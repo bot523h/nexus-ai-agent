@@ -98,7 +98,7 @@ class ViralEngine:
     def generate_post() -> str:
         """Generate a random viral post from templates."""
         category = random.choice(_VIRAL_TEMPLATES)
-        return random.choice(category["templates"])
+        return str(random.choice(category["templates"]))
 
     @staticmethod
     def generate_posts(count: int = 10) -> list[str]:

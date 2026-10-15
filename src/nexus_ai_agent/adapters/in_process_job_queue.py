@@ -197,6 +197,15 @@ logger = logging.getLogger(__name__)
 VERIFICATION_RESULT_KEY = "artifact_verification"
 
 
+def _row_or_none(value: object) -> sqlite3.Row | None:
+    """Narrow ``fetchone()``: the queue connections always install ``sqlite3.Row``."""
+    if value is None:
+        return None
+    if not isinstance(value, sqlite3.Row):
+        raise TypeError("queue connection must use the sqlite3.Row factory")
+    return value
+
+
 class _AttemptTransitionError(RuntimeError):
     """A queue CAS succeeded but its matching attempt-ledger CAS did not."""
 
@@ -2140,15 +2149,19 @@ class InProcessJobQueue:
 
     def _fetch_row(self, job_id: str) -> sqlite3.Row | None:
         with self._db_lock, self._connection() as connection:
-            return connection.execute(
-                "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
-            ).fetchone()
+            return _row_or_none(
+                connection.execute(
+                    "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
+                ).fetchone()
+            )
 
     def _fetch_row_full(self, job_id: str) -> sqlite3.Row | None:
         with self._db_lock, self._connection() as connection:
-            return connection.execute(
-                "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
-            ).fetchone()
+            return _row_or_none(
+                connection.execute(
+                    "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
+                ).fetchone()
+            )
 
     def _decode_attempt_history(self, raw: str) -> list[dict[str, object]]:
         """Decode the queue-owned, row-atomic attempt ledger."""

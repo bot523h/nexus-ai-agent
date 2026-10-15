@@ -122,12 +122,12 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.12"
 mypy_path = ["src"]
-warn_unused_ignores = true
-warn_redundant_casts = true
+# Audit A-13 (2026-10-15): `src/` is type-checked under mypy --strict.  `strict`
+# implies disallow_untyped_defs, disallow_any_generics, warn_return_any,
+# warn_unused_ignores, warn_redundant_casts, no_implicit_optional and
+# strict_equality; the explicit flags below are the ones strict does not set.
+strict = true
 warn_unreachable = true
-disallow_untyped_defs = true
-no_implicit_optional = true
-strict_equality = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]

@@ -122,7 +122,7 @@ class ChannelManager:
     async def get_members_count(self, chat_id: int) -> int:
         """Return the member count for *chat_id*."""
         bot = self._require_bot()
-        return await bot.get_chat_member_count(chat_id=chat_id)
+        return int(await bot.get_chat_member_count(chat_id=chat_id))
 
     async def get_admins(self, chat_id: int) -> list[dict[str, Any]]:
         """Return a list of admin dicts for *chat_id*."""

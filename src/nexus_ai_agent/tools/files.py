@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 from nexus_ai_agent.tools.base import BaseTool, RiskLevel
 from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
@@ -34,7 +35,7 @@ class ReadFileTool(BaseTool):
     def bind_workspace(self, workspace_root: str | Path) -> None:
         self._workspace = WorkspaceFilesystem(workspace_root)
 
-    async def execute(self, inputs: dict) -> dict:
+    async def execute(self, inputs: dict[str, Any]) -> dict[str, Any]:
         try:
             path = str(inputs.get("path", ""))
             output = self._workspace.read_text(path)
@@ -54,7 +55,7 @@ class WriteFileTool(BaseTool):
     def bind_workspace(self, workspace_root: str | Path) -> None:
         self._workspace = WorkspaceFilesystem(workspace_root)
 
-    async def execute(self, inputs: dict) -> dict:
+    async def execute(self, inputs: dict[str, Any]) -> dict[str, Any]:
         try:
             path = str(inputs.get("path", ""))
             content = str(inputs.get("content", ""))
@@ -75,7 +76,7 @@ class ListDirTool(BaseTool):
     def bind_workspace(self, workspace_root: str | Path) -> None:
         self._workspace = WorkspaceFilesystem(workspace_root)
 
-    async def execute(self, inputs: dict) -> dict:
+    async def execute(self, inputs: dict[str, Any]) -> dict[str, Any]:
         try:
             path = str(inputs.get("path", "")) or "."
             items = self._workspace.list_names(path)

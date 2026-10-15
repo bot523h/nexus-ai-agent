@@ -113,7 +113,7 @@ class QuizGame:
         q = self._active.get(user_id)
         if q is None:
             return False
-        return q["answer"] == choice
+        return bool(q["answer"] == choice)
 
     def clear(self, user_id: int) -> None:
         """Clear active question for *user_id*."""

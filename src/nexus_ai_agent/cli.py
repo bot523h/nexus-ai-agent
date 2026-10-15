@@ -294,7 +294,7 @@ def inspect_checkpoints(
     try:
         now = datetime.now(timezone.utc)
         records = lifecycle.records() if lifecycle is not None else []
-        grouped: dict[str, list] = {}
+        grouped: dict[str, list[Any]] = {}
         for record in records:
             grouped.setdefault(record.thread_id, []).append(record)
         threads = (
@@ -1462,7 +1462,7 @@ def smoke(
 
     long_term = LongTermMemory(":memory:", llm)
 
-    async def _run() -> dict:
+    async def _run() -> dict[str, Any]:
         checkpointer = get_checkpointer(":memory:")
         graph = compile_graph(llm, checkpointer, long_term, registry)
         initial_state: NexusState = {
@@ -1481,10 +1481,11 @@ def smoke(
             "turn_count": 0,
             "moderation_passed": True,
         }
-        return await graph.ainvoke(
+        final_state = await graph.ainvoke(
             initial_state,
             config={"configurable": {"thread_id": "smoke-test"}},
         )
+        return dict(final_state)
 
     result = asyncio.run(_run())
 

@@ -53,6 +53,6 @@ class LocalLlamaCppProvider(LLMProvider):
             self._st = SentenceTransformer("all-MiniLM-L6-v2")
 
         def _run() -> list[float]:
-            return self._st.encode(text).tolist()
+            return [float(value) for value in self._st.encode(text).tolist()]
 
         return await asyncio.to_thread(_run)

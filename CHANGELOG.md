@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fix — A-13 strict typing of `src/` (board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **`mypy --strict src` is now clean and enforced.** The 57 strict-mode findings in 33 modules
+  (31 `type-arg`, 26 `no-any-return`) are fixed and `[tool.mypy] strict = true` makes the CI
+  `lint` job (`mypy src`) inherit them; `tests/unit/test_ci_lint_parity.py` pins the flag.
+- Three sites were closed with a real boundary check instead of a cast, each with a regression
+  test in `tests/unit/test_strict_typing_boundaries.py`: GitHub release/asset JSON of the wrong
+  shape is a typed `StorageError` (was a late `AttributeError`); `_check_result_magnitude`
+  returns the checked number and refuses non-numeric evaluator output; the job queue's
+  `fetchone()` narrowing raises if a connection lacks the `sqlite3.Row` factory.
+- Everything else is annotation-only (`dict[str, Any]`, `tuple[Any, ...]`, PTB/LangGraph generic
+  parameters, `str()`/`bool()`/`int()`/`float()` on values that already had that type) with no
+  behaviour change; `ForceJoinManager.get_join_keyboard` is typed `InlineKeyboardMarkup`.
+
 ### Refactor — A-11 `InProcessJobQueue._process_job` decomposition (board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
 
 - **`_process_job` 62 → 17 (R22 ceiling 20), behaviour-preserving.** The 500-line job pipeline is

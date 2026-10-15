@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 
 class NexusState(TypedDict):
@@ -8,11 +8,11 @@ class NexusState(TypedDict):
     chat_id: int
     user_id: int
     correlation_id: str
-    messages: list[dict]  # {"role": "user"|"assistant", "content": str}
+    messages: list[dict[str, Any]]  # {"role": "user"|"assistant", "content": str}
     intent: Literal["chat", "task", "memory", "unknown"]
     active_persona: str
-    current_task: dict | None
-    tool_results: list[dict]
+    current_task: dict[str, Any] | None
+    tool_results: list[dict[str, Any]]
     memory_context: str
     response: str
     error: str | None

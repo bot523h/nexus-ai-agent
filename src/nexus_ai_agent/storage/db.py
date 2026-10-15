@@ -380,7 +380,7 @@ async def _is_alembic_versioned(engine: Any) -> bool:
         return bool(sa_inspect(sync_conn).has_table("alembic_version"))
 
     async with engine.connect() as conn:
-        return await conn.run_sync(_has_version_table)
+        return bool(await conn.run_sync(_has_version_table))
 
 
 def _get_pg_engine(url: str) -> Any:

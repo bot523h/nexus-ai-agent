@@ -313,7 +313,7 @@ def build_application(
     *,
     presence: PresenceStore | None = None,
     session_factory: Callable[[], Any] | None = None,
-) -> Application:
+) -> Application[Any, Any, Any, Any, Any, Any]:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
     if not token or token == "CHANGE_ME":
         raise ValueError("TELEGRAM_BOT_TOKEN must be provided via environment/settings")

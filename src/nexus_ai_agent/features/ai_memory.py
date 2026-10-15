@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from typing import Any
 
 from sqlmodel import select
 
@@ -166,7 +167,7 @@ class AIMemoryEngine:
             logger.error("Failed to update AI memory: %s", e)
         return EGRESSED
 
-    async def _save_memory(self, user_id: int, data: dict) -> None:
+    async def _save_memory(self, user_id: int, data: dict[str, Any]) -> None:
         """Merge new data into persistent UserMemory."""
         async with get_session() as session:
             stmt = select(UserMemory).where(UserMemory.user_id == user_id)

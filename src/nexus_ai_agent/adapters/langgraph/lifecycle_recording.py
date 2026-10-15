@@ -86,7 +86,7 @@ class TouchCoalescer:
             )
 
 
-class LifecycleRecordingSaver(BaseCheckpointSaver):
+class LifecycleRecordingSaver(BaseCheckpointSaver[Any]):
     """Delegate a saver while recording lifecycle metadata best-effort.
 
     This wrapper never changes the result or failure semantics of the wrapped
@@ -126,8 +126,8 @@ class LifecycleRecordingSaver(BaseCheckpointSaver):
         self.serde = self._saver.serde
 
     @property
-    def config_specs(self) -> list:
-        return self._saver.config_specs
+    def config_specs(self) -> list[Any]:
+        return list(self._saver.config_specs)
 
     async def flush(self) -> None:
         # Drain outstanding record writes first: the touch below targets rows

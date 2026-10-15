@@ -36,6 +36,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from nexus_ai_agent.provenance.models import (
     GENESIS_HASH,
@@ -79,7 +80,7 @@ class CausalConflictError(RuntimeError):
 _CLAIM_FIELDS: tuple[str, ...] = ("status", "error", "payload_digest", "result_digest")
 
 
-def _claims_conflict(existing: dict, event: CausalEvent) -> bool:
+def _claims_conflict(existing: dict[str, Any], event: CausalEvent) -> bool:
     return any(existing.get(field) != getattr(event, field) for field in _CLAIM_FIELDS)
 
 

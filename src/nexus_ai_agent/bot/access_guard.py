@@ -62,7 +62,7 @@ _DENIAL_REPLY_LIMIT = 3
 _DENIAL_REPLY_WINDOW = 60
 
 
-class AccessGuardHandler(BaseHandler[Update, CallbackContext, None]):
+class AccessGuardHandler(BaseHandler[Update, CallbackContext[Any, Any, Any, Any], None]):
     """Intercepts updates from unauthorized users and blocks them."""
 
     def __init__(
@@ -88,7 +88,7 @@ class AccessGuardHandler(BaseHandler[Update, CallbackContext, None]):
             return False
         return not self._is_allowed(int(user.id))
 
-    async def _denied(self, update: Any, context: CallbackContext) -> None:
+    async def _denied(self, update: Any, context: CallbackContext[Any, Any, Any, Any]) -> None:
         user = update.effective_user
         user_id = int(user.id)
         command = ""

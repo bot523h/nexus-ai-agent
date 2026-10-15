@@ -15,6 +15,7 @@ import time
 from typing import Any
 
 from sqlmodel import Session, col, select
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.models import ForceJoinConfig
@@ -197,10 +198,8 @@ class ForceJoinManager:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_join_keyboard(channel: str = DEFAULT_CHANNEL) -> Any:
+    def get_join_keyboard(channel: str = DEFAULT_CHANNEL) -> InlineKeyboardMarkup:
         """Return an InlineKeyboardMarkup with Join + Verify buttons."""
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
         # Strip @ for the URL
         ch_clean = channel.lstrip("@")
         return InlineKeyboardMarkup(

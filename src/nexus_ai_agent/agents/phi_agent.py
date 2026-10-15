@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from nexus_ai_agent.agents.base import BaseAgent
 from nexus_ai_agent.llm.provider import LLMProvider
@@ -27,7 +28,7 @@ class PhiAgent(BaseAgent):
         resp = await self.llm.generate(conv + "\nassistant:", system=system)
         return {**state, "response": resp, "active_persona": "phi"}
 
-    async def moderate(self, text: str) -> dict:
+    async def moderate(self, text: str) -> dict[str, Any]:
         system = 'Reply ONLY with JSON: {"safe": true, "reason": "ok"}'
         raw = await self.llm.generate(f"Is this content safe?\n{text}", system=system)
         try:

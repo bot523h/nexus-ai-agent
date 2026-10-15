@@ -176,7 +176,9 @@ class CheckpointReconciler:
             return f"error:{type(exc).__name__}"
         return "match"
 
-    def _scan(self, now: datetime) -> tuple[int, int, int, list[Anomaly], list[Anomaly], list, int]:
+    def _scan(
+        self, now: datetime
+    ) -> tuple[int, int, int, list[Anomaly], list[Anomaly], list[CheckpointRecord], int]:
         """Read-only pass over checkpoints and the lifecycle index.
 
         Returns (rows_scanned, checkpoints, lifecycle_rows, anomalies,
@@ -228,7 +230,7 @@ class CheckpointReconciler:
             )
             records = []
         lifecycle_keys: set[tuple[str, str]] = set()
-        orphan_records: list = []
+        orphan_records: list[CheckpointRecord] = []
         missing: list[Anomaly] = []
         for record in records:
             key = (record.thread_id, record.checkpoint_id)

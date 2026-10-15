@@ -179,3 +179,36 @@ def test_the_parity_check_is_red_on_a_floor_above_the_pin() -> None:
     workflow = "jobs:\n  lint-fast:\n    steps:\n      - run: pip install ruff==0.8.6\n"
     problems = ruff_parity_problems(precommit, workflow, '  "ruff>=0.9",\n')
     assert problems and "requires ruff>=0.9" in problems[0]
+
+
+# --------------------------------------------------------------------------- #
+# A-13 — mypy strictness is a ratchet, not a local habit
+# --------------------------------------------------------------------------- #
+_MYPY_SECTION = re.compile(r"^\[tool\.mypy\]\n(?P<body>.*?)(?=^\[|\Z)", re.MULTILINE | re.DOTALL)
+
+
+def mypy_is_strict(pyproject_text: str) -> bool:
+    """True when ``[tool.mypy]`` declares ``strict = true`` (section-local)."""
+    match = _MYPY_SECTION.search(pyproject_text)
+    if match is None:
+        return False
+    return re.search(r"^strict\s*=\s*true\s*$", match.group("body"), re.MULTILINE) is not None
+
+
+def test_src_is_type_checked_under_mypy_strict() -> None:
+    """Audit A-13: the 57 strict-mode findings were fixed and ``strict`` was then
+    switched on for the whole ``src/`` tree; the CI ``lint`` job runs plain
+    ``mypy src`` and therefore inherits it.  Turning the flag off again must be
+    a visible, reviewed change."""
+    assert mypy_is_strict(PYPROJECT.read_text(encoding="utf-8"))
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert re.search(r"^\s*- run: mypy src\s*$", workflow, re.MULTILINE), "CI must run `mypy src`"
+
+
+def test_the_strict_check_is_red_on_a_non_strict_fixture() -> None:
+    assert not mypy_is_strict(
+        "[tool.mypy]\npython_version = '3.12'\n\n[tool.other]\nstrict = true\n"
+    )
+    assert mypy_is_strict(
+        "[tool.ruff]\nx = 1\n\n[tool.mypy]\nstrict = true\nwarn_unreachable = true\n"
+    )

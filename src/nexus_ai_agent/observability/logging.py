@@ -289,7 +289,9 @@ def configure_logging(level: str = "INFO", *, redact: bool = True) -> None:
 
 
 def get_logger(name: str) -> structlog.BoundLogger:
-    return structlog.get_logger(name)
+    # structlog's factory is typed ``Any`` on purpose (lazy proxy); the bound
+    # logger it hands back is the configured wrapper class.
+    return cast(structlog.BoundLogger, structlog.get_logger(name))
 
 
 __all__ = [

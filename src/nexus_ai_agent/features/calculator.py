@@ -155,8 +155,12 @@ def _check_pow_guard(base: Any, exponent: Any) -> None:
             raise ExpressionTooComplex(f"exponent too large (max {MAX_POW_EXPONENT})")
 
 
-def _check_result_magnitude(value: Any) -> None:
-    """Bound the final result so a huge integer cannot be materialised lazily."""
+def _check_result_magnitude(value: Any) -> int | float:
+    """Bound the final result so a huge integer cannot be materialised lazily.
+
+    Returns the value as a plain number; anything that is not an ``int`` or a
+    ``float`` (bool, complex, or an evaluator defect) is refused.
+    """
     if isinstance(value, bool):
         raise CalculatorError("boolean results are not allowed")
     if isinstance(value, int) and value.bit_length() > MAX_RESULT_BITS:
@@ -165,6 +169,9 @@ def _check_result_magnitude(value: Any) -> None:
         raise ExpressionTooComplex("result too large")
     if isinstance(value, complex):
         raise CalculatorError("complex results are not supported")
+    if not isinstance(value, int | float):
+        raise CalculatorError("non-numeric result")
+    return value
 
 
 class SafeCalculator:
@@ -194,9 +201,7 @@ class SafeCalculator:
             if node_count > MAX_NODES:
                 raise ExpressionTooComplex(f"expression too complex (max {MAX_NODES} nodes)")
 
-        result = self._eval(tree.body, depth=0)
-        _check_result_magnitude(result)
-        return result
+        return _check_result_magnitude(self._eval(tree.body, depth=0))
 
     # -- internals ---------------------------------------------------------
 

@@ -342,7 +342,7 @@ class Translator:
                 resp = await client.get(self.MYMEMORY_URL, params=params)
                 resp.raise_for_status()
                 data = resp.json()
-                return data.get("responseData", {}).get("translatedText", text)
+                return str(data.get("responseData", {}).get("translatedText", text))
             except Exception:  # noqa: BLE001
                 logger.exception("translate_failed", text=text[:50])
                 return f"❌ خطا در ترجمه: {text}"

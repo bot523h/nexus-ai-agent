@@ -69,7 +69,7 @@ class AsyncCompatibleSqliteSaver(SqliteSaver):
         return await asyncio.to_thread(self.get_delta_channel_history, *args, **kwargs)
 
 
-class PostgresCheckpointer(BaseCheckpointSaver):
+class PostgresCheckpointer(BaseCheckpointSaver[Any]):
     """Lazy, self-healing LangGraph checkpointer backed by PostgreSQL.
 
     Subclasses ``BaseCheckpointSaver`` (without calling its ``__init__``) so

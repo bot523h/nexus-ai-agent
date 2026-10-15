@@ -276,7 +276,8 @@ class CognitionGateway:
                 idempotency_key=idempotency_key,
                 reason=reason,
             )
-            return self._bus.dispatch(command)
+            result: CommandResult = self._bus.dispatch(command)
+            return result
         except AuthorizationError as exc:
             raise CognitionRefused(RefusalReason.AUTHORITY_FIELD, str(exc)) from exc
         except NagarError as exc:
