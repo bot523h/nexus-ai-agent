@@ -283,9 +283,19 @@ def test_the_release_lineage_job_exists_and_fetches_tags() -> None:
 #: is not 3.10-capable and CI must not pretend otherwise); the moment the last
 #: one is gone, the leg MUST become blocking again — this test enforces the
 #: transition machine, so the exception cannot silently outlive its cause.
-_PY310_RUNTIME_BLOCKERS = ("StrEnum",)
+_PY310_RUNTIME_BLOCKERS = ("StrEnum", "UTC")  # enum.StrEnum and datetime.UTC are 3.11+
 
 _SRC = REPO_ROOT / "src"
+_TESTS = REPO_ROOT / "tests"
+_SCRIPTS = REPO_ROOT / "scripts"
+
+
+def _is_datetime_module(expr: ast.expr) -> bool:
+    """``datetime.UTC`` / ``dt.UTC`` (module alias) — not ``timezone.utc`` or a
+    user attribute that merely happens to be called ``UTC``."""
+    if isinstance(expr, ast.Name):
+        return expr.id in {"datetime", "dt"}
+    return isinstance(expr, ast.Attribute) and expr.attr == "datetime"
 
 
 def _py310_runtime_blockers(root: Path = _SRC) -> list[str]:
@@ -310,6 +320,8 @@ def _py310_runtime_blockers(root: Path = _SRC) -> list[str]:
                 names = [alias.name for alias in node.names]
             elif isinstance(node, ast.Attribute):
                 # ``enum.StrEnum`` is a real use even though it is not an import.
+                if node.attr == "UTC" and not _is_datetime_module(node.value):
+                    continue
                 names = [node.attr]
             for marker in _PY310_RUNTIME_BLOCKERS:
                 if any(n == marker or n.endswith(f".{marker}") for n in names):
@@ -319,6 +331,15 @@ def _py310_runtime_blockers(root: Path = _SRC) -> list[str]:
                         shown = path.name
                     blockers.append(f"{shown} uses {marker}")
     return blockers
+
+
+def test_the_test_suite_and_scripts_are_310_clean_too() -> None:
+    """The parity leg runs the *whole* suite on 3.10: a test that calls
+    ``datetime.UTC`` (closeout 2026-10-15, ``test_composition_root_runtime``)
+    turns that leg red just as surely as a runtime construct would, and the
+    3.12 ``test`` job cannot see it.  Catch it here, on every interpreter."""
+    assert _py310_runtime_blockers(_TESTS) == []
+    assert _py310_runtime_blockers(_SCRIPTS) == []
 
 
 def test_the_310_parity_leg_is_blocking_iff_the_runtime_supports_it() -> None:

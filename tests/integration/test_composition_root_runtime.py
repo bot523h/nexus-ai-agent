@@ -75,7 +75,7 @@ def _text_update(*, user_id: int, chat_type: str, text: str = "سلام") -> Upd
     user = User(id=user_id, first_name="t", is_bot=False)
     message = Message(
         message_id=1,
-        date=dt.datetime.now(dt.UTC),
+        date=dt.datetime.now(dt.timezone.utc),  # 3.10-safe (datetime.UTC is 3.11+)
         chat=chat,
         from_user=user,
         text=text,
