@@ -164,6 +164,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strangers stop at the guard, a private text reaches `on_message`, no text
   handler is shadowed behind it, every command is registered exactly once
   (115) and the eight A-03 commands map to their own `*_cmd` callbacks.
+- **A-06 deeper validation.** `tests/integration/test_api_gate_inventory.py`
+  takes the route inventory from the app's own OpenAPI document and probes
+  every operation through the real ASGI app: unconfigured → every non-public
+  route is `503` (webhook `403`); configured with missing/wrong bearer, Basic
+  or HMAC headers → `401`/`403`; the correct dashboard token opens only
+  `/api/dashboard/*`. On `main` the same test reports the audited leak
+  (`/api/dashboard/stats` and `/recent_users` answer `200` unconfigured).
 - **Docs:** the golden-update command is `nexus checkpoints golden update`
   (three documents said `nexus golden update`, which does not exist).
 
