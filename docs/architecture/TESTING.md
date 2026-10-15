@@ -108,7 +108,7 @@ pytest -q tests/unit/test_docs_integrity.py
 |---|---|---|
 | No full Mermaid syntax validation (structural checks only) | a syntactically invalid diagram could pass the gate | [`adr/0002`](adr/0002-docs-as-code-enforcement.md) — adopt `mermaid-lint` if `docs/` grows past ~30 files |
 | Optional heavy extras are not exercised in the default CI job | a broken optional path may survive until a user opts in | CLOSED for the shipping extras by the `extras-matrix` CI job (task-132, legs `core`/`pdf`/`speech`/`translate` + skip-inflation audit); heavy *core* deps (Chroma/sentence-transformers) stay covered by unit/fail-closed tests only, and `[local-llm]` never existed as an extra |
-| PostgreSQL suites skip locally without `NEXUS_DATABASE_URL` | local confidence is lower than CI confidence | CI `migrate-postgres` job |
+| PostgreSQL suites skip locally without `NEXUS_DATABASE_URL` | local confidence is lower than CI confidence | CI `migrate-postgres` job (migrate → race → single-engine → adapter contract → lifecycle → schema authority/A-19 → `alembic check` → idempotent migrate → head stamp); locally a throw-away `pgserver` cluster reproduces the whole leg |
 | No browser/E2E UI test | the dashboard is HTML-by-render, not a UI framework | deliberate: see [`OVERVIEW.md`](OVERVIEW.md) §7 (dashboard is read-only by design) |
 | P0-8/P0-9 have no guard test yet | engine double-wiring and empty graph memory can return unnoticed | board **task-124** [`SECURITY.md`](SECURITY.md) §3 |
 

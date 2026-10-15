@@ -3,10 +3,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Integer
+from sqlalchemy import BigInteger, Column, DateTime, Index, Integer, Text, func
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.types import TypeDecorator, TypeEngine
 from sqlmodel import Field, SQLModel
+
+from nexus_ai_agent.storage.clock import naive_utcnow
 
 
 class TelegramId(TypeDecorator[int]):
@@ -35,7 +37,7 @@ class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     telegram_id: int = Field(index=True, unique=True, sa_type=TelegramId)
     username: str = Field(default="")
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
     is_allowed: bool = Field(default=True, index=True)
 
 
@@ -43,7 +45,7 @@ class Chat(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     chat_id: int = Field(index=True, unique=True, sa_type=TelegramId)
     thread_id: str = Field(index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
     policy: str = Field(default="default")
 
 
@@ -53,7 +55,7 @@ class Message(SQLModel, table=True):
     role: str = Field(index=True)  # "user"|"assistant"|"system"
     content: str
     correlation_id: str = Field(index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
 
 
 class Task(SQLModel, table=True):
@@ -61,7 +63,7 @@ class Task(SQLModel, table=True):
     chat_id: int = Field(foreign_key="chat.id", index=True)
     status: str = Field(default="pending", index=True)
     plan_json: str = Field(default="{}")
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
     completed_at: datetime | None = Field(default=None, index=True)
 
 
@@ -73,7 +75,7 @@ class ToolRun(SQLModel, table=True):
     output_json: str = Field(default="{}")
     error: str | None = Field(default=None)
     duration_ms: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
 
 
 # ── v1.2.0 models ────────────────────────────────────────────────────
@@ -85,7 +87,7 @@ class WelcomeMessage(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     chat_id: int = Field(index=True, unique=True, sa_type=TelegramId)
     text: str = Field(default="")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class ChannelSchedule(SQLModel, table=True):
@@ -96,7 +98,7 @@ class ChannelSchedule(SQLModel, table=True):
     text: str
     scheduled_at: datetime = Field(index=True)
     status: str = Field(default="pending", index=True)  # pending | sent | cancelled
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class AnonSession(SQLModel, table=True):
@@ -105,7 +107,7 @@ class AnonSession(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user1_id: int = Field(index=True, sa_type=TelegramId)
     user2_id: int = Field(index=True, sa_type=TelegramId)
-    started_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    started_at: datetime = Field(default_factory=naive_utcnow, index=True)
     status: str = Field(default="active", index=True)  # active | ended | reported
 
 
@@ -117,8 +119,8 @@ class QuizScore(SQLModel, table=True):
     chat_id: int = Field(index=True, sa_type=TelegramId)
     score: int = Field(default=0)
     answered: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
+    updated_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class Reminder(SQLModel, table=True):
@@ -130,7 +132,7 @@ class Reminder(SQLModel, table=True):
     text: str
     remind_at: datetime = Field(index=True)
     status: str = Field(default="pending", index=True)  # pending | sent | cancelled
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 # ── v1.3.0 models ──────────────────────────────────────────────────
@@ -144,7 +146,7 @@ class AdminLog(SQLModel, table=True):
     action: str = Field(index=True)
     target: str = Field(default="")
     details: str = Field(default="")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=naive_utcnow, index=True)
 
 
 class ForceJoinConfig(SQLModel, table=True):
@@ -155,7 +157,7 @@ class ForceJoinConfig(SQLModel, table=True):
     enabled: bool = Field(default=False)
     channel_username: str = Field(default="@nexus_ai_official")
     welcome_message: str = Field(default="⛔ لطفاً ابتدا در کانال عضو شوید.")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class PersonalityConfig(SQLModel, table=True):
@@ -165,7 +167,7 @@ class PersonalityConfig(SQLModel, table=True):
     chat_id: int = Field(index=True, unique=True, sa_type=TelegramId)
     personality: str = Field(default="friendly")
     set_by: int = Field(default=0, sa_type=TelegramId)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class EngagementConfig(SQLModel, table=True):
@@ -176,7 +178,7 @@ class EngagementConfig(SQLModel, table=True):
     enabled: bool = Field(default=False)
     frequency_minutes: int = Field(default=60)
     last_engagement: datetime | None = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class ModerationConfig(SQLModel, table=True):
@@ -190,7 +192,7 @@ class ModerationConfig(SQLModel, table=True):
     profanity_filter: bool = Field(default=False)
     max_warnings: int = Field(default=3)
     mute_duration_minutes: int = Field(default=30)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class UserReputation(SQLModel, table=True):
@@ -203,8 +205,8 @@ class UserReputation(SQLModel, table=True):
     warnings: int = Field(default=0)
     is_muted: bool = Field(default=False)
     mute_until: datetime | None = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
+    updated_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class UserXP(SQLModel, table=True):
@@ -221,8 +223,8 @@ class UserXP(SQLModel, table=True):
     last_daily: datetime | None = Field(default=None)
     achievements: str = Field(default="[]")  # JSON array
     referral_count: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
+    updated_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class AdCampaign(SQLModel, table=True):
@@ -237,7 +239,7 @@ class AdCampaign(SQLModel, table=True):
     max_repeats: int = Field(default=0)  # 0 = unlimited
     next_run: datetime | None = Field(default=None)
     created_by: int = Field(default=0, sa_type=TelegramId)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class ViralPost(SQLModel, table=True):
@@ -249,7 +251,7 @@ class ViralPost(SQLModel, table=True):
     viral_score: float = Field(default=0.0)
     status: str = Field(default="pending", index=True)  # pending | posted | failed
     posted_at: datetime | None = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class AnalyticsEvent(SQLModel, table=True):
@@ -260,7 +262,7 @@ class AnalyticsEvent(SQLModel, table=True):
     user_id: int = Field(default=0, sa_type=TelegramId)
     event_type: str = Field(index=True)
     event_data: str = Field(default="{}")  # JSON
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
 
 
 # ── v2.0.0 models ──────────────────────────────────────────────────────
@@ -283,7 +285,7 @@ class Referral(SQLModel, table=True):
     status: str = Field(default="pending", index=True)  # pending | completed | rewarded
     reward_claimed: bool = Field(default=False)
     xp_awarded: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
     completed_at: datetime | None = Field(default=None)
 
 
@@ -295,7 +297,7 @@ class ReferralCode(SQLModel, table=True):
     code: str = Field(index=True, unique=True)
     total_referrals: int = Field(default=0)
     successful_referrals: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class UserLanguage(SQLModel, table=True):
@@ -305,8 +307,8 @@ class UserLanguage(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(default=0, sa_type=TelegramId)
     language: str = Field(default="en")  # ISO 639-1 code
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
+    updated_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class CloudFile(SQLModel, table=True):
@@ -319,7 +321,7 @@ class CloudFile(SQLModel, table=True):
     provider: str = Field(default="")  # dropbox | pcloud | internxt | mega
     remote_path: str = Field(default="")
     file_size: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 # ── v3.0.0 models ──────────────────────────────────────────────────────
@@ -331,14 +333,14 @@ class KnowledgeCache(SQLModel, table=True):
     source: str
     content: str
     expires_at: datetime = Field(index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class PendingApproval(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     change_type: str
     description: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=naive_utcnow)
     status: str = "pending"  # pending, approved, rejected
     auto_apply_at: datetime | None = None
 
@@ -346,7 +348,7 @@ class PendingApproval(SQLModel, table=True):
 class UserActiveAgent(SQLModel, table=True):
     user_id: int = Field(primary_key=True, sa_type=TelegramId)
     agent_name: str
-    activated_at: datetime = Field(default_factory=datetime.utcnow)
+    activated_at: datetime = Field(default_factory=naive_utcnow)
 
 
 class UserMemory(SQLModel, table=True):
@@ -355,7 +357,7 @@ class UserMemory(SQLModel, table=True):
     interests: str = "[]"  # JSON list
     occupation: str | None = None
     personality_tags: str = "[]"  # JSON list
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(default_factory=naive_utcnow)
     # ── P0-7: explicit consent for LLM egress (AIMemory) ──────────────
     # ``ai_memory_consent`` is a tri-state: None (unset / never asked or
     # answered) | "granted" | "denied".  No message text may leave the
@@ -374,3 +376,27 @@ class DocumentChunk(SQLModel, table=True):
     chunk_text: str
     chunk_index: int
     embedding: str  # JSON list of floats
+
+
+class ConversationHistory(SQLModel, table=True):
+    """Chat transcript rows written by :class:`features.conversation_store.ConversationStore`.
+
+    Schema authority (audit 2026-10-15): until revision ``c7a1e5d2b9f3`` the
+    store declared this table on a *private* ``MetaData`` and ran
+    ``create_all()`` at runtime — a second schema owner next to Alembic. The
+    model below is byte-for-byte the DDL the store used to emit (same column
+    types, same nullability, same ``ix_conv_history_conv_id`` index name), so
+    the revision adopts an existing table in place and no row is touched.
+    """
+
+    __tablename__ = "conversation_history"
+    __table_args__ = (Index("ix_conv_history_conv_id", "conv_id"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    conv_id: str
+    role: str
+    parts_json: str = Field(sa_column=Column(Text, nullable=False))
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime, server_default=func.current_timestamp()),
+    )

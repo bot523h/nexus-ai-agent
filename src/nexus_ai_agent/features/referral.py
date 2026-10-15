@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import secrets
 import string
-from datetime import datetime, timezone
 from typing import Any
 
 from sqlmodel import Session as _Session
-from sqlmodel import SQLModel, select
+from sqlmodel import select
 
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.clock import naive_utcnow
 from nexus_ai_agent.storage.db import sync_engine
 from nexus_ai_agent.storage.models import Referral, ReferralCode
 
@@ -35,16 +35,6 @@ REFERRAL_REWARDS: list[dict[str, Any]] = [
 ]
 
 
-def _naive_utcnow() -> datetime:
-    """Current UTC time as the naive value the DATETIME columns store.
-
-    ``datetime.utcnow()`` is deprecated (Python 3.12) and silently mixes naive
-    and aware values; this keeps the stored representation unchanged (DTZ003,
-    audit A-12).
-    """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
 class ReferralEngine:
     """Referral viral loop engine — track, reward, and grow."""
 
@@ -53,19 +43,10 @@ class ReferralEngine:
         configured backend — ``NEXUS_DATABASE_URL`` or ``NEXUS_DB_PATH`` — via
         ``storage.db.sync_engine`` (audit A-02)."""
         self._db_path = db_path
-        self._ensure_tables()
-
-    def _ensure_tables(self) -> None:
-        """Create the two referral tables when they are missing.
-
-        Dialect-agnostic ``create_all`` over the canonical ``storage.models``
-        definitions replaced the hand-written SQLite DDL (``AUTOINCREMENT``),
-        which a PostgreSQL deployment would have rejected. On PostgreSQL the
-        tables already exist from migration ``47903d282ede``; ``checkfirst``
-        makes this a no-op there.
-        """
-        tables = [SQLModel.metadata.tables["referral"], SQLModel.metadata.tables["referralcode"]]
-        SQLModel.metadata.create_all(self._sync_engine(), tables=tables, checkfirst=True)
+        # No runtime DDL (audit 2026-10-15, schema authority): ``referral`` and
+        # ``referralcode`` exist from migration ``47903d282ede`` on every
+        # migrated database; ``ensure_startup_schema`` / ``nexus migrate`` is
+        # the only writer of the schema.
 
     def _sync_engine(self) -> Any:
         """The process-wide synchronous engine (see ``storage.db.sync_engine``).
@@ -149,7 +130,7 @@ class ReferralEngine:
                 referee_id=referee_id,
                 referral_code=code,
                 status="completed",
-                completed_at=_naive_utcnow(),
+                completed_at=naive_utcnow(),
                 xp_awarded=True,
             )
             s.add(ref)

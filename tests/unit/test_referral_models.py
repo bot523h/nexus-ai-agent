@@ -11,7 +11,6 @@ forge any user's code.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from sqlmodel import SQLModel
 
@@ -36,8 +35,8 @@ def test_the_single_definition_carries_the_migrated_constraints() -> None:
     assert code_table.c.code.unique is True
 
 
-def test_referral_codes_are_random_and_do_not_embed_the_user_id(tmp_path: Path) -> None:
-    engine = ReferralEngine(db_path=str(tmp_path / "ref.sqlite"))
+def test_referral_codes_are_random_and_do_not_embed_the_user_id(migrated_sqlite: str) -> None:
+    engine = ReferralEngine(db_path=migrated_sqlite)
     first = engine.get_or_create_code(user_id=123456789)
     assert first == engine.get_or_create_code(user_id=123456789), "stable per user"
     assert "123456789" not in first

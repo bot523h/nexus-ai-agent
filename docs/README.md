@@ -113,6 +113,12 @@ placeholder text.
 | [audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md](audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md) | Exact-SHA mainline truth audit: release-metadata defects (README version, lockstep guard, Continuum snapshot) with the delivered fixes and honest production limitations. |
 | [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
 | [audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md](audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md) | Dated Phase-1 stabilization handoff: live PR inventory, exact-SHA remediation evidence, Board fence correction, CI blockers, and backup/restore limits. |
+| [audits/COORDINATION_2026-09-21.md](audits/COORDINATION_2026-09-21.md) | Coordination record of session `01a0c54f` (2026-09-21): claims, collisions and hand-offs of the wave-4 batch (moved from the repository root in the 2026-10-15 closeout). |
+| [audits/WAVE5_COORDINATION_01a0c5da.md](audits/WAVE5_COORDINATION_01a0c5da.md) | Coordination record of session `01a0c5da` (2026-09-21, wave 5): claim, collision record, re-apply log — companion of `WAVE5_ACTIVATION_2026-09-21.md` (moved from the root). |
+| [audits/STORAGE_RESILIENCE_CHECKUP_2026-09-21.md](audits/STORAGE_RESILIENCE_CHECKUP_2026-09-21.md) | Ten-step storage-resilience check-up and hand-over (2026-09-21, Persian; session `01a0c58a`, base `b422512`) (moved from the root). |
+| [audits/LIVE_ENGINEERING_BASELINE_2026-09-26.md](audits/LIVE_ENGINEERING_BASELINE_2026-09-26.md) | Reproducible snapshot of the 2026-09-26 engineering baseline: exact commands, versions and gate outputs (moved from the root). |
+| [audits/OWNER_WIDE_FORENSIC_AUDIT_2026-09-26.md](audits/OWNER_WIDE_FORENSIC_AUDIT_2026-09-26.md) | Owner-wide forensic audit (2026-09-26): scope and truth boundary, verified/unverified claims per surface (moved from the root). |
+| [audits/MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md](audits/MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md) | Master engineering truth report (2026-09-27): exact-SHA state of the repository, release/CI/runtime truth and residual risks (moved from the root). |
 
 ## History (archived — read-only, never a source of truth)
 

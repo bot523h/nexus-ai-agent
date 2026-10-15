@@ -23,6 +23,7 @@ dependencies = [
   "langgraph-checkpoint-postgres==3.1.2",
   "pydantic-settings>=2.0",
   "pydantic>=2.7,<3",  # imported directly by 29 modules (audit A-05); was only transitive
+  "packaging>=23.0",  # agent/updater.py compares release tags semantically (audit A-07)
     "sentence-transformers>=3.0",
     "llama-cpp-python>=0.2",
     "structlog>=24.0",

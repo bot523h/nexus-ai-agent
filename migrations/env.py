@@ -11,6 +11,9 @@ URL + metadata resolution:
   that merges ``SQLModel.metadata`` with any future metadata owners.
 - ``render_as_batch=True`` is enabled only for SQLite, which needs batch mode
   for ALTER statements; PostgreSQL does not need it (and it is slower there).
+- ``include_object`` (``migration_metadata.include_object``) keeps autogenerate
+  and ``alembic check`` to the tables this metadata owns: LangGraph's
+  checkpoint tables share the database but are migrated by LangGraph.
 
 The application package must be importable (it is installed as part of the
 project), the same assumption the stock Alembic template makes about the app
@@ -26,7 +29,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from nexus_ai_agent.storage.db import resolve_migration_url
-from nexus_ai_agent.storage.migration_metadata import get_target_metadata
+from nexus_ai_agent.storage.migration_metadata import get_target_metadata, include_object
 
 # The Alembic Config object, providing access to the values within the .ini
 # file in use.
@@ -61,6 +64,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         render_as_batch=is_sqlite_url(url),
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -72,6 +76,8 @@ def do_run_migrations(connection: Connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         render_as_batch=is_sqlite_url(resolve_migration_url()),
+        # Foreign tables (LangGraph checkpoints, lifecycle store) are not drift.
+        include_object=include_object,
     )
 
     with context.begin_transaction():

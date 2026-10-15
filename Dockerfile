@@ -29,7 +29,19 @@ RUN mkdir -p data/chroma data/cache assets/fonts
 # Initialize database (optional during build, better at runtime)
 # RUN export PYTHONPATH=$PYTHONPATH:$(pwd)/src && python -m nexus_ai_agent.cli migrate
 
+# Run as an unprivileged user (audit A-16, closeout 2026-10-15). The bot writes
+# only under /app/data (SQLite files, caches, creative artifacts); nothing it
+# does needs root, and a compromised handler must not own the container.
+RUN groupadd --system nexus && useradd --system --gid nexus --home-dir /app --shell /usr/sbin/nologin nexus \
+    && chown -R nexus:nexus /app
+USER nexus
+
 EXPOSE 8000
+
+# Liveness: mode-aware (polling deployments have no HTTP server — see
+# docker/healthcheck.sh). start-period covers model/cache warm-up.
+HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
+    CMD ["/app/docker/healthcheck.sh"]
 
 # Default command runs the bot.
 # NEXUS_RUN_MODE selects the run mode (see bot/webhook.py); "polling" is the

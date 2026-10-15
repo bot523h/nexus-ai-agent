@@ -198,7 +198,7 @@ def decide_sqlite_bootstrap(db_path: str | None = None) -> str:
     """
     from nexus_ai_agent.config.settings import get_settings
 
-    normalized = str(Path(db_path or get_settings().db_path).expanduser())
+    normalized = _sqlite_identity(db_path or get_settings().db_path)
     if normalized in _initialized_paths:
         return _SqliteBootstrapMode.NOTHING.value
     if not Path(normalized).exists():
@@ -212,11 +212,24 @@ def decide_sqlite_bootstrap(db_path: str | None = None) -> str:
     return _SqliteBootstrapMode.ALEMBIC.value
 
 
+def _sqlite_identity(db_path: str) -> str:
+    """The one key under which a SQLite file is cached and remembered.
+
+    Absolute, so the identity of ``data/app.sqlite`` does not depend on the
+    current working directory: a process (or a test) that changes directory
+    after the engine was created must get a *different* engine and a fresh
+    bootstrap decision, not the previous directory's file under the same
+    relative name (that leak produced ``no such table`` on a brand-new file
+    whose relative path was already in ``_initialized_paths``).
+    """
+    return str(Path(db_path).expanduser().resolve())
+
+
 def _get_engine(db_path: str) -> Any:
     """Return an engine bound to ``db_path``, recreating it when the path changes."""
     global _engine, _engine_path, _session_factory
 
-    normalized_path = str(Path(db_path).expanduser())
+    normalized_path = _sqlite_identity(db_path)
     if _engine is None or _engine_path != normalized_path:
         Path(normalized_path).parent.mkdir(parents=True, exist_ok=True)
         if _engine is not None:
@@ -335,7 +348,7 @@ async def _set_wal_mode(engine: Any) -> None:
 
 async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
     """Create all SQLModel tables for the selected database, exactly once per path."""
-    normalized_path = str(Path(db_path).expanduser())
+    normalized_path = _sqlite_identity(db_path)
     engine = _get_engine(normalized_path)
     # Dispose *after* the lookup: a path switch retires the previous engine
     # inside _get_engine, and disposing it here (rather than on the *next*
@@ -346,8 +359,28 @@ async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
         return
 
     await _set_wal_mode(engine)
+    if await _is_alembic_versioned(engine):
+        # Schema authority (audit 2026-10-15): a file that carries
+        # ``alembic_version`` is owned by the migration chain.  ``create_all``
+        # must not run against it — it would silently materialise a model
+        # table that has no migration and hide the missing revision until the
+        # first PostgreSQL deployment.  ``ensure_startup_schema`` (and
+        # ``nexus migrate``) is the only writer of such a file's schema.
+        _initialized_paths.add(normalized_path)
+        return
     await create_all_metadata(engine, SQLModel.metadata)
     _initialized_paths.add(normalized_path)
+
+
+async def _is_alembic_versioned(engine: Any) -> bool:
+    """Whether the database already carries Alembic's ``alembic_version`` table."""
+    from sqlalchemy import inspect as sa_inspect
+
+    def _has_version_table(sync_conn: Any) -> bool:
+        return bool(sa_inspect(sync_conn).has_table("alembic_version"))
+
+    async with engine.connect() as conn:
+        return await conn.run_sync(_has_version_table)
 
 
 def _get_pg_engine(url: str) -> Any:

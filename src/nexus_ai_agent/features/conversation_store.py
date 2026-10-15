@@ -1,4 +1,4 @@
-"""Persistent conversation history — stores chat messages in SQLite.
+"""Persistent conversation history — stores chat messages in the configured database.
 
 Replaces GeminiEngine's in-memory _history dict so conversations
 survive process restarts and can be queried/audited.
@@ -7,53 +7,24 @@ survive process restarts and can be queried/audited.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import (
-    Column,
-    DateTime,
-    Index,
-    Integer,
-    MetaData,
-    String,
-    Table,
-    Text,
-    func,
-    text,
-)
+from sqlalchemy import text
 
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.clock import naive_utcnow
 from nexus_ai_agent.storage.db import sync_engine
 
 log = get_logger(__name__)
 
-
-def _naive_utcnow() -> datetime:
-    """Current UTC time as the naive value the DATETIME columns store.
-
-    ``datetime.utcnow()`` is deprecated (Python 3.12) and silently mixes naive
-    and aware values; this keeps the stored representation unchanged (DTZ003,
-    audit A-12).
-    """
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-_CONVERSATION_METADATA = MetaData()
-_CONVERSATION_HISTORY = Table(
-    "conversation_history",
-    _CONVERSATION_METADATA,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("conv_id", String, nullable=False),
-    Column("role", String, nullable=False),
-    Column("parts_json", Text, nullable=False),
-    Column("created_at", DateTime, server_default=func.current_timestamp()),
-    Index("ix_conv_history_conv_id", "conv_id"),
-)
+# The ``conversation_history`` table this store reads and writes is declared
+# once, in ``storage.models.ConversationHistory``, and provisioned by the
+# Alembic chain (revision ``c7a1e5d2b9f3``) — never by this module (audit
+# 2026-10-15, schema authority).
 
 
 class ConversationStore:
-    """SQLite-backed conversation history store.
+    """Conversation history store on the configured database (SQLite or PostgreSQL).
 
     Each conversation is identified by a ``conv_id`` (e.g. ``"tg:12345"``).
     Messages are stored as JSON-serialised dicts with ``role`` and ``parts``.
@@ -69,19 +40,16 @@ class ConversationStore:
     def __init__(self, db_path: str | None = None) -> None:
         """``db_path`` pins a SQLite file; ``None`` follows the configured
         backend (``NEXUS_DATABASE_URL`` or ``NEXUS_DB_PATH``) through
-        ``storage.db.sync_engine`` (audit A-02)."""
-        self._engine = sync_engine(db_path)
-        self._ensure_table()
+        ``storage.db.sync_engine`` (audit A-02).
 
-    def _ensure_table(self) -> None:
-        """Create ``conversation_history`` (and its ``conv_id`` index) when missing.
-
-        Declared as a private SQLAlchemy ``Table`` so the DDL is emitted per
-        dialect (the former hand-written ``AUTOINCREMENT`` statement was
-        SQLite-only); the table stays outside ``SQLModel.metadata`` because
-        it is owned by this store, not by the Alembic-managed schema.
+        The constructor never touches the schema: ``conversation_history`` is
+        created by the migration chain — ``ensure_startup_schema`` before the
+        bot polls (SQLite) or ``nexus migrate`` / the lazy PostgreSQL
+        preparation (D7).  A missing table therefore surfaces as a database
+        error from the first query, which is the correct, loud failure for an
+        un-migrated deployment.
         """
-        _CONVERSATION_METADATA.create_all(self._engine, checkfirst=True)
+        self._engine = sync_engine(db_path)
 
     def get_history(self, conv_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
         """Get recent conversation history for *conv_id*.
@@ -123,7 +91,7 @@ class ConversationStore:
                     "cid": conv_id,
                     "role": role,
                     "parts": parts_json,
-                    "ts": _naive_utcnow().isoformat(),
+                    "ts": naive_utcnow().isoformat(),
                 },
             )
 
@@ -143,7 +111,7 @@ class ConversationStore:
                         "cid": conv_id,
                         "role": role,
                         "parts": parts_json,
-                        "ts": _naive_utcnow().isoformat(),
+                        "ts": naive_utcnow().isoformat(),
                     },
                 )
 

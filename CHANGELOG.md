@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fix — remediation closeout (schema authority, A-07/A-12/A-15/A-16/A-19; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **Schema authority — one writer of the schema.** `ConversationStore`
+  declared `conversation_history` on a private `MetaData` and ran
+  `create_all()` in its constructor; `ReferralEngine` ran `create_all()` for
+  two tables the initial migration already owns; the async SQLite bootstrap
+  (`create_all_tables`) ran against files Alembic had already versioned. Now:
+  `ConversationHistory` is a `storage/models.py` table, revision
+  `c7a1e5d2b9f3` *adopts* an existing table in place (byte-identical DDL,
+  legacy index name kept, rows preserved) or creates it, feature stores emit
+  no DDL (an un-migrated file fails loudly at first query), and
+  `create_all_tables` skips any file carrying `alembic_version`. Tests:
+  `tests/unit/test_schema_authority.py` (AST scan for `create_all`, adoption
+  with rows, downgrade/upgrade, guard), `tests/integration/
+  test_postgres_schema_authority.py` (same on PostgreSQL, CI
+  `migrate-postgres`), fixture `migrated_sqlite` in `tests/conftest.py`
+  (schema via the production `ensure_startup_schema`). The PostgreSQL golden
+  `postgres.langgraph.json` changed `96105e96…` → `fb658576…`: re-hashing the
+  live payload with the previous head reproduces the old value, i.e. the
+  only delta is `migration_head`.
+- **A-19 — `alembic check` on a real deployment.** The drift gate reported
+  `remove_table` for LangGraph's `checkpoints*` tables and autogenerate
+  proposed dropping them. `migration_metadata.include_object` ignores
+  reflected tables the metadata does not own; drift on an owned table is
+  still detected (negative control in `test_migrations.py` and the PG test).
+  The CI job now runs `alembic check` on the service database.
+- **A-12 — single time contract.** `storage/clock.py` (`utcnow`,
+  `naive_utcnow`, `as_naive_utc`, `as_aware_utc`) replaces five private
+  helpers and 32 `default_factory=datetime.utcnow` references; stored
+  values are naive UTC, in-flight values aware UTC, conversions explicit.
+  `tests/unit/test_time_contract.py` bans `datetime.utcnow` package-wide
+  (AST) and pins the column/default contract.
+- **A-07 — self-update says what it did.** `agent/updater.py` probes
+  capability first (git present, package inside a *clean* work tree with an
+  upstream): the container image (built without `.git`, installed into
+  site-packages) gets `self-update unsupported: … rebuild and redeploy`
+  and executes nothing; otherwise `git pull --ff-only` → reinstall with
+  exact outcomes `already up to date at <sha>` / `updated <old> -> <new>;
+  restart required`. Release checks compare versions semantically
+  (`packaging`, now a declared dependency) — an older or non-version tag is
+  not an update. `/update` relays the exact outcome
+  (`tests/unit/test_update_command_outcomes.py`); `tests/unit/test_updater.py`
+  exercises the probe against real git repositories.
+- **A-16 — container hardening.** The image runs as the unprivileged
+  `nexus` user and declares a mode-aware `HEALTHCHECK`
+  (`docker/healthcheck.sh`: `/healthz` in webhook mode, live `run-bot`
+  process in polling mode — never a blanket HTTP probe).
+  `tests/unit/test_container_contract.py` runs the probe for real.
+- **A-15 — documentation drift.** `MODULE_MAP.md` (verified SHA, 79 i18n
+  keys, new law R21), `DATA_AND_STORAGE.md` (5-revision chain, adoption,
+  foreign tables, time contract, backups as external prerequisite, updater
+  contract), `RUNTIME_FLOWS.md`, `TESTING.md`, README storage box,
+  `AGENTS.md` §4 board snapshot; six dated root reports moved to
+  `docs/audits/` and indexed.
+
 ### Fix — full-audit remediation, round 0 (findings A-01/A-02b/A-03/A-06; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
 
 - **A-01 — every free-text message crashed on `main`.** `storage/db.py` built

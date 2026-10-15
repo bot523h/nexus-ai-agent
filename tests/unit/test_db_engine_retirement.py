@@ -48,3 +48,33 @@ async def test_path_switch_disposes_the_retired_engine_immediately(tmp_path: Pat
     assert not any(t.is_alive() for t in first_workers), (
         "the retired engine's aiosqlite worker thread outlived the path switch"
     )
+
+
+async def test_sqlite_identity_is_absolute_so_a_cwd_change_cannot_reuse_a_stale_bootstrap(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Closeout 2026-10-15: ``get_session()``'s default ``data/app.sqlite`` was
+    cached and remembered under its *relative* name.  A caller that changed
+    directory (every ``monkeypatch.chdir`` test) bootstrapped ``<tmp>/data/
+    app.sqlite``, after which the *next* caller in another directory reused
+    the "already initialised" verdict for a brand-new, empty file and failed
+    with ``no such table`` — the order-dependent CI failure of
+    ``tests/unit/test_approval.py::test_approve_status``.
+    """
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+
+    monkeypatch.chdir(first)
+    async with get_session("data/app.sqlite") as session:
+        (await session.exec(select(PendingApproval))).all()
+    assert (first / "data" / "app.sqlite").is_file()
+
+    monkeypatch.chdir(second)
+    async with get_session("data/app.sqlite") as session:
+        (await session.exec(select(PendingApproval))).all()  # was: no such table
+    assert (second / "data" / "app.sqlite").is_file()
+    assert db_module._engine_path == str((second / "data" / "app.sqlite").resolve())
+    assert str((first / "data" / "app.sqlite").resolve()) in db_module._initialized_paths
+    assert str((second / "data" / "app.sqlite").resolve()) in db_module._initialized_paths

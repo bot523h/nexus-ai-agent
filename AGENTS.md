@@ -62,16 +62,18 @@ distribution-version test fail for purely environmental reasons — documented i
 
 ## 4. Board state (schema 2 — summary; always verify with `show`)
 
-Verified at `2026-10-06T23:20Z`, `main` @ `b733fb0` (after the #126 → #183 → #128 spine stack and the #184 owner-gate fix merged).
+Verified at `2026-10-15T15:00Z`, `main` @ `6b39856` (after #212 pinned `langgraph-checkpoint-sqlite==3.1.1`). The live
+record is `python scripts/agent_board.py show`; this table is a snapshot, not an authority.
 
 | Task | Zone | Owner (branch) | Status |
 |---|---|---|---|
+| `task-270-full-audit-remediation` audit A-01…A-19 remediation + closeout (schema authority, time contract, updater contract, PR triage) | `full-audit-remediation` | `arena/26f7d958-nexus-ai-agent` (generation 3, 24 h lease, `gates_owner`) | `active` — draft PR #218 |
 | `task-186` intent-first creative spine + `task-207` referee / `task-219` lease fencing / `task-220` gc-note | `nagar-creative-graph` / `coordination-referee` | merged | `done` (PR#126) |
 | `task-221` spine plan atomicity · `task-222` transaction-scoped rollback · `task-223` identity-aware `system.undo` | `nagar-creative-graph` / `nagar-contract-gate` | merged | `done` (#126 / #183 / #128) |
 | `task-190` SQLite WAL init race | `storage-observability` | merged | `done` (#132 → #174) |
 | `task-253` owner identity gate fails closed when unconfigured | `features-owner-control` | merged | `done` (PR#184) |
 | `task-131` documentation & architecture suite + board rewrite | `docs-architecture` | — | `done` |
-| `ci-gates-steward` interim gates stewardship | `ci-quality` | — | `completed_released` (no live `gates_owner`) |
+| `ci-gates-steward` interim gates stewardship | `ci-quality` | — | `completed_released` (the live `gates_owner` is task-270 while its lease is valid) |
 | `task-122` PR#32 rebase + dedupe | `feature-wiring` | عامل B | `assigned_to_B` (stale lease) |
 | `task-123` PR#33 slim-down | `packaging+interop` | شاخه 3aa | `assigned_to_E_pr33` (stale lease) |
 | `task-124` P0-8 single wiring + P0-9 graph memory | `audit-remainder` | free | `available_sequenced_post_32_33` — **P0** |
@@ -82,7 +84,8 @@ Verified at `2026-10-06T23:20Z`, `main` @ `b733fb0` (after the #126 → #183 →
 
 Closed waves, merged PRs (#19–#38 and the spine stack) and the four recorded incidents live in
 `history` inside `.agents/board.json`; the durable narrative is
-`docs/architecture/` plus `docs/audits/`.
+`docs/architecture/` plus `docs/audits/`. A stale `gates_owner: true` field is **not** proof of a live
+gates owner — check the branch, generation and `expires` of the claim (`show`), as rule 2 requires.
 
 ## 5. شبکه ۱۰ وظیفه کلیدی بعدی (wave 4 — full detail: `.agents/board.json → next_work`)
 

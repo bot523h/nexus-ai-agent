@@ -2,7 +2,7 @@
 
 **Status:** Living document — every rule here names the test that enforces it
 **Scope:** package inventory, allowed dependency directions, fitness-function catalogue, extension recipes
-**Verified against:** `main` @ `6e41123`
+**Verified against:** `main` @ `6b39856` + the 2026-10-15 closeout candidate (PR #218)
 
 This is the *structural* contract of the repository. If a rule is not in §3 or §4, it is a convention, not a law. If a rule is in this file and **not** enforced by a test, that is a documentation bug — file it against zone `docs-architecture`.
 
@@ -32,7 +32,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | `application/ports/` | L1 | the six hexagonal contracts (`LLMPort`, `JobQueuePort`, `ObjectStoragePort`, `ConversationStorePort`, `CheckpointLifecyclePort`, `CaptionEnginePort`) | see [`PORTS.md`](PORTS.md) |
 | `creative/studio/` | L1 | Nagar core: typed `Project`, `CommandBus`, `CapabilityRegistry`, `PermissionLevel`, reference resolver | `build_wave1_registry`, `CommandBus.dispatch` |
 | `creative/packs/` | L2 | seven data-only packs + manifest schema, verifier, registry | `register_*_operations`, `PackRegistry.register_builtin` |
-| `i18n/` | L1 | 15 locales × 63 keys, key-parity guarded | `I18n`, `i18n` |
+| `i18n/` | L1 | 15 locales × 79 keys, key-parity guarded (`tests/unit/test_i18n_parity.py`) | `I18n`, `i18n` |
 | `core/` | L3 | SSRF guard, resilient HTTP client, instrumentation decorator | `SafeAsyncTransport`, `ResilientHttpClient`, `instrumented` |
 | `application/` | L3 | use-case composition with no framework imports | `get_image_gen_provider` |
 | `infrastructure/observability/` | L3 | metrics registry, structured lifecycle events, redaction | `MetricsRegistry`, `log_lifecycle_event`, `redact` |
@@ -77,6 +77,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | R18 | A main-bound merge requires `base == main`: `scripts/merge_base_guard.py` fails closed (exit 1) on a `pull_request` whose base is any other branch, and treats an unreadable base as exit 2 — never a pass. Closes the #143 wrong-base merge (base = a feature branch, merged as `d7c463e`, never on `main`) | `test_merge_base_guard.py` (all tests; the CI-wiring and stdlib assertions are the non-vacuity guards) |
 | R19 | One database per deployment: synchronous feature code obtains its engine from `storage.db.sync_engine()` (PostgreSQL via psycopg when `NEXUS_DATABASE_URL` is set, else the configured SQLite file), feature modules never build a `create_engine("sqlite:///…")` of their own, and feature modules never redeclare a table that `storage/models.py` owns | `tests/unit/test_sync_engine_resolution.py` (every `_sync_engine` helper resolves to the shared engine; the PostgreSQL URL wins), `tests/unit/test_referral_models.py` (single `Referral`/`ReferralCode` definitions) |
 | R20 | Every production module is reachable: something in `src/`, `tests/`, `scripts/` or `migrations/` imports it (statically or by dotted string), or it is a declared composition root (`cli`, `api.app`). Nine never-imported modules found by the 2026-10-15 audit (A-10) were deleted rather than kept as aspiration | `test_no_orphan_modules.py` (all three tests; the entry-point allowlist carries a reason per entry and is itself checked for staleness) |
+| R21 | Alembic is the only schema authority: no production module other than `storage/db.py` (the un-versioned SQLite bootstrap, which skips files carrying `alembic_version`) references `create_all`; feature stores (`ConversationStore`, `ReferralEngine`) never emit DDL and fail loudly on an un-migrated file; `alembic check` ignores tables owned by other libraries (LangGraph checkpoints) but still detects drift on owned tables; every `DateTime` default is `storage.clock.naive_utcnow` and `datetime.utcnow` is banned package-wide | `tests/unit/test_schema_authority.py` (AST scan, adoption revision `c7a1e5d2b9f3`, create_all guard), `tests/integration/test_postgres_schema_authority.py` (PG leg, CI `migrate-postgres`), `tests/unit/test_migrations.py::test_check_ignores_tables_owned_by_other_libraries`, `tests/unit/test_time_contract.py` |
 
 **Legacy baseline.** `tests/architecture/legacy_baseline.json` freezes the pre-existing `langgraph`/`sqlmodel`/`telegram` import set with an explicit `approval: ARCH_BASELINE_APPROVED`. New violations fail; removing a baseline entry is allowed (and should be celebrated, not blocked).
 

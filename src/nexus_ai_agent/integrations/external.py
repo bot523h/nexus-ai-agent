@@ -44,7 +44,7 @@ import re
 import unicodedata
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Generic, TypeVar
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
@@ -54,6 +54,7 @@ import httpx
 from nexus_ai_agent.core.http_client import CircuitOpenError, ResilientHttpClient
 from nexus_ai_agent.core.ssrf_guard import SSRFBlockError
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.clock import as_aware_utc, naive_utcnow, utcnow
 
 logger = get_logger(__name__)
 
@@ -80,19 +81,8 @@ MAX_EXTRACTED_TEXT_CHARS = 20_000
 """Upper bound on text handed back from HTML extraction."""
 
 
-def utcnow() -> datetime:
-    """Timezone-aware current UTC time (``datetime.utcnow`` is deprecated)."""
-    return datetime.now(timezone.utc)
-
-
-def naive_utcnow() -> datetime:
-    """Naive UTC timestamp for the plain ``DateTime`` columns in storage/.
-
-    The storage models use naive ``DateTime`` columns, so the repository-wide
-    convention is *naive values are UTC*.  This helper makes that conversion
-    explicit and keeps the deprecated ``datetime.utcnow()`` out of the zone.
-    """
-    return utcnow().replace(tzinfo=None)
+# ``utcnow`` / ``naive_utcnow`` are re-exported from the project's single time
+# contract (``storage.clock``, audit A-12) so existing importers keep working.
 
 
 # ── failure taxonomy ───────────────────────────────────────────────────────
@@ -941,8 +931,7 @@ def dedupe_by_url(rows: Iterable[Mapping[str, Any]], *, url_key: str) -> list[Ma
 
 def is_fresh(retrieved_at: datetime, max_age: timedelta) -> bool:
     """Freshness predicate for provenance-aware callers."""
-    reference = retrieved_at if retrieved_at.tzinfo else retrieved_at.replace(tzinfo=timezone.utc)
-    return utcnow() - reference <= max_age
+    return utcnow() - as_aware_utc(retrieved_at) <= max_age
 
 
 __all__ = [

@@ -100,21 +100,20 @@ def test_every_feature_module_delegates_to_the_central_engine(
 def test_the_referral_engine_follows_the_configured_backend(postgres_configured: Any) -> None:
     from nexus_ai_agent.features.referral import ReferralEngine
 
-    # Table creation is `checkfirst`, which would need a connection on
-    # PostgreSQL — assert the resolution without touching the network.
-    engine = ReferralEngine.__new__(ReferralEngine)
-    engine._db_path = None
-    assert engine._sync_engine().url.drivername == "postgresql+psycopg"
+    # The constructor emits no DDL (schema authority), so this needs no server.
+    assert ReferralEngine()._sync_engine().url.drivername == "postgresql+psycopg"
 
 
-def test_the_referral_engine_creates_its_tables_on_sqlite(settings_override: Any) -> None:
+def test_the_referral_engine_emits_no_ddl_on_sqlite(settings_override: Any) -> None:
+    """Schema authority (audit 2026-10-15): the tables come from the migration
+    chain (``47903d282ede``), never from the feature engine."""
     from sqlalchemy import inspect
 
     from nexus_ai_agent.features.referral import ReferralEngine
 
-    ReferralEngine()  # db_path=None → NEXUS_DB_PATH
+    ReferralEngine()  # db_path=None → NEXUS_DB_PATH (a fresh, un-migrated file)
     names = set(inspect(db_module.sync_engine()).get_table_names())
-    assert {"referral", "referralcode"} <= names
+    assert not ({"referral", "referralcode"} & names)
 
 
 def test_the_reminder_and_conversation_stores_follow_the_configured_backend(
@@ -124,9 +123,8 @@ def test_the_reminder_and_conversation_stores_follow_the_configured_backend(
     from nexus_ai_agent.features.tools import ReminderSystem
 
     assert ReminderSystem(db_path=None)._engine_ref().url.drivername == "postgresql+psycopg"
-    store = ConversationStore.__new__(ConversationStore)  # skip create_all (needs a server)
-    store._engine = db_module.sync_engine(None)
-    assert store._engine.url.drivername == "postgresql+psycopg"
+    # The constructor emits no DDL (schema authority), so this needs no server.
+    assert ConversationStore(db_path=None)._engine.url.drivername == "postgresql+psycopg"
 
 
 def test_composition_roots_hand_none_to_engines_when_postgres_is_configured() -> None:

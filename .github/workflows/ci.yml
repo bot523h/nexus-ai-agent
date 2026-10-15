@@ -428,13 +428,21 @@ jobs:
       - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py
       # Lifecycle store contract, PG leg (option A).
       - run: pytest -q tests/integration/test_lifecycle_store_contract.py
+      # Schema authority (closeout 2026-10-15): a legacy conversation_history
+      # table is adopted in place with its rows, the revision is reversible,
+      # and `alembic check` is clean next to LangGraph's tables (A-19) while
+      # still detecting drift on an owned table.
+      - run: pytest -q tests/integration/test_postgres_schema_authority.py
+      # A-19 as the operator runs it: the drift gate on the deployment database
+      # (LangGraph tables present from the steps above) must exit 0.
+      - run: alembic check
       # idempotent re-run must be a no-op (revision already at head).
       - run: nexus migrate
       # Confirm the migration stamp on a real Postgres.
-      # Head is b5d8e2f4a917 (telegram_ids_bigint, audit A-17), which revises
-      # 7c2f9d41e8a3 (ai_memory_consent, P0-7).
+      # Head is c7a1e5d2b9f3 (conversation_history adopted by the chain, audit
+      # 2026-10-15), which revises b5d8e2f4a917 (telegram_ids_bigint, A-17).
       - run: |
-          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q b5d8e2f4a917
+          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q c7a1e5d2b9f3
 
   # ── Merge-base guard (incident #143, fail-closed) ───────────────────────────
   # PR #143 was merged with base = a *feature* branch, not `main`; GitHub called

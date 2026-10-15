@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any, ClassVar
 
 from sqlmodel import Session, select
 
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.clock import as_naive_utc, naive_utcnow
 from nexus_ai_agent.storage.models import ModerationConfig, UserReputation
 
 logger = get_logger(__name__)
@@ -31,18 +32,6 @@ def _sync_engine() -> Any:
     from nexus_ai_agent.storage.db import sync_engine
 
     return sync_engine()
-
-
-def _utcnow_naive() -> datetime:
-    """Current UTC time without tzinfo — the convention of every model column."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-def _as_utc_naive(value: datetime) -> datetime:
-    """Normalise a stored timestamp to naive UTC regardless of how it was written."""
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 # ---------------------------------------------------------------------------
@@ -276,11 +265,11 @@ class ModerationEngine:
                     reputation=0,
                     warnings=0,
                     is_muted=True,
-                    mute_until=_utcnow_naive() + timedelta(minutes=duration_minutes),
+                    mute_until=naive_utcnow() + timedelta(minutes=duration_minutes),
                 )
             else:
                 rep.is_muted = True
-                rep.mute_until = _utcnow_naive() + timedelta(minutes=duration_minutes)
+                rep.mute_until = naive_utcnow() + timedelta(minutes=duration_minutes)
             session.add(rep)
             session.commit()
             logger.info(
@@ -325,7 +314,7 @@ class ModerationEngine:
             # by an older build may carry an offset, so normalise before the
             # comparison — mixing the two raised ``TypeError`` and would have
             # crashed the ingress for every muted user.
-            if rep.mute_until is not None and _as_utc_naive(rep.mute_until) <= _utcnow_naive():
+            if rep.mute_until is not None and as_naive_utc(rep.mute_until) <= naive_utcnow():
                 rep.is_muted = False
                 rep.mute_until = None
                 session.add(rep)

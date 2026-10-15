@@ -29,16 +29,15 @@ pytest -q tests/unit/test_conversation_store_contract.py
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from nexus_ai_agent.features.conversation_store import ConversationStore
 
 
 @pytest.fixture()
-def store(tmp_path: Path) -> ConversationStore:
-    return ConversationStore(db_path=str(tmp_path / "test_conv.sqlite"))
+def store(migrated_sqlite: str) -> ConversationStore:
+    # The table comes from the migration chain (c7a1e5d2b9f3), never from the store.
+    return ConversationStore(db_path=migrated_sqlite)
 
 
 # ---------------------------------------------------------------------------
@@ -256,8 +255,8 @@ def test_nested_dict_parts_roundtrip(store: ConversationStore) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_data_persists_across_store_instances(tmp_path: Path) -> None:
-    db = str(tmp_path / "persist.sqlite")
+def test_data_persists_across_store_instances(migrated_sqlite: str) -> None:
+    db = migrated_sqlite
     s1 = ConversationStore(db_path=db)
     s1.append("tg:persist", {"role": "user", "parts": [{"text": "survive"}]})
     del s1
