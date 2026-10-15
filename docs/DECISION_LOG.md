@@ -1986,3 +1986,20 @@ debt) remain open findings tracked on the board; the daily `maintenance/backup-d
 unexplained because Actions job logs are not reachable from the remediation environment; no live
 PostgreSQL run was performed in this environment — the PostgreSQL resolution is asserted on the
 engine URL/driver (SQLAlchemy engines are lazy) and the dialect-agnostic DDL on SQLite.
+
+*Governance recovery (GOV-1/GOV-2, 2026-10-15).* Two findings against the board's own evidence
+chain were closed by the same rule. GOV-1: the referee mutation `pr_branch_self_exclusion_removed`
+survived because its test was vacuous (exit 2 for an unrelated reason); the test now proves the
+reason and the campaign reproduces 14/14. GOV-2: the Gate-5 campaign's "11 + 5 = 16" was a count
+error over 17 probes, five of which were silently *not applied* (anchor drift), and the harness
+run in an isolated worktree imported the editable-installed production package, so a campaign could
+report "0 caught" while mutating nothing. Decision: a mutation harness is only evidence when (a) every
+anchor occurs exactly once in its target — enforced by a unit test, not by the campaign's own
+"NOT APPLIED" line; (b) the harness imports the tree it mutates (`PYTHONPATH` pinned); (c) a probe
+weakens *every* layer that guards the invariant (M2–M4 are multi-edit: fenced SELECT + ledger status
+filter + fenced UPDATE), because an equivalent mutant is not a surviving mutant; (d) both campaigns run
+in CI (`governance-mutations`) inside a detached worktree with a 25-minute cap. Rejected: running the
+campaigns against the job's own checkout (a crash would leave the tree mutated for later steps) and
+dropping `AND attempt = ?` outright in the mutants (changes the binding count → sqlite error → red for
+the wrong reason).
+

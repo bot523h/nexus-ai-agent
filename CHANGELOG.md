@@ -121,6 +121,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command is backed by an engine since round 0; `/companion` and `/analyze`
   were never registered and are listed as such.
 
+### Fix — governance recovery: both mutation harnesses attack again (GOV-1/GOV-2; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **GOV-1 — referee mutation `pr_branch_self_exclusion_removed` survived.**
+  The test meant to kill it ran `check` on a synthetic board without exactly
+  one active gates owner, so the referee returned exit 2 for *that* reason
+  and the self-exclusion was never exercised (a vacuous test). The test now
+  builds a gated board (`_gated_synthetic_board`), asserts the printed reason
+  and keeps a control run; `scripts/board_referee_mutations.py` reproduces
+  **14/14 killed** (exit 0, `agent_board.py` SHA identical before and after).
+- **GOV-2 — Gate-5 probe campaign reconciled to 17/17.** The published
+  "11 + 5 = 16" was a counting error: 12 probes were caught and 5 (`M2`, `M3`,
+  `M4`, `M5a`, `M9`) were silently *not applied* because their anchors had
+  drifted off `in_process_job_queue.py`. All five are re-anchored; `M2`–`M4`
+  became multi-edit probes (`Probe.extra_edits`) because every `_mark_*` CAS is
+  guarded three times (fenced SELECT, attempt-ledger status filter, fenced
+  UPDATE) and weakening only the UPDATE is an equivalent mutant, not an attack.
+  Root cause of a second silent failure mode fixed: run in an isolated
+  worktree, the harness imported the editable-installed production package, so
+  every probe "survived" while touching nothing — `_run_tests` now pins
+  `PYTHONPATH` to the tree under mutation. `scripts/gate5_mutation_probes.py`
+  reproduces **17/17 caught** (exit 0, target SHA identical before and after).
+- **Guards:** `tests/unit/test_mutation_harness_anchors.py` fails instantly on
+  anchor drift (every anchor must occur exactly once in its target), on a
+  mutant that changes the SQL binding count, on a harness that does not pin
+  `PYTHONPATH`, and on a CI workflow that does not run both campaigns in a
+  detached worktree. CI job `governance-mutations` (`.github/workflows/ci.yml`,
+  25-minute cap, worktree + `git diff --exit-code`) runs both campaigns on
+  every push to `main`/`v*` and every pull request.
+
 ### Feature — truth doctor: one authority for repository truth (law R16, session `arena/runtime-truth-tooling`)
 
 - **The repository could not prove its own truth.** Version drift, an unindexed
