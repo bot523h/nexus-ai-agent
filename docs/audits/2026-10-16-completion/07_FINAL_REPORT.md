@@ -49,8 +49,8 @@
 | `ruff check src tests scripts` | clean |
 | `ruff format --check` | clean |
 | `mypy --strict src` | **0 errors / 284 files** |
-| `pytest -m "not slow"` (includes `tests/architecture`: complexity ratchet, reachability law, import boundaries) | **4262 passed, 37 skipped** (baseline before this session: 4181 / 37) |
-| mutation (HuggingFace parse reverted) | **11 tests fail** on the old behaviour; restored → green |
+| `pytest -m "not slow"` (includes `tests/architecture`: complexity ratchet, reachability law, import boundaries) | **4271 passed, 37 skipped** (baseline before this audit: 4181 / 37) |
+| mutation (HuggingFace parse reverted) | **20 of 41** provider tests fail on the old behaviour; restored → 41 green |
 | `tests/unit/test_docs_integrity.py` | package indexed in `docs/README.md` (enforced by the suite) |
 
 Local results are **not** a substitute for CI; the canonical pipeline result for the

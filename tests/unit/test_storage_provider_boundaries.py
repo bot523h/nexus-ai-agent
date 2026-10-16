@@ -345,6 +345,12 @@ async def test_a_key_without_a_revision_uses_main(
         "hf://owner/model@main/file.gguf?download=1",
         "hf://owner/model@main/file with space.gguf",
         "hf://owner/model@../evil/file.gguf",
+        "hf://owner/model@refs%2Fheads%2Fmain/file.gguf",  # percent-encoded revision
+        "hf://owner/model@main/file.gguf#fragment",
+        "hf://owner/model@main/sub/../../x.gguf",  # traversal in the sub-path
+        "hf://owner@/model@main/file.gguf",  # two @, the first of which is empty
+        "hf://owner//model@main/file.gguf",  # empty name segment
+        "hf://owner/model",  # a repository, but no file
     ],
 )
 async def test_unsafe_keys_are_refused_before_any_request(
@@ -375,6 +381,53 @@ async def test_huggingface_missing_model_and_server_error_are_distinguishable(
         await provider.download(remote_key=key, local_path=destination)
     assert not isinstance(excinfo.value, ProviderUnavailable)
     assert not destination.exists()
+
+
+async def test_a_filename_containing_an_at_sign_is_refused_as_ambiguous(
+    fake_httpx: type[FakeClient], tmp_path: Path
+) -> None:
+    """``@`` separates the revision, so it cannot also appear inside the path.
+
+    ``hf://o/r@main/model@2.gguf`` has two readings — revision ``main`` with the
+    file ``model@2.gguf``, or revision ``main/model`` with the file ``2.gguf`` —
+    and the convention has no escape for it.  The provider refuses instead of
+    guessing, which is the fail-closed choice: a guess would silently download a
+    *different* file than the operator asked for.
+    """
+    with pytest.raises(ProviderUnavailable):
+        await huggingface.HuggingFaceProvider(token=None).download(
+            remote_key="hf://o/r@main/model@2.gguf", local_path=tmp_path / "m.gguf"
+        )
+    assert fake_httpx.requests == []
+
+
+async def test_the_flattened_legacy_form_is_refused_because_nothing_ever_wrote_it(
+    fake_httpx: type[FakeClient], tmp_path: Path
+) -> None:
+    """``safe_key_to_filename`` (``a/b`` → ``a__b``) is never applied to HF keys.
+
+    It is used by the single-filename providers only (``mega.py``,
+    ``github_releases.py`` — verified by grep), so no stored HF key can be in
+    that form.  Accepting it would give one model two names.
+    """
+    with pytest.raises(ProviderUnavailable):
+        await huggingface.HuggingFaceProvider(token=None).download(
+            remote_key="hf://TheBloke__Mistral-7B@main/model.gguf", local_path=tmp_path / "m.gguf"
+        )
+    assert fake_httpx.requests == []
+
+
+async def test_a_commit_shaped_revision_is_accepted(
+    fake_httpx: type[FakeClient], tmp_path: Path
+) -> None:
+    """A revision may be a branch, a tag or a commit sha — all are path segments."""
+    provider = huggingface.HuggingFaceProvider(token=None)
+    await provider.download(
+        remote_key="hf://owner/model@935c7190eb1f/model.gguf", local_path=tmp_path / "m.gguf"
+    )
+    assert fake_httpx.requests[0]["url"] == (
+        "https://huggingface.co/owner/model/resolve/935c7190eb1f/model.gguf"
+    )
 
 
 async def test_huggingface_is_read_only(fake_httpx: type[FakeClient], tmp_path: Path) -> None:

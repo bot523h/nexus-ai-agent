@@ -50,6 +50,28 @@ The new suite also pins what the defect hid: the token travels only in the
 a 5xx raises `StorageError` and neither leaves a partial file behind, and a refused
 upload makes **no** HTTP request at all.
 
+### Input classes the parser must answer (added 2026-10-16, second pass)
+
+The mission asked for malformed, **ambiguous** and **legacy** inputs to be covered
+explicitly, not just the happy path. Nine further cases, each with the decision it
+encodes:
+
+| Input | Decision | Why |
+|---|---|---|
+| `hf://o/r@main/model@2.gguf` | **refused** (ambiguous) | two readings exist — revision `main` + file `model@2.gguf`, or revision `main/model` + file `2.gguf`; the convention has no escape, and guessing would download a *different* file than asked |
+| `hf://TheBloke__Mistral-7B@main/model.gguf` | **refused** (legacy flattened form) | `safe_key_to_filename` (`a/b` → `a__b`) is applied by `mega.py` and `github_releases.py` only — verified by grep, `ai_storage_manager.py` builds `HuggingFaceProvider` and never flattens — so no stored key can be in that form; accepting it would give one model two names |
+| `hf://owner/model@935c7190eb1f/model.gguf` | **accepted** | a revision may be a branch, a tag or a commit sha |
+| `hf://owner/model@refs%2Fheads%2Fmain/file.gguf` | refused | percent-encoded separators are not decoded into the URL path |
+| `hf://owner/model@main/file.gguf#fragment`, `…?download=1` | refused | query/fragment characters never reach a URL |
+| `hf://owner/model@main/sub/../../x.gguf` | refused | traversal below the repository root |
+| `hf://owner//model@main/file.gguf`, `hf://owner@/model@main/file.gguf` | refused | empty repository component |
+| `hf://owner/model` | refused | a repository is not a file |
+| `hf://owner/model/file.gguf` (no revision) | accepted as `main`, path may contain directories | the documented short form |
+
+With these, reverting the parser fails **20 of the 41** provider tests (it failed 11
+of 32 in the first pass) — the regression suite is strictly stronger than the
+original defect's blast radius.
+
 ## The 13 modules that received their first behaviour test
 
 All reachable from a composition root, all previously covered only by lint/typing
@@ -71,12 +93,12 @@ gates or by a reachability law:
 | `storage/providers/mega.py` | credential gate, missing client package is typed, the root folder is created once, a key that must become one filename cannot smuggle a separator |
 | `storage/providers/huggingface.py` | see P1-1 |
 
-Test counts: **81 new tests** in seven files
+Test counts: **90 new tests** in seven files
 (`test_instrumentation.py` 6, `test_slideshow_image_fill.py` 6,
 `test_bot_handler_surface.py` 14, `test_agent_store_registry.py` 5,
 `test_studio_api_scope.py` 12, `test_composition_facades.py` 6,
-`test_storage_provider_boundaries.py` 32). Full local suite: **4262 passed /
-37 skipped** (was 4181 / 37 before this audit), which is the +81.
+`test_storage_provider_boundaries.py` 41). Full local suite: **4271 passed /
+37 skipped** (4181 / 37 before this audit, 4262 / 37 after the first pass).
 
 ## Tests whose *setup* changed (disclosed, not hidden)
 
