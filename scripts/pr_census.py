@@ -102,11 +102,28 @@ def _checks(repo: str, sha: str, token: str) -> dict[str, str]:
 def _base_changed_since_merge_base(
     repo: str, head: str, base_branch: str, token: str
 ) -> tuple[list[str], int, int, bool]:
-    """Files the base changed since the merge base; (files, ahead_by, behind_by, truncated)."""
-    basehead = urllib.parse.quote(f"{head}...{base_branch}", safe="")
+    """Files the base changed since the merge base.
+
+    Returns ``(files, commits_unique_to_head, commits_only_in_base, truncated)``,
+    all **relative to ``base_branch``** — which for a stacked PR is another
+    feature branch, not ``main`` (see :func:`_main_relative_counts`).
+
+    The compare direction is ``<base_branch>...<head>`` so the API's
+    ``ahead_by`` / ``behind_by`` mean what their names say: commits the PR has
+    that the base does not, and commits the base has that the PR does not.
+
+    Defect fixed 2026-10-16: the first version passed ``<head>...<base_branch>``
+    and published the two numbers under each other's names, so a ledger row for
+    #218 read "26 behind" even though ``main`` is an ancestor of its head (26 is
+    the count of *unique* commits).  The historical packages keep the old field
+    names; this run and every run after it use the corrected ones.
+    """
+    basehead = urllib.parse.quote(f"{base_branch}...{head}", safe="")
     payload = _get(f"{API}/repos/{repo}/compare/{basehead}", token)
     assert isinstance(payload, dict)
     files = [f["filename"] for f in payload.get("files", []) if isinstance(f, dict)]
+    # ``total_commits`` follows the same direction as ahead_by: commits the head
+    # has that the base does not.
     total = int(payload.get("total_commits", 0))
     truncated = len(files) >= 300
     return (
@@ -115,6 +132,52 @@ def _base_changed_since_merge_base(
         int(payload.get("behind_by", 0)),
         truncated or total > 250,
     )
+
+
+def _main_relative_counts(
+    repo: str,
+    head: str,
+    base_ref: str,
+    default_branch: str,
+    token: str,
+    base_ahead: int,
+    base_behind: int,
+    base_files: int,
+) -> dict[str, int]:
+    """Counts against ``default_branch``, never against a stacked base.
+
+    Defect fixed 2026-10-16 (second, distinct from the direction defect above):
+    the compare runs against the PR's **own** base branch, and every row then
+    published those numbers under main-relative names.  For a stacked PR that is
+    not a rounding error — #213 (base = #210's branch) read ``unique_commits=12``
+    and ``commits_behind_main=19`` while its main-relative truth was
+    ``26 / 6``.  A ledger built on that would order merges wrongly, so when the
+    base is not the default branch a second compare against the default branch
+    supplies the main-relative triple.
+    """
+
+    if base_ref == default_branch:
+        return {
+            "unique_commits_vs_main": base_ahead,
+            "commits_behind_main": base_behind,
+            "changed_files_vs_main": base_files,
+        }
+    try:
+        main_files, ahead, behind, _ = _base_changed_since_merge_base(
+            repo, head, default_branch, token
+        )
+    except urllib.error.HTTPError as exc:
+        print(f"{head[:8]}: main compare failed ({exc.code})", file=sys.stderr)
+        return {
+            "unique_commits_vs_main": -1,
+            "commits_behind_main": -1,
+            "changed_files_vs_main": -1,
+        }
+    return {
+        "unique_commits_vs_main": ahead,
+        "commits_behind_main": behind,
+        "changed_files_vs_main": len(main_files),
+    }
 
 
 def classify(
@@ -189,6 +252,16 @@ def main(argv: list[str] | None = None) -> int:
         if number == args.reference:
             auto_state = "REFERENCE"
         override = overrides.get(str(number), {})
+        main_relative = _main_relative_counts(
+            args.repo,
+            head_sha,
+            base_ref,
+            default_branch,
+            token,
+            ahead,
+            behind,
+            len(files),
+        )
         rows.append(
             {
                 "number": number,
@@ -198,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
                 "head_sha": head_sha,
                 "base_ref": base_ref,
                 "base_sha_at_census": main_sha if base_ref == default_branch else "",
+                "compare_base_ref": base_ref,
                 "draft": bool(pr.get("draft")),
                 "mergeable": pr.get("mergeable"),
                 "mergeable_state": pr.get("mergeable_state"),
@@ -217,8 +291,12 @@ def main(argv: list[str] | None = None) -> int:
                 "touches_board": touches_board,
                 "dirty_only_because_of_board": board_only and pr.get("mergeable_state") == "dirty",
                 "board_in_both_sides": BOARD_FILE in both_sides,
-                "ahead_by": ahead,
-                "behind_by": behind,
+                # base-relative pair: the compare above ran against ``base_ref``,
+                # which for a stacked PR is another feature branch
+                "unique_commits_vs_base": ahead,
+                "base_commits_not_in_head": behind,
+                # main-relative triple: what integration decisions are made from
+                **main_relative,
                 "auto_state": auto_state,
                 "override_state": override.get("state", ""),
                 "override_reason": override.get("reason", ""),
@@ -269,8 +347,12 @@ def main(argv: list[str] | None = None) -> int:
         "touches_board",
         "dirty_only_because_of_board",
         "board_in_both_sides",
-        "ahead_by",
-        "behind_by",
+        "compare_base_ref",
+        "unique_commits_vs_base",
+        "base_commits_not_in_head",
+        "unique_commits_vs_main",
+        "commits_behind_main",
+        "changed_files_vs_main",
         "auto_state",
         "override_state",
         "override_reason",

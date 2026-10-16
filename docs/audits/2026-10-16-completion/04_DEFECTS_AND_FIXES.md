@@ -93,12 +93,49 @@ gates or by a reachability law:
 | `storage/providers/mega.py` | credential gate, missing client package is typed, the root folder is created once, a key that must become one filename cannot smuggle a separator |
 | `storage/providers/huggingface.py` | see P1-1 |
 
-Test counts: **90 new tests** in seven files
+Test counts: **97 new tests** in eight files
 (`test_instrumentation.py` 6, `test_slideshow_image_fill.py` 6,
 `test_bot_handler_surface.py` 14, `test_agent_store_registry.py` 5,
 `test_studio_api_scope.py` 12, `test_composition_facades.py` 6,
-`test_storage_provider_boundaries.py` 41). Full local suite: **4271 passed /
-37 skipped** (4181 / 37 before this audit, 4262 / 37 after the first pass).
+`test_storage_provider_boundaries.py` 41, `test_pr_census_compare.py` 7).
+Full local suite: **4278 passed / 37 skipped** on the final tree
+(4181 / 37 before this audit, 4262 / 37 after the first pass, 4271 / 37 after the
+HuggingFace hardening, 4278 / 37 once the seven census-tool tests exist).
+
+## P1-2 — the census tool fed the integration ledger wrong numbers (tooling)
+
+**Found by** adversarial re-reading of the tool that produces
+[`05_PR_CENSUS_AND_INTEGRATION_LEDGER.md`](05_PR_CENSUS_AND_INTEGRATION_LEDGER.md),
+after the *first* comparison defect had already been fixed there.
+
+**Root cause (two distinct defects, both in `scripts/pr_census.py`).**
+
+1. The compare direction was `<head>...<base>` and the two returned numbers were
+   written into the row under each other's names. #218 read "26 behind" although
+   `main` is an ancestor of its head. Fixed in the earlier pass.
+2. The compare runs against **each PR's own base branch** — correct for a file list,
+   wrong for the column names it was published under. Two PRs here are *stacked*
+   (#213 on #210's branch, #208 on #203's branch), and for them the row claimed
+   main-relative numbers that were base-relative: #213 read `unique_commits=12`,
+   `commits_behind_main=19`, while the main-relative truth is **26 unique / 6
+   behind** (42 changed files vs `main`, not 15). A merge order computed from that
+   is wrong in the direction that matters.
+
+**Fix.** The base-relative pair is renamed (`unique_commits_vs_base`,
+`base_commits_not_in_head`), a `compare_base_ref` column records which base was
+used, and a new `_main_relative_counts()` issues a second `main...<head>` compare
+whenever the base is not the default branch, so every row carries
+`unique_commits_vs_main`, `commits_behind_main` and `changed_files_vs_main`
+computed against `main` — with `-1` (never `0`, which would read as "level with
+main") when that compare fails.
+
+**Discriminating evidence.** `tests/unit/test_pr_census_compare.py` grew from 4 to
+**7 tests**: the direction guard, the returned order, the 300-file truncation flag,
+a text guard that the old names cannot come back, plus three new ones — a
+main-based PR makes exactly **one** compare call, a stacked PR makes **two** and
+takes the main-relative numbers, and a failed main compare yields `-1/-1/-1`. The
+regenerated census shows both pairs side by side for #213 and #208, so the
+mislabeling is now visible rather than silent.
 
 ## Tests whose *setup* changed (disclosed, not hidden)
 

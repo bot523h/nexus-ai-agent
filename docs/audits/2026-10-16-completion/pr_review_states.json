@@ -1,0 +1,320 @@
+{
+ "prs": {
+  "100": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "104": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "111": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "113": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "114": {
+   "draft": true,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "115": {
+   "draft": false,
+   "merge_state_status": "BEHIND",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "117": {
+   "draft": true,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "118": {
+   "draft": true,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "121": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "122": {
+   "draft": false,
+   "merge_state_status": "BEHIND",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "124": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "125": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "129": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "134": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "135": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "137": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "139": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "140": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "144": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "149": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "150": {
+   "draft": true,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "157": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "173": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "189": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "190": {
+   "draft": false,
+   "merge_state_status": "BEHIND",
+   "review_decision": "APPROVED"
+  },
+  "193": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "195": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "APPROVED"
+  },
+  "198": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "199": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "APPROVED"
+  },
+  "200": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "APPROVED"
+  },
+  "201": {
+   "draft": false,
+   "merge_state_status": "BEHIND",
+   "review_decision": "APPROVED"
+  },
+  "202": {
+   "draft": false,
+   "merge_state_status": "BEHIND",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "203": {
+   "draft": false,
+   "merge_state_status": "BEHIND",
+   "review_decision": "APPROVED"
+  },
+  "204": {
+   "draft": true,
+   "merge_state_status": "BEHIND",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "205": {
+   "draft": false,
+   "merge_state_status": "BEHIND",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "206": {
+   "draft": false,
+   "merge_state_status": "BEHIND",
+   "review_decision": "APPROVED"
+  },
+  "208": {
+   "draft": false,
+   "merge_state_status": "UNSTABLE",
+   "review_decision": ""
+  },
+  "209": {
+   "draft": false,
+   "merge_state_status": "BEHIND",
+   "review_decision": "APPROVED"
+  },
+  "210": {
+   "draft": false,
+   "merge_state_status": "BLOCKED",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "211": {
+   "draft": false,
+   "merge_state_status": "BEHIND",
+   "review_decision": "APPROVED"
+  },
+  "213": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": ""
+  },
+  "218": {
+   "draft": false,
+   "merge_state_status": "BLOCKED",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "33": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  },
+  "56": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "57": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "58": {
+   "draft": true,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "59": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "60": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "63": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "64": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "66": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "69": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "70": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "73": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "83": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "84": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "87": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "88": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "89": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "92": {
+   "draft": true,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "96": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "97": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "REVIEW_REQUIRED"
+  },
+  "99": {
+   "draft": false,
+   "merge_state_status": "DIRTY",
+   "review_decision": "CHANGES_REQUESTED"
+  }
+ },
+ "source": "gh pr view per PR (GraphQL reviewDecision)"
+}

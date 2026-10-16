@@ -1,114 +1,145 @@
-# 07 — Final report (2026-10-16)
+# 07 — Final report (2026-10-16, session 2)
+
+This file replaces the 08:22Z version of the same name. Everything below was
+measured again on the tree that carries this document; the previous version's
+`8a733a7` head, 269-file count, 81-test count and "0 reviews" line are superseded.
 
 ## Where the repository stands
 
 | | |
 |---|---|
-| `main` SHA (before and after this session) | `6b398565cc1ce0c51fac77d7623350b299c3938f` — **unmoved**; no direct commit, no force-push |
-| Audited branch head | `8a733a77c7ac35f9a6cc40b7a7cc80a89193f300` (`8a733a7`), plus the commit that adds this package |
-| Work branch | `arena/26f7d958-nexus-ai-agent` (the only branch this session writes to) |
-| PR | [#218](https://github.com/bot523h/nexus-ai-agent/pull/218) — 269 files, +39 211 / −1 784, `MERGEABLE`, `mergeStateStatus=BLOCKED`, `reviewDecision=REVIEW_REQUIRED`, 0 reviews |
-| CI on `8a733a7` | [run 38810548962](https://github.com/bot523h/nexus-ai-agent/actions/runs/38810548962) — **success, 21/21 jobs** (also 38806486544 on `bd8aab5`, 21/21) |
-| CI on the head that contains this file | quoted in the PR #218 ledger comment (run id + per-job conclusions) once it completes — **no CI claim is made here for an unexecuted run** |
-| Coordination ref | `refs/nexus/board` at `b1a5fac`; single active claim `task-270-full-audit-remediation`, generation 3, expires 2026-10-16T20:24:55Z, owner = this branch |
+| `main` | `6b398565cc1ce0c51fac77d7623350b299c3938f` — **unmoved** by this session; no direct commit, no force-push, no tag |
+| Work branch | `arena/26f7d958-nexus-ai-agent` — the only branch this session writes to |
+| Work head at this session's start | `f930064b48bbde8f0b1096e6563bcbf8d7855bf5` (`f930064`), plus the commit that adds this document |
+| PR | [#218](https://github.com/bot523h/nexus-ai-agent/pull/218) — 293 files, +63 117 / −1 787 vs `main`, `MERGEABLE`, `mergeStateStatus=BLOCKED`, `reviewDecision=REVIEW_REQUIRED`, **0 reviews** |
+| CI, exact head `337cf70` | [run 38873962245](https://github.com/bot523h/nexus-ai-agent/actions/runs/38873962245) — **success, 21/21 jobs, 22 check contexts** (three consecutive green runs on that head) |
+| CI, exact head `f930064` | [run 38889442506](https://github.com/bot523h/nexus-ai-agent/actions/runs/38889442506) — still running at the time this file was written; the three `continuum-evidence` jobs were the only ones left, 18/21 already `success`. **No conclusion is claimed here.** |
+| CI for the head that carries this document | recorded in the PR #218 ledger comment posted immediately after this push (run id + per-job conclusions), not asserted in advance |
+| Board | `refs/nexus/board` at `d919635` (published by this session's claim renewal); schema 2; **exactly one active claim** — `task-270-full-audit-remediation`, generation 3, `gates_owner=true`, claimed 2026-10-16T08:28:43Z with a 24 h TTL → valid until 2026-10-17T08:28:43Z |
 
 ## What was done in this session
 
-1. **Recovered the sandbox checkout** from a stale snapshot without losing work
-   (proof in [`01_LIVE_TRUTH.md`](01_LIVE_TRUTH.md)) and re-established live truth:
-   remote refs, per-job CI conclusions, PR merge state, collaborator list, board lease.
-2. **Audited PR #218's 269-file diff** independently: secrets scan, test-weakening
-   analysis (30 removed assertions, all accounted for with equal-or-stronger
-   replacements), migration chain and dialect isolation, workflow permissions and
-   triggers, the Asset-Library/passport integration, and the board-ref CAS.
-   See [`02_PR218_INDEPENDENT_AUDIT.md`](02_PR218_INDEPENDENT_AUDIT.md).
-3. **Closed the module audit to 284/284**: regenerated the inventory on the current
-   head, wrote a disposition resolver (`scripts/module_disposition.py`) that produces
-   one evidence-backed row per production module, read all 45 unrecorded diffs by
-   hand, and recorded the verdicts in `review_records.json`. Result: zero `DEFERRED`,
-   two modules with no direct test reference (both named with residual risk).
-   See [`03_MODULE_DISPOSITION.md`](03_MODULE_DISPOSITION.md).
-4. **Found and fixed a real defect (P1-1)** in a module the previous audit listed as
-   untested: `storage/providers/huggingface.py` could not download any model through
-   its own documented key format (404 on every attempt). Fixed with validation; the
-   regression is proven discriminating — restoring the old parse fails 11 of the new
-   tests. Added **81 tests** covering 13 previously untested reachable modules.
-   See [`04_DEFECTS_AND_FIXES.md`](04_DEFECTS_AND_FIXES.md).
-5. **Regenerated the PR census** against the live API (63 open PRs, `main` unmoved)
-   and recomputed the integration order with preconditions and owners.
-   See [`05_PR_CENSUS_AND_INTEGRATION_LEDGER.md`](05_PR_CENSUS_AND_INTEGRATION_LEDGER.md).
-6. **Re-verified the operational blockers with today's evidence**: the scheduled
-   backup fails on five missing secrets (run 38872121719) and the new dependency-audit
-   workflow cannot be dispatched until it lands on the default branch (HTTP 404).
-   See [`06_OPERATIONS_AND_BLOCKERS.md`](06_OPERATIONS_AND_BLOCKERS.md).
+1. **Live truth re-read before touching anything**: remote `main`/board SHAs,
+   per-job CI conclusions, merge state, the reviewer roster, the collaborator list,
+   the board's active claim, and the clone's completeness. The clone was found
+   **still shallow** (`main` = 1 commit locally) and was unshallowed
+   (`git fetch --unshallow origin` → 576 commits; PR refs re-fetched: 214). Every
+   ancestry-based statement in this package was re-derived after that fix.
+2. **Recovered the sandbox checkout** from a stale snapshot without losing work
+   (tree `4f731758…` compared equal to the remote tip; rescue branch kept local).
+3. **Hardened the HuggingFace provider against malformed keys** (P1-1): +9 input
+   classes, mutation-proven. Restoring the old parse now fails **20 of 41** tests.
+4. **Found and fixed two defects in the census tool itself** (P1-2) — the compare
+   direction, and then the *base* of the compare, which had published
+   base-relative commit counts under main-relative names for the two stacked PRs
+   (#213: claimed 12/19, true 26/6). See
+   [`04_DEFECTS_AND_FIXES.md`](04_DEFECTS_AND_FIXES.md).
+5. **Regenerated the census and reconciled all 63 open PRs** with categories,
+   dependencies, owners and evidence: `NEEDS_REBASE` 40, `NEEDS_FIX` 11,
+   `DEFERRED_WITH_OWNER_AND_REASON` 7, `BLOCKED_EXTERNAL` 4,
+   `DUPLICATE_OR_SUPERSEDED` 1, **`READY_TO_MERGE` 0**. See
+   [`05_PR_CENSUS_AND_INTEGRATION_LEDGER.md`](05_PR_CENSUS_AND_INTEGRATION_LEDGER.md).
+6. **Established the decisive governance fact for this repository**: across all 63
+   open PRs, `coderabbitai[bot]` submitted **every** review (11 `APPROVED`, 48
+   `CHANGES_REQUESTED`, 27 `COMMENTED`, 12 `DISMISSED`); `bot523h` only comments;
+   `arena-ai-coding-agent[bot]` submits no reviews. A bot approval satisfies the
+   required-review rule — and CodeRabbit is therefore the **only** route to the
+   approval #218 needs, which it refuses because the diff exceeds its 100-file cap.
+7. **Re-verified the #209 supersession claim** by reproducing it (not inheriting the
+   override): all five tests it adds exist by name in the #218 tree, commit
+   `7bfd628` is an ancestor, and its rejected `O_DIRECTORY` change is absent.
+8. **Acted where action is lawful**: requested the (obtainable) CodeRabbit review on
+   **#210** — 41 files, 0 commits behind `main`, every check green, blocked only by
+   the required review — as [comment 6214117556](https://github.com/bot523h/nexus-ai-agent/pull/210#issuecomment-6214117556).
+   No branch of another PR was pushed to, rebased, or rewritten.
 
-## Local gates on this tree (before the push)
+## Local gates on this tree
 
 | Gate | Result |
 |---|---|
 | `ruff check src tests scripts` | clean |
-| `ruff format --check` | clean |
-| `mypy --strict src` | **0 errors / 284 files** |
-| `pytest -m "not slow"` (includes `tests/architecture`: complexity ratchet, reachability law, import boundaries) | **4271 passed, 37 skipped** (baseline before this audit: 4181 / 37) |
-| mutation (HuggingFace parse reverted) | **20 of 41** provider tests fail on the old behaviour; restored → 41 green |
-| `tests/unit/test_docs_integrity.py` | package indexed in `docs/README.md` (enforced by the suite) |
+| `ruff format --check` | clean (597 files) |
+| `mypy --strict src` | 0 errors / 284 files |
+| `deptry src` | clean |
+| `pytest -m "not slow"` | **4278 passed / 37 skipped** (214.76 s, `rm -rf data` first, exit 0) |
+| `tests/unit/test_docs_integrity.py` | pass (this package is indexed in `docs/README.md`) |
+| mutation: HuggingFace parse reverted | **20 of 41** provider tests fail on the old behaviour; restored → 41 green |
+| mutation: board referee | **14/14 killed**, baseline restored green |
 
-Local results are **not** a substitute for CI; the canonical pipeline result for the
-exact head is the run quoted in the ledger comment.
+Local results are evidence about the tree, **not** a substitute for CI. The
+canonical result for an exact head is the CI run on that head.
 
 ## Statuses, honestly applied
 
 | Item | Status | Why |
 |---|---|---|
-| A-04 board-ref remedy | `REMEDIED_CI_VERIFIED_PENDING_MERGE` | implemented, adversarial tests, live ref read; the production proof (a foreign claim after merge) has not happened |
-| A-01…A-19 remediation set | `VERIFIED-on-PR` (not merged) | reviewed and CI-green on this branch; not on `main` |
-| Asset Library + passport wiring | `IMPLEMENTED · TESTED · CI-VERIFIED(on PR) · NOT MERGED` | 2 new unit tests + 3 disclosed setup changes; dedup/immutability/fallback proven |
-| Module audit | **284/284 dispositioned, 0 deferred** | method and limitations in doc 03 |
-| P1-1 HuggingFace key parsing | `REMEDIATED_WITH_TESTS (local)` | mutation-killed; CI on the new head pending at writing |
-| Backups | `BLOCKED_BY_EXTERNAL_DEPENDENCY` | five secrets missing (run 38872121719) |
-| Container / deployment | container probe `VERIFIED` in CI; live deployment **not performed** | no deployment access in this environment |
-| CommandBus deadline, CAS fsck/gc schedule, graph projection, lockfile | `DEFERRED_WITH_REASON` | each has a named acceptance test in docs 04/06; deliberately not grown into this PR |
+| A-04 board-ref remedy | `REMEDIATED_CI_VERIFIED_PENDING_MERGE` | implemented with adversarial tests and a live ref read; the production proof (a foreign claim landing after merge) has not happened |
+| A-01…A-19 remediation set | `VERIFIED-on-PR` (not merged) | reviewed and CI-green on this branch; **not** on `main` |
+| P1-1 HuggingFace key parsing | `REMEDIATED_WITH_TESTS` (on this PR) | mutation-killed; exact-head CI in the ledger comment |
+| P1-2 census tool | `REMEDIATED_WITH_TESTS` | 7 tests in `test_pr_census_compare.py`; regenerated artifacts |
+| Module audit | 284/284 dispositioned, 0 deferred | method and limits in [`03_MODULE_DISPOSITION.md`](03_MODULE_DISPOSITION.md) |
+| PR #218 | **BLOCKED** (external reviewer capacity) | protections are not bypassable from this environment |
+| PR #210 | **BLOCKED** pending the requested review | green, level with `main`, 41 files ≤ 100 |
+| Other 61 PRs | `NEEDS_REBASE` / `NEEDS_FIX` / `DEFERRED` / `SUPERSEDED` | one row each in [`pr_reconciliation.md`](pr_reconciliation.md) |
+| Backups | `BLOCKED_BY_EXTERNAL_DEPENDENCY` | run 38872121719 fails the preflight: `NEXUS_DATABASE_URL R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET` are absent. **Secret names only — no values anywhere in this package.** |
+| Dependency-audit workflow | `BLOCKED` until it is on the default branch | `gh workflow run dependency-audit.yml` → HTTP 404 while the workflow exists only on this branch |
+| Container / deployment | container probe green in CI; **live deployment not performed** | no deployment access from this environment |
 
-Nothing in this session is described as merged, production-verified, or complete on
-the strength of a test alone.
+Nothing in this session is described as merged, deployed, or production-verified.
 
-## Merge attempt and the exact blocker
+## The one actionable blocker
 
-The documented sequence was attempted as-is, without `--admin` or any other bypass,
-and GitHub refused:
+#218 needs exactly one approving review, and the only account that approves in this
+repo is CodeRabbit, which skips the PR:
+
+```
+Review skipped: 182 files exceed the limit of 100.        (comment 6197253259)
+```
+
+`gh pr merge 218 --merge` therefore refuses, and the refusal was observed, not
+assumed:
 
 ```
 $ gh pr merge 218 --merge
 X Pull request #218 is not mergeable: the base branch policy prohibits the merge.
-To have the pull request merged after all the requirements have been met, add the `--auto` flag.
-To use administrator privileges to immediately merge the pull request, add the `--admin` flag.
-
 $ echo $?
 1
 ```
 
-Neither suggested flag was used: `--auto` would queue a merge that no human
-reviewed, and `--admin` is the bypass the standing instructions forbid.
+`--admin` and `--auto` were **not** used, and the head was **not** rewritten to
+dodge review. The owner has three honest routes:
 
-Root cause: `REVIEW_REQUIRED` with an empty review list. `gh api .../collaborators`
-→ `["bot523h"]` only — the sole account is the PR author, GitHub forbids
-self-approval, and the required-review rule sits behind an API this token cannot
-read (403 on `branches/main/protection`). **This is a governance blocker, not an
-engineering one**, and it is not worked around.
+1. raise the CodeRabbit limit (plan or organization settings) and re-trigger;
+2. set review-scope path filters in CodeRabbit's organization settings — note that
+   a repo-level `.coderabbit.yaml` narrowing to `src/**` was considered and
+   **rejected** here: it would permanently remove review coverage from tests,
+   migrations and workflows, and would leave any future docs/test-only PR with
+   nothing reviewable at all;
+3. split the delivery into PRs of ≤100 files (which is what the bot itself
+   suggests) — heavier, and it costs the single exact-head CI evidence this branch
+   already holds.
 
-## First next action (owner, exact command)
+Until one of those happens, #218 stays where it is: implementation complete,
+locally and CI-verified, and **not** merged.
+
+## Ordered next actions
 
 ```bash
-# 1) an independent account adds one approving review on #218
-# 2) then:
-gh pr merge 218 --merge
-# 3) then prove the merge and the post-merge state:
+# A. after the owner unblocks review capacity (route 1/2), or after a <=100-file split:
+gh pr merge 218 --merge                    # no --admin, no --auto
 git fetch origin main && git log --oneline -1 origin/main
-gh run list --branch main --limit 1
-gh workflow run dependency-audit.yml --ref main
-```
+gh run list --branch main --limit 3
 
-After that, the first engineering task is the CommandBus deadline (P1) on a fresh
-branch from the new `main`: acceptance = a deterministic per-command deadline that
-cannot commit partial project state on timeout, with cancel/timeout/rollback tests;
-the design constraints are in the overnight package's `05_COMMANDBUS_AUDIT.md`.
+# B. #210: the review request is already placed (comment 6214117556)
+gh pr view 210 --json reviewDecision,mergeStateStatus
+
+# C. backups: add the five repository secrets, then
+gh run list --workflow=maintenance.yml --limit 1   # expect the preflight to pass
+
+# D. dependency audit: merge this branch first, then
+gh workflow run dependency-audit.yml --ref main
+
+# E. first engineering item after #218 lands (unchanged, still out of #218's scope):
+#    CommandBus per-command deadline — acceptance in the overnight package's
+#    05_COMMANDBUS_AUDIT.md.
+```
