@@ -200,9 +200,20 @@ class AssetLibraryService:
                 return await self._resolve_existing(repo, session, existing, fingerprint, stream)
             self._fault("after_ingest_row")
 
-            content_sha256, size_bytes = self._blob_store.stage_to(
-                staging_key, stream, max_bytes=self._max_bytes
-            )
+            try:
+                content_sha256, size_bytes = self._blob_store.stage_to(
+                    staging_key, stream, max_bytes=self._max_bytes
+                )
+            except ContentTooLarge:
+                # An oversize upload is refused before any staged identity
+                # exists.  Fail the durable Tx1 row now — exactly like the
+                # empty-content and unsupported-media branches below — instead
+                # of leaving a pending STAGING row that a later recovery pass
+                # would mislabel as ``staging_lost``.
+                self._blob_store.remove_staging(staging_key)
+                await repo.mark_failed(ingest_id, error_code="content_too_large")
+                await session.commit()
+                raise
             self._fault("after_stage")
 
             if size_bytes == 0:
