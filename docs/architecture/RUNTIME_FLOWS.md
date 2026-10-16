@@ -163,14 +163,14 @@ flowchart TD
     sqlite -->|fresh| up["alembic upgrade head (under migration lock)"]
     sqlite -->|legacy tables, unstamped| adopt["adopt legacy sqlite: stamp, never replay DDL"]
     pg -->|pre-Alembic database| adoptpg["nexus adopt-pg: inspect → decide → stamp (D10)"]
-    pg -->|already stamped| head["verify head == 7c2f9d41e8a3"]
+    pg -->|already stamped| head["verify head == e575469d90b9"]
     up --> ready["ensure_startup_schema() → session factory"]
     adopt --> ready
     adoptpg --> ready
     head --> ready
 ```
 
-- Chain (3 revisions): `47903d282ede` (initial) → `f4a9c2e71b08` (checkpoint lifecycle table) → `7c2f9d41e8a3` (ai-memory consent) = **head**.
+- Chain (4 revisions): `47903d282ede` (initial) → `f4a9c2e71b08` (checkpoint lifecycle table) → `7c2f9d41e8a3` (ai-memory consent) → `e575469d90b9` (nagar asset library v1) = **head**.
 - Migrations are idempotent: re-running `nexus migrate` at head is a no-op; CI proves it on a real `pgvector/pgvector:pg16` service container.
 - Schema drift fails fast rather than silently repairing: `storage/checkpoint_fingerprint.py` compares a DB fingerprint against a golden manifest, and `nexus golden update` is human-only.
 

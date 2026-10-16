@@ -22,6 +22,11 @@ _engine: Any | None = None
 _engine_path: str | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 _initialized_paths: set[str] = set()
+# Serialises first-use initialisation of one SQLite path among coroutines.
+# An ``asyncio.Lock`` is bound to the loop it is first awaited on, so locks
+# are keyed by (loop id, path); ``asyncio.run`` creates a fresh loop per call
+# (CLI, tests) and must not inherit a lock from a dead loop.
+_init_locks: dict[tuple[int, str], asyncio.Lock] = {}
 # Seconds a SQLite connection waits for a competing lock before raising
 # SQLITE_BUSY. The default (5s in the sqlite3 stdlib) is applied only to the
 # database lock; it does not cover the one-time ``PRAGMA journal_mode=WAL``
@@ -242,7 +247,10 @@ def _is_concurrent_create_conflict(exc: Exception) -> bool:
     the winner did exactly the work the loser was about to do.
     """
     message = str(getattr(exc, "orig", exc)).lower()
-    return "already exists" in message
+    # ``database schema has changed`` (SQLITE_SCHEMA) is the same race seen
+    # from a pooled connection whose prepared statement predates the winner's
+    # DDL: the statement is simply re-prepared on the next attempt.
+    return "already exists" in message or "schema has changed" in message
 
 
 async def create_all_metadata(engine: Any, metadata: MetaData) -> None:
@@ -319,9 +327,18 @@ async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
     if normalized_path in _initialized_paths:
         return
 
-    await _set_wal_mode(engine)
-    await create_all_metadata(engine, SQLModel.metadata)
-    _initialized_paths.add(normalized_path)
+    # Coroutines racing on one fresh path run the WAL switch and ``create_all``
+    # DDL one at a time; later arrivals find the path initialised (double-check
+    # under the lock) and return without touching the schema.  Other processes
+    # and hosts are not covered by this lock: they are absorbed by the
+    # idempotent ``create_all`` plus the conflict retry in create_all_metadata.
+    lock = _init_locks.setdefault((id(asyncio.get_running_loop()), normalized_path), asyncio.Lock())
+    async with lock:
+        if normalized_path in _initialized_paths:
+            return
+        await _set_wal_mode(engine)
+        await create_all_metadata(engine, SQLModel.metadata)
+        _initialized_paths.add(normalized_path)
 
 
 def _get_pg_engine(url: str) -> Any:

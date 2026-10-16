@@ -65,8 +65,29 @@ class AsyncCompatibleSqliteSaver(SqliteSaver):
     async def aprune(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self.prune, *args, **kwargs)
 
+    def get_delta_channel_history(self, *args: Any, **kwargs: Any) -> Any:
+        # langgraph-checkpoint-sqlite 3.1.1 treats only ``None`` as "use the
+        # latest checkpoint"; an empty ``checkpoint_id`` (which ``get_tuple``
+        # does accept as "latest") silently yields no seed and no writes.
+        # 3.1.2 fixes that upstream but also adds ``writes.task_path``, which
+        # invalidates the committed schema golden, so the pin stays at 3.1.1
+        # and the empty id is normalised here instead.
+        return super().get_delta_channel_history(*args, **_without_empty_checkpoint_id(kwargs))
+
     async def aget_delta_channel_history(self, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(self.get_delta_channel_history, *args, **kwargs)
+
+
+def _without_empty_checkpoint_id(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Return ``kwargs`` with an empty ``config.configurable.checkpoint_id`` removed."""
+    config: Any = kwargs.get("config")
+    if not isinstance(config, dict):
+        return kwargs
+    configurable: Any = config.get("configurable")
+    if not isinstance(configurable, dict) or configurable.get("checkpoint_id") != "":
+        return kwargs
+    fixed = {k: v for k, v in configurable.items() if k != "checkpoint_id"}
+    return {**kwargs, "config": {**config, "configurable": fixed}}
 
 
 class PostgresCheckpointer(BaseCheckpointSaver):
