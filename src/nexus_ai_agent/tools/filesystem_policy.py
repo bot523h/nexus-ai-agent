@@ -261,39 +261,51 @@ class WorkspaceFilesystem:
         resolved = self.resolve(raw)
         digest = hashlib.sha256()
         size = 0
-        with self._parent_fd(parts, create=create_parents) as (parent_fd, name):
-            assert name is not None
-            staging_name = f".staging-{secrets.token_hex(16)}"
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _CLOEXEC
-            staging_fd = os.open(staging_name, flags, mode=0o600, dir_fd=parent_fd)
-            try:
-                with os.fdopen(staging_fd, "wb") as handle:
-                    while True:
-                        chunk = source.read(1 << 20)
-                        if not chunk:
-                            break
-                        size += len(chunk)
-                        if size > max_bytes:
-                            raise ContentLimitExceeded(f"stream exceeds the {max_bytes}-byte limit")
-                        digest.update(chunk)
-                        handle.write(chunk)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(
-                    staging_name,
-                    name,
-                    src_dir_fd=parent_fd,
-                    dst_dir_fd=parent_fd,
-                )
-                # Persist the directory entry itself: fsync of the file content
-                # does not guarantee the rename survives a power loss.
-                os.fsync(parent_fd)
-            except BaseException:
+        try:
+            with self._parent_fd(parts, create=create_parents) as (parent_fd, name):
+                assert name is not None
+                staging_name = f".staging-{secrets.token_hex(16)}"
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _CLOEXEC
+                staging_fd = os.open(staging_name, flags, mode=0o600, dir_fd=parent_fd)
                 try:
-                    os.unlink(staging_name, dir_fd=parent_fd)
-                except OSError:
-                    pass
-                raise
+                    with os.fdopen(staging_fd, "wb") as handle:
+                        while True:
+                            chunk = source.read(1 << 20)
+                            if not chunk:
+                                break
+                            size += len(chunk)
+                            if size > max_bytes:
+                                raise ContentLimitExceeded(
+                                    f"stream exceeds the {max_bytes}-byte limit"
+                                )
+                            digest.update(chunk)
+                            handle.write(chunk)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(
+                        staging_name,
+                        name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                    # Persist the directory entry itself: fsync of the file content
+                    # does not guarantee the rename survives a power loss.
+                    os.fsync(parent_fd)
+                except BaseException:
+                    try:
+                        os.unlink(staging_name, dir_fd=parent_fd)
+                    except OSError:
+                        pass
+                    raise
+        except FilesystemBoundaryError:
+            # Typed boundary failures — including ContentLimitExceeded, a
+            # subclass — keep their type so callers can switch on it.
+            raise
+        except OSError as exc:
+            # A parent swapped to a symlink or made inaccessible between
+            # ``resolve`` and the descriptor walk, or the staging ``os.open``
+            # itself, must not leak a raw OSError across this boundary.
+            raise FilesystemBoundaryError("stream could not be written safely") from exc
         return resolved, digest.hexdigest(), size
 
     def read_bytes(self, raw: str, *, max_bytes: int | None = None) -> bytes:
