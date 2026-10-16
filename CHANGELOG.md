@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Completion audit (2026-10-16)** — every production module now carries a current disposition
+  (284/284, zero deferred) via `scripts/module_disposition.py` + `review_records.json`, and a real
+  defect was fixed on the way: `storage/providers/huggingface.py` could not download any model
+  through its own documented key format (the revision was split from the first `/` of a
+  `owner/name` repository id, producing a 404 URL); the parser now takes the last `@` and validates
+  every component before it reaches the network. 81 new tests give thirteen previously untested but
+  reachable modules (instrumentation, slideshow image fill, agent-store registry, Studio API scope,
+  image-gen composition, the four bot handler modules, the cloud storage providers) their first
+  behaviour coverage; evidence in `docs/audits/2026-10-16-completion/`.
 - **Asset Library wired into the passport archive** — `archive_trim_evidence` now admits
   both evidence files into the content-addressed `AssetLibrary` under the artifact root and
   publishes each `jobs/<job>/<attempt>/…` key as an immutable (0o444) hard link to the blob:

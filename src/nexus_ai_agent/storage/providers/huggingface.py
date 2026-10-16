@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 import httpx
 
 from .base import ProviderUnavailable, StorageError
+
+#: One path segment of a repository id or a revision: no ``/``, no ``@``, no
+#: relative components — the key is interpolated into a URL, so it is validated
+#: before it can reach the network.
+_SAFE_PART = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
+#: A file path inside the repository: segments separated by ``/``.
+_SAFE_PATH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}")
 
 
 class HuggingFaceProvider:
@@ -33,14 +41,41 @@ class HuggingFaceProvider:
         return {"Authorization": f"Bearer {self._token}"}
 
     def _parse_key(self, remote_key: str) -> tuple[str, str, str]:
+        """``hf://<owner>/<name>[@<revision>]/<path>`` → ``(repo_id, revision, filename)``.
+
+        The repository id contains a ``/``, so only the **last** ``@`` can
+        introduce the revision: splitting at the first ``/`` (the pre-audit
+        behaviour) turned the module's own documented example
+        ``hf://TheBloke/Mistral-7B-Instruct-v0.2-GGUF@main/mistral-7b-….gguf``
+        into the 404 URL ``…/TheBloke/resolve/main/Mistral-7B-…@main/…`` — the
+        provider could not download any model it advertised.  Audit
+        2026-10-16, defect P1-1.
+        """
         if not remote_key.startswith("hf://"):
             raise ProviderUnavailable("Not a HuggingFace key")
         rest = remote_key.removeprefix("hf://")
-        repo_and_rev, _, filename = rest.partition("/")
-        repo, _, rev = repo_and_rev.partition("@")
-        rev = rev or "main"
+        if "@" in rest:
+            repo, _, tail = rest.rpartition("@")
+            rev, _, filename = tail.partition("/")
+            if not rev:
+                raise ProviderUnavailable("Invalid HuggingFace key: empty revision")
+        else:
+            # No revision marker: the repository id is always the first two
+            # segments (``<owner>/<name>``) and the rest is the file path.
+            head, _, remainder = rest.partition("/")
+            name, _, filename = remainder.partition("/")
+            repo, rev = f"{head}/{name}", "main"
         if not repo or not filename:
             raise ProviderUnavailable("Invalid HuggingFace key")
+        if repo.count("/") != 1 or len(repo.split("/")) != 2:
+            raise ProviderUnavailable("Invalid HuggingFace key: repo id must be <owner>/<name>")
+        if not _SAFE_PART.fullmatch(rev):
+            raise ProviderUnavailable("Invalid HuggingFace key: unsafe revision")
+        owner, name = repo.split("/")
+        if not (_SAFE_PART.fullmatch(owner) and _SAFE_PART.fullmatch(name)):
+            raise ProviderUnavailable("Invalid HuggingFace key: unsafe repo id")
+        if not _SAFE_PATH.fullmatch(filename) or ".." in filename.split("/"):
+            raise ProviderUnavailable("Invalid HuggingFace key: unsafe filename")
         return repo, rev, filename
 
     async def upload(self, *, local_path: Path, remote_key: str) -> None:
