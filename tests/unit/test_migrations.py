@@ -102,6 +102,7 @@ def test_revision_chain_is_single_line() -> None:
     assert [r.revision for r in script.walk_revisions()] == [
         "c7a1e5d2b9f3",
         "b5d8e2f4a917",
+        "e575469d90b9",
         "7c2f9d41e8a3",
         "f4a9c2e71b08",
         "47903d282ede",

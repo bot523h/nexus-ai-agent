@@ -1905,8 +1905,49 @@ and `tests/unit/test_undo_contract_mutations.py` — 4 tests, 3 mutants killed (
 field compared; comparison inverted). `docs/architecture/COMMAND_CAPABILITY_CONTRACT.md` §`system.undo`
 records the contract.
 
+### D-0026 — Asset Library: the closed MIME allowlist is decided by the ISO-BMFF *major brand*, and a replay never touches the original's staging file (task-266)
 
-### D-0026 — Audit findings are closed by code with a guard, never by a note: the 2026-10-15 full-audit remediation
+Two defects in the Asset Library ingest path, found on the PR #210 head (`a6154a4`) by review and
+reproduced here before fixing.
+
+**1. `ftyp` is a container signature, not a media type.** `detect_media_type` returned `video/mp4`
+for any header with `ftyp` at offset 4. HEIC/HEIF and AVIF stills, QuickTime movies, 3GPP/3GPP2
+files and iTunes audio share that box, so each was admitted as `MediaKind.VIDEO` through a
+"closed" allowlist that lists none of them. Decision: only the **major brand** (bytes 8..12)
+decides, against `MP4_MAJOR_BRANDS` (`isom`, `iso2`..`iso9`, `mp41`, `mp42`, `avc1`, `M4V `,
+`dash`), taken from the MP4 Registration Authority registry (<https://mp4ra.org/registered-types/brands>).
+The *compatible-brands* list is deliberately ignored: a HEIC file may list `mp42` as compatible and
+must still be refused. Adding a brand is an explicit, tested decision. One function serves both the
+live ingest and the crash-recovery re-classification, so one fix covers both.
+
+**2. A replay overwrote the only recoverable copy.** `_resolve_existing` staged the replay stream
+onto `existing.staging_key` and compared afterwards. `os.replace` had already destroyed the
+original by then: an empty replay wiped it (then failed `AssetVersion.size_bytes >= 1`), and a
+replay arriving before Tx2 (no recorded digest) silently *became* the asset. Decision: the replay
+is staged under a **fresh key**, compared with the original's identity, and removed on every exit
+path. The reference identity is, in order: the digest/size recorded by Tx2; a fresh measurement of
+the intact original staged file; nothing (original lost), in which case a non-empty replay is
+adopted as the new staged original and an empty one is refused. Any mismatch is a typed
+`IdempotencyConflict` and the original stays recoverable.
+
+Reproduced first: 14 of 26 brand tests and 6 of 10 replay tests failed on the unfixed code.
+Guarded by `tests/unit/test_asset_library_mime_brands.py` (39 tests) and
+`tests/integration/test_asset_library_replay_safety.py` (15 tests, including the live-ingest and
+crash-recovery HEIC refusals). Mutation proofs: all five replay mutants killed (replay staged on the
+original's key; comparison disabled; cleanup removed; empty-body guard removed; recorded Tx2 identity
+ignored); of three MIME mutants two are killed and the third (`len(header) >= 8` instead of `>= 12`)
+is an **equivalent mutant** - a short slice can never equal an allow-listed brand - so no test can
+distinguish it.
+
+Scope (no overclaiming): this classifies by container signature only; it is not a safety scan and
+does not parse the stream. QuickTime, HEIF/AVIF and 3GPP are *refused*, not supported. Concurrent
+same-key replays are serialized by the `UNIQUE(project_id, idempotency_key)` constraint at Tx1.
+Within one process, `_replay_lock_for` serializes interrupted-ingest recovery per database and
+idempotency key; the replay safety suite covers matching and conflicting concurrent replays, including
+32 repeated two-different-replay rounds. Cross-process serialization and PostgreSQL row-lock behavior
+are not verified here and remain **DEFERRED** pending the independent real-PostgreSQL interleaving test.
+
+### D-0027 — Audit findings are closed by code with a guard, never by a note: the 2026-10-15 full-audit remediation
 
 *Problem.* The 2026-10-15 full audit (published on PR#198, comments 6190228525 and 6190229601;
 cross-reference on PR#217) found that `main` at `6b398565` could not survive its own first
@@ -2070,3 +2111,4 @@ unreadable ref is exit 2, never a pass. Evidence: `tests/unit/test_agent_board_r
 adversarial suite), `scripts/board_referee_mutations.py` 14/14, live bootstrap `refs/nexus/board@04bacc8`
 seeded from the union of live leases across all 56 distinct open-PR boards (exactly one: `task-270`),
 first compare-and-swap heartbeat `04bacc8 → b1a5fac`.
+

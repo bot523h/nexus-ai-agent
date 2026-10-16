@@ -1,7 +1,7 @@
 """A-02 on a live PostgreSQL: one database per deployment, both engines.
 
 ``tests/unit/test_sync_engine_resolution.py`` proves *which* URL every feature
-module resolves to without a server; the 2026-10-15 remediation (D-0026,
+module resolves to without a server; the 2026-10-15 remediation (D-0027,
 law R19) recorded that no live PostgreSQL run had been performed.  This test
 runs only where ``NEXUS_DATABASE_URL`` is configured (CI job
 ``migrate-postgres``, or a local server) and proves, on the real backend:

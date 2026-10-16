@@ -13,21 +13,52 @@ still rejects absolute paths, traversal, and symlinks before operating.
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import ntpath
 import os
+import secrets
 import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import BinaryIO
 
 
 class FilesystemBoundaryError(ValueError):
     """A path cannot be proven to remain inside the configured root."""
 
 
+class ContentLimitExceeded(FilesystemBoundaryError):
+    """A bounded stream exceeded the caller's declared maximum size."""
+
+
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+
+
+def _open_directory(name: str | Path, *, dir_fd: int | None = None) -> int:
+    """Open a directory without allowing a final symlink to be followed.
+
+    Linux follows a symlink to a directory when ``O_DIRECTORY`` is combined
+    with ``O_NOFOLLOW``.  Open without ``O_DIRECTORY`` and verify the inode
+    after the no-follow open instead.
+
+    ``O_NONBLOCK`` is mandatory: without it, opening a FIFO that has no writer
+    blocks forever *before* the ``fstat`` type check can reject it, letting
+    anyone who can plant a FIFO in the workspace stall the caller (CWE-400).
+    The flag is a no-op for real directories.
+    """
+    fd = os.open(name, os.O_RDONLY | _NOFOLLOW | _CLOEXEC | _NONBLOCK, dir_fd=dir_fd)
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise NotADirectoryError(errno.ENOTDIR, "not a directory", name)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def _validate_relative(raw: str, *, allow_root: bool = False) -> tuple[str, ...]:
@@ -87,8 +118,7 @@ class WorkspaceFilesystem:
             except NotADirectoryError as exc:
                 # ``file/child``: an ancestor is not a directory.  Surface the
                 # typed boundary error rather than a raw OSError so callers
-                # that fail closed on FilesystemBoundaryError cannot miss it
-                # (re-scoped remainder of PR #209).
+                # that fail closed on FilesystemBoundaryError cannot miss it.
                 raise FilesystemBoundaryError("path component is not a directory") from exc
             if stat.S_ISLNK(mode):
                 raise FilesystemBoundaryError("symlinks are not allowed in workspace paths")
@@ -98,10 +128,7 @@ class WorkspaceFilesystem:
             raise FilesystemBoundaryError(f"workspace root does not exist: {self.root}")
         if os.name == "posix":
             try:
-                return os.open(
-                    self.root,
-                    os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC,
-                )
+                return _open_directory(self.root)
             except OSError as exc:
                 raise FilesystemBoundaryError(
                     f"workspace root could not be opened safely: {self.root}"
@@ -122,11 +149,7 @@ class WorkspaceFilesystem:
         try:
             for part in parts[:-1]:
                 try:
-                    child = os.open(
-                        part,
-                        os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC,
-                        dir_fd=fd,
-                    )
+                    child = _open_directory(part, dir_fd=fd)
                 except FileNotFoundError:
                     if not create:
                         raise
@@ -134,11 +157,7 @@ class WorkspaceFilesystem:
                         os.mkdir(part, mode=0o700, dir_fd=fd)
                     except FileExistsError:
                         pass  # a concurrent creator won; the no-follow open re-validates
-                    child = os.open(
-                        part,
-                        os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC,
-                        dir_fd=fd,
-                    )
+                    child = _open_directory(part, dir_fd=fd)
                 os.close(fd)
                 fd = child
             yield fd, (parts[-1] if parts else None)
@@ -211,6 +230,149 @@ class WorkspaceFilesystem:
             raise FilesystemBoundaryError("parent path could not be opened safely") from exc
         return resolved
 
+    def write_stream(
+        self,
+        raw: str,
+        source: BinaryIO,
+        *,
+        max_bytes: int,
+        create_parents: bool = True,
+    ) -> tuple[Path, str, int]:
+        """Stream ``source`` into a contained file and return (path, sha256, size).
+
+        Bytes are read in bounded chunks and hashed while writing, so the digest
+        is always computed from the *actual* bytes — never a caller-supplied
+        value.  ``max_bytes`` is enforced during the read, so a hostile or
+        unbounded stream cannot exhaust disk before the limit is noticed.
+
+        The content is first written to a random staging file created inside the
+        destination directory with ``O_CREAT|O_EXCL|O_NOFOLLOW`` and then
+        ``os.replace``d onto the target, so a reader never observes a partial
+        file and a pre-existing symlink leaf can never be followed.
+
+        Raises:
+            ContentLimitExceeded: If the stream exceeds ``max_bytes``.
+            FilesystemBoundaryError: If the path is uncontained or a component
+                is a symlink.
+        """
+        if max_bytes <= 0:
+            raise FilesystemBoundaryError("max_bytes must be positive")
+        parts = _validate_relative(raw)
+        resolved = self.resolve(raw)
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with self._parent_fd(parts, create=create_parents) as (parent_fd, name):
+                assert name is not None
+                staging_name = f".staging-{secrets.token_hex(16)}"
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _CLOEXEC
+                staging_fd = os.open(staging_name, flags, mode=0o600, dir_fd=parent_fd)
+                try:
+                    with os.fdopen(staging_fd, "wb") as handle:
+                        while True:
+                            chunk = source.read(1 << 20)
+                            if not chunk:
+                                break
+                            size += len(chunk)
+                            if size > max_bytes:
+                                raise ContentLimitExceeded(
+                                    f"stream exceeds the {max_bytes}-byte limit"
+                                )
+                            digest.update(chunk)
+                            handle.write(chunk)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(
+                        staging_name,
+                        name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                    # Persist the directory entry itself: fsync of the file content
+                    # does not guarantee the rename survives a power loss.
+                    os.fsync(parent_fd)
+                except BaseException:
+                    try:
+                        os.unlink(staging_name, dir_fd=parent_fd)
+                    except OSError:
+                        pass
+                    raise
+        except FilesystemBoundaryError:
+            # Typed boundary failures — including ContentLimitExceeded, a
+            # subclass — keep their type so callers can switch on it.
+            raise
+        except OSError as exc:
+            # A parent swapped to a symlink or made inaccessible between
+            # ``resolve`` and the descriptor walk, or the staging ``os.open``
+            # itself, must not leak a raw OSError across this boundary.
+            raise FilesystemBoundaryError("stream could not be written safely") from exc
+        return resolved, digest.hexdigest(), size
+
+    def read_bytes(self, raw: str, *, max_bytes: int | None = None) -> bytes:
+        """Read a contained regular file without following a symlink leaf."""
+        parts = _validate_relative(raw)
+        self.resolve(raw)
+        with self._parent_fd(parts) as (parent_fd, name):
+            assert name is not None
+            try:
+                fd = os.open(name, os.O_RDONLY | _NOFOLLOW | _CLOEXEC, dir_fd=parent_fd)
+            except OSError as exc:
+                raise FilesystemBoundaryError("file could not be opened safely") from exc
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode):
+                    raise FilesystemBoundaryError("path is not a regular file")
+                with os.fdopen(fd, "rb") as handle:
+                    return handle.read() if max_bytes is None else handle.read(max_bytes)
+            except FilesystemBoundaryError:
+                raise
+            except OSError as exc:
+                raise FilesystemBoundaryError("file could not be read safely") from exc
+
+    def hash_file(self, raw: str) -> tuple[str, int]:
+        """Return ``(sha256_hex, byte_size)`` for a contained regular file.
+
+        Streams in bounded chunks so a large file is never fully buffered; the
+        digest is computed from the bytes actually on disk.
+        """
+        parts = _validate_relative(raw)
+        self.resolve(raw)
+        digest = hashlib.sha256()
+        size = 0
+        with self._parent_fd(parts) as (parent_fd, name):
+            assert name is not None
+            try:
+                fd = os.open(name, os.O_RDONLY | _NOFOLLOW | _CLOEXEC, dir_fd=parent_fd)
+            except OSError as exc:
+                raise FilesystemBoundaryError("file could not be opened safely") from exc
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode):
+                    raise FilesystemBoundaryError("path is not a regular file")
+                with os.fdopen(fd, "rb") as handle:
+                    while True:
+                        chunk = handle.read(1 << 20)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        digest.update(chunk)
+            except FilesystemBoundaryError:
+                raise
+            except OSError as exc:
+                raise FilesystemBoundaryError("file could not be read safely") from exc
+        return digest.hexdigest(), size
+
+    def exists(self, raw: str) -> bool:
+        """True if ``raw`` resolves to a contained regular file.
+
+        Never follows a symlink leaf; any boundary violation reads as ``False``.
+        """
+        try:
+            self.require_regular_file(raw)
+        except FilesystemBoundaryError:
+            return False
+        return True
+
     def list_names(self, raw: str = ".") -> list[str]:
         parts = _validate_relative(raw, allow_root=True) if raw != "." else ()
         self.resolve(raw, allow_root=True)
@@ -224,11 +386,7 @@ class WorkspaceFilesystem:
         with self._parent_fd(parts) as (parent_fd, name):
             assert name is not None
             try:
-                directory_fd = os.open(
-                    name,
-                    os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC,
-                    dir_fd=parent_fd,
-                )
+                directory_fd = _open_directory(name, dir_fd=parent_fd)
             except OSError as exc:
                 raise FilesystemBoundaryError("directory could not be opened safely") from exc
             try:
@@ -284,9 +442,7 @@ class WorkspaceFilesystem:
         try:
             with self._parent_fd(parts) as (parent_fd, name):
                 assert name is not None
-                return os.open(
-                    name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC, dir_fd=parent_fd
-                )
+                return _open_directory(name, dir_fd=parent_fd)
         except OSError as exc:
             raise FilesystemBoundaryError("directory could not be opened safely") from exc
 
@@ -300,9 +456,7 @@ class WorkspaceFilesystem:
             with self._parent_fd(parts, create=create) as (parent_fd, name):
                 assert name is not None
                 try:
-                    fd = os.open(
-                        name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC, dir_fd=parent_fd
-                    )
+                    fd = _open_directory(name, dir_fd=parent_fd)
                 except FileNotFoundError:
                     if not create:
                         raise FilesystemBoundaryError("directory does not exist") from None
@@ -310,9 +464,7 @@ class WorkspaceFilesystem:
                         os.mkdir(name, mode=0o700, dir_fd=parent_fd)
                     except FileExistsError:
                         pass  # a concurrent creator won; the no-follow open re-validates
-                    fd = os.open(
-                        name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC, dir_fd=parent_fd
-                    )
+                    fd = _open_directory(name, dir_fd=parent_fd)
                 os.close(fd)
         except OSError as exc:
             raise FilesystemBoundaryError("directory could not be created safely") from exc
@@ -437,9 +589,7 @@ class WorkspaceFilesystem:
                 continue
             if stat.S_ISDIR(info.st_mode):
                 try:
-                    child = os.open(
-                        name, os.O_RDONLY | _DIRECTORY | _NOFOLLOW | _CLOEXEC, dir_fd=dir_fd
-                    )
+                    child = _open_directory(name, dir_fd=dir_fd)
                 except OSError:
                     # A symlink or an unreadable entry: unlink it, never recurse.
                     try:
@@ -462,4 +612,8 @@ class WorkspaceFilesystem:
                     pass
 
 
-__all__ = ["FilesystemBoundaryError", "WorkspaceFilesystem"]
+__all__ = [
+    "ContentLimitExceeded",
+    "FilesystemBoundaryError",
+    "WorkspaceFilesystem",
+]

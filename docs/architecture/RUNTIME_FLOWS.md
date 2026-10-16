@@ -170,7 +170,7 @@ flowchart TD
     head --> ready
 ```
 
-- Chain (5 revisions): `47903d282ede` (initial) → `f4a9c2e71b08` (checkpoint lifecycle table) → `7c2f9d41e8a3` (ai-memory consent) → `b5d8e2f4a917` (Telegram ids BIGINT on PostgreSQL, audit A-17) → `c7a1e5d2b9f3` (`conversation_history` adopted by the chain, closeout 2026-10-15) = **head**.
+- Chain (6 revisions): `47903d282ede` (initial) → `f4a9c2e71b08` (checkpoint lifecycle table) → `7c2f9d41e8a3` (ai-memory consent) → `e575469d90b9` (nagar asset library v1, task-266) → `b5d8e2f4a917` (Telegram ids BIGINT on PostgreSQL, audit A-17) → `c7a1e5d2b9f3` (`conversation_history` adopted by the chain, closeout 2026-10-15) = **head**.
 - Migrations are idempotent: re-running `nexus migrate` at head is a no-op; CI proves it on a real `pgvector/pgvector:pg16` service container.
 - Schema drift fails fast rather than silently repairing: `storage/checkpoint_fingerprint.py` compares a DB fingerprint against a golden manifest, and `nexus checkpoints golden update` is human-only.
 

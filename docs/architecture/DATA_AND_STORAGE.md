@@ -46,14 +46,15 @@ flowchart LR
 ## 2. Schema management
 
 - **Alembic is the only schema authority.** Startup either verifies head or runs the chain under a migration lock (`ensure_startup_schema`). The only other place that may emit DDL is the un-versioned SQLite bootstrap in `storage/db.py::create_all_tables` (bare dev/test files and the legacy adoption path); it *skips* any file that already carries `alembic_version`, so a model table without a revision can no longer be silently materialised. Feature modules never create tables: `ConversationStore` and `ReferralEngine` used to run their own `create_all` at import/construction time (closeout 2026-10-15) — `tests/unit/test_schema_authority.py` scans the package for `create_all` references and fails on any new one.
-- Chain (5 revisions, current head `c7a1e5d2b9f3`):
+- Chain (6 revisions, current head `c7a1e5d2b9f3`):
 
 ```text
 47903d282ede  initial schema
    └── f4a9c2e71b08  nexus_checkpoint_lifecycle (PostgreSQL only)
           └── 7c2f9d41e8a3  ai-memory consent columns on usermemory
-                 └── b5d8e2f4a917  Telegram id columns INTEGER → BIGINT (PostgreSQL only; audit A-17)
-                        └── c7a1e5d2b9f3  conversation_history adopted by the chain (closeout 2026-10-15)  ← HEAD
+                 └── e575469d90b9  nagar asset library v1 (assets/versions/links/ingests)
+                        └── b5d8e2f4a917  Telegram id columns INTEGER → BIGINT (PostgreSQL only; audit A-17)
+                               └── c7a1e5d2b9f3  conversation_history adopted by the chain (closeout 2026-10-15)  ← HEAD
 ```
 
 - **Adoption, not rebuild.** `c7a1e5d2b9f3` creates `conversation_history` only where it does not exist; on a deployment where the old store already created it, the table and its rows are adopted as-is (the owned DDL is byte-identical to the legacy DDL, including the index name `ix_conv_history_conv_id`). Proven on SQLite (`tests/unit/test_schema_authority.py`) and on PostgreSQL (`tests/integration/test_postgres_schema_authority.py`, CI `migrate-postgres`).
