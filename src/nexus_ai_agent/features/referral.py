@@ -2,51 +2,26 @@
 
 from __future__ import annotations
 
-import hashlib
-from datetime import datetime
+import secrets
+import string
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import create_engine as _ce
-from sqlalchemy import text as _text
-from sqlmodel import Field, SQLModel, select
 from sqlmodel import Session as _Session
+from sqlmodel import SQLModel, select
 
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.db import sync_engine
+from nexus_ai_agent.storage.models import Referral, ReferralCode
 
 log = get_logger(__name__)
 
-
-# ── Database Models ──────────────────────────────────────────────────
-
-
-class Referral(SQLModel, table=True):
-    """Referral tracking — who referred whom."""
-
-    __table_args__ = {"extend_existing": True}
-
-    id: int | None = Field(default=None, primary_key=True)
-    referrer_id: int = Field(index=True)
-    referee_id: int = Field(index=True, unique=True)  # each user can only be referred once
-    referral_code: str = Field(index=True)
-    status: str = Field(default="pending", index=True)  # pending | completed | rewarded
-    reward_claimed: bool = Field(default=False)
-    xp_awarded: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    completed_at: datetime | None = Field(default=None)
+#: Unambiguous upper-case alphanumerics (no 0/O/1/I) for human-typed codes.
+_CODE_ALPHABET = "".join(c for c in string.ascii_uppercase + string.digits if c not in "0O1I")
 
 
-class ReferralCode(SQLModel, table=True):
-    """Unique referral codes per user."""
-
-    __table_args__ = {"extend_existing": True}
-
-    id: int | None = Field(default=None, primary_key=True)
-    user_id: int = Field(index=True, unique=True)
-    code: str = Field(index=True, unique=True)
-    total_referrals: int = Field(default=0)
-    successful_referrals: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
+# The ``Referral`` / ``ReferralCode`` tables are defined once, in
+# ``storage/models.py`` (audit A-09); this module only operates on them.
 
 # ── Tiered Rewards ───────────────────────────────────────────────────
 
@@ -60,74 +35,72 @@ REFERRAL_REWARDS: list[dict[str, Any]] = [
 ]
 
 
+def _naive_utcnow() -> datetime:
+    """Current UTC time as the naive value the DATETIME columns store.
+
+    ``datetime.utcnow()`` is deprecated (Python 3.12) and silently mixes naive
+    and aware values; this keeps the stored representation unchanged (DTZ003,
+    audit A-12).
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 class ReferralEngine:
     """Referral viral loop engine — track, reward, and grow."""
 
-    def __init__(self, db_path: str = "data/app.sqlite") -> None:
+    def __init__(self, db_path: str | None = None) -> None:
+        """``db_path`` pins a SQLite file (tests); ``None`` follows the
+        configured backend — ``NEXUS_DATABASE_URL`` or ``NEXUS_DB_PATH`` — via
+        ``storage.db.sync_engine`` (audit A-02)."""
         self._db_path = db_path
-        self._engine: Any | None = None
         self._ensure_tables()
 
     def _ensure_tables(self) -> None:
-        """Create tables if they don't exist."""
-        engine = self._sync_engine()
-        with engine.begin() as conn:
-            conn.execute(
-                _text(
-                    "CREATE TABLE IF NOT EXISTS referral ("
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                    "referrer_id INTEGER,"
-                    "referee_id INTEGER UNIQUE,"
-                    "referral_code VARCHAR,"
-                    "status VARCHAR DEFAULT 'pending',"
-                    "reward_claimed BOOLEAN DEFAULT 0,"
-                    "xp_awarded BOOLEAN DEFAULT 0,"
-                    "created_at DATETIME,"
-                    "completed_at DATETIME)"
-                )
-            )
-            conn.execute(
-                _text(
-                    "CREATE TABLE IF NOT EXISTS referralcode ("
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                    "user_id INTEGER UNIQUE,"
-                    "code VARCHAR UNIQUE,"
-                    "total_referrals INTEGER DEFAULT 0,"
-                    "successful_referrals INTEGER DEFAULT 0,"
-                    "created_at DATETIME)"
-                )
-            )
+        """Create the two referral tables when they are missing.
+
+        Dialect-agnostic ``create_all`` over the canonical ``storage.models``
+        definitions replaced the hand-written SQLite DDL (``AUTOINCREMENT``),
+        which a PostgreSQL deployment would have rejected. On PostgreSQL the
+        tables already exist from migration ``47903d282ede``; ``checkfirst``
+        makes this a no-op there.
+        """
+        tables = [SQLModel.metadata.tables["referral"], SQLModel.metadata.tables["referralcode"]]
+        SQLModel.metadata.create_all(self._sync_engine(), tables=tables, checkfirst=True)
 
     def _sync_engine(self) -> Any:
-        """Cached synchronous engine.
+        """The process-wide synchronous engine (see ``storage.db.sync_engine``).
 
         P1-2: the referral call-sites (``/start`` deep-link, ``/referral``,
         ``/referral_board``) run in worker threads via ``asyncio.to_thread``
-        at the handler layer, so the engine is created with
-        ``check_same_thread=False`` and cached instead of rebuilt per call.
+        at the handler layer; the central engine is thread-safe and cached.
         """
-        if self._engine is None:
-            self._engine = _ce(
-                f"sqlite:///{self._db_path}",
-                echo=False,
-                connect_args={"check_same_thread": False},
-            )
-        return self._engine
+        return sync_engine(self._db_path)
 
     @staticmethod
-    def generate_code(user_id: int) -> str:
-        """Generate a unique referral code for a user."""
-        raw = f"NEXUS-{user_id}-{hashlib.sha256(str(user_id).encode()).hexdigest()[:8]}"
-        return raw.upper()
+    def generate_code(user_id: int | None = None) -> str:
+        """Generate a fresh referral code.
+
+        The code is *random* (``secrets``), never derived from the user id:
+        the previous ``NEXUS-<id>-<sha256(id)[:8]>`` scheme leaked the Telegram
+        id in the code and let anyone forge any user's code (audit A-12,
+        2026-10-15). ``user_id`` is accepted for signature compatibility and
+        ignored. Codes already stored keep working — lookup is by stored value.
+        """
+        return "NEXUS-" + "".join(secrets.choice(_CODE_ALPHABET) for _ in range(8))
 
     def get_or_create_code(self, user_id: int) -> str:
-        """Get existing referral code or create one."""
+        """Get existing referral code or create one (collision-checked)."""
         eng = self._sync_engine()
         with _Session(eng) as s:
             existing = s.exec(select(ReferralCode).where(ReferralCode.user_id == user_id)).first()
             if existing:
                 return existing.code
-            code = self.generate_code(user_id)
+            for _ in range(5):
+                code = self.generate_code()
+                if s.exec(select(ReferralCode).where(ReferralCode.code == code)).first() is None:
+                    break
+            else:  # pragma: no cover — 36**8 space; five collisions in a row is a broken RNG
+                raise RuntimeError("could not allocate a unique referral code")
             rc = ReferralCode(user_id=user_id, code=code)
             s.add(rc)
             s.commit()
@@ -176,7 +149,7 @@ class ReferralEngine:
                 referee_id=referee_id,
                 referral_code=code,
                 status="completed",
-                completed_at=datetime.utcnow(),
+                completed_at=_naive_utcnow(),
                 xp_awarded=True,
             )
             s.add(ref)

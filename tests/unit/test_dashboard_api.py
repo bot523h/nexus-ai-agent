@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -53,8 +54,20 @@ def client_and_db(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Any:
     settings_module.get_settings.cache_clear()
 
 
-def test_recent_users_is_pii_free(client_and_db: TestClient) -> None:
-    resp = client_and_db.get("/api/dashboard/recent_users")
+TOKEN = {"Authorization": "Bearer s3cret-token"}
+
+
+@pytest.fixture()
+def with_token(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", "s3cret-token")
+    settings_module.get_settings.cache_clear()
+    yield
+    monkeypatch.delenv("NEXUS_DASHBOARD_TOKEN", raising=False)
+    settings_module.get_settings.cache_clear()
+
+
+def test_recent_users_is_pii_free(client_and_db: TestClient, with_token: None) -> None:
+    resp = client_and_db.get("/api/dashboard/recent_users", headers=TOKEN)
     assert resp.status_code == 200
     users = resp.json()
     assert len(users) == 2
@@ -64,10 +77,40 @@ def test_recent_users_is_pii_free(client_and_db: TestClient) -> None:
         assert set(entry) == {"id", "joined_at"}
 
 
-def test_stats_works_without_token(client_and_db: TestClient) -> None:
-    resp = client_and_db.get("/api/dashboard/stats")
+def test_stats_count_real_rows(client_and_db: TestClient, with_token: None) -> None:
+    resp = client_and_db.get("/api/dashboard/stats", headers=TOKEN)
     assert resp.status_code == 200
-    assert resp.json()["total_users"] == 2
+    assert resp.json() == {
+        "total_users": 2,
+        "total_chats": 0,
+        "total_files": 0,
+        "active_specialized_agents": 0,
+    }
+
+
+def test_dashboard_is_closed_when_no_token_is_configured(client_and_db: TestClient) -> None:
+    """Audit A-06 (2026-10-15): an unset token used to mean *open*; it now
+    means *disabled*, with a response that says which variable to set."""
+    for path in ("/api/dashboard/stats", "/api/dashboard/recent_users"):
+        resp = client_and_db.get(path)
+        assert resp.status_code == 503, path
+        assert "NEXUS_DASHBOARD_TOKEN" in resp.json()["detail"]
+        # Guessing a header does not open it either.
+        assert client_and_db.get(path, headers=TOKEN).status_code == 503
+
+
+@pytest.mark.parametrize("limit", [0, -1, 101, "abc"])
+def test_recent_users_limit_is_bounded(client_and_db: TestClient, with_token: None, limit) -> None:
+    resp = client_and_db.get(f"/api/dashboard/recent_users?limit={limit}", headers=TOKEN)
+    assert resp.status_code == 422
+
+
+def test_recent_users_limit_within_range_is_honoured(
+    client_and_db: TestClient, with_token: None
+) -> None:
+    resp = client_and_db.get("/api/dashboard/recent_users?limit=1", headers=TOKEN)
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
 
 
 def test_token_required_when_configured(client_and_db: TestClient, monkeypatch) -> None:

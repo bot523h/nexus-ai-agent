@@ -1,6 +1,7 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 12 effective 2026-09-30  
+**Status:** Canonical historical record; revision 13 effective 2026-10-15  
+**r13 scope:** full-audit remediation (D-0026; session `arena/26f7d958-nexus-ai-agent`, board `task-270`): the sixteen findings of the 2026-10-15 full audit (PR#198 comments 6190228525/6190229601) closed as code, not prose — the `main` message-path crash, one database per deployment, the last ten canned commands, declared dependencies, the fail-closed dashboard, the non-blocking updater, CI hygiene, single table definitions, hashes/codes/timestamps, explicit imports — each with a regression test.  
 **r12 scope:** product-direction decision (D-0025): the Nagar creative backbone is an intent-first loop (Intent → Creative Graph → Capability Compiler → CommandBus → render lane → verification → artifact + lineage), not a feature. The first vertical slice — the in-memory, single-project intent loop over the existing operation matrix — is implemented in `creative/spine/` with its own boundary and mutation guards; reference reverse engineering ships as the first *capability* over it (heuristic port, low confidence, never a copy). Direction record: `docs/architecture/CREATIVE_DIRECTION.md`.  
 **r11 scope:** S3/S5 adversarial closure of the security-boundary salvage (D-0016; session `arena/01a0d563-nexus-ai-agent`, PR#79): 5 proven defects closed, 12/12 mutation-killed.  
 **r10 scope:** security-boundary truth salvage (D-0015; PR#76 head `5b17a70` carried into PR#79): S1–S5 real deltas fixed, 9/9 mutation-killed.  
@@ -22,6 +23,7 @@
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
 - **r10 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
 - **r11 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
+- **r13 (2026-10-15, full-audit remediation):** owner-mandated remediation of audit findings A-01…A-13 on one branch with a regression test per fix; the audit itself (244 modules, 23 verified) remains the published evidence on PR#198. D-0026.  
 - **r12 (2026-09-30, creative direction):** recorded the product frame (intent, not tools) and the backbone loop above the proven execution chain, then *built the first vertical slice* — the in-memory, single-project intent loop (typed intent → creative graph → capability compiler → CommandBus → artifact + evidence) in `creative/spine/`, with its own boundary and mutation guards. Reverse engineering, multiverse, social feedback, pack marketplace and style DNA stay deferred behind evidence-based triggers. Direction page: `docs/architecture/CREATIVE_DIRECTION.md`; D-0025.  
 - **r8 (2026-09-24, P0 stabilization day):** D-0010 legacy `/creative/*` HTTP lane = keep+harden (strictly harden-edged) on a deprecation track gated on open PR#58's SSRF scope, never a competitor pipeline; D-0011 `/edit` `/caption` `/grade` wired through the canonical chain with message-anchored idempotency, the bogus `mapper` handler key removed, honest op matrix (`lut`/`burnin` refused, not faked), all replies through the i18n catalog; D-0012 backup success must be measured and round-trip-verified, never asserted — plus the r8 coordination facts (task-106 superseded into task-166, task-164 narrowed to owner-secrets, docs number-resync against measured values: 57 registered ops).
 
@@ -1944,3 +1946,116 @@ Within one process, `_replay_lock_for` serializes interrupted-ingest recovery pe
 idempotency key; the replay safety suite covers matching and conflicting concurrent replays, including
 32 repeated two-different-replay rounds. Cross-process serialization and PostgreSQL row-lock behavior
 are not verified here and remain **DEFERRED** pending the independent real-PostgreSQL interleaving test.
+
+### D-0027 — Audit findings are closed by code with a guard, never by a note: the 2026-10-15 full-audit remediation
+
+*Problem.* The 2026-10-15 full audit (published on PR#198, comments 6190228525 and 6190229601;
+cross-reference on PR#217) found that `main` at `6b398565` could not survive its own first
+message: every free-text message crashed because `storage/db.py` handed out SQLAlchemy
+`AsyncSession`s while the handlers called SQLModel's `session.exec` (A-01). Around that crash sat
+structural debt that no single PR had owned: thirteen feature modules building private
+`sqlite:///` engines so a PostgreSQL deployment silently ran *two* databases (A-02, A-02b); ten
+commands still answering with canned strings (A-03); a dashboard API that was open when its token
+was unset (A-06); a self-updater that ran `git pull`/`pip install` *blocking* on the bot's event loop
+without timeouts (A-07); CI running on every branch push without permissions or timeouts (A-08);
+`Referral`/`ReferralCode` declared twice with different constraints and glued with
+`extend_existing` (A-09); md5 content hashes, referral codes that embedded the Telegram id and were
+forgeable, deprecated `utcnow()` and a `/tmp` default for persistent creative state (A-12); and
+imports that worked only through implicit re-exports (A-13). Previous missions (Mission 1,
+Mission 2 forensic assurance) were *assurance only* by owner instruction; on 2026-10-15 the owner
+granted full remediation authority on the session branch.
+
+*Decision.*
+1. **Every finding closes with a regression test that fails on the old code**, or it is not
+   closed. A-01: `tests/integration/test_real_session_factory.py` drives the helpers through the
+   real factory (4/5 fail on the old code). A-07: `test_do_update_does_not_block_the_event_loop`
+   (heartbeat keeps ticking during a slow step; mutation-checked by restoring the blocking calls).
+   A-02: `tests/unit/test_sync_engine_resolution.py`. A-09: `tests/unit/test_referral_models.py`.
+   A-03: `tests/unit/test_surface_moderation.py`, `test_surface_viral.py`,
+   `test_surface_registration.py`. A-06: `tests/unit/test_dashboard_api.py`.
+2. **One database per deployment (law R19).** `storage.db.sync_engine()` is the single
+   synchronous resolution point and mirrors `get_session`: `NEXUS_DATABASE_URL` wins (psycopg v3,
+   `pool_pre_ping`), else the configured SQLite file (`check_same_thread=False` because callers run
+   in `asyncio.to_thread`, same busy timeout as the async engine). One cached engine per process,
+   disposed when the URL changes. Feature modules keep their `_sync_engine` *names* (tests
+   monkeypatch them) but delegate; composition roots pass `sync_db_path_for(settings)` so an
+   explicit `Settings` object still pins SQLite while PostgreSQL deployments no longer grow a
+   second database. Tables are created with dialect-agnostic `create_all`, never hand-written
+   SQLite DDL. The structural guard: no `src/` module outside `storage/db.py` may contain a
+   `sqlite:///` URL.
+3. **One definition per table.** `storage/models.py` owns every table; the migration-matching
+   (strict) `Referral`/`ReferralCode` definitions are the only ones, `features/referral.py`
+   imports them. `extend_existing=True` is banned as a reconciliation device — it hides exactly
+   the constraint drift the audit found.
+4. **Fail closed, bounded, explicit.** Dashboard without a token → `503` naming
+   `NEXUS_DASHBOARD_TOKEN`; updater steps off-loop with timeouts (git 300 s, pip 1200 s, release
+   probe 15 s); CI on `main` pushes, `v*` tags and all PRs only, read-only workflow permissions,
+   per-job `timeout-minutes` sized from measured run durations; `maintenance.yml` pinned to the
+   same action SHAs.
+5. **Honest surfaces, owner-gated by default.** The last ten canned commands became
+   `bot/surface/moderation.py` (owner-only `/mod_config` `/warn` `/mute` `/unmute`; `/reputation`
+   of *others* owner-only; Telegram `restrict_chat_member` attempted and its outcome reported, never
+   claimed) and `bot/surface/viral.py` (`/viral_post publish` owner-only). The moderation engine is
+   *wired* for the first time: a group-message ingress in group −1 after the access guard stops
+   propagation of a removed message. `/vision` calls the real `GeminiEngine.vision` with a 10 MiB
+   guard; `/leaderboard` is an alias of `/xp_leaderboard`.
+6. **Secrets are random, hashes are sha256, time is explicit.** Referral codes come from
+   `secrets` over an unambiguous alphabet with a collision loop; legacy stored codes stay valid
+   because lookup is by stored value. Every `datetime.utcnow()` is replaced by an explicit naive-UTC
+   helper that keeps the stored representation. `creative_temp_dir` defaults to `data/creative`
+   (next to the SQLite file); `/tmp` is opt-in via `CREATIVE_TEMP_DIR`.
+7. **Declared dependencies are the imported ones.** `deptry src` runs in the CI lint job with an
+   explicit `[tool.deptry]` policy: optional integrations (`nacl`, `gtts`, `mega`,
+   `imageio_ffmpeg`) are allow-listed as undeclared-by-design rather than promoted to new extras,
+   so the extras matrix (`scripts/extras_matrix.py check`) stays unchanged.
+
+*Rejected.* (a) Keeping `extend_existing` and merging the two referral schemas "softly" — it is
+exactly the mechanism that let the drift ship. (b) A per-module engine cache (`lru_cache` per
+path) — it retains disposed engines and bypasses the single switch. (c) Promoting the optional
+integrations to extras — four new CI legs for packages nothing in CI exercises. (d) Treating the
+README "Simulated" rows as documentation debt — they were *false* (every command had been real
+since the surface waves); a stale honesty table is a dishonest one. (e) Fixing the updater by
+shortening the subprocess calls while keeping them on the loop — the loop still stalls.
+
+*Evidence / confirmation.* Branch `arena/26f7d958-nexus-ai-agent`, commits `2c2ebaf`, `9d31b39`
+and the round-1 commit referenced in `CHANGELOG.md` `[Unreleased]`. Gates on the branch:
+`ruff check .`, `ruff format --check .`, `mypy src` (291 files), `deptry src`,
+`python scripts/extras_matrix.py check`, `python -m nexus_ai_agent.diagnostics.truth`, and
+`pytest -m "not slow"` — 3988+ passed / 31 skipped, also clean under `-W error::DeprecationWarning`.
+Honest limits: A-10 (dead modules), A-11 (`_process_job` complexity 63), A-15/A-16 (documentation
+debt) remain open findings tracked on the board; the daily `maintenance/backup-db` failure is
+unexplained because Actions job logs are not reachable from the remediation environment; no live
+PostgreSQL run was performed in this environment — the PostgreSQL resolution is asserted on the
+engine URL/driver (SQLAlchemy engines are lazy) and the dialect-agnostic DDL on SQLite.
+
+*Governance recovery (GOV-1/GOV-2, 2026-10-15).* Two findings against the board's own evidence
+chain were closed by the same rule. GOV-1: the referee mutation `pr_branch_self_exclusion_removed`
+survived because its test was vacuous (exit 2 for an unrelated reason); the test now proves the
+reason and the campaign reproduces 14/14. GOV-2: the Gate-5 campaign's "11 + 5 = 16" was a count
+error over 17 probes, five of which were silently *not applied* (anchor drift), and the harness
+run in an isolated worktree imported the editable-installed production package, so a campaign could
+report "0 caught" while mutating nothing. Decision: a mutation harness is only evidence when (a) every
+anchor occurs exactly once in its target — enforced by a unit test, not by the campaign's own
+"NOT APPLIED" line; (b) the harness imports the tree it mutates (`PYTHONPATH` pinned); (c) a probe
+weakens *every* layer that guards the invariant (M2–M4 are multi-edit: fenced SELECT + ledger status
+filter + fenced UPDATE), because an equivalent mutant is not a surviving mutant; (d) both campaigns run
+in CI (`governance-mutations`) inside a detached worktree with a 25-minute cap. Rejected: running the
+campaigns against the job's own checkout (a crash would leave the tree mutated for later steps) and
+dropping `AND attempt = ?` outright in the mutants (changes the binding count → sqlite error → red for
+the wrong reason).
+
+*Round 2 — live PostgreSQL and the composition root (2026-10-15).* The PostgreSQL blocker was
+lifted with a local PostgreSQL 16.2 (+pgvector) and immediately paid for itself: finding **A-17**
+— every Telegram id column was a 32-bit INTEGER on PostgreSQL, so a PostgreSQL deployment could not
+process a message from a post-2021 account or a supergroup. Decision: a *variant* column type
+(`BigInteger().with_variant(Integer(), "sqlite")`) rather than a plain `BigInteger`, because SQLite's
+INTEGER is already 64-bit and `INTEGER PRIMARY KEY` must remain the rowid alias — the SQLite schema
+and every existing SQLite file are untouched, and the Alembic revision `b5d8e2f4a917` is PostgreSQL-only
+and type-only. Rejected: (a) `BigInteger` everywhere (forces a batch table rebuild of every SQLite
+install for no gain); (b) widening only `user.telegram_id`/`chat.chat_id` (the feature tables hold the
+same ids); (c) leaving the LangGraph golden stale (its payload includes the Alembic head by design —
+the human-only `nexus checkpoints golden update` was run and the single-field delta proven by
+re-hashing). Validation rule confirmed: a finding is "deeper validated" only by a test that drives the
+*real* entry point (`on_message`, `build_application`, the real session factory) and that fails on
+`main` for the audited reason.
+

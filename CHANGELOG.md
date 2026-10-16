@@ -7,6 +7,195 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fix — full-audit remediation, round 0 (findings A-01/A-02b/A-03/A-06; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-01 — every free-text message crashed on `main`.** `storage/db.py` built
+  its session factories with SQLAlchemy's `AsyncSession` while
+  `bot/handlers.py` (`_upsert_user` on every message), `/myfiles`, `/download`,
+  `/language` and `features/onboarding.py` call `session.exec(...)` — a
+  SQLModel-only method. The factories now use
+  `sqlmodel.ext.asyncio.session.AsyncSession`; `SessionFactory` is typed to
+  it; 19 `session.execute(...)` call sites moved to the SQLModel idiom.
+  `is_first_time_user` only degrades on `SQLAlchemyError` any more — an
+  `AttributeError` like this one propagates instead of being read as "first
+  time". Regression: `tests/integration/test_real_session_factory.py` drives
+  the helpers through the real factory (4/5 tests fail on the old code).
+- **A-02b — `get_session()` ignored `NEXUS_DB_PATH`.** The no-argument form
+  hard-coded `data/app.sqlite`, so the async paths and the feature engines
+  silently used two different SQLite files. It now resolves
+  `settings.db_path`.
+- **A-03 — the last ten canned commands are real.** `/mod_config` `/warn`
+  `/mute` `/unmute` `/reputation` (`bot/surface/moderation.py`, owner-gated,
+  real `ModerationEngine`, Telegram `restrict_chat_member` reported honestly)
+  and `/viral_preview` `/viral_stats` `/viral_post` (`bot/surface/viral.py`,
+  the real `ViralPost` queue; `publish` is owner-only). `/leaderboard` is an
+  alias of `/xp_leaderboard`; `/vision` downloads the photo and calls
+  `GeminiEngine.vision`. The moderation engine is finally *wired*: a group-
+  message ingress runs in group -1 right after the access guard and stops
+  propagation of a removed message. Found while wiring:
+  `ModerationEngine.is_muted` raised `TypeError` (naive vs aware datetime)
+  for every muted user — fixed with naive-UTC storage + tolerant read.
+- **A-06 — dashboard API fail-closed.** With `NEXUS_DASHBOARD_TOKEN` unset,
+  `/api/dashboard/*` now answers `503` (was: open). `?limit=` is bounded to
+  `1..100` (`422` otherwise). The HTML dashboard asks for the token once per
+  tab and renders the PII-free payload it actually receives.
+- **Board:** the remediation lease `task-270-full-audit-remediation` has its
+  own declared zone (`full-audit-remediation`), satisfying the board
+  invariants (`tests/unit/test_agent_board.py`).
+
+### Fix — full-audit remediation, round 1 (findings A-02/A-05/A-07/A-08/A-09/A-12/A-13; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-02 — one database per deployment.** Thirteen feature modules
+  (`ads`, `analytics`, `anonymous_chat`, `channel_manager`, `engagement`,
+  `force_join`, `games`, `gamification`, `moderation`, `owner_control`,
+  `personality`, `viral_engine`, plus `ReferralEngine`, `ReminderSystem`,
+  `ConversationStore` and the `/broadcast` commands) each built their own
+  `create_engine("sqlite:///…")`, so a PostgreSQL deployment
+  (`NEXUS_DATABASE_URL`) kept users/chats in Postgres and XP, moderation,
+  ads, games, referrals, reminders … in a SQLite file next to the code.
+  `storage.db.sync_engine()` is now the single resolution point (PostgreSQL
+  via `postgresql+psycopg://` with `pool_pre_ping`, else the configured SQLite
+  file; one cached engine per process, disposed on URL change); every
+  `_sync_engine` helper delegates to it, the composition roots hand engines
+  `sync_db_path_for(settings)`, `/broadcast` reads chats through the async
+  session factory, and the referral/conversation tables are created with
+  dialect-agnostic `create_all` instead of SQLite-only `AUTOINCREMENT` DDL.
+  Law **R19** in `docs/architecture/MODULE_MAP.md`; regression
+  `tests/unit/test_sync_engine_resolution.py` (21 tests incl. a structural
+  guard that no `src/` module outside `storage/db.py` builds a `sqlite:///`
+  engine).
+- **A-09 — one definition per table.** `Referral`/`ReferralCode` were
+  declared twice (`storage/models.py` and `features/referral.py`, glued with
+  `extend_existing=True`, with *different* constraints). The strict,
+  migration-matching definitions in `storage/models.py` are the only ones;
+  `features/referral.py` imports them. `tests/unit/test_referral_models.py`.
+- **A-12 — weak hashes and forgeable codes.** Content/filename hashes in
+  `image_gen.py`, `speech.py`, `viral_engine.py` moved from md5 to sha256.
+  Referral codes were `NEXUS-<telegram id>-<md5(id)[:8]>` — they leaked the
+  id and anyone could forge any user's code; they are now random
+  (`secrets`, 8 chars from an unambiguous alphabet, collision-checked in
+  `get_or_create_code`; stored legacy codes stay valid). The remaining
+  `datetime.utcnow()` sites (`agent_manager`, `ai_memory`,
+  `conversation_store`, `referral`, `agent/updater`) use an explicit
+  naive-UTC helper. `creative_temp_dir` defaults to `data/creative` (next to
+  the SQLite database) instead of the world-writable, reboot-cleared
+  `/tmp/nexus_creative` (bandit B108); override with `CREATIVE_TEMP_DIR`.
+- **A-07 — the self-updater blocked the event loop.** `git pull` and
+  `pip install .` ran with blocking `subprocess.run` (no timeout) on the bot's
+  loop, and the release check used an unbounded `httpx` client. Both steps
+  now run via `asyncio.to_thread` with timeouts (git 300 s, pip 1200 s), the
+  release probe times out at 15 s. `tests/unit/test_updater.py::
+  test_do_update_does_not_block_the_event_loop` (a heartbeat keeps ticking
+  while a slow step runs; fails on the old code).
+- **A-05 — declared dependencies match imports.** `langchain-community`
+  (never imported) and `pytest-mock` (no `mocker` use) removed; `pydantic`
+  declared explicitly; `deptry` added to `[dev]` with a `[tool.deptry]`
+  policy (optional integrations nacl/gtts/mega/imageio-ffmpeg allow-listed)
+  and run in the CI lint job and `make deps`.
+- **A-08 — CI hygiene.** `ci.yml` runs on pushes to `main`/`v*` tags and on
+  every PR (not on every branch push), declares read-only workflow
+  permissions, and every job has a `timeout-minutes` sized from real run
+  durations; `maintenance.yml` pins its actions to the same SHAs as `ci.yml`
+  and has timeouts.
+- **A-13 — imports from defining modules.** `creative/spine/__init__.py`,
+  `agents/store/agent_manager.py` and `llm/litellm_provider.py` import
+  `CompiledIntent`, `StoreAgent` and `Router` from the modules that define
+  them (`mypy --no-implicit-reexport` clean on all three).
+- **A-10 — nine never-imported modules removed.** `agents/chat_agent.py`,
+  `agents/planner_agent.py`, `agent/feedback.py`, `core/async_db.py`,
+  `domain/retention.py` (superseded by `domain/policies/retention.py`),
+  `memory/short_term.py`, `storage/model_fetch.py`,
+  `adapters/caption_unavailable.py` and `i18n/loader.py` had no importer in
+  `src/`, `tests/`, `scripts/` or `migrations/`, no dynamic/string reference
+  and no entry point. Law **R20** (`tests/architecture/test_no_orphan_modules.py`)
+  now fails on any new orphan; its entry-point allowlist (`cli`, `api.app`)
+  carries a reason per entry and is checked for staleness.
+- **Board:** the remediation lease was re-issued through the official CLI at
+  the documented 24 h TTL (`AGENTS.md` §5) instead of the 48 h it had been
+  claimed with (generation 3; release + re-claim, no hand edit).
+- **Tests:** the remaining `session.execute(select(...))` calls in the test
+  suite moved to `session.exec(...)` and the SSRF API tests send form bodies
+  via `content=` — the fast suite now passes with
+  `-W error::DeprecationWarning`.
+- **README:** the "Real vs. Simulated" table was stale — every registered
+  command is backed by an engine since round 0; `/companion` and `/analyze`
+  were never registered and are listed as such.
+
+### Fix — full-audit remediation, round 2 (deeper validation of A-01/A-02/A-03; new finding A-17; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-17 — Telegram identifiers overflowed PostgreSQL's INTEGER.** Found by
+  the first live PostgreSQL run of this remediation (PostgreSQL 16.2, local
+  server + the CI `migrate-postgres` leg): all 33 Telegram id columns
+  (`user.telegram_id`, every `chat_id`/`user_id`, `anonsession.user1_id/
+  user2_id`, `referral.referrer_id/referee_id`, `adcampaign.created_by`,
+  `personalityconfig.set_by`) were 32-bit, so `_upsert_user` failed with
+  `NumericValueOutOfRange` for any account created after 2021 and
+  `_upsert_chat` for any supergroup — the bot could not answer a single
+  message on a PostgreSQL deployment. SQLite hid it (64-bit INTEGER). Fix:
+  `storage.models.TelegramId = BigInteger().with_variant(Integer(), "sqlite")`
+  on every such column (SQLite schema byte-identical, `INTEGER PRIMARY KEY`
+  stays the rowid alias) and Alembic revision **`b5d8e2f4a917`** (PostgreSQL
+  only, type-only, 33 `ALTER COLUMN … TYPE BIGINT`; downgrade narrows back).
+  Verified on the live server: upgrade, downgrade, upgrade, `alembic check`
+  reports no column drift, and a `2**40`-range user id plus a `-100…`
+  supergroup id round-trip through both engines. The PostgreSQL LangGraph
+  golden (`storage/golden/postgres.langgraph.json`) was regenerated with the
+  human-only `nexus checkpoints golden update --yes`; the only payload delta
+  is `migration_head` (re-hashing the new payload with the old head reproduces
+  the previous fingerprint exactly). Head pins in CI, tests and docs moved to
+  `b5d8e2f4a917`. Guards: `tests/unit/test_telegram_id_width.py` (ORM ↔
+  migration list ↔ PostgreSQL DDL lockstep, SQLite unchanged, internal keys
+  stay 32-bit) and `tests/integration/test_postgres_single_engine.py` (runs
+  in the CI PostgreSQL job).
+- **A-01 deeper validation.** `tests/integration/test_a01_message_path.py`
+  drives the real `on_message` handler built by `build_handlers` through the
+  production `get_session` factory into a real SQLite file after the exact
+  `nexus run` schema bring-up (`ensure_startup_schema` → Alembic); on `main`
+  the same test fails with the audit's `'AsyncSession' object has no
+  attribute 'exec'`.
+- **A-02 deeper validation.** `test_postgres_single_engine.py` proves on a
+  live PostgreSQL that the async session factory and the synchronous feature
+  engines (force-join predicate, referral tables) read and write one
+  database (`current_database()` identical, no SQLite engine in the process).
+- **A-03 deeper validation.** `tests/integration/test_composition_root_runtime.py`
+  builds the real PTB `Application` (`build_application`, no network) and
+  uses PTB's own `check_update` dispatch: group −1 is exactly access guard →
+  moderation gate, group text reaches the gate and private text does not,
+  strangers stop at the guard, a private text reaches `on_message`, no text
+  handler is shadowed behind it, every command is registered exactly once
+  (115) and the eight A-03 commands map to their own `*_cmd` callbacks.
+- **Docs:** the golden-update command is `nexus checkpoints golden update`
+  (three documents said `nexus golden update`, which does not exist).
+
+### Fix — governance recovery: both mutation harnesses attack again (GOV-1/GOV-2; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **GOV-1 — referee mutation `pr_branch_self_exclusion_removed` survived.**
+  The test meant to kill it ran `check` on a synthetic board without exactly
+  one active gates owner, so the referee returned exit 2 for *that* reason
+  and the self-exclusion was never exercised (a vacuous test). The test now
+  builds a gated board (`_gated_synthetic_board`), asserts the printed reason
+  and keeps a control run; `scripts/board_referee_mutations.py` reproduces
+  **14/14 killed** (exit 0, `agent_board.py` SHA identical before and after).
+- **GOV-2 — Gate-5 probe campaign reconciled to 17/17.** The published
+  "11 + 5 = 16" was a counting error: 12 probes were caught and 5 (`M2`, `M3`,
+  `M4`, `M5a`, `M9`) were silently *not applied* because their anchors had
+  drifted off `in_process_job_queue.py`. All five are re-anchored; `M2`–`M4`
+  became multi-edit probes (`Probe.extra_edits`) because every `_mark_*` CAS is
+  guarded three times (fenced SELECT, attempt-ledger status filter, fenced
+  UPDATE) and weakening only the UPDATE is an equivalent mutant, not an attack.
+  Root cause of a second silent failure mode fixed: run in an isolated
+  worktree, the harness imported the editable-installed production package, so
+  every probe "survived" while touching nothing — `_run_tests` now pins
+  `PYTHONPATH` to the tree under mutation. `scripts/gate5_mutation_probes.py`
+  reproduces **17/17 caught** (exit 0, target SHA identical before and after).
+- **Guards:** `tests/unit/test_mutation_harness_anchors.py` fails instantly on
+  anchor drift (every anchor must occur exactly once in its target), on a
+  mutant that changes the SQL binding count, on a harness that does not pin
+  `PYTHONPATH`, and on a CI workflow that does not run both campaigns in a
+  detached worktree. CI job `governance-mutations` (`.github/workflows/ci.yml`,
+  25-minute cap, worktree + `git diff --exit-code`) runs both campaigns on
+  every push to `main`/`v*` and every pull request.
+
 ### Feature — truth doctor: one authority for repository truth (law R16, session `arena/runtime-truth-tooling`)
 
 - **The repository could not prove its own truth.** Version drift, an unindexed
