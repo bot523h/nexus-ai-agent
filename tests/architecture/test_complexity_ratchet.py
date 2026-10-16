@@ -49,6 +49,8 @@ BASELINE: dict[str, int] = {
     "jobs/verification.py::verify_artifact": 29,
     "creative/packs/verify.py::verify_manifest": 27,
     "creative/temporal/core.py::FrameRateResolver.resolve": 26,
+    # incoming from main via #210; pre-existing hotspot at its measured value
+    "creative/assets/ingestion.py::reconcile_ingest": 25,
     "cli.py::inspect_checkpoints": 24,
     "continuum/mutations.py::run_campaign": 23,
     "creative/studio/bus.py::CommandBus._dispatch_locked": 23,

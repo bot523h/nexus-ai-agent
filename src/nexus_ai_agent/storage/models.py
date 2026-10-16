@@ -424,7 +424,7 @@ class Asset(SQLModel, table=True):
 
     asset_id: str = Field(primary_key=True)
     media_kind: str = Field(index=True)  # "image" | "audio" | "video"
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
 
 
 class AssetVersion(SQLModel, table=True):
@@ -438,7 +438,7 @@ class AssetVersion(SQLModel, table=True):
     media_type: str
     blob_key: str
     original_filename: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
 
 
 class ProjectAssetLink(SQLModel, table=True):
@@ -448,7 +448,7 @@ class ProjectAssetLink(SQLModel, table=True):
     project_id: str = Field(index=True)
     asset_id: str = Field(foreign_key="asset.asset_id", index=True)
     version_id: str = Field(foreign_key="assetversion.version_id", index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
 
 
 class AssetIngest(SQLModel, table=True):
@@ -481,5 +481,5 @@ class AssetIngest(SQLModel, table=True):
     asset_id: str | None = Field(default=None, index=True)
     version_id: str | None = Field(default=None, index=True)
     error_code: str | None = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=naive_utcnow, index=True)
+    updated_at: datetime = Field(default_factory=naive_utcnow, index=True)
