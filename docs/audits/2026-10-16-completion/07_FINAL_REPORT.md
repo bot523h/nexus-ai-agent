@@ -48,10 +48,13 @@ measured again on the tree that carries this document; the previous version's
 7. **Re-verified the #209 supersession claim** by reproducing it (not inheriting the
    override): all five tests it adds exist by name in the #218 tree, commit
    `7bfd628` is an ancestor, and its rejected `O_DIRECTORY` change is absent.
-8. **Acted where action is lawful**: requested the (obtainable) CodeRabbit review on
-   **#210** — 41 files, 0 commits behind `main`, every check green, blocked only by
-   the required review — as [comment 6214117556](https://github.com/bot523h/nexus-ai-agent/pull/210#issuecomment-6214117556).
-   No branch of another PR was pushed to, rebased, or rewritten.
+8. **Acted where action is lawful**: requested the obtainable CodeRabbit review on
+   **#210** — 41 files, 0 commits behind `main`, every check green, `reviewDecision`
+   `CHANGES_REQUESTED` from two 2026-10-13 reviews whose head (15:46Z) is newer than
+   both but was never re-reviewed — as [comment 6214117556](https://github.com/bot523h/nexus-ai-agent/pull/210#issuecomment-6214117556).
+   No branch of another PR was pushed to, rebased, or rewritten. (The first version of
+   that row said "blocked only by the required review"; the live review list corrected it
+   the same hour.)
 
 ## Local gates on this tree
 
@@ -79,7 +82,7 @@ canonical result for an exact head is the CI run on that head.
 | P1-2 census tool | `REMEDIATED_WITH_TESTS` | 7 tests in `test_pr_census_compare.py`; regenerated artifacts |
 | Module audit | 284/284 dispositioned, 0 deferred | method and limits in [`03_MODULE_DISPOSITION.md`](03_MODULE_DISPOSITION.md) |
 | PR #218 | **BLOCKED** (external reviewer capacity) | protections are not bypassable from this environment |
-| PR #210 | **BLOCKED** pending the requested review | green, level with `main`, 41 files ≤ 100 |
+| PR #210 | **BLOCKED** pending a re-review | green, level with `main`, 41 files ≤ 100; two open change requests from 2026-10-13 that the newer head never answered on the record |
 | Other 61 PRs | `NEEDS_REBASE` / `NEEDS_FIX` / `DEFERRED` / `SUPERSEDED` | one row each in [`pr_reconciliation.md`](pr_reconciliation.md) |
 | Backups | `BLOCKED_BY_EXTERNAL_DEPENDENCY` | run 38872121719 fails the preflight: `NEXUS_DATABASE_URL R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET` are absent. **Secret names only — no values anywhere in this package.** |
 | Dependency-audit workflow | `BLOCKED` until it is on the default branch | `gh workflow run dependency-audit.yml` → HTTP 404 while the workflow exists only on this branch |

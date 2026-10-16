@@ -41,13 +41,18 @@ both recorded now, so neither can be quoted as the other.
 | `BLOCKED_BY_FAILURE` | 11 | at least one check on the exact head is red |
 | `DEFERRED` | 7 | drafts |
 | `BLOCKED_BY_GOVERNANCE` | 2 | stacked on another PR's branch (#213 → #210, #208 → #203) |
-| `REVIEW_REQUIRED` | 1 | green, level with `main`, waiting only on the required review (#210) |
+| `REVIEW_REQUIRED` | 1 | green, level with `main`, blocked by the review gate (**#210**, whose live `reviewDecision` is `CHANGES_REQUESTED` — see below) |
 | `SUPERSEDED_BY_VERIFIED_CHANGE_PENDING_MERGE` | 1 | #209, whose remainder is already inside #218 (verified below) |
 | `REFERENCE` | 1 | #218 |
 
 Review decisions (collected per PR over GraphQL at 10:5xZ, `pr_review_states.json`):
 `APPROVED` 9, `CHANGES_REQUESTED` 16, `REVIEW_REQUIRED` 36, none 2.
 Merge states: `DIRTY` 49, `BEHIND` 11, `BLOCKED` 2, `UNSTABLE` 1.
+
+**An approval alone does not make any of those 9 mergeable**: eight are
+`BEHIND`/`DIRTY` against `main` and one (#211) is red on `test` and
+`python-parity`; a rebase push also dismisses the existing approval and needs a
+fresh review. That is why `READY_TO_MERGE` is 0.
 
 ## The reviewer roster — the decisive fact for this repository
 
@@ -88,7 +93,7 @@ branch was deleted by this reconciliation.**
 | PR | head | files@main | unique@main | behind | category | dependency / next action |
 |---|---|---|---|---|---|---|
 | #218 | `f930064` | 293 | 26 | 0 | BLOCKED_EXTERNAL | CodeRabbit's 100-file cap; owner must raise the cap or split ≤100 files |
-| #210 | `1d7390c` | 41 | 27 | 0 | BLOCKED_EXTERNAL | review requested 2026-10-16 (comment 6214117556); merges after #218 (shared `.github/workflows/ci.yml` + storage/fs sources) |
+| #210 | `1d7390c` | 41 | 27 | 0 | BLOCKED_EXTERNAL | two open `CHANGES_REQUESTED` reviews from 2026-10-13; the head (15:46Z) is newer than both but was never re-reviewed; re-review requested 2026-10-16 (comment 6214117556) |
 | #213 | `29ca3d6` | 42 | 26 | 6 | BLOCKED_EXTERNAL | stacked on #210's branch and dirty against it; restack after #210 |
 | #208 | `45b5e17` | 1 | 2 | 6 | BLOCKED_EXTERNAL | stacked on #203's branch; `merge-base-guard` red because the base moved |
 | #211 | `878842b` | 8 | 4 | 1 | NEEDS_FIX | test + python-parity red; shares `scripts/agent_board.py` with #202 |

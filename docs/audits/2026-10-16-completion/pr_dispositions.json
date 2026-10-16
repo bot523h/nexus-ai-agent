@@ -12,7 +12,8 @@
  "notes": [
   "Everything not listed here is derived by scripts/pr_reconcile.py from the live census rows.",
   "No PR is closed by this ledger; DUPLICATE_OR_SUPERSEDED and SAFE_TO_CLOSE_WITH_EVIDENCE name the evidence a closer must cite.",
-  "This session writes only to arena/26f7d958-nexus-ai-agent (PR #218). Every other row is evidence plus an owner."
+  "This session writes only to arena/26f7d958-nexus-ai-agent (PR #218). Every other row is evidence plus an owner.",
+  "Session 2 correction: #210 was first rowed as 'waiting only on the required review'. The live review list shows two unanswered change requests from 2026-10-13, so the row was rewritten."
  ],
  "dispositions": {
   "33": {
@@ -193,11 +194,11 @@
   },
   "210": {
    "category": "BLOCKED_EXTERNAL",
-   "dependency": "review requested 2026-10-16 (comment 6214117556); merges after #218 because it shares .github/workflows/ci.yml and storage/fs sources with the #218 diff",
-   "owner": "repository owner (bot523h) — the review request is placed, the bot decides",
-   "required_fix": "wait for the CodeRabbit verdict on head 1d7390cc, then merge; if it requests changes, the branch author must push (this session does not write to other branches)",
-   "acceptance": "approval + all checks success on head 1d7390cc + merge without --admin",
-   "evidence": "census row: 41 files, 27 unique commits, 0 behind main, 0 failing checks, mergeable_state=blocked (review only)"
+   "dependency": "two open CHANGES_REQUESTED reviews from coderabbitai[bot] (2026-10-13T05:34Z and 15:36Z); the head (1d7390cc, 2026-10-13T15:46Z) is newer than both, but no re-review has happened, so reviewDecision stays CHANGES_REQUESTED. Re-review requested 2026-10-16 (comment 6214117556). It also merges after #218, whose diff shares .github/workflows/ci.yml and storage/fs sources.",
+   "owner": "repository owner (bot523h) — the re-review is requested; only CodeRabbit can clear it here",
+   "required_fix": "obtain a review on head 1d7390cc that supersedes the two change requests, then merge; if CodeRabbit still asks for changes, the branch author must push (this session writes only to #218)",
+   "acceptance": "reviewDecision=APPROVED on head 1d7390cc with all checks green on the same sha",
+   "evidence": "census row 41 files / 27 unique / 0 behind / 0 failing; gh pr view 210 -> reviewDecision CHANGES_REQUESTED, mergeStateStatus BLOCKED, reviews: 2x coderabbitai CHANGES_REQUESTED"
   },
   "211": {
    "category": "NEEDS_FIX",
