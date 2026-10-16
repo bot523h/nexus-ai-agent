@@ -1,0 +1,302 @@
+path,first_landing_layer,status_vs_main,commits_touching,commit_shas,in_pr218_final_diff
+.agents/board.json,P1,M,4,5bc146e 8fd4c44 9d31b39 2c2ebaf,"no (nets to zero: changed by commit 1, restored by the A-04 cutover)"
+.env.example,P1,M,2,a357b0f 9d31b39,yes
+.github/workflows/ci.yml,P1,M,8,5bc146e a0c2027 d80568f 72fb067 c894d2d 807c197,yes
+.github/workflows/maintenance.yml,P1,M,1,a357b0f,yes
+CHANGELOG.md,P1,M,18,337cf70 fae25fc 7fd4112 5bc146e 7bfd628 a0c2027,yes
+Makefile,P1,M,1,a357b0f,yes
+README.md,P1,M,4,c894d2d 8fd4c44 a357b0f 9d31b39,yes
+docker-compose.yml,P1,M,1,9d31b39,yes
+docs/DECISION_LOG.md,P1,M,5,5bc146e 0632801 807c197 8690a4c a357b0f,yes
+docs/architecture/DATA_AND_STORAGE.md,P1,M,2,c894d2d 807c197,yes
+docs/architecture/MODULE_MAP.md,P1,M,5,d80568f 6fb0a97 c894d2d 8fd4c44 a357b0f,yes
+docs/architecture/RUNTIME_FLOWS.md,P1,M,2,c894d2d 807c197,yes
+docs/architecture/TESTING.md,P1,M,2,c894d2d 807c197,yes
+docs/architecture/TRUTH_DOCTOR.md,P1,M,1,8fd4c44,yes
+migrations/versions/b5d8e2f4a917_telegram_ids_bigint.py,P1,A,1,807c197,yes
+pyproject.toml,P1,M,5,c52f795 8c4adf2 c894d2d 0632801 a357b0f,yes
+scripts/gate5_mutation_probes.py,P1,M,2,d80568f 8690a4c,yes
+src/nexus_ai_agent/adapters/caption_unavailable.py,P1,D,1,8fd4c44,yes
+src/nexus_ai_agent/agent/feedback.py,P1,D,1,8fd4c44,yes
+src/nexus_ai_agent/agent/updater.py,P1,M,4,c894d2d 0632801 a357b0f 9d31b39,yes
+src/nexus_ai_agent/agents/chat_agent.py,P1,D,1,8fd4c44,yes
+src/nexus_ai_agent/agents/planner_agent.py,P1,D,1,8fd4c44,yes
+src/nexus_ai_agent/agents/store/agent_manager.py,P1,M,3,c894d2d a357b0f 9d31b39,yes
+src/nexus_ai_agent/api/app.py,P1,M,2,c52f795 9d31b39,yes
+src/nexus_ai_agent/api/dashboard.py,P1,M,1,9d31b39,yes
+src/nexus_ai_agent/bot/app.py,P1,M,5,c52f795 8c4adf2 0632801 a357b0f 9d31b39,yes
+src/nexus_ai_agent/bot/feature_handlers.py,P1,M,1,a357b0f,yes
+src/nexus_ai_agent/bot/handlers.py,P1,M,4,c52f795 0632801 a357b0f 9d31b39,yes
+src/nexus_ai_agent/bot/surface/__init__.py,P1,M,1,9d31b39,yes
+src/nexus_ai_agent/bot/surface/moderation.py,P1,A,1,9d31b39,yes
+src/nexus_ai_agent/bot/surface/viral.py,P1,A,1,9d31b39,yes
+src/nexus_ai_agent/config/settings.py,P1,M,2,0632801 a357b0f,yes
+src/nexus_ai_agent/core/async_db.py,P1,D,1,8fd4c44,yes
+src/nexus_ai_agent/creative/spine/__init__.py,P1,M,1,a357b0f,yes
+src/nexus_ai_agent/diagnostics/truth.py,P1,M,1,8fd4c44,yes
+src/nexus_ai_agent/domain/retention.py,P1,D,1,8fd4c44,yes
+src/nexus_ai_agent/features/ads.py,P1,M,1,a357b0f,yes
+src/nexus_ai_agent/features/ai_memory.py,P1,M,5,8c4adf2 c894d2d 0632801 a357b0f 9d31b39,yes
+src/nexus_ai_agent/features/analytics.py,P1,M,1,a357b0f,yes
+src/nexus_ai_agent/features/anonymous_chat.py,P1,M,1,a357b0f,yes
+src/nexus_ai_agent/features/channel_manager.py,P1,M,3,8c4adf2 0632801 a357b0f,yes
+src/nexus_ai_agent/features/conversation_store.py,P1,M,2,c894d2d a357b0f,yes
+src/nexus_ai_agent/features/engagement.py,P1,M,2,0632801 a357b0f,yes
+src/nexus_ai_agent/features/force_join.py,P1,M,2,8c4adf2 a357b0f,yes
+src/nexus_ai_agent/features/games.py,P1,M,2,8c4adf2 a357b0f,yes
+src/nexus_ai_agent/features/gamification.py,P1,M,1,a357b0f,yes
+src/nexus_ai_agent/features/image_gen.py,P1,M,1,a357b0f,yes
+src/nexus_ai_agent/features/moderation.py,P1,M,4,c894d2d 0632801 a357b0f 9d31b39,yes
+src/nexus_ai_agent/features/onboarding.py,P1,M,1,9d31b39,yes
+src/nexus_ai_agent/features/owner_control.py,P1,M,2,0632801 a357b0f,yes
+src/nexus_ai_agent/features/personality.py,P1,M,1,a357b0f,yes
+src/nexus_ai_agent/features/referral.py,P1,M,2,c894d2d a357b0f,yes
+src/nexus_ai_agent/features/speech.py,P1,M,2,c52f795 a357b0f,yes
+src/nexus_ai_agent/features/tools.py,P1,M,2,8c4adf2 a357b0f,yes
+src/nexus_ai_agent/features/viral_engine.py,P1,M,3,8c4adf2 a357b0f 9d31b39,yes
+src/nexus_ai_agent/i18n/loader.py,P1,D,1,8fd4c44,yes
+src/nexus_ai_agent/knowledge/knowledge_manager.py,P1,M,1,9d31b39,yes
+src/nexus_ai_agent/llm/litellm_provider.py,P1,M,1,a357b0f,yes
+src/nexus_ai_agent/memory/short_term.py,P1,D,1,8fd4c44,yes
+src/nexus_ai_agent/storage/db.py,P1,M,5,8c4adf2 c894d2d 0632801 a357b0f 9d31b39,yes
+src/nexus_ai_agent/storage/golden/postgres.langgraph.json,P1,M,2,c894d2d 807c197,yes
+src/nexus_ai_agent/storage/model_fetch.py,P1,D,1,8fd4c44,yes
+src/nexus_ai_agent/storage/models.py,P1,M,3,c894d2d 807c197 a357b0f,yes
+tests/architecture/legacy_baseline.json,P1,M,1,8fd4c44,yes
+tests/architecture/test_legacy_agent_no_raw_execution.py,P1,M,1,8fd4c44,yes
+tests/architecture/test_no_orphan_modules.py,P1,A,1,8fd4c44,yes
+tests/integration/test_a01_message_path.py,P1,A,3,4e75d27 0632801 807c197,yes
+tests/integration/test_composition_root_runtime.py,P1,A,3,50abdb0 0632801 807c197,yes
+tests/integration/test_migrate_adoption.py,P1,M,2,c894d2d 807c197,yes
+tests/integration/test_migrate_cli.py,P1,M,2,c894d2d 807c197,yes
+tests/integration/test_migrate_race_condition.py,P1,M,3,c894d2d 0632801 807c197,yes
+tests/integration/test_postgres_single_engine.py,P1,A,1,807c197,yes
+tests/integration/test_real_session_factory.py,P1,A,1,9d31b39,yes
+tests/unit/surface_fakes.py,P1,M,1,9d31b39,yes
+tests/unit/test_agent_board.py,P1,M,3,5bc146e 0632801 8690a4c,yes
+tests/unit/test_ai_memory_consent.py,P1,M,2,c894d2d 807c197,yes
+tests/unit/test_api_ssrf_download.py,P1,M,2,0632801 a357b0f,yes
+tests/unit/test_core_fingerprint.py,P1,M,2,c894d2d 807c197,yes
+tests/unit/test_dashboard_api.py,P1,M,2,0632801 9d31b39,yes
+tests/unit/test_database_url.py,P1,M,1,a357b0f,yes
+tests/unit/test_db.py,P1,M,1,a357b0f,yes
+tests/unit/test_feature_wiring.py,P1,M,1,9d31b39,yes
+tests/unit/test_force_join_gate.py,P1,M,1,a357b0f,yes
+tests/unit/test_knowledge_hardening.py,P1,M,2,a357b0f 9d31b39,yes
+tests/unit/test_migrations.py,P1,M,2,c894d2d 807c197,yes
+tests/unit/test_mutation_harness_anchors.py,P1,A,2,d80568f 8690a4c,yes
+tests/unit/test_referral_models.py,P1,A,2,c894d2d a357b0f,yes
+tests/unit/test_storage_wal_init_race.py,P1,M,1,a357b0f,yes
+tests/unit/test_surface_moderation.py,P1,A,1,9d31b39,yes
+tests/unit/test_surface_registration.py,P1,M,1,9d31b39,yes
+tests/unit/test_surface_viral.py,P1,A,1,9d31b39,yes
+tests/unit/test_sync_engine_resolution.py,P1,A,2,c894d2d a357b0f,yes
+tests/unit/test_telegram_id_width.py,P1,A,1,807c197,yes
+tests/unit/test_updater.py,P1,M,3,c894d2d 0632801 a357b0f,yes
+tests/integration/test_api_gate_inventory.py,P2,A,2,0632801 60a044f,yes
+scripts/agent_board.py,P3,M,2,5bc146e 0632801,yes
+scripts/board_referee_mutations.py,P3,M,1,0632801,yes
+scripts/execution_core_mutations.py,P3,M,2,d80568f 0632801,yes
+scripts/pack_trust_mutations.py,P3,M,1,0632801,yes
+scripts/release_lineage.py,P3,M,1,0632801,yes
+scripts/runtime_service_grant_guard_mutations.py,P3,M,1,0632801,yes
+scripts/shell_sandbox_mutations.py,P3,M,1,0632801,yes
+scripts/temporal_mutations.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/agent/approval.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/agent/self_monitor.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/agents/store/base_agent.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/bot/creative_surface.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/bot/surface/ads.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/bot/surface/channel_management.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/cli.py,P3,M,2,8c4adf2 0632801,yes
+src/nexus_ai_agent/creative/image_gen/pollinations_adapter.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/creative/render_jobs.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/creative/slideshow/ffmpeg.py,P3,M,2,8c4adf2 0632801,yes
+src/nexus_ai_agent/creative/spine/reference.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/creative/temporal/core.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/features/rag.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/features/summarizer.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/integrations/external.py,P3,M,2,c894d2d 0632801,yes
+src/nexus_ai_agent/memory/eval.py,P3,M,1,0632801,yes
+src/nexus_ai_agent/nagar/creative/__init__.py,P3,M,2,8c4adf2 0632801,yes
+src/nexus_ai_agent/storage/providers/github_releases.py,P3,M,3,c52f795 8c4adf2 0632801,yes
+tests/architecture/test_creative_channels.py,P3,M,1,0632801,yes
+tests/architecture/test_pack_trust_boundary.py,P3,M,1,0632801,yes
+tests/architecture/test_provenance_boundary.py,P3,M,1,0632801,yes
+tests/conftest.py,P3,M,2,c894d2d 0632801,yes
+tests/integration/test_checkpoint_composition.py,P3,M,1,0632801,yes
+tests/integration/test_creative_chain_e2e.py,P3,M,1,0632801,yes
+tests/integration/test_gate5_closure.py,P3,M,1,0632801,yes
+tests/integration/test_nagar_durable_handoff_e2e.py,P3,M,2,fae25fc 0632801,yes
+tests/integration/test_provenance_passport_e2e.py,P3,M,2,fae25fc 0632801,yes
+tests/integration/test_verification_gap_closure.py,P3,M,1,0632801,yes
+tests/unit/test_bot_slideshow_notify.py,P3,M,1,0632801,yes
+tests/unit/test_checkpoint_dependency_pin.py,P3,M,1,0632801,yes
+tests/unit/test_checkpoint_lifecycle_store_boundary.py,P3,M,1,0632801,yes
+tests/unit/test_ci_extras_parity.py,P3,M,2,50abdb0 0632801,yes
+tests/unit/test_cognition_gateway.py,P3,M,1,0632801,yes
+tests/unit/test_continuum_hardening.py,P3,M,1,0632801,yes
+tests/unit/test_creative_notify.py,P3,M,1,0632801,yes
+tests/unit/test_creative_render_jobs.py,P3,M,1,0632801,yes
+tests/unit/test_db_engine_retirement.py,P3,A,2,c894d2d 0632801,yes
+tests/unit/test_external_contracts.py,P3,M,1,0632801,yes
+tests/unit/test_failure_semantics.py,P3,M,1,0632801,yes
+tests/unit/test_filesystem_policy_primitives.py,P3,M,2,7bfd628 0632801,yes
+tests/unit/test_lifecycle_recording.py,P3,M,1,0632801,yes
+tests/unit/test_litellm_provider.py,P3,M,1,0632801,yes
+tests/unit/test_local_server_provider.py,P3,M,1,0632801,yes
+tests/unit/test_maintenance_workflow_contract.py,P3,M,1,0632801,yes
+tests/unit/test_migration_metadata.py,P3,M,1,0632801,yes
+tests/unit/test_nagar_cognition_queue_handoff.py,P3,M,1,0632801,yes
+tests/unit/test_observability.py,P3,M,1,0632801,yes
+tests/unit/test_opgap_wave5.py,P3,M,1,0632801,yes
+tests/unit/test_optional_extras.py,P3,M,1,0632801,yes
+tests/unit/test_phi_moderation_fail_closed.py,P3,M,1,0632801,yes
+tests/unit/test_rag_chunking.py,P3,M,1,0632801,yes
+tests/unit/test_rendering_lane_exposure.py,P3,M,1,0632801,yes
+tests/unit/test_request_queue.py,P3,M,1,0632801,yes
+tests/unit/test_slideshow_30s_target.py,P3,M,1,0632801,yes
+tests/unit/test_spine_mutations.py,P3,M,1,0632801,yes
+tests/unit/test_storage_resilience.py,P3,M,1,0632801,yes
+tests/unit/test_surface_onboarding.py,P3,M,1,0632801,yes
+tests/unit/test_unified_cloud.py,P3,M,1,0632801,yes
+AGENTS.md,P4,M,2,5bc146e c894d2d,yes
+Dockerfile,P4,M,1,c894d2d,yes
+docker/healthcheck.sh,P4,A,1,c894d2d,yes
+docs/README.md,P4,M,6,aef9b25 337cf70 bd8aab5 5bc146e 4cf8bbc c894d2d,yes
+docs/audits/COORDINATION_2026-09-21.md,P4,R,1,c894d2d,yes
+docs/audits/LIVE_ENGINEERING_BASELINE_2026-09-26.md,P4,R,1,c894d2d,yes
+docs/audits/MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md,P4,R,1,c894d2d,yes
+docs/audits/OWNER_WIDE_FORENSIC_AUDIT_2026-09-26.md,P4,R,1,c894d2d,yes
+docs/audits/STORAGE_RESILIENCE_CHECKUP_2026-09-21.md,P4,R,1,c894d2d,yes
+docs/audits/WAVE5_COORDINATION_01a0c5da.md,P4,R,1,c894d2d,yes
+migrations/env.py,P4,M,1,c894d2d,yes
+migrations/versions/c7a1e5d2b9f3_conversation_history.py,P4,A,1,c894d2d,yes
+src/nexus_ai_agent/bot/update_handlers.py,P4,M,1,c894d2d,yes
+src/nexus_ai_agent/storage/clock.py,P4,A,1,c894d2d,yes
+src/nexus_ai_agent/storage/migration_metadata.py,P4,M,1,c894d2d,yes
+tests/architecture/test_complexity_ratchet.py,P4,A,2,d80568f 6fb0a97,yes
+tests/integration/test_postgres_schema_authority.py,P4,A,1,c894d2d,yes
+tests/unit/test_container_contract.py,P4,A,2,a0c2027 c894d2d,yes
+tests/unit/test_conversation_store_contract.py,P4,M,1,c894d2d,yes
+tests/unit/test_schema_authority.py,P4,A,1,c894d2d,yes
+tests/unit/test_time_contract.py,P4,A,1,c894d2d,yes
+tests/unit/test_update_command_outcomes.py,P4,A,1,c894d2d,yes
+src/nexus_ai_agent/adapters/in_process_job_queue.py,P5,M,2,8c4adf2 d80568f,yes
+src/nexus_ai_agent/adapters/langgraph/lifecycle_recording.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/agents/phi_agent.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/bot/access_guard.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/bot/slideshow_notify.py,P5,M,1,c52f795,yes
+src/nexus_ai_agent/creative/image_post.py,P5,M,1,c52f795,yes
+src/nexus_ai_agent/creative/rendering/ir.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/features/ai_chat.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/features/calculator.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/features/story_gen.py,P5,M,1,c52f795,yes
+src/nexus_ai_agent/llm/local_llama_cpp.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/memory/long_term.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/nagar/cognition/gateway.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/nagar/creative/handoff.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/observability/logging.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/orchestration/state.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/provenance/journal.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/storage/ai_storage_manager.py,P5,M,1,c52f795,yes
+src/nexus_ai_agent/storage/checkpoint_lifecycle_pg_store.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/storage/checkpoint_reconciler.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/storage/langgraph_checkpoint.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/storage/unified_cloud.py,P5,M,1,c52f795,yes
+src/nexus_ai_agent/tools/base.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/tools/files.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/tools/filesystem_policy.py,P5,M,1,7bfd628,yes
+src/nexus_ai_agent/tools/registry.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/tools/system_shell.py,P5,M,1,8c4adf2,yes
+src/nexus_ai_agent/worker.py,P5,M,1,c52f795,yes
+tests/unit/test_async_offload.py,P5,A,1,c52f795,yes
+tests/unit/test_ci_lint_parity.py,P5,M,2,c52f795 8c4adf2,yes
+tests/unit/test_process_job_characterization.py,P5,A,1,d80568f,yes
+tests/unit/test_strict_typing_boundaries.py,P5,A,1,8c4adf2,yes
+.github/workflows/dependency-audit.yml,P6,A,1,bd8aab5,yes
+docs/MULTI_AGENT_PROTOCOL.md,P6,M,1,bd8aab5,yes
+docs/architecture/adr/0012-coordination-ref-board-authority.md,P6,A,1,5bc146e,yes
+docs/architecture/adr/README.md,P6,M,1,5bc146e,yes
+docs/audits/2026-10-15-closeout/CI_AND_RELEASE_EVIDENCE.md,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/EXECUTIVE_SUMMARY.md,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/EXTERNAL_BLOCKERS.md,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/INDEX.md,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/MODULE_AUDIT.md,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/PR_CONVERGENCE.md,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/SECURITY_AND_CONTAINER.md,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/TECHNICAL_DEBT_LEDGER.md,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/00_phase_zero_snapshot.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/01_a11_baseline_tests.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/02_exec_core_mutations_baseline.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/03_characterization_vs_original.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/04_exec_core_mutations_after.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/05_gate5_mutations_after.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/06_full_suite_after_a11.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/07_full_suite_after_a13.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/08_full_suite_after_a12.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/09_gates_at_a0c2027.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/evidence/10_full_suite_at_7bfd628_with_skips.txt,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/mission2_module_status_6b398565.csv,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/module_inventory.csv,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/module_inventory.json,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/pr_convergence_ledger.csv,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-closeout/remediation_map.json,P6,A,1,4cf8bbc,yes
+docs/audits/2026-10-15-overnight-stabilization/01_LIVE_TRUTH_AND_PR218.md,P6,A,2,8a733a7 bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/02_PR_CENSUS_AND_LEDGER.md,P6,A,1,bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/03_A04_BOARD_STRUCTURAL_REMEDY.md,P6,A,1,bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/04_ASSET_LIBRARY_AND_CREATIVE_GRAPH.md,P6,A,2,fae25fc bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/05_COMMANDBUS_AUDIT.md,P6,A,1,bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/06_OBSERVABILITY_AND_PROVIDER_CONTRACTS.md,P6,A,1,bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/07_OPERATIONS_BACKUPS_SUPPLY_CHAIN.md,P6,A,1,bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/08_MODULE_INVENTORY_AND_REACHABILITY.md,P6,A,1,bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/09_RESEARCH_DECISION_BACKLOG.md,P6,A,1,bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/10_FINAL_REPORT_AND_SKEPTICAL_AUDIT.md,P6,A,2,8a733a7 bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/INDEX.md,P6,A,1,bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/a04_merge_tree_proof.json,P6,A,1,5bc146e,yes
+docs/audits/2026-10-15-overnight-stabilization/module_inventory.csv,P6,A,1,bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/module_inventory.json,P6,A,1,bd8aab5,yes
+docs/audits/2026-10-15-overnight-stabilization/pr_census.csv,P6,A,1,5bc146e,yes
+docs/audits/2026-10-15-overnight-stabilization/pr_census.json,P6,A,1,5bc146e,yes
+docs/audits/2026-10-15-overnight-stabilization/pr_overrides.json,P6,A,1,5bc146e,yes
+docs/audits/2026-10-15-overnight-stabilization/remediation_map.json,P6,A,1,bd8aab5,yes
+scripts/board_merge_preflight.py,P6,A,1,5bc146e,yes
+scripts/module_inventory.py,P6,A,1,4cf8bbc,yes
+scripts/pr_census.py,P6,A,2,aef9b25 5bc146e,yes
+src/nexus_ai_agent/execution/asset_library.py,P6,A,1,7fd4112,yes
+src/nexus_ai_agent/jobs/creative_passport.py,P6,M,1,fae25fc,yes
+tests/integration/test_job_lifecycle_queue.py,P6,M,1,fae25fc,yes
+tests/unit/test_agent_board_ref.py,P6,A,1,5bc146e,yes
+tests/unit/test_asset_library.py,P6,A,1,7fd4112,yes
+tests/unit/test_creative_passport.py,P6,M,1,fae25fc,yes
+docs/audits/2026-10-16-completion/01_LIVE_TRUTH.md,P7,A,1,337cf70,yes
+docs/audits/2026-10-16-completion/02_PR218_INDEPENDENT_AUDIT.md,P7,A,1,337cf70,yes
+docs/audits/2026-10-16-completion/03_MODULE_DISPOSITION.md,P7,A,1,337cf70,yes
+docs/audits/2026-10-16-completion/04_DEFECTS_AND_FIXES.md,P7,A,3,aef9b25 f930064 337cf70,yes
+docs/audits/2026-10-16-completion/05_PR_CENSUS_AND_INTEGRATION_LEDGER.md,P7,A,3,5a727d7 aef9b25 337cf70,yes
+docs/audits/2026-10-16-completion/06_OPERATIONS_AND_BLOCKERS.md,P7,A,1,337cf70,yes
+docs/audits/2026-10-16-completion/07_FINAL_REPORT.md,P7,A,4,5a727d7 aef9b25 f930064 337cf70,yes
+docs/audits/2026-10-16-completion/INDEX.md,P7,A,2,aef9b25 337cf70,yes
+docs/audits/2026-10-16-completion/module_disposition.csv,P7,A,1,337cf70,yes
+docs/audits/2026-10-16-completion/module_disposition.json,P7,A,1,337cf70,yes
+docs/audits/2026-10-16-completion/module_inventory.csv,P7,A,1,337cf70,yes
+docs/audits/2026-10-16-completion/module_inventory.json,P7,A,1,337cf70,yes
+docs/audits/2026-10-16-completion/pr_census.csv,P7,A,2,aef9b25 337cf70,yes
+docs/audits/2026-10-16-completion/pr_census.json,P7,A,2,aef9b25 337cf70,yes
+docs/audits/2026-10-16-completion/pr_dispositions.json,P7,A,2,5a727d7 aef9b25,yes
+docs/audits/2026-10-16-completion/pr_reconciliation.csv,P7,A,2,5a727d7 aef9b25,yes
+docs/audits/2026-10-16-completion/pr_reconciliation.json,P7,A,2,5a727d7 aef9b25,yes
+docs/audits/2026-10-16-completion/pr_reconciliation.md,P7,A,2,5a727d7 aef9b25,yes
+docs/audits/2026-10-16-completion/pr_review_states.json,P7,A,1,aef9b25,yes
+docs/audits/2026-10-16-completion/review_records.json,P7,A,1,337cf70,yes
+scripts/module_disposition.py,P7,A,1,337cf70,yes
+scripts/pr_reconcile.py,P7,A,1,aef9b25,yes
+src/nexus_ai_agent/storage/providers/huggingface.py,P7,M,1,337cf70,yes
+tests/unit/test_agent_store_registry.py,P7,A,1,337cf70,yes
+tests/unit/test_bot_handler_surface.py,P7,A,1,337cf70,yes
+tests/unit/test_composition_facades.py,P7,A,1,337cf70,yes
+tests/unit/test_instrumentation.py,P7,A,1,337cf70,yes
+tests/unit/test_pr_census_compare.py,P7,A,1,aef9b25,yes
+tests/unit/test_slideshow_image_fill.py,P7,A,1,337cf70,yes
+tests/unit/test_storage_provider_boundaries.py,P7,A,2,f930064 337cf70,yes
+tests/unit/test_studio_api_scope.py,P7,A,1,337cf70,yes
