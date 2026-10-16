@@ -305,10 +305,11 @@ async def test_reused_key_with_different_payload_is_a_conflict(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_reused_key_different_bytes_same_filename_is_a_conflict(tmp_path: Path) -> None:
-    """The idempotency fingerprint includes the measured content digest.
+    """A reused key with different bytes is refused on the READY path.
 
-    Same filename and declared type, but different bytes: the replay must be a
-    typed conflict rather than a silent return of the earlier asset.
+    The request fingerprint covers only filename and declared type, so this
+    conflict is detected by comparing the replay's measured digest with the
+    recorded content identity — never by silently returning the earlier asset.
     """
     service = _new_service(tmp_path)
     request = IngestRequest(idempotency_key="bytes", original_filename="pic.png")
