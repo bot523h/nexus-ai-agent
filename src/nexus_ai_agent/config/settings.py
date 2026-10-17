@@ -343,8 +343,14 @@ class Settings(BaseSettings):
         validation_alias="NEXUS_CREATIVE_GEMINI_API_KEY",
     )
     creative_temp_dir: str = Field(
-        default="/tmp/nexus_creative",
-        description="Temporary directory for creative jobs",
+        # Under the persistent data directory, next to ``db_path``: the
+        # creative job registry (creative_jobs.sqlite3) and in-flight
+        # workspaces live here, so a world-writable, reboot-cleared /tmp path
+        # (bandit B108; audit A-12) was the wrong default. Override with
+        # CREATIVE_TEMP_DIR to keep a custom location.
+        default="data/creative",
+        validation_alias=AliasChoices("CREATIVE_TEMP_DIR", "NEXUS_CREATIVE_TEMP_DIR"),
+        description="Workspace directory for creative jobs (registry + render workspaces)",
     )
 
     # Image generation is distinct from image analysis/upload authorization.
@@ -359,7 +365,7 @@ class Settings(BaseSettings):
         max_length=100,
     )
     image_gen_estimated_cost_usd: Decimal = Field(
-        default=Decimal("0"),
+        default=Decimal(0),
         ge=0,
         allow_inf_nan=False,
         validation_alias="NEXUS_IMAGE_GEN_ESTIMATED_COST_USD",

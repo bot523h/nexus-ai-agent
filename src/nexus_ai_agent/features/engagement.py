@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import random
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, ClassVar
 
 from sqlmodel import Session, select
 
-from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.models import EngagementConfig
 
@@ -23,11 +22,15 @@ logger = get_logger(__name__)
 
 
 def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for feature CRUD."""
-    from sqlalchemy import create_engine as _ce
+    """The process-wide synchronous engine (``storage.db.sync_engine``).
 
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+    Audit A-02: this module used to build its own ``sqlite:///`` engine and
+    therefore ignored ``NEXUS_DATABASE_URL``; the central helper resolves
+    PostgreSQL-or-SQLite exactly like ``get_session``.
+    """
+    from nexus_ai_agent.storage.db import sync_engine
+
+    return sync_engine()
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +92,9 @@ class EngagementEngine:
     # Anti-spam: minimum seconds between engagements per chat
     MIN_INTERVAL_SECONDS = 300  # 5 minutes
 
-    # In-memory last engagement time per chat
-    _last_engagement: dict[int, datetime] = {}
+    # In-memory last engagement time per chat (process-wide, shared by every
+    # instance on purpose — one scheduler per process).
+    _last_engagement: ClassVar[dict[int, datetime]] = {}
 
     def __init__(self, bot: Any | None = None) -> None:
         self.bot = bot

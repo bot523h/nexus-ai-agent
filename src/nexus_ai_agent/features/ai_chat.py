@@ -131,7 +131,7 @@ class GeminiEngine:
     def _get_history(self, conv_id: str) -> list[dict[str, Any]]:
         """Get conversation history — from persistent store if available, else in-memory."""
         if self._store is not None:
-            return self._store.get_history(conv_id, limit=self._max_history)
+            return list(self._store.get_history(conv_id, limit=self._max_history))
         # Fallback: in-memory
         if conv_id not in self._history:
             self._history[conv_id] = []
@@ -186,7 +186,7 @@ class GeminiEngine:
                 return f"❌ خطای API ({resp.status_code}): لطفاً بعداً تلاش کنید."
             data = resp.json()
             try:
-                return data["candidates"][0]["content"]["parts"][0]["text"]
+                return str(data["candidates"][0]["content"]["parts"][0]["text"])
             except (KeyError, IndexError):
                 log.error("gemini_unexpected_response", data=str(data)[:500])
                 return "❌ پاسخ نامعتبر از API."
@@ -212,7 +212,7 @@ class GeminiEngine:
         if self._queue is not None:
             from nexus_ai_agent.features.request_queue import Priority
 
-            result = await self._queue.submit(
+            result: str = await self._queue.submit(
                 lambda: self._do_chat(text, conv_id=conv_id, user_id=user_id, mode=mode),
                 user_id=user_id,
                 priority=Priority.NORMAL,
@@ -251,11 +251,12 @@ class GeminiEngine:
         if self._queue is not None:
             from nexus_ai_agent.features.request_queue import Priority
 
-            return await self._queue.submit(
+            queued: str = await self._queue.submit(
                 lambda: self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"]),
                 user_id=user_id,
                 priority=Priority.NORMAL,
             )
+            return queued
 
         return await self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"])
 

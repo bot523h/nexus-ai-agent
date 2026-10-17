@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -64,7 +64,7 @@ class CreativeRecipe(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     recipe_hash: str = ""
 
-    def model_post_init(self, _context: Any) -> None:  # noqa: D105 - pydantic hook
+    def model_post_init(self, _context: Any) -> None:
         payload = {
             "source": self.source,
             "dimensions": self.dimensions,
@@ -102,7 +102,7 @@ class RulesRecipeAnalyzer:
     """
 
     #: hint value -> abstracted strategy per dimension.
-    _ABSTRACTIONS: dict[str, dict[str, str]] = {
+    _ABSTRACTIONS: ClassVar[dict[str, dict[str, str]]] = {
         "pacing": {
             "fast": "fast hook strategy: front-load the payoff",
             "slow": "slow-build strategy: earn attention gradually",

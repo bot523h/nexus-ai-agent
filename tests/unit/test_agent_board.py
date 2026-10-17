@@ -53,10 +53,16 @@ def _hermetic_pr_env(monkeypatch: pytest.MonkeyPatch) -> None:
     branches over the network inside a unit test (the same leak class that once
     turned ``praudit`` red). The explicit ``--repo``/``--token`` arguments stay
     available for the tests that exercise the new source directly.
+
+    ``NEXUS_BOARD_STORE=tree`` pins these tests to the frozen tree file: the
+    production default is the coordination ref (protocol 11, audit A-04), which
+    would otherwise ``git fetch`` from origin.  The ref store has its own suite,
+    ``tests/unit/test_agent_board_ref.py``, against a local bare origin.
     """
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("NEXUS_BOARD_STORE", "tree")
 
 
 LEGAL_STATUSES = {
@@ -202,7 +208,7 @@ def test_active_claims_carry_owner_timestamp_and_zone(board: dict) -> None:
         assert claim.get("claimed_at"), f"active claim {claim['task']} has no lease timestamp"
         assert int(claim.get("ttl_hours", 0)) > 0, f"active claim {claim['task']} has no TTL"
         assert claim.get("exclusive_paths") is not None
-        datetime.strptime(claim["claimed_at"], "%Y-%m-%dT%H:%M:%SZ")
+        datetime.strptime(claim["claimed_at"], "%Y-%m-%dT%H:%M:%S%z")
 
 
 def test_exclusive_paths_belong_to_a_declared_zone(board: dict) -> None:
@@ -488,13 +494,45 @@ def test_check_consults_sibling_worktree_boards(
     assert code == 1
 
 
-def test_check_unreliable_worktree_enumeration_is_exit_2(
-    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """If sibling worktrees cannot be enumerated, the absence of overlap is unproven."""
+def _gated_synthetic_board() -> dict:
+    """The synthetic board with its one lease also holding the gates.
+
+    ``cmd_check`` is fail-closed on *several* independent conditions — among
+    them "exactly one active gates_owner". A board without a gates owner is
+    exit 2 for that reason alone, which made the worktree-enumeration test
+    below vacuous (the referee mutant ``foreign_worktree_boards_skipped``
+    survived 13/14 in the Mission-2 campaign). With the gates invariant
+    satisfied, the only remaining road to exit 2 is the source under test.
+    """
     board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = True
+    return board
+
+
+def _isolate_worktree_source(board_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """origin/main readable and clean, open-PR source readable and empty."""
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
+
+
+def _check_args(files: str = "docs/not-owned.md") -> object:
+    return type("A", (), {"files": files, "branch": "arena/999-me", "no_remote": False})()
+
+
+def test_check_unreliable_worktree_enumeration_is_exit_2(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """If sibling worktrees cannot be enumerated, the absence of overlap is unproven.
+
+    GOV-1 (2026-10-15): the verdict must be exit 2 *because of the worktree
+    source* — the printed reason is asserted — and the identical situation with
+    a readable enumeration must be exit 0, so a referee that pretends the
+    enumeration succeeded (``return [], True``) is caught.
+    """
+    board = _gated_synthetic_board()
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    _isolate_worktree_source(board_module, monkeypatch)
 
     def _git_worktree_fails(args: list[str], cwd: Path) -> object:
         if args[:2] == ["worktree", "list"]:
@@ -502,18 +540,34 @@ def test_check_unreliable_worktree_enumeration_is_exit_2(
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr(board_module, "_git", _git_worktree_fails)
-    # origin/main is readable and clean, but the worktree enumeration was not.
-    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
-    # Isolate the worktree source from the open-PR branch source.
-    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
-    code = board_module.cmd_check(
-        type(
-            "A",
-            (),
-            {"files": "docs/not-owned.md", "branch": "arena/999-me", "no_remote": False},
-        )()
-    )
+    code = board_module.cmd_check(_check_args())
+    out = capsys.readouterr().out
     assert code == 2, "unreliable worktree enumeration must not be a clean pass"
+    assert "git worktree enumeration" in out, out
+
+    # Control: the same board and scope with a *readable* (empty) enumeration
+    # is a clean pass — proving exit 2 above came from the worktree source.
+    def _git_worktree_ok(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _git_worktree_ok)
+    assert board_module.cmd_check(_check_args()) == 0
+
+
+def test_check_git_unavailable_for_worktrees_is_exit_2(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``_git`` returning ``None`` (binary missing) is the same unverifiable verdict."""
+    board = _gated_synthetic_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    _isolate_worktree_source(board_module, monkeypatch)
+    monkeypatch.setattr(board_module, "_git", lambda args, cwd: None)
+    code = board_module.cmd_check(_check_args())
+    assert code == 2
+    assert "git worktree enumeration" in capsys.readouterr().out
 
 
 def test_check_proven_conflict_wins_over_unreadable_remote(

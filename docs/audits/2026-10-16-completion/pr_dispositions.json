@@ -1,0 +1,228 @@
+{
+ "generated_by": "hand judgements written 2026-10-16 against pr_census.json 2026-10-16T11:04:15Z",
+ "categories": [
+  "READY_TO_MERGE",
+  "NEEDS_FIX",
+  "NEEDS_REBASE",
+  "BLOCKED_EXTERNAL",
+  "DUPLICATE_OR_SUPERSEDED",
+  "SAFE_TO_CLOSE_WITH_EVIDENCE",
+  "DEFERRED_WITH_OWNER_AND_REASON"
+ ],
+ "notes": [
+  "Everything not listed here is derived by scripts/pr_reconcile.py from the live census rows.",
+  "No PR is closed by this ledger; DUPLICATE_OR_SUPERSEDED and SAFE_TO_CLOSE_WITH_EVIDENCE name the evidence a closer must cite.",
+  "This session writes only to arena/26f7d958-nexus-ai-agent (PR #218). Every other row is evidence plus an owner.",
+  "Session 2 correction: #210 was first rowed as 'waiting only on the required review'. The live review list shows two unanswered change requests from 2026-10-13, so the row was rewritten."
+ ],
+ "dispositions": {
+  "33": {
+   "category": "NEEDS_FIX",
+   "dependency": "none outstanding; the oldest open delivery (v3.13.0 P0 security code)",
+   "owner": "branch author / repository owner",
+   "required_fix": "fix the failing checks on the head, then rebase (49 commits behind)",
+   "acceptance": "checks green on a head that is 0 behind main",
+   "evidence": "census row failing_checks=[\"extras-matrix (rag)\", \"extras-matrix (postgres)\", \"extras-matrix (speech)\", \"extras-matrix (r2)\", \"extras-matrix (local-llm)\", \"extras-matrix (translate)\", \"extras-matrix (media)\", \"extras-matrix (core)\", \"extras-matrix (pdf)\", \"extras-matrix (otio)\", \"migrate-postgres\"]"
+  },
+  "58": {
+   "category": "DEFERRED_WITH_OWNER_AND_REASON",
+   "dependency": "draft — not proposed for merge",
+   "owner": "repository owner (bot523h)",
+   "required_fix": "leave as a draft until the owner promotes it; no session action",
+   "acceptance": "owner marks ready-for-review",
+   "evidence": "census row: draft S1-S5 security boundary (12 files, 226 behind)"
+  },
+  "92": {
+   "category": "DEFERRED_WITH_OWNER_AND_REASON",
+   "dependency": "draft — not proposed for merge",
+   "owner": "repository owner (bot523h)",
+   "required_fix": "leave as a draft until the owner promotes it; no session action",
+   "acceptance": "owner marks ready-for-review",
+   "evidence": "census row: draft SQLite defaults preservation (43 files, 168 behind)"
+  },
+  "114": {
+   "category": "DEFERRED_WITH_OWNER_AND_REASON",
+   "dependency": "draft — not proposed for merge",
+   "owner": "repository owner (bot523h)",
+   "required_fix": "leave as a draft until the owner promotes it; no session action",
+   "acceptance": "owner marks ready-for-review",
+   "evidence": "census row: draft Persian capability explorer (17 files, 118 behind)"
+  },
+  "117": {
+   "category": "DEFERRED_WITH_OWNER_AND_REASON",
+   "dependency": "draft — not proposed for merge",
+   "owner": "repository owner (bot523h)",
+   "required_fix": "leave as a draft until the owner promotes it; no session action",
+   "acceptance": "owner marks ready-for-review",
+   "evidence": "census row: draft W2 hardening (41 files, 118 behind)"
+  },
+  "118": {
+   "category": "DEFERRED_WITH_OWNER_AND_REASON",
+   "dependency": "owner instruction: Wave 3-C candidate and this compat repair stay distinct until an authorized integration exists",
+   "owner": "repository owner (bot523h)",
+   "required_fix": "keep as a draft; never describe as fixed before authorized integration",
+   "acceptance": "an explicit owner decision, not a session inference",
+   "evidence": "census row: draft, 52 files, 26 unique commits, 118 behind, dirty, no failing checks"
+  },
+  "122": {
+   "category": "NEEDS_REBASE",
+   "dependency": "none outstanding",
+   "owner": "branch author / repository owner",
+   "required_fix": "take main into the branch and re-run CI (53 commits behind)",
+   "acceptance": "0 behind main with checks green on the new head",
+   "evidence": "census row: 10 files, 15 unique commits, 53 behind, H1 chat routing fix — 10 files, clean checks, 53 behind"
+  },
+  "150": {
+   "category": "DEFERRED_WITH_OWNER_AND_REASON",
+   "dependency": "draft — not proposed for merge",
+   "owner": "repository owner (bot523h)",
+   "required_fix": "leave as a draft until the owner promotes it; no session action",
+   "acceptance": "owner marks ready-for-review",
+   "evidence": "census row: draft CreativeWork verified pipeline (29 files, 118 behind)"
+  },
+  "190": {
+   "category": "NEEDS_REBASE",
+   "dependency": "CodeRabbit approved this head, but a rebase push will dismiss that approval and require a fresh review",
+   "owner": "branch author / repository owner",
+   "required_fix": "rebase onto main (49 commits behind), re-run CI, then re-request the review",
+   "acceptance": "green CI + fresh approval on the rebased head",
+   "evidence": "pr_review_states.json: APPROVED by coderabbitai[bot]; census row: 8 files, 49 behind, no failing checks"
+  },
+  "193": {
+   "category": "NEEDS_FIX",
+   "dependency": "none outstanding",
+   "owner": "branch author / repository owner",
+   "required_fix": "fix the failing check on the head: runtime-foundation (Ubuntu 26.04 / Python 3.14) (dirty against main as well)",
+   "acceptance": "runtime-foundation green on a head that is 0 behind main",
+   "evidence": "census row failing_checks=[\"runtime-foundation (Ubuntu 26.04 / Python 3.14)\"]"
+  },
+  "195": {
+   "category": "NEEDS_REBASE",
+   "dependency": "none outstanding",
+   "owner": "branch author / repository owner",
+   "required_fix": "take main into the branch and re-run CI (25 commits behind)",
+   "acceptance": "0 behind main with checks green on the new head",
+   "evidence": "census row: 6 files, 5 unique commits, 25 behind, I1-I10 negative mutation coverage — 6 files, dirty against main, 25 behind"
+  },
+  "198": {
+   "category": "NEEDS_REBASE",
+   "dependency": "none outstanding; conflicts with main (mergeable=false, state=dirty)",
+   "owner": "branch author / repository owner",
+   "required_fix": "resolve the conflicts against main and re-run CI (25 commits behind)",
+   "acceptance": "mergeable=true with checks green on the new head; /stt identity + ask() quota behaviour unchanged",
+   "evidence": "census row: 30 files, 23 unique commits, 25 behind, dirty, no failing checks"
+  },
+  "199": {
+   "category": "NEEDS_REBASE",
+   "dependency": "none outstanding",
+   "owner": "branch author / repository owner",
+   "required_fix": "take main into the branch and re-run CI (25 commits behind)",
+   "acceptance": "0 behind main with checks green on the new head",
+   "evidence": "census row: 4 files, 5 unique commits, 25 behind, execution-core contract doc — 4 files, dirty, 25 behind"
+  },
+  "200": {
+   "category": "NEEDS_REBASE",
+   "dependency": "none outstanding",
+   "owner": "branch author / repository owner",
+   "required_fix": "take main into the branch and re-run CI (25 commits behind)",
+   "acceptance": "0 behind main with checks green on the new head",
+   "evidence": "census row: 2 files, 3 unique commits, 25 behind, cancel-without-token regression test — 2 files, dirty, 25 behind"
+  },
+  "201": {
+   "category": "NEEDS_REBASE",
+   "dependency": "none outstanding",
+   "owner": "branch author / repository owner",
+   "required_fix": "take main into the branch and re-run CI (6 commits behind)",
+   "acceptance": "0 behind main with checks green on the new head",
+   "evidence": "census row: 4 files, 7 unique commits, 6 behind, request-queue vs execution-core doc — 4 files, clean checks, 6 behind"
+  },
+  "202": {
+   "category": "NEEDS_REBASE",
+   "dependency": "#211 shares scripts/agent_board.py; board-referee behaviour is the shared surface",
+   "owner": "branch author / repository owner",
+   "required_fix": "take main into the branch and re-run CI (6 commits behind)",
+   "acceptance": "0 behind main, board referee mutations green on the new head",
+   "evidence": "census row: 9 files, 19 unique commits, 6 behind, no failing checks"
+  },
+  "203": {
+   "category": "NEEDS_REBASE",
+   "dependency": "#208 is stacked on it",
+   "owner": "branch author / repository owner",
+   "required_fix": "take main into the branch and re-run CI (6 commits behind)",
+   "acceptance": "0 behind main with checks green on the new head",
+   "evidence": "census row: 1 file, 6 behind, mergeable_state=behind, no failing checks"
+  },
+  "204": {
+   "category": "DEFERRED_WITH_OWNER_AND_REASON",
+   "dependency": "draft — not proposed for merge",
+   "owner": "repository owner (bot523h)",
+   "required_fix": "leave as a draft until the owner promotes it; no session action",
+   "acceptance": "owner marks ready-for-review",
+   "evidence": "census row: draft sqlite-vec extension fallback (4 files, 6 behind)"
+  },
+  "205": {
+   "category": "NEEDS_FIX",
+   "dependency": "#213 (Asset Library collision: both touch creative/assets/* and the asset-library tests)",
+   "owner": "branch author / repository owner",
+   "required_fix": "fix the four failing checks on the head (python-parity (3.10), python-parity (3.11), python-parity (3.12), test (pytest -m \"not slow\")) before any merge discussion",
+   "acceptance": "pytest + python-parity 3.10/3.11/3.12 green on the exact head",
+   "evidence": "census row failing_checks=[\"python-parity (3.10)\", \"python-parity (3.11)\", \"python-parity (3.12)\", \"test (pytest -m \\\"not slow\\\")\"]"
+  },
+  "206": {
+   "category": "NEEDS_REBASE",
+   "dependency": "none outstanding",
+   "owner": "branch author / repository owner",
+   "required_fix": "take main into the branch and re-run CI (6 commits behind)",
+   "acceptance": "0 behind main with checks green on the new head",
+   "evidence": "census row: 3 files, 3 unique commits, 6 behind, passport evidence binding — 3 files, clean checks, 6 behind"
+  },
+  "208": {
+   "category": "BLOCKED_EXTERNAL",
+   "dependency": "stacked on #203's branch (base_ref=arena/7b013ce8-nexus-ai-agent); one board-only commit",
+   "owner": "branch author / repository owner",
+   "required_fix": "wait for #203, then restack; its merge-base-guard check fails because the base moved",
+   "acceptance": "base_ref=main with merge-base-guard green",
+   "evidence": "census row failing_checks=[\"merge-base-guard (base == main)\"]"
+  },
+  "209": {
+   "category": "DUPLICATE_OR_SUPERSEDED",
+   "dependency": "#218 (its remainder is already inside #218) — close only after #218 is on main",
+   "owner": "repository owner (bot523h)",
+   "required_fix": "close with the reproduced evidence below after #218 merges; do not merge this head (it is red and carries the rejected O_DIRECTORY removal)",
+   "acceptance": "closure comment cites the five test names, commit 7bfd628 and the O_DIRECTORY check",
+   "evidence": "reproduced 2026-10-16: all 5 tests added by #209 are present by exact name in the #218 tree; 7bfd628 ('re-scoped remainder of #209') is an ancestor of the #218 head; #209's O_DIRECTORY removal is absent (the #218 tree still defines O_DIRECTORY); #209's own head is red on test + python-parity 3.10/3.11/3.12"
+  },
+  "210": {
+   "category": "BLOCKED_EXTERNAL",
+   "dependency": "two open CHANGES_REQUESTED reviews from coderabbitai[bot] (2026-10-13T05:34Z and 15:36Z); the head (1d7390cc, 2026-10-13T15:46Z) is newer than both, but no re-review has happened, so reviewDecision stays CHANGES_REQUESTED. Re-review requested 2026-10-16 (comment 6214117556). It also merges after #218, whose diff shares .github/workflows/ci.yml and storage/fs sources.",
+   "owner": "repository owner (bot523h) — the re-review is requested; only CodeRabbit can clear it here",
+   "required_fix": "obtain a review on head 1d7390cc that supersedes the two change requests, then merge; if CodeRabbit still asks for changes, the branch author must push (this session writes only to #218)",
+   "acceptance": "reviewDecision=APPROVED on head 1d7390cc with all checks green on the same sha",
+   "evidence": "census row 41 files / 27 unique / 0 behind / 0 failing; gh pr view 210 -> reviewDecision CHANGES_REQUESTED, mergeStateStatus BLOCKED, reviews: 2x coderabbitai CHANGES_REQUESTED"
+  },
+  "211": {
+   "category": "NEEDS_FIX",
+   "dependency": "#202 (both change scripts/agent_board.py and its tests)",
+   "owner": "branch author / repository owner",
+   "required_fix": "fix the failing checks on the head: test (pytest -m \"not slow\"), python-parity (3.10), python-parity (3.11), python-parity (3.12)",
+   "acceptance": "test + python-parity green on the exact head",
+   "evidence": "census row failing_checks=[\"test (pytest -m \\\"not slow\\\")\", \"python-parity (3.10)\", \"python-parity (3.11)\", \"python-parity (3.12)\"]"
+  },
+  "213": {
+   "category": "BLOCKED_EXTERNAL",
+   "dependency": "stacked on #210's branch (base_ref=arena/claude-5-5-sqlite-init-serialize-20261012), which is itself blocked; head is dirty against that base",
+   "owner": "branch author / repository owner",
+   "required_fix": "wait for #210 to merge, then restack onto main and re-run CI; do not merge a stacked head into main directly",
+   "acceptance": "base_ref becomes main, mergeable_state clean, checks green on the restacked head",
+   "evidence": "census row: base_ref=arena/claude-5-5-sqlite-init-serialize-20261012, files_vs_base=15 but files_vs_main=42, 26 unique / 6 behind main"
+  },
+  "218": {
+   "category": "BLOCKED_EXTERNAL",
+   "dependency": "CodeRabbit is the only possible approver in this repository and refuses the 293-file diff (100-file cap): 'Review skipped: 182 files exceed the limit of 100'. #210 consumes the same protected paths, so this PR is the keystone of the merge order.",
+   "owner": "repository owner (bot523h): CodeRabbit plan / organization-level path_filters, or the documented <=100-file split",
+   "required_fix": "obtain one approving review on the frozen head, then `gh pr merge 218 --merge`; self-approval, --admin and rewriting the head to dodge review are all excluded",
+   "acceptance": "reviewDecision=APPROVED on head f930064 + every required check success on that same sha + merge performed with no bypass flag",
+   "evidence": "pr_review_states.json; reviewer roster across all 63 open PRs: coderabbitai[bot] submitted every one of the 11 APPROVED / 48 CHANGES_REQUESTED reviews; bot523h only comments; arena-ai-coding-agent[bot] submits no reviews; docs/audits/2026-10-16-completion/02_PR218_INDEPENDENT_AUDIT.md"
+  }
+ }
+}

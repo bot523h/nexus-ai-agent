@@ -140,7 +140,7 @@ class AIStorageManager:
     async def upload_blob(self, *, local_path: Path, remote_key: str) -> None:
         """Upload a maintenance blob (DB backup / heavy RAG doc) to R2 only."""
         provider = self._blob_provider()
-        size = local_path.stat().st_size
+        size = (await asyncio.to_thread(local_path.stat)).st_size
         await provider.upload(local_path=local_path, remote_key=remote_key)
         log.info("storage_blob_upload_ok", provider=provider.name, key=remote_key, bytes=size)
 
@@ -163,7 +163,7 @@ class AIStorageManager:
             await self.upload_blob(local_path=local_path, remote_key=remote_key)
             return
 
-        size = local_path.stat().st_size
+        size = (await asyncio.to_thread(local_path.stat)).st_size
         preferred = self.get_best_provider(size_bytes=size)
         candidates = self._upload_candidates(preferred=preferred)
         if not candidates:

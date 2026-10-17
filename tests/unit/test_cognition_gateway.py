@@ -141,10 +141,10 @@ def _run(gateway: CognitionGateway, *, requested: frozenset[str] | None = None):
 def test_valid_proposal_executes_only_through_the_real_bus() -> None:
     provider = FakeProvider(_model_json())
     gateway = _gateway(LocalCognition(provider))
-    before = gateway._bus.state_revision  # noqa: SLF001 - test observes real state
+    before = gateway._bus.state_revision
     result = _run(gateway, requested=frozenset({"media.play"}))
     assert result.status == "applied"
-    assert gateway._bus.state_revision == before + 1  # noqa: SLF001
+    assert gateway._bus.state_revision == before + 1
     assert provider.calls == 1
 
 
@@ -154,11 +154,11 @@ def test_valid_proposal_executes_only_through_the_real_bus() -> None:
 @pytest.mark.parametrize("hostile", ["{broken json", "", "not json at all", "[1,2,3]"])
 def test_malformed_model_never_reaches_the_bus(hostile: str) -> None:
     gateway = _gateway(LocalCognition(FakeProvider(hostile)))
-    before = gateway._bus.state_hash  # noqa: SLF001
+    before = gateway._bus.state_hash
     with pytest.raises(CognitionRefused) as exc:
         _run(gateway, requested=frozenset({"media.play"}))
     assert exc.value.reason in (RefusalReason.MALFORMED, RefusalReason.SCHEMA_VIOLATION)
-    assert gateway._bus.state_hash == before  # noqa: SLF001
+    assert gateway._bus.state_hash == before
 
 
 # -- case 3: a forbidden operation never reaches the bus -------------------
@@ -168,11 +168,11 @@ def test_forbidden_operation_never_reaches_the_bus() -> None:
     # Registry offers media.play; model emits an operation outside the offered set.
     provider = FakeProvider(_model_json(operation="system.delete_everything"))
     gateway = _gateway(LocalCognition(provider))
-    before = gateway._bus.state_hash  # noqa: SLF001
+    before = gateway._bus.state_hash
     with pytest.raises(CognitionRefused) as exc:
         _run(gateway, requested=frozenset({"media.play"}))
     assert exc.value.reason is RefusalReason.DISALLOWED_OPERATION
-    assert gateway._bus.state_hash == before  # noqa: SLF001
+    assert gateway._bus.state_hash == before
 
 
 def test_model_cannot_name_an_operation_the_registry_does_not_offer() -> None:
@@ -201,11 +201,11 @@ def test_model_cannot_name_an_operation_the_registry_does_not_offer() -> None:
 )
 def test_spoofed_authority_never_reaches_the_bus(hostile: str) -> None:
     gateway = _gateway(LocalCognition(FakeProvider(hostile)))
-    before = gateway._bus.state_hash  # noqa: SLF001
+    before = gateway._bus.state_hash
     with pytest.raises(CognitionRefused) as exc:
         _run(gateway, requested=frozenset({"media.play"}))
     assert exc.value.reason in (RefusalReason.AUTHORITY_FIELD, RefusalReason.SCHEMA_VIOLATION)
-    assert gateway._bus.state_hash == before  # noqa: SLF001
+    assert gateway._bus.state_hash == before
 
 
 # -- case 5: provider timeout is a bounded refusal -------------------------
@@ -213,11 +213,11 @@ def test_spoofed_authority_never_reaches_the_bus(hostile: str) -> None:
 
 def test_provider_timeout_is_a_bounded_refusal() -> None:
     gateway = _gateway(LocalCognition(FakeProvider(asyncio.TimeoutError("slow"))))
-    before = gateway._bus.state_hash  # noqa: SLF001
+    before = gateway._bus.state_hash
     with pytest.raises(CognitionRefused) as exc:
         _run(gateway, requested=frozenset({"media.play"}))
     assert exc.value.reason is RefusalReason.PRODUCER_FAILED
-    assert gateway._bus.state_hash == before  # noqa: SLF001
+    assert gateway._bus.state_hash == before
 
 
 # -- case 6: provider unavailable -> typed refusal, no raw-model path ------
@@ -225,11 +225,11 @@ def test_provider_timeout_is_a_bounded_refusal() -> None:
 
 def test_absent_provider_is_a_typed_refusal() -> None:
     gateway = _gateway(NullCognition())
-    before = gateway._bus.state_hash  # noqa: SLF001
+    before = gateway._bus.state_hash
     with pytest.raises(CognitionRefused) as exc:
         _run(gateway, requested=frozenset({"media.play"}))
     assert exc.value.reason is RefusalReason.PRODUCER_REFUSED
-    assert gateway._bus.state_hash == before  # noqa: SLF001
+    assert gateway._bus.state_hash == before
 
 
 # -- case 7: disabled feature flag selects the null producer ---------------

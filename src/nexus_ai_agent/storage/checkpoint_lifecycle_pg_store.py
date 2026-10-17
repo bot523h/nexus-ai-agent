@@ -35,6 +35,7 @@ import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import psycopg
 
@@ -84,15 +85,15 @@ class PostgresCheckpointLifecycleStore:
             self._connection = psycopg.connect(self.database_url, autocommit=True, options=options)
         return self._connection
 
-    def _execute(self, sql: str, params: tuple = ()) -> None:
+    def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         with self._lock:
             self._connect().execute(sql, params)
 
-    def _fetchall(self, sql: str, params: tuple = ()) -> list:
+    def _fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
         with self._lock:
-            return self._connect().execute(sql, params).fetchall()
+            return list(self._connect().execute(sql, params).fetchall())
 
-    def _rowcount(self, sql: str, params: tuple = ()) -> int:
+    def _rowcount(self, sql: str, params: tuple[Any, ...] = ()) -> int:
         with self._lock:
             cursor = self._connect().execute(sql, params)
             return cursor.rowcount
@@ -165,7 +166,7 @@ class PostgresCheckpointLifecycleStore:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _record(row: tuple) -> CheckpointRecord:
+def _record(row: tuple[Any, ...]) -> CheckpointRecord:
     return CheckpointRecord(
         thread_id=row[0],
         checkpoint_id=row[1],

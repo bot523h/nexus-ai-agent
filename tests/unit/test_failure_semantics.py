@@ -65,7 +65,7 @@ def test_dependency_unavailable_is_retryable_a_deploy_can_fix_it() -> None:
 
 def test_worker_crash_is_retryable_conservative_bounded_default() -> None:
     assert classify_exception(RuntimeError("boom")) is FailureClass.RETRYABLE
-    assert classify_exception(Exception("?")) is FailureClass.RETRYABLE  # noqa: B017
+    assert classify_exception(Exception("?")) is FailureClass.RETRYABLE
 
 
 def test_invalid_input_is_terminal_a_retry_repeats_the_refusal() -> None:
@@ -194,7 +194,7 @@ def test_six_states_total_with_two_failure_states() -> None:
         JobStatus.FAILED_RETRYABLE,
         JobStatus.FAILED_TERMINAL,
     }
-    assert FAILURE_STATES == {JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
+    assert {JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL} == FAILURE_STATES
 
 
 def test_failure_states_are_terminal_and_have_no_outgoing_edges() -> None:

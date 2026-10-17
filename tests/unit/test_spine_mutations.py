@@ -112,6 +112,7 @@ def _run_spine_tests() -> bool:
         capture_output=True,
         text=True,
         env={**_env(), "PYTHONPATH": str(REPO_ROOT / "src")},
+        check=False,
     )
     return result.returncode == 0
 

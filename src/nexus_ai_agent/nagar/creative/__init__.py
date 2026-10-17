@@ -114,7 +114,8 @@ def _schema_for(gateway: CognitionGateway, operation: str, attr: str) -> dict[st
         model = getattr(spec, attr, None)
         if model is None:
             return {}
-        return model.model_json_schema()
+        schema: dict[str, Any] = model.model_json_schema()
+        return schema
     except Exception:  # noqa: BLE001 — a missing schema is a prompt degradation, not an error
         return {}
 
@@ -260,7 +261,7 @@ def _record_acceptance(
 
 
 def verify_trim_artifact(
-    bus: Any,  # noqa: ANN401 — the real CommandBus
+    bus: Any,
     outcome: FreeTextOutcome,
     *,
     artifact_path: str | None = None,

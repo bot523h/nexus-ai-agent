@@ -23,6 +23,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nexus_ai_agent.execution.asset_library import (
+    AssetBoundaryError,
+    AssetIntegrityError,
+    AssetLibrary,
+    AssetLibraryError,
+    AssetTooLargeError,
+)
 from nexus_ai_agent.jobs.verification import VerificationOutcome
 
 CREATIVE_RENDER_JOB_TYPE = "creative_render"
@@ -296,11 +303,20 @@ def archive_trim_evidence(
     output_key = f"{attempt_directory_key}/output.mp4"
     input_path = _resolve_store_path(artifact_root, input_key)
     output_path = _resolve_store_path(artifact_root, output_key)
+    library = AssetLibrary(root_resolved, max_bytes=MAX_EVIDENCE_FILE_BYTES)
     input_sha, input_size = _copy_verified(
-        source_snapshot.path, input_path, too_large_code="invalid_request"
+        source_snapshot.path,
+        input_path,
+        too_large_code="invalid_request",
+        library=library,
+        attempt_id=attempt_identifier,
     )
     archived_sha, archived_size = _copy_verified(
-        output_source, output_path, too_large_code="render_failed"
+        output_source,
+        output_path,
+        too_large_code="render_failed",
+        library=library,
+        attempt_id=attempt_identifier,
     )
     if (input_sha, input_size) != (source_snapshot.sha256, source_snapshot.size_bytes):
         raise CreativePassportError("archived trim input differs from the measured source")
@@ -788,13 +804,65 @@ def _mkdirs_durable(artifact_root: Path, directory: Path) -> None:
     _fsync_directory(root.parent)
 
 
+def _publish_from_library(
+    library: AssetLibrary,
+    source: Path,
+    destination: Path,
+    *,
+    too_large_code: Literal["invalid_request", "render_failed"],
+    attempt_id: str,
+) -> tuple[str, int] | None:
+    """Admit ``source`` into the CAS and hard-link the blob at ``destination``.
+
+    Returns the measured identity, or ``None`` when the link itself is not
+    possible on this filesystem (the caller then streams a copy instead).
+    Size and boundary violations are re-raised with the passport's own error
+    types so callers see the same failures as before the library existed.
+    """
+    try:
+        admitted = library.admit(source, attempt_id=attempt_id or "passport")
+    except AssetTooLargeError as exc:
+        raise CreativeEvidenceTooLargeError(
+            f"evidence file exceeds {MAX_EVIDENCE_FILE_BYTES} bytes", code=too_large_code
+        ) from exc
+    except (AssetBoundaryError, AssetIntegrityError, AssetLibraryError) as exc:
+        raise CreativePassportError(f"could not admit evidence asset: {exc}") from exc
+    blob = library.path_for(admitted.sha256)
+    try:
+        os.link(blob, destination)
+    except FileExistsError:
+        # Lost a race with a concurrent publisher of the same key: the caller's
+        # "existing bytes must match" rule decides, exactly as before.
+        existing_sha, existing_size = hash_file(destination, too_large_code=too_large_code)
+        if (existing_sha, existing_size) != (admitted.sha256, admitted.size_bytes):
+            raise CreativePassportError(
+                "artifact-store key already contains different bytes"
+            ) from None
+        return existing_sha, existing_size
+    except OSError:
+        return None
+    _fsync_directory(destination.parent)
+    return admitted.sha256, admitted.size_bytes
+
+
 def _copy_verified(
     source: Path,
     destination: Path,
     *,
     too_large_code: Literal["invalid_request", "render_failed"],
+    library: AssetLibrary | None = None,
+    attempt_id: str = "",
 ) -> tuple[str, int]:
-    """Atomically copy one evidence file and return the destination's measured identity."""
+    """Atomically persist one evidence file and return the destination's measured identity.
+
+    When an :class:`AssetLibrary` is supplied the bytes are first admitted into
+    the content-addressed store under the artifact root and the attempt path is
+    published as a hard link to that blob: identical inputs across attempts
+    share one copy on disk while every ``jobs/<job>/<attempt>/…`` key keeps
+    working unchanged.  A filesystem that cannot link (``EXDEV`` or a store
+    on another mount) falls back to the streaming copy below, so the
+    passport contract never depends on the CAS being available.
+    """
     if not destination.parent.is_dir():
         raise CreativePassportError("artifact-store destination directory is missing")
     if destination.exists():
@@ -803,6 +871,13 @@ def _copy_verified(
         if (existing_sha, existing_size) != (source_sha, source_size):
             raise CreativePassportError("artifact-store key already contains different bytes")
         return existing_sha, existing_size
+
+    if library is not None:
+        linked = _publish_from_library(
+            library, source, destination, too_large_code=too_large_code, attempt_id=attempt_id
+        )
+        if linked is not None:
+            return linked
 
     staging = destination.with_name(f".{destination.name}.{os.getpid()}.part")
     digest = hashlib.sha256()

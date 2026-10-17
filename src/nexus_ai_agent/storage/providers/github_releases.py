@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import httpx
 
 from .base import ProviderUnavailable, StorageError, filename_to_safe_key, safe_key_to_filename
+
+
+def _json_object(response: httpx.Response, what: str) -> dict[str, Any]:
+    """Decode a JSON object body or fail closed with a typed storage error."""
+    data = response.json()
+    if not isinstance(data, dict):
+        raise StorageError(f"{what} payload is not a JSON object")
+    return data
 
 
 class GitHubReleasesProvider:
@@ -29,11 +38,11 @@ class GitHubReleasesProvider:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-    async def _get_or_create_release(self, client: httpx.AsyncClient) -> dict:
+    async def _get_or_create_release(self, client: httpx.AsyncClient) -> dict[str, Any]:
         r = await client.get(f"{self._api}/releases/tags/{self._TAG}", headers=self._headers())
         if r.status_code == 200:
-            return r.json()
-        if r.status_code not in (404,):
+            return _json_object(r, "GitHub release")
+        if r.status_code != 404:
             raise StorageError(f"GitHub release lookup failed: {r.status_code}")
 
         payload = {
@@ -45,22 +54,27 @@ class GitHubReleasesProvider:
         r = await client.post(f"{self._api}/releases", headers=self._headers(), json=payload)
         if r.status_code not in (200, 201):
             raise StorageError(f"GitHub release create failed: {r.status_code}")
-        return r.json()
+        return _json_object(r, "GitHub release")
 
     async def _find_asset(
         self,
         client: httpx.AsyncClient,
         *,
-        release: dict,
+        release: dict[str, Any],
         asset_name: str,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         assets_url = str(release.get("assets_url") or "")
         if not assets_url:
             raise StorageError("GitHub release has no assets_url")
         r = await client.get(assets_url, headers=self._headers())
         if r.status_code != 200:
             raise StorageError(f"GitHub assets list failed: {r.status_code}")
-        for a in r.json():
+        assets = r.json()
+        if not isinstance(assets, list):
+            raise StorageError("GitHub assets list is not a JSON array")
+        for a in assets:
+            if not isinstance(a, dict):
+                raise StorageError("GitHub asset entry is not a JSON object")
             if a.get("name") == asset_name:
                 return a
         return None
@@ -78,7 +92,7 @@ class GitHubReleasesProvider:
 
             upload_url = f"{self._uploads}/releases/{release['id']}/assets"
             params = {"name": asset_name}
-            data = local_path.read_bytes()
+            data = await asyncio.to_thread(local_path.read_bytes)
             r = await client.post(
                 upload_url,
                 headers={**self._headers(), "Content-Type": "application/octet-stream"},

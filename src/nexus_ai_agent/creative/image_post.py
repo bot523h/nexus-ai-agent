@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 from importlib import import_module
@@ -14,20 +15,21 @@ except ImportError:  # pragma: no cover - environment dependent
 from nexus_ai_agent.config.settings import get_settings
 
 
+def _reserve_output_path(temp_dir: Path) -> str:
+    """Create the temp dir and reserve a unique ``.png`` name (blocking; run off-loop)."""
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    fd, output_path = tempfile.mkstemp(prefix="creative-post-", suffix=".png", dir=temp_dir)
+    os.close(fd)
+    Path(output_path).unlink(missing_ok=True)
+    return output_path
+
+
 async def generate_image_post(text: str, image_url: str | None, template: str) -> str:
     if async_playwright is None:
         raise RuntimeError("Playwright not installed")
 
     settings = get_settings()
-    temp_dir = Path(settings.creative_temp_dir)
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    fd, output_path = tempfile.mkstemp(
-        prefix="creative-post-",
-        suffix=".png",
-        dir=temp_dir,
-    )
-    os.close(fd)
-    Path(output_path).unlink(missing_ok=True)
+    output_path = await asyncio.to_thread(_reserve_output_path, Path(settings.creative_temp_dir))
 
     image_markup = ""
     if image_url:

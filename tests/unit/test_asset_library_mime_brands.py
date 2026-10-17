@@ -90,7 +90,7 @@ def test_non_mp4_brands_never_reach_the_allowlist_through_any_signature() -> Non
         assert detect_media_type(_ftyp(brand)) not in SUPPORTED_MEDIA_TYPES
 
 
-@pytest.mark.parametrize("cut", range(0, 12))
+@pytest.mark.parametrize("cut", range(12))
 def test_no_prefix_shorter_than_the_full_brand_is_ever_accepted(cut: int) -> None:
     """Every strict prefix of a valid MP4 header is rejected, so a missing or
     partial brand can never be read as an allowed one."""

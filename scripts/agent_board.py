@@ -2,8 +2,13 @@
 """Multi-agent claim board CLI for NEXUS AI Agent.
 
 Coordination channel for agents working on this repository from separate
-sandboxes. The only shared medium between sandboxes is the git repo itself,
-so a claim is only real once it is committed AND pushed.
+sandboxes. The only shared medium between sandboxes is the git repo itself.
+Since protocol 11 (ADR 0012, audit A-04) the live board is the coordination
+ref ``refs/nexus/board`` on origin: every mutation below fetches the ref,
+applies the change and publishes it with a compare-and-swap push in the same
+command, so a claim is real the moment the command reports it published — and
+no code branch or pull request ever carries board state.  ``.agents/board.json``
+is a frozen archive (``guard``), used only with ``--store tree``.
 
 Commands
 --------
@@ -18,17 +23,21 @@ Commands
                                 Record a deferral note ("I stopped because
                                 another agent was working; resume later")
   next --branch BRANCH          Suggest the first claimable task
-  check --files a,b,c --branch BRANCH [--no-remote] [--repo owner/name]
-                                Multi-source referee over the claim board, every
-                                *other* live git worktree's board, origin/main's
-                                board, and every open-PR branch's pushed board.
-                                Exit 0 when every source is readable and there
-                                is no overlap, 1 on a proven overlap, 2 when a
-                                source (this board, a worktree, origin/main, or
-                                an open-PR branch) could not be read — never 0
-                                on unverified data.
-                                --no-remote loudly narrows the claim to the
-                                local board (scope=local, not a global pass).
+  check --files a,b,c --branch BRANCH
+                                Overlap referee against refs/nexus/board — the
+                                single authority (code trees are not sources).
+                                Exit 0 when the ref is readable, has exactly one
+                                live gates owner and no overlap; 1 on a proven
+                                overlap (or a modified board archive in the
+                                tree); 2 when the ref could not be read or is
+                                inconsistent — never 0 on unverified data.
+                                With --store tree the pre-protocol-11
+                                multi-source referee runs instead ([--no-remote]
+                                [--repo owner/name] [--token]).
+  guard [--print]               Exit 1 when .agents/board.json differs from the
+                                frozen archive digest (runs in CI on every PR).
+  init-ref [--from FILE]        Bootstrap refs/nexus/board once from a board file;
+                                refuses (exit 2) when the ref already exists.
   praudit [--pr-json F | --repo owner/name] [--fail-on-invisible] [--json]
                                 Read-only audit: compare open GitHub PR changed
                                 files against board exclusive_paths and report
@@ -48,28 +57,38 @@ a legacy record at generation 0) needs no token — there is nothing to fence
 against. The check is deterministic — a refusal, never a warning or a
 best-effort log.
 
-All state lives in .agents/board.json (schema 1). Pure stdlib.
+Board authority (protocol 11)
+-----------------------------
+``--store ref`` (default; env ``NEXUS_BOARD_STORE``): board = ``board.json`` on
+``refs/nexus/board`` (override ``NEXUS_BOARD_REF``).  Writes are
+``git push origin <sha>:<ref> --force-with-lease=<ref>:<tip we read>``; a lost
+race is redone from a fresh read (3 attempts), then refused.  An unreadable or
+unwritable ref is exit 2 — never a pass, never a fallback to the tree file.
+``--store tree``: the pre-protocol-11 file + flock behaviour on
+``.agents/board.json`` for fixtures and tests.  Pure stdlib + git.
 
 Typical loop for an arriving agent:
     python scripts/agent_board.py show
     python scripts/agent_board.py next --branch $MY_BRANCH
     python scripts/agent_board.py claim feature-wiring-batch --branch $MY_BRANCH
-    # ... git pull --rebase, commit board change, push IMMEDIATELY ...
+    # published on refs/nexus/board by the command itself — nothing to commit
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import subprocess
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 BOARD = ROOT / ".agents" / "board.json"
@@ -77,6 +96,206 @@ BOARD = ROOT / ".agents" / "board.json"
 # Files every PR is expected to touch (coordination medium) — never counted as
 # "uncovered scope" by praudit, because no claim exclusively owns them.
 COORDINATION_FILES = frozenset({".agents/board.json"})
+
+# ── Board authority (protocol 11, audit A-04) ─────────────────────────
+# The live board is a *coordination ref*, not a file in the code tree.  Every
+# claim/release/defer is one commit on that ref, written with a compare-and-swap
+# push (``--force-with-lease=<ref>:<tip we read>``), so two sandboxes can never
+# overwrite each other and a code PR never carries board state again.  The tree
+# file ``.agents/board.json`` is a frozen archive of the last tree-resident
+# board (pinned by ``FROZEN_BOARD_SHA256`` and the ``guard`` command); it is
+# consulted only in ``--store tree`` mode (tests, offline fixtures).
+BOARD_REF = os.environ.get("NEXUS_BOARD_REF", "refs/nexus/board")
+BOARD_REF_FILE = "board.json"
+FROZEN_BOARD_SHA256 = "94a7642f64606b4ec69dcfd2b255755d20cf27c0a706797de6e237ad25b0a160"
+_STORE_ENV = "NEXUS_BOARD_STORE"
+_CAS_ATTEMPTS = 3
+
+
+class BoardSourceUnavailable(RuntimeError):
+    """The authoritative board could not be read or written — never a pass."""
+
+
+class BoardCASConflict(RuntimeError):
+    """The ref moved between our read and our write; the mutation must be redone."""
+
+
+def resolve_store(args: argparse.Namespace | None = None) -> str:
+    """``ref`` (authoritative, default) or ``tree`` (frozen file; tests/offline).
+
+    Precedence: explicit ``--store`` > ``NEXUS_BOARD_STORE`` env > ``ref``.
+    """
+    explicit = getattr(args, "store", None) if args is not None else None
+    choice = explicit or os.environ.get(_STORE_ENV, "") or "ref"
+    if choice not in ("ref", "tree"):
+        raise SystemExit(f"unknown board store {choice!r} (expected 'ref' or 'tree')")
+    return choice
+
+
+def _plumbing(args: list[str], *, stdin: str | None = None) -> str:
+    """Run a git plumbing command against ROOT; raise BoardSourceUnavailable on failure."""
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            input=stdin,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BoardSourceUnavailable(f"git {args[0]} could not run: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise BoardSourceUnavailable(
+            f"git {' '.join(args[:2])} failed: {detail[-1] if detail else 'no output'}"
+        )
+    return result.stdout
+
+
+def fetch_ref_board() -> tuple[dict[str, Any], str]:
+    """Fetch the coordination ref and return ``(board, tip_sha)``.
+
+    The ref is fetched into the same local name so a stale local copy can never
+    be mistaken for the remote tip: the tip used for compare-and-swap is the one
+    this very fetch produced.  Any failure is ``BoardSourceUnavailable``.
+    """
+    _plumbing(["fetch", "--quiet", "origin", f"+{BOARD_REF}:{BOARD_REF}"])
+    tip = _plumbing(["rev-parse", "--verify", f"{BOARD_REF}^{{commit}}"]).strip()
+    raw = _plumbing(["show", f"{tip}:{BOARD_REF_FILE}"])
+    try:
+        board = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise BoardSourceUnavailable(f"{BOARD_REF}@{tip[:7]} board.json is not valid JSON") from exc
+    if not isinstance(board, dict) or board.get("schema") != 2:
+        raise BoardSourceUnavailable(
+            f"{BOARD_REF}@{tip[:7]} is not a schema-2 claim board (incompatible generation)"
+        )
+    if not isinstance(board.get("claims", []), list):
+        raise BoardSourceUnavailable(f"{BOARD_REF}@{tip[:7]} claims is not a list")
+    return board, tip
+
+
+def _board_blob(board: dict[str, Any]) -> str:
+    text = json.dumps(board, indent=2, ensure_ascii=False) + "\n"
+    return _plumbing(["hash-object", "-w", "--stdin"], stdin=text).strip()
+
+
+def _commit_board(board: dict[str, Any], parent: str | None, message: str) -> str:
+    """Write ``board`` as a commit object (no working tree, no index) and return its sha."""
+    blob = _board_blob(board)
+    entries: list[str] = []
+    if parent is not None:
+        for line in _plumbing(["ls-tree", parent]).splitlines():
+            meta, _, name = line.partition("\t")
+            if name != BOARD_REF_FILE:
+                entries.append(line)
+    entries.append(f"100644 blob {blob}\t{BOARD_REF_FILE}")
+    tree = _plumbing(["mktree"], stdin="\n".join(entries) + "\n").strip()
+    commit_args = [*_identity_args(), "commit-tree", tree, "-m", message]
+    if parent is not None:
+        commit_args += ["-p", parent]
+    return _plumbing(commit_args).strip()
+
+
+def _identity_args() -> list[str]:
+    """Keep the sandbox's own git identity; fall back to a marker identity if none is set."""
+    probe = subprocess.run(
+        ["git", "config", "--get", "user.email"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode == 0 and probe.stdout.strip():
+        return []
+    return ["-c", "user.name=nexus-agent-board", "-c", "user.email=agent-board@nexus.invalid"]
+
+
+def push_ref_board(board: dict[str, Any], expected_tip: str | None, message: str) -> str:
+    """Compare-and-swap write: publish ``board`` on top of ``expected_tip``.
+
+    ``--force-with-lease=<ref>:<expected>`` makes the remote reject the update
+    when the ref no longer points at the tip we read (``BoardCASConflict``);
+    an empty expectation means "the ref must not exist yet" (bootstrap).
+    """
+    commit = _commit_board(board, expected_tip, message)
+    lease = f"--force-with-lease={BOARD_REF}:{expected_tip or ''}"
+    try:
+        result = subprocess.run(
+            ["git", "push", "--quiet", "origin", f"{commit}:{BOARD_REF}", lease],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BoardSourceUnavailable(f"git push could not run: {exc}") from exc
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout).strip()
+        if "stale info" in err or "rejected" in err or "fetch first" in err:
+            raise BoardCASConflict(err.splitlines()[-1] if err else "push rejected")
+        raise BoardSourceUnavailable(f"git push failed: {err.splitlines()[-1] if err else '?'}")
+    # keep the local ref in step with what the remote accepted
+    _plumbing(["update-ref", BOARD_REF, commit])
+    return commit
+
+
+# Active ref transaction: while set, load_board()/save_board()/board_lock()
+# operate on this in-memory board instead of the tree file.  The runner below
+# publishes it with compare-and-swap once the command returns.
+_REF_TX: dict[str, Any] | None = None
+
+
+def _ref_message(args: argparse.Namespace) -> str:
+    cmd = getattr(args, "cmd", None) or getattr(getattr(args, "func", None), "__name__", "board")
+    task = getattr(args, "task", "") or ""
+    branch = getattr(args, "branch", "") or ""
+    return f"board: {cmd} {task} ({branch})".strip()
+
+
+def run_with_store(args: argparse.Namespace, fn: Callable[[argparse.Namespace], int]) -> int:
+    """Execute a board command against the resolved store.
+
+    ``tree``: the command runs exactly as before (file + flock).  ``ref``: the
+    board is fetched, the command mutates it in memory, and the result is
+    published with compare-and-swap; a lost race is *redone from a fresh read*
+    (so a claim that became foreign in the meantime is refused, never
+    overwritten).  Unreadable/unwritable authority is exit 2 — never a pass,
+    never a silent fallback to the frozen tree file.
+    """
+    global _REF_TX
+    if resolve_store(args) == "tree":
+        return fn(args)
+    for attempt in range(1, _CAS_ATTEMPTS + 1):
+        try:
+            board, tip = fetch_ref_board()
+        except BoardSourceUnavailable as exc:
+            print(f"UNVERIFIABLE: board authority {BOARD_REF} unreadable: {exc}")
+            return 2
+        _REF_TX = {"board": board, "tip": tip, "dirty": False}
+        try:
+            rc = int(fn(args))
+            tx = _REF_TX
+        finally:
+            _REF_TX = None
+        if not tx or not tx["dirty"]:
+            return rc
+        try:
+            new_tip = push_ref_board(tx["board"], tip, _ref_message(args))
+        except BoardCASConflict:
+            print(f"[cas] {BOARD_REF} moved during attempt {attempt}; re-reading and redoing")
+            continue
+        except BoardSourceUnavailable as exc:
+            print(f"UNVERIFIABLE: board authority {BOARD_REF} not writable: {exc}")
+            return 2
+        print(f"[board] published {BOARD_REF} {tip[:7]} → {new_tip[:7]}")
+        return rc
+    print(f"REFUSED: {BOARD_REF} kept moving for {_CAS_ATTEMPTS} attempts; retry later (exit 2)")
+    return 2
+
 
 STOP_BANNER = """
 ╔══════════════════════════════════════════════════════════════════╗
@@ -128,6 +347,8 @@ def _parse(ts: str | None) -> datetime | None:
 
 
 def load_board() -> dict:
+    if _REF_TX is not None:
+        return _REF_TX["board"]
     if not BOARD.exists():
         sys.exit(f"board not found: {BOARD}")
     return json.loads(BOARD.read_text(encoding="utf-8"))
@@ -135,6 +356,10 @@ def load_board() -> dict:
 
 def save_board(board: dict) -> None:
     board["updated_at"] = _iso(_now())
+    if _REF_TX is not None:
+        _REF_TX["board"] = board
+        _REF_TX["dirty"] = True
+        return
     BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
@@ -154,7 +379,13 @@ def board_lock() -> Iterator[None]:
     span hosts: two sandboxes mutate separate clones and reconcile through git,
     where the fencing generation is the guard (a stale epoch is refused on push).
     Non-POSIX degrades to best-effort, exactly like the migration lock.
+
+    Inside a ref transaction the compare-and-swap push *is* the lock, so no
+    file lock is taken (and nothing under ``.agents/`` is touched).
     """
+    if _REF_TX is not None:
+        yield
+        return
     BOARD.parent.mkdir(parents=True, exist_ok=True)
     lock_path = BOARD.with_suffix(".lock")
     try:
@@ -412,8 +643,12 @@ def _claim_locked(args: argparse.Namespace) -> int:
         f"CLAIMED {args.task} for {args.branch} (ttl {args.ttl}h, gates_owner={args.gates}, "
         f"generation {claim['generation']})"
     )
-    print("NOW: git add .agents/board.json && git commit && git push IMMEDIATELY —")
-    print("an unpushed claim does not exist for the other sandbox.")
+    if _REF_TX is not None:
+        print(f"the claim is published on {BOARD_REF} by this command (compare-and-swap);")
+        print("nothing in the code tree changes — do NOT add .agents/board.json to your PR.")
+    else:
+        print("NOW: git add .agents/board.json && git commit && git push IMMEDIATELY —")
+        print("an unpushed claim does not exist for the other sandbox.")
     return 0
 
 
@@ -701,6 +936,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     loud exit 2: "no overlap" is only honest when every consulted source was
     actually read.
     """
+    if resolve_store(args) == "ref":
+        return _check_ref(args)
     files = [f for f in args.files.split(",") if f.strip()]
     sources: list[tuple[str, dict]] = []
     unreadable: list[str] = []
@@ -894,7 +1131,7 @@ def _gh_get(url: str, token: str | None) -> object:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 (github api only)
+    with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
 
 
@@ -962,6 +1199,129 @@ def _load_pr_fixture(path: str) -> list[dict]:
     return data
 
 
+def _archive_drift() -> str | None:
+    """Return a message when the frozen tree archive was modified, else None."""
+    if not BOARD.exists():
+        return f"{BOARD.relative_to(ROOT)} is missing (expected frozen archive)"
+    digest = hashlib.sha256(BOARD.read_bytes()).hexdigest()
+    if digest != FROZEN_BOARD_SHA256:
+        return (
+            f"{BOARD.relative_to(ROOT)} differs from the frozen archive "
+            f"(sha256 {digest[:12]}… ≠ {FROZEN_BOARD_SHA256[:12]}…)"
+        )
+    return None
+
+
+def _check_ref(args: argparse.Namespace) -> int:
+    """Overlap referee against the coordination ref — the *only* source.
+
+    Worktrees, origin/main and PR branches are not consulted: with the board on
+    its own ref there is exactly one place a live claim can exist, so a stale or
+    hostile ``.agents/board.json`` in any code tree (including ours) cannot grant
+    or hide a claim.  Exit 0 clear, 1 overlap, 2 unverifiable.
+    """
+    files = [f.strip() for f in args.files.split(",") if f.strip()]
+    branch = args.branch or ""
+    try:
+        board, tip = fetch_ref_board()
+    except BoardSourceUnavailable as exc:
+        print(f"UNVERIFIABLE: board authority {BOARD_REF} unreadable: {exc}")
+        print(STOP_BANNER)
+        return 2
+    print(f"check scope: {BOARD_REF}@{tip[:7]} (single authority; code trees are not sources)")
+    try:
+        hits = _conflicting_paths(board, branch, files)
+    except (TypeError, ValueError, AttributeError) as exc:
+        print(f"UNVERIFIABLE: {BOARD_REF}@{tip[:7]} has a malformed claim: {exc}")
+        print(STOP_BANNER)
+        return 2
+    rc = 0
+    if hits:
+        print(f"OVERLAP with {len(hits)} active claim(s) on {BOARD_REF}:")
+        for task, path in hits:
+            print(f"  {path}  ← {task}")
+        rc = 1
+    owners, malformed = _active_gates_owners(board)
+    if malformed:
+        print(f"UNVERIFIABLE: malformed gates_owner claims on {BOARD_REF}: {', '.join(malformed)}")
+        rc = 2
+    elif len(owners) != 1:
+        names = ", ".join(str(o.get("task", "?")) for o in owners) or "-"
+        print(
+            f"UNVERIFIABLE: expected exactly one live gates_owner on {BOARD_REF}, "
+            f"found {len(owners)}: {names}"
+        )
+        rc = 2
+    drift = _archive_drift()
+    if drift is not None:
+        print(f"ARCHIVE MODIFIED: {drift}")
+        print("fix: git checkout origin/main -- .agents/board.json  (board state lives on the ref)")
+        rc = max(rc, 1)
+    if rc == 0:
+        print(f"no overlap on {BOARD_REF}@{tip[:7]} — safe to proceed")
+    else:
+        print(STOP_BANNER)
+    return rc
+
+
+def cmd_guard(args: argparse.Namespace) -> int:
+    """Fail (exit 1) when the frozen tree archive ``.agents/board.json`` was edited.
+
+    Run in CI on every pull request: after the move to the coordination ref,
+    *no* code PR may carry board state.  ``--print`` shows the digests.
+    """
+    drift = _archive_drift()
+    if getattr(args, "print_digest", False):
+        actual = hashlib.sha256(BOARD.read_bytes()).hexdigest() if BOARD.exists() else "-"
+        print(f"frozen={FROZEN_BOARD_SHA256}\nactual={actual}")
+    if drift is not None:
+        print(f"BOARD ARCHIVE MODIFIED: {drift}")
+        print("The live board is the coordination ref; code PRs must not carry board edits.")
+        print("fix: git checkout origin/main -- .agents/board.json")
+        return 1
+    print("board archive frozen (sha256 matches) — OK")
+    return 0
+
+
+def cmd_init_ref(args: argparse.Namespace) -> int:
+    """Bootstrap the coordination ref from a board file (refuses if the ref exists)."""
+    source = Path(args.source) if args.source else BOARD
+    try:
+        board = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"UNVERIFIABLE: cannot read seed board {source}: {exc}")
+        return 2
+    if not isinstance(board, dict) or board.get("schema") != 2:
+        print(f"REFUSED: {source} is not a schema-2 board")
+        return 2
+    protocol = board.setdefault("protocol", {})
+    if isinstance(protocol, dict):
+        protocol["board_authority"] = {
+            "ref": BOARD_REF,
+            "file": BOARD_REF_FILE,
+            "write": "scripts/agent_board.py claim|release|defer (compare-and-swap push)",
+            "tree_copy": ".agents/board.json is a frozen archive (see `guard`)",
+        }
+    try:
+        existing = _plumbing(["ls-remote", "--exit-code", "origin", BOARD_REF]).strip()
+    except BoardSourceUnavailable:
+        existing = ""  # ls-remote --exit-code returns 2 when the ref is absent
+    if existing:
+        print(f"REFUSED: {BOARD_REF} already exists on origin ({existing.split()[0][:7]}); ")
+        print("init-ref never overwrites it — use claim/release/defer, which compare-and-swap")
+        return 2
+    try:
+        tip = push_ref_board(board, None, "board: bootstrap coordination ref (A-04, protocol 11)")
+    except BoardCASConflict:
+        print(f"REFUSED: {BOARD_REF} already exists on origin; init-ref never overwrites it")
+        return 2
+    except BoardSourceUnavailable as exc:
+        print(f"UNVERIFIABLE: {exc}")
+        return 2
+    print(f"[board] {BOARD_REF} created at {tip} from {source}")
+    return 0
+
+
 def cmd_praudit(args: argparse.Namespace) -> int:
     """Read-only visibility audit — never writes the board."""
     board = load_board()
@@ -1012,6 +1372,16 @@ def cmd_praudit(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="NEXUS multi-agent claim board")
+    parser.add_argument(
+        "--store",
+        choices=("ref", "tree"),
+        default=None,
+        help=(
+            f"board authority: 'ref' = coordination ref {BOARD_REF} (default, fetch + "
+            "compare-and-swap push); 'tree' = frozen .agents/board.json (tests/offline only). "
+            f"Env fallback: {_STORE_ENV}."
+        ),
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("show").set_defaults(func=cmd_show)
@@ -1095,9 +1465,20 @@ def main() -> int:
     p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_praudit)
 
+    p = sub.add_parser("guard", help="fail when the frozen tree archive was modified")
+    p.add_argument("--print", dest="print_digest", action="store_true", help="show digests")
+    p.set_defaults(func=cmd_guard)
+
+    p = sub.add_parser("init-ref", help=f"bootstrap {BOARD_REF} once from a board file")
+    p.add_argument("--from", dest="source", default="", help="seed board path (default tree)")
+    p.set_defaults(func=cmd_init_ref)
+
     args = parser.parse_args()
+    direct = {cmd_check, cmd_guard, cmd_init_ref}
     try:
-        return int(args.func(args))
+        if args.func in direct:
+            return int(args.func(args))
+        return int(run_with_store(args, args.func))
     except BoardLockedError as exc:
         print(f"UNVERIFIABLE: {exc}")
         return 2

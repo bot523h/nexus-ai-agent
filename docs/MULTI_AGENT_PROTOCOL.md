@@ -1,7 +1,15 @@
 # Multi-Agent Working Protocol (NEXUS AI Agent)
 
-Version 1.0 — 2026-09-21
-Companion files: `AGENTS.md` (root contract), `.agents/board.json` (state), `scripts/agent_board.py` (CLI).
+Version 1.1 — 2026-10-15 (protocol 11: board authority moved to the coordination ref; v1.0 2026-09-21)
+Companion files: `AGENTS.md` (root contract), **`refs/nexus/board` on origin** (live state, file
+`board.json`), `.agents/board.json` (frozen archive — not live state), `scripts/agent_board.py` (CLI).
+
+> **Protocol 11 (ADR 0012, audit A-04).** Claims no longer travel through code branches.
+> `claim`/`release`/`defer` fetch `refs/nexus/board`, apply the change and publish it with a
+> compare-and-swap push in the same command; a lost race is redone from a fresh read. `check`
+> consults only that ref. Never `git add .agents/board.json` — CI (`guard`) fails a PR that edits it;
+> when rebasing an open PR run `git checkout origin/main -- .agents/board.json`. The paragraphs
+> below that describe "pull, commit, push the board" are the v1.0 mechanics kept for history.
 
 ## 1. Why this exists
 
@@ -38,11 +46,11 @@ queued ──claim──▶ active (lease: owner + TTL + exclusive_paths)
                 + note in deferred_log
 ```
 
-* **claim** — atomic *by convention*: the agent pulls the board, flips one task to
-  `active` with its branch name, commits and pushes **immediately**. If two agents
-  race the same push, git itself surfaces the conflict; the loser re-runs `show`
-  and loses the claim (first-pushed lease wins, later push must not overwrite a
-  fresher `claimed_at`).
+* **claim** — atomic *by compare-and-swap* since protocol 11: the CLI reads the
+  ref tip, applies the lease and pushes it with `--force-with-lease=<ref>:<tip>`;
+  if another sandbox published first the push is rejected, the CLI re-reads and
+  re-decides (a now-live foreign lease is refused). First-published lease wins,
+  by construction rather than by convention. (v1.0: pull → flip → commit → push.)
 * **TTL / stale takeover** — every lease has `ttl_hours` (default 24). `gc` (run
   automatically inside `show`/`next`) flips expired leases to `expired`, making
   the task claimable again. An agent that is still working re-runs `claim` to
@@ -82,14 +90,15 @@ python scripts/agent_board.py check --files "src/a.py,src/b.py" --branch BR   # 
 python scripts/agent_board.py check --files "src/a.py" --branch BR --no-remote  # local only
 ```
 
-`check` is a **multi-source referee**. It reads the local board, every sibling
-git worktree's board, and `origin/main`'s board, then exits:
+`check` is the **overlap referee against the single authority** (`refs/nexus/board`,
+protocol 11; the v1.0 multi-source mode over local/worktree/`origin/main`/PR
+boards remains available only with `--store tree`). It exits:
 
 | exit | meaning |
 |---|---|
 | `0` | no overlap **and** every consulted source was readable |
 | `1` | a proven overlap with another branch's active `exclusive_paths` |
-| `2` | a source could not be read (git/remote/worktree unavailable) — **not** a pass |
+| `2` | the authority could not be read or is inconsistent (ref unreachable, schema≠2, malformed claim, not exactly one live gates owner) — **not** a pass |
 
 Exit `2` is the honesty gate: "no overlap" is only claimed when the data was
 actually read. `--no-remote` narrows the check to the local board and says so

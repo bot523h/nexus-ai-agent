@@ -1,0 +1,12 @@
+# 07 — Operations: backups, install locking, image, audits, dispositions (Phase 7)
+
+| Item | Live fact | Disposition |
+|---|---|---|
+| Nightly DB backup (`.github/workflows/maintenance.yml`, cron 03:17 UTC) | preflight refuses without `NEXUS_DATABASE_URL` (PostgreSQL), `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`; last run 38704873852 failed preflight | **BLOCKED_BY_EXTERNAL_DEPENDENCY** (secrets). No real backup/restore drill ran tonight and none is claimed. Preflight already fails closed with the runbook pointer (`docs/ops/r2-storage.md §4`). |
+| Scheduled `pip-audit` | **was absent** — the weekly cron in `maintenance.yml` (Mon 04:23 UTC) is R2 housekeeping, not an audit (the closeout text that implied a scheduled audit was wrong; corrected here). Last local run: 7 advisories / 0 fix versions available | **ADDED tonight**: `.github/workflows/dependency-audit.yml` (Tuesdays 05:41 UTC + `workflow_dispatch`; audits the real `pip install -e ".[dev]"` environment; JSON artifact 90 days; non-blocking because it is not a PR check). Status: IMPLEMENTED, **not yet executed** — first evidence is its first scheduled/dispatched run id. |
+| Hash-locked install / lockfile | no `requirements*.txt`/`uv.lock`; installs from `pyproject.toml` ranges; `langgraph-checkpoint-sqlite==3.1.1` pinned by #212 | **OPEN (P1)** — proposal: generate `requirements-lock.txt` with hashes from the CI-verified environment and install with `--require-hashes` in the container stage; needs an owner decision on the Python version to lock (3.12 image vs 3.10 parity) |
+| Multi-stage image | `Dockerfile` single stage `python:3.12-slim`, unprivileged runtime, healthcheck, CI `container` job builds + probes it (job 116625684891 success) | OPEN (P2): builder stage for `llama-cpp-python` sdist compile; blocked on the lockfile decision above to avoid locking twice |
+| chromadb | declared dependency, used by `features/rag.py`, `rag_core.py`, `bot/surface/docs.py`; listed in deptry allow-list | KEEP (in use); revisit if `sqlite_vec` lane covers RAG (research item 9) |
+| diskcache | not declared, not imported (`grep` empty) | N/A — nothing to remove |
+| Operator smoke test | `docs/ops/DEPLOY_RUNBOOK.md` (preflight → deploy → smoke → rollback) | present; after a merge of #218: `nexus --version`, `python -m nexus_ai_agent.cli checkpoints verify`, send one message, `python scripts/agent_board.py guard` |
+| Tagging | version 3.13.0, no `v3.13.0` tag; newest tag v3.5.0 | owner tags **after** merge — never an unmerged head |

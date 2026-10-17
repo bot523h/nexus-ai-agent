@@ -1,0 +1,14 @@
+# Gate evidence — working tree = code head a0c202704418a94bd01204fd3fe3dd42886ce97e + the closeout docs and scripts/module_inventory.py (docs-only follow-up commit) — 2026-10-15T19:27:15Z — python 3.11.2, ruff 0.16.8, mypy 2.4.0
+$ ruff check . --no-cache
+All checks passed!
+exit=0
+$ ruff format --check .
+685 files already formatted
+exit=0
+$ mypy src   ([tool.mypy] strict = true)
+Success: no issues found in 283 source files
+exit=0
+$ deptry src
+Success! No dependency issues found.
+exit=0
+$ pytest (fast suite, see 08_full_suite_after_a12.txt — identical tree except docs)

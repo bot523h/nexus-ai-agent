@@ -148,7 +148,7 @@ def test_the_surface_package_imports_without_telegram() -> None:
     cheap registration job — and it runs in a subprocess because
     ``sys.modules`` is shared with every other test in the session.
     """
-    result = subprocess.run(  # noqa: S603 - fixed argv, this interpreter only
+    result = subprocess.run(
         [sys.executable, "-c", _BARE_IMPORT_PROBE],
         capture_output=True,
         text=True,

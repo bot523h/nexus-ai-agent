@@ -17,10 +17,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy import create_engine as _create_engine
 from sqlmodel import Session, select
 
-from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.features.calculator import (
     CalculatorError,
     ExpressionTooComplex,
@@ -120,15 +118,17 @@ class ReminderSystem:
     # -- engine --------------------------------------------------------------
 
     def _engine_ref(self) -> Any:
+        """The process-wide synchronous engine (``storage.db.sync_engine``).
+
+        P1-2: sessions are executed in worker threads (``to_thread``); the
+        central engine is created thread-safe. Audit A-02: an explicit
+        ``db_path`` pins a SQLite file, ``None`` follows the configured backend
+        (``NEXUS_DATABASE_URL`` or ``NEXUS_DB_PATH``).
+        """
         if self._engine is None:
-            path = self._db_path or get_settings().db_path
-            # P1-2: sessions are executed in worker threads (to_thread);
-            # pooled connections may therefore be created and used on
-            # different threads, which sqlite3 allows only with
-            # check_same_thread=False.
-            self._engine = _create_engine(
-                f"sqlite:///{path}", echo=False, connect_args={"check_same_thread": False}
-            )
+            from nexus_ai_agent.storage.db import sync_engine
+
+            self._engine = sync_engine(self._db_path)
         return self._engine
 
     def close(self) -> None:
@@ -137,9 +137,10 @@ class ReminderSystem:
             if not task.done():
                 task.cancel()
         self._tasks.clear()
-        if self._engine is not None:
-            self._engine.dispose()
-            self._engine = None
+        # The engine is the shared process-wide one; release the reference
+        # only — disposing it would drop every other engine's pooled
+        # connections too.
+        self._engine = None
 
     # -- user-facing API -----------------------------------------------------
 
@@ -341,7 +342,7 @@ class Translator:
                 resp = await client.get(self.MYMEMORY_URL, params=params)
                 resp.raise_for_status()
                 data = resp.json()
-                return data.get("responseData", {}).get("translatedText", text)
+                return str(data.get("responseData", {}).get("translatedText", text))
             except Exception:  # noqa: BLE001
                 logger.exception("translate_failed", text=text[:50])
                 return f"❌ خطا در ترجمه: {text}"

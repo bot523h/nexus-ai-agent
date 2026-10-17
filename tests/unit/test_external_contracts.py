@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import re
 from typing import Any
-from urllib.parse import urlsplit  # noqa: E402
+from urllib.parse import urlsplit
 
 import httpx
 import pytest

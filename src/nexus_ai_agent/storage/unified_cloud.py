@@ -14,6 +14,7 @@ Total: ~57GB+ unified virtual storage, transparent to the user.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -39,6 +40,12 @@ PROVIDER_LIMITS: dict[str, float] = {
 
 # Estimated total
 TOTAL_FREE_GB = sum(PROVIDER_LIMITS.values())
+
+
+def _write_file(path: Path, content: bytes) -> None:
+    """Create the parent directory and write ``content`` (blocking; run off-loop)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
 
 
 class CloudProviderInfo:
@@ -120,7 +127,7 @@ class _DropboxProvider:
             "Content-Type": "application/octet-stream",
             "Dropbox-API-Arg": json.dumps(api_arg, separators=(",", ":")),
         }
-        data = local_path.read_bytes()
+        data = await asyncio.to_thread(local_path.read_bytes)
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(url, headers=headers, content=data)
             if resp.status_code not in (200, 409):
@@ -138,8 +145,7 @@ class _DropboxProvider:
             resp = await client.post(url, headers=headers)
             if resp.status_code != 200:
                 raise ProviderUnavailable(f"Dropbox download failed: {resp.status_code}")
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            local_path.write_bytes(resp.content)
+            await asyncio.to_thread(_write_file, local_path, resp.content)
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
         if not self._token:
@@ -206,7 +212,7 @@ class _PcloudProvider:
         if not self._token:
             raise ProviderUnavailable("pCloud token not configured")
         url = "https://api.pcloud.com/uploadfile"
-        data = local_path.read_bytes()
+        data = await asyncio.to_thread(local_path.read_bytes)
         params = {
             "auth": self._token,
             "path": _nexus_path(remote_key),
@@ -232,8 +238,7 @@ class _PcloudProvider:
                 raise ProviderUnavailable("pCloud download link not available")
             resp2 = await client.get(f"https://{dl_url}")
             if resp2.status_code == 200:
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                local_path.write_bytes(resp2.content)
+                await asyncio.to_thread(_write_file, local_path, resp2.content)
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
         if not self._token:
@@ -275,7 +280,7 @@ class _InternxtProvider:
         key = _validate_remote_key(remote_key)
         url = "https://api.internxt.com/drive/storage/upload"
         headers = {"Authorization": f"Bearer {self._token}"}
-        data = local_path.read_bytes()
+        data = await asyncio.to_thread(local_path.read_bytes)
         files = {"file": (key, data)}
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(url, headers=headers, files=files)
@@ -397,7 +402,7 @@ class UnifiedCloudStorage:
                 "error": "❌ هیچ سرویس ابری تنظیم نشده.",
             }
 
-        if not local_path.exists():
+        if not await asyncio.to_thread(local_path.exists):
             return {
                 "success": False,
                 "provider": None,
@@ -406,7 +411,7 @@ class UnifiedCloudStorage:
                 "error": "❌ فایل یافت نشد.",
             }
 
-        size = local_path.stat().st_size
+        size = (await asyncio.to_thread(local_path.stat)).st_size
         # Only default the key when it is absent; an explicit empty string is
         # an invalid key and must be rejected, not silently replaced.
         key = local_path.name if remote_key is None else remote_key

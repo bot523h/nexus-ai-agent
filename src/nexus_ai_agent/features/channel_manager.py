@@ -13,7 +13,6 @@ from typing import Any
 from sqlmodel import Session, desc, select
 from telegram.error import TelegramError
 
-from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.features.viral_engine import ViralEngine
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.models import ChannelSchedule, User, ViralPost, WelcomeMessage
@@ -22,11 +21,15 @@ logger = get_logger(__name__)
 
 
 def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for simple CRUD inside features."""
-    from sqlalchemy import create_engine as _ce
+    """The process-wide synchronous engine (``storage.db.sync_engine``).
 
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+    Audit A-02: this module used to build its own ``sqlite:///`` engine and
+    therefore ignored ``NEXUS_DATABASE_URL``; the central helper resolves
+    PostgreSQL-or-SQLite exactly like ``get_session``.
+    """
+    from nexus_ai_agent.storage.db import sync_engine
+
+    return sync_engine()
 
 
 class ChannelManager:
@@ -119,7 +122,7 @@ class ChannelManager:
     async def get_members_count(self, chat_id: int) -> int:
         """Return the member count for *chat_id*."""
         bot = self._require_bot()
-        return await bot.get_chat_member_count(chat_id=chat_id)
+        return int(await bot.get_chat_member_count(chat_id=chat_id))
 
     async def get_admins(self, chat_id: int) -> list[dict[str, Any]]:
         """Return a list of admin dicts for *chat_id*."""
@@ -191,7 +194,7 @@ class ChannelManager:
                 await bot.send_message(chat_id=self.channel_id, text=text, parse_mode="Markdown")
                 return True
             except TelegramError as e:
-                logger.error(f"Failed to post top users: {e}")
+                logger.error("Failed to post top users", error=str(e))
                 return False
 
     async def post_viral_content(self) -> int:
@@ -216,7 +219,7 @@ class ChannelManager:
                     session.add(post)
                     count += 1
                 except TelegramError as e:
-                    logger.error(f"Failed to post viral content {post.id}: {e}")
+                    logger.error("Failed to post viral content", post_id=post.id, error=str(e))
                     post.status = "failed"
                     session.add(post)
 

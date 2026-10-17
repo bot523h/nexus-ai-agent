@@ -9,7 +9,6 @@ immutable domain contracts.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import cast
 
 from sqlalchemy import Table, func, literal_column, select, update
@@ -24,6 +23,7 @@ from nexus_ai_agent.creative.assets.models import (
     ProjectAssetLink,
 )
 from nexus_ai_agent.storage import models as orm
+from nexus_ai_agent.storage.clock import naive_utcnow
 
 # Typed table accessors (SQLAlchemy 2.0 style) so column expressions stay typed
 # without importing SQLModel into this module — the architecture ratchet forbids
@@ -176,7 +176,7 @@ class SqlAssetRepository:
                 orm.AssetIngest.ingest_id == ingest_id,  # type: ignore[arg-type]
                 orm.AssetIngest.state == IngestState.STAGING.value,  # type: ignore[arg-type]
             )
-            .values(staging_key=staging_key, updated_at=datetime.utcnow())
+            .values(staging_key=staging_key, updated_at=naive_utcnow())
             .execution_options(synchronize_session="fetch")
         )
         await self._session.flush()
@@ -200,7 +200,7 @@ class SqlAssetRepository:
         row.size_bytes = size_bytes
         row.media_kind = media_kind.value
         row.media_type = media_type
-        row.updated_at = datetime.utcnow()
+        row.updated_at = naive_utcnow()
         await self._session.flush()
 
     async def mark_failed(self, ingest_id: str, *, error_code: str) -> bool:
@@ -219,7 +219,7 @@ class SqlAssetRepository:
                 state=IngestState.FAILED.value,
                 error_code=error_code,
                 staging_key=None,
-                updated_at=datetime.utcnow(),
+                updated_at=naive_utcnow(),
             )
             .execution_options(synchronize_session="fetch")
         )
@@ -236,7 +236,7 @@ class SqlAssetRepository:
                 orm.AssetIngest.state == IngestState.READY.value,  # type: ignore[arg-type]
             )
             .values(
-                state=IngestState.FAILED.value, error_code=error_code, updated_at=datetime.utcnow()
+                state=IngestState.FAILED.value, error_code=error_code, updated_at=naive_utcnow()
             )
             .execution_options(synchronize_session="fetch")
         )
@@ -283,7 +283,7 @@ class SqlAssetRepository:
                 media_type=media_type,
                 staging_key=None,
                 error_code=None,
-                updated_at=datetime.utcnow(),
+                updated_at=naive_utcnow(),
             )
             .execution_options(synchronize_session="fetch")
         )

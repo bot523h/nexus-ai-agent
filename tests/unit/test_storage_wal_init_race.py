@@ -81,7 +81,7 @@ async def test_first_use_wal_survives_a_concurrent_writer(tmp_path: Path) -> Non
 
     assert _journal_mode(db_path) == "wal"
     async with get_session(str(db_path)) as session:
-        await session.execute(text("SELECT 1"))
+        await session.exec(text("SELECT 1"))  # type: ignore[call-overload]
 
 
 @pytest.mark.asyncio

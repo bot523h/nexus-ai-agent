@@ -86,7 +86,7 @@ class _StubLLM:
         base = sum(ord(c) for c in text) % 100
         return [((base + i) % 10) / 10.0 for i in range(384)]
 
-    async def generate(self, prompt: str, system: str | None = None) -> str:  # noqa: ARG002
+    async def generate(self, prompt: str, system: str | None = None) -> str:
         return "stub"
 
 

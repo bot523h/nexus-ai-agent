@@ -36,18 +36,35 @@ while either layer stands; the tests kill the mutant only when the property
 itself is broken.
 
 Usage:  .venv/bin/python scripts/execution_core_mutations.py
+
+CI runs the campaign in the ``governance-mutations`` job inside a detached
+worktree (A-11 closeout, 2026-10-15); ``tests/unit/test_mutation_harness_anchors.py``
+fails instantly when an anchor drifts or stops being unique, so a refactor of a
+mutated site (e.g. the ``_process_job`` decomposition) must re-point the probe
+in the same change.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-PYTEST = [sys.executable, "-m", "pytest", "-q", "-p", "no:warnings", "--tb=no"]
+PYTEST = [
+    sys.executable,
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "no:warnings",
+    "-p",
+    "no:cacheprovider",
+    "--tb=no",
+]
 
 QUEUE = REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py"
 BACKEND = REPO / "src/nexus_ai_agent/adapters/native_local_backend.py"
@@ -305,25 +322,25 @@ PROBES: tuple[Probe, ...] = (
         name="M6 success notification before the durable commit",
         target=QUEUE,
         anchor=(
-            "            if not await asyncio.to_thread(self._mark_completed, claim, final_result):\n"
-            "                self._log_rejected(job_id, claim, JobStatus.COMPLETED)\n"
-            "                return"
+            "        if not await asyncio.to_thread(self._mark_completed, claim, final_result):\n"
+            "            self._log_rejected(job_id, claim, JobStatus.COMPLETED)\n"
+            "            return None"
         ),
         mutant=(
-            "            if not await asyncio.to_thread(self._mark_completed, claim, final_result):\n"
-            "                # MUTATION: notify success even though the commit was refused\n"
-            "                self._log_rejected(job_id, claim, JobStatus.COMPLETED)\n"
-            "                await self._notify_completion(\n"
-            "                    JobCompletion(\n"
-            "                        job_id=job_id,\n"
-            "                        job_type=job_type,\n"
-            "                        status=JobStatus.COMPLETED,\n"
-            "                        result=final_result,\n"
-            "                        error=None,\n"
-            "                        payload=payload,\n"
-            "                    )\n"
+            "        if not await asyncio.to_thread(self._mark_completed, claim, final_result):\n"
+            "            # MUTATION: notify success even though the commit was refused\n"
+            "            self._log_rejected(job_id, claim, JobStatus.COMPLETED)\n"
+            "            await self._notify_completion(\n"
+            "                JobCompletion(\n"
+            "                    job_id=job_id,\n"
+            "                    job_type=job_type,\n"
+            "                    status=JobStatus.COMPLETED,\n"
+            "                    result=final_result,\n"
+            "                    error=None,\n"
+            "                    payload=payload,\n"
             "                )\n"
-            "                return"
+            "            )\n"
+            "            return None"
         ),
         tests=(
             f"{RACES}test_refused_commit_emits_no_success_notification",
@@ -520,7 +537,14 @@ PROBES: tuple[Probe, ...] = (
 
 
 def _run_tests(tests: tuple[str, ...]) -> int:
-    result = subprocess.run([*PYTEST, *tests], cwd=REPO, capture_output=True, text=True)
+    # ``PYTHONPATH`` pins the *mutated* tree: when the campaign runs in an
+    # isolated worktree (the only safe place for it — a crash must never leave
+    # a production checkout mutated) an editable install of the package would
+    # otherwise shadow the mutation and every probe would "survive" (GOV-2).
+    env = {**os.environ, "PYTHONPATH": str(REPO / "src")}
+    result = subprocess.run(
+        [*PYTEST, *tests], cwd=REPO, capture_output=True, text=True, env=env, check=False
+    )
     return result.returncode
 
 

@@ -90,7 +90,7 @@ def _without_empty_checkpoint_id(kwargs: dict[str, Any]) -> dict[str, Any]:
     return {**kwargs, "config": {**config, "configurable": fixed}}
 
 
-class PostgresCheckpointer(BaseCheckpointSaver):
+class PostgresCheckpointer(BaseCheckpointSaver[Any]):
     """Lazy, self-healing LangGraph checkpointer backed by PostgreSQL.
 
     Subclasses ``BaseCheckpointSaver`` (without calling its ``__init__``) so

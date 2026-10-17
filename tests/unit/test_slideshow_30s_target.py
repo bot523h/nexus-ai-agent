@@ -27,7 +27,7 @@ def _images(directory: Path, count: int) -> tuple[Path, ...]:
 def test_30s_joins_the_frozen_target_set_without_disturbing_it() -> None:
     assert 30_000_000 in TARGET_DURATIONS_US
     assert set(TARGET_DURATIONS_US) >= {60_000_000, 120_000_000, 300_000_000}
-    assert TARGET_DURATIONS_US == tuple(sorted(TARGET_DURATIONS_US))
+    assert tuple(sorted(TARGET_DURATIONS_US)) == TARGET_DURATIONS_US
 
 
 def test_plan_tiles_30_seconds_exactly_end_to_end(tmp_path: Path) -> None:

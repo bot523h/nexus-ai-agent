@@ -15,7 +15,7 @@ from .resilience import CachedImageAdapter, validate_image
 class PollinationsAdapter(CachedImageAdapter):
     def __init__(self, *, model: str = "flux", **kwargs: Any) -> None:
         super().__init__(
-            provider="pollinations", model=model, estimated_cost_usd=Decimal("0"), **kwargs
+            provider="pollinations", model=model, estimated_cost_usd=Decimal(0), **kwargs
         )
 
     async def _generate(self, client: httpx.AsyncClient, request: ImageRequest) -> GeneratedImage:

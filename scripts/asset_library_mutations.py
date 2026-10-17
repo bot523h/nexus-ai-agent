@@ -132,6 +132,7 @@ def run_tests() -> bool:
             capture_output=True,
             text=True,
             timeout=TEST_TIMEOUT_SECONDS,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         print(f"(test run exceeded {TEST_TIMEOUT_SECONDS}s) ", end="", flush=True)

@@ -298,7 +298,7 @@ async def test_mutation_rollback_removed_is_harmless_on_simple_insert_failure(
     """
 
     @contextmanager
-    def no_rollback_write_transaction(self):  # noqa: ANN001
+    def no_rollback_write_transaction(self):
         with self._lock:
             try:
                 yield self._connection

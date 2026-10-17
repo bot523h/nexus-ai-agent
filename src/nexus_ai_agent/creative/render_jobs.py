@@ -170,7 +170,7 @@ def _guarded_input(payload: CreativeRenderPayload, workspace: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: str) -> Any:  # noqa: ANN401
+def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: str) -> Any:
     """One asset ("src") + an empty main timeline — the minimal central state
     a pack operation can lawfully mutate."""
     from nexus_ai_agent.creative.studio.models import (
@@ -208,11 +208,11 @@ def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: 
 
 
 def build_job_bus(
-    project: Any,  # noqa: ANN401
+    project: Any,
     *,
     operation: str | None = None,
-    authorizer: Any = None,  # noqa: ANN401
-) -> Any:  # noqa: ANN401
+    authorizer: Any = None,
+) -> Any:
     """The canonical, server-policy bus factory for job-side callers.
 
     This is the single reviewed construction site for a ``CommandBus`` outside
@@ -241,7 +241,7 @@ def build_job_bus(
 
 
 def _dispatch(
-    project: Any,  # noqa: ANN401
+    project: Any,
     *,
     operation: str,
     input_data: dict[str, Any],
@@ -323,7 +323,7 @@ def _operation_inputs(payload: CreativeRenderPayload, duration_us: int) -> dict[
 
 def _lane_ops(
     payload: CreativeRenderPayload, canonical_id: str, duration_us: int
-) -> tuple[list[Any], Any | None]:  # noqa: ANN401
+) -> tuple[list[Any], Any | None]:
     """Lane-IR instrumentation matching the canonical operation one-to-one.
     Trim is clamped to the measured duration — the media is the truth."""
     from nexus_ai_agent.creative.rendering.ir import (
@@ -373,7 +373,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
     staging.replace(path)
 
 
-def _default_caption_engine() -> Any:  # noqa: ANN401 - CaptionEnginePort
+def _default_caption_engine() -> Any:
     """Optional-extra resolution (SLIDESHOW.md ``[speech]`` row): default
     installs report unavailable and the chain fails *closed*, typed and
     translated — it never silently degrades to a stub."""

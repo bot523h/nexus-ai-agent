@@ -1,0 +1,37 @@
+== execution_core_mutations.py AFTER refactor, tree: 7 dirty files, 2026-10-15T18:50:17Z
+=== M1 final completion CAS ignores the attempt fence (src/nexus_ai_agent/adapters/in_process_job_queue.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha ccd77260dabe
+=== M2 stale cancel ignores the fencing token (src/nexus_ai_agent/adapters/in_process_job_queue.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha ccd77260dabe
+=== M3 reconcile uses unscoped startup takeover (src/nexus_ai_agent/adapters/native_local_backend.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha 76483b81366e
+=== M4 publish follows a symlinked staged source (src/nexus_ai_agent/execution/staging.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha caea810d6b14
+=== M5 quarantine crosses a symlinked destination (src/nexus_ai_agent/execution/staging.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha caea810d6b14
+=== M6 success notification before the durable commit (src/nexus_ai_agent/adapters/in_process_job_queue.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha ccd77260dabe
+=== M7 unbound identity gains cancellation authority (both layers) (src/nexus_ai_agent/adapters/native_local_backend.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha 76483b81366e
+=== M8 unproven staleness is taken over (fail-open) (src/nexus_ai_agent/adapters/in_process_job_queue.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha ccd77260dabe
+=== M9 lost mkdir race becomes a boundary error (src/nexus_ai_agent/tools/filesystem_policy.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha e1bfa5e1b9f1
+=== M10 quarantine destination boundary errors are swallowed (src/nexus_ai_agent/execution/staging.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha caea810d6b14
+=== M11 shutdown resets by job id instead of the local attempt (src/nexus_ai_agent/adapters/in_process_job_queue.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha ccd77260dabe
+=== M12 staging write follows a swapped ancestor (src/nexus_ai_agent/execution/staging.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha caea810d6b14
+=== M13 remove_tree leaks post-removal parent-reopen OSError (src/nexus_ai_agent/tools/filesystem_policy.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha e1bfa5e1b9f1
+=== M14 backend ignores required-verification policy (src/nexus_ai_agent/adapters/native_local_backend.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha 76483b81366e
+=== M15 shutdown drops a late reservation claim (src/nexus_ai_agent/adapters/in_process_job_queue.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha ccd77260dabe
+=== M16 require_regular_file leaks parent-walk OSError (src/nexus_ai_agent/tools/filesystem_policy.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha e1bfa5e1b9f1
+=== M17 caller idempotency overrides the durable identity (src/nexus_ai_agent/adapters/native_local_backend.py)
+  mutant: CAUGHT (exit 1); restored: GREEN; sha 76483b81366e
+=== summary: 17/17 mutations caught
+exit=0

@@ -1,0 +1,5 @@
+== FULL fast suite after A-13 strict, 2026-10-15T19:04:31Z
+SKIPPED [1] tests/unit/test_optional_extras.py:145: core-only contract (proven by the `core` CI leg): translate fail-closed error
+SKIPPED [1] tests/unit/test_optional_extras.py:303: no active leg (default jobs) — leg validation is inert here
+4091 passed, 37 skipped in 208.04s (0:03:28)
+exit=0

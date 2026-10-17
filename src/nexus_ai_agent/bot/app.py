@@ -19,6 +19,7 @@ from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
+from nexus_ai_agent.storage.db import sync_db_path_for
 
 from .handlers import (
     build_handlers,
@@ -80,7 +81,7 @@ async def _notify_creative_completion(completion: Any, token: str) -> None:
     here, exactly like the slideshow notifier. Telegram I/O lives in this
     grandfathered file (frozen import-boundary test).
     """
-    from telegram import Bot  # noqa: PLC0415
+    from telegram import Bot
 
     from nexus_ai_agent.creative.render_jobs import ERROR_CODES, cleanup_workspace
     from nexus_ai_agent.i18n import i18n
@@ -118,20 +119,21 @@ async def _notify_creative_completion(completion: Any, token: str) -> None:
             return
         caption = i18n.t("creative.completed", lang=lang, command=command, operation=operation)
         artifact = result.get("artifact_path")
-        if artifact and Path(str(artifact)).exists():
+        if artifact and await asyncio.to_thread(Path(str(artifact)).exists):
             path = Path(str(artifact))
+            from nexus_ai_agent.bot.handlers import local_input_file
+
+            artifact_file = await local_input_file(path)
             if result.get("artifact_kind") == "video":
                 duration_us = result.get("duration_us")
-                with path.open("rb") as handle:
-                    await bot.send_video(
-                        chat_id=chat_id,
-                        video=handle,
-                        caption=caption,
-                        duration=int(duration_us / 1_000_000) if duration_us else None,
-                    )
+                await bot.send_video(
+                    chat_id=chat_id,
+                    video=artifact_file,
+                    caption=caption,
+                    duration=int(duration_us / 1_000_000) if duration_us else None,
+                )
             else:
-                with path.open("rb") as handle:
-                    await bot.send_document(chat_id=chat_id, document=handle, caption=caption)
+                await bot.send_document(chat_id=chat_id, document=artifact_file, caption=caption)
         else:
             await bot.send_message(chat_id=chat_id, text=caption)
     finally:
@@ -245,7 +247,7 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     engines["causal_journal"] = causal_journal
 
     # Persistent conversation store
-    conv_store = ConversationStore(db_path=settings.db_path)
+    conv_store = ConversationStore(db_path=sync_db_path_for(settings))
     engines["conversation_store"] = conv_store
 
     # Request queue for fair Gemini API access
@@ -284,7 +286,7 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     engines["summarizer_engine"] = summarizer_engine
 
     # Referral
-    engines["referral_engine"] = ReferralEngine(db_path=settings.db_path)
+    engines["referral_engine"] = ReferralEngine(db_path=sync_db_path_for(settings))
 
     # Unified Cloud Storage
     engines["unified_cloud"] = UnifiedCloudStorage(
@@ -312,7 +314,7 @@ def build_application(
     *,
     presence: PresenceStore | None = None,
     session_factory: Callable[[], Any] | None = None,
-) -> Application:
+) -> Application[Any, Any, Any, Any, Any, Any]:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", settings.telegram_bot_token)
     if not token or token == "CHANGE_ME":
         raise ValueError("TELEGRAM_BOT_TOKEN must be provided via environment/settings")
@@ -380,6 +382,12 @@ def build_application(
     from nexus_ai_agent.bot.access_guard import build_access_guard
 
     application.add_handler(build_access_guard(settings), group=-1)
+    # Smart moderation ingress (audit A-03, 2026-10-15): same group, right
+    # after the guard, so a violating group message is removed before the
+    # group-0 handlers (and the AI) ever see it.
+    from nexus_ai_agent.bot.handlers import build_moderation_gate
+
+    application.add_handler(build_moderation_gate(), group=-1)
 
     for handler in build_handlers(
         graph,
@@ -400,8 +408,6 @@ def build_application(
 
     for _name, _fn in build_creative_handlers(job_queue).items():
         application.add_handler(_CommandHandler(_name, _fn))
-    # Custom command handlers removed as they should be part of build_handlers or imported correctly
-    # install_presence_heartbeat(application) # Removed as it was an unawaited mock
     return application
 
 

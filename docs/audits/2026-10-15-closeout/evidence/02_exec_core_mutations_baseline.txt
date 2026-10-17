@@ -1,0 +1,28 @@
+== execution_core_mutations.py BASELINE (pre-refactor) at 6fb0a97 2026-10-15T18:40:01Z
+=== M12 staging write follows a swapped ancestor (src/nexus_ai_agent/execution/staging.py)
+  baseline: GREEN
+  mutant: CAUGHT (exit 1); restored: GREEN; sha caea810d6b14
+
+=== M13 remove_tree leaks post-removal parent-reopen OSError (src/nexus_ai_agent/tools/filesystem_policy.py)
+  baseline: GREEN
+  mutant: CAUGHT (exit 1); restored: GREEN; sha e1bfa5e1b9f1
+
+=== M14 backend ignores required-verification policy (src/nexus_ai_agent/adapters/native_local_backend.py)
+  baseline: GREEN
+  mutant: CAUGHT (exit 1); restored: GREEN; sha 76483b81366e
+
+=== M15 shutdown drops a late reservation claim (src/nexus_ai_agent/adapters/in_process_job_queue.py)
+  baseline: GREEN
+  mutant: CAUGHT (exit 1); restored: GREEN; sha ab037cef4fde
+
+=== M16 require_regular_file leaks parent-walk OSError (src/nexus_ai_agent/tools/filesystem_policy.py)
+  baseline: GREEN
+  mutant: CAUGHT (exit 1); restored: GREEN; sha e1bfa5e1b9f1
+
+=== M17 caller idempotency overrides the durable identity (src/nexus_ai_agent/adapters/native_local_backend.py)
+  baseline: GREEN
+  mutant: CAUGHT (exit 1); restored: GREEN; sha 76483b81366e
+
+=== summary: 17/17 mutations caught
+exit=0
+0

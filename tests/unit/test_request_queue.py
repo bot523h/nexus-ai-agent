@@ -323,7 +323,7 @@ async def test_py310_shaped_caller_timeout_is_builtin_and_settles_once(
 
     async def wait_for(awaitable: object, timeout: float | None = None) -> object:
         if isinstance(awaitable, asyncio.Future):
-            raise _Py310WaitTimeout()
+            raise _Py310WaitTimeout
         return await real_wait_for(awaitable, timeout)
 
     monkeypatch.setattr(asyncio, "wait_for", wait_for)
@@ -375,7 +375,7 @@ async def test_py310_shaped_rate_wait_timeout_is_not_a_processor_error(
             # so the injected timeout does not warn "coroutine was never awaited".
             awaitable.close()
         await asyncio.sleep(0.01)
-        raise _Py310WaitTimeout()
+        raise _Py310WaitTimeout
 
     queue = GeminiRequestQueue(max_rpm=1, max_daily=10)
     provider_called = asyncio.Event()
@@ -579,7 +579,7 @@ async def test_provider_self_cancellation_is_typed_failure_and_worker_survives()
     queue = GeminiRequestQueue(max_rpm=10, max_daily=10)
 
     async def self_cancelling_provider() -> str:
-        raise asyncio.CancelledError()
+        raise asyncio.CancelledError
 
     try:
         result = await queue.submit(self_cancelling_provider, user_id=11, timeout=5)

@@ -11,8 +11,17 @@ from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import MetaData, inspect, text
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
+
+# The session class every factory below hands out. SQLModel's AsyncSession is
+# a strict subclass of SQLAlchemy's (``execute``/``scalars`` keep working) and
+# additionally provides ``exec()``, which the bot handlers, the dashboard and
+# the feature engines rely on. Building the factories with the plain
+# SQLAlchemy class made every ``await session.exec(...)`` raise
+# ``AttributeError`` at runtime (audit finding A-01, 2026-10-15) — a defect no
+# test caught because none drove a handler through the real factory.
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from nexus_ai_agent.storage import models as _models  # noqa: F401
 
@@ -44,6 +53,12 @@ _pg_session_factories: dict[str, async_sessionmaker[AsyncSession]] = {}
 # = Alembic migrated (the stopgap create_all was retired in D7); the guard is
 # per-URL so two different Neon databases in one process stay independent.
 _pg_prepared_urls: set[str] = set()
+
+# Synchronous engine for the feature engines (sync SQLModel CRUD executed in
+# worker threads) — one live engine per process, keyed by its URL; see
+# ``sync_engine``.
+_sync_engine_url: str | None = None
+_sync_engine_instance: Any | None = None
 
 # The only URL schemes accepted for NEXUS_DATABASE_URL.
 _SUPPORTED_URL_SCHEMES = ("postgresql", "postgres", "postgresql+asyncpg")
@@ -85,6 +100,13 @@ def to_asyncpg_url(url: str) -> str:
     normalized = normalize_database_url(url)
     parts = urlsplit(normalized)
     return urlunsplit(("postgresql+asyncpg", parts.netloc, parts.path, parts.query, parts.fragment))
+
+
+def to_psycopg_url(url: str) -> str:
+    """Return the SQLAlchemy psycopg (v3, synchronous) form of a PostgreSQL URL."""
+    normalized = normalize_database_url(url)
+    parts = urlsplit(normalized)
+    return urlunsplit(("postgresql+psycopg", parts.netloc, parts.path, parts.query, parts.fragment))
 
 
 def resolve_migration_url() -> str:
@@ -181,7 +203,7 @@ def decide_sqlite_bootstrap(db_path: str | None = None) -> str:
     """
     from nexus_ai_agent.config.settings import get_settings
 
-    normalized = str(Path(db_path or get_settings().db_path).expanduser())
+    normalized = _sqlite_identity(db_path or get_settings().db_path)
     if normalized in _initialized_paths:
         return _SqliteBootstrapMode.NOTHING.value
     if not Path(normalized).exists():
@@ -195,11 +217,24 @@ def decide_sqlite_bootstrap(db_path: str | None = None) -> str:
     return _SqliteBootstrapMode.ALEMBIC.value
 
 
+def _sqlite_identity(db_path: str) -> str:
+    """The one key under which a SQLite file is cached and remembered.
+
+    Absolute, so the identity of ``data/app.sqlite`` does not depend on the
+    current working directory: a process (or a test) that changes directory
+    after the engine was created must get a *different* engine and a fresh
+    bootstrap decision, not the previous directory's file under the same
+    relative name (that leak produced ``no such table`` on a brand-new file
+    whose relative path was already in ``_initialized_paths``).
+    """
+    return str(Path(db_path).expanduser().resolve())
+
+
 def _get_engine(db_path: str) -> Any:
     """Return an engine bound to ``db_path``, recreating it when the path changes."""
     global _engine, _engine_path, _session_factory
 
-    normalized_path = str(Path(db_path).expanduser())
+    normalized_path = _sqlite_identity(db_path)
     if _engine is None or _engine_path != normalized_path:
         Path(normalized_path).parent.mkdir(parents=True, exist_ok=True)
         if _engine is not None:
@@ -217,7 +252,7 @@ def _get_engine(db_path: str) -> Any:
             # which is retried explicitly in _set_wal_mode.
             connect_args={"timeout": _SQLITE_BUSY_TIMEOUT_SECONDS},
         )
-        _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
+        _session_factory = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
         _engine_path = normalized_path
     return _engine
 
@@ -321,9 +356,13 @@ async def _set_wal_mode(engine: Any) -> None:
 
 async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
     """Create all SQLModel tables for the selected database, exactly once per path."""
-    await _dispose_replaced_engines()
-    normalized_path = str(Path(db_path).expanduser())
+    normalized_path = _sqlite_identity(db_path)
     engine = _get_engine(normalized_path)
+    # Dispose *after* the lookup: a path switch retires the previous engine
+    # inside _get_engine, and disposing it here (rather than on the *next*
+    # database operation) closes its aiosqlite worker thread while the loop
+    # that owns it is still alive.
+    await _dispose_replaced_engines()
     if normalized_path in _initialized_paths:
         return
 
@@ -337,8 +376,28 @@ async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
         if normalized_path in _initialized_paths:
             return
         await _set_wal_mode(engine)
+        if await _is_alembic_versioned(engine):
+            # Schema authority (audit 2026-10-15): a file that carries
+            # ``alembic_version`` is owned by the migration chain.  ``create_all``
+            # must not run against it — it would silently materialise a model
+            # table that has no migration and hide the missing revision until the
+            # first PostgreSQL deployment.  ``ensure_startup_schema`` (and
+            # ``nexus migrate``) is the only writer of such a file's schema.
+            _initialized_paths.add(normalized_path)
+            return
         await create_all_metadata(engine, SQLModel.metadata)
         _initialized_paths.add(normalized_path)
+
+
+async def _is_alembic_versioned(engine: Any) -> bool:
+    """Whether the database already carries Alembic's ``alembic_version`` table."""
+    from sqlalchemy import inspect as sa_inspect
+
+    def _has_version_table(sync_conn: Any) -> bool:
+        return bool(sa_inspect(sync_conn).has_table("alembic_version"))
+
+    async with engine.connect() as conn:
+        return bool(await conn.run_sync(_has_version_table))
 
 
 def _get_pg_engine(url: str) -> Any:
@@ -360,7 +419,9 @@ def _get_pg_session_factory(url: str) -> async_sessionmaker[AsyncSession]:
     normalized = normalize_database_url(url)
     factory = _pg_session_factories.get(normalized)
     if factory is None:
-        factory = async_sessionmaker(_get_pg_engine(normalized), expire_on_commit=False)
+        factory = async_sessionmaker(
+            _get_pg_engine(normalized), class_=AsyncSession, expire_on_commit=False
+        )
         _pg_session_factories[normalized] = factory
     return factory
 
@@ -386,6 +447,79 @@ async def _ensure_pg_schema(url: str) -> None:
     _pg_prepared_urls.add(normalized)
 
 
+def sync_database_url(db_path: str | None = None) -> str:
+    """The SQLAlchemy URL synchronous code must use for the configured backend.
+
+    Mirrors :func:`get_session`'s resolution: an explicit ``db_path`` pins a
+    SQLite file; otherwise ``NEXUS_DATABASE_URL`` (PostgreSQL, psycopg driver)
+    wins and the configured SQLite file (``NEXUS_DB_PATH``) is the fallback.
+    """
+    if db_path is None:
+        database_url = resolve_database_url()
+        if database_url is not None:
+            return to_psycopg_url(database_url)
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
+    return f"sqlite:///{Path(db_path).expanduser()}"
+
+
+def sync_db_path_for(settings: Any) -> str | None:
+    """The ``db_path`` a composition root hands to a feature engine.
+
+    ``None`` (= follow ``NEXUS_DATABASE_URL`` through :func:`sync_engine`) when
+    PostgreSQL is configured, otherwise the configured SQLite file — so a
+    root that was given an explicit ``Settings`` object keeps its SQLite path
+    while a PostgreSQL deployment no longer gets a second, SQLite database
+    beside the configured one (audit A-02).
+    """
+    if (getattr(settings, "database_url", None) or "").strip():
+        return None
+    return str(settings.db_path)
+
+
+def sync_engine(db_path: str | None = None) -> Any:
+    """Process-wide synchronous engine for the configured database.
+
+    Audit finding A-02 (2026-10-15): thirteen feature modules each built their
+    own ``create_engine(f"sqlite:///{settings.db_path}")`` — so a deployment
+    on PostgreSQL (``NEXUS_DATABASE_URL``) had its users/chats/files in
+    Postgres and its XP, moderation, ads, games, referrals … in a SQLite file
+    next to the code. This is the single resolution point for synchronous
+    work; the feature modules' ``_sync_engine`` helpers delegate here.
+
+    * One live engine per process. When the resolved URL changes (tests point
+      ``NEXUS_DB_PATH`` at a fresh temp file per case) the previous engine is
+      disposed so pooled connections never pile up.
+    * SQLite: ``check_same_thread=False`` because the callers run inside
+      ``asyncio.to_thread`` workers, plus the same busy timeout as the async
+      engine. The parent directory is created on demand.
+    * PostgreSQL: ``pool_pre_ping`` so a recycled Neon connection is detected
+      before a statement fails on it.
+    """
+    global _sync_engine_url, _sync_engine_instance
+
+    from sqlalchemy import create_engine as sync_create_engine
+
+    url = sync_database_url(db_path)
+    if _sync_engine_instance is not None and _sync_engine_url == url:
+        return _sync_engine_instance
+    if _sync_engine_instance is not None:
+        _sync_engine_instance.dispose()
+        _sync_engine_instance = None
+    if url.startswith("sqlite:///"):
+        Path(url[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
+        engine = sync_create_engine(
+            url,
+            echo=False,
+            connect_args={"check_same_thread": False, "timeout": _SQLITE_BUSY_TIMEOUT_SECONDS},
+        )
+    else:
+        engine = sync_create_engine(url, echo=False, pool_pre_ping=True)
+    _sync_engine_url, _sync_engine_instance = url, engine
+    return engine
+
+
 @asynccontextmanager
 async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]:
     """Yield an initialized async session for the configured backend.
@@ -393,8 +527,15 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
     - ``db_path`` given  → SQLite backend, exactly as before (unchanged).
     - ``db_path`` is ``None`` → the backend comes from the environment:
       ``NEXUS_DATABASE_URL`` set → PostgreSQL, prepared lazily via Alembic
-      (D7: the ``create_all`` stopgap was retired); otherwise the default
-      SQLite path.
+      (D7: the ``create_all`` stopgap was retired); otherwise the configured
+      SQLite file (``NEXUS_DB_PATH``, default ``data/app.sqlite``).
+
+    The SQLite fallback used to hard-code ``"data/app.sqlite"`` and ignore
+    ``NEXUS_DB_PATH``, so an operator who pointed the bot at a persistent
+    volume still had the async paths (users, chats, files, dashboard) write
+    into an ephemeral file next to the code while the feature engines wrote
+    into the configured one — two databases for one deployment (audit
+    finding A-02b).
     """
     await _dispose_replaced_engines()
     if db_path is None:
@@ -405,7 +546,9 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
             async with factory() as session:
                 yield session
             return
-        db_path = "data/app.sqlite"
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
 
     await create_all_tables(db_path)
     if _session_factory is None:

@@ -266,8 +266,8 @@ class AdvancedRAGEngine:
                 continue
             texts[str(chunk_id)] = text
             lexical.add(str(chunk_id), text)
-            metadata = metadata if isinstance(metadata, dict) else {}
-            file_id = str(metadata.get("file_id", "") or "")
+            meta = metadata if isinstance(metadata, dict) else {}
+            file_id = str(meta.get("file_id", "") or "")
             if not file_id:
                 continue
             info = documents.get(file_id)

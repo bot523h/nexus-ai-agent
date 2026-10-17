@@ -61,4 +61,4 @@ def test_empty_targets_combine_to_empty_metadata(original_targets: list[MetaData
 def test_default_targets_contain_only_sqlmodel_metadata() -> None:
     # The shipped default keeps exactly the one real target (the V1 hook is in
     # place, but nothing new is registered yet).
-    assert mm.METADATA_TARGETS == [SQLModel.metadata]
+    assert [SQLModel.metadata] == mm.METADATA_TARGETS

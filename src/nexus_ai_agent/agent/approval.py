@@ -50,7 +50,7 @@ class ApprovalSystem:
                         parse_mode="Markdown",
                     )
                 except Exception as e:
-                    logger.error(f"Failed to notify owner: {e}")
+                    logger.error("Failed to notify owner: %s", e)
 
             return approval.id or 0
 
@@ -62,7 +62,7 @@ class ApprovalSystem:
                 approval.status = "approved"
                 session.add(approval)
                 await session.commit()
-                logger.info(f"Action {approval_id} approved: {approval.description}")
+                logger.info("Action %s approved: %s", approval_id, approval.description)
                 return True
         return False
 
@@ -74,6 +74,6 @@ class ApprovalSystem:
                 approval.status = "rejected"
                 session.add(approval)
                 await session.commit()
-                logger.info(f"Action {approval_id} rejected: {approval.description}")
+                logger.info("Action %s rejected: %s", approval_id, approval.description)
                 return True
         return False

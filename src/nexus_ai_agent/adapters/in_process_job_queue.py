@@ -159,6 +159,13 @@ class ArtifactPublication:
     finalize: Callable[[dict[str, object], dict[str, object]], None] | None = None
 
 
+@dataclass(frozen=True)
+class _TrimPreflight:
+    """What the timeline.trim preflight hands to the archive stage."""
+
+    source_snapshot: FileSnapshot | None
+
+
 def default_artifact_publications() -> dict[str, ArtifactPublication]:
     """Built-in publications keyed by job type (task-181).
 
@@ -190,6 +197,15 @@ logger = logging.getLogger(__name__)
 VERIFICATION_RESULT_KEY = "artifact_verification"
 
 
+def _row_or_none(value: object) -> sqlite3.Row | None:
+    """Narrow ``fetchone()``: the queue connections always install ``sqlite3.Row``."""
+    if value is None:
+        return None
+    if not isinstance(value, sqlite3.Row):
+        raise TypeError("queue connection must use the sqlite3.Row factory")
+    return value
+
+
 class _AttemptTransitionError(RuntimeError):
     """A queue CAS succeeded but its matching attempt-ledger CAS did not."""
 
@@ -217,7 +233,7 @@ class _EnqueueOutcome:
     job_id: str
     created: bool
     payload_conflict: bool
-    payload_digest: str
+    payload_digest: str | None
     status: str
     status_known: bool
     rejected: bool = False
@@ -976,43 +992,145 @@ class InProcessJobQueue:
         # another process reserved the row meanwhile, nothing is announced.
         handler = self._handlers.get(job_type)
         if handler is None:
-            error = f"no handler registered for job type {row['job_type']}"
-            status = failure_status(FailureClass.TERMINAL)
-            if not await asyncio.to_thread(self._fail_unclaimed, job_id, error, status):
-                self._log_rejected(job_id, None, status)
-                return
-            await self._record(
-                CausalEvent(
-                    kind=EventKind.JOB_FAILED,
-                    job_id=job_id,
-                    job_type=job_type,
-                    idempotency_key=str(row["idempotency_key"] or ""),
-                    status=status.value,
-                    error=error,
-                    payload_digest=payload_digest,
-                    detail={"phase": "claim_time_structural"},
-                    occurred_at=_now(),
-                )
+            await self._fail_claim_time_structural(row, job_id, job_type, payload_digest)
+            return
+
+        claim = await self._reserve(row, job_id, job_type, payload_digest)
+        if claim is None:
+            return
+        payload: dict[str, object] = {}
+        trim_request = False
+        source_snapshot: FileSnapshot | None = None
+        try:
+            parsed = json.loads(str(row["payload_json"]))
+            if not isinstance(parsed, dict):
+                raise RuntimeError(f"invalid persisted payload for {job_id}")
+            payload = {str(key): value for key, value in parsed.items()}
+            trim_request = job_type == CREATIVE_RENDER_JOB_TYPE and is_timeline_trim_request(
+                payload
             )
-            logger.info(
-                "job_failed job_id=%s type=%s status=%s error=%r",
-                job_id,
-                job_type,
-                status.value,
-                error,
-            )
-            await self._notify_completion(
-                JobCompletion(
-                    job_id=job_id,
-                    job_type=job_type,
-                    status=status,
-                    result=None,
-                    error=error,
-                    payload={},
+            if trim_request:
+                preflight = await self._trim_preflight(
+                    row, claim, job_type, payload, payload_digest
                 )
+                if preflight is None:
+                    return
+                source_snapshot = preflight.source_snapshot
+            result = await handler(payload)
+            if not isinstance(result, dict):
+                raise TypeError("job handler must return a dictionary")
+        except asyncio.CancelledError:
+            # Cancellation is a process-lifecycle event, not a business
+            # failure. Keep the row recoverable for the next process — but
+            # only OUR row: a newer owner's execution (or a terminal row)
+            # must never be reopened by a cancelled predecessor.
+            await self._reopen_after_cancellation(row, claim, job_type, payload_digest)
+            raise
+        except Exception as exc:  # noqa: BLE001 - job failure must be persisted
+            # Fail-closed conversion: classify and persist a failure status.
+            status = failure_status(classify_exception(exc))
+            await self._fail_owned(claim, job_type, payload, str(exc), status, None)
+            return
+
+        # GAP-A (task-181) + R4: a handler result that says success=False is
+        # a FAILURE of the job — never COMPLETED, whatever any verifier would
+        # answer about it.  The typed dialect keeps its code; a bare
+        # ``{"success": False}`` is recorded as ``unspecified`` (TERMINAL).
+        # The result payload is preserved so the notifier can translate it
+        # and the audit chain can read it.
+        code = failure_code_of(result)
+        if code is not None:
+            status = failure_status(classify_typed_code(code))
+            await self._fail_owned(
+                claim, job_type, payload, typed_failure_error(code), status, result
             )
             return
 
+        verifier = self._artifact_verifiers.get(job_type)
+        publication = self._artifact_publications.get(job_type)
+        if verifier is None:
+            final_result = await self._complete_unverified(
+                claim, job_id, job_type, payload, payload_digest, result
+            )
+        else:
+            final_result = await self._verify_and_complete(
+                row,
+                claim,
+                job_id,
+                job_type,
+                payload,
+                payload_digest,
+                result,
+                verifier,
+                publication,
+                trim_request,
+                source_snapshot,
+            )
+        if final_result is None:
+            return
+
+        logger.info("job_completed job_id=%s type=%s attempt=%d", job_id, job_type, claim.attempt)
+        await self._notify_completion(
+            JobCompletion(
+                job_id=job_id,
+                job_type=job_type,
+                status=JobStatus.COMPLETED,
+                result=final_result,
+                error=None,
+                payload=payload,
+            )
+        )
+
+    async def _fail_claim_time_structural(
+        self, row: sqlite3.Row, job_id: str, job_type: str, payload_digest: str | None
+    ) -> None:
+        """Stage 0 — no handler for the job type: PENDING → FAILED_TERMINAL by
+        unowned CAS, before any reservation (A-11 extraction; semantics
+        unchanged)."""
+        error = f"no handler registered for job type {row['job_type']}"
+        status = failure_status(FailureClass.TERMINAL)
+        if not await asyncio.to_thread(self._fail_unclaimed, job_id, error, status):
+            self._log_rejected(job_id, None, status)
+            return
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_FAILED,
+                job_id=job_id,
+                job_type=job_type,
+                idempotency_key=str(row["idempotency_key"] or ""),
+                status=status.value,
+                error=error,
+                payload_digest=payload_digest,
+                detail={"phase": "claim_time_structural"},
+                occurred_at=_now(),
+            )
+        )
+        logger.info(
+            "job_failed job_id=%s type=%s status=%s error=%r",
+            job_id,
+            job_type,
+            status.value,
+            error,
+        )
+        await self._notify_completion(
+            JobCompletion(
+                job_id=job_id,
+                job_type=job_type,
+                status=status,
+                result=None,
+                error=error,
+                payload={},
+            )
+        )
+
+    async def _reserve(
+        self, row: sqlite3.Row, job_id: str, job_type: str, payload_digest: str | None
+    ) -> ExecutionClaim | None:
+        """Stage 1 — reservation: the RUNNING boundary and the ownership
+        boundary.  Returns the minted claim, or ``None`` when the row is not
+        ours (rejected CAS, unreadable attempt history).  A cancellation that
+        lands while the shielded CAS commits reopens the minted claim and
+        re-raises (A-11 extraction; semantics unchanged)."""
         # Reservation: the RUNNING boundary and the ownership boundary.  A
         # PENDING-only CAS mints this execution's fencing token; a row that
         # is already PROCESSING/VERIFYING belongs to someone else (another
@@ -1064,10 +1182,10 @@ class InProcessJobQueue:
                 job_id,
                 exc_info=True,
             )
-            return
+            return None
         if claim is None:
             logger.info("job_reservation_rejected job_id=%s type=%s", job_id, job_type)
-            return
+            return None
         owner = asyncio.current_task()
         if owner is None:  # private worker entry point must be task-owned
             raise RuntimeError("job processing requires an asyncio task")
@@ -1085,209 +1203,388 @@ class InProcessJobQueue:
                 occurred_at=_now(),
             )
         )
-        payload: dict[str, object] = {}
-        trim_request = False
-        source_snapshot: FileSnapshot | None = None
+        return claim
+
+    async def _reconcile_from_verified_attempt(
+        self,
+        row: sqlite3.Row,
+        claim: ExecutionClaim,
+        job_type: str,
+        payload: dict[str, object],
+        payload_digest: str | None,
+        prior: dict[str, object],
+    ) -> None:
+        """Stage 2b — a verified earlier attempt exists for this timeline.trim
+        request: re-verify its stored evidence and complete *this* attempt from
+        it instead of rendering again.  Every exit is terminal for the job
+        (A-11 extraction; semantics unchanged)."""
+        job_id = claim.job_id
+        if not await asyncio.to_thread(self._mark_verifying, claim):
+            self._log_rejected(job_id, claim, JobStatus.VERIFYING)
+            return
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_VERIFICATION_STARTED,
+                job_id=job_id,
+                job_type=job_type,
+                idempotency_key=str(row["idempotency_key"] or ""),
+                attempt=claim.attempt,
+                status=JobStatus.VERIFYING.value,
+                payload_digest=payload_digest,
+                occurred_at=_now(),
+            )
+        )
         try:
-            parsed = json.loads(str(row["payload_json"]))
-            if not isinstance(parsed, dict):
-                raise RuntimeError(f"invalid persisted payload for {job_id}")
-            payload = {str(key): value for key, value in parsed.items()}
-            trim_request = job_type == CREATIVE_RENDER_JOB_TYPE and is_timeline_trim_request(
-                payload
+            prior_result, prior_passport, prior_attempt_id = await asyncio.to_thread(
+                self._reverify_candidate, dict(row), prior
             )
-            if trim_request:
-                if self._artifact_verifiers.get(CREATIVE_RENDER_JOB_TYPE) is None:
-                    await self._fail_owned(
-                        claim,
-                        job_type,
-                        payload,
-                        "creative_passport_requires_artifact_verifier",
-                        JobStatus.FAILED_TERMINAL,
-                        None,
-                    )
-                    return
-                prior = await asyncio.to_thread(self._find_verified_attempt, job_id, claim.attempt)
-                if prior is not None:
-                    if not await asyncio.to_thread(self._mark_verifying, claim):
-                        self._log_rejected(job_id, claim, JobStatus.VERIFYING)
-                        return
-                    await self._record(
-                        CausalEvent(
-                            kind=EventKind.JOB_VERIFICATION_STARTED,
-                            job_id=job_id,
-                            job_type=job_type,
-                            idempotency_key=str(row["idempotency_key"] or ""),
-                            attempt=claim.attempt,
-                            status=JobStatus.VERIFYING.value,
-                            payload_digest=payload_digest,
-                            occurred_at=_now(),
-                        )
-                    )
-                    try:
-                        prior_result, prior_passport, prior_attempt_id = await asyncio.to_thread(
-                            self._reverify_candidate, dict(row), prior
-                        )
-                    except Exception as exc:  # noqa: BLE001 - corrupted evidence fails closed
-                        await self._fail_owned(
-                            claim,
-                            job_type,
-                            payload,
-                            f"creative_passport_reconciliation_failed:{type(exc).__name__}",
-                            JobStatus.FAILED_TERMINAL,
-                            None,
-                        )
-                        return
-                    if not await asyncio.to_thread(
-                        self._mark_completed,
-                        claim,
-                        prior_result,
-                        prior_passport,
-                        "reconciled",
-                        prior_attempt_id,
-                    ):
-                        self._log_rejected(job_id, claim, JobStatus.COMPLETED)
-                        return
-                    await self._record(
-                        CausalEvent(
-                            kind=EventKind.JOB_COMPLETED,
-                            job_id=job_id,
-                            job_type=job_type,
-                            idempotency_key=str(row["idempotency_key"] or ""),
-                            attempt=claim.attempt,
-                            status=JobStatus.COMPLETED.value,
-                            payload_digest=payload_digest,
-                            result_digest=digest_of(prior_result),
-                            detail={
-                                **self._artifact_facts(prior_result),
-                                "reconciled_from_attempt_id": prior_attempt_id,
-                            },
-                            occurred_at=_now(),
-                        )
-                    )
-                    logger.info(
-                        "job_reconciled_from_verified_attempt job_id=%s attempt=%d "
-                        "source_attempt_id=%s",
-                        job_id,
-                        claim.attempt,
-                        prior_attempt_id,
-                    )
-                    await self._notify_completion(
-                        JobCompletion(
-                            job_id=job_id,
-                            job_type=job_type,
-                            status=JobStatus.COMPLETED,
-                            result=prior_result,
-                            error=None,
-                            payload=payload,
-                        )
-                    )
-                    return
-                typed_render_preflight = False
-                try:
-                    source_snapshot = await asyncio.to_thread(capture_trim_source, payload)
-                except Exception as exc:  # noqa: BLE001 - preflight failures fail closed
-                    if self._is_typed_render_preflight_error(exc):
-                        # Preserve the real handler's public typed input failure,
-                        # including its persisted result and translation.
-                        typed_render_preflight = True
-                        logger.info(
-                            "creative_trim_source_typed_failure job_id=%s reason=%s",
-                            job_id,
-                            type(exc).__name__,
-                        )
-                    else:
-                        error = (
-                            typed_failure_error(exc.code)
-                            if isinstance(exc, CreativeEvidenceTooLargeError)
-                            else f"creative_passport_source_unavailable:{type(exc).__name__}"
-                        )
-                        await self._fail_owned(
-                            claim,
-                            job_type,
-                            payload,
-                            error,
-                            JobStatus.FAILED_TERMINAL,
-                            None,
-                        )
-                        return
-                if source_snapshot is None and not typed_render_preflight:
-                    await self._fail_owned(
-                        claim,
-                        job_type,
-                        payload,
-                        "creative_passport_source_unavailable:missing_snapshot",
-                        JobStatus.FAILED_TERMINAL,
-                        None,
-                    )
-                    return
-                if self._sqlite_path == ":memory:" and not typed_render_preflight:
-                    # A memory-only queue cannot durably bind row completion
-                    # to the archived source/output/passport evidence. Reject
-                    # before invoking the real render handler.
-                    await self._fail_owned(
-                        claim,
-                        job_type,
-                        payload,
-                        "creative_passport_requires_file_backed_queue",
-                        JobStatus.FAILED_TERMINAL,
-                        None,
-                    )
-                    return
-            result = await handler(payload)
-            if not isinstance(result, dict):
-                raise TypeError("job handler must return a dictionary")
-        except asyncio.CancelledError:
-            # Cancellation is a process-lifecycle event, not a business
-            # failure. Keep the row recoverable for the next process — but
-            # only OUR row: a newer owner's execution (or a terminal row)
-            # must never be reopened by a cancelled predecessor.
-            if not await asyncio.to_thread(self._mark_pending, claim):
-                self._log_rejected(job_id, claim, JobStatus.PENDING)
-            else:
-                await self._record(
-                    CausalEvent(
-                        kind=EventKind.JOB_REOPENED,
-                        job_id=job_id,
-                        job_type=job_type,
-                        idempotency_key=str(row["idempotency_key"] or ""),
-                        attempt=claim.attempt,
-                        status=JobStatus.PENDING.value,
-                        payload_digest=payload_digest,
-                        detail={"phase": "cancellation"},
-                        occurred_at=_now(),
-                    )
-                )
-            raise
-        except Exception as exc:  # noqa: BLE001 - job failure must be persisted
-            # Fail-closed conversion: classify and persist a failure status.
-            status = failure_status(classify_exception(exc))
-            await self._fail_owned(claim, job_type, payload, str(exc), status, None)
-            return
-
-        # GAP-A (task-181) + R4: a handler result that says success=False is
-        # a FAILURE of the job — never COMPLETED, whatever any verifier would
-        # answer about it.  The typed dialect keeps its code; a bare
-        # ``{"success": False}`` is recorded as ``unspecified`` (TERMINAL).
-        # The result payload is preserved so the notifier can translate it
-        # and the audit chain can read it.
-        code = failure_code_of(result)
-        if code is not None:
-            status = failure_status(classify_typed_code(code))
+        except Exception as exc:  # noqa: BLE001 - corrupted evidence fails closed
             await self._fail_owned(
-                claim, job_type, payload, typed_failure_error(code), status, result
+                claim,
+                job_type,
+                payload,
+                f"creative_passport_reconciliation_failed:{type(exc).__name__}",
+                JobStatus.FAILED_TERMINAL,
+                None,
             )
             return
+        if not await asyncio.to_thread(
+            self._mark_completed,
+            claim,
+            prior_result,
+            prior_passport,
+            "reconciled",
+            prior_attempt_id,
+        ):
+            self._log_rejected(job_id, claim, JobStatus.COMPLETED)
+            return
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_COMPLETED,
+                job_id=job_id,
+                job_type=job_type,
+                idempotency_key=str(row["idempotency_key"] or ""),
+                attempt=claim.attempt,
+                status=JobStatus.COMPLETED.value,
+                payload_digest=payload_digest,
+                result_digest=digest_of(prior_result),
+                detail={
+                    **self._artifact_facts(prior_result),
+                    "reconciled_from_attempt_id": prior_attempt_id,
+                },
+                occurred_at=_now(),
+            )
+        )
+        logger.info(
+            "job_reconciled_from_verified_attempt job_id=%s attempt=%d source_attempt_id=%s",
+            job_id,
+            claim.attempt,
+            prior_attempt_id,
+        )
+        await self._notify_completion(
+            JobCompletion(
+                job_id=job_id,
+                job_type=job_type,
+                status=JobStatus.COMPLETED,
+                result=prior_result,
+                error=None,
+                payload=payload,
+            )
+        )
+        return
 
-        verifier = self._artifact_verifiers.get(job_type)
-        publication = self._artifact_publications.get(job_type)
-        if verifier is None:
-            # No verification contract for this job type: historical
-            # semantics — the handler result is the completed result.
-            final_result = result
-            if not await asyncio.to_thread(self._mark_completed, claim, final_result):
+    async def _trim_preflight(
+        self,
+        row: sqlite3.Row,
+        claim: ExecutionClaim,
+        job_type: str,
+        payload: dict[str, object],
+        payload_digest: str | None,
+    ) -> _TrimPreflight | None:
+        """Stage 2 — timeline.trim preflight: verifier present, reconciliation
+        from a verified attempt, source snapshot, file-backed queue.  Returns
+        the captured source for the archive stage, or ``None`` when the job
+        was finalised here (A-11 extraction; semantics unchanged)."""
+        job_id = claim.job_id
+        source_snapshot: FileSnapshot | None = None
+        if self._artifact_verifiers.get(CREATIVE_RENDER_JOB_TYPE) is None:
+            await self._fail_owned(
+                claim,
+                job_type,
+                payload,
+                "creative_passport_requires_artifact_verifier",
+                JobStatus.FAILED_TERMINAL,
+                None,
+            )
+            return None
+        prior = await asyncio.to_thread(self._find_verified_attempt, job_id, claim.attempt)
+        if prior is not None:
+            await self._reconcile_from_verified_attempt(
+                row, claim, job_type, payload, payload_digest, prior
+            )
+            return None
+        typed_render_preflight = False
+        try:
+            source_snapshot = await asyncio.to_thread(capture_trim_source, payload)
+        except Exception as exc:  # noqa: BLE001 - preflight failures fail closed
+            if self._is_typed_render_preflight_error(exc):
+                # Preserve the real handler's public typed input failure,
+                # including its persisted result and translation.
+                typed_render_preflight = True
+                logger.info(
+                    "creative_trim_source_typed_failure job_id=%s reason=%s",
+                    job_id,
+                    type(exc).__name__,
+                )
+            else:
+                error = (
+                    typed_failure_error(exc.code)
+                    if isinstance(exc, CreativeEvidenceTooLargeError)
+                    else f"creative_passport_source_unavailable:{type(exc).__name__}"
+                )
+                await self._fail_owned(
+                    claim,
+                    job_type,
+                    payload,
+                    error,
+                    JobStatus.FAILED_TERMINAL,
+                    None,
+                )
+                return None
+        if source_snapshot is None and not typed_render_preflight:
+            await self._fail_owned(
+                claim,
+                job_type,
+                payload,
+                "creative_passport_source_unavailable:missing_snapshot",
+                JobStatus.FAILED_TERMINAL,
+                None,
+            )
+            return None
+        if self._sqlite_path == ":memory:" and not typed_render_preflight:
+            # A memory-only queue cannot durably bind row completion
+            # to the archived source/output/passport evidence. Reject
+            # before invoking the real render handler.
+            await self._fail_owned(
+                claim,
+                job_type,
+                payload,
+                "creative_passport_requires_file_backed_queue",
+                JobStatus.FAILED_TERMINAL,
+                None,
+            )
+            return None
+        return _TrimPreflight(source_snapshot=source_snapshot)
+
+    async def _reopen_after_cancellation(
+        self, row: sqlite3.Row, claim: ExecutionClaim, job_type: str, payload_digest: str | None
+    ) -> None:
+        """Cancellation is a process-lifecycle event, not a business failure:
+        keep OUR row recoverable (fenced by the claim) and record the reopen
+        (A-11 extraction; semantics unchanged)."""
+        job_id = claim.job_id
+        if not await asyncio.to_thread(self._mark_pending, claim):
+            self._log_rejected(job_id, claim, JobStatus.PENDING)
+        else:
+            await self._record(
+                CausalEvent(
+                    kind=EventKind.JOB_REOPENED,
+                    job_id=job_id,
+                    job_type=job_type,
+                    idempotency_key=str(row["idempotency_key"] or ""),
+                    attempt=claim.attempt,
+                    status=JobStatus.PENDING.value,
+                    payload_digest=payload_digest,
+                    detail={"phase": "cancellation"},
+                    occurred_at=_now(),
+                )
+            )
+
+    async def _complete_unverified(
+        self,
+        claim: ExecutionClaim,
+        job_id: str,
+        job_type: str,
+        payload: dict[str, object],
+        payload_digest: str | None,
+        result: dict[str, object],
+    ) -> dict[str, object] | None:
+        """Stage 4a — no verification contract for this job type: the handler
+        result is the completed result.  ``None`` = the durable commit was
+        refused (not our row any more) — the caller must not notify
+        (A-11 extraction; semantics unchanged)."""
+        # No verification contract for this job type: historical
+        # semantics — the handler result is the completed result.
+        final_result = result
+        if not await asyncio.to_thread(self._mark_completed, claim, final_result):
+            self._log_rejected(job_id, claim, JobStatus.COMPLETED)
+            return None
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_COMPLETED,
+                job_id=job_id,
+                job_type=job_type,
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+                attempt=claim.attempt,
+                status=JobStatus.COMPLETED.value,
+                payload_digest=payload_digest,
+                result_digest=digest_of(final_result),
+                detail=self._artifact_facts(final_result),
+                occurred_at=_now(),
+            )
+        )
+        return final_result
+
+    async def _persist_trim_passport(
+        self,
+        row: sqlite3.Row,
+        claim: ExecutionClaim,
+        job_type: str,
+        payload: dict[str, object],
+        result: dict[str, object],
+        outcome: VerificationOutcome,
+        source_snapshot: FileSnapshot | None,
+        verifier: ArtifactVerifier,
+    ) -> tuple[dict[str, object], str] | None:
+        """Stage 4c — archive the trim evidence (source/output/passport) and
+        bind it to this attempt before the row may commit.  Returns
+        ``(final_result, stored_passport)``; ``None`` = the job was finalised
+        here (persistence failed closed, or the row is no longer ours)
+        (A-11 extraction; semantics unchanged)."""
+        job_id = claim.job_id
+        try:
+            if self._sqlite_path == ":memory:":
+                raise CreativePassportError(
+                    "timeline.trim passport requires a file-backed SQLite queue"
+                )
+            identity = RequestIdentity(
+                request_id=str(row["request_id"]),
+                request_fingerprint=str(row["request_fingerprint"]),
+                transaction_id=str(row["transaction_id"]),
+            )
+            archived = await asyncio.to_thread(
+                archive_trim_evidence,
+                artifact_root=self._artifact_root,
+                job_id=job_id,
+                attempt_number=claim.attempt,
+                attempt_identifier=creative_attempt_id(job_id, claim.attempt),
+                identity=identity,
+                payload=payload,
+                result=result,
+                verification=outcome.block,
+                source_snapshot=source_snapshot,
+                verifier=verifier,
+            )
+            final_result = {
+                **archived.result,
+                VERIFICATION_RESULT_KEY: archived.verification,
+            }
+            stored_passport = passport_json(archived.passport)
+            if not await asyncio.to_thread(
+                self._record_verified_attempt,
+                claim,
+                final_result,
+                archived.verification,
+                archived.execution_evidence,
+                stored_passport,
+            ):
+                self._log_rejected(job_id, claim, JobStatus.VERIFYING)
+                return None
+            final_result["artifact_passport_id"] = archived.passport.passport_id
+        except Exception as exc:  # noqa: BLE001 - evidence persistence fails closed
+            logger.warning(
+                "creative_passport_persistence_failed job_id=%s reason=%s",
+                job_id,
+                type(exc).__name__,
+                exc_info=True,
+            )
+            error = (
+                typed_failure_error(exc.code)
+                if isinstance(exc, CreativeEvidenceTooLargeError)
+                else f"creative_passport_failed:{type(exc).__name__}"
+            )
+            await self._fail_owned(
+                claim,
+                job_type,
+                payload,
+                error,
+                JobStatus.FAILED_TERMINAL,
+                None,
+            )
+            return None
+        return final_result, stored_passport
+
+    async def _verify_and_complete(
+        self,
+        row: sqlite3.Row,
+        claim: ExecutionClaim,
+        job_id: str,
+        job_type: str,
+        payload: dict[str, object],
+        payload_digest: str | None,
+        result: dict[str, object],
+        verifier: ArtifactVerifier,
+        publication: ArtifactPublication | None,
+        trim_request: bool,
+        source_snapshot: FileSnapshot | None,
+    ) -> dict[str, object] | None:
+        """Stage 4b — execution success ≠ job success: VERIFYING → independent
+        verification → (publish atomically → re-probe) → trim passport →
+        durable COMPLETED → finalize.  Returns the final result to notify, or
+        ``None`` when the job was finalised here (refusal persisted as a
+        failure, or the row is no longer ours) (A-11 extraction; semantics
+        unchanged)."""
+        # Execution success ≠ job success: verify the artifact
+        # independently before the row may become terminal-success.
+        if not await asyncio.to_thread(self._mark_verifying, claim):
+            self._log_rejected(job_id, claim, JobStatus.VERIFYING)
+            return None  # row was reclaimed/reset elsewhere; not ours anymore
+        logger.info("job_verifying job_id=%s type=%s", job_id, job_type)
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_VERIFICATION_STARTED,
+                job_id=job_id,
+                job_type=job_type,
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+                attempt=claim.attempt,
+                status=JobStatus.VERIFYING.value,
+                payload_digest=payload_digest,
+                occurred_at=_now(),
+            )
+        )
+        outcome = await self._verify_safely(verifier, payload, result)
+        published = False
+        if outcome.ok and publication is not None:
+            # Stage → verify → **publish atomically** → **re-probe** →
+            # persist success (§4 order, task-181).  Publication is the
+            # irreversible side effect: it runs only for the current
+            # owner (fence re-checked right before it) and keeps the
+            # previous artifact recoverable.
+            result, outcome, published = await self._publish_and_reprobe(
+                claim, publication, verifier, payload, result
+            )
+        if outcome.ok:
+            stored_passport: str | None = None
+            final_result = {**result, VERIFICATION_RESULT_KEY: outcome.block}
+            if trim_request:
+                persisted = await self._persist_trim_passport(
+                    row, claim, job_type, payload, result, outcome, source_snapshot, verifier
+                )
+                if persisted is None:
+                    return None
+                final_result, stored_passport = persisted
+            if stored_passport is None:
+                committed = await asyncio.to_thread(self._mark_completed, claim, final_result)
+            else:
+                committed = await asyncio.to_thread(
+                    self._mark_completed, claim, final_result, stored_passport
+                )
+            if not committed:
+                # Durable commit refused: we are no longer the owner.  No
+                # notification, no filesystem action — the current owner
+                # decides the fate of the destination.
                 self._log_rejected(job_id, claim, JobStatus.COMPLETED)
-                return
+                return None
             await self._record(
                 CausalEvent(
                     kind=EventKind.JOB_COMPLETED,
@@ -1302,153 +1599,23 @@ class InProcessJobQueue:
                     occurred_at=_now(),
                 )
             )
+            if publication is not None and publication.finalize is not None and published:
+                await self._finalize_safely(publication, payload, result)
         else:
-            # Execution success ≠ job success: verify the artifact
-            # independently before the row may become terminal-success.
-            if not await asyncio.to_thread(self._mark_verifying, claim):
-                self._log_rejected(job_id, claim, JobStatus.VERIFYING)
-                return  # row was reclaimed/reset elsewhere; not ours anymore
-            logger.info("job_verifying job_id=%s type=%s", job_id, job_type)
-            await self._record(
-                CausalEvent(
-                    kind=EventKind.JOB_VERIFICATION_STARTED,
-                    job_id=job_id,
-                    job_type=job_type,
-                    idempotency_key=str(payload.get("idempotency_key") or ""),
-                    attempt=claim.attempt,
-                    status=JobStatus.VERIFYING.value,
-                    payload_digest=payload_digest,
-                    occurred_at=_now(),
-                )
+            if publication is not None and outcome.reason_code != "stale_execution":
+                # A refusal retracts this attempt (staged temp before
+                # publication; restore of the previous artifact after
+                # a refused re-probe).  A fenced-off execution retracts
+                # nothing: the destination is not its to touch.
+                await asyncio.to_thread(publication.retract, payload, result)
+            reason = str(outcome.reason_code)
+            status = failure_status(classify_verification_reason(reason))
+            await self._fail_owned(
+                claim, job_type, payload, f"verification_failed:{reason}", status, None
             )
-            outcome = await self._verify_safely(verifier, payload, result)
-            published = False
-            if outcome.ok and publication is not None:
-                # Stage → verify → **publish atomically** → **re-probe** →
-                # persist success (§4 order, task-181).  Publication is the
-                # irreversible side effect: it runs only for the current
-                # owner (fence re-checked right before it) and keeps the
-                # previous artifact recoverable.
-                result, outcome, published = await self._publish_and_reprobe(
-                    claim, publication, verifier, payload, result
-                )
-            if outcome.ok:
-                stored_passport: str | None = None
-                final_result = {**result, VERIFICATION_RESULT_KEY: outcome.block}
-                if trim_request:
-                    try:
-                        if self._sqlite_path == ":memory:":
-                            raise CreativePassportError(
-                                "timeline.trim passport requires a file-backed SQLite queue"
-                            )
-                        identity = RequestIdentity(
-                            request_id=str(row["request_id"]),
-                            request_fingerprint=str(row["request_fingerprint"]),
-                            transaction_id=str(row["transaction_id"]),
-                        )
-                        archived = await asyncio.to_thread(
-                            archive_trim_evidence,
-                            artifact_root=self._artifact_root,
-                            job_id=job_id,
-                            attempt_number=claim.attempt,
-                            attempt_identifier=creative_attempt_id(job_id, claim.attempt),
-                            identity=identity,
-                            payload=payload,
-                            result=result,
-                            verification=outcome.block,
-                            source_snapshot=source_snapshot,
-                            verifier=verifier,
-                        )
-                        final_result = {
-                            **archived.result,
-                            VERIFICATION_RESULT_KEY: archived.verification,
-                        }
-                        stored_passport = passport_json(archived.passport)
-                        if not await asyncio.to_thread(
-                            self._record_verified_attempt,
-                            claim,
-                            final_result,
-                            archived.verification,
-                            archived.execution_evidence,
-                            stored_passport,
-                        ):
-                            self._log_rejected(job_id, claim, JobStatus.VERIFYING)
-                            return
-                        final_result["artifact_passport_id"] = archived.passport.passport_id
-                    except Exception as exc:  # noqa: BLE001 - evidence persistence fails closed
-                        logger.warning(
-                            "creative_passport_persistence_failed job_id=%s reason=%s",
-                            job_id,
-                            type(exc).__name__,
-                            exc_info=True,
-                        )
-                        error = (
-                            typed_failure_error(exc.code)
-                            if isinstance(exc, CreativeEvidenceTooLargeError)
-                            else f"creative_passport_failed:{type(exc).__name__}"
-                        )
-                        await self._fail_owned(
-                            claim,
-                            job_type,
-                            payload,
-                            error,
-                            JobStatus.FAILED_TERMINAL,
-                            None,
-                        )
-                        return
-                if stored_passport is None:
-                    committed = await asyncio.to_thread(self._mark_completed, claim, final_result)
-                else:
-                    committed = await asyncio.to_thread(
-                        self._mark_completed, claim, final_result, stored_passport
-                    )
-                if not committed:
-                    # Durable commit refused: we are no longer the owner.  No
-                    # notification, no filesystem action — the current owner
-                    # decides the fate of the destination.
-                    self._log_rejected(job_id, claim, JobStatus.COMPLETED)
-                    return
-                await self._record(
-                    CausalEvent(
-                        kind=EventKind.JOB_COMPLETED,
-                        job_id=job_id,
-                        job_type=job_type,
-                        idempotency_key=str(payload.get("idempotency_key") or ""),
-                        attempt=claim.attempt,
-                        status=JobStatus.COMPLETED.value,
-                        payload_digest=payload_digest,
-                        result_digest=digest_of(final_result),
-                        detail=self._artifact_facts(final_result),
-                        occurred_at=_now(),
-                    )
-                )
-                if publication is not None and publication.finalize is not None and published:
-                    await self._finalize_safely(publication, payload, result)
-            else:
-                if publication is not None and outcome.reason_code != "stale_execution":
-                    # A refusal retracts this attempt (staged temp before
-                    # publication; restore of the previous artifact after
-                    # a refused re-probe).  A fenced-off execution retracts
-                    # nothing: the destination is not its to touch.
-                    await asyncio.to_thread(publication.retract, payload, result)
-                reason = str(outcome.reason_code)
-                status = failure_status(classify_verification_reason(reason))
-                await self._fail_owned(
-                    claim, job_type, payload, f"verification_failed:{reason}", status, None
-                )
-                return
+            return None
 
-        logger.info("job_completed job_id=%s type=%s attempt=%d", job_id, job_type, claim.attempt)
-        await self._notify_completion(
-            JobCompletion(
-                job_id=job_id,
-                job_type=job_type,
-                status=JobStatus.COMPLETED,
-                result=final_result,
-                error=None,
-                payload=payload,
-            )
-        )
+        return final_result
 
     async def _fail_owned(
         self,
@@ -1982,15 +2149,19 @@ class InProcessJobQueue:
 
     def _fetch_row(self, job_id: str) -> sqlite3.Row | None:
         with self._db_lock, self._connection() as connection:
-            return connection.execute(
-                "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
-            ).fetchone()
+            return _row_or_none(
+                connection.execute(
+                    "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
+                ).fetchone()
+            )
 
     def _fetch_row_full(self, job_id: str) -> sqlite3.Row | None:
         with self._db_lock, self._connection() as connection:
-            return connection.execute(
-                "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
-            ).fetchone()
+            return _row_or_none(
+                connection.execute(
+                    "SELECT * FROM nexus_job_queue WHERE id = ?", (job_id,)
+                ).fetchone()
+            )
 
     def _decode_attempt_history(self, raw: str) -> list[dict[str, object]]:
         """Decode the queue-owned, row-atomic attempt ledger."""

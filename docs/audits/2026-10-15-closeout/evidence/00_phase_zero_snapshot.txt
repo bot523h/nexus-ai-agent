@@ -1,0 +1,18 @@
+# Phase Zero live snapshot — retrieved 2026-10-15T18:33:31Z
+remote: https://github.com/bot523h/nexus-ai-agent.git
+6fb0a972a1498fa710f8f1a0cbb27146c0f96a40	refs/heads/arena/26f7d958-nexus-ai-agent
+6b398565cc1ce0c51fac77d7623350b299c3938f	refs/heads/main
+local: branch=arena/26f7d958-nexus-ai-agent HEAD=6fb0a972a1498fa710f8f1a0cbb27146c0f96a40 dirty=0 unpushed=0
+NOTE: sandbox had been reset; local checkout was found at 6b39856 with a partial working-tree patchset (31 added files missing, 0 content differences) → reset --hard to origin branch tip 6fb0a97; all prior work was already pushed.
+default_branch=main permissions={"admin":true,"maintain":true,"pull":true,"push":true,"triage":true}
+branch protection API: {"message":"Resource not accessible by integration","documentation_url":"https://docs.gith
+rulesets for main: 0
+PR218 state=open draft=false base=main@6b398565cc1ce0c51fac77d7623350b299c3938f head=6fb0a972a1498fa710f8f1a0cbb27146c0f96a40 commits=13 files=183 mergeable=true mergeable_state=blocked
+PR218 reviewDecision=REVIEW_REQUIRED mergeStateStatus=BLOCKED reviews=0
+open PRs: 63  closed PRs: 151
+remote branches: 148
+run 38777822652 6fb0a97 pull_request completed success
+run 38777770857 6fb0a97 pull_request completed cancelled
+tools: Python 3.11.2 docker=none psql=none pg_ctl=none
+secrets: gh secret list → failed to get secrets: HTTP 403: Resource not accessible by 
+board(candidate) gates_owner: task-270-full-audit-remediation branch arena/26f7d958-nexus-ai-agent gen 3 expires 2026-10-16T12:36:15+00:00

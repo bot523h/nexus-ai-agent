@@ -25,7 +25,9 @@ class ToolRegistry:
     def get(self, name: str) -> BaseTool | None:
         return self._tools.get(name)
 
-    async def run(self, name: str, inputs: dict, policy: dict[str, Any] | None = None) -> dict:
+    async def run(
+        self, name: str, inputs: dict[str, Any], policy: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         policy = policy or {}
         tool = self.get(name)
         if tool is None:

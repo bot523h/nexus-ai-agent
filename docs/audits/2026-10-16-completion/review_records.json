@@ -1,0 +1,414 @@
+{
+ "audit": "2026-10-16-completion",
+ "base_sha": "6b398565cc1ce0c51fac77d7623350b299c3938f",
+ "head_sha": "8a733a77c7ac35f9a6cc40b7a7cc80a89193f300",
+ "method": "every path listed here was read as a diff, not inferred from a commit message",
+ "reviews": {
+  "src/nexus_ai_agent/adapters/langgraph/lifecycle_recording.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/agent/self_monitor.py": {
+   "finding": "A-12/A-13",
+   "reason": "the diff replaces f-string logging with %s arguments (structlog lazy formatting, same rendered text) and narrows `# type: ignore` to `[import-untyped]`; no branch or threshold changed",
+   "residual_risk": "the %s form changes the record layout for log consumers that parse the message field",
+   "tests": "tests/unit/test_self_monitor.py (2 references)",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/agents/base.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: the ABC refuses a subclass without run(); the llm is retained",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_composition_facades.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/agents/phi_agent.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/agents/store/agent_manager.py": {
+   "finding": "A-12+A-13",
+   "reason": "session.exec()/one_or_none() replace the raw execute+scalar_one_or_none pair and datetime.utcnow() is replaced by the shared naive_utcnow() clock contract",
+   "residual_risk": "none identified by the review",
+   "tests": "tests/unit/test_time_contract.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/agents/store/specialized_agents.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: registry ids/metadata/prompt completeness and the JSON-safe listing contract",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_agent_store_registry.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/api/dashboard.py": {
+   "finding": "A-06",
+   "reason": "no NEXUS_DASHBOARD_TOKEN now closes the API with 503 instead of opening it, ?limit is validated 1..100, and the four counters go through one helper on session.exec",
+   "residual_risk": "none identified by the review",
+   "tests": "tests/unit/test_dashboard_api.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/api/studio.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: 503 without a token, authentication before project checks, no existence oracle",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_studio_api_scope.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/application/image_generation.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: provider choice from settings, process singleton, paid-tier guard",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_composition_facades.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/bot/access_guard.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/bot/agent_handlers.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: the menu offers every agent id plus the stop button",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_bot_handler_surface.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/bot/feature_handlers.py": {
+   "finding": "A-02",
+   "reason": "the module's private engine helper delegates to storage.db.sync_engine; the diff removes create_engine(f\"sqlite:///{db_path}\") and therefore the second database beside the configured NEXUS_DATABASE_URL",
+   "residual_risk": "the helper is still private to the module; a future edit that reintroduces create_engine is caught only by the module list in test_sync_engine_resolution.py",
+   "tests": "tests/unit/test_sync_engine_resolution.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/bot/knowledge_handlers.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: the reply is the engine's summary and close() runs even when learn() raises",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_bot_handler_surface.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/bot/monitor_handlers.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: a non-owner cannot construct the approval system; the health reply carries the monitor's numbers",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_bot_handler_surface.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/bot/slideshow_notify.py": {
+   "finding": "A-12",
+   "reason": "blocking file operations (mkstemp/unlink, is_file, sha256+stat, stat, read_bytes/write_bytes, exists) moved into asyncio.to_thread; the module stays off the loop",
+   "residual_risk": "none identified by the review",
+   "tests": "tests/unit/test_async_offload.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/bot/surface/ads.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/bot/tool_handlers.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: the weather reply is the tool payload; a missing city never calls the tool",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_bot_handler_surface.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/core/instrumentation.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: event names, latency field, re-raise identity, bounded log_args, slow→warning",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_instrumentation.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/creative/image_gen/pollinations_adapter.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/creative/image_post.py": {
+   "finding": "A-12",
+   "reason": "blocking file operations (mkstemp/unlink, is_file, sha256+stat, stat, read_bytes/write_bytes, exists) moved into asyncio.to_thread; the module stays off the loop",
+   "residual_risk": "none identified by the review",
+   "tests": "tests/unit/test_async_offload.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/creative/rendering/ir.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/creative/slideshow/image_fill.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: deficit-only generation, text-only requests, cleanup on failure and on cancellation",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_slideshow_image_fill.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/creative/spine/__init__.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/creative/spine/reference.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/creative/temporal/core.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/features/ads.py": {
+   "finding": "A-02",
+   "reason": "the module's private engine helper delegates to storage.db.sync_engine; the diff removes create_engine(f\"sqlite:///{db_path}\") and therefore the second database beside the configured NEXUS_DATABASE_URL",
+   "residual_risk": "the helper is still private to the module; a future edit that reintroduces create_engine is caught only by the module list in test_sync_engine_resolution.py",
+   "tests": "tests/unit/test_sync_engine_resolution.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/features/ai_chat.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/features/analytics.py": {
+   "finding": "A-02",
+   "reason": "the module's private engine helper delegates to storage.db.sync_engine; the diff removes create_engine(f\"sqlite:///{db_path}\") and therefore the second database beside the configured NEXUS_DATABASE_URL",
+   "residual_risk": "the helper is still private to the module; a future edit that reintroduces create_engine is caught only by the module list in test_sync_engine_resolution.py",
+   "tests": "tests/unit/test_sync_engine_resolution.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/features/anonymous_chat.py": {
+   "finding": "A-02",
+   "reason": "the module's private engine helper delegates to storage.db.sync_engine; the diff removes create_engine(f\"sqlite:///{db_path}\") and therefore the second database beside the configured NEXUS_DATABASE_URL",
+   "residual_risk": "the helper is still private to the module; a future edit that reintroduces create_engine is caught only by the module list in test_sync_engine_resolution.py",
+   "tests": "tests/unit/test_sync_engine_resolution.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/features/engagement.py": {
+   "finding": "A-02",
+   "reason": "the module's private engine helper delegates to storage.db.sync_engine; the diff removes create_engine(f\"sqlite:///{db_path}\") and therefore the second database beside the configured NEXUS_DATABASE_URL",
+   "residual_risk": "the helper is still private to the module; a future edit that reintroduces create_engine is caught only by the module list in test_sync_engine_resolution.py",
+   "tests": "tests/unit/test_sync_engine_resolution.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/features/games.py": {
+   "finding": "A-02",
+   "reason": "the module's private engine helper delegates to storage.db.sync_engine; the diff removes create_engine(f\"sqlite:///{db_path}\") and therefore the second database beside the configured NEXUS_DATABASE_URL",
+   "residual_risk": "the helper is still private to the module; a future edit that reintroduces create_engine is caught only by the module list in test_sync_engine_resolution.py",
+   "tests": "tests/unit/test_sync_engine_resolution.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/features/gamification.py": {
+   "finding": "A-02",
+   "reason": "the module's private engine helper delegates to storage.db.sync_engine; the diff removes create_engine(f\"sqlite:///{db_path}\") and therefore the second database beside the configured NEXUS_DATABASE_URL",
+   "residual_risk": "the helper is still private to the module; a future edit that reintroduces create_engine is caught only by the module list in test_sync_engine_resolution.py",
+   "tests": "tests/unit/test_sync_engine_resolution.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/features/image_gen.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/features/owner_control.py": {
+   "finding": "A-02",
+   "reason": "the module's private engine helper delegates to storage.db.sync_engine; the diff removes create_engine(f\"sqlite:///{db_path}\") and therefore the second database beside the configured NEXUS_DATABASE_URL",
+   "residual_risk": "the helper is still private to the module; a future edit that reintroduces create_engine is caught only by the module list in test_sync_engine_resolution.py",
+   "tests": "tests/unit/test_sync_engine_resolution.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/features/personality.py": {
+   "finding": "A-02",
+   "reason": "the module's private engine helper delegates to storage.db.sync_engine; the diff removes create_engine(f\"sqlite:///{db_path}\") and therefore the second database beside the configured NEXUS_DATABASE_URL",
+   "residual_risk": "the helper is still private to the module; a future edit that reintroduces create_engine is caught only by the module list in test_sync_engine_resolution.py",
+   "tests": "tests/unit/test_sync_engine_resolution.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/features/speech.py": {
+   "finding": "A-12",
+   "reason": "blocking file operations (mkstemp/unlink, is_file, sha256+stat, stat, read_bytes/write_bytes, exists) moved into asyncio.to_thread; the module stays off the loop",
+   "residual_risk": "none identified by the review",
+   "tests": "tests/unit/test_async_offload.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/features/summarizer.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/jobs/creative_passport.py": {
+   "finding": "P4-CAS",
+   "reason": "archive_trim_evidence admits both evidence files into the content-addressed AssetLibrary and publishes the attempt keys as immutable hard links; typed errors and the EXDEV fallback are unchanged",
+   "residual_risk": "archived evidence is now 0o444 and shares the blob: corruption of one attempt's bytes reaches every attempt that links the same blob (detection still fires per attempt)",
+   "tests": "tests/unit/test_creative_passport.py (2 new tests) + tests/integration/test_provenance_passport_e2e.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/llm/litellm_provider.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/llm/local_llama_cpp.py": {
+   "finding": "A-13",
+   "reason": "the embedding vector is now coerced to float (was int for the llama.cpp python binding); consumers compute cosine similarity, so the normalisation is safe — but the module is only reachable when the llama-cpp extra is installed and it has no test",
+   "residual_risk": "no test exercises the float coercion; a future consumer that asserts int would break silently",
+   "tests": "none (extra not installed in CI)",
+   "verdict": "NO_DEFECT_FOUND"
+  },
+  "src/nexus_ai_agent/memory/long_term.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/nagar/cognition/gateway.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/nagar/creative/handoff.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/observability/logging.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/orchestration/state.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/provenance/journal.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/storage/ai_storage_manager.py": {
+   "finding": "A-12",
+   "reason": "blocking file operations (mkstemp/unlink, is_file, sha256+stat, stat, read_bytes/write_bytes, exists) moved into asyncio.to_thread; the module stays off the loop",
+   "residual_risk": "none identified by the review",
+   "tests": "tests/unit/test_async_offload.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/storage/checkpoint_lifecycle_pg_store.py": {
+   "finding": "A-13",
+   "reason": "annotations for the SQL params/rows plus list() around fetchall() so the caller gets a container it owns; the SQL text and the row mapping are untouched",
+   "residual_risk": "none identified; PostgreSQL paths are exercised in the migrate-postgres CI job",
+   "tests": "tests/unit/test_checkpoint_lifecycle.py (3 references)",
+   "verdict": "NO_DEFECT_FOUND"
+  },
+  "src/nexus_ai_agent/storage/langgraph_checkpoint.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/storage/migration_metadata.py": {
+   "finding": "A-19",
+   "reason": "new include_object hook: a reflected table with no counterpart in the target metadata (LangGraph checkpoints, lifecycle store) is ignored, so autogenerate can no longer propose dropping it",
+   "residual_risk": "none identified by the review",
+   "tests": "tests/unit/test_migration_metadata.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/storage/providers/huggingface.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test (plus defect P1-1 fixed): the documented key format, traversal rejection, token only in the header",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_storage_provider_boundaries.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/storage/providers/mega.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: credential gate, missing client package, root-folder creation, single-filename key mapping",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_storage_provider_boundaries.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/storage/providers/rclone.py": {
+   "finding": "audit-2026-10-16",
+   "reason": "first behaviour test: unconfigured refusal, argv-list construction, typed failure on a non-zero exit",
+   "residual_risk": "the new tests cover the recorded behaviours only; uncovered branches are listed in the disposition table",
+   "tests": "tests/unit/test_storage_provider_boundaries.py",
+   "verdict": "TEST_ADDED"
+  },
+  "src/nexus_ai_agent/storage/unified_cloud.py": {
+   "finding": "A-12",
+   "reason": "blocking file operations (mkstemp/unlink, is_file, sha256+stat, stat, read_bytes/write_bytes, exists) moved into asyncio.to_thread; the module stays off the loop",
+   "residual_risk": "none identified by the review",
+   "tests": "tests/unit/test_async_offload.py",
+   "verdict": "RECORDED"
+  },
+  "src/nexus_ai_agent/tools/base.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/tools/files.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/tools/system_shell.py": {
+   "finding": "A-13/A-14",
+   "reason": "diff read line by line: parameter/return annotations, ClassVar/Generic parameters, noqa removal, Decimal(0) instead of Decimal(\"0\"), re.DOTALL|IGNORECASE instead of re.S|re.I, an import path (litellm.router), a str()/list() materialisation and `repeats or 'نامحدود'` instead of a conditional — no branch, threshold or value changes",
+   "residual_risk": "none identified by the review",
+   "tests": "gates: ruff, mypy --strict (284 files), full suite",
+   "verdict": "NON_BEHAVIOURAL"
+  },
+  "src/nexus_ai_agent/worker.py": {
+   "finding": "A-12",
+   "reason": "blocking file operations (mkstemp/unlink, is_file, sha256+stat, stat, read_bytes/write_bytes, exists) moved into asyncio.to_thread; the module stays off the loop",
+   "residual_risk": "none identified by the review",
+   "tests": "tests/unit/test_async_offload.py",
+   "verdict": "RECORDED"
+  }
+ }
+}

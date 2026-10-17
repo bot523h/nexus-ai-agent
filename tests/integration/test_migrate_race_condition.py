@@ -38,8 +38,8 @@ from sqlmodel import SQLModel
 
 import nexus_ai_agent.storage.db  # noqa: F401  (registers every SQLModel table)
 
-#: Chain head — migrations/versions/e575469d90b9_nagar_asset_library_v1.py.
-_HEAD = "e575469d90b9"
+#: Chain head — migrations/versions/b5d8e2f4a917_telegram_ids_bigint.py.
+_HEAD = "c7a1e5d2b9f3"
 
 _WORKERS = 4
 _TIMEOUT_SECONDS = 180
@@ -57,7 +57,7 @@ def _run_migrates(db_file: Path, count: int) -> list[subprocess.CompletedProcess
     env["PYTHONDONTWRITEBYTECODE"] = "1"
 
     processes = [
-        subprocess.Popen(  # noqa: S603 — fixed argv, no shell
+        subprocess.Popen(
             [sys.executable, "-m", "nexus_ai_agent.cli", "migrate"],
             env=env,
             cwd=str(db_file.parent),

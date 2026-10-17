@@ -55,7 +55,7 @@ def _lose_the_mkdir_race(monkeypatch: pytest.MonkeyPatch, *, as_symlink_to: Path
     """
     real_mkdir = os.mkdir
 
-    def racing_mkdir(name, mode=0o777, *, dir_fd=None):  # noqa: ANN001, ANN202
+    def racing_mkdir(name, mode=0o777, *, dir_fd=None):
         if as_symlink_to is None:
             real_mkdir(name, mode, dir_fd=dir_fd)
         else:
@@ -285,7 +285,7 @@ def test_write_stream_wraps_a_staging_open_failure_as_boundary_error(
     (ws.root / "job").mkdir()
     real_open = os.open
 
-    def failing_staging_open(name, flags, mode=0o777, *, dir_fd=None):  # noqa: ANN001, ANN202
+    def failing_staging_open(name, flags, mode=0o777, *, dir_fd=None):
         if isinstance(name, str) and name.startswith(".staging-"):
             raise OSError(errno.ENOSPC, "no space left on device", name)
         return real_open(name, flags, mode, dir_fd=dir_fd)
@@ -415,7 +415,11 @@ def _run_with_deadline(ws: WorkspaceFilesystem, call: str, seconds: float = 5.0)
     )
     try:
         done = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True, timeout=seconds
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=seconds,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return "HANG"

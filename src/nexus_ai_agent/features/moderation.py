@@ -10,23 +10,28 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any
+from datetime import timedelta
+from typing import Any, ClassVar
 
 from sqlmodel import Session, select
 
-from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.clock import as_naive_utc, naive_utcnow
 from nexus_ai_agent.storage.models import ModerationConfig, UserReputation
 
 logger = get_logger(__name__)
 
 
 def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for feature CRUD."""
-    from sqlalchemy import create_engine as _ce
+    """The process-wide synchronous engine (``storage.db.sync_engine``).
 
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+    Audit A-02: this module used to build its own ``sqlite:///`` engine and
+    therefore ignored ``NEXUS_DATABASE_URL``; the central helper resolves
+    PostgreSQL-or-SQLite exactly like ``get_session``.
+    """
+    from nexus_ai_agent.storage.db import sync_engine
+
+    return sync_engine()
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +63,7 @@ class ModerationEngine:
     """Smart moderation: anti-spam, flood, link filter, profanity, warnings."""
 
     # In-memory flood tracking: user_id -> list of timestamps
-    _flood_tracker: dict[int, list[float]] = {}
+    _flood_tracker: ClassVar[dict[int, list[float]]] = {}
 
     # Rate limits
     FLOOD_WINDOW_SECONDS = 5
@@ -245,8 +250,6 @@ class ModerationEngine:
     @staticmethod
     def mute_user(user_id: int, chat_id: int, duration_minutes: int = 30) -> None:
         """Mute a user (set is_muted flag and mute_until timestamp)."""
-        from datetime import datetime, timedelta, timezone
-
         engine = _sync_engine()
         with Session(engine) as session:
             rep = session.exec(
@@ -262,11 +265,11 @@ class ModerationEngine:
                     reputation=0,
                     warnings=0,
                     is_muted=True,
-                    mute_until=datetime.now(timezone.utc) + timedelta(minutes=duration_minutes),
+                    mute_until=naive_utcnow() + timedelta(minutes=duration_minutes),
                 )
             else:
                 rep.is_muted = True
-                rep.mute_until = datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)
+                rep.mute_until = naive_utcnow() + timedelta(minutes=duration_minutes)
             session.add(rep)
             session.commit()
             logger.info(
@@ -296,8 +299,6 @@ class ModerationEngine:
     @staticmethod
     def is_muted(user_id: int, chat_id: int) -> bool:
         """Check if a user is currently muted."""
-        from datetime import datetime, timezone
-
         engine = _sync_engine()
         with Session(engine) as session:
             rep = session.exec(
@@ -308,8 +309,12 @@ class ModerationEngine:
             ).first()
             if rep is None or not rep.is_muted:
                 return False
-            # Check if mute has expired
-            if rep.mute_until is not None and rep.mute_until <= datetime.now(timezone.utc):
+            # Check if mute has expired. ``mute_until`` is stored as naive UTC
+            # (every timestamp column in storage/models.py is); a row written
+            # by an older build may carry an offset, so normalise before the
+            # comparison — mixing the two raised ``TypeError`` and would have
+            # crashed the ingress for every muted user.
+            if rep.mute_until is not None and as_naive_utc(rep.mute_until) <= naive_utcnow():
                 rep.is_muted = False
                 rep.mute_until = None
                 session.add(rep)

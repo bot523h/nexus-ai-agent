@@ -141,7 +141,7 @@ def _row_fingerprint(queue: InProcessJobQueue, job_id: str) -> str:
     )
 
 
-async def test_real_render_passport_is_verified_and_remeasured(harness) -> None:  # noqa: ANN001
+async def test_real_render_passport_is_verified_and_remeasured(harness) -> None:
     queue, journal = harness
     job_id = await _render_trim(queue, journal, "e2e-1")
 
@@ -182,7 +182,7 @@ async def test_real_render_passport_is_verified_and_remeasured(harness) -> None:
     assert journal.count() == journal_before
 
 
-async def test_tampered_artifact_bytes_flip_passport_to_compromised(harness) -> None:  # noqa: ANN001
+async def test_tampered_artifact_bytes_flip_passport_to_compromised(harness) -> None:
     queue, journal = harness
     job_id = await _render_trim(queue, journal, "e2e-2")
     builder = PassportBuilder(journal, queue)
@@ -191,6 +191,7 @@ async def test_tampered_artifact_bytes_flip_passport_to_compromised(harness) -> 
     result = await queue.get_result(job_id)
     artifact = Path(str(result["artifact_path"]))
     original = artifact.read_bytes()
+    artifact.chmod(0o644)  # archived evidence is an immutable CAS hard link; bypass to corrupt
     artifact.write_bytes(original[:-1] + bytes([original[-1] ^ 0xFF]))  # flip a bit
 
     passport = builder.build(job_id)
@@ -198,7 +199,7 @@ async def test_tampered_artifact_bytes_flip_passport_to_compromised(harness) -> 
     assert any(f.code == "artifact_digest_mismatch" for f in passport.findings)
 
 
-async def test_removed_artifact_is_a_limitation_never_a_lie(harness) -> None:  # noqa: ANN001
+async def test_removed_artifact_is_a_limitation_never_a_lie(harness) -> None:
     queue, journal = harness
     job_id = await _render_trim(queue, journal, "e2e-3")
     result = await queue.get_result(job_id)
@@ -209,7 +210,7 @@ async def test_removed_artifact_is_a_limitation_never_a_lie(harness) -> None:  #
     assert any(f.code == "artifact_bytes_unavailable" for f in passport.findings)
 
 
-async def test_corrupted_journal_compromises_every_passport(harness) -> None:  # noqa: ANN001
+async def test_corrupted_journal_compromises_every_passport(harness) -> None:
     queue, journal = harness
     job_id = await _render_trim(queue, journal, "e2e-4")
 
@@ -226,7 +227,7 @@ async def test_corrupted_journal_compromises_every_passport(harness) -> None:  #
     assert any(f.code == "chain_broken" for f in passport.findings)
 
 
-async def test_journal_lost_then_backfilled_is_honested(harness) -> None:  # noqa: ANN001
+async def test_journal_lost_then_backfilled_is_honested(harness) -> None:
     """A fresh journal + labeled backfill → limitations, never fake VERIFIED."""
     queue, journal = harness
     job_id = await _render_trim(queue, journal, "e2e-5")

@@ -159,11 +159,15 @@ def test_captured_stdlib_log_has_no_raw_secrets(captured_root_logs: _Capture) ->
     """httpx-style INFO lines and error strings flow through the stdlib
     root handlers in production — the boundary filter must mask them."""
     httpx_logger = logging.getLogger("httpx")
+    # httpx logs *pre-formatted* messages — the f-strings reproduce exactly
+    # that third-party behaviour, which is what the boundary filter must mask.
     httpx_logger.info(
-        "HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/"
+        "HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/"  # noqa: G004
         f"gemini-2.0-flash:generateContent?key={GEMINI_KEY} HTTP/1.1"
     )
-    httpx_logger.info(f"HTTP Request: GET https://api.telegram.org/bot{BOT_TOKEN}/getMe HTTP/1.1")
+    httpx_logger.info(
+        f"HTTP Request: GET https://api.telegram.org/bot{BOT_TOKEN}/getMe HTTP/1.1"  # noqa: G004
+    )
     logging.getLogger("urllib3").error(
         "<urlopen error permission denied for https://user:secretPW@internal.example.com/x"
         "?token=supersecret123>"
@@ -265,7 +269,8 @@ def test_captured_stdlib_mapping_args_secret_in_format_string(
     captured_root_logs: _Capture,
 ) -> None:
     logging.getLogger("app").error(
-        f"auth failed: Basic {BASIC_CREDENTIAL} for %(user)s", {"user": "bob"}
+        f"auth failed: Basic {BASIC_CREDENTIAL} for %(user)s",  # noqa: G004 - the leak under test
+        {"user": "bob"},
     )
     rendered = "\n".join(captured_root_logs.lines)
     assert BASIC_CREDENTIAL not in rendered
@@ -376,8 +381,8 @@ def test_captured_stdlib_object_arg_repr_redacted_by_final_boundary(
     the filter cannot rewrite them in place, so the wrapped formatter
     (final boundary) must mask the rendered line."""
 
-    class _LeakyClient:  # noqa: D401 — repr carries a header dump
-        def __repr__(self) -> str:  # noqa: D105
+    class _LeakyClient:
+        def __repr__(self) -> str:
             return f"<Client headers={{'Authorization': 'Basic {BASIC_CREDENTIAL}'}}>"
 
     logging.getLogger("app").error("client: %s", _LeakyClient())
@@ -394,8 +399,8 @@ def test_captured_stdlib_object_arg_repr_fresh_credential_redacted(
     can save this — only the final-boundary rendered-line redaction with
     repr-aware key matching can."""
 
-    class _LeakySession:  # noqa: D401
-        def __repr__(self) -> str:  # noqa: D105
+    class _LeakySession:
+        def __repr__(self) -> str:
             # the exact shape repr({'api_key': ...}) renders:
             # single-quoted KEY, colon, quoted value
             return "<Session {'api_key': 'fresh-credential-xyz-987654'}>"

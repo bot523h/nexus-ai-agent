@@ -82,7 +82,7 @@ def ev_to_gamma(exposure_ev: float) -> float:
     usable unclamped band is ±log2(10) ≈ ±3.32 EV and the golden tests pin both
     ends as a contract (see ``tests/unit/test_rendering_lane_exposure.py``).
     """
-    return max(EQ_GAMMA_MIN, min(EQ_GAMMA_MAX, 2.0**exposure_ev))
+    return max(EQ_GAMMA_MIN, min(EQ_GAMMA_MAX, float(2.0**exposure_ev)))
 
 
 def tint_to_gm(tint: float) -> float:
@@ -248,7 +248,7 @@ class ExposureOp(BaseModel):
     @property
     def gamma_is_clamped(self) -> bool:
         """True when the EV lies outside the band ``eq`` can represent exactly."""
-        return 2.0**self.exposure_ev != self.gamma
+        return float(2.0**self.exposure_ev) != self.gamma
 
     @property
     def needs_rgb_pass(self) -> bool:

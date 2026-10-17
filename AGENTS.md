@@ -9,25 +9,35 @@
 # AGENTS.md — Multi-Agent Coordination Contract (protocol v2)
 
 Several agents work on this repository **in parallel, from separate sandboxes**. The only shared
-medium between sandboxes is **this git repository**, so coordination is file-based: a claim board
-committed and pushed through git, backed by a zero-dependency CLI
+medium between sandboxes is **this git repository**, so coordination is git-based: a claim board
+that lives on its **own coordination ref**, backed by a zero-dependency CLI
 (`scripts/agent_board.py`) whose behaviour and schema are themselves tested
-(`tests/unit/test_agent_board.py`).
+(`tests/unit/test_agent_board.py`, `tests/unit/test_agent_board_ref.py`).
 
-The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, `deferred_log`,
-`takeover_log`, `next_work`, `history`). Structure is enforced, not requested.
+The live board is **`refs/nexus/board`** on `origin` (file `board.json` in that ref's tree;
+**schema 2**: `protocol`, `zones`, `claims`, `deferred_log`, `takeover_log`, `next_work`,
+`history`). Every `claim`/`release`/`defer` is one commit on that ref, published by the CLI with a
+compare-and-swap push (`--force-with-lease`), so a lost race is redone from a fresh read and never
+overwrites another sandbox's lease. The tree file `.agents/board.json` is a **frozen archive** of the
+last tree-resident board (audit A-04, ADR 0012): it is pinned by sha256, CI fails any pull request
+that modifies it, and a code PR must never carry board state again. Structure is enforced, not
+requested. (`--store tree` / `NEXUS_BOARD_STORE=tree` runs the CLI against the tree file for
+offline fixtures and tests only — it can never write the authority.)
 
 ## 1. The five rules
 
 1. **CLAIM BEFORE YOU CODE.** `python scripts/agent_board.py show` → `... next --branch <your-branch>`
-   → `... claim <task> --branch <your-branch>`. Commit **and push the board change immediately**:
-   an unpushed claim does not exist for the other sandbox. Finish → `release`; blocked → `defer`
-   (the Persian note template is built into the CLI).
+   → `... claim <task> --branch <your-branch>`. The CLI fetches the ref, applies your claim and pushes
+   it in the same command — **do not** `git add .agents/board.json`; the claim exists for every other
+   sandbox the moment the command prints `published refs/nexus/board`. Finish → `release`; blocked
+   → `defer` (the Persian note template is built into the CLI). Renew with `claim … --expected-generation <n>`.
 2. **ONE OWNER PER FILE-ZONE.** Claims carry `exclusive_paths`. Before pushing, run
    `python scripts/agent_board.py check --files <changed,files> --branch <you>`; exit `1` means a
-   proven overlap with another agent's live lease — do not push that work, pick another task or
-   defer. Exit `2` means a source (git/remote/worktree) was unreadable — that is **not** a pass;
-   retry once it is reachable. Only exit `0` means "every consulted source was readable and disjoint".
+   proven overlap with another agent's live lease on the ref (or a modified board archive in your
+   tree) — do not push that work, pick another task or defer. Exit `2` means the authority
+   (`refs/nexus/board`) was unreadable or inconsistent (no single live gates owner, malformed claim)
+   — that is **not** a pass; retry once it is reachable. Only exit `0` means "the authority was
+   readable and disjoint". Code trees — yours, `main`, any PR branch — are **not** sources.
 3. **BRANCH NAME IS THE CANONICAL IDENTITY.** Letters (A/B/C/…) are convenience labels only.
    A newcomer must state its identity as *its branch*, after checking `git ls-remote origin "arena/*"`,
    the open PRs, and this board. (The rule exists because three sessions once declared "agent E".)
@@ -62,16 +72,18 @@ distribution-version test fail for purely environmental reasons — documented i
 
 ## 4. Board state (schema 2 — summary; always verify with `show`)
 
-Verified at `2026-10-06T23:20Z`, `main` @ `b733fb0` (after the #126 → #183 → #128 spine stack and the #184 owner-gate fix merged).
+Verified at `2026-10-15T15:00Z`, `main` @ `6b39856` (after #212 pinned `langgraph-checkpoint-sqlite==3.1.1`). The live
+record is `python scripts/agent_board.py show`; this table is a snapshot, not an authority.
 
 | Task | Zone | Owner (branch) | Status |
 |---|---|---|---|
+| `task-270-full-audit-remediation` audit A-01…A-19 remediation + closeout (schema authority, time contract, updater contract, PR triage) | `full-audit-remediation` | `arena/26f7d958-nexus-ai-agent` (generation 3, 24 h lease, `gates_owner`) | `active` — draft PR #218 |
 | `task-186` intent-first creative spine + `task-207` referee / `task-219` lease fencing / `task-220` gc-note | `nagar-creative-graph` / `coordination-referee` | merged | `done` (PR#126) |
 | `task-221` spine plan atomicity · `task-222` transaction-scoped rollback · `task-223` identity-aware `system.undo` | `nagar-creative-graph` / `nagar-contract-gate` | merged | `done` (#126 / #183 / #128) |
 | `task-190` SQLite WAL init race | `storage-observability` | merged | `done` (#132 → #174) |
 | `task-253` owner identity gate fails closed when unconfigured | `features-owner-control` | merged | `done` (PR#184) |
 | `task-131` documentation & architecture suite + board rewrite | `docs-architecture` | — | `done` |
-| `ci-gates-steward` interim gates stewardship | `ci-quality` | — | `completed_released` (no live `gates_owner`) |
+| `ci-gates-steward` interim gates stewardship | `ci-quality` | — | `completed_released` (the live `gates_owner` is task-270 while its lease is valid) |
 | `task-122` PR#32 rebase + dedupe | `feature-wiring` | عامل B | `assigned_to_B` (stale lease) |
 | `task-123` PR#33 slim-down | `packaging+interop` | شاخه 3aa | `assigned_to_E_pr33` (stale lease) |
 | `task-124` P0-8 single wiring + P0-9 graph memory | `audit-remainder` | free | `available_sequenced_post_32_33` — **P0** |
@@ -82,7 +94,8 @@ Verified at `2026-10-06T23:20Z`, `main` @ `b733fb0` (after the #126 → #183 →
 
 Closed waves, merged PRs (#19–#38 and the spine stack) and the four recorded incidents live in
 `history` inside `.agents/board.json`; the durable narrative is
-`docs/architecture/` plus `docs/audits/`.
+`docs/architecture/` plus `docs/audits/`. A stale `gates_owner: true` field is **not** proof of a live
+gates owner — check the branch, generation and `expires` of the claim (`show`), as rule 2 requires.
 
 ## 5. شبکه ۱۰ وظیفه کلیدی بعدی (wave 4 — full detail: `.agents/board.json → next_work`)
 
@@ -115,8 +128,10 @@ Remaining main-bound order:
 
 `src/nexus_ai_agent/bot/handlers.py` remains the highest-conflict file in the repository: any agent
 touching it must coordinate explicitly in the board note before pushing. The rule for
-`.agents/board.json` or `AGENTS.md` conflicts is **newest state wins, and schema 2 must still pass
-`tests/unit/test_agent_board.py`**.
+`AGENTS.md` conflicts is **newest state wins**. `.agents/board.json` can no longer conflict: it is a
+frozen archive (`python scripts/agent_board.py guard` must pass), and the live board on
+`refs/nexus/board` is serialised by compare-and-swap, with schema 2 still enforced by
+`tests/unit/test_agent_board.py`.
 
 ## 7. Documentation contract (new in v2)
 

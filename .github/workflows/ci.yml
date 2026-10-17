@@ -2,8 +2,19 @@ name: CI
 
 on:
   push:
+    # Audit 2026-10-15 (A-08): an unfiltered `push:` ran the whole matrix twice
+    # for every PR commit (push + pull_request). Branch work is gated by its
+    # PR; `main` and release tags keep their own post-merge signal.
+    branches: [main]
+    tags: ["v*"]
   pull_request:
     types: [opened, synchronize, reopened, edited]
+
+# Least privilege for every job (A-08). Nothing in this workflow writes to the
+# repository: artifacts use the runtime token, release-lineage only *reads*
+# tags/releases with GH_TOKEN.
+permissions:
+  contents: read
 
 # A superseded push's matrix run is wasted minutes: cancel it so the queue
 # always reflects the newest SHA (the maintenance workflow deliberately does
@@ -16,6 +27,7 @@ jobs:
   lint:
     name: lint (ruff + mypy + version lockstep)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -27,6 +39,9 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
+      # Dependency truth (audit A-05): undeclared imports / unused declarations
+      # are a red build. Optional integrations are allow-listed in pyproject.
+      - run: deptry src
       # Version-lockstep guard: VERSION == pyproject.toml == latest CHANGELOG
       # heading.  Fails fast with a human-readable message; the same check
       # also lives in tests/unit/test_version_command.py so ``make test``
@@ -36,6 +51,7 @@ jobs:
   test:
     name: test (pytest -m "not slow")
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # task-113: deliberately NOT `needs: lint`.  A broken-lint push must never be able to
     # turn the test suite red, and the `lint-fast` rail below already reports lint and
     # version drift in seconds.  tests/unit/test_ci_lint_parity.py enforces this.
@@ -51,7 +67,17 @@ jobs:
           set -o pipefail
           # -rs: skip REASONS are part of the contract — an optional-dependency
           # skip must be intentional and visible, never silent (task-132).
-          pytest -v -rs -m "not slow" --tb=short 2>&1 | tee pytest.log
+          pytest -v -rfEs -m "not slow" --tb=short 2>&1 | tee pytest.log
+      # Raw job logs and artifacts live on a blob store that is not reachable
+      # from every reviewer environment; the failing test ids are therefore
+      # also surfaced as check annotations (readable through the Checks API).
+      - name: failing tests as annotations
+        if: failure()
+        run: |
+          grep -E '^(FAILED|ERROR) ' pytest.log | head -n 10 | while IFS= read -r line; do
+            printf '::error title=pytest::%s\n' "$line"
+          done
+          printf '::warning title=pytest::%s failing test id(s) in total (first 10 annotated)\n' "$(grep -cE '^(FAILED|ERROR) ' pytest.log || true)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
@@ -70,6 +96,7 @@ jobs:
   extras-matrix:
     name: extras-matrix (${{ matrix.leg }})
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       NEXUS_EXTRA_LEG: ${{ matrix.leg }}
@@ -153,6 +180,7 @@ jobs:
   python-parity:
     name: python-parity (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     strategy:
@@ -167,7 +195,14 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: |
           set -o pipefail
-          pytest -q -rs -m "not slow" --tb=short 2>&1 | tee parity.log
+          pytest -q -rfEs -m "not slow" --tb=short 2>&1 | tee parity.log
+      - name: failing tests as annotations
+        if: failure()
+        run: |
+          grep -E '^(FAILED|ERROR) ' parity.log | head -n 10 | while IFS= read -r line; do
+            printf '::error title=pytest %s::%s\n' "${{ matrix.python-version }}" "$line"
+          done
+          printf '::warning title=pytest %s::%s failing test id(s) in total (first 10 annotated)\n' "${{ matrix.python-version }}" "$(grep -cE '^(FAILED|ERROR) ' parity.log || true)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
@@ -196,6 +231,7 @@ jobs:
   continuum-evidence:
     name: continuum-evidence (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     strategy:
@@ -283,6 +319,7 @@ jobs:
   trust-mutations:
     name: trust-mutations (pack trust plane)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -302,6 +339,7 @@ jobs:
   temporal-mutations:
     name: temporal-mutations (temporal truth algebra)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -314,6 +352,43 @@ jobs:
       - name: the working tree must be unchanged after mutation testing
         run: git diff --exit-code
 
+  # Governance harnesses (GOV-1 / GOV-2, 2026-10-15): the board referee and the
+  # Gate-5 execution-fencing probes are mutation campaigns — a guard that has
+  # never been attacked is not evidence.  Both run in a *detached worktree* so
+  # a crash can never leave the job's checkout mutated, both restore bytes and
+  # compare SHA-256 before/after, and the working tree is asserted unchanged.
+  # Budget: referee ≈20 s, Gate-5 ≈2 min, execution-core ≈2 min on the hosted
+  # runner (17 probes × 3 targeted pytest runs each); the 25-minute cap is the
+  # same as the other campaigns.
+  governance-mutations:
+    name: governance-mutations (board referee 14 + Gate-5 fencing 17 + execution core 17)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - name: isolated worktree for the campaigns
+        run: git worktree add --detach "$RUNNER_TEMP/mutation-worktree" HEAD
+      - name: board referee mutations (14/14 must be killed)
+        working-directory: ${{ runner.temp }}/mutation-worktree
+        run: python scripts/board_referee_mutations.py
+      - name: Gate-5 execution-fencing probes (17/17 must be caught)
+        working-directory: ${{ runner.temp }}/mutation-worktree
+        run: python scripts/gate5_mutation_probes.py
+      - name: execution-core probes M1–M17 (17/17 must be caught)
+        working-directory: ${{ runner.temp }}/mutation-worktree
+        run: python scripts/execution_core_mutations.py
+      - name: the worktree and the checkout must be unchanged after mutation testing
+        run: |
+          git -C "$RUNNER_TEMP/mutation-worktree" diff --exit-code
+          git diff --exit-code
+          git worktree remove --force "$RUNNER_TEMP/mutation-worktree"
+
   # The remote-key ingress is a security boundary: an external filename becomes
   # a provider object key and then a cache path.  Three mutations (raw filename
   # as key, unsafe join, encoded traversal unchecked) must each turn the
@@ -321,6 +396,7 @@ jobs:
   remote-key-mutations:
     name: remote-key-mutations (ingress + cache containment)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -339,6 +415,7 @@ jobs:
   # is later set to Neon, the exact same `nexus migrate` path runs against it.
   migrate-postgres:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -364,19 +441,30 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: nexus migrate
       - run: pytest -q tests/integration/test_postgres_create_all_race.py
+      # Audit A-02/A-17 (2026-10-15): async + sync engines share this one
+      # database, and post-2021 user ids / supergroup ids fit (BIGINT).
+      - run: pytest -q tests/integration/test_postgres_single_engine.py
       # Shared read-only adapter contract, PG leg (incl. golden stability
       # and the f4a9c2e71b08 lifecycle table).
       - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py
       # Lifecycle store contract, PG leg (option A).
       - run: pytest -q tests/integration/test_lifecycle_store_contract.py
+      # Schema authority (closeout 2026-10-15): a legacy conversation_history
+      # table is adopted in place with its rows, the revision is reversible,
+      # and `alembic check` is clean next to LangGraph's tables (A-19) while
+      # still detecting drift on an owned table.
+      - run: pytest -q tests/integration/test_postgres_schema_authority.py
+      # A-19 as the operator runs it: the drift gate on the deployment database
+      # (LangGraph tables present from the steps above) must exit 0.
+      - run: alembic check
       # idempotent re-run must be a no-op (revision already at head).
       - run: nexus migrate
       # Confirm the migration stamp on a real Postgres.
-      # Head is e575469d90b9 (nagar asset library v1), which sits on top of
-      # 7c2f9d41e8a3 (ai_memory_consent, P0-7), which revises the
-      # f4a9c2e71b08 lifecycle table revision.
+      # Head is c7a1e5d2b9f3 (conversation_history adopted by the chain, audit
+      # 2026-10-15), which revises b5d8e2f4a917 (telegram_ids_bigint, A-17),
+      # which revises e575469d90b9 (nagar asset library v1, task-266).
       - run: |
-          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q e575469d90b9
+          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q c7a1e5d2b9f3
 
   # ── Merge-base guard (incident #143, fail-closed) ───────────────────────────
   # PR #143 was merged with base = a *feature* branch, not `main`; GitHub called
@@ -388,6 +476,7 @@ jobs:
     name: merge-base-guard (base == main)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -400,6 +489,11 @@ jobs:
           python scripts/merge_base_guard.py check-event \
             --event "${{ github.event_name }}" \
             --base "${{ github.base_ref }}"
+      # ADR 0012 / audit A-04: the live claim board is refs/nexus/board; the tree
+      # copy is a frozen archive.  A PR that edits it is carrying board state on
+      # the merge path again — red, with the one-line fix printed by the guard.
+      - name: Board archive is frozen (claims live on refs/nexus/board)
+        run: python scripts/agent_board.py guard --print
 
   # ── Release lineage (machine-checked, reported — never assumed) ─────────────
   # VERSION → commit → CI → tag → GitHub Release → CHANGELOG.  Gaps are OPEN
@@ -407,6 +501,7 @@ jobs:
   # version's tag exists, the whole chain behind it must hold.
   release-lineage:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       GH_TOKEN: ${{ github.token }}
@@ -448,6 +543,7 @@ jobs:
   lint-fast:
     name: lint-fast (lockstep + pinned ruff, no install)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -462,3 +558,85 @@ jobs:
       - run: python -m pip install "ruff==0.16.8"
       - run: ruff check .
       - run: ruff format --check .
+
+  # ── Container contract (audit A-16, closeout 2026-10-15) ────────────────────
+  # The image is what production runs; the unit contract
+  # (tests/unit/test_container_contract.py) reads the Dockerfile and executes the
+  # probe script on the runner, this job executes the *image*: it must build, run
+  # as the unprivileged `nexus` user, own a writable /app/data, expose the
+  # mode-aware HEALTHCHECK, and the in-container updater must report
+  # "unsupported" (the image ships without .git and without git).
+  #
+  # No Telegram token exists in CI, so the probe is exercised against stand-in
+  # processes with the same observable shape (a `run-bot` argv in the PID
+  # namespace; an HTTP server answering /healthz) — this proves the probe
+  # plumbing inside the image, not a live bot session.
+  container:
+    name: container (build, unprivileged runtime, healthcheck, updater probe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      IMAGE: nexus-ci:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: build the production image
+        run: docker build --pull -t "$IMAGE" .
+      - name: the runtime user is unprivileged and owns a writable data dir
+        run: |
+          set -eux
+          test "$(docker run --rm "$IMAGE" id -un)" = "nexus"
+          test "$(docker run --rm "$IMAGE" id -u)" != "0"
+          docker run --rm "$IMAGE" sh -c 'touch /app/data/.ci-write && test -w /app/data && test -w /app/data/chroma'
+          # the CLI imports and answers as that user (no root-only paths at import time)
+          docker run --rm "$IMAGE" python -m nexus_ai_agent.cli --help >/dev/null
+      - name: the image declares the mode-aware HEALTHCHECK
+        run: |
+          set -eux
+          docker inspect --format '{{json .Config.Healthcheck}}' "$IMAGE" | tee /tmp/healthcheck.json
+          grep -q '/app/docker/healthcheck.sh' /tmp/healthcheck.json
+          docker run --rm "$IMAGE" test -x /app/docker/healthcheck.sh
+      - name: polling mode — the probe passes only when a run-bot process is alive
+        run: |
+          set -eux
+          # stand-in with the observable shape of `… cli run-bot …` (no token in CI)
+          docker run -d --name hc-polling "$IMAGE" \
+            python -c 'import time; time.sleep(600)' run-bot nexus_ai_agent
+          sleep 2
+          docker exec hc-polling /app/docker/healthcheck.sh
+          docker run -d --name hc-polling-dead "$IMAGE" sleep 600
+          sleep 2
+          if docker exec hc-polling-dead /app/docker/healthcheck.sh; then
+            echo "healthcheck must fail without a run-bot process"; exit 1
+          fi
+          docker rm -f hc-polling hc-polling-dead
+      - name: webhook mode — the probe follows /healthz on the bound port
+        run: |
+          set -eux
+          docker run -d --name hc-webhook -e NEXUS_RUN_MODE=webhook -e PORT=8000 "$IMAGE" \
+            sh -c 'mkdir -p /tmp/www && echo ok > /tmp/www/healthz && cd /tmp/www && exec python -m http.server 8000'
+          for i in $(seq 1 20); do
+            docker exec hc-webhook python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/healthz", timeout=2)' && break
+            sleep 1
+          done
+          docker exec hc-webhook /app/docker/healthcheck.sh
+          docker run -d --name hc-webhook-down -e NEXUS_RUN_MODE=webhook -e PORT=8000 "$IMAGE" sleep 600
+          sleep 2
+          if docker exec hc-webhook-down /app/docker/healthcheck.sh; then
+            echo "healthcheck must fail when /healthz does not answer"; exit 1
+          fi
+          docker rm -f hc-webhook hc-webhook-down
+      - name: the in-container updater refuses to self-update (no .git, no git)
+        run: |
+          set -eux
+          # `-i` attaches the heredoc to the container's stdin (without it python
+          # would read an empty program and exit 0 — a vacuous pass).
+          docker run -i --rm "$IMAGE" python - <<'PY'
+          from nexus_ai_agent.agent.updater import probe_update_capability
+          capability = probe_update_capability()
+          print(f"supported={capability.supported} reason={capability.reason}")
+          raise SystemExit(1 if capability.supported else 0)
+          PY
+      - name: image facts for the evidence package
+        run: |
+          docker image inspect "$IMAGE" --format 'size_bytes={{.Size}} user={{.Config.User}} cmd={{json .Config.Cmd}}'

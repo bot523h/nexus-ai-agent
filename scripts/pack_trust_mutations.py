@@ -135,6 +135,7 @@ def run_tests() -> bool:
         cwd=ROOT,
         capture_output=True,
         text=True,
+        check=False,
     )
     return result.returncode == 0
 

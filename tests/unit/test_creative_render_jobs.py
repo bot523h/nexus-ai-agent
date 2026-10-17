@@ -247,7 +247,7 @@ def test_opt_in_policy_is_exactly_the_experimental_surface_operations() -> None:
         )
     }
     assert experimental, "probe lost its subject: no EXPERIMENTAL surface operation"
-    assert EXPERIMENTAL_OPT_IN_OPERATIONS == experimental
+    assert experimental == EXPERIMENTAL_OPT_IN_OPERATIONS
 
 
 def test_trim_rejects_bad_points_as_typed_failure(workspace: Path) -> None:

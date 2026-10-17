@@ -33,6 +33,9 @@ async def _dispose_db_engine():
         db_module._engine = None
         db_module._engine_path = None
         db_module._session_factory = None
+    # Engines retired by a path switch inside the test are closed here too,
+    # on the same live loop, so no aiosqlite worker thread outlives the test.
+    await db_module._dispose_replaced_engines()
 
 
 @pytest.fixture()
@@ -66,3 +69,28 @@ def settings_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 def sample_telegram_update() -> dict[str, Any]:
     p = Path(__file__).parent / "fixtures" / "telegram_updates" / "sample_message.json"
     return json.loads(p.read_text(encoding="utf-8"))
+
+
+@pytest.fixture()
+def migrated_sqlite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A SQLite file brought to the Alembic head by the *production* bring-up.
+
+    Schema authority (audit 2026-10-15): feature stores no longer create their
+    own tables, so a test that exercises them on a fresh file must provision
+    the schema the way ``nexus run`` does — ``ensure_startup_schema`` (migration
+    lock → ``alembic upgrade head``).  Returns the file path.
+    """
+    from nexus_ai_agent.storage import db as db_module
+    from nexus_ai_agent.storage.migrations import ensure_startup_schema
+
+    path = str(tmp_path / "migrated.sqlite")
+    monkeypatch.setenv("NEXUS_DB_PATH", path)
+    monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    settings_module.get_settings.cache_clear()
+    db_module._sync_engine_url = None  # type: ignore[attr-defined]
+    db_module._sync_engine_instance = None  # type: ignore[attr-defined]
+    report = ensure_startup_schema()
+    assert report == {"backend": "sqlite", "source": "alembic"}, report
+    yield path
+    settings_module.get_settings.cache_clear()

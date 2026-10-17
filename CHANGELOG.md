@@ -7,6 +7,425 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Completion audit (2026-10-16)** — every production module now carries a current disposition
+  (284/284, zero deferred) via `scripts/module_disposition.py` + `review_records.json`, and a real
+  defect was fixed on the way: `storage/providers/huggingface.py` could not download any model
+  through its own documented key format (the revision was split from the first `/` of a
+  `owner/name` repository id, producing a 404 URL); the parser now takes the last `@` and validates
+  every component before it reaches the network. 81 new tests give thirteen previously untested but
+  reachable modules (instrumentation, slideshow image fill, agent-store registry, Studio API scope,
+  image-gen composition, the four bot handler modules, the cloud storage providers) their first
+  behaviour coverage; evidence in `docs/audits/2026-10-16-completion/`.
+- **Asset Library wired into the passport archive** — `archive_trim_evidence` now admits
+  both evidence files into the content-addressed `AssetLibrary` under the artifact root and
+  publishes each `jobs/<job>/<attempt>/…` key as an immutable (0o444) hard link to the blob:
+  identical bytes across attempts share one copy, every existing key/reader keeps working,
+  size/boundary violations keep the passport's own error types, and a filesystem that
+  cannot link falls back to the previous verified streaming copy. Tests that simulate disk
+  corruption of archived evidence now bypass the read-only mode bit explicitly.
+### Added — content-addressed Asset Library (Phase 4 §4 substrate; board `task-270`)
+
+- `execution/asset_library.py`: SHA-256 content-addressed blob store under the queue-owned
+  artifact root (`cas/sha256/aa/bb/<hex>`): attempt-scoped `.part` staging with `O_EXCL|O_NOFOLLOW`,
+  streamed hash + size ceiling, `fsync`, publication by `os.link` (never overwrites; dedup verifies
+  the existing bytes by full re-hash), sources opened `O_NOFOLLOW|O_NONBLOCK` and required to be
+  regular files (symlink/FIFO/directory refused before a byte is read), conservative MIME sniff with
+  `mime_mismatch` against the declared type, `verify`/`open_verified`, `fsck` (missing / orphans /
+  corrupt / stale parts / unexpected entries against the durable references) and `gc` (unreferenced
+  + older than a minimum age only; referenced blobs are never deleted, even when corrupt). No index,
+  manifest, queue or verifier of its own — authority stays with the job row / passport that
+  references a `storage_key`. Not yet wired into `jobs.creative_passport.archive_trim_evidence`
+  (next step; documented in the overnight audit package). Tests: `tests/unit/test_asset_library.py`
+  (38: dedup across attempts, idempotent retry, crash-before-publish, stale-part reaping, symlink,
+  FIFO non-blocking, oversize, unsafe ids/addresses, 16-thread identical-bytes race with exactly one
+  winner, distinct-content race, tamper detection without overwrite, fsck/gc, MIME table); five
+  hand mutants (rename-overwrite, follow-symlinks, blocking open, skip-verify-on-dedup,
+  gc-ignores-references) each killed.
+
+### Changed — A-04 the claim board leaves the merge path (ADR 0012; board `task-270`)
+
+- The live multi-agent claim board now lives on the coordination ref **`refs/nexus/board`**
+  (`board.json` in that ref's tree). `scripts/agent_board.py claim|release|defer` fetch the ref,
+  apply the mutation in memory and publish it with `git push --force-with-lease=<ref>:<tip>`
+  (compare-and-swap): a lost race is redone from a fresh read (≤3 attempts) and a now-live foreign
+  lease or stale generation is refused as before; an unreadable ref is exit 2, never a pass.
+  `check` consults only the ref — worktrees, `origin/main` and PR-branch boards are no longer
+  sources (`--no-remote`/`--repo`/`--token` apply to `--store tree` fixtures only).
+- `.agents/board.json` is now a **frozen archive** (content of `main@6b398565`, sha256-pinned by
+  `FROZEN_BOARD_SHA256`); new `guard` command fails when it differs and runs in CI
+  (`merge-base-guard` job). Rebasing an open PR: `git checkout origin/main -- .agents/board.json`.
+- New `init-ref` command bootstraps the ref once and refuses to overwrite an existing one;
+  `--store {ref,tree}` / `NEXUS_BOARD_STORE` select the store (`ref` is the default).
+- Tests: `tests/unit/test_agent_board_ref.py` (local bare origin + clones; CAS race, bounded retry,
+  real `--force-with-lease` rejection, expired takeover with fencing token, stale generation,
+  unreachable origin, schema≠2, planted tree board, world-fence paths, two/zero live gates owners,
+  tree store cannot write the authority, guard/init-ref). `tests/unit/test_agent_board.py` is pinned
+  to `NEXUS_BOARD_STORE=tree` and unchanged otherwise.
+- `scripts/pr_census.py`: repeatable census of all open PRs (head/base SHA, mergeability, files,
+  CI on head, overlap with a reference PR, board-only dirtiness) feeding
+  `docs/audits/2026-10-15-overnight-stabilization/pr_census.{json,csv}`.
+
+### Fix — filesystem boundary typing (re-scoped remainder of PR #209)
+
+- `tools.filesystem_policy`: a path that passes *through* a regular file or FIFO
+  (`file/child`) now raises `FilesystemBoundaryError("path component is not a directory")`
+  instead of leaking a raw `NotADirectoryError` from `lstat()`. Only the typed-error hunk and
+  the five tests of #209 were integrated; its `O_DIRECTORY` removal was not (the kernel
+  rationale does not reproduce on Linux 6.1 — see PR #209 comment 6197534460).
+
+### Fix — A-12 async-blocking census closed (board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **No blocking file I/O inside `async def` in `src/` (35 → 0).** Every `open()`/`Path`
+  read/write/stat/exists/mkdir/unlink and `tempfile.mkstemp` that ran on the event loop now goes
+  through `asyncio.to_thread` with identical call semantics: Telegram uploads read the artifact
+  in a worker thread and hand PTB a named in-memory buffer (`bot.handlers.local_input_file`),
+  the story renderer's PIL work runs off-loop (`AIStoryGenerator._render_story`), API uploads
+  and URL downloads spool chunk-by-chunk off-loop, cloud providers read/write off-loop.
+  `ASYNC` joined the ruff rule set (production rule; `tests/**` and `scripts/**` exempt), pinned by
+  `tests/unit/test_ci_lint_parity.py`; `tests/unit/test_async_offload.py` proves the two
+  user-visible helpers never touch the loop thread.
+### CI — A-16 container verification job (board `task-270`)
+
+- **CI `container` job.** Builds the production image and executes it: runs as `nexus`
+  (uid ≠ 0) with a writable `/app/data`, the CLI imports as that user, the image declares the
+  mode-aware `HEALTHCHECK`, the probe passes/fails correctly in polling mode (run-bot process
+  present/absent) and webhook mode (`/healthz` answering/not), and the in-container updater
+  reports `self-update unsupported` (no `.git`, no `git`). No Telegram token exists in CI, so
+  the probe is exercised against stand-in processes with the same observable shape — this
+  proves the probe plumbing inside the image, not a live bot session.
+  `tests/unit/test_container_contract.py::test_ci_executes_the_image_contract_end_to_end` pins
+  the job shape (positive **and** negative probe cases, `docker run -i` for the updater check).
+
+### Fix — A-13 strict typing of `src/` (board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **`mypy --strict src` is now clean and enforced.** The 57 strict-mode findings in 33 modules
+  (31 `type-arg`, 26 `no-any-return`) are fixed and `[tool.mypy] strict = true` makes the CI
+  `lint` job (`mypy src`) inherit them; `tests/unit/test_ci_lint_parity.py` pins the flag.
+- Three sites were closed with a real boundary check instead of a cast, each with a regression
+  test in `tests/unit/test_strict_typing_boundaries.py`: GitHub release/asset JSON of the wrong
+  shape is a typed `StorageError` (was a late `AttributeError`); `_check_result_magnitude`
+  returns the checked number and refuses non-numeric evaluator output; the job queue's
+  `fetchone()` narrowing raises if a connection lacks the `sqlite3.Row` factory.
+- Everything else is annotation-only (`dict[str, Any]`, `tuple[Any, ...]`, PTB/LangGraph generic
+  parameters, `str()`/`bool()`/`int()`/`float()` on values that already had that type) with no
+  behaviour change; `ForceJoinManager.get_join_keyboard` is typed `InlineKeyboardMarkup`.
+
+### Refactor — A-11 `InProcessJobQueue._process_job` decomposition (board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **`_process_job` 62 → 17 (R22 ceiling 20), behaviour-preserving.** The 500-line job pipeline is
+  now a sequence of stage helpers — `_fail_claim_time_structural` (no handler → `FAILED_TERMINAL`
+  by unowned CAS), `_reserve` (shielded PENDING→PROCESSING CAS incl. the cancellation reopen of a
+  late-minted claim), `_trim_preflight` + `_reconcile_from_verified_attempt` (timeline.trim
+  verifier/reconciliation/source snapshot), `_reopen_after_cancellation`, `_complete_unverified`,
+  `_verify_and_complete` + `_persist_trim_passport` (VERIFYING → verify → publish/re-probe →
+  passport → durable COMPLETED → finalize). Every await, durable CAS, causal record and log line
+  keeps its order; a helper returning `None` is exactly the old early `return`.
+- **Characterisation contract first** — `tests/unit/test_process_job_characterization.py` (9 tests
+  on the real queue: no-handler failure before reservation, terminal/unknown-status rows never
+  execute, reservation-before-completion ordering, classified handler exceptions, non-dict results,
+  typed `success=False` results never verified, cancellation reopens only our row and announces
+  nothing, verifier refusal/acceptance) was proven green on the old method and on the new shape.
+- **Mutation anchors re-pointed, not dropped** — gate5 `M5a`/`M5b` and execution-core `M6` lived
+  inside `_process_job`; they now target the helpers and both campaigns remain 17/17.
+  `scripts/execution_core_mutations.py` is now run by the CI `governance-mutations` job (detached
+  worktree, `PYTHONPATH` pinned to the mutated tree, GOV-2 shape) and guarded by
+  `tests/unit/test_mutation_harness_anchors.py` (anchor uniqueness, mutant ≠ anchor, PYTHONPATH pin).
+- `_process_job` left the R22 `BASELINE` (21 pinned hotspots remain); the non-vacuity guard now
+  pins `build_handlers` and asserts the healed pipeline stays inside the ceiling.
+
+### Fix — closeout follow-through (A-01 negative control, A-11 ratchet, 3.10 parity; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-01 negative control** — `tests/integration/test_a01_message_path.py` now also proves that a
+  database failure at the `get_session` seam makes `on_message` propagate the error, send no reply
+  and never invoke the LLM graph (a swallowed `OperationalError` can no longer look like a handled
+  message).
+- **A-11 complexity ratchet (new law R22)** — `tests/architecture/test_complexity_ratchet.py`: McCabe
+  complexity of every function in `src/` is capped at 20; the 22 pre-existing hotspots are pinned at
+  their measured values (`_process_job` 62, `_compile` 38, `_planned_session` 36, `get_job_facts` 33, …)
+  and may only shrink. The decomposition of the hotspots themselves is a separate change.
+- **Python 3.10 parity** — `datetime.UTC` (3.11+) removed from `test_composition_root_runtime.py`; the
+  3.10-blocker scanner covers `tests/` and `scripts/` and recognises `datetime.UTC`.
+- **CI legibility** — `test` and `python-parity` keep the pytest failure summary (`-rfEs`) and emit
+  failing test ids as check annotations.
+
+### Fix — remediation closeout (schema authority, A-07/A-12/A-15/A-16/A-19; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **Schema authority — one writer of the schema.** `ConversationStore`
+  declared `conversation_history` on a private `MetaData` and ran
+  `create_all()` in its constructor; `ReferralEngine` ran `create_all()` for
+  two tables the initial migration already owns; the async SQLite bootstrap
+  (`create_all_tables`) ran against files Alembic had already versioned. Now:
+  `ConversationHistory` is a `storage/models.py` table, revision
+  `c7a1e5d2b9f3` *adopts* an existing table in place (byte-identical DDL,
+  legacy index name kept, rows preserved) or creates it, feature stores emit
+  no DDL (an un-migrated file fails loudly at first query), and
+  `create_all_tables` skips any file carrying `alembic_version`. Tests:
+  `tests/unit/test_schema_authority.py` (AST scan for `create_all`, adoption
+  with rows, downgrade/upgrade, guard), `tests/integration/
+  test_postgres_schema_authority.py` (same on PostgreSQL, CI
+  `migrate-postgres`), fixture `migrated_sqlite` in `tests/conftest.py`
+  (schema via the production `ensure_startup_schema`). The PostgreSQL golden
+  `postgres.langgraph.json` changed `96105e96…` → `fb658576…`: re-hashing the
+  live payload with the previous head reproduces the old value, i.e. the
+  only delta is `migration_head`.
+- **A-19 — `alembic check` on a real deployment.** The drift gate reported
+  `remove_table` for LangGraph's `checkpoints*` tables and autogenerate
+  proposed dropping them. `migration_metadata.include_object` ignores
+  reflected tables the metadata does not own; drift on an owned table is
+  still detected (negative control in `test_migrations.py` and the PG test).
+  The CI job now runs `alembic check` on the service database.
+- **A-12 — single time contract.** `storage/clock.py` (`utcnow`,
+  `naive_utcnow`, `as_naive_utc`, `as_aware_utc`) replaces five private
+  helpers and 32 `default_factory=datetime.utcnow` references; stored
+  values are naive UTC, in-flight values aware UTC, conversions explicit.
+  `tests/unit/test_time_contract.py` bans `datetime.utcnow` package-wide
+  (AST) and pins the column/default contract.
+- **A-07 — self-update says what it did.** `agent/updater.py` probes
+  capability first (git present, package inside a *clean* work tree with an
+  upstream): the container image (built without `.git`, installed into
+  site-packages) gets `self-update unsupported: … rebuild and redeploy`
+  and executes nothing; otherwise `git pull --ff-only` → reinstall with
+  exact outcomes `already up to date at <sha>` / `updated <old> -> <new>;
+  restart required`. Release checks compare versions semantically
+  (`packaging`, now a declared dependency) — an older or non-version tag is
+  not an update. `/update` relays the exact outcome
+  (`tests/unit/test_update_command_outcomes.py`); `tests/unit/test_updater.py`
+  exercises the probe against real git repositories.
+- **A-16 — container hardening.** The image runs as the unprivileged
+  `nexus` user and declares a mode-aware `HEALTHCHECK`
+  (`docker/healthcheck.sh`: `/healthz` in webhook mode, live `run-bot`
+  process in polling mode — never a blanket HTTP probe).
+  `tests/unit/test_container_contract.py` runs the probe for real.
+- **A-15 — documentation drift.** `MODULE_MAP.md` (verified SHA, 79 i18n
+  keys, new law R21), `DATA_AND_STORAGE.md` (5-revision chain, adoption,
+  foreign tables, time contract, backups as external prerequisite, updater
+  contract), `RUNTIME_FLOWS.md`, `TESTING.md`, README storage box,
+  `AGENTS.md` §4 board snapshot; six dated root reports moved to
+  `docs/audits/` and indexed.
+
+### Fix — full-audit remediation, round 0 (findings A-01/A-02b/A-03/A-06; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-01 — every free-text message crashed on `main`.** `storage/db.py` built
+  its session factories with SQLAlchemy's `AsyncSession` while
+  `bot/handlers.py` (`_upsert_user` on every message), `/myfiles`, `/download`,
+  `/language` and `features/onboarding.py` call `session.exec(...)` — a
+  SQLModel-only method. The factories now use
+  `sqlmodel.ext.asyncio.session.AsyncSession`; `SessionFactory` is typed to
+  it; 19 `session.execute(...)` call sites moved to the SQLModel idiom.
+  `is_first_time_user` only degrades on `SQLAlchemyError` any more — an
+  `AttributeError` like this one propagates instead of being read as "first
+  time". Regression: `tests/integration/test_real_session_factory.py` drives
+  the helpers through the real factory (4/5 tests fail on the old code).
+- **A-02b — `get_session()` ignored `NEXUS_DB_PATH`.** The no-argument form
+  hard-coded `data/app.sqlite`, so the async paths and the feature engines
+  silently used two different SQLite files. It now resolves
+  `settings.db_path`.
+- **A-03 — the last ten canned commands are real.** `/mod_config` `/warn`
+  `/mute` `/unmute` `/reputation` (`bot/surface/moderation.py`, owner-gated,
+  real `ModerationEngine`, Telegram `restrict_chat_member` reported honestly)
+  and `/viral_preview` `/viral_stats` `/viral_post` (`bot/surface/viral.py`,
+  the real `ViralPost` queue; `publish` is owner-only). `/leaderboard` is an
+  alias of `/xp_leaderboard`; `/vision` downloads the photo and calls
+  `GeminiEngine.vision`. The moderation engine is finally *wired*: a group-
+  message ingress runs in group -1 right after the access guard and stops
+  propagation of a removed message. Found while wiring:
+  `ModerationEngine.is_muted` raised `TypeError` (naive vs aware datetime)
+  for every muted user — fixed with naive-UTC storage + tolerant read.
+- **A-06 — dashboard API fail-closed.** With `NEXUS_DASHBOARD_TOKEN` unset,
+  `/api/dashboard/*` now answers `503` (was: open). `?limit=` is bounded to
+  `1..100` (`422` otherwise). The HTML dashboard asks for the token once per
+  tab and renders the PII-free payload it actually receives.
+- **Board:** the remediation lease `task-270-full-audit-remediation` has its
+  own declared zone (`full-audit-remediation`), satisfying the board
+  invariants (`tests/unit/test_agent_board.py`).
+
+### Fix — full-audit remediation, round 1 (findings A-02/A-05/A-07/A-08/A-09/A-12/A-13; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-02 — one database per deployment.** Thirteen feature modules
+  (`ads`, `analytics`, `anonymous_chat`, `channel_manager`, `engagement`,
+  `force_join`, `games`, `gamification`, `moderation`, `owner_control`,
+  `personality`, `viral_engine`, plus `ReferralEngine`, `ReminderSystem`,
+  `ConversationStore` and the `/broadcast` commands) each built their own
+  `create_engine("sqlite:///…")`, so a PostgreSQL deployment
+  (`NEXUS_DATABASE_URL`) kept users/chats in Postgres and XP, moderation,
+  ads, games, referrals, reminders … in a SQLite file next to the code.
+  `storage.db.sync_engine()` is now the single resolution point (PostgreSQL
+  via `postgresql+psycopg://` with `pool_pre_ping`, else the configured SQLite
+  file; one cached engine per process, disposed on URL change); every
+  `_sync_engine` helper delegates to it, the composition roots hand engines
+  `sync_db_path_for(settings)`, `/broadcast` reads chats through the async
+  session factory, and the referral/conversation tables are created with
+  dialect-agnostic `create_all` instead of SQLite-only `AUTOINCREMENT` DDL.
+  Law **R19** in `docs/architecture/MODULE_MAP.md`; regression
+  `tests/unit/test_sync_engine_resolution.py` (21 tests incl. a structural
+  guard that no `src/` module outside `storage/db.py` builds a `sqlite:///`
+  engine).
+- **A-09 — one definition per table.** `Referral`/`ReferralCode` were
+  declared twice (`storage/models.py` and `features/referral.py`, glued with
+  `extend_existing=True`, with *different* constraints). The strict,
+  migration-matching definitions in `storage/models.py` are the only ones;
+  `features/referral.py` imports them. `tests/unit/test_referral_models.py`.
+- **A-12 — weak hashes and forgeable codes.** Content/filename hashes in
+  `image_gen.py`, `speech.py`, `viral_engine.py` moved from md5 to sha256.
+  Referral codes were `NEXUS-<telegram id>-<md5(id)[:8]>` — they leaked the
+  id and anyone could forge any user's code; they are now random
+  (`secrets`, 8 chars from an unambiguous alphabet, collision-checked in
+  `get_or_create_code`; stored legacy codes stay valid). The remaining
+  `datetime.utcnow()` sites (`agent_manager`, `ai_memory`,
+  `conversation_store`, `referral`, `agent/updater`) use an explicit
+  naive-UTC helper. `creative_temp_dir` defaults to `data/creative` (next to
+  the SQLite database) instead of the world-writable, reboot-cleared
+  `/tmp/nexus_creative` (bandit B108); override with `CREATIVE_TEMP_DIR`.
+- **A-07 — the self-updater blocked the event loop.** `git pull` and
+  `pip install .` ran with blocking `subprocess.run` (no timeout) on the bot's
+  loop, and the release check used an unbounded `httpx` client. Both steps
+  now run via `asyncio.to_thread` with timeouts (git 300 s, pip 1200 s), the
+  release probe times out at 15 s. `tests/unit/test_updater.py::
+  test_do_update_does_not_block_the_event_loop` (a heartbeat keeps ticking
+  while a slow step runs; fails on the old code).
+- **A-05 — declared dependencies match imports.** `langchain-community`
+  (never imported) and `pytest-mock` (no `mocker` use) removed; `pydantic`
+  declared explicitly; `deptry` added to `[dev]` with a `[tool.deptry]`
+  policy (optional integrations nacl/gtts/mega/imageio-ffmpeg allow-listed)
+  and run in the CI lint job and `make deps`.
+- **A-08 — CI hygiene.** `ci.yml` runs on pushes to `main`/`v*` tags and on
+  every PR (not on every branch push), declares read-only workflow
+  permissions, and every job has a `timeout-minutes` sized from real run
+  durations; `maintenance.yml` pins its actions to the same SHAs as `ci.yml`
+  and has timeouts.
+- **A-13 — imports from defining modules.** `creative/spine/__init__.py`,
+  `agents/store/agent_manager.py` and `llm/litellm_provider.py` import
+  `CompiledIntent`, `StoreAgent` and `Router` from the modules that define
+  them (`mypy --no-implicit-reexport` clean on all three).
+- **A-10 — nine never-imported modules removed.** `agents/chat_agent.py`,
+  `agents/planner_agent.py`, `agent/feedback.py`, `core/async_db.py`,
+  `domain/retention.py` (superseded by `domain/policies/retention.py`),
+  `memory/short_term.py`, `storage/model_fetch.py`,
+  `adapters/caption_unavailable.py` and `i18n/loader.py` had no importer in
+  `src/`, `tests/`, `scripts/` or `migrations/`, no dynamic/string reference
+  and no entry point. Law **R20** (`tests/architecture/test_no_orphan_modules.py`)
+  now fails on any new orphan; its entry-point allowlist (`cli`, `api.app`)
+  carries a reason per entry and is checked for staleness.
+- **Board:** the remediation lease was re-issued through the official CLI at
+  the documented 24 h TTL (`AGENTS.md` §5) instead of the 48 h it had been
+  claimed with (generation 3; release + re-claim, no hand edit).
+- **Tests:** the remaining `session.execute(select(...))` calls in the test
+  suite moved to `session.exec(...)` and the SSRF API tests send form bodies
+  via `content=` — the fast suite now passes with
+  `-W error::DeprecationWarning`.
+- **README:** the "Real vs. Simulated" table was stale — every registered
+  command is backed by an engine since round 0; `/companion` and `/analyze`
+  were never registered and are listed as such.
+
+### Fix — full-audit remediation, round 2 (deeper validation of A-01/A-02/A-03; new finding A-17; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **A-17 — Telegram identifiers overflowed PostgreSQL's INTEGER.** Found by
+  the first live PostgreSQL run of this remediation (PostgreSQL 16.2, local
+  server + the CI `migrate-postgres` leg): all 33 Telegram id columns
+  (`user.telegram_id`, every `chat_id`/`user_id`, `anonsession.user1_id/
+  user2_id`, `referral.referrer_id/referee_id`, `adcampaign.created_by`,
+  `personalityconfig.set_by`) were 32-bit, so `_upsert_user` failed with
+  `NumericValueOutOfRange` for any account created after 2021 and
+  `_upsert_chat` for any supergroup — the bot could not answer a single
+  message on a PostgreSQL deployment. SQLite hid it (64-bit INTEGER). Fix:
+  `storage.models.TelegramId = BigInteger().with_variant(Integer(), "sqlite")`
+  on every such column (SQLite schema byte-identical, `INTEGER PRIMARY KEY`
+  stays the rowid alias) and Alembic revision **`b5d8e2f4a917`** (PostgreSQL
+  only, type-only, 33 `ALTER COLUMN … TYPE BIGINT`; downgrade narrows back).
+  Verified on the live server: upgrade, downgrade, upgrade, `alembic check`
+  reports no column drift, and a `2**40`-range user id plus a `-100…`
+  supergroup id round-trip through both engines. The PostgreSQL LangGraph
+  golden (`storage/golden/postgres.langgraph.json`) was regenerated with the
+  human-only `nexus checkpoints golden update --yes`; the only payload delta
+  is `migration_head` (re-hashing the new payload with the old head reproduces
+  the previous fingerprint exactly). Head pins in CI, tests and docs moved to
+  `b5d8e2f4a917`. Guards: `tests/unit/test_telegram_id_width.py` (ORM ↔
+  migration list ↔ PostgreSQL DDL lockstep, SQLite unchanged, internal keys
+  stay 32-bit) and `tests/integration/test_postgres_single_engine.py` (runs
+  in the CI PostgreSQL job).
+- **A-01 deeper validation.** `tests/integration/test_a01_message_path.py`
+  drives the real `on_message` handler built by `build_handlers` through the
+  production `get_session` factory into a real SQLite file after the exact
+  `nexus run` schema bring-up (`ensure_startup_schema` → Alembic); on `main`
+  the same test fails with the audit's `'AsyncSession' object has no
+  attribute 'exec'`.
+- **A-02 deeper validation.** `test_postgres_single_engine.py` proves on a
+  live PostgreSQL that the async session factory and the synchronous feature
+  engines (force-join predicate, referral tables) read and write one
+  database (`current_database()` identical, no SQLite engine in the process).
+- **A-03 deeper validation.** `tests/integration/test_composition_root_runtime.py`
+  builds the real PTB `Application` (`build_application`, no network) and
+  uses PTB's own `check_update` dispatch: group −1 is exactly access guard →
+  moderation gate, group text reaches the gate and private text does not,
+  strangers stop at the guard, a private text reaches `on_message`, no text
+  handler is shadowed behind it, every command is registered exactly once
+  (115) and the eight A-03 commands map to their own `*_cmd` callbacks.
+- **A-06 deeper validation.** `tests/integration/test_api_gate_inventory.py`
+  takes the route inventory from the app's own OpenAPI document and probes
+  every operation through the real ASGI app: unconfigured → every non-public
+  route is `503` (webhook `403`); configured with missing/wrong bearer, Basic
+  or HMAC headers → `401`/`403`; the correct dashboard token opens only
+  `/api/dashboard/*`. On `main` the same test reports the audited leak
+  (`/api/dashboard/stats` and `/recent_users` answer `200` unconfigured).
+- **A-14 — lint ratchet widened from `E,F,I,B,UP` to the rules the audit
+  showed were catching real defects.** Newly enforced at zero violations:
+  `RUF100` (stale `# noqa` — 77 removed, every one of them a suppression for a
+  rule that was never on), `T201`, `PLW2901`, `PLW1510`, `A002`, `PGH003`,
+  `RUF012`, `RUF015`, `DTZ`, `S324`, `SIM115`, `SIM300`, `G004`, `PIE`,
+  `RSE102`, `FURB`; `scripts/**` and `diagnostics/truth.py` may `print`,
+  `BLE001` is declared `external` so its documenting `# noqa` comments
+  survive. Real fixes that fell out: two file-handle leaks in
+  `bot/handlers.py` (`reply_photo(photo=open(...))`,
+  `reply_voice(voice=open(...))` now use `with`), eleven f-string logging
+  calls, a blanket `# type: ignore`, a loop variable overwritten in
+  `features/rag.py`, five shared mutable class attributes made explicit
+  `ClassVar`s, twelve `subprocess.run` calls with an explicit `check=False`,
+  `nexus smoke`'s `input` parameter renamed `message`, and two blocks of
+  commented-out code deleted. Deferred with counts recorded in the decision
+  log: `ASYNC2xx`, `BLE001`, `S108`, `PERF`, `TRY400`, `ISC`, `SIM105/102/117`,
+  `RET504`, `RUF005`, `ERA001` (false positives on prose comments).
+- **A-18 — retired SQLite engine disposed at the switch, not "next time".**
+  `storage.db.create_all_tables` retired the previous engine on a path switch
+  but disposed it only on the *next* database call, so the last switch in a
+  process (and every one in a test) left an aiosqlite worker thread bound to
+  a loop that was about to close — the `RuntimeError: Event loop is closed`
+  thread noise. Disposal now happens right after the switch;
+  `tests/unit/test_db_engine_retirement.py` pins it (fails on the old code).
+  The autouse test fixture also drains retired engines, and the three
+  Round-2 integration fixtures no longer drop the engine reference without
+  disposing it (the fast suite is warning-free again: 4019 passed, 0 warnings).
+- **Docs:** the golden-update command is `nexus checkpoints golden update`
+  (three documents said `nexus golden update`, which does not exist).
+
+### Fix — governance recovery: both mutation harnesses attack again (GOV-1/GOV-2; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
+
+- **GOV-1 — referee mutation `pr_branch_self_exclusion_removed` survived.**
+  The test meant to kill it ran `check` on a synthetic board without exactly
+  one active gates owner, so the referee returned exit 2 for *that* reason
+  and the self-exclusion was never exercised (a vacuous test). The test now
+  builds a gated board (`_gated_synthetic_board`), asserts the printed reason
+  and keeps a control run; `scripts/board_referee_mutations.py` reproduces
+  **14/14 killed** (exit 0, `agent_board.py` SHA identical before and after).
+- **GOV-2 — Gate-5 probe campaign reconciled to 17/17.** The published
+  "11 + 5 = 16" was a counting error: 12 probes were caught and 5 (`M2`, `M3`,
+  `M4`, `M5a`, `M9`) were silently *not applied* because their anchors had
+  drifted off `in_process_job_queue.py`. All five are re-anchored; `M2`–`M4`
+  became multi-edit probes (`Probe.extra_edits`) because every `_mark_*` CAS is
+  guarded three times (fenced SELECT, attempt-ledger status filter, fenced
+  UPDATE) and weakening only the UPDATE is an equivalent mutant, not an attack.
+  Root cause of a second silent failure mode fixed: run in an isolated
+  worktree, the harness imported the editable-installed production package, so
+  every probe "survived" while touching nothing — `_run_tests` now pins
+  `PYTHONPATH` to the tree under mutation. `scripts/gate5_mutation_probes.py`
+  reproduces **17/17 caught** (exit 0, target SHA identical before and after).
+- **Guards:** `tests/unit/test_mutation_harness_anchors.py` fails instantly on
+  anchor drift (every anchor must occur exactly once in its target), on a
+  mutant that changes the SQL binding count, on a harness that does not pin
+  `PYTHONPATH`, and on a CI workflow that does not run both campaigns in a
+  detached worktree. CI job `governance-mutations` (`.github/workflows/ci.yml`,
+  25-minute cap, worktree + `git diff --exit-code`) runs both campaigns on
+  every push to `main`/`v*` and every pull request.
+
 ### Feature — truth doctor: one authority for repository truth (law R16, session `arena/runtime-truth-tooling`)
 
 - **The repository could not prove its own truth.** Version drift, an unindexed

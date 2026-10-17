@@ -43,7 +43,7 @@ flowchart LR
 **Determinism rules**
 - No network in unit tests; external services are faked (`llm/fake_llm.py`, `tests/unit/surface_fakes.py`).
 - Time is injected or frozen; ordering is asserted explicitly (no "usually sorted").
-- Golden files (`tests/architecture/legacy_baseline.json`, checkpoint fingerprints, caption/tone fixtures) are **updated by a human-run command** (`nexus golden update`), never auto-rewritten by a test run.
+- Golden files (`tests/architecture/legacy_baseline.json`, checkpoint fingerprints, caption/tone fixtures) are **updated by a human-run command** (`nexus checkpoints golden update --yes`), never auto-rewritten by a test run.
 - Real binaries are used where "it worked" would otherwise be a guess: the render lane runs genuine FFmpeg encodes supplied by the `imageio-ffmpeg` wheel (a dev extra), and CI installs it.
 - Byte stability is asserted where determinism is claimed (canonical JSON, filtergraph strings, `.srt`/`.vtt`/`.ass` output).
 
@@ -108,7 +108,7 @@ pytest -q tests/unit/test_docs_integrity.py
 |---|---|---|
 | No full Mermaid syntax validation (structural checks only) | a syntactically invalid diagram could pass the gate | [`adr/0002`](adr/0002-docs-as-code-enforcement.md) — adopt `mermaid-lint` if `docs/` grows past ~30 files |
 | Optional heavy extras are not exercised in the default CI job | a broken optional path may survive until a user opts in | CLOSED for the shipping extras by the `extras-matrix` CI job (task-132, legs `core`/`pdf`/`speech`/`translate` + skip-inflation audit); heavy *core* deps (Chroma/sentence-transformers) stay covered by unit/fail-closed tests only, and `[local-llm]` never existed as an extra |
-| PostgreSQL suites skip locally without `NEXUS_DATABASE_URL` | local confidence is lower than CI confidence | CI `migrate-postgres` job |
+| PostgreSQL suites skip locally without `NEXUS_DATABASE_URL` | local confidence is lower than CI confidence | CI `migrate-postgres` job (migrate → race → single-engine → adapter contract → lifecycle → schema authority/A-19 → `alembic check` → idempotent migrate → head stamp); locally a throw-away `pgserver` cluster reproduces the whole leg |
 | No browser/E2E UI test | the dashboard is HTML-by-render, not a UI framework | deliberate: see [`OVERVIEW.md`](OVERVIEW.md) §7 (dashboard is read-only by design) |
 | P0-8/P0-9 have no guard test yet | engine double-wiring and empty graph memory can return unnoticed | board **task-124** [`SECURITY.md`](SECURITY.md) §3 |
 

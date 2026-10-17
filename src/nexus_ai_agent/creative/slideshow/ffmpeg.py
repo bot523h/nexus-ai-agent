@@ -473,7 +473,7 @@ def resolve_ffmpeg_bin(explicit: str | None = None) -> str:
     try:
         import imageio_ffmpeg  # type: ignore[import-untyped]
 
-        return imageio_ffmpeg.get_ffmpeg_exe()
+        return str(imageio_ffmpeg.get_ffmpeg_exe())
     except Exception as error:  # pragma: no cover - depends on the environment
         raise FfmpegUnavailableError(
             "no FFmpeg binary found: install ffmpeg, set NEXUS_FFMPEG_BIN, or "
@@ -483,7 +483,7 @@ def resolve_ffmpeg_bin(explicit: str | None = None) -> str:
 
 
 def _run(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 - argv list, shell=False, allow-listed binary
+    return subprocess.run(
         args,
         capture_output=True,
         text=True,

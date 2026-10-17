@@ -11,8 +11,12 @@ import pytest
 
 import nexus_ai_agent.adapters.in_process_job_queue as queue_module
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.execution.asset_library import AssetLibrary
 from nexus_ai_agent.jobs.creative_passport import (
+    MAX_EVIDENCE_FILE_BYTES,
+    CreativeEvidenceTooLargeError,
     CreativePassportError,
+    _copy_verified,
     _fsync_directory,
     _resolve_store_path,
     attempt_id,
@@ -188,6 +192,86 @@ def test_artifact_storage_keys_cannot_escape_the_queue_root(tmp_path: Path) -> N
     with pytest.raises(CreativePassportError):
         _resolve_store_path(root, "/tmp/outside.mp4")
     assert _resolve_store_path(root, "jobs/job/attempt/output.mp4").is_relative_to(root)
+
+
+def test_copy_verified_publishes_attempt_paths_as_links_into_the_asset_library(
+    tmp_path: Path,
+) -> None:
+    """Identical evidence across attempts shares one immutable CAS blob."""
+    root = tmp_path / "queue.artifacts"
+    root.mkdir()
+    library = AssetLibrary(root, max_bytes=MAX_EVIDENCE_FILE_BYTES)
+    source = tmp_path / "render.mp4"
+    source.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"frame" * 100)
+    first = root / "jobs" / "job-a" / "attempt-1" / "output.mp4"
+    second = root / "jobs" / "job-a" / "attempt-2" / "output.mp4"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+
+    sha_1, size_1 = _copy_verified(
+        source, first, too_large_code="render_failed", library=library, attempt_id="attempt-1"
+    )
+    sha_2, size_2 = _copy_verified(
+        source, second, too_large_code="render_failed", library=library, attempt_id="attempt-2"
+    )
+
+    assert (sha_1, size_1) == (sha_2, size_2)
+    blob = library.path_for(sha_1)
+    assert blob.is_file() and blob.is_relative_to(root / "cas")
+    # both attempt keys are hard links to the single blob — one copy on disk
+    assert first.stat().st_ino == blob.stat().st_ino == second.stat().st_ino
+    assert blob.stat().st_nlink >= 3
+    assert first.read_bytes() == source.read_bytes()
+    # the published bytes are immutable at the filesystem level (0o444)
+    with pytest.raises(PermissionError):
+        first.write_bytes(b"tamper")
+    assert library.verify(sha_1)
+    # re-running the same publish is idempotent (same identity, no error)
+    assert _copy_verified(
+        source, first, too_large_code="render_failed", library=library, attempt_id="attempt-1"
+    ) == (sha_1, size_1)
+
+
+def test_copy_verified_library_path_keeps_the_passport_error_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "queue.artifacts"
+    root.mkdir()
+    destination = root / "jobs" / "job" / "attempt" / "input.mp4"
+    destination.parent.mkdir(parents=True)
+    oversized = tmp_path / "big.bin"
+    oversized.write_bytes(b"x" * 64)
+    tiny_library = AssetLibrary(root, max_bytes=16)
+    with pytest.raises(CreativeEvidenceTooLargeError) as too_large:
+        _copy_verified(
+            oversized, destination, too_large_code="invalid_request", library=tiny_library
+        )
+    assert too_large.value.code == "invalid_request"
+    assert not destination.exists()
+    incoming = root / "cas" / "incoming"
+    assert not incoming.exists() or not list(incoming.iterdir())  # no staging leak
+
+    # a different key that already holds different bytes still fails closed
+    occupied = root / "jobs" / "job" / "attempt" / "output.mp4"
+    occupied.write_bytes(b"other bytes")
+    library = AssetLibrary(root, max_bytes=MAX_EVIDENCE_FILE_BYTES)
+    with pytest.raises(CreativePassportError, match="different bytes"):
+        _copy_verified(oversized, occupied, too_large_code="render_failed", library=library)
+
+    # an attempt directory that cannot hard-link the blob (other mount / no link
+    # support) falls back to the verified streaming copy instead of failing
+    real_link = os.link
+
+    def link_only_inside_cas(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        if not Path(str(dst)).is_relative_to(root / "cas"):
+            raise OSError(18, "Invalid cross-device link")
+        real_link(str(src), str(dst), *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "link", link_only_inside_cas)
+    fallback = root / "jobs" / "job" / "attempt" / "fallback.mp4"
+    sha, size = _copy_verified(oversized, fallback, too_large_code="render_failed", library=library)
+    assert fallback.is_file() and size == 64
+    assert fallback.stat().st_ino != library.path_for(sha).stat().st_ino
 
 
 def test_directory_sync_failure_fails_the_evidence_write_closed(

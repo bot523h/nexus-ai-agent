@@ -19,6 +19,8 @@ initial migration would knowingly omit 7 indexes.
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import MetaData
 from sqlmodel import SQLModel
 
@@ -48,3 +50,25 @@ def get_target_metadata() -> MetaData:
         for table in target.tables.values():
             combined._add_table(table.name, table.schema, table)
     return combined
+
+
+def include_object(
+    obj: Any, name: str | None, type_: str, reflected: bool, compare_to: Any
+) -> bool:
+    """Alembic ``include_object`` hook: compare only what this metadata owns.
+
+    The application database is shared with tables that other libraries create
+    and migrate themselves — LangGraph's ``checkpoints`` / ``checkpoint_blobs``
+    / ``checkpoint_writes`` / ``checkpoint_migrations`` and the lifecycle store
+    on PostgreSQL.  Without this hook every real deployment failed
+    ``alembic check`` with ``remove_table`` noise for those tables, and worse,
+    ``alembic revision --autogenerate`` *proposed dropping them* (audit
+    2026-10-15, finding A-19).  A table that exists in the database
+    (``reflected``) but has no counterpart in the target metadata
+    (``compare_to is None``) is therefore ignored.  Everything else — model
+    tables missing from the database, column/type/index drift on owned
+    tables — is still compared, so the gate keeps catching missing revisions.
+    """
+    if type_ == "table" and reflected and compare_to is None:
+        return False
+    return True

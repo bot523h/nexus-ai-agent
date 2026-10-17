@@ -19,7 +19,7 @@ class _ScriptedLLM:
     def __init__(self, reply: str) -> None:
         self._reply = reply
 
-    async def generate(self, prompt: str, system: str = "") -> str:  # noqa: ARG002
+    async def generate(self, prompt: str, system: str = "") -> str:
         return self._reply
 
 

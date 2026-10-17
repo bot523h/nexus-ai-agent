@@ -38,7 +38,7 @@ def _get_owner_id() -> int:
     sentinel; it is not a Telegram user id.  Every caller must treat it as
     *nobody*, never as an identity — see :func:`is_owner`.
     """
-    global _owner_id  # noqa: PLW0603
+    global _owner_id
     if _owner_id is None:
         _owner_id = get_settings().owner_telegram_id
     return _owner_id
@@ -109,11 +109,15 @@ def owner_only(func: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for feature CRUD."""
-    from sqlalchemy import create_engine as _ce
+    """The process-wide synchronous engine (``storage.db.sync_engine``).
 
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+    Audit A-02: this module used to build its own ``sqlite:///`` engine and
+    therefore ignored ``NEXUS_DATABASE_URL``; the central helper resolves
+    PostgreSQL-or-SQLite exactly like ``get_session``.
+    """
+    from nexus_ai_agent.storage.db import sync_engine
+
+    return sync_engine()
 
 
 def log_admin_action(

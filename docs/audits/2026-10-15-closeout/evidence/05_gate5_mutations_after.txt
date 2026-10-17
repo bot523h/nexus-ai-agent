@@ -1,0 +1,14 @@
+== gate5_mutation_probes.py AFTER refactor 2026-10-15T18:51:26Z
+  baseline: GREEN
+  mutant:  RED (exit 1) — caught
+  restore: SHA restored ccd77260dabe…
+  rerun:   GREEN
+
+=== M10 bare success=False treated as success (src/nexus_ai_agent/jobs/failure_semantics.py)
+  baseline: GREEN
+  mutant:  RED (exit 1) — caught
+  restore: SHA restored 0310699c2942…
+  rerun:   GREEN
+
+=== summary: 17/17 mutants caught ===
+exit=0

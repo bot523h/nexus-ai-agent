@@ -164,10 +164,35 @@ async def root() -> str:
         </div>
 
         <script>
+            // The dashboard API is bearer-token gated (NEXUS_DASHBOARD_TOKEN);
+            // the token is asked for once per tab and kept in sessionStorage.
+            const TOKEN_KEY = 'nexus_dashboard_token';
+            function dashboardToken(force) {
+                let token = sessionStorage.getItem(TOKEN_KEY);
+                if (!token || force) {
+                    const ask = 'توکن داشبورد (NEXUS_DASHBOARD_TOKEN) را وارد کنید:';
+                    token = window.prompt(ask) || '';
+                    sessionStorage.setItem(TOKEN_KEY, token);
+                }
+                return token;
+            }
+            async function apiFetch(path) {
+                const authed = (force) => fetch(path, {
+                    headers: { 'Authorization': 'Bearer ' + dashboardToken(force) }
+                });
+                let res = await authed(false);
+                if (res.status === 401) { res = await authed(true); }
+                if (res.status === 503) {
+                    const note = 'داشبورد غیرفعال است: NEXUS_DASHBOARD_TOKEN تنظیم نشده.';
+                    document.getElementById('recent_users').innerHTML =
+                        '<p class="text-amber-400">' + note + '</p>';
+                }
+                if (!res.ok) { throw new Error('dashboard API ' + res.status); }
+                return res.json();
+            }
             async function loadStats() {
                 try {
-                    const res = await fetch('/api/dashboard/stats');
-                    const data = await res.json();
+                    const data = await apiFetch('/api/dashboard/stats');
                     document.getElementById('total_users').innerText = data.total_users;
                     document.getElementById('total_chats').innerText = data.total_chats;
                     document.getElementById('total_files').innerText = data.total_files;
@@ -178,23 +203,24 @@ async def root() -> str:
 
             async function loadRecentUsers() {
                 try {
-                    const res = await fetch('/api/dashboard/recent_users');
-                    const data = await res.json();
+                    const data = await apiFetch('/api/dashboard/recent_users');
                     const container = document.getElementById('recent_users');
                     if (data.length === 0) {
                         container.innerHTML = '<p class="text-slate-400">هیچ کاربری یافت نشد.</p>';
                         return;
                     }
                     let html = '<ul class="divide-y divide-slate-700">';
+                    // PII-free payload (P0-5): surrogate id + join time only.
                     data.forEach(u => {
-                        const name = u.username || 'بدون نام';
+                        const joined = u.joined_at
+                            ? new Date(u.joined_at).toLocaleString('fa-IR') : '—';
                         html += `
                             <li class="py-3 flex justify-between items-center">
                                 <div>
-                                    <span class="font-bold text-blue-300">${name}</span>
+                                    <span class="font-bold text-blue-300">کاربر #${u.id}</span>
                                     <span class="text-slate-500 text-sm ml-2">
-                             ID: ${u.telegram_id}
-                         </span>
+                                        عضویت: ${joined}
+                                    </span>
                                 </div>
                                 <span class="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">
                                     User #${u.id}
@@ -230,13 +256,17 @@ async def healthz() -> dict[str, str]:
 async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(temp_dir.mkdir, parents=True, exist_ok=True)
     suffix = Path(upload.filename or "upload.bin").suffix or ".bin"
-    fd, temp_path = tempfile.mkstemp(prefix="creative-upload-", suffix=suffix, dir=temp_dir)
+    fd, temp_path = await asyncio.to_thread(
+        tempfile.mkstemp, prefix="creative-upload-", suffix=suffix, dir=temp_dir
+    )
     os.close(fd)
     written = 0
     try:
-        with Path(temp_path).open("wb") as handle:
+        # Disk writes run off the event loop (A-12): one thread hop per chunk.
+        handle = await asyncio.to_thread(Path(temp_path).open, "wb")
+        try:
             while True:
                 chunk = await upload.read(1024 * 1024)
                 if not chunk:
@@ -247,10 +277,12 @@ async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
                         status_code=413,
                         detail=f"upload exceeds the {_MAX_UPLOAD_BYTES}-byte limit",
                     )
-                handle.write(chunk)
+                await asyncio.to_thread(handle.write, chunk)
+        finally:
+            await asyncio.to_thread(handle.close)
     except Exception:
         # A rejected (or failed) upload never leaves a partial file behind.
-        Path(temp_path).unlink(missing_ok=True)
+        await asyncio.to_thread(Path(temp_path).unlink, missing_ok=True)
         raise
     await upload.close()
     return temp_path
@@ -277,9 +309,11 @@ async def _download_video_to_temp(video_url: str) -> str:
 
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(temp_dir.mkdir, parents=True, exist_ok=True)
     suffix = Path(urlparse(video_url).path).suffix or ".mp4"
-    fd, temp_path = tempfile.mkstemp(prefix="creative-url-", suffix=suffix, dir=temp_dir)
+    fd, temp_path = await asyncio.to_thread(
+        tempfile.mkstemp, prefix="creative-url-", suffix=suffix, dir=temp_dir
+    )
     os.close(fd)
     try:
         async with httpx.AsyncClient(
@@ -287,12 +321,15 @@ async def _download_video_to_temp(video_url: str) -> str:
         ) as client:
             async with client.stream("GET", video_url) as response:
                 response.raise_for_status()
-                with Path(temp_path).open("wb") as handle:
+                handle = await asyncio.to_thread(Path(temp_path).open, "wb")
+                try:
                     async for chunk in response.aiter_bytes():
-                        handle.write(chunk)
+                        await asyncio.to_thread(handle.write, chunk)
+                finally:
+                    await asyncio.to_thread(handle.close)
     except Exception:
         # A refused/blocked/failed download never leaves a partial file.
-        Path(temp_path).unlink(missing_ok=True)
+        await asyncio.to_thread(Path(temp_path).unlink, missing_ok=True)
         raise
     return temp_path
 
@@ -329,7 +366,7 @@ async def _process_video_edit_job(
         await registry.update_job_status(job_id, "failed", error=str(exc))
     finally:
         if local_input_path:
-            Path(local_input_path).unlink(missing_ok=True)
+            await asyncio.to_thread(Path(local_input_path).unlink, missing_ok=True)
 
 
 # Legacy lane (ADR 0006): the canonical media path is the Telegram creative

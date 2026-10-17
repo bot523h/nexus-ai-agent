@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import struct
 from pathlib import Path
+from typing import Any
 
 from nexus_ai_agent.llm.provider import LLMProvider
 
@@ -67,7 +68,7 @@ class LongTermMemory:
         self,
         thread_id: str,
         text: str,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         _ = metadata
         embedding = await self._llm.embed(text)

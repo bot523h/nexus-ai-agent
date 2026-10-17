@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Any
 
 
 class RiskLevel(str, Enum):
@@ -16,7 +17,7 @@ class BaseTool(ABC):
     risk_level: RiskLevel
 
     @abstractmethod
-    async def execute(self, inputs: dict) -> dict:
+    async def execute(self, inputs: dict[str, Any]) -> dict[str, Any]:
         """
         Execute tool with structured inputs.
 

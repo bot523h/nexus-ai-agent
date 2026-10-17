@@ -71,7 +71,11 @@ async def update_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await message.reply_text(f"🆕 نسخه جدید یافت شد: {latest}\nدر حال درخواست تایید...")
     success, detail = await monitor.perform_update(current_version, approval_system)
+    # A-07: relay the updater's exact outcome — "already up to date" is not an
+    # update, "unsupported" (container image without .git) is not "pending".
     if success:
-        await message.reply_text("✅ آپدیت با موفقیت انجام شد. لطفاً بات را ری‌استارت کنید.")
+        await message.reply_text(f"✅ {detail}")
+    elif detail.startswith("self-update unsupported"):
+        await message.reply_text(f"⛔ {detail}")
     else:
         await message.reply_text(f"⏳ {detail}")

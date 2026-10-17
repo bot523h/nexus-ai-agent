@@ -14,7 +14,6 @@ dependencies = [
   "python-telegram-bot>=21.0",
   "langgraph>=0.2",
   "langgraph-checkpoint-sqlite==3.1.1",
-  "langchain-community>=0.2",
   "sqlmodel==0.0.42",
   "sqlalchemy==2.0.54",
   "alembic==1.20.0",
@@ -23,6 +22,8 @@ dependencies = [
   "psycopg[binary,pool]==3.3.5",
   "langgraph-checkpoint-postgres==3.1.2",
   "pydantic-settings>=2.0",
+  "pydantic>=2.7,<3",  # imported directly by 29 modules (audit A-05); was only transitive
+  "packaging>=23.0",  # agent/updater.py compares release tags semantically (audit A-07)
     "sentence-transformers>=3.0",
     "llama-cpp-python>=0.2",
     "structlog>=24.0",
@@ -63,9 +64,9 @@ dev = [
   "pytest-asyncio>=0.23",
   "ruff>=0.4",
   "mypy>=1.10",
-  "pytest-mock>=3.12",
   "pypdf>=5.1",  # keep the pdf-extraction test path real, not mocked
   "imageio-ffmpeg>=0.5",  # bundles a static FFmpeg: the render test runs a real encode
+  "deptry>=0.20",  # declared-vs-imported dependency gate (`make deps`, CI lint job)
 ]
 
 [tool.setuptools]
@@ -84,7 +85,39 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+# Audit A-14 (2026-10-15): the rule set was the bare minimum; every rule below
+# is enabled at zero violations and is a ratchet (a new violation is red).
+select = [
+    "E", "F", "I", "B", "UP",
+    "RUF100",  # unused `# noqa` — a stale suppression is a lie about the code
+    "T201",    # `print` in library code (scripts/CLI output are exempt below)
+    "PLW2901", # loop variable overwritten inside the loop
+    "PLW1510", # `subprocess.run` without an explicit `check=`
+    "A002",    # argument shadows a builtin
+    "PGH003",  # blanket `# type: ignore`
+    "RUF012",  # mutable class attribute without ClassVar
+    "RUF015",  # `list(x)[0]` → `next(iter(x))`
+    "DTZ",     # naive datetime construction
+    "S324",    # insecure hash (md5/sha1) for security purposes
+    "SIM115",  # `open()` without a context manager (file-handle leak)
+    "SIM300",  # Yoda conditions
+    "G004",    # f-string in a logging call (formatted even when filtered out)
+    "PIE",     # misc. correctness (unnecessary placeholders, dict kwargs, …)
+    "RSE102",  # `raise Exc()` → `raise Exc`
+    "FURB",    # refurb modernisations (regex flag aliases, decimal ctor, …)
+    "ASYNC",   # blocking I/O / sleep / subprocess inside `async def` (audit A-12 census)
+]
+# `BLE001` is not selected, but its `# noqa: BLE001` comments document every
+# deliberate broad `except` for reviewers; `external` keeps RUF100 from
+# stripping them.
+external = ["BLE001"]
+
+[tool.ruff.lint.per-file-ignores]
+# Operator-facing CLIs print by design.  Tests and scripts may block inside
+# `async def` (fixtures, probes, waits); the A-12 census is a production rule.
+"scripts/**" = ["T201", "ASYNC"]
+"tests/**" = ["ASYNC"]
+"src/nexus_ai_agent/diagnostics/truth.py" = ["T201"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -92,12 +125,12 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.12"
 mypy_path = ["src"]
-warn_unused_ignores = true
-warn_redundant_casts = true
+# Audit A-13 (2026-10-15): `src/` is type-checked under mypy --strict.  `strict`
+# implies disallow_untyped_defs, disallow_any_generics, warn_return_any,
+# warn_unused_ignores, warn_redundant_casts, no_implicit_optional and
+# strict_equality; the explicit flags below are the ones strict does not set.
+strict = true
 warn_unreachable = true
-disallow_untyped_defs = true
-no_implicit_optional = true
-strict_equality = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
@@ -112,7 +145,6 @@ module = [
     "psycopg",
     "psycopg_pool",
     "asyncpg",
-    "langchain_community",
     "mega",
     "sqlite_vec",
     "telegram",
@@ -129,3 +161,30 @@ module = [
     "nacl.exceptions",
 ]
 ignore_missing_imports = true
+
+# ── Dependency truth (audit A-05, 2026-10-15) ────────────────────────────────
+# `deptry src` is part of `make lint` and the CI lint job: every import must be
+# a declared dependency, and every declared runtime dependency must be used.
+[tool.deptry]
+known_first_party = ["nexus_ai_agent"]
+pep621_dev_dependency_groups = ["dev"]
+
+[tool.deptry.per_rule_ignores]
+# DEP001 — imported but not declared: *optional* integrations that are probed
+# at import time and degrade with a typed error when absent.
+#   nacl  → creative/packs/delivery/signing.py (Ed25519 backend; pure fallback)
+#   gtts  → features/speech.py (online TTS; returns success=False when missing)
+#   mega  → storage/providers/mega.py (ProviderUnavailable when missing)
+DEP001 = ["nacl", "gtts", "mega"]
+# DEP004 — imported at runtime but declared only in the dev extra: the bundled
+# static FFmpeg is the *last* fallback of creative/slideshow/ffmpeg.py (after
+# NEXUS_FFMPEG_BIN and PATH) and fails with a typed error when absent.
+DEP004 = ["imageio_ffmpeg"]
+# DEP002 — declared but not imported by name: database drivers selected through
+# URL schemes / dialect strings, FastAPI's form parser, and the dynamic
+# `duckduckgo_search` import in integrations/external.py.
+DEP002 = ["asyncpg", "python-multipart", "duckduckgo-search"]
+# DEP003 — transitive packages imported directly, each owned by a declared
+# dependency: starlette (fastapi), httpcore (httpx), botocore (boto3),
+# psycopg_pool (psycopg[pool]).
+DEP003 = ["starlette", "httpcore", "botocore", "psycopg_pool"]

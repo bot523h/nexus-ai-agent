@@ -94,7 +94,7 @@ def _project(duration_us: int = 9_000_000):
     return actor, project
 
 
-def _gateway(actor, project, producer, *, enabled=True):  # noqa: ANN001
+def _gateway(actor, project, producer, *, enabled=True):
     access = ProjectAccess(
         actor=actor, project_id=PROJECT_ID, permissions=frozenset({"project:read", "project:write"})
     )
@@ -110,7 +110,7 @@ def _gateway(actor, project, producer, *, enabled=True):  # noqa: ANN001
     )
 
 
-def _run(text: str, *, producer, project, queue, source_path, workspace_dir):  # noqa: ANN001
+def _run(text: str, *, producer, project, queue, source_path, workspace_dir):
     actor, _ = _project()
     gateway = _gateway(actor, project, producer)
     return asyncio.run(
@@ -128,7 +128,7 @@ def _run(text: str, *, producer, project, queue, source_path, workspace_dir):  #
 
 
 @pytest.fixture()
-def source(tmp_path):  # noqa: ANN001
+def source(tmp_path):
     path = tmp_path / "real_source.mp4"
     path.write_bytes(b"\x00\x01\x02\x03real-bytes")
     return path
@@ -137,7 +137,7 @@ def source(tmp_path):  # noqa: ANN001
 # ── the model supplies points only; the payload is canonical ────────────────
 
 
-def test_valid_proposal_enqueues_one_typed_canonical_payload(tmp_path, source) -> None:  # noqa: ANN001
+def test_valid_proposal_enqueues_one_typed_canonical_payload(tmp_path, source) -> None:
     _, project = _project()
     queue = RecordingQueue()
     outcome = _run(
@@ -162,7 +162,7 @@ def test_valid_proposal_enqueues_one_typed_canonical_payload(tmp_path, source) -
     assert typed.args == ["1", "8"]
 
 
-def test_payload_carries_no_authority_and_no_raw_text(tmp_path, source) -> None:  # noqa: ANN001
+def test_payload_carries_no_authority_and_no_raw_text(tmp_path, source) -> None:
     _, project = _project()
     queue = RecordingQueue()
     _run(
@@ -183,7 +183,7 @@ def test_payload_carries_no_authority_and_no_raw_text(tmp_path, source) -> None:
 # ── refusals enqueue NOTHING ────────────────────────────────────────────────
 
 
-def test_missing_model_enqueues_nothing(tmp_path, source) -> None:  # noqa: ANN001
+def test_missing_model_enqueues_nothing(tmp_path, source) -> None:
     actor, project = _project()
     # No model configured -> the gateway is disabled and selects NullCognition
     # (the fail-closed default).  A null producer refuses and nothing enqueues.
@@ -222,7 +222,7 @@ def test_missing_model_enqueues_nothing(tmp_path, source) -> None:  # noqa: ANN0
         _proposal(input={"clip_asset_id": "src", "in_point_us": 5_000_000, "out_point_us": 1}),
     ],
 )
-def test_hostile_or_invalid_proposal_enqueues_nothing(tmp_path, source, hostile) -> None:  # noqa: ANN001
+def test_hostile_or_invalid_proposal_enqueues_nothing(tmp_path, source, hostile) -> None:
     _, project = _project()
     queue = RecordingQueue()
     outcome = _run(
@@ -237,7 +237,7 @@ def test_hostile_or_invalid_proposal_enqueues_nothing(tmp_path, source, hostile)
     assert queue.enqueues == []
 
 
-def test_missing_source_is_refused_before_enqueue(tmp_path) -> None:  # noqa: ANN001
+def test_missing_source_is_refused_before_enqueue(tmp_path) -> None:
     _, project = _project()
     queue = RecordingQueue()
     outcome = _run(
@@ -253,7 +253,7 @@ def test_missing_source_is_refused_before_enqueue(tmp_path) -> None:  # noqa: AN
     assert queue.enqueues == []
 
 
-def test_no_source_asset_is_refused(tmp_path, source) -> None:  # noqa: ANN001
+def test_no_source_asset_is_refused(tmp_path, source) -> None:
     actor, _ = _project()
     empty = new_project("p", "n", Timeline(timeline_id="tl", duration_us=0))
     gateway = _gateway(actor, empty, ScriptedProducer(_proposal()))
@@ -288,7 +288,7 @@ def test_same_intent_same_key_different_intent_different_key() -> None:
     assert key_a.startswith("cognition:")
 
 
-def test_contradictory_payload_under_same_key_fails_closed(tmp_path, source) -> None:  # noqa: ANN001
+def test_contradictory_payload_under_same_key_fails_closed(tmp_path, source) -> None:
     """Same intent + a model that changes its points ⇒ typed refusal, never overwrite.
 
     The intent key is deterministic, so a *non-deterministic* model returning a
@@ -312,7 +312,7 @@ def test_contradictory_payload_under_same_key_fails_closed(tmp_path, source) -> 
         )
         return _gateway(actor, project, producer)
 
-    async def _attempt(gateway):  # noqa: ANN001
+    async def _attempt(gateway):
         return await run_free_text_intent_durable(
             "trim it",
             gateway=gateway,
@@ -366,7 +366,7 @@ def test_build_payload_rejects_unsupported_operation() -> None:
         {"in_point_us": None, "out_point_us": 100},
     ],
 )
-def test_build_payload_rejects_bad_points(inputs) -> None:  # noqa: ANN001
+def test_build_payload_rejects_bad_points(inputs) -> None:
     with pytest.raises(HandoffRefusal):
         build_creative_payload(
             _FakeProposal("timeline.trim", inputs),

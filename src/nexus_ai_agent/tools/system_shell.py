@@ -84,7 +84,7 @@ import shlex
 import subprocess
 from enum import Enum
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from nexus_ai_agent.tools.base import BaseTool, RiskLevel
 from nexus_ai_agent.tools.files import _workspace_root
@@ -783,7 +783,7 @@ class ShellTool(BaseTool):
 
     # ── execution ───────────────────────────────────────────────────
 
-    async def execute(self, inputs: dict) -> dict:
+    async def execute(self, inputs: dict[str, Any]) -> dict[str, Any]:
         command = str(inputs.get("command", "")).strip()
         if not command:
             return {"success": False, "output": "", "error": "Missing command"}
