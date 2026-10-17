@@ -428,6 +428,22 @@ def _creative_job_ids(creative_dir: Path) -> list[str]:
     return sorted(str(row[0]) for row in rows)
 
 
+def _run_async(coro: Any) -> Any:
+    """Run a coroutine on a private loop, without touching the current one.
+
+    ``asyncio.run`` installs its own loop as *the* current loop and, on
+    Python 3.10, clears it again when it returns — which would fight with
+    the loop pytest-asyncio manages for the surrounding test.  A private
+    loop keeps the suite independent of that machinery on every supported
+    interpreter (3.10, 3.11, 3.12).
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 class _StubApplication:
     """Minimal stand-in for a PTB application (bot + update queue)."""
 
@@ -708,7 +724,7 @@ def test_the_studio_surface_enforces_project_scope_after_authentication(
     from nexus_ai_agent.api.app import get_creative_registry
 
     registry = get_creative_registry()
-    job_id = asyncio.run(registry.create_job("video_edit", {"project_id": AUTHORIZED_PROJECT}))
+    job_id = _run_async(registry.create_job("video_edit", {"project_id": AUTHORIZED_PROJECT}))
 
     authorized = {"Authorization": f"Bearer {DASHBOARD_TOKEN}"}
     allowed = api_env.client.get(
@@ -775,7 +791,7 @@ def test_the_legacy_creative_surface_opens_only_with_a_valid_signature(
     from nexus_ai_agent.api.app import get_creative_registry
 
     registry = get_creative_registry()
-    job_id = asyncio.run(registry.create_job("video_edit", {"project_id": AUTHORIZED_PROJECT}))
+    job_id = _run_async(registry.create_job("video_edit", {"project_id": AUTHORIZED_PROJECT}))
     read_ok = api_env.client.get(f"/creative/jobs/{job_id}", headers=_hmac_headers(HMAC_KEY, b""))
     assert read_ok.status_code == 200, read_ok.text[:200]
     assert read_ok.json()["id"] == job_id
@@ -877,7 +893,7 @@ def test_a_rejected_creative_request_creates_no_job_and_persists_no_upload(
     from nexus_ai_agent.api.app import get_creative_registry
 
     registry = get_creative_registry()
-    asyncio.run(registry.create_job("video_edit", {"project_id": AUTHORIZED_PROJECT}))
+    _run_async(registry.create_job("video_edit", {"project_id": AUTHORIZED_PROJECT}))
     before = _creative_job_ids(api_env.creative_dir)
     assert before, "the creative registry is empty — the assertion below has no teeth"
 

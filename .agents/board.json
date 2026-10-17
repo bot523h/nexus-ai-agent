@@ -833,7 +833,8 @@
       "description": "A-06 — OpenAPI fail-closed route inventory: every registered HTTP operation must be classified (public allowlist or a named authentication/authorization gate) and proved by a regression test; plus the configuration comments that document those gates.",
       "paths": [
         "tests/integration/test_api_gate_inventory.py",
-        "src/nexus_ai_agent/config/settings.py"
+        "src/nexus_ai_agent/config/settings.py",
+        "docs/architecture/SECURITY.md"
       ]
     }
   ],
@@ -3697,14 +3698,15 @@
       ],
       "exclusive_paths": [
         "tests/integration/test_api_gate_inventory.py",
-        "src/nexus_ai_agent/config/settings.py"
+        "src/nexus_ai_agent/config/settings.py",
+        "docs/architecture/SECURITY.md"
       ],
       "owner_hint": "agent A — branch arena/9574fc5d-nexus-ai-agent (session identity)",
       "agent_branch": "arena/9574fc5d-nexus-ai-agent",
       "claimed_at": "2026-10-17T20:51:25Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "Scope extension (2026-10-17, P2 audit): the route-inventory audit found that the NEXUS_DASHBOARD_TOKEN comment in config/settings.py still documented the pre-A-06 posture ('when unset the API is open'), which contradicts the fail-closed gate in api/dashboard.py. The change is comment-only (no behaviour change); the ownership re-check (agent_board.py check --files ... --branch arena/9574fc5d-nexus-ai-agent) returned exit 0 (27 sources read, no overlap) before the edit.",
+      "note": "Scope extension (2026-10-17, P2 audit): (1) the NEXUS_DASHBOARD_TOKEN comment in config/settings.py still documented the pre-A-06 posture ('when unset the API is open'), which contradicts the fail-closed gate in api/dashboard.py — comment-only, no behaviour change; (2) docs/architecture/SECURITY.md gained threat row T15 so the new guard is discoverable in the STRIDE table (the living-view contract of AGENTS.md §7). Ownership re-checked before each edit: agent_board.py check --files ... --branch arena/9574fc5d-nexus-ai-agent -> exit 0 (27 sources read, no overlap).",
       "generation": 1
     }
   ],
