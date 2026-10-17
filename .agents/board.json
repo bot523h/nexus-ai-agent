@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-17T00:00:00Z",
+  "updated_at": "2026-10-17T20:51:25Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -826,6 +826,13 @@
         "tests/integration/test_migrate_race_condition.py",
         "tests/integration/test_migrate_adoption.py",
         "tests/integration/test_migrate_cli.py"
+      ]
+    },
+    {
+      "id": "api-gate-assurance",
+      "description": "A-06 — OpenAPI fail-closed route inventory: every registered HTTP operation must be classified (public allowlist or a named authentication/authorization gate) and proved by a regression test.",
+      "paths": [
+        "tests/integration/test_api_gate_inventory.py"
       ]
     }
   ],
@@ -3661,6 +3668,42 @@
       "note": "Closure evidence v3 (PR #205, branch arena/nagar-asset-library-v1, head 906b0a2). 4 CodeRabbit findings closed: (1) replay digest check via BlobStore.hash_stream -> IdempotencyConflict; (2) UNIQUE(project_id, idempotency_key) on assetingest + migration e575469d90b9; (3) parent-fd fsync after os.replace; (4) de-vacuumed rglob assertions. Focused suites (exact, exit 0): tests/architecture/test_asset_library_boundary.py 6 passed; tests/unit/test_asset_library_service.py 10 passed; tests/unit/test_asset_library_models.py 10 passed; tests/unit/test_asset_library_blob_store.py 10 passed; tests/integration/test_asset_library_recovery.py 8 passed; tests/integration/test_asset_library_filesystem_security.py 12 passed; tests/integration/test_asset_library_persistence.py 10 passed; combined 66 passed. Mutation harness scripts/asset_library_mutations.py: 8/8 killed (containment, NUL, key-shape, dedup-verify, open-verify, bounded-read, unique-constraint, replay-digest). Full suite python -m pytest -q -m \"not slow\": 3966 passed, 31 skipped (local); CI test job on 906b0a2/e27e6f0: 3967 passed, 30 skipped, 0 failed. CI on 906b0a2: push run 38161719742 success (a1); PR run 38161723606 success (a2, after one pre-existing SQLite WAL-init-race rerun). ruff check+format clean; mypy src 299 files clean; truth doctor OK. agent_board.py check on changed files: exit 0 (no overlap). Known unrelated flake: SQLite WAL-init race (test_concurrent_first_use_sets_wal_without_error).",
       "generation": 1,
       "release_reason": "auto-released by gc at 2026-10-13T15:08:09Z (stale active lease)"
+    },
+    {
+      "task": "task-271-api-gate-inventory",
+      "title": "A-06 — OpenAPI fail-closed route inventory (every registered HTTP operation classified and gated)",
+      "title_fa": "A-06 — فهرست مسیرهای OpenAPI با بستن fail-closed: هر عملیات HTTP ثبت‌شده باید صریحاً طبقه‌بندی و محافظت شود.",
+      "zone": "api-gate-assurance",
+      "priority": "P2",
+      "status": "active",
+      "scope": "Enumerate the live FastAPI OpenAPI schema and prove that every registered HTTP operation is either on an explicit public allowlist or behind a tested security gate (dashboard bearer token, studio project scope, Telegram webhook shared secret, legacy creative HMAC request signature). A newly added unprotected route must turn the guard red, and no test may contact an external service or a developer's configured database.",
+      "scope_fa": "اسکیمای زندهٔ OpenAPI اپلیکیشن FastAPI فهرست می‌شود و ثابت می‌شود که هر عملیات HTTP ثبت‌شده یا روی فهرست عمومی صریح است یا پشت یک گیت امنیتی آزمون‌شده (توکن bearer داشبورد، محدودهٔ پروژهٔ studio، سکرت وب‌هوک تلگرام، امضای HMAC مسیرهای legacy) قرار دارد. افزودن مسیر محافظت‌نشده باید گارد را قرمز کند و هیچ تستی نباید به سرویس بیرونی یا دیتابیس توسعه‌دهنده وصل شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The route inventory is derived from the real application's OpenAPI schema and from the actually registered routes — not from a hand-written list of route names.",
+        "Every discovered operation is either on an explicit public allowlist (GET /, GET /healthz) or mapped to a named security gate; an unclassified operation fails with a message naming the method and path.",
+        "Every operation is probed through the real ASGI app: unconfigured security fails closed, missing/incorrect credentials are rejected, and a correct credential opens only the intended surface.",
+        "A newly registered unprotected route is detected by the guard (proved by a controlled, fully reverted mutation probe).",
+        "Studio project scope, the Telegram webhook shared secret and the legacy creative HMAC signature are each proved independently — authentication never bypasses project-level authorization.",
+        "Tests are isolated: temporary SQLite database, explicit environment overrides, no external network, no real jobs, no persisted uploads, no leaked global state.",
+        "A security failure message identifies the affected method and path."
+      ],
+      "evidence_required": [
+        "pytest -q tests/integration/test_api_gate_inventory.py (exact command + exit code + pass/skip counts)",
+        "pytest -q tests/unit/test_dashboard_api.py tests/unit/test_security_hardening.py tests/unit/test_webhook_mode.py tests/unit/test_creative_studio.py (focused security suites)",
+        "ruff check . && ruff format --check . (exit codes)",
+        "CI run URL + per-job conclusions for the exact final head SHA"
+      ],
+      "exclusive_paths": [
+        "tests/integration/test_api_gate_inventory.py"
+      ],
+      "owner_hint": "agent A — branch arena/9574fc5d-nexus-ai-agent (session identity)",
+      "agent_branch": "arena/9574fc5d-nexus-ai-agent",
+      "claimed_at": "2026-10-17T20:51:25Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
