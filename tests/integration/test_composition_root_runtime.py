@@ -295,6 +295,17 @@ def test_a_photo_captioned_vision_is_dispatched_to_the_vision_handler(
     )
     assert _group_zero_callback(application, addressed) == "vision_cmd"
 
+    # Mobile clients put the question on the next line. The first cut of this
+    # filter ended with ``(?:[^\S\n]|$)``, which excludes a newline and, with
+    # no re.MULTILINE, also fails to match before a mid-string newline — so
+    # the photo was silently buffered as a slideshow image instead.
+    newline = _photo_update(
+        user_id=OWNER_ID,
+        chat_type=Chat.PRIVATE,
+        caption="/vision\nwhat is in this picture?",
+    )
+    assert _group_zero_callback(application, newline) == "vision_cmd"
+
 
 def test_an_ordinary_photo_still_reaches_the_slideshow_handler(application: Any) -> None:
     assert (
@@ -342,6 +353,10 @@ def test_the_vision_question_is_read_from_the_caption_when_args_are_empty() -> N
     )
     assert _vision_question(update_with("عکس اسلایدشو"), empty_context) == (
         _VISION_DEFAULT_QUESTION
+    )
+    # A newline is a separator too, on every Telegram client.
+    assert _vision_question(update_with("/vision\nwhat is in this picture?"), empty_context) == (
+        "what is in this picture?"
     )
     # A text command keeps using the arguments PTB parsed.
     assert (

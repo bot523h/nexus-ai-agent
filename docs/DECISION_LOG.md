@@ -2081,10 +2081,12 @@ with three independent safeguards, because any one of them can be defeated:
 1. **An explicit second opt-in** (`NEXUS_PG_TEST_DESTRUCTIVE=1`) in addition to
    `NEXUS_DATABASE_URL`, set by the CI job that owns the disposable database. The opt-in is a
    safeguard, not the fix — it does not make an unscoped delete safe.
-2. **Every statement is scoped to a per-run nonce** — no statement may address a row the test
-   did not create. Enforced statically by `tests/unit/test_pg_integration_safety.py`, which
-   walks the module's AST and fails on any `text(...)` `DELETE` without a nonce-scoped
-   `WHERE` (and on any DDL/`UPDATE`/`TRUNCATE`).
+2. **Every write is scoped to a per-run nonce** — no write may modify or delete a row the
+   test did not create. Read-only queries may inspect pre-existing rows: the survival
+   assertion *needs* the baseline `_enabled_force_join_chat_ids()` reads. Enforced
+   statically by `tests/unit/test_pg_integration_safety.py`, which walks the module's AST
+   and fails on any `text(...)` `DELETE` without a nonce-scoped `WHERE` (and on any
+   DDL/`UPDATE`/`TRUNCATE`).
 3. **Survival is asserted, not assumed**: a module-scoped fixture snapshots the enabled
    configurations before the module and asserts afterwards that none disappeared, and a
    dedicated test drives the gate with a foreign enabled configuration and proves it
