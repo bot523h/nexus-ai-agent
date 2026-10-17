@@ -30,6 +30,9 @@ import os
 from typing import Any
 
 from nexus_ai_agent.config.settings import Settings, get_settings
+from nexus_ai_agent.observability.logging import get_logger
+
+logger = get_logger(__name__)
 
 DEFAULT_RUN_MODE = "polling"
 VALID_RUN_MODES = ("polling", "webhook")
@@ -147,19 +150,29 @@ async def _serve_webhook(
     port: int,
     log_level: str,
 ) -> None:
-    """Serve webhook mode on a running event loop (see :func:`run_webhook`)."""
+    """Serve webhook mode on a running event loop (see :func:`run_webhook`).
+
+    W1 canonical lifecycle: ``post_init`` is our ONE startup authority
+    (binds engines + restores reminders + resumes pending jobs) and
+    ``post_shutdown`` is our ONE shutdown authority (tears down every
+    resource through the Runtime).  PTB only invokes these callbacks from
+    ``run_polling``/``run_webhook``, so this manual ``initialize → start →
+    (serve) → stop → shutdown`` path must invoke them itself — otherwise a
+    webhook deployment silently skips startup binding and leaks every
+    resource at shutdown.
+    """
     import uvicorn
 
-    # 1) Bring the application up.  No Updater is started, so nothing polls:
-    #    Telegram POSTs updates to /webhook/telegram instead.
+    # 1) Bring the application up, then run the startup authority.  No
+    #    Updater is started — Telegram POSTs updates to /webhook/telegram.
     await application.initialize()
-    job_queue = getattr(application, "bot_data", {}).get("job_queue")
-    if job_queue is not None:
-        await job_queue.resume_pending()
+    post_init = getattr(application, "post_init", None)
+    if post_init is not None:
+        await post_init(application)
     await application.start()
     try:
-        # 2) Register the webhook.  Telegram will echo `webhook_secret` back
-        #    in TELEGRAM_SECRET_TOKEN_HEADER on every delivery.
+        # 2) Register the webhook.  Telegram will echo `webhook_secret`
+        #    back in TELEGRAM_SECRET_TOKEN_HEADER on every delivery.
         await application.bot.set_webhook(url=webhook_url, secret_token=webhook_secret)
 
         # 3) Serve.  uvicorn installs SIGINT/SIGTERM handlers that set
@@ -175,8 +188,23 @@ async def _serve_webhook(
         server = uvicorn.Server(config)
         await server.serve()
     finally:
-        # 4) Graceful application shutdown: stop consuming updates and close
-        #    the bot's HTTP sessions.  Runs even if serving failed, so a
-        #    platform-issued SIGTERM never leaves half-open resources behind.
-        await application.stop()
-        await application.shutdown()
+        # 4) Graceful shutdown in canonical PTB order:
+        #      stop       → stop consuming updates, close bot HTTPClient
+        #      shutdown   → run post_shutdown → Runtime.shutdown() which
+        #                    disposes ALL engines/queues/clients/DBs.
+        #    Runs even if serving failed, so a platform-issued SIGTERM
+        #    never leaves half-open resources behind.
+        try:
+            await application.stop()
+        except Exception:  # noqa: BLE001 — don't strand shutdown
+            logger.exception("webhook_application_stop_failed")
+        try:
+            post_shutdown = getattr(application, "post_shutdown", None)
+            if post_shutdown is not None:
+                await post_shutdown(application)
+        except Exception:  # noqa: BLE001
+            logger.exception("webhook_application_post_shutdown_failed")
+        try:
+            await application.shutdown()
+        except Exception:  # noqa: BLE001
+            logger.exception("webhook_application_shutdown_failed")

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import Any
 
 from sqlmodel import Session, select
@@ -21,21 +20,42 @@ from nexus_ai_agent.storage.models import AnonSession
 logger = get_logger(__name__)
 
 
-@lru_cache(maxsize=8)
+_sync_engines: dict[str, Any] = {}
+
+
 def _sync_engine(db_path: str) -> Any:
     """Return a (cached) synchronous SQLAlchemy engine for feature CRUD.
 
     P1-2: the async methods' DB blocks run in worker threads (``asyncio.to_thread``),
     so the engine is created with ``check_same_thread=False`` and cached
-    to remove the per-call engine construction.
+    to remove the per-call engine construction.  Dict-based (not
+    lru_cache) so W1 shutdown can dispose and clear the cache
+    deterministically.
     """
     from sqlalchemy import create_engine as _ce
 
-    return _ce(
-        f"sqlite:///{db_path}",
-        echo=False,
-        connect_args={"check_same_thread": False},
-    )
+    engine = _sync_engines.get(db_path)
+    if engine is None:
+        engine = _ce(
+            f"sqlite:///{db_path}",
+            echo=False,
+            connect_args={"check_same_thread": False},
+        )
+        _sync_engines[db_path] = engine
+    return engine
+
+
+def _shutdown_engines() -> None:
+    """Dispose every cached engine and clear the cache (W1 runtime ownership).
+
+    Called from the synchronous shutdown path.  Must not raise.
+    """
+    for engine in list(_sync_engines.values()):
+        try:
+            engine.dispose()
+        except Exception:  # noqa: BLE001
+            logger.warning("anon_chat_engine_dispose_failed", exc_info=True)
+    _sync_engines.clear()
 
 
 class AnonymousChatManager:

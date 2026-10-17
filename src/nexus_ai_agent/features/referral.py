@@ -114,6 +114,22 @@ class ReferralEngine:
             )
         return self._engine
 
+    def close(self) -> None:
+        """Dispose the cached engine (W1 runtime ownership).
+
+        Idempotent and never raises.
+        """
+        if self._engine is not None:
+            try:
+                self._engine.dispose()
+            except Exception:  # noqa: BLE001
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning(
+                    "referral_engine_dispose_failed", exc_info=True
+                )
+            self._engine = None
+
     @staticmethod
     def generate_code(user_id: int) -> str:
         """Generate a unique referral code for a user."""

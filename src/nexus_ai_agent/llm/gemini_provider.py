@@ -18,30 +18,31 @@ log = get_logger(__name__)
 class GeminiProvider(LLMProvider):
     """LLMProvider implementation backed by Google Gemini 2.0 Flash.
 
-    Delegates all generation to GeminiEngine which handles rate-limiting,
-    conversation memory, and multi-modal requests internally.
-
-    For embeddings, uses a simple deterministic hash-based approach
-    (suitable for retrieval Augmentation at small scale).  When a real
-    embedding model is needed, swap to LocalLlamaCppProvider or a
-    dedicated embedding API.
+    Wraps a :class:`GeminiEngine`; the engine may be injected directly
+    (W1: one canonical engine owned by the runtime) or constructed from
+    credentials for isolated test usage.
     """
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",
         model: str = "gemini-2.0-flash",
         max_rpm: int = 15,
         max_daily: int = 1500,
         max_history: int = 20,
+        *,
+        engine: GeminiEngine | None = None,
     ) -> None:
-        self._engine = GeminiEngine(
-            api_key=api_key,
-            model=model,
-            max_rpm=max_rpm,
-            max_daily=max_daily,
-            max_history=max_history,
-        )
+        if engine is not None:
+            self._engine = engine
+        else:
+            self._engine = GeminiEngine(
+                api_key=api_key,
+                model=model,
+                max_rpm=max_rpm,
+                max_daily=max_daily,
+                max_history=max_history,
+            )
 
     @property
     def engine(self) -> GeminiEngine:
