@@ -19,6 +19,11 @@ names:
   is a failure — and a route hidden with ``include_in_schema=False`` is a
   failure too, because such an operation would be invisible to an
   OpenAPI-based inventory;
+* the cross-check looks **into mounted sub-applications** as well: a
+  ``Mount`` is a route with a path but no method set, and it is not part of
+  the parent's OpenAPI document, so a mounted (or statically served)
+  sub-application would otherwise be a blind spot.  A container the
+  inventory cannot enumerate has to be exempted explicitly, with a reason;
 * every operation must be classified: either it is on the **explicit
   public allowlist** below, or it belongs to one named security surface.
   An unclassified operation fails the test with the offending method and
@@ -45,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import re
 import sqlite3
 import time
 from collections.abc import Iterable, Iterator, Mapping
@@ -56,6 +62,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from starlette.staticfiles import StaticFiles
 
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.storage import db as db_module
@@ -82,6 +89,19 @@ PUBLIC_OPERATIONS: frozenset[tuple[str, str]] = frozenset(
 HTTP_METHODS: frozenset[str] = frozenset(
     {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 )
+
+#: Non-HTTP routes the inventory is allowed to ignore, mapped to the reason
+#: why an HTTP probe cannot audit them.  A route with a path but no method
+#: set is a *container*: a mounted sub-application or a websocket route.
+#: A container whose interior the inventory can enumerate is audited through
+#: its operations; a container it cannot see into (a static file server, for
+#: example) is invisible to every HTTP-based inventory and therefore has to
+#: be exempted explicitly — with a reason.  The map is empty today: the
+#: application mounts no sub-application and exposes no websocket route.
+OPAQUE_ROUTE_EXEMPTIONS: dict[str, str] = {}
+
+#: Matches a path parameter placeholder that no schema-derived name filled.
+_PLACEHOLDER_PATTERN = re.compile(r"\{[^}]+\}")
 
 #: Sample values for the path parameters of the audited operations.
 #: ``project_id`` must be inside the configured Studio project allowlist,
@@ -188,8 +208,23 @@ def surface_of(operation: tuple[str, str]) -> Surface | None:
 # ── the inventory ───────────────────────────────────────────────────────────
 
 
-def _iter_routes(routes: Iterable[Any]) -> Iterator[Any]:
-    """Yield every route reachable from *routes*, nested routers included.
+@dataclass(frozen=True)
+class RegisteredRoute:
+    """One route the application registered, as the inventory sees it."""
+
+    #: The path the route is really served under (mount prefixes included).
+    path: str
+    #: The Starlette/FastAPI route object.
+    route: Any
+    #: The path of the mount this route lives inside (``None`` for the
+    #: application's own route table).
+    container: str | None
+
+
+def _iter_routes(
+    routes: Iterable[Any], prefix: str = "", container: str | None = None
+) -> Iterator[RegisteredRoute]:
+    """Yield every route reachable from *routes* — nested routers and mounts.
 
     FastAPI changed how ``include_router`` is represented: older versions
     copy the router's routes into ``app.routes`` (flat), newer versions keep
@@ -197,34 +232,95 @@ def _iter_routes(routes: Iterable[Any]) -> Iterator[Any]:
     looked at the flat list would silently lose a whole surface (the
     dashboard and the Studio router are both included routers here), so the
     walk follows the nesting in both shapes.
+
+    Starlette's ``Mount`` is a second, independent way to hide operations:
+    it is a route with a path but *no* method set, and the sub-application
+    it serves sees the path **without** the mount prefix.  The walk therefore
+    looks into mounts as well and adds the prefix back, so a mounted
+    sub-application cannot slip past the inventory.
     """
-    seen: set[int] = set()
-    pending: list[Any] = list(routes)
+    seen: set[tuple[int, str]] = set()
+    pending: list[tuple[str, Any, str | None]] = [(prefix, route, container) for route in routes]
     while pending:
-        route = pending.pop(0)
-        if id(route) in seen:
+        base, route, enclosing = pending.pop(0)
+        path = getattr(route, "path", None)
+        effective = base + (path or "")
+        key = (id(route), effective)
+        if key in seen:
             continue
-        seen.add(id(route))
-        yield route
+        seen.add(key)
+        yield RegisteredRoute(path=effective, route=route, container=enclosing)
+
+        # A route with a path but no method set is a *container* (a mount or
+        # a websocket route): its children are served under its path.
+        is_container = bool(path) and not getattr(route, "methods", None)
+        child_container = effective if is_container else enclosing
+
+        # FastAPI's include_router wrapper: the nested routes already carry
+        # their full path.
         for attribute in ("original_router", "router"):
             nested = getattr(route, attribute, None)
             nested_routes = getattr(nested, "routes", None)
             if nested_routes:
-                pending.extend(nested_routes)
+                pending.extend(
+                    (effective, nested_route, child_container) for nested_route in nested_routes
+                )
+
+        # Starlette's Mount: the sub-application sees the path without the
+        # mount prefix, so the prefix is added back here.
+        for attribute in ("routes", "app"):
+            nested = getattr(route, attribute, None)
+            nested_routes = getattr(nested, "routes", None)
+            if nested_routes:
+                pending.extend(
+                    (effective, nested_route, child_container) for nested_route in nested_routes
+                )
 
 
-def _http_routes(app: FastAPI) -> dict[str, set[str]]:
-    """Every registered HTTP route of the application: path → methods."""
-    routes: dict[str, set[str]] = {}
-    for route in _iter_routes(app.routes):
-        path = getattr(route, "path", None)
+@dataclass(frozen=True)
+class RouteTable:
+    """Every route the application registered, split by what the guard can see."""
+
+    #: Every HTTP operation, as ``(method, effective path)``.
+    operations: frozenset[tuple[str, str]]
+    #: Every non-HTTP route (a mount or a websocket route): ``(kind, path)``.
+    containers: frozenset[tuple[str, str]]
+    #: The containers whose interior the inventory cannot enumerate.
+    opaque: frozenset[tuple[str, str]]
+
+
+def _registered_routes(app: FastAPI) -> RouteTable:
+    """Read the application's route table, mounts included."""
+    operations: set[tuple[str, str]] = set()
+    containers: dict[str, str] = {}
+    for registered in _iter_routes(app.routes):
+        route = registered.route
         methods = getattr(route, "methods", None)
-        if not path or not methods:
-            continue
-        for method in methods:
-            if method.lower() in HTTP_METHODS:
-                routes.setdefault(path, set()).add(method.upper())
-    return routes
+        path = registered.path
+        if methods:
+            for method in methods:
+                if method.lower() in HTTP_METHODS:
+                    operations.add((method.upper(), path))
+        elif path:
+            containers[path] = type(route).__name__
+
+    # A container is *opaque* when no HTTP operation can be found beneath
+    # it — a mounted static file server, for example.  Such a route is
+    # invisible to every OpenAPI-based inventory, so it has to be exempted
+    # explicitly instead of being dropped silently.
+    opaque = {
+        (kind, path)
+        for path, kind in containers.items()
+        if not any(
+            op_path == path or op_path.startswith(path.rstrip("/") + "/")
+            for _method, op_path in operations
+        )
+    }
+    return RouteTable(
+        operations=frozenset(operations),
+        containers=frozenset((kind, path) for path, kind in containers.items()),
+        opaque=frozenset(opaque),
+    )
 
 
 def _documentation_paths(app: FastAPI) -> set[str]:
@@ -294,12 +390,19 @@ def _path_parameter_names(schema: Mapping[str, Any], path: str) -> list[str]:
 
 
 def _fill_path(path: str, names: Iterable[str]) -> str:
-    """Replace every path parameter with a sample value."""
+    """Replace every path parameter with a sample value.
+
+    The names come from the OpenAPI document, so the values are the ones the
+    audited surfaces expect (``project_id`` must be inside the Studio
+    allowlist).  A path the document does not describe — a mounted
+    sub-application, for instance — falls back to a generic value, because
+    such an operation is reported as unclassified rather than silently
+    accepted, and the probe must not explode on it.
+    """
     filled = path
     for name in names:
         filled = filled.replace("{" + name + "}", PATH_PARAM_VALUES.get(name, f"p2-{name}"))
-    assert "{" not in filled, f"unfilled path parameter in {path!r} (parameters: {list(names)})"
-    return filled
+    return _PLACEHOLDER_PATTERN.sub("p2-parameter", filled)
 
 
 @dataclass(frozen=True)
@@ -315,6 +418,18 @@ class Inventory:
     #: FastAPI's own documentation endpoints (registered, but not described
     #: by the OpenAPI document).
     documentation: frozenset[tuple[str, str]]
+    #: Operations reached through a mount: registered, but the OpenAPI
+    #: document of the parent application does not describe them.
+    mounted: frozenset[tuple[str, str]]
+    #: Every non-HTTP route (a mount or a websocket route): ``(kind, path)``.
+    containers: frozenset[tuple[str, str]]
+    #: The containers whose interior the inventory cannot enumerate.
+    opaque: frozenset[tuple[str, str]]
+
+    @property
+    def served(self) -> frozenset[tuple[str, str]]:
+        """Every operation the application really serves."""
+        return self.operations | self.mounted
 
     @property
     def public(self) -> frozenset[tuple[str, str]]:
@@ -324,7 +439,7 @@ class Inventory:
     @property
     def gated(self) -> frozenset[tuple[str, str]]:
         """The operations that must sit behind a security surface."""
-        return self.operations - self.public
+        return self.served - self.public
 
 
 def build_inventory(app: FastAPI) -> Inventory:
@@ -332,20 +447,26 @@ def build_inventory(app: FastAPI) -> Inventory:
     schema = _fresh_schema(app)
     operations = _openapi_operations(schema)
     documentation_paths = _documentation_paths(app)
-    registered: set[tuple[str, str]] = set()
+    table = _registered_routes(app)
     documentation: set[tuple[str, str]] = set()
-    for path, methods in _http_routes(app).items():
-        for method in methods:
-            operation = (method, path)
-            registered.add(operation)
-            if path in documentation_paths:
-                documentation.add(operation)
+    mounted: set[tuple[str, str]] = set()
+    for method, path in table.operations:
+        operation = (method, path)
+        if path in documentation_paths:
+            documentation.add(operation)
+        elif operation not in operations:
+            # Registered, but the OpenAPI document does not describe it: the
+            # operation is reachable only through a mount.
+            mounted.add(operation)
     return Inventory(
         app=app,
         schema=schema,
         operations=frozenset(operations),
-        registered=frozenset(registered),
+        registered=table.operations,
         documentation=frozenset(documentation),
+        mounted=frozenset(mounted),
+        containers=table.containers,
+        opaque=table.opaque,
     )
 
 
@@ -571,12 +692,15 @@ def _arm_security(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_the_inventory_covers_every_registered_operation(api_env: ApiEnv) -> None:
     """The inventory is the application's own document, cross-checked.
 
-    Three things must hold at once: the OpenAPI document describes exactly
+    Four things must hold at once: the OpenAPI document describes exactly
     the routes the application registered, the operations it does *not*
-    describe are only FastAPI's own documentation endpoints, and no
-    operation hides behind ``include_in_schema=False`` (such an operation
-    would be invisible to an OpenAPI-based inventory — the hole this whole
-    suite exists to close).
+    describe are only FastAPI's own documentation endpoints and the
+    operations reached through a mount, no operation hides behind
+    ``include_in_schema=False`` (such an operation would be invisible to an
+    OpenAPI-based inventory — the hole this whole suite exists to close),
+    and no route is *opaque*: a container the inventory cannot look into (a
+    mounted static file server, for example) is invisible to every
+    HTTP-based inventory and therefore has to be exempted explicitly.
     """
     inventory = build_inventory(api_env.app)
 
@@ -587,24 +711,36 @@ def test_the_inventory_covers_every_registered_operation(api_env: ApiEnv) -> Non
     )
 
     registered_but_undescribed = sorted(inventory.registered - inventory.operations)
-    assert registered_but_undescribed == sorted(inventory.documentation), (
+    assert registered_but_undescribed == sorted(inventory.documentation | inventory.mounted), (
         "operations that the OpenAPI document does not describe are invisible "
-        "to the inventory; only FastAPI's documentation endpoints may be "
-        f"hidden: {registered_but_undescribed}"
+        "to the inventory; only FastAPI's documentation endpoints and the "
+        f"operations reached through a mount may be hidden: {registered_but_undescribed}"
     )
 
     hidden = sorted(
-        (method, route.path)
-        for route in _iter_routes(api_env.app.routes)
-        if isinstance(route, APIRoute) and not route.include_in_schema
-        for method in (route.methods or set())
+        (method, registered.path)
+        for registered in _iter_routes(api_env.app.routes)
+        if isinstance(registered.route, APIRoute) and not registered.route.include_in_schema
+        for method in (registered.route.methods or set())
     )
     assert not hidden, (
         f"operations excluded from the OpenAPI document are invisible to the inventory: {hidden}"
     )
 
+    unclassified_containers = sorted(
+        (kind, path) for kind, path in inventory.opaque if path not in OPAQUE_ROUTE_EXEMPTIONS
+    )
+    assert not unclassified_containers, (
+        "routes the inventory cannot look into are invisible to every "
+        "HTTP-based inventory (mount a sub-application whose operations are "
+        "visible, or exempt the route in OPAQUE_ROUTE_EXEMPTIONS with a "
+        f"reason): {unclassified_containers}"
+    )
+    for path, reason in OPAQUE_ROUTE_EXEMPTIONS.items():
+        assert reason.strip(), f"the exemption for {path!r} has no reason"
+
     # The audited surfaces are really present (the routers are mounted).
-    paths = {path for _method, path in inventory.operations}
+    paths = {path for _method, path in inventory.served}
     assert {"/api/dashboard/stats", "/api/dashboard/recent_users"} <= paths
     assert any(path.startswith("/api/studio/") for path in paths)
     assert {"/creative/video-edit", "/creative/jobs/{job_id}"} <= paths
@@ -617,7 +753,7 @@ def test_every_registered_operation_is_classified(api_env: ApiEnv) -> None:
     inventory = build_inventory(api_env.app)
     unclassified = sorted(
         operation
-        for operation in inventory.operations
+        for operation in inventory.served
         if operation not in inventory.public and surface_of(operation) is None
     )
     assert not unclassified, (
@@ -625,10 +761,22 @@ def test_every_registered_operation_is_classified(api_env: ApiEnv) -> None:
         f"surface (classify them, or add them to the public allowlist): {unclassified}"
     )
 
+    # An operation reached through a mount is not described by the OpenAPI
+    # document of the parent application, so it needs a named owner even more
+    # explicitly than a described one.
+    unowned_mounted = sorted(
+        operation for operation in inventory.mounted if surface_of(operation) is None
+    )
+    assert not unowned_mounted, (
+        "operations reached through a mount are invisible to the OpenAPI "
+        "document and must be owned by a named security surface: "
+        f"{unowned_mounted}"
+    )
+
     # Every declared surface must really be exercised by a real operation —
     # a policy entry that covers nothing would rot silently.
     for surface in SURFACES:
-        owned = sorted(op for op in inventory.operations if surface.owns(op))
+        owned = sorted(op for op in inventory.served if surface.owns(op))
         assert owned, f"security surface {surface.name!r} owns no registered operation"
 
 
@@ -960,3 +1108,84 @@ def test_a_newly_registered_unprotected_route_is_detected(api_env: ApiEnv, monke
     restored = build_inventory(api_env.app)
     assert ("GET", "/__p2_unprotected_probe__") not in restored.operations
     assert _sweep(api_env.client, restored, "wrong") == {}
+
+
+def test_a_mounted_sub_application_cannot_hide_from_the_inventory(
+    api_env: ApiEnv, monkeypatch
+) -> None:
+    """A mounted sub-application is a second way to hide an operation.
+
+    A ``Mount`` is a route with a path but no method set, and it is not part
+    of the parent's OpenAPI document.  An inventory that only looks at the
+    document and at the routes with a method set would therefore stay green
+    while ``app.mount("/files", StaticFiles(...))`` — or a mounted FastAPI
+    sub-application without a gate — served unprotected operations.
+
+    Both shapes are proved here, and the application is restored afterwards.
+    """
+    _arm_security(monkeypatch)
+    before_routes = list(api_env.app.router.routes)
+
+    # ── a mounted sub-application with an unprotected operation ──────────
+    sub_app = FastAPI()
+
+    @sub_app.get("/leak")
+    async def _leak() -> dict[str, str]:
+        return {"ok": "unprotected"}
+
+    api_env.app.mount("/__p2_mount_probe__", app=sub_app)
+    added = [route for route in api_env.app.router.routes if route not in before_routes]
+    try:
+        assert len(added) == 1, "the mounted sub-application was not registered"
+        inventory = build_inventory(api_env.app)
+        probe_operation = ("GET", "/__p2_mount_probe__/leak")
+
+        # 1. the operation is part of the inventory, with its real path …
+        assert probe_operation in inventory.mounted, inventory.mounted
+        assert probe_operation in inventory.registered, inventory.registered
+        # 2. … it is not owned by any security surface …
+        assert surface_of(probe_operation) is None
+        # 3. … and the sweep reports it, with the status it really answers.
+        deviations = _sweep(api_env.client, inventory, "wrong")
+        assert probe_operation in deviations, deviations
+        assert "200" in deviations[probe_operation], deviations[probe_operation]
+        # 4. the mounted operation really is reachable and unprotected.
+        assert api_env.client.get("/__p2_mount_probe__/leak").status_code == 200
+    finally:
+        for route in added:
+            api_env.app.router.routes.remove(route)
+        api_env.app.openapi_schema = None
+
+    # The application is restored: no mounted sub-application, and the
+    # inventory is green again.
+    assert list(api_env.app.router.routes) == before_routes
+    restored = build_inventory(api_env.app)
+    assert ("GET", "/__p2_mount_probe__/leak") not in restored.served
+    assert _sweep(api_env.client, restored, "wrong") == {}
+
+    # ── a container the inventory cannot look into ──────────────────────
+    static_app = StaticFiles(directory=str(api_env.root), html=False)
+    api_env.app.mount("/__p2_opaque_probe__", app=static_app)
+    added = [route for route in api_env.app.router.routes if route not in before_routes]
+    try:
+        assert len(added) == 1, "the opaque container was not registered"
+        inventory = build_inventory(api_env.app)
+        opaque = sorted(
+            (kind, path) for kind, path in inventory.opaque if path == "/__p2_opaque_probe__"
+        )
+        assert opaque, (
+            "a container the inventory cannot enumerate must be reported as "
+            f"opaque, not dropped silently: {sorted(inventory.containers)}"
+        )
+        assert opaque[0][1] not in OPAQUE_ROUTE_EXEMPTIONS, (
+            "the opaque container is neither visible to the inventory nor exempted with a reason"
+        )
+    finally:
+        for route in added:
+            api_env.app.router.routes.remove(route)
+        api_env.app.openapi_schema = None
+
+    assert list(api_env.app.router.routes) == before_routes
+    final = build_inventory(api_env.app)
+    assert not final.opaque, sorted(final.opaque)
+    assert _sweep(api_env.client, final, "wrong") == {}
