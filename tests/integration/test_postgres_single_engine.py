@@ -11,22 +11,53 @@ runs only where ``NEXUS_DATABASE_URL`` is configured (CI job
   to the *same* PostgreSQL database: a row written through one is read back
   through the other;
 * the sync feature engines really run their statements on PostgreSQL —
-  ``ForceJoinManager.should_block`` flips once a ``ForceJoinConfig`` row exists
-  (the predicate compiles to ``enabled IS true`` on this dialect too);
+  ``ForceJoinManager.should_block`` flips with the ``enabled IS true``
+  predicate the column expression compiles to on this dialect;
 * the ``ReferralEngine`` creates and uses its tables on PostgreSQL;
 * no engine in the process is SQLite;
 * the ids used are a post-2021 user id (> 2**31) and a supergroup id
   (``-100…``) — the values that overflowed PostgreSQL's INTEGER before
   migration ``b5d8e2f4a917`` (audit A-17).
 
-Rows are keyed by a per-run nonce and removed afterwards so the shared CI
-database stays clean across jobs.
+Data-safety contract (review finding, 2026-10-17)
+-------------------------------------------------
+
+An earlier revision of this module opened its force-join test with an
+**unscoped** delete::
+
+    DELETE FROM forcejoinconfig WHERE enabled IS true
+
+``NEXUS_DATABASE_URL`` is the very variable an operator sets to the real
+(possibly Neon, possibly shared) database, and the module docstring offered
+"a local server" as a supported target — so running the suite against a
+development database permanently deleted *every other chat's* enabled
+force-join configuration. That statement also contradicted the claim below
+that rows are keyed by a per-run nonce.
+
+The module is now safe by construction, not by convention:
+
+* **Explicit opt-in.** ``NEXUS_DATABASE_URL`` alone no longer enables it;
+  ``NEXUS_PG_TEST_DESTRUCTIVE=1`` must be set as well. The CI
+  ``migrate-postgres`` job sets it against its disposable service container
+  (``tests/unit/test_pg_integration_safety.py`` enforces that).
+* **Every statement is scoped to a per-run nonce.** No statement in this
+  module touches a row it did not create; the same unit test parses the
+  module and fails on any ``DELETE`` without a nonce-scoped ``WHERE``.
+* **The assertion was redesigned.** The old first assertion needed a
+  *globally empty* table. The gate answers "does any enabled configuration
+  exist", so the test now compares its verdict with the table's own state
+  instead of emptying the table to make the comparison trivial.
+* **Survival is asserted, not assumed.** A module-scoped fixture snapshots
+  the set of enabled configurations before the module runs and proves after
+  it that none of them disappeared, and a dedicated test drives the gate with
+  a foreign enabled configuration and asserts that configuration survives.
 """
 
 from __future__ import annotations
 
 import os
 import secrets
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -39,14 +70,77 @@ from nexus_ai_agent.storage import db as db_module
 from nexus_ai_agent.storage.db import get_session, sync_engine
 from nexus_ai_agent.storage.models import Chat, ForceJoinConfig, User
 
+#: The second, explicit opt-in. ``NEXUS_DATABASE_URL`` alone points the whole
+#: application at a database — including a real one — so it must not by itself
+#: arm a module that writes to that database.
+DESTRUCTIVE_OPT_IN = "NEXUS_PG_TEST_DESTRUCTIVE"
+
 pytestmark = [
     pytest.mark.asyncio,
-    pytest.mark.skipif(not os.getenv("NEXUS_DATABASE_URL"), reason="requires PostgreSQL"),
+    pytest.mark.skipif(
+        not os.getenv("NEXUS_DATABASE_URL"),
+        reason="requires PostgreSQL (NEXUS_DATABASE_URL)",
+    ),
+    pytest.mark.skipif(
+        os.getenv(DESTRUCTIVE_OPT_IN) != "1",
+        reason=(
+            f"refuses to write to NEXUS_DATABASE_URL without {DESTRUCTIVE_OPT_IN}=1 "
+            "(the CI migrate-postgres job sets it against its disposable service "
+            "container)"
+        ),
+    ),
 ]
 
 
+# ── scoped data access (no statement below is ever unscoped) ────────────────
+
+
+def _enabled_force_join_chat_ids(engine: Any) -> set[int]:
+    """Every chat id that currently has an *enabled* force-join configuration."""
+    with Session(engine) as session:
+        return set(
+            session.execute(
+                text("SELECT chat_id FROM forcejoinconfig WHERE enabled IS true")
+            ).scalars()
+        )
+
+
+def _delete_force_join_rows(engine: Any, chat_ids: list[int]) -> None:
+    """Remove only the ``forcejoinconfig`` rows of *chat_ids*."""
+    with engine.begin() as conn:
+        for chat_id in chat_ids:
+            conn.execute(text("DELETE FROM forcejoinconfig WHERE chat_id = :id"), {"id": chat_id})
+
+
+def _delete_run_rows(engine: Any, *, chat_ids: list[int], telegram_id: int) -> None:
+    """Remove exactly the rows this run created — success path *and* failure path."""
+    _delete_force_join_rows(engine, chat_ids)
+    with engine.begin() as conn:
+        for chat_id in chat_ids:
+            conn.execute(text("DELETE FROM chat WHERE chat_id = :id"), {"id": chat_id})
+        conn.execute(text('DELETE FROM "user" WHERE telegram_id = :id'), {"id": telegram_id})
+
+
+@pytest.fixture(scope="module", autouse=True)
+def unrelated_configurations_survive() -> Iterator[None]:
+    """No test in this module may delete another chat's enabled configuration.
+
+    Module-scoped and autouse: the snapshot is taken before the first test and
+    re-checked after the last one, so every statement the module runs —
+    including the force-join test that used to clear the whole table — is
+    proven harmless to configurations it did not create.
+    """
+    before = _enabled_force_join_chat_ids(sync_engine())
+    yield
+    after = _enabled_force_join_chat_ids(sync_engine())
+    assert before <= after, (
+        "this module deleted an enabled force-join configuration it did not create: "
+        f"{sorted(before - after)}"
+    )
+
+
 @pytest.fixture()
-def pg(monkeypatch: pytest.MonkeyPatch) -> Any:
+def pg(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     """Point every resolution path at the configured PostgreSQL and reset caches."""
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.delenv("NEXUS_DB_PATH", raising=False)
@@ -60,14 +154,16 @@ def pg(monkeypatch: pytest.MonkeyPatch) -> Any:
     # migration ``b5d8e2f4a917`` (audit A-17) — the ids *are* the probe.
     nonce = 2**40 + secrets.randbelow(2**30)
     chat_id = -(10**12 + nonce)
+    # A second, *foreign* chat id: rows under it stand in for another chat's
+    # data, which no statement in this module is allowed to remove.
+    foreign_chat_id = chat_id - 1
     try:
-        yield SimpleNamespace(nonce=nonce, chat_id=chat_id)
+        yield SimpleNamespace(nonce=nonce, chat_id=chat_id, foreign_chat_id=foreign_chat_id)
     finally:
-        engine = sync_engine()
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM forcejoinconfig WHERE chat_id = :id"), {"id": chat_id})
-            conn.execute(text("DELETE FROM chat WHERE chat_id = :id"), {"id": chat_id})
-            conn.execute(text('DELETE FROM "user" WHERE telegram_id = :id'), {"id": nonce})
+        # ``finally``, not a bare teardown: the rows this run created are
+        # removed whether the test passed, failed or errored. Only the two
+        # nonce-scoped chat ids and the nonce user id are named.
+        _delete_run_rows(sync_engine(), chat_ids=[chat_id, foreign_chat_id], telegram_id=nonce)
         settings_module.get_settings.cache_clear()
         db_module._sync_engine_url = None  # type: ignore[attr-defined]
         db_module._sync_engine_instance = None  # type: ignore[attr-defined]
@@ -98,25 +194,101 @@ async def test_async_and_sync_paths_share_one_postgres_database(pg: Any) -> None
 
 
 async def test_force_join_gate_runs_its_predicate_on_postgres(pg: Any) -> None:
+    """``enabled IS true`` really evaluates on PostgreSQL — table left intact.
+
+    The gate is *global*: ``should_block`` is armed while any chat has an
+    enabled configuration and the (unbound) manager cannot confirm
+    membership. The old test proved the negative case by deleting every
+    enabled row in the database; this one compares the verdict with the
+    table's own state and only ever adds/removes the two rows it created.
+    """
     from nexus_ai_agent.features.force_join import ForceJoinManager
 
     manager = ForceJoinManager()  # unbound: membership can never be confirmed
-    with Session(sync_engine()) as session:
-        session.execute(text("DELETE FROM forcejoinconfig WHERE enabled IS true"))
-        session.commit()
-    assert await manager.should_block(pg.nonce, "") is False, "no enabled row → gate is inert"
-    with Session(sync_engine()) as session:
+    engine = sync_engine()
+
+    # Enabled configurations that predate this test — including, on a shared
+    # database, real ones belonging to other chats. They are read only.
+    pre_existing = _enabled_force_join_chat_ids(engine) - {pg.chat_id, pg.foreign_chat_id}
+
+    # Our probe row: this is the row the test owns and toggles.
+    with Session(engine) as session:
         session.add(
             ForceJoinConfig(chat_id=pg.chat_id, enabled=True, channel_username="@nexus_pg_probe")
         )
         session.commit()
-    # The predicate (``enabled IS true``) now finds the row on PostgreSQL and,
-    # with no bot bound, the gate fails closed.
-    assert await manager.should_block(pg.nonce, "") is True
-    with Session(sync_engine()) as session:
-        session.execute(text("DELETE FROM forcejoinconfig WHERE chat_id = :id"), {"id": pg.chat_id})
+    assert await manager.should_block(pg.nonce, "") is True, "an enabled row arms the gate"
+
+    # Disabling *our* row returns the verdict to the pre-existing baseline …
+    with Session(engine) as session:
+        cfg = session.exec(
+            select(ForceJoinConfig).where(ForceJoinConfig.chat_id == pg.chat_id)
+        ).one()
+        cfg.enabled = False
+        session.add(cfg)
         session.commit()
-    assert await manager.should_block(pg.nonce, "") is False
+    assert await manager.should_block(pg.nonce, "") is bool(pre_existing), (
+        "the verdict tracks the table, not this chat's row"
+    )
+
+    # … and removing it entirely changes nothing either: whatever the answer
+    # is, it is decided by rows this test never wrote.
+    _delete_force_join_rows(engine, [pg.chat_id])
+    assert await manager.should_block(pg.nonce, "") is bool(pre_existing)
+
+    # The negative case, scoped: with a second enabled row of our own the gate
+    # arms again, and with both of ours gone it is back to the baseline. On
+    # the disposable CI database (no pre-existing rows) that baseline is
+    # ``False`` — exactly the original "no enabled row → gate is inert"
+    # assertion, now without the table-wide delete.
+    with Session(engine) as session:
+        session.add(
+            ForceJoinConfig(
+                chat_id=pg.foreign_chat_id, enabled=True, channel_username="@nexus_pg_probe_2"
+            )
+        )
+        session.commit()
+    assert await manager.should_block(pg.nonce, "") is True
+    _delete_force_join_rows(engine, [pg.foreign_chat_id])
+    assert await manager.should_block(pg.nonce, "") is bool(pre_existing)
+
+
+async def test_an_unrelated_enabled_force_join_configuration_survives_the_gate(
+    pg: Any,
+) -> None:
+    """The regression witness for the table-wide ``DELETE`` (2026-10-17).
+
+    A configuration belonging to a *different* chat is created here, the gate
+    is driven against it as the old test drove it, and the row is then proven
+    untouched — enabled, same channel, same chat id. The old module deleted
+    it in its first statement.
+    """
+    from nexus_ai_agent.features.force_join import ForceJoinManager
+
+    manager = ForceJoinManager()
+    engine = sync_engine()
+    with Session(engine) as session:
+        session.add(
+            ForceJoinConfig(
+                chat_id=pg.foreign_chat_id,
+                enabled=True,
+                channel_username="@nexus_pg_foreign",
+            )
+        )
+        session.commit()
+
+    # The predicate finds the foreign row on PostgreSQL and, with no bot
+    # bound, the gate fails closed.
+    assert await manager.should_block(pg.nonce, "") is True
+
+    assert pg.foreign_chat_id in _enabled_force_join_chat_ids(engine)
+    with Session(engine) as session:
+        survivor = session.exec(
+            select(ForceJoinConfig).where(ForceJoinConfig.chat_id == pg.foreign_chat_id)
+        ).one()
+    assert survivor.enabled is True
+    assert survivor.channel_username == "@nexus_pg_foreign"
+    assert survivor.chat_id == pg.foreign_chat_id
 
 
 async def test_referral_engine_creates_and_uses_its_tables_on_postgres(pg: Any) -> None:

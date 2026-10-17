@@ -428,6 +428,13 @@ jobs:
           --health-retries 10
     env:
       NEXUS_DATABASE_URL: postgresql://nexus:nexus@localhost:5432/nexus
+      # Review finding 2026-10-17: the integration module writes to the
+      # database named by NEXUS_DATABASE_URL, so it refuses to run without a
+      # second, explicit opt-in. This job's database is the disposable service
+      # container below, which is exactly the case the opt-in authorises — and
+      # `tests/unit/test_pg_integration_safety.py` fails if this line ever
+      # disappears (a silent skip is not coverage).
+      NEXUS_PG_TEST_DESTRUCTIVE: "1"
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

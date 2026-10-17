@@ -256,3 +256,106 @@ async def test_is_muted_survives_a_round_trip_through_sqlite(db: Any) -> None:
     finally:
         engine.dispose()
     assert ModerationEngine.is_muted(TARGET, GROUP) is False
+
+
+# ── media captions are text too (review finding, 2026-10-17) ───────────────
+
+
+def _photo() -> tuple[Any, ...]:
+    """A one-element ``message.photo`` tuple, as Telegram delivers it."""
+    return (type("PhotoSize", (), {"file_id": "p", "file_size": 1_000})(),)
+
+
+async def test_a_captioned_photo_is_moderated_on_its_caption(db: Any) -> None:
+    """A spam link in a photo caption used to be invisible to the ingress."""
+    ModerationEngine.set_config(GROUP, link_filter=True, anti_flood=False)
+    bot = FakeBot()
+    update = make_update(
+        user_id=INTRUDER,
+        chat_id=GROUP,
+        caption="look at this http://spam.example",
+        photo=_photo(),
+    )
+    assert update.message.text is None, "a photo carries no message.text"
+
+    verdict = await surface.evaluate_message(update, make_context(bot=bot))
+
+    assert verdict["allowed"] is False
+    assert update.message.deleted is True
+    assert bot.sent[-1][1].startswith("⚠️ اخطار")
+
+
+async def test_a_caption_without_a_violation_is_allowed(db: Any) -> None:
+    ModerationEngine.set_config(GROUP, link_filter=True, anti_flood=False)
+    update = make_update(user_id=INTRUDER, chat_id=GROUP, caption="عکس قشنگی شد", photo=_photo())
+    verdict = await surface.evaluate_message(update, make_context(bot=FakeBot()))
+    assert verdict["allowed"] is True
+    assert update.message.deleted is False
+
+
+async def test_bare_media_stays_on_the_early_return_path(db: Any) -> None:
+    """No text, no caption → allowed without touching the database."""
+    ModerationEngine.set_config(GROUP, link_filter=True, profanity_filter=True)
+    update = make_update(user_id=INTRUDER, chat_id=GROUP, photo=_photo())
+    verdict = await surface.evaluate_message(update, make_context(bot=FakeBot()))
+    assert verdict == {"allowed": True, "reasons": [], "action": "allow"}
+    assert update.message.deleted is False
+    assert _rows(db, UserReputation) == []
+
+
+async def test_the_owner_is_never_moderated_on_a_caption_either(db: Any) -> None:
+    ModerationEngine.set_config(GROUP, link_filter=True)
+    update = make_update(
+        user_id=OWNER,
+        chat_id=GROUP,
+        caption="http://example.com",
+        photo=_photo(),
+    )
+    assert (await surface.evaluate_message(update, make_context()))["allowed"] is True
+    assert update.message.deleted is False
+
+
+# ── the group -1 gate itself: stop or pass (review finding, 2026-10-17) ────
+
+
+async def test_the_gate_stops_a_violating_message_and_passes_a_clean_one(db: Any) -> None:
+    """``_moderation_gate`` is what keeps a denied message from group 0."""
+    from telegram.ext import ApplicationHandlerStop
+
+    from nexus_ai_agent.bot.handlers import _moderation_gate
+
+    ModerationEngine.set_config(GROUP, link_filter=True, anti_flood=False)
+
+    denied = make_update(user_id=INTRUDER, chat_id=GROUP, text="http://spam.example")
+    with pytest.raises(ApplicationHandlerStop):
+        await _moderation_gate(denied, make_context(bot=FakeBot()))
+
+    clean = make_update(user_id=INTRUDER, chat_id=GROUP, text="سلام")
+    await _moderation_gate(clean, make_context(bot=FakeBot()))  # must not raise
+
+
+async def test_the_gate_stops_a_muted_users_message(db: Any) -> None:
+    from telegram.ext import ApplicationHandlerStop
+
+    from nexus_ai_agent.bot.handlers import _moderation_gate
+
+    ModerationEngine.set_config(GROUP)
+    ModerationEngine.mute_user(INTRUDER, GROUP, 30)
+    update = make_update(user_id=INTRUDER, chat_id=GROUP, text="hello?")
+    with pytest.raises(ApplicationHandlerStop):
+        await _moderation_gate(update, make_context(bot=FakeBot()))
+
+
+async def test_the_gate_lets_a_command_through_when_it_is_allowed(db: Any) -> None:
+    """Commands are now *seen* by the gate — but only a verdict stops them."""
+    from nexus_ai_agent.bot.handlers import _moderation_gate
+
+    ModerationEngine.set_config(GROUP, link_filter=True, anti_flood=False)
+    update = make_update(user_id=INTRUDER, chat_id=GROUP, text="/start")
+    await _moderation_gate(update, make_context(bot=FakeBot()))  # must not raise
+
+    offending = make_update(user_id=INTRUDER, chat_id=GROUP, text="/start http://spam.example")
+    from telegram.ext import ApplicationHandlerStop
+
+    with pytest.raises(ApplicationHandlerStop):
+        await _moderation_gate(offending, make_context(bot=FakeBot()))

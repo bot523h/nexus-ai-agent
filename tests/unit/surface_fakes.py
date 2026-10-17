@@ -118,8 +118,14 @@ class FakeMessage:
         *,
         message_id: int | None = None,
         author_id: int | None = None,
+        caption: str | None = None,
+        photo: tuple[Any, ...] = (),
     ) -> None:
         self.text = text
+        # Telegram keeps the text of a photo/document in ``caption``; the
+        # moderation ingress reads both (review finding, 2026-10-17).
+        self.caption = caption
+        self.photo = list(photo)
         self.message_id = message_id
         self.replies: list[str] = []
         self.deleted = False
@@ -153,8 +159,10 @@ class FakeUpdate:
         callback: FakeCallback | None = None,
         language_code: str | None = "en",
         reply_to: FakeMessage | None = None,
+        caption: str | None = None,
+        photo: tuple[Any, ...] = (),
     ) -> None:
-        self.message = FakeMessage(text)
+        self.message = FakeMessage(text, caption=caption, photo=photo)
         self.message.reply_to_message = reply_to
         self.edited_message = None
         self.callback_query = callback
@@ -203,8 +211,14 @@ def make_update(
     callback: FakeCallback | None = None,
     language_code: str | None = "en",
     reply_to: FakeMessage | None = None,
+    caption: str | None = None,
+    photo: tuple[Any, ...] = (),
 ) -> FakeUpdate:
-    """Build an update for a command, a free-text message, or a callback."""
+    """Build an update for a command, a free-text message, or a callback.
+
+    ``caption``/``photo`` build a *media* message the way Telegram does: no
+    ``text``, the text in ``caption``.
+    """
     return FakeUpdate(
         user_id=user_id,
         chat_id=chat_id,
@@ -213,6 +227,8 @@ def make_update(
         callback=callback,
         language_code=language_code,
         reply_to=reply_to,
+        caption=caption,
+        photo=photo,
     )
 
 
