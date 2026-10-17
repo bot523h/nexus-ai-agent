@@ -29,6 +29,8 @@ __all__ = [
     "bot_of",
     "callback_data",
     "chat_id",
+    "message_caption",
+    "message_content",
     "message_of",
     "message_text",
     "reply",
@@ -90,6 +92,23 @@ def message_text(update: Any) -> str:
     """Text of the triggering message; ``""`` when there is none."""
     text = _attr(message_of(update), "text")
     return text if isinstance(text, str) else ""
+
+
+def message_caption(update: Any) -> str:
+    """Caption of a media message; ``""`` for text messages and bare media.
+
+    Telegram keeps the text of a photo/video/document in ``message.caption``,
+    not in ``message.text`` — a caption-only message therefore has an empty
+    :func:`message_text`, which is how a captioned photo used to slip past the
+    moderation ingress entirely.
+    """
+    caption = _attr(message_of(update), "caption")
+    return caption if isinstance(caption, str) else ""
+
+
+def message_content(update: Any) -> str:
+    """The text a user actually wrote: body text, else the media caption."""
+    return message_text(update) or message_caption(update)
 
 
 def args(context: Any) -> list[str]:

@@ -13,11 +13,14 @@ are lazy, so the URL/driver can be asserted without a server.
 from __future__ import annotations
 
 import importlib
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import sqlalchemy
 
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.storage import db as db_module
@@ -85,6 +88,126 @@ def test_switching_the_url_disposes_the_previous_engine(
     second = db_module.sync_engine(str(tmp_path / "b.sqlite"))
     assert second is not first
     assert disposed == [True]
+
+
+def test_concurrent_first_use_publishes_exactly_one_engine(
+    settings_override: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Eight workers hitting an empty cache must not orphan seven engines.
+
+    The feature engines call ``sync_engine()`` from ``asyncio.to_thread``
+    workers. Before the 2026-10-17 fix the read-check-create-publish sequence
+    was unsynchronised: every racing thread saw ``_sync_engine_instance is
+    None``, each built its own engine, and only the last one to publish stayed
+    in the cache — the others' connection pools were never disposed.
+
+    ``create_engine`` is spied on (``sync_engine`` imports it at call time) and
+    the first caller is slowed down, so the race window is deterministic
+    instead of a flake that depends on thread scheduling.
+    """
+    real_create_engine = sqlalchemy.create_engine
+    built: list[Any] = []
+
+    def slow_first_create_engine(*args: Any, **kwargs: Any) -> Any:
+        if not built:
+            time.sleep(0.3)  # widen the window: everyone else sees an empty cache
+        engine = real_create_engine(*args, **kwargs)
+        built.append(engine)
+        return engine
+
+    monkeypatch.setattr(sqlalchemy, "create_engine", slow_first_create_engine)
+    db_module._sync_engine_url = None  # type: ignore[attr-defined]
+    db_module._sync_engine_instance = None  # type: ignore[attr-defined]
+
+    workers = 8
+    start = threading.Barrier(workers)
+    results: list[Any] = []
+    errors: list[BaseException] = []
+    guard = threading.Lock()
+
+    def worker() -> None:
+        try:
+            start.wait()
+            engine = db_module.sync_engine()
+        except BaseException as exc:  # noqa: BLE001 — reported in the assertion below
+            with guard:
+                errors.append(exc)
+            return
+        with guard:
+            results.append(engine)
+
+    threads = [threading.Thread(target=worker) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == [], errors
+    assert len(built) == 1, f"{len(built)} engines built for a single first use"
+    assert len(results) == workers
+    assert {id(engine) for engine in results} == {id(db_module._sync_engine_instance)}, (
+        "every caller must receive the engine that was published to the cache"
+    )
+
+
+def test_concurrent_first_use_never_returns_an_unpublished_engine(
+    settings_override: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stronger form: the returned engine is the cached one *while* racing."""
+    real_create_engine = sqlalchemy.create_engine
+    built: list[Any] = []
+
+    def spy_create_engine(*args: Any, **kwargs: Any) -> Any:
+        # Every caller is slowed down, so without a critical section all
+        # twelve observe an empty cache (deterministic, not a scheduling flake).
+        time.sleep(0.05)
+        engine = real_create_engine(*args, **kwargs)
+        built.append(engine)
+        return engine
+
+    monkeypatch.setattr(sqlalchemy, "create_engine", spy_create_engine)
+    db_module._sync_engine_url = None  # type: ignore[attr-defined]
+    db_module._sync_engine_instance = None  # type: ignore[attr-defined]
+
+    workers = 12
+    start = threading.Barrier(workers)
+    returned: list[Any] = []
+    guard = threading.Lock()
+
+    def worker() -> None:
+        start.wait()
+        engine = db_module.sync_engine()
+        with guard:
+            returned.append(engine)
+
+    threads = [threading.Thread(target=worker) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    # One deployment, one engine: every racing caller must be handed the same
+    # object, and it must be the object that ended up in the cache.
+    assert {id(engine) for engine in returned} == {id(db_module._sync_engine_instance)}, (
+        f"{len({id(e) for e in returned})} distinct engines were handed out"
+    )
+    # A second, synchronised round reuses the published engine: the lock is a
+    # first-use guard, not a per-call serialiser.
+    built.clear()
+    start = threading.Barrier(workers)
+    again: list[Any] = []
+
+    def reuse() -> None:
+        start.wait()
+        again.append(db_module.sync_engine())
+
+    threads = [threading.Thread(target=reuse) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert built == [], "no engine may be built while the cached one matches"
+    assert {id(engine) for engine in again} == {id(db_module._sync_engine_instance)}
 
 
 @pytest.mark.parametrize("name", FEATURE_MODULES)

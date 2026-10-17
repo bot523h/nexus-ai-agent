@@ -14,10 +14,14 @@ SQLite never showed the defect because its INTEGER is 64-bit.
 
 Isolation contract (explicit, for review — "No hidden migration"):
 
-* PostgreSQL only: on SQLite the ORM type is ``BigInteger().with_variant(
-  Integer(), "sqlite")`` — the SQLite schema is byte-for-byte what it was
-  (``INTEGER PRIMARY KEY`` stays the rowid alias) and ``alembic check`` sees
-  no drift, so there is nothing to do and the revision is a no-op there.
+* PostgreSQL only: on SQLite the ORM type — the named ``TypeDecorator``
+  ``storage.models.TelegramId`` (``impl = BigInteger``, whose
+  ``load_dialect_impl`` returns ``Integer()`` for the sqlite dialect and
+  ``BigInteger()`` for every other one) — renders ``INTEGER``, so the SQLite
+  schema is byte-for-byte what it was (``INTEGER PRIMARY KEY`` stays the
+  rowid alias) and ``alembic check`` sees no drift: there is nothing to do
+  and the revision is a no-op there. On PostgreSQL the same type renders
+  ``BIGINT``, which is exactly what this revision alters.
 * Exactly the ``TELEGRAM_ID_COLUMNS`` listed below change, type only
   (``INTEGER`` → ``BIGINT``); nullability, defaults, indexes and unique
   constraints are untouched (PostgreSQL rebuilds the affected indexes).

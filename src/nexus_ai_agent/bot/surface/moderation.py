@@ -44,7 +44,15 @@ from typing import Any
 from nexus_ai_agent.features.moderation import ModerationEngine
 from nexus_ai_agent.features.owner_control import is_owner
 
-from ._ptb import args, bot_of, chat_id, message_of, message_text, reply, user_id
+from ._ptb import (
+    args,
+    bot_of,
+    chat_id,
+    message_content,
+    message_of,
+    reply,
+    user_id,
+)
 from .channel_management import parse_target_id
 
 __all__ = [
@@ -365,15 +373,21 @@ async def reputation_cmd(update: Any, context: Any) -> None:
 
 
 async def evaluate_message(update: Any, context: Any) -> dict[str, Any]:
-    """Run the engine over an incoming text message and apply the verdict.
+    """Run the engine over an incoming message and apply the verdict.
 
     Returns the engine's verdict dict (``allowed``/``reasons``/``action``) so
     the registering layer can stop propagation for disallowed messages. The
-    owner is never moderated; private chats and empty texts are allowed
-    without touching the database.
+    owner is never moderated; private chats and messages without text are
+    allowed without touching the database.
+
+    The text is ``message.text`` **or the media caption**: Telegram puts the
+    text of a photo in ``caption``, so a captioned photo with a spam link
+    reported an empty text and was waved through (review finding,
+    2026-10-17). Bare media — no text, no caption — stays on the existing
+    early-return path.
     """
     chat, uid = chat_id(update), user_id(update)
-    text = message_text(update)
+    text = message_content(update)
     allow: dict[str, Any] = {"allowed": True, "reasons": [], "action": "allow"}
     if chat is None or uid is None or not text or chat > 0 or is_owner(uid):
         return allow

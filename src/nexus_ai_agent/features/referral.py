@@ -106,10 +106,20 @@ class ReferralEngine:
             s.commit()
             return code
 
+    @staticmethod
+    def referral_link(code: str, bot_username: str = "nexus_ai_agent_bot") -> str:
+        """Render the deep link for an *already resolved* referral code.
+
+        Pure, so the renderer (:meth:`format_stats`) can build the link from
+        the exact code it displays instead of resolving the code a second time
+        (review finding, 2026-10-17).
+        """
+        return f"https://t.me/{bot_username}?start=ref_{code}"
+
     def get_referral_link(self, user_id: int, bot_username: str = "nexus_ai_agent_bot") -> str:
         """Get full referral link for sharing."""
         code = self.get_or_create_code(user_id)
-        return f"https://t.me/{bot_username}?start=ref_{code}"
+        return self.referral_link(code, bot_username)
 
     def process_referral(self, referee_id: int, start_param: str) -> dict[str, Any]:
         """Process a referral when a new user starts the bot with a referral code.
@@ -191,13 +201,23 @@ class ReferralEngine:
         return None  # Max tier reached
 
     def get_referral_stats(self, user_id: int) -> dict[str, Any]:
-        """Get referral statistics for a user."""
+        """Get referral statistics for a user.
+
+        The ``code`` is **the stored one**: before 2026-10-17 a user with no
+        row yet was handed a freshly generated (never persisted) code here,
+        while :meth:`get_referral_link` — called by :meth:`format_stats` a
+        line later — generated and stored *another* one. The link the user
+        shared therefore carried a different code from the code shown next to
+        it, and the displayed code was not the one the referrer was credited
+        for. A read that allocates the code keeps every surface on one
+        persistent identity.
+        """
         eng = self._sync_engine()
         with _Session(eng) as s:
             rc = s.exec(select(ReferralCode).where(ReferralCode.user_id == user_id)).first()
             if rc is None:
                 return {
-                    "code": self.generate_code(user_id),
+                    "code": self.get_or_create_code(user_id),
                     "total": 0,
                     "successful": 0,
                     "current_tier": None,
@@ -235,9 +255,16 @@ class ReferralEngine:
             return result
 
     def format_stats(self, user_id: int, bot_username: str = "nexus_ai_agent_bot") -> str:
-        """Format referral stats for display."""
+        """Format referral stats for display.
+
+        The link is built from the *same* code the statistics report, and both
+        resolve through :meth:`get_or_create_code` — so the code shown, the
+        code stored in ``referralcode`` and the code inside the link are one
+        persistent identity on every call, including the very first
+        ``/referral`` (which is what allocates it).
+        """
         stats = self.get_referral_stats(user_id)
-        link = self.get_referral_link(user_id, bot_username)
+        link = self.referral_link(str(stats["code"]), bot_username)
         lines = [
             "🔗 سیستم دعوت وایرال",
             "━━━━━━━━━━━━━━━━━",

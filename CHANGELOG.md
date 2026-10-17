@@ -132,8 +132,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NumericValueOutOfRange` for any account created after 2021 and
   `_upsert_chat` for any supergroup — the bot could not answer a single
   message on a PostgreSQL deployment. SQLite hid it (64-bit INTEGER). Fix:
-  `storage.models.TelegramId = BigInteger().with_variant(Integer(), "sqlite")`
-  on every such column (SQLite schema byte-identical, `INTEGER PRIMARY KEY`
+  `storage.models.TelegramId`, a named `TypeDecorator` (`impl = BigInteger`:
+  `load_dialect_impl()` returns `Integer()` for the sqlite dialect and
+  `BigInteger()` for every other one), on every such column (SQLite schema
+  byte-identical, `INTEGER PRIMARY KEY`
   stays the rowid alias) and Alembic revision **`b5d8e2f4a917`** (PostgreSQL
   only, type-only, 33 `ALTER COLUMN … TYPE BIGINT`; downgrade narrows back).
   Verified on the live server: upgrade, downgrade, upgrade, `alembic check`
@@ -166,6 +168,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (115) and the eight A-03 commands map to their own `*_cmd` callbacks.
 - **Docs:** the golden-update command is `nexus checkpoints golden update`
   (three documents said `nexus golden update`, which does not exist).
+
+### Fix — review closeout, round 3 (PR #219 review findings 1–7; board `task-270`, session `arena/525960ca-nexus-ai-agent`)
+
+Seven findings from the CodeRabbit review of PR #219. Each fix carries a
+failing-first regression test — the test was run against the pre-fix code and
+shown red before the fix was applied.
+
+- **F1 (data safety) — the PostgreSQL integration test deleted other chats'
+  force-join configuration.** `tests/integration/test_postgres_single_engine.py`
+  opened with `DELETE FROM forcejoinconfig WHERE enabled IS true`: no nonce
+  filter, against whatever `NEXUS_DATABASE_URL` names — the same variable an
+  operator points at a real Neon database. The module now (a) refuses to run
+  without a second opt-in, `NEXUS_PG_TEST_DESTRUCTIVE=1`, which the CI
+  `migrate-postgres` job sets against its disposable service container; (b)
+  scopes every statement to a per-run nonce; (c) compares the gate's verdict
+  with the table's own state instead of emptying the table to make the
+  comparison trivial; (d) proves survival — a module-scoped fixture snapshots
+  the enabled configurations before the module runs and asserts afterwards
+  that none disappeared, and a dedicated test drives the gate with a foreign
+  enabled configuration and asserts it survives.
+  `tests/unit/test_pg_integration_safety.py` needs no database: it parses the
+  module's `text(...)` literals and fails on any `DELETE` without a
+  nonce-scoped `WHERE`, and fails if CI ever drops the opt-in — a silent skip
+  is not coverage, so arming the opt-in *without* a database is now a red build
+  rather than a green skip.
+- **F2 — `/referral` displayed one code and shared another.**
+  `ReferralEngine.get_referral_stats` generated a fresh, *unpersisted* code for
+  a user with no `referralcode` row, while `get_referral_link` — called one
+  line later by `format_stats` — generated and stored a different one, so the
+  code shown next to the link was not the code inside it and referrals were
+  credited to a code the user never saw. `get_referral_stats` now resolves
+  through `get_or_create_code`, and `format_stats` renders the link from the
+  very code it displays (the new `ReferralEngine.referral_link` is pure).
+- **F3 — moderation was bypassable with a command or a media caption.** The
+  group −1 ingress was `filters.TEXT & ~filters.COMMAND`, so no command ever
+  reached the engine, and `filters.TEXT` reads `message.text`, which is empty
+  for a photo — a spam link in a caption was never evaluated. The filter is now
+  `(TEXT | COMMAND | CAPTION) & ChatType.GROUPS` (`filters.CAPTION` verified in
+  python-telegram-bot **21.0**, the declared floor, not only the installed
+  version) and `evaluate_message` reads `message_content` = text, else caption.
+  Owner exemption, allowed-message dispatch and the muted-user path are
+  unchanged; bare media (no text, no caption) keeps its early return.
+- **F4 — `/vision` on a photo caption never dispatched.**
+  `CommandHandler.check_update` requires `message.text`, so a caption-only
+  `/vision` fell through to `slideshow_photo`; and `context.args` is empty for
+  a `MessageHandler` update, so the question would have been lost even if it
+  had dispatched. A `MessageHandler(filters.PHOTO & filters.CaptionRegex(…))`
+  now sits **before** the slideshow photo handler and `_vision_question` reads
+  the caption (including `/vision@BotName`). Ordinary photos still reach the
+  slideshow and a text `/vision` still uses `context.args`.
+- **F5 — `sync_engine()` could publish two engines.** The
+  read-check-dispose-create-publish sequence was unsynchronised, so racing
+  `asyncio.to_thread` workers each built an engine and only the last one stayed
+  in the cache (the others' pools were never disposed). The sequence is now a
+  single critical section under a module-level `threading.Lock`; nothing inside
+  it calls back into the module, so it cannot deadlock, and no caller's
+  database work runs under it. Deterministic proof: eight synchronised threads
+  build **8** engines before the fix and **1** after.
+- **F6 — the dashboard showed join times in the viewer's timezone.**
+  `User.created_at` is naive UTC and `new Date("…T12:34:56")` reads a naive
+  ISO-8601 string as *local* time. `api.dashboard.serialize_joined_at` now
+  publishes an explicit UTC offset (naive → read as UTC, aware → converted with
+  the instant preserved, missing → `None`), and the dashboard client normalises
+  an offset-less payload as a second line of defence.
+- **F7 — the `TelegramId` documentation described a type that does not exist.**
+  `docs/architecture/DATA_AND_STORAGE.md` and the `b5d8e2f4a917` docstring
+  (plus the same wording in this file and in `DECISION_LOG.md`) described
+  `BigInteger().with_variant(Integer(), "sqlite")`; the implementation is the
+  named `TypeDecorator` `storage.models.TelegramId` (`impl = BigInteger`,
+  `load_dialect_impl()` → `Integer` on sqlite). The guarantee is unchanged:
+  BIGINT on PostgreSQL, INTEGER (rowid alias for primary keys) on SQLite.
 
 ### Fix — governance recovery: both mutation harnesses attack again (GOV-1/GOV-2; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
 

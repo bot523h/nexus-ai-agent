@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -57,6 +58,28 @@ router = APIRouter(
 )
 
 
+def serialize_joined_at(value: datetime | None) -> str | None:
+    """Render a ``User.created_at`` as an unambiguous UTC instant.
+
+    The ``DATETIME`` columns store *naive UTC* (``datetime.utcnow()``), but a
+    naive ISO-8601 string is read as **local time** by JavaScript's
+    ``new Date(...)``: the dashboard showed every join time shifted by the
+    viewer's UTC offset (review finding, 2026-10-17). The contract is fixed
+    here, at the serialization boundary:
+
+    * naive value  → interpreted as UTC and published with an explicit
+      offset (``…+00:00``);
+    * aware value  → converted to UTC, so the instant is preserved whatever
+      offset it arrived with;
+    * ``None``     → ``None`` (unchanged: the client renders "—").
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc).isoformat()
+    return value.astimezone(timezone.utc).isoformat()
+
+
 async def _count(session: Any, model: type[Any], key: str = "id") -> int:
     statement = select(func.count(literal_column(key))).select_from(model)
     return int((await session.exec(statement)).one())
@@ -88,7 +111,4 @@ async def get_recent_users(
     async with get_session() as session:
         stmt = select(User).order_by(literal_column("id").desc()).limit(limit)
         users = (await session.exec(stmt)).all()
-        return [
-            {"id": u.id, "joined_at": u.created_at.isoformat() if u.created_at else None}
-            for u in users
-        ]
+        return [{"id": u.id, "joined_at": serialize_joined_at(u.created_at)} for u in users]

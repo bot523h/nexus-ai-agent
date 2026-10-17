@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from telegram import Chat, Message, Update, User
+from telegram import Chat, Message, MessageEntity, PhotoSize, Update, User
 from telegram.ext import CommandHandler, MessageHandler
 
 from nexus_ai_agent.bot.access_guard import AccessGuardHandler
@@ -81,6 +81,55 @@ def _text_update(*, user_id: int, chat_type: str, text: str = "سلام") -> Upd
         text=text,
     )
     return Update(update_id=1, message=message)
+
+
+def _fake_bot() -> Any:
+    """A bot object with just the member command dispatch reads (``username``).
+
+    The real ``application.bot`` would need a network round trip to be
+    initialized; ``CommandHandler`` only asks it for its username.
+    """
+    return SimpleNamespace(username="nexus_test_bot")
+
+
+def _command_update(*, user_id: int, chat_type: str, text: str, bot: Any = None) -> Update:
+    """A real ``/command`` message (the entity is what ``filters.COMMAND`` reads).
+
+    ``CommandHandler.check_update`` resolves the optional ``@bot`` suffix
+    through ``message.get_bot()``, so a bot must be attached for command
+    dispatch to be evaluated at all.
+    """
+    chat = Chat(id=-100500 if chat_type != Chat.PRIVATE else user_id, type=chat_type)
+    user = User(id=user_id, first_name="t", is_bot=False)
+    entity = MessageEntity(type=MessageEntity.BOT_COMMAND, offset=0, length=len(text.split()[0]))
+    message = Message(
+        message_id=2,
+        date=dt.datetime.now(dt.timezone.utc),
+        chat=chat,
+        from_user=user,
+        text=text,
+        entities=[entity],
+    )
+    if bot is not None:
+        message.set_bot(bot)
+    return Update(update_id=2, message=message)
+
+
+def _photo_update(*, user_id: int, chat_type: str, caption: str | None = None) -> Update:
+    """A photo message; its text (if any) lives in ``caption``, never in ``text``."""
+    chat = Chat(id=-100500 if chat_type != Chat.PRIVATE else user_id, type=chat_type)
+    user = User(id=user_id, first_name="t", is_bot=False)
+    return Update(
+        update_id=3,
+        message=Message(
+            message_id=3,
+            date=dt.datetime.now(dt.timezone.utc),
+            chat=chat,
+            from_user=user,
+            photo=(PhotoSize(file_id="p1", file_unique_id="u1", width=64, height=64),),
+            caption=caption,
+        ),
+    )
 
 
 def _first_match(handlers: list[Any], update: Update) -> Any:
@@ -168,3 +217,134 @@ def test_build_application_rejects_a_placeholder_token(
 
     with pytest.raises(ValueError, match="TELEGRAM_BOT_TOKEN"):
         build_application(SimpleNamespace(telegram_bot_token="CHANGE_ME"), graph=object())  # type: ignore[arg-type]
+
+
+# ── the moderation gate's message coverage (review finding, 2026-10-17) ────
+
+
+def test_the_gate_matches_group_text_group_commands_and_group_captions(
+    application: Any,
+) -> None:
+    """``filters.TEXT & ~filters.COMMAND`` missed commands *and* media captions.
+
+    A violating command — or a spam link in a photo caption — therefore
+    reached the AI and stayed in the chat. The owner is allowed by the guard
+    and by the engine, so all three forms must be seen by the gate.
+    """
+    guard, gate = application.handlers[-1]
+    cases = {
+        "plain text": _text_update(user_id=OWNER_ID, chat_type=Chat.SUPERGROUP),
+        "command": _command_update(
+            user_id=OWNER_ID, chat_type=Chat.SUPERGROUP, text="/start ref_1234"
+        ),
+        "photo caption": _photo_update(
+            user_id=OWNER_ID, chat_type=Chat.SUPERGROUP, caption="http://spam.example"
+        ),
+    }
+    for label, update in cases.items():
+        assert guard.check_update(update) is False, f"{label}: the owner is allowed"
+        assert gate.check_update(update), f"{label} never reached the moderation gate"
+
+
+def test_the_gate_still_ignores_private_messages_and_bare_media(application: Any) -> None:
+    _, gate = application.handlers[-1]
+    assert not gate.check_update(_text_update(user_id=OWNER_ID, chat_type=Chat.PRIVATE))
+    assert not gate.check_update(
+        _command_update(user_id=OWNER_ID, chat_type=Chat.PRIVATE, text="/start")
+    )
+    # A photo with no caption carries no text: nothing to moderate.
+    assert not gate.check_update(_photo_update(user_id=OWNER_ID, chat_type=Chat.SUPERGROUP))
+
+
+def test_a_disallowed_group_message_never_reaches_a_group_zero_handler(
+    application: Any,
+) -> None:
+    """The gate stops propagation for a denied verdict; the gate is the filter."""
+    guard, gate = application.handlers[-1]
+    strangers = [
+        _text_update(user_id=STRANGER_ID, chat_type=Chat.SUPERGROUP),
+        _command_update(user_id=STRANGER_ID, chat_type=Chat.SUPERGROUP, text="/start"),
+        _photo_update(
+            user_id=STRANGER_ID, chat_type=Chat.SUPERGROUP, caption="http://spam.example"
+        ),
+    ]
+    for update in strangers:
+        assert guard.check_update(update) is True, "the guard stops strangers first"
+    # … and for an *allowed* user the gate itself is what decides, in group -1,
+    # before any group-0 handler runs.
+    assert isinstance(application.handlers[-1][1], MessageHandler)
+
+
+# ── /vision on a photo caption (review finding, 2026-10-17) ────────────────
+
+
+def _group_zero_callback(application: Any, update: Update) -> str | None:
+    handler = _first_match(application.handlers[0], update)
+    return None if handler is None else handler.callback.__name__
+
+
+def test_a_photo_captioned_vision_is_dispatched_to_the_vision_handler(
+    application: Any,
+) -> None:
+    """``CommandHandler`` only reads ``message.text``, so this never dispatched."""
+    update = _photo_update(user_id=OWNER_ID, chat_type=Chat.PRIVATE, caption="/vision")
+    assert _group_zero_callback(application, update) == "vision_cmd"
+
+    addressed = _photo_update(
+        user_id=OWNER_ID, chat_type=Chat.PRIVATE, caption="/vision@nexus_test_bot what is this?"
+    )
+    assert _group_zero_callback(application, addressed) == "vision_cmd"
+
+
+def test_an_ordinary_photo_still_reaches_the_slideshow_handler(application: Any) -> None:
+    assert (
+        _group_zero_callback(application, _photo_update(user_id=OWNER_ID, chat_type=Chat.PRIVATE))
+        == "slideshow_photo"
+    )
+    assert (
+        _group_zero_callback(
+            application,
+            _photo_update(user_id=OWNER_ID, chat_type=Chat.PRIVATE, caption="عکس اسلایدشو"),
+        )
+        == "slideshow_photo"
+    )
+
+
+def test_a_text_vision_command_still_reaches_the_vision_handler(application: Any) -> None:
+    update = _command_update(
+        user_id=OWNER_ID,
+        chat_type=Chat.PRIVATE,
+        text="/vision describe this",
+        bot=_fake_bot(),
+    )
+    assert _group_zero_callback(application, update) == "vision_cmd"
+
+
+def test_the_vision_question_is_read_from_the_caption_when_args_are_empty() -> None:
+    """A ``MessageHandler`` update has no ``context.args`` — the caption is the source."""
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.bot.handlers import (
+        _VISION_DEFAULT_QUESTION,
+        _vision_question,
+    )
+
+    def update_with(caption: str) -> Any:
+        return SimpleNamespace(message=SimpleNamespace(caption=caption))
+
+    empty_context = SimpleNamespace(args=None)
+    assert _vision_question(update_with("/vision"), empty_context) == _VISION_DEFAULT_QUESTION
+    assert _vision_question(update_with("/vision what is this?"), empty_context) == (
+        "what is this?"
+    )
+    assert _vision_question(update_with("/vision@nexus_bot what is this?"), empty_context) == (
+        "what is this?"
+    )
+    assert _vision_question(update_with("عکس اسلایدشو"), empty_context) == (
+        _VISION_DEFAULT_QUESTION
+    )
+    # A text command keeps using the arguments PTB parsed.
+    assert (
+        _vision_question(update_with(""), SimpleNamespace(args=["describe", "this"]))
+        == "describe this"
+    )

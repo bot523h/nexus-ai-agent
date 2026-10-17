@@ -1,6 +1,7 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 13 effective 2026-10-15  
+**Status:** Canonical historical record; revision 14 effective 2026-10-17  
+**r14 scope:** review closeout of the task-270 P1 layer (D-0028; session `arena/525960ca-nexus-ai-agent`, PR#219): the seven CodeRabbit findings closed as code — destructive PostgreSQL test data safety, one persistent referral identity, moderation coverage for commands and media captions, `/vision` caption dispatch, serialised `sync_engine` first use, UTC-anchored dashboard timestamps, and the `TelegramId` documentation — each with a failing-first regression test.  
 **r13 scope:** full-audit remediation (D-0026; session `arena/26f7d958-nexus-ai-agent`, board `task-270`): the sixteen findings of the 2026-10-15 full audit (PR#198 comments 6190228525/6190229601) closed as code, not prose — the `main` message-path crash, one database per deployment, the last ten canned commands, declared dependencies, the fail-closed dashboard, the non-blocking updater, CI hygiene, single table definitions, hashes/codes/timestamps, explicit imports — each with a regression test.  
 **r12 scope:** product-direction decision (D-0025): the Nagar creative backbone is an intent-first loop (Intent → Creative Graph → Capability Compiler → CommandBus → render lane → verification → artifact + lineage), not a feature. The first vertical slice — the in-memory, single-project intent loop over the existing operation matrix — is implemented in `creative/spine/` with its own boundary and mutation guards; reference reverse engineering ships as the first *capability* over it (heuristic port, low confidence, never a copy). Direction record: `docs/architecture/CREATIVE_DIRECTION.md`.  
 **r11 scope:** S3/S5 adversarial closure of the security-boundary salvage (D-0016; session `arena/01a0d563-nexus-ai-agent`, PR#79): 5 proven defects closed, 12/12 mutation-killed.  
@@ -23,6 +24,7 @@
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
 - **r10 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
 - **r11 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
+- **r14 (2026-10-17, review closeout of the P1 layer):** the seven findings of the PR#219 review closed with failing-first tests; a test that writes to `NEXUS_DATABASE_URL` needs an explicit second opt-in and may only ever delete rows it created. D-0028.  
 - **r13 (2026-10-15, full-audit remediation):** owner-mandated remediation of audit findings A-01…A-13 on one branch with a regression test per fix; the audit itself (244 modules, 23 verified) remains the published evidence on PR#198. D-0026.  
 - **r12 (2026-09-30, creative direction):** recorded the product frame (intent, not tools) and the backbone loop above the proven execution chain, then *built the first vertical slice* — the in-memory, single-project intent loop (typed intent → creative graph → capability compiler → CommandBus → artifact + evidence) in `creative/spine/`, with its own boundary and mutation guards. Reverse engineering, multiverse, social feedback, pack marketplace and style DNA stay deferred behind evidence-based triggers. Direction page: `docs/architecture/CREATIVE_DIRECTION.md`; D-0025.  
 - **r8 (2026-09-24, P0 stabilization day):** D-0010 legacy `/creative/*` HTTP lane = keep+harden (strictly harden-edged) on a deprecation track gated on open PR#58's SSRF scope, never a competitor pipeline; D-0011 `/edit` `/caption` `/grade` wired through the canonical chain with message-anchored idempotency, the bogus `mapper` handler key removed, honest op matrix (`lut`/`burnin` refused, not faked), all replies through the i18n catalog; D-0012 backup success must be measured and round-trip-verified, never asserted — plus the r8 coordination facts (task-106 superseded into task-166, task-164 narrowed to owner-secrets, docs number-resync against measured values: 57 registered ops).
@@ -2047,8 +2049,10 @@ the wrong reason).
 *Round 2 — live PostgreSQL and the composition root (2026-10-15).* The PostgreSQL blocker was
 lifted with a local PostgreSQL 16.2 (+pgvector) and immediately paid for itself: finding **A-17**
 — every Telegram id column was a 32-bit INTEGER on PostgreSQL, so a PostgreSQL deployment could not
-process a message from a post-2021 account or a supergroup. Decision: a *variant* column type
-(`BigInteger().with_variant(Integer(), "sqlite")`) rather than a plain `BigInteger`, because SQLite's
+process a message from a post-2021 account or a supergroup. Decision: a *dialect-aware* column type — the named `TypeDecorator`
+`storage.models.TelegramId` (`impl = BigInteger`; `load_dialect_impl()` returns
+`Integer()` for the sqlite dialect and `BigInteger()` for every other one) —
+rather than a plain `BigInteger`, because SQLite's
 INTEGER is already 64-bit and `INTEGER PRIMARY KEY` must remain the rowid alias — the SQLite schema
 and every existing SQLite file are untouched, and the Alembic revision `b5d8e2f4a917` is PostgreSQL-only
 and type-only. Rejected: (a) `BigInteger` everywhere (forces a batch table rebuild of every SQLite
@@ -2059,3 +2063,41 @@ re-hashing). Validation rule confirmed: a finding is "deeper validated" only by 
 *real* entry point (`on_message`, `build_application`, the real session factory) and that fails on
 `main` for the audited reason.
 
+
+### D-0028 — A test that writes to the configured database is a destructive program: opt-in, nonce scope, and a survival assertion
+
+*Review closeout of the task-270 P1 layer (PR#219, 2026-10-17).*
+`tests/integration/test_postgres_single_engine.py` opened with
+`DELETE FROM forcejoinconfig WHERE enabled IS true` — an unscoped statement running against
+whatever `NEXUS_DATABASE_URL` names, which is the variable an operator points at the real
+database. It was green in CI only because CI aims it at a disposable service container; the
+module's own docstring offered "a local server" as a supported target, so a developer running
+`pytest` against a development or Neon database lost every chat's enabled force-join
+configuration.
+
+Decision: a test that writes to a *configured* database is treated as a destructive program,
+with three independent safeguards, because any one of them can be defeated:
+
+1. **An explicit second opt-in** (`NEXUS_PG_TEST_DESTRUCTIVE=1`) in addition to
+   `NEXUS_DATABASE_URL`, set by the CI job that owns the disposable database. The opt-in is a
+   safeguard, not the fix — it does not make an unscoped delete safe.
+2. **Every statement is scoped to a per-run nonce** — no statement may address a row the test
+   did not create. Enforced statically by `tests/unit/test_pg_integration_safety.py`, which
+   walks the module's AST and fails on any `text(...)` `DELETE` without a nonce-scoped
+   `WHERE` (and on any DDL/`UPDATE`/`TRUNCATE`).
+3. **Survival is asserted, not assumed**: a module-scoped fixture snapshots the enabled
+   configurations before the module and asserts afterwards that none disappeared, and a
+   dedicated test drives the gate with a foreign enabled configuration and proves it
+   survives.
+
+The assertion that needed the empty table was **redesigned**, not merely guarded: the
+force-join gate answers "does any enabled configuration exist", so the test compares its
+verdict with the table's own state instead of emptying the table to make the comparison
+trivial. On the disposable CI database that is exactly the original assertion.
+
+Rejected: (a) keeping the delete and documenting "run against a scratch database" — an
+operator's `NEXUS_DATABASE_URL` is one typo away from the real one; (b) skipping the module
+outside CI — a silent skip is not coverage, which is why a unit test pins the opt-in in the
+workflow; (c) creating a per-run database — `CREATE DATABASE` is not granted on every hosted
+PostgreSQL (notably Neon), so it would have traded a data-safety guarantee for a
+coverage gap on exactly the deployments the test exists to protect.

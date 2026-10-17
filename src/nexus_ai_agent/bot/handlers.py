@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
@@ -145,6 +146,38 @@ SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 #: inline-data request ceiling is 20 MB; Telegram photos are ≤ 10 MB anyway).
 _VISION_MAX_BYTES = 10 * 1024 * 1024
 
+#: The question ``/vision`` asks when the caller did not supply one.
+_VISION_DEFAULT_QUESTION = "این تصویر را با جزئیات توصیف کن."
+
+#: A ``/vision`` command sitting at the start of a **photo caption**, with the
+#: optional ``@bot`` addressing Telegram supports (``/vision@MyBot``). Used
+#: both as the PTB filter that dispatches the caption photo and to strip the
+#: command off the caption so the rest becomes the question.
+_VISION_CAPTION_COMMAND = r"^\s*/vision(?:@[\w]+)?(?:[^\S\n]|$)"
+_VISION_CAPTION_PATTERN = re.compile(_VISION_CAPTION_COMMAND, re.IGNORECASE)
+
+
+def _vision_question(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+    """The question ``/vision`` was asked, whichever way it arrived.
+
+    * ``context.args`` — filled by PTB's ``CommandHandler`` for a **text**
+      ``/vision …`` message (the usual reply-to-a-photo form);
+    * else the **photo caption** with the ``/vision`` command stripped —
+      ``CommandHandler`` never sees caption commands and a plain
+      ``MessageHandler`` leaves ``context.args`` empty, so a caption-only
+      ``/vision what is this?`` used to lose its question and always fall back
+      to the generic prompt (review finding, 2026-10-17).
+    """
+    from_args = " ".join(getattr(context, "args", None) or []).strip()
+    if from_args:
+        return from_args
+    caption = getattr(getattr(update, "message", None), "caption", None)
+    if isinstance(caption, str) and caption:
+        match = _VISION_CAPTION_PATTERN.match(caption)
+        if match is not None:
+            return caption[match.end() :].strip() or _VISION_DEFAULT_QUESTION
+    return _VISION_DEFAULT_QUESTION
+
 
 async def _moderation_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Group -1 ingress: run the moderation engine before any group-0 handler.
@@ -154,21 +187,52 @@ async def _moderation_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     disallowed message must not reach ``on_message`` (the AI would otherwise
     answer the spam it just removed), hence :class:`ApplicationHandlerStop`.
     Chats without a configuration — and the owner — pass through untouched.
+
+    The handler matches group text, group commands and group media captions
+    (see :func:`_moderation_ingress_filter`), so the gate is no longer a filter
+    a violating message can be written to avoid.
     """
     verdict = await evaluate_message(update, context)
     if verdict.get("allowed") is not True:
         raise ApplicationHandlerStop
 
 
+def _moderation_ingress_filter() -> Any:
+    """Every *group* message that carries text of any kind.
+
+    ``filters.TEXT & ~filters.COMMAND`` (the pre-2026-10-17 filter) missed two
+    whole classes of group traffic, so a violating message could reach the AI
+    — and stay in the chat — untouched:
+
+    * **commands** — ``~filters.COMMAND`` excluded every ``/cmd …`` message,
+      so a command whose arguments carried a spam link or a slur was never
+      evaluated;
+    * **media captions** — ``filters.TEXT`` only looks at ``message.text``,
+      which is empty for a photo; the text lives in ``message.caption``. A
+      spam link in a photo caption bypassed the gate completely.
+
+    Commands are deliberately *included* rather than excluded: the gate only
+    raises ``ApplicationHandlerStop`` for a disallowed verdict, so an allowed
+    command still falls through to its own handler in group 0 exactly as
+    before. Media without a caption has no text to evaluate and is allowed by
+    ``evaluate_message``'s early return.
+
+    Filter availability was checked against python-telegram-bot **21.0** (the
+    floor in ``pyproject.toml``), not just the installed version:
+    ``filters.TEXT``, ``filters.COMMAND`` and ``filters.CAPTION`` all exist
+    there (``CAPTION`` is the ``filters.Caption()`` shortcut).
+    """
+    return (filters.TEXT | filters.COMMAND | filters.CAPTION) & filters.ChatType.GROUPS
+
+
 def build_moderation_gate() -> MessageHandler[Any, Any]:
-    """The group-chat text ingress; register it in group -1 after the access guard.
+    """The group-chat message ingress; register it in group -1 after the access guard.
 
     The guard's ``check_update`` is false for allowed users, so PTB continues
     to this handler within the same group; for denied users the guard raises
     ``ApplicationHandlerStop`` first and the engine never sees the message.
     """
-    group_text = filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS
-    return MessageHandler(group_text, _moderation_gate)
+    return MessageHandler(_moderation_ingress_filter(), _moderation_gate)
 
 
 async def _upsert_user(db_session_factory: SessionFactory, tg_user: Any) -> User:
@@ -430,6 +494,17 @@ def build_handlers(
 
         Until the 2026-10-15 audit this command answered a fixed sentence for
         every image; it now downloads the photo and asks the real engine.
+
+        It is reached two ways, and the question is read from whichever the
+        update actually carries:
+
+        * a **text** ``/vision …`` message (usually a reply to a photo) — PTB's
+          ``CommandHandler`` parsed the arguments into ``context.args``;
+        * a **photo whose caption is** ``/vision …`` — dispatched by
+          :func:`build_vision_photo_handler`, because ``CommandHandler`` only
+          inspects ``message.text``, so a caption-only command was never
+          dispatched at all. ``context.args`` is empty for a ``MessageHandler``
+          update, hence :func:`_vision_question` falls back to the caption.
         """
         if gemini_engine is None:
             await _reply(update, "❌ Gemini AI not configured.")
@@ -447,7 +522,7 @@ def build_handlers(
         if photo.file_size and photo.file_size > _VISION_MAX_BYTES:
             await _reply(update, "❌ عکس بزرگ‌تر از ۱۰ مگابایت است.")
             return
-        question = " ".join(context.args or []).strip() or "این تصویر را با جزئیات توصیف کن."
+        question = _vision_question(update, context)
         try:
             tg_file = await photo.get_file()
             payload = bytes(await tg_file.download_as_bytearray())
@@ -1535,6 +1610,14 @@ def build_handlers(
         CommandHandler("chat_with_doc", chat_with_doc_cmd),
         # v3.12.0 Wave 2.5: slideshow surface — command + upload buffer (queue only)
         CommandHandler("slideshow", slideshow_cmd),
+        # ``/vision`` written as a photo *caption* — registered before the
+        # slideshow photo handler on purpose. ``CommandHandler`` only inspects
+        # ``message.text``, so a caption-only ``/vision`` was dispatched to
+        # ``slideshow_photo`` instead and silently buffered as a slideshow
+        # image; PTB stops at the first matching handler of a group, so this
+        # handler takes the caption photos and every other photo (with or
+        # without a caption) still reaches ``slideshow_photo``.
+        MessageHandler(filters.PHOTO & filters.CaptionRegex(_VISION_CAPTION_PATTERN), vision_cmd),
         MessageHandler(filters.PHOTO, slideshow_photo),
         MessageHandler(filters.Document.PDF, pdf_handler),
         # ── Phase 3: AI Story ──

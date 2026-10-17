@@ -211,9 +211,16 @@ async def root() -> str:
                     }
                     let html = '<ul class="divide-y divide-slate-700">';
                     // PII-free payload (P0-5): surrogate id + join time only.
+                    // `joined_at` is published with an explicit UTC offset by
+                    // `api/dashboard.py`; `new Date()` reads an ISO string
+                    // *without* an offset as local time, which shifted every
+                    // join time by the viewer's UTC offset. Normalise here so
+                    // an older/foreign payload stays correct too.
+                    const utcStamp = v =>
+                        /(?:Z|[+-]\\d{2}:?\\d{2})$/.test(v) ? v : v + 'Z';
                     data.forEach(u => {
                         const joined = u.joined_at
-                            ? new Date(u.joined_at).toLocaleString('fa-IR') : '—';
+                            ? new Date(utcStamp(u.joined_at)).toLocaleString('fa-IR') : '—';
                         html += `
                             <li class="py-3 flex justify-between items-center">
                                 <div>

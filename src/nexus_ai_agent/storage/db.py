@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -59,6 +60,16 @@ _pg_prepared_urls: set[str] = set()
 # ``sync_engine``.
 _sync_engine_url: str | None = None
 _sync_engine_instance: Any | None = None
+#: Serialises first use of :func:`sync_engine` (review follow-up, 2026-10-17).
+#: The feature engines call it from ``asyncio.to_thread`` workers, so several
+#: threads can observe an empty cache at the same moment; without this lock
+#: each of them would build an engine and only the last one to publish would
+#: stay in the cache, leaving the others' pools undisposed for the life of the
+#: process. The lock is held only around the URL comparison, the disposal of a
+#: superseded engine, engine construction and the cache publication — never
+#: around a caller's own database work — so it cannot serialise unrelated
+#: database lifecycle operations or deadlock against them.
+_sync_engine_lock = threading.Lock()
 
 # The only URL schemes accepted for NEXUS_DATABASE_URL.
 _SUPPORTED_URL_SCHEMES = ("postgresql", "postgres", "postgresql+asyncpg")
@@ -465,22 +476,29 @@ def sync_engine(db_path: str | None = None) -> Any:
     from sqlalchemy import create_engine as sync_create_engine
 
     url = sync_database_url(db_path)
-    if _sync_engine_instance is not None and _sync_engine_url == url:
-        return _sync_engine_instance
-    if _sync_engine_instance is not None:
-        _sync_engine_instance.dispose()
-        _sync_engine_instance = None
-    if url.startswith("sqlite:///"):
-        Path(url[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
-        engine = sync_create_engine(
-            url,
-            echo=False,
-            connect_args={"check_same_thread": False, "timeout": _SQLITE_BUSY_TIMEOUT_SECONDS},
-        )
-    else:
-        engine = sync_create_engine(url, echo=False, pool_pre_ping=True)
-    _sync_engine_url, _sync_engine_instance = url, engine
-    return engine
+    # The whole read-check-dispose-create-publish sequence is one critical
+    # section: publishing *after* the lock is released would let a second
+    # racing caller read a cache that does not yet hold the engine the first
+    # one built (and the last caller to publish would win, orphaning the
+    # others). Nothing inside the section calls back into this module, so the
+    # lock cannot be taken recursively.
+    with _sync_engine_lock:
+        if _sync_engine_instance is not None and _sync_engine_url == url:
+            return _sync_engine_instance
+        if _sync_engine_instance is not None:
+            _sync_engine_instance.dispose()
+            _sync_engine_instance = None
+        if url.startswith("sqlite:///"):
+            Path(url[len("sqlite:///") :]).parent.mkdir(parents=True, exist_ok=True)
+            engine = sync_create_engine(
+                url,
+                echo=False,
+                connect_args={"check_same_thread": False, "timeout": _SQLITE_BUSY_TIMEOUT_SECONDS},
+            )
+        else:
+            engine = sync_create_engine(url, echo=False, pool_pre_ping=True)
+        _sync_engine_url, _sync_engine_instance = url, engine
+        return engine
 
 
 @asynccontextmanager
