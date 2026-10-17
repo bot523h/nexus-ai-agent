@@ -127,14 +127,16 @@ def _load_integration_module() -> ModuleType:
     return module
 
 
-@pytest.mark.parametrize("missing", ["NEXUS_DATABASE_URL", "NEXUS_PG_TEST_DESTRUCTIVE"])
-def test_the_module_is_skipped_when_either_variable_is_absent(
-    monkeypatch: pytest.MonkeyPatch, missing: str
+def test_the_module_is_skipped_without_the_destructive_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The guard is behavioural, not decorative: prove it disarms the module."""
+    """The guard is behavioural, not decorative: prove it disarms the module.
+
+    ``NEXUS_DATABASE_URL`` alone points the *application* at a database; it
+    must not by itself arm a module that writes to it.
+    """
     monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus")
-    monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", "1")
-    monkeypatch.delenv(missing, raising=False)
+    monkeypatch.delenv("NEXUS_PG_TEST_DESTRUCTIVE", raising=False)
 
     module = _load_integration_module()
     fired = [
@@ -142,7 +144,29 @@ def test_the_module_is_skipped_when_either_variable_is_absent(
         for mark in module.pytestmark
         if getattr(mark, "name", "") == "skipif" and mark.args
     ]
-    assert any(fired), f"no skip guard fired with {missing} unset"
+    assert any(fired), "no skip guard fired with the destructive opt-in unset"
+
+
+def test_the_opt_in_armed_without_a_database_is_a_red_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An armed opt-in must never degrade into a silent skip.
+
+    If ``NEXUS_PG_TEST_DESTRUCTIVE=1`` is set but no database is configured,
+    every test in the module would collect as "skipped": the build reports
+    green while the live PostgreSQL proof — the reason the module exists —
+    goes unverified. That is the exact failure mode the opt-in was added to
+    prevent, so a misconfigured run has to be *red*.
+    """
+    monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
+    monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", "1")
+
+    # ``pytest.fail`` raises ``Failed``, which derives from BaseException.
+    with pytest.raises(BaseException) as excinfo:
+        _load_integration_module()
+    assert "NEXUS_DATABASE_URL" in str(excinfo.value), (
+        "the module must say which variable is missing instead of skipping quietly"
+    )
 
 
 def test_the_module_runs_when_both_variables_are_set(monkeypatch: pytest.MonkeyPatch) -> None:

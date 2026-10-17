@@ -191,7 +191,8 @@ shown red before the fix was applied.
   `tests/unit/test_pg_integration_safety.py` needs no database: it parses the
   module's `text(...)` literals and fails on any `DELETE` without a
   nonce-scoped `WHERE`, and fails if CI ever drops the opt-in — a silent skip
-  is not coverage.
+  is not coverage, so arming the opt-in *without* a database is now a red build
+  rather than a green skip.
 - **F2 — `/referral` displayed one code and shared another.**
   `ReferralEngine.get_referral_stats` generated a fresh, *unpersisted* code for
   a user with no `referralcode` row, while `get_referral_link` — called one

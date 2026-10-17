@@ -91,6 +91,19 @@ pytestmark = [
     ),
 ]
 
+# The opt-in must never turn into a silent skip. If it is armed but no database
+# is configured, every test below would collect as "skipped" and the build would
+# report green while the PostgreSQL contract — the reason this module exists —
+# went unverified. A misconfigured run is therefore a *red* build.
+if os.getenv(DESTRUCTIVE_OPT_IN) == "1" and not os.getenv("NEXUS_DATABASE_URL"):
+    pytest.fail(
+        f"{DESTRUCTIVE_OPT_IN}=1 is set but NEXUS_DATABASE_URL is not: this module "
+        "would collect as skipped, so the PostgreSQL contract it exists to verify "
+        "would go unverified while the build stayed green. Set both variables, or "
+        "neither.",
+        pytrace=False,
+    )
+
 
 # ── scoped data access (no statement below is ever unscoped) ────────────────
 
