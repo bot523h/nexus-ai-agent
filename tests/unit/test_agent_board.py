@@ -1325,3 +1325,54 @@ def test_show_garbage_collects_an_expired_lease(board_module: ModuleType) -> Non
     # gc records *why* it released the lease, and never clobbers the owner's note.
     assert "stale active lease" in freed["release_reason"]
     assert freed["note"] == handoff
+
+
+def test_takeover_retires_the_gc_release_reason(board_module: ModuleType) -> None:
+    """A takeover must not leave gc's "auto-released" reason on a live lease.
+
+    ``gc_expired`` stamps ``release_reason`` on a lease it frees. If a new
+    owner then takes that record over, the reason describes a release that no
+    longer applies: an active lease would claim to be auto-released. The old
+    reason is retired to ``previous_release_reason`` (history stays honest),
+    and the live record carries no ``release_reason`` at all (task-220).
+    """
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    stale = next(c for c in board["claims"] if c["task"] == "synthetic-dir-claim")
+    stale["claimed_at"] = _iso(datetime.now(timezone.utc) - timedelta(hours=48))
+    stale["ttl_hours"] = 1
+    stale["generation"] = 2
+    board_module.BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
+    args = type(
+        "A",
+        (),
+        {
+            "task": "synthetic-dir-claim",
+            "branch": "arena/new-owner",
+            "ttl": 24,
+            "gates": False,
+            "expected_generation": 2,
+        },
+    )()
+    assert board_module.cmd_claim(args) == 0
+    reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    live = next(c for c in reloaded["claims"] if c["task"] == "synthetic-dir-claim")
+    assert live["status"] == "active" and live["agent_branch"] == "arena/new-owner"
+    assert "release_reason" not in live, "a live lease must not carry a stale release reason"
+    assert "stale active lease" in live["previous_release_reason"]
+
+
+def test_takeover_of_a_never_released_lease_records_no_release_history(
+    board_module: ModuleType,
+) -> None:
+    """Control: with nothing to retire, a claim adds neither reason key."""
+    task = _first_claimable(board_module.BOARD)
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    claim = next(c for c in board["claims"] if c["task"] == task)
+    claim.pop("release_reason", None)
+    claim.pop("previous_release_reason", None)
+    board_module.BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
+    args = type("A", (), {"task": task, "branch": "arena/fresh", "ttl": 24, "gates": False})()
+    assert board_module.cmd_claim(args) == 0
+    reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    live = next(c for c in reloaded["claims"] if c["task"] == task)
+    assert "release_reason" not in live and "previous_release_reason" not in live
