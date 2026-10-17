@@ -46,18 +46,21 @@ flowchart LR
 ## 2. Schema management
 
 - **Alembic is the only schema authority.** The stopgap `create_all` path was retired (D7); startup either verifies head or runs the chain under a migration lock.
-- Chain (4 revisions, current head `e575469d90b9`):
+- Chain (5 revisions, current head `b5d8e2f4a917`):
 
 ```text
 47903d282ede  initial schema
    └── f4a9c2e71b08  nexus_checkpoint_lifecycle (PostgreSQL only)
           └── 7c2f9d41e8a3  ai-memory consent columns on usermemory
-                 └── e575469d90b9  nagar asset library v1 (assets/versions/links/ingests)  ← HEAD
+                 └── e575469d90b9  nagar asset library v1 (assets/versions/links/ingests)
+                        └── b5d8e2f4a917  Telegram id columns INTEGER → BIGINT (PostgreSQL only; audit A-17)  ← HEAD
 ```
+
+- **Telegram identifiers are 64-bit.** Every user/chat id column uses `storage.models.TelegramId`, a named `TypeDecorator` (not a `with_variant` expression): its `impl` is `BigInteger` and `load_dialect_impl()` returns `Integer()` on SQLite and `BigInteger()` for every other dialect — BIGINT on PostgreSQL, unchanged INTEGER (rowid alias for primary keys) on SQLite. Because it is a named class the tests can compile it directly (`models.TelegramId().compile(dialect=…)`), which a `with_variant` expression would not allow. `tests/unit/test_telegram_id_width.py` keeps the ORM, the migration list and the PostgreSQL DDL in lockstep; `tests/integration/test_postgres_single_engine.py` writes a post-2021 user id and a supergroup id through both engines on the real PostgreSQL in CI.
 
 - **URL normalisation** accepts `postgresql://`, `postgres://`, `postgresql+asyncpg://` and rejects everything else with a clear error (`storage/db.py::normalize_database_url`).
 - **Legacy adoption instead of replay:** an existing, unstamped SQLite database or a pre-Alembic PostgreSQL database is *inspected, decided, then stamped* (`storage/adopt_pg.py`, `nexus adopt-pg`) — never re-created.
-- **Drift is a failure, not a repair:** `storage/checkpoint_fingerprint.py` compares a live fingerprint to a golden manifest; updating goldens is human-only (`nexus golden update`, enforced by tests).
+- **Drift is a failure, not a repair:** `storage/checkpoint_fingerprint.py` compares a live fingerprint to a golden manifest; updating goldens is human-only (`nexus checkpoints golden update --yes`, enforced by tests). The PostgreSQL golden includes the Alembic head, so every new revision is followed by a reviewed golden update (last: `b5d8e2f4a917`, fingerprint `96105e96…`).
 - **Concurrency:** migrations take a lock (`storage/migrations.py::migration_lock`); concurrent first-run migrations are covered by `tests/integration/test_migrate_race_condition.py` and the CI `migrate-postgres` job (real `pgvector/pgvector:pg16`), which also asserts the stamp equals the head revision and that a second `nexus migrate` is a no-op.
 
 ## 3. Entity ownership (naming discipline)

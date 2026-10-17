@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-13T15:08:09Z",
+  "updated_at": "2026-10-17T00:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3994,6 +3994,12 @@
         "wave": "PR#47/#51 integration + CI root-cause repair",
         "content": "agent B's residual feature wiring landed (real RAG rag_core + eval harness, gamification /daily single-session fix, framework-free bot/surface, PR#32 triage); the red test job was root-caused without CI logs (log-receiver EOF) and repaired: 3 board clock bombs, an environment-dependent RAG test, a queue-hook ordering race; hostile-clock sweep clean.",
         "anchor": "PR#52 315d38a",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "PR#219 review closeout — the seven findings of the P1 layer (task-270)",
+        "content": "the CodeRabbit review of PR#219 closed as code, each with a failing-first regression test: (1) the PostgreSQL integration test no longer deletes other chats' forcejoinconfig — nonce-scoped statements, a second explicit opt-in (NEXUS_PG_TEST_DESTRUCTIVE, set only by the job that owns the disposable database) and a module-scoped survival assertion, statically enforced by tests/unit/test_pg_integration_safety.py; (2) /referral shows one persistent code — get_referral_stats resolves through get_or_create_code and format_stats renders the link from the code it displays; (3) the moderation gate covers commands and media captions ((TEXT | COMMAND | CAPTION) & ChatType.GROUPS; filters.CAPTION verified present in PTB 21.0, the declared floor) and evaluate_message reads text-or-caption; (4) a caption-only /vision dispatches to vision_cmd via a MessageHandler(PHOTO & CaptionRegex) registered before slideshow_photo, and the question is parsed from the caption (incl. /vision@BotName); (5) sync_engine's read-check-dispose-create-publish sequence is one critical section under a module lock, so racing to_thread workers can no longer publish two engines (proof: 8 threads build 8 engines before, 1 after); (6) api/dashboard publishes joined_at with an explicit UTC offset and the dashboard client normalises an offset-less payload; (7) the TelegramId docs and the b5d8e2f4a917 docstring describe the real named TypeDecorator (impl BigInteger, load_dialect_impl) instead of a with_variant expression. mypy/deptry outcomes are unchanged from the P1 head (chromadb and llama-cpp-python are not installed here) and were re-measured at that head to prove it. Decision record: DECISION_LOG r14 / D-0028.",
+        "anchor": "PR#219 review closeout, session arena/525960ca-nexus-ai-agent",
         "release": "v3.13.0"
       }
     ],
