@@ -267,7 +267,8 @@ def _openapi_operations(schema: Mapping[str, Any]) -> set[tuple[str, str]]:
 
 def _path_parameter_names(schema: Mapping[str, Any], path: str) -> list[str]:
     """The path parameters of one operation, read from the schema."""
-    item = schema.get("paths", {}).get(path)  # type: ignore[union-attr]
+    paths = schema.get("paths")
+    item = paths.get(path) if isinstance(paths, Mapping) else None
     if not isinstance(item, Mapping):
         return []
     names: list[str] = []
@@ -364,6 +365,11 @@ def _sweep(
     (configured, but wrong credentials).  The expected status is the one the
     owning surface demands — never a set of "acceptable" codes, because a
     set would let a 404/405/422 pass as a gate that ran.
+
+    The probe sends no body and no query parameters on purpose.  FastAPI
+    solves the route's dependencies *before* it validates the body, the
+    query and the path parameters (verified for the installed FastAPI), so
+    a missing parameter can never turn a security rejection into a 422.
     """
     deviations: dict[tuple[str, str], str] = {}
     for operation in sorted(inventory.gated):
@@ -373,14 +379,15 @@ def _sweep(
         surface = surface_of(operation)
         if surface is None:
             deviations[operation] = (
-                f"no security surface owns this operation (observed status {response.status_code})"
+                f"{method} {path}: no security surface owns this operation "
+                f"(observed status {response.status_code})"
             )
             continue
         expected = surface.expected_status(state)
         if response.status_code != expected:
             deviations[operation] = (
-                f"expected {expected} for surface {surface.name!r} in state {state!r}, "
-                f"got {response.status_code}: {response.text[:160]!r}"
+                f"{method} {path}: expected {expected} for surface {surface.name!r} "
+                f"in state {state!r}, got {response.status_code}: {response.text[:160]!r}"
             )
     return deviations
 
@@ -490,6 +497,13 @@ def api_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[ApiEnv]
         "WEBHOOK_SECRET",
         "NEXUS_STUDIO_PROJECT_IDS",
         "NEXUS_API_CORS_ORIGINS",
+        # The un-prefixed aliases of the path settings: a host that exports
+        # DB_PATH must not redirect the suite's database either.
+        "DB_PATH",
+        "CHECKPOINT_PATH",
+        "VECTOR_PATH",
+        "MODEL_PATH",
+        "CACHE_DIR",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -519,7 +533,11 @@ def api_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[ApiEnv]
     app.state.webhook_application = saved_state["webhook_application"]
     app.state.webhook_secret = saved_state["webhook_secret"]
     settings_module.get_settings.cache_clear()
-    _reset_storage_caches()
+    # The engine is deliberately *not* nulled here: the repository's autouse
+    # fixture (``tests/conftest.py::_dispose_db_engine``) disposes it on a
+    # live event loop, and dropping the reference first would leak the
+    # aiosqlite connection instead of closing it.
+    db_module._initialized_paths.clear()
 
 
 def _arm_security(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -752,6 +770,20 @@ def test_the_legacy_creative_surface_opens_only_with_a_valid_signature(
     assert valid.status_code == 400, valid.text[:200]
     assert "Provide either file or video_url" in valid.json()["detail"]
 
+    # The read half of the same lane is gated by the same signature: a job
+    # row is only readable with a valid signature.
+    from nexus_ai_agent.api.app import get_creative_registry
+
+    registry = get_creative_registry()
+    job_id = asyncio.run(registry.create_job("video_edit", {"project_id": AUTHORIZED_PROJECT}))
+    read_ok = api_env.client.get(f"/creative/jobs/{job_id}", headers=_hmac_headers(HMAC_KEY, b""))
+    assert read_ok.status_code == 200, read_ok.text[:200]
+    assert read_ok.json()["id"] == job_id
+    read_denied = api_env.client.get(
+        f"/creative/jobs/{job_id}", headers=_hmac_headers("another-key", b"")
+    )
+    assert read_denied.status_code == 401, read_denied.text[:200]
+
 
 def test_the_webhook_surface_opens_only_with_the_configured_shared_secret(
     api_env: ApiEnv, monkeypatch, sample_telegram_update: dict[str, Any]
@@ -759,19 +791,6 @@ def test_the_webhook_surface_opens_only_with_the_configured_shared_secret(
     """The webhook has its own secret boundary, independent of the API token."""
     _arm_security(monkeypatch)
     secret_header = {"X-Telegram-Bot-Api-Secret-Token": WEBHOOK_SECRET}
-
-    # Wrong secret.
-    wrong = api_env.client.post(
-        "/webhook/telegram",
-        json=sample_telegram_update,
-        headers=secret_header | {"X-Telegram-Bot-Api-Secret-Token": "nope"},
-    )
-    assert wrong.status_code == 403, wrong.text[:200]
-    assert wrong.json()["error"] == "invalid secret"
-
-    # Missing secret.
-    missing = api_env.client.post("/webhook/telegram", json=sample_telegram_update)
-    assert missing.status_code == 403, missing.text[:200]
 
     # The right secret, but no application published yet: the secret gate ran
     # and passed, the next stage reports "not ready" (a distinct status, so
@@ -782,9 +801,28 @@ def test_the_webhook_surface_opens_only_with_the_configured_shared_secret(
     assert not_ready.status_code == 503, not_ready.text[:200]
     assert not_ready.json()["error"] == "webhook application not ready"
 
-    # The right secret and a published application: the update is accepted.
+    # The stub application is published *before* the rejected requests, so
+    # the "nothing was enqueued" assertions below have teeth: a rejected
+    # delivery must not reach the update queue.
     stub = _StubApplication()
     api_env.app.state.webhook_application = stub
+
+    # Wrong secret.
+    wrong = api_env.client.post(
+        "/webhook/telegram",
+        json=sample_telegram_update,
+        headers=secret_header | {"X-Telegram-Bot-Api-Secret-Token": "nope"},
+    )
+    assert wrong.status_code == 403, wrong.text[:200]
+    assert wrong.json()["error"] == "invalid secret"
+    assert stub.update_queue.empty(), "a rejected delivery was enqueued"
+
+    # Missing secret.
+    missing = api_env.client.post("/webhook/telegram", json=sample_telegram_update)
+    assert missing.status_code == 403, missing.text[:200]
+    assert stub.update_queue.empty(), "a rejected delivery was enqueued"
+
+    # The right secret and a published application: the update is accepted.
     accepted = api_env.client.post(
         "/webhook/telegram", json=sample_telegram_update, headers=secret_header
     )
