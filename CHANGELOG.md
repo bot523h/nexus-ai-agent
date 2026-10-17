@@ -182,7 +182,8 @@ shown red before the fix was applied.
   operator points at a real Neon database. The module now (a) refuses to run
   without a second opt-in, `NEXUS_PG_TEST_DESTRUCTIVE=1`, which the CI
   `migrate-postgres` job sets against its disposable service container; (b)
-  scopes every statement to a per-run nonce; (c) compares the gate's verdict
+  scopes every **write** to a per-run nonce (read-only baseline queries are
+  allowed and are what the survival assertion reads); (c) compares the gate's verdict
   with the table's own state instead of emptying the table to make the
   comparison trivial; (d) proves survival — a module-scoped fixture snapshots
   the enabled configurations before the module runs and asserts afterwards

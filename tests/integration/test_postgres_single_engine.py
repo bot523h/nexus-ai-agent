@@ -40,9 +40,11 @@ The module is now safe by construction, not by convention:
   ``NEXUS_PG_TEST_DESTRUCTIVE=1`` must be set as well. The CI
   ``migrate-postgres`` job sets it against its disposable service container
   (``tests/unit/test_pg_integration_safety.py`` enforces that).
-* **Every statement is scoped to a per-run nonce.** No statement in this
-  module touches a row it did not create; the same unit test parses the
-  module and fails on any ``DELETE`` without a nonce-scoped ``WHERE``.
+* **Every write is scoped to a per-run nonce.** No statement in this
+  module modifies or deletes a row it did not create; the same unit test
+  parses the module and fails on any ``DELETE`` without a nonce-scoped
+  ``WHERE``. Read-only queries *may* inspect pre-existing rows — the
+  survival assertion below needs that baseline.
 * **The assertion was redesigned.** The old first assertion needed a
   *globally empty* table. The gate answers "does any enabled configuration
   exist", so the test now compares its verdict with the table's own state

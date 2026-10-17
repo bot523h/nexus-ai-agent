@@ -153,7 +153,7 @@ _VISION_DEFAULT_QUESTION = "این تصویر را با جزئیات توصیف 
 #: optional ``@bot`` addressing Telegram supports (``/vision@MyBot``). Used
 #: both as the PTB filter that dispatches the caption photo and to strip the
 #: command off the caption so the rest becomes the question.
-_VISION_CAPTION_COMMAND = r"^\s*/vision(?:@[\w]+)?(?:[^\S\n]|$)"
+_VISION_CAPTION_COMMAND = r"^\s*/vision(?:@\w+)?(?:\s|$)"
 _VISION_CAPTION_PATTERN = re.compile(_VISION_CAPTION_COMMAND, re.IGNORECASE)
 
 

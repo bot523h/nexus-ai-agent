@@ -52,6 +52,10 @@ def client_and_db(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Any:
     _reset_db_engine_cache()
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
+    # Pin the SQLite file to *this* fixture's database before the settings
+    # cache is cleared: a developer with NEXUS_DB_PATH pointed at an absolute
+    # path would otherwise have this test's rows committed to that database.
+    monkeypatch.setenv("NEXUS_DB_PATH", str(db_file))
     settings_module.get_settings.cache_clear()
     yield TestClient(app)
     settings_module.get_settings.cache_clear()
