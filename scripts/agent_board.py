@@ -392,6 +392,12 @@ def _claim_locked(args: argparse.Namespace) -> int:
         gates_owner=bool(args.gates),
         note="",
     )
+    # A takeover/re-claim of a lease that ``gc`` freed must not keep gc's
+    # "auto-released" reason on what is now a live lease. Retire it into
+    # ``previous_release_reason`` so the record stays honest (task-220).
+    retired = claim.pop("release_reason", None)
+    if retired:
+        claim["previous_release_reason"] = retired
     # Fencing epoch: strictly monotonic across every (re)claim. A brand-new or
     # legacy claim (generation 0) becomes 1; a takeover or re-claim advances it
     # so any superseded holder's recorded expectation is invalidated — including
