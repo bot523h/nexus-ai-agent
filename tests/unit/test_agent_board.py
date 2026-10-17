@@ -822,6 +822,72 @@ def test_claim_takeover_advances_generation(board_module: ModuleType) -> None:
     assert _generation_of(board_module, task) == before + 1
 
 
+def test_takeover_of_a_gc_released_lease_retires_the_stale_release_reason(
+    board_module: ModuleType,
+) -> None:
+    """An ACTIVE lease must not still claim to have been released (task-220).
+
+    ``gc_expired`` stamps ``release_reason`` on the record it frees.  A takeover
+    reuses that record — if the reason stayed, the new ACTIVE lease would carry
+    a contradictory "auto-released by gc" line that ``show`` and every audit
+    after it would repeat.  The reason must retire into ``previous_release_reason``
+    (history preserved, contradiction impossible), exactly the way PR #211's
+    review demanded and CodeRabbit re-flagged on the board file itself.
+    """
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    task = _first_claimable(board_module.BOARD)
+    claim = next(c for c in board["claims"] if c["task"] == task)
+    reason = "auto-released by gc at 2026-10-16T00:00:00Z (stale active lease)"
+    claim.update(status="expired", release_reason=reason, generation=2)
+    board_module.BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    code = board_module.cmd_claim(
+        type(
+            "A",
+            (),
+            {
+                "task": task,
+                "branch": "arena/999-new",
+                "ttl": 24,
+                "gates": False,
+                "expected_generation": 2,
+            },
+        )()
+    )
+
+    assert code == 0
+    after = next(
+        c
+        for c in json.loads(board_module.BOARD.read_text(encoding="utf-8"))["claims"]
+        if c["task"] == task
+    )
+    assert after["status"] == "active"
+    assert "release_reason" not in after, (
+        "an active lease still carries its gc release_reason — contradictory record"
+    )
+    assert after.get("previous_release_reason") == reason
+    assert after["generation"] == 3
+
+
+def test_a_claim_that_was_never_released_gets_no_history_field(
+    board_module: ModuleType,
+) -> None:
+    """Takeover of a record with no release_reason must not invent one."""
+    task = _first_claimable(board_module.BOARD)
+    code = board_module.cmd_claim(
+        type("A", (), {"task": task, "branch": "arena/999-new", "ttl": 24, "gates": False})()
+    )
+    assert code == 0
+    after = next(
+        c
+        for c in json.loads(board_module.BOARD.read_text(encoding="utf-8"))["claims"]
+        if c["task"] == task
+    )
+    assert after["status"] == "active"
+    assert "release_reason" not in after
+    assert "previous_release_reason" not in after
+
+
 def test_heartbeat_keeps_generation_stable(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:

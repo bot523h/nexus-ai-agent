@@ -384,6 +384,14 @@ def _claim_locked(args: argparse.Namespace) -> int:
         if refusal:
             print(refusal)
             return 2
+    # gc stamps ``release_reason`` on the record it frees. A takeover reuses that
+    # record, and an ACTIVE lease must not still claim to have been released
+    # (CodeRabbit on PR #211; revalidated against this tree 2026-10-16 — the
+    # takeover below never cleared it). Retire the reason into history instead
+    # of dropping it: the release stays auditable, the contradiction cannot exist.
+    stale_reason = claim.pop("release_reason", None)
+    if stale_reason:
+        claim["previous_release_reason"] = stale_reason
     claim.update(
         status="active",
         agent_branch=args.branch,
