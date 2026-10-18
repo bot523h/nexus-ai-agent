@@ -167,13 +167,29 @@
     {"id": "D7", "claim": "PR creation", "status": "NOT_REVIEWABLE", "resolution": "HTTP 403 for the integration token; manual URL provided"}
   ],
 
+  "publication_history": {
+    "at_utc": "2026-10-18T~05:44Z (initial report)",
+    "attempt": "POST /repos/bot523h/nexus-ai-agent/pulls",
+    "result": "HTTP 403 {\"message\":\"Resource not accessible by integration\"}",
+    "status_at_that_time": "BLOCKED_BY_403",
+    "note": "true at the time; retained for history and NOT rewritten"
+  },
+  "publication_current": {
+    "at_utc": "2026-10-18T10:27Z",
+    "pr": 228,
+    "pr_state": "open",
+    "pr_head": "b6958b0c43783271874a5efdd3e6797be029c936",
+    "pr_base": "62922dfbcff290edab35e3c3aa0cf70e71b136ca (main)",
+    "pr_body": "completed via the GitHub MCP update tool (3557 chars); the integration REST token still returns 403 for PR edit",
+    "ci": "run 39119296180 on b6958b0: completed, success, 20/20 jobs",
+    "status": "PR_OPEN_CI_PASSED"
+  },
   "final_status": "EVIDENCE_VERIFIED_WITH_LIMITATIONS",
   "merge_status": "BLOCKED_BY_GOVERNANCE",
-  "pr_status": "BLOCKED_BY_403",
   "limitations": [
-    "No official gates_owner (referee exit 2) - integration is blocked.",
+    "No official gates_owner (referee exit 2) - merge is blocked by governance.",
     "Phase-6 real RecipeAnalyzer, durable graph/lineage, counterfactual lab remain DEFERRED.",
     "One flaky test (D4) documented but not fixed - outside this mission's authority.",
-    "PR creation blocked by HTTP 403 for the integration token."
+    "The integration REST token has no scopes (metadata read + git push); PR title/body were set via the GitHub MCP tool instead."
   ]
 }
