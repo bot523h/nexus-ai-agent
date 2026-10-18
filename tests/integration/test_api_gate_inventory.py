@@ -94,10 +94,12 @@ HTTP_METHODS: frozenset[str] = frozenset(
 #: why an HTTP probe cannot audit them.  A route with a path but no method
 #: set is a *container*: a mounted sub-application or a websocket route.
 #: A container whose interior the inventory can enumerate is audited through
-#: its operations; a container it cannot see into (a static file server, for
+#: its contents; a container it cannot see into (a static file server, for
 #: example) is invisible to every HTTP-based inventory and therefore has to
-#: be exempted explicitly — with a reason.  The map is empty today: the
-#: application mounts no sub-application and exposes no websocket route.
+#: be exempted explicitly — with a reason.  The key is the container's path
+#: (``"/"`` for a mount at the root, which Starlette stores as an empty
+#: string).  The map is empty today: the application mounts no
+#: sub-application and exposes no websocket route.
 OPAQUE_ROUTE_EXEMPTIONS: dict[str, str] = {}
 
 #: Matches a path parameter placeholder that no schema-derived name filled.
@@ -216,13 +218,24 @@ class RegisteredRoute:
     path: str
     #: The Starlette/FastAPI route object.
     route: Any
-    #: The path of the mount this route lives inside (``None`` for the
-    #: application's own route table).
-    container: str | None
+    #: The chain of containers (mounts) this route sits inside, outermost
+    #: first.  It is what tells a container "there is something inside me"
+    #: apart from "something merely shares my prefix".
+    containers: tuple[str, ...]
+
+
+def _container_key(path: str) -> str:
+    """The identity of a container: its path, with the root mount normalised.
+
+    Starlette strips the trailing slash of a mount path, so ``app.mount("/",
+    ...)`` is stored with the path ``""``.  The empty string is easy to
+    confuse with "no container at all", so the root mount is keyed as ``"/"``.
+    """
+    return path or "/"
 
 
 def _iter_routes(
-    routes: Iterable[Any], prefix: str = "", container: str | None = None
+    routes: Iterable[Any], prefix: str = "", containers: tuple[str, ...] = ()
 ) -> Iterator[RegisteredRoute]:
     """Yield every route reachable from *routes* — nested routers and mounts.
 
@@ -237,24 +250,31 @@ def _iter_routes(
     it is a route with a path but *no* method set, and the sub-application
     it serves sees the path **without** the mount prefix.  The walk therefore
     looks into mounts as well and adds the prefix back, so a mounted
-    sub-application cannot slip past the inventory.
+    sub-application cannot slip past the inventory.  The chain of enclosing
+    containers travels with every route, so "there is something inside this
+    mount" is a fact about the route tree, not a guess based on a path
+    prefix.
     """
     seen: set[tuple[int, str]] = set()
-    pending: list[tuple[str, Any, str | None]] = [(prefix, route, container) for route in routes]
+    pending: list[tuple[str, Any, tuple[str, ...]]] = [
+        (prefix, route, containers) for route in routes
+    ]
     while pending:
-        base, route, enclosing = pending.pop(0)
+        base, route, chain = pending.pop(0)
         path = getattr(route, "path", None)
         effective = base + (path or "")
         key = (id(route), effective)
         if key in seen:
             continue
         seen.add(key)
-        yield RegisteredRoute(path=effective, route=route, container=enclosing)
+        yield RegisteredRoute(path=effective, route=route, containers=chain)
 
         # A route with a path but no method set is a *container* (a mount or
-        # a websocket route): its children are served under its path.
-        is_container = bool(path) and not getattr(route, "methods", None)
-        child_container = effective if is_container else enclosing
+        # a websocket route): its children are served under its path.  The
+        # root mount has an empty path, so the test is "has a path at all",
+        # not "has a non-empty path".
+        is_container = path is not None and not getattr(route, "methods", None)
+        child_chain = chain + (_container_key(effective),) if is_container else chain
 
         # FastAPI's include_router wrapper: the nested routes already carry
         # their full path.
@@ -263,7 +283,7 @@ def _iter_routes(
             nested_routes = getattr(nested, "routes", None)
             if nested_routes:
                 pending.extend(
-                    (effective, nested_route, child_container) for nested_route in nested_routes
+                    (effective, nested_route, child_chain) for nested_route in nested_routes
                 )
 
         # Starlette's Mount: the sub-application sees the path without the
@@ -273,7 +293,7 @@ def _iter_routes(
             nested_routes = getattr(nested, "routes", None)
             if nested_routes:
                 pending.extend(
-                    (effective, nested_route, child_container) for nested_route in nested_routes
+                    (effective, nested_route, child_chain) for nested_route in nested_routes
                 )
 
 
@@ -293,6 +313,7 @@ def _registered_routes(app: FastAPI) -> RouteTable:
     """Read the application's route table, mounts included."""
     operations: set[tuple[str, str]] = set()
     containers: dict[str, str] = {}
+    enumerated: set[str] = set()
     for registered in _iter_routes(app.routes):
         route = registered.route
         methods = getattr(route, "methods", None)
@@ -301,21 +322,20 @@ def _registered_routes(app: FastAPI) -> RouteTable:
             for method in methods:
                 if method.lower() in HTTP_METHODS:
                     operations.add((method.upper(), path))
-        elif path:
-            containers[path] = type(route).__name__
+        elif getattr(route, "path", None) is not None:
+            containers[_container_key(path)] = type(route).__name__
+        # Reaching *into* a container proves that the container was
+        # enumerated — whether what is inside is an operation or another
+        # container.  An operation of the parent application that merely
+        # shares the mount's prefix does not count: it is not inside the
+        # mount.
+        enumerated.update(registered.containers)
 
-    # A container is *opaque* when no HTTP operation can be found beneath
-    # it — a mounted static file server, for example.  Such a route is
-    # invisible to every OpenAPI-based inventory, so it has to be exempted
-    # explicitly instead of being dropped silently.
-    opaque = {
-        (kind, path)
-        for path, kind in containers.items()
-        if not any(
-            op_path == path or op_path.startswith(path.rstrip("/") + "/")
-            for _method, op_path in operations
-        )
-    }
+    # A container is *opaque* when nothing inside it could be enumerated — a
+    # mounted static file server, for example.  Such a route is invisible to
+    # every OpenAPI-based inventory, so it has to be exempted explicitly
+    # instead of being dropped silently.
+    opaque = {(kind, path) for path, kind in containers.items() if path not in enumerated}
     return RouteTable(
         operations=frozenset(operations),
         containers=frozenset((kind, path) for path, kind in containers.items()),
@@ -1189,3 +1209,50 @@ def test_a_mounted_sub_application_cannot_hide_from_the_inventory(
     final = build_inventory(api_env.app)
     assert not final.opaque, sorted(final.opaque)
     assert _sweep(api_env.client, final, "wrong") == {}
+
+    # ── a mount at the root ────────────────────────────────────────────
+    # Starlette strips the trailing slash, so this mount is stored with the
+    # path ``""``.  It must not be confused with "no container at all".
+    api_env.app.mount("/", app=StaticFiles(directory=str(api_env.root), html=False))
+    added = [route for route in api_env.app.router.routes if route not in before_routes]
+    try:
+        assert len(added) == 1, "the root container was not registered"
+        inventory = build_inventory(api_env.app)
+        assert ("Mount", "/") in inventory.containers, sorted(inventory.containers)
+        assert ("Mount", "/") in inventory.opaque, sorted(inventory.opaque)
+    finally:
+        for route in added:
+            api_env.app.router.routes.remove(route)
+        api_env.app.openapi_schema = None
+
+    assert list(api_env.app.router.routes) == before_routes
+    restored = build_inventory(api_env.app)
+    assert not restored.opaque, sorted(restored.opaque)
+    assert not restored.containers, sorted(restored.containers)
+    assert _sweep(api_env.client, restored, "wrong") == {}
+
+    # ── a parent operation that shares the mount's prefix ──────────────
+    # The mount still serves everything the inventory cannot enumerate, so
+    # it stays opaque: "there is an operation under this prefix" is not the
+    # same fact as "there is an operation *inside* this mount".
+    @api_env.app.get("/__p2_prefix_probe__/list")
+    async def _prefix_probe() -> dict[str, str]:
+        return {"ok": "parent route"}
+
+    api_env.app.mount(
+        "/__p2_prefix_probe__", app=StaticFiles(directory=str(api_env.root), html=False)
+    )
+    added = [route for route in api_env.app.router.routes if route not in before_routes]
+    try:
+        assert len(added) == 2, "the parent route and the mount were not registered"
+        inventory = build_inventory(api_env.app)
+        assert ("Mount", "/__p2_prefix_probe__") in inventory.opaque, sorted(inventory.opaque)
+    finally:
+        for route in added:
+            api_env.app.router.routes.remove(route)
+        api_env.app.openapi_schema = None
+
+    assert list(api_env.app.router.routes) == before_routes
+    final_state = build_inventory(api_env.app)
+    assert not final_state.opaque, sorted(final_state.opaque)
+    assert _sweep(api_env.client, final_state, "wrong") == {}
