@@ -219,9 +219,11 @@ class RegisteredRoute:
     #: The Starlette/FastAPI route object.
     route: Any
     #: The chain of containers (mounts) this route sits inside, outermost
-    #: first.  It is what tells a container "there is something inside me"
-    #: apart from "something merely shares my prefix".
-    containers: tuple[str, ...]
+    #: first.  Each entry identifies the container by the *route object* and
+    #: its effective path, because two different containers can share a
+    #: path (a mount at the root and a mount at the root inside it) and
+    #: must not be confused with one another.
+    containers: tuple[tuple[int, str], ...]
 
 
 def _container_key(path: str) -> str:
@@ -235,7 +237,7 @@ def _container_key(path: str) -> str:
 
 
 def _iter_routes(
-    routes: Iterable[Any], prefix: str = "", containers: tuple[str, ...] = ()
+    routes: Iterable[Any], prefix: str = "", containers: tuple[tuple[int, str], ...] = ()
 ) -> Iterator[RegisteredRoute]:
     """Yield every route reachable from *routes* — nested routers and mounts.
 
@@ -256,7 +258,7 @@ def _iter_routes(
     prefix.
     """
     seen: set[tuple[int, str]] = set()
-    pending: list[tuple[str, Any, tuple[str, ...]]] = [
+    pending: list[tuple[str, Any, tuple[tuple[int, str], ...]]] = [
         (prefix, route, containers) for route in routes
     ]
     while pending:
@@ -274,7 +276,7 @@ def _iter_routes(
         # root mount has an empty path, so the test is "has a path at all",
         # not "has a non-empty path".
         is_container = path is not None and not getattr(route, "methods", None)
-        child_chain = chain + (_container_key(effective),) if is_container else chain
+        child_chain = chain + ((id(route), effective),) if is_container else chain
 
         # FastAPI's include_router wrapper: the nested routes already carry
         # their full path.
@@ -312,8 +314,11 @@ class RouteTable:
 def _registered_routes(app: FastAPI) -> RouteTable:
     """Read the application's route table, mounts included."""
     operations: set[tuple[str, str]] = set()
-    containers: dict[str, str] = {}
-    enumerated: set[str] = set()
+    # A container is identified by its route object *and* its effective path:
+    # a mount at the root and a mount at the root inside it share a path but
+    # are two different containers, and only the inner one may be opaque.
+    containers: dict[tuple[int, str], tuple[str, str]] = {}
+    enumerated: set[tuple[int, str]] = set()
     for registered in _iter_routes(app.routes):
         route = registered.route
         methods = getattr(route, "methods", None)
@@ -323,7 +328,7 @@ def _registered_routes(app: FastAPI) -> RouteTable:
                 if method.lower() in HTTP_METHODS:
                     operations.add((method.upper(), path))
         elif getattr(route, "path", None) is not None:
-            containers[_container_key(path)] = type(route).__name__
+            containers[(id(route), path)] = (type(route).__name__, _container_key(path))
         # Reaching *into* a container proves that the container was
         # enumerated — whether what is inside is an operation or another
         # container.  An operation of the parent application that merely
@@ -335,10 +340,10 @@ def _registered_routes(app: FastAPI) -> RouteTable:
     # mounted static file server, for example.  Such a route is invisible to
     # every OpenAPI-based inventory, so it has to be exempted explicitly
     # instead of being dropped silently.
-    opaque = {(kind, path) for path, kind in containers.items() if path not in enumerated}
+    opaque = {entry for key, entry in containers.items() if key not in enumerated}
     return RouteTable(
         operations=frozenset(operations),
-        containers=frozenset((kind, path) for path, kind in containers.items()),
+        containers=frozenset(containers.values()),
         opaque=frozenset(opaque),
     )
 
@@ -1256,3 +1261,26 @@ def test_a_mounted_sub_application_cannot_hide_from_the_inventory(
     final_state = build_inventory(api_env.app)
     assert not final_state.opaque, sorted(final_state.opaque)
     assert _sweep(api_env.client, final_state, "wrong") == {}
+
+    # ── a mount at the root inside a mount at the root ─────────────────
+    # Both containers have the same effective path, so they must be told
+    # apart by their identity: the outer one is enumerated (it holds the
+    # inner one), the inner one is opaque and must be reported.
+    inner_app = FastAPI()
+    inner_app.mount("/", app=StaticFiles(directory=str(api_env.root), html=False))
+    api_env.app.mount("/", app=inner_app)
+    added = [route for route in api_env.app.router.routes if route not in before_routes]
+    try:
+        assert len(added) == 1, "the nested root container was not registered"
+        inventory = build_inventory(api_env.app)
+        assert ("Mount", "/") in inventory.opaque, sorted(inventory.opaque)
+    finally:
+        for route in added:
+            api_env.app.router.routes.remove(route)
+        api_env.app.openapi_schema = None
+
+    assert list(api_env.app.router.routes) == before_routes
+    nested_state = build_inventory(api_env.app)
+    assert not nested_state.opaque, sorted(nested_state.opaque)
+    assert not nested_state.containers, sorted(nested_state.containers)
+    assert _sweep(api_env.client, nested_state, "wrong") == {}
