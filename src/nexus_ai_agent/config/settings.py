@@ -328,11 +328,13 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="NEXUS_API_HMAC_KEY",
     )
-    # Bearer token for the dashboard API (P0-5). When set, every
-    # /api/dashboard/* request must send "Authorization: Bearer <token>"
-    # (constant-time comparison). When unset the API is open — the
-    # deployment MUST keep the port private (docker-compose binds
-    # 127.0.0.1 by default). Generate with:
+    # Bearer token for the dashboard API (P0-5). Every /api/dashboard/* and
+    # /api/studio/* request must send "Authorization: Bearer <token>"
+    # (constant-time comparison). When unset the API is **closed**, not open:
+    # the gate answers 503 "Security configuration incomplete" (audit A-06,
+    # hardened in api/dashboard.py). The earlier "open when unset, keep the
+    # port private" posture silently published aggregate user data on every
+    # host that exposes the API port, and it is gone. Generate with:
     #   python -c "import secrets; print(secrets.token_urlsafe(32))"
     api_dashboard_token: str | None = Field(
         default=None,
