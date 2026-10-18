@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-17T20:51:25Z",
+  "updated_at": "2026-10-18T08:17:41Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3677,7 +3677,7 @@
       "title_fa": "A-06 — فهرست مسیرهای OpenAPI با بستن fail-closed: هر عملیات HTTP ثبت‌شده باید صریحاً طبقه‌بندی و محافظت شود.",
       "zone": "api-gate-assurance",
       "priority": "P2",
-      "status": "active",
+      "status": "done",
       "scope": "Enumerate the live FastAPI OpenAPI schema and prove that every registered HTTP operation is either on an explicit public allowlist or behind a tested security gate (dashboard bearer token, studio project scope, Telegram webhook shared secret, legacy creative HMAC request signature). A newly added unprotected route must turn the guard red, and no test may contact an external service or a developer's configured database.",
       "scope_fa": "اسکیمای زندهٔ OpenAPI اپلیکیشن FastAPI فهرست می‌شود و ثابت می‌شود که هر عملیات HTTP ثبت‌شده یا روی فهرست عمومی صریح است یا پشت یک گیت امنیتی آزمون‌شده (توکن bearer داشبورد، محدودهٔ پروژهٔ studio، سکرت وب‌هوک تلگرام، امضای HMAC مسیرهای legacy) قرار دارد. افزودن مسیر محافظت‌نشده باید گارد را قرمز کند و هیچ تستی نباید به سرویس بیرونی یا دیتابیس توسعه‌دهنده وصل شود.",
       "prerequisites": [],
@@ -3702,12 +3702,12 @@
         "docs/architecture/SECURITY.md"
       ],
       "owner_hint": "agent A — branch arena/9574fc5d-nexus-ai-agent (session identity)",
-      "agent_branch": "arena/9574fc5d-nexus-ai-agent",
-      "claimed_at": "2026-10-17T20:51:25Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "Scope extension (2026-10-17, P2 audit): (1) the NEXUS_DASHBOARD_TOKEN comment in config/settings.py still documented the pre-A-06 posture ('when unset the API is open'), which contradicts the fail-closed gate in api/dashboard.py — comment-only, no behaviour change; (2) docs/architecture/SECURITY.md gained threat row T15 so the new guard is discoverable in the STRIDE table (the living-view contract of AGENTS.md §7). Ownership re-checked before each edit: agent_board.py check --files ... --branch arena/9574fc5d-nexus-ai-agent -> exit 0 (27 sources read, no overlap).",
-      "generation": 1
+      "generation": 2
     }
   ],
   "deferred_log": [
