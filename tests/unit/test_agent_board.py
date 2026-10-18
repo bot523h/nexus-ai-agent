@@ -488,13 +488,45 @@ def test_check_consults_sibling_worktree_boards(
     assert code == 1
 
 
-def test_check_unreliable_worktree_enumeration_is_exit_2(
-    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """If sibling worktrees cannot be enumerated, the absence of overlap is unproven."""
+def _gated_synthetic_board() -> dict:
+    """The synthetic board with its one lease also holding the gates.
+
+    ``cmd_check`` is fail-closed on *several* independent conditions — among
+    them "exactly one active gates_owner". A board without a gates owner is
+    exit 2 for that reason alone, which made the worktree-enumeration test
+    below vacuous (the referee mutant ``foreign_worktree_boards_skipped``
+    survived 13/14 in the Mission-2 campaign). With the gates invariant
+    satisfied, the only remaining road to exit 2 is the source under test.
+    """
     board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = True
+    return board
+
+
+def _isolate_worktree_source(board_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """origin/main readable and clean, open-PR source readable and empty."""
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
+
+
+def _check_args(files: str = "docs/not-owned.md") -> object:
+    return type("A", (), {"files": files, "branch": "arena/999-me", "no_remote": False})()
+
+
+def test_check_unreliable_worktree_enumeration_is_exit_2(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """If sibling worktrees cannot be enumerated, the absence of overlap is unproven.
+
+    GOV-1 (2026-10-15): the verdict must be exit 2 *because of the worktree
+    source* — the printed reason is asserted — and the identical situation with
+    a readable enumeration must be exit 0, so a referee that pretends the
+    enumeration succeeded (``return [], True``) is caught.
+    """
+    board = _gated_synthetic_board()
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    _isolate_worktree_source(board_module, monkeypatch)
 
     def _git_worktree_fails(args: list[str], cwd: Path) -> object:
         if args[:2] == ["worktree", "list"]:
@@ -502,18 +534,34 @@ def test_check_unreliable_worktree_enumeration_is_exit_2(
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     monkeypatch.setattr(board_module, "_git", _git_worktree_fails)
-    # origin/main is readable and clean, but the worktree enumeration was not.
-    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
-    # Isolate the worktree source from the open-PR branch source.
-    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
-    code = board_module.cmd_check(
-        type(
-            "A",
-            (),
-            {"files": "docs/not-owned.md", "branch": "arena/999-me", "no_remote": False},
-        )()
-    )
+    code = board_module.cmd_check(_check_args())
+    out = capsys.readouterr().out
     assert code == 2, "unreliable worktree enumeration must not be a clean pass"
+    assert "git worktree enumeration" in out, out
+
+    # Control: the same board and scope with a *readable* (empty) enumeration
+    # is a clean pass — proving exit 2 above came from the worktree source.
+    def _git_worktree_ok(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _git_worktree_ok)
+    assert board_module.cmd_check(_check_args()) == 0
+
+
+def test_check_git_unavailable_for_worktrees_is_exit_2(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``_git`` returning ``None`` (binary missing) is the same unverifiable verdict."""
+    board = _gated_synthetic_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    _isolate_worktree_source(board_module, monkeypatch)
+    monkeypatch.setattr(board_module, "_git", lambda args, cwd: None)
+    code = board_module.cmd_check(_check_args())
+    assert code == 2
+    assert "git worktree enumeration" in capsys.readouterr().out
 
 
 def test_check_proven_conflict_wins_over_unreadable_remote(
@@ -1327,71 +1375,52 @@ def test_show_garbage_collects_an_expired_lease(board_module: ModuleType) -> Non
     assert freed["note"] == handoff
 
 
-def _expire_first_active(board_module: ModuleType) -> str:
+def test_takeover_retires_the_gc_release_reason(board_module: ModuleType) -> None:
+    """A takeover must not leave gc's "auto-released" reason on a live lease.
+
+    ``gc_expired`` stamps ``release_reason`` on a lease it frees. If a new
+    owner then takes that record over, the reason describes a release that no
+    longer applies: an active lease would claim to be auto-released. The old
+    reason is retired to ``previous_release_reason`` (history stays honest),
+    and the live record carries no ``release_reason`` at all (task-220).
+    """
     board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
-    stale = next(c for c in board["claims"] if c["status"] == "active")
+    stale = next(c for c in board["claims"] if c["task"] == "synthetic-dir-claim")
     stale["claimed_at"] = _iso(datetime.now(timezone.utc) - timedelta(hours=48))
     stale["ttl_hours"] = 1
+    stale["generation"] = 2
     board_module.BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
-    return str(stale["task"])
-
-
-def test_takeover_of_a_gc_released_lease_clears_the_stale_release_reason(
-    board_module: ModuleType,
-) -> None:
-    """An ACTIVE lease must not claim to have been released (review on PR #211).
-
-    gc stamps ``release_reason`` on the expired record; a later takeover reuses
-    that record, so the reason has to be retired — kept only as history.
-    """
-    task = _expire_first_active(board_module)
-    assert board_module.cmd_show(type("A", (), {})()) == 0
-    expired = _claim(board_module, task)
-    assert "stale active lease" in expired["release_reason"]
-    generation = int(expired.get("generation") or 0)  # legacy records have none
-
     args = type(
         "A",
         (),
         {
-            "task": task,
+            "task": "synthetic-dir-claim",
             "branch": "arena/new-owner",
             "ttl": 24,
             "gates": False,
-            "expected_generation": generation or None,
+            "expected_generation": 2,
         },
     )()
     assert board_module.cmd_claim(args) == 0
+    reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    live = next(c for c in reloaded["claims"] if c["task"] == "synthetic-dir-claim")
+    assert live["status"] == "active" and live["agent_branch"] == "arena/new-owner"
+    assert "release_reason" not in live, "a live lease must not carry a stale release reason"
+    assert "stale active lease" in live["previous_release_reason"]
 
-    taken = _claim(board_module, task)
-    assert taken["status"] == "active"
-    assert "release_reason" not in taken or not taken["release_reason"]
-    assert "stale active lease" in taken["previous_release_reason"], "history is retained"
-    assert taken["generation"] == generation + 1, "takeover must advance the fencing epoch"
 
-
-def test_a_claim_that_was_never_released_gets_no_history_field(
+def test_takeover_of_a_never_released_lease_records_no_release_history(
     board_module: ModuleType,
 ) -> None:
+    """Control: with nothing to retire, a claim adds neither reason key."""
+    task = _first_claimable(board_module.BOARD)
     board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
-    free = next(c for c in board["claims"] if c["status"] == "queued")
-    args = type(
-        "A",
-        (),
-        {
-            "task": free["task"],
-            "branch": "arena/x",
-            "ttl": 24,
-            "gates": False,
-            "expected_generation": free.get("generation"),
-        },
-    )()
+    claim = next(c for c in board["claims"] if c["task"] == task)
+    claim.pop("release_reason", None)
+    claim.pop("previous_release_reason", None)
+    board_module.BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
+    args = type("A", (), {"task": task, "branch": "arena/fresh", "ttl": 24, "gates": False})()
     assert board_module.cmd_claim(args) == 0
-    after = _claim(board_module, free["task"])
-    assert "previous_release_reason" not in after
-    assert not after.get("release_reason")
-
-
-def _claim(board_module: ModuleType, task: str) -> dict:
-    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
-    return next(c for c in board["claims"] if c["task"] == task)
+    reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    live = next(c for c in reloaded["claims"] if c["task"] == task)
+    assert "release_reason" not in live and "previous_release_reason" not in live

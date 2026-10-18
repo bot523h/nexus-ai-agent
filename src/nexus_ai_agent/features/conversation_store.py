@@ -7,15 +7,49 @@ survive process restarts and can be queried/audited.
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    func,
+    text,
+)
 
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.db import sync_engine
 
 log = get_logger(__name__)
+
+
+def _naive_utcnow() -> datetime:
+    """Current UTC time as the naive value the DATETIME columns store.
+
+    ``datetime.utcnow()`` is deprecated (Python 3.12) and silently mixes naive
+    and aware values; this keeps the stored representation unchanged (DTZ003,
+    audit A-12).
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+_CONVERSATION_METADATA = MetaData()
+_CONVERSATION_HISTORY = Table(
+    "conversation_history",
+    _CONVERSATION_METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("conv_id", String, nullable=False),
+    Column("role", String, nullable=False),
+    Column("parts_json", Text, nullable=False),
+    Column("created_at", DateTime, server_default=func.current_timestamp()),
+    Index("ix_conv_history_conv_id", "conv_id"),
+)
 
 
 class ConversationStore:
@@ -26,40 +60,28 @@ class ConversationStore:
 
     Usage::
 
-        store = ConversationStore(db_path="data/app.sqlite")
+        store = ConversationStore()  # or ConversationStore(db_path="…sqlite")
         store.append(conv_id, {"role": "user", "parts": [{"text": "Hi"}]})
         history = store.get_history(conv_id, limit=20)
         store.clear(conv_id)
     """
 
-    def __init__(self, db_path: str = "data/app.sqlite") -> None:
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._engine = create_engine(f"sqlite:///{db_path}", echo=False)
+    def __init__(self, db_path: str | None = None) -> None:
+        """``db_path`` pins a SQLite file; ``None`` follows the configured
+        backend (``NEXUS_DATABASE_URL`` or ``NEXUS_DB_PATH``) through
+        ``storage.db.sync_engine`` (audit A-02)."""
+        self._engine = sync_engine(db_path)
         self._ensure_table()
 
     def _ensure_table(self) -> None:
-        """Create the conversation_history table if it doesn't exist."""
-        with self._engine.begin() as conn:
-            conn.execute(
-                text(
-                    "CREATE TABLE IF NOT EXISTS conversation_history ("
-                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                    "conv_id VARCHAR NOT NULL, "
-                    "role VARCHAR NOT NULL, "
-                    "parts_json TEXT NOT NULL, "
-                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
-                )
-            )
-            # Index for fast lookup by conv_id
-            try:
-                conn.execute(
-                    text(
-                        "CREATE INDEX IF NOT EXISTS ix_conv_history_conv_id "
-                        "ON conversation_history(conv_id)"
-                    )
-                )
-            except Exception:
-                pass  # Index may already exist
+        """Create ``conversation_history`` (and its ``conv_id`` index) when missing.
+
+        Declared as a private SQLAlchemy ``Table`` so the DDL is emitted per
+        dialect (the former hand-written ``AUTOINCREMENT`` statement was
+        SQLite-only); the table stays outside ``SQLModel.metadata`` because
+        it is owned by this store, not by the Alembic-managed schema.
+        """
+        _CONVERSATION_METADATA.create_all(self._engine, checkfirst=True)
 
     def get_history(self, conv_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
         """Get recent conversation history for *conv_id*.
@@ -101,7 +123,7 @@ class ConversationStore:
                     "cid": conv_id,
                     "role": role,
                     "parts": parts_json,
-                    "ts": datetime.utcnow().isoformat(),
+                    "ts": _naive_utcnow().isoformat(),
                 },
             )
 
@@ -121,7 +143,7 @@ class ConversationStore:
                         "cid": conv_id,
                         "role": role,
                         "parts": parts_json,
-                        "ts": datetime.utcnow().isoformat(),
+                        "ts": _naive_utcnow().isoformat(),
                     },
                 )
 

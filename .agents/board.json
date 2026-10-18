@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-13T05:23:38Z",
+  "updated_at": "2026-10-18T08:17:41Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -804,6 +804,37 @@
         "tests/unit/test_filesystem_policy_primitives.py",
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py"
+      ]
+    },
+    {
+      "id": "nagar-asset-library",
+      "description": "Nagar Asset Library V1 — content-addressed blob store, durable asset metadata, scoped idempotency, explicit ingest recovery (first-party, framework-independent).",
+      "paths": [
+        "src/nexus_ai_agent/creative/assets/",
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "src/nexus_ai_agent/storage/models.py",
+        "migrations/versions/",
+        "tests/unit/test_asset_library_models.py",
+        "tests/unit/test_asset_library_blob_store.py",
+        "tests/unit/test_asset_library_service.py",
+        "tests/integration/test_asset_library_persistence.py",
+        "tests/integration/test_asset_library_recovery.py",
+        "tests/architecture/test_asset_library_boundary.py",
+        "tests/unit/test_migrations.py",
+        "tests/unit/test_ai_memory_consent.py",
+        "tests/unit/test_core_fingerprint.py",
+        "tests/integration/test_migrate_race_condition.py",
+        "tests/integration/test_migrate_adoption.py",
+        "tests/integration/test_migrate_cli.py"
+      ]
+    },
+    {
+      "id": "api-gate-assurance",
+      "description": "A-06 — OpenAPI fail-closed route inventory: every registered HTTP operation must be classified (public allowlist or a named authentication/authorization gate) and proved by a regression test; plus the configuration comments that document those gates.",
+      "paths": [
+        "tests/integration/test_api_gate_inventory.py",
+        "src/nexus_ai_agent/config/settings.py",
+        "docs/architecture/SECURITY.md"
       ]
     }
   ],
@@ -2344,7 +2375,7 @@
       "gates_owner": false,
       "note": "",
       "generation": 1,
-      "release_reason": "auto-released by gc at 2026-10-12T21:07:18Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-10-13T15:08:09Z (stale active lease)"
     },
     {
       "task": "task-182-durable-idempotency-conflict",
@@ -3522,7 +3553,7 @@
       "gates_owner": false,
       "note": "",
       "generation": 1,
-      "release_reason": "auto-released by gc at 2026-10-12T21:07:18Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-10-13T15:08:09Z (stale active lease)"
     },
     {
       "task": "nexus-stabilization-handoff",
@@ -3554,7 +3585,7 @@
       "gates_owner": false,
       "note": "",
       "generation": 1,
-      "release_reason": "auto-released by gc at 2026-10-12T21:07:18Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-10-13T15:08:09Z (stale active lease)"
     },
     {
       "task": "ci-gates-steward-closure",
@@ -3562,7 +3593,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Exactly one live gates_owner while the closure validation runs: the referee fails closed (exit 2) for every agent while no live gates owner exists, and main-bound closure work needs the full gates executed by their holder. Runs make lint / make types / make test against the closure head and records the results bound to the exact SHA.",
       "scope_fa": "",
       "prerequisites": [],
@@ -3579,13 +3610,104 @@
         ".github/"
       ],
       "owner_hint": "successor of ci-gates-steward / task-145-ci-gates-handoff-refresh",
-      "agent_branch": "arena/claude-5-5-night-governance-20261013",
-      "claimed_at": "2026-10-13T05:23:38Z",
+      "agent_branch": "phase1-pr196-guard-20261009",
+      "claimed_at": "2026-10-10T18:42:23Z",
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "",
-      "generation": 4,
-      "previous_release_reason": "auto-released by gc at 2026-10-12T21:07:18Z (stale active lease)"
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-10-13T15:08:09Z (stale active lease)"
+    },
+    {
+      "task": "task-266-asset-library-v1",
+      "title": "Nagar Asset Library V1: secure ingest, immutable content identity, durable project link, restart-proven recovery",
+      "title_fa": "کتابخانه دارایی ناگار نسخه ۱: دریافت امن، هویت تغییرناپذیر محتوا، اتصال پایدار پروژه و اثبات بازیابی پس از راه‌اندازی مجدد",
+      "zone": "nagar-asset-library",
+      "priority": "P1",
+      "status": "expired",
+      "scope": "First-party, framework-independent Asset Library capability under src/nexus_ai_agent/creative/assets/: a content-addressed local blob store that reuses WorkspaceFilesystem as the single filesystem security boundary; durable SQLModel metadata (asset identity, immutable versions, project links, ingest recovery state); scoped idempotency; and an explicit STAGING->READY/FAILED recovery state machine. Authorization reuses the existing ProjectAuthorizer seam. Adds NO second queue, graph, ledger, passport, verifier or authorization authority, and does not touch the Telegram surface.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a supported real-media fixture ingests; asset has a stable logical id and an immutable version with a measured SHA-256 + byte size",
+        "the physical blob is stored under a deterministic content-derived key, never the caller filename; the local adapter is composed explicitly",
+        "authorized callers list/retrieve; a different project cannot access the asset without a grant; authorization happens before any write-side effect",
+        "reinitializing the service/repository/session (new instances) preserves asset, version, project link and content hash",
+        "a crash between blob publication and the final metadata commit is recoverable or explicitly failed; READY is never reported unless content size+digest match and the DB row is committed",
+        "repeated ingest with the same scoped idempotency key resolves to one logical result; a reused key with different content fails with a typed conflict",
+        "filename/MIME spoofing, oversize and unsupported inputs fail closed; traversal/symlink paths cannot redirect storage",
+        "no duplicated graph/ledger/queue/authorization; existing DB+Alembic conventions respected; new migration covered by tests"
+      ],
+      "evidence_required": [
+        "exact pytest commands with exit codes for the focused asset-library suites",
+        "a restart/recovery test that uses newly constructed service+repository+session instances",
+        "at least four mutation probes (guard removed -> its test turns RED), each reverted",
+        "agent_board.py check result on the changed files and the final CI status on the exact head SHA"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/assets/",
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "src/nexus_ai_agent/storage/models.py",
+        "migrations/versions/",
+        "tests/unit/test_asset_library_models.py",
+        "tests/unit/test_asset_library_blob_store.py",
+        "tests/unit/test_asset_library_service.py",
+        "tests/integration/test_asset_library_persistence.py",
+        "tests/integration/test_asset_library_recovery.py",
+        "tests/architecture/test_asset_library_boundary.py",
+        "tests/unit/test_migrations.py",
+        "tests/unit/test_ai_memory_consent.py",
+        "tests/unit/test_core_fingerprint.py",
+        "tests/integration/test_migrate_race_condition.py",
+        "tests/integration/test_migrate_adoption.py",
+        "tests/integration/test_migrate_cli.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/nagar-asset-library-v1",
+      "claimed_at": "2026-10-11T17:55:20Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Closure evidence v3 (PR #205, branch arena/nagar-asset-library-v1, head 906b0a2). 4 CodeRabbit findings closed: (1) replay digest check via BlobStore.hash_stream -> IdempotencyConflict; (2) UNIQUE(project_id, idempotency_key) on assetingest + migration e575469d90b9; (3) parent-fd fsync after os.replace; (4) de-vacuumed rglob assertions. Focused suites (exact, exit 0): tests/architecture/test_asset_library_boundary.py 6 passed; tests/unit/test_asset_library_service.py 10 passed; tests/unit/test_asset_library_models.py 10 passed; tests/unit/test_asset_library_blob_store.py 10 passed; tests/integration/test_asset_library_recovery.py 8 passed; tests/integration/test_asset_library_filesystem_security.py 12 passed; tests/integration/test_asset_library_persistence.py 10 passed; combined 66 passed. Mutation harness scripts/asset_library_mutations.py: 8/8 killed (containment, NUL, key-shape, dedup-verify, open-verify, bounded-read, unique-constraint, replay-digest). Full suite python -m pytest -q -m \"not slow\": 3966 passed, 31 skipped (local); CI test job on 906b0a2/e27e6f0: 3967 passed, 30 skipped, 0 failed. CI on 906b0a2: push run 38161719742 success (a1); PR run 38161723606 success (a2, after one pre-existing SQLite WAL-init-race rerun). ruff check+format clean; mypy src 299 files clean; truth doctor OK. agent_board.py check on changed files: exit 0 (no overlap). Known unrelated flake: SQLite WAL-init race (test_concurrent_first_use_sets_wal_without_error).",
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-10-13T15:08:09Z (stale active lease)"
+    },
+    {
+      "task": "task-271-api-gate-inventory",
+      "title": "A-06 — OpenAPI fail-closed route inventory (every registered HTTP operation classified and gated)",
+      "title_fa": "A-06 — فهرست مسیرهای OpenAPI با بستن fail-closed: هر عملیات HTTP ثبت‌شده باید صریحاً طبقه‌بندی و محافظت شود.",
+      "zone": "api-gate-assurance",
+      "priority": "P2",
+      "status": "done",
+      "scope": "Enumerate the live FastAPI OpenAPI schema and prove that every registered HTTP operation is either on an explicit public allowlist or behind a tested security gate (dashboard bearer token, studio project scope, Telegram webhook shared secret, legacy creative HMAC request signature). A newly added unprotected route must turn the guard red, and no test may contact an external service or a developer's configured database.",
+      "scope_fa": "اسکیمای زندهٔ OpenAPI اپلیکیشن FastAPI فهرست می‌شود و ثابت می‌شود که هر عملیات HTTP ثبت‌شده یا روی فهرست عمومی صریح است یا پشت یک گیت امنیتی آزمون‌شده (توکن bearer داشبورد، محدودهٔ پروژهٔ studio، سکرت وب‌هوک تلگرام، امضای HMAC مسیرهای legacy) قرار دارد. افزودن مسیر محافظت‌نشده باید گارد را قرمز کند و هیچ تستی نباید به سرویس بیرونی یا دیتابیس توسعه‌دهنده وصل شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The route inventory is derived from the real application's OpenAPI schema and from the actually registered routes — not from a hand-written list of route names.",
+        "Every discovered operation is either on an explicit public allowlist (GET /, GET /healthz) or mapped to a named security gate; an unclassified operation fails with a message naming the method and path.",
+        "Every operation is probed through the real ASGI app: unconfigured security fails closed, missing/incorrect credentials are rejected, and a correct credential opens only the intended surface.",
+        "A newly registered unprotected route is detected by the guard (proved by a controlled, fully reverted mutation probe).",
+        "Studio project scope, the Telegram webhook shared secret and the legacy creative HMAC signature are each proved independently — authentication never bypasses project-level authorization.",
+        "Tests are isolated: temporary SQLite database, explicit environment overrides, no external network, no real jobs, no persisted uploads, no leaked global state.",
+        "A security failure message identifies the affected method and path."
+      ],
+      "evidence_required": [
+        "pytest -q tests/integration/test_api_gate_inventory.py (exact command + exit code + pass/skip counts)",
+        "pytest -q tests/unit/test_dashboard_api.py tests/unit/test_security_hardening.py tests/unit/test_webhook_mode.py tests/unit/test_creative_studio.py (focused security suites)",
+        "ruff check . && ruff format --check . (exit codes)",
+        "CI run URL + per-job conclusions for the exact final head SHA"
+      ],
+      "exclusive_paths": [
+        "tests/integration/test_api_gate_inventory.py",
+        "src/nexus_ai_agent/config/settings.py",
+        "docs/architecture/SECURITY.md"
+      ],
+      "owner_hint": "agent A — branch arena/9574fc5d-nexus-ai-agent (session identity)",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Scope extension (2026-10-17, P2 audit): (1) the NEXUS_DASHBOARD_TOKEN comment in config/settings.py still documented the pre-A-06 posture ('when unset the API is open'), which contradicts the fail-closed gate in api/dashboard.py — comment-only, no behaviour change; (2) docs/architecture/SECURITY.md gained threat row T15 so the new guard is discoverable in the STRIDE table (the living-view contract of AGENTS.md §7). Ownership re-checked before each edit: agent_board.py check --files ... --branch arena/9574fc5d-nexus-ai-agent -> exit 0 (27 sources read, no overlap).",
+      "generation": 2
     }
   ],
   "deferred_log": [
@@ -3919,6 +4041,12 @@
         "wave": "PR#47/#51 integration + CI root-cause repair",
         "content": "agent B's residual feature wiring landed (real RAG rag_core + eval harness, gamification /daily single-session fix, framework-free bot/surface, PR#32 triage); the red test job was root-caused without CI logs (log-receiver EOF) and repaired: 3 board clock bombs, an environment-dependent RAG test, a queue-hook ordering race; hostile-clock sweep clean.",
         "anchor": "PR#52 315d38a",
+        "release": "v3.13.0"
+      },
+      {
+        "wave": "PR#219 review closeout — the seven findings of the P1 layer (task-270)",
+        "content": "the CodeRabbit review of PR#219 closed as code, each with a failing-first regression test: (1) the PostgreSQL integration test no longer deletes other chats' forcejoinconfig — nonce-scoped statements, a second explicit opt-in (NEXUS_PG_TEST_DESTRUCTIVE, set only by the job that owns the disposable database) and a module-scoped survival assertion, statically enforced by tests/unit/test_pg_integration_safety.py; (2) /referral shows one persistent code — get_referral_stats resolves through get_or_create_code and format_stats renders the link from the code it displays; (3) the moderation gate covers commands and media captions ((TEXT | COMMAND | CAPTION) & ChatType.GROUPS; filters.CAPTION verified present in PTB 21.0, the declared floor) and evaluate_message reads text-or-caption; (4) a caption-only /vision dispatches to vision_cmd via a MessageHandler(PHOTO & CaptionRegex) registered before slideshow_photo, and the question is parsed from the caption (incl. /vision@BotName); (5) sync_engine's read-check-dispose-create-publish sequence is one critical section under a module lock, so racing to_thread workers can no longer publish two engines (proof: 8 threads build 8 engines before, 1 after); (6) api/dashboard publishes joined_at with an explicit UTC offset and the dashboard client normalises an offset-less payload; (7) the TelegramId docs and the b5d8e2f4a917 docstring describe the real named TypeDecorator (impl BigInteger, load_dialect_impl) instead of a with_variant expression. mypy/deptry outcomes are unchanged from the P1 head (chromadb and llama-cpp-python are not installed here) and were re-measured at that head to prove it. Decision record: DECISION_LOG r14 / D-0028.",
+        "anchor": "PR#219 review closeout, session arena/525960ca-nexus-ai-agent",
         "release": "v3.13.0"
       }
     ],
