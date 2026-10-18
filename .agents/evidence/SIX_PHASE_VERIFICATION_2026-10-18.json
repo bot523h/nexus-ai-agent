@@ -1,139 +1,179 @@
 {
-  "schema": "six-phase-verification.v2",
-  "supersedes": {
-    "file": ".agents/evidence/SIX_PHASE_VERIFICATION_2026-10-14.json",
-    "why": "its 'generated' date (2026-10-14) contradicted the baseline commit time (2026-10-17). This file is the corrected, auditable record; the old file is removed by the same non-destructive commit."
-  },
-  "generated_utc": "2026-10-18T05:54:46Z",
-  "generated_source": "container clock: `date -u` at correction time",
-  "correction_mission": "evidence-honesty correction only; NO product code changed",
+  "schema": "six-phase-verification.v3",
+  "supersedes": ["six-phase-verification.v1 (.agents/evidence/SIX_PHASE_VERIFICATION_2026-10-14.json, removed)", "six-phase-verification.v2 (.agents/evidence/SIX_PHASE_VERIFICATION_2026-10-18.json, this file rewritten in place)"],
+  "generated_utc": "2026-10-18T07:55Z",
+  "generated_source": "container clock `date -u --iso-8601=seconds`; independently corroborated by the GitHub HTTP Date header (see phase1_clock)",
+  "mission": "evidence closure + forensic audit + PR publication; NO product code, test, board, or other-agent-zone change",
 
-  "identity": {
-    "verifier": "OpenHands",
-    "branch": "arena/six-phase-verification-2026-10-14",
-    "branch_head_before_correction": "04f479f3abef5068d36c9bfb1b543df6aff86312",
-    "branch_change_scope": "evidence files only (this file + removal of the mis-dated predecessor); no source, test, or docs change"
-  },
-
-  "timestamps": {
-    "note": "git commit times and the container clock disagree by ~8h (container clock is ahead of the commit clock). Both are recorded verbatim with their source; the discrepancy is NOT reconciled because no evidence exists to explain it.",
-    "baseline_main_commit": {"sha": "2feac8a91ed32cf5b0b3a8ddba3f48beca7755b3", "committer_iso": "2026-10-17T15:26:01-04:00", "utc": "2026-10-17T19:26:01Z", "source": "git log -1 --format=%cI origin/main"},
-    "evidence_commit": {"sha": "04f479f3abef5068d36c9bfb1b543df6aff86312", "committer_utc": "2026-10-17T21:34:34Z", "source": "git log -1 --format=%cI HEAD"},
-    "local_suite_run_finished_utc": "2026-10-18T05:54Z (log mtime 2026-10-18 05:54:46 +0000)",
-    "container_clock_utc": "2026-10-18T05:54:46Z",
-    "ci_main_run": {"created_at": "2026-10-17T19:26:04Z", "run_started_at": "2026-10-17T19:59:45Z", "updated_at": "2026-10-17T20:30:17Z", "source": "GitHub Actions run API"}
-  },
-
-  "live_state": {
-    "checked_at_utc": "2026-10-18T05:44:44Z",
+  "phase0_live_truth": {
+    "observed_at_utc": "2026-10-18T07:39:27Z",
     "main_sha": "2feac8a91ed32cf5b0b3a8ddba3f48beca7755b3",
-    "branch_sha": "04f479f3abef5068d36c9bfb1b543df6aff86312",
+    "branch": "arena/six-phase-verification-2026-10-14",
+    "branch_head": "85b7891f756da6484b840578336031d5207baaaa",
+    "branch_expected_head": "85b7891f756da6484b840578336031d5207baaaa",
+    "match": "expected == actual for both main and branch",
+    "working_tree": {"tracked": "clean", "untracked": ["?? .openhands/"]},
+    "changed_files_vs_main": ["A .agents/evidence/SIX_PHASE_VERIFICATION_2026-10-18.json", "A .agents/evidence/local_full_suite_2feac8a.log"],
+    "diff_check": "git diff --check origin/main...HEAD -> exit 0 (no whitespace errors)",
     "open_pr_count": 63,
-    "open_pr_count_source": "GET /repos/bot523h/nexus-ai-agent/pulls?state=open&per_page=100 at 2026-10-18T05:44:44Z",
-    "gates_owner": null,
-    "referee_check": {"command": "python scripts/agent_board.py check --files ... --branch arena/nagar-asset-library-v1", "exit": 2, "meaning": "UNVERIFIABLE (exactly one active gates_owner required; found 0) -> not a pass"},
-    "board_edited": false
+    "branch_ci_runs": 0,
+    "branch_ci_reason": "ci.yml triggers on push(main,tags) + pull_request only; a pushed branch without a PR gets no CI"
   },
 
-  "governance": {
-    "merge_status": "BLOCKED",
-    "blocker": "no official gates_owner (referee exit 2); merge/coordination process not passed",
-    "no_force_push": true, "no_main_write": true, "no_board_edit": true, "no_gates_owner_seizure": true
-  },
-
-  "phase_status": {
-    "note": "phases 1-5 are VERIFIED only for the contracts/paths that have code + tests + executed output. Phase 6 is split by sub-capability; two sub-capabilities are DEFERRED by the architecture document, not built.",
-    "phase_1_intent_to_constraint_compiler": {"status": "VERIFIED", "paths": ["creative/spine/models.py", "creative/spine/compiler.py", "creative/spine/execution.py"], "evidence": ["tests/unit/test_creative_spine.py", "tests/architecture/test_spine_boundary.py", "tests/unit/test_spine_mutations.py (5/5)"]},
-    "phase_2_verifier_and_passport": {"status": "VERIFIED", "paths": ["jobs/verification.py", "provenance/passport.py", "jobs/creative_passport.py"], "evidence": ["tests/unit/test_creative_passport.py", "tests/unit/test_job_verification_gaps.py", "tests/integration/test_provenance_passport_e2e.py"]},
-    "phase_3_real_vertical_slice": {"status": "VERIFIED", "paths": ["nagar/creative/handoff.py", "creative/render_jobs.py"], "evidence": ["tests/integration/test_nagar_durable_handoff_e2e.py", "tests/integration/test_creative_chain_e2e.py", "tests/integration/test_phase_d_e2e.py"]},
-    "phase_4_web_studio_to_real_api": {"status": "VERIFIED", "paths": ["api/studio.py", "product/studio_read.py", "product/studio_experience.py"], "evidence": ["tests/unit/test_studio_read_api.py", "tests/unit/test_product_studio.py"], "wiring_proof": "api/app.py:108 app.include_router(studio_router); JobRegistry.get_job matches ProjectJobReadPort"},
-    "phase_5_temporal_media_intelligence": {"status": "VERIFIED", "paths": ["creative/temporal/core.py", "creative/temporal/adapters.py"], "evidence": ["tests/unit/test_temporal_algebra.py", "tests/unit/test_temporal_exactness.py", "scripts/temporal_mutations.py (10/10)"]},
-    "phase_6_subcapabilities": {
-      "heuristic_reference_to_recipe_and_no_copy_constraint": {"status": "VERIFIED", "paths": ["creative/spine/reference.py"], "evidence": ["test_reference_becomes_a_strategy_not_a_copy", "test_recipe_to_intent_carries_the_no_copy_constraint", "test_recipe_is_content_addressed_and_deterministic"], "doc_source": "CREATIVE_DIRECTION.md section 4"},
-      "real_media_RecipeAnalyzer": {"status": "DEFERRED", "reason": "CREATIVE_DIRECTION.md section 6: requires a media-capable analyzer extracting composition/timing/colour/pacing with measured confidence; only RulesRecipeAnalyzer (deterministic, hint-based) ships", "not_a_defect": true},
-      "durable_graph_and_lineage_store": {"status": "DEFERRED", "reason": "CREATIVE_DIRECTION.md section 2 and section 4: the graph and lineage are present but IN-MEMORY, not persisted; durable store is a deferred trigger", "not_a_defect": true},
-      "counterfactual_lab_or_durable_creative_graph": {"status": "DEFERRED", "reason": "not implemented; CREATIVE_DIRECTION.md section 6 lists 'Multiverse' as a deferred trigger requiring durable graph+lineage first"}
+  "phase1_clock": {
+    "verdict": "NO_MEASURABLE_SKEW (prior '~8h skew' claim was WRONG and is retracted)",
+    "method": "independent UTC reference taken simultaneously with the container clock",
+    "local_clock_before": "2026-10-18T07:40:20+00:00",
+    "independent_utc_github_http_date": "Sun, 18 Oct 2026 07:40:20 GMT",
+    "local_clock_after": "2026-10-18T07:40:20+00:00",
+    "delta": "0 seconds (identical to the second)",
+    "correction": "the earlier v2 note inferred an ~8h 'container/commit clock gap' from the interval between a commit time and a later reading. That is elapsed time, not skew. With a simultaneous independent reference, no skew exists.",
+    "distinct_timestamps": {
+      "document_created_utc": {"value": "2026-10-18T07:55Z", "source": "container `date -u`"},
+      "baseline_main_commit": {"value": "2026-10-17T15:26:01-04:00 (=2026-10-17T19:26:01Z)", "source": "git show -s --format=%cI 2feac8a"},
+      "evidence_branch_commit": {"value": "2026-10-18T06:01:59Z", "source": "git show -s --format=%cI 85b7891"},
+      "local_test_run": {"value": "2026-10-18T07:44Z-07:55Z (runs)", "source": "pytest log mtimes"},
+      "ci_main_run": {"created": "2026-10-17T19:26:04Z", "started": "2026-10-17T19:59:45Z", "updated": "2026-10-17T20:30:17Z", "source": "GitHub Actions run 39062446338 API"}
     }
   },
 
-  "test_results": {
-    "note": "two results are recorded side by side; neither replaces the other",
-    "local_run": {
-      "command": "python -m pytest -q -p no:warnings -o addopts=\"\" -m \"not slow\"",
-      "sha_under_test": "2feac8a91ed32cf5b0b3a8ddba3f48beca7755b3 (detached HEAD)",
-      "result": "4246 passed, 36 skipped in 328.35s (0:05:28)",
-      "failed": 0,
-      "environment": {"os": "Debian GNU/Linux 13 (trixie)", "kernel": "Linux 6.8.0-1055-gke x86_64", "python": "3.13.15", "pytest": "9.1.1", "ruff": "0.16.10"},
-      "log": {"path": ".agents/evidence/local_full_suite_2feac8a.log (committed with this correction)", "sha256": "ec6c16ad713734f46018237a409b5f7475557e88a70856e62692e30d6e54fdb2", "reviewable": true, "captured_at_utc": "2026-10-18T05:54Z"},
-      "earlier_local_run": {"result": "4246 passed, 36 skipped in 392.39s", "log_status": "REPORTED_BUT_NO_REVIEWABLE_LOG (the /tmp log was cleared by the environment; superseded by the re-run above)"}
+  "phase2_test_reconciliation": {
+    "local": {
+      "command": "python -m pytest -q -rs -o addopts=\"\" -m \"not slow\"",
+      "sha": "2feac8a91ed32cf5b0b3a8ddba3f48beca7755b3",
+      "result": "4246 passed, 36 skipped in 319.81s",
+      "exit_code": 0,
+      "environment": {"os": "Debian GNU/Linux 13 (trixie)", "python": "3.13.15", "pytest": "9.1.1", "ruff": "0.16.10"},
+      "log": ".agents/evidence/local_suite_rs_2feac8a.log",
+      "log_sha256": "627ee48c26d9f204c0bc63e6114aa96e47ef395c0c537dd3fa6af8335753f5c4"
     },
-    "ci_run": {
-      "sha_under_test": "2feac8a91ed32cf5b0b3a8ddba3f48beca7755b3",
-      "workflow": "CI (main push)", "run_id": 39062446338, "test_job_id": 117490323379,
-      "job_name": "test (pytest -m \"not slow\")",
-      "result": "4247 passed, 35 skipped, 1764 warnings in 324.35s (0:05:24)",
-      "conclusion": "success",
+    "ci": {
+      "run_id": 39062446338, "job_id": 117490323379, "job_name": "test (pytest -m \"not slow\")",
+      "sha": "2feac8a91ed32cf5b0b3a8ddba3f48beca7755b3",
+      "result": "4247 passed, 35 skipped, 1764 warnings in 324.35s",
       "environment": {"runner": "ubuntu-latest", "python": "3.12", "pytest": "9.1.1"},
       "source": "GET /actions/jobs/117490323379/logs"
     },
-    "discrepancy_explanation": "local 4246+36 vs CI 4247+35: the same suite, one test moves between passed/skipped by environment (Python 3.13 local vs 3.12 CI). Both are recorded; no attempt is made to force equality."
-  },
-
-  "static_checks": {
-    "ruff_check": {"local": "All checks passed! (ruff 0.16.10)", "ci_lint_job_117490328497": "success"},
-    "ruff_format_check": {"local": "701 files already formatted (ruff 0.16.10)", "ci": "699 files already formatted (ruff 0.17.1 resolved by `pip install -e .[dev]`)"},
-    "ruff_format_discrepancy": {
-      "verdict": "EXPLAINED_WITH_EVIDENCE",
-      "cause": "different ruff formatter versions: local 0.16.10 vs CI 0.17.1 (pyproject pins ruff>=0.4; the lint job resolves the newest). ci.yml:532 itself documents that ruff format output changes between versions, so the file COUNT the formatter reports can differ.",
-      "not_a_regression": true
+    "delta": {
+      "verdict": "RESOLVED_WITH_EVIDENCE",
+      "exact_differing_test": "tests/unit/test_maintenance_workflow_contract.py:226 :: test_a_fully_configured_preflight_passes",
+      "cause": "@pytest.mark.skipif(shutil.which(\"pg_dump\") is None, reason=\"pg_dump is required ... present on the CI runner image\"). pg_dump is ABSENT locally (skipped) and PRESENT on the CI runner (passes).",
+      "not_python_version": "the prior v2 explanation ('one test moves passed<->skipped by interpreter version') is WRONG and is retracted; the cause is the pg_dump tool, not the interpreter.",
+      "arithmetic": "CI 4247 passed = local 4246 passed + this one test; CI 35 skipped = local 36 skipped - this one test"
     },
-    "truth_doctor": {"result": "OK - no findings"},
-    "version_lockstep": {"result": "3.13.0 (VERSION == pyproject == CHANGELOG)"}
+    "flake_finding": {
+      "verdict": "UNRESOLVED",
+      "test": "tests/integration/test_execution_native_backend.py::test_cancel_without_a_fencing_token_is_refused",
+      "failure": "AssertionError: assert 1 is None at tests/integration/test_execution_native_backend.py:462 (`assert identity.fencing_token is None`)",
+      "observed_rate_this_session": "1 failure in 3 full-suite runs on 2feac8a; 0 failures in 12/12 isolated runs and 6/6 execution-trio runs; same SHA green in CI and in the other 2 full runs",
+      "log": ".agents/evidence/local_suite_failed_rs_2feac8a.log",
+      "log_sha256": "68094410b959317a7c45bb12aae34c5ee8c66f564df78e0b8c683e3df5c43755",
+      "root_cause_hypothesis": "native_local_backend.submit() enqueues then reads get_job_facts_async; a worker that reserves the job (attempt 1, fencing_token 1) before that read makes the submit-time identity carry a token under load. This is a TEST-robustness race; the cancel-fencing PRODUCT behaviour is correct.",
+      "not_fixed": "mission forbids changing product code or tests; this is reported for an owner, not silently patched",
+      "classification": "FLAKY (load-sensitive)"
+    }
   },
 
-  "mutation_evidence": {
-    "status_vocabulary": "1=direct reviewable output captured; 2=only covered inside the main suite; 3=claimed but output not attached",
+  "phase3_ruff_forensics": {
+    "verdict": "RESOLVED_WITH_EVIDENCE",
+    "local": {"ruff_version": "0.16.10", "count": 701},
+    "ci_lint_job": {"job_id": 117490328497, "ruff_version": "0.17.1 (resolved by `pip install -e .[dev]`; pyproject pins ruff>=0.4)", "count": 699},
+    "ci_lint_fast_job": {"job_id": 117490337914, "ruff_version": "0.16.8 (pinned, == .pre-commit-config.yaml rev v0.16.8)", "count": 699},
+    "canonical_pin": {"pre_commit_config_ruff_rev": "v0.16.8", "lint_fast_pin": "ruff==0.16.8", "pyproject": "ruff>=0.4"},
+    "cause": "FILE-SET difference, NOT a version difference: ruff scans .py AND .md. Tracked = 604 .py + 95 .md = 699 (CI clean checkout). Locally, 2 UNTRACKED files are added by the OpenHands session: .openhands/memory/MEMORY.md and .openhands/memory/2026-10-09.md -> 701. Proven by `ruff format --check . --verbose` path enumeration.",
+    "retraction": "the prior v2 claim that the count difference was caused by ruff version is WRONG; both 0.16.8 and 0.17.1 report 699 on a clean tree.",
+    "no_files_force_formatted": true
+  },
+
+  "phase4_mutation_evidence": {
+    "note": "/tmp is NOT durable and was cleared between sessions; every campaign below was RE-RUN on 2feac8a and captured under .agents/evidence/mutation_captures/.",
     "campaigns": {
-      "execution_core_mutations": {"status": 1, "result": "17/17 mutations caught", "command": "python scripts/execution_core_mutations.py", "exit": 0, "log": "/tmp/mut_exec.log", "captured_at_utc": "2026-10-18T05:46:26Z"},
-      "llm_queue_mutations": {"status": 1, "result": "18/18 mutants killed", "command": "python scripts/llm_queue_mutations.py", "exit": 0, "log": "/tmp/mut_llm.log", "captured_at_utc": "2026-10-18T05:47:11Z"},
-      "temporal_mutations": {"status": 1, "result": "10/10 killed", "command": "python scripts/temporal_mutations.py", "note": "also a CI job 'temporal-mutations' (success on 2feac8a)"},
-      "continuum_mutations": {"status": 1, "result": "PASSED @ 2feac8a", "command": "python scripts/continuum_mutations.py"},
-      "spine_mutations": {"status": 2, "result": "5/5", "note": "run as pytest tests/unit/test_spine_mutations.py (green in the main suite); direct harness output not separately captured"}
+      "execution_core_mutations": {"sha": "2feac8a", "command": "python scripts/execution_core_mutations.py", "exit": 0, "result": "17/17 mutations caught", "log": ".agents/evidence/mutation_captures/execution_core_mutations.log", "log_sha256": "968846e71f7962ff498c9fde274e94b90018bf6be0439952b1b9fca317794693"},
+      "llm_queue_mutations": {"sha": "2feac8a", "command": "python scripts/llm_queue_mutations.py", "exit": 0, "result": "18/18 mutants killed", "log": ".agents/evidence/mutation_captures/llm_queue_mutations.log", "log_sha256": "77fa22be5e9189947a421a9007b675f9051886d85626a7d136e32d1c169dc1ea"},
+      "temporal_mutations": {"sha": "2feac8a", "command": "python scripts/temporal_mutations.py", "exit": 0, "result": "10/10 killed", "log": ".agents/evidence/mutation_captures/temporal_mutations.log", "log_sha256": "440d2c8b3ddb42ceebf1f62adb086ea4251208850f58e54ef48e3c128f17b153", "ci_note": "also CI job 'temporal-mutations' (success on 2feac8a)"},
+      "continuum_mutations": {"sha": "2feac8a", "command": "python scripts/continuum_mutations.py", "exit": 0, "result": "PASSED @ 2feac8a", "log": ".agents/evidence/mutation_captures/continuum_mutations.log", "log_sha256": "ceacceaea1e2195227a20ef3713d5914bac8e3f89bd84a54d1f863eaaa578565"},
+      "spine_mutations": {"sha": "2feac8a", "command": "python -m pytest -q -rs tests/unit/test_spine_mutations.py", "exit": 0, "result": "1 passed (test_spine_mutations_are_all_killed asserts 5/5)", "log": ".agents/evidence/mutation_captures/spine_mutations_pytest.log", "log_sha256": "64ba5926c5e2276f4664ae5e7f38d8faf302faddfece19d3b32ff7914c16dc1b"}
     },
-    "tree_after_campaigns": "tracked tree clean; only untracked .openhands/ remains (mutants restored)"
+    "tree_after": "tracked clean (mutants restored); only untracked .openhands/ and the new captures remain",
+    "reviewability": "all status=1 (direct reviewable output captured)"
   },
 
-  "tree_status": {
-    "tracked": "clean",
-    "untracked": ["?? .openhands/ (OpenHands session memory; deliberately NOT committed or deleted)"],
-    "precise_statement": "tracked tree clean; one untracked directory .openhands/ (not part of any deliverable)"
+  "phase5_six_phase_claims": {
+    "requirement_code_test_evidence": [
+      {"phase": 1, "requirement": "intent -> registry-checked plan, one write path", "code": "creative/spine/{models,compiler,execution}.py", "tests": ["tests/unit/test_creative_spine.py", "tests/architecture/test_spine_boundary.py", "tests/unit/test_spine_mutations.py"], "result": "147-test phase suite green (see phase_tests log)", "status": "VERIFIED"},
+      {"phase": 2, "requirement": "independent re-measurement; evidence != existence", "code": "jobs/verification.py, provenance/passport.py, jobs/creative_passport.py", "tests": ["tests/unit/test_creative_passport.py", "tests/unit/test_job_verification_gaps.py", "tests/integration/test_provenance_passport_e2e.py"], "status": "VERIFIED"},
+      {"phase": 3, "requirement": "free text -> durable queue -> worker -> verified artifact", "code": "nagar/creative/handoff.py, creative/render_jobs.py", "tests": ["tests/integration/test_nagar_durable_handoff_e2e.py", "tests/integration/test_creative_chain_e2e.py", "tests/integration/test_phase_d_e2e.py"], "status": "VERIFIED"},
+      {"phase": 4, "requirement": "authorized read-only Studio API", "code": "api/studio.py, product/studio_read.py, product/studio_experience.py", "tests": ["tests/unit/test_studio_read_api.py", "tests/unit/test_product_studio.py"], "wiring": "api/app.py:108 include_router(studio_router); JobRegistry.get_job matches ProjectJobReadPort", "status": "VERIFIED"},
+      {"phase": 5, "requirement": "exact temporal algebra + incremental execution", "code": "creative/temporal/{core,adapters}.py", "tests": ["tests/unit/test_temporal_algebra.py", "tests/unit/test_temporal_exactness.py", "scripts/temporal_mutations.py"], "status": "VERIFIED"}
+    ],
+    "phase6_subcapabilities": {
+      "heuristic_reference_to_recipe_and_no_copy_constraint": {"status": "VERIFIED", "code": "creative/spine/reference.py", "tests": ["test_reference_becomes_a_strategy_not_a_copy", "test_recipe_to_intent_carries_the_no_copy_constraint", "test_recipe_is_content_addressed_and_deterministic"], "doc": "CREATIVE_DIRECTION.md section 4"},
+      "real_media_RecipeAnalyzer": {"status": "DEFERRED", "reason": "CREATIVE_DIRECTION.md section 6; only RulesRecipeAnalyzer (deterministic, hint-based) ships"},
+      "durable_graph_and_lineage_store": {"status": "DEFERRED", "reason": "CREATIVE_DIRECTION.md sections 2 and 4: graph/lineage are present but IN-MEMORY, not persisted"},
+      "counterfactual_lab_or_multiverse": {"status": "DEFERRED", "reason": "CREATIVE_DIRECTION.md section 6 trigger requires durable graph+lineage first"}
+    },
+    "phase_tests_log": {"path": ".agents/evidence/phase_tests_verbose_2feac8a.log", "log_sha256": "1c9b2786b362dc46b218cd37ac5e22e880fb8da74c01e794ed844e4ea8425e31", "result": "147 passed in 29.27s", "note": "the phase suite minus the e2e/crash/race files; the full 4246 covers those"},
+    "rule": "no DEFERRED capability is reported complete because the suite is green"
+  },
+
+  "phase6_governance": {
+    "gates_owner": null,
+    "referee_command": "GITHUB_REPOSITORY=bot523h/nexus-ai-agent python scripts/agent_board.py check --files \".agents/evidence/SIX_PHASE_VERIFICATION_2026-10-18.json,.agents/evidence/local_full_suite_2feac8a.log\" --branch arena/six-phase-verification-2026-10-14",
+    "referee_output": "check scope: local + sibling worktrees + origin/main + pushed open-PR branches - 27 source(s) read / UNVERIFIABLE: exactly one active, unexpired gates_owner is required; found 0 (zero or multiple is fail-closed)",
+    "referee_exit": 2,
+    "exit2_meaning_from_code": "scripts/agent_board.py::check returns 2 for 'UNVERIFIABLE' - either (a) not exactly one active, unexpired gates_owner, or (b) a consulted source (local board, worktrees, origin/main, open-PR branch boards) could not be read. It is NOT a pass. A proven overlap would be exit 1 even amid unreadable sources.",
+    "note_on_overlap": "the run reached the gates_owner stage (after the overlap stage), so NO overlap was proven for this branch's files",
+    "pr211_relation": {"pr": 211, "title": "ci(governance): board-integrity gate + gates_owner reclaim via official takeover", "state": "open", "merged": false, "head": "arena/claude-5-5-night-governance-20261013", "files_include": [".agents/board.json", "scripts/agent_board.py", "scripts/check_board_integrity.py"], "conclusion": "the takeover is UNMERGED, so no gates_owner is active; the referee's 0-owner result is consistent with this"},
+    "actions_taken": "none - no claim/lease/gates_owner created or seized; .agents/board.json untouched",
+    "merge_status": "BLOCKED_BY_GOVERNANCE (the official gate owner is absent)"
+  },
+
+  "phase7_three_review_passes": {
+    "passA_factual_consistency": {
+      "checks": ["all SHAs match live ls-remote (main 2feac8a, branch 85b7891)", "CI 20/20 jobs success on 2feac8a (4 skipped-by-design: merge-base-guard)", "test counts recorded separately (local 4246+36 / CI 4247+35)", "file names match committed paths", "VERIFIED labels limited to phases 1-5 + phase-6 heuristic sub-capability"],
+      "result": "PASS"
+    },
+    "passB_adversarial_review": {
+      "checks": ["removed /tmp references as evidence (re-ran + committed under .agents/evidence)", "retracted the wrong '8h skew' and 'python-version' causes", "flaky test disclosed as UNRESOLVED with log+sha", "no guessing: each cause tied to a command output"],
+      "result": "PASS (2 retractions + 1 unresolved documented)"
+    },
+    "passC_publication_scope": {
+      "checks": ["JSON parses (python -m json.tool)", "git diff --check clean", "git diff --name-status origin/main...HEAD = evidence files only", "no product/test/board/other-agent path touched", "recorded log SHAs match committed files"],
+      "result": "PASS"
+    }
   },
 
   "ci_separation": {
-    "main_ci": {"sha": "2feac8a91ed32cf5b0b3a8ddba3f48beca7755b3", "run_id": 39062446338, "conclusion": "success", "jobs": "20/20 success", "scope": "main only"},
-    "branch_ci": {"branch": "arena/six-phase-verification-2026-10-14", "runs": 0, "reason": "ci.yml triggers on push(main/tags) and pull_request only; a pushed branch without a PR gets no CI"},
-    "rule": "main's green CI is NOT evidence for a branch or PR; they are reported separately and never conflated"
+    "main_ci": {"sha": "2feac8a", "run_id": 39062446338, "conclusion": "success", "jobs": "20/20 success (1 skipped: merge-base-guard)"},
+    "branch_ci": {"branch": "arena/six-phase-verification-2026-10-14", "runs": 0},
+    "rule": "main CI is not branch/PR CI; never substituted"
   },
 
-  "pr_creation": {
+  "pr_publication": {
     "attempted": true,
-    "result": "403 Forbidden by the integration token (POST /repos/bot523h/nexus-ai-agent/pulls)",
-    "manual_url": "https://github.com/bot523h/nexus-ai-agent/pull/new/arena/six-phase-verification-2026-10-14",
-    "bypass_attempted": false
+    "endpoint": "POST /repos/bot523h/nexus-ai-agent/pulls",
+    "result": "HTTP 403 {\"message\":\"Resource not accessible by integration\"}",
+    "bypass_attempted": false,
+    "manual_url": "https://github.com/bot523h/nexus-ai-agent/pull/new/arena/six-phase-verification-2026-10-14"
   },
 
-  "remaining_discrepancies": [
-    "Container clock is ~8h ahead of the git commit clock; both recorded verbatim, unreconciled (no evidence to explain it).",
-    "local 4246+36 vs CI 4247+35 (one test moves between passed/skipped by interpreter version).",
-    "ruff format 701 (local 0.16.10) vs 699 (CI 0.17.1) - explained by formatter version.",
-    "Earlier local timing 392.39s has no reviewable log; the 328.35s re-run supersedes it and its log is retained."
+  "discrepancy_table": [
+    {"id": "D1", "claim": "generated 2026-10-14 vs baseline 2026-10-17", "status": "RESOLVED_WITH_EVIDENCE", "resolution": "file renamed to 2026-10-18; generated_utc recorded with source"},
+    {"id": "D2", "claim": "clock skew ~8h", "status": "RESOLVED_WITH_EVIDENCE", "resolution": "retracted; simultaneous independent UTC == local clock, delta 0"},
+    {"id": "D3", "claim": "local 4246+36 vs CI 4247+35", "status": "RESOLVED_WITH_EVIDENCE", "resolution": "pg_dump skip of test_maintenance_workflow_contract.py:226"},
+    {"id": "D4", "claim": "local run flake (test_cancel_without_a_fencing_token_is_refused)", "status": "UNRESOLVED", "resolution": "1/3 full-suite runs; 0/12 isolated; test-robustness race in submit(); not fixed (out of authority)"},
+    {"id": "D5", "claim": "ruff 701 vs 699", "status": "RESOLVED_WITH_EVIDENCE", "resolution": "2 untracked .openhands/memory/*.md files; not a version effect"},
+    {"id": "D6", "claim": "/tmp mutation logs as evidence", "status": "RESOLVED_WITH_EVIDENCE", "resolution": "re-run and committed under .agents/evidence/mutation_captures/ with sha256"},
+    {"id": "D7", "claim": "PR creation", "status": "NOT_REVIEWABLE", "resolution": "HTTP 403 for the integration token; manual URL provided"}
   ],
 
+  "final_status": "EVIDENCE_VERIFIED_WITH_LIMITATIONS",
+  "merge_status": "BLOCKED_BY_GOVERNANCE",
+  "pr_status": "BLOCKED_BY_403",
   "limitations": [
-    "Integration is BLOCKED on an official gates_owner; nothing is merged.",
-    "Phase 6 real media analyzer, durable graph/lineage, and counterfactual lab are DEFERRED by CREATIVE_DIRECTION.md sections 2/4/6.",
-    "PR creation is 403-blocked for the integration token; manual URL provided."
-  ],
-
-  "final_status": "VERIFIED_WITH_LIMITATIONS"
+    "No official gates_owner (referee exit 2) - integration is blocked.",
+    "Phase-6 real RecipeAnalyzer, durable graph/lineage, counterfactual lab remain DEFERRED.",
+    "One flaky test (D4) documented but not fixed - outside this mission's authority.",
+    "PR creation blocked by HTTP 403 for the integration token."
+  ]
 }
