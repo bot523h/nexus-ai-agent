@@ -468,23 +468,23 @@ jobs:
       - name: Summarize any report, including failed campaigns
         if: always()
         run: |
-          if [ -f ci-artifacts/api-gate-mutations.json ]; then
-            python - <<'PY'
-            import json
-            from pathlib import Path
+          python - <<'PY'
+          import json
+          from pathlib import Path
 
-            report = json.loads(Path("ci-artifacts/api-gate-mutations.json").read_text())
-            summary = report.get("summary", {})
-            print(f"accepted={report.get('accepted')} summary={summary}")
-            for mutation in report.get("mutations", []):
-                print(
-                    f"{mutation.get('id')}: {mutation.get('status')} "
-                    f"{mutation.get('name')} — {mutation.get('reason')}"
-                )
-            PY
-          else
-            echo "No campaign JSON was produced; see the failed runner/setup step."
-          fi
+          report_path = Path("ci-artifacts/api-gate-mutations.json")
+          if not report_path.is_file():
+              print("No campaign JSON was produced; see the failed runner/setup step.")
+          else:
+              report = json.loads(report_path.read_text())
+              summary = report.get("summary", {})
+              print(f"accepted={report.get('accepted')} summary={summary}")
+              for mutation in report.get("mutations", []):
+                  print(
+                      f"{mutation.get('id')}: {mutation.get('status')} "
+                      f"{mutation.get('name')} — {mutation.get('reason')}"
+                  )
+          PY
       - name: Verify source restoration and checkout integrity (also on failure)
         if: always()
         run: |

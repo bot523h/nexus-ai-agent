@@ -444,7 +444,9 @@ def test_report_path_inside_product_source_is_rejected(
     assert not target.exists()
 
 
-def test_ci_job_is_least_privilege_repeatable_and_uploads_evidence_on_failure() -> None:
+def test_ci_job_is_least_privilege_repeatable_and_uploads_evidence_on_failure(
+    tmp_path: Path,
+) -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["api-gate-mutations"]
     steps = job["steps"]
@@ -467,3 +469,44 @@ def test_ci_job_is_least_privilege_repeatable_and_uploads_evidence_on_failure() 
         command for command in commands if "git diff --exit-code HEAD -- src/" in command
     )
     assert '"--porcelain=v1"' in source_check
+
+    summary_step = next(
+        step
+        for step in steps
+        if step.get("name") == "Summarize any report, including failed campaigns"
+    )
+    summary_report = tmp_path / "ci-artifacts" / "api-gate-mutations.json"
+    summary_report.parent.mkdir(parents=True)
+    summary_report.write_text(
+        json.dumps(
+            {
+                "accepted": True,
+                "summary": {"planned": 1, "detected": 1},
+                "mutations": [
+                    {"id": "A", "status": "detected", "name": "probe", "reason": "oracle"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary_result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", summary_step["run"]],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert summary_result.returncode == 0, summary_result.stderr
+    assert "accepted=True" in summary_result.stdout
+    assert "A: detected probe — oracle" in summary_result.stdout
+
+    summary_report.unlink()
+    missing_report_result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", summary_step["run"]],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing_report_result.returncode == 0, missing_report_result.stderr
+    assert "No campaign JSON was produced" in missing_report_result.stdout
