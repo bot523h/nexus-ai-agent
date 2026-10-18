@@ -521,6 +521,7 @@ def run_reported_mutation_suite(
         "provenance": {
             "git_commit": _commit_sha(),
             "github_sha": os.environ.get("GITHUB_SHA") or None,
+            "pr_head_sha": os.environ.get("NEXUS_EXPECTED_PR_HEAD_SHA") or None,
             "python_version": platform.python_version(),
             "worktree_clean": worktree_clean,
             "worktree_problems": worktree_problems,
@@ -556,10 +557,16 @@ def run_reported_mutation_suite(
     assert isinstance(provenance, dict)
     sha = provenance.get("git_commit")
     github_sha = provenance.get("github_sha")
+    expected_pr_head_sha = os.environ.get("NEXUS_EXPECTED_PR_HEAD_SHA") or None
+    pr_head_binding_valid = (
+        not expected_pr_head_sha or provenance.get("pr_head_sha") == expected_pr_head_sha
+    )
+    provenance["pr_head_binding_valid"] = pr_head_binding_valid
     commit_binding_valid = (
         bool(sha)
         and (not github_sha or github_sha == sha)
         and provenance.get("worktree_clean") is True
+        and pr_head_binding_valid
     )
     provenance["commit_binding_valid"] = commit_binding_valid
 
@@ -609,7 +616,7 @@ def run_reported_mutation_suite(
         for row in rows:
             if row["status"] == "not_run":
                 row["reason"] = (
-                    "commit/worktree binding invalid (missing SHA, GITHUB_SHA mismatch, "
+                    "commit/worktree binding invalid (missing SHA, GITHUB_SHA/PR-head mismatch, "
                     "or non-artifact worktree changes)"
                 )
                 row["failure_kind"] = "invalid_provenance"

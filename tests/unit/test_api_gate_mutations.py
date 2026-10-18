@@ -69,6 +69,7 @@ def _install_fake_successful_environment(
     baseline_tests: tuple[str, ...],
 ) -> None:
     monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.delenv("NEXUS_EXPECTED_PR_HEAD_SHA", raising=False)
     monkeypatch.setattr(support, "_worktree_clean", lambda: (True, []))
     monkeypatch.setattr(support, "_apply_exact_mutation", lambda _mutation: ({}, None, True))
     monkeypatch.setattr(support, "_restore_exact_bytes", lambda _originals: (True, []))
@@ -153,6 +154,8 @@ def test_reported_runner_accepts_only_fourteen_oracle_confirmed_mutations(
     }
     assert all(row["status"] == "detected" for row in report["mutations"])
     assert report["provenance"]["git_commit"]
+    assert report["provenance"]["pr_head_sha"] is None
+    assert report["provenance"]["pr_head_binding_valid"] is True
     assert report["provenance"]["commit_binding_valid"] is True
     assert first.read_bytes() == second.read_bytes(), "report must be byte-stable on rerun"
 
@@ -277,6 +280,7 @@ def test_failed_baseline_marks_every_mutation_not_run(
     mutations = _synthetic_mutations(support, ("A",))
     baseline_tests = ("tests/synthetic/test_baseline.py::test_baseline",)
     monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.delenv("NEXUS_EXPECTED_PR_HEAD_SHA", raising=False)
     monkeypatch.setattr(support, "_worktree_clean", lambda: (True, []))
     apply_calls: list[str] = []
     monkeypatch.setattr(
@@ -323,6 +327,7 @@ def test_anchor_drift_is_invalid_and_not_run(
     )
     baseline_tests = ("tests/synthetic/test_baseline.py::test_baseline",)
     monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.delenv("NEXUS_EXPECTED_PR_HEAD_SHA", raising=False)
     monkeypatch.setattr(support, "_worktree_clean", lambda: (True, []))
     calls: list[tuple[str, ...]] = []
 
@@ -384,6 +389,7 @@ def test_dirty_worktree_cannot_produce_commit_bound_success(
     mutation = _synthetic_mutations(support, ("A",))[0]
     baseline_tests = ("tests/synthetic/test_baseline.py::test_baseline",)
     monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.delenv("NEXUS_EXPECTED_PR_HEAD_SHA", raising=False)
     monkeypatch.setattr(support, "_worktree_clean", lambda: (False, [" M src/changed.py"]))
     calls: list[bool] = []
     monkeypatch.setattr(
@@ -409,6 +415,7 @@ def test_missing_definition_is_invalid_and_explicitly_not_run(
     support = mutation_support
     baseline_tests = ("tests/synthetic/test_baseline.py::test_baseline",)
     monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.delenv("NEXUS_EXPECTED_PR_HEAD_SHA", raising=False)
     monkeypatch.setattr(support, "_worktree_clean", lambda: (True, []))
     monkeypatch.setattr(
         support,
@@ -435,6 +442,7 @@ def test_report_path_inside_product_source_is_rejected(
 ) -> None:
     support = mutation_support
     monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.delenv("NEXUS_EXPECTED_PR_HEAD_SHA", raising=False)
     called: list[bool] = []
     monkeypatch.setattr(support, "_run_audited_tests", lambda *_args: called.append(True))
     target = REPO / "src" / "api-gate-evidence.json"
@@ -460,10 +468,14 @@ def test_ci_job_is_least_privilege_repeatable_and_uploads_evidence_on_failure(
     assert any("scripts/api_gate_mutations.py" in command for command in commands)
     assert any("cmp ci-artifacts/api-gate-mutations.json" in command for command in commands)
     assert any('"worktree_clean"' in command for command in commands)
+    assert any('"pr_head_sha"' in command for command in commands)
+    assert job["env"]["NEXUS_EXPECTED_PR_HEAD_SHA"] == (
+        "${{ github.event.pull_request.head.sha || github.sha }}"
+    )
     assert "secrets." not in serialized
     upload = next(step for step in steps if "upload-artifact" in step.get("uses", ""))
     assert upload.get("if") == "always()"
-    assert "github.sha" in upload["with"]["name"]
+    assert "NEXUS_EXPECTED_PR_HEAD_SHA" in upload["with"]["name"]
     assert "ci-artifacts/" in upload["with"]["path"]
     source_check = next(
         command for command in commands if "git diff --exit-code HEAD -- src/" in command
