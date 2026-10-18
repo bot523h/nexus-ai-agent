@@ -217,4 +217,4 @@ Allowed: "persistent, memory-based agent that keeps a verified identity and comm
 
 ## 10. Validation of this document
 
-Facts in §2 come from `git show origin/main:<path>` at `62922df` on 2026-10-18. Literature in §3 was fetched the same day, mostly at abstract level; full-text details were not read. The two media benchmarks were confirmed to exist and to contain the numbers quoted. Proposed schemas, phases and metrics are design proposals, not results.
+Facts in §2 come from `git show 62922df:<path>` on 2026-10-18. Literature in §3 was fetched the same day, mostly at abstract level; full-text details were not read. The two media benchmarks were confirmed to exist and to contain the numbers quoted. Proposed schemas, phases and metrics are design proposals, not results.
