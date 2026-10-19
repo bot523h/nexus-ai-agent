@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-18T08:17:41Z",
+  "updated_at": "2026-10-19T04:08:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -835,6 +835,16 @@
         "tests/integration/test_api_gate_inventory.py",
         "src/nexus_ai_agent/config/settings.py",
         "docs/architecture/SECURITY.md"
+      ]
+    },
+    {
+      "id": "selfhood",
+      "description": "Living Core Phase 1 — constitutional zone: charter, Self-Ledger, fail-closed boot, human-only amendment door.",
+      "paths": [
+        "src/nexus_ai_agent/selfhood/",
+        "tests/unit/test_selfhood_ledger.py",
+        "tests/architecture/test_selfhood_boundary.py",
+        "docs/architecture/SELF_CHARTER.md"
       ]
     }
   ],
@@ -3708,6 +3718,41 @@
       "gates_owner": false,
       "note": "Scope extension (2026-10-17, P2 audit): (1) the NEXUS_DASHBOARD_TOKEN comment in config/settings.py still documented the pre-A-06 posture ('when unset the API is open'), which contradicts the fail-closed gate in api/dashboard.py — comment-only, no behaviour change; (2) docs/architecture/SECURITY.md gained threat row T15 so the new guard is discoverable in the STRIDE table (the living-view contract of AGENTS.md §7). Ownership re-checked before each edit: agent_board.py check --files ... --branch arena/9574fc5d-nexus-ai-agent -> exit 0 (27 sources read, no overlap).",
       "generation": 2
+    },
+    {
+      "task": "task-living-core-p1-selfhood",
+      "title": "Living Core Phase 1 — charter + append-only Self-Ledger with fail-closed boot",
+      "title_fa": "فاز ۱ هستهٔ زنده — منشور و Self-Ledger فقط‌افزودنی با بوت fail-closed",
+      "zone": "selfhood",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Implement selfhood/: immutable charter digest, hash-chained append-only Self-Ledger, boot that verifies the chain and anchors/compares the charter, human-only amendment door, commitments projection.",
+      "scope_fa": "پیاده‌سازی selfhood/: منشور تغییرناپذیر با digest، دفتر زنجیره‌هش فقط‌افزودنی، بوت با تایید زنجیره و مقایسهٔ منشور، دریچهٔ اصلاح فقط انسانی و تعهدات به‌صورت projection.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "tampering/deletion pinpointed at the exact seq; tail loss detected given an external anchor",
+        "tampered ledger and unannounced charter change both fail closed at boot",
+        "after a hard kill every charter entry and open commitment is restored",
+        "no module under src/ imports selfhood.amend and the ledger has no UPDATE/DELETE SQL"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_selfhood_ledger.py tests/architecture/test_selfhood_boundary.py",
+        "pytest tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py",
+        "ruff check/format and mypy on src/nexus_ai_agent/selfhood"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/selfhood/",
+        "tests/unit/test_selfhood_ledger.py",
+        "tests/architecture/test_selfhood_boundary.py",
+        "docs/architecture/SELF_CHARTER.md"
+      ],
+      "owner_hint": "agent: Claude (Living Core), branch feat/selfhood-ledger",
+      "agent_branch": "feat/selfhood-ledger",
+      "claimed_at": "2026-10-19T04:08:46Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "note": ""
     }
   ],
   "deferred_log": [
