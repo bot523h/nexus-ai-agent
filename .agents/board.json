@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-18T08:17:41Z",
+  "updated_at": "2026-10-19T04:24:33Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -835,6 +835,18 @@
         "tests/integration/test_api_gate_inventory.py",
         "src/nexus_ai_agent/config/settings.py",
         "docs/architecture/SECURITY.md"
+      ]
+    },
+    {
+      "id": "api-gate-mutations",
+      "description": "Durable A-06 API-gate mutation campaign, CI job, contract tests, and testing documentation",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/api_gate_mutations.py",
+        "scripts/security_mutation_support.py",
+        "tests/integration/test_api_gate_inventory.py",
+        "tests/unit/test_api_gate_mutations.py",
+        "docs/architecture/TESTING.md"
       ]
     }
   ],
@@ -3708,6 +3720,48 @@
       "gates_owner": false,
       "note": "Scope extension (2026-10-17, P2 audit): (1) the NEXUS_DASHBOARD_TOKEN comment in config/settings.py still documented the pre-A-06 posture ('when unset the API is open'), which contradicts the fail-closed gate in api/dashboard.py — comment-only, no behaviour change; (2) docs/architecture/SECURITY.md gained threat row T15 so the new guard is discoverable in the STRIDE table (the living-view contract of AGENTS.md §7). Ownership re-checked before each edit: agent_board.py check --files ... --branch arena/9574fc5d-nexus-ai-agent -> exit 0 (27 sources read, no overlap).",
       "generation": 2
+    },
+    {
+      "task": "task-272-api-gate-mutations-ci",
+      "title": "A-06 API-gate security mutation campaign as a durable fail-closed CI job",
+      "title_fa": "کمپین جهش امنیتی A-06 به‌عنوان گیت پایدار و fail-closed در CI",
+      "zone": "api-gate-mutations",
+      "priority": "P2",
+      "status": "active",
+      "scope": "Persist and execute the fourteen A–N API-gate security mutations described in merged PR #226 as a deterministic, hermetic CI job. Recover the identifiers and intent from the merged PR body and live test/source anchors; explicitly document that the temporary historical driver itself was not committed, so the new checked-in probes are auditable reifications rather than byte-for-byte recovery of that deleted driver. Keep all product-source edits transient and byte-for-byte restored.",
+      "scope_fa": "چهارده جهش امنیتی API-gate با شناسه‌های A تا N که در بدنهٔ PR ادغام‌شدهٔ ۲۲۶ ثبت شده‌اند، به‌شکل job قطعی و hermetic در CI پایدار شوند. شناسه‌ها و هدف‌ها از PR ادغام‌شده و anchorهای زندهٔ تست/منبع بازیابی می‌شوند؛ صریحاً ثبت شود که driver موقت تاریخی commit نشده، بنابراین probeهای جدید بازسازیِ قابل‌ممیزی از شرح‌ها هستند، نه بازیابی بایت‌به‌بایت driver حذف‌شده. هر تغییر موقت در منبع محصول باید دقیقاً بازگردانده شود.",
+      "prerequisites": [
+        "task-271-api-gate-inventory"
+      ],
+      "acceptance_criteria": [
+        "The checked-in campaign has exactly the recovered A–N identifiers, unique anchors, named targets and test oracles; historical probe source is not falsely claimed to have been recovered.",
+        "An unmutated API inventory baseline passes; each of the fourteen valid mutations is applied, the intended oracle fails, all source bytes are restored, and the baseline passes again.",
+        "Machine-readable evidence is bound to the tested commit and reports planned, executed, detected, surviving, invalid and not-run mutations from per-mutation execution records; missing definitions, unexpected pytest failures, infrastructure failures, survivors or restoration failures make the command nonzero.",
+        "A CI job runs the campaign without secrets, external services or network access, uploads the commit-bound report even on failure when one exists, and verifies the source/worktree is restored.",
+        "A controlled surviving-mutant and an infrastructure/incomplete-run control both produce nonzero status and honest report categories.",
+        "No tracked or untracked product source under src/ is changed by the PR or left changed by mutation execution."
+      ],
+      "evidence_required": [
+        "python scripts/api_gate_mutations.py --report ci-artifacts/api-gate-mutations.json (exit code and all 14 outcomes)",
+        "pytest -q tests/unit/test_api_gate_mutations.py tests/integration/test_api_gate_inventory.py (exact counts)",
+        "git diff --check and git diff --exit-code -- src/ after the campaign",
+        "CI run URL, exact PR head SHA, and per-check conclusions; report/artifact digest if uploaded"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/ci.yml",
+        "scripts/api_gate_mutations.py",
+        "scripts/security_mutation_support.py",
+        "tests/integration/test_api_gate_inventory.py",
+        "tests/unit/test_api_gate_mutations.py",
+        "docs/architecture/TESTING.md"
+      ],
+      "owner_hint": "Arena session branch arena/b3e5c858-nexus-ai-agent",
+      "agent_branch": "arena/b3e5c858-nexus-ai-agent",
+      "claimed_at": "2026-10-19T04:07:23Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "REVIEW HANDOFF — 2026-10-19; keep ownership, do not release before PR merge.\nPR: https://github.com/bot523h/nexus-ai-agent/pull/231\nBranch: arena/b3e5c858-nexus-ai-agent. Task: task-272-api-gate-mutations-ci. Zone: api-gate-mutations.\nLive main synchronized at 5891f4d73d40f5633757f36ce56fde2d8fe0698e; merge commit before this board-only handoff commit: 6da4f1e9a6b9a7de120bb4c2f1fd5e62fee052a4. Lease heartbeat was refreshed with agent_board.py claim --expected-generation 1; generation remains 1; gates_owner remains true and is the sole gates owner. A trial active_in_review transition on candidate head 659242860e402d086c5735d8c384c3ead2292c92 exposed a validator conflict: src/nexus_ai_agent/diagnostics/truth.py:571 requires literal status='active' for every gates_owner claim (TRUTH041). On that candidate, make lint, types, and deps passed; make test had 4 failures, all TRUTH041, with 4,280 passed and 36 skipped. No source-code change is in scope, so status is returned to active to preserve the sole gates_owner and exclusive-path fencing. The active_in_review transition is not repository-wide safe until maintainers reconcile the board/truth validators.\nPRE-SYNC EVIDENCE ONLY — CI run https://github.com/bot523h/nexus-ai-agent/actions/runs/39132662954 was on old head 5bbcfe6b2fa850349f35ce1625951d7fbe703025 and is NOT proof for the synchronized/new head. Its historical campaign was 14/14 detected, 0 survived/invalid/not-run; prior local JSON SHA-256 c9e56f3a9351004008e0cfa798a26657d7f93025cc37e925bb2fe93869cf17e5; artifact bundle digest sha256:4e3c6849684bb918703486d9ff434661308b15474ad507053dc9c265df278cc3. Historical focused suite: 105 passed; prior exact-head CI was green.\nCandidate pre-correction head 659242860e402d086c5735d8c384c3ead2292c92: two local A–N campaigns accepted (14/14 planned/executed/detected, 0 survived/invalid/not-run; both baselines/restorations passed; byte-identical reports SHA-256 1b57c28e8ad6cad5dbe3b13fd9a39063cb980a6f47b19939e0808d1d968568fa); targeted tests 109 passed; Ruff/format, board check and src/ restoration passed. This is not final-head evidence: the status correction below creates a new head. Rerun both campaigns and all required gates on the resulting exact head; then verify/publish exact-head CI and artifact metadata. Do not reuse pre-sync or candidate evidence as final proof. The deleted temporary mutation driver was not recovered; A–N remain auditable reifications from PR #226/live anchors. The CI artifact contents were not independently downloaded; only GitHub bundle metadata was verified.\nReviewer state at handoff: no requested reviewer/team, no human review recorded, CodeRabbit SUCCESS only. Maintainer must assign a qualified reviewer; no identity is invented. No merge requested.",
+      "generation": 1
     }
   ],
   "deferred_log": [
