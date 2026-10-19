@@ -59,7 +59,7 @@ def test_selfhood_stays_inside_its_allowlist() -> None:
 
 def test_ledger_has_no_mutating_sql_besides_insert() -> None:
     text = (SELF / "ledger.py").read_text(encoding="utf-8")
-    assert not re.search(r"\b(UPDATE|DELETE|DROP|ALTER|REPLACE)\b", text), (
+    assert not re.search(r"\b(UPDATE|DELETE|DROP|ALTER|REPLACE)\b", text, re.IGNORECASE), (
         "the Self-Ledger is append-only: no UPDATE/DELETE/DROP/ALTER/REPLACE"
     )
 

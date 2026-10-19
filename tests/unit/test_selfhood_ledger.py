@@ -145,3 +145,55 @@ def test_crash_restores_every_charter_entry_and_open_commitment(tmp_path: Path) 
         "c5",
     ]
     assert state.charter_digest == CHARTER.digest()
+
+
+def test_created_at_tampering_is_detected(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    ledger.append(SelfEntryKind.OBSERVATION, subject="s", detail={})
+    with sqlite3.connect(ledger.db_path) as raw:
+        raw.execute("UPDATE nexus_self_ledger SET created_at = '1999-01-01T00:00:00+00:00'")
+    verdict = ledger.verify()
+    assert not verdict.ok and verdict.first_broken_seq == 1
+
+
+def test_concurrent_open_commitment_admits_exactly_one_writer(tmp_path: Path) -> None:
+    import threading
+
+    ledger = _ledger(tmp_path)
+    outcomes: list[str] = []
+
+    def attempt() -> None:
+        try:
+            ledger.open_commitment("race", "only one")
+            outcomes.append("ok")
+        except ValueError:
+            outcomes.append("refused")
+
+    threads = [threading.Thread(target=attempt) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert outcomes.count("ok") == 1 and outcomes.count("refused") == 7
+    assert [c.commitment_id for c in ledger.open_commitments()] == ["race"]
+    assert ledger.verify().ok
+
+
+def test_two_processes_cannot_both_open_the_same_commitment(tmp_path: Path) -> None:
+    path = tmp_path / "self.sqlite3"
+    SelfLedger(path)
+    child = textwrap.dedent(
+        f"""
+        import sys
+        from nexus_ai_agent.selfhood.ledger import SelfLedger
+        try:
+            SelfLedger({str(path)!r}).open_commitment("xproc", "t")
+            sys.exit(0)
+        except ValueError:
+            sys.exit(3)
+        """
+    )
+    procs = [subprocess.Popen([sys.executable, "-I", "-c", child], cwd=ROOT) for _ in range(4)]
+    codes = sorted(p.wait() for p in procs)
+    assert codes == [0, 3, 3, 3]
+    assert len(SelfLedger(path).open_commitments()) == 1

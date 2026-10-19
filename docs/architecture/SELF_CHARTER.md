@@ -42,3 +42,5 @@ Setpoints (`claim_vs_measured_gap_max`, `ledger_verify_interval_s`) are data for
 | Unannounced charter change fails closed; human amendment works | `test_charter_drift_fails_closed_without_human_amendment`, `test_amendment_requires_a_named_human_and_then_boots` |
 | After a hard kill, all charter entries and open commitments return | `test_crash_restores_every_charter_entry_and_open_commitment` |
 | No code path in `src/` writes the charter | `test_nothing_in_src_can_reach_the_amendment_door`, `test_ledger_has_no_mutating_sql_besides_insert` |
+| Check-then-append commitments cannot race (threads or processes) | `test_concurrent_open_commitment_admits_exactly_one_writer`, `test_two_processes_cannot_both_open_the_same_commitment` |
+| `created_at` is covered by verification | `test_created_at_tampering_is_detected` |

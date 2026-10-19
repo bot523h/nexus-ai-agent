@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -86,6 +86,19 @@ def _bad(count: int, seq: int, reason: str) -> SelfVerdict:
     return SelfVerdict(False, count, None, seq, reason)
 
 
+def _opened(records: list[SelfRecord]) -> list[Commitment]:
+    return [
+        Commitment(r.payload["subject"], str(r.payload["detail"].get("text", "")), r.seq)
+        for r in records
+        if r.kind is SelfEntryKind.COMMITMENT_OPENED
+    ]
+
+
+def _open(records: list[SelfRecord]) -> list[Commitment]:
+    closed = {r.payload["subject"] for r in records if r.kind is SelfEntryKind.COMMITMENT_CLOSED}
+    return [c for c in _opened(records) if c.commitment_id not in closed]
+
+
 class SelfLedger:
     """Durable single-writer, append-only, hash-chained self-state store."""
 
@@ -114,13 +127,22 @@ class SelfLedger:
         subject: str,
         detail: dict[str, Any] | None = None,
         occurred_at: str | None = None,
+        precondition: Callable[[list[SelfRecord]], None] | None = None,
     ) -> SelfRecord:
+        """Append one record.
+
+        ``precondition`` runs INSIDE the write transaction on the records read
+        under the write lock, so a check-then-append (e.g. "this commitment is
+        not open yet") cannot race another thread or process.
+        """
         if not subject:
             raise ValueError("subject must not be empty")
         stamp = occurred_at or datetime.now(timezone.utc).isoformat()
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                if precondition is not None:
+                    precondition(self._read(connection))
                 head = connection.execute(
                     "SELECT seq, record_hash FROM nexus_self_ledger ORDER BY seq DESC LIMIT 1"
                 ).fetchone()
@@ -149,43 +171,45 @@ class SelfLedger:
         return SelfRecord(seq, record_hash, prev, record_json, stamp)
 
     def open_commitment(self, commitment_id: str, text: str) -> SelfRecord:
-        if any(c.commitment_id == commitment_id for c in self._all_commitment_ids()):
-            raise ValueError(f"commitment {commitment_id!r} already exists")
+        def _not_yet_opened(records: list[SelfRecord]) -> None:
+            if any(c.commitment_id == commitment_id for c in _opened(records)):
+                raise ValueError(f"commitment {commitment_id!r} already exists")
+
         return self.append(
-            SelfEntryKind.COMMITMENT_OPENED, subject=commitment_id, detail={"text": text}
+            SelfEntryKind.COMMITMENT_OPENED,
+            subject=commitment_id,
+            detail={"text": text},
+            precondition=_not_yet_opened,
         )
 
     def close_commitment(self, commitment_id: str, *, outcome: str) -> SelfRecord:
-        if commitment_id not in {c.commitment_id for c in self.open_commitments()}:
-            raise ValueError(f"commitment {commitment_id!r} is not open")
+        def _is_open(records: list[SelfRecord]) -> None:
+            if commitment_id not in {c.commitment_id for c in _open(records)}:
+                raise ValueError(f"commitment {commitment_id!r} is not open")
+
         return self.append(
-            SelfEntryKind.COMMITMENT_CLOSED, subject=commitment_id, detail={"outcome": outcome}
+            SelfEntryKind.COMMITMENT_CLOSED,
+            subject=commitment_id,
+            detail={"outcome": outcome},
+            precondition=_is_open,
         )
 
     # -- reads ------------------------------------------------------------
 
-    def records(self) -> list[SelfRecord]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT seq, record_hash, prev_hash, record_json, created_at"
-                " FROM nexus_self_ledger ORDER BY seq"
-            ).fetchall()
+    @staticmethod
+    def _read(connection: sqlite3.Connection) -> list[SelfRecord]:
+        rows = connection.execute(
+            "SELECT seq, record_hash, prev_hash, record_json, created_at"
+            " FROM nexus_self_ledger ORDER BY seq"
+        ).fetchall()
         return [SelfRecord(*row) for row in rows]
 
-    def _all_commitment_ids(self) -> list[Commitment]:
-        return [
-            Commitment(r.payload["subject"], str(r.payload["detail"].get("text", "")), r.seq)
-            for r in self.records()
-            if r.kind is SelfEntryKind.COMMITMENT_OPENED
-        ]
+    def records(self) -> list[SelfRecord]:
+        with self._connect() as connection:
+            return self._read(connection)
 
     def open_commitments(self) -> list[Commitment]:
-        closed = {
-            r.payload["subject"]
-            for r in self.records()
-            if r.kind is SelfEntryKind.COMMITMENT_CLOSED
-        }
-        return [c for c in self._all_commitment_ids() if c.commitment_id not in closed]
+        return _open(self.records())
 
     def verify(self, *, expected_head: str | None = None) -> SelfVerdict:
         """Recompute the whole chain from genesis; pinpoint the first break."""
@@ -203,6 +227,7 @@ class SelfLedger:
                 consistent = (
                     payload.get("seq") == record.seq
                     and payload.get("prev_hash") == record.prev_hash
+                    and payload.get("occurred_at") == record.created_at
                 )
             except ValueError:
                 consistent = False
