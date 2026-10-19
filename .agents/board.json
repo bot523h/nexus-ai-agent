@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-18T10:41:38Z",
+  "updated_at": "2026-10-19T04:07:45Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3727,7 +3727,7 @@
       "title_fa": "کمپین جهش امنیتی A-06 به‌عنوان گیت پایدار و fail-closed در CI",
       "zone": "api-gate-mutations",
       "priority": "P2",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "Persist and execute the fourteen A–N API-gate security mutations described in merged PR #226 as a deterministic, hermetic CI job. Recover the identifiers and intent from the merged PR body and live test/source anchors; explicitly document that the temporary historical driver itself was not committed, so the new checked-in probes are auditable reifications rather than byte-for-byte recovery of that deleted driver. Keep all product-source edits transient and byte-for-byte restored.",
       "scope_fa": "چهارده جهش امنیتی API-gate با شناسه‌های A تا N که در بدنهٔ PR ادغام‌شدهٔ ۲۲۶ ثبت شده‌اند، به‌شکل job قطعی و hermetic در CI پایدار شوند. شناسه‌ها و هدف‌ها از PR ادغام‌شده و anchorهای زندهٔ تست/منبع بازیابی می‌شوند؛ صریحاً ثبت شود که driver موقت تاریخی commit نشده، بنابراین probeهای جدید بازسازیِ قابل‌ممیزی از شرح‌ها هستند، نه بازیابی بایت‌به‌بایت driver حذف‌شده. هر تغییر موقت در منبع محصول باید دقیقاً بازگردانده شود.",
       "prerequisites": [
@@ -3757,10 +3757,10 @@
       ],
       "owner_hint": "Arena session branch arena/b3e5c858-nexus-ai-agent",
       "agent_branch": "arena/b3e5c858-nexus-ai-agent",
-      "claimed_at": "2026-10-18T10:41:38Z",
+      "claimed_at": "2026-10-19T04:07:23Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "",
+      "note": "REVIEW HANDOFF — 2026-10-19; keep ownership, do not release before PR merge.\nPR: https://github.com/bot523h/nexus-ai-agent/pull/231\nBranch: arena/b3e5c858-nexus-ai-agent. Task: task-272-api-gate-mutations-ci. Zone: api-gate-mutations.\nLive main synchronized at 5891f4d73d40f5633757f36ce56fde2d8fe0698e; merge commit before this board-only handoff commit: 6da4f1e9a6b9a7de120bb4c2f1fd5e62fee052a4. Lease heartbeat was refreshed with agent_board.py claim --expected-generation 1; generation remains 1; gates_owner remains true and is the sole gates owner. Status active_in_review keeps the exclusive paths fenced.\nPRE-SYNC EVIDENCE ONLY — CI run https://github.com/bot523h/nexus-ai-agent/actions/runs/39132662954 was on old head 5bbcfe6b2fa850349f35ce1625951d7fbe703025 and is NOT proof for the synchronized/new head. Its historical campaign was 14/14 detected, 0 survived/invalid/not-run; prior local JSON SHA-256 c9e56f3a9351004008e0cfa798a26657d7f93025cc37e925bb2fe93869cf17e5; artifact bundle digest sha256:4e3c6849684bb918703486d9ff434661308b15474ad507053dc9c265df278cc3. Historical focused suite: 105 passed; prior exact-head CI was green.\nPOST-SYNC/POST-BOARD exact-head campaign, full gates, CI run and artifact: pending at the time of this board note. Do not reuse the pre-sync evidence as proof. Final exact-head evidence will be published on PR #231 and in the final handoff. The deleted temporary mutation driver was not recovered; A–N remain auditable reifications from PR #226/live anchors. The CI artifact contents were not independently downloaded; only GitHub bundle metadata was verified.\nReviewer state at handoff: no requested reviewer/team, no human review recorded, CodeRabbit SUCCESS only. Maintainer must assign a qualified reviewer; no identity is invented. No merge requested.",
       "generation": 1
     }
   ],
