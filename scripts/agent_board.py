@@ -286,7 +286,14 @@ def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple
 
 
 def _active_gates_owners(board: dict) -> tuple[list[dict], list[str]]:
-    """Return live gates owners and malformed claims that block verification."""
+    """Return live gates owners and malformed claims (both advisory only).
+
+    POLICY (2026-10-19): there is **no mandatory global gates_owner**. Every
+    agent runs its own gates and records its own evidence; ``check`` must not be
+    blocked by a missing or doubled gate holder. Malformed claims are still
+    surfaced so a broken record is visible, but neither condition produces
+    exit 2 — only a genuinely unsafe shared-state condition does.
+    """
     owners: list[dict] = []
     malformed: list[str] = []
     for claim in board.get("claims", []):
@@ -706,6 +713,10 @@ def cmd_check(args: argparse.Namespace) -> int:
     ``origin/main``, not checked out locally). A source that cannot be read is a
     loud exit 2: "no overlap" is only honest when every consulted source was
     actually read.
+
+    POLICY (2026-10-19): a global ``gates_owner`` is **not required**. The gate
+    holder is advisory only — its presence (or absence, or duplication) never
+    produces exit 2. Every agent runs its own gates and records its own evidence.
     """
     files = [f for f in args.files.split(",") if f.strip()]
     sources: list[tuple[str, dict]] = []
@@ -791,14 +802,18 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
     owners, malformed_owners = _active_gates_owners(local_board)
-    if not no_remote and (malformed_owners or len(owners) != 1):
+    # POLICY (2026-10-19): gates_owner is advisory, not a global lock. Report the
+    # state so a malformed or doubled record is visible, but never fail the check
+    # because of it — a missing owner must not make independent work unverifiable.
+    if owners:
         print(
-            "UNVERIFIABLE: exactly one active, unexpired gates_owner is required; "
-            f"found {len(owners)} (zero or multiple is fail-closed)"
+            f"gates_owner (advisory): {len(owners)} active — "
+            f"{', '.join(str(o.get('task', '?')) for o in owners)}"
         )
-        for reason in malformed_owners:
-            print(f"  malformed gates-owner claim: {reason}")
-        return 2
+    else:
+        print("gates_owner (advisory): none — no mandatory global gates owner")
+    for reason in malformed_owners:
+        print(f"  malformed gates-owner claim (advisory): {reason}")
 
     if unreadable:
         print("UNVERIFIABLE: cannot establish the absence of overlap — source(s) unreadable:")

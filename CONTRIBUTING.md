@@ -42,5 +42,8 @@ and deferrals are managed through `.agents/board.json` and
 `docs/MULTI_AGENT_PROTOCOL.fa.md`). Claim your task, push the board change
 immediately, never touch a file under another agent's active exclusive paths,
 and record a deferral note when you must stop because another agent holds the
-zone. Only the current `gates_owner` claim runs the shared quality gates
-(`make lint`, `make types`, `make test`) against main-bound work.
+zone. There is **no mandatory global `gates_owner`** (policy 2026-10-19): every
+agent runs the shared quality gates (`make lint`, `make types`, `make test`) on
+its own branch and records the exact commands, results and SHA as evidence. A
+`gates_owner` claim is optional and advisory; it never blocks CI, review or
+another agent's work.

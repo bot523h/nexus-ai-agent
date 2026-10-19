@@ -129,6 +129,13 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        if False:  # mutation: read stale tracking refs as fresh\n            continue",
         "a tracking ref not fetched in this run must never be read as a live lease",
     ),
+    Mutation(
+        "gates_owner_absence_fails_the_check",
+        '        print("gates_owner (advisory): none — no mandatory global gates owner")',
+        "        return 2  # mutation: reintroduce the mandatory gates_owner (fail-closed on absence)",
+        "policy 2026-10-19: a missing gates_owner must not fail the check "
+        "(zero owners is verifiable, never unverifiable)",
+    ),
 )
 
 

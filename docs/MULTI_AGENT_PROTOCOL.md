@@ -23,8 +23,10 @@ several Claude Code sessions over git worktrees of one repo):
   an owner, a scope of exclusive paths, and a TTL) plus a **deferral log** so a
   stopped agent leaves a durable note instead of a silent conflict.
 * **Referee layer** — a deterministic overlap check that any agent (or CI) can run
-  before pushing, and a single **gates owner** rule so two agents never race the
-  same lint/test suite.
+  before pushing, so two agents do not silently edit the same exclusive paths.
+  There is **no mandatory global gates owner** (policy 2026-10-19): each agent runs
+  its own gates and records its own evidence. A `gates_owner` claim remains an
+  optional, advisory, at-most-one marker — it never locks the project.
 
 ## 2. Task lifecycle
 
