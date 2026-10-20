@@ -140,9 +140,7 @@ class NativeLocalBackend:
             payload=dict(request.payload),
         )
         facts = await self._queue.get_job_facts_async(job_id)
-        return self._identity_from_facts(
-            job_id, request.idempotency_key, facts, bind_attempt=False
-        )
+        return self._identity_from_facts(job_id, request.idempotency_key, facts, bind_attempt=False)
 
     async def observe(self, identity: ExecutionIdentity) -> ExecutionObservation:
         facts = await self._queue.get_job_facts_async(identity.job_id)
