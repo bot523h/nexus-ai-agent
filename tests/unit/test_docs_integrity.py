@@ -327,3 +327,13 @@ def test_conflict_marker_scanner_detects_a_real_conflict() -> None:
     # A Setext H1 underline of exactly seven ``=`` is legitimate Markdown and must
     # not be mistaken for a conflict separator.
     assert not _has_conflict_marker("Title\n=======\n\nbody\n")
+
+
+def test_agents_and_overview_point_at_the_product_frame() -> None:
+    """The app-first frame must stay discoverable: AGENTS.md and OVERVIEW.md link to it."""
+    frame = DOCS / "architecture" / "PRODUCT_FRAME.md"
+    assert frame.is_file(), "docs/architecture/PRODUCT_FRAME.md is missing"
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    overview = (DOCS / "architecture" / "OVERVIEW.md").read_text(encoding="utf-8")
+    assert "docs/architecture/PRODUCT_FRAME.md" in agents, "AGENTS.md lost the product-frame link"
+    assert "PRODUCT_FRAME.md" in overview, "OVERVIEW.md lost the product-frame link"

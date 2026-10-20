@@ -18,9 +18,9 @@
 
 ## 1. Purpose
 
-NEXUS AI Agent is an **offline-first, single-process, multi-agent system** with two products on one runtime:
+NEXUS AI Agent is an **offline-first, single-process, multi-agent application with a living core**. Its direction is app-first: the web/mobile application is the product and Telegram is one channel adapter — see [PRODUCT_FRAME.md](PRODUCT_FRAME.md) (owner direction; the decision record is pending). Today the code still ships two product surfaces on one runtime:
 
-1. **A Telegram assistant surface** — chat, memory, tools, moderation, gamification, community features, 15 locales (`src/nexus_ai_agent/features/`, `src/nexus_ai_agent/bot/`, `src/nexus_ai_agent/i18n/locales/`).
+1. **A Telegram channel** — chat, memory, tools, moderation, gamification, community features, 15 locales (`src/nexus_ai_agent/features/`, `src/nexus_ai_agent/bot/`, `src/nexus_ai_agent/i18n/locales/`).
 2. **Nagar, a creative studio** — typed, permissioned media operations (edit / motion / audio / caption / color / delivery) that compile to deterministic FFmpeg invocations and measured artifacts (`src/nexus_ai_agent/creative/`).
 
 Both products share one runtime, one persistence layer, and one quality contract. Nothing is a fleet: there is no broker, no worker cluster, no sidecar database. See §4.
