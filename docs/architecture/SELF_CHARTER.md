@@ -17,7 +17,7 @@ The constitutional zone of the Living Core: an identity contract the system cann
 | `fail-closed` | On an integrity doubt about self-state, stop rather than guess. |
 | `human-gate` | Irreversible or externally visible actions require human approval. |
 
-Setpoints (`claim_vs_measured_gap_max`, `ledger_verify_interval_s`) are data for the later vital-signs phase; Phase 1 only anchors them in the digest.
+Setpoints (all in the digest): `claim_vs_measured_gap_max` and `ledger_verify_interval_s` are reserved for later phases; `provider_fallback_ratio_max`, `ram_percent_max` and `disk_free_gb_min` are read by Phase 2a. A name ending `_max` / `_min` bounds the vital from above / below; names without that suffix are not vitals.
 
 ## Mechanics
 
@@ -44,3 +44,21 @@ Setpoints (`claim_vs_measured_gap_max`, `ledger_verify_interval_s`) are data for
 | No code path in `src/` writes the charter | `test_nothing_in_src_can_reach_the_amendment_door`, `test_ledger_has_no_mutating_sql_besides_insert` |
 | Check-then-append commitments cannot race (threads or processes) | `test_concurrent_open_commitment_admits_exactly_one_writer`, `test_two_processes_cannot_both_open_the_same_commitment` |
 | `created_at` is covered by verification | `test_created_at_tampering_is_detected` |
+
+## Phase 2a — Vital signs (`selfhood/vitals.py`)
+
+- **Setpoints come only from the charter.** `VitalSigns` refuses a probe that has no charter setpoint, so a learner cannot loosen the threshold it is judged by.
+- **Each sample appends a `vital_reading`; an out-of-range one also appends a `vital_deviation`.** A probe that raises or returns a non-finite number is recorded as a deviation (value `null`) — an unreadable vital is never treated as healthy.
+- **Restart-safe.** `latest_readings(ledger)` rebuilds the newest reading per vital from the chain.
+- **Scheduler.** `VitalsScheduler(period_s)` samples off the event loop thread and has a kill switch (`stop`). Single event loop only.
+- **`ProviderHealthTracker`** is a sliding window; its `fallback_ratio` is the first real probe.
+
+Not yet done (Phase 2 remainder, deliberately separate PRs): wiring the scheduler and probes into bot startup, post-update verification and rollback for the updater, and deciding `auto_apply_at` (implement with a test or remove).
+
+| Criterion | Test |
+|---|---|
+| Vitals survive restart | `test_vitals_survive_restart` |
+| Simulated provider outage reaches the ledger within one period | `test_simulated_provider_outage_lands_in_the_ledger_within_one_period` |
+| Broken or NaN probe is a deviation | `test_a_failing_probe_is_itself_a_deviation_never_a_crash`, `test_nan_reading_is_a_deviation_not_a_pass` |
+| Setpoints are charter-only | `test_setpoints_come_from_the_charter_not_from_the_caller`, `test_probe_without_a_charter_setpoint_is_refused` |
+| Kill switch | `test_kill_switch_stops_sampling` |

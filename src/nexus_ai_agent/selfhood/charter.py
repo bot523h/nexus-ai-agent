@@ -50,7 +50,13 @@ CHARTER = Charter(
         ("human-gate", "Irreversible or externally visible actions require human approval."),
     ),
     setpoints=MappingProxyType(
-        {"claim_vs_measured_gap_max": 0.05, "ledger_verify_interval_s": 3600.0}
+        {
+            "claim_vs_measured_gap_max": 0.05,
+            "ledger_verify_interval_s": 3600.0,
+            "provider_fallback_ratio_max": 0.5,
+            "ram_percent_max": 85.0,
+            "disk_free_gb_min": 1.0,
+        }
     ),
 )
 
