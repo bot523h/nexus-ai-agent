@@ -3803,8 +3803,7 @@
       "scope": "Run scripts/execution_core_mutations.py as a CI mutation job",
       "scope_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "prerequisites": [
-        "task-254 merged",
-        "no live ci-quality claim"
+        "task-254-execution-core-v1"
       ],
       "acceptance_criteria": [
         "CI job runs the campaign on PRs touching execution-core paths; red on any surviving mutant",
@@ -3814,15 +3813,14 @@
         "pytest -q tests/unit/test_mutation_harness_anchors.py"
       ],
       "exclusive_paths": [
-        ".github/workflows/ci.yml",
-        "scripts/execution_core_mutations.py"
+        ".github/workflows/ci.yml"
       ],
       "owner_hint": "",
       "agent_branch": "arena/task-260-exec-mutations-ci",
       "claimed_at": "2026-10-20T21:32:25Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "",
+      "note": "CI wiring (.github/workflows/ci.yml, zone ci-quality) + supporting fix to scripts/execution_core_mutations.py (zone execution-core, unclaimed) and tests/unit/test_mutation_harness_anchors.py.",
       "generation": 1
     }
   ],
