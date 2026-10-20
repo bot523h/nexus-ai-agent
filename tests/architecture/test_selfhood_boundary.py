@@ -18,10 +18,12 @@ SELF = SRC / "selfhood"
 
 ALLOWED_TOP_LEVEL = {
     "__future__",
+    "asyncio",
     "dataclasses",
     "enum",
     "json",
     "logging",
+    "math",
     "sqlite3",
     "threading",
     "datetime",

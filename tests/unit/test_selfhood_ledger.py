@@ -197,3 +197,22 @@ def test_two_processes_cannot_both_open_the_same_commitment(tmp_path: Path) -> N
     codes = sorted(p.wait() for p in procs)
     assert codes == [0, 3, 3, 3]
     assert len(SelfLedger(path).open_commitments()) == 1
+
+
+def test_precondition_runs_while_the_write_lock_is_held(tmp_path: Path) -> None:
+    """Deterministic contention proof: a second writer is locked out during the check."""
+    ledger = _ledger(tmp_path)
+    seen: list[str] = []
+
+    def precondition(_records: list) -> None:
+        other = sqlite3.connect(ledger.db_path, timeout=0.05, isolation_level=None)
+        try:
+            other.execute("BEGIN IMMEDIATE")
+            seen.append("second writer got in")
+        except sqlite3.OperationalError as exc:
+            seen.append(str(exc))
+        finally:
+            other.close()
+
+    ledger.append(SelfEntryKind.OBSERVATION, subject="s", precondition=precondition)
+    assert seen and "locked" in seen[0], seen
