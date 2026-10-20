@@ -32,7 +32,7 @@ Setpoints (all in the digest): `claim_vs_measured_gap_max` and `ledger_verify_in
 
 - A bare hash chain cannot see loss of the **newest** records. `verify(expected_head=...)` and `boot_self(expected_head=...)` accept an externally held head hash; wiring a periodic off-host anchor is a later phase.
 - Whoever can rewrite the whole SQLite file *and* recompute every hash can forge history; the defence is the external anchor plus the human-only amendment door, not the file.
-- Phase 1 is not yet wired into the bot's startup; it is a verified building block.
+- The bot boots the Self-Ledger only when `SELF_VITALS_ENABLED` is on and boot reports `OK`; no other feature uses self-state yet.
 
 ## Acceptance evidence
 
