@@ -135,3 +135,17 @@ def test_kill_switch_stops_sampling(tmp_path: Path) -> None:
 def test_nan_reading_is_a_deviation_not_a_pass(tmp_path: Path) -> None:
     readings = VitalSigns(_ledger(tmp_path), probes={"ram_percent": lambda: float("nan")}).sample()
     assert readings[0].deviating and readings[0].value is None
+
+
+def test_restart_judges_a_reading_by_the_limit_stored_with_it(tmp_path: Path) -> None:
+    from dataclasses import replace
+    from types import MappingProxyType
+
+    loose = replace(
+        CHARTER,
+        setpoints=MappingProxyType({**CHARTER.setpoints, "ram_percent_max": 99.0}),
+    )
+    ledger = _ledger(tmp_path)
+    VitalSigns(ledger, probes={"ram_percent": lambda: 95.0}, charter=loose).sample()
+    reading = latest_readings(ledger)["ram_percent"]
+    assert reading.setpoint.limit == 99.0 and not reading.deviating  # not re-judged by CHARTER

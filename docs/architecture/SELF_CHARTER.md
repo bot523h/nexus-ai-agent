@@ -17,7 +17,7 @@ The constitutional zone of the Living Core: an identity contract the system cann
 | `fail-closed` | On an integrity doubt about self-state, stop rather than guess. |
 | `human-gate` | Irreversible or externally visible actions require human approval. |
 
-Setpoints (`claim_vs_measured_gap_max`, `ledger_verify_interval_s`) are data for the later vital-signs phase; Phase 2a reads them (see below); a setpoint named `<vital>_max` / `<vital>_min` bounds the vital from above / below.
+Setpoints (all in the digest): `claim_vs_measured_gap_max` and `ledger_verify_interval_s` are reserved for later phases; `provider_fallback_ratio_max`, `ram_percent_max` and `disk_free_gb_min` are read by Phase 2a. A name ending `_max` / `_min` bounds the vital from above / below; names without that suffix are not vitals.
 
 ## Mechanics
 

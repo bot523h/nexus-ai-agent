@@ -100,20 +100,22 @@ class VitalSigns:
 
 
 def latest_readings(ledger: SelfLedger) -> dict[str, VitalReading]:
-    """Most recent reading per vital, reconstructed from the ledger (restart-safe)."""
-    setpoints = setpoints_from(CHARTER)
+    """Most recent reading per vital, rebuilt from the chain (restart-safe).
+
+    Judged against the limit and direction stored WITH each reading, so the
+    result always agrees with the ``vital_deviation`` record in the same chain,
+    even after a later charter amendment.
+    """
     latest: dict[str, VitalReading] = {}
     for record in ledger.records():
         if record.kind is not SelfEntryKind.VITAL_READING:
             continue
         name = str(record.payload["subject"]).removeprefix("vital:")
         detail = record.payload["detail"]
-        if name not in setpoints:
-            continue
+        setpoint = Setpoint(name, float(detail["limit"]), str(detail["direction"]))
         value = detail.get("value")
-        sp = setpoints[name]
-        deviating = True if value is None else sp.violated_by(float(value))
-        latest[name] = VitalReading(name, value, sp, deviating, detail.get("error"))
+        deviating = True if value is None else setpoint.violated_by(float(value))
+        latest[name] = VitalReading(name, value, setpoint, deviating, detail.get("error"))
     return latest
 
 
