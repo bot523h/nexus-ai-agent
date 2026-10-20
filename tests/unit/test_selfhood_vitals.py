@@ -94,19 +94,32 @@ def test_provider_health_window_forgets_old_calls() -> None:
 
 
 def test_simulated_provider_outage_lands_in_the_ledger_within_one_period(tmp_path: Path) -> None:
+    """A provider outage must land as a vital deviation.
+
+    Deterministic by construction: the probe counts its own invocations and the
+    test stops the scheduler once the required samples have actually run — there
+    is no reliance on wall-clock sleeps racing the scheduler period.
+    """
     ledger = _ledger(tmp_path)
     tracker = ProviderHealthTracker(window=10)
-    vitals = VitalSigns(ledger, probes={"provider_fallback_ratio": tracker.fallback_ratio})
-    scheduler = VitalsScheduler(vitals, period_s=0.05)
+    samples = {"n": 0}
+
+    def probe() -> float:
+        samples["n"] += 1
+        if samples["n"] >= 2:  # the outage begins after the first healthy sample
+            for _ in range(10):
+                tracker.record(primary_ok=False)
+        return tracker.fallback_ratio()
+
+    vitals = VitalSigns(ledger, probes={"provider_fallback_ratio": probe})
+    scheduler = VitalsScheduler(vitals, period_s=0.01)
 
     async def scenario() -> None:
         task = asyncio.create_task(scheduler.run())
-        await asyncio.sleep(0.12)  # healthy period(s)
-        for _ in range(10):
-            tracker.record(primary_ok=False)  # outage begins
-        await asyncio.sleep(0.12)  # > one period later
+        while samples["n"] < 2:  # wait on real progress, not on a fixed sleep
+            await asyncio.sleep(0)
         scheduler.stop()
-        await asyncio.wait_for(task, timeout=2)
+        await asyncio.wait_for(task, timeout=5)
 
     asyncio.run(scenario())
     deviations = [r for r in ledger.records() if r.kind is SelfEntryKind.VITAL_DEVIATION]
@@ -116,19 +129,25 @@ def test_simulated_provider_outage_lands_in_the_ledger_within_one_period(tmp_pat
 
 def test_kill_switch_stops_sampling(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
-    scheduler = VitalsScheduler(
-        VitalSigns(ledger, probes={"ram_percent": lambda: 1.0}), period_s=0.02
-    )
+    samples = {"n": 0}
+
+    def probe() -> float:
+        samples["n"] += 1
+        return 1.0
+
+    scheduler = VitalsScheduler(VitalSigns(ledger, probes={"ram_percent": probe}), period_s=0.01)
 
     async def scenario() -> None:
         task = asyncio.create_task(scheduler.run())
-        await asyncio.sleep(0.07)
+        while samples["n"] < 1:  # wait for a real sample, not a fixed sleep
+            await asyncio.sleep(0)
         scheduler.stop()
-        await asyncio.wait_for(task, timeout=2)
+        await asyncio.wait_for(task, timeout=5)  # returns only if the kill switch works
 
     asyncio.run(scenario())
+    assert samples["n"] >= 1
     count = len(ledger.records())
-    asyncio.run(asyncio.sleep(0.1))
+    asyncio.run(asyncio.sleep(0.05))  # a (broken) zombie loop would sample again here
     assert len(SelfLedger(ledger.db_path).records()) == count
 
 
