@@ -41,13 +41,24 @@ Usage:  .venv/bin/python scripts/execution_core_mutations.py
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-PYTEST = [sys.executable, "-m", "pytest", "-q", "-p", "no:warnings", "--tb=no"]
+PYTEST = [
+    sys.executable,
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "no:warnings",
+    "-p",
+    "no:cacheprovider",
+    "--tb=no",
+]
 
 QUEUE = REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py"
 BACKEND = REPO / "src/nexus_ai_agent/adapters/native_local_backend.py"
@@ -520,7 +531,8 @@ PROBES: tuple[Probe, ...] = (
 
 
 def _run_tests(tests: tuple[str, ...]) -> int:
-    result = subprocess.run([*PYTEST, *tests], cwd=REPO, capture_output=True, text=True)
+    env = {**os.environ, "PYTHONPATH": str(REPO / "src")}
+    result = subprocess.run([*PYTEST, *tests], cwd=REPO, capture_output=True, text=True, env=env)
     return result.returncode
 
 
