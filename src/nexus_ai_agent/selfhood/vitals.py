@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from nexus_ai_agent.selfhood.charter import CHARTER, Charter
-from nexus_ai_agent.selfhood.ledger import SelfEntryKind, SelfLedger
+from nexus_ai_agent.selfhood.ledger import PendingEntry, SelfEntryKind, SelfLedger
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,11 +90,11 @@ class VitalSigns:
                 "direction": setpoint.direction,
                 "error": error,
             }
-            self._ledger.append(SelfEntryKind.VITAL_READING, subject=f"vital:{name}", detail=detail)
+            subject = f"vital:{name}"
+            batch = [PendingEntry(SelfEntryKind.VITAL_READING, subject, detail)]
             if deviating:
-                self._ledger.append(
-                    SelfEntryKind.VITAL_DEVIATION, subject=f"vital:{name}", detail=detail
-                )
+                batch.append(PendingEntry(SelfEntryKind.VITAL_DEVIATION, subject, detail))
+            self._ledger.append_many(batch)  # reading + deviation commit together
             readings.append(reading)
         return readings
 
