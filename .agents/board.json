@@ -3820,7 +3820,7 @@
       "claimed_at": "2026-10-20T21:32:25Z",
       "ttl_hours": 24,
       "gates_owner": true,
-      "note": "CI wiring (.github/workflows/ci.yml, zone ci-quality) + supporting fix to scripts/execution_core_mutations.py (zone execution-core, unclaimed) and tests/unit/test_mutation_harness_anchors.py.",
+      "note": "CI wiring (.github/workflows/ci.yml, zone ci-quality). Supporting fixes in unclaimed zones: scripts/execution_core_mutations.py (execution-core) PYTHONPATH pin, and a submit() fence-leak fix in src/nexus_ai_agent/adapters/native_local_backend.py (execution-core) that removes the intermittent test_cancel_without_a_fencing_token_is_refused failure.",
       "generation": 1
     }
   ],
