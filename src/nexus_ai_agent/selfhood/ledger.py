@@ -40,6 +40,8 @@ class SelfEntryKind(str, Enum):
     COMMITMENT_OPENED = "commitment_opened"
     COMMITMENT_CLOSED = "commitment_closed"
     OBSERVATION = "observation"
+    VITAL_READING = "vital_reading"
+    VITAL_DEVIATION = "vital_deviation"
 
 
 def compute_record_hash(record_json: str) -> str:
