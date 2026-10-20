@@ -58,10 +58,13 @@ async def start_vitals(
     from nexus_ai_agent.selfhood.runtime import SelfBootStatus, self_ledger_db_path, try_boot_self
     from nexus_ai_agent.selfhood.vitals import VitalSigns, VitalsScheduler
 
-    boot = try_boot_self(self_ledger_db_path(db_path))
+    boot = await asyncio.to_thread(try_boot_self, self_ledger_db_path(db_path))
     if boot.status is not SelfBootStatus.OK or boot.state is None:
         return None
-    vitals = VitalSigns(boot.state.ledger, default_probes(max_ram_mb=max_ram_mb))
+    data_dir = os.path.dirname(os.path.abspath(db_path)) or "."  # the volume that holds the data
+    vitals = VitalSigns(
+        boot.state.ledger, default_probes(max_ram_mb=max_ram_mb, disk_path=data_dir)
+    )
     scheduler = VitalsScheduler(vitals, period_s=period_s)
     return VitalsHandle(scheduler, asyncio.create_task(scheduler.run()))
 

@@ -95,3 +95,28 @@ def test_start_vitals_refuses_a_tampered_ledger(tmp_path: Path) -> None:
     with sqlite3.connect(self_ledger_db_path(db)) as raw:
         raw.execute("UPDATE nexus_self_ledger SET record_json = record_json || ' '")
     assert asyncio.run(start_vitals(enabled=True, db_path=db, period_s=5, max_ram_mb=1500)) is None
+
+
+def test_start_vitals_measures_the_volume_holding_the_data(tmp_path: Path, monkeypatch) -> None:
+    import asyncio
+
+    from nexus_ai_agent.agent import self_vitals
+
+    seen: dict[str, str] = {}
+    real = self_vitals.default_probes
+
+    def spy(*, max_ram_mb: int, disk_path: str = "/"):
+        seen["disk_path"] = disk_path
+        return real(max_ram_mb=max_ram_mb, disk_path=disk_path)
+
+    monkeypatch.setattr(self_vitals, "default_probes", spy)
+
+    async def go() -> None:
+        handle = await self_vitals.start_vitals(
+            enabled=True, db_path=str(tmp_path / "n.db"), period_s=5, max_ram_mb=1500
+        )
+        assert handle is not None
+        await handle.stop()
+
+    asyncio.run(go())
+    assert seen["disk_path"] == str(tmp_path)

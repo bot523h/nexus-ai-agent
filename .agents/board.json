@@ -847,7 +847,9 @@
         "docs/architecture/SELF_CHARTER.md",
         "tests/unit/test_selfhood_vitals.py",
         "src/nexus_ai_agent/agent/self_vitals.py",
-        "tests/unit/test_selfhood_runtime.py"
+        "tests/unit/test_selfhood_runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/config/settings.py"
       ]
     }
   ],
@@ -3823,7 +3825,9 @@
         "tests/unit/test_selfhood_runtime.py",
         "tests/unit/test_selfhood_ledger.py",
         "tests/unit/test_selfhood_vitals.py",
-        "docs/architecture/SELF_CHARTER.md"
+        "docs/architecture/SELF_CHARTER.md",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/config/settings.py"
       ],
       "owner_hint": "agent: Claude (Living Core), branch feat/selfhood-atomic-batch",
       "agent_branch": "feat/selfhood-atomic-batch",

@@ -19,6 +19,8 @@ The constitutional zone of the Living Core: an identity contract the system cann
 
 Setpoints (all in the digest): `claim_vs_measured_gap_max` and `ledger_verify_interval_s` are reserved for later phases; `provider_fallback_ratio_max`, `ram_percent_max` and `disk_free_gb_min` are read by Phase 2a. A name ending `_max` / `_min` bounds the vital from above / below; names without that suffix are not vitals.
 
+**Changing a setpoint changes the digest.** Any edit to the charter (including setpoints) makes `boot_self` raise `CharterDriftError` on a ledger anchored with the previous digest until a named human records `adopt_amendment`. No ledger had been anchored in production before setpoints were extended; later setpoint changes need that amendment step as part of rollout.
+
 ## Mechanics
 
 1. **Ledger.** Each record commits to `prev_hash` and to its exact stored bytes under the domain `nexus.self-ledger.record.v1` (same canonical-JSON and genesis conventions as the causal journal, a separate sidecar and a separate domain). There is no update or delete API.
