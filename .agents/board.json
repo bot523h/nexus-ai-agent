@@ -846,6 +846,10 @@
         "tests/architecture/test_selfhood_boundary.py",
         "docs/architecture/SELF_CHARTER.md",
         "tests/unit/test_selfhood_vitals.py",
+        "src/nexus_ai_agent/agent/self_vitals.py",
+        "tests/unit/test_selfhood_runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/config/settings.py",
         "tests/unit/test_selfhood_witness.py"
       ]
     }
@@ -3792,6 +3796,46 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 2,
+      "note": ""
+    },
+    {
+      "task": "task-living-core-p2b-wiring",
+      "title": "Living Core Phase 2b — atomic batch append, fail-safe self boot, real probes, opt-in bot wiring",
+      "title_fa": "فاز ۲ب هستهٔ زنده — append اتمیک دسته‌ای، بوت fail-safe، پروب‌های واقعی و اتصال opt-in به بات",
+      "zone": "selfhood",
+      "priority": "P1",
+      "status": "active",
+      "scope": "append_many (all-or-nothing); selfhood/runtime.py try_boot_self (ok/unavailable/tampered/charter_drift); agent/self_vitals.py real ram/disk probes + start_vitals; minimal opt-in hook in bot/app.py and two settings (default off).",
+      "scope_fa": "append_many اتمیک؛ try_boot_self با چهار وضعیت؛ پروب‌های واقعی رم و دیسک و start_vitals؛ اتصال حداقلی و opt-in (پیش‌فرض خاموش) در bot/app.py.",
+      "prerequisites": [
+        "task-living-core-p2-vitals"
+      ],
+      "acceptance_criteria": [
+        "reading+deviation commit atomically (batch refuses as a whole)",
+        "tampered or drifted ledger never yields a usable state; unavailable degrades without raising",
+        "no fabricated probe: only measured quantities are offered",
+        "disabled by default; enabled run samples into the ledger and stops cleanly"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_selfhood_runtime.py tests/unit/test_selfhood_ledger.py tests/unit/test_selfhood_vitals.py tests/architecture",
+        "ruff + mypy"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/selfhood/",
+        "src/nexus_ai_agent/agent/self_vitals.py",
+        "tests/unit/test_selfhood_runtime.py",
+        "tests/unit/test_selfhood_ledger.py",
+        "tests/unit/test_selfhood_vitals.py",
+        "docs/architecture/SELF_CHARTER.md",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/config/settings.py"
+      ],
+      "owner_hint": "agent: Claude (Living Core), branch feat/selfhood-atomic-batch",
+      "agent_branch": "feat/selfhood-atomic-batch",
+      "claimed_at": "2026-10-20T05:32:27Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
       "note": ""
     },
     {
