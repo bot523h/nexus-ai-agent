@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-20T04:10:52Z",
+  "updated_at": "2026-10-20T05:32:52Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -845,7 +845,11 @@
         "tests/unit/test_selfhood_ledger.py",
         "tests/architecture/test_selfhood_boundary.py",
         "docs/architecture/SELF_CHARTER.md",
-        "tests/unit/test_selfhood_vitals.py"
+        "tests/unit/test_selfhood_vitals.py",
+        "src/nexus_ai_agent/agent/self_vitals.py",
+        "tests/unit/test_selfhood_runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/config/settings.py"
       ]
     },
     {
@@ -3772,7 +3776,7 @@
       "title_fa": "فاز ۲الف هستهٔ زنده — علائم حیاتی ماندگار در Self-Ledger با setpointهای منشور و زمان‌بند با کلید توقف",
       "zone": "selfhood",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "selfhood/vitals.py: probes sampled by a scheduler, setpoints read only from the charter, readings and deviations appended to the ledger, broken or non-finite probes recorded as deviations, restart-safe latest_readings, ProviderHealthTracker.",
       "scope_fa": "vitals.py: نمونه‌برداری زمان‌بندی‌شده، setpoint فقط از منشور، ثبت قرائت و انحراف در ledger، پروب خراب یا NaN به‌عنوان انحراف، و بازیابی پس از ری‌استارت.",
       "prerequisites": [
@@ -3796,8 +3800,48 @@
         "docs/architecture/SELF_CHARTER.md"
       ],
       "owner_hint": "agent: Claude (Living Core), branch feat/selfhood-vitals",
-      "agent_branch": "feat/selfhood-vitals",
-      "claimed_at": "2026-10-20T04:10:52Z",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 2,
+      "note": ""
+    },
+    {
+      "task": "task-living-core-p2b-wiring",
+      "title": "Living Core Phase 2b — atomic batch append, fail-safe self boot, real probes, opt-in bot wiring",
+      "title_fa": "فاز ۲ب هستهٔ زنده — append اتمیک دسته‌ای، بوت fail-safe، پروب‌های واقعی و اتصال opt-in به بات",
+      "zone": "selfhood",
+      "priority": "P1",
+      "status": "active",
+      "scope": "append_many (all-or-nothing); selfhood/runtime.py try_boot_self (ok/unavailable/tampered/charter_drift); agent/self_vitals.py real ram/disk probes + start_vitals; minimal opt-in hook in bot/app.py and two settings (default off).",
+      "scope_fa": "append_many اتمیک؛ try_boot_self با چهار وضعیت؛ پروب‌های واقعی رم و دیسک و start_vitals؛ اتصال حداقلی و opt-in (پیش‌فرض خاموش) در bot/app.py.",
+      "prerequisites": [
+        "task-living-core-p2-vitals"
+      ],
+      "acceptance_criteria": [
+        "reading+deviation commit atomically (batch refuses as a whole)",
+        "tampered or drifted ledger never yields a usable state; unavailable degrades without raising",
+        "no fabricated probe: only measured quantities are offered",
+        "disabled by default; enabled run samples into the ledger and stops cleanly"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_selfhood_runtime.py tests/unit/test_selfhood_ledger.py tests/unit/test_selfhood_vitals.py tests/architecture",
+        "ruff + mypy"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/selfhood/",
+        "src/nexus_ai_agent/agent/self_vitals.py",
+        "tests/unit/test_selfhood_runtime.py",
+        "tests/unit/test_selfhood_ledger.py",
+        "tests/unit/test_selfhood_vitals.py",
+        "docs/architecture/SELF_CHARTER.md",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/config/settings.py"
+      ],
+      "owner_hint": "agent: Claude (Living Core), branch feat/selfhood-atomic-batch",
+      "agent_branch": "feat/selfhood-atomic-batch",
+      "claimed_at": "2026-10-20T05:32:27Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
