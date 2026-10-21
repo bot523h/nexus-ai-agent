@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-20T20:43:30Z",
+  "updated_at": "2026-10-21T03:56:13Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3763,7 +3763,7 @@
       "title_fa": "فاز ۲الف هستهٔ زنده — علائم حیاتی ماندگار در Self-Ledger با setpointهای منشور و زمان‌بند با کلید توقف",
       "zone": "selfhood",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "selfhood/vitals.py: probes sampled by a scheduler, setpoints read only from the charter, readings and deviations appended to the ledger, broken or non-finite probes recorded as deviations, restart-safe latest_readings, ProviderHealthTracker.",
       "scope_fa": "vitals.py: نمونه‌برداری زمان‌بندی‌شده، setpoint فقط از منشور، ثبت قرائت و انحراف در ledger، پروب خراب یا NaN به‌عنوان انحراف، و بازیابی پس از ری‌استارت.",
       "prerequisites": [
@@ -3787,11 +3787,11 @@
         "docs/architecture/SELF_CHARTER.md"
       ],
       "owner_hint": "agent: Claude (Living Core), branch feat/selfhood-vitals",
-      "agent_branch": "feat/selfhood-vitals",
-      "claimed_at": "2026-10-20T04:10:52Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "note": ""
     },
     {
