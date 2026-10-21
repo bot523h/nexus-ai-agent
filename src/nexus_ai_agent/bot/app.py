@@ -353,8 +353,24 @@ def build_application(
             except Exception:  # noqa: BLE001 — ledger recovery must not kill the bot
                 logger.exception("causal_journal_backfill_failed")
         await job_queue.resume_pending()
+        # Living Core phase 2b: opt-in vital signs (off unless
+        # SELF_VITALS_ENABLED=true). Observation only — it never acts.
+        try:
+            from nexus_ai_agent.agent.self_vitals import start_vitals
+
+            application.bot_data["self_vitals"] = await start_vitals(
+                enabled=settings.self_vitals_enabled,
+                db_path=str(settings.db_path),
+                period_s=settings.self_vitals_period_s,
+                max_ram_mb=settings.max_ram_mb,
+            )
+        except Exception:  # noqa: BLE001 — observation must never kill the bot
+            logger.exception("self_vitals_startup_failed")
 
     async def _post_shutdown(application: Any) -> None:
+        vitals_handle = application.bot_data.get("self_vitals")
+        if vitals_handle is not None:
+            await vitals_handle.stop()
         try:
             feature_engines.reminders.close()
         except Exception:  # noqa: BLE001
