@@ -70,7 +70,7 @@ Not yet done (Phase 2 remainder, deliberately separate PRs): post-update verific
 - **Atomic batches.** `SelfLedger.append_many` commits several records in one transaction (all or none); `VitalSigns.sample` uses it so a reading and its deviation can never be split.
 - **`selfhood.runtime.try_boot_self`** returns `OK`, `UNAVAILABLE` (sidecar cannot open — degrade, keep running), `TAMPERED` or `CHARTER_DRIFT`. The last two never carry a state, so anything that needs self-state must require `OK`.
 - **Real probes only** (`agent/self_vitals.py`): `ram_percent` and `disk_free_gb`. The provider fallback ratio is deliberately not offered until the provider chain feeds a `ProviderHealthTracker` — a probe that always reads 0.0 would be a lie.
-- **Opt-in.** `SELF_VITALS_ENABLED` (default `false`) and `SELF_VITALS_PERIOD_S` (default 60, minimum 5). When enabled and healthy, the bot starts the scheduler in `post_init` and stops it in `post_shutdown`; startup and sampling failures are logged and the bot keeps running; the shutdown wait is bounded (10 s) and fail-safe (a timeout cancels the task without raising or logging). Observation only: nothing acts on a deviation yet.
+- **Opt-in.** `SELF_VITALS_ENABLED` (default `false`) and `SELF_VITALS_PERIOD_S` (default 60, minimum 5). When enabled and healthy, the bot starts the scheduler in `post_init` and stops it in `post_shutdown`; startup failures and exceptions that escape `VitalSigns.sample` are logged, while probe failures are recorded as deviations; the bot keeps running; the shutdown wait is bounded (10 s) and fail-safe (a timeout cancels the task without raising or logging). Observation only: nothing acts on a deviation yet.
 
 | Criterion | Test |
 |---|---|
