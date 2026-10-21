@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -98,19 +99,31 @@ def test_simulated_provider_outage_lands_in_the_ledger_within_one_period(tmp_pat
     tracker = ProviderHealthTracker(window=10)
     vitals = VitalSigns(ledger, probes={"provider_fallback_ratio": tracker.fallback_ratio})
     scheduler = VitalsScheduler(vitals, period_s=0.05)
+    outage_started = [0.0]
+    detected_at = [0.0]
+
+    def _deviation_count() -> int:
+        return sum(1 for r in ledger.records() if r.kind is SelfEntryKind.VITAL_DEVIATION)
 
     async def scenario() -> None:
         task = asyncio.create_task(scheduler.run())
         await asyncio.sleep(0.12)  # healthy period(s)
+        assert _deviation_count() == 0
+        outage_started[0] = time.monotonic()
         for _ in range(10):
             tracker.record(primary_ok=False)  # outage begins
-        await asyncio.sleep(0.12)  # > one period later
+        deadline = outage_started[0] + 2.0
+        while _deviation_count() == 0 and time.monotonic() < deadline:
+            await asyncio.sleep(0.005)
+        detected_at[0] = time.monotonic()  # first deviation, observed while running
         scheduler.stop()
         await asyncio.wait_for(task, timeout=2)
 
     asyncio.run(scenario())
     deviations = [r for r in ledger.records() if r.kind is SelfEntryKind.VITAL_DEVIATION]
     assert deviations and deviations[0].payload["subject"] == "vital:provider_fallback_ratio"
+    # One sampling period (0.05 s) plus bounded scheduling/IO slack — not merely "eventually".
+    assert detected_at[0] - outage_started[0] < 0.05 + 0.25
     assert ledger.verify().ok
 
 
