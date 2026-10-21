@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -46,6 +46,14 @@ class SelfEntryKind(str, Enum):
 
 def compute_record_hash(record_json: str) -> str:
     return sha256_hex(RECORD_DOMAIN.encode("utf-8") + b"\n" + record_json.encode("utf-8"))
+
+
+@dataclass(frozen=True)
+class PendingEntry:
+    kind: SelfEntryKind
+    subject: str
+    detail: dict[str, Any]
+    occurred_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -137,9 +145,20 @@ class SelfLedger:
         under the write lock, so a check-then-append (e.g. "this commitment is
         not open yet") cannot race another thread or process.
         """
-        if not subject:
-            raise ValueError("subject must not be empty")
-        stamp = occurred_at or datetime.now(timezone.utc).isoformat()
+        entry = PendingEntry(kind, subject, detail or {}, occurred_at)
+        return self.append_many([entry], precondition=precondition)[0]
+
+    def append_many(
+        self,
+        entries: Sequence[PendingEntry],
+        *,
+        precondition: Callable[[list[SelfRecord]], None] | None = None,
+    ) -> list[SelfRecord]:
+        """Append several records in ONE transaction: all of them or none."""
+        for entry in entries:
+            if not entry.subject:
+                raise ValueError("subject must not be empty")
+        written: list[SelfRecord] = []
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -148,29 +167,34 @@ class SelfLedger:
                 head = connection.execute(
                     "SELECT seq, record_hash FROM nexus_self_ledger ORDER BY seq DESC LIMIT 1"
                 ).fetchone()
-                seq = int(head[0]) + 1 if head else 1
+                seq = int(head[0]) if head else 0
                 prev = str(head[1]) if head else GENESIS_HASH
-                record_json = canonical_json(
-                    {
-                        "seq": seq,
-                        "prev_hash": prev,
-                        "kind": kind.value,
-                        "subject": subject,
-                        "detail": detail or {},
-                        "occurred_at": stamp,
-                    }
-                )
-                record_hash = compute_record_hash(record_json)
-                connection.execute(
-                    "INSERT INTO nexus_self_ledger (seq, record_hash, prev_hash, record_json,"
-                    " created_at) VALUES (?, ?, ?, ?, ?)",
-                    (seq, record_hash, prev, record_json, stamp),
-                )
+                for entry in entries:
+                    seq += 1
+                    stamp = entry.occurred_at or datetime.now(timezone.utc).isoformat()
+                    record_json = canonical_json(
+                        {
+                            "seq": seq,
+                            "prev_hash": prev,
+                            "kind": entry.kind.value,
+                            "subject": entry.subject,
+                            "detail": entry.detail,
+                            "occurred_at": stamp,
+                        }
+                    )
+                    record_hash = compute_record_hash(record_json)
+                    connection.execute(
+                        "INSERT INTO nexus_self_ledger (seq, record_hash, prev_hash, record_json,"
+                        " created_at) VALUES (?, ?, ?, ?, ?)",
+                        (seq, record_hash, prev, record_json, stamp),
+                    )
+                    written.append(SelfRecord(seq, record_hash, prev, record_json, stamp))
+                    prev = record_hash
                 connection.execute("COMMIT")
             except BaseException:
                 connection.execute("ROLLBACK")
                 raise
-        return SelfRecord(seq, record_hash, prev, record_json, stamp)
+        return written
 
     def open_commitment(self, commitment_id: str, text: str) -> SelfRecord:
         def _not_yet_opened(records: list[SelfRecord]) -> None:

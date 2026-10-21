@@ -216,3 +216,24 @@ def test_precondition_runs_while_the_write_lock_is_held(tmp_path: Path) -> None:
 
     ledger.append(SelfEntryKind.OBSERVATION, subject="s", precondition=precondition)
     assert seen and "locked" in seen[0], seen
+
+
+def test_append_many_is_all_or_nothing_and_chained(tmp_path: Path) -> None:
+    from nexus_ai_agent.selfhood.ledger import PendingEntry
+
+    ledger = _ledger(tmp_path)
+    records = ledger.append_many(
+        [
+            PendingEntry(SelfEntryKind.OBSERVATION, "a", {"i": 1}),
+            PendingEntry(SelfEntryKind.OBSERVATION, "b", {"i": 2}),
+        ]
+    )
+    assert [r.seq for r in records] == [1, 2] and ledger.verify().ok
+    with pytest.raises(ValueError):
+        ledger.append_many(
+            [
+                PendingEntry(SelfEntryKind.OBSERVATION, "c", {}),
+                PendingEntry(SelfEntryKind.OBSERVATION, "", {}),  # invalid -> whole batch refused
+            ]
+        )
+    assert [r.seq for r in ledger.records()] == [1, 2]
