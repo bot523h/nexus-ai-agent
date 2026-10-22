@@ -116,6 +116,9 @@ placeholder text.
 | [audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md](audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md) | Exact-SHA mainline truth audit: release-metadata defects (README version, lockstep guard, Continuum snapshot) with the delivered fixes and honest production limitations. |
 | [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
 | [audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md](audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md) | Dated Phase-1 stabilization handoff: live PR inventory, exact-SHA remediation evidence, Board fence correction, CI blockers, and backup/restore limits. |
+| [audits/EXTENSION_HUB_PROMPT_AUDIT_2026-10-22.md](audits/EXTENSION_HUB_PROMPT_AUDIT_2026-10-22.md) | Audit of an externally proposed "Extension Hub" architecture against the live tree: what already exists in `creative/packs/`, three measured findings (empty trust root, permission-vocabulary drift, placeholder artifact licences), and the R7/R9/R20 conflicts the proposal would create. |
+| [audits/ARSENAL_WAVE_A_CENSUS_2026-10-22.md](audits/ARSENAL_WAVE_A_CENSUS_2026-10-22.md) | OSS Arsenal Wave A census: verified live repo/governance truth, capability inventory with measured gaps, and a 15-candidate evaluation matrix (licence, release, Python floor, dependency footprint) fetched from the GitHub and PyPI APIs. |
+| [audits/ARSENAL_WAVE_A_PLAN_2026-10-22.md](audits/ARSENAL_WAVE_A_PLAN_2026-10-22.md) | OSS Arsenal Wave A plan: the port/adapter pattern every wave must copy, Waves B–F with acceptance criteria, proposed board task entries, the measurement protocol, and rejected approaches with reasons. |
 
 ## History (archived — read-only, never a source of truth)
 
