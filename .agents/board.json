@@ -3872,7 +3872,7 @@
       "zone": "storage-backends",
       "priority": "P0",
       "status": "active_in_review",
-      "scope": "A typed, provider-neutral object-store contract for files Nagar owns (streamed put/get, measured SHA-256, idempotent content-addressed publishing, capabilities, truthful capacity reporting), a Neon Object Storage adapter over its documented S3-compatible branch endpoint, and the existing local content-addressed blob store as a conforming backend. Documentation lands in the living DATA_AND_STORAGE.md page (no new docs/ page: docs/README.md is under PR#240's live lease). Drive connectors (Wave 4) and extension catalogue (Wave 6) are out of scope.",
+      "scope": "A typed, provider-neutral object-store contract for files Nagar owns (streamed put/get, measured SHA-256, idempotent content-addressed publishing, capabilities, truthful capacity reporting), a Neon Object Storage adapter over its documented S3-compatible branch endpoint, and the existing local content-addressed blob store as a conforming backend. Documentation lands in the living DATA_AND_STORAGE.md page (no new docs/ page: docs/README.md is under PR#240's live lease). Drive connectors (Wave 4) and extension catalogue (Wave 6) are out of scope. Review round 2 additionally extends this claim to the single filesystem boundary (src/nexus_ai_agent/tools/filesystem_policy.py) because bounded chunk-by-chunk local streaming must be implemented inside that boundary, not by opening paths directly.",
       "scope_fa": "قرارداد تایپ‌شدهٔ مستقل از ارائه‌دهنده برای فایل‌های تحت مالکیت ناگار، آداپتور Neon Object Storage روی نقطهٔ پایانی S3-compatible مستند آن، و حفظ انبار محلی content-addressed به‌عنوان بک‌اند سازگار. مستندات در صفحهٔ زندهٔ DATA_AND_STORAGE.md می‌نشیند (بدون صفحهٔ جدید چون docs/README.md در اجارهٔ فعال PR#240 است). کانکتورهای درایو (موج ۴) و کاتالوگ افزونه (موج ۶) خارج از دامنه‌اند.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -3904,11 +3904,13 @@
         "docs/architecture/MODULE_MAP.md",
         "docs/DECISION_LOG.md",
         "docs/architecture/STORAGE_AND_CONNECTORS.md",
-        ".env.example"
+        ".env.example",
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "tests/unit/test_filesystem_policy_primitives.py"
       ],
       "owner_hint": "",
       "agent_branch": "arena/edeae323-nexus-ai-agent",
-      "claimed_at": "2026-10-22T05:43:13Z",
+      "claimed_at": "2026-10-22T11:21:17Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "PR#244 open, base 04469ed. Review round 1 (2026-10-22) closed two real gaps in the existing implementation: (a) list_keys prefix semantics were relative in local/memory but bucket-prefixed in Neon — `namespace` is now contract, keys are absolute everywhere, and a prefix outside the namespace is refused instead of silently empty; (b) the integrity claim outran the code — `verify_bytes` and `put_stream(verify_existing=...)` added, `PutResult.content_verified` reports whether a real byte check happened, and `head` is documented as metadata-only. Environment hardening: endpoint parsed by authority (look-alike hosts/userinfo/path/port refused), region never sourced from AWS_REGION, credential aliases retained and documented. Evidence: 47 contract + 48 Neon + 14 boundary tests; architecture 263 passed; unit suite failing-file set identical to base 04469ed (178 failed both, pre-existing/environmental). Gates still unverifiable: zero live gates_owner, so the multi-source referee exits 2 repo-wide; a 70-PR board probe found no overlap. Neon live round-trip remains BLOCKED (no credential). Merge state BLOCKED: REVIEW_REQUIRED, zero review submissions, and the sole collaborator is the owner, so an independent reviewer must be invited — this session cannot self-approve.",
