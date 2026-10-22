@@ -3908,39 +3908,40 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/edeae323-nexus-ai-agent",
-      "claimed_at": "2026-10-22T11:34:48Z",
+      "claimed_at": "2026-10-22T12:10:39Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "PR#244 open, base 04469ed. Review round 1 (2026-10-22) closed two real gaps in the existing implementation: (a) list_keys prefix semantics were relative in local/memory but bucket-prefixed in Neon — `namespace` is now contract, keys are absolute everywhere, and a prefix outside the namespace is refused instead of silently empty; (b) the integrity claim outran the code — `verify_bytes` and `put_stream(verify_existing=...)` added, `PutResult.content_verified` reports whether a real byte check happened, and `head` is documented as metadata-only. Environment hardening: endpoint parsed by authority (look-alike hosts/userinfo/path/port refused), region never sourced from AWS_REGION, credential aliases retained and documented. Evidence: 47 contract + 48 Neon + 14 boundary tests; architecture 263 passed; unit suite failing-file set identical to base 04469ed (178 failed both, pre-existing/environmental). Gates still unverifiable: zero live gates_owner, so the multi-source referee exits 2 repo-wide; a 70-PR board probe found no overlap. Neon live round-trip remains BLOCKED (no credential). Merge state BLOCKED: REVIEW_REQUIRED, zero review submissions, and the sole collaborator is the owner, so an independent reviewer must be invited — this session cannot self-approve.",
+      "note": "PR#244 round 2 (2026-10-22) closed three defects found in independent review, all verified on head 9bd1c69. (A) Namespace ownership was a string prefix, so 'nagar/assets' could see 'nagar/assets-other': ownership is now a path-segment rule defined once (is_within_namespace/resolve_namespace_prefix) and enforced on every key operation BEFORE any provider request, plus re-applied to list_keys/measure_namespace results (list_objects_v2 matches prefixes literally). The local adapter no longer exposes staging/… through head/blob_path. A root namespace needs explicit allow_root_namespace=True. (B) Local streaming was fake: iter_chunks materialized the object and open_bytes read everything before enforcing max_bytes. Both now stream through the boundary's new chunked reader (WorkspaceFilesystem.iter_bytes, same O_NOFOLLOW walk) with incremental hashing; the bound is enforced while reading. (C) verify_bytes compared only the metadata digest, so rewriting bytes AND metadata around an unchanged content-addressed key passed verification. It now resolves both identities and raises IntegrityMismatch before streaming when they disagree; the pre-existing byte-corruption tests are unchanged. LIMITATIONS: Neon live round-trip still BLOCKED (zero credentials in this environment — mocks are not live evidence); local delete stays UnsupportedOperation by design (shared content-addressed blobs); D-0030 remains PROPOSED. Referee: exit 2 repo-wide (mandatory gates_owner law on main — the PR#211 defect — and, without --repo, an unreadable open-PR source); with --repo: 28 sources read, exit 2 for the gates_owner law only. A local-only --no-remote check exits 0 and is explicitly NOT a global pass. Merge: BLOCKED on REVIEW_REQUIRED with 0 reviews; the sole collaborator is the owner, so an independent reviewer must be invited — this session cannot self-approve.",
       "generation": 1,
       "delivered": [
-        "src/nexus_ai_agent/storage/object_store.py (ObjectStore contract: namespace, absolute keys, put_stream(content_verified/verify_existing), verify_bytes, CapacityReport provenance)",
-        "src/nexus_ai_agent/storage/local_object_store.py (conforming local backend, byte-verified publish)",
-        "src/nexus_ai_agent/storage/neon_object_storage.py (Neon S3-subset adapter, opt-in, soft-delete aware)",
-        "tests/unit/test_object_store_contract.py (47)",
-        "tests/unit/test_neon_object_storage.py (48)",
-        "tests/architecture/test_storage_backend_boundary.py (14 laws incl. R22/S6/S7)",
-        "docs/architecture/DATA_AND_STORAGE.md §7 (three layers, key model, integrity model, capacity policy, roadmap)",
-        "docs/architecture/MODULE_MAP.md law R22",
-        "docs/DECISION_LOG.md D-0030 PROPOSED + review amendment",
-        ".env.example opt-in Neon block"
+        "src/nexus_ai_agent/storage/object_store.py (contract: namespace ownership law, is_within_namespace, resolve_namespace_prefix, content_digest_from_key, measure_namespace)",
+        "src/nexus_ai_agent/storage/local_object_store.py (ownership on every op, chunked streaming with incremental digest, bounded open_bytes, measure_namespace)",
+        "src/nexus_ai_agent/storage/neon_object_storage.py (ownership before every request, sibling-safe listing/measurement, two-identity digest, explicit root-namespace opt-in)",
+        "src/nexus_ai_agent/tools/filesystem_policy.py (contained chunked reader iter_bytes — see task-275)",
+        "tests/unit/test_object_store_contract.py (88: contract + adversarial sibling prefixes + measured laziness/bounds)",
+        "tests/unit/test_neon_object_storage.py (70: incl. 'refused before any provider request' and joint byte+metadata rewrite)",
+        "tests/architecture/test_storage_backend_boundary.py (17: laws S1–S9)",
+        "tests/unit/test_filesystem_policy_primitives.py (37: chunked-reader boundary laws)",
+        "docs/architecture/DATA_AND_STORAGE.md §7.1 (ownership, two identities, truthful local streaming)",
+        "docs/architecture/MODULE_MAP.md R22 (laws S8/S9)",
+        "docs/DECISION_LOG.md D-0030 amendment 2 (still PROPOSED)"
       ],
       "evidence": {
         "pr": "https://github.com/bot523h/nexus-ai-agent/pull/244",
-        "pr_head_tested": "c5dee4a2ea9ce7f4a15d33dcf959150b7ddcf451",
-        "ci_run_before_review_round": "https://github.com/bot523h/nexus-ai-agent/actions/runs/39730912102 (success, 21/21)",
-        "ci_run_after_review_round": "https://github.com/bot523h/nexus-ai-agent/actions/runs/39736375973 (conclusion success, 21/21 checks, head c5dee4a)",
+        "pr_head_tested": "9bd1c69d7f2abc0298e9885b95b9b74fc84c8a6f",
+        "ci_run": "https://github.com/bot523h/nexus-ai-agent/actions/runs/39771678397 (conclusion success, 20/20 jobs, head 9bd1c69)",
         "commands": [
-          "pytest tests/unit/test_object_store_contract.py tests/unit/test_neon_object_storage.py tests/architecture/test_storage_backend_boundary.py -q → 109 passed",
-          "pytest tests/architecture -q → 263 passed",
-          "pytest tests/unit -q --tb=no → 178 failed / 3557 passed; identical failing-file set at base 04469ed",
-          "ruff check + ruff format --check (6 changed files) → clean",
-          "mypy (3 storage modules) → Success",
-          "git diff --check → clean",
-          "agent_board.py check --no-remote → exit 0; 70-PR multi-source probe → no overlap"
+          "pytest tests/unit/test_object_store_contract.py tests/unit/test_neon_object_storage.py tests/architecture/test_storage_backend_boundary.py tests/unit/test_filesystem_policy_primitives.py -q → 212 passed",
+          "pytest tests/architecture -q → 266 passed",
+          "pytest tests/unit/test_docs_integrity.py tests/unit/test_truth_doctor.py -q → 106 passed",
+          "pytest tests/unit -q --tb=no (ignoring live-PG + fingerprint modules) → 186 failed / 3617 passed / 11 errors; failing set is a strict SUBSET of base cf73020 (187) — zero new failures",
+          "ruff check + ruff format --check (8 changed Python files) → clean",
+          "mypy (4 changed modules) → Success",
+          "old-vs-new probe (cf73020 modules): sibling leak True→False, measure (23,2)→(3,1), joint rewrite True→IntegrityMismatch, iter_chunks read-ahead 4096→256 bytes, open_bytes whole-read 3145728→bounded, head('staging/candidate') metadata→InvalidObjectKey"
         ],
+        "referee": "exit 2 (mandatory gates_owner on main; and open-PR source unreadable without --repo). With --repo: 28 sources, exit 2 for the gates_owner law only. Local --no-remote: exit 0, explicitly local-only.",
         "live_provider_evidence": "NONE — Neon round-trip BLOCKED (no credential/bucket in this environment)",
-        "review_state": "REVIEW_REQUIRED; 0 review submissions; only automated CodeRabbit triage comment; no eligible independent reviewer exists in the repo (sole collaborator is the owner)."
+        "review_state": "REVIEW_REQUIRED; 0 human reviews; automated CodeRabbit review on an older commit only; sole collaborator is the owner"
       }
     },
     {
@@ -4018,7 +4019,7 @@
       "title_fa": "هستهٔ اجرا: خواندن تکه‌تکهٔ مهارشده روی WorkspaceFilesystem (پیش‌نیاز دور دوم ذخیره‌سازی)",
       "zone": "execution-core",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "Add an additive, descriptor-relative chunked reader (iter_bytes) to the single filesystem boundary so a caller can enforce a byte bound while reading instead of after buffering the whole file. Same containment as read_bytes: validated parent walk, O_NOFOLLOW leaf, regular-file check. No change to existing primitives, no second filesystem implementation, no new public write path. Requested by task-272 round 2 (the local object store cannot stream honestly without it).",
       "scope_fa": "افزودن خوانندهٔ تکه‌تکهٔ افزایشی (iter_bytes) به تنها مرز فایل‌سیستم، با همان مهار read_bytes؛ بدون تغییر رفتار اولیه‌های موجود و بدون پیاده‌سازی دوم فایل‌سیستم.",
       "prerequisites": [],
@@ -4038,11 +4039,22 @@
       ],
       "owner_hint": "",
       "agent_branch": "arena/edeae323-nexus-ai-agent",
-      "claimed_at": "2026-10-22T11:34:48Z",
+      "claimed_at": "2026-10-22T12:10:39Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
-      "note": "Registered during PR#244 round 2. PROCESS NOTE: the boundary change was written before this claim existed — it was first added to task-272's exclusive_paths, which the board law `test_exclusive_paths_belong_to_a_declared_zone` correctly rejected because tools/ belongs to the execution-core zone. The correction is a separate zone-correct claim (this record), not a zone edit. The code is unchanged by that correction."
+      "note": "Delivered as PR#244 round-2 prerequisite and verified on head 9bd1c69: WorkspaceFilesystem.iter_bytes yields bounded chunks with the same validated parent walk + O_NOFOLLOW leaf open as read_bytes, closes the descriptor on early abandonment, and rejects symlink leaves, directories, missing files and non-positive chunk sizes. No existing primitive changed; the boundary, staging, sandbox and asset-library filesystem-security suites stay green (153 + 12 passed).",
+      "evidence": {
+        "pr": "https://github.com/bot523h/nexus-ai-agent/pull/244",
+        "pr_head_tested": "9bd1c69d7f2abc0298e9885b95b9b74fc84c8a6f",
+        "ci_run": "https://github.com/bot523h/nexus-ai-agent/actions/runs/39771678397 (success, 20/20)",
+        "commands": [
+          "pytest tests/unit/test_filesystem_policy_primitives.py -q → 37 passed",
+          "pytest tests/unit/test_asset_library_blob_store.py tests/unit/test_filesystem_boundary.py tests/unit/test_execution_staging.py tests/unit/test_shell_sandbox.py tests/architecture/test_execution_boundary_enforcement.py -q → 153 passed",
+          "pytest tests/integration/test_asset_library_filesystem_security.py -q → 12 passed",
+          "ruff + ruff format + mypy on filesystem_policy.py → clean"
+        ]
+      }
     }
   ],
   "deferred_log": [
