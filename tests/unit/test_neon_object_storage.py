@@ -83,6 +83,9 @@ class FakeS3:
         self.failures: list[ProviderError] = []
         self.fail_always: ProviderError | None = None
         self.upload_fileobj_calls: list[str] = []
+        #: Every provider operation attempted, in order — lets a test prove a
+        #: refusal happened *before* the network, not after a 404/403.
+        self.calls: list[str] = []
 
     # -- failure injection -------------------------------------------------- #
     def _maybe_fail(self) -> None:
@@ -93,6 +96,7 @@ class FakeS3:
 
     # -- S3 surface --------------------------------------------------------- #
     def put_object(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append("put_object")
         self._maybe_fail()
         body = kwargs["Body"]
         data = body.read()
@@ -107,6 +111,7 @@ class FakeS3:
         return {"ETag": '"etag-"'}
 
     def upload_fileobj(self, fileobj: Any, bucket: str, key: str, **kwargs: Any) -> None:
+        self.calls.append("upload_fileobj")
         self._maybe_fail()
         data = fileobj.read()
         self.objects[key] = {
@@ -119,6 +124,7 @@ class FakeS3:
         self.upload_fileobj_calls.append(key)
 
     def head_object(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append("head_object")
         self._maybe_fail()
         key = kwargs["Key"]
         entry = self.objects.get(key)
@@ -132,6 +138,7 @@ class FakeS3:
         }
 
     def get_object(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append("get_object")
         self._maybe_fail()
         key = kwargs["Key"]
         entry = self.objects.get(key)
@@ -140,11 +147,13 @@ class FakeS3:
         return {"Body": FakeBody(entry["Body"]), "Metadata": entry["Metadata"]}
 
     def delete_object(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append("delete_object")
         self._maybe_fail()
         self.objects.pop(kwargs["Key"], None)
         return {}
 
     def list_objects_v2(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append("list_objects_v2")
         self._maybe_fail()
         prefix = kwargs.get("Prefix", "")
         contents = [
@@ -155,6 +164,7 @@ class FakeS3:
         return {"Contents": contents, "IsTruncated": False}
 
     def head_bucket(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append("head_bucket")
         self._maybe_fail()
         return {}
 
@@ -162,6 +172,15 @@ class FakeS3:
     def corrupt_bytes(self, key: str, data: bytes) -> None:
         """Replace the stored payload, leaving metadata (incl. sha256) untouched."""
         self.objects[key]["Body"] = data
+
+
+def owned_key(hex_char: str) -> str:
+    """An absolute key inside this store's namespace for a synthetic digest.
+
+    Keys are absolute, so a key produced without the namespace prefix is a
+    foreign key — it is refused on purpose (see the ownership tests).
+    """
+    return f"nagar/assets/{content_key_for(hex_char * 64)}"
 
 
 def make_store(**overrides: Any) -> tuple[NeonObjectStorage, FakeS3]:
@@ -325,7 +344,7 @@ def test_an_unconfigured_backend_refuses_work_with_a_typed_error() -> None:
     with pytest.raises(BackendNotConfigured):
         store.put_stream(io.BytesIO(b"x"), max_bytes=16)
     with pytest.raises(BackendNotConfigured):
-        store.open_bytes(content_key_for("d" * 64))
+        store.open_bytes(owned_key("d"))
 
 
 # --------------------------------------------------------------------------- #
@@ -462,7 +481,7 @@ def test_read_verifies_the_recorded_digest() -> None:
 
 def test_missing_object_is_none_and_not_found() -> None:
     store, _ = make_store()
-    key = content_key_for("b" * 64)
+    key = owned_key("b")
     assert store.head(key) is None
     assert store.exists(key) is False
     with pytest.raises(ObjectNotFound):
@@ -491,7 +510,7 @@ def test_delete_is_reported_as_soft_and_never_reclaims() -> None:
 
 def test_delete_of_absent_key_is_not_an_error() -> None:
     store, _ = make_store()
-    outcome = store.delete(content_key_for("c" * 64))
+    outcome = store.delete(owned_key("c"))
     assert outcome.existed is False
     assert outcome.reclaimed_bytes == 0
 
@@ -673,14 +692,35 @@ def test_verify_bytes_is_true_only_after_a_real_byte_re_read() -> None:
 def test_verify_bytes_refuses_a_missing_object() -> None:
     store, _ = make_store()
     with pytest.raises(ObjectNotFound):
-        store.verify_bytes(content_key_for("a" * 64))
+        store.verify_bytes(owned_key("a"))
 
 
-def test_verify_bytes_is_false_when_no_digest_was_recorded() -> None:
-    """No recorded digest means the comparison is impossible, so it is not 'verified'."""
+def test_verify_bytes_is_false_when_no_identity_exists_at_all() -> None:
+    """No key digest and no recorded digest: the comparison is impossible.
+
+    ``False`` is reserved for that case. A *content-addressed* key is itself an
+    identity (see the next test), so removing only the metadata does not make
+    verification impossible.
+    """
+    store, client = make_store()
+    key = "nagar/assets/notes/readme.txt"
+    client.objects[key] = {
+        "Body": b"no identity",
+        "Metadata": {},
+        "ContentType": None,
+        "ETag": '"e"',
+    }
+    assert store.verify_bytes(key) is False
+
+
+def test_a_content_addressed_key_verifies_even_without_recorded_metadata() -> None:
+    """The immutable key is a real identity; the metadata is only the second one."""
     store, client = make_store()
     published = store.put_stream(io.BytesIO(b"no metadata"), max_bytes=64)
     client.objects[published.key]["Metadata"] = {}
+    assert store.verify_bytes(published.key) is True
+
+    client.corrupt_bytes(published.key, b"tampered")
     assert store.verify_bytes(published.key) is False
 
 
@@ -721,7 +761,7 @@ def test_verify_existing_refuses_metadata_that_lies_about_the_bytes() -> None:
 # --------------------------------------------------------------------------- #
 def test_not_found_is_typed_on_every_read_path() -> None:
     store, _ = make_store()
-    key = content_key_for("b" * 64)
+    key = owned_key("b")
     assert store.head(key) is None
     assert store.exists(key) is False
     with pytest.raises(ObjectNotFound):
@@ -729,3 +769,157 @@ def test_not_found_is_typed_on_every_read_path() -> None:
     with pytest.raises(ObjectNotFound):
         list(store.iter_chunks(key))
     assert store.delete(key).existed is False
+
+
+# --------------------------------------------------------------------------- #
+# Namespace ownership (review round 2, finding A)
+#
+# `list_objects_v2` matches a raw string prefix, so asking for "nagar/assets"
+# also returns "nagar/assets-other/…" from the provider. Ownership therefore
+# cannot be delegated to the provider's string match: it is enforced here, on
+# the way in (keys) and on the way out (listing and measurement).
+# --------------------------------------------------------------------------- #
+SIBLING_KEY = f"nagar/assets-other/blobs/{'ab'}/{('ab' * 32)}"
+UNRELATED_KEY = "other-tenant/secret"
+
+
+@pytest.fixture(params=[SIBLING_KEY, UNRELATED_KEY], ids=["sibling", "unrelated"])
+def foreign_key(request) -> str:
+    return request.param
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["head", "exists", "open_bytes", "iter_chunks", "verify_bytes", "delete"],
+)
+def test_a_foreign_key_is_refused_before_any_provider_request(operation, foreign_key) -> None:
+    """The refusal must happen locally; a provider round-trip would already leak intent."""
+    store, client = make_store()
+    with pytest.raises(InvalidObjectKey):
+        if operation == "iter_chunks":
+            list(store.iter_chunks(foreign_key))
+        else:
+            getattr(store, operation)(foreign_key)
+    assert client.calls == [], f"{operation} reached the provider before refusing the key"
+
+
+def test_listing_excludes_a_sibling_namespace() -> None:
+    store, client = make_store()
+    ours = store.put_stream(io.BytesIO(b"ours"), max_bytes=1024)
+    client.objects[SIBLING_KEY] = {
+        "Body": b"theirs",
+        "Metadata": {},
+        "ContentType": None,
+        "ETag": '"e"',
+    }
+    listed = store.list_keys()
+    assert ours.key in listed
+    assert SIBLING_KEY not in listed, "a sibling namespace leaked into this store's listing"
+    assert all(key.startswith("nagar/assets/") for key in listed)
+
+
+def test_measurement_excludes_a_sibling_namespace() -> None:
+    store, client = make_store()
+    store.put_stream(io.BytesIO(b"abc"), max_bytes=1024)
+    client.objects[SIBLING_KEY] = {
+        "Body": b"a-much-longer-foreign-object",
+        "Metadata": {},
+        "ContentType": None,
+        "ETag": '"e"',
+    }
+    assert store.measure_namespace() == (3, 1)
+
+
+def test_a_prefix_inside_a_sibling_namespace_is_refused() -> None:
+    store, _ = make_store()
+    with pytest.raises(InvalidObjectKey):
+        store.list_keys(prefix="nagar/assets-other")
+
+
+def test_delete_refuses_a_foreign_key_without_a_request() -> None:
+    store, client = make_store()
+    with pytest.raises(InvalidObjectKey):
+        store.delete(SIBLING_KEY)
+    assert client.calls == []
+
+
+# --------------------------------------------------------------------------- #
+# Content-address integrity (review round 2, finding C)
+#
+# Two identities exist: the digest the immutable key encodes, and the digest in
+# the rewritable metadata. An attacker who replaces the bytes *and* updates the
+# metadata leaves the key untouched — a metadata-only check would then call the
+# object intact.
+# --------------------------------------------------------------------------- #
+def test_rewritten_bytes_and_metadata_cannot_pass_verification() -> None:
+    store, client = make_store()
+    published = store.put_stream(io.BytesIO(b"authentic payload"), max_bytes=1024)
+
+    forged = b"forged payload with the same key"
+    import hashlib
+
+    client.objects[published.key]["Body"] = forged
+    client.objects[published.key]["Metadata"]["sha256"] = hashlib.sha256(forged).hexdigest()
+
+    with pytest.raises(IntegrityMismatch):
+        store.verify_bytes(published.key)
+    with pytest.raises(IntegrityMismatch):
+        list(store.iter_chunks(published.key))
+    with pytest.raises(IntegrityMismatch):
+        store.open_bytes(published.key)
+
+
+def test_the_key_contradiction_is_reported_before_the_object_is_streamed() -> None:
+    store, client = make_store()
+    published = store.put_stream(io.BytesIO(b"authentic payload"), max_bytes=1024)
+    client.objects[published.key]["Metadata"]["sha256"] = "f" * 64
+
+    client.calls.clear()
+    with pytest.raises(IntegrityMismatch):
+        list(store.iter_chunks(published.key))
+    assert "get_object" not in client.calls, "a contradictory object was streamed before refusal"
+
+
+def test_metadata_digest_still_must_match_the_bytes() -> None:
+    """The pre-existing law is not weakened: metadata alone can still catch corruption."""
+    store, client = make_store()
+    published = store.put_stream(io.BytesIO(b"authentic payload"), max_bytes=1024)
+    client.corrupt_bytes(published.key, b"tampered")
+    assert store.verify_bytes(published.key) is False
+
+
+# --------------------------------------------------------------------------- #
+# Root namespace edge case (finding A: validate deliberately)
+# --------------------------------------------------------------------------- #
+def test_an_empty_namespace_claims_the_whole_bucket_and_needs_an_explicit_opt_in() -> None:
+    with pytest.raises(ValueError, match="allow_root_namespace"):
+        NeonStorageConfig(
+            endpoint_url=ENDPOINT,
+            region="us-east-2",
+            access_key_id=ACCESS_KEY,
+            secret_access_key=SECRET,
+            bucket="nagar-assets",
+            prefix="",
+        )
+
+
+def test_an_opted_in_root_namespace_owns_every_key() -> None:
+    client = FakeS3()
+    store = NeonObjectStorage(
+        NeonStorageConfig(
+            endpoint_url=ENDPOINT,
+            region="us-east-2",
+            access_key_id=ACCESS_KEY,
+            secret_access_key=SECRET,
+            bucket="nagar-assets",
+            prefix="",
+            allow_root_namespace=True,
+        ),
+        client=client,
+    )
+    assert store.namespace == ""
+    published = store.put_stream(io.BytesIO(b"root"), max_bytes=64)
+    assert published.key.startswith("blobs/")
+    assert store.open_bytes(published.key) == b"root"
+    assert store.list_keys() == [published.key]
+    assert store.measure_namespace() == (4, 1)

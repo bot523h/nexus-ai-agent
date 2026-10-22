@@ -57,7 +57,10 @@ from nexus_ai_agent.storage.object_store import (
     ObjectTooLarge,
     PutResult,
     TransientBackendError,
+    content_digest_from_key,
     content_key_for,
+    is_within_namespace,
+    resolve_namespace_prefix,
     utcnow,
     validate_object_key,
 )
@@ -142,6 +145,7 @@ class NeonStorageConfig:
     secret_access_key: str = field(repr=False)
     bucket: str
     prefix: str = DEFAULT_PREFIX
+    allow_root_namespace: bool = False
     max_attempts: int = 3
     retry_backoff_seconds: float = 0.25
     multipart_threshold_bytes: int = 64 * 1024 * 1024
@@ -177,7 +181,16 @@ class NeonStorageConfig:
             raise ValueError("Neon Object Storage region must be a non-empty region string")
         if not _BUCKET.match(self.bucket or ""):
             raise ValueError("bucket must be a valid S3 bucket name (3-63 chars, [a-z0-9.-])")
-        object.__setattr__(self, "prefix", validate_object_key(self.prefix))
+        if self.prefix:
+            object.__setattr__(self, "prefix", validate_object_key(self.prefix))
+        elif not self.allow_root_namespace:
+            # An empty prefix means "this store owns the whole bucket". Silently
+            # accepting it would let one misconfigured variable claim every object
+            # in a shared bucket, so the root namespace must be opted into.
+            raise ValueError(
+                "prefix must not be empty: an empty namespace claims the entire bucket; "
+                "set allow_root_namespace=True to opt in explicitly"
+            )
         if not self.access_key_id or not self.secret_access_key:
             raise ValueError("Neon Object Storage requires both an access key id and a secret")
         if self.max_attempts < 1:
@@ -327,6 +340,43 @@ class NeonObjectStorage:
         be passed straight back to ``head``/``open_bytes``/``delete``.
         """
         return self._config.prefix
+
+    def _require_owned(self, key: str, *, operation: str) -> str:
+        """Prove the key belongs to this store's namespace before any request.
+
+        ``validate_object_key`` only proves the key is *well formed*; a foreign
+        key (another tenant's prefix, or a sibling like ``nagar/assets-other``)
+        is perfectly well formed and must still be refused here — before the
+        client is built and before a single byte leaves the process.
+        """
+        key = validate_object_key(key)
+        if not is_within_namespace(key, self._config.prefix):
+            raise InvalidObjectKey(
+                f"{operation}: key {key!r} is outside this store's namespace "
+                f"{self._config.prefix!r}"
+            )
+        return key
+
+    def _identity_digest(self, metadata: ObjectMetadata) -> str | None:
+        """Resolve the digest an object claims, refusing a contradiction.
+
+        Two independent identities exist: the digest encoded in the immutable
+        content-addressed key, and the digest recorded in the (rewritable)
+        object metadata. Checking only the metadata accepts an object whose bytes
+        *and* metadata were replaced together while the key stayed the same;
+        checking only the key ignores what the upload recorded. When both are
+        present and disagree, at least one was tampered with, so this refuses
+        instead of picking a winner.
+        """
+        from_key = content_digest_from_key(metadata.key)
+        from_metadata = dict(metadata.custom).get(META_SHA256)
+        if from_key is not None and from_metadata is not None and from_key != from_metadata:
+            raise IntegrityMismatch(
+                f"object {metadata.key!r} records digest {from_metadata} but its "
+                "content-addressed key encodes a different digest; the object was "
+                "modified without changing its key"
+            )
+        return from_key or from_metadata
 
     def _require_configured(self) -> None:
         if not self.is_configured():
@@ -554,8 +604,8 @@ class NeonObjectStorage:
 
     # -- reads -------------------------------------------------------------- #
     def head(self, key: str) -> ObjectMetadata | None:
+        key = self._require_owned(key, operation="head")
         self._require_configured()
-        key = validate_object_key(key)
         try:
             response = self._call(
                 "head_object",
@@ -588,11 +638,11 @@ class NeonObjectStorage:
         Returns ``False`` when no digest was recorded at upload (nothing to
         compare against, so a "verified" verdict would be a guess).
         """
-        key = validate_object_key(key)
+        key = self._require_owned(key, operation="verify_bytes")
         metadata = self.head(key)
         if metadata is None:
             raise ObjectNotFound(f"{key!r} not found")
-        expected = dict(metadata.custom).get(META_SHA256)
+        expected = self._identity_digest(metadata)
         if expected is None:
             return False
         import hashlib
@@ -619,8 +669,8 @@ class NeonObjectStorage:
         """
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
-        key = validate_object_key(key)
-        expected = self._recorded_digest(key)
+        key = self._require_owned(key, operation="read")
+        expected = self._expected_digest(key)
         import hashlib
 
         digest = hashlib.sha256()
@@ -636,15 +686,21 @@ class NeonObjectStorage:
                 f"object {key!r} does not hash to the identity recorded at upload"
             )
 
-    def _recorded_digest(self, key: str) -> str | None:
-        """The digest recorded at upload time, read from object metadata."""
+    def _expected_digest(self, key: str) -> str | None:
+        """The digest this object must hash to, resolved from key *and* metadata.
+
+        Raises :class:`IntegrityMismatch` when the immutable key and the recorded
+        metadata disagree — that combination means the object was rewritten and
+        re-described around an unchanged key.
+        """
         metadata = self.head(key)
         if metadata is None:
             raise ObjectNotFound(f"{key!r} not found")
-        return dict(metadata.custom).get(META_SHA256)
+        return self._identity_digest(metadata)
 
     def _iter_payload(self, key: str, *, chunk_size: int = 1 << 20) -> Iterator[bytes]:
         """Yield the raw stored bytes without any digest check."""
+        key = self._require_owned(key, operation="read")
         self._require_configured()
         response = self._call(
             "get_object",
@@ -673,8 +729,8 @@ class NeonObjectStorage:
         key existed, so ``existed`` is measured with a prior HEAD instead of being
         guessed from a successful delete.
         """
+        key = self._require_owned(key, operation="delete")
         self._require_configured()
-        key = validate_object_key(key)
         existed = self.head(key) is not None
         try:
             self._call(
@@ -704,22 +760,22 @@ class NeonObjectStorage:
         effective = self._effective_prefix(prefix)
         keys: list[str] = []
         for item in self._iter_listing(effective):
-            keys.append(item["Key"])
+            key = item["Key"]
+            # ``list_objects_v2`` matches a raw prefix, so ``nagar/assets`` also
+            # returns ``nagar/assets-other/…``. The namespace boundary, not the
+            # provider's string match, decides what belongs to this store.
+            if not is_within_namespace(key, self._config.prefix):
+                continue
+            if effective and not key.startswith(effective):
+                continue
+            keys.append(key)
             if len(keys) >= limit:
                 break
         return keys
 
     def _effective_prefix(self, prefix: str) -> str:
         """Resolve a caller prefix to a bucket-absolute one, or refuse it."""
-        namespace = self._config.prefix
-        if not prefix:
-            return namespace
-        validate_object_key(prefix)
-        if not (prefix == namespace or prefix.startswith(f"{namespace}/")):
-            raise InvalidObjectKey(
-                f"prefix {prefix!r} is outside this store's namespace {namespace!r}"
-            )
-        return prefix
+        return resolve_namespace_prefix(prefix, self._config.prefix)
 
     def _iter_listing(self, search: str) -> Iterator[dict[str, Any]]:
         """Page through ``list_objects_v2`` until a page or the listing ends."""
@@ -751,6 +807,8 @@ class NeonObjectStorage:
         total = 0
         count = 0
         for item in self._iter_listing(self._config.prefix):
+            if not is_within_namespace(item["Key"], self._config.prefix):
+                continue
             total += item["Size"]
             count += 1
         return total, count

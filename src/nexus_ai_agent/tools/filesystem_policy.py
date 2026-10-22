@@ -329,6 +329,50 @@ class WorkspaceFilesystem:
             except OSError as exc:
                 raise FilesystemBoundaryError("file could not be read safely") from exc
 
+    def iter_bytes(self, raw: str, *, chunk_size: int = 1 << 20) -> Iterator[bytes]:
+        """Yield a contained regular file's bytes in bounded chunks.
+
+        Unlike :meth:`read_bytes`, nothing is buffered whole: the caller pays for
+        the chunks it actually consumes, so an adapter can enforce a size bound
+        *while* reading instead of after materializing the file. The descriptor
+        is opened relative to a validated parent directory with ``O_NOFOLLOW``,
+        exactly like every whole-file read here — a chunked read is not a weaker
+        boundary than a buffered one.
+
+        The digest is deliberately *not* computed here: this layer returns bytes
+        and proves containment, while the identity check belongs to the object
+        store that knows what the key claims.
+        """
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        parts = _validate_relative(raw)
+        self.resolve(raw)
+        with self._parent_fd(parts) as (parent_fd, name):
+            assert name is not None
+            try:
+                fd = os.open(name, os.O_RDONLY | _NOFOLLOW | _CLOEXEC, dir_fd=parent_fd)
+            except OSError as exc:
+                raise FilesystemBoundaryError("file could not be opened safely") from exc
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode):
+                    raise FilesystemBoundaryError("path is not a regular file")
+            except FilesystemBoundaryError:
+                os.close(fd)
+                raise
+            except OSError as exc:
+                os.close(fd)
+                raise FilesystemBoundaryError("file could not be read safely") from exc
+            with os.fdopen(fd, "rb") as handle:
+                try:
+                    while True:
+                        chunk = handle.read(chunk_size)
+                        if not chunk:
+                            break
+                        yield chunk
+                except OSError as exc:
+                    raise FilesystemBoundaryError("file could not be read safely") from exc
+
     def hash_file(self, raw: str) -> tuple[str, int]:
         """Return ``(sha256_hex, byte_size)`` for a contained regular file.
 

@@ -20,6 +20,7 @@ Two honest limitations are declared rather than papered over:
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import BinaryIO
@@ -44,7 +45,10 @@ from nexus_ai_agent.storage.object_store import (
     ObjectTooLarge,
     PutResult,
     UnsupportedOperation,
+    content_digest_from_key,
     content_key_for,
+    is_within_namespace,
+    resolve_namespace_prefix,
     utcnow,
     validate_object_key,
 )
@@ -54,19 +58,12 @@ _BLOB_PREFIX = "blobs"
 
 
 def _effective_prefix(prefix: str, *, namespace: str) -> str:
-    """Resolve the listing prefix and refuse one outside this store's namespace.
+    """Resolve the listing prefix through the contract's single boundary rule.
 
-    The rule lives in one place per adapter because it is part of the contract
-    (see ``object_store``'s key model): a caller that passes a bucket-absolute
-    prefix belonging to another store gets a loud error instead of an empty page
-    that looks like "no assets".
+    Both adapters delegate here (via :func:`resolve_namespace_prefix`) so the
+    sibling-namespace rule cannot drift between backends.
     """
-    if not prefix:
-        return namespace
-    validate_object_key(prefix)
-    if namespace and not (prefix == namespace or prefix.startswith(f"{namespace}/")):
-        raise InvalidObjectKey(f"prefix {prefix!r} is outside this store's namespace {namespace!r}")
-    return prefix
+    return resolve_namespace_prefix(prefix, namespace)
 
 
 class LocalObjectStore:
@@ -78,6 +75,20 @@ class LocalObjectStore:
     def namespace(self) -> str:
         """The content-addressed layout is this store's whole key space."""
         return _BLOB_PREFIX
+
+    def _require_owned(self, key: str, *, operation: str) -> str:
+        """Validate the key shape *and* prove it belongs to this store's namespace.
+
+        Runs before any filesystem access, so a foreign key can never reach
+        ``hash_file``/``require_regular_file`` and expose another workspace area
+        (``staging/…`` is a valid key shape, and it is not ours).
+        """
+        key = validate_object_key(key)
+        if not is_within_namespace(key, self.namespace):
+            raise InvalidObjectKey(
+                f"{operation}: key {key!r} is outside this store's namespace {self.namespace!r}"
+            )
+        return key
 
     def __init__(self, root: str | Path) -> None:
         self._root = Path(root).expanduser()
@@ -163,27 +174,57 @@ class LocalObjectStore:
 
     # -- reads ------------------------------------------------------------- #
     def open_bytes(self, key: str, *, max_bytes: int | None = None) -> bytes:
-        key = validate_object_key(key)
-        try:
-            data = self._blobs.open(key)
-        except ContentIntegrityError as exc:
-            raise IntegrityMismatch(str(exc)) from exc
-        except (BlobStoreError, FilesystemBoundaryError, OSError) as exc:
-            raise ObjectStoreError(f"local read failed for {key!r}") from exc
-        if max_bytes is not None and len(data) > max_bytes:
-            raise ObjectTooLarge(f"object {key!r} exceeds the {max_bytes}-byte read bound")
-        return data
+        """Return the object, refusing to buffer past ``max_bytes``.
 
-    def iter_chunks(self, key: str, *, chunk_size: int = 1 << 20) -> Iterator[bytes]:
+        The bound is enforced *inside* the iteration, so an oversized object is
+        rejected after reading at most one chunk beyond the limit instead of
+        after being materialized whole.
+        """
+        return b"".join(self.iter_chunks(key, max_bytes=max_bytes))
+
+    def iter_chunks(
+        self, key: str, *, chunk_size: int = 1 << 20, max_bytes: int | None = None
+    ) -> Iterator[bytes]:
+        """Stream one blob chunk by chunk, hashing incrementally as it goes.
+
+        Nothing is materialized: the bytes come from the workspace boundary's
+        contained chunked reader. The digest the key encodes is compared at the
+        end of a full iteration — a consumer that stops early has consumed bytes
+        that were never verified, exactly as the contract documents.
+        """
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
-        data = self.open_bytes(key)
-        for start in range(0, len(data), chunk_size):
-            yield data[start : start + chunk_size]
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("max_bytes must not be negative")
+        key = self._require_owned(key, operation="read")
+        if not self._fs.exists(key):
+            raise ObjectNotFound(f"{key!r} not found")
+
+        digest = hashlib.sha256()
+        total = 0
+        try:
+            for chunk in self._fs.iter_bytes(key, chunk_size=chunk_size):
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise ObjectTooLarge(f"object {key!r} exceeds the {max_bytes}-byte read bound")
+                digest.update(chunk)
+                yield chunk
+        except (FilesystemBoundaryError, OSError) as exc:
+            raise ObjectStoreError(f"local read failed for {key!r}") from exc
+
+        expected = content_digest_from_key(key)
+        if expected is not None and digest.hexdigest() != expected:
+            raise IntegrityMismatch("stored content does not match its content key")
 
     def head(self, key: str) -> ObjectMetadata | None:
-        """Measure one blob. The local store has no cheap HEAD: this re-hashes."""
-        key = validate_object_key(key)
+        """Measure one blob. The local store has no cheap HEAD: this re-hashes.
+
+        A key outside ``blobs/`` raises :class:`InvalidObjectKey` instead of
+        returning ``None``: the staging area, the database file and every other
+        workspace path are valid key *shapes*, and reporting them as "absent"
+        would let a caller probe them without an error.
+        """
+        key = self._require_owned(key, operation="head")
         try:
             sha256, size = self._fs.hash_file(key)
         except (FilesystemBoundaryError, OSError):
@@ -198,9 +239,10 @@ class LocalObjectStore:
 
         Exposed so a test can corrupt a blob and prove the byte-verification law;
         it deliberately returns a path inside the existing workspace boundary and
-        performs no write itself.
+        performs no write itself. Ownership is enforced first, so no path outside
+        ``blobs/`` can be handed out.
         """
-        key = validate_object_key(key)
+        key = self._require_owned(key, operation="blob_path")
         self._fs.require_regular_file(key)
         return self._root.resolve() / key
 
@@ -208,16 +250,26 @@ class LocalObjectStore:
         """Re-hash the blob and compare it with the digest its key encodes.
 
         The local key *is* the digest, so this is a genuine byte-level check and
-        not a metadata comparison.
+        not a metadata comparison. Bytes are streamed, so a large object is never
+        buffered just to be verified.
         """
-        key = validate_object_key(key)
-        metadata = self.head(key)
-        if metadata is None:
+        key = self._require_owned(key, operation="verify_bytes")
+        if not self._fs.exists(key):
             raise ObjectNotFound(f"{key!r} not found")
-        expected = key.rsplit("/", 1)[-1]
-        return metadata.sha256 == expected
+        expected = content_digest_from_key(key)
+        digest = hashlib.sha256()
+        try:
+            for chunk in self._fs.iter_bytes(key):
+                digest.update(chunk)
+        except (FilesystemBoundaryError, OSError):
+            return False
+        if expected is None:
+            return False
+        return digest.hexdigest() == expected
 
     def delete(self, key: str) -> DeleteResult:
+        """Refuse, but only after the key is proven to be inside this namespace."""
+        self._require_owned(key, operation="delete")
         raise UnsupportedOperation(
             "content-addressed blobs are shared across assets; deletion is owned by "
             "the Asset Library lifecycle (see the Asset Library retention design)"
@@ -235,7 +287,11 @@ class LocalObjectStore:
         keys: list[str] = []
         for path in self._fs.iter_files():
             relative = path.relative_to(self._root.resolve()).as_posix()
-            if not relative.startswith(effective):
+            # Ownership first: a sibling directory (``blobs-other/…``) is not ours
+            # even when it shares our namespace's literal prefix.
+            if not is_within_namespace(relative, self.namespace):
+                continue
+            if effective and not relative.startswith(effective):
                 continue
             keys.append(relative)
             if len(keys) >= limit:
@@ -251,13 +307,7 @@ class LocalObjectStore:
         be fiction. What is measured is exactly what this backend owns: the bytes
         of its own content-addressed blobs.
         """
-        measured = 0
-        for path in self._fs.iter_files():
-            if path.relative_to(self._root.resolve()).as_posix().startswith(f"{_BLOB_PREFIX}/"):
-                try:
-                    measured += path.stat().st_size
-                except OSError:
-                    continue
+        measured, _ = self.measure_namespace()
         return CapacityReport(
             backend=self.name,
             kind=CapacityKind.UNKNOWN,
@@ -268,6 +318,25 @@ class LocalObjectStore:
                 "volume free space is shared with the application database and is not a Nagar quota"
             ),
         )
+
+    def measure_namespace(self) -> tuple[int, int]:
+        """Measure ``(bytes, objects)`` of this store's own namespace.
+
+        Sibling namespaces are excluded by the segment boundary, so
+        ``blobs-other/…`` never inflates this store's measurement.
+        """
+        total = 0
+        count = 0
+        for path in self._fs.iter_files():
+            relative = path.relative_to(self._root.resolve()).as_posix()
+            if not is_within_namespace(relative, self.namespace):
+                continue
+            try:
+                total += path.stat().st_size
+            except OSError:
+                continue
+            count += 1
+        return total, count
 
     def health(self) -> HealthReport:
         ok = (self._root / _BLOB_PREFIX).is_dir() and (self._root / "staging").is_dir()

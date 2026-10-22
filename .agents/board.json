@@ -3872,7 +3872,7 @@
       "zone": "storage-backends",
       "priority": "P0",
       "status": "active_in_review",
-      "scope": "A typed, provider-neutral object-store contract for files Nagar owns (streamed put/get, measured SHA-256, idempotent content-addressed publishing, capabilities, truthful capacity reporting), a Neon Object Storage adapter over its documented S3-compatible branch endpoint, and the existing local content-addressed blob store as a conforming backend. Documentation lands in the living DATA_AND_STORAGE.md page (no new docs/ page: docs/README.md is under PR#240's live lease). Drive connectors (Wave 4) and extension catalogue (Wave 6) are out of scope. Review round 2 additionally extends this claim to the single filesystem boundary (src/nexus_ai_agent/tools/filesystem_policy.py) because bounded chunk-by-chunk local streaming must be implemented inside that boundary, not by opening paths directly.",
+      "scope": "A typed, provider-neutral object-store contract for files Nagar owns (streamed put/get, measured SHA-256, idempotent content-addressed publishing, capabilities, truthful capacity reporting), a Neon Object Storage adapter over its documented S3-compatible branch endpoint, and the existing local content-addressed blob store as a conforming backend. Documentation lands in the living DATA_AND_STORAGE.md page (no new docs/ page: docs/README.md is under PR#240's live lease). Drive connectors (Wave 4) and extension catalogue (Wave 6) are out of scope.",
       "scope_fa": "قرارداد تایپ‌شدهٔ مستقل از ارائه‌دهنده برای فایل‌های تحت مالکیت ناگار، آداپتور Neon Object Storage روی نقطهٔ پایانی S3-compatible مستند آن، و حفظ انبار محلی content-addressed به‌عنوان بک‌اند سازگار. مستندات در صفحهٔ زندهٔ DATA_AND_STORAGE.md می‌نشیند (بدون صفحهٔ جدید چون docs/README.md در اجارهٔ فعال PR#240 است). کانکتورهای درایو (موج ۴) و کاتالوگ افزونه (موج ۶) خارج از دامنه‌اند.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -3904,13 +3904,11 @@
         "docs/architecture/MODULE_MAP.md",
         "docs/DECISION_LOG.md",
         "docs/architecture/STORAGE_AND_CONNECTORS.md",
-        ".env.example",
-        "src/nexus_ai_agent/tools/filesystem_policy.py",
-        "tests/unit/test_filesystem_policy_primitives.py"
+        ".env.example"
       ],
       "owner_hint": "",
       "agent_branch": "arena/edeae323-nexus-ai-agent",
-      "claimed_at": "2026-10-22T11:21:17Z",
+      "claimed_at": "2026-10-22T11:34:48Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "PR#244 open, base 04469ed. Review round 1 (2026-10-22) closed two real gaps in the existing implementation: (a) list_keys prefix semantics were relative in local/memory but bucket-prefixed in Neon — `namespace` is now contract, keys are absolute everywhere, and a prefix outside the namespace is refused instead of silently empty; (b) the integrity claim outran the code — `verify_bytes` and `put_stream(verify_existing=...)` added, `PutResult.content_verified` reports whether a real byte check happened, and `head` is documented as metadata-only. Environment hardening: endpoint parsed by authority (look-alike hosts/userinfo/path/port refused), region never sourced from AWS_REGION, credential aliases retained and documented. Evidence: 47 contract + 48 Neon + 14 boundary tests; architecture 263 passed; unit suite failing-file set identical to base 04469ed (178 failed both, pre-existing/environmental). Gates still unverifiable: zero live gates_owner, so the multi-source referee exits 2 repo-wide; a 70-PR board probe found no overlap. Neon live round-trip remains BLOCKED (no credential). Merge state BLOCKED: REVIEW_REQUIRED, zero review submissions, and the sole collaborator is the owner, so an independent reviewer must be invited — this session cannot self-approve.",
@@ -4013,6 +4011,38 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "Registered 2026-10-22 during PR#244 review; queued only — Wave 2 is deliberately NOT implemented on this branch."
+    },
+    {
+      "task": "task-275-filesystem-chunked-reads",
+      "title": "Execution-core: contained chunked reads on WorkspaceFilesystem (storage round-2 prerequisite)",
+      "title_fa": "هستهٔ اجرا: خواندن تکه‌تکهٔ مهارشده روی WorkspaceFilesystem (پیش‌نیاز دور دوم ذخیره‌سازی)",
+      "zone": "execution-core",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Add an additive, descriptor-relative chunked reader (iter_bytes) to the single filesystem boundary so a caller can enforce a byte bound while reading instead of after buffering the whole file. Same containment as read_bytes: validated parent walk, O_NOFOLLOW leaf, regular-file check. No change to existing primitives, no second filesystem implementation, no new public write path. Requested by task-272 round 2 (the local object store cannot stream honestly without it).",
+      "scope_fa": "افزودن خوانندهٔ تکه‌تکهٔ افزایشی (iter_bytes) به تنها مرز فایل‌سیستم، با همان مهار read_bytes؛ بدون تغییر رفتار اولیه‌های موجود و بدون پیاده‌سازی دوم فایل‌سیستم.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "iter_bytes yields bounded chunks that reassemble to the file, without buffering it whole.",
+        "It rejects a symlinked leaf, a directory and a missing file exactly as read_bytes does (same O_NOFOLLOW descriptor walk).",
+        "A non-positive chunk_size is a ValueError; abandoning the iterator closes the descriptor without error.",
+        "No existing primitive changes behaviour: the pre-existing boundary, staging and security suites stay green."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_filesystem_policy_primitives.py tests/unit/test_filesystem_boundary.py tests/integration/test_asset_library_filesystem_security.py -q",
+        "ruff check + mypy on the boundary module"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "tests/unit/test_filesystem_policy_primitives.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/edeae323-nexus-ai-agent",
+      "claimed_at": "2026-10-22T11:34:48Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "note": "Registered during PR#244 round 2. PROCESS NOTE: the boundary change was written before this claim existed — it was first added to task-272's exclusive_paths, which the board law `test_exclusive_paths_belong_to_a_declared_zone` correctly rejected because tools/ belongs to the execution-core zone. The correction is a separate zone-correct claim (this record), not a zone edit. The code is unchanged by that correction."
     }
   ],
   "deferred_log": [

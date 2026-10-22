@@ -36,7 +36,10 @@ from nexus_ai_agent.storage.object_store import (
     ObjectTooLarge,
     PutResult,
     UnsupportedOperation,
+    content_digest_from_key,
     content_key_for,
+    is_within_namespace,
+    resolve_namespace_prefix,
     utcnow,
     validate_object_key,
 )
@@ -59,6 +62,15 @@ class MemoryObjectStore:
     @property
     def namespace(self) -> str:
         return "blobs"
+
+    def _owned(self, key: str, *, operation: str = "key") -> str:
+        """The same ownership law as the real adapters (the contract's witness)."""
+        key = validate_object_key(key)
+        if not is_within_namespace(key, self.namespace):
+            raise InvalidObjectKey(
+                f"{operation}: key {key!r} is outside this store's namespace {self.namespace!r}"
+            )
+        return key
 
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
@@ -117,18 +129,32 @@ class MemoryObjectStore:
         )
 
     def open_bytes(self, key: str, *, max_bytes: int | None = None) -> bytes:
-        key = validate_object_key(key)
+        return b"".join(self.iter_chunks(key, max_bytes=max_bytes))
+
+    def iter_chunks(
+        self, key: str, *, chunk_size: int = 1 << 20, max_bytes: int | None = None
+    ) -> Iterator[bytes]:
+        key = self._owned(key, operation="read")
         if key not in self.objects:
             raise ObjectNotFound(f"{key!r} not found")
-        return self.objects[key][0]
+        data, expected = self.objects[key]
+        import hashlib
 
-    def iter_chunks(self, key: str, *, chunk_size: int = 1 << 20) -> Iterator[bytes]:
-        data = self.open_bytes(key)
+        digest = hashlib.sha256()
+        total = 0
         for start in range(0, len(data), chunk_size):
-            yield data[start : start + chunk_size]
+            chunk = data[start : start + chunk_size]
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise ObjectTooLarge(f"object {key!r} exceeds the {max_bytes}-byte read bound")
+            digest.update(chunk)
+            yield chunk
+        identity = content_digest_from_key(key)
+        if identity is not None and digest.hexdigest() != identity:
+            raise IntegrityMismatch("stored content does not match its content key")
 
     def head(self, key: str):  # noqa: ANN201 - contract shape only
-        key = validate_object_key(key)
+        key = self._owned(key, operation="head")
         if key not in self.objects:
             return None
         data, sha256 = self.objects[key]
@@ -142,22 +168,27 @@ class MemoryObjectStore:
     def verify_bytes(self, key: str) -> bool:
         import hashlib
 
-        data = self.open_bytes(key)
-        return hashlib.sha256(data).hexdigest() == self.objects[key][1]
+        key = self._owned(key, operation="verify_bytes")
+        if key not in self.objects:
+            raise ObjectNotFound(f"{key!r} not found")
+        expected = content_digest_from_key(key) or self.objects[key][1]
+        if expected is None:
+            return False
+        return hashlib.sha256(self.objects[key][0]).hexdigest() == expected
 
     def delete(self, key: str) -> DeleteResult:
-        key = validate_object_key(key)
+        key = self._owned(key, operation="delete")
         entry = self.objects.pop(key, None)
         return DeleteResult(key=key, existed=entry is not None, soft=False)
 
     def list_keys(self, *, prefix: str = "", limit: int = 1000) -> list[str]:
-        effective = prefix or self.namespace
-        validate_object_key(effective)
-        if not (effective == self.namespace or effective.startswith(f"{self.namespace}/")):
-            raise InvalidObjectKey(
-                f"prefix {effective!r} is outside this store's namespace {self.namespace!r}"
-            )
-        return sorted(k for k in self.objects if k.startswith(effective))[:limit]
+        effective = resolve_namespace_prefix(prefix, self.namespace)
+        owned = [k for k in self.objects if is_within_namespace(k, self.namespace)]
+        return sorted(k for k in owned if not effective or k.startswith(effective))[:limit]
+
+    def measure_namespace(self) -> tuple[int, int]:
+        owned = [k for k in self.objects if is_within_namespace(k, self.namespace)]
+        return sum(len(self.objects[k][0]) for k in owned), len(owned)
 
     def capacity(self) -> CapacityReport:
         return CapacityReport(
@@ -540,3 +571,202 @@ def test_utcnow_is_timezone_aware() -> None:
     now = utcnow()
     assert now.tzinfo is not None
     assert abs(now - datetime.now(timezone.utc)) < timedelta(seconds=5)
+
+
+# --------------------------------------------------------------------------- #
+# Namespace ownership (review round 2, finding A)
+#
+# The adversary here is a *sibling* prefix, not an unrelated one. "blobs" and
+# "blobs-other" share a literal string prefix, so `str.startswith` says they
+# overlap while a path-segment boundary says they do not. Every key operation
+# must refuse the foreign key, and listing/measurement must exclude it.
+# --------------------------------------------------------------------------- #
+SIBLING_KEY = f"blobs-other/{'ab'}/{('ab' * 32)}"
+UNRELATED_KEY = "other-tenant/secret"
+
+
+@pytest.fixture(params=[SIBLING_KEY, UNRELATED_KEY], ids=["sibling", "unrelated"])
+def foreign_key(request) -> str:
+    """Both shapes must be refused; the sibling one is the easy one to miss."""
+    return request.param
+
+
+def test_a_sibling_prefix_is_not_inside_the_namespace() -> None:
+    assert is_within_namespace("blobs/ab/x", "blobs") is True
+    assert is_within_namespace("blobs", "blobs") is True
+    assert is_within_namespace("blobs-other/ab/x", "blobs") is False
+    assert is_within_namespace("blobs/ab/x", "") is True  # root namespace owns everything
+    with pytest.raises(InvalidObjectKey):
+        resolve_namespace_prefix("blobs-other/ab/x", "blobs")
+    # The root namespace does not reject anything, including a leading segment.
+    assert resolve_namespace_prefix("anything/at/all", "") == "anything/at/all"
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["head", "exists", "open_bytes", "iter_chunks", "verify_bytes", "delete"],
+)
+def test_every_key_operation_refuses_a_foreign_key(store, operation, foreign_key) -> None:
+    """A foreign key is an error, never "absent" — silence would hide the mistake."""
+    with pytest.raises(InvalidObjectKey):
+        if operation == "iter_chunks":
+            list(store.iter_chunks(foreign_key))
+        else:
+            getattr(store, operation)(foreign_key)
+
+
+def test_open_bytes_does_not_swallow_a_foreign_key_as_not_found(store, foreign_key) -> None:
+    """`ObjectNotFound` for a foreign key would be a quiet cross-namespace probe."""
+    with pytest.raises(InvalidObjectKey):
+        store.open_bytes(foreign_key)
+
+
+def _seed_foreign_object(store, workspace, key: str, data: bytes) -> None:
+    """Write an object under a sibling namespace, bypassing the adapter on purpose."""
+    if isinstance(store, MemoryObjectStore):
+        store.objects[key] = (data, "")
+        return
+    path = workspace / key
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+def test_listing_excludes_a_sibling_namespace(store, tmp_path) -> None:
+    owned = store.put_stream(io.BytesIO(b"ours"), max_bytes=1024)
+    _seed_foreign_object(store, tmp_path / "objects", SIBLING_KEY, b"theirs")
+
+    listed = store.list_keys()
+    assert owned.key in listed
+    assert SIBLING_KEY not in listed, "a sibling namespace leaked into this store's listing"
+    assert all(is_within_namespace(key, store.namespace) for key in listed)
+
+
+def test_measurement_excludes_a_sibling_namespace(store, tmp_path) -> None:
+    store.put_stream(io.BytesIO(b"ours"), max_bytes=1024)
+    _seed_foreign_object(store, tmp_path / "objects", SIBLING_KEY, b"theirs-is-longer")
+
+    total, count = store.measure_namespace()
+    assert (total, count) == (4, 1), "capacity measurement counted a sibling namespace"
+
+
+def test_listed_keys_are_accepted_unchanged_by_every_operation(store) -> None:
+    """The absolute-key contract: what listing returns is what the API takes."""
+    for payload in (b"alpha", b"beta"):
+        store.put_stream(io.BytesIO(payload), max_bytes=1024)
+    for key in store.list_keys():
+        assert store.head(key) is not None
+        assert store.exists(key) is True
+        assert store.open_bytes(key) == b"".join(store.iter_chunks(key))
+        assert store.verify_bytes(key) is True
+
+
+# --------------------------------------------------------------------------- #
+# Local streaming and bounds (review round 2, finding B)
+#
+# "Bounded" is a claim about bytes actually read, so it is measured: a thin
+# delegating spy sits in front of the real WorkspaceFilesystem and counts what
+# the boundary handed out. The real filesystem, boundary checks and O_NOFOLLOW
+# path are still exercised — only the accounting is added.
+# --------------------------------------------------------------------------- #
+class _RecordingFilesystem:
+    """Delegates to the real boundary and records how much it released."""
+
+    def __init__(self, inner) -> None:  # noqa: ANN001 - structural delegate
+        self._inner = inner
+        self.bytes_yielded = 0
+        self.chunks = 0
+
+    def __getattr__(self, name: str):  # noqa: ANN401 - delegate everything else
+        return getattr(self._inner, name)
+
+    def iter_bytes(self, raw: str, *, chunk_size: int = 1 << 20) -> Iterator[bytes]:
+        for chunk in self._inner.iter_bytes(raw, chunk_size=chunk_size):
+            self.bytes_yielded += len(chunk)
+            self.chunks += 1
+            yield chunk
+
+
+def test_local_iter_chunks_does_not_read_ahead_of_the_consumer(tmp_path) -> None:
+    store = LocalObjectStore(tmp_path / "objects")
+    payload = b"x" * 4096
+    result = store.put_stream(io.BytesIO(payload), max_bytes=1 << 20)
+
+    recorder = _RecordingFilesystem(store._fs)
+    store._fs = recorder
+    iterator = store.iter_chunks(result.key, chunk_size=256)
+    try:
+        first = next(iterator)
+        second = next(iterator)
+        assert first + second == payload[:512]
+        assert recorder.chunks == 2, "iter_chunks read more chunks than the consumer asked for"
+        assert recorder.bytes_yielded <= 512, (
+            f"iter_chunks buffered {recorder.bytes_yielded} bytes before yielding 512"
+        )
+    finally:
+        iterator.close()
+
+
+def test_local_open_bytes_enforces_the_bound_while_reading(tmp_path) -> None:
+    store = LocalObjectStore(tmp_path / "objects")
+    payload = b"y" * (3 << 20)
+    result = store.put_stream(io.BytesIO(payload), max_bytes=1 << 20 * 8)
+
+    recorder = _RecordingFilesystem(store._fs)
+    store._fs = recorder
+    with pytest.raises(ObjectTooLarge):
+        store.open_bytes(result.key, max_bytes=100)
+    assert recorder.bytes_yielded < len(payload), (
+        "open_bytes read the whole object before enforcing max_bytes"
+    )
+
+
+def test_local_verify_bytes_streams_instead_of_buffering(tmp_path) -> None:
+    store = LocalObjectStore(tmp_path / "objects")
+    payload = b"v" * (3 << 20)
+    result = store.put_stream(io.BytesIO(payload), max_bytes=1 << 20 * 8)
+
+    recorder = _RecordingFilesystem(store._fs)
+    store._fs = recorder
+    assert store.verify_bytes(result.key) is True
+    assert recorder.chunks > 1, "verify_bytes did not stream the object"
+
+
+def test_local_full_iteration_verifies_but_a_partial_read_is_unverified(tmp_path) -> None:
+    """The contract says a verified *prefix* does not exist; this pins that behaviour."""
+    store = LocalObjectStore(tmp_path / "objects")
+    result = store.put_stream(io.BytesIO(b"z" * 1024), max_bytes=1 << 20)
+    store.blob_path(result.key).write_bytes(b"tampered")
+
+    iterator = store.iter_chunks(result.key, chunk_size=256)
+    assert next(iterator)  # bytes are served before the digest can be checked
+    with pytest.raises(IntegrityMismatch):
+        list(iterator)
+
+    with pytest.raises(IntegrityMismatch):
+        store.open_bytes(result.key)
+
+
+def test_local_head_and_blob_path_never_expose_the_staging_area(tmp_path) -> None:
+    """`staging/…` is a valid key shape in this workspace, and it is not ours."""
+    store = LocalObjectStore(tmp_path / "objects")
+    staging = tmp_path / "objects" / "staging" / "candidate"
+    staging.parent.mkdir(parents=True, exist_ok=True)
+    staging.write_bytes(b"another workspace file")
+
+    for call in (store.head, store.exists, store.blob_path, store.verify_bytes):
+        with pytest.raises(InvalidObjectKey):
+            call("staging/candidate")
+    with pytest.raises(InvalidObjectKey):
+        list(store.iter_chunks("staging/candidate"))
+
+
+def test_local_measurement_ignores_staging_and_siblings(tmp_path) -> None:
+    store = LocalObjectStore(tmp_path / "objects")
+    store.put_stream(io.BytesIO(b"ours"), max_bytes=1024)
+    staging = tmp_path / "objects" / "staging" / "leftover"
+    staging.write_bytes(b"not-an-object")
+    sibling = tmp_path / "objects" / "blobs-other" / "aa" / "x"
+    sibling.parent.mkdir(parents=True, exist_ok=True)
+    sibling.write_bytes(b"someone-else")
+
+    assert store.measure_namespace() == (4, 1)

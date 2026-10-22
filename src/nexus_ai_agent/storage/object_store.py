@@ -51,6 +51,26 @@ Key model — the ambiguity this contract removes
   namespace is the store's ``namespace``, never a hidden transform applied on
   the way in and forgotten on the way out.
 
+Namespace ownership — enforced, not assumed
+------------------------------------------
+The namespace boundary is a **path-segment** boundary: ``nagar/assets`` owns
+``nagar/assets/...`` but never ``nagar/assets-other/...``. A bare
+``str.startswith`` check cannot express that, so every adapter uses
+:func:`is_within_namespace` instead.
+
+Every operation that accepts a key (``head``, ``exists``, ``open_bytes``,
+``iter_chunks``, ``verify_bytes``, ``delete``) validates both the key *shape*
+and its namespace membership **before issuing any provider request**. A key
+outside the store's namespace raises :class:`InvalidObjectKey`; it is never
+reported as ``None``/absent, because "not found" would hide a caller that is
+addressing another tenant. ``list_keys`` and ``measure_namespace`` apply the
+same boundary to what the provider returns, so a namespace can neither read
+nor count its sibling's objects.
+
+An empty namespace (``""``) means "this store owns the whole key space" and is
+only legal where a backend says so explicitly; it is never the silent default
+for a shared bucket.
+
 Integrity model — what each operation actually guarantees
 ---------------------------------------------------------
 ``put_stream``
@@ -186,6 +206,47 @@ def content_key_for(sha256: str, *, prefix: str = "") -> str:
     if not prefix:
         return key
     return f"{validate_object_key(prefix)}/{key}"
+
+
+def content_digest_from_key(key: str) -> str | None:
+    """The SHA-256 a content-addressed key encodes, or ``None`` when it encodes none.
+
+    The key is the immutable half of the identity; the stored metadata digest is
+    the mutable half. Callers that compare against *only* one of the two accept a
+    tampered object, so adapters resolve both through this helper and refuse a
+    contradiction (see :func:`nexus.storage.neon_object_storage` ``_identity_digest``).
+    """
+    candidate = key.rsplit("/", 1)[-1]
+    return candidate if _SHA256.match(candidate) else None
+
+
+def is_within_namespace(key: str, namespace: str) -> bool:
+    """True iff ``key`` lies inside ``namespace`` at a path-segment boundary.
+
+    ``"nagar/assets-other/x"`` is **not** inside ``"nagar/assets"``. This is the
+    check a bare ``startswith`` gets wrong, and getting it wrong is how one
+    tenant's namespace exposes another tenant's objects.
+    """
+    if not namespace:
+        return True
+    return key == namespace or key.startswith(f"{namespace}/")
+
+
+def resolve_namespace_prefix(prefix: str, namespace: str) -> str:
+    """Resolve a caller's listing prefix against the store's namespace.
+
+    ``prefix`` defaults to the whole namespace. A prefix outside the namespace is
+    refused rather than translated or silently emptied, because an empty page
+    reads as "no assets" and hides the mistake.
+    """
+    effective = prefix or namespace
+    if effective:
+        validate_object_key(effective)
+    if not is_within_namespace(effective, namespace):
+        raise InvalidObjectKey(
+            f"prefix {effective!r} is outside this store's namespace {namespace!r}"
+        )
+    return effective
 
 
 def validate_object_key(key: str) -> str:
@@ -444,9 +505,26 @@ class ObjectStore(Protocol):
         """
         ...
 
-    def open_bytes(self, key: str, *, max_bytes: int | None = None) -> bytes: ...
+    def open_bytes(self, key: str, *, max_bytes: int | None = None) -> bytes:
+        """Return the whole object, refusing to buffer more than ``max_bytes``.
 
-    def iter_chunks(self, key: str, *, chunk_size: int = 1 << 20) -> Iterator[bytes]: ...
+        The bound must be enforced *while reading*, not after the object has
+        already been materialized: an adapter that reads first and checks second
+        has no bound at all.
+        """
+        ...
+
+    def iter_chunks(
+        self, key: str, *, chunk_size: int = 1 << 20, max_bytes: int | None = None
+    ) -> Iterator[bytes]:
+        """Yield the object chunk by chunk, hashing incrementally.
+
+        A consumer that iterates to completion gets :class:`IntegrityMismatch`
+        when the bytes do not match the identity the key encodes. A consumer that
+        stops early has consumed bytes that were not yet verified — the contract
+        never promises a verified prefix.
+        """
+        ...
 
     def head(self, key: str) -> ObjectMetadata | None:
         """Recorded metadata, or ``None`` when absent. This does not read bytes."""
@@ -455,12 +533,17 @@ class ObjectStore(Protocol):
     def exists(self, key: str) -> bool: ...
 
     def verify_bytes(self, key: str) -> bool:
-        """Re-read the object and compare its digest with the recorded one.
+        """Re-read the object and compare its digest with the identity it claims.
+
+        The identity is the digest encoded in the key **and** the digest recorded
+        in metadata; when both exist and disagree, the object has been modified
+        without changing its key and :class:`IntegrityMismatch` is raised.
 
         The only supported statement that the *stored bytes* are intact. Returns
-        ``False`` when the object exists but carries no recorded digest (the
-        comparison is impossible, so "verified" would be a guess) and raises
-        :class:`ObjectNotFound` when it does not exist.
+        ``False`` only when the object exists but carries no identity at all —
+        neither a content-addressed key nor a recorded digest — because then the
+        comparison is impossible and "verified" would be a guess. Raises
+        :class:`ObjectNotFound` when the object does not exist.
         """
         ...
 
@@ -471,7 +554,17 @@ class ObjectStore(Protocol):
 
         Every returned key starts with the effective prefix and is accepted by
         ``head``/``open_bytes``. Raises :class:`InvalidObjectKey` for a prefix
-        outside this store's ``namespace``.
+        outside this store's ``namespace``, and never returns a key from a
+        sibling namespace (``nagar/assets-other`` is not ``nagar/assets``).
+        """
+        ...
+
+    def measure_namespace(self) -> tuple[int, int]:
+        """Measure ``(bytes, objects)`` present under this store's namespace.
+
+        A listing-based measurement of *our* objects — not a quota, and never
+        added to another backend's numbers. Sibling namespaces are excluded by
+        the same segment boundary as every other operation.
         """
         ...
 

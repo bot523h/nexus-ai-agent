@@ -2180,6 +2180,22 @@ the proposal, not new decisions:
 3. **Environment sourcing is explicit.** The region is never taken from `AWS_REGION`; the endpoint is
    parsed by authority so look-alike hosts, embedded credentials, paths and non-443 ports are refused.
 
+**D-0030 amendment 2 (2026-10-22, PR #244 round-2 review).** Still **PROPOSED**. Three corrections:
+
+1. **Ownership is a segment boundary, not a string prefix.** `nagar/assets` does not own
+   `nagar/assets-other/…`. Every key operation now proves membership before any provider request (a
+   foreign key raises `InvalidObjectKey` instead of reading as "absent"), and `list_keys` /
+   `measure_namespace` exclude siblings *after* the provider returns them, because `list_objects_v2`
+   matches prefixes literally. One shared rule (`is_within_namespace`) serves both backends. A root
+   namespace (`""`) must be opted into explicitly; it is never inherited from a missing variable.
+2. **Local reads stream.** `iter_chunks` reads through the filesystem boundary chunk by chunk with an
+   incremental digest, and `open_bytes(max_bytes=…)` enforces its bound while reading. Previously both
+   materialized the whole object first, so the documented bound did not exist.
+3. **Two identities, not one.** `verify_bytes` compares against the digest encoded in the
+   content-addressed key *and* the recorded metadata, and raises `IntegrityMismatch` when they
+   disagree — so rewriting bytes and metadata together while keeping the key no longer passes. The
+   existing corruption tests (bytes changed, metadata untouched) are unchanged and still pass.
+
 Evidence: `tests/unit/test_object_store_contract.py` (47), `tests/unit/test_neon_object_storage.py`
 (48), `tests/architecture/test_storage_backend_boundary.py` (14). Still **no live provider round-trip**
 — BLOCKED on an operator-provisioned branch, bucket and scoped credential.

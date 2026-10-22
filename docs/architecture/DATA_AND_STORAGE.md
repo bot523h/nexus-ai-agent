@@ -168,6 +168,30 @@ same absolute keys, defaults to `namespace`, and **refuses** a prefix outside it
 keep a second invisible key space; the Neon bucket prefix is `namespace`, not a
 transform applied on the way in and forgotten on the way out.
 
+**Namespace ownership (enforced as of the #244 round-2 review).** The boundary is
+a **path segment** boundary, not a string prefix: `nagar/assets` owns
+`nagar/assets/…` but never `nagar/assets-other/…`. A bare `str.startswith` cannot
+express that, and `list_objects_v2` matches prefixes literally, so the provider
+happily returns a sibling's keys. Therefore:
+
+* every key-accepting operation (`head`, `exists`, `open_bytes`, `iter_chunks`,
+  `verify_bytes`, `delete`) validates shape **and** membership before issuing any
+  provider request — a foreign key raises `InvalidObjectKey`, never "not found",
+  because "absent" would hide a caller addressing another tenant;
+* `list_keys` and `measure_namespace` apply the same boundary to what the
+  provider returns, so a namespace can neither list nor count its sibling;
+* the rule lives once (`is_within_namespace` / `resolve_namespace_prefix`) and
+  both adapters import it, so the two backends cannot drift apart;
+* the local adapter enforces it too: `staging/…` is a valid key *shape* in the
+  same workspace and is not ours, so `head`/`blob_path` refuse it instead of
+  hashing another workspace file;
+* an empty namespace (`""`, whole key space) must be opted into explicitly
+  (`allow_root_namespace=True`) instead of being inherited from a missing
+  variable — a misconfigured prefix must not claim a shared bucket.
+
+Law S8 in `tests/architecture/test_storage_backend_boundary.py` keeps the rule
+shared; the adversarial sibling-prefix tests live in both unit suites.
+
 **Integrity model — narrowed to what is actually checked.** Metadata presence is
 **not** proof that the stored bytes were verified:
 
@@ -176,8 +200,27 @@ transform applied on the way in and forgotten on the way out.
 | `put_stream` (new object) | bytes hashed while reading; after upload the object's **size and recorded digest metadata** are re-read | **no** (`content_verified=False`) for Neon; the local adapter re-hashes on publish (`True`) |
 | `put_stream` (existing key) | metadata match ⇒ reuse (`created=False`) | **no** unless `verify_existing=True`, which re-reads and hashes and raises `IntegrityMismatch` on a mismatch |
 | `head` | recorded metadata | **no** |
-| `open_bytes` / `iter_chunks` | returned bytes hashed against the recorded digest | **yes** |
-| `verify_bytes` | full re-read + digest comparison; `False` when no digest was recorded | **yes** |
+| `open_bytes` / `iter_chunks` | returned bytes hashed against the digest the key encodes, and against recorded metadata when both exist | **yes** |
+| `verify_bytes` | full re-read + digest comparison; `False` only when *no* identity exists (neither a content-addressed key nor a recorded digest) | **yes** |
+
+**Two identities, not one (round 2).** A content-addressed key embeds the digest
+and is immutable; the metadata digest is rewritable by anyone with write access.
+Verifying against the metadata alone accepts an object whose **bytes and metadata
+were replaced together** while the key stayed the same — the exact gap closed
+here. The adapters resolve both through `content_digest_from_key` and, when the
+two disagree, raise `IntegrityMismatch` *before* streaming the object rather than
+picking a winner. Removing only the metadata does not disable verification: the
+key is still an identity.
+
+**Local streaming is real streaming (round 2).** `LocalObjectStore` no longer
+materializes an object to read it: `iter_chunks` reads through
+`WorkspaceFilesystem.iter_bytes` chunk by chunk and hashes incrementally, and
+`open_bytes(max_bytes=…)` enforces the bound *while* reading instead of after the
+whole file is in memory. Chunked reads use the same descriptor-relative,
+`O_NOFOLLOW` walk as `read_bytes`, so a streaming read is not a weaker boundary.
+A consumer that stops early has consumed unverified bytes — the contract has
+never claimed a verified prefix, and a full iteration still raises
+`IntegrityMismatch` on a mismatch.
 
 So a backend that records a digest and later serves corrupted bytes is caught at
 *read* time, not at `head` time; and `verify_existing=True` is how a dedupe is

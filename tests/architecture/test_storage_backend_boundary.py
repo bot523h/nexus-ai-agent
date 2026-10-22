@@ -218,3 +218,44 @@ def test_law_s7_region_is_never_sourced_from_generic_aws_environment() -> None:
         f"unexpected region sources: {sorted(region_aliases)}"
     )
     assert not any(name.startswith("AWS_") for name in region_aliases)
+
+
+# --------------------------------------------------------------------------- #
+# Law S8 — namespace ownership is one shared, segment-aware rule
+# Law S9 — local streaming lives inside the filesystem boundary
+# --------------------------------------------------------------------------- #
+def test_law_s8_namespace_boundary_is_defined_once_and_reused() -> None:
+    """A second ownership implementation is how sibling prefixes leak.
+
+    The boundary must be a path-segment test (``nagar/assets-other`` is not
+    ``nagar/assets``), defined once in the contract and imported by both
+    adapters. Re-deriving it per adapter is exactly the drift that let a
+    ``startswith`` check pass for an unrelated prefix while failing its sibling.
+    """
+    contract = CONTRACT.read_text(encoding="utf-8")
+    assert "def is_within_namespace" in contract
+    assert "def resolve_namespace_prefix" in contract
+
+    for path in (LOCAL, NEON):
+        source = path.read_text(encoding="utf-8")
+        assert "is_within_namespace" in source, f"{path.name} must use the shared boundary"
+        assert "resolve_namespace_prefix" in source, (
+            f"{path.name} must resolve listing prefixes through the contract"
+        )
+        # The broken idiom this round exists to remove.
+        assert 'startswith(f"{self.namespace}/")' not in source, path.name
+        assert 'startswith(f"{namespace}/")' not in source, path.name
+
+
+def test_law_s9_local_streaming_goes_through_the_filesystem_boundary() -> None:
+    """A chunked read must not become a second, weaker filesystem implementation."""
+    source = LOCAL.read_text(encoding="utf-8")
+    assert "_fs.iter_bytes(" in source, "local reads must stream through the boundary"
+    assert "os.open(" not in source, "opening descriptors here would bypass O_NOFOLLOW containment"
+    assert ".read_bytes()" not in source, "a whole-file read cannot enforce a streaming bound"
+
+
+def test_law_s9b_the_boundary_exposes_a_chunked_reader() -> None:
+    from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
+
+    assert callable(getattr(WorkspaceFilesystem, "iter_bytes", None))
