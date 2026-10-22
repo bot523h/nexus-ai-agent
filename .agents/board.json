@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-22T20:32:11Z",
+  "updated_at": "2026-10-22T21:22:20Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3911,7 +3911,7 @@
       "claimed_at": "2026-10-22T12:10:39Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "PR#244 round 2 (2026-10-22) closed three defects found in independent review, all verified on head 9bd1c69. (A) Namespace ownership was a string prefix, so 'nagar/assets' could see 'nagar/assets-other': ownership is now a path-segment rule defined once (is_within_namespace/resolve_namespace_prefix) and enforced on every key operation BEFORE any provider request, plus re-applied to list_keys/measure_namespace results (list_objects_v2 matches prefixes literally). The local adapter no longer exposes staging/… through head/blob_path. A root namespace needs explicit allow_root_namespace=True. (B) Local streaming was fake: iter_chunks materialized the object and open_bytes read everything before enforcing max_bytes. Both now stream through the boundary's new chunked reader (WorkspaceFilesystem.iter_bytes, same O_NOFOLLOW walk) with incremental hashing; the bound is enforced while reading. (C) verify_bytes compared only the metadata digest, so rewriting bytes AND metadata around an unchanged content-addressed key passed verification. It now resolves both identities and raises IntegrityMismatch before streaming when they disagree; the pre-existing byte-corruption tests are unchanged. LIMITATIONS: Neon live round-trip still BLOCKED (zero credentials in this environment — mocks are not live evidence); local delete stays UnsupportedOperation by design (shared content-addressed blobs); D-0030 remains PROPOSED. Referee: exit 2 repo-wide (mandatory gates_owner law on main — the PR#211 defect — and, without --repo, an unreadable open-PR source); with --repo: 28 sources read, exit 2 for the gates_owner law only. A local-only --no-remote check exits 0 and is explicitly NOT a global pass. Merge: BLOCKED on REVIEW_REQUIRED with 0 reviews; the sole collaborator is the owner, so an independent reviewer must be invited — this session cannot self-approve. | ARENA-B re-verification (independent of the previous session's report): live state re-read (main 04469ed unchanged, PR#244 head b7a57c0, PR#211 still OPEN/BLOCKED). Focused suite re-run on the pushed source: 212 passed; architecture 266; docs/truth 106; ruff/format/mypy clean. Full-unit comparison made by EXACT failing-test-ID set (not counts) between head b7a57c0 and base 04469ed: both 186 IDs, comm both directions empty -> IDENTICAL sets, 0 new failures, +163 passing tests. Referee exit 2 with 28 sources read (mandatory gates_owner law on main) — NOT reinterpreted as a pass. NO MERGE: PR#211 governance dependency unmerged, zero human reviews, single collaborator. Honest nuance on the read bound: it is enforced at chunk granularity, so a 100-byte bound rejects after one 1 MiB chunk is read, not byte-exactly.",
+      "note": "PR#244 round 2 (2026-10-22) closed three defects found in independent review, all verified on head 9bd1c69. (A) Namespace ownership was a string prefix, so 'nagar/assets' could see 'nagar/assets-other': ownership is now a path-segment rule defined once (is_within_namespace/resolve_namespace_prefix) and enforced on every key operation BEFORE any provider request, plus re-applied to list_keys/measure_namespace results (list_objects_v2 matches prefixes literally). The local adapter no longer exposes staging/… through head/blob_path. A root namespace needs explicit allow_root_namespace=True. (B) Local streaming was fake: iter_chunks materialized the object and open_bytes read everything before enforcing max_bytes. Both now stream through the boundary's new chunked reader (WorkspaceFilesystem.iter_bytes, same O_NOFOLLOW walk) with incremental hashing; the bound is enforced while reading. (C) verify_bytes compared only the metadata digest, so rewriting bytes AND metadata around an unchanged content-addressed key passed verification. It now resolves both identities and raises IntegrityMismatch before streaming when they disagree; the pre-existing byte-corruption tests are unchanged. LIMITATIONS: Neon live round-trip still BLOCKED (zero credentials in this environment — mocks are not live evidence); local delete stays UnsupportedOperation by design (shared content-addressed blobs); D-0030 remains PROPOSED. Referee: exit 2 repo-wide (mandatory gates_owner law on main — the PR#211 defect — and, without --repo, an unreadable open-PR source); with --repo: 28 sources read, exit 2 for the gates_owner law only. A local-only --no-remote check exits 0 and is explicitly NOT a global pass. Merge: BLOCKED on REVIEW_REQUIRED with 0 reviews; the sole collaborator is the owner, so an independent reviewer must be invited — this session cannot self-approve. | ARENA-B re-verification (independent of the previous session's report): live state re-read (main 04469ed unchanged, PR#244 head b7a57c0, PR#211 still OPEN/BLOCKED). Focused suite re-run on the pushed source: 212 passed; architecture 266; docs/truth 106; ruff/format/mypy clean. Full-unit comparison made by EXACT failing-test-ID set (not counts) between head b7a57c0 and base 04469ed: both 186 IDs, comm both directions empty -> IDENTICAL sets, 0 new failures, +163 passing tests. Referee exit 2 with 28 sources read (mandatory gates_owner law on main) — NOT reinterpreted as a pass. NO MERGE: PR#211 governance dependency unmerged, zero human reviews, single collaborator. Honest nuance on the read bound: it is enforced at chunk granularity, so a 100-byte bound rejects after one 1 MiB chunk is read, not byte-exactly. | POST-GOVERNANCE REFRESH: PR#211 merged (main d7bbd14); branch merged main normally (8028966, no rebase/force-push) and the board was reconciled deliberately — Option B policy from main, all 102 main claims kept, only the evidenced expired-lease GC transition applied, branch claims preserved (272/275 still active_in_review, 273/274 still queued). Verification on the refreshed head: 212 focused storage, 153 boundary/security, 266 architecture, 106 docs/truth, 136 board laws; full-unit failed AND errored ID sets identical to base d7bbd14 (186 + 11), +163 passing. Referee now exits 0 on this branch (28 sources); on main 0/1/2 all reproduce correctly. Neon live round-trip still BLOCKED. Merge still requires an independent human review, which remains unavailable.",
       "generation": 1,
       "delivered": [
         "src/nexus_ai_agent/storage/object_store.py (contract: namespace ownership law, is_within_namespace, resolve_namespace_prefix, content_digest_from_key, measure_namespace)",
@@ -3963,6 +3963,33 @@
           "governance_dependency": "PR #211 OPEN, mergeStateStatus BLOCKED, REVIEW_REQUIRED — governance chain not closed; merge of #244 withheld",
           "review": "0 human reviews; collaborators=[bot523h]; review request 422 (author)",
           "live_provider_evidence": "NONE — Neon round-trip still BLOCKED (no credential in this environment)"
+        },
+        "post_governance_refresh": {
+          "date": "2026-10-22T21:22:20Z",
+          "governance_dependency": "CLOSED — PR #211 merged 2026-10-22T20:22:31Z as d7bbd147a0135e581012a9a819b748e8469f588c",
+          "main_sha_at_refresh": "d7bbd147a0135e581012a9a819b748e8469f588c",
+          "merge_commit": "80289664c934e70bba294caa41fa067c84b4f241 (parents 06e7566 + d7bbd14)",
+          "head_verified": "8028966",
+          "ci_runs": [
+            "39848293611 — post-#211 main CI on d7bbd14: success 20/20",
+            "39852979896 — PR#244 refreshed head 8028966: success 20/20"
+          ],
+          "local_commands": [
+            "focused storage suite -> 212 passed",
+            "filesystem boundary + security -> 153 passed",
+            "tests/architecture -> 266 passed",
+            "docs integrity + truth doctor -> 106 passed",
+            "board/authority/integrity/mutation tests -> 136 passed",
+            "board integrity gate -> OK (329868 bytes)",
+            "ruff check / ruff format --check / mypy -> clean / clean / Success",
+            "full unit lane vs NEW base d7bbd14 -> head 186 failed + 11 errors / base 186 failed + 11 errors",
+            "failed-ID diff: empty both directions (identical); errored-ID diff: empty both directions (identical); +163 passing (3674 vs 3511)"
+          ],
+          "referee": "EXIT 0 on the refreshed branch: 28 sources read, 'gates_owner (advisory): none — no mandatory global gates owner'. On merged main: exit 0 on an unclaimed file, exit 1 on a proven real overlap (task-272 vs src/nexus_ai_agent/storage/object_store.py), exit 2 on an unreadable required source. The old repo-wide exit 2 caused by the mandatory gates_owner is gone.",
+          "board_reconciliation": "102 canonical main claims preserved (one evidenced lease-GC transition only); 4 branch claims preserved; 0 duplicates; 68 main zones byte-identical; both policy fields Option B.",
+          "live_provider_evidence": "NONE — Neon round-trip remains BLOCKED (no operator-provisioned bucket/credentials)",
+          "review": "0 human reviews, 0 review requests; collaborators = [bot523h] (PR author) — cannot request review from the author",
+          "ref_retirement": "DEFERRED — refs/nexus/board untouched at d919635dfa3d4eed038bcdb57e42c76879243fb5"
         }
       }
     },
@@ -4065,7 +4092,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
-      "note": "Delivered as PR#244 round-2 prerequisite and verified on head 9bd1c69: WorkspaceFilesystem.iter_bytes yields bounded chunks with the same validated parent walk + O_NOFOLLOW leaf open as read_bytes, closes the descriptor on early abandonment, and rejects symlink leaves, directories, missing files and non-positive chunk sizes. No existing primitive changed; the boundary, staging, sandbox and asset-library filesystem-security suites stay green (153 + 12 passed).",
+      "note": "Delivered as PR#244 round-2 prerequisite and verified on head 9bd1c69: WorkspaceFilesystem.iter_bytes yields bounded chunks with the same validated parent walk + O_NOFOLLOW leaf open as read_bytes, closes the descriptor on early abandonment, and rejects symlink leaves, directories, missing files and non-positive chunk sizes. No existing primitive changed; the boundary, staging, sandbox and asset-library filesystem-security suites stay green (153 + 12 passed). | POST-GOVERNANCE REFRESH: PR#211 merged (main d7bbd14); branch merged main normally (8028966, no rebase/force-push) and the board was reconciled deliberately — Option B policy from main, all 102 main claims kept, only the evidenced expired-lease GC transition applied, branch claims preserved (272/275 still active_in_review, 273/274 still queued). Verification on the refreshed head: 212 focused storage, 153 boundary/security, 266 architecture, 106 docs/truth, 136 board laws; full-unit failed AND errored ID sets identical to base d7bbd14 (186 + 11), +163 passing. Referee now exits 0 on this branch (28 sources); on main 0/1/2 all reproduce correctly. Neon live round-trip still BLOCKED. Merge still requires an independent human review, which remains unavailable.",
       "evidence": {
         "pr": "https://github.com/bot523h/nexus-ai-agent/pull/244",
         "pr_head_tested": "9bd1c69d7f2abc0298e9885b95b9b74fc84c8a6f",
@@ -4075,7 +4102,34 @@
           "pytest tests/unit/test_asset_library_blob_store.py tests/unit/test_filesystem_boundary.py tests/unit/test_execution_staging.py tests/unit/test_shell_sandbox.py tests/architecture/test_execution_boundary_enforcement.py -q → 153 passed",
           "pytest tests/integration/test_asset_library_filesystem_security.py -q → 12 passed",
           "ruff + ruff format + mypy on filesystem_policy.py → clean"
-        ]
+        ],
+        "post_governance_refresh": {
+          "date": "2026-10-22T21:22:20Z",
+          "governance_dependency": "CLOSED — PR #211 merged 2026-10-22T20:22:31Z as d7bbd147a0135e581012a9a819b748e8469f588c",
+          "main_sha_at_refresh": "d7bbd147a0135e581012a9a819b748e8469f588c",
+          "merge_commit": "80289664c934e70bba294caa41fa067c84b4f241 (parents 06e7566 + d7bbd14)",
+          "head_verified": "8028966",
+          "ci_runs": [
+            "39848293611 — post-#211 main CI on d7bbd14: success 20/20",
+            "39852979896 — PR#244 refreshed head 8028966: success 20/20"
+          ],
+          "local_commands": [
+            "focused storage suite -> 212 passed",
+            "filesystem boundary + security -> 153 passed",
+            "tests/architecture -> 266 passed",
+            "docs integrity + truth doctor -> 106 passed",
+            "board/authority/integrity/mutation tests -> 136 passed",
+            "board integrity gate -> OK (329868 bytes)",
+            "ruff check / ruff format --check / mypy -> clean / clean / Success",
+            "full unit lane vs NEW base d7bbd14 -> head 186 failed + 11 errors / base 186 failed + 11 errors",
+            "failed-ID diff: empty both directions (identical); errored-ID diff: empty both directions (identical); +163 passing (3674 vs 3511)"
+          ],
+          "referee": "EXIT 0 on the refreshed branch: 28 sources read, 'gates_owner (advisory): none — no mandatory global gates owner'. On merged main: exit 0 on an unclaimed file, exit 1 on a proven real overlap (task-272 vs src/nexus_ai_agent/storage/object_store.py), exit 2 on an unreadable required source. The old repo-wide exit 2 caused by the mandatory gates_owner is gone.",
+          "board_reconciliation": "102 canonical main claims preserved (one evidenced lease-GC transition only); 4 branch claims preserved; 0 duplicates; 68 main zones byte-identical; both policy fields Option B.",
+          "live_provider_evidence": "NONE — Neon round-trip remains BLOCKED (no operator-provisioned bucket/credentials)",
+          "review": "0 human reviews, 0 review requests; collaborators = [bot523h] (PR author) — cannot request review from the author",
+          "ref_retirement": "DEFERRED — refs/nexus/board untouched at d919635dfa3d4eed038bcdb57e42c76879243fb5"
+        }
       }
     }
   ],
