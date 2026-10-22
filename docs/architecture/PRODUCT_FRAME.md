@@ -13,8 +13,8 @@ NEXUS is a **web/mobile application with a living core** (persistent identity, m
 
 1. **Say "channel", not "the bot".** Features are written as core capabilities behind the command bus and policy; a channel only presents them and relays input.
 2. **The core never imports `telegram`.** Framework imports stay at the edge (this is already the frozen-baseline rule in `tests/architecture/test_import_boundaries.py`); the baseline may only shrink.
-3. **Canonical identity is a `Principal`, not a Telegram id.** A Telegram `chat_id` / `telegram_user_id` is a *binding* of a channel to a principal. New code must not take a Telegram id as its identity parameter.
-4. **A new capability is incomplete until it is reachable without Telegram** (through the application API or the CLI). Telegram handlers are thin adapters.
+3. **Canonical identity is a `Principal`, not a Telegram id (target; lands with F1).** Today, before F1 is accepted and merged, identity is still the Telegram id and no `Principal` type exists on `main`; code written now follows the existing contract and must not widen Telegram-id coupling beyond what it already has. Once F1 lands, a Telegram `chat_id` / `telegram_user_id` is only a *binding* of a channel to a principal, and new code must not take a Telegram id as its identity parameter.
+4. **A new capability is incomplete until it is reachable without Telegram** (through the application API or the CLI). Telegram handlers are thin adapters. *Enforcement: pending.* No test checks this yet, so reviewers must check it by hand until a gate exists (planned with F1/F2); it is a review requirement, not a machine-enforced one.
 5. **Do not rewrite working Telegram behaviour to prove a point.** Migration is by characterization test first, then extraction behind a port (§4). No big-bang rewrite, no new service split (the modular-monolith constraint in [OVERVIEW.md](OVERVIEW.md) §4 still holds).
 6. **Honest claims.** Nothing in product text says the system is conscious or has feelings; "living" means persistent, self-measuring and self-verifying (roadmap §1).
 
