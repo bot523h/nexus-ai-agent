@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-22T00:00:00Z",
+  "updated_at": "2026-10-22T16:32:07Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3911,7 +3911,7 @@
       "claimed_at": "2026-10-22T12:10:39Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "PR#244 round 2 (2026-10-22) closed three defects found in independent review, all verified on head 9bd1c69. (A) Namespace ownership was a string prefix, so 'nagar/assets' could see 'nagar/assets-other': ownership is now a path-segment rule defined once (is_within_namespace/resolve_namespace_prefix) and enforced on every key operation BEFORE any provider request, plus re-applied to list_keys/measure_namespace results (list_objects_v2 matches prefixes literally). The local adapter no longer exposes staging/… through head/blob_path. A root namespace needs explicit allow_root_namespace=True. (B) Local streaming was fake: iter_chunks materialized the object and open_bytes read everything before enforcing max_bytes. Both now stream through the boundary's new chunked reader (WorkspaceFilesystem.iter_bytes, same O_NOFOLLOW walk) with incremental hashing; the bound is enforced while reading. (C) verify_bytes compared only the metadata digest, so rewriting bytes AND metadata around an unchanged content-addressed key passed verification. It now resolves both identities and raises IntegrityMismatch before streaming when they disagree; the pre-existing byte-corruption tests are unchanged. LIMITATIONS: Neon live round-trip still BLOCKED (zero credentials in this environment — mocks are not live evidence); local delete stays UnsupportedOperation by design (shared content-addressed blobs); D-0030 remains PROPOSED. Referee: exit 2 repo-wide (mandatory gates_owner law on main — the PR#211 defect — and, without --repo, an unreadable open-PR source); with --repo: 28 sources read, exit 2 for the gates_owner law only. A local-only --no-remote check exits 0 and is explicitly NOT a global pass. Merge: BLOCKED on REVIEW_REQUIRED with 0 reviews; the sole collaborator is the owner, so an independent reviewer must be invited — this session cannot self-approve.",
+      "note": "PR#244 round 2 (2026-10-22) closed three defects found in independent review, all verified on head 9bd1c69. (A) Namespace ownership was a string prefix, so 'nagar/assets' could see 'nagar/assets-other': ownership is now a path-segment rule defined once (is_within_namespace/resolve_namespace_prefix) and enforced on every key operation BEFORE any provider request, plus re-applied to list_keys/measure_namespace results (list_objects_v2 matches prefixes literally). The local adapter no longer exposes staging/… through head/blob_path. A root namespace needs explicit allow_root_namespace=True. (B) Local streaming was fake: iter_chunks materialized the object and open_bytes read everything before enforcing max_bytes. Both now stream through the boundary's new chunked reader (WorkspaceFilesystem.iter_bytes, same O_NOFOLLOW walk) with incremental hashing; the bound is enforced while reading. (C) verify_bytes compared only the metadata digest, so rewriting bytes AND metadata around an unchanged content-addressed key passed verification. It now resolves both identities and raises IntegrityMismatch before streaming when they disagree; the pre-existing byte-corruption tests are unchanged. LIMITATIONS: Neon live round-trip still BLOCKED (zero credentials in this environment — mocks are not live evidence); local delete stays UnsupportedOperation by design (shared content-addressed blobs); D-0030 remains PROPOSED. Referee: exit 2 repo-wide (mandatory gates_owner law on main — the PR#211 defect — and, without --repo, an unreadable open-PR source); with --repo: 28 sources read, exit 2 for the gates_owner law only. A local-only --no-remote check exits 0 and is explicitly NOT a global pass. Merge: BLOCKED on REVIEW_REQUIRED with 0 reviews; the sole collaborator is the owner, so an independent reviewer must be invited — this session cannot self-approve. | ARENA-B re-verification (independent of the previous session's report): live state re-read (main 04469ed unchanged, PR#244 head b7a57c0, PR#211 still OPEN/BLOCKED). Focused suite re-run on the pushed source: 212 passed; architecture 266; docs/truth 106; ruff/format/mypy clean. Full-unit comparison made by EXACT failing-test-ID set (not counts) between head b7a57c0 and base 04469ed: both 186 IDs, comm both directions empty -> IDENTICAL sets, 0 new failures, +163 passing tests. Referee exit 2 with 28 sources read (mandatory gates_owner law on main) — NOT reinterpreted as a pass. NO MERGE: PR#211 governance dependency unmerged, zero human reviews, single collaborator. Honest nuance on the read bound: it is enforced at chunk granularity, so a 100-byte bound rejects after one 1 MiB chunk is read, not byte-exactly.",
       "generation": 1,
       "delivered": [
         "src/nexus_ai_agent/storage/object_store.py (contract: namespace ownership law, is_within_namespace, resolve_namespace_prefix, content_digest_from_key, measure_namespace)",
@@ -3941,7 +3941,29 @@
         ],
         "referee": "exit 2 (mandatory gates_owner on main; and open-PR source unreadable without --repo). With --repo: 28 sources, exit 2 for the gates_owner law only. Local --no-remote: exit 0, explicitly local-only.",
         "live_provider_evidence": "NONE — Neon round-trip BLOCKED (no credential/bucket in this environment)",
-        "review_state": "REVIEW_REQUIRED; 0 human reviews; automated CodeRabbit review on an older commit only; sole collaborator is the owner"
+        "review_state": "REVIEW_REQUIRED; 0 human reviews; automated CodeRabbit review on an older commit only; sole collaborator is the owner",
+        "arena_b_reverification": {
+          "date": "2026-10-22T16:32:07Z",
+          "head_verified": "b7a57c0cc2f93aa37603a14de4a8e8c1c1dff6da",
+          "base_verified": "04469ed0f46fdc66752cdea36d25ce2145db3f1e",
+          "ci_runs_on_head": [
+            "https://github.com/bot523h/nexus-ai-agent/actions/runs/39776244664 (success, 20/20)",
+            "https://github.com/bot523h/nexus-ai-agent/actions/runs/39780481477 (success, 20/20)"
+          ],
+          "local_commands": [
+            "focused storage suite -> 212 passed",
+            "tests/architecture -> 266 passed",
+            "docs integrity + truth doctor -> 106 passed",
+            "full unit (minus live-PG/fingerprint) -> 186 failed / 3617 passed / 11 errors",
+            "exact failing-ID diff vs base 04469ed -> 186 vs 186, empty both directions, +163 passed",
+            "ruff check / ruff format --check / mypy -> clean / clean / Success",
+            "old-vs-new probe: sibling leak True->False, measure (23,2)->(3,1), joint rewrite True->IntegrityMismatch, staging head metadata->InvalidObjectKey, iter_chunks 4096B->256B before first yield, open_bytes 3145728B->1048576B"
+          ],
+          "referee": "exit 2, 28 sources read, mandatory gates_owner law on main",
+          "governance_dependency": "PR #211 OPEN, mergeStateStatus BLOCKED, REVIEW_REQUIRED — governance chain not closed; merge of #244 withheld",
+          "review": "0 human reviews; collaborators=[bot523h]; review request 422 (author)",
+          "live_provider_evidence": "NONE — Neon round-trip still BLOCKED (no credential in this environment)"
+        }
       }
     },
     {
