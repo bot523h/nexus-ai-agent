@@ -56,6 +56,15 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("NEXUS_AUTO_UPDATE", "AUTO_UPDATE"),
     )
+    self_vitals_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("NEXUS_SELF_VITALS_ENABLED", "SELF_VITALS_ENABLED"),
+    )
+    self_vitals_period_s: float = Field(
+        default=60.0,
+        ge=5.0,
+        validation_alias=AliasChoices("NEXUS_SELF_VITALS_PERIOD_S", "SELF_VITALS_PERIOD_S"),
+    )
     allowed_user_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list,
         validation_alias=AliasChoices("NEXUS_ALLOWED_USER_IDS", "ALLOWED_USER_IDS"),
