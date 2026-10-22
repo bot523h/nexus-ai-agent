@@ -2103,3 +2103,63 @@ outside CI — a silent skip is not coverage, which is why a unit test pins the 
 workflow; (c) creating a per-run database — `CREATE DATABASE` is not granted on every hosted
 PostgreSQL (notably Neon), so it would have traded a data-safety guarantee for a
 coverage gap on exactly the deployments the test exists to protect.
+
+### D-0030 — Storage has three products, capacity is a typed claim with a source, and a second storage seam is allowed only because neither existing one can carry a user asset (task-272, **PROPOSED**)
+
+**Status: PROPOSED — not accepted.** This entry records an implemented and tested *adapter and
+contract* plus the design direction behind them. The direction itself awaits owner review; per
+`AGENTS.md` §7 a proposal is not an accepted decision, and no later wave may cite it as authority
+until it is accepted.
+
+**Context.** A source audit of `main` @ `04469ed` found: the Asset Library's blob store is a local
+content-addressed directory with no cloud backend wired to it; Cloudflare R2 exists but is the
+*maintenance* tier (database backups, heavy RAG documents) and is deliberately outside the user-file
+path; `storage/unified_cloud.py` models Dropbox, pCloud and Internxt with **static environment
+tokens** and publishes a `TOTAL_FREE_GB` that sums advertised free plans; pCloud/Internxt `get_usage`
+return a hard-coded allocation with `used_bytes: 0`; Google Drive is reachable only through a
+pre-configured `rclone` remote; OneDrive is absent; and no Neon Object Storage code existed although
+Neon PostgreSQL is a supported database backend.
+
+**Decision (four parts).**
+
+1. **Three products, three boundaries.** (A) *Storage backends* for files Nagar owns; (B)
+   *user-authorized drive connectors* for accounts the user connects (per-user OAuth, durable
+   ownership, least-privilege scopes); (C) *user-installable capability extensions*. An OAuth
+   connection grants no right to execute third-party code, and no layer may be described using
+   another layer's evidence. Recorded in `architecture/DATA_AND_STORAGE.md` §7.
+2. **A new seam, justified rather than convenient.** `storage/object_store.py` is the typed contract
+   for immutable content-addressed blobs. The two existing seams cannot carry it:
+   `StorageProvider` is path-based with no checksum/idempotency/capacity semantics, and
+   `BlobStore` is a filesystem *staging* contract. Neither existing seam is replaced or rewired:
+   R2 keeps its backup/RAG routing, and the Asset Library keeps its staging path until an explicit
+   composition step exists (law R22 keeps that one-way).
+3. **Capacity is a typed claim.** `CapacityReport` requires a source and an aware timestamp, and
+   distinguishes `AUTHORITATIVE` / `ADVERTISED` / `UNKNOWN`; only authoritative quota+usage yields
+   `verified_remaining_bytes`; an `UNKNOWN` report cannot carry numbers; unique and replicated bytes
+   are separate fields; deletion is not reclamation where the provider soft-deletes (Neon does).
+   This supersedes the "sum of free tiers" model in `storage/unified_cloud.py` **for the user-asset
+   path only** — that module's legacy behaviour is left untouched in this wave so existing
+   deployments do not change silently.
+4. **Neon Object Storage is a backend, verified from its documentation before implementation.** The
+   adapter targets the documented branch endpoint (`https://br-….storage.c-<N>.<region>.aws.neon.tech`),
+   path-style + SigV4, lazy `boto3`, bounded retry, typed non-retry of authorization failures, and
+   soft-delete-aware accounting. It is **feature-gated**: an incomplete environment returns `None`
+   and the local backend remains the default.
+
+**Evidence.** `tests/unit/test_object_store_contract.py` (33 tests over two independent
+implementations), `tests/unit/test_neon_object_storage.py` (29 tests against an injected fake S3
+client), `tests/architecture/test_storage_backend_boundary.py` (10 laws). Live provider round-trip:
+**BLOCKED** — no Neon Object Storage credential exists in the implementation environment; mocks are
+not live evidence. `docs/architecture/DATA_AND_STORAGE.md` §7.3 is the operative policy text.
+
+**Rejected.** (a) Reusing `unified_cloud` as the user-asset path — its routing is round-robin over
+static tokens and its capacity numbers are advertised, not measured; (b) implementing the four drive
+connectors as S3 buckets — they are OAuth'd user accounts with per-provider quota and error
+semantics; (c) reporting a single "total available" across backends — that is the exact arithmetic
+that produced the previous fiction; (d) making Neon the default backend before a live round-trip —
+an unverified default is an outage waiting for a deploy; (e) replacing the Principal model with Neon
+Auth because storage is Neon-hosted — identity and storage are independent products.
+
+**Limits.** No per-user OAuth connector, no quota API integration, no placement/fallback engine, no
+R2 user-asset wiring, no UI, no installable extension runtime. Those are Waves 2–6 in
+`architecture/DATA_AND_STORAGE.md` §7.7, each with its own claim.

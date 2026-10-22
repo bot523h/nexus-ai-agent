@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-22T05:38:32Z",
+  "updated_at": "2026-10-22T05:43:13Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -865,7 +865,8 @@
         "docs/architecture/DATA_AND_STORAGE.md",
         "docs/architecture/MODULE_MAP.md",
         "docs/DECISION_LOG.md",
-        "docs/architecture/STORAGE_AND_CONNECTORS.md"
+        "docs/architecture/STORAGE_AND_CONNECTORS.md",
+        ".env.example"
       ]
     }
   ],
@@ -3872,7 +3873,8 @@
         "The local content-addressed blob store satisfies the same contract test suite (CHECKSUM, dedupe, oversize, missing object, tamper detection).",
         "No secret (access key, secret key, token) appears in repr, exception text or log fields; proven by test.",
         "Soft-delete semantics of the provider are declared in capabilities and never reported as reclaimed capacity.",
-        "DATA_AND_STORAGE.md documents the three layers (backends / user-authorized drive connectors / user-installable extensions), the capacity truth policy, and the wave roadmap; MODULE_MAP.md §3 names the enforcing test; DECISION_LOG.md carries the decision as PROPOSED (not accepted)."
+        "DATA_AND_STORAGE.md documents the three layers (backends / user-authorized drive connectors / user-installable extensions), the capacity truth policy, and the wave roadmap; MODULE_MAP.md §3 names the enforcing test; DECISION_LOG.md carries the decision as PROPOSED (not accepted).",
+        "The new credential variables are documented as a commented, empty block in .env.example so an operator can discover the feature without reading source."
       ],
       "evidence_required": [
         "pytest tests/unit/test_object_store_contract.py tests/unit/test_neon_object_storage.py tests/architecture/test_storage_backend_boundary.py -q (exact output)",
@@ -3891,11 +3893,12 @@
         "docs/architecture/DATA_AND_STORAGE.md",
         "docs/architecture/MODULE_MAP.md",
         "docs/DECISION_LOG.md",
-        "docs/architecture/STORAGE_AND_CONNECTORS.md"
+        "docs/architecture/STORAGE_AND_CONNECTORS.md",
+        ".env.example"
       ],
       "owner_hint": "",
       "agent_branch": "arena/edeae323-nexus-ai-agent",
-      "claimed_at": "2026-10-22T05:38:32Z",
+      "claimed_at": "2026-10-22T05:43:13Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
