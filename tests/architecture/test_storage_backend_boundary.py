@@ -161,3 +161,60 @@ def test_both_backends_satisfy_the_contract_protocol(tmp_path) -> None:
 @pytest.mark.parametrize("path", NEW_MODULES, ids=lambda p: p.name)
 def test_new_modules_declare_a_docstring(path: Path) -> None:
     assert ast.get_docstring(_tree(path)), f"{path.name} has no module docstring"
+
+
+# --------------------------------------------------------------------------- #
+# Law S6/S7 — the contract's key model and integrity claim are not conventions
+# --------------------------------------------------------------------------- #
+def _object_store_implementations() -> list[type]:
+    from nexus_ai_agent.storage.local_object_store import LocalObjectStore as _Local
+    from nexus_ai_agent.storage.neon_object_storage import NeonObjectStorage as _Neon
+
+    return [_Local, _Neon]
+
+
+@pytest.mark.parametrize("cls", _object_store_implementations(), ids=lambda c: c.__name__)
+def test_law_s6_every_backend_declares_namespace_and_byte_verification(cls) -> None:
+    """A backend without these two cannot honour the key/integrity model."""
+    assert isinstance(cls.namespace, property), (
+        f"{cls.__name__} must expose `namespace` as a property (the store's root prefix)"
+    )
+    assert callable(getattr(cls, "verify_bytes", None)), (
+        f"{cls.__name__} must implement verify_bytes(): metadata presence is not verification"
+    )
+
+
+def test_law_s6b_no_backend_documents_head_as_verification() -> None:
+    """The claim wording itself is checked, because the earlier defect was a doc claim."""
+    problems: list[str] = []
+    for path in (CONTRACT, LOCAL, NEON):
+        text = path.read_text(encoding="utf-8").lower()
+        for phrase in ("head verifies", "head() verifies", "verified by head"):
+            if phrase in text:
+                problems.append(f"{path.name}: {phrase!r}")
+    assert not problems, "head() reports metadata; it does not verify stored bytes"
+
+
+def test_law_s7_region_is_never_sourced_from_generic_aws_environment() -> None:
+    """Credential aliases may exist; the branch region must be explicit."""
+    import ast as _ast
+
+    tree = _ast.parse(NEON.read_text(encoding="utf-8"), filename=str(NEON))
+    region_aliases: set[str] = set()
+    for node in _ast.walk(tree):
+        # the _ENV mapping is the single source of accepted variable names
+        if isinstance(node, _ast.Assign) and any(
+            isinstance(target, _ast.Name) and target.id == "_ENV" for target in node.targets
+        ):
+            mapping = node.value
+            for key_node, value_node in zip(mapping.keys, mapping.values, strict=True):
+                if getattr(key_node, "value", None) == "region":
+                    region_aliases.update(
+                        element.value
+                        for element in value_node.elts
+                        if isinstance(element, _ast.Constant)
+                    )
+    assert region_aliases == {"NEXUS_NEON_STORAGE_REGION"}, (
+        f"unexpected region sources: {sorted(region_aliases)}"
+    )
+    assert not any(name.startswith("AWS_") for name in region_aliases)

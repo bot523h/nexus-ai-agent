@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from nexus_ai_agent.storage.neon_object_storage import (
+    DEFAULT_PREFIX,
     META_SHA256,
     NeonObjectStorage,
     NeonStorageConfig,
@@ -30,6 +31,7 @@ from nexus_ai_agent.storage.object_store import (
     BackendNotConfigured,
     CapacityKind,
     IntegrityMismatch,
+    InvalidObjectKey,
     ObjectConflict,
     ObjectNotFound,
     ObjectStoreError,
@@ -156,6 +158,11 @@ class FakeS3:
         self._maybe_fail()
         return {}
 
+    # -- test helpers ------------------------------------------------------- #
+    def corrupt_bytes(self, key: str, data: bytes) -> None:
+        """Replace the stored payload, leaving metadata (incl. sha256) untouched."""
+        self.objects[key]["Body"] = data
+
 
 def make_store(**overrides: Any) -> tuple[NeonObjectStorage, FakeS3]:
     client = FakeS3()
@@ -201,42 +208,60 @@ def test_a_host_aws_configuration_cannot_capture_nagar_files() -> None:
     }
     assert build_neon_object_store(host_only) is None
 
-    neon_aliases = {
+
+def test_aws_aliases_need_an_explicit_neon_region_and_never_borrow_aws_region() -> None:
+    """Credential/endpoint aliases are allowed; the *region* is never an AWS guess."""
+    aliases_without_region = {
         "AWS_ENDPOINT_URL_S3": ENDPOINT,
-        "AWS_REGION": "us-east-2",
+        "AWS_REGION": "us-east-1",
         "AWS_ACCESS_KEY_ID": "aws-key",
         "AWS_SECRET_ACCESS_KEY": "aws-secret",
         "NEXUS_NEON_STORAGE_BUCKET": "nagar-assets",
     }
-    store = build_neon_object_store(neon_aliases)
+    assert build_neon_object_store(aliases_without_region) is None, (
+        "AWS_REGION must not silently become the Neon branch region"
+    )
+
+    aliases_with_region = dict(aliases_without_region)
+    aliases_with_region["NEXUS_NEON_STORAGE_REGION"] = "us-east-2"
+    store = build_neon_object_store(aliases_with_region)
     assert store is not None
     assert store.config.endpoint_url == ENDPOINT
+    assert store.config.region == "us-east-2", "the explicit Neon region wins over AWS_REGION"
 
-    # ... and the explicit NEXUS names win over the aliases.
-    explicit = dict(neon_aliases)
-    explicit.update(
-        {
-            "NEXUS_NEON_STORAGE_ENDPOINT": ENDPOINT,
-            "NEXUS_NEON_STORAGE_REGION": "us-east-2",
-            "NEXUS_NEON_STORAGE_ACCESS_KEY_ID": ACCESS_KEY,
-            "NEXUS_NEON_STORAGE_SECRET_ACCESS_KEY": SECRET,
-            "AWS_ENDPOINT_URL_S3": "https://other-branch.storage.c-2.us-east-2.aws.neon.tech",
-        }
-    )
-    store = build_neon_object_store(explicit)
+
+def test_explicit_neon_names_win_over_the_aws_aliases() -> None:
+    env = {
+        "AWS_ENDPOINT_URL_S3": "https://other-branch.storage.c-2.us-east-2.aws.neon.tech",
+        "AWS_REGION": "us-east-1",
+        "AWS_ACCESS_KEY_ID": "aws-key",
+        "AWS_SECRET_ACCESS_KEY": "aws-secret",
+        "NEXUS_NEON_STORAGE_ENDPOINT": ENDPOINT,
+        "NEXUS_NEON_STORAGE_REGION": "us-east-2",
+        "NEXUS_NEON_STORAGE_ACCESS_KEY_ID": ACCESS_KEY,
+        "NEXUS_NEON_STORAGE_SECRET_ACCESS_KEY": SECRET,
+        "NEXUS_NEON_STORAGE_BUCKET": "nagar-assets",
+    }
+    store = build_neon_object_store(env)
     assert store is not None
+    assert store.config.endpoint_url == ENDPOINT
     assert store.config.access_key_id == ACCESS_KEY
+    assert store.config.secret_access_key == SECRET
 
 
 @pytest.mark.parametrize(
     "endpoint",
     [
-        "http://br-x.storage.c-2.us-east-2.aws.neon.tech",
-        "https://s3.us-east-2.amazonaws.com",
-        "https://bucket.r2.cloudflarestorage.com",
+        "https://evil.example?.neon.tech",
+        "https://evil.example#neon.tech",
+        "https://br-x.storage.c-2.us-east-2.aws.neon.tech.evil.example",
+        "https://user:pass@br-x.storage.c-2.us-east-2.aws.neon.tech",
+        "https://br-x.storage.c-2.us-east-2.aws.neon.tech/bucket",
+        "https://br-x.storage.c-2.us-east-2.aws.neon.tech:8443",
     ],
 )
-def test_non_neon_or_insecure_endpoints_are_refused(endpoint: str) -> None:
+def test_lookalike_or_ambiguous_endpoints_are_refused(endpoint: str) -> None:
+    """Host parsing is by authority, not by a substring/suffix test on the URL."""
     with pytest.raises(ValueError):
         NeonStorageConfig(
             endpoint_url=endpoint,
@@ -261,6 +286,12 @@ def test_config_repr_and_redaction_hide_credentials() -> None:
     assert redacted["access_key_id"] == "***"
     assert redacted["secret_access_key"] == "***"
     assert redacted["bucket"] == "nagar-assets"
+
+
+def test_namespace_is_the_configured_prefix() -> None:
+    store, _ = make_store()
+    assert store.namespace == "nagar/assets"
+    assert DEFAULT_PREFIX == "nagar/assets"
 
 
 def test_client_arguments_use_path_style_and_sigv4() -> None:
@@ -506,3 +537,195 @@ def test_health_reports_reachability_without_leaking_credentials() -> None:
     assert unhealthy.ok is False
     assert SECRET not in unhealthy.detail
     assert ACCESS_KEY not in unhealthy.detail
+
+
+# --------------------------------------------------------------------------- #
+# Contract conformance — the laws the shared fixture could not exercise
+# --------------------------------------------------------------------------- #
+def test_round_trip_publish_head_exists_read() -> None:
+    """1. Publish → head → exists → complete read round-trip."""
+    store, _ = make_store()
+    payload = b"round-trip payload " * 64
+    published = store.put_stream(io.BytesIO(payload), max_bytes=1 << 20)
+
+    assert store.exists(published.key) is True
+    metadata = store.head(published.key)
+    assert metadata is not None
+    assert metadata.key == published.key
+    assert metadata.size_bytes == len(payload)
+    assert metadata.sha256 == published.sha256
+
+    assert store.open_bytes(published.key) == payload
+    assert b"".join(store.iter_chunks(published.key, chunk_size=7)) == payload
+
+
+def test_listed_keys_are_absolute_and_addressable() -> None:
+    """2. Returned-key consistency: listed keys are the keys the API accepts."""
+    store, _ = make_store()
+    published = store.put_stream(io.BytesIO(b"address me"), max_bytes=1024)
+
+    listed = store.list_keys()
+    assert published.key in listed
+    for key in listed:
+        assert key.startswith(store.namespace), (
+            f"listed key {key!r} escapes the store namespace {store.namespace!r}"
+        )
+        metadata = store.head(key)
+        assert metadata is not None and metadata.key == key, (
+            "every listed key must be accepted by head() unchanged"
+        )
+        # ... and readable, which is what "addressable" means for a caller.
+        assert isinstance(store.open_bytes(key), bytes)
+
+
+def test_prefix_filters_over_absolute_keys_not_a_hidden_namespace() -> None:
+    """3. list_keys(prefix=...) against keys returned by the same backend."""
+    store, _ = make_store()
+    first = store.put_stream(io.BytesIO(b"one"), max_bytes=64)
+    second = store.put_stream(io.BytesIO(b"two"), max_bytes=64)
+
+    narrow = first.key.rsplit("/", 1)[0]  # e.g. nagar/assets/blobs/ab
+    assert store.list_keys(prefix=narrow) == [first.key]
+    assert store.list_keys(prefix=store.namespace) == store.list_keys()
+    assert second.key not in store.list_keys(prefix=narrow)
+
+    # A foreign prefix is refused, never silently translated or emptied.
+    with pytest.raises(InvalidObjectKey):
+        store.list_keys(prefix="other-tenant")
+    with pytest.raises(InvalidObjectKey):
+        store.list_keys(prefix=content_key_for("f" * 64))  # the relative form
+
+
+def test_namespace_isolation_ignores_foreign_objects() -> None:
+    """6b. Objects outside our namespace are never listed, measured or read."""
+    store, client = make_store()
+    store.put_stream(io.BytesIO(b"ours"), max_bytes=64)
+    client.objects["other-tenant/secret"] = {
+        "Body": b"not ours",
+        "Metadata": {},
+        "ContentType": None,
+        "ETag": '"x"',
+    }
+    assert all(key.startswith("nagar/assets/") for key in store.list_keys())
+    assert "other-tenant/secret" not in store.list_keys()
+    total, count = store.measure_namespace()
+    assert (total, count) == (4, 1)
+
+
+def test_idempotent_republish_and_conflicting_content() -> None:
+    """4. Idempotent republish and conflicting existing content (kept together)."""
+    store, client = make_store()
+    payload = b"same bytes"
+    first = store.put_stream(io.BytesIO(payload), max_bytes=1024)
+    second = store.put_stream(io.BytesIO(payload), max_bytes=1024)
+    assert (first.created, second.created) == (True, False)
+    assert len(client.put_calls) == 1
+
+    # A key whose recorded content disagrees is a conflict, never a silent rewrite.
+    client.objects[first.key]["Metadata"] = {META_SHA256: "0" * 64}
+    with pytest.raises(ObjectConflict):
+        store.put_stream(io.BytesIO(payload), max_bytes=1024)
+
+
+def test_read_time_bounds_and_digest_mismatch() -> None:
+    """5. Read-time byte bounds and digest mismatch detection."""
+    store, client = make_store()
+    published = store.put_stream(io.BytesIO(b"0123456789"), max_bytes=1024)
+
+    with pytest.raises(ObjectTooLarge):
+        store.open_bytes(published.key, max_bytes=4)
+
+    # Same length, different bytes: only a byte-level check can see this.
+    client.corrupt_bytes(published.key, b"9876543210")
+    with pytest.raises(IntegrityMismatch):
+        store.open_bytes(published.key)
+    with pytest.raises(IntegrityMismatch):
+        list(store.iter_chunks(published.key, chunk_size=4))
+
+
+# --------------------------------------------------------------------------- #
+# Integrity: metadata presence is not byte verification
+# --------------------------------------------------------------------------- #
+def test_head_does_not_verify_bytes() -> None:
+    """The precisely narrowed claim: head reports metadata, it does not read."""
+    store, client = make_store()
+    published = store.put_stream(io.BytesIO(b"authentic!"), max_bytes=64)
+    client.corrupt_bytes(published.key, b"TAMPERED!")
+
+    metadata = store.head(published.key)
+    assert metadata is not None
+    assert metadata.sha256 == published.sha256, "head reports the recorded digest"
+    assert metadata.size_bytes == len(b"TAMPERED!")
+
+    assert store.verify_bytes(published.key) is False
+    with pytest.raises(IntegrityMismatch):
+        store.open_bytes(published.key)
+
+
+def test_verify_bytes_is_true_only_after_a_real_byte_re_read() -> None:
+    store, client = make_store()
+    published = store.put_stream(io.BytesIO(b"healthy bytes"), max_bytes=64)
+    assert store.verify_bytes(published.key) is True
+    client.corrupt_bytes(published.key, b"healthy BYTES")
+    assert store.verify_bytes(published.key) is False
+
+
+def test_verify_bytes_refuses_a_missing_object() -> None:
+    store, _ = make_store()
+    with pytest.raises(ObjectNotFound):
+        store.verify_bytes(content_key_for("a" * 64))
+
+
+def test_verify_bytes_is_false_when_no_digest_was_recorded() -> None:
+    """No recorded digest means the comparison is impossible, so it is not 'verified'."""
+    store, client = make_store()
+    published = store.put_stream(io.BytesIO(b"no metadata"), max_bytes=64)
+    client.objects[published.key]["Metadata"] = {}
+    assert store.verify_bytes(published.key) is False
+
+
+def test_put_reports_that_it_did_not_verify_bytes() -> None:
+    store, _ = make_store()
+    created = store.put_stream(io.BytesIO(b"fresh"), max_bytes=64)
+    assert created.created is True
+    assert created.content_verified is False, (
+        "put_stream checks size + recorded metadata after upload; it must not claim more"
+    )
+
+    duplicate = store.put_stream(io.BytesIO(b"fresh"), max_bytes=64)
+    assert duplicate.created is False
+    assert duplicate.content_verified is False
+
+    verified = store.put_stream(io.BytesIO(b"fresh"), max_bytes=64, verify_existing=True)
+    assert verified.created is False
+    assert verified.content_verified is True
+
+
+def test_verify_existing_refuses_metadata_that_lies_about_the_bytes() -> None:
+    """The defect the narrowed claim points at: matching metadata, corrupted bytes."""
+    store, client = make_store()
+    published = store.put_stream(io.BytesIO(b"payload!"), max_bytes=64)
+    client.corrupt_bytes(published.key, b"CORRUPT!")
+
+    # Default reuse trusts metadata (documented, and reported as unverified) ...
+    reuse = store.put_stream(io.BytesIO(b"payload!"), max_bytes=64)
+    assert (reuse.created, reuse.content_verified) == (False, False)
+
+    # ... and the opt-in path refuses it instead of handing back a corrupt object.
+    with pytest.raises(IntegrityMismatch):
+        store.put_stream(io.BytesIO(b"payload!"), max_bytes=64, verify_existing=True)
+
+
+# --------------------------------------------------------------------------- #
+# Failure paths (mission 1 item 6)
+# --------------------------------------------------------------------------- #
+def test_not_found_is_typed_on_every_read_path() -> None:
+    store, _ = make_store()
+    key = content_key_for("b" * 64)
+    assert store.head(key) is None
+    assert store.exists(key) is False
+    with pytest.raises(ObjectNotFound):
+        store.open_bytes(key)
+    with pytest.raises(ObjectNotFound):
+        list(store.iter_chunks(key))
+    assert store.delete(key).existed is False

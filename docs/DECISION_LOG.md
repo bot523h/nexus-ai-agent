@@ -2163,3 +2163,23 @@ Auth because storage is Neon-hosted — identity and storage are independent pro
 **Limits.** No per-user OAuth connector, no quota API integration, no placement/fallback engine, no
 R2 user-asset wiring, no UI, no installable extension runtime. Those are Waves 2–6 in
 `architecture/DATA_AND_STORAGE.md` §7.7, each with its own claim.
+
+**D-0030 amendment (2026-10-22, PR #244 independent review).** The review found the contract's
+*prefix* and *integrity* semantics were conventions rather than law, so two adapters disagreed and a
+documentation claim outran the code. The status stays **PROPOSED**; the following are corrections to
+the proposal, not new decisions:
+
+1. **`namespace` is contract.** Each store declares its root key prefix; `list_keys(prefix=...)`
+   filters the same absolute keys that `head`/`open_bytes` accept, defaults to `namespace`, and
+   refuses a prefix outside it. Neon previously prepended `nagar/assets` internally while the local
+   and in-memory stores filtered relative keys, so the *same call* meant different things per backend.
+2. **Integrity is claimed only where measured.** `head` reports recorded metadata and never verifies
+   bytes; `verify_bytes` re-reads and hashes; `PutResult.content_verified` is `True` only after a real
+   byte check, and `put_stream(verify_existing=True)` makes a dedupe safe. The earlier wording
+   ("post-upload verification") is narrowed in code, docs and the PR body.
+3. **Environment sourcing is explicit.** The region is never taken from `AWS_REGION`; the endpoint is
+   parsed by authority so look-alike hosts, embedded credentials, paths and non-443 ports are refused.
+
+Evidence: `tests/unit/test_object_store_contract.py` (47), `tests/unit/test_neon_object_storage.py`
+(48), `tests/architecture/test_storage_backend_boundary.py` (14). Still **no live provider round-trip**
+— BLOCKED on an operator-provisioned branch, bucket and scoped credential.

@@ -2,7 +2,7 @@
 
 **Status:** Living document
 **Scope:** every store the runtime touches, what owns it, how it is migrated, and how data leaves
-**Verified against:** `main` @ `04469ed` (storage Wave 1, task-272)
+**Verified against:** `main` @ `04469ed` (storage Wave 1, task-272; contract reviewed and hardened in PR #244)
 
 The system uses **one logical data model with two physical backends** (SQLite for local, PostgreSQL/Neon for scale-to-zero) plus three purpose-built stores. Nothing is shared by accident: each store has exactly one owner module.
 
@@ -149,13 +149,52 @@ A narrow, provider-neutral seam for **immutable content-addressed blobs**:
 
 | Operation | Contract | Why it is in the contract |
 |---|---|---|
-| `put_stream(source, max_bytes, content_type, expected_sha256, metadata)` | streams in, measures SHA-256, publishes, returns `PutResult(key, sha256, size, created)` | `max_bytes` is enforced *while reading*; `expected_sha256` pins an identity the caller already measured |
+| `namespace` | the store's root key prefix (`""` = whole key space) | makes the key space explicit instead of hidden inside an adapter |
+| `put_stream(source, max_bytes, content_type, expected_sha256, metadata, verify_existing)` | streams in, measures SHA-256, publishes, returns `PutResult(key, sha256, size, created, content_verified)` | `max_bytes` is enforced *while reading*; `expected_sha256` pins an identity the caller already measured |
 | `open_bytes` / `iter_chunks` | bounded read / streaming read with end-of-stream digest check | a tampered object raises instead of being served |
-| `head` / `exists` | measured identity, not a cached claim | lets a retry decide "same bytes already there" without downloading |
+| `head` / `exists` | **recorded metadata** only — never a read of the bytes | lets a retry decide "same bytes already there" without downloading |
+| `verify_bytes` | full byte-level re-read and digest comparison | the *only* supported statement that the stored bytes are intact |
 | `delete` | `DeleteResult(existed, soft, reclaimed_bytes)` | a soft delete must not be reported as reclaimed capacity |
-| `list_keys` | prefixed, bounded listing | measurement of *our* namespace |
+| `list_keys(prefix=…)` | filters over the **same absolute keys** the other calls accept; default prefix is `namespace`; a prefix outside it is refused | removes the relative-vs-absolute ambiguity that let one adapter prepend a bucket namespace while others did not |
 | `capacity` | `CapacityReport` | see §7.3 |
 | `capabilities` | `BackendCapabilities` | no caller may assume multipart, presign or hard delete |
+
+**Key model (explicit as of the #244 review).** A *key* is backend-absolute and
+opaque: it is the string the backend stores, it is safe to persist, and it is
+exactly what `head` / `open_bytes` / `verify_bytes` / `delete` accept.
+`namespace` is the store's root prefix. `list_keys(prefix=...)` filters those
+same absolute keys, defaults to `namespace`, and **refuses** a prefix outside it
+(`InvalidObjectKey`) rather than silently returning an empty page. No adapter may
+keep a second invisible key space; the Neon bucket prefix is `namespace`, not a
+transform applied on the way in and forgotten on the way out.
+
+**Integrity model — narrowed to what is actually checked.** Metadata presence is
+**not** proof that the stored bytes were verified:
+
+| Call | What it checks | Byte-level? |
+|---|---|---|
+| `put_stream` (new object) | bytes hashed while reading; after upload the object's **size and recorded digest metadata** are re-read | **no** (`content_verified=False`) for Neon; the local adapter re-hashes on publish (`True`) |
+| `put_stream` (existing key) | metadata match ⇒ reuse (`created=False`) | **no** unless `verify_existing=True`, which re-reads and hashes and raises `IntegrityMismatch` on a mismatch |
+| `head` | recorded metadata | **no** |
+| `open_bytes` / `iter_chunks` | returned bytes hashed against the recorded digest | **yes** |
+| `verify_bytes` | full re-read + digest comparison; `False` when no digest was recorded | **yes** |
+
+So a backend that records a digest and later serves corrupted bytes is caught at
+*read* time, not at `head` time; and `verify_existing=True` is how a dedupe is
+made safe. Both paths are covered by tests that corrupt bytes while leaving the
+recorded SHA-256 metadata untouched
+(`tests/unit/test_neon_object_storage.py::test_verify_existing_refuses_metadata_that_lies_about_the_bytes`,
+`::test_head_does_not_verify_bytes`, `tests/unit/test_object_store_contract.py::test_verify_bytes_detects_tampering_that_preserves_metadata`).
+
+**Environment and credential sourcing.** The endpoint alone switches the backend
+on. `AWS_ENDPOINT_URL_S3` is honoured only as Neon's documented alias *and* only
+when it parses to a `*.neon.tech` authority; the credential pair
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` is accepted as an alias; the
+**region is never taken from `AWS_REGION`** — Neon's branch region is explicit
+(`NEXUS_NEON_STORAGE_REGION`) because a wrong region silently targets the wrong
+endpoint. Endpoints are parsed by authority (`urlsplit`), so
+`https://evil.example?.neon.tech`, embedded userinfo, a path component or a
+non-443 port are all refused.
 
 Errors are typed (`BackendNotConfigured`, `ObjectNotFound`, `ObjectTooLarge`,
 `IntegrityMismatch`, `ObjectConflict`, `AuthorizationDenied`,

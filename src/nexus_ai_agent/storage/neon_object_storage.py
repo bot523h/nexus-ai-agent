@@ -37,6 +37,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import IO, Any, BinaryIO
+from urllib.parse import urlsplit
 
 from nexus_ai_agent.storage.object_store import (
     AuthorizationDenied,
@@ -48,6 +49,7 @@ from nexus_ai_agent.storage.object_store import (
     DeleteResult,
     HealthReport,
     IntegrityMismatch,
+    InvalidObjectKey,
     ObjectConflict,
     ObjectMetadata,
     ObjectNotFound,
@@ -71,9 +73,14 @@ DEFAULT_PREFIX = "nagar/assets"
 #: ``AWS_*`` names are Neon's own documented aliases; the ``NEXUS_NEON_STORAGE_*``
 #: names win when both are present so a host-level AWS configuration cannot
 #: silently capture Nagar's user files.
+#: ``AWS_ENDPOINT_URL_S3`` is accepted as a *discovery convenience* only: it may
+#: switch the backend on when it points at a Neon host, but it is never the value
+#: used to build the client (the endpoint is canonicalized from the environment
+#: first). ``AWS_REGION`` is deliberately NOT an accepted source: Neon returns the
+#: branch's own region, and an AWS region would silently target the wrong one.
 _ENV = {
     "endpoint_url": ("NEXUS_NEON_STORAGE_ENDPOINT",),
-    "region": ("NEXUS_NEON_STORAGE_REGION", "AWS_REGION"),
+    "region": ("NEXUS_NEON_STORAGE_REGION",),
     "access_key_id": ("NEXUS_NEON_STORAGE_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"),
     "secret_access_key": ("NEXUS_NEON_STORAGE_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"),
     "bucket": ("NEXUS_NEON_STORAGE_BUCKET",),
@@ -140,20 +147,32 @@ class NeonStorageConfig:
     multipart_threshold_bytes: int = 64 * 1024 * 1024
 
     def __post_init__(self) -> None:
-        endpoint = (self.endpoint_url or "").strip().rstrip("/")
-        if not endpoint.startswith("https://"):
+        endpoint = (self.endpoint_url or "").strip()
+        parsed = urlsplit(endpoint)
+        # A naive ``endswith(".neon.tech")`` on the raw string accepts
+        # ``https://evil.example?.neon.tech``; parsing the authority is the only
+        # way to know which host will actually receive the signed request.
+        if parsed.scheme != "https":
             raise ValueError(
                 "Neon Object Storage endpoint must be an https:// URL "
                 "(http would send credentials in clear text)"
             )
-        host = endpoint.removeprefix("https://").split("/", 1)[0]
+        if parsed.username or parsed.password:
+            raise ValueError("endpoint must not embed credentials in the URL")
+        if parsed.query or parsed.fragment:
+            raise ValueError("endpoint must not carry a query string or fragment")
+        if parsed.path not in ("", "/"):
+            raise ValueError("endpoint must be a bare host (no path component)")
+        host = (parsed.hostname or "").lower()
         if not host.endswith(NEON_ENDPOINT_SUFFIX):
             raise ValueError(
                 f"endpoint host {host!r} is not a Neon Object Storage host "
                 f"(*{NEON_ENDPOINT_SUFFIX}); an AWS S3 endpoint here means every "
                 "request silently leaves Neon"
             )
-        object.__setattr__(self, "endpoint_url", endpoint)
+        if parsed.port is not None and parsed.port != 443:
+            raise ValueError("endpoint port must be 443 (the documented Neon endpoint)")
+        object.__setattr__(self, "endpoint_url", f"https://{host}")
         if not self.region or any(char.isspace() for char in self.region):
             raise ValueError("Neon Object Storage region must be a non-empty region string")
         if not _BUCKET.match(self.bucket or ""):
@@ -177,15 +196,20 @@ class NeonStorageConfig:
         content-addressed backend and starts normally.
 
         The endpoint alone decides whether Neon is switched on. ``AWS_*`` names
-        are honoured as documented aliases only when ``AWS_ENDPOINT_URL_S3`` is
-        itself a Neon host, so an unrelated AWS configuration on the host can
-        never silently capture Nagar's user files (and never crashes startup).
+        are honoured only as documented Neon aliases: the S3 endpoint variable is
+        accepted when it points at a Neon host (Neon's own ``get started`` writes
+        those names), and the credential pair is accepted as the access-key/secret
+        alias. The region is **never** taken from ``AWS_REGION`` — Neon's branch
+        region is authoritative and an AWS region would silently target the wrong
+        one. An unrelated AWS configuration on the host therefore cannot capture
+        Nagar's user files, and cannot crash startup.
         """
         source = os.environ if env is None else env
         endpoint = _first(source, _ENV["endpoint_url"])
         if endpoint is None:
             alias = _first(source, ("AWS_ENDPOINT_URL_S3",))
-            endpoint = alias if alias and alias.rstrip("/").endswith(NEON_ENDPOINT_SUFFIX) else None
+            host = (urlsplit(alias or "").hostname or "").lower()
+            endpoint = alias if host.endswith(NEON_ENDPOINT_SUFFIX) else None
         if endpoint is None:
             return None
         values = {
@@ -295,6 +319,15 @@ class NeonObjectStorage:
     def config(self) -> NeonStorageConfig:
         return self._config
 
+    @property
+    def namespace(self) -> str:
+        """The bucket prefix this store owns: stored keys are ``<namespace>/...``.
+
+        Keys handed to callers are always this absolute form, so a stored key can
+        be passed straight back to ``head``/``open_bytes``/``delete``.
+        """
+        return self._config.prefix
+
     def _require_configured(self) -> None:
         if not self.is_configured():
             raise BackendNotConfigured(
@@ -398,6 +431,7 @@ class NeonObjectStorage:
         content_type: str | None = None,
         expected_sha256: str | None = None,
         metadata: Mapping[str, str] | None = None,
+        verify_existing: bool = False,
     ) -> PutResult:
         self._require_configured()
         if max_bytes <= 0:
@@ -414,17 +448,26 @@ class NeonObjectStorage:
             existing = self.head(key)
             if existing is not None:
                 stored_sha = dict(existing.custom).get(META_SHA256)
-                if stored_sha == sha256 and existing.size_bytes == size:
-                    return PutResult(
-                        key=key,
-                        sha256=sha256,
-                        size_bytes=size,
-                        created=False,
-                        etag=existing.etag,
+                if stored_sha != sha256 or existing.size_bytes != size:
+                    raise ObjectConflict(
+                        f"key {key!r} already holds different content; refusing to overwrite an "
+                        "immutable content-addressed object"
                     )
-                raise ObjectConflict(
-                    f"key {key!r} already holds different content; refusing to overwrite an "
-                    "immutable content-addressed object"
+                # Metadata says "same object". Verify it only when asked: a
+                # byte-level check costs a full GET, and silently treating the
+                # metadata as proof is exactly the claim this contract forbids.
+                if verify_existing and not self.verify_bytes(key):
+                    raise IntegrityMismatch(
+                        f"key {key!r} carries matching metadata but its bytes do not hash "
+                        "to the recorded digest"
+                    )
+                return PutResult(
+                    key=key,
+                    sha256=sha256,
+                    size_bytes=size,
+                    created=False,
+                    etag=existing.etag,
+                    content_verified=verify_existing,
                 )
             spool.seek(0)
             extra: dict[str, Any] = {
@@ -442,12 +485,14 @@ class NeonObjectStorage:
                     f"object {key!r} failed post-upload verification "
                     f"(size {verified.size_bytes} vs {size}, digest {digest_state})"
                 )
+            # Size + recorded digest metadata were re-read; the bytes were not.
             return PutResult(
                 key=key,
                 sha256=sha256,
                 size_bytes=size,
                 created=True,
                 etag=verified.etag,
+                content_verified=False,
             )
         finally:
             spool.close()
@@ -535,6 +580,31 @@ class NeonObjectStorage:
     def exists(self, key: str) -> bool:
         return self.head(key) is not None
 
+    def verify_bytes(self, key: str) -> bool:
+        """Re-read the object and compare its bytes with the recorded digest.
+
+        This is the only statement in this adapter that the *stored bytes* are
+        intact; ``head`` reports recorded metadata and never reads content.
+        Returns ``False`` when no digest was recorded at upload (nothing to
+        compare against, so a "verified" verdict would be a guess).
+        """
+        key = validate_object_key(key)
+        metadata = self.head(key)
+        if metadata is None:
+            raise ObjectNotFound(f"{key!r} not found")
+        expected = dict(metadata.custom).get(META_SHA256)
+        if expected is None:
+            return False
+        import hashlib
+
+        digest = hashlib.sha256()
+        try:
+            for chunk in self._iter_payload(key):
+                digest.update(chunk)
+        except ObjectStoreError:
+            raise
+        return digest.hexdigest() == expected
+
     def open_bytes(self, key: str, *, max_bytes: int | None = None) -> bytes:
         return b"".join(self.iter_chunks(key, max_bytes=max_bytes))
 
@@ -549,8 +619,33 @@ class NeonObjectStorage:
         """
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
-        self._require_configured()
         key = validate_object_key(key)
+        expected = self._recorded_digest(key)
+        import hashlib
+
+        digest = hashlib.sha256()
+        total = 0
+        for chunk in self._iter_payload(key, chunk_size=chunk_size):
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise ObjectTooLarge(f"object {key!r} exceeds the {max_bytes}-byte read bound")
+            digest.update(chunk)
+            yield chunk
+        if expected is not None and digest.hexdigest() != expected:
+            raise IntegrityMismatch(
+                f"object {key!r} does not hash to the identity recorded at upload"
+            )
+
+    def _recorded_digest(self, key: str) -> str | None:
+        """The digest recorded at upload time, read from object metadata."""
+        metadata = self.head(key)
+        if metadata is None:
+            raise ObjectNotFound(f"{key!r} not found")
+        return dict(metadata.custom).get(META_SHA256)
+
+    def _iter_payload(self, key: str, *, chunk_size: int = 1 << 20) -> Iterator[bytes]:
+        """Yield the raw stored bytes without any digest check."""
+        self._require_configured()
         response = self._call(
             "get_object",
             self.client.get_object,
@@ -558,30 +653,17 @@ class NeonObjectStorage:
             Key=key,
             key=key,
         )
-        expected = dict(response.get("Metadata") or {}).get(META_SHA256)
-        import hashlib
-
-        digest = hashlib.sha256()
-        total = 0
         body = response.get("Body")
         try:
             while True:
                 chunk = body.read(chunk_size)
                 if not chunk:
                     break
-                total += len(chunk)
-                if max_bytes is not None and total > max_bytes:
-                    raise ObjectTooLarge(f"object {key!r} exceeds the {max_bytes}-byte read bound")
-                digest.update(chunk)
                 yield chunk
         finally:
             close = getattr(body, "close", None)
             if callable(close):
                 close()
-        if expected is not None and digest.hexdigest() != expected:
-            raise IntegrityMismatch(
-                f"object {key!r} does not hash to the identity recorded at upload"
-            )
 
     # -- deletion ----------------------------------------------------------- #
     def delete(self, key: str) -> DeleteResult:
@@ -607,13 +689,40 @@ class NeonObjectStorage:
         return DeleteResult(key=key, existed=existed, soft=True, reclaimed_bytes=0)
 
     def list_keys(self, *, prefix: str = "", limit: int = 1000) -> list[str]:
+        """Absolute object keys under ``prefix`` (default: this store's namespace).
+
+        The provider is asked for ``<namespace>/[prefix]`` and the returned keys
+        are the provider's own key strings, which are also what
+        ``head``/``open_bytes``/``delete`` accept. A prefix outside the store's
+        namespace is refused (never silently translated), so a caller cannot
+        accidentally list another tenant's objects — or mistake another
+        namespace for "no assets".
+        """
         self._require_configured()
         if limit <= 0:
             raise ValueError("limit must be positive")
-        search = f"{self._config.prefix}/{prefix}" if prefix else self._config.prefix
-        if prefix:
-            validate_object_key(prefix)
+        effective = self._effective_prefix(prefix)
         keys: list[str] = []
+        for item in self._iter_listing(effective):
+            keys.append(item["Key"])
+            if len(keys) >= limit:
+                break
+        return keys
+
+    def _effective_prefix(self, prefix: str) -> str:
+        """Resolve a caller prefix to a bucket-absolute one, or refuse it."""
+        namespace = self._config.prefix
+        if not prefix:
+            return namespace
+        validate_object_key(prefix)
+        if not (prefix == namespace or prefix.startswith(f"{namespace}/")):
+            raise InvalidObjectKey(
+                f"prefix {prefix!r} is outside this store's namespace {namespace!r}"
+            )
+        return prefix
+
+    def _iter_listing(self, search: str) -> Iterator[dict[str, Any]]:
+        """Page through ``list_objects_v2`` until a page or the listing ends."""
         token: str | None = None
         while True:
             kwargs: dict[str, Any] = {"Bucket": self._config.bucket, "Prefix": search}
@@ -623,11 +732,9 @@ class NeonObjectStorage:
                 "list_objects_v2", self.client.list_objects_v2, **kwargs, key=search
             )
             for item in response.get("Contents", []) or []:
-                keys.append(str(item.get("Key", "")))
-                if len(keys) >= limit:
-                    return keys
+                yield {"Key": str(item.get("Key", "")), "Size": int(item.get("Size", 0))}
             if not response.get("IsTruncated"):
-                return keys
+                return
             token = response.get("NextContinuationToken")
             if not token:
                 raise ObjectStoreError(
@@ -635,7 +742,7 @@ class NeonObjectStorage:
                 )
 
     def measure_namespace(self) -> tuple[int, int]:
-        """Measure ``(bytes, objects)`` actually present under our prefix.
+        """Measure ``(bytes, objects)`` actually present under our namespace.
 
         This is a listing-based measurement of Nagar's own objects — deliberately
         not a quota, and never added to another backend's numbers.
@@ -643,24 +750,10 @@ class NeonObjectStorage:
         self._require_configured()
         total = 0
         count = 0
-        token: str | None = None
-        while True:
-            kwargs: dict[str, Any] = {"Bucket": self._config.bucket, "Prefix": self._config.prefix}
-            if token:
-                kwargs["ContinuationToken"] = token
-            response = self._call(
-                "list_objects_v2", self.client.list_objects_v2, **kwargs, key=self._config.prefix
-            )
-            for item in response.get("Contents", []) or []:
-                total += int(item.get("Size", 0))
-                count += 1
-            if not response.get("IsTruncated"):
-                return total, count
-            token = response.get("NextContinuationToken")
-            if not token:
-                raise ObjectStoreError(
-                    "list_objects_v2 returned a truncated page without NextContinuationToken"
-                )
+        for item in self._iter_listing(self._config.prefix):
+            total += item["Size"]
+            count += 1
+        return total, count
 
     # -- truth -------------------------------------------------------------- #
     def capacity(self) -> CapacityReport:

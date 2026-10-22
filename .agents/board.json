@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-22T05:43:13Z",
+  "updated_at": "2026-10-22T00:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -867,6 +867,16 @@
         "docs/DECISION_LOG.md",
         "docs/architecture/STORAGE_AND_CONNECTORS.md",
         ".env.example"
+      ]
+    },
+    {
+      "id": "r2-user-assets",
+      "description": "Wave 2: Cloudflare R2 as a user-asset ObjectStore backend, configured separately from the existing maintenance blob tier (backups, heavy RAG docs).",
+      "paths": [
+        "src/nexus_ai_agent/storage/r2_object_store.py",
+        "tests/unit/test_r2_object_store.py",
+        "tests/integration/test_r2_asset_roundtrip.py",
+        "docs/architecture/DATA_AND_STORAGE.md"
       ]
     }
   ],
@@ -3901,8 +3911,36 @@
       "claimed_at": "2026-10-22T05:43:13Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "PR#244 (head a6e690a). Wave 1 offline-verified: 33 contract tests, 29 Neon adapter tests, 10 boundary laws (R22), docs §7 + D-0030 PROPOSED. Neon live round-trip BLOCKED: no NEXUS_NEON_STORAGE_* credential, no .env, no neon CLI in this sandbox. Gates deferred: the board has no live gates_owner; multi-source referee exits 2 for the whole repo.",
-      "generation": 1
+      "note": "PR#244 open, base 04469ed. Review round 1 (2026-10-22) closed two real gaps in the existing implementation: (a) list_keys prefix semantics were relative in local/memory but bucket-prefixed in Neon — `namespace` is now contract, keys are absolute everywhere, and a prefix outside the namespace is refused instead of silently empty; (b) the integrity claim outran the code — `verify_bytes` and `put_stream(verify_existing=...)` added, `PutResult.content_verified` reports whether a real byte check happened, and `head` is documented as metadata-only. Environment hardening: endpoint parsed by authority (look-alike hosts/userinfo/path/port refused), region never sourced from AWS_REGION, credential aliases retained and documented. Evidence: 47 contract + 48 Neon + 14 boundary tests; architecture 263 passed; unit suite failing-file set identical to base 04469ed (178 failed both, pre-existing/environmental). Gates still unverifiable: zero live gates_owner, so the multi-source referee exits 2 repo-wide; a 70-PR board probe found no overlap. Neon live round-trip remains BLOCKED (no credential). Merge state BLOCKED pending independent review.",
+      "generation": 1,
+      "delivered": [
+        "src/nexus_ai_agent/storage/object_store.py (ObjectStore contract: namespace, absolute keys, put_stream(content_verified/verify_existing), verify_bytes, CapacityReport provenance)",
+        "src/nexus_ai_agent/storage/local_object_store.py (conforming local backend, byte-verified publish)",
+        "src/nexus_ai_agent/storage/neon_object_storage.py (Neon S3-subset adapter, opt-in, soft-delete aware)",
+        "tests/unit/test_object_store_contract.py (47)",
+        "tests/unit/test_neon_object_storage.py (48)",
+        "tests/architecture/test_storage_backend_boundary.py (14 laws incl. R22/S6/S7)",
+        "docs/architecture/DATA_AND_STORAGE.md §7 (three layers, key model, integrity model, capacity policy, roadmap)",
+        "docs/architecture/MODULE_MAP.md law R22",
+        "docs/DECISION_LOG.md D-0030 PROPOSED + review amendment",
+        ".env.example opt-in Neon block"
+      ],
+      "evidence": {
+        "pr": "https://github.com/bot523h/nexus-ai-agent/pull/244",
+        "pr_head_tested": "0438c9bcbb9e1ba278ae19b5ab7aff2411d8a26c",
+        "ci_run_before_review_round": "https://github.com/bot523h/nexus-ai-agent/actions/runs/39730912102 (success, 21/21)",
+        "ci_run_after_review_round": "pending — appended after the review commit is pushed",
+        "commands": [
+          "pytest tests/unit/test_object_store_contract.py tests/unit/test_neon_object_storage.py tests/architecture/test_storage_backend_boundary.py -q → 109 passed",
+          "pytest tests/architecture -q → 263 passed",
+          "pytest tests/unit -q --tb=no → 178 failed / 3557 passed; identical failing-file set at base 04469ed",
+          "ruff check + ruff format --check (6 changed files) → clean",
+          "mypy (3 storage modules) → Success",
+          "git diff --check → clean",
+          "agent_board.py check --no-remote → exit 0; 70-PR multi-source probe → no overlap"
+        ],
+        "live_provider_evidence": "NONE — Neon round-trip BLOCKED (no credential/bucket in this environment)"
+      }
     },
     {
       "task": "task-273-storage-connectors-page",
@@ -3931,7 +3969,47 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Blocked by the docs/README.md lease held by task-product-frame-app-first (PR#240)."
+      "note": "Still blocked: PR#240 (task-product-frame-app-first) holds the live lease on docs/README.md, so the page cannot be indexed. Do not edit docs/README.md while that lease holds."
+    },
+    {
+      "task": "task-274-r2-user-asset-backend",
+      "title": "Storage Wave 2: Cloudflare R2 as a separate user-asset ObjectStore backend",
+      "title_fa": "موج ۲ ذخیره‌سازی: R2 به‌عنوان بک‌اند دارایی کاربر روی قرارداد ObjectStore، جدا از لایهٔ نگهداری",
+      "zone": "r2-user-assets",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Adapt the existing R2 S3 client into an ObjectStore-conforming *user-asset* backend with its own bucket and credential pair, deliberately separate from the maintenance tier that routes backups/ and rag-docs/ (storage/ai_storage_manager.py). No change to the maintenance routing, no change to the production default (local content-addressed store), no Wave 3 registry/placement work.",
+      "scope_fa": "تبدیل کلاینت S3 موجود R2 به بک‌اند دارایی کاربر سازگار با ObjectStore با باکت و جفت اعتبارنامهٔ مستقل از لایهٔ نگهداری (backups/ و rag-docs/). مسیر نگهداری و پیش‌فرض تولید تغییر نمی‌کند.",
+      "prerequisites": [
+        "task-272-storage-backend-contract"
+      ],
+      "prerequisite_note": "Operator prerequisites (not task ids): an R2 asset bucket distinct from the backup bucket, and a scoped R2 API token limited to that bucket. The owner must provision both out-of-band; no credential is requested or accepted in chat, and the task stays BLOCKED until they exist.",
+      "acceptance_criteria": [
+        "An ObjectStore implementation for R2 passes the same contract laws as the local and Neon backends (absolute keys, namespace refusal, verify_bytes, capacity provenance, soft/hard delete accounting).",
+        "The asset backend uses a distinct bucket + credential pair from the maintenance tier; a test proves the backup/RAG routing (backups/, rag-docs/, AIStorageManager.is_blob_key) is byte-for-byte unchanged.",
+        "Missing or partial R2 asset configuration yields None from its settings factory: startup cannot break and the local backend stays the default.",
+        "Retry is bounded and typed; a 403 is never retried; no secret appears in repr, exception text or logs.",
+        "No production default changes; rollback is a configuration flip back to the local backend, documented.",
+        "Capacity is reported as UNKNOWN unless an authoritative figure is obtainable; no advertised free-tier number is used."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_r2_object_store.py tests/unit/test_r2_provider.py tests/unit/test_unified_cloud.py -q (exact output)",
+        "pytest tests/architecture -q (exact output; R22 must still pass)",
+        "ruff check + ruff format --check on every changed Python file, mypy on the new modules",
+        "agent_board.py check --no-remote exit 0 plus a recorded multi-source probe of all open PR boards",
+        "LIVE round-trip against the operator bucket recorded as evidence, or an explicit BLOCKED statement naming the missing bucket/token step (mocks are not live evidence)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/r2_object_store.py",
+        "tests/unit/test_r2_object_store.py",
+        "tests/integration/test_r2_asset_roundtrip.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Registered 2026-10-22 during PR#244 review; queued only — Wave 2 is deliberately NOT implemented on this branch."
     }
   ],
   "deferred_log": [

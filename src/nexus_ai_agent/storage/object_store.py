@@ -33,6 +33,45 @@ Two rules are encoded in the types, because both were violated in the tree:
    enforced; reporting that as freed space would be a lie.
 
 No web framework, Telegram, ORM or cloud SDK type appears here.
+
+Key model — the ambiguity this contract removes
+----------------------------------------------
+* A **key is backend-absolute and opaque**: it is exactly the string the backend
+  stores, it is safe to persist in a database, and it is what ``head``,
+  ``open_bytes``, ``iter_chunks``, ``verify_bytes`` and ``delete`` accept.
+* ``namespace`` is the store's root prefix (``""`` when the store owns the whole
+  key space). Every key the store writes starts with ``namespace``.
+* ``list_keys(prefix=...)`` filters over those **same absolute keys**: every
+  returned key starts with the effective prefix, and every returned key is
+  accepted by ``head``/``open_bytes`` on the same store. The effective prefix is
+  ``prefix`` when supplied, else ``namespace``. A prefix **outside** the store's
+  namespace raises :class:`InvalidObjectKey` rather than silently listing another
+  tenant's keys (or returning an empty page that hides the mistake).
+* No implementation may keep a second, invisible key space: a provider bucket
+  namespace is the store's ``namespace``, never a hidden transform applied on
+  the way in and forgotten on the way out.
+
+Integrity model — what each operation actually guarantees
+---------------------------------------------------------
+``put_stream``
+    The *bytes sent* were hashed and their length enforced while reading; after
+    upload the object's **size and recorded digest metadata** are re-read. The
+    bytes are **not** read back. ``PutResult.content_verified`` says whether a
+    byte-level check happened (see ``verify_existing``).
+``put_stream(verify_existing=True)``
+    Before reporting ``created=False`` for an existing key, the stored bytes are
+    re-read and hashed; a mismatch raises :class:`IntegrityMismatch`.
+``head``
+    Reports **recorded metadata**; it does not read object bytes.
+``open_bytes`` / ``iter_chunks``
+    The bytes returned are hashed and compared with the recorded digest; a
+    mismatch raises :class:`IntegrityMismatch`.
+``verify_bytes``
+    An explicit, full byte-level re-read and digest comparison.
+
+Metadata presence is therefore **not** proof that the stored bytes were
+verified. A backend that cannot cheaply verify bytes must still implement
+``verify_bytes`` and must not describe ``head`` as verification.
 """
 
 from __future__ import annotations
@@ -237,6 +276,12 @@ class PutResult:
     size_bytes: int
     created: bool
     etag: str | None = None
+    content_verified: bool = False
+    """True only when this call read the stored bytes back and hashed them.
+
+    ``False`` means size + recorded digest metadata were checked (see the
+    module's integrity table); it never means the bytes were verified.
+    """
 
 
 @dataclass(frozen=True)
@@ -354,9 +399,21 @@ class ObjectStore(Protocol):
     maintenance tier already own their own async scheduling, and a network-bound
     synchronous adapter composes cleanly with ``asyncio.to_thread``. An adapter
     that needs to be async must not pretend to be one of these.
+
+    The key model and the integrity model are defined in the module docstring;
+    they are contract, not convention.
     """
 
     name: str
+
+    @property
+    def namespace(self) -> str:
+        """The root key prefix this store owns (``""`` for the whole key space).
+
+        Keys returned by ``put_stream``/``list_keys`` always start with it, and
+        ``list_keys`` refuses a prefix outside it.
+        """
+        ...
 
     def capabilities(self) -> BackendCapabilities: ...
 
@@ -370,12 +427,20 @@ class ObjectStore(Protocol):
         content_type: str | None = None,
         expected_sha256: str | None = None,
         metadata: Mapping[str, str] | None = None,
+        verify_existing: bool = False,
     ) -> PutResult:
         """Stream ``source`` into content-addressed storage and publish it.
 
         ``expected_sha256`` lets a caller pin the identity it already measured
         (a replayed idempotency key, a resumed upload); a mismatch raises
         :class:`IntegrityMismatch` and publishes nothing.
+
+        When the same bytes already exist, the call reuses them
+        (``created=False``). That reuse is decided from recorded metadata by
+        default; pass ``verify_existing=True`` to re-read and hash the stored
+        bytes first, so a silently corrupted object is reported as
+        :class:`IntegrityMismatch` instead of being handed back as a valid
+        dedupe. ``PutResult.content_verified`` reports which happened.
         """
         ...
 
@@ -383,13 +448,32 @@ class ObjectStore(Protocol):
 
     def iter_chunks(self, key: str, *, chunk_size: int = 1 << 20) -> Iterator[bytes]: ...
 
-    def head(self, key: str) -> ObjectMetadata | None: ...
+    def head(self, key: str) -> ObjectMetadata | None:
+        """Recorded metadata, or ``None`` when absent. This does not read bytes."""
+        ...
 
     def exists(self, key: str) -> bool: ...
 
+    def verify_bytes(self, key: str) -> bool:
+        """Re-read the object and compare its digest with the recorded one.
+
+        The only supported statement that the *stored bytes* are intact. Returns
+        ``False`` when the object exists but carries no recorded digest (the
+        comparison is impossible, so "verified" would be a guess) and raises
+        :class:`ObjectNotFound` when it does not exist.
+        """
+        ...
+
     def delete(self, key: str) -> DeleteResult: ...
 
-    def list_keys(self, *, prefix: str = "", limit: int = 1000) -> list[str]: ...
+    def list_keys(self, *, prefix: str = "", limit: int = 1000) -> list[str]:
+        """Absolute keys under ``prefix`` (default: ``namespace``), bounded.
+
+        Every returned key starts with the effective prefix and is accepted by
+        ``head``/``open_bytes``. Raises :class:`InvalidObjectKey` for a prefix
+        outside this store's ``namespace``.
+        """
+        ...
 
     def capacity(self) -> CapacityReport: ...
 

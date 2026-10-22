@@ -56,6 +56,10 @@ class MemoryObjectStore:
     def __init__(self) -> None:
         self.objects: dict[str, tuple[bytes, str]] = {}
 
+    @property
+    def namespace(self) -> str:
+        return "blobs"
+
     def capabilities(self) -> BackendCapabilities:
         return BackendCapabilities(
             supports_streaming=True,
@@ -78,6 +82,7 @@ class MemoryObjectStore:
         content_type: str | None = None,
         expected_sha256: str | None = None,
         metadata: Mapping[str, str] | None = None,
+        verify_existing: bool = False,
     ) -> PutResult:
         import hashlib
 
@@ -96,9 +101,20 @@ class MemoryObjectStore:
             raise IntegrityMismatch("pinned digest differs from the stream")
         key = content_key_for(sha256)
         if key in self.objects:
-            return PutResult(key=key, sha256=sha256, size_bytes=len(payload), created=False)
+            stored, _ = self.objects[key]
+            if stored != bytes(payload):
+                raise ObjectConflict(f"{key!r} holds different content")
+            return PutResult(
+                key=key,
+                sha256=sha256,
+                size_bytes=len(payload),
+                created=False,
+                content_verified=verify_existing and self.verify_bytes(key),
+            )
         self.objects[key] = (bytes(payload), sha256)
-        return PutResult(key=key, sha256=sha256, size_bytes=len(payload), created=True)
+        return PutResult(
+            key=key, sha256=sha256, size_bytes=len(payload), created=True, content_verified=True
+        )
 
     def open_bytes(self, key: str, *, max_bytes: int | None = None) -> bytes:
         key = validate_object_key(key)
@@ -123,13 +139,25 @@ class MemoryObjectStore:
     def exists(self, key: str) -> bool:
         return self.head(key) is not None
 
+    def verify_bytes(self, key: str) -> bool:
+        import hashlib
+
+        data = self.open_bytes(key)
+        return hashlib.sha256(data).hexdigest() == self.objects[key][1]
+
     def delete(self, key: str) -> DeleteResult:
         key = validate_object_key(key)
         entry = self.objects.pop(key, None)
         return DeleteResult(key=key, existed=entry is not None, soft=False)
 
     def list_keys(self, *, prefix: str = "", limit: int = 1000) -> list[str]:
-        return sorted(k for k in self.objects if k.startswith(prefix))[:limit]
+        effective = prefix or self.namespace
+        validate_object_key(effective)
+        if not (effective == self.namespace or effective.startswith(f"{self.namespace}/")):
+            raise InvalidObjectKey(
+                f"prefix {effective!r} is outside this store's namespace {self.namespace!r}"
+            )
+        return sorted(k for k in self.objects if k.startswith(effective))[:limit]
 
     def capacity(self) -> CapacityReport:
         return CapacityReport(
@@ -285,6 +313,143 @@ def test_local_store_rejects_traversal_keys(tmp_path) -> None:
             store.open_bytes(bad)
 
 
+# --------------------------------------------------------------------------- #
+# Key model: absolute keys and explicit prefix semantics (the contract's law)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("store_name", ["local", "memory"])
+def test_listed_keys_are_absolute_and_directly_addressable(store_name, tmp_path) -> None:
+    store = LocalObjectStore(tmp_path / "objects") if store_name == "local" else MemoryObjectStore()
+    result = store.put_stream(io.BytesIO(b"address me"), max_bytes=1024)
+    listed = store.list_keys()
+    assert result.key in listed, "a published key must appear in the default listing"
+    assert store.namespace and result.key.startswith(store.namespace)
+    for key in listed:
+        assert key.startswith(store.namespace), (
+            f"listed key {key!r} escapes the store namespace {store.namespace!r}"
+        )
+        metadata = store.head(key)
+        assert metadata is not None and metadata.key == key, (
+            "every listed key must be accepted by head() unchanged"
+        )
+
+
+@pytest.mark.parametrize("store_name", ["local", "memory"])
+def test_prefix_filters_over_the_same_absolute_key_space(store_name, tmp_path) -> None:
+    store = LocalObjectStore(tmp_path / "objects") if store_name == "local" else MemoryObjectStore()
+    first = store.put_stream(io.BytesIO(b"one"), max_bytes=64)
+    second = store.put_stream(io.BytesIO(b"two"), max_bytes=64)
+
+    # A prefix inside the namespace must be interpreted the same way the keys are:
+    # as a prefix of the absolute key, not of a hidden relative space.
+    narrow = first.key.rsplit("/", 1)[0]
+    listed = store.list_keys(prefix=narrow)
+    assert listed == [first.key], listed
+    assert second.key not in listed
+
+    # Every returned key matches the prefix and round-trips through the reads.
+    for key in listed:
+        assert key.startswith(narrow)
+        assert store.open_bytes(key)
+
+
+@pytest.mark.parametrize("store_name", ["local", "memory"])
+def test_prefix_outside_the_namespace_is_refused_not_silently_empty(store_name, tmp_path) -> None:
+    store = LocalObjectStore(tmp_path / "objects") if store_name == "local" else MemoryObjectStore()
+    store.put_stream(io.BytesIO(b"x"), max_bytes=64)
+    for foreign in ("other-tenant", "blobs2", "a"):
+        with pytest.raises(InvalidObjectKey):
+            store.list_keys(prefix=foreign)
+
+
+def test_default_prefix_is_the_store_namespace(tmp_path) -> None:
+    store = LocalObjectStore(tmp_path / "objects")
+    store.put_stream(io.BytesIO(b"x"), max_bytes=64)
+    assert store.list_keys() == store.list_keys(prefix=store.namespace)
+
+
+# --------------------------------------------------------------------------- #
+# Integrity: metadata presence is not byte verification
+# --------------------------------------------------------------------------- #
+def test_head_reports_recorded_metadata_without_reading_bytes(tmp_path) -> None:
+    store = LocalObjectStore(tmp_path / "objects")
+    result = store.put_stream(io.BytesIO(b"original"), max_bytes=64)
+    (tmp_path / "objects" / result.key).write_bytes(b"tampered")
+
+    # head() answers from the filesystem listing and a re-hash of the file, so for
+    # the local adapter the size changes visibly; the point of the law is that the
+    # *contract* only promises recorded metadata. Whatever head reports, the read
+    # paths must refuse the tampered bytes.
+    with pytest.raises(IntegrityMismatch):
+        store.open_bytes(result.key)
+    with pytest.raises(IntegrityMismatch):
+        list(store.iter_chunks(result.key))
+
+
+def test_verify_bytes_detects_tampering_that_preserves_metadata(tmp_path) -> None:
+    """The exact scenario: bytes changed, recorded digest metadata unchanged."""
+    store = LocalObjectStore(tmp_path / "objects")
+    result = store.put_stream(io.BytesIO(b"authentic"), max_bytes=64)
+    assert store.verify_bytes(result.key) is True
+
+    # Same length, different bytes: size checks alone cannot see this.
+    (tmp_path / "objects" / result.key).write_bytes(b"TAMPERED!")
+
+    assert store.verify_bytes(result.key) is False, (
+        "verify_bytes must re-read and hash the bytes, not trust the key/metadata"
+    )
+    with pytest.raises(IntegrityMismatch):
+        store.open_bytes(result.key)
+
+
+def test_verify_bytes_raises_on_a_missing_object(store) -> None:
+    with pytest.raises(ObjectNotFound):
+        store.verify_bytes(content_key_for("e" * 64))
+
+
+def test_a_byte_verification_claim_is_provable(store) -> None:
+    """No backend may report ``content_verified`` it cannot back up.
+
+    The law is a claim/evidence pair: if ``put_stream`` says the existing bytes
+    were verified, corrupting them must make the next default dedupe fail, because
+    the backend that verified once can verify again. If it makes no such claim,
+    the reuse is explicitly metadata-level and must say ``created=False``.
+    """
+    created = store.put_stream(io.BytesIO(b"fresh"), max_bytes=64)
+    assert created.created is True
+    duplicate = store.put_stream(io.BytesIO(b"fresh"), max_bytes=64)
+    assert duplicate.created is False
+
+    if not duplicate.content_verified:
+        # Metadata-level reuse: the call is honest about not having read bytes.
+        return
+
+    corrupt = tmp_path_blob_for(store, created.key)
+    assert corrupt is not None, (
+        "a backend claiming byte verification must expose mutable storage here"
+    )
+    corrupt.write_bytes(b"BADAB")  # same length, different bytes
+    with pytest.raises(IntegrityMismatch):
+        store.put_stream(io.BytesIO(b"fresh"), max_bytes=64)
+
+
+def tmp_path_blob_for(store, key: str):
+    """The on-disk path of a blob for the local adapter, else ``None``."""
+    if isinstance(store, LocalObjectStore):
+        return store.blob_path(key)
+    return None
+
+
+def test_verify_existing_refuses_a_corrupted_duplicate(tmp_path) -> None:
+    store = LocalObjectStore(tmp_path / "objects")
+    result = store.put_stream(io.BytesIO(b"payload"), max_bytes=64)
+    (tmp_path / "objects" / result.key).write_bytes(b"corrupt")
+    with pytest.raises(IntegrityMismatch):
+        store.put_stream(io.BytesIO(b"payload"), max_bytes=64, verify_existing=True)
+
+
+# --------------------------------------------------------------------------- #
+# Value objects: the anti-fabrication invariants
+# --------------------------------------------------------------------------- #
 # --------------------------------------------------------------------------- #
 # Value objects: the anti-fabrication invariants
 # --------------------------------------------------------------------------- #
