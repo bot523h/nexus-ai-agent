@@ -335,5 +335,16 @@ def test_agents_and_overview_point_at_the_product_frame() -> None:
     assert frame.is_file(), "docs/architecture/PRODUCT_FRAME.md is missing"
     agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     overview = (DOCS / "architecture" / "OVERVIEW.md").read_text(encoding="utf-8")
-    assert "docs/architecture/PRODUCT_FRAME.md" in agents, "AGENTS.md lost the product-frame link"
-    assert "PRODUCT_FRAME.md" in overview, "OVERVIEW.md lost the product-frame link"
+
+    def _links_to_frame(text: str, base: Path) -> bool:
+        # A Markdown link (not a bare path mention) whose destination resolves to the frame.
+        for target in _LINK.findall(text):
+            path = target.split("#", 1)[0]
+            if path and (base / path).resolve() == frame.resolve():
+                return True
+        return False
+
+    assert _links_to_frame(agents, REPO_ROOT), "AGENTS.md lost the product-frame link"
+    assert _links_to_frame(overview, DOCS / "architecture"), (
+        "OVERVIEW.md lost the product-frame link"
+    )
