@@ -3861,7 +3861,7 @@
       "title_fa": "موج ۱ ذخیره‌سازی: قرارداد مستقل از ارائه‌دهنده + بک‌اند Neon Object Storage",
       "zone": "storage-backends",
       "priority": "P0",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "A typed, provider-neutral object-store contract for files Nagar owns (streamed put/get, measured SHA-256, idempotent content-addressed publishing, capabilities, truthful capacity reporting), a Neon Object Storage adapter over its documented S3-compatible branch endpoint, and the existing local content-addressed blob store as a conforming backend. Documentation lands in the living DATA_AND_STORAGE.md page (no new docs/ page: docs/README.md is under PR#240's live lease). Drive connectors (Wave 4) and extension catalogue (Wave 6) are out of scope.",
       "scope_fa": "قرارداد تایپ‌شدهٔ مستقل از ارائه‌دهنده برای فایل‌های تحت مالکیت ناگار، آداپتور Neon Object Storage روی نقطهٔ پایانی S3-compatible مستند آن، و حفظ انبار محلی content-addressed به‌عنوان بک‌اند سازگار. مستندات در صفحهٔ زندهٔ DATA_AND_STORAGE.md می‌نشیند (بدون صفحهٔ جدید چون docs/README.md در اجارهٔ فعال PR#240 است). کانکتورهای درایو (موج ۴) و کاتالوگ افزونه (موج ۶) خارج از دامنه‌اند.",
       "prerequisites": [],
@@ -3901,7 +3901,7 @@
       "claimed_at": "2026-10-22T05:43:13Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "",
+      "note": "PR#244 (head a6e690a). Wave 1 offline-verified: 33 contract tests, 29 Neon adapter tests, 10 boundary laws (R22), docs §7 + D-0030 PROPOSED. Neon live round-trip BLOCKED: no NEXUS_NEON_STORAGE_* credential, no .env, no neon CLI in this sandbox. Gates deferred: the board has no live gates_owner; multi-source referee exits 2 for the whole repo.",
       "generation": 1
     },
     {
