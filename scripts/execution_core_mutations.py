@@ -530,9 +530,30 @@ PROBES: tuple[Probe, ...] = (
 )
 
 
-def _run_tests(tests: tuple[str, ...]) -> int:
+# Per-run cap: a mutated test that hangs must not stall the campaign.  Each run
+# is a single targeted test file (seconds, not the full suite); 300 s is a wide
+# safety margin that still fails far below the CI job's 30-minute limit.
+TEST_TIMEOUT_S = 300
+
+
+def _run_tests(tests: tuple[str, ...]) -> int | None:
+    """pytest's exit code, or ``None`` when the run exceeded ``TEST_TIMEOUT_S``.
+
+    ``None`` is deliberately distinct from a non-zero code: a timed-out run is
+    *inconclusive* and must never be counted as a caught mutation.
+    """
     env = {**os.environ, "PYTHONPATH": str(REPO / "src")}
-    result = subprocess.run([*PYTEST, *tests], cwd=REPO, capture_output=True, text=True, env=env)
+    try:
+        result = subprocess.run(
+            [*PYTEST, *tests],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=TEST_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     return result.returncode
 
 
@@ -564,6 +585,11 @@ def main() -> int:
         print(f"\n=== {probe.name} ({probe.target.relative_to(REPO)})")
 
         baseline = _run_tests(probe.tests)
+        if baseline is None:
+            failures.append(f"{probe.name}: baseline TIMED OUT after {TEST_TIMEOUT_S}s")
+            print(f"  baseline: TIMED OUT after {TEST_TIMEOUT_S}s — probe invalid")
+            probe.target.write_bytes(original)
+            continue
         if baseline != 0:
             failures.append(f"{probe.name}: baseline not GREEN (exit {baseline})")
             print(f"  baseline: NOT GREEN (exit {baseline}) — probe invalid")
@@ -592,6 +618,11 @@ def main() -> int:
                 print("  restore: FAILED (target2 bytes differ)")
                 continue
 
+        if mutated is None:
+            failures.append(f"{probe.name}: mutant run TIMED OUT after {TEST_TIMEOUT_S}s")
+            print(f"  mutant: TIMED OUT after {TEST_TIMEOUT_S}s — NOT counted as caught")
+            continue
+
         if mutated == 0:
             failures.append(f"{probe.name}: mutation NOT caught (tests stayed GREEN)")
             print("  mutant: NOT CAUGHT — tests stayed GREEN")
@@ -599,6 +630,10 @@ def main() -> int:
 
         # Restored bytes must be GREEN again.
         restored = _run_tests(probe.tests)
+        if restored is None:
+            failures.append(f"{probe.name}: restored run TIMED OUT after {TEST_TIMEOUT_S}s")
+            print(f"  restored: TIMED OUT after {TEST_TIMEOUT_S}s")
+            continue
         if restored != 0:
             failures.append(f"{probe.name}: restored tree not GREEN (exit {restored})")
             print(f"  restored: NOT GREEN (exit {restored})")
