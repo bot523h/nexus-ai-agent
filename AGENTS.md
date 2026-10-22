@@ -14,6 +14,12 @@ committed and pushed through git, backed by a zero-dependency CLI
 (`scripts/agent_board.py`) whose behaviour and schema are themselves tested
 (`tests/unit/test_agent_board.py`).
 
+The single authoritative coordination board is `.agents/board.json` on `main`.
+`refs/nexus/board` is deprecated and non-authoritative: the shipped CLI never
+reads it, and it can never grant execution authority. Branch and worktree boards
+remain required overlap evidence, not a competing canonical authority (owner
+decision Option B, issue #236).
+
 The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, `deferred_log`,
 `takeover_log`, `next_work`, `history`). Structure is enforced, not requested.
 
