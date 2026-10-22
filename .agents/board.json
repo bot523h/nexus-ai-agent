@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-20T05:32:52Z",
+  "updated_at": "2026-10-22T05:38:32Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -850,6 +850,22 @@
         "tests/unit/test_selfhood_runtime.py",
         "src/nexus_ai_agent/bot/app.py",
         "src/nexus_ai_agent/config/settings.py"
+      ]
+    },
+    {
+      "id": "storage-backends",
+      "description": "Provider-neutral object-storage contract + Neon Object Storage / R2 / local content-addressed backends for Nagar-owned files (Wave 1). Drive connectors, connector SDK and extension catalogue are later waves and NOT in this zone.",
+      "paths": [
+        "src/nexus_ai_agent/storage/object_store.py",
+        "src/nexus_ai_agent/storage/neon_object_storage.py",
+        "src/nexus_ai_agent/storage/local_object_store.py",
+        "tests/unit/test_object_store_contract.py",
+        "tests/unit/test_neon_object_storage.py",
+        "tests/architecture/test_storage_backend_boundary.py",
+        "docs/architecture/DATA_AND_STORAGE.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/STORAGE_AND_CONNECTORS.md"
       ]
     }
   ],
@@ -3803,7 +3819,7 @@
       "title_fa": "فاز ۲ب هستهٔ زنده — append اتمیک دسته‌ای، بوت fail-safe، پروب‌های واقعی و اتصال opt-in به بات",
       "zone": "selfhood",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "append_many (all-or-nothing); selfhood/runtime.py try_boot_self (ok/unavailable/tampered/charter_drift); agent/self_vitals.py real ram/disk probes + start_vitals; minimal opt-in hook in bot/app.py and two settings (default off).",
       "scope_fa": "append_many اتمیک؛ try_boot_self با چهار وضعیت؛ پروب‌های واقعی رم و دیسک و start_vitals؛ اتصال حداقلی و opt-in (پیش‌فرض خاموش) در bot/app.py.",
       "prerequisites": [
@@ -3835,7 +3851,84 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
-      "note": ""
+      "note": "",
+      "release_reason": "auto-released by gc at 2026-10-22T05:35:06Z (stale active lease)"
+    },
+    {
+      "task": "task-272-storage-backend-contract",
+      "title": "Storage Wave 1: provider-neutral object-store contract + Neon Object Storage backend",
+      "title_fa": "موج ۱ ذخیره‌سازی: قرارداد مستقل از ارائه‌دهنده + بک‌اند Neon Object Storage",
+      "zone": "storage-backends",
+      "priority": "P0",
+      "status": "active",
+      "scope": "A typed, provider-neutral object-store contract for files Nagar owns (streamed put/get, measured SHA-256, idempotent content-addressed publishing, capabilities, truthful capacity reporting), a Neon Object Storage adapter over its documented S3-compatible branch endpoint, and the existing local content-addressed blob store as a conforming backend. Documentation lands in the living DATA_AND_STORAGE.md page (no new docs/ page: docs/README.md is under PR#240's live lease). Drive connectors (Wave 4) and extension catalogue (Wave 6) are out of scope.",
+      "scope_fa": "قرارداد تایپ‌شدهٔ مستقل از ارائه‌دهنده برای فایل‌های تحت مالکیت ناگار، آداپتور Neon Object Storage روی نقطهٔ پایانی S3-compatible مستند آن، و حفظ انبار محلی content-addressed به‌عنوان بک‌اند سازگار. مستندات در صفحهٔ زندهٔ DATA_AND_STORAGE.md می‌نشیند (بدون صفحهٔ جدید چون docs/README.md در اجارهٔ فعال PR#240 است). کانکتورهای درایو (موج ۴) و کاتالوگ افزونه (موج ۶) خارج از دامنه‌اند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A provider-neutral ObjectStore contract exists: typed error taxonomy, declared BackendCapabilities, streamed put with bounded max_bytes, measured SHA-256, idempotent content-addressed republish, head/exists/delete/list.",
+        "CapacityReport distinguishes AUTHORITATIVE / ADVERTISED / UNKNOWN, carries measured_at + source, and refuses to invent a number (UNKNOWN must not carry quota/used values).",
+        "NeonObjectStorage implements the contract against the documented S3-compatible branch endpoint (path-style, SigV4, endpoint_url + force_path_style), imports boto3 lazily, retries transient failures a bounded number of times, and never retries a non-transient 4xx.",
+        "Missing configuration is a typed BackendNotConfigured and the settings factory returns None instead of raising; importing the module without credentials cannot break startup.",
+        "The local content-addressed blob store satisfies the same contract test suite (CHECKSUM, dedupe, oversize, missing object, tamper detection).",
+        "No secret (access key, secret key, token) appears in repr, exception text or log fields; proven by test.",
+        "Soft-delete semantics of the provider are declared in capabilities and never reported as reclaimed capacity.",
+        "DATA_AND_STORAGE.md documents the three layers (backends / user-authorized drive connectors / user-installable extensions), the capacity truth policy, and the wave roadmap; MODULE_MAP.md §3 names the enforcing test; DECISION_LOG.md carries the decision as PROPOSED (not accepted)."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_object_store_contract.py tests/unit/test_neon_object_storage.py tests/architecture/test_storage_backend_boundary.py -q (exact output)",
+        "ruff check on every changed Python file",
+        "python scripts/agent_board.py check --no-remote --files <changed> --branch <branch> exit 0, plus a recorded multi-source probe of all open PR boards (the referee exits 2 repo-wide because no gates_owner exists)",
+        "CI run URL for the exact tested head, or an explicit 'gates deferred to gates owner' statement",
+        "live provider round-trip result, or the precise missing credential/setup step (mocks are not live evidence)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/object_store.py",
+        "src/nexus_ai_agent/storage/neon_object_storage.py",
+        "src/nexus_ai_agent/storage/local_object_store.py",
+        "tests/unit/test_object_store_contract.py",
+        "tests/unit/test_neon_object_storage.py",
+        "tests/architecture/test_storage_backend_boundary.py",
+        "docs/architecture/DATA_AND_STORAGE.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/STORAGE_AND_CONNECTORS.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/edeae323-nexus-ai-agent",
+      "claimed_at": "2026-10-22T05:38:32Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
+    },
+    {
+      "task": "task-273-storage-connectors-page",
+      "title": "Split the storage/connector/extension architecture into its own living page once docs/README.md frees",
+      "title_fa": "جدا کردن معماری ذخیره‌سازی/کانکتور/افزونه به صفحهٔ زندهٔ مستقل پس از آزاد شدن docs/README.md",
+      "zone": "storage-backends",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "Wave 0 documentation completeness: a dedicated docs/architecture/STORAGE_AND_CONNECTORS.md plus its docs/README.md index row, blocked today because PR#240 holds a live lease on docs/README.md.",
+      "scope_fa": "کامل‌کردن مستندات موج ۰: صفحهٔ اختصاصی و ردیف فهرست آن، که امروز به‌دلیل اجارهٔ فعال PR#240 روی docs/README.md ممکن نیست.",
+      "prerequisites": [
+        "task-272-storage-backend-contract"
+      ],
+      "acceptance_criteria": [
+        "docs/architecture/STORAGE_AND_CONNECTORS.md exists, is indexed in docs/README.md, and passes tests/unit/test_docs_integrity.py",
+        "the page states the three layers, the truthful-capacity policy, the wave roadmap and the security boundaries, and links every enforcing test"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_docs_integrity.py -q (exact output)"
+      ],
+      "exclusive_paths": [
+        "docs/architecture/STORAGE_AND_CONNECTORS.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Blocked by the docs/README.md lease held by task-product-frame-app-first (PR#240)."
     }
   ],
   "deferred_log": [
