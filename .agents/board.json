@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-20T05:32:52Z",
+  "updated_at": "2026-10-20T20:29:44Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3836,6 +3836,40 @@
       "gates_owner": false,
       "generation": 1,
       "note": ""
+    },
+    {
+      "task": "task-product-frame-app-first",
+      "title": "Product frame: NEXUS is an app with a living core; Telegram is one channel adapter",
+      "title_fa": "قاب محصول: NEXUS یک اپ با هستهٔ زنده است؛ تلگرام یکی از آداپترهای کانال است",
+      "zone": "docs-architecture",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Record the app-first product frame in PRODUCT_FRAME.md, AGENTS.md and OVERVIEW.md so every agent stops treating the Telegram bot as the product; no code change.",
+      "scope_fa": "ثبت قاب اپ‌محور در PRODUCT_FRAME.md و AGENTS.md و OVERVIEW.md تا هیچ عاملی ربات تلگرام را خودِ محصول فرض نکند؛ بدون تغییر کد.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "PRODUCT_FRAME.md states the frame, the evidence of current Telegram coupling and the migration ladder, and is indexed in docs/README.md",
+        "AGENTS.md and OVERVIEW.md link to it and no longer describe Telegram as the product",
+        "a docs-integrity test fails if either link is removed"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py",
+        "ruff check on tests/unit/test_docs_integrity.py"
+      ],
+      "exclusive_paths": [
+        "docs/architecture/PRODUCT_FRAME.md",
+        "AGENTS.md",
+        "docs/architecture/OVERVIEW.md",
+        "docs/README.md",
+        "tests/unit/test_docs_integrity.py"
+      ],
+      "owner_hint": "agent: Claude (Living Core), branch docs/app-first-frame",
+      "agent_branch": "docs/app-first-frame",
+      "claimed_at": "2026-10-20T20:29:44Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [

@@ -17,6 +17,7 @@ placeholder text.
 |---|---|
 | [architecture.md](architecture.md) | Front door: the system in one picture + the reading order. |
 | [architecture/OVERVIEW.md](architecture/OVERVIEW.md) | C4 context & container views, stakeholders, the five quality attributes, frozen constraints, deployment topologies. |
+| [architecture/PRODUCT_FRAME.md](architecture/PRODUCT_FRAME.md) | The product frame: NEXUS is an app with a living core and Telegram is one channel adapter — rules for every agent, reproducible coupling evidence, the F0–F3 migration ladder (owner direction; decision record pending). |
 | [architecture/OVERVIEW.fa.md](architecture/OVERVIEW.fa.md) | خلاصهٔ فارسی و نقشهٔ مسیر مطالعه (navigation summary; English wins on conflict). |
 | [architecture/MODULE_MAP.md](architecture/MODULE_MAP.md) | Layer diagram, package inventory, boundary laws → the tests that enforce them, extension recipes. |
 | [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
