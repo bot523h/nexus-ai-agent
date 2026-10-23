@@ -867,7 +867,7 @@
         "CHANGELOG.md",
         "docs/architecture/KNOWLEDGE_RETRIEVAL.md",
         "docs/architecture/MODULE_MAP.md",
-        "docs/architecture/adr/0008-llamaindex-local-retrieval.md",
+        "docs/architecture/adr/0012-local-first-llamaindex-retrieval.md",
         "docs/architecture/adr/README.md",
         "docs/DECISION_LOG.md",
         "docs/README.md",
@@ -875,7 +875,9 @@
         "tests/unit/test_knowledge_retrieval_service.py",
         "tests/unit/test_knowledge_retrieval_cli.py",
         "tests/integration/test_knowledge_retrieval_pipeline.py",
-        "tests/architecture/test_knowledge_retrieval_boundary.py"
+        "tests/architecture/test_knowledge_retrieval_boundaries.py",
+        "docs/ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md",
+        "docs/examples/KNOWLEDGE_RETRIEVAL.md"
       ]
     }
   ],
@@ -3901,7 +3903,7 @@
         "CHANGELOG.md",
         "docs/architecture/KNOWLEDGE_RETRIEVAL.md",
         "docs/architecture/MODULE_MAP.md",
-        "docs/architecture/adr/0008-llamaindex-local-retrieval.md",
+        "docs/architecture/adr/0012-local-first-llamaindex-retrieval.md",
         "docs/architecture/adr/README.md",
         "docs/DECISION_LOG.md",
         "docs/README.md",
@@ -3909,7 +3911,9 @@
         "tests/unit/test_knowledge_retrieval_service.py",
         "tests/unit/test_knowledge_retrieval_cli.py",
         "tests/integration/test_knowledge_retrieval_pipeline.py",
-        "tests/architecture/test_knowledge_retrieval_boundary.py"
+        "tests/architecture/test_knowledge_retrieval_boundaries.py",
+        "docs/ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md",
+        "docs/examples/KNOWLEDGE_RETRIEVAL.md"
       ],
       "owner_hint": "",
       "agent_branch": "arena/01c872e0-nexus-ai-agent",
@@ -3917,7 +3921,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 2
     }
   ],
   "deferred_log": [
