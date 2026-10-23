@@ -2,7 +2,7 @@
 
 **Status:** Living document
 **Scope:** every store the runtime touches, what owns it, how it is migrated, and how data leaves
-**Verified against:** `main` @ `7573249`
+**Verified against:** `main` @ `04469ed` (storage Wave 1, task-272; contract reviewed and hardened in PR #244)
 
 The system uses **one logical data model with two physical backends** (SQLite for local, PostgreSQL/Neon for scale-to-zero) plus three purpose-built stores. Nothing is shared by accident: each store has exactly one owner module.
 
@@ -40,7 +40,8 @@ flowchart LR
 | Checkpoints | `storage/langgraph_checkpoint.py` (`get_checkpointer`) | SQLite or PostgreSQL | disposable | LangGraph runtime state only; deletion never touches messages |
 | Lifecycle index | `storage/checkpoint_lifecycle*.py` | PG table `nexus_checkpoint_lifecycle` / SQLite sidecar table | durable | metadata about checkpoints: age, lineage, lock state, access |
 | Vector store | `features/rag.py` (`vector_path`, `chroma_db_path`) | SQLite/Chroma on disk | rebuildable | derived from documents; safe to drop and re-ingest |
-| Blob tier | `storage/providers/r2.py`, `storage/ai_storage_manager.py` | Cloudflare R2 | durable | idempotent `put`/`delete` behind `ObjectStoragePort` |
+| Blob tier | `storage/providers/r2.py`, `storage/ai_storage_manager.py` | Cloudflare R2 | durable | idempotent `put`/`delete` behind `ObjectStoragePort`; **maintenance artifacts only** (backups, RAG documents) — see §7 |
+| User asset blobs | `storage/object_store.py` (contract), `storage/local_object_store.py` (default), `storage/neon_object_storage.py` (opt-in) | local content-addressed volume, or Neon Object Storage | durable | immutable, content-addressed (`blobs/<2>/<sha256>`); feature-gated by `NEXUS_NEON_STORAGE_*`; see §7 |
 | Creative workspace | `settings.creative_temp_dir` | local temp dir | ephemeral | `slideshow_*` workspaces; stale ones pruned after 24 h |
 
 ## 2. Schema management
@@ -103,3 +104,261 @@ Full policy text: [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md), [`RETENTION_DECISION
 - No PII in dashboard responses (`api/dashboard.py`, `tests/unit/test_dashboard_privacy.py`).
 - No user prompt egress to a training-capable free endpoint unless the strict-privacy flag is off and the user consented (`features/ai_memory.py` consent gate + `LLM_PROVIDERS.md`).
 - No manifest, tone template, or pack resource may contain an executable key (§[`CREATIVE_STUDIO.md`](CREATIVE_STUDIO.md) §3).
+
+---
+
+## 7. Three storage products, not one (Wave 1, task-272)
+
+Nagar needs three things that look similar and must never be conflated. The
+distinction is a security boundary, a capacity-accounting boundary and a
+support boundary at the same time.
+
+```mermaid
+flowchart LR
+    subgraph A["A · Storage backends — Nagar owns the bytes"]
+        local["local content-addressed volume (default)"]
+        neon["Neon Object Storage (opt-in, S3 subset)"]
+        r2["Cloudflare R2 (maintenance blobs: backups, RAG)"]
+    end
+    subgraph B["B · User-authorized drive connectors — the user owns the account"]
+        gdrive["Google Drive"]
+        dropbox["Dropbox"]
+        onedrive["OneDrive"]
+        pcloud["pCloud"]
+    end
+    subgraph C["C · User-installable capability extensions"]
+        connector["connector (declared capabilities)"]
+        capability["typed capability extension"]
+        plugin["executable plugin (sandboxed, separate risk class)"]
+    end
+    app["Nagar Asset Library"]
+    app --> A
+    app -. "explicit consent + per-user OAuth" .-> B
+    app -. "policy-approved invocation only" .-> C
+```
+
+| Layer | Who owns the data | Implemented today | Evidence level |
+|---|---|---|---|
+| **A. Storage backends** | Nagar (the deployment) | `ObjectStore` contract; local content-addressed adapter; Neon Object Storage adapter | contract + both adapters **VERIFIED by offline tests**; Neon live round-trip **BLOCKED** (no credential in this environment) |
+| **B. Drive connectors** | the end user's own account | **nothing per-user.** `storage/unified_cloud.py` holds *static* Dropbox/pCloud/Internxt tokens for one shared account, and Google Drive only through a pre-configured `rclone` remote | **NOT IMPLEMENTED** as a per-user connection (Wave 4) |
+| **C. Capability extensions** | third parties | capability packs exist (`creative/packs/**`, Ed25519 trust root, ADR 0006); no install/catalogue UX, no third-party executable plugin runtime | packs **VERIFIED**; user-installable extensions **NOT IMPLEMENTED** (Wave 6) |
+
+### 7.1 The contract (`src/nexus_ai_agent/storage/object_store.py`)
+
+A narrow, provider-neutral seam for **immutable content-addressed blobs**:
+
+| Operation | Contract | Why it is in the contract |
+|---|---|---|
+| `namespace` | the store's root key prefix (`""` = whole key space) | makes the key space explicit instead of hidden inside an adapter |
+| `put_stream(source, max_bytes, content_type, expected_sha256, metadata, verify_existing)` | streams in, measures SHA-256, publishes, returns `PutResult(key, sha256, size, created, content_verified)` | `max_bytes` is enforced *while reading*; `expected_sha256` pins an identity the caller already measured |
+| `open_bytes` / `iter_chunks` | bounded read / streaming read with end-of-stream digest check | a tampered object raises instead of being served |
+| `head` / `exists` | **recorded metadata** only — never a read of the bytes | lets a retry decide "same bytes already there" without downloading |
+| `verify_bytes` | full byte-level re-read and digest comparison | the *only* supported statement that the stored bytes are intact |
+| `delete` | `DeleteResult(existed, soft, reclaimed_bytes)` | a soft delete must not be reported as reclaimed capacity |
+| `list_keys(prefix=…)` | filters over the **same absolute keys** the other calls accept; default prefix is `namespace`; a prefix outside it is refused | removes the relative-vs-absolute ambiguity that let one adapter prepend a bucket namespace while others did not |
+| `capacity` | `CapacityReport` | see §7.3 |
+| `capabilities` | `BackendCapabilities` | no caller may assume multipart, presign or hard delete |
+
+**Key model (explicit as of the #244 review).** A *key* is backend-absolute and
+opaque: it is the string the backend stores, it is safe to persist, and it is
+exactly what `head` / `open_bytes` / `verify_bytes` / `delete` accept.
+`namespace` is the store's root prefix. `list_keys(prefix=...)` filters those
+same absolute keys, defaults to `namespace`, and **refuses** a prefix outside it
+(`InvalidObjectKey`) rather than silently returning an empty page. No adapter may
+keep a second invisible key space; the Neon bucket prefix is `namespace`, not a
+transform applied on the way in and forgotten on the way out.
+
+**Namespace ownership (enforced as of the #244 round-2 review).** The boundary is
+a **path segment** boundary, not a string prefix: `nagar/assets` owns
+`nagar/assets/…` but never `nagar/assets-other/…`. A bare `str.startswith` cannot
+express that, and `list_objects_v2` matches prefixes literally, so the provider
+happily returns a sibling's keys. Therefore:
+
+* every key-accepting operation (`head`, `exists`, `open_bytes`, `iter_chunks`,
+  `verify_bytes`, `delete`) validates shape **and** membership before issuing any
+  provider request — a foreign key raises `InvalidObjectKey`, never "not found",
+  because "absent" would hide a caller addressing another tenant;
+* `list_keys` and `measure_namespace` apply the same boundary to what the
+  provider returns, so a namespace can neither list nor count its sibling;
+* the rule lives once (`is_within_namespace` / `resolve_namespace_prefix`) and
+  both adapters import it, so the two backends cannot drift apart;
+* the local adapter enforces it too: `staging/…` is a valid key *shape* in the
+  same workspace and is not ours, so `head`/`blob_path` refuse it instead of
+  hashing another workspace file;
+* an empty namespace (`""`, whole key space) must be opted into explicitly
+  (`allow_root_namespace=True`) instead of being inherited from a missing
+  variable — a misconfigured prefix must not claim a shared bucket.
+
+Law S8 in `tests/architecture/test_storage_backend_boundary.py` keeps the rule
+shared; the adversarial sibling-prefix tests live in both unit suites.
+
+**Integrity model — narrowed to what is actually checked.** Metadata presence is
+**not** proof that the stored bytes were verified:
+
+| Call | What it checks | Byte-level? |
+|---|---|---|
+| `put_stream` (new object) | bytes hashed while reading; after upload the object's **size and recorded digest metadata** are re-read | **no** (`content_verified=False`) for Neon; the local adapter re-hashes on publish (`True`) |
+| `put_stream` (existing key) | metadata match ⇒ reuse (`created=False`) | **no** unless `verify_existing=True`, which re-reads and hashes and raises `IntegrityMismatch` on a mismatch |
+| `head` | recorded metadata | **no** |
+| `open_bytes` / `iter_chunks` | returned bytes hashed against the digest the key encodes, and against recorded metadata when both exist | **yes** |
+| `verify_bytes` | full re-read + digest comparison; `False` only when *no* identity exists (neither a content-addressed key nor a recorded digest) | **yes** |
+
+**Two identities, not one (round 2).** A content-addressed key embeds the digest
+and is immutable; the metadata digest is rewritable by anyone with write access.
+Verifying against the metadata alone accepts an object whose **bytes and metadata
+were replaced together** while the key stayed the same — the exact gap closed
+here. The adapters resolve both through `content_digest_from_key` and, when the
+two disagree, raise `IntegrityMismatch` *before* streaming the object rather than
+picking a winner. Removing only the metadata does not disable verification: the
+key is still an identity.
+
+**Local streaming is real streaming (round 2).** `LocalObjectStore` no longer
+materializes an object to read it: `iter_chunks` reads through
+`WorkspaceFilesystem.iter_bytes` chunk by chunk and hashes incrementally, and
+`open_bytes(max_bytes=…)` enforces the bound *while* reading instead of after the
+whole file is in memory. Chunked reads use the same descriptor-relative,
+`O_NOFOLLOW` walk as `read_bytes`, so a streaming read is not a weaker boundary.
+A consumer that stops early has consumed unverified bytes — the contract has
+never claimed a verified prefix, and a full iteration still raises
+`IntegrityMismatch` on a mismatch.
+
+So a backend that records a digest and later serves corrupted bytes is caught at
+*read* time, not at `head` time; and `verify_existing=True` is how a dedupe is
+made safe. Both paths are covered by tests that corrupt bytes while leaving the
+recorded SHA-256 metadata untouched
+(`tests/unit/test_neon_object_storage.py::test_verify_existing_refuses_metadata_that_lies_about_the_bytes`,
+`::test_head_does_not_verify_bytes`, `tests/unit/test_object_store_contract.py::test_verify_bytes_detects_tampering_that_preserves_metadata`).
+
+**Environment and credential sourcing.** The endpoint alone switches the backend
+on. `AWS_ENDPOINT_URL_S3` is honoured only as Neon's documented alias *and* only
+when it parses to a `*.neon.tech` authority; the credential pair
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` is accepted as an alias; the
+**region is never taken from `AWS_REGION`** — Neon's branch region is explicit
+(`NEXUS_NEON_STORAGE_REGION`) because a wrong region silently targets the wrong
+endpoint. Endpoints are parsed by authority (`urlsplit`), so
+`https://evil.example?.neon.tech`, embedded userinfo, a path component or a
+non-443 port are all refused.
+
+Errors are typed (`BackendNotConfigured`, `ObjectNotFound`, `ObjectTooLarge`,
+`IntegrityMismatch`, `ObjectConflict`, `AuthorizationDenied`,
+`TransientBackendError`, `BackendUnavailable`, `UnsupportedOperation`,
+`InvalidObjectKey`) so a failure disables exactly one backend and never the
+process.
+
+**Why a third seam was necessary.** `storage/providers/base.py::StorageProvider`
+is a path-based maintenance seam with no checksum, idempotency or capacity
+semantics; `creative/assets/ports.py::BlobStore` is a *staging* contract
+(`new_staging_key` → `stage_to` → `store`) shaped by the local filesystem. A
+remote store cannot implement the staging dance honestly. The new contract does
+not replace either: R2 keeps its backup/RAG routing untouched, and the Asset
+Library's ingest path keeps its staging seam until Wave 2 refactors the split.
+
+### 7.2 Backends: what exists, and what each one truly is
+
+| Backend | What it is | Status | Notes |
+|---|---|---|---|
+| Local content-addressed | `LocalObjectStore` over the existing `LocalContentAddressedBlobStore` + `WorkspaceFilesystem` | **implemented, offline-tested** | the *only* filesystem security layer; no delete (blobs are shared), no metadata sidecar — both declared in `capabilities()` |
+| Neon Object Storage | `NeonObjectStorage` over the branch S3 endpoint | **adapter implemented, offline-tested; live round-trip BLOCKED** | beta; path-style + SigV4 only; `DeleteObject` is a **soft** delete; versioning/lifecycle stored-but-unenforced; no quota API |
+| Cloudflare R2 | existing technical blob tier | **unchanged by this wave** | user-asset use is Wave 2 and needs a *separate* bucket/credential pair, never the backup configuration |
+| Google Drive / Dropbox / OneDrive / pCloud | *connectors*, not backends | **not implemented per-user** | see §7.4 |
+
+The Neon endpoint is validated, not trusted: `NeonStorageConfig` refuses a
+non-`https` endpoint, refuses a host outside `*.neon.tech` (pointing at AWS S3
+is a documented Neon failure mode), and refuses an invalid bucket name. The
+adapter sets `endpoint_url`, `region_name`, path-style addressing, SigV4 and
+`request_checksum_calculation="when_required"`, and disables botocore's own
+retry loop so exactly one bounded retry policy exists.
+
+### 7.3 Capacity must be truthful (the rule this section exists for)
+
+`CapacityReport` requires a **source** and a timezone-aware **`measured_at`**,
+and carries one of three provenances:
+
+| Kind | Meaning | Exposed as "available"? |
+|---|---|---|
+| `AUTHORITATIVE` | a provider quota/usage API answered for this account | yes — and only when both quota and usage are present |
+| `ADVERTISED` | a plan allowance published by the provider | **no** (`verified_remaining_bytes` stays `None`) |
+| `UNKNOWN` | no dependable figure exists | **no** — and the type *rejects* carrying quota/used numbers |
+
+Rules that follow from it:
+
+- **Never sum advertised plans.** "15 GB + 2 GB + 10 GB" is not capacity; the
+  previous `PROVIDER_LIMITS` / `TOTAL_FREE_GB` table in
+  `storage/unified_cloud.py` is exactly that anti-pattern and is not used by
+  this layer.
+- **Unique bytes ≠ replicated bytes.** `CapacityReport` keeps
+  `measured_unique_bytes` and `replicated_bytes` apart; a backup copy is not
+  new capacity.
+- **Database capacity is not object capacity.** Neon PostgreSQL storage and
+  Neon Object Storage are separate products with separate limits.
+- **Deletion is not reclamation** when the provider soft-deletes (Neon). The
+  report says so in `note`, and `DeleteResult.reclaimed_bytes` stays `0`.
+- **A failed or revoked credential is zero capacity, not "available".** The
+  backend is reported unavailable; nothing is silently re-routed.
+
+### 7.4 User-authorized drive connectors (Wave 4 — not started)
+
+Target: the user connects **their own** Google Drive / Dropbox / OneDrive /
+pCloud account. That requires a per-user OAuth lifecycle (state/CSRF, code
+exchange, encrypted refresh token, rotation, revocation, disconnect), durable
+ownership by Principal **and** workspace/project, and least-privilege scopes.
+
+Today's code is not that, and must not be described as it:
+
+- `unified_cloud._DropboxProvider` / `_PcloudProvider` / `_InternxtProvider`
+  take a **static** bearer token from the environment: one shared identity for
+  every user of the deployment.
+- `_PcloudProvider.get_usage()` returns a hard-coded 10 GB allocation and
+  `used_bytes: 0`; `_InternxtProvider` returns the same shape. Those are
+  fabricated measurements, not observations.
+- Google Drive is reachable only through a pre-configured `rclone` remote
+  (`RcloneProvider`) — a deployment-wide CLI credential, with no OAuth
+  callback, no consent screen and no per-user state.
+- OneDrive is absent from the tree entirely.
+
+A per-user connection is **not** an S3 bucket and needs its own provider-specific
+adapter, quota semantics and error surface. Wave 4 also depends on durable
+identity ownership: the reference `PrincipalDirectory` is in-memory today (open
+PR #243), so a per-process map cannot be the ownership authority for a
+persistent connection.
+
+### 7.5 User-installable capability extensions (Wave 6 — not started)
+
+Three distinct things, three distinct risk classes:
+
+1. **Connector** — a described external service (auth + scoped API access).
+2. **Typed capability extension** — declared operations with typed inputs and
+   outputs, executed by NEXUS under its existing policy.
+3. **Executable third-party plugin** — code. An OAuth grant must never imply
+   permission to run code; plugins need versioning, signature/trust
+   verification, declared permissions, isolation (separate process), resource
+   limits, uninstall and rollback.
+
+Invocation stays behind the existing `CommandBus` / capability / policy
+pipeline; no extension gets its own execution path.
+
+### 7.6 Explicit non-goals
+
+- No "unlimited" or "guaranteed multi-terabyte" capacity claim, and no summing
+  of free tiers.
+- No account multiplication, quota evasion, or test-account farming.
+- No silent deletion, eviction or orphaning when a quota is exhausted or a token
+  is revoked.
+- No Neon **Auth** replacing the Principal model merely because Neon provides
+  storage.
+- No third-party executable code inside the trusted NEXUS process.
+
+### 7.7 Staged roadmap and current status
+
+| Wave | Scope | Status |
+|---|---|---|
+| 0 | live audit; three-layer architecture; capacity policy; non-goals | **done in this page** (dedicated page deferred: `docs/README.md` is leased by PR #240) |
+| 1 | typed contract + local adapter + Neon adapter + tests | **this wave** — offline-verified, live round-trip blocked |
+| 2 | R2 as a *separate* user-asset backend | queued; must not disturb backup/RAG routing |
+| 3 | registry, health, quota, placement/fallback policy, per-asset location | queued; needs authoritative quota sources |
+| 4 | per-user OAuth drives (smallest slice first) | queued; blocked on durable identity ownership (PR #243 is still a reference in-memory directory) |
+| 5 | Connections UI/API + connector manifests | queued; blocked on Wave 4 |
+| 6 | trusted extension catalogue | queued; blocked on Waves 3–5 |
+
+Enforcing tests for every law in this section: `tests/architecture/test_storage_backend_boundary.py`
+(R22 in [`MODULE_MAP.md`](MODULE_MAP.md) §3).

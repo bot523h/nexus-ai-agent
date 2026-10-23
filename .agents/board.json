@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-20T05:32:52Z",
+  "updated_at": "2026-10-22T21:22:20Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -850,6 +850,33 @@
         "tests/unit/test_selfhood_runtime.py",
         "src/nexus_ai_agent/bot/app.py",
         "src/nexus_ai_agent/config/settings.py"
+      ]
+    },
+    {
+      "id": "storage-backends",
+      "description": "Provider-neutral object-storage contract + Neon Object Storage / R2 / local content-addressed backends for Nagar-owned files (Wave 1). Drive connectors, connector SDK and extension catalogue are later waves and NOT in this zone.",
+      "paths": [
+        "src/nexus_ai_agent/storage/object_store.py",
+        "src/nexus_ai_agent/storage/neon_object_storage.py",
+        "src/nexus_ai_agent/storage/local_object_store.py",
+        "tests/unit/test_object_store_contract.py",
+        "tests/unit/test_neon_object_storage.py",
+        "tests/architecture/test_storage_backend_boundary.py",
+        "docs/architecture/DATA_AND_STORAGE.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/STORAGE_AND_CONNECTORS.md",
+        ".env.example"
+      ]
+    },
+    {
+      "id": "r2-user-assets",
+      "description": "Wave 2: Cloudflare R2 as a user-asset ObjectStore backend, configured separately from the existing maintenance blob tier (backups, heavy RAG docs).",
+      "paths": [
+        "src/nexus_ai_agent/storage/r2_object_store.py",
+        "tests/unit/test_r2_object_store.py",
+        "tests/integration/test_r2_asset_roundtrip.py",
+        "docs/architecture/DATA_AND_STORAGE.md"
       ]
     }
   ],
@@ -3803,7 +3830,7 @@
       "title_fa": "فاز ۲ب هستهٔ زنده — append اتمیک دسته‌ای، بوت fail-safe، پروب‌های واقعی و اتصال opt-in به بات",
       "zone": "selfhood",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "append_many (all-or-nothing); selfhood/runtime.py try_boot_self (ok/unavailable/tampered/charter_drift); agent/self_vitals.py real ram/disk probes + start_vitals; minimal opt-in hook in bot/app.py and two settings (default off).",
       "scope_fa": "append_many اتمیک؛ try_boot_self با چهار وضعیت؛ پروب‌های واقعی رم و دیسک و start_vitals؛ اتصال حداقلی و opt-in (پیش‌فرض خاموش) در bot/app.py.",
       "prerequisites": [
@@ -3835,7 +3862,275 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
-      "note": ""
+      "note": "",
+      "release_reason": "auto-released by gc at 2026-10-22T05:35:06Z (stale active lease)"
+    },
+    {
+      "task": "task-272-storage-backend-contract",
+      "title": "Storage Wave 1: provider-neutral object-store contract + Neon Object Storage backend",
+      "title_fa": "موج ۱ ذخیره‌سازی: قرارداد مستقل از ارائه‌دهنده + بک‌اند Neon Object Storage",
+      "zone": "storage-backends",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "A typed, provider-neutral object-store contract for files Nagar owns (streamed put/get, measured SHA-256, idempotent content-addressed publishing, capabilities, truthful capacity reporting), a Neon Object Storage adapter over its documented S3-compatible branch endpoint, and the existing local content-addressed blob store as a conforming backend. Documentation lands in the living DATA_AND_STORAGE.md page (no new docs/ page: docs/README.md is under PR#240's live lease). Drive connectors (Wave 4) and extension catalogue (Wave 6) are out of scope.",
+      "scope_fa": "قرارداد تایپ‌شدهٔ مستقل از ارائه‌دهنده برای فایل‌های تحت مالکیت ناگار، آداپتور Neon Object Storage روی نقطهٔ پایانی S3-compatible مستند آن، و حفظ انبار محلی content-addressed به‌عنوان بک‌اند سازگار. مستندات در صفحهٔ زندهٔ DATA_AND_STORAGE.md می‌نشیند (بدون صفحهٔ جدید چون docs/README.md در اجارهٔ فعال PR#240 است). کانکتورهای درایو (موج ۴) و کاتالوگ افزونه (موج ۶) خارج از دامنه‌اند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A provider-neutral ObjectStore contract exists: typed error taxonomy, declared BackendCapabilities, streamed put with bounded max_bytes, measured SHA-256, idempotent content-addressed republish, head/exists/delete/list.",
+        "CapacityReport distinguishes AUTHORITATIVE / ADVERTISED / UNKNOWN, carries measured_at + source, and refuses to invent a number (UNKNOWN must not carry quota/used values).",
+        "NeonObjectStorage implements the contract against the documented S3-compatible branch endpoint (path-style, SigV4, endpoint_url + force_path_style), imports boto3 lazily, retries transient failures a bounded number of times, and never retries a non-transient 4xx.",
+        "Missing configuration is a typed BackendNotConfigured and the settings factory returns None instead of raising; importing the module without credentials cannot break startup.",
+        "The local content-addressed blob store satisfies the same contract test suite (CHECKSUM, dedupe, oversize, missing object, tamper detection).",
+        "No secret (access key, secret key, token) appears in repr, exception text or log fields; proven by test.",
+        "Soft-delete semantics of the provider are declared in capabilities and never reported as reclaimed capacity.",
+        "DATA_AND_STORAGE.md documents the three layers (backends / user-authorized drive connectors / user-installable extensions), the capacity truth policy, and the wave roadmap; MODULE_MAP.md §3 names the enforcing test; DECISION_LOG.md carries the decision as PROPOSED (not accepted).",
+        "The new credential variables are documented as a commented, empty block in .env.example so an operator can discover the feature without reading source."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_object_store_contract.py tests/unit/test_neon_object_storage.py tests/architecture/test_storage_backend_boundary.py -q (exact output)",
+        "ruff check on every changed Python file",
+        "python scripts/agent_board.py check --no-remote --files <changed> --branch <branch> exit 0, plus a recorded multi-source probe of all open PR boards (the referee exits 2 repo-wide because no gates_owner exists)",
+        "CI run URL for the exact tested head, or an explicit 'gates deferred to gates owner' statement",
+        "live provider round-trip result, or the precise missing credential/setup step (mocks are not live evidence)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/object_store.py",
+        "src/nexus_ai_agent/storage/neon_object_storage.py",
+        "src/nexus_ai_agent/storage/local_object_store.py",
+        "tests/unit/test_object_store_contract.py",
+        "tests/unit/test_neon_object_storage.py",
+        "tests/architecture/test_storage_backend_boundary.py",
+        "docs/architecture/DATA_AND_STORAGE.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/STORAGE_AND_CONNECTORS.md",
+        ".env.example"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/edeae323-nexus-ai-agent",
+      "claimed_at": "2026-10-22T12:10:39Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "PR#244 round 2 (2026-10-22) closed three defects found in independent review, all verified on head 9bd1c69. (A) Namespace ownership was a string prefix, so 'nagar/assets' could see 'nagar/assets-other': ownership is now a path-segment rule defined once (is_within_namespace/resolve_namespace_prefix) and enforced on every key operation BEFORE any provider request, plus re-applied to list_keys/measure_namespace results (list_objects_v2 matches prefixes literally). The local adapter no longer exposes staging/… through head/blob_path. A root namespace needs explicit allow_root_namespace=True. (B) Local streaming was fake: iter_chunks materialized the object and open_bytes read everything before enforcing max_bytes. Both now stream through the boundary's new chunked reader (WorkspaceFilesystem.iter_bytes, same O_NOFOLLOW walk) with incremental hashing; the bound is enforced while reading. (C) verify_bytes compared only the metadata digest, so rewriting bytes AND metadata around an unchanged content-addressed key passed verification. It now resolves both identities and raises IntegrityMismatch before streaming when they disagree; the pre-existing byte-corruption tests are unchanged. LIMITATIONS: Neon live round-trip still BLOCKED (zero credentials in this environment — mocks are not live evidence); local delete stays UnsupportedOperation by design (shared content-addressed blobs); D-0030 remains PROPOSED. Referee: exit 2 repo-wide (mandatory gates_owner law on main — the PR#211 defect — and, without --repo, an unreadable open-PR source); with --repo: 28 sources read, exit 2 for the gates_owner law only. A local-only --no-remote check exits 0 and is explicitly NOT a global pass. Merge: BLOCKED on REVIEW_REQUIRED with 0 reviews; the sole collaborator is the owner, so an independent reviewer must be invited — this session cannot self-approve. | ARENA-B re-verification (independent of the previous session's report): live state re-read (main 04469ed unchanged, PR#244 head b7a57c0, PR#211 still OPEN/BLOCKED). Focused suite re-run on the pushed source: 212 passed; architecture 266; docs/truth 106; ruff/format/mypy clean. Full-unit comparison made by EXACT failing-test-ID set (not counts) between head b7a57c0 and base 04469ed: both 186 IDs, comm both directions empty -> IDENTICAL sets, 0 new failures, +163 passing tests. Referee exit 2 with 28 sources read (mandatory gates_owner law on main) — NOT reinterpreted as a pass. NO MERGE: PR#211 governance dependency unmerged, zero human reviews, single collaborator. Honest nuance on the read bound: it is enforced at chunk granularity, so a 100-byte bound rejects after one 1 MiB chunk is read, not byte-exactly. | POST-GOVERNANCE REFRESH: PR#211 merged (main d7bbd14); branch merged main normally (8028966, no rebase/force-push) and the board was reconciled deliberately — Option B policy from main, all 102 main claims kept, only the evidenced expired-lease GC transition applied, branch claims preserved (272/275 still active_in_review, 273/274 still queued). Verification on the refreshed head: 212 focused storage, 153 boundary/security, 266 architecture, 106 docs/truth, 136 board laws; full-unit failed AND errored ID sets identical to base d7bbd14 (186 + 11), +163 passing. Referee now exits 0 on this branch (28 sources); on main 0/1/2 all reproduce correctly. Neon live round-trip still BLOCKED. Merge still requires an independent human review, which remains unavailable.",
+      "generation": 1,
+      "delivered": [
+        "src/nexus_ai_agent/storage/object_store.py (contract: namespace ownership law, is_within_namespace, resolve_namespace_prefix, content_digest_from_key, measure_namespace)",
+        "src/nexus_ai_agent/storage/local_object_store.py (ownership on every op, chunked streaming with incremental digest, bounded open_bytes, measure_namespace)",
+        "src/nexus_ai_agent/storage/neon_object_storage.py (ownership before every request, sibling-safe listing/measurement, two-identity digest, explicit root-namespace opt-in)",
+        "src/nexus_ai_agent/tools/filesystem_policy.py (contained chunked reader iter_bytes — see task-275)",
+        "tests/unit/test_object_store_contract.py (88: contract + adversarial sibling prefixes + measured laziness/bounds)",
+        "tests/unit/test_neon_object_storage.py (70: incl. 'refused before any provider request' and joint byte+metadata rewrite)",
+        "tests/architecture/test_storage_backend_boundary.py (17: laws S1–S9)",
+        "tests/unit/test_filesystem_policy_primitives.py (37: chunked-reader boundary laws)",
+        "docs/architecture/DATA_AND_STORAGE.md §7.1 (ownership, two identities, truthful local streaming)",
+        "docs/architecture/MODULE_MAP.md R22 (laws S8/S9)",
+        "docs/DECISION_LOG.md D-0030 amendment 2 (still PROPOSED)"
+      ],
+      "evidence": {
+        "pr": "https://github.com/bot523h/nexus-ai-agent/pull/244",
+        "pr_head_tested": "9bd1c69d7f2abc0298e9885b95b9b74fc84c8a6f",
+        "ci_run": "https://github.com/bot523h/nexus-ai-agent/actions/runs/39771678397 (conclusion success, 20/20 jobs, head 9bd1c69)",
+        "commands": [
+          "pytest tests/unit/test_object_store_contract.py tests/unit/test_neon_object_storage.py tests/architecture/test_storage_backend_boundary.py tests/unit/test_filesystem_policy_primitives.py -q → 212 passed",
+          "pytest tests/architecture -q → 266 passed",
+          "pytest tests/unit/test_docs_integrity.py tests/unit/test_truth_doctor.py -q → 106 passed",
+          "pytest tests/unit -q --tb=no (ignoring live-PG + fingerprint modules) → 186 failed / 3617 passed / 11 errors; failing set is a strict SUBSET of base cf73020 (187) — zero new failures",
+          "ruff check + ruff format --check (8 changed Python files) → clean",
+          "mypy (4 changed modules) → Success",
+          "old-vs-new probe (cf73020 modules): sibling leak True→False, measure (23,2)→(3,1), joint rewrite True→IntegrityMismatch, iter_chunks read-ahead 4096→256 bytes, open_bytes whole-read 3145728→bounded, head('staging/candidate') metadata→InvalidObjectKey"
+        ],
+        "referee": "exit 2 (mandatory gates_owner on main; and open-PR source unreadable without --repo). With --repo: 28 sources, exit 2 for the gates_owner law only. Local --no-remote: exit 0, explicitly local-only.",
+        "live_provider_evidence": "NONE — Neon round-trip BLOCKED (no credential/bucket in this environment)",
+        "review_state": "REVIEW_REQUIRED; 0 human reviews; automated CodeRabbit review on an older commit only; sole collaborator is the owner",
+        "arena_b_reverification": {
+          "date": "2026-10-22T16:32:07Z",
+          "head_verified": "b7a57c0cc2f93aa37603a14de4a8e8c1c1dff6da",
+          "base_verified": "04469ed0f46fdc66752cdea36d25ce2145db3f1e",
+          "ci_runs_on_head": [
+            "https://github.com/bot523h/nexus-ai-agent/actions/runs/39776244664 (success, 20/20)",
+            "https://github.com/bot523h/nexus-ai-agent/actions/runs/39780481477 (success, 20/20)"
+          ],
+          "local_commands": [
+            "focused storage suite -> 212 passed",
+            "tests/architecture -> 266 passed",
+            "docs integrity + truth doctor -> 106 passed",
+            "full unit (minus live-PG/fingerprint) -> 186 failed / 3617 passed / 11 errors",
+            "exact failing-ID diff vs base 04469ed -> 186 vs 186, empty both directions, +163 passed",
+            "ruff check / ruff format --check / mypy -> clean / clean / Success",
+            "old-vs-new probe: sibling leak True->False, measure (23,2)->(3,1), joint rewrite True->IntegrityMismatch, staging head metadata->InvalidObjectKey, iter_chunks 4096B->256B before first yield, open_bytes 3145728B->1048576B"
+          ],
+          "referee": "exit 2, 28 sources read, mandatory gates_owner law on main",
+          "governance_dependency": "PR #211 OPEN, mergeStateStatus BLOCKED, REVIEW_REQUIRED — governance chain not closed; merge of #244 withheld",
+          "review": "0 human reviews; collaborators=[bot523h]; review request 422 (author)",
+          "live_provider_evidence": "NONE — Neon round-trip still BLOCKED (no credential in this environment)"
+        },
+        "post_governance_refresh": {
+          "date": "2026-10-22T21:22:20Z",
+          "governance_dependency": "CLOSED — PR #211 merged 2026-10-22T20:22:31Z as d7bbd147a0135e581012a9a819b748e8469f588c",
+          "main_sha_at_refresh": "d7bbd147a0135e581012a9a819b748e8469f588c",
+          "merge_commit": "80289664c934e70bba294caa41fa067c84b4f241 (parents 06e7566 + d7bbd14)",
+          "head_verified": "8028966",
+          "ci_runs": [
+            "39848293611 — post-#211 main CI on d7bbd14: success 20/20",
+            "39852979896 — PR#244 refreshed head 8028966: success 20/20"
+          ],
+          "local_commands": [
+            "focused storage suite -> 212 passed",
+            "filesystem boundary + security -> 153 passed",
+            "tests/architecture -> 266 passed",
+            "docs integrity + truth doctor -> 106 passed",
+            "board/authority/integrity/mutation tests -> 136 passed",
+            "board integrity gate -> OK (329868 bytes)",
+            "ruff check / ruff format --check / mypy -> clean / clean / Success",
+            "full unit lane vs NEW base d7bbd14 -> head 186 failed + 11 errors / base 186 failed + 11 errors",
+            "failed-ID diff: empty both directions (identical); errored-ID diff: empty both directions (identical); +163 passing (3674 vs 3511)"
+          ],
+          "referee": "EXIT 0 on the refreshed branch: 28 sources read, 'gates_owner (advisory): none — no mandatory global gates owner'. On merged main: exit 0 on an unclaimed file, exit 1 on a proven real overlap (task-272 vs src/nexus_ai_agent/storage/object_store.py), exit 2 on an unreadable required source. The old repo-wide exit 2 caused by the mandatory gates_owner is gone.",
+          "board_reconciliation": "102 canonical main claims preserved (one evidenced lease-GC transition only); 4 branch claims preserved; 0 duplicates; 68 main zones byte-identical; both policy fields Option B.",
+          "live_provider_evidence": "NONE — Neon round-trip remains BLOCKED (no operator-provisioned bucket/credentials)",
+          "review": "0 human reviews, 0 review requests; collaborators = [bot523h] (PR author) — cannot request review from the author",
+          "ref_retirement": "DEFERRED — refs/nexus/board untouched at d919635dfa3d4eed038bcdb57e42c76879243fb5"
+        }
+      }
+    },
+    {
+      "task": "task-273-storage-connectors-page",
+      "title": "Split the storage/connector/extension architecture into its own living page once docs/README.md frees",
+      "title_fa": "جدا کردن معماری ذخیره‌سازی/کانکتور/افزونه به صفحهٔ زندهٔ مستقل پس از آزاد شدن docs/README.md",
+      "zone": "storage-backends",
+      "priority": "P2",
+      "status": "queued",
+      "scope": "Wave 0 documentation completeness: a dedicated docs/architecture/STORAGE_AND_CONNECTORS.md plus its docs/README.md index row, blocked today because PR#240 holds a live lease on docs/README.md.",
+      "scope_fa": "کامل‌کردن مستندات موج ۰: صفحهٔ اختصاصی و ردیف فهرست آن، که امروز به‌دلیل اجارهٔ فعال PR#240 روی docs/README.md ممکن نیست.",
+      "prerequisites": [
+        "task-272-storage-backend-contract"
+      ],
+      "acceptance_criteria": [
+        "docs/architecture/STORAGE_AND_CONNECTORS.md exists, is indexed in docs/README.md, and passes tests/unit/test_docs_integrity.py",
+        "the page states the three layers, the truthful-capacity policy, the wave roadmap and the security boundaries, and links every enforcing test"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_docs_integrity.py -q (exact output)"
+      ],
+      "exclusive_paths": [
+        "docs/architecture/STORAGE_AND_CONNECTORS.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Still blocked: PR#240 (task-product-frame-app-first) holds the live lease on docs/README.md, so the page cannot be indexed. Do not edit docs/README.md while that lease holds."
+    },
+    {
+      "task": "task-274-r2-user-asset-backend",
+      "title": "Storage Wave 2: Cloudflare R2 as a separate user-asset ObjectStore backend",
+      "title_fa": "موج ۲ ذخیره‌سازی: R2 به‌عنوان بک‌اند دارایی کاربر روی قرارداد ObjectStore، جدا از لایهٔ نگهداری",
+      "zone": "r2-user-assets",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Adapt the existing R2 S3 client into an ObjectStore-conforming *user-asset* backend with its own bucket and credential pair, deliberately separate from the maintenance tier that routes backups/ and rag-docs/ (storage/ai_storage_manager.py). No change to the maintenance routing, no change to the production default (local content-addressed store), no Wave 3 registry/placement work.",
+      "scope_fa": "تبدیل کلاینت S3 موجود R2 به بک‌اند دارایی کاربر سازگار با ObjectStore با باکت و جفت اعتبارنامهٔ مستقل از لایهٔ نگهداری (backups/ و rag-docs/). مسیر نگهداری و پیش‌فرض تولید تغییر نمی‌کند.",
+      "prerequisites": [
+        "task-272-storage-backend-contract"
+      ],
+      "prerequisite_note": "Operator prerequisites (not task ids): an R2 asset bucket distinct from the backup bucket, and a scoped R2 API token limited to that bucket. The owner must provision both out-of-band; no credential is requested or accepted in chat, and the task stays BLOCKED until they exist.",
+      "acceptance_criteria": [
+        "An ObjectStore implementation for R2 passes the same contract laws as the local and Neon backends (absolute keys, namespace refusal, verify_bytes, capacity provenance, soft/hard delete accounting).",
+        "The asset backend uses a distinct bucket + credential pair from the maintenance tier; a test proves the backup/RAG routing (backups/, rag-docs/, AIStorageManager.is_blob_key) is byte-for-byte unchanged.",
+        "Missing or partial R2 asset configuration yields None from its settings factory: startup cannot break and the local backend stays the default.",
+        "Retry is bounded and typed; a 403 is never retried; no secret appears in repr, exception text or logs.",
+        "No production default changes; rollback is a configuration flip back to the local backend, documented.",
+        "Capacity is reported as UNKNOWN unless an authoritative figure is obtainable; no advertised free-tier number is used."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_r2_object_store.py tests/unit/test_r2_provider.py tests/unit/test_unified_cloud.py -q (exact output)",
+        "pytest tests/architecture -q (exact output; R22 must still pass)",
+        "ruff check + ruff format --check on every changed Python file, mypy on the new modules",
+        "agent_board.py check --no-remote exit 0 plus a recorded multi-source probe of all open PR boards",
+        "LIVE round-trip against the operator bucket recorded as evidence, or an explicit BLOCKED statement naming the missing bucket/token step (mocks are not live evidence)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/r2_object_store.py",
+        "tests/unit/test_r2_object_store.py",
+        "tests/integration/test_r2_asset_roundtrip.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Registered 2026-10-22 during PR#244 review; queued only — Wave 2 is deliberately NOT implemented on this branch."
+    },
+    {
+      "task": "task-275-filesystem-chunked-reads",
+      "title": "Execution-core: contained chunked reads on WorkspaceFilesystem (storage round-2 prerequisite)",
+      "title_fa": "هستهٔ اجرا: خواندن تکه‌تکهٔ مهارشده روی WorkspaceFilesystem (پیش‌نیاز دور دوم ذخیره‌سازی)",
+      "zone": "execution-core",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "Add an additive, descriptor-relative chunked reader (iter_bytes) to the single filesystem boundary so a caller can enforce a byte bound while reading instead of after buffering the whole file. Same containment as read_bytes: validated parent walk, O_NOFOLLOW leaf, regular-file check. No change to existing primitives, no second filesystem implementation, no new public write path. Requested by task-272 round 2 (the local object store cannot stream honestly without it).",
+      "scope_fa": "افزودن خوانندهٔ تکه‌تکهٔ افزایشی (iter_bytes) به تنها مرز فایل‌سیستم، با همان مهار read_bytes؛ بدون تغییر رفتار اولیه‌های موجود و بدون پیاده‌سازی دوم فایل‌سیستم.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "iter_bytes yields bounded chunks that reassemble to the file, without buffering it whole.",
+        "It rejects a symlinked leaf, a directory and a missing file exactly as read_bytes does (same O_NOFOLLOW descriptor walk).",
+        "A non-positive chunk_size is a ValueError; abandoning the iterator closes the descriptor without error.",
+        "No existing primitive changes behaviour: the pre-existing boundary, staging and security suites stay green."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_filesystem_policy_primitives.py tests/unit/test_filesystem_boundary.py tests/integration/test_asset_library_filesystem_security.py -q",
+        "ruff check + mypy on the boundary module"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/tools/filesystem_policy.py",
+        "tests/unit/test_filesystem_policy_primitives.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/edeae323-nexus-ai-agent",
+      "claimed_at": "2026-10-22T12:10:39Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "note": "Delivered as PR#244 round-2 prerequisite and verified on head 9bd1c69: WorkspaceFilesystem.iter_bytes yields bounded chunks with the same validated parent walk + O_NOFOLLOW leaf open as read_bytes, closes the descriptor on early abandonment, and rejects symlink leaves, directories, missing files and non-positive chunk sizes. No existing primitive changed; the boundary, staging, sandbox and asset-library filesystem-security suites stay green (153 + 12 passed). | POST-GOVERNANCE REFRESH: PR#211 merged (main d7bbd14); branch merged main normally (8028966, no rebase/force-push) and the board was reconciled deliberately — Option B policy from main, all 102 main claims kept, only the evidenced expired-lease GC transition applied, branch claims preserved (272/275 still active_in_review, 273/274 still queued). Verification on the refreshed head: 212 focused storage, 153 boundary/security, 266 architecture, 106 docs/truth, 136 board laws; full-unit failed AND errored ID sets identical to base d7bbd14 (186 + 11), +163 passing. Referee now exits 0 on this branch (28 sources); on main 0/1/2 all reproduce correctly. Neon live round-trip still BLOCKED. Merge still requires an independent human review, which remains unavailable.",
+      "evidence": {
+        "pr": "https://github.com/bot523h/nexus-ai-agent/pull/244",
+        "pr_head_tested": "9bd1c69d7f2abc0298e9885b95b9b74fc84c8a6f",
+        "ci_run": "https://github.com/bot523h/nexus-ai-agent/actions/runs/39771678397 (success, 20/20)",
+        "commands": [
+          "pytest tests/unit/test_filesystem_policy_primitives.py -q → 37 passed",
+          "pytest tests/unit/test_asset_library_blob_store.py tests/unit/test_filesystem_boundary.py tests/unit/test_execution_staging.py tests/unit/test_shell_sandbox.py tests/architecture/test_execution_boundary_enforcement.py -q → 153 passed",
+          "pytest tests/integration/test_asset_library_filesystem_security.py -q → 12 passed",
+          "ruff + ruff format + mypy on filesystem_policy.py → clean"
+        ],
+        "post_governance_refresh": {
+          "date": "2026-10-22T21:22:20Z",
+          "governance_dependency": "CLOSED — PR #211 merged 2026-10-22T20:22:31Z as d7bbd147a0135e581012a9a819b748e8469f588c",
+          "main_sha_at_refresh": "d7bbd147a0135e581012a9a819b748e8469f588c",
+          "merge_commit": "80289664c934e70bba294caa41fa067c84b4f241 (parents 06e7566 + d7bbd14)",
+          "head_verified": "8028966",
+          "ci_runs": [
+            "39848293611 — post-#211 main CI on d7bbd14: success 20/20",
+            "39852979896 — PR#244 refreshed head 8028966: success 20/20"
+          ],
+          "local_commands": [
+            "focused storage suite -> 212 passed",
+            "filesystem boundary + security -> 153 passed",
+            "tests/architecture -> 266 passed",
+            "docs integrity + truth doctor -> 106 passed",
+            "board/authority/integrity/mutation tests -> 136 passed",
+            "board integrity gate -> OK (329868 bytes)",
+            "ruff check / ruff format --check / mypy -> clean / clean / Success",
+            "full unit lane vs NEW base d7bbd14 -> head 186 failed + 11 errors / base 186 failed + 11 errors",
+            "failed-ID diff: empty both directions (identical); errored-ID diff: empty both directions (identical); +163 passing (3674 vs 3511)"
+          ],
+          "referee": "EXIT 0 on the refreshed branch: 28 sources read, 'gates_owner (advisory): none — no mandatory global gates owner'. On merged main: exit 0 on an unclaimed file, exit 1 on a proven real overlap (task-272 vs src/nexus_ai_agent/storage/object_store.py), exit 2 on an unreadable required source. The old repo-wide exit 2 caused by the mandatory gates_owner is gone.",
+          "board_reconciliation": "102 canonical main claims preserved (one evidenced lease-GC transition only); 4 branch claims preserved; 0 duplicates; 68 main zones byte-identical; both policy fields Option B.",
+          "live_provider_evidence": "NONE — Neon round-trip remains BLOCKED (no operator-provisioned bucket/credentials)",
+          "review": "0 human reviews, 0 review requests; collaborators = [bot523h] (PR author) — cannot request review from the author",
+          "ref_retirement": "DEFERRED — refs/nexus/board untouched at d919635dfa3d4eed038bcdb57e42c76879243fb5"
+        }
+      }
     }
   ],
   "deferred_log": [
