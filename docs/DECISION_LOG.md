@@ -2103,3 +2103,45 @@ outside CI — a silent skip is not coverage, which is why a unit test pins the 
 workflow; (c) creating a per-run database — `CREATE DATABASE` is not granted on every hosted
 PostgreSQL (notably Neon), so it would have traded a data-safety guarantee for a
 coverage gap on exactly the deployments the test exists to protect.
+
+### D-0029 — Knowledge retrieval V1: evidence over convenience — a vector hit is not evidence until the registry vouches for it (task-273)
+
+**Date:** 2026-10-23 · **Status:** accepted · **Scope:** `knowledge_retrieval/`, `adapters/llamaindex_retrieval.py`, CLI `knowledge`, migration `d4e1c0a79b21`
+
+**Decision.** The LlamaIndex-backed knowledge subsystem ships with four non-negotiable semantics:
+(1) **verified evidence** — a retrieval hit becomes evidence only after its `source_id` resolves to an
+`ingested` registry row whose sha256 equals the hit's; mismatches are dropped (`dropped_stale`) and
+zero-query-overlap nearest neighbours are discarded (`filtered_unrelated`, ≥ 4-char distinctive-token
+overlap), so the subsystem answers `no_matches` rather than fabricate relevance; (2) **derived store,
+authoritative DB** — the LlamaIndex storage context is disposable (`rebuild` recreates it, generation
++ 1), `knowledgesource` in the one SQLite/Postgres authority records identity/hash/status, and ingest
+commits the index write before the registry row so interrupted runs converge on the next run
+(duplicate-run INSERT races collapse through the IntegrityError→UPDATE retry instead of failing the
+run); (3) **local-first by default** — pinned `llama-index-core==0.14.25` (MIT, no LLM extras,
+telemetry disabled in-process), hash embeddings by default, `sentence-transformers` only from an
+existing local directory (a missing directory is `error[embedding]`, never a download), PDF only via
+the already-declared `pypdf` extra; (4) **operations through existing boundaries** — CLI-only
+(`index|search|status|rebuild|sources list|remove`, `--json`, `error[code]` + hint, exit 1, no stack
+traces), no new API routes (the fail-closed route inventory stays untouched), no new UI.
+
+**Alternatives rejected.** *Serve the raw top-k from the vector store* — rejected: pure vector search
+always returns a nearest neighbour, so an unrelated document would be presented as evidence for a
+niche query (the exact failure the mission forbids). *Reuse/extend `features/rag.py`* — rejected: it is
+a per-user upload engine (Chroma + flashrank) without authorized-root registration, hash change
+detection, incremental reindex, stale cleanup or versioned citations — the mission's gaps. *Hosted
+embeddings / managed vector store* — rejected: violates local-first, adds keys and per-query cost.
+*Expose an API route now* — rejected: each route must enter the fail-closed inventory with
+hostile-state tests; V1's operator surface is the CLI behind existing authz.
+
+**Consequences.** Precision is favoured over recall (paraphrases sharing no distinctive token are
+dropped, visible as `filtered_unrelated`); per-project scoping and reranking are deferred; the hash
+provider's scores are ordering signals, not calibrated probabilities. Recovery is uniform: any
+store-level corruption ⇒ `nexus knowledge rebuild --yes`.
+
+**Evidence.** `tests/unit/test_knowledge_retrieval_identity.py`,
+`tests/unit/test_knowledge_retrieval_service.py`, `tests/unit/test_knowledge_retrieval_cli.py`,
+`tests/integration/test_knowledge_retrieval_pipeline.py`,
+`tests/architecture/test_knowledge_retrieval_boundaries.py` (law R22). Living view:
+`docs/architecture/KNOWLEDGE_RETRIEVAL.md`; ADR:
+`docs/architecture/adr/0012-local-first-llamaindex-retrieval.md`.
+

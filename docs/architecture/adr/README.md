@@ -21,6 +21,7 @@ This directory holds **decisions about how the architecture documentation and it
 | [0007](0007-multisource-referee-exit-codes.md) | The overlap referee reports unverifiable data as exit 2, not as a pass | accepted | 2026-09-30 |
 | [0008](0008-canonical-identity-arbitration.md) | Canonical identity arbitration: one authority per identity, one durable lineage | accepted | 2026-10-06 |
 | [0011](0011-restricted-shell-flag-grammar.md) | The restricted shell validates an argument grammar, not a list of forbidden options | accepted | 2026-09-27 |
+| [0012](0012-local-first-llamaindex-retrieval.md) | Local-first LlamaIndex behind a narrow port, with SQLite as the only authority | accepted | 2026-10-23 |
 
 ## Rules
 

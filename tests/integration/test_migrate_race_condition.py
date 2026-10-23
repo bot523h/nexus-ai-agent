@@ -38,8 +38,8 @@ from sqlmodel import SQLModel
 
 import nexus_ai_agent.storage.db  # noqa: F401  (registers every SQLModel table)
 
-#: Chain head — migrations/versions/b5d8e2f4a917_telegram_ids_bigint.py.
-_HEAD = "b5d8e2f4a917"
+#: Chain head — migrations/versions/d4e1c0a79b21_knowledge_retrieval.py.
+_HEAD = "d4e1c0a79b21"
 
 _WORKERS = 4
 _TIMEOUT_SECONDS = 180
