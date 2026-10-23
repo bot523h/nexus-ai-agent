@@ -37,6 +37,9 @@ from typing import Any
 from nexus_ai_agent.selfhood.ledger import SelfLedger, SelfRecord
 
 MAX_RECEIPTS = 4096
+#: Largest sequence a ledger can hold (SQLite INTEGER PRIMARY KEY is a signed 64-bit int).
+#: A receipt beyond it is malformed, and is rejected before it is ever formatted into text.
+MAX_SEQ = (1 << 63) - 1
 _PREFIX = "sha256:"
 _HEX = frozenset("0123456789abcdef")
 
@@ -85,7 +88,7 @@ def parse_receipt(raw: object) -> WitnessReceipt | None:
         seq, digest = raw.get("seq"), raw.get("record_hash")
     else:
         return None
-    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
+    if isinstance(seq, bool) or not isinstance(seq, int) or not 1 <= seq <= MAX_SEQ:
         return None
     if not isinstance(digest, str) or not digest.startswith(_PREFIX):
         return None
@@ -165,7 +168,10 @@ def compare_witnesses(records: Sequence[SelfRecord], receipts: Iterable[object])
 
 def check_witnesses(ledger: SelfLedger, receipts: Iterable[object]) -> WitnessVerdict:
     """Verify the chain, then prove every receipt is a prefix of the ledger."""
-    chain = ledger.verify()
+    # One read: the chain is verified and compared on the *same* snapshot, so a row
+    # rewritten between two reads cannot pass verification and then be compared.
+    records = ledger.records()
+    chain = ledger.verify_records(records)
     if not chain.ok:
         return _verdict(
             WitnessStatus.LEDGER_TAMPERED,
@@ -174,11 +180,12 @@ def check_witnesses(ledger: SelfLedger, receipts: Iterable[object]) -> WitnessVe
             chain.first_broken_seq,
             chain.reason or "chain does not verify",
         )
-    return compare_witnesses(ledger.records(), receipts)
+    return compare_witnesses(records, receipts)
 
 
 __all__ = [
     "MAX_RECEIPTS",
+    "MAX_SEQ",
     "WitnessReceipt",
     "WitnessStatus",
     "WitnessVerdict",

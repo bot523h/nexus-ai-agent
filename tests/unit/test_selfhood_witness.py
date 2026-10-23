@@ -11,6 +11,7 @@ import pytest
 from nexus_ai_agent.selfhood.ledger import SelfEntryKind, SelfLedger
 from nexus_ai_agent.selfhood.witness import (
     MAX_RECEIPTS,
+    MAX_SEQ,
     WitnessReceipt,
     WitnessStatus,
     check_witnesses,
@@ -167,3 +168,77 @@ def test_receipts_round_trip_through_json_transport(tmp_path: Path) -> None:
     assert receipt is not None
     wire = json.loads(json.dumps([receipt.to_dict()]))
     assert check_witnesses(ledger, wire).ok
+
+
+@pytest.mark.parametrize("seq", [1, 2, MAX_SEQ])
+def test_sequence_bounds_accept_every_representable_ledger_sequence(seq: int) -> None:
+    assert parse_receipt({"seq": seq, "record_hash": HASH}) == WitnessReceipt(seq, HASH)
+
+
+@pytest.mark.parametrize(
+    "seq",
+    [
+        0,
+        -1,
+        MAX_SEQ + 1,
+        2**64,
+        pytest.param(10**100000, id="beyond-the-int-to-str-digit-limit"),
+    ],
+)
+def test_sequences_no_ledger_can_hold_are_malformed_not_crashes(seq: int) -> None:
+    assert parse_receipt({"seq": seq, "record_hash": HASH}) is None
+
+
+def test_an_absurd_sequence_is_reported_malformed_and_never_formatted(tmp_path: Path) -> None:
+    # 10**100000 exceeds CPython's int->str digit limit: formatting it would raise ValueError.
+    ledger = _ledger(tmp_path)
+    verdict = check_witnesses(ledger, [{"seq": 10**100000, "record_hash": HASH}])
+    assert verdict.status is WitnessStatus.MALFORMED
+
+
+class _CountingLedger(SelfLedger):
+    """Counts reads; optionally serves a tampered snapshot from the first read on."""
+
+    def __init__(self, path: Path, *, tamper_from_read: int | None = None) -> None:
+        super().__init__(path)
+        self.reads = 0
+        self._tamper_from_read = tamper_from_read
+
+    def records(self):  # type: ignore[no-untyped-def]
+        self.reads += 1
+        rows = super().records()
+        if self._tamper_from_read is not None and self.reads >= self._tamper_from_read:
+            rows = [r for r in rows if r.seq != 2]  # splice a record out of the snapshot
+        return rows
+
+
+def test_check_witnesses_reads_the_ledger_exactly_once(tmp_path: Path) -> None:
+    ledger = _CountingLedger(tmp_path / "self.sqlite3")
+    for index in range(4):
+        ledger.append(SelfEntryKind.OBSERVATION, subject="s", detail={"i": index})
+    ledger.reads = 0
+    assert check_witnesses(ledger, [_receipt(ledger, 1)]).ok
+    # _receipt() above read once more; the check itself must have used a single read.
+    assert ledger.reads == 2
+
+
+def test_verification_and_comparison_use_the_same_snapshot(tmp_path: Path) -> None:
+    ledger = _CountingLedger(tmp_path / "self.sqlite3")
+    for index in range(4):
+        ledger.append(SelfEntryKind.OBSERVATION, subject="s", detail={"i": index})
+    receipt = _receipt(ledger, 1)
+    ledger.reads = 0
+    ledger._tamper_from_read = 1  # the very first read already shows the broken chain
+    verdict = check_witnesses(ledger, [receipt])
+    assert verdict.status is WitnessStatus.LEDGER_TAMPERED
+    assert ledger.reads == 1
+
+
+def test_verify_records_judges_a_given_snapshot_not_the_database(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    clean = ledger.records()
+    assert SelfLedger.verify_records(clean).ok
+    spliced = [r for r in clean if r.seq != 3]
+    verdict = SelfLedger.verify_records(spliced)
+    assert not verdict.ok and verdict.first_broken_seq == 4
+    assert ledger.verify().ok  # the database itself is untouched
