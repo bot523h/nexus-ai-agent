@@ -851,6 +851,16 @@
         "src/nexus_ai_agent/bot/app.py",
         "src/nexus_ai_agent/config/settings.py"
       ]
+    },
+    {
+      "id": "app-core",
+      "description": "App-first frame F1 — Principal identity and ChannelPort; Telegram becomes one adapter.",
+      "paths": [
+        "src/nexus_ai_agent/application/principal.py",
+        "src/nexus_ai_agent/application/ports/channel.py",
+        "tests/unit/test_principal.py",
+        "tests/architecture/test_app_core_boundary.py"
+      ]
     }
   ],
   "claims": [
@@ -3836,6 +3846,40 @@
       "gates_owner": false,
       "generation": 1,
       "note": ""
+    },
+    {
+      "task": "task-app-first-f1-principal",
+      "title": "App-first F1 step 1 — Principal identity, ChannelPort and a telegram-coupling ratchet",
+      "title_fa": "چارچوب اپ‌محور F1 گام ۱ — هویت Principal، ChannelPort و ratchet برای کاهش اتصال تلگرام",
+      "zone": "app-core",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Pure vocabulary: PrincipalId, ChannelBinding, in-memory PrincipalDirectory, ChannelPort protocol; an architecture ratchet pinning the 5 non-bot telegram importers so they can only shrink. No storage schema change, no handler rewired.",
+      "scope_fa": "واژگان خالص Principal و ChannelPort و تست ratchet؛ بدون تغییر schema و بدون دست‌زدن به handlerها.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a binding maps to at most one Principal; moving it is refused",
+        "concurrent first contact yields exactly one Principal",
+        "identity/channel modules import no telegram",
+        "the set of non-bot telegram importers equals the measured 5 and can only shrink"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_principal.py tests/architecture",
+        "ruff + mypy on src/nexus_ai_agent/application"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/application/principal.py",
+        "src/nexus_ai_agent/application/ports/channel.py",
+        "tests/unit/test_principal.py",
+        "tests/architecture/test_app_core_boundary.py"
+      ],
+      "owner_hint": "agent: Claude (Living Core), branch feat/app-core-principal",
+      "agent_branch": "feat/app-core-principal",
+      "claimed_at": "2026-10-21T04:13:43Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
