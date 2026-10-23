@@ -14,8 +14,9 @@ import json
 import re
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlalchemy.orm import Session
 
 from nexus_ai_agent.application.principal import (
     BindingConflictError,
@@ -72,10 +73,10 @@ class SQLApplicationDirectory:
     @staticmethod
     def _binding_row(session: Session, binding: ChannelBinding) -> AppChannelBinding | None:
         statement = select(AppChannelBinding).where(
-            AppChannelBinding.channel == binding.channel,
-            AppChannelBinding.external_id == binding.external_id,
+            AppChannelBinding.channel == binding.channel,  # type: ignore[arg-type]
+            AppChannelBinding.external_id == binding.external_id,  # type: ignore[arg-type]
         )
-        return session.exec(statement).first()
+        return session.execute(statement).scalars().first()
 
     def resolve(self, binding: ChannelBinding) -> PrincipalId | None:
         with Session(self._engine) as session:
@@ -142,9 +143,15 @@ class SQLApplicationDirectory:
 
     def bindings_of(self, principal: PrincipalId) -> frozenset[ChannelBinding]:
         with Session(self._engine) as session:
-            rows = session.exec(
-                select(AppChannelBinding).where(AppChannelBinding.principal_id == str(principal))
-            ).all()
+            rows = (
+                session.execute(
+                    select(AppChannelBinding).where(
+                        AppChannelBinding.principal_id == str(principal)  # type: ignore[arg-type]
+                    )
+                )
+                .scalars()
+                .all()
+            )
         return frozenset(ChannelBinding(row.channel, row.external_id) for row in rows)
 
     def require_binding(self, binding_id: str, principal: PrincipalId) -> ChannelBinding:

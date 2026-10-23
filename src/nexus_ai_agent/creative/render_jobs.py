@@ -322,12 +322,14 @@ def _dispatch(
     )
 
     if canonical is None:
-        actor = ActorIdentity(kind="service", actor_id="creative-render-runtime")
-        authorizer: Any = ProjectAccess(
-            actor=actor,
+        service_actor = ActorIdentity(kind="service", actor_id="creative-render-runtime")
+        service_access = ProjectAccess(
+            actor=service_actor,
             project_id=project.project_id,
             permissions=frozenset({"project:read", "project:write"}),
         )
+        actor = service_actor
+        authorizer = service_access
         provenance = None
         request_context = RequestContext()
         preconditions = Preconditions()

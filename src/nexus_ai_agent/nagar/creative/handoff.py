@@ -29,7 +29,6 @@ worker's ``CommandBus``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -51,9 +50,10 @@ MAX_INTENT_CHARS = 500
 WORKER_SOURCE_ASSET_ID = "src"
 
 
-@dataclass(frozen=True)
-class CanonicalHandoffFacts:
+class CanonicalHandoffFacts(BaseModel):
     """Composition-owned references, checked again by the execution worker."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     principal_id: str
     channel_binding_id: str
