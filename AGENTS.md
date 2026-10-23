@@ -16,6 +16,12 @@ committed and pushed through git, backed by a zero-dependency CLI
 (`scripts/agent_board.py`) whose behaviour and schema are themselves tested
 (`tests/unit/test_agent_board.py`).
 
+The single authoritative coordination board is `.agents/board.json` on `main`.
+`refs/nexus/board` is deprecated and non-authoritative: the shipped CLI never
+reads it, and it can never grant execution authority. Branch and worktree boards
+remain required overlap evidence, not a competing canonical authority (owner
+decision Option B, issue #236).
+
 The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, `deferred_log`,
 `takeover_log`, `next_work`, `history`). Structure is enforced, not requested.
 
@@ -33,11 +39,15 @@ The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, 
 3. **BRANCH NAME IS THE CANONICAL IDENTITY.** Letters (A/B/C/…) are convenience labels only.
    A newcomer must state its identity as *its branch*, after checking `git ls-remote origin "arena/*"`,
    the open PRs, and this board. (The rule exists because three sessions once declared "agent E".)
-4. **ONE GATES OWNER.** Exactly one agent (the holder of `gates_owner: true`) runs the full gates on
-   main-bound work. Everyone else writes "deferred to gates owner" in the PR body. Local *diagnostic*
-   checks (`ruff check`, targeted `pytest`) are always allowed and encouraged — they are not the gate.
+4. **NO MANDATORY GATES OWNER (policy 2026-10-19).** Every agent runs its own gates
+   (`make lint`, `make types`, `make test`) on its own branch and records its own evidence —
+   the exact command, the observed result, and the SHA it ran against. A `gates_owner: true`
+   claim is **optional and advisory only**: it never blocks another agent's work, CI, or a PR
+   review, and its absence never makes the referee "unverifiable". Do **not** invent or restore
+   an owner to satisfy the retired rule.
 5. **LEASES EXPIRE (24 h TTL).** `show`/`next`/`gc` auto-release stale leases. Renew by re-running
-   `claim` (heartbeat; refreshes the clock). `gates_owner` is exclusive: taking it clears any other.
+   `claim` (heartbeat; refreshes the clock). `gates_owner` is optional; if claimed it stays
+   exclusive (at most one at a time), but it is never a global lock on the project.
 
 ## 2. Evidence rules (new in v2)
 
