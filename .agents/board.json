@@ -888,6 +888,7 @@
         "docs/architecture/CANONICAL_EXECUTION.md",
         "docs/architecture/DATA_AND_STORAGE.md",
         "docs/architecture/RUNTIME_FLOWS.md",
+        ".github/workflows/ci.yml",
         "docs/README.md"
       ]
     }
@@ -953,6 +954,7 @@
         "docs/architecture/CANONICAL_EXECUTION.md",
         "docs/architecture/DATA_AND_STORAGE.md",
         "docs/architecture/RUNTIME_FLOWS.md",
+        ".github/workflows/ci.yml",
         "docs/README.md"
       ],
       "owner_hint": "Single integration owner on arena/94286869-nexus-ai-agent; no parallel implementation agents.",
