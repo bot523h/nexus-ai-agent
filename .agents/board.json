@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-20T05:32:52Z",
+  "updated_at": "2026-10-21T18:03:47Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -849,7 +849,8 @@
         "src/nexus_ai_agent/agent/self_vitals.py",
         "tests/unit/test_selfhood_runtime.py",
         "src/nexus_ai_agent/bot/app.py",
-        "src/nexus_ai_agent/config/settings.py"
+        "src/nexus_ai_agent/config/settings.py",
+        "tests/unit/test_selfhood_witness.py"
       ]
     }
   ],
@@ -3803,7 +3804,7 @@
       "title_fa": "فاز ۲ب هستهٔ زنده — append اتمیک دسته‌ای، بوت fail-safe، پروب‌های واقعی و اتصال opt-in به بات",
       "zone": "selfhood",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "append_many (all-or-nothing); selfhood/runtime.py try_boot_self (ok/unavailable/tampered/charter_drift); agent/self_vitals.py real ram/disk probes + start_vitals; minimal opt-in hook in bot/app.py and two settings (default off).",
       "scope_fa": "append_many اتمیک؛ try_boot_self با چهار وضعیت؛ پروب‌های واقعی رم و دیسک و start_vitals؛ اتصال حداقلی و opt-in (پیش‌فرض خاموش) در bot/app.py.",
       "prerequisites": [
@@ -3830,12 +3831,45 @@
         "src/nexus_ai_agent/config/settings.py"
       ],
       "owner_hint": "agent: Claude (Living Core), branch feat/selfhood-atomic-batch",
-      "agent_branch": "feat/selfhood-atomic-batch",
-      "claimed_at": "2026-10-20T05:32:27Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "note": ""
+    },
+    {
+      "task": "task-living-core-witness",
+      "title": "Two-witness ledger: prefix-consistency check of device-held head receipts (tail truncation, rewrite and fork detection)",
+      "title_fa": "دفتر دوشاهدی: بررسی سازگاری پیشوندی رسیدهای سرِ زنجیره که دستگاه نگه می‌دارد (تشخیص قطع انتها، بازنویسی و دوشاخه‌شدن)",
+      "zone": "selfhood",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Pure selfhood/witness.py: WitnessReceipt, issue_receipt, check_witnesses. A receipt is (seq, record_hash) a paired device saw. The check proves the ledger still extends every receipt, so growth is not a false alarm (unlike verify(expected_head)), and detects tail truncation, history rewrite and conflicting witnesses (fork). Untrusted input never raises.",
+      "scope_fa": "ماژول خالص selfhood/witness.py: رسید (seq، record_hash) که دستگاه جفت‌شده دیده است؛ بررسی می‌کند دفتر هنوز همهٔ رسیدها را امتداد می‌دهد (رشد هشدار کاذب نیست)، و قطع انتها، بازنویسی تاریخچه و شاهدهای متناقض را تشخیص می‌دهد.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "every truncation point below the witnessed seq is TRUNCATED; at or above it is CONSISTENT",
+        "a rewritten history of the same length is DIVERGED even when its own chain verifies",
+        "two receipts with the same seq and different hashes are CONFLICTING (fork)",
+        "growth after the receipt is CONSISTENT; no receipts is NO_WITNESS, never CONSISTENT",
+        "malformed receipts never raise and never pass; selfhood import allowlist unchanged"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_selfhood_witness.py tests/architecture/test_selfhood_boundary.py tests/unit/test_agent_board.py",
+        "ruff check/format and mypy on src/nexus_ai_agent/selfhood"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/selfhood/witness.py",
+        "tests/unit/test_selfhood_witness.py"
+      ],
+      "owner_hint": "agent: Claude (Living Core), branch feat/selfhood-witness",
+      "agent_branch": "feat/selfhood-witness",
+      "claimed_at": "2026-10-20T20:43:30Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
