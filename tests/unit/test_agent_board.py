@@ -402,6 +402,63 @@ def test_check_detects_overlap_and_allows_disjoint_work(
     )
 
 
+def test_check_is_clean_with_no_gates_owner_policy_2026_10_19(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """No mandatory global gates_owner: zero owners must NOT block the check.
+
+    Policy 2026-10-19: every agent runs its own gates; a missing (or doubled)
+    gates_owner is advisory and never makes independent work unverifiable.
+    """
+    board = _synthetic_directory_claim_board()  # gates_owner is False
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    _isolate_worktree_source(board_module, monkeypatch)
+    code = board_module.cmd_check(_check_args("docs/not-owned-by-anyone.md"))
+    out = capsys.readouterr().out
+    assert code == 0, "zero gates_owners must be verifiable (exit 0), not fail-closed"
+    assert "gates_owner (advisory)" in out
+
+
+def test_check_reports_multiple_gates_owners_without_blocking(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Two gates_owners is a reported anomaly, never a global lock."""
+    board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = True
+    board["claims"].append(
+        {
+            "task": "synthetic-second-gate",
+            "status": "active",
+            "zone": "synthetic",
+            "agent_branch": "arena/222-other",
+            "claimed_at": "2026-01-01T00:00:00Z",
+            "ttl_hours": 24,
+            "gates_owner": True,
+            "exclusive_paths": ["docs/elsewhere.md"],
+        }
+    )
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    _isolate_worktree_source(board_module, monkeypatch)
+    code = board_module.cmd_check(_check_args("docs/not-owned-by-anyone.md"))
+    out = capsys.readouterr().out
+    assert code == 0, "a doubled gates_owner must be advisory, not fail-closed"
+    assert "2 active" in out
+
+
+def test_check_still_fails_closed_when_a_source_is_unreadable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The safety floor is unchanged: an unreadable source is still exit 2."""
+    board = _synthetic_directory_claim_board()  # no gates owner
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: (None, "test: remote offline"))
+    code = board_module.cmd_check(_check_args("docs/not-owned-by-anyone.md"))
+    assert code == 2, "an unreadable source must stay exit 2 (safety floor preserved)"
+
+
 def test_check_unreadable_source_is_exit_2_never_a_pass(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -489,14 +546,12 @@ def test_check_consults_sibling_worktree_boards(
 
 
 def _gated_synthetic_board() -> dict:
-    """The synthetic board with its one lease also holding the gates.
+    """The synthetic board with its one lease also holding the (advisory) gate.
 
-    ``cmd_check`` is fail-closed on *several* independent conditions — among
-    them "exactly one active gates_owner". A board without a gates owner is
-    exit 2 for that reason alone, which made the worktree-enumeration test
-    below vacuous (the referee mutant ``foreign_worktree_boards_skipped``
-    survived 13/14 in the Mission-2 campaign). With the gates invariant
-    satisfied, the only remaining road to exit 2 is the source under test.
+    Under policy 2026-10-19 a gates_owner is no longer required, so the check is
+    no longer fail-closed on its absence; this fixture is retained only so the
+    tests that exercise *other* exit-2 sources still run against a board that
+    also records a gate holder, keeping those cases representative.
     """
     board = _synthetic_directory_claim_board()
     board["claims"][0]["gates_owner"] = True
