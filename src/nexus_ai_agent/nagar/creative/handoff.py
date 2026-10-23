@@ -29,14 +29,17 @@ worker's ``CommandBus``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nexus_ai_agent.application.creative_intent import CanonicalCreativeIntent
+
 #: The single canonical operation this slice can hand off.  It is registered,
 #: AVAILABLE and REVERSIBLE in the edit pack; the worker's closed
 #: ``SURFACE_TO_CANONICAL`` maps ``("edit", "trim")`` to it.
-TRIM_OPERATION = "timeline.trim"
+TRIM_OPERATION: Literal["timeline.trim"] = "timeline.trim"
 #: Surface (command, operation) the canonical worker accepts for a trim.
 TRIM_COMMAND = "edit"
 TRIM_SURFACE_OPERATION = "trim"
@@ -46,6 +49,15 @@ CREATIVE_RENDER_JOB_TYPE = "creative_render"
 MAX_INTENT_CHARS = 500
 #: The one asset id the canonical worker's self-contained project exposes.
 WORKER_SOURCE_ASSET_ID = "src"
+
+
+@dataclass(frozen=True)
+class CanonicalHandoffFacts:
+    """Composition-owned references, checked again by the execution worker."""
+
+    principal_id: str
+    channel_binding_id: str
+    project_id: str
 
 
 class HandoffRefusal(ValueError):
@@ -184,6 +196,8 @@ def build_creative_payload(
     chat_id: int,
     lang: str,
     idempotency_key: str,
+    canonical: CanonicalHandoffFacts | None = None,
+    source_text: str | None = None,
 ) -> dict[str, Any]:
     """Turn a validated proposal into a typed canonical ``creative_render`` payload.
 
@@ -215,7 +229,7 @@ def build_creative_payload(
             raise HandoffRefusal(
                 "invalid_points", "trim window is empty within the source duration"
             )
-    return {
+    payload = {
         "command": TRIM_COMMAND,
         "operation": TRIM_SURFACE_OPERATION,
         "args": [_seconds(in_us), _seconds(out_us)],
@@ -227,6 +241,52 @@ def build_creative_payload(
         "lang": str(lang),
         "idempotency_key": idempotency_key,
     }
+    if canonical is None:
+        return payload
+    if source_text is None:
+        raise HandoffRefusal("invalid_identity", "canonical intent requires normalized source text")
+    if inputs.get("clip_asset_id", WORKER_SOURCE_ASSET_ID) != WORKER_SOURCE_ASSET_ID:
+        raise HandoffRefusal(
+            "invalid_proposal", "canonical worker accepts only the staged src asset"
+        )
+
+    import hashlib
+    import json
+
+    try:
+        proposal_data = proposal.model_dump(mode="json")
+        proposal_json = json.dumps(
+            proposal_data,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise HandoffRefusal("invalid_proposal", "proposal is not canonical JSON") from exc
+    proposal_id = "proposal_" + hashlib.sha256(proposal_json.encode("utf-8")).hexdigest()
+    source_text_sha256 = "sha256:" + hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+    typed_intent = CanonicalCreativeIntent.create(
+        project_id=canonical.project_id,
+        proposal_id=proposal_id,
+        source_text_sha256=source_text_sha256,
+        operation=TRIM_OPERATION,
+        input_data={
+            "clip_asset_id": WORKER_SOURCE_ASSET_ID,
+            "in_point_us": in_us,
+            "out_point_us": out_us,
+        },
+    )
+    payload.update(
+        {
+            "schema_version": 2,
+            "principal_id": canonical.principal_id,
+            "project_id": canonical.project_id,
+            "channel_binding_id": canonical.channel_binding_id,
+            "intent": typed_intent.model_dump(mode="json"),
+        }
+    )
+    return payload
 
 
 def _schema_for(gateway: Any, operation: str, attr: str) -> dict[str, Any]:
@@ -291,6 +351,7 @@ async def run_free_text_intent_durable(
     lang: str = "en",
     clip_asset_id: str | None = None,
     journal: Any | None = None,
+    canonical: CanonicalHandoffFacts | None = None,
 ) -> CognitionJobOutcome:
     """Turn free text into at most one durable ``creative_render`` job — or refuse.
 
@@ -309,6 +370,17 @@ async def run_free_text_intent_durable(
     if not intent:
         return CognitionJobOutcome(
             status="refused", refusal_reason="malformed", detail="empty intent text"
+        )
+    if canonical is not None and (
+        canonical.project_id != gateway.project_id
+        or canonical.project_id != project.project_id
+        or gateway.actor.kind != "user"
+        or canonical.principal_id != gateway.actor.actor_id
+    ):
+        return CognitionJobOutcome(
+            status="refused",
+            refusal_reason="invalid_identity",
+            detail="canonical references do not match the injected actor and project",
         )
 
     try:
@@ -407,6 +479,8 @@ async def run_free_text_intent_durable(
             chat_id=chat_id,
             lang=lang,
             idempotency_key=idempotency_key,
+            canonical=canonical,
+            source_text=intent if canonical is not None else None,
         )
     except HandoffRefusal as exc:
         _record(
@@ -443,6 +517,21 @@ async def run_free_text_intent_durable(
         return CognitionJobOutcome(
             status="refused", refusal_reason="idempotency_conflict", detail=str(exc)
         )
+    execution_identity = {
+        "durable_job_id": job_id,
+        "operation": TRIM_OPERATION,
+        "in_point_us": proposal.input.get("in_point_us"),
+        "out_point_us": proposal.input.get("out_point_us"),
+    }
+    if canonical is not None:
+        execution_identity.update(
+            {
+                "principal_id": canonical.principal_id,
+                "project_id": canonical.project_id,
+                "channel_binding_id": canonical.channel_binding_id,
+                "canonical_intent": payload["intent"],
+            }
+        )
     _record(
         journal,
         decision=CognitionDecision.PROPOSAL_ACCEPTED,
@@ -450,12 +539,7 @@ async def run_free_text_intent_durable(
         job_id=intent_job_id,
         idempotency_key=idempotency_key,
         operation=TRIM_OPERATION,
-        execution_identity={
-            "durable_job_id": job_id,
-            "operation": TRIM_OPERATION,
-            "in_point_us": proposal.input.get("in_point_us"),
-            "out_point_us": proposal.input.get("out_point_us"),
-        },
+        execution_identity=execution_identity,
     )
     return CognitionJobOutcome(
         status="enqueued",
@@ -472,6 +556,7 @@ __all__ = [
     "TRIM_OPERATION",
     "TRIM_SURFACE_OPERATION",
     "WORKER_SOURCE_ASSET_ID",
+    "CanonicalHandoffFacts",
     "CognitionJobOutcome",
     "HandoffRefusal",
     "build_creative_payload",
