@@ -29,13 +29,13 @@ from nexus_ai_agent.creative.spine.compiler import (
     RulesCapabilityCompiler,
 )
 from nexus_ai_agent.creative.spine.execution import (
-    CompiledIntent,
     CreativeExecutionSpine,
     SpineRun,
 )
 from nexus_ai_agent.creative.spine.models import (
     ArtifactRecord,
     CompilationError,
+    CompiledIntent,
     CreativeGraph,
     EvidenceRecord,
     GraphError,
