@@ -3912,6 +3912,12 @@
         "authority laws + four-verb contract + staging boundary policy documented",
         "docs integrity suite green"
       ],
+      "evidence_required": [
+        "docs/architecture/EXECUTION_CORE.md committed with the I1-I10 table mapping each invariant to its enforcing symbol and proving test node",
+        "the contract/authority/staging sections present and provider-neutral (four verbs only: submit/observe/cancel/reconcile)",
+        "pytest -q tests/unit/test_docs_integrity.py green on the claim head (exact command + observed count in the PR body)",
+        "every relative link resolves and the page is indexed in docs/README.md"
+      ],
       "exclusive_paths": [
         "docs/architecture/EXECUTION_CORE.md",
         "tests/unit/test_docs_integrity.py"
