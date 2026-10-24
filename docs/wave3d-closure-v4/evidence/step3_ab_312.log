@@ -1,0 +1,59 @@
+..F.....s.s.s.s.s.s.s.s.s.s.sssss......ss.....s......................... [ 54%]
+...............s............F....................F.F....F...F            [100%]
+=================================== FAILURES ===================================
+_______________________ test_setup_schema_matches_golden _______________________
+tests/integration/test_checkpoint_adapter.py:26: in test_setup_schema_matches_golden
+    adapter.assert_golden(GOLDEN)
+src/nexus_ai_agent/storage/checkpoint_adapter.py:189: in assert_golden
+    raise CleanupDisabled(
+E   nexus_ai_agent.storage.checkpoint_adapter.CleanupDisabled: checkpoint cleanup disabled: schema fingerprint mismatch expected=538d8b200b30a6a2414c9f554b0d2ef034054bd84028d1e6b97aac7ee16653e5 actual=3bb6888cfe97a110259c18750c3eb94c0a1961fa94afdcdeb1d9b2fed5b81b55
+_________________ test_apply_under_lock_contention_fails_safe __________________
+tests/unit/test_lifecycle_adversarial.py:338: in test_apply_under_lock_contention_fails_safe
+    with pytest.raises(RuntimeError, match="already in progress"):
+E   Failed: DID NOT RAISE RuntimeError
+------------------------------ Captured log call -------------------------------
+WARNING  nexus_ai_agent.storage.checkpoint_fingerprint:checkpoint_fingerprint.py:85 core schema mismatch (warning only; nothing disabled)
+WARNING  nexus_ai_agent.lifecycle:structured.py:27 checkpoint cleanup disabled: schema fingerprint mismatch
+_______________ test_apply_backfills_missing_with_protected_age ________________
+tests/unit/test_reconciler.py:136: in test_apply_backfills_missing_with_protected_age
+    assert report.applied is True
+E   AssertionError: assert False is True
+E    +  where False = ReconcileReport(rows_scanned=3, checkpoints=2, lifecycle_rows=1, anomalies=[Anomaly(kind='missing_lifecycle', thread_i...core_schema='warning:db_head_missing', kill_switch=True, applied=False, backfilled=0, purged=0, bytes_freed_estimate=0).applied
+------------------------------ Captured log call -------------------------------
+WARNING  nexus_ai_agent.storage.checkpoint_fingerprint:checkpoint_fingerprint.py:85 core schema mismatch (warning only; nothing disabled)
+WARNING  nexus_ai_agent.lifecycle:structured.py:27 checkpoint cleanup disabled: schema fingerprint mismatch
+____________________ test_purge_eligible_orphan_is_applied _____________________
+tests/unit/test_reconciler.py:175: in test_purge_eligible_orphan_is_applied
+    assert report.purged == 1
+E   AssertionError: assert 0 == 1
+E    +  where 0 = ReconcileReport(rows_scanned=401, checkpoints=200, lifecycle_rows=201, anomalies=[Anomaly(kind='orphan_lifecycle', thr...core_schema='warning:db_head_missing', kill_switch=True, applied=False, backfilled=0, purged=0, bytes_freed_estimate=0).purged
+------------------------------ Captured log call -------------------------------
+WARNING  nexus_ai_agent.storage.checkpoint_fingerprint:checkpoint_fingerprint.py:85 core schema mismatch (warning only; nothing disabled)
+WARNING  nexus_ai_agent.lifecycle:structured.py:27 checkpoint cleanup disabled: schema fingerprint mismatch
+________________________ test_scan_error_disables_apply ________________________
+tests/unit/test_reconciler.py:265: in test_scan_error_disables_apply
+    assert report.langgraph_schema == "match"
+E   AssertionError: assert 'disabled:fin...rint_mismatch' == 'match'
+E     
+E     - match
+E     + disabled:fingerprint_mismatch
+------------------------------ Captured log call -------------------------------
+WARNING  nexus_ai_agent.storage.checkpoint_fingerprint:checkpoint_fingerprint.py:85 core schema mismatch (warning only; nothing disabled)
+WARNING  nexus_ai_agent.lifecycle:structured.py:27 checkpoint cleanup disabled: schema fingerprint mismatch
+WARNING  nexus_ai_agent.lifecycle:structured.py:27 reconcile scan failed for thread
+____________________ test_cli_reconcile_apply_requires_flag ____________________
+tests/unit/test_reconciler.py:349: in test_cli_reconcile_apply_requires_flag
+    assert payload["applied"] is True
+E   assert False is True
+------------------------------ Captured log call -------------------------------
+WARNING  nexus_ai_agent.storage.checkpoint_fingerprint:checkpoint_fingerprint.py:85 core schema mismatch (warning only; nothing disabled)
+WARNING  nexus_ai_agent.lifecycle:structured.py:27 checkpoint cleanup disabled: schema fingerprint mismatch
+=========================== short test summary info ============================
+FAILED tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden
+FAILED tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe
+FAILED tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age
+FAILED tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied
+FAILED tests/unit/test_reconciler.py::test_scan_error_disables_apply - Assert...
+FAILED tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag
+6 failed, 108 passed, 19 skipped in 7.95s
+legA_exit=1

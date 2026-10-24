@@ -1,0 +1,17 @@
+.....................FFF................................................ [ 87%]
+..........                                                               [100%]
+=================================== FAILURES ===================================
+E   AssertionError: /forget_me answered the user that all long-term memory was erased, but the turn transcript is still retrievable and still injectable: ['User: my favourite is blue CANARY-ALPHA-9f3c1d']
+    assert not True
+     +  where True = any(<generator object test_forget_me_erases_the_long_term_transcript_store_too.<locals>.<genexpr> at 0x7f3fa53f4ba0>)
+/home/user/wave3d/v4/_reproduce/pb/tests/unit/test_memory_privacy_adversarial.py:401: AssertionError: /forget_me answered the user that all long-term memory was erased, but the turn transcript is still retrievable and still injectable: ['User: my favourite is blue CANARY-ALPHA-9f3c1d']
+E   AttributeError: 'AsyncSession' object has no attribute 'exec'
+/home/user/wave3d/v4/_reproduce/pb/src/nexus_ai_agent/bot/handlers.py:130: AttributeError: 'AsyncSession' object has no attribute 'exec'
+E   AttributeError: 'AsyncSession' object has no attribute 'exec'
+/home/user/wave3d/v4/_reproduce/pb/src/nexus_ai_agent/bot/handlers.py:130: AttributeError: 'AsyncSession' object has no attribute 'exec'
+=========================== short test summary info ============================
+FAILED tests/unit/test_memory_privacy_adversarial.py::test_forget_me_erases_the_long_term_transcript_store_too
+FAILED tests/unit/test_memory_privacy_adversarial.py::test_registered_on_message_carries_identity_into_the_graph
+FAILED tests/unit/test_memory_privacy_adversarial.py::test_registered_on_message_keeps_a_group_out_of_personal_memory
+3 failed, 79 passed in 8.53s
+exit=1

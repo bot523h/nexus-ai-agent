@@ -1,0 +1,3 @@
+5 passed in 1.09s
+corrupt ambient DB -> 5 passed in 1.12s
+unpatched + corrupt ambient -> 1 failed in 0.51s

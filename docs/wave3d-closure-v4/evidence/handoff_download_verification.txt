@@ -1,0 +1,18 @@
+# Durable-handoff verification (step 19)
+verified_at_utc=2026-10-14T20:55:08Z
+source_of_truth_branch=arena/aa451c49-nexus-ai-agent
+artifact_commit=f99ab1c653ec7fe038412306110baa200f154935
+download_origin=https://github.com/bot523h/nexus-ai-agent.git (git clone --depth 1 --branch …)
+method=sha256 of every file under docs/wave3d-closure-v4 in the downloaded tree compared with the workspace bundle /home/user/wave3d/v4 (excluding _reproduce)
+
+downloaded files: 45, local bundle files: 45
+missing in download: 0
+extra in download: 0
+hash mismatches: 0
+VERIFIED IDENTICAL
+
+# follow-up verifications (bundle re-synced twice after this record was written)
+verified_at_utc=2026-10-14T21:0Z
+artifact_commit=54c83f12c57bbffe51f862cde3f0adda4d7e7d16  files=47/47 identical  mismatches=0
+artifact_commit=584e3077f87fbdf17bc2544d07d034d724e0ab7e  files=48/48 identical  mismatches=0
+method=each commit re-cloned from https://github.com/bot523h/nexus-ai-agent.git (--depth 1, branch arena/aa451c49-nexus-ai-agent) and every file under docs/wave3d-closure-v4 hashed against the workspace bundle /home/user/wave3d/v4 (excluding _reproduce)

@@ -1,0 +1,271 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________________________ test_approve_status ______________________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x7f5bcfc46690>
+dialect = <sqlalchemy.dialects.sqlite.aiosqlite.SQLiteDialect_aiosqlite object at 0x7f5bcfa6de50>
+context = <sqlalchemy.dialects.sqlite.aiosqlite.SQLiteExecutionContext_aiosqlite object at 0x7f5bcfc46350>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteCompiler object at 0x7f5bcfafb950>
+parameters = [()]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1969: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/engine/default.py:952: in do_execute
+    cursor.execute(statement, parameters)
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:213: in execute
+    self._adapt_connection._handle_exception(error)
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:373: in _handle_exception
+    raise error
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:195: in execute
+    self.await_(_cursor.execute(operation, parameters))
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+../../../.venv-nexus/lib/python3.11/site-packages/aiosqlite/cursor.py:40: in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+../../../.venv-nexus/lib/python3.11/site-packages/aiosqlite/cursor.py:32: in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../.venv-nexus/lib/python3.11/site-packages/aiosqlite/core.py:160: in _execute
+    return await future
+           ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tx = <_queue.SimpleQueue object at 0x7f5bcfc75d00>
+
+    def _connection_worker_thread(tx: _TxQueue):
+        """
+        Execute function calls on a separate thread.
+    
+        :meta private:
+        """
+        while True:
+            # Continues running until all queue items are processed,
+            # even after connection is closed (so we can finalize all
+            # futures)
+    
+            future, function = tx.get()
+    
+            try:
+                LOG.debug("executing %s", function)
+>               result = function()
+                         ^^^^^^^^^^
+E               sqlite3.DatabaseError: file is not a database
+
+../../../.venv-nexus/lib/python3.11/site-packages/aiosqlite/core.py:63: DatabaseError
+
+The above exception was the direct cause of the following exception:
+
+    @pytest.mark.asyncio
+    async def test_approve_status():
+        system = ApprovalSystem()
+>       approval_id = await system.request_approval("test_change", "test_desc")
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/unit/test_approval.py:11: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/nexus_ai_agent/agent/approval.py:26: in request_approval
+    async with get_session() as session:
+/usr/lib/python3.11/contextlib.py:204: in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+src/nexus_ai_agent/storage/db.py:393: in get_session
+    await create_all_tables(db_path)
+src/nexus_ai_agent/storage/db.py:322: in create_all_tables
+    await _set_wal_mode(engine)
+src/nexus_ai_agent/storage/db.py:299: in _set_wal_mode
+    await conn.execute(text("PRAGMA journal_mode=WAL"))
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/ext/asyncio/engine.py:659: in execute
+    result = await greenlet_spawn(
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:201: in greenlet_spawn
+    result = context.throw(*sys.exc_info())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1421: in execute
+    return meth(
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/sql/elements.py:526: in _execute_on_connection
+    return connection._execute_clauseelement(
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1643: in _execute_clauseelement
+    ret = self._execute_context(
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1848: in _execute_context
+    return self._exec_single_context(
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1988: in _exec_single_context
+    self._handle_dbapi_exception(
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/engine/base.py:2365: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/engine/base.py:1969: in _exec_single_context
+    self.dialect.do_execute(
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/engine/default.py:952: in do_execute
+    cursor.execute(statement, parameters)
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:213: in execute
+    self._adapt_connection._handle_exception(error)
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:373: in _handle_exception
+    raise error
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/dialects/sqlite/aiosqlite.py:195: in execute
+    self.await_(_cursor.execute(operation, parameters))
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:132: in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../.venv-nexus/lib/python3.11/site-packages/sqlalchemy/util/_concurrency_py3k.py:196: in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+../../../.venv-nexus/lib/python3.11/site-packages/aiosqlite/cursor.py:40: in execute
+    await self._execute(self._cursor.execute, sql, parameters)
+../../../.venv-nexus/lib/python3.11/site-packages/aiosqlite/cursor.py:32: in _execute
+    return await self._conn._execute(fn, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../.venv-nexus/lib/python3.11/site-packages/aiosqlite/core.py:160: in _execute
+    return await future
+           ^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tx = <_queue.SimpleQueue object at 0x7f5bcfc75d00>
+
+    def _connection_worker_thread(tx: _TxQueue):
+        """
+        Execute function calls on a separate thread.
+    
+        :meta private:
+        """
+        while True:
+            # Continues running until all queue items are processed,
+            # even after connection is closed (so we can finalize all
+            # futures)
+    
+            future, function = tx.get()
+    
+            try:
+                LOG.debug("executing %s", function)
+>               result = function()
+                         ^^^^^^^^^^
+E               sqlalchemy.exc.DatabaseError: (sqlite3.DatabaseError) file is not a database
+E               [SQL: PRAGMA journal_mode=WAL]
+E               (Background on this error at: https://sqlalche.me/e/20/4xp6)
+
+../../../.venv-nexus/lib/python3.11/site-packages/aiosqlite/core.py:63: DatabaseError
+=========================== short test summary info ============================
+FAILED tests/unit/test_approval.py::test_approve_status - sqlalchemy.exc.Data...
+1 failed in 0.54s
