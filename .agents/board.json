@@ -1,12 +1,12 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-20T04:10:52Z",
+  "updated_at": "2026-10-24T07:28:37Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
     "identity_rule": "شاخه، هویت متعارف است (branch name is the canonical identity)؛ حروف (A/B/C…) فقط برچسب‌اند. هر سشن جدید باید ابتدا `git ls-remote origin \"arena/*\"`، PRهای باز و این تخته را بخواند.",
     "lease_ttl_hours": 24,
-    "gates_rule": "دقیقاً یک عامل (دارندهٔ gates_owner) گیت‌های کامل را روی کارِ main-bound اجرا می‌کند؛ بقیه «deferred to gates owner» را در PR قید می‌کنند. بررسی‌های تشخیصی محلی (ruff check، pytest هدفمند) برای همه آزاد است.",
+    "gates_rule": "سیاست ۲۰۲۶-۱۰-۲۲: هیچ gates_owner سراسری اجباری وجود ندارد. هر عامل گیت‌های خود (make lint / make types / make test یا معادل هدفمند) را روی شاخهٔ خود اجرا و دستور، نتیجه و SHA آزمایش‌شده را ثبت می‌کند. ادعای gates_owner اختیاری و صرفاً اطلاع‌رسانی است، حداکثر یکی در هر زمان، و هرگز کار، CI یا بازبینی دیگران را قفل نمی‌کند. نبودِ آن وضعیت قابل‌تأیید است نه حکم غیرقابل‌تأیید؛ داور فقط زمانی fail-closed (کد ۲) می‌شود که یک منبع مشترک الزامی خوانده نشود.",
     "overlap_rule_fa": "پیش از push: `python scripts/agent_board.py check --files <changed files> --branch <you>` باید کد خروج ۰ بدهد. اگر ناحیه گرفته است: تسک دیگر یا ثبت defer با دلیل فارسی.",
     "verification_rule": "هر تسک باید acceptance_criteria و evidence_required داشته باشد؛ ساختار تخته با tests/unit/test_agent_board.py تضمین می‌شود و یک تسک بدون معیار پذیرش قابل claim نیست.",
     "merge_order": [
@@ -33,7 +33,7 @@
     ]
   },
   "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل موظف است بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری سایر عامل‌ها، با بالاترین کیفیت مهندسی در سطح Anthropic و OpenAI کار خود را به صورت هوشمندانه، بدون پس‌رفت (Zero Regression) و بدون باگ به سرانجام برساند. هر عامل در بدو ورود باید هویت خود را اعلام کند (عامل A / B / C / D)، کارت شروع‌به‌کار خود را تیک بزند و پس از اتمام هر تسک، ۱۰ کار بعدی را روی تخته مستند کند.",
-  "gates_rule": "Exactly ONE agent (the gates_owner of the active claim) runs make lint / make types / make test on main-bound work. Other agents must NOT run overlapping gates in parallel; they note 'deferred to gates owner' in their PR body. Exception: read-only diagnostic checks (ruff check, targeted pytest) are always allowed for analysis.",
+  "gates_rule": "Policy 2026-10-22 (no mandatory global gates owner): there is no global gates_owner. Every agent runs its own gates (make lint / make types / make test, or a targeted equivalent) on its own branch and records the exact command, observed result and tested SHA as evidence. A gates_owner claim is optional and advisory, at most one at a time, and never locks another agent's work, CI, or a PR review. Its absence is verifiable state, not an unverifiable verdict; the referee still fails closed (exit 2) only when a required shared source cannot be read.",
   "merge_order_note": "۱) task-101 (lint restore) → ۲) PR#32 rebase+merge → ۳) task-102 (security) و task-104/105/107/108/109/110 موازی روی مسیرهای گسسته → ۴) task-106 بعد از ادغام الگوی surface. تداخل .agents/board.json بین PR#32 و این واگذاری با قاعده «آخرین وضعیت واگذاری برنده است» حل می‌شود.",
   "zones": [
     {
@@ -845,7 +845,11 @@
         "tests/unit/test_selfhood_ledger.py",
         "tests/architecture/test_selfhood_boundary.py",
         "docs/architecture/SELF_CHARTER.md",
-        "tests/unit/test_selfhood_vitals.py"
+        "tests/unit/test_selfhood_vitals.py",
+        "src/nexus_ai_agent/agent/self_vitals.py",
+        "tests/unit/test_selfhood_runtime.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/config/settings.py"
       ]
     }
   ],
@@ -3762,7 +3766,7 @@
       "title_fa": "فاز ۲الف هستهٔ زنده — علائم حیاتی ماندگار در Self-Ledger با setpointهای منشور و زمان‌بند با کلید توقف",
       "zone": "selfhood",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "selfhood/vitals.py: probes sampled by a scheduler, setpoints read only from the charter, readings and deviations appended to the ledger, broken or non-finite probes recorded as deviations, restart-safe latest_readings, ProviderHealthTracker.",
       "scope_fa": "vitals.py: نمونه‌برداری زمان‌بندی‌شده، setpoint فقط از منشور، ثبت قرائت و انحراف در ledger، پروب خراب یا NaN به‌عنوان انحراف، و بازیابی پس از ری‌استارت.",
       "prerequisites": [
@@ -3786,12 +3790,145 @@
         "docs/architecture/SELF_CHARTER.md"
       ],
       "owner_hint": "agent: Claude (Living Core), branch feat/selfhood-vitals",
-      "agent_branch": "feat/selfhood-vitals",
-      "claimed_at": "2026-10-20T04:10:52Z",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 2,
+      "note": ""
+    },
+    {
+      "task": "task-living-core-p2b-wiring",
+      "title": "Living Core Phase 2b — atomic batch append, fail-safe self boot, real probes, opt-in bot wiring",
+      "title_fa": "فاز ۲ب هستهٔ زنده — append اتمیک دسته‌ای، بوت fail-safe، پروب‌های واقعی و اتصال opt-in به بات",
+      "zone": "selfhood",
+      "priority": "P1",
+      "status": "expired",
+      "scope": "append_many (all-or-nothing); selfhood/runtime.py try_boot_self (ok/unavailable/tampered/charter_drift); agent/self_vitals.py real ram/disk probes + start_vitals; minimal opt-in hook in bot/app.py and two settings (default off).",
+      "scope_fa": "append_many اتمیک؛ try_boot_self با چهار وضعیت؛ پروب‌های واقعی رم و دیسک و start_vitals؛ اتصال حداقلی و opt-in (پیش‌فرض خاموش) در bot/app.py.",
+      "prerequisites": [
+        "task-living-core-p2-vitals"
+      ],
+      "acceptance_criteria": [
+        "reading+deviation commit atomically (batch refuses as a whole)",
+        "tampered or drifted ledger never yields a usable state; unavailable degrades without raising",
+        "no fabricated probe: only measured quantities are offered",
+        "disabled by default; enabled run samples into the ledger and stops cleanly"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_selfhood_runtime.py tests/unit/test_selfhood_ledger.py tests/unit/test_selfhood_vitals.py tests/architecture",
+        "ruff + mypy"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/selfhood/",
+        "src/nexus_ai_agent/agent/self_vitals.py",
+        "tests/unit/test_selfhood_runtime.py",
+        "tests/unit/test_selfhood_ledger.py",
+        "tests/unit/test_selfhood_vitals.py",
+        "docs/architecture/SELF_CHARTER.md",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/config/settings.py"
+      ],
+      "owner_hint": "agent: Claude (Living Core), branch feat/selfhood-atomic-batch",
+      "agent_branch": "feat/selfhood-atomic-batch",
+      "claimed_at": "2026-10-20T05:32:27Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
-      "note": ""
+      "note": "",
+      "release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)"
+    },
+    {
+      "task": "task-260-execution-mutations-ci-job",
+      "title": "Run scripts/execution_core_mutations.py as a CI mutation job",
+      "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
+      "zone": "ci-quality",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Run scripts/execution_core_mutations.py as a CI mutation job",
+      "scope_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "CI job runs the campaign on PRs touching execution-core paths; red on any surviving mutant",
+        "runtime budgeted (<= ~2 min); parity with the trust-mutations job pattern"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_mutation_harness_anchors.py"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/ci.yml"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/task-260-exec-mutations-ci",
+      "claimed_at": "2026-10-22T18:46:06Z",
+      "ttl_hours": 24,
+      "gates_owner": true,
+      "note": "Execution-core mapping: the native execution core (Task-254) merged via PR #192 (merge commit a48326ded85bbe4e0972d645ee0ea6e877935362, 'supersedes #191'); PR #191 (arena/execution-core-v1-nexus-ai-agent) is CLOSED and superseded. PR #241 is the separate Task-260 mutation-CI follow-up, not the execution-core implementation. CI wiring lives in .github/workflows/ci.yml (zone ci-quality); the harness scripts/execution_core_mutations.py is the execution-core zone (task-254, done).",
+      "generation": 2,
+      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)"
+    },
+    {
+      "task": "task-265-flaky-cancel-identity-race",
+      "title": "Flaky race in NativeLocalBackend.submit identity binding (unbound assert)",
+      "title_fa": "",
+      "zone": "execution-core",
+      "priority": "P2",
+      "status": "active",
+      "scope": "test_execution_native_backend.py::test_cancel_without_a_fencing_token_is_refused failed once in a full-suite run (1 failed,3878 passed) and passed on immediate rerun (3879 passed,31 skipped). submit() reads facts after a to_thread yield, so the worker can reserve (attempt=1) before the facts read, binding a fencing_token; the test assumes a fresh submit is unbound. Make the assertion robust or gate the reservation deterministically.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "the isolated race test is deterministic across >=20 full-suite-equivalent runs",
+        "either submit binds identity without a scheduling race, or the test asserts the durable truth instead of the fresh-submit assumption",
+        "no behaviour change to the fenced CAS or reservation semantics"
+      ],
+      "exclusive_paths": [
+        "tests/integration/test_execution_native_backend.py",
+        "src/nexus_ai_agent/adapters/native_local_backend.py"
+      ],
+      "note": "",
+      "agent_branch": "arena/nexus-night-task265-cancel-identity-flake",
+      "claimed_at": "2026-10-24T04:48:15Z",
+      "gates_owner": false,
+      "generation": 1,
+      "ttl_hours": 24
+    },
+    {
+      "task": "task-264-passport-attempt-id-alignment",
+      "title": "Bind CreativeExecutionPassport attempt ids to the AttemptStaging layout",
+      "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
+      "zone": "durable-creative-queue-evidence",
+      "priority": "P3",
+      "status": "active",
+      "scope": "Align CreativeExecutionPassport attempt identity and evidence storage with the existing AttemptStaging attempt-scoped contract; change only the passport implementation and its unit tests.",
+      "scope_fa": "شناسه‌های attempt در passport و staging از یک منبع باید بیایند تا ردیابی artifact یکتا بماند.",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "one minting function for attempt ids used by both surfaces",
+        "passport evidence paths resolve inside the attempt staging tree; traversal rejected",
+        "provenance suites green"
+      ],
+      "evidence_required": [
+        "RED then GREEN focused unit tests for attempt identity, attempt-scoped evidence paths, traversal, mismatch, and missing artifacts",
+        "pytest tests/unit/test_creative_passport.py and related provenance/staging tests",
+        "ruff check, ruff format --check, mypy on changed paths, and git diff --check",
+        "exact-head GitHub CI evidence and final SHA/worktree/ownership report"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/jobs/creative_passport.py",
+        "tests/unit/test_creative_passport.py"
+      ],
+      "owner_hint": "Bootstrap from next_work after task-254 merge; claim only on the dedicated task-264 branch.",
+      "agent_branch": "arena/task-264-passport-attempt-id-alignment",
+      "claimed_at": "2026-10-24T04:47:52Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
