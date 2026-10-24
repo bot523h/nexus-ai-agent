@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-24T04:10:41Z",
+  "updated_at": "2026-10-24T04:48:16Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3876,7 +3876,7 @@
       "priority": "P3",
       "status": "active",
       "agent_branch": "arena/nexus-night-task261-request-queue-doc",
-      "claimed_at": "2026-10-10T18:23:22Z",
+      "claimed_at": "2026-10-24T04:48:16Z",
       "gates_owner": false,
       "generation": 1,
       "exclusive_paths": [
