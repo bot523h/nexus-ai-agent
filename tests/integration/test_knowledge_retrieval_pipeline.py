@@ -313,3 +313,57 @@ async def test_no_network_and_no_llm_stack_during_operations(
     assert _spec("llama_index.llms.openai") is None
     assert "llama_index.llms.openai" not in sys.modules
     assert os.environ.get("OTEL_SDK_DISABLED") == "true"
+
+
+async def test_index_recreates_a_deleted_store_without_rebuild(kb_env: Path) -> None:
+    """Deleting the derived directory must heal with a plain `index` run.
+
+    Review finding: registry "unchanged" verdicts used to skip every file
+    after the store was deleted, so `index` left an empty store while the
+    docs promise it recreates one (search must return `ok` again).
+    """
+    import shutil
+
+    (kb_env / "doc.md").write_text("Recreatable store content about broker health.")
+    service = _service()
+    assert (await service.index_sources()).ingested == 1
+    assert (await service.search("broker health")).state == QueryState.OK
+
+    index_dir = Path(str(settings_module.get_settings().knowledge_index_path))
+    shutil.rmtree(index_dir)
+    assert not index_dir.exists()
+
+    report = await _service().index_sources()
+    assert report.unchanged == 0, "nothing may be 'unchanged' when the store is gone"
+    assert report.ingested == 1
+    healed = await _service().search("broker health")
+    assert healed.state == QueryState.OK
+    assert healed.evidence[0].path == "doc.md"
+
+
+async def test_provider_failure_is_not_store_corruption(kb_env: Path, monkeypatch) -> None:
+    """An existing store + a broken embedder must degrade as a provider issue.
+
+    Review finding: `_inspect_sync` used to mark embedding failures
+    `corrupt=True`, sending operators to `rebuild --yes` — which would wipe a
+    valid index and then fail every file on the same provider error.
+    """
+    (kb_env / "doc.md").write_text("Stored content that outlives a provider swap.")
+    assert (await _service().index_sources()).ingested == 1  # store exists (hash)
+
+    # Swap to a provider whose model directory does not exist.
+    monkeypatch.setenv("NEXUS_KNOWLEDGE_EMBEDDING_PROVIDER", "sentence-transformers")
+    monkeypatch.setenv(
+        "NEXUS_KNOWLEDGE_EMBEDDING_MODEL_PATH",
+        str(Path.cwd() / "definitely-not-a-model"),
+    )
+    settings_module.get_settings.cache_clear()
+
+    status = await _service().status()
+    assert status.degraded_reason == "embedding_model_directory_missing"
+    assert status.store_corrupt is False, "a provider failure must not read as corruption"
+    assert status.store_present is True
+
+    with pytest.raises(IndexUnavailableError) as caught:
+        await _service().search("stored content")
+    assert caught.value.code == "embedding"

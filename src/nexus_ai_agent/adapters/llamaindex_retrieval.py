@@ -385,6 +385,22 @@ class LlamaIndexKnowledgeIndex:
                 rebuilt_at=rebuilt_at if isinstance(rebuilt_at, str) else None,
             )
         except IndexUnavailableError as exc:
+            if exc.code == "embedding":
+                # The store on disk can be perfectly healthy while the
+                # configured embedder is unusable (missing model directory,
+                # failed load). Marking that `corrupt` would send the operator
+                # to `rebuild --yes`, which wipes a valid index and then fails
+                # every file on the same provider error (review finding).
+                # Provider problems surface through `provider_available` /
+                # `load_error` — never through `corrupt`.
+                return StoreInfo(
+                    present=True,
+                    corrupt=False,
+                    node_count=None,
+                    generation=generation if isinstance(generation, int) else None,
+                    rebuilt_at=rebuilt_at if isinstance(rebuilt_at, str) else None,
+                    load_error=f"embedding_provider_unavailable: {exc.message}",
+                )
             return StoreInfo(
                 present=True,
                 corrupt=True,

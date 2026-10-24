@@ -10,10 +10,10 @@ Every command is the shipped CLI; `--json` output is machine-readable, logs stay
 |---|---|---|
 | `NEXUS_KNOWLEDGE_ENABLED` | `true` | `false` ⇒ every mutating command exits `error[disabled]` |
 | `NEXUS_KNOWLEDGE_SOURCE_ROOTS` | empty | comma-separated or JSON list of allowlisted roots; empty ⇒ `error[misconfigured]` |
-| `NEXUS_KNOWLEDGE_INDEX_PATH` | `<cache>/knowledge_index` | derived store (safe to delete) |
+| `NEXUS_KNOWLEDGE_INDEX_PATH` | `data/knowledge_index` | derived store (safe to delete) |
 | `NEXUS_KNOWLEDGE_EMBEDDING_PROVIDER` | `hash` | `hash` offline; `sentence-transformers` needs a local model dir |
 | `NEXUS_KNOWLEDGE_EMBEDDING_MODEL_PATH` | empty | existing directory only — never auto-downloaded |
-| `NEXUS_KNOWLEDGE_MAX_FILES`, `..._MAX_FILE_BYTES`, `..._MAX_TOTAL_BYTES`, `..._SEARCH_TOP_K` | bounded | input limits; violated limits fail at settings validation |
+| `NEXUS_KNOWLEDGE_MAX_FILES`, `..._MAX_FILE_BYTES`, `..._CHUNK_TOKENS`, `..._CHUNK_OVERLAP`, `..._SEARCH_TOP_K` | bounded | input limits; violated limits fail at settings validation |
 
 Schema: `alembic upgrade head` (table `knowledgesource`); `nexus migrate` applies it.
 

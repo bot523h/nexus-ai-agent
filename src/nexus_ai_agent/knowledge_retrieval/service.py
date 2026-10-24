@@ -134,6 +134,11 @@ class KnowledgeRetrievalService:
         scanned_ids = {source_id_for(source.root, source.rel_path) for source in outcome.sources}
 
         registry = {record.source_id: record for record in await self._repository.list_all()}
+        # Registry "unchanged" verdicts are only meaningful while the derived
+        # store actually holds those sources. After the operator deletes
+        # NEXUS_KNOWLEDGE_INDEX_PATH, a plain `index` must recreate it (the
+        # documented contract) instead of skipping every file as unchanged.
+        store_present = (await self._index.inspect()).present
         counters = {"new": 0, "modified": 0, "unchanged": 0, "failed": 0, "chunks": 0}
         removed = 0
         errors: list[str] = []
@@ -172,6 +177,7 @@ class KnowledgeRetrievalService:
                 prior is not None
                 and prior.status is SourceStatus.INGESTED
                 and prior.sha256 == sha256
+                and store_present
             ):
                 counters["unchanged"] += 1
                 continue
