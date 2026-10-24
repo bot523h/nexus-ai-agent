@@ -630,19 +630,27 @@ def test_too_many_spans_is_a_typed_engine_error_not_a_traceback(
 
 
 @needs_ffmpeg
-def test_real_ffmpeg_refuses_playlists_under_the_format_whitelist(
-    engine: str, tmp_path: Path
+def test_real_ffmpeg_enforces_the_format_whitelist(
+    engine: str, media: dict[str, Path], tmp_path: Path
 ) -> None:
-    """Defence in depth: even if the text sniff were bypassed, the demuxer is refused."""
+    """Cause-specific proof: the *same* WAV opens when its demuxer is whitelisted and is
+    refused when it is not, on both FFmpeg builds; a playlist is refused by the shipped list."""
+
+    def run(path: Path, formats: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603 - fixed argv
+            [
+                engine, "-hide_banner", "-nostdin", "-protocol_whitelist", "file",
+                "-format_whitelist", formats, "-i", str(path), "-t", "0.05", "-f", "null", "-",
+            ],
+            capture_output=True, text=True, timeout=20, check=False,
+        )  # fmt: skip
+
+    wav = media["tone.wav"]
+    allowed = run(wav, "wav")
+    refused = run(wav, "mov")
+    assert allowed.returncode == 0 and "Input #0, wav" in allowed.stderr
+    assert refused.returncode != 0 and "Input #0" not in refused.stderr
     playlist = tmp_path / "evil.m3u8"
     playlist.write_text("#EXTM3U\n#EXTINF:1,\n/etc/hostname\n#EXT-X-ENDLIST\n")
-    done = subprocess.run(  # noqa: S603 - fixed argv
-        [
-            engine, "-hide_banner", "-nostdin", "-protocol_whitelist", "file",
-            "-format_whitelist", analyzer_module.FORMAT_WHITELIST,
-            "-i", str(playlist), "-f", "null", "-",
-        ],
-        capture_output=True, text=True, timeout=20, check=False,
-    )  # fmt: skip
-    assert done.returncode != 0
-    assert "Input #0" not in done.stderr
+    blocked = run(playlist, analyzer_module.FORMAT_WHITELIST)
+    assert blocked.returncode != 0 and "Input #0" not in blocked.stderr

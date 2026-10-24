@@ -75,9 +75,13 @@ local-file-read attacks through them are a known class (CVE-2016-1897/1898). Def
 4. error messages echo the path only, never file content.
 
 Content binding: after the run the analyzer re-resolves the path and checks device, inode, size, mtime
-**and a fresh SHA-256**; any mismatch yields an error, never evidence. FFmpeg is always given the already
-resolved real path, so a symlink swap cannot redirect it. Residual (stated, not hidden): a writer that
-changes the bytes during the run and restores them before the re-hash is indistinguishable from no write.
+**and a fresh SHA-256**; any mismatch yields an error, never evidence. FFmpeg receives the already
+resolved real path as a *pathname argument*, not an open file handle, so a replacement of that path between
+`resolve()` and FFmpeg's own `open()` could make FFmpeg read the replacement; the post-run re-hash detects
+it whenever the path still differs at check time. Residual (stated, not hidden): a writer that swaps the
+file for the duration of the run and restores the original before the re-hash is not detected. Closing that
+fully needs an fd-passing input (`/proc/self/fd`), deliberately not used so the evidence stays portable;
+the threat requires write access to the media directory, which already lets an attacker change the media.
 
 Verified live on FFmpeg 6.1.1 (system) and 7.0.2 (bundled). Not independently confirmed: the exact CVE
 ids and versions in an external "BLOCKED" report that cited none checkable from this repository.
