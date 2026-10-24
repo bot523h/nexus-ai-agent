@@ -273,16 +273,51 @@ def test_a_dash_leading_filename_cannot_become_an_option(
     assert evidence.asset_sha256 == _sha(hostile)
 
 
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("evil.m3u8", "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nhttp://127.0.0.1:9/x.ts\n"),
+        ("local.m3u8", "#EXTM3U\n#EXTINF:1,\n/etc/passwd\n#EXT-X-ENDLIST\n"),
+        ("list.ffconcat", "ffconcat version 1.0\nfile '/etc/passwd'\n"),
+        ("call.sdp", "v=0\no=- 0 0 IN IP4 127.0.0.1\ns=x\nm=audio 5004 RTP/AVP 0\n"),
+        ("manifest.mpd", "<?xml version='1.0'?><MPD><Period/></MPD>"),
+        ("empty.wav", ""),
+    ],
+)
+def test_text_inputs_are_refused_before_any_process_runs(
+    tmp_path: Path, name: str, text: str
+) -> None:
+    """HLS/concat/SDP/DASH can name other files or URLs (the CVE-2016-1897/1898 class):
+    refused outright, with a binary that would fail the test if it were ever executed."""
+    canary = tmp_path / "executed"
+    binary = _fake(tmp_path, f"touch {canary}\nexit 0\n")
+    target = tmp_path / name
+    target.write_text(text)
+    analyzer = FfmpegAnalyzer(binary=binary)
+    for call in (
+        analyzer.probe,
+        analyzer.silences,
+        analyzer.scene_cuts,
+        analyzer.loudness,
+    ):
+        with pytest.raises(AnalysisInputError, match="text, not a media container"):
+            call(target)
+    assert not canary.exists(), "FFmpeg must never be started for a text input"
+
+
 @needs_ffmpeg
-def test_playlist_indirection_to_the_network_is_refused(engine: str, tmp_path: Path) -> None:
-    """``-protocol_whitelist file``: a container may not make FFmpeg open ``http:``."""
+def test_real_ffmpeg_never_sees_a_network_playlist(engine: str, tmp_path: Path) -> None:
     playlist = tmp_path / "evil.m3u8"
-    playlist.write_text(
-        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\n"
-        "http://127.0.0.1:9/never-fetched.ts\n#EXT-X-ENDLIST\n"
-    )
-    with pytest.raises(AnalysisFailedError):
+    playlist.write_text("#EXTM3U\n#EXTINF:1,\nhttp://127.0.0.1:9/never.ts\n#EXT-X-ENDLIST\n")
+    with pytest.raises(AnalysisInputError):
         FfmpegAnalyzer(binary=engine, timeout_s=20).silences(playlist)
+
+
+@needs_ffmpeg
+def test_binary_media_is_not_mistaken_for_text(engine: str, media: dict[str, Path]) -> None:
+    for name in ("tone.wav", "scenes.mp4", "av.mp4"):
+        head = media[name].read_bytes()[:1024]
+        assert not analyzer_module._looks_textual(head), name
 
 
 @needs_ffmpeg

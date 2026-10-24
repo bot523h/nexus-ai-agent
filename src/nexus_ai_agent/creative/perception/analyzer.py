@@ -93,6 +93,37 @@ def _sha256(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+_SNIFF_BYTES = 1024
+_TEXT_RATIO = 0.95
+
+
+def _looks_textual(head: bytes) -> bool:
+    """True for text-based inputs (HLS/DASH playlists, ffconcat, SDP, XML, scripts).
+
+    Real media containers are binary (RIFF, ISO-BMFF, Matroska, Ogg, ID3/MPEG frames
+    all carry NUL or high bytes in their first kilobyte).  Every FFmpeg *indirection*
+    format is text: it can name other files or URLs, which is the HLS+concat
+    local-file-read class (CVE-2016-1897/1898).  Refusing text outright removes the
+    class instead of relying on each FFmpeg version's own mitigations.
+    """
+    if not head:
+        return True
+    if b"\x00" in head:
+        return False
+    printable = sum(1 for b in head if 32 <= b < 127 or b in (9, 10, 13))
+    return printable / len(head) >= _TEXT_RATIO
+
+
+def _refuse_indirection(path: Path) -> None:
+    with path.open("rb") as handle:
+        head = handle.read(_SNIFF_BYTES)
+    if _looks_textual(head):
+        raise AnalysisInputError(
+            f"{path} is text, not a media container (playlists, concat lists and SDP "
+            "can reference other files or URLs and are refused)"
+        )
+
+
 def _fixed(value: float, digits: int) -> str:
     """Fixed-point text: never an exponent form FFmpeg's option parser could misread."""
     return f"{value:.{digits}f}"
@@ -126,6 +157,7 @@ class FfmpegAnalyzer:
             raise AnalysisInputError(f"media not found: {candidate}") from error
         if not resolved.is_file():
             raise AnalysisInputError(f"not a regular file: {resolved}")
+        _refuse_indirection(resolved)
         stat = resolved.stat()
         return _Source(resolved, _sha256(resolved), stat.st_size, stat.st_mtime_ns)
 
@@ -249,6 +281,7 @@ class FfmpegAnalyzer:
             raise AnalysisInputError(f"media not found: {candidate}") from error
         if not resolved.is_file():
             raise AnalysisInputError(f"not a regular file: {resolved}")
+        _refuse_indirection(resolved)
         return self._probe_resolved(resolved)
 
     def _probe_resolved(self, resolved: Path) -> parsers.MediaProbe:
