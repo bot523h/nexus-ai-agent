@@ -11,7 +11,10 @@
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).parents[2]
 LANE = REPO_ROOT / "src" / "nexus_ai_agent" / "creative" / "rendering"
@@ -104,14 +107,86 @@ def test_lane_does_not_cross_into_other_zones() -> None:
             )
 
 
+def _imports_subprocess(path: Path) -> bool:
+    """True when *path* imports ``subprocess`` in any form.
+
+    A raw ``"import subprocess" in text`` scan misses ``from subprocess import run``
+    (and ``import subprocess as sp``), so a rogue lane file could spawn a process
+    while the boundary test stayed green.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(a.name == "subprocess" or a.name.startswith("subprocess.") for a in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == "subprocess" or module.startswith("subprocess."):
+                return True
+    return False
+
+
+def _uses_shell_true(path: Path) -> bool:
+    """True when *path* calls anything with a truthy ``shell=`` keyword.
+
+    Catches ``shell=True`` regardless of whitespace (``shell = True``) and any
+    ``subprocess`` alias, because it inspects call keywords rather than text.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "shell" and isinstance(keyword.value, ast.Constant):
+                if bool(keyword.value.value):
+                    return True
+    return False
+
+
 def test_exactly_one_subprocess_site_and_no_shell_true() -> None:
-    subprocess_users = [
-        p for p in _lane_files() if "import subprocess" in p.read_text(encoding="utf-8")
-    ]
-    assert [p.name for p in subprocess_users] == ["executor.py"], (
-        f"only executor.py may import subprocess, found: {[p.name for p in subprocess_users]}"
+    subprocess_users = [p.name for p in _lane_files() if _imports_subprocess(p)]
+    assert subprocess_users == ["executor.py"], (
+        f"only executor.py may import subprocess, found: {subprocess_users}"
     )
-    for file_path in _lane_files():
-        assert "shell=True" not in file_path.read_text(encoding="utf-8"), (
-            f"{file_path.relative_to(REPO_ROOT)} must never use shell=True"
-        )
+    shell_users = [p.relative_to(REPO_ROOT) for p in _lane_files() if _uses_shell_true(p)]
+    assert not shell_users, f"lane files must never use shell=True: {shell_users}"
+
+
+def test_subprocess_detector_catches_from_and_aliased_imports(tmp_path: Path) -> None:
+    plain = tmp_path / "plain.py"
+    plain.write_text("import subprocess\n", encoding="utf-8")
+    from_import = tmp_path / "from_import.py"
+    from_import.write_text("from subprocess import run\n", encoding="utf-8")
+    aliased = tmp_path / "aliased.py"
+    aliased.write_text("import subprocess as sp\n", encoding="utf-8")
+    clean = tmp_path / "clean.py"
+    clean.write_text("import json\n", encoding="utf-8")
+    assert _imports_subprocess(plain)
+    assert _imports_subprocess(from_import)
+    assert _imports_subprocess(aliased)
+    assert not _imports_subprocess(clean)
+
+
+def test_shell_true_detector_is_whitespace_insensitive(tmp_path: Path) -> None:
+    spaced = tmp_path / "spaced.py"
+    spaced.write_text("import subprocess\nsubprocess.run(cmd, shell = True)\n", encoding="utf-8")
+    compact = tmp_path / "compact.py"
+    compact.write_text("import subprocess\nsubprocess.run(cmd, shell=True)\n", encoding="utf-8")
+    falsey = tmp_path / "falsey.py"
+    falsey.write_text("import subprocess\nsubprocess.run(cmd, shell=False)\n", encoding="utf-8")
+    assert _uses_shell_true(spaced)
+    assert _uses_shell_true(compact)
+    assert not _uses_shell_true(falsey)
+
+
+def test_rogue_lane_file_fails_the_boundary(tmp_path: Path, monkeypatch) -> None:
+    """End-to-end: a lane file that spawns a process without the literal
+    ``import subprocess`` and uses ``shell = True`` must fail the boundary test."""
+    (tmp_path / "executor.py").write_text("import subprocess\n", encoding="utf-8")
+    (tmp_path / "rogue.py").write_text(
+        "from subprocess import run\ndef go(cmd):\n    return run(cmd, shell = True)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_lane_files", lambda: sorted(tmp_path.glob("*.py")))
+    with pytest.raises(AssertionError):
+        test_exactly_one_subprocess_site_and_no_shell_true()

@@ -6,6 +6,7 @@ are initialized here and passed to handlers via bot_data.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -18,6 +19,7 @@ from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
+from nexus_ai_agent.storage.db import sync_db_path_for
 
 from .handlers import (
     build_handlers,
@@ -218,18 +220,33 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     # Application-owned background jobs. The queue is a SQLite sidecar owned
     # by this adapter; execution remains on the bot process event loop.
     # D4: finished jobs notify the origin Telegram chat (fail-safe hook).
+    # task-231: the causal journal (Project Graph ledger) records every
+    # durable transition into its own sidecar — evidence, never authority.
+    # Its unavailability DEGRADES EVIDENCE, never the bot: a corrupt, locked
+    # or unwritable sidecar logs ``causal_journal_unavailable``, the queue
+    # runs without an observer, and the passport plane reports the gap.
+    from nexus_ai_agent.provenance import QueueLedgerObserver
+    from nexus_ai_agent.provenance.paths import (
+        causal_journal_db_path,
+        try_open_causal_journal,
+    )
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
+    _queue_db = job_queue_db_path(settings.db_path)
+    causal_journal = try_open_causal_journal(causal_journal_db_path(_queue_db))
+    causal_observer = QueueLedgerObserver(causal_journal) if causal_journal is not None else None
     job_queue = InProcessJobQueue(
-        job_queue_db_path(settings.db_path),
+        _queue_db,
         on_job_finished=_build_job_completion_notifier(_bot_token(settings)),
+        causal_observer=causal_observer,
     )
     for job_type, handler in default_job_handlers().items():
         job_queue.register_handler(job_type, handler)
     engines["job_queue"] = job_queue
+    engines["causal_journal"] = causal_journal
 
     # Persistent conversation store
-    conv_store = ConversationStore(db_path=settings.db_path)
+    conv_store = ConversationStore(db_path=sync_db_path_for(settings))
     engines["conversation_store"] = conv_store
 
     # Request queue for fair Gemini API access
@@ -268,7 +285,7 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     engines["summarizer_engine"] = summarizer_engine
 
     # Referral
-    engines["referral_engine"] = ReferralEngine(db_path=settings.db_path)
+    engines["referral_engine"] = ReferralEngine(db_path=sync_db_path_for(settings))
 
     # Unified Cloud Storage
     engines["unified_cloud"] = UnifiedCloudStorage(
@@ -320,9 +337,40 @@ def build_application(
             await feature_engines.reminders.restore_pending()
         except Exception:  # noqa: BLE001 — startup wiring must not kill the bot
             logger.exception("feature_engines_startup_failed")
+        # task-231: close any crash-window holes in the causal journal with
+        # explicitly labeled reconstructions (idempotent, fail-safe). A
+        # degraded (None) journal simply has nothing to backfill into.
+        journal = engines.get("causal_journal")
+        if journal is not None:
+            try:
+                from nexus_ai_agent.provenance.backfill import backfill_journal
+
+                backfill_journal(
+                    journal,
+                    job_queue,
+                    await asyncio.to_thread(job_queue.job_ids),
+                )
+            except Exception:  # noqa: BLE001 — ledger recovery must not kill the bot
+                logger.exception("causal_journal_backfill_failed")
         await job_queue.resume_pending()
+        # Living Core phase 2b: opt-in vital signs (off unless
+        # SELF_VITALS_ENABLED=true). Observation only — it never acts.
+        try:
+            from nexus_ai_agent.agent.self_vitals import start_vitals
+
+            application.bot_data["self_vitals"] = await start_vitals(
+                enabled=settings.self_vitals_enabled,
+                db_path=str(settings.db_path),
+                period_s=settings.self_vitals_period_s,
+                max_ram_mb=settings.max_ram_mb,
+            )
+        except Exception:  # noqa: BLE001 — observation must never kill the bot
+            logger.exception("self_vitals_startup_failed")
 
     async def _post_shutdown(application: Any) -> None:
+        vitals_handle = application.bot_data.get("self_vitals")
+        if vitals_handle is not None:
+            await vitals_handle.stop()
         try:
             feature_engines.reminders.close()
         except Exception:  # noqa: BLE001
@@ -349,6 +397,12 @@ def build_application(
     from nexus_ai_agent.bot.access_guard import build_access_guard
 
     application.add_handler(build_access_guard(settings), group=-1)
+    # Smart moderation ingress (audit A-03, 2026-10-15): same group, right
+    # after the guard, so a violating group message is removed before the
+    # group-0 handlers (and the AI) ever see it.
+    from nexus_ai_agent.bot.handlers import build_moderation_gate
+
+    application.add_handler(build_moderation_gate(), group=-1)
 
     for handler in build_handlers(
         graph,

@@ -218,7 +218,8 @@ async def test_unexpected_crash_is_durable_failed_and_safe(
     workspace.mkdir(parents=True)
     _clip(workspace / "input.mp4")
 
-    # simulate a catastrophic environment failure past every typed guard
+    # Deterministic input-evidence infrastructure failure: the new preflight
+    # must stop before the real render handler can observe it.
     def _boom(raw: str) -> Path:
         raise OSError("disk exploded")
 
@@ -228,14 +229,18 @@ async def test_unexpected_crash_is_durable_failed_and_safe(
         job_type="creative_render", idempotency_key=key, payload=_payload(workspace, key)
     )
     status = await _drain(queue, job_id)
-    # task-181: an unexpected OSError is classified RETRYABLE (transient IO /
-    # crash class) — a failure status, never COMPLETED.
-    assert status is JobStatus.FAILED_RETRYABLE, "unexpected exceptions persist a failure status"
-    row_error = await queue.get_result(job_id)
-    assert row_error is None  # exception-failure jobs have no result payload
+    # Evidence preflight is a deterministic terminal failure; no result or
+    # passport is manufactured from the unavailable source evidence.
+    assert status is JobStatus.FAILED_TERMINAL
+    assert await queue.get_result(job_id) is None
+    row = queue._fetch_row_full(job_id)
+    assert row is not None
+    assert row["error"] == "creative_passport_source_unavailable:CreativePassportError"
+    assert row["artifact_passport_json"] is None
+    assert not queue._artifact_root.exists()
     assert bot.messages, "failed job must notify the user"
     text = bot.messages[-1]
-    assert text.startswith("⚠️"), "retryable failures carry the retryable class line"
+    assert text.startswith("❌"), "terminal failures carry the terminal class line"
     assert text.endswith(i18n.t("creative.failed.internal", lang="fa", detail="x"))
     assert "disk exploded" not in text, "internal errors must not leak to users"
     assert "creative_" not in text and "/tmp" not in text, "internal paths must not leak"
