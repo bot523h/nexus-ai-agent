@@ -16,7 +16,7 @@ flowchart TB
         cmd["TypedCommand envelope<br/>protocol v1 + idempotency_key + preconditions"]
         bus["CommandBus<br/>validate → authorize → apply atomically"]
         reg["CapabilityRegistry<br/>Domain > Capability > OperationSpec"]
-        packs["7 packs: edit · motion · audio · caption · color/delivery · slideshow"]
+        packs["7 packs: edit · motion · audio · caption · color/delivery · slideshow · analysis/perception"]
         proj["Project state<br/>Timeline/Track/Clip/AssetRecord/EffectLayerRef<br/>derived state_hash"]
     end
     subgraph impure["Impure — one process, one file, one measurement"]
@@ -33,7 +33,7 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 
 | Concept | Type | Meaning |
 |---|---|---|
-| Domain | `Domain` | first id segment: `media`, `timeline`, `motion`, `audio`, `caption`, `color`, `delivery`, `slideshow`, `system` |
+| Domain | `Domain` | first id segment: `media`, `timeline`, `motion`, `audio`, `caption`, `color`, `delivery`, `slideshow`, `analysis`, `system` |
 | Capability | `Capability` | a named grouping inside a domain (for example `timeline.edit`) |
 | Operation | `OperationSpec` | `operation_id`, typed `input_model` (pydantic, `extra="forbid"`), handler, `permission_level`, `undoable` |
 | Envelope | `TypedCommand` | Protocol `nagar.command.v1`, envelope schema 1 (legacy) or 2 (explicit `actor`, `target.project_id`, `provenance`); typed `input_refs`, execution policy, request context, optional capability snapshot, idempotency key, preconditions. See [Gate 2](COMMAND_CAPABILITY_CONTRACT.md). |
@@ -72,7 +72,7 @@ A pack is a directory with a `pack.manifest.json` validated against `nexus.capab
 - No executable key at any depth of any manifest (`test_pack_manifest_is_data_only.py`).
 - A pack's declared capabilities must equal the operations its registration function adds, and it must activate against its own manifest (`test_slideshow_adapter_boundary.py`).
 - An **external** pack that declares an operation the runtime does not know is rejected at registration; a **builtin** pack may register with *pending* capabilities but cannot be activated until they resolve (`creative/packs/registry.py`).
-- Verification reports every finding; the signature state is one of the nine `TrustState` values decided against the **trust root** (`creative/packs/trust.py`), never against the manifest's own claim. No shipped pack is `verified` today — all six carry a documented placeholder.
+- Verification reports every finding; the signature state is one of the nine `TrustState` values decided against the **trust root** (`creative/packs/trust.py`), never against the manifest's own claim. No shipped pack is `verified` today — all seven carry a documented placeholder.
 - `registered` ≠ `verified` ≠ `trusted` ≠ `active`: registration checks structure and policy, the trust root decides trust, and `PackRegistry.activate()` refuses any **external** pack whose state is not `verified` ([ADR 0006](adr/0006-capability-pack-trust-root.md)).
 
 ## 4. Pack inventory and the activation gap (re-measured 2026-09-24)
@@ -91,7 +91,7 @@ A pack is a directory with a `pack.manifest.json` validated against `nexus.capab
 
 The activation gap is **closed** (board task-126, landed): `cli.py::_packs_registry`
 now composes `creative.packs.runtime.build_pack_registry()` — the runtime and the
-CLI see the same **57** registered operation ids, and every builtin manifest
+CLI see the same **60** registered operation ids, and every builtin manifest
 verifies clean. Activation remains an explicit, auditable step (`nexus packs
 activate`), which is why `packs list` still reports each pack's `active` flag
 as false until an operator activates it.
@@ -105,10 +105,10 @@ Measured 2026-09-24 by diffing the operation ids in
 | Metric | Value |
 |---|---:|
 | Operation ids catalogued by the TDD (parsed, family-filtered) | 69 |
-| Registered at runtime (CLI == builders) | **57 unique** |
+| Registered at runtime (CLI == builders) | **60 unique** |
 | TDD ids implemented | 46 |
 | TDD ids remaining | **23** |
-| Registered beyond the TDD catalogue (post-TDD additions: slideshow 6, `media.pause`, `timeline.mark`, `system.undo`, `delivery.make_proxy_480p`, `delivery.render_master_4k`) | 11 |
+| Registered beyond the TDD catalogue (post-TDD additions: slideshow 6, `media.pause`, `timeline.mark`, `system.undo`, `delivery.make_proxy_480p`, `delivery.render_master_4k`, perception 3: `analysis.mark_silences`, `analysis.mark_scene_cuts`, `analysis.assess_loudness`) | 14 |
 
 Remaining, by family (all in the `portrait.*` / `scene.*` / `color.*` AI lanes):
 
@@ -143,13 +143,13 @@ The lane is deliberately the *only* place in the creative tree that spawns a pro
 ## 8. How to verify this document
 
 ```bash
-# inventory (expect: 6 packs, 57 unique registered ops; CLI == builders)
+# inventory (expect: 7 packs, 60 unique registered ops; CLI == builders)
 python - <<'PY'
 from nexus_ai_agent.cli import _packs_registry
 print(len(_packs_registry().runtime_registry.list_operations()))
 PY
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
-print(len(build_runtime_registry().list_operations()))   # also 57
+print(len(build_runtime_registry().list_operations()))   # also 60
 nexus packs list          # pending counts per pack (§4 table — all 0)
 nexus packs verify <id>   # every finding, not a summary
 pytest -q tests/architecture tests/unit/test_caption_pack.py tests/unit/test_rendering_lane.py
