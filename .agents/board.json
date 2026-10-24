@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-24T07:28:37Z",
+  "updated_at": "2026-10-24T14:54:26Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3894,6 +3894,30 @@
       "gates_owner": false,
       "generation": 1,
       "ttl_hours": 24
+    },
+    {
+      "task": "task-261-request-queue-boundary-doc",
+      "title": "Document the LLM request-queue vs execution-core cancellation boundary",
+      "zone": "docs-architecture",
+      "priority": "P3",
+      "status": "active",
+      "agent_branch": "arena/nexus-night-task261-request-queue-doc",
+      "claimed_at": "2026-10-24T04:48:16Z",
+      "gates_owner": false,
+      "generation": 1,
+      "exclusive_paths": [
+        "docs/architecture/REQUEST_QUEUE.md"
+      ],
+      "acceptance_criteria": [
+        "one page maps each cancellation surface to its authority and identity model",
+        "audit note: no cross-subsystem authority leak; links to the execution contract"
+      ],
+      "evidence_required": [
+        "exact commands + observed results for docs integrity tests"
+      ],
+      "prerequisites": [],
+      "ttl_hours": 24,
+      "note": ""
     },
     {
       "task": "task-264-passport-attempt-id-alignment",
