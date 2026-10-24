@@ -921,9 +921,14 @@ def _knowledge_service() -> Any:
     from nexus_ai_agent.observability.logging import configure_logging
 
     try:
+        import os as _os
+
+        # Logs first (stderr, redacted): even a settings/index-directory
+        # startup failure must land somewhere real before the CLI prints
+        # "details are in the application log". The level is refined right
+        # after the settings object exists.
+        configure_logging((_os.environ.get("NEXUS_LOG_LEVEL") or "INFO").lower())
         settings = get_settings()
-        # Same pattern as run-bot: structured, redacted logs on stderr so the
-        # command's stdout (notably --json) stays parseable.
         configure_logging(settings.log_level)
         config = KnowledgeConfig.from_settings(settings)
         return KnowledgeRetrievalService(config, LlamaIndexKnowledgeIndex(config))
@@ -931,8 +936,37 @@ def _knowledge_service() -> Any:
         _knowledge_exit(exc)
 
 
+def _safe_error_detail(exc: Exception) -> str:
+    """Operator-safe one-line detail for a non-typed failure.
+
+    Pydantic settings errors are reduced to field *locations* — their ``input``
+    values may contain secrets and must never be echoed. Everything else is
+    truncated type + message (errno strings carry the configured path, which
+    the operator set themselves — allowed by the error contract).
+    """
+    try:
+        from pydantic import ValidationError
+
+        if isinstance(exc, ValidationError):
+            locations = [
+                ".".join(str(part) for part in error.get("loc", ())) for error in exc.errors()[:4]
+            ]
+            return "ValidationError: invalid settings field(s): " + ", ".join(
+                location for location in locations if location
+            )
+    except Exception:  # noqa: BLE001 — diagnostic helper never fails the exit path
+        pass
+    return f"{type(exc).__name__}: {exc}"[:400]
+
+
 def _knowledge_exit(exc: Any) -> None:
-    """Map a typed knowledge failure to a clean stderr line + exit 1."""
+    """Map a typed knowledge failure to a clean stderr line + exit 1.
+
+    Non-typed failures (startup: settings load, index-directory creation) are
+    *actually* logged — structured, redacted, with the traceback on stderr —
+    so the printed hint is true, and the CLI line carries the safe detail
+    above, never a bare exception name alone.
+    """
     from nexus_ai_agent.knowledge_retrieval import KnowledgeRetrievalError
 
     if isinstance(exc, KnowledgeRetrievalError):
@@ -940,8 +974,18 @@ def _knowledge_exit(exc: Any) -> None:
         if exc.hint:
             typer.echo(f"hint: {exc.hint}", err=True)
     else:
-        typer.echo(f"error[internal]: {type(exc).__name__}", err=True)
-        typer.echo("hint: details are in the application log, not the CLI output", err=True)
+        from nexus_ai_agent.observability.logging import get_logger
+
+        get_logger(__name__).error(
+            "knowledge_command_failed",
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+        typer.echo(f"error[internal]: {_safe_error_detail(exc)}", err=True)
+        typer.echo(
+            "hint: full details (traceback) are in the application log on stderr",
+            err=True,
+        )
     raise typer.Exit(code=1)
 
 

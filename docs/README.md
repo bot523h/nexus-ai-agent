@@ -49,7 +49,7 @@ placeholder text.
 | [architecture/adr/0007-multisource-referee-exit-codes.md](architecture/adr/0007-multisource-referee-exit-codes.md) | The overlap referee reports unverifiable data as exit 2, not as a pass. |
 | [architecture/adr/0008-canonical-identity-arbitration.md](architecture/adr/0008-canonical-identity-arbitration.md) | One authority per identity, one durable lineage; dispositions for competing open PRs. |
 | [architecture/adr/0011-restricted-shell-flag-grammar.md](architecture/adr/0011-restricted-shell-flag-grammar.md) | The restricted shell validates a declared argument grammar, not a forbidden-option list. |
-| [architecture/adr/0012-local-first-llamaindex-retrieval.md](architecture/adr/0012-local-first-llamaindex-retrieval.md) | Local-first LlamaIndex behind a narrow port, with SQLite as the only authority. |
+| [architecture/adr/0012-local-first-llamaindex-retrieval.md](architecture/adr/0012-local-first-llamaindex-retrieval.md) | Knowledge-retrieval docs: living view + law R22 fitness test (behaviour record lives in DECISION_LOG D-0030). |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
 | [architecture/TRUTH_DOCTOR.md](architecture/TRUTH_DOCTOR.md) | The repo-truth authority (law R16): one pure-stdlib scanner for version lock-step, docs index/link integrity, boundary-law→test resolution, documentation claim witnesses, and truthy-default verdict reads — with its finding codes and honest limits. |
 

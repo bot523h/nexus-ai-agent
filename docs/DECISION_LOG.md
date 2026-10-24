@@ -2104,9 +2104,9 @@ workflow; (c) creating a per-run database — `CREATE DATABASE` is not granted o
 PostgreSQL (notably Neon), so it would have traded a data-safety guarantee for a
 coverage gap on exactly the deployments the test exists to protect.
 
-### D-0029 — Knowledge retrieval V1: evidence over convenience — a vector hit is not evidence until the registry vouches for it (task-273)
+### D-0030 — Knowledge retrieval V1: evidence over convenience — a vector hit is not evidence until the registry vouches for it (task-273)
 
-**Date:** 2026-10-23 · **Status:** accepted · **Scope:** `knowledge_retrieval/`, `adapters/llamaindex_retrieval.py`, CLI `knowledge`, migration `d4e1c0a79b21`
+**Date recorded:** 2026-10-24 · **Status:** implemented under owner-mandated task-273; agent-authored record, **not** an owner acceptance — owner review happens on PR #245. **Identifier note:** the D-0029 slot is reserved for the app-first product frame (owner direction stated 2026-10-20, proposed by PR #240, explicitly awaiting owner acceptance) and must not be reused here. · **Scope:** `knowledge_retrieval/`, `adapters/llamaindex_retrieval.py`, CLI `knowledge`, migration `d4e1c0a79b21`
 
 **Decision.** The LlamaIndex-backed knowledge subsystem ships with four non-negotiable semantics:
 (1) **verified evidence** — a retrieval hit becomes evidence only after its `source_id` resolves to an
@@ -2142,6 +2142,6 @@ store-level corruption ⇒ `nexus knowledge rebuild --yes`.
 `tests/unit/test_knowledge_retrieval_service.py`, `tests/unit/test_knowledge_retrieval_cli.py`,
 `tests/integration/test_knowledge_retrieval_pipeline.py`,
 `tests/architecture/test_knowledge_retrieval_boundaries.py` (law R22). Living view:
-`docs/architecture/KNOWLEDGE_RETRIEVAL.md`; ADR:
-`docs/architecture/adr/0012-local-first-llamaindex-retrieval.md`.
+`docs/architecture/KNOWLEDGE_RETRIEVAL.md`; ADR 0012 records only the docs-enforcement
+decision and links back here (behaviour authority = this entry).
 

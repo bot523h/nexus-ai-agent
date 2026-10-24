@@ -6,66 +6,66 @@ consulted: AGENTS.md protocol v2, docs/architecture/MODULE_MAP.md
 informed: future per-project knowledge scoping work
 ---
 
-# 0012. Local-first LlamaIndex behind a narrow port, with SQLite as the only authority
+# 0012. Knowledge-retrieval documentation is a living view enforced by a named fitness test, not prose
 
 ## Context and Problem Statement
 
-NEXUS needs evidence-grounded retrieval over operator-allowlisted local sources (board
-`task-273`). The existing neighbours — `features/rag.py` (per-user Chroma uploads) and
-`knowledge/` (provenance-first web cache) — do not provide authorized-root registration,
-hash-based change detection, incremental reindex, stale cleanup, versioned citations or
-rebuild operations. The mission constrains the shape: local-first (no paid services, no
-telemetry, no silent downloads), LlamaIndex confined to ingestion/indexing/retrieval, and
-SQLite remaining the single authority.
+The knowledge-retrieval capability (task-273) introduced a new subsystem whose
+*behaviour* decisions (adapter confinement, embedding provider, authoritative
+store, evidence semantics) belong in `docs/DECISION_LOG.md` per the coding
+guidelines and this directory's own rule 3 ("an ADR here must not restate a
+DECISION_LOG decision; it links to it"). What is still undecided here is the
+**documentation-enforcement** question: where the capability's living
+documentation lives, and how the repo keeps it true as the code changes.
 
 ## Decision Drivers
 
-- **Isolation**: the core domain must not grow a framework dependency; a fitness function
-  must be able to prove confinement mechanically.
-- **Local-first determinism**: tests and default operations run offline, without keys.
-- **Recoverability**: any derived state must be rebuildable from authority + sources.
-- **House conventions**: composition in `cli.py`, typed errors, structured redaction-aware
-  logs, Alembic-managed tables, docs updated in the same change.
+- Every boundary rule must name its enforcing test (AGENTS.md §7, MODULE_MAP).
+- One index, living views, no duplicate authoritative records.
+- Drift between docs and code must fail a gate, not a review comment.
 
 ## Considered Options
 
-1. **Pinned `llama-index-core` behind `KnowledgeIndexPort`, adapter-only import** (chosen).
-2. Extend `features/rag_core.py` BM25 only — no LlamaIndex at all (fails the mission's
-   integration requirement and the vector-store persistence contract).
-3. Managed vector store / hosted embeddings (Chroma cloud, OpenAI) — fails local-first.
+1. Prose-only documentation in one page, enforced by review discipline.
+2. **A single living architecture view plus a MODULE_MAP law row whose
+   enforcing test is an executable fitness function** (chosen).
+3. Fold the capability docs into existing pages (OVERVIEW/MODULE_MAP) only.
 
 ## Decision Outcome
 
-Chosen option: **1**, because it satisfies every driver at once: `llama-index-core==0.14.25`
-(MIT, pinned as a core dependency, no LLM extras) is quarantined in
-`src/nexus_ai_agent/adapters/llamaindex_retrieval.py`, the core package talks only the port,
-and `cli.py` is the one composition root. The hash embedding provider makes the default path
-pure arithmetic; `sentence-transformers` is opt-in behind an existing-local-directory rule.
-Persistence is the LlamaIndex storage context under `NEXUS_KNOWLEDGE_INDEX_PATH`, treated as
-derived state, with `knowledgesource` (SQLite, migration `d4e1c0a79b21`) as authority.
+Chosen option: **2**, because it makes both the docs and their claims
+mechanically checkable:
+
+- `docs/architecture/KNOWLEDGE_RETRIEVAL.md` is the living view (indexed in
+  `docs/README.md`, with `truth:` witness markers the truth doctor verifies).
+- MODULE_MAP law **R22** names `tests/architecture/test_knowledge_retrieval_boundaries.py`
+  as its enforcing test; that test (plus the docs-integrity suite) is the
+  confirmation that the written boundaries and commands stay executable.
+
+Behaviour decisions themselves are **not** recorded here — they live in
+[`../../DECISION_LOG.md`](../../DECISION_LOG.md) entry **D-0030**
+(implementation status stated there honestly; the D-0029 slot remains
+reserved for the app-first product frame proposed by PR #240, pending
+explicit owner acceptance).
 
 ### Consequences
 
-- Positive: confinement, offline tests, rebuild-from-authority recovery, no new API/UI
-  surface (CLI ops through the existing command layer).
-- Negative/negative-risk: the lexical-overlap guard prefers precision over recall;
-  sentence-transformers users must prefetch a model once; per-project scoping is deferred.
-- Rejected: option 2 (no vector persistence contract), option 3 (paid/networked).
+- Positive: docs claims resolve to tests (`truth:` markers, R22), one
+  authoritative behaviour record (D-0030), one docs-enforcement record (here).
+- Negative: adding another enforcement surface means updating both the law row
+  and this record's Confirmation.
 
 ## Confirmation
 
-- `tests/architecture/test_knowledge_retrieval_boundaries.py` (llama_index confined to the
-  adapter; core package imports neither adapters nor the framework; single wiring site).
-- `tests/architecture/test_import_boundaries.py` (legacy baseline untouched).
-- `tests/unit/test_knowledge_retrieval_identity.py`,
-  `tests/unit/test_knowledge_retrieval_service.py`,
-  `tests/unit/test_knowledge_retrieval_cli.py`,
-  `tests/integration/test_knowledge_retrieval_pipeline.py` (lifecycle, stale-drop,
-  corrupt-rebuild, fail-closed security, no-network/no-LLM).
-- Gates: `make lint types test` with the editable install (AGENTS.md local-gate rule).
+- `tests/architecture/test_knowledge_retrieval_boundaries.py` (R22: adapter
+  confinement, core-package isolation, authority imports, resolver self-tests).
+- `tests/unit/test_docs_integrity.py` (index/link/H1/ADR-index agreement —
+  this record is listed in `adr/README.md` and `docs/README.md`).
+- `python -m nexus_ai_agent.diagnostics.truth` (law-test resolution + claim
+  witnesses across the living view).
 
 ## Links
 
 - Living view: [`../KNOWLEDGE_RETRIEVAL.md`](../KNOWLEDGE_RETRIEVAL.md)
-- Operational semantics: [`../../DECISION_LOG.md`](../../DECISION_LOG.md) entry D-0029
+- Behaviour record: [`../../DECISION_LOG.md`](../../DECISION_LOG.md) entry D-0030
 - Board claim: `.agents/board.json` → `task-273-llamaindex-retrieval`

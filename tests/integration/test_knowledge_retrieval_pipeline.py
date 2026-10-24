@@ -28,6 +28,7 @@ from nexus_ai_agent.knowledge_retrieval import (
     KnowledgeRetrievalService,
 )
 from nexus_ai_agent.knowledge_retrieval.errors import IndexUnavailableError
+from nexus_ai_agent.knowledge_retrieval.models import QueryState
 from nexus_ai_agent.observability.logging import configure_logging
 
 
@@ -198,8 +199,13 @@ async def test_interrupted_index_fails_one_file_then_converges(
     status = await service.status()
     assert status.error_count == 1  # the failure is visible to operators
 
-    # Nothing stale is served after the interrupted write.
-    assert (await service.search("incident timeline")).state in {"no_matches", "ok"}
+    # Nothing stale is served after the interrupted write: the prior nodes
+    # were dropped and the registry row is in `error`, so the only correct
+    # answer is `no_matches` — accepting "ok" here would let a regression
+    # that still serves the v1 chunk pass unnoticed.
+    interrupted = await service.search("incident timeline")
+    assert interrupted.state == QueryState.NO_MATCHES
+    assert interrupted.evidence == ()
     rows = await service.list_sources()
     assert rows[0].status.value == "error"
 

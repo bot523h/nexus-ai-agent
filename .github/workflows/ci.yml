@@ -484,6 +484,9 @@ jobs:
       # Audit A-02/A-17 (2026-10-15): async + sync engines share this one
       # database, and post-2021 user ids / supergroup ids fit (BIGINT).
       - run: pytest -q tests/integration/test_postgres_single_engine.py
+      # Knowledge registry on the real backend: naive-UTC TIMESTAMP columns,
+      # nonce-scoped writes, survival assertion (task-273, review finding).
+      - run: pytest -q tests/integration/test_knowledge_retrieval_postgres.py
       # Shared read-only adapter contract, PG leg (incl. golden stability
       # and the f4a9c2e71b08 lifecycle table).
       - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py

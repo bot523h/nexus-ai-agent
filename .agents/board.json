@@ -887,7 +887,8 @@
         "tests/unit/test_core_fingerprint.py",
         "tests/unit/test_migrations.py",
         "docs/architecture/DATA_AND_STORAGE.md",
-        "docs/architecture/RUNTIME_FLOWS.md"
+        "docs/architecture/RUNTIME_FLOWS.md",
+        "tests/integration/test_knowledge_retrieval_postgres.py"
       ]
     }
   ],
@@ -3891,13 +3892,13 @@
         "Evidence-grounded search: every hit carries source id, safe relative path, content sha256, chunk index + char offsets, score; empty query, empty index and zero-result have defined distinct results; no fabricated metadata; stale source version never presented as verified-current",
         "Persistence/recovery: source registry + ingest status in canonical SQLite via alembic migration (upgrade+downgrade tested); index store is derived, survives restart, rebuildable deterministically; corrupt index reported as degraded with typed error, canonical state unharmed",
         "Integration: application service + port/protocol; core domain never imports llama_index (architecture test); adapter lazily imports llama-index-core (pinned, MIT, telemetry disabled, no OpenAI/paid calls, no silent model download)",
-        "CLI ops via nexus knowledge sub-app (index/search/status/rebuild/sources add|remove|list) with defined exit codes for disabled/unconfigured/empty/failure states",
+        "CLI ops via nexus knowledge sub-app (index/search/status/rebuild/sources list|remove) with defined exit codes for disabled/unconfigured/empty/failure states",
         "Deterministic test suite (unit + integration + security) green with no network, no model server, no credentials; existing suite stays green; make lint, make types, make deps, make test pass at the pushed SHA",
-        "Docs updated where maintainers look: docs/architecture/KNOWLEDGE_RETRIEVAL.md + docs/README.md index + MODULE_MAP inventory/law-with-enforcing-test + ADR 0008 + DECISION_LOG + CHANGELOG + .env.example; numbers reproducible from the tree"
+        "Docs updated where maintainers look: docs/architecture/KNOWLEDGE_RETRIEVAL.md + docs/README.md index + MODULE_MAP inventory/law-with-enforcing-test + ADR 0012 + DECISION_LOG + CHANGELOG + .env.example; numbers reproducible from the tree"
       ],
       "evidence_required": [
         "Exact commands with exit statuses: make lint / make types / make deps / make test (record totals) against the pushed HEAD SHA",
-        "pytest -q tests/unit/test_knowledge_retrieval_*.py tests/integration/test_knowledge_retrieval_pipeline.py tests/architecture/test_knowledge_retrieval_boundary.py results",
+        "pytest -q tests/unit/test_knowledge_retrieval_*.py tests/integration/test_knowledge_retrieval_pipeline.py tests/architecture/test_knowledge_retrieval_boundaries.py results",
         "PR with task id, zone, acceptance criteria met, commands observed; CI checks green on the exact head SHA",
         "Dependency evidence: llama-index-core pinned version + license (MIT) + no external-call defaults proof (telemetry off, no OPENAI_API_KEY requirement)"
       ],
@@ -3933,7 +3934,8 @@
         "tests/unit/test_core_fingerprint.py",
         "tests/unit/test_migrations.py",
         "docs/architecture/DATA_AND_STORAGE.md",
-        "docs/architecture/RUNTIME_FLOWS.md"
+        "docs/architecture/RUNTIME_FLOWS.md",
+        "tests/integration/test_knowledge_retrieval_postgres.py"
       ],
       "owner_hint": "",
       "agent_branch": "arena/01c872e0-nexus-ai-agent",

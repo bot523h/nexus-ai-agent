@@ -127,12 +127,16 @@ class KnowledgeRetrievalService:
         outcome = scan_roots(self._config, roots)
         candidates = outcome.sources[: self._config.max_files]
         truncated = len(outcome.sources) > self._config.max_files
+        # Stale detection answers "does this source still exist anywhere in
+        # the authorized roots?" — against the COMPLETE scan, never against
+        # the max_files processing budget. A file beyond the budget is
+        # unprocessed this run, not deleted (its evidence stays intact).
+        scanned_ids = {source_id_for(source.root, source.rel_path) for source in outcome.sources}
 
         registry = {record.source_id: record for record in await self._repository.list_all()}
         counters = {"new": 0, "modified": 0, "unchanged": 0, "failed": 0, "chunks": 0}
         removed = 0
         errors: list[str] = []
-        seen: set[str] = set()
 
         def note(message: str) -> None:
             if len(errors) < _MAX_REPORT_ERRORS:
@@ -145,10 +149,9 @@ class KnowledgeRetrievalService:
 
         for candidate in candidates:
             source_id = source_id_for(candidate.root, candidate.rel_path)
-            seen.add(source_id)
             prior = registry.get(source_id)
             try:
-                content = _read_content(candidate.path, self._config)
+                content = _read_content(candidate.path, self._config, root=candidate.root)
             except _ContentRejected as rejection:
                 # The file stopped being indexable (binary/decode/empty/
                 # unreadable): never keep serving its previous version.
@@ -231,8 +234,10 @@ class KnowledgeRetrievalService:
                 counters["modified"] += 1
 
         # Stale cleanup: registry rows whose source is no longer offered by
-        # the configured roots (deleted, renamed, root removed from config).
-        stale = [source_id for source_id in registry if source_id not in seen]
+        # ANY configured root (deleted, renamed, root removed from config).
+        # Sources merely skipped by the max_files budget remain in
+        # ``scanned_ids`` and are never touched here.
+        stale = [source_id for source_id in registry if source_id not in scanned_ids]
         if stale:
             removed = await self._drop_sources(stale)
 
@@ -467,7 +472,11 @@ class KnowledgeRetrievalService:
         if not matches:
             matches = [r for r in records if r.path == ref]
         if not matches:
-            matches = [r for r in records if r.path.endswith(ref)]
+            # Suffix fallback for "sub/dir/name.md" references — only on a
+            # path-segment boundary, so unregister("a.md") can never silently
+            # match "data.md".
+            suffix = "/" + ref.lstrip("/")
+            matches = [r for r in records if r.path.endswith(suffix)]
         if not matches:
             return False
         if len(matches) > 1:
@@ -539,24 +548,94 @@ class _Content:
         self.pages = pages
 
 
-def _read_content(path: Path, config: KnowledgeConfig) -> _Content:
+def _open_and_read_bounded(path: Path, max_bytes: int) -> bytes:
+    """Open ``path`` once with ``O_NOFOLLOW`` and read at most ``max_bytes``.
+
+    Read-site safety (the scan checked the *pathname*; this checks the file
+    actually being read — the TOCTOU boundary of ingestion):
+
+    * ``O_NOFOLLOW`` refuses a symlink swapped in after the scan (ELOOP);
+    * the descriptor must be a regular file and is size-capped *before* the
+      read, then the bounded read itself re-checks the cap (a file that grew
+      after the scan can never be slurped whole);
+    * after reading, ``lstat(path)`` must name the opened file
+      (``st_ino``/``st_dev`` identity) — a replacement between open and read
+      is rejected instead of silently hashing different bytes.
+
+    Raises ``_ContentRejected`` with a safe reason: ``symlink``, ``replaced``
+    or ``oversize``/``unreadable``.
+    """
+    import errno
+    import os
+    import stat as stat_module
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.ELOOP:
+            raise _ContentRejected("symlink") from None
+        raise _ContentRejected("unreadable") from None
+    try:
+        info = os.fstat(fd)
+        if not stat_module.S_ISREG(info.st_mode):
+            raise _ContentRejected("unreadable")
+        if info.st_size > max_bytes:
+            raise _ContentRejected("oversize")
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining > 0:
+            piece = os.read(fd, min(1 << 20, remaining))
+            if not piece:
+                break
+            chunks.append(piece)
+            remaining -= len(piece)
+        raw = b"".join(chunks)
+        if len(raw) > max_bytes:
+            raise _ContentRejected("oversize")
+        try:
+            path_info = os.stat(path, follow_symlinks=False)
+        except OSError:
+            raise _ContentRejected("replaced") from None
+        if (path_info.st_ino, path_info.st_dev) != (info.st_ino, info.st_dev):
+            raise _ContentRejected("replaced")
+        return raw
+    finally:
+        os.close(fd)
+
+
+def _read_content(path: Path, config: KnowledgeConfig, *, root: Path | None = None) -> _Content:
     """Read, hash and decode one candidate; raises ``_ContentRejected``.
 
+    The bytes come from one no-follow, identity-checked, size-bounded
+    descriptor (see :func:`_open_and_read_bounded`); when ``root`` is given,
+    containment is re-validated at the read site so a replaced parent
+    directory cannot smuggle foreign content into a citation.  The PDF parser
+    consumes the *same* bytes that were hashed.
+
     Deterministic failure taxonomy (also the report's reason vocabulary):
-    ``unreadable`` (OSError), ``binary`` (NUL sniff), ``decode`` (not UTF-8),
-    ``oversize`` (extracted text bound), ``empty`` (no retrievable text),
-    ``pdf`` (parser failure).
+    ``symlink`` (no-follow open refused), ``replaced`` (pathname no longer
+    names the opened file), ``traversal`` (containment re-check failed),
+    ``unreadable`` (OSError / not a regular file), ``oversize`` (byte or text
+    bound), ``binary`` (NUL sniff), ``decode`` (not UTF-8), ``empty`` (no
+    retrievable text), ``pdf`` (parser failure), ``unsupported`` (pypdf
+    absent — scan-time classification normally prevents reaching it).
     """
     import hashlib
 
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        raise _ContentRejected("unreadable") from None
+    from nexus_ai_agent.knowledge_retrieval.errors import SourceRejectedError
+    from nexus_ai_agent.knowledge_retrieval.scanner import validate_member
+
+    raw = _open_and_read_bounded(path, config.max_file_bytes)
+    if root is not None:
+        try:
+            validate_member(root, path)
+        except SourceRejectedError:
+            raise _ContentRejected("traversal") from None
     sha256 = hashlib.sha256(raw).hexdigest()
 
     if path.suffix.lower() == ".pdf":
-        text, pages = _extract_pdf_text(path, config.max_file_bytes)
+        text, pages = _extract_pdf_text(raw, config.max_file_bytes)
     else:
         pages = None
         if b"\x00" in raw[:8192]:
@@ -572,20 +651,24 @@ def _read_content(path: Path, config: KnowledgeConfig) -> _Content:
     return _Content(raw=raw, text=text, sha256=sha256, pages=pages)
 
 
-def _extract_pdf_text(path: Path, max_chars: int) -> tuple[str, list[tuple[int, int, int]]]:
+def _extract_pdf_text(data: bytes, max_chars: int) -> tuple[str, list[tuple[int, int, int]]]:
     """Extract text + per-page ``(start, end, page)`` spans (1-based pages).
 
     ``pypdf`` is an optional extra; a deployment without it classifies PDFs
     at scan time (unsupported), so this path only runs when the package is
     actually present.  Page spans let chunk metadata carry a real page number
-    instead of a guess.
+    instead of a guess.  The parser consumes the already-hashed bytes — the
+    text served as an excerpt can never come from a different file version
+    than the one behind ``sha256``.
     """
+    import io
+
     try:
         from pypdf import PdfReader
     except ImportError:
         raise _ContentRejected("unsupported") from None
     try:
-        reader = PdfReader(str(path))
+        reader = PdfReader(io.BytesIO(data))
         pieces: list[str] = []
         spans: list[tuple[int, int, int]] = []
         cursor = 0

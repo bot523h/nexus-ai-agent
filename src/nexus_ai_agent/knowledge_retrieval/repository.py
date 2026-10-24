@@ -40,8 +40,21 @@ def session_error(exc: Exception) -> KnowledgeStoreError:
     )
 
 
+def _naive_utc(value: datetime) -> datetime:
+    """Registry columns are ``TIMESTAMP WITHOUT TIME ZONE`` (naive UTC).
+
+    Aware values are converted to UTC and stripped; already-naive values are
+    preserved as-is (the contract: naive *is* UTC). The PostgreSQL driver path
+    (and the SQLite one) therefore see exactly the type the migration
+    declares — no tz-aware value ever reaches a column that cannot hold it.
+    """
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return _naive_utc(datetime.now(timezone.utc))
 
 
 def _to_record(row: orm.KnowledgeSource) -> SourceRecord:
@@ -127,7 +140,7 @@ class KnowledgeSourceRepository:
         into a convergent write instead of a systemic store error.
         """
         now = _utcnow()
-        stamp = indexed_at or now
+        stamp = _naive_utc(indexed_at) if indexed_at is not None else now
         try:
             await self._insert_ingested(
                 source_id=source_id,

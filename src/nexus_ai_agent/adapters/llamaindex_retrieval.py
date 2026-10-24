@@ -49,7 +49,6 @@ import contextlib
 import io
 import json
 import os
-import shutil
 import threading
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -73,6 +72,26 @@ os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 
 _MANIFEST_NAME = "manifest.json"
 _INDEX_MARKER = "index_store.json"
+#: Exactly the files LlamaIndex persists for this store (plus our manifest).
+_OWNED_STORE_FILES = frozenset(
+    {
+        "docstore.json",
+        "index_store.json",
+        "graph_store.json",
+        "image__vector_store.json",
+        "default__vector_store.json",
+        "manifest.json",
+    }
+)
+
+
+def _is_owned_store_entry(child: Path) -> bool:
+    """Adapter-owned store artifact: a flat JSON file this adapter writes."""
+    return child.is_file() and (
+        child.name in _OWNED_STORE_FILES or child.name.endswith("__vector_store.json")
+    )
+
+
 _SENTENCE_TRANSFORMERS_CACHE: dict[str, BaseEmbedding] = {}
 _SETTINGS_LOCK = threading.Lock()
 
@@ -312,17 +331,30 @@ class LlamaIndexKnowledgeIndex:
             return results
 
     def _clear_sync(self) -> None:
+        """Delete ONLY the artifacts this adapter writes; fail closed otherwise.
+
+        ``index_path`` is operator-configurable (possibly a shared directory),
+        so a rebuild must never recursively delete whatever happens to live
+        there — unknown files or subdirectories make the operation a typed
+        error instead of an irreversible wipe.
+        """
         with self._lock:
             previous_generation = self._read_manifest().get("generation", 0)
             if not isinstance(previous_generation, int) or previous_generation < 0:
                 previous_generation = 0
             store = self._store_dir()
             if store.is_dir():
-                for child in store.iterdir():
-                    if child.is_file():
-                        child.unlink(missing_ok=True)
-                    elif child.is_dir():
-                        shutil.rmtree(child, ignore_errors=True)
+                children = list(store.iterdir())
+                foreign = [c.name for c in children if not _is_owned_store_entry(c)]
+                if foreign:
+                    raise IndexUnavailableError(
+                        "knowledge index directory contains entries the index "
+                        f"does not own: {', '.join(sorted(foreign)[:5])}",
+                        hint="point NEXUS_KNOWLEDGE_INDEX_PATH at a dedicated "
+                        "directory; rebuild only deletes index artifacts",
+                    )
+                for child in children:
+                    child.unlink(missing_ok=True)
             self._index = None
             store.mkdir(parents=True, exist_ok=True)
             self._write_manifest(bump_generation=True, generation_override=previous_generation + 1)

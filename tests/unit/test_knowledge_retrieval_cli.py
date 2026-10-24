@@ -33,6 +33,9 @@ def cli_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("NEXUS_KNOWLEDGE_SOURCE_ROOTS", str(source_root))
     monkeypatch.setenv("NEXUS_KNOWLEDGE_INDEX_PATH", str(tmp_path / "knowledge_index"))
     monkeypatch.setenv("NEXUS_KNOWLEDGE_ENABLED", "true")
+    # Deterministic offline provider regardless of the invoking environment:
+    # an inherited NEXUS_KNOWLEDGE_EMBEDDING_PROVIDER must not change behavior.
+    monkeypatch.setenv("NEXUS_KNOWLEDGE_EMBEDDING_PROVIDER", "hash")
     monkeypatch.setenv("NEXUS_LOG_LEVEL", "WARNING")
     settings_module.get_settings.cache_clear()
 
@@ -194,3 +197,27 @@ def test_index_reports_secret_exclusion_in_human_output(cli_env: Path) -> None:
 
     listed = json.loads(_run("knowledge", "sources", "list", "--json").stdout)
     assert all(".env" not in row["path"] for row in listed)
+
+
+def test_startup_failure_prints_a_safe_actionable_detail(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Startup diagnostics: never a bare exception name, never a silent log.
+
+    If settings/index-directory construction fails, the CLI must print the
+    safe detail (type + message) and route the full traceback to the actual
+    application log — stdout stays empty (no log pollution).
+    """
+
+    def boom():
+        raise PermissionError(13, "Permission denied", str(cli_env / "knowledge_index"))
+
+    monkeypatch.setattr(settings_module, "get_settings", boom)
+    result = _run("knowledge", "status")
+    assert result.exit_code == 1
+    assert "error[internal]:" in result.stderr
+    assert "PermissionError" in result.stderr
+    assert "Permission denied" in result.stderr  # actionable, not just the type name
+    assert "knowledge_index" in result.stderr  # the operator's configured path
+    assert "application log" in result.stderr
+    assert result.stdout.strip() == ""  # stdout carries no log output

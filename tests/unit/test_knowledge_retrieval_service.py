@@ -579,3 +579,90 @@ def test_settings_env_parsing_does_not_require_env_file() -> None:
     assert settings.knowledge_embedding_provider == "hash"
     assert settings.knowledge_index_path == "data/knowledge_index"
     assert settings.knowledge_search_top_k == 5
+
+
+# ── review regressions: scan budget, unregister boundary, naive timestamps ─
+
+
+async def test_max_files_budget_never_deletes_unprocessed_sources(
+    roots: Path, tmp_path: Path, db_ready: Path
+) -> None:
+    """A source beyond the processing budget is unprocessed — not stale.
+
+    Failing shape from the review: exactly max_files indexed files + one more
+    file sorting early must not evict the last file's evidence.
+    """
+    (roots / "zeta.md").write_text("Zeta content about quantum turnips.")
+    (roots / "alpha.md").write_text("Alpha content about vintage routers.")
+    service, index = make_service(roots, tmp_path)
+    first = await service.index_sources()
+    assert first.new == 2
+
+    # Budget 1: alpha sorts first and gets processed; zeta is beyond the cut.
+    capped, _ = make_service(roots, tmp_path, max_files=1, fake=index)
+    report = await capped.index_sources()
+    assert report.truncated is True
+    assert report.removed == 0, "budget-skipped source must never be treated as stale"
+    assert {row.path for row in await capped.list_sources()} == {"alpha.md", "zeta.md"}
+    survivor = await capped.search("quantum turnips")
+    assert survivor.state is QueryState.OK
+    assert {ev.path for ev in survivor.evidence} == {"zeta.md"}
+
+
+async def test_unregister_suffix_never_crosses_a_path_segment(
+    roots: Path, tmp_path: Path, db_ready: Path
+) -> None:
+    """``unregister("a.md")`` must not match ``data.md`` silently."""
+    (roots / "data.md").write_text("Ownership notes about data.md tokens.")
+    service, _ = make_service(roots, tmp_path)
+    await service.index_sources()
+
+    assert await service.unregister("a.md") is False
+    rows = await service.list_sources()
+    assert [row.path for row in rows] == ["data.md"]
+    assert (await service.search("ownership notes data")).state is QueryState.OK
+
+
+async def test_repository_timestamps_are_naive_utc(
+    db_ready: Path,
+) -> None:
+    """Aware caller values are converted; naive values preserved (contract)."""
+    from datetime import datetime, timezone
+
+    repository = KnowledgeSourceRepository(get_session)
+    aware = datetime(2026, 10, 24, 4, 30, tzinfo=timezone.utc)
+    await repository.upsert_ingested(
+        source_id="naive-ts-1",
+        root="/r",
+        path="a.md",
+        sha256="c" * 64,
+        size_bytes=3,
+        chunks=1,
+        indexed_at=aware,
+    )
+    naive = datetime(2026, 3, 1, 9, 30)
+    await repository.upsert_ingested(
+        source_id="naive-ts-2",
+        root="/r",
+        path="b.md",
+        sha256="d" * 64,
+        size_bytes=3,
+        chunks=1,
+        indexed_at=naive,
+    )
+    rows = {row.source_id: row for row in await repository.list_all()}
+    # SourceRecord carries JSON-safe ISO strings: a tz-aware value would
+    # round-trip as "…+00:00" and parse back aware — naive parses tz-free.
+    from datetime import datetime as _datetime
+
+    stamped = rows["naive-ts-1"]
+    assert stamped.indexed_at is not None
+    stamped_dt = _datetime.fromisoformat(stamped.indexed_at)
+    assert stamped_dt.tzinfo is None
+    assert stamped_dt == aware.astimezone(timezone.utc).replace(tzinfo=None)
+    assert _datetime.fromisoformat(stamped.updated_at).tzinfo is None
+    kept = rows["naive-ts-2"]
+    assert kept.indexed_at is not None
+    kept_dt = _datetime.fromisoformat(kept.indexed_at)
+    assert kept_dt == naive and kept_dt.tzinfo is None
+    await repository.delete_many(["naive-ts-1", "naive-ts-2"])

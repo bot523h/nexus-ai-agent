@@ -417,3 +417,99 @@ def test_hash_embed_folds_persian_variants_like_the_rag_core() -> None:
     persian_yeh = hash_embed(["کتاب خوب"])
     arabic_yeh = hash_embed(["كتاب خوب"])  # Arabic yeh/kaf forms
     assert persian_yeh == arabic_yeh
+
+
+# ── read-site safety (TOCTOU boundary of ingestion — review finding) ──────
+
+
+def test_read_content_refuses_a_symlink_swapped_in_after_the_scan(
+    tmp_path: Path,
+) -> None:
+    """O_NOFOLLOW: a symlink replacing the scanned file can never be followed."""
+    target = tmp_path / "doc.md"
+    target.write_text("Original safe content.")
+    outside = tmp_path.parent / "outside-secret.md"
+    outside.write_text("must never be read")
+    content = _read_content(target, _config(), root=tmp_path)  # sanity: real file
+    assert content.text == "Original safe content."
+
+    target.unlink()
+    target.symlink_to(outside)
+    with pytest.raises(_ContentRejected) as caught:
+        _read_content(target, _config(), root=tmp_path)
+    assert caught.value.reason == "symlink"
+    outside.unlink()
+
+
+def test_read_content_revalidates_containment_at_the_read_site(tmp_path: Path) -> None:
+    """A regular file outside the authorized root is rejected at READ time too."""
+    root = tmp_path / "root"
+    root.mkdir()
+    foreign = tmp_path / "notes.md"  # regular file, not a symlink: identity passes
+    foreign.write_text("Foreign body content.")
+
+    with pytest.raises(_ContentRejected) as caught:
+        _read_content(foreign, _config(), root=root)
+    assert caught.value.reason == "traversal"
+    # …while the same file is fine when its root really contains it:
+    inside = root / "notes.md"
+    inside.write_text("Foreign body content.")
+    assert _read_content(inside, _config(), root=root).text == "Foreign body content."
+
+
+def test_read_content_bounds_a_file_that_grew_after_the_scan(tmp_path: Path) -> None:
+    """The byte bound is enforced at the descriptor, before any full read."""
+    target = tmp_path / "grow.md"
+    target.write_text("small at scan time")
+    target.write_text("x" * 4096)  # grows before the read
+    with pytest.raises(_ContentRejected) as caught:
+        _read_content(target, _config(max_file_bytes=64))
+    assert caught.value.reason == "oversize"
+
+
+def test_pdf_extraction_consumes_the_hashed_bytes_not_a_path(
+    tmp_path: Path,
+) -> None:
+    """The parser reads the same bytes behind sha256 (no second open)."""
+    from nexus_ai_agent.knowledge_retrieval.service import _extract_pdf_text
+
+    pdf_bytes = (Path(__file__).parents[1] / "fixtures" / "minimal.pdf").read_bytes()
+    text, spans = _extract_pdf_text(pdf_bytes, 10_000)
+    assert "Hello NEXUS job queue" in text
+    assert spans and spans[0][2] == 1
+
+
+# ── rebuild must only delete adapter-owned artifacts (review finding) ─────
+
+
+async def test_rebuild_clear_refuses_foreign_entries_and_preserves_them(
+    tmp_path: Path,
+) -> None:
+    """A shared ``index_path`` is never recursively wiped by ``clear()``."""
+    from nexus_ai_agent.adapters.llamaindex_retrieval import LlamaIndexKnowledgeIndex
+
+    store = tmp_path / "knowledge_index"
+    store.mkdir()
+    (store / "docstore.json").write_text("{}")
+    (store / "manifest.json").write_text('{"generation": 3}')
+    (store / "app.sqlite").write_text("operator data that must survive")
+    (store / "subdir").mkdir()
+    (store / "subdir" / "keep.txt").write_text("keep me")
+
+    adapter = LlamaIndexKnowledgeIndex(_config(index_path=store))
+    with pytest.raises(IndexUnavailableError, match="does not own"):
+        await adapter.clear()
+    assert (store / "app.sqlite").read_text() == "operator data that must survive"
+    assert (store / "subdir" / "keep.txt").exists()
+    assert (store / "docstore.json").exists()
+
+    # With only owned artifacts present, clear succeeds: every LlamaIndex
+    # artifact is gone and the adapter immediately stamps a fresh manifest
+    # (generation bumped) — the only file left is the one it just wrote.
+    (store / "app.sqlite").unlink()
+    import shutil
+
+    shutil.rmtree(store / "subdir")
+    await adapter.clear()
+    assert {entry.name for entry in store.iterdir()} == {"manifest.json"}
+    assert '"generation": 4' in (store / "manifest.json").read_text()

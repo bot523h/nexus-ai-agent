@@ -145,6 +145,10 @@ per-query cost. The only optional network event is the operator's one-time model
 - Vector search has no reranker; scores from the hash provider are coarse ordering signals,
   not calibrated probabilities.
 
-The ADR for the integration shape is
-[`adr/0012-local-first-llamaindex-retrieval.md`](adr/0012-local-first-llamaindex-retrieval.md);
-operational procedures live in [`../ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md`](../ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md).
+The behaviour record (integration shape, evidence semantics, local-first constraints)
+is
+[`../DECISION_LOG.md`](../DECISION_LOG.md) entry **D-0030**; ADR
+[`adr/0012-local-first-llamaindex-retrieval.md`](adr/0012-local-first-llamaindex-retrieval.md)
+records only how this documentation is enforced (living view + law R22).
+Operational procedures live in
+[`../ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md`](../ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md).

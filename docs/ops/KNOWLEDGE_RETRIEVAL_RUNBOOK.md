@@ -22,7 +22,10 @@ Schema: `alembic upgrade head` (table `knowledgesource`); `nexus migrate` applie
 ```bash
 nexus knowledge index --json          # incremental; idempotent
 nexus knowledge search "rollback runbook" --json
-nexus knowledge status --json         # never raises; honest degraded reasons
+nexus knowledge status --json         # once the service constructs, status never raises —
+                                       # degradation is reported honestly; *construction*
+                                       # failures (unknown provider, invalid limits, unwritable
+                                       # index dir) exit 1 with error[misconfigured]/error[internal]
 nexus knowledge sources list --json   # registry: path, sha256, status, chunks
 nexus knowledge sources remove path/within/root.md   # unregister one source
 nexus knowledge rebuild --yes         # wipe derived store + reindex (generation + 1)
@@ -39,7 +42,8 @@ stack trace.
 | `degraded` / `degraded_reason` | `false` / `null` | see §7 of the architecture doc: `index_store_corrupt` → §4 below; `embedding_model_directory_missing` → prefetch the model; `index_missing_rebuild_required` → restore files or rebuild; `index_inspect_failed` → filesystem permissions |
 | `store_present` | `true` after first index | `false` with `source_count > 0` ⇒ rebuild |
 | `error_count` | `0` | per-file failures listed by `sources list` (`status=error`); fix the file and rerun `index` — next run converges |
-| `node_count`, `generation` | monotonic | sudden drop after manual deletion ⇒ rebuild |
+| `node_count` | observed count of nodes currently in the store | it *decreases* legitimately when a source is unregistered or removed — compare against `source_count`/registry `chunks`, not against history; only rebuild if `store_present` is true but `node_count` is 0 while `ingested_count > 0` |
+| `generation` | bumps by 1 on each `rebuild` (monotonic) | unchanged generation after an expected rebuild ⇒ the rebuild never ran |
 
 ## 4. Recovery procedures
 
