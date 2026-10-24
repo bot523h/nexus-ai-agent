@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-23T19:18:26Z",
+  "updated_at": "2026-10-24T04:13:24Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3609,7 +3609,7 @@
       "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Run scripts/execution_core_mutations.py as a CI mutation job",
       "scope_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "prerequisites": [
@@ -3629,10 +3629,11 @@
       "agent_branch": "arena/task-260-exec-mutations-ci",
       "claimed_at": "2026-10-22T18:46:06Z",
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "Execution-core mapping: the native execution core (Task-254) merged via PR #192 (merge commit a48326ded85bbe4e0972d645ee0ea6e877935362, 'supersedes #191'); PR #191 (arena/execution-core-v1-nexus-ai-agent) is CLOSED and superseded. PR #241 is the separate Task-260 mutation-CI follow-up, not the execution-core implementation. CI wiring lives in .github/workflows/ci.yml (zone ci-quality); the harness scripts/execution_core_mutations.py is the execution-core zone (task-254, done).",
       "generation": 2,
-      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)"
+      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)",
+      "release_reason": "auto-released by gc at 2026-10-24T04:13:24Z (stale active lease)"
     },
     {
       "task": "task-266-asset-library-v1",
