@@ -56,6 +56,15 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("NEXUS_AUTO_UPDATE", "AUTO_UPDATE"),
     )
+    self_vitals_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("NEXUS_SELF_VITALS_ENABLED", "SELF_VITALS_ENABLED"),
+    )
+    self_vitals_period_s: float = Field(
+        default=60.0,
+        ge=5.0,
+        validation_alias=AliasChoices("NEXUS_SELF_VITALS_PERIOD_S", "SELF_VITALS_PERIOD_S"),
+    )
     allowed_user_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list,
         validation_alias=AliasChoices("NEXUS_ALLOWED_USER_IDS", "ALLOWED_USER_IDS"),
@@ -328,11 +337,13 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="NEXUS_API_HMAC_KEY",
     )
-    # Bearer token for the dashboard API (P0-5). When set, every
-    # /api/dashboard/* request must send "Authorization: Bearer <token>"
-    # (constant-time comparison). When unset the API is open — the
-    # deployment MUST keep the port private (docker-compose binds
-    # 127.0.0.1 by default). Generate with:
+    # Bearer token for the dashboard API (P0-5). Every /api/dashboard/* and
+    # /api/studio/* request must send "Authorization: Bearer <token>"
+    # (constant-time comparison). When unset the API is **closed**, not open:
+    # the gate answers 503 "Security configuration incomplete" (audit A-06,
+    # hardened in api/dashboard.py). The earlier "open when unset, keep the
+    # port private" posture silently published aggregate user data on every
+    # host that exposes the API port, and it is gone. Generate with:
     #   python -c "import secrets; print(secrets.token_urlsafe(32))"
     api_dashboard_token: str | None = Field(
         default=None,
@@ -343,8 +354,14 @@ class Settings(BaseSettings):
         validation_alias="NEXUS_CREATIVE_GEMINI_API_KEY",
     )
     creative_temp_dir: str = Field(
-        default="/tmp/nexus_creative",
-        description="Temporary directory for creative jobs",
+        # Under the persistent data directory, next to ``db_path``: the
+        # creative job registry (creative_jobs.sqlite3) and in-flight
+        # workspaces live here, so a world-writable, reboot-cleared /tmp path
+        # (bandit B108; audit A-12) was the wrong default. Override with
+        # CREATIVE_TEMP_DIR to keep a custom location.
+        default="data/creative",
+        validation_alias=AliasChoices("CREATIVE_TEMP_DIR", "NEXUS_CREATIVE_TEMP_DIR"),
+        description="Workspace directory for creative jobs (registry + render workspaces)",
     )
 
     # Image generation is distinct from image analysis/upload authorization.

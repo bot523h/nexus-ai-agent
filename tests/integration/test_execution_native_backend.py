@@ -251,6 +251,37 @@ async def test_submit_is_idempotent_on_the_nexus_key(tmp_path: Path) -> None:
     await _drain(queue, first.job_id)
 
 
+@pytest.mark.asyncio
+async def test_idempotent_submit_returns_the_unbound_job_identity(tmp_path: Path) -> None:
+    """I8/I1: ``submit`` is job-level; it must never leak the live attempt's fence.
+
+    ``submit`` reads the durable row *after* the worker may already have
+    reserved it (the row is PROCESSING at ``attempt >= 1``).  Returning that
+    attempt's ``fencing_token`` would hand the caller a fence it never owned —
+    the source of the intermittent failure of
+    ``test_cancel_without_a_fencing_token_is_refused``, where a raced ``submit``
+    bound a token and then cancelled the live attempt.  The deterministic form
+    is an idempotent duplicate ``submit`` on an already-in-flight row.
+    """
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+
+    first = await backend.submit(_request("same-key"))
+    await _wait_status(queue, first.job_id, JobStatus.PROCESSING)  # attempt = 1 durable
+
+    second = await backend.submit(_request("same-key"))  # idempotent duplicate
+    assert second.job_id == first.job_id
+    assert second.fencing_token is None, "submit leaked the live attempt's fence"
+    assert second.attempt_id is None
+    assert second.request_id == first.request_id  # canonical identity still resolved
+    assert second.idempotency_key == "same-key"
+
+    gate.event(1).set()
+    assert await _drain(queue, first.job_id) is JobStatus.COMPLETED
+
+
 # --------------------------------------------------------------------------- #
 # I7 — observe maps durable status; an unknown job is UNKNOWN, never FAILED
 # --------------------------------------------------------------------------- #
