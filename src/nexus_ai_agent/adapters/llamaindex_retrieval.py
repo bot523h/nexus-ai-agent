@@ -46,6 +46,7 @@ if TYPE_CHECKING:  # pragma: no cover — typing only, never imported at runtime
 
 import asyncio
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -83,6 +84,16 @@ _OWNED_STORE_FILES = frozenset(
         "manifest.json",
     }
 )
+
+
+def _sentence_transformer_model_identity(model_path: str | None) -> str:
+    """Path-distinguishing identity without exposing the local model path."""
+    raw_path = (model_path or "").strip()
+    if not raw_path:
+        return "sentence-transformers:missing"
+    resolved = Path(raw_path).expanduser().resolve()
+    path_digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
+    return f"sentence-transformers:{resolved.name}:{path_digest}"
 
 
 def _is_owned_store_entry(child: Path) -> bool:
@@ -227,8 +238,7 @@ class LlamaIndexKnowledgeIndex:
         if provider == "hash":
             return f"nexus-hash-v1-{EMBEDDING_DIM}dim"
         if provider == "sentence-transformers":
-            name = Path((self._config.embedding_model_path or "").strip()).name
-            return f"sentence-transformers:{name}"
+            return _sentence_transformer_model_identity(self._config.embedding_model_path)
         return provider
 
     def _read_manifest(self) -> dict[str, object]:
@@ -262,10 +272,14 @@ class LlamaIndexKnowledgeIndex:
             (self._store_dir() / _MANIFEST_NAME).write_text(
                 json.dumps(payload, sort_keys=True), encoding="utf-8"
             )
-        except OSError:
-            # The manifest is observability, not authority: a failed stamp
-            # must never fail an otherwise successful index operation.
-            pass
+        except OSError as exc:
+            raise IndexUnavailableError(
+                "knowledge index manifest could not be written",
+                code="embedding_model_manifest_write_failed",
+                hint=(
+                    "check write access to NEXUS_KNOWLEDGE_INDEX_PATH, then retry index or rebuild"
+                ),
+            ) from exc
 
     def _persist(self, index: object) -> None:
         index.storage_context.persist(persist_dir=str(self._store_dir()))  # type: ignore[attr-defined]
@@ -531,6 +545,8 @@ def _build_sentence_transformer_embedding(config: KnowledgeConfig) -> BaseEmbedd
             "docs/architecture/KNOWLEDGE_RETRIEVAL.md §4",
         )
 
+    model_identity = _sentence_transformer_model_identity(str(resolved))
+
     cached = _SENTENCE_TRANSFORMERS_CACHE.get(str(resolved))
     if cached is not None:
         return cached
@@ -555,7 +571,7 @@ def _build_sentence_transformer_embedding(config: KnowledgeConfig) -> BaseEmbedd
         ) from exc
 
     class SentenceTransformerEmbedding(BaseEmbedding):
-        model_name: str = f"sentence-transformers:{resolved.name}"
+        model_name: str = model_identity
 
         def _encode(self, text: str) -> list[float]:
             vector = model.encode(text)

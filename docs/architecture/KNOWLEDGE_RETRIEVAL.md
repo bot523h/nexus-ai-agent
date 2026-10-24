@@ -95,9 +95,12 @@ States are explicit — `ok`, `empty_query`, `empty_index`, `no_matches` — and
 
 The store lives under `NEXUS_KNOWLEDGE_INDEX_PATH` (marker `index_store.json`, generation
 stamps **and the embedding-space identity** in `manifest.json`). The recorded identity
-mirrors the provider's `model_name` (`nexus-hash-v1-256dim`, `sentence-transformers:<dir>`):
-switching provider or model directory means the stored vectors belong to a *different
-embedding space*, so inspection reports `embedding_model_changed_rebuild_required`,
+mirrors the provider's `model_name` (`nexus-hash-v1-256dim`,
+`sentence-transformers:<dir>:<path-hash>`). The path hash distinguishes directories with the
+same basename without storing the raw path. It is not a digest of model weights: replacing weights
+in place still requires an explicit rebuild. Missing or older basename-only stamps are legacy and
+also require a rebuild. Switching provider or model directory means the vectors belong to a
+*different embedding space*, so inspection reports `embedding_model_changed_rebuild_required`,
 `search` and plain `index` refuse with `error[rebuild_required]` (no mixed spaces, no
 partial re-ingest), and `nexus knowledge rebuild --yes` is the explicit recovery. It is **derived state**: deleting the directory and running
 `nexus knowledge index` (or `rebuild`) recreates it from SQLite + the source roots. SQLite
@@ -111,6 +114,7 @@ and counts.
 | `KnowledgeDisabledError` | `disabled` | `NEXUS_KNOWLEDGE_ENABLED=false` | enable if intended; `status` still answers |
 | `KnowledgeConfigError` | `misconfigured` | no/invalid roots, bad limits, unknown provider | fix env, rerun |
 | `IndexUnavailableError` | `index_unavailable` / `embedding` | corrupt store, missing embedder/model dir | `nexus knowledge rebuild` / prefetch model |
+| `IndexUnavailableError` | `embedding_model_manifest_write_failed` | required embedding identity could not be persisted; the file is reported failed | restore write access, then rebuild |
 | `KnowledgeStoreError` | `store_error` | canonical database failure | inspect DB; registry and index converge on next run |
 | `SourceRejectedError` | `source_rejected` | registration-time escape attempt | fix the path |
 

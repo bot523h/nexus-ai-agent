@@ -63,6 +63,9 @@ stack trace.
   commands exit `error[rebuild_required]`): the store's vectors belong to the previous
   embedding space — run `nexus knowledge rebuild --yes`; plain `index` deliberately
   refuses rather than mixing spaces.
+- **Manifest stamp write fails** (`embedding_model_manifest_write_failed` in the index report):
+  the file is not accepted as indexed. Restore write access/space for the derived index path, then
+  run `nexus knowledge rebuild --yes` to recreate vectors and their identity together.
 - **Config swap to `sentence-transformers`** fails: reason is in status; prefetch §4 of the
   architecture doc, or stay on `hash`.
 

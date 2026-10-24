@@ -369,7 +369,61 @@ async def test_provider_failure_is_not_store_corruption(kb_env: Path, monkeypatc
     assert caught.value.code == "embedding"
 
 
-async def test_embedding_model_change_requires_explicit_rebuild(kb_env: Path) -> None:
+def test_sentence_transformer_identity_distinguishes_same_basename_paths(
+    tmp_path: Path,
+) -> None:
+    from nexus_ai_agent.adapters.llamaindex_retrieval import _sentence_transformer_model_identity
+
+    first = tmp_path / "primary" / "minilm"
+    second = tmp_path / "archive" / "minilm"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    first_identity = _sentence_transformer_model_identity(str(first))
+    second_identity = _sentence_transformer_model_identity(str(second))
+
+    assert first_identity != second_identity
+    assert first_identity.startswith("sentence-transformers:minilm:")
+    assert str(tmp_path) not in first_identity
+    assert _sentence_transformer_model_identity(str(first)) == first_identity
+
+
+async def test_manifest_write_failure_is_typed_and_rebuild_recovers(
+    kb_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (kb_env / "doc.md").write_text("Manifest persistence must be part of index success.")
+    index_dir = Path(str(settings_module.get_settings().knowledge_index_path))
+    manifest_path = index_dir / "manifest.json"
+    original_write_text = Path.write_text
+
+    def fail_manifest_write(self: Path, data: str, **kwargs) -> int:
+        if self == manifest_path:
+            raise OSError("simulated manifest write failure")
+        return original_write_text(self, data, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_manifest_write)
+    service = _service()
+    report = await service.index_sources()
+    assert report.ingested == 0 and report.failed == 1
+    assert report.errors == ("doc.md: embedding_model_manifest_write_failed",)
+    assert await service.list_sources() == []
+
+    monkeypatch.setattr(Path, "write_text", original_write_text)
+    recovered = _service()
+    status = await recovered.status()
+    assert status.degraded_reason == "embedding_model_changed_rebuild_required"
+    rebuilt = await recovered.rebuild()
+    assert rebuilt.rebuilt and rebuilt.ingested == 1
+    assert (await recovered.search("manifest persistence")).state == QueryState.OK
+
+
+@pytest.mark.parametrize(
+    "legacy_model",
+    ["sentence-transformers:legacy-basename", None],
+    ids=("old-identity-format", "missing-identity"),
+)
+async def test_embedding_model_change_requires_explicit_rebuild(
+    kb_env: Path, legacy_model: str | None
+) -> None:
     """A store built in another embedding space is never served or fed.
 
     Review finding: provider/model identity was not recorded, so swapping
@@ -392,7 +446,10 @@ async def test_embedding_model_change_requires_explicit_rebuild(kb_env: Path) ->
 
     # Simulate a provider/model swap: the store keeps the old identity while
     # configuration now implies another one.
-    manifest["embedding_model"] = "sentence-transformers:some-other-model"
+    if legacy_model is None:
+        manifest.pop("embedding_model", None)
+    else:
+        manifest["embedding_model"] = legacy_model
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     status = await _service().status()
