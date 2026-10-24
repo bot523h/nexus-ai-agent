@@ -23,6 +23,9 @@ placeholder text.
 | [architecture/CREATIVE_STUDIO.md](architecture/CREATIVE_STUDIO.md) | Nagar: capability model, permission ladder, packs, activation gap, TDD coverage ledger, render lane. |
 | [architecture/CREATIVE_DIRECTION.md](architecture/CREATIVE_DIRECTION.md) | Nagar product direction: the intent-first backbone loop, the first vertical slice (single-project intent loop), deferred capabilities and their triggers. |
 | [architecture/COMMAND_CAPABILITY_CONTRACT.md](architecture/COMMAND_CAPABILITY_CONTRACT.md) | Nagar Gate 2: canonical command envelope, authorization/capability/policy/reference pipeline, idempotency, revision, and evidence limits. |
+| [architecture/LIVING_INTELLIGENCE_ROADMAP.md](architecture/LIVING_INTELLIGENCE_ROADMAP.md) | Proposed direction (owner review pending): the Living Core — persistent self-ledger, measured self-model, vital signs, provenance-tagged memory, verifier-gated learning — with evidence table, ten phases, exit evidence, aliveness metrics and the honest-claims policy. |
+| [architecture/LIVING_INTELLIGENCE_ROADMAP.fa.md](architecture/LIVING_INTELLIGENCE_ROADMAP.fa.md) | خلاصهٔ فارسی نقشهٔ راه هوش زنده (English wins on conflict). |
+| [architecture/SELF_CHARTER.md](architecture/SELF_CHARTER.md) | Living Core Phase 1: the immutable charter, the append-only hash-chained Self-Ledger, fail-closed boot, the human-only amendment door, honest limits, acceptance evidence. |
 | [architecture/PROVENANCE_LEDGER.md](architecture/PROVENANCE_LEDGER.md) | The causal ledger (Project Graph journal): tamper-evident recording of every durable job transition, and the Artifact Passport — the read-only, fail-closed projection that reconciles chain vs. authority and re-measures artifacts. |
 | [architecture/JOB_LIFECYCLE.md](architecture/JOB_LIFECYCLE.md) | Canonical job lifecycle: chain, state machine with owners+invariants, side-effect boundary, artifact verification contract, retry/failure semantics, Result chain. |
 | [architecture/EXECUTION_CORE.md](architecture/EXECUTION_CORE.md) | NEXUS V1 execution core: the four-verb provider-neutral contract, authority laws, identity separation, staging/publication boundary, and the I1–I10 invariant matrix. |
@@ -113,6 +116,7 @@ placeholder text.
 | [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |
 | [audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md](audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md) | Exact-SHA mainline truth audit: release-metadata defects (README version, lockstep guard, Continuum snapshot) with the delivered fixes and honest production limitations. |
 | [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
+| [audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md](audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md) | Dated Phase-1 stabilization handoff: live PR inventory, exact-SHA remediation evidence, Board fence correction, CI blockers, and backup/restore limits. |
 
 ## History (archived — read-only, never a source of truth)
 

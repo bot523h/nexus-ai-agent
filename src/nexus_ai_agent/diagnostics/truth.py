@@ -420,7 +420,7 @@ def check_law_test_resolution(root: Path) -> list[Finding]:
 #: A doc may assert that a symbol EXISTS::
 #:     <!-- truth:file=src/nexus_ai_agent/cli.py symbol=run_bot -->
 #: or that a symbol is ABSENT (the "no fake feature" direction)::
-#:     <!-- truth-absent:file=src/nexus_ai_agent/agents/planner_agent.py symbol=real_planner -->
+#:     <!-- truth-absent:file=src/nexus_ai_agent/agents/base.py symbol=real_planner -->
 _CLAIM = re.compile(
     r"<!--\s*(truth|truth-absent):file=(?P<file>\S+)(?:\s+symbol=(?P<symbol>[A-Za-z0-9_.]+))?\s*-->"
 )
