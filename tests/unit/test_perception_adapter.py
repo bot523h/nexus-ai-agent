@@ -528,6 +528,10 @@ def test_argv_contract(tmp_path: Path, media_file: Path) -> None:
         assert argv[:3] == ["-hide_banner", "-nostdin", "-nostats"]
         assert argv[argv.index("-protocol_whitelist") + 1] == "file"
         assert argv.index("-protocol_whitelist") < argv.index("-i")
+        allowed = argv[argv.index("-format_whitelist") + 1].split(",")
+        assert argv.index("-format_whitelist") < argv.index("-i")
+        assert {"wav", "mov", "matroska"} <= set(allowed)
+        assert not {"hls", "applehttp", "concat", "sdp", "image2", "data", "dash"} & set(allowed)
         given = argv[argv.index("-i") + 1]
         assert os.path.isabs(given) and given == str(media_file.resolve())
     assert analyzer.engine_id() == "ffmpeg 9.9-test"
@@ -542,3 +546,103 @@ def test_engine_query_failures_are_unavailable(tmp_path: Path) -> None:
     analyzer = FfmpegAnalyzer(binary=_fake(tmp_path, "sleep 30\n"), timeout_s=0.3)
     with pytest.raises(AnalysisUnavailableError, match="version"):
         analyzer.engine_id()
+
+
+def test_a_same_size_same_mtime_swap_during_the_run_is_detected(
+    tmp_path: Path, media_file: Path
+) -> None:
+    """Size+mtime can be forged with os.utime; the content hash cannot."""
+    donor = tmp_path / "donor.wav"
+    donor.write_bytes(bytes(b ^ 0x55 for b in media_file.read_bytes()))
+    stamp = media_file.stat()
+    body = (
+        'prev=""; for a in "$@"; do\n'
+        '  if [ "$prev" = "-i" ]; then input="$a"; fi; prev="$a"; done\n'
+        'case "$*" in\n'
+        f'  *silencedetect*) cat "{donor}" > "$input"; touch -r "{donor}" "$input" ;;\n'
+        "  *)\n" + BANNER_AUDIO + "    ;;\n"
+        "esac\n"
+    )
+    os.utime(donor, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    with pytest.raises(AnalysisFailedError, match="changed while it was being analysed"):
+        FfmpegAnalyzer(binary=_fake(tmp_path, body)).silences(media_file)
+
+
+def test_a_file_replaced_by_rename_during_the_run_is_detected(
+    tmp_path: Path, media_file: Path
+) -> None:
+    """A different inode at the same path (even with identical bytes) is not the file
+    that was hashed; FFmpeg's input path is already the resolved file, so a symlink
+    swap cannot redirect it, but a rename can replace it."""
+    other = tmp_path / "other.wav"
+    other.write_bytes(media_file.read_bytes())
+    body = (
+        'case "$*" in\n'
+        f'  *silencedetect*) mv -f "{other}" "{media_file}" ;;\n'
+        "  *)\n" + BANNER_AUDIO + "    ;;\n"
+        "esac\n"
+    )
+    with pytest.raises(AnalysisFailedError, match="changed while it was being analysed"):
+        FfmpegAnalyzer(binary=_fake(tmp_path, body)).silences(media_file)
+
+
+def test_evidence_names_the_rounded_parameters_ffmpeg_received(
+    tmp_path: Path, media_file: Path
+) -> None:
+    log = tmp_path / "filter.log"
+    body = (
+        f'printf "%s\\n" "$@" > {log}.$$\n'
+        'case "$*" in\n'
+        '  *"-version"*) echo "ffmpeg version 9.9-test" ;;\n'
+        "  *)\n" + BANNER_AUDIO + "    ;;\n"
+        "esac\n"
+    )
+    analyzer = FfmpegAnalyzer(binary=_fake(tmp_path, body))
+    evidence = analyzer.silences(media_file, noise_floor_db=-40.04, min_silence_s=0.50049)
+    assert evidence.noise_floor_db == -40.0 and evidence.min_silence_us == 500_000
+    filters = [
+        line
+        for entry in tmp_path.glob("filter.log.*")
+        for line in entry.read_text().splitlines()
+        if "silencedetect" in line
+    ]
+    assert filters == ["silencedetect=noise=-40.0dB:d=0.500"]
+    with pytest.raises(AnalysisInputError, match="after rounding"):
+        analyzer.silences(media_file, noise_floor_db=-99.96)
+    with pytest.raises(AnalysisInputError, match="after rounding"):
+        analyzer.scene_cuts(media_file, threshold=0.9996)
+
+
+def test_too_many_spans_is_a_typed_engine_error_not_a_traceback(
+    tmp_path: Path, media_file: Path
+) -> None:
+    lines = "".join(
+        f'echo "[silencedetect @ 0x1] silence_start: {i}.0" >&2\n'
+        f'echo "[silencedetect @ 0x1] silence_end: {i}.5 | silence_duration: 0.5" >&2\n'
+        for i in range(0, 5001)
+    )
+    banner = BANNER_AUDIO.replace("00:00:10.00", "03:00:00.00")
+    body = (
+        'case "$*" in\n  *silencedetect*)\n' + lines + "    ;;\n  *)\n" + banner + "    ;;\nesac\n"
+    )
+    with pytest.raises(AnalysisFailedError, match="evidence limits"):
+        FfmpegAnalyzer(binary=_fake(tmp_path, body), max_media_s=4 * 3600).silences(media_file)
+
+
+@needs_ffmpeg
+def test_real_ffmpeg_refuses_playlists_under_the_format_whitelist(
+    engine: str, tmp_path: Path
+) -> None:
+    """Defence in depth: even if the text sniff were bypassed, the demuxer is refused."""
+    playlist = tmp_path / "evil.m3u8"
+    playlist.write_text("#EXTM3U\n#EXTINF:1,\n/etc/hostname\n#EXT-X-ENDLIST\n")
+    done = subprocess.run(  # noqa: S603 - fixed argv
+        [
+            engine, "-hide_banner", "-nostdin", "-protocol_whitelist", "file",
+            "-format_whitelist", analyzer_module.FORMAT_WHITELIST,
+            "-i", str(playlist), "-f", "null", "-",
+        ],
+        capture_output=True, text=True, timeout=20, check=False,
+    )  # fmt: skip
+    assert done.returncode != 0
+    assert "Input #0" not in done.stderr

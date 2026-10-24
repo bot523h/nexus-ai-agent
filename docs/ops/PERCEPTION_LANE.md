@@ -70,7 +70,14 @@ local-file-read attacks through them are a known class (CVE-2016-1897/1898). Def
 1. `-protocol_whitelist file` before `-i` (no network, no `data:`/`crypto:`/`subfile:` chains);
 2. the analyzer sniffs the first KiB and **refuses any non-binary input** with `AnalysisInputError`
    *before any process is started* (real containers carry NUL/high bytes; every indirection format is text);
-3. error messages echo the path only, never file content.
+3. `-format_whitelist` limits demuxing to real media containers (HLS/concat/SDP/DASH/image2/data are absent);
+   a playlist that slipped past the sniff would still be refused by FFmpeg itself (tested on both builds);
+4. error messages echo the path only, never file content.
+
+Content binding: after the run the analyzer re-resolves the path and checks device, inode, size, mtime
+**and a fresh SHA-256**; any mismatch yields an error, never evidence. FFmpeg is always given the already
+resolved real path, so a symlink swap cannot redirect it. Residual (stated, not hidden): a writer that
+changes the bytes during the run and restores them before the re-hash is indistinguishable from no write.
 
 Verified live on FFmpeg 6.1.1 (system) and 7.0.2 (bundled). Not independently confirmed: the exact CVE
 ids and versions in an external "BLOCKED" report that cited none checkable from this repository.

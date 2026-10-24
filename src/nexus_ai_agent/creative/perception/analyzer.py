@@ -17,9 +17,14 @@ Safety properties, each pinned by a test:
 * **bounded memory and time.**  stderr is *streamed*; only the lines a parser
   needs are kept (capped), and a watchdog kills the process at ``timeout_s``.
   Input reading is capped at ``max_media_s`` seconds.
-* **evidence is content-bound.**  The file is hashed before analysis and its
-  ``(size, mtime_ns)`` is re-checked afterwards; a file that changes while it is
-  analysed yields an error, not evidence about bytes nobody can name.
+* **only known media demuxers.**  ``-format_whitelist`` limits input probing to
+  real media containers (no HLS, concat, SDP, DASH, image2, data), and a text
+  sniff refuses playlists before any process starts.
+* **evidence is content-bound.**  The file is hashed before analysis; afterwards
+  its identity (device, inode), size, mtime *and content hash* are re-checked, so
+  a swap (symlink/rename/in-place write) during the run yields an error, not
+  evidence about bytes FFmpeg may never have read.  (A writer that restores the
+  exact original bytes before the re-hash is indistinguishable from no write.)
 * **fail loud.**  A missing stream, a non-zero exit, an unparsable summary and a
   timeout are four distinct typed errors; none degrades into empty evidence.
 
@@ -39,6 +44,9 @@ from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.perception.models import (
     LoudnessEvidence,
@@ -83,6 +91,8 @@ class _Source:
     sha256: str
     size: int
     mtime_ns: int
+    device: int = 0
+    inode: int = 0
 
 
 def _sha256(path: Path) -> str:
@@ -92,6 +102,16 @@ def _sha256(path: Path) -> str:
             digest.update(chunk)
     return f"sha256:{digest.hexdigest()}"
 
+
+#: Demuxers a measurement may open.  Matching is per name token, so ``mov`` admits
+#: the whole ``mov,mp4,m4a,3gp,3g2,mj2`` family.  HLS/concat/SDP/DASH/image2/data
+#: are deliberately absent (verified on FFmpeg 6.1.1 and 7.0.2).
+FORMAT_WHITELIST = ",".join(
+    (
+        "wav", "w64", "aiff", "flac", "mp3", "ogg", "matroska", "webm", "mov", "avi",
+        "mpegts", "mpeg", "aac", "ac3", "eac3", "flv", "asf", "caf", "au", "amr",
+    )
+)  # fmt: skip
 
 _SNIFF_BYTES = 1024
 _TEXT_RATIO = 0.95
@@ -114,6 +134,11 @@ def _looks_textual(head: bytes) -> bool:
     return printable / len(head) >= _TEXT_RATIO
 
 
+def _refuse_indirection_bytes(path: Path) -> bool:
+    with path.open("rb") as handle:
+        return _looks_textual(handle.read(_SNIFF_BYTES))
+
+
 def _refuse_indirection(path: Path) -> None:
     with path.open("rb") as handle:
         head = handle.read(_SNIFF_BYTES)
@@ -127,6 +152,17 @@ def _refuse_indirection(path: Path) -> None:
 def _fixed(value: float, digits: int) -> str:
     """Fixed-point text: never an exponent form FFmpeg's option parser could misread."""
     return f"{value:.{digits}f}"
+
+
+def _seal(model: Any, **fields: Any) -> Any:
+    """``model.seal`` with validation failures surfaced as typed engine errors."""
+    try:
+        return model.seal(**fields)
+    except ValidationError as error:
+        raise AnalysisFailedError(
+            "measurement is outside the evidence limits (too many spans/cuts or an "
+            "out-of-range value); raise the threshold or shorten the media"
+        ) from error
 
 
 @dataclass
@@ -159,14 +195,33 @@ class FfmpegAnalyzer:
             raise AnalysisInputError(f"not a regular file: {resolved}")
         _refuse_indirection(resolved)
         stat = resolved.stat()
-        return _Source(resolved, _sha256(resolved), stat.st_size, stat.st_mtime_ns)
+        return _Source(
+            resolved,
+            _sha256(resolved),
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_dev,
+            stat.st_ino,
+        )
 
     def _assert_unchanged(self, source: _Source) -> None:
-        stat = source.path.stat()
-        if (stat.st_size, stat.st_mtime_ns) != (source.size, source.mtime_ns):
-            raise AnalysisFailedError(
-                f"{source.path} changed while it was being analysed; refusing evidence"
+        changed = AnalysisFailedError(
+            f"{source.path} changed while it was being analysed; refusing evidence"
+        )
+        try:
+            now = source.path.resolve(strict=True)
+            stat = now.stat()
+            same = (now, stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns) == (
+                source.path,
+                source.device,
+                source.inode,
+                source.size,
+                source.mtime_ns,
             )
+            if not same or _refuse_indirection_bytes(now) or _sha256(now) != source.sha256:
+                raise changed
+        except OSError as error:
+            raise changed from error
 
     def _run(
         self,
@@ -245,7 +300,7 @@ class FfmpegAnalyzer:
             )
 
     def _common_input(self, source: _Source, *, limit: bool = True) -> list[str]:
-        arguments = ["-protocol_whitelist", "file"]
+        arguments = ["-protocol_whitelist", "file", "-format_whitelist", FORMAT_WHITELIST]
         if limit:
             arguments += ["-t", str(self.max_media_s)]
         return [*arguments, "-i", str(source.path)]
@@ -289,6 +344,8 @@ class FfmpegAnalyzer:
             [
                 "-protocol_whitelist",
                 "file",
+                "-format_whitelist",
+                FORMAT_WHITELIST,
                 "-i",
                 str(resolved),
                 "-t",
@@ -316,6 +373,12 @@ class FfmpegAnalyzer:
             raise AnalysisInputError("noise_floor_db must be in (-100, -10]")
         if not 0.01 <= min_silence_s <= 600.0:
             raise AnalysisInputError("min_silence_s must be in [0.01, 600]")
+        # Round once; the filter, the evidence and the range check all use the rounded
+        # values, so evidence never names a parameter FFmpeg did not receive.
+        noise_floor_db = round(noise_floor_db, 1)
+        min_silence_s = round(min_silence_s, 3)
+        if not -100.0 < noise_floor_db <= -10.0 or not 0.01 <= min_silence_s <= 600.0:
+            raise AnalysisInputError("parameters are out of range after rounding")
         source = self._source(path)
         probe = self._probe_resolved(source.path)
         if not probe.has_audio:
@@ -338,7 +401,8 @@ class FfmpegAnalyzer:
         except parsers.ParseError as error:
             raise AnalysisFailedError(f"unreadable silencedetect output: {error}") from error
         self._assert_unchanged(source)
-        return SilenceEvidence.seal(
+        return _seal(
+            SilenceEvidence,
             engine=self.engine_id(),
             asset_sha256=source.sha256,
             duration_us=probe.duration_us,
@@ -351,6 +415,9 @@ class FfmpegAnalyzer:
         """Scene-change instants of the video stream (``select='gt(scene,T)'``)."""
         if not 0.0 < threshold < 1.0:
             raise AnalysisInputError("threshold must be strictly between 0 and 1")
+        threshold = round(threshold, 3)
+        if not 0.0 < threshold < 1.0:
+            raise AnalysisInputError("threshold is out of range after rounding to 3 digits")
         source = self._source(path)
         probe = self._probe_resolved(source.path)
         if not probe.has_video:
@@ -373,7 +440,8 @@ class FfmpegAnalyzer:
         except parsers.ParseError as error:
             raise AnalysisFailedError(f"unreadable showinfo output: {error}") from error
         self._assert_unchanged(source)
-        return SceneCutEvidence.seal(
+        return _seal(
+            SceneCutEvidence,
             engine=self.engine_id(),
             asset_sha256=source.sha256,
             duration_us=probe.duration_us,
@@ -405,7 +473,8 @@ class FfmpegAnalyzer:
         except parsers.ParseError as error:
             raise AnalysisFailedError(f"unreadable ebur128 output: {error}") from error
         self._assert_unchanged(source)
-        return LoudnessEvidence.seal(
+        return _seal(
+            LoudnessEvidence,
             engine=self.engine_id(),
             asset_sha256=source.sha256,
             duration_us=probe.duration_us,

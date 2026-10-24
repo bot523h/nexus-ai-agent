@@ -33,7 +33,7 @@ nexus.slideshow.compose capabilities=6               ← only these two were com
 nexus.language.caption  capabilities=10
 
 # after Wave 5
-all six: pending=0, and `nexus packs verify` accepts the repository's own manifests
+all packs (six at Wave 5, seven now): pending=0, and `nexus packs verify` accepts the repository's own manifests
 ```
 
 ---
@@ -92,7 +92,7 @@ from nexus_ai_agent.creative.packs.runtime import build_pack_runtime
 runtime = build_pack_runtime(activate=True)
 runtime.complete  # True: no pending capability anywhere
 [r.package_id for r in runtime.status()]  # seven packs, composition order
-len(runtime.operation_ids())  # 57 = wave-1 (5) + pack operations (52)
+len(runtime.operation_ids())  # 60 = wave-1 (5) + pack operations (55)
 ```
 
 ---
@@ -127,7 +127,7 @@ lives in `continuum/` precisely so that allowlist never has to grow.
 ## 5. Measuring what actually runs — the 95% acceptance contract (DECISION_LOG D-0023)
 
 ```bash
-python scripts/pack_coverage.py                                   # canonical: 27 targets, 95% bar
+python scripts/pack_coverage.py                                   # canonical: 29 targets, 95% bar
 python scripts/pack_coverage.py --json-out ci-artifacts/pack-coverage.json
 python scripts/pack_coverage.py --verify-artifact ci-artifacts/pack-coverage.json
 python scripts/pack_coverage.py --list-tests
@@ -139,7 +139,7 @@ python scripts/pack_coverage.py --threshold 80
 
 **The contract.** A report is *accepted* only when every one of these holds:
 
-* the run is **canonical** — exactly the 27 targets of `DEFAULT_TEST_TARGETS`
+* the run is **canonical** — exactly the 29 targets of `DEFAULT_TEST_TARGETS`
   (derived from `PACK_TEST_TARGETS`, one entry per composed pack plus the
   substrate), every pack, the default pack root, and the bar at
   `ACCEPTANCE_THRESHOLD = 95.0`; a subset, a respelled duplicate, an unknown or

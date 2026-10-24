@@ -39,6 +39,8 @@ ADAPTER_ALLOWED = {
     "subprocess",
     "threading",
     "math",
+    "pydantic",
+    "typing",
     "nexus_ai_agent",
 }
 NETWORK_AND_HEAVY = {
