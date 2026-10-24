@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-24T07:54:13Z",
+  "updated_at": "2026-10-24T14:54:10Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3927,6 +3927,41 @@
       "claimed_at": "2026-10-24T04:48:16Z",
       "ttl_hours": 24,
       "gates_owner": false,
+      "generation": 1
+    },
+    {
+      "task": "task-264-passport-attempt-id-alignment",
+      "title": "Bind CreativeExecutionPassport attempt ids to the AttemptStaging layout",
+      "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
+      "zone": "durable-creative-queue-evidence",
+      "priority": "P3",
+      "status": "active",
+      "scope": "Align CreativeExecutionPassport attempt identity and evidence storage with the existing AttemptStaging attempt-scoped contract; change only the passport implementation and its unit tests.",
+      "scope_fa": "شناسه‌های attempt در passport و staging از یک منبع باید بیایند تا ردیابی artifact یکتا بماند.",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "one minting function for attempt ids used by both surfaces",
+        "passport evidence paths resolve inside the attempt staging tree; traversal rejected",
+        "provenance suites green"
+      ],
+      "evidence_required": [
+        "RED then GREEN focused unit tests for attempt identity, attempt-scoped evidence paths, traversal, mismatch, and missing artifacts",
+        "pytest tests/unit/test_creative_passport.py and related provenance/staging tests",
+        "ruff check, ruff format --check, mypy on changed paths, and git diff --check",
+        "exact-head GitHub CI evidence and final SHA/worktree/ownership report"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/jobs/creative_passport.py",
+        "tests/unit/test_creative_passport.py"
+      ],
+      "owner_hint": "Bootstrap from next_work after task-254 merge; claim only on the dedicated task-264 branch.",
+      "agent_branch": "arena/task-264-passport-attempt-id-alignment",
+      "claimed_at": "2026-10-24T04:47:52Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
       "generation": 1
     }
   ],
