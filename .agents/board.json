@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-22T18:46:06Z",
+  "updated_at": "2026-10-24T10:20:53Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -850,6 +850,21 @@
         "tests/unit/test_selfhood_runtime.py",
         "src/nexus_ai_agent/bot/app.py",
         "src/nexus_ai_agent/config/settings.py"
+      ]
+    },
+    {
+      "id": "nagar-perception",
+      "description": "Measured media evidence: pure pack + free offline FFmpeg adapter",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/perception/",
+        "src/nexus_ai_agent/creative/perception/",
+        "tests/unit/test_perception_pack.py",
+        "tests/unit/test_perception_parsers.py",
+        "tests/unit/test_perception_adapter.py",
+        "tests/unit/test_perception_cli.py",
+        "tests/unit/test_perception_composition_contract.py",
+        "tests/architecture/test_perception_boundary.py",
+        "docs/ops/PERCEPTION_LANE.md"
       ]
     }
   ],
@@ -3844,7 +3859,7 @@
       "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Run scripts/execution_core_mutations.py as a CI mutation job",
       "scope_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "prerequisites": [
@@ -3864,10 +3879,44 @@
       "agent_branch": "arena/task-260-exec-mutations-ci",
       "claimed_at": "2026-10-22T18:46:06Z",
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "Execution-core mapping: the native execution core (Task-254) merged via PR #192 (merge commit a48326ded85bbe4e0972d645ee0ea6e877935362, 'supersedes #191'); PR #191 (arena/execution-core-v1-nexus-ai-agent) is CLOSED and superseded. PR #241 is the separate Task-260 mutation-CI follow-up, not the execution-core implementation. CI wiring lives in .github/workflows/ci.yml (zone ci-quality); the harness scripts/execution_core_mutations.py is the execution-core zone (task-254, done).",
       "generation": 2,
-      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)"
+      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)",
+      "release_reason": "auto-released by gc at 2026-10-24T10:20:53Z (stale active lease)"
+    },
+    {
+      "task": "task-perception-lane",
+      "title": "Perception lane - measured silence/scene/loudness evidence from a free offline FFmpeg engine",
+      "title_fa": "لایه‌ی ادراک - شواهد اندازه‌گیری‌شده‌ی سکوت، تغییر صحنه و لودنس با موتور رایگان و آفلاین FFmpeg",
+      "zone": "nagar-perception",
+      "priority": "P1",
+      "status": "active",
+      "scope": "New builtin pack nexus.analysis.perception (pure: content-bound sealed evidence + 3 operations) and creative/perception adapter (FFmpeg silencedetect/scene/ebur128, argv-only, protocol-whitelisted, bounded time/memory) + `nexus analyze` CLI. No new dependency, no network, no API key.",
+      "scope_fa": "پک داخلی nexus.analysis.perception (خالص) و آداپتور creative/perception با FFmpeg؛ بدون وابستگی جدید، بدون شبکه، بدون کلید API.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "evidence is bound to content sha256 and refused on mismatch",
+        "marker edits are idempotent and reversible",
+        "FFmpeg runs argv-only with a protocol whitelist, a timeout and bounded stderr",
+        "pack coverage >= 95% and all architecture gates green"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_perception_* tests/architecture",
+        "scripts/pack_coverage.py accepted"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/perception/",
+        "src/nexus_ai_agent/creative/perception/",
+        "tests/architecture/test_perception_boundary.py"
+      ],
+      "owner_hint": "agent: Claude, branch feat/analysis-perception-pack",
+      "agent_branch": "feat/analysis-perception-pack",
+      "claimed_at": "2026-10-24T10:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [

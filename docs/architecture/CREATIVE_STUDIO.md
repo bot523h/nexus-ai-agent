@@ -87,6 +87,7 @@ A pack is a directory with a `pack.manifest.json` validated against `nexus.capab
 | `nexus.edit.timeline` | 1.0.0 | 9 | 0 | placeholder | False | — |
 | `nexus.motion.graphics` | 1.0.0 | 10 | 0 | placeholder | False | — |
 | `nexus.slideshow.compose` | 0.2.0 | 6 | 0 | placeholder | False | ffmpeg |
+| `nexus.analysis.perception` | 1.0.0 | 3 | 0 | placeholder | False | ffmpeg |
 
 The activation gap is **closed** (board task-126, landed): `cli.py::_packs_registry`
 now composes `creative.packs.runtime.build_pack_registry()` — the runtime and the

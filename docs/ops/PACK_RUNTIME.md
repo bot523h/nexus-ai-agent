@@ -46,9 +46,9 @@ builtin packs exist in the runtime:
 | Symbol | Meaning |
 |---|---|
 | `PackComposition` | one pack: `directory`, `package_id`, registrar, summary |
-| `COMPOSITION` | the six builtin packs, in deterministic order (slideshow → caption → edit → motion → audio → delivery) |
+| `COMPOSITION` | the seven builtin packs, in deterministic order (slideshow → caption → edit → motion → audio → delivery → perception) |
 | `COMPOSITION_BY_DIRECTORY` / `COMPOSITION_BY_PACKAGE_ID` | O(1) lookups used by the gate and the CLI |
-| `build_runtime_registry()` | Wave-1 catalog + every pack's operations (57 operations today) |
+| `build_runtime_registry()` | Wave-1 catalog + every pack's operations (60 operations today) |
 | `build_pack_registry()` | the same registry wrapped in a `PackRegistry` (what the CLI consumes) |
 | `build_pack_runtime()` | `PackRuntime`: composition + builtin registration + optional activation |
 | `PackRuntime.status()` | one `PackStatus` row per pack: capabilities, pending, active, signature, binaries |
@@ -91,7 +91,7 @@ from nexus_ai_agent.creative.packs.runtime import build_pack_runtime
 
 runtime = build_pack_runtime(activate=True)
 runtime.complete  # True: no pending capability anywhere
-[r.package_id for r in runtime.status()]  # six packs, composition order
+[r.package_id for r in runtime.status()]  # seven packs, composition order
 len(runtime.operation_ids())  # 57 = wave-1 (5) + pack operations (52)
 ```
 
