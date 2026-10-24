@@ -23,6 +23,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nexus_ai_agent.execution.staging import AttemptStaging
 from nexus_ai_agent.jobs.verification import VerificationOutcome
 
 CREATIVE_RENDER_JOB_TYPE = "creative_render"
@@ -261,6 +262,11 @@ def archive_trim_evidence(
     verifier: Callable[[dict[str, object], dict[str, object]], VerificationOutcome],
 ) -> ArchivedCreativeEvidence:
     """Persist both assets, independently reverify the archived output, and build a passport."""
+    expected_attempt_identifier = attempt_id(job_id, attempt_number)
+    if attempt_identifier != expected_attempt_identifier:
+        raise CreativePassportError(
+            "attempt identifier does not match the canonical attempt generation"
+        )
     if source_snapshot is None:
         raise CreativePassportError("trim source was not measured before execution")
     if str(result.get("operation") or "") != TIMELINE_TRIM_OPERATION:
@@ -282,10 +288,17 @@ def archive_trim_evidence(
         raise CreativePassportError("trim input changed while the render was running")
     output_sha, output_size = hash_file(output_source, too_large_code="render_failed")
 
-    attempt_directory_key = f"jobs/{_safe_job_key(job_id)}/{attempt_identifier}"
+    root_resolved = artifact_root.resolve()
+    attempt_staging = AttemptStaging(artifact_root, job_id=job_id, attempt_id=attempt_identifier)
+    attempt_directory = attempt_staging.staging_dir
+    try:
+        attempt_directory_key = attempt_directory.relative_to(root_resolved).as_posix()
+    except ValueError as exc:
+        raise CreativePassportError(
+            "attempt staging directory escaped its configured root"
+        ) from exc
     attempt_directory = _resolve_store_path(artifact_root, attempt_directory_key)
     _mkdirs_durable(artifact_root, attempt_directory)
-    root_resolved = artifact_root.resolve()
     attempt_directory = attempt_directory.resolve()
     try:
         attempt_directory.relative_to(root_resolved)
@@ -719,10 +732,6 @@ def passport_json(passport: CreativeExecutionPassport) -> str:
 def asset_path(artifact_root: Path, storage_key: str) -> Path:
     """Resolve a portable storage key under the queue-owned artifact root."""
     return _resolve_existing_store_file(artifact_root.resolve(), storage_key)
-
-
-def _safe_job_key(job_id: str) -> str:
-    return hashlib.sha256(job_id.encode("utf-8")).hexdigest()
 
 
 def _resolve_store_path(root: Path, storage_key: str) -> Path:
