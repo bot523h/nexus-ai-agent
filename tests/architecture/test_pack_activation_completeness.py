@@ -49,6 +49,10 @@ BUILDERS: dict[str, tuple[str, str]] = {
     "motion": ("nexus_ai_agent.creative.packs.motion.operations", "build_motion_registry"),
     "audio": ("nexus_ai_agent.creative.packs.audio.operations", "build_audio_registry"),
     "delivery": ("nexus_ai_agent.creative.packs.delivery.operations", "build_delivery_registry"),
+    "perception": (
+        "nexus_ai_agent.creative.packs.perception.operations",
+        "build_perception_registry",
+    ),
 }
 
 

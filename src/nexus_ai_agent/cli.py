@@ -22,6 +22,9 @@ packs_app = typer.Typer(help="Capability-pack manifests (data-only packs)")
 slideshow_app = typer.Typer(
     help="Slideshow pack (nexus.slideshow.compose): tone templates and planning"
 )
+analyze_app = typer.Typer(
+    help="Free offline media measurement (FFmpeg): silence, scenes, loudness evidence"
+)
 
 
 def _open_checkpoint_backend() -> tuple[Any, Path]:
@@ -647,6 +650,58 @@ def packs_activate(
     typer.echo(f"✓ {pack.package_id} is active ({len(pack.manifest.capabilities)} capabilities)")
 
 
+# ── nexus analyze — measured media evidence (nexus.analysis.perception) ──
+
+
+def _emit_evidence(measure: Any) -> None:
+    """Run one measurement and print its evidence as JSON; typed failures exit 1."""
+    from nexus_ai_agent.creative.perception import AnalysisError
+
+    try:
+        result = measure()
+    except AnalysisError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(json.dumps(result.model_dump(mode="json"), indent=2, ensure_ascii=False))
+
+
+@analyze_app.command("silences")
+def analyze_silences(
+    media: Annotated[Path, typer.Argument(help="Audio or video file.")],
+    noise_floor_db: float = typer.Option(-40.0, help="Silence threshold in dB (-100, -10]."),
+    min_silence_s: float = typer.Option(0.5, help="Shortest silence to report, seconds."),
+) -> None:
+    """Measure silent intervals (feeds ``analysis.mark_silences``)."""
+    from nexus_ai_agent.creative.perception import FfmpegAnalyzer
+
+    _emit_evidence(
+        lambda: FfmpegAnalyzer().silences(
+            media, noise_floor_db=noise_floor_db, min_silence_s=min_silence_s
+        )
+    )
+
+
+@analyze_app.command("scenes")
+def analyze_scenes(
+    media: Annotated[Path, typer.Argument(help="Video file.")],
+    threshold: float = typer.Option(0.3, help="Scene-change sensitivity, strictly in (0, 1)."),
+) -> None:
+    """Measure scene changes (feeds ``analysis.mark_scene_cuts``)."""
+    from nexus_ai_agent.creative.perception import FfmpegAnalyzer
+
+    _emit_evidence(lambda: FfmpegAnalyzer().scene_cuts(media, threshold=threshold))
+
+
+@analyze_app.command("loudness")
+def analyze_loudness(
+    media: Annotated[Path, typer.Argument(help="Audio or video file.")],
+) -> None:
+    """Measure EBU R128 loudness (feeds ``analysis.assess_loudness``)."""
+    from nexus_ai_agent.creative.perception import FfmpegAnalyzer
+
+    _emit_evidence(lambda: FfmpegAnalyzer().loudness(media))
+
+
 # ── Wave 2b: nexus slideshow — planning surface of the slideshow pack ──
 
 
@@ -906,6 +961,7 @@ app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(packs_app, name="packs")
 app.add_typer(slideshow_app, name="slideshow")
+app.add_typer(analyze_app, name="analyze")
 
 
 # ── D1: nexus jobs resume — operator drain of the durable in-process queue ──

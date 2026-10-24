@@ -113,6 +113,15 @@ def _register_delivery(registry: CapabilityRegistry) -> object:
     return registry
 
 
+def _register_perception(registry: CapabilityRegistry) -> object:
+    from nexus_ai_agent.creative.packs.perception.operations import (
+        register_perception_operations,
+    )
+
+    register_perception_operations(registry)
+    return registry
+
+
 @dataclass(frozen=True)
 class PackComposition:
     """One builtin pack: where it lives, what it declares, how it is registered."""
@@ -127,7 +136,7 @@ class PackComposition:
         return f"{self.directory} ({self.package_id})"
 
 
-#: The six builtin packs, in registration order.  The order is deterministic and
+#: The seven builtin packs, in registration order.  The order is deterministic and
 #: part of the public contract: it is what ``nexus packs list`` prints and what
 #: the activation snapshot records.  ``slideshow`` first (the pack every other
 #: lane builds on), then the language, edit, motion, audio and delivery lanes.
@@ -167,6 +176,12 @@ COMPOSITION: tuple[PackComposition, ...] = (
         "nexus.color.delivery",
         _register_delivery,
         "colour transforms, proxies, OTIO delivery (Wave 7)",
+    ),
+    PackComposition(
+        "perception",
+        "nexus.analysis.perception",
+        _register_perception,
+        "measured silence, scene-cut and loudness evidence (free local FFmpeg)",
     ),
 )
 

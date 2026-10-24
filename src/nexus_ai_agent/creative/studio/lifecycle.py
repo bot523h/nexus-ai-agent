@@ -121,6 +121,12 @@ PACK_LIFECYCLE: dict[str, PackLifecycle] = {
         state=LifecycleState.EXPERIMENTAL,
         reason="exposure/LUT twins + OTIO export real; the 4k master is a spec, not a render",
     ),
+    "nexus.analysis.perception": PackLifecycle(
+        pack_id="nexus.analysis.perception",
+        state=LifecycleState.AVAILABLE,
+        reason="real FFmpeg silencedetect/scene/ebur128 evidence, content-bound; "
+        "marker edits are reversible state transactions",
+    ),
     "nexus.vision.portrait": PackLifecycle(
         pack_id="nexus.vision.portrait",
         state=LifecycleState.EXPERIMENTAL,
