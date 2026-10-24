@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — local-first knowledge retrieval (board `task-273`, PR #245, decision log D-0030)
+
+- New `nexus knowledge` CLI (`index | search | status | rebuild | sources list|remove`, `--json`)
+  over an allowlisted source registry (table `knowledgesource`, migration
+  `d4e1c0a79b21`) and a derived, rebuildable LlamaIndex store confined to
+  `adapters/llamaindex_retrieval.py` (pinned MIT `llama-index-core`, offline hash
+  embeddings by default, telemetry off, no LLM/paid calls).
+- Evidence search verifies every hit against the registry sha256 (stale or
+  zero-overlap vector hits are dropped, never served as evidence); read-site
+  no-follow/identity/bounded-open hardening; adapter-owned-only rebuild clears.
+- Architecture law R22 (`tests/architecture/test_knowledge_retrieval_boundaries.py`),
+  living view `docs/architecture/KNOWLEDGE_RETRIEVAL.md`, ADR 0012
+  (docs-enforcement), ops runbook and examples.
+
 ### Fix — full-audit remediation, round 0 (findings A-01/A-02b/A-03/A-06; board `task-270`, session `arena/26f7d958-nexus-ai-agent`)
 
 - **A-01 — every free-text message crashed on `main`.** `storage/db.py` built
