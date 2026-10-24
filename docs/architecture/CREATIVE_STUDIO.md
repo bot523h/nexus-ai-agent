@@ -54,6 +54,8 @@ The lifecycle gate is the single seam between the canonical Gate-2 contract and 
 
 `Project.state_hash` is **derived** from a canonical JSON serialization on every construction (revision excluded, so revision+hash preconditions survive undo cycles). A stored hash therefore cannot drift from the state it describes.
 
+Undo is **transaction-scoped**: `system.undo` accepts an optional `transaction_id`, and the stage-9 handler refuses with `UndoConflictError` unless that id is still the newest editable transaction. The gate runs inside the handler, under the bus lock, so a rollback can never rewind a concurrent foreign edit (task-223; [`COMMAND_CAPABILITY_CONTRACT.md`](COMMAND_CAPABILITY_CONTRACT.md) §7.1).
+
 ## 3. The pack substrate (data, never code-on-arrival)
 
 A pack is a directory with a `pack.manifest.json` validated against `nexus.capability-pack.v1` plus pure handler modules:

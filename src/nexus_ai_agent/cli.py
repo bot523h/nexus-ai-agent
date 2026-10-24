@@ -899,6 +899,297 @@ def slideshow_render(
     typer.echo(f"  • {artifact['output_sha256']}")
 
 
+# ── task-273: nexus knowledge — local-first knowledge index (LlamaIndex) ──
+
+knowledge_app = typer.Typer(
+    help="Local-first knowledge index over authorized sources (LlamaIndex adapter)"
+)
+knowledge_sources_app = typer.Typer(help="Registered knowledge sources")
+
+
+def _knowledge_service() -> Any:
+    # Composition root (L5): settings → validated config → service + adapter.
+    # The knowledge_retrieval package itself never imports the adapter.
+    # Construction itself can fail closed (unknown provider, bad limits) —
+    # those are operator-facing typed errors, never tracebacks.
+    from nexus_ai_agent.adapters.llamaindex_retrieval import LlamaIndexKnowledgeIndex
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.knowledge_retrieval import (
+        KnowledgeConfig,
+        KnowledgeRetrievalService,
+    )
+    from nexus_ai_agent.observability.logging import configure_logging
+
+    try:
+        import os as _os
+
+        # Logs first (stderr, redacted): even a settings/index-directory
+        # startup failure must land somewhere real before the CLI prints
+        # "details are in the application log". The level is refined right
+        # after the settings object exists.
+        configure_logging((_os.environ.get("NEXUS_LOG_LEVEL") or "INFO").lower())
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        config = KnowledgeConfig.from_settings(settings)
+        return KnowledgeRetrievalService(config, LlamaIndexKnowledgeIndex(config))
+    except Exception as exc:  # noqa: BLE001 — mapped to a typed line + exit 1
+        _knowledge_exit(exc)
+
+
+def _safe_error_detail(exc: Exception) -> str:
+    """Operator-safe one-line detail for a non-typed failure.
+
+    Pydantic settings errors are reduced to field *locations* — their ``input``
+    values may contain secrets and must never be echoed. Everything else is
+    truncated type + message (errno strings carry the configured path, which
+    the operator set themselves — allowed by the error contract).
+    """
+    try:
+        from pydantic import ValidationError
+
+        if isinstance(exc, ValidationError):
+            locations = [
+                ".".join(str(part) for part in error.get("loc", ())) for error in exc.errors()[:4]
+            ]
+            return "ValidationError: invalid settings field(s): " + ", ".join(
+                location for location in locations if location
+            )
+    except Exception:  # noqa: BLE001 — diagnostic helper never fails the exit path
+        pass
+    return f"{type(exc).__name__}: {exc}"[:400]
+
+
+def _knowledge_exit(exc: Any) -> None:
+    """Map a typed knowledge failure to a clean stderr line + exit 1.
+
+    Non-typed failures (startup: settings load, index-directory creation) are
+    *actually* logged — structured, redacted, with the traceback on stderr —
+    so the printed hint is true, and the CLI line carries the safe detail
+    above, never a bare exception name alone.
+    """
+    from nexus_ai_agent.knowledge_retrieval import KnowledgeRetrievalError
+
+    if isinstance(exc, KnowledgeRetrievalError):
+        typer.echo(f"error[{exc.code}]: {exc.message}", err=True)
+        if exc.hint:
+            typer.echo(f"hint: {exc.hint}", err=True)
+    else:
+        from nexus_ai_agent.observability.logging import get_logger
+
+        get_logger(__name__).error(
+            "knowledge_command_failed",
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+        typer.echo(f"error[internal]: {_safe_error_detail(exc)}", err=True)
+        typer.echo(
+            "hint: full details (traceback) are in the application log on stderr",
+            err=True,
+        )
+    raise typer.Exit(code=1)
+
+
+def _run_knowledge(op: Any) -> Any:
+    try:
+        return asyncio.run(op)
+    except Exception as exc:  # noqa: BLE001 — every failure maps to a typed line
+        _knowledge_exit(exc)
+
+
+@knowledge_app.command("index")
+def knowledge_index(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable report"),
+) -> None:
+    """Scan the authorized roots and (re)index changed sources incrementally."""
+    service = _knowledge_service()
+    report = _run_knowledge(service.index_sources())
+    if json_output:
+        typer.echo(json.dumps(report.as_dict(), indent=2, ensure_ascii=False))
+        return
+    typer.echo(
+        f"✓ run {report.run_id}: {report.ingested} ingested "
+        f"({report.new} new, {report.modified} modified), "
+        f"{report.unchanged} unchanged, {report.removed} removed, "
+        f"{report.chunks_written} chunks in {report.duration_s:.2f}s"
+    )
+    if report.rejected or report.unsupported or report.failed:
+        typer.echo(
+            f"  • skipped: {report.rejected} rejected, {report.unsupported} unsupported, "
+            f"{report.failed} failed"
+        )
+    for line in report.errors:
+        typer.echo(f"  • {line}", err=True)
+    if report.truncated:
+        typer.echo("  • truncated: raise NEXUS_KNOWLEDGE_MAX_FILES to index more", err=True)
+
+
+@knowledge_app.command("search")
+def knowledge_search(
+    query: str = typer.Argument(..., help="Natural-language query"),
+    top_k: int = typer.Option(0, "--top-k", min=0, max=50, help="0 = configured default"),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable evidence"),
+) -> None:
+    """Retrieve source-grounded evidence (excerpts + verified citations)."""
+    service = _knowledge_service()
+    response = _run_knowledge(service.search(query, top_k or None))
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "query": response.query,
+                    "state": response.state.value,
+                    "dropped_stale": response.dropped_stale,
+                    "filtered_unrelated": response.filtered_unrelated,
+                    "index_generation": response.index_generation,
+                    "evidence": [
+                        {
+                            "source_id": item.source_id,
+                            "path": item.path,
+                            "root": item.root,
+                            "sha256": item.sha256,
+                            "chunk_index": item.chunk_index,
+                            "start": item.start,
+                            "end": item.end,
+                            "score": round(item.score, 6),
+                            "page": item.page,
+                            "excerpt": item.excerpt,
+                            "citation": item.citation,
+                        }
+                        for item in response.evidence
+                    ],
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+    if not response.evidence:
+        typer.echo(f"(no evidence: {response.state.value})")
+        return
+    for item in response.evidence:
+        page = f" p.{item.page}" if item.page is not None else ""
+        typer.echo(
+            f"[{item.score:.4f}] {item.path} @ {item.sha256[:12]} "
+            f"#chunk {item.chunk_index} ({item.start}:{item.end}){page}"
+        )
+        typer.echo(f"    {item.excerpt}")
+    if response.dropped_stale:
+        typer.echo(f"  • dropped {response.dropped_stale} stale hit(s)")
+    if response.filtered_unrelated:
+        typer.echo(f"  • filtered {response.filtered_unrelated} unrelated hit(s)")
+
+
+@knowledge_app.command("status")
+def knowledge_status(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable status"),
+) -> None:
+    """Report subsystem/index health honestly (never fabricates success)."""
+    service = _knowledge_service()
+    status = _run_knowledge(service.status())
+    if json_output:
+        typer.echo(json.dumps(status.as_dict(), indent=2, ensure_ascii=False))
+        return
+    typer.echo(f"enabled:      {status.enabled}")
+    typer.echo(f"configured:   {status.configured}")
+    typer.echo(
+        f"store:        {'present' if status.store_present else 'absent'}"
+        + (" CORRUPT" if status.store_corrupt else "")
+    )
+    typer.echo(f"nodes:        {status.node_count if status.node_count is not None else '?'}")
+    typer.echo(f"generation:   {status.generation if status.generation is not None else '-'}")
+    typer.echo(
+        f"sources:      {status.source_count} registered, "
+        f"{status.ingested_count} ingested, {status.error_count} error"
+    )
+    typer.echo(
+        f"embeddings:   {status.embedding_provider} "
+        f"({'available' if status.provider_available else 'UNAVAILABLE'})"
+    )
+    if status.degraded:
+        typer.echo(f"⚠ degraded:   {status.degraded_reason}")
+    typer.echo(f"index path:   {status.index_path}")
+
+
+@knowledge_app.command("rebuild")
+def knowledge_rebuild(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable report"),
+) -> None:
+    """Drop the derived index + registry view, then reindex from disk."""
+    if not yes:
+        typer.confirm(
+            "Rebuild deletes the derived knowledge index and reingests every "
+            "configured source. Continue?",
+            abort=True,
+        )
+    service = _knowledge_service()
+    report = _run_knowledge(service.rebuild())
+    if json_output:
+        typer.echo(json.dumps(report.as_dict(), indent=2, ensure_ascii=False))
+        return
+    typer.echo(
+        f"✓ rebuilt run {report.run_id}: {report.ingested} ingested, "
+        f"{report.chunks_written} chunks in {report.duration_s:.2f}s"
+    )
+    for line in report.errors:
+        typer.echo(f"  • {line}", err=True)
+
+
+@knowledge_sources_app.command("list")
+def knowledge_sources_list(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable rows"),
+) -> None:
+    """List every registered knowledge source (canonical registry)."""
+    service = _knowledge_service()
+    rows = _run_knowledge(service.list_sources())
+    if json_output:
+        typer.echo(
+            json.dumps(
+                [
+                    {
+                        "source_id": row.source_id,
+                        "root": row.root,
+                        "path": row.path,
+                        "sha256": row.sha256,
+                        "size_bytes": row.size_bytes,
+                        "status": row.status.value,
+                        "chunks": row.chunks,
+                        "indexed_at": row.indexed_at,
+                        "updated_at": row.updated_at,
+                        "last_error": row.last_error,
+                    }
+                    for row in rows
+                ],
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+    if not rows:
+        typer.echo("(no registered sources — run `nexus knowledge index`)")
+        return
+    for row in rows:
+        typer.echo(
+            f"{row.source_id}  {row.status.value:8}  {row.chunks:4} chunks  "
+            f"{row.sha256[:12] or '-':12}  {row.path}"
+        )
+
+
+@knowledge_sources_app.command("remove")
+def knowledge_sources_remove(
+    reference: str = typer.Argument(..., help="source_id or path of the source"),
+) -> None:
+    """Unregister one source: index entries and registry row are removed."""
+    service = _knowledge_service()
+    removed = _run_knowledge(service.unregister(reference))
+    if not removed:
+        typer.echo(f"error[not_found]: no registered source matches {reference!r}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ unregistered {reference}")
+
+
+knowledge_app.add_typer(knowledge_sources_app, name="sources")
+
 checkpoints_app.add_typer(golden_app, name="golden")
 app.add_typer(checkpoints_app, name="checkpoints")
 app.add_typer(metrics_app, name="metrics")
@@ -906,6 +1197,7 @@ app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(packs_app, name="packs")
 app.add_typer(slideshow_app, name="slideshow")
+app.add_typer(knowledge_app, name="knowledge")
 
 
 # ── D1: nexus jobs resume — operator drain of the durable in-process queue ──
@@ -927,15 +1219,55 @@ def jobs_resume(
     Handlers are the standard application ones, so resumed jobs run exactly
     as they would inside the bot.
     """
+    import sqlite3
+
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
     from nexus_ai_agent.application.ports.job_queue import JobStatus
     from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.provenance import (
+        CausalConflictError,
+        QueueLedgerObserver,
+    )
+    from nexus_ai_agent.provenance.backfill import backfill_journal
+    from nexus_ai_agent.provenance.paths import (
+        causal_journal_db_path,
+        try_open_causal_journal,
+    )
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
     async def _run() -> None:
-        queue = InProcessJobQueue(job_queue_db_path(get_settings().db_path))
+        queue_db = job_queue_db_path(get_settings().db_path)
+        # Evidence degrades, execution never dies for the ledger (D-0024).
+        journal = try_open_causal_journal(causal_journal_db_path(queue_db))
+        observer = QueueLedgerObserver(journal) if journal is not None else None
+        if journal is None:
+            typer.echo(
+                "⚠️  Causal ledger unavailable — draining WITHOUT evidence"
+                " recording (job outcomes stay authoritative)."
+            )
+        queue = InProcessJobQueue(queue_db, causal_observer=observer)
         for job_type, handler in default_job_handlers().items():
             queue.register_handler(job_type, handler)
+        if journal is not None:
+            # task-231: recovery closes crash-window holes with labeled
+            # reconstructions before anything is drained (idempotent).
+            try:
+                report = backfill_journal(journal, queue, queue.job_ids())
+                typer.echo(
+                    f"Causal journal: +{report.appended} reconstructed, "
+                    f"{report.already_present} already present."
+                )
+            except CausalConflictError as exc:
+                # The ledger itself refuses a lying reconstruction: the job
+                # authority is untouched and the drain still proceeds — but
+                # the quarantined conflict stays on the ledger for audit.
+                typer.echo(
+                    f"⚠️  Causal backfill stopped on an evidence conflict"
+                    f" ({exc}); draining without backfill. Inspect the"
+                    f" EVENT_CONFLICT records before trusting this history."
+                )
+            except sqlite3.Error as exc:
+                typer.echo(f"⚠️  Causal backfill failed ({exc}); draining without it.")
         job_ids = await queue.resume_pending_jobs()
         if not job_ids:
             typer.echo("No pending jobs to resume.")
@@ -968,6 +1300,49 @@ def jobs_resume(
                 await asyncio.sleep(0.2)
 
     asyncio.run(_run())
+
+
+# ── task-231: nexus jobs passport — the Artifact Passport reader ──────────
+
+
+@jobs_app.command("passport")
+def jobs_passport(
+    job_id: str = typer.Argument(..., help="The durable job id to explain."),
+) -> None:
+    """Reconstruct the Artifact Passport for one job (read-only).
+
+    Derives the causal account from the hash-chained journal + the
+    authoritative row, re-measures the artifact bytes when reachable, and
+    prints the passport with its status (VERIFIED / VERIFIED_WITH_LIMITATIONS
+    / INCOMPLETE / COMPROMISED). Exit code 2 on COMPROMISED or INCOMPLETE.
+    """
+    import json as _json
+    import sqlite3
+
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.provenance import CausalJournal, PassportBuilder
+    from nexus_ai_agent.provenance.paths import causal_journal_db_path
+    from nexus_ai_agent.worker import job_queue_db_path
+
+    queue_db = job_queue_db_path(get_settings().db_path)
+    try:
+        journal = CausalJournal(causal_journal_db_path(queue_db))
+    except (sqlite3.Error, OSError) as exc:
+        typer.echo(f"Causal evidence unavailable: {exc}")
+        raise typer.Exit(3) from None
+    builder = PassportBuilder(journal, InProcessJobQueue(queue_db))
+    try:
+        passport = builder.build(job_id)
+    except KeyError:
+        typer.echo(f"Unknown job: {job_id}")
+        raise typer.Exit(2) from None
+    except sqlite3.Error as exc:
+        typer.echo(f"Causal evidence unreadable: {exc}")
+        raise typer.Exit(3) from None
+    typer.echo(_json.dumps(passport.to_dict(), ensure_ascii=False, indent=2))
+    if passport.status.value in {"COMPROMISED", "INCOMPLETE"}:
+        raise typer.Exit(2)
 
 
 # ── v3.9.0: nexus maintenance — stateless scheduled jobs (Phase 5) ─────
@@ -1042,6 +1417,229 @@ def housekeeping(
         typer.echo(f"note: {result['r2_skipped_reason']}")
     if result["dry_run"]:
         typer.echo("dry-run: nothing was changed")
+
+
+# -- Gate C step 2: one free-text intent through the DURABLE queue ------------
+#
+# The durable successor to PR #155's inline slice.  It is a real operator entry
+# point: it builds the canonical chain (cognition propose-only boundary -> typed
+# creative_render payload -> the existing durable queue), the EXISTING worker
+# executes it (runtime registry -> existing CommandBus -> render lane ->
+# independent verification), and it reports the durable outcome.  It adds no
+# capability, policy or actor source; authority is applied once, in the worker.
+
+NEXUS_INTENT_PROJECT_ID = "nagar-free-text-demo"
+
+
+def _intent_workspace(root: str, idempotency_key: str) -> str:
+    """A fresh, guarded workspace for the durable job (worker's own contract)."""
+    import uuid as _uuid
+    from pathlib import Path as _Path
+
+    token = idempotency_key.split(":", 1)[-1][:12] + _uuid.uuid4().hex[:6]
+    workspace = _Path(root) / f"creative_intent_{token}"
+    workspace.mkdir(parents=True, exist_ok=True)
+    return str(workspace)
+
+
+def _run_durable_intent(
+    *,
+    text: str,
+    source_path: str,
+    workspace_root: str,
+    duration_us: int,
+    actor_id: str,
+    clip_asset_id: str | None,
+    timeout: float,
+) -> tuple[Any, Any]:
+    """Compose the chain, enqueue the typed job, drain it, return (outcome, queue)."""
+    import asyncio as _asyncio
+
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.creative.render_jobs import build_job_bus
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        AssetRecord,
+        Timeline,
+        new_project,
+    )
+    from nexus_ai_agent.nagar.cognition import build_cognition_gateway
+    from nexus_ai_agent.nagar.composition import ProviderStatus, build_cognition_provider
+    from nexus_ai_agent.nagar.creative import (
+        derive_intent_idempotency_key,
+        run_free_text_intent_durable,
+    )
+    from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
+
+    actor = ActorIdentity(kind="user", actor_id=actor_id)
+    source = AssetRecord(
+        asset_id="src",
+        media_kind="video",
+        content_sha256="sha256:" + "0" * 64,
+        duration_us=duration_us,
+    )
+    project = new_project(
+        NEXUS_INTENT_PROJECT_ID,
+        "free-text-intent",
+        Timeline(timeline_id="tl_intent", duration_us=duration_us),
+    ).model_copy(update={"assets": [source]})
+    # The one canonical, server-policy bus factory.  ``ProjectAccess`` is the
+    # canonical authorizer for an ephemeral local project; no bespoke authorizer.
+    access = ProjectAccess(
+        actor=actor,
+        project_id=NEXUS_INTENT_PROJECT_ID,
+        permissions=frozenset({"project:read", "project:write"}),
+    )
+    bus = build_job_bus(project, authorizer=access)
+
+    provider, status = build_cognition_provider()
+    if status is not ProviderStatus.AVAILABLE:
+        typer.echo(
+            f"ℹ️  No model configured ({status.value}); the intent will require"
+            " clarification and nothing will be enqueued."
+        )
+    gateway = build_cognition_gateway(
+        bus=bus,
+        actor=actor,
+        project_id=NEXUS_INTENT_PROJECT_ID,
+        # Fail closed: with no available provider the gateway is disabled and
+        # selects NullCognition, so nothing is ever fabricated or enqueued.
+        enabled=status is ProviderStatus.AVAILABLE,
+        completion=provider,
+    )
+
+    queue_db = job_queue_db_path(get_settings().db_path)
+    queue = InProcessJobQueue(queue_db)
+    for job_type, handler in default_job_handlers().items():
+        queue.register_handler(job_type, handler)
+
+    # Derive the key up front so the workspace name is deterministic per intent.
+    key = derive_intent_idempotency_key(gateway.project_id, actor, " ".join(text.split()))
+    workspace = _intent_workspace(workspace_root, key)
+
+    async def _run_all() -> Any:
+        # One event loop: enqueue schedules the job on THIS loop (the same way the
+        # long-lived bot loop does), so the drain below actually runs it.  A
+        # process restart mid-flight is recovered by ``resume_pending_jobs``,
+        # which only ever touches still-pending rows.
+        outcome = await run_free_text_intent_durable(
+            text,
+            gateway=gateway,
+            queue=queue,
+            project=project,
+            source_path=source_path,
+            workspace_dir=workspace,
+            user_id=0,
+            chat_id=0,
+            clip_asset_id=clip_asset_id,
+        )
+        if outcome.status != "enqueued" or outcome.job_id is None:
+            return outcome
+        terminal = {JobStatus.COMPLETED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
+        loop = _asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if await queue.get_status(outcome.job_id) in terminal:
+                return outcome
+            await _asyncio.sleep(0.1)
+        raise TimeoutError(f"job {outcome.job_id} did not reach a terminal state")
+
+    outcome = _asyncio.run(_run_all())
+    return outcome, queue
+
+
+@app.command("intent")
+def intent(
+    text: str = typer.Argument(..., help="Free-text creative intent (e.g. 'trim from 1s to 8s')."),
+    source: str = typer.Option(
+        ...,
+        "--source",
+        help="Path to the REAL source media file to trim (staged into the job workspace).",
+    ),
+    clip_asset_id: str | None = typer.Option(
+        None, "--clip", help="Source asset id to trim (defaults to the sole video asset)."
+    ),
+    duration_us: int = typer.Option(
+        9_000_000,
+        "--duration-us",
+        min=1,
+        help="Authoritative source duration (microseconds) the project commits.",
+    ),
+    actor_id: str = typer.Option(
+        "local-operator", "--actor", help="Actor identity for this intent (host-owned)."
+    ),
+    workspace_root: str | None = typer.Option(
+        None, "--workspace-root", help="Root for the guarded job workspace (default: settings)."
+    ),
+    timeout: float = typer.Option(
+        120.0, "--timeout", min=1.0, help="Max seconds to wait for the durable job to finish."
+    ),
+    journal_db: str | None = typer.Option(
+        None, "--journal-db", help="Path to the causal journal sidecar (default: none)."
+    ),
+) -> None:
+    """Run one free-text intent through cognition -> DURABLE queue -> verified artifact.
+
+    With no model configured the command reports ``clarification_required`` and
+    enqueues nothing (the Model Kill Test, observable from the CLI).  With a model
+    it persists exactly one typed ``creative_render`` job whose EXISTING worker
+    applies exactly one authorized ``timeline.trim`` through the existing
+    CommandBus, renders a real artifact, and independently verifies it.
+    """
+    from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.config.settings import get_settings
+
+    root = workspace_root or str(get_settings().creative_temp_dir)
+
+    journal: Any | None = None
+    if journal_db is not None:
+        from nexus_ai_agent.provenance.journal import CausalJournal
+
+        journal = CausalJournal(journal_db)
+
+    try:
+        outcome, queue = _run_durable_intent(
+            text=text,
+            source_path=source,
+            workspace_root=root,
+            duration_us=duration_us,
+            actor_id=actor_id,
+            clip_asset_id=clip_asset_id,
+            timeout=timeout,
+        )
+    except TimeoutError as exc:
+        typer.echo(f"⏳ {exc}")
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"status: {outcome.status}")
+    if outcome.operation:
+        typer.echo(f"operation: {outcome.operation}")
+    if outcome.refusal_reason:
+        typer.echo(f"refusal_reason: {outcome.refusal_reason}")
+    if outcome.detail:
+        typer.echo(f"detail: {outcome.detail}")
+
+    if outcome.status == "enqueued" and outcome.job_id:
+        import asyncio as _asyncio
+
+        status = _asyncio.run(queue.get_status(outcome.job_id))
+        result = _asyncio.run(queue.get_result(outcome.job_id)) or {}
+        typer.echo(f"job_id: {outcome.job_id}")
+        typer.echo(f"durable_status: {status.value}")
+        if status is JobStatus.COMPLETED:
+            typer.echo(f"artifact_path: {result.get('artifact_path')}")
+            typer.echo(f"sha256: {result.get('sha256')}")
+            typer.echo(f"duration_us: {result.get('duration_us')}")
+            verification = result.get("artifact_verification") or {}
+            typer.echo(f"verified: {verification.get('status') == 'verified'}")
+        if journal is not None:
+            typer.echo(f"journal: {journal_db}")
+
+    if outcome.status not in {"enqueued", "clarification_required"}:
+        raise typer.Exit(1)
 
 
 @app.command()
