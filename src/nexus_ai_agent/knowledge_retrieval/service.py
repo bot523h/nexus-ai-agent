@@ -568,7 +568,7 @@ def _open_under_root(root: Path, rel: Path) -> int:
     Every descriptor this function opens — the root handle and every
     intermediate directory — is closed before it returns, on success *and* on
     failure; only the final file descriptor is handed to the caller. A platform
-    without ``dir_fd`` support **fails closed** with reason ``unsupported``:
+    without ``dir_fd`` support **fails closed** with reason ``unsupported_dir_fd``:
     a pathname-based substitute would reintroduce the race the walk exists to
     remove.
     """
@@ -597,9 +597,7 @@ def _open_under_root(root: Path, rel: Path) -> int:
             except NotImplementedError:
                 # No dir_fd on this platform: refusing beats guessing — a
                 # path-based fallback would reopen the parent-redirect race.
-                raise _ContentRejected(
-                    "unsupported",
-                ) from None
+                raise _ContentRejected("unsupported_dir_fd") from None
             except OSError as exc:
                 # Linux: final-component symlink → ELOOP; symlink under
                 # O_DIRECTORY → ENOTDIR ("not a directory" — the link is
@@ -634,9 +632,10 @@ def _read_content(path: Path, config: KnowledgeConfig, *, root: Path | None = No
     Deterministic failure taxonomy (also the report's reason vocabulary):
     ``symlink`` (a component refused the no-follow open — including a
     symlinked parent swapped in after the scan), ``traversal`` (path outside
-    the root / ``..`` component), ``unsupported`` (platform without
-    ``dir_fd`` — the secure walk refuses rather than guessing), ``unreadable`` (OSError / not a regular
-    file), ``oversize`` (byte or text bound), ``binary`` (NUL sniff),
+    the root / ``..`` component), ``unsupported_dir_fd`` (platform without
+    ``dir_fd`` — the secure walk refuses rather than guessing),
+    ``unreadable`` (OSError / not a regular file),
+    ``oversize`` (byte or text bound), ``binary`` (NUL sniff),
     ``decode`` (not UTF-8), ``empty`` (no retrievable text), ``pdf`` (parser
     failure), ``unsupported`` (pypdf absent — scan-time classification
     normally prevents reaching it).

@@ -575,7 +575,7 @@ def test_read_content_does_not_leak_descriptors(tmp_path: Path) -> None:
 
 
 def test_read_content_fails_closed_without_dir_fd_support(tmp_path: Path) -> None:
-    """No ``dir_fd`` ⇒ typed ``unsupported`` rejection — never a path-based guess.
+    """No ``dir_fd`` ⇒ typed ``unsupported_dir_fd`` rejection — never a path-based guess.
 
     Review finding: the previous fallback re-opened and re-resolved the
     pathname, which a redirect-then-restore could still dodge. The secure
@@ -602,6 +602,6 @@ def test_read_content_fails_closed_without_dir_fd_support(tmp_path: Path) -> Non
             _read_content(target, _config(), root=root)
     finally:
         _os.open = real_open  # type: ignore[assignment]
-    assert caught.value.reason == "unsupported"
+    assert caught.value.reason == "unsupported_dir_fd"
     # Direct (no-root) opens do not need dir_fd and keep working:
     assert _read_content(target, _config()).text == "Body content."
