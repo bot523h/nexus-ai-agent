@@ -19,7 +19,7 @@ placeholder text.
 | [architecture/OVERVIEW.md](architecture/OVERVIEW.md) | C4 context & container views, stakeholders, the five quality attributes, frozen constraints, deployment topologies. |
 | [architecture/OVERVIEW.fa.md](architecture/OVERVIEW.fa.md) | خلاصهٔ فارسی و نقشهٔ مسیر مطالعه (navigation summary; English wins on conflict). |
 | [architecture/MODULE_MAP.md](architecture/MODULE_MAP.md) | Layer diagram, package inventory, boundary laws → the tests that enforce them, extension recipes. |
-| [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
+| [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, canonical schema-2 trim, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
 | [architecture/CREATIVE_STUDIO.md](architecture/CREATIVE_STUDIO.md) | Nagar: capability model, permission ladder, packs, activation gap, TDD coverage ledger, render lane. |
 | [architecture/CREATIVE_DIRECTION.md](architecture/CREATIVE_DIRECTION.md) | Nagar product direction: the intent-first backbone loop, the first vertical slice (single-project intent loop), deferred capabilities and their triggers. |
 | [architecture/COMMAND_CAPABILITY_CONTRACT.md](architecture/COMMAND_CAPABILITY_CONTRACT.md) | Nagar Gate 2: canonical command envelope, authorization/capability/policy/reference pipeline, idempotency, revision, and evidence limits. |
@@ -28,7 +28,7 @@ placeholder text.
 | [architecture/SELF_CHARTER.md](architecture/SELF_CHARTER.md) | Living Core Phase 1: the immutable charter, the append-only hash-chained Self-Ledger, fail-closed boot, the human-only amendment door, honest limits, acceptance evidence. |
 | [architecture/PROVENANCE_LEDGER.md](architecture/PROVENANCE_LEDGER.md) | The causal ledger (Project Graph journal): tamper-evident recording of every durable job transition, and the Artifact Passport — the read-only, fail-closed projection that reconciles chain vs. authority and re-measures artifacts. |
 | [architecture/JOB_LIFECYCLE.md](architecture/JOB_LIFECYCLE.md) | Canonical job lifecycle: chain, state machine with owners+invariants, side-effect boundary, artifact verification contract, retry/failure semantics, Result chain. |
-| [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, ownership, Alembic chain, retention, portability, and what never enters a store. |
+| [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, application-owned identity, Alembic chain, retention, portability, and what never enters a store. |
 | [architecture/SECURITY.md](architecture/SECURITY.md) | Trust boundaries, STRIDE threat → control → evidence table, P0 audit follow-through, review checklist. |
 | [architecture/OBSERVABILITY.md](architecture/OBSERVABILITY.md) | Structured events, metric policy, health semantics, inspection commands, the short alert list. |
 | [architecture/TESTING.md](architecture/TESTING.md) | Test taxonomy, the four gates, determinism rules, baseline numbers, honest gaps. |
