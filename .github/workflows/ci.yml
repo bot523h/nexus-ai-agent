@@ -484,6 +484,9 @@ jobs:
       # Audit A-02/A-17 (2026-10-15): async + sync engines share this one
       # database, and post-2021 user ids / supergroup ids fit (BIGINT).
       - run: pytest -q tests/integration/test_postgres_single_engine.py
+      # Knowledge registry on the real backend: naive-UTC TIMESTAMP columns,
+      # nonce-scoped writes, survival assertion (task-273, review finding).
+      - run: pytest -q tests/integration/test_knowledge_retrieval_postgres.py
       # Shared read-only adapter contract, PG leg (incl. golden stability
       # and the f4a9c2e71b08 lifecycle table).
       - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py
@@ -492,12 +495,12 @@ jobs:
       # idempotent re-run must be a no-op (revision already at head).
       - run: nexus migrate
       # Confirm the migration stamp on a real Postgres.
-      # Head is b5d8e2f4a917 (telegram_ids_bigint, audit A-17), which revises
-      # e575469d90b9 (nagar asset library v1), which sits on top of
-      # 7c2f9d41e8a3 (ai_memory_consent, P0-7), which revises the
+      # Head is d4e1c0a79b21 (knowledge_retrieval, task-273), which revises
+      # b5d8e2f4a917 (telegram_ids_bigint, audit A-17) → e575469d90b9 (nagar
+      # asset library v1) → 7c2f9d41e8a3 (ai_memory_consent, P0-7) →
       # f4a9c2e71b08 lifecycle table revision.
       - run: |
-          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q b5d8e2f4a917
+          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q d4e1c0a79b21
 
   # ── Merge-base guard (incident #143, fail-closed) ───────────────────────────
   # PR #143 was merged with base = a *feature* branch, not `main`; GitHub called
