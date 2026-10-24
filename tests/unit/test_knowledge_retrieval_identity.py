@@ -513,3 +513,36 @@ async def test_rebuild_clear_refuses_foreign_entries_and_preserves_them(
     await adapter.clear()
     assert {entry.name for entry in store.iterdir()} == {"manifest.json"}
     assert '"generation": 4' in (store / "manifest.json").read_text()
+
+
+def test_read_content_refuses_a_redirected_parent_directory(tmp_path: Path) -> None:
+    """The review's remaining race: parent swap *before* the open.
+
+    With the descriptor-relative walk the intermediate component is opened
+    ``O_NOFOLLOW`` against the **root handle**, so redirecting ``sub`` to a
+    symlink (or restoring it after the read) can never steer bytes from
+    outside the root — the walk itself refuses the component.
+    """
+    root = tmp_path / "root"
+    sub = root / "sub"
+    sub.mkdir(parents=True)
+    target = sub / "note.md"
+    target.write_text("Legitimate body content.")
+    outside_dir = tmp_path / "outside-dir"
+    outside_dir.mkdir()
+    (outside_dir / "note.md").write_text("smuggled outside bytes")
+
+    # Redirect the parent: sub → outside-dir (symlink), file moved away intact.
+    sub.rename(tmp_path / "sub-original")  # the real dir keeps note.md
+    sub.symlink_to(outside_dir, target_is_directory=True)
+
+    with pytest.raises(_ContentRejected) as caught:
+        _read_content(root / "sub" / "note.md", _config(), root=root)
+    assert caught.value.reason == "symlink"
+
+    # Restore: the legitimate file reads normally again (structural check —
+    # no cached pathname verdict).
+    sub.unlink()
+    (tmp_path / "sub-original").rename(sub)
+    content = _read_content(root / "sub" / "note.md", _config(), root=root)
+    assert content.text == "Legitimate body content."

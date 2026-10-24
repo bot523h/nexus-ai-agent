@@ -548,42 +548,148 @@ class _Content:
         self.pages = pages
 
 
-def _open_and_read_bounded(path: Path, max_bytes: int) -> bytes:
-    """Open ``path`` once with ``O_NOFOLLOW`` and read at most ``max_bytes``.
+def _open_under_root(root: Path, rel: Path) -> int:
+    """Open the file ``root / rel`` through a descriptor-relative walk.
 
-    Read-site safety (the scan checked the *pathname*; this checks the file
-    actually being read — the TOCTOU boundary of ingestion):
+    Trust anchor: the **directory handle** opened on the configured root, not
+    a pathname that is re-resolved later. Every component — intermediate *and*
+    final — is opened with ``O_NOFOLLOW`` relative to the previous
+    descriptor, so:
 
-    * ``O_NOFOLLOW`` refuses a symlink swapped in after the scan (ELOOP);
-    * the descriptor must be a regular file and is size-capped *before* the
-      read, then the bounded read itself re-checks the cap (a file that grew
-      after the scan can never be slurped whole);
-    * after reading, ``lstat(path)`` must name the opened file
-      (``st_ino``/``st_dev`` identity) — a replacement between open and read
-      is rejected instead of silently hashing different bytes.
+    * a parent directory swapped to a symlink before the open cannot steer
+      the walk outside (the symlink component is refused, ``ELOOP``);
+    * there is nothing to race *after* the open: the path is never consulted
+      again — no identity check and no containment re-check whose timing an
+      attacker could dodge with a redirect-then-restore (the sequence the
+      review identified: identity passes while redirected, containment passes
+      after restore). Bytes come from an unbroken chain of descriptors that
+      began at the root handle.
 
-    Raises ``_ContentRejected`` with a safe reason: ``symlink``, ``replaced``
-    or ``oversize``/``unreadable``.
+    Platforms without ``dir_fd`` support fall back to a single no-follow open
+    plus a realpath containment check on the resolved descriptor path.
     """
     import errno
     import os
-    import stat as stat_module
 
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    base = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    parts = tuple(part for part in rel.parts if part not in ("", "."))
+    if not parts or ".." in parts:
+        raise _ContentRejected("traversal")
     try:
-        fd = os.open(path, flags)
+        root_fd = os.open(root, base | os.O_DIRECTORY | nofollow)
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.ELOOP:
+            raise _ContentRejected("symlink") from None
+        raise _ContentRejected("unreadable") from None
+    fd = root_fd
+    try:
+        for index, part in enumerate(parts):
+            flags = base | nofollow
+            if index < len(parts) - 1:
+                flags |= os.O_DIRECTORY
+            try:
+                next_fd = os.open(part, flags, dir_fd=fd)
+            except NotImplementedError:
+                # No dir_fd on this platform: fall back to the classic
+                # no-follow open + realpath containment (documented weaker
+                # mode; CI and production run on Linux where dir_fd exists).
+                os.close(fd)
+                return _open_fallback_no_follow(root, parts)
+            except OSError as exc:
+                # Linux: final-component symlink → ELOOP; symlink under
+                # O_DIRECTORY → ENOTDIR ("not a directory" — the link is
+                # never resolved). Both are the no-follow refusal we want.
+                if getattr(exc, "errno", None) in (errno.ELOOP, errno.ENOTDIR):
+                    raise _ContentRejected("symlink") from None
+                raise _ContentRejected("unreadable") from None
+            if fd != root_fd:
+                os.close(fd)
+            fd = next_fd
+        return fd
+    except BaseException:
+        if fd != root_fd:
+            try:
+                os.close(fd)
+            finally:
+                os.close(root_fd)
+        elif fd == root_fd:
+            os.close(root_fd)
+        raise
+
+
+def _open_fallback_no_follow(root: Path, parts: tuple[str, ...]) -> int:
+    """Fallback opener for platforms without ``dir_fd`` (see above)."""
+    import errno
+    import os
+
+    target = root.joinpath(*parts)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(target, flags)
     except OSError as exc:
         if getattr(exc, "errno", None) == errno.ELOOP:
             raise _ContentRejected("symlink") from None
         raise _ContentRejected("unreadable") from None
     try:
+        resolved_root = root.resolve()
+        resolved_target = target.resolve(strict=False)
+        if resolved_target != resolved_root and resolved_root not in resolved_target.parents:
+            raise _ContentRejected("traversal")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_content(path: Path, config: KnowledgeConfig, *, root: Path | None = None) -> _Content:
+    """Read, hash and decode one candidate; raises ``_ContentRejected``.
+
+    With ``root`` (every production call site) the bytes come from the
+    descriptor-relative walk of :func:`_open_under_root` — containment is
+    structural, not a later pathname comparison, and the same descriptor is
+    size-bounded and hashed: the PDF parser consumes these exact bytes, so a
+    citation's text provably belongs to the sha256 served. Without ``root``
+    (direct unit use) the file is opened no-follow with the same bounds.
+
+    Deterministic failure taxonomy (also the report's reason vocabulary):
+    ``symlink`` (a component refused the no-follow open — including a
+    symlinked parent swapped in after the scan), ``traversal`` (path outside
+    the root / ``..`` component), ``unreadable`` (OSError / not a regular
+    file), ``oversize`` (byte or text bound), ``binary`` (NUL sniff),
+    ``decode`` (not UTF-8), ``empty`` (no retrievable text), ``pdf`` (parser
+    failure), ``unsupported`` (pypdf absent — scan-time classification
+    normally prevents reaching it).
+    """
+    import os
+
+    if root is not None:
+        try:
+            rel = path.relative_to(root)
+        except ValueError:
+            raise _ContentRejected("traversal") from None
+        fd = _open_under_root(root, rel)
+    else:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+        except OSError as exc:
+            import errno
+
+            if getattr(exc, "errno", None) == errno.ELOOP:
+                raise _ContentRejected("symlink") from None
+            raise _ContentRejected("unreadable") from None
+    try:
+        import hashlib
+        import stat as stat_module
+
         info = os.fstat(fd)
         if not stat_module.S_ISREG(info.st_mode):
             raise _ContentRejected("unreadable")
-        if info.st_size > max_bytes:
+        if info.st_size > config.max_file_bytes:
             raise _ContentRejected("oversize")
         chunks: list[bytes] = []
-        remaining = max_bytes + 1
+        remaining = config.max_file_bytes + 1
         while remaining > 0:
             piece = os.read(fd, min(1 << 20, remaining))
             if not piece:
@@ -591,49 +697,12 @@ def _open_and_read_bounded(path: Path, max_bytes: int) -> bytes:
             chunks.append(piece)
             remaining -= len(piece)
         raw = b"".join(chunks)
-        if len(raw) > max_bytes:
+        if len(raw) > config.max_file_bytes:
             raise _ContentRejected("oversize")
-        try:
-            path_info = os.stat(path, follow_symlinks=False)
-        except OSError:
-            raise _ContentRejected("replaced") from None
-        if (path_info.st_ino, path_info.st_dev) != (info.st_ino, info.st_dev):
-            raise _ContentRejected("replaced")
-        return raw
     finally:
         os.close(fd)
 
-
-def _read_content(path: Path, config: KnowledgeConfig, *, root: Path | None = None) -> _Content:
-    """Read, hash and decode one candidate; raises ``_ContentRejected``.
-
-    The bytes come from one no-follow, identity-checked, size-bounded
-    descriptor (see :func:`_open_and_read_bounded`); when ``root`` is given,
-    containment is re-validated at the read site so a replaced parent
-    directory cannot smuggle foreign content into a citation.  The PDF parser
-    consumes the *same* bytes that were hashed.
-
-    Deterministic failure taxonomy (also the report's reason vocabulary):
-    ``symlink`` (no-follow open refused), ``replaced`` (pathname no longer
-    names the opened file), ``traversal`` (containment re-check failed),
-    ``unreadable`` (OSError / not a regular file), ``oversize`` (byte or text
-    bound), ``binary`` (NUL sniff), ``decode`` (not UTF-8), ``empty`` (no
-    retrievable text), ``pdf`` (parser failure), ``unsupported`` (pypdf
-    absent — scan-time classification normally prevents reaching it).
-    """
-    import hashlib
-
-    from nexus_ai_agent.knowledge_retrieval.errors import SourceRejectedError
-    from nexus_ai_agent.knowledge_retrieval.scanner import validate_member
-
-    raw = _open_and_read_bounded(path, config.max_file_bytes)
-    if root is not None:
-        try:
-            validate_member(root, path)
-        except SourceRejectedError:
-            raise _ContentRejected("traversal") from None
     sha256 = hashlib.sha256(raw).hexdigest()
-
     if path.suffix.lower() == ".pdf":
         text, pages = _extract_pdf_text(raw, config.max_file_bytes)
     else:
