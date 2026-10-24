@@ -138,7 +138,19 @@ class KnowledgeRetrievalService:
         # store actually holds those sources. After the operator deletes
         # NEXUS_KNOWLEDGE_INDEX_PATH, a plain `index` must recreate it (the
         # documented contract) instead of skipping every file as unchanged.
-        store_present = (await self._index.inspect()).present
+        info = await self._index.inspect()
+        if info.model_mismatch:
+            # Reindexing only *changed* files under a new embedding space
+            # would mix incompatible vectors in one store — a full rebuild is
+            # the only honest next step (explicit, never implicit).
+            raise IndexUnavailableError(
+                "embedding model changed since this index was built — refusing "
+                "to mix embedding spaces during incremental indexing",
+                hint="run `nexus knowledge rebuild --yes` to rebuild the store "
+                "with the configured embedding model",
+                code="rebuild_required",
+            )
+        store_present = info.present
         counters = {"new": 0, "modified": 0, "unchanged": 0, "failed": 0, "chunks": 0}
         removed = 0
         errors: list[str] = []
@@ -349,6 +361,16 @@ class KnowledgeRetrievalService:
                 "knowledge index store is corrupt",
                 hint="run `nexus knowledge rebuild` to recreate the derived index",
             )
+        if info.model_mismatch:
+            # Vectors from a different embedding space must never be served:
+            # scores would be meaningless (silent garbage retrieval).
+            raise IndexUnavailableError(
+                "embedding model changed since this index was built — refusing "
+                "to serve vectors from a different embedding space",
+                hint="run `nexus knowledge rebuild --yes` to rebuild the store "
+                "with the configured embedding model",
+                code="rebuild_required",
+            )
         if not info.present:
             return SearchResponse(query=stripped, state=QueryState.EMPTY_INDEX)
 
@@ -441,6 +463,8 @@ class KnowledgeRetrievalService:
             degraded = "index_store_corrupt"
         elif not provider_ok:
             degraded = provider_reason
+        elif info.model_mismatch:
+            degraded = "embedding_model_changed_rebuild_required"
         elif records and ingested > 0 and not info.present:
             degraded = "index_missing_rebuild_required"
         elif info.load_error and not info.corrupt:

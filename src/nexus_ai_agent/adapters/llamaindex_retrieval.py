@@ -214,6 +214,23 @@ class LlamaIndexKnowledgeIndex:
         )
         return self._index
 
+    def _embedding_identity(self) -> str:
+        """Identity of the embedding space this store must have been built in.
+
+        Load-free (no model construction): mirrors the provider's
+        ``BaseEmbedding.model_name`` exactly — ``HashEmbedding.model_name``
+        and ``SentenceTransformerEmbedding.model_name`` — so a provider or
+        model-directory change is visible without paying for a load. Stored
+        in ``manifest.json`` on every write; compared during inspection.
+        """
+        provider = self._config.embedding_provider
+        if provider == "hash":
+            return f"nexus-hash-v1-{EMBEDDING_DIM}dim"
+        if provider == "sentence-transformers":
+            name = Path((self._config.embedding_model_path or "").strip()).name
+            return f"sentence-transformers:{name}"
+        return provider
+
     def _read_manifest(self) -> dict[str, object]:
         try:
             data = json.loads((self._store_dir() / _MANIFEST_NAME).read_text("utf-8"))
@@ -237,6 +254,9 @@ class LlamaIndexKnowledgeIndex:
             "generation": generation,
             "rebuilt_at": manifest.get("rebuilt_at") if not bump_generation else _utcnow(),
             "updated_at": _utcnow(),
+            # The embedding space this store belongs to; inspection refuses
+            # to serve or incrementally feed a store built with another one.
+            "embedding_model": self._embedding_identity(),
         }
         try:
             (self._store_dir() / _MANIFEST_NAME).write_text(
@@ -373,6 +393,23 @@ class LlamaIndexKnowledgeIndex:
                 generation=generation if isinstance(generation, int) else None,
                 rebuilt_at=rebuilt_at if isinstance(rebuilt_at, str) else None,
             )
+        recorded_model = manifest.get("embedding_model")
+        recorded = recorded_model if isinstance(recorded_model, str) else None
+        active = self._embedding_identity()
+        if recorded != active:
+            # Embedding-space mismatch (provider/model swapped, or a legacy
+            # manifest without an identity): vectors from the old space must
+            # never be served or fed — the operator rebuilds deliberately.
+            return StoreInfo(
+                present=True,
+                corrupt=False,
+                node_count=None,
+                generation=generation if isinstance(generation, int) else None,
+                rebuilt_at=rebuilt_at if isinstance(rebuilt_at, str) else None,
+                embedding_model=recorded,
+                model_mismatch=True,
+                load_error="embedding_model_changed_rebuild_required",
+            )
         try:
             index = self._load_or_create()
             ref_infos = index.docstore.get_all_ref_doc_info()  # type: ignore[attr-defined]
@@ -383,6 +420,7 @@ class LlamaIndexKnowledgeIndex:
                 node_count=node_count,
                 generation=generation if isinstance(generation, int) else None,
                 rebuilt_at=rebuilt_at if isinstance(rebuilt_at, str) else None,
+                embedding_model=active,
             )
         except IndexUnavailableError as exc:
             if exc.code == "embedding":

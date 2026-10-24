@@ -94,7 +94,12 @@ States are explicit — `ok`, `empty_query`, `empty_index`, `no_matches` — and
 ## 6. Persistence and derived state
 
 The store lives under `NEXUS_KNOWLEDGE_INDEX_PATH` (marker `index_store.json`, generation
-stamps in `manifest.json`). It is **derived state**: deleting the directory and running
+stamps **and the embedding-space identity** in `manifest.json`). The recorded identity
+mirrors the provider's `model_name` (`nexus-hash-v1-256dim`, `sentence-transformers:<dir>`):
+switching provider or model directory means the stored vectors belong to a *different
+embedding space*, so inspection reports `embedding_model_changed_rebuild_required`,
+`search` and plain `index` refuse with `error[rebuild_required]` (no mixed spaces, no
+partial re-ingest), and `nexus knowledge rebuild --yes` is the explicit recovery. It is **derived state**: deleting the directory and running
 `nexus knowledge index` (or `rebuild`) recreates it from SQLite + the source roots. SQLite
 (`knowledgesource`, migration `d4e1c0a79b21`) is the authority for identity, hashes, status
 and counts.

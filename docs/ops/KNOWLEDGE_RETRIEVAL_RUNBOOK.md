@@ -39,7 +39,7 @@ stack trace.
 
 | Field | Healthy | Investigate when |
 |---|---|---|
-| `degraded` / `degraded_reason` | `false` / `null` | see §7 of the architecture doc: `index_store_corrupt` → §4 below; `embedding_model_directory_missing` → prefetch the model; `index_missing_rebuild_required` → restore files or rebuild; `index_inspect_failed` → filesystem permissions |
+| `degraded` / `degraded_reason` | `false` / `null` | see §7 of the architecture doc: `index_store_corrupt` → §4 below; `embedding_model_directory_missing` → prefetch the model; `embedding_model_changed_rebuild_required` → `nexus knowledge rebuild --yes` (embedding space swapped); `index_missing_rebuild_required` → restore files or rebuild; `index_inspect_failed` → filesystem permissions |
 | `store_present` | `true` after first index | `false` with `source_count > 0` ⇒ rebuild |
 | `error_count` | `0` | per-file failures listed by `sources list` (`status=error`); fix the file and rerun `index` — next run converges |
 | `node_count` | observed count of nodes currently in the store | it *decreases* legitimately when a source is unregistered or removed — compare against `source_count`/registry `chunks`, not against history; only rebuild if `store_present` is true but `node_count` is 0 while `ingested_count > 0` |
@@ -59,7 +59,11 @@ stack trace.
   disappears from search immediately.
 - **Database restored from backup**: registry and store may disagree on sha256; search
   drops mismatches (`dropped_stale`) instead of serving them — run `rebuild` to resync.
-- **Config swap to `sentence-transformers` fails**: reason is in status; prefetch §4 of the
+- **Provider/model changed** (status shows `embedding_model_changed_rebuild_required`,
+  commands exit `error[rebuild_required]`): the store's vectors belong to the previous
+  embedding space — run `nexus knowledge rebuild --yes`; plain `index` deliberately
+  refuses rather than mixing spaces.
+- **Config swap to `sentence-transformers`** fails: reason is in status; prefetch §4 of the
   architecture doc, or stay on `hash`.
 
 ## 5. Safety notes

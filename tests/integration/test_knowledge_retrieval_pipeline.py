@@ -367,3 +367,50 @@ async def test_provider_failure_is_not_store_corruption(kb_env: Path, monkeypatc
     with pytest.raises(IndexUnavailableError) as caught:
         await _service().search("stored content")
     assert caught.value.code == "embedding"
+
+
+async def test_embedding_model_change_requires_explicit_rebuild(kb_env: Path) -> None:
+    """A store built in another embedding space is never served or fed.
+
+    Review finding: provider/model identity was not recorded, so swapping
+    embedders silently scored old-space vectors with the new model (garbage
+    retrieval) and incremental indexing would have mixed spaces. The manifest
+    now records the embedding identity; inspection refuses on mismatch and
+    both `search` and `index_sources` demand an explicit rebuild.
+    """
+    import json
+
+    (kb_env / "doc.md").write_text("Embedding space content about tundra health.")
+    service = _service()
+    assert (await service.index_sources()).ingested == 1
+    assert (await service.search("tundra health")).state == QueryState.OK
+
+    index_dir = Path(str(settings_module.get_settings().knowledge_index_path))
+    manifest_path = index_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest.get("embedding_model") == "nexus-hash-v1-256dim"
+
+    # Simulate a provider/model swap: the store keeps the old identity while
+    # configuration now implies another one.
+    manifest["embedding_model"] = "sentence-transformers:some-other-model"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    status = await _service().status()
+    assert status.degraded_reason == "embedding_model_changed_rebuild_required"
+    assert status.store_present is True and status.store_corrupt is False
+
+    with pytest.raises(IndexUnavailableError) as search_error:
+        await _service().search("tundra health")
+    assert search_error.value.code == "rebuild_required"
+
+    with pytest.raises(IndexUnavailableError) as index_error:
+        await _service().index_sources()  # no silent partial re-ingest
+    assert index_error.value.code == "rebuild_required"
+
+    rebuilt = await _service().rebuild()
+    assert rebuilt.rebuilt is True
+    healed = await _service().search("tundra health")
+    assert healed.state == QueryState.OK
+    manifest_after = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest_after.get("embedding_model") == "nexus-hash-v1-256dim"
+    assert (await _service().status()).degraded_reason is None

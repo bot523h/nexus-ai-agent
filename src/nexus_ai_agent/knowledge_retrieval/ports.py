@@ -56,6 +56,12 @@ class StoreInfo:
     generation: int | None
     rebuilt_at: str | None
     load_error: str = ""
+    #: Embedding-space identity recorded in the store manifest at build time.
+    embedding_model: str | None = None
+    #: True when the store was built with a different embedding space than
+    #: the currently configured provider/model — search and incremental
+    #: indexing must refuse (rebuild required) instead of mixing vectors.
+    model_mismatch: bool = False
 
 
 @runtime_checkable
