@@ -166,7 +166,7 @@ class LiteLLMRoutingProvider(LLMProvider):
             # litellm's retry warnings off stdout, which the CLI's ``--json``
             # modes rely on.
             os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-            from litellm import Router
+            from litellm.router import Router
 
             router = Router(
                 model_list=[self._deployment_to_model(d) for d in self._chain],
