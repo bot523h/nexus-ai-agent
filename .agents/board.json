@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-24T04:05:54Z",
+  "updated_at": "2026-10-24T04:47:52Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -3898,7 +3898,7 @@
       ],
       "owner_hint": "Bootstrap from next_work after task-254 merge; claim only on the dedicated task-264 branch.",
       "agent_branch": "arena/task-264-passport-attempt-id-alignment",
-      "claimed_at": "2026-10-11T17:48:04Z",
+      "claimed_at": "2026-10-24T04:47:52Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
