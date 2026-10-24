@@ -602,6 +602,10 @@ async def test_max_files_budget_never_deletes_unprocessed_sources(
     capped, _ = make_service(roots, tmp_path, max_files=1, fake=index)
     report = await capped.index_sources()
     assert report.truncated is True
+    # Budget truncation is a *processing* limit, not scan incompleteness:
+    # presence was fully observed, so the completeness verdict stays true.
+    assert report.scan_complete is True
+    assert report.incomplete_roots == ()
     assert report.removed == 0, "budget-skipped source must never be treated as stale"
     assert {row.path for row in await capped.list_sources()} == {"alpha.md", "zeta.md"}
     survivor = await capped.search("quantum turnips")
@@ -666,3 +670,212 @@ async def test_repository_timestamps_are_naive_utc(
     kept_dt = _datetime.fromisoformat(kept.indexed_at)
     assert kept_dt == naive and kept_dt.tzinfo is None
     await repository.delete_many(["naive-ts-1", "naive-ts-2"])
+
+
+# ── incomplete-scan data-loss guards (P0: presence-unknown ≠ absence) ────
+
+
+async def test_report_exposes_scan_completeness(
+    roots: Path, tmp_path: Path, db_ready: Path
+) -> None:
+    """The report must carry an explicit scan-completeness verdict."""
+    (roots / "note.md").write_text("Completeness reporting baseline content.")
+    service, _ = make_service(roots, tmp_path)
+    report = await service.index_sources()
+    assert report.scan_complete is True
+    assert report.incomplete_roots == ()
+    payload = report.as_dict()
+    assert payload["scan_complete"] is True
+    assert payload["incomplete_roots"] == []
+
+
+async def test_unreadable_nested_directory_preserves_subtree_evidence(
+    roots: Path, tmp_path: Path, db_ready: Path
+) -> None:
+    """An unreadable nested directory must never delete the rows under it.
+
+    Presence under a failed directory is UNKNOWN — the walk cannot prove the
+    sources are gone, so their registry rows and index evidence survive, the
+    run reports the incomplete scan, and a later run (permissions restored)
+    reconciles normally.
+    """
+    import os
+
+    sub = roots / "sub"
+    locked = sub / "locked"
+    locked.mkdir(parents=True)
+    (sub / "keep.md").write_text("Visible healthy runbook content.")
+    (locked / "inner.md").write_text("Nested content about quantum tunnels.")
+    service, _ = make_service(roots, tmp_path)
+
+    first = await service.index_sources()
+    assert first.ingested == 2 and first.scan_complete is True
+
+    os.chmod(locked, 0o000)
+    try:
+        second = await service.index_sources()
+        # Data-loss guard first: nothing may be deleted from an incomplete scan.
+        assert second.removed == 0, "incomplete scan must never delete registry rows"
+        rows = {row.path for row in await service.list_sources()}
+        assert rows == {"sub/keep.md", "sub/locked/inner.md"}
+        survivor = await service.search("quantum tunnels")
+        assert survivor.state is QueryState.OK
+        # The incomplete condition is reported explicitly.
+        assert second.scan_complete is False
+        assert second.incomplete_roots
+        assert any("scan incomplete" in err for err in second.errors)
+    finally:
+        os.chmod(locked, 0o755)
+
+    # Recovery: permissions restored → complete scan reconciles normally.
+    third = await service.index_sources()
+    assert third.scan_complete is True
+    assert third.incomplete_roots == ()
+    assert third.removed == 0
+    assert {row.path for row in await service.list_sources()} == {
+        "sub/keep.md",
+        "sub/locked/inner.md",
+    }
+    assert (await service.search("quantum tunnels")).state is QueryState.OK
+
+
+async def test_failed_walk_traversal_preserves_unseen_subtree(
+    roots: Path, tmp_path: Path, db_ready: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A traversal error mid-walk is not proof that its subtree vanished.
+
+    The walker reports the failure through ``onerror``; the subtree is never
+    visited. Without proof of completion the stale step must keep those rows,
+    and the run must say the scan was incomplete.
+    """
+    import os as os_module
+
+    sub = roots / "sub"
+    sub.mkdir()
+    (sub / "visible.md").write_text("Visible content about routers.")
+    ghost = roots / "ghost"
+    ghost.mkdir()
+    (ghost / "hidden.md").write_text("Hidden content about bridges.")
+    service, _ = make_service(roots, tmp_path)
+    assert (await service.index_sources()).ingested == 2
+
+    import nexus_ai_agent.knowledge_retrieval.scanner as scanner_module
+
+    real_walk = os_module.walk
+
+    def failing_walk(top, *args, onerror=None, **kwargs):
+        # Simulate a permission failure while listing ``ghost``: the error is
+        # reported to onerror and the subtree is never yielded.
+        fired = False
+        for dirpath, dirnames, filenames in real_walk(top, *args, onerror=None, **kwargs):
+            if onerror is not None and not fired:
+                fired = True
+                onerror(
+                    PermissionError(
+                        13,
+                        "Permission denied",
+                        os_module.fspath(type(top)(top) / "ghost"),
+                    )
+                )
+            dirnames[:] = [name for name in dirnames if name != "ghost"]
+            yield dirpath, dirnames, filenames
+
+    monkeypatch.setattr(scanner_module.os, "walk", failing_walk)
+    try:
+        second = await service.index_sources()
+        assert second.removed == 0, "unvisited subtree must not be treated as deleted"
+        rows = {row.path for row in await service.list_sources()}
+        assert rows == {"sub/visible.md", "ghost/hidden.md"}
+        assert (await service.search("hidden bridges")).state is QueryState.OK
+        assert second.scan_complete is False
+        assert second.incomplete_roots
+    finally:
+        monkeypatch.undo()
+
+    # Recovery: traversal succeeds again → complete run, evidence intact.
+    third = await service.index_sources()
+    assert third.scan_complete is True
+    assert third.removed == 0
+    assert {row.path for row in await service.list_sources()} == {
+        "sub/visible.md",
+        "ghost/hidden.md",
+    }
+
+
+async def test_missing_root_preserves_registry_rows_until_it_returns(
+    tmp_path: Path, db_ready: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A root vanishing after validation keeps its rows; absence is unknown.
+
+    The scanner docstring promises the soft path ("the registry keeps its
+    sources; the next run reconciles") for a root that disappears between
+    configuration validation and the walk. This regression pins it end-to-end
+    on a real SQLite registry with two roots: validation still passes (the
+    root exists), then the root vanishes before the walk — stale cleanup must
+    not treat that as proof of absence.
+    """
+    import shutil
+
+    root_a = tmp_path / "roota"
+    root_b = tmp_path / "rootb"
+    root_a.mkdir()
+    root_b.mkdir()
+    (root_a / "keep.md").write_text("Root A stable content about storage.")
+    (root_b / "gone.md").write_text("Root B volatile content about caches.")
+    service, _ = make_service(root_a, tmp_path, source_roots=(root_a.resolve(), root_b.resolve()))
+
+    first = await service.index_sources()
+    assert first.ingested == 2 and first.scan_complete is True
+
+    # Vanish root B exactly in the documented race window: after
+    # require_roots() validation, before the walk starts.
+    import nexus_ai_agent.knowledge_retrieval.service as service_module
+
+    real_scan = service_module.scan_roots
+
+    def vanishing_scan(config, roots):
+        if root_b.exists():
+            shutil.rmtree(root_b)
+        return real_scan(config, roots)
+
+    monkeypatch.setattr(service_module, "scan_roots", vanishing_scan)
+    second = await service.index_sources()
+    assert second.removed == 0, "missing root must not delete its registry rows"
+    rows = {row.path for row in await service.list_sources()}
+    assert rows == {"keep.md", "gone.md"}
+    assert second.scan_complete is False
+    assert any(root_b.name in r for r in second.incomplete_roots), second.incomplete_roots
+    # Its evidence is still served: unknown presence, not proven absent.
+    assert (await service.search("volatile caches")).state is QueryState.OK
+    monkeypatch.undo()
+
+    # Recovery: the root returns -> complete scan reconciles in place.
+    root_b.mkdir()
+    (root_b / "gone.md").write_text("Root B volatile content about caches.")
+    third = await service.index_sources()
+    assert third.scan_complete is True
+    assert third.incomplete_roots == ()
+    assert third.removed == 0
+    assert {row.path for row in await service.list_sources()} == {"keep.md", "gone.md"}
+    assert (await service.search("volatile caches")).state is QueryState.OK
+
+
+async def test_complete_scan_still_deletes_genuinely_missing_sources_with_completeness_flag(
+    roots: Path, tmp_path: Path, db_ready: Path
+) -> None:
+    """Deletion semantics are not weakened: a completed scan still removes.
+
+    Complements test_removed_files_disappear_from_index_and_registry by
+    asserting the completeness verdict that licenses the deletion.
+    """
+    (roots / "keep.md").write_text("Kept content about switches.")
+    (roots / "drop.md").write_text("Dropped content about modems.")
+    service, _ = make_service(roots, tmp_path)
+    await service.index_sources()
+
+    (roots / "drop.md").unlink()
+    report = await service.index_sources()
+    assert report.scan_complete is True, "deletion only happens with a complete scan"
+    assert report.incomplete_roots == ()
+    assert report.removed == 1
+    assert [row.path for row in await service.list_sources()] == ["keep.md"]

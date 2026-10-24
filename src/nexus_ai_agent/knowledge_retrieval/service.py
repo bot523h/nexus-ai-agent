@@ -163,6 +163,12 @@ class KnowledgeRetrievalService:
             note(f"{issue.path}: {issue.reason}")
         if truncated:
             note(f"budget: max_files={self._config.max_files} reached, run truncated")
+        if outcome.incomplete_roots:
+            note(
+                "scan incomplete: traversal failed for "
+                f"{', '.join(outcome.incomplete_roots)} — presence unknown there; "
+                "stale cleanup skipped for those roots"
+            )
 
         for candidate in candidates:
             source_id = source_id_for(candidate.root, candidate.rel_path)
@@ -254,8 +260,22 @@ class KnowledgeRetrievalService:
         # Stale cleanup: registry rows whose source is no longer offered by
         # ANY configured root (deleted, renamed, root removed from config).
         # Sources merely skipped by the max_files budget remain in
-        # ``scanned_ids`` and are never touched here.
-        stale = [source_id for source_id in registry if source_id not in scanned_ids]
+        # ``scanned_ids`` and are never touched here. Roots whose traversal
+        # did not complete (missing / unreadable / walk error) can never
+        # prove absence — rows under them are preserved until a complete
+        # scan says otherwise (intentional removal = drop the root from
+        # config, which then licenses cleanup on the next complete run).
+        def _norm_root(value: str) -> str:
+            from pathlib import Path as _Path
+
+            return str(_Path(value).resolve(strict=False))
+
+        incomplete_roots = {_norm_root(root) for root in outcome.incomplete_roots}
+        stale = [
+            source_id
+            for source_id, record in registry.items()
+            if source_id not in scanned_ids and _norm_root(record.root) not in incomplete_roots
+        ]
         if stale:
             removed = await self._drop_sources(stale)
 
@@ -276,6 +296,8 @@ class KnowledgeRetrievalService:
             failed=counters["failed"],
             chunks_written=counters["chunks"],
             truncated=truncated,
+            scan_complete=not outcome.incomplete_roots,
+            incomplete_roots=outcome.incomplete_roots,
             errors=tuple(errors),
             duration_s=time.monotonic() - started,
         )
@@ -289,6 +311,7 @@ class KnowledgeRetrievalService:
             failed=report.failed,
             chunks=report.chunks_written,
             truncated=report.truncated,
+            scan_complete=report.scan_complete,
             duration_s=round(report.duration_s, 3),
         )
         return report
@@ -322,6 +345,8 @@ class KnowledgeRetrievalService:
             failed=report.failed,
             chunks_written=report.chunks_written,
             truncated=report.truncated,
+            scan_complete=report.scan_complete,
+            incomplete_roots=report.incomplete_roots,
             errors=report.errors,
             duration_s=time.monotonic() - started,
             rebuilt=True,

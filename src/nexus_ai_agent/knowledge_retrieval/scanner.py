@@ -120,10 +120,18 @@ class ScannedSource:
 
 @dataclass(frozen=True, slots=True)
 class ScanOutcome:
-    """Deterministic scan result: sorted candidates + classified refusals."""
+    """Deterministic scan result: sorted candidates + classified refusals.
+
+    ``incomplete_roots`` lists (as ``str(root)``) every configured root whose
+    traversal did **not** complete: the directory was missing/unreadable, or
+    ``os.walk`` reported a mid-walk error through ``onerror``. For those roots
+    the scan is *not* proof of absence — the service must preserve existing
+    registry/index evidence under them instead of running stale cleanup.
+    """
 
     sources: tuple[ScannedSource, ...]
     issues: tuple[ScanIssue, ...]
+    incomplete_roots: tuple[str, ...] = ()
 
 
 def is_secret_filename(name: str) -> bool:
@@ -195,12 +203,42 @@ def scan_roots(config: KnowledgeConfig, roots: tuple[Path, ...]) -> ScanOutcome:
     """
     candidates: list[ScannedSource] = []
     issues: list[ScanIssue] = []
+    incomplete: set[str] = set()
+
+    def _walk_error(root: Path, err: OSError) -> None:
+        """Mid-walk failure: the affected subtree's contents are UNKNOWN.
+
+        ``os.walk`` without ``onerror`` would swallow the error and silently
+        skip the subtree — which the service could then mistake for "all
+        sources deleted". Mark the whole root incomplete instead and surface
+        the failure as a readable issue.
+        """
+        incomplete.add(str(root))
+        failing = getattr(err, "filename", None)
+        if failing:
+            try:
+                shown: str = os.path.relpath(str(failing), str(root))
+            except (ValueError, OSError):
+                shown = str(failing)
+        else:
+            shown = "."
+        issues.append(ScanIssue(path=shown or ".", reason="unreadable"))
 
     for root in roots:
         if not root.is_dir():
+            # Vanished (or never existed): absence under it is unknown.
+            incomplete.add(str(root))
             issues.append(ScanIssue(path=str(root), reason="unreadable"))
             continue
-        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+
+        def _on_walk_error(err: OSError, _root: Path = root) -> None:
+            _walk_error(_root, err)
+
+        for dirpath, dirnames, filenames in os.walk(
+            root,
+            followlinks=False,
+            onerror=_on_walk_error,
+        ):
             current = Path(dirpath)
             # Prune excluded directories in place (also drops symlinked dirs,
             # which os.walk would otherwise list but never follow).
@@ -231,4 +269,8 @@ def scan_roots(config: KnowledgeConfig, roots: tuple[Path, ...]) -> ScanOutcome:
 
     candidates.sort(key=lambda item: (str(item.root), item.rel_path))
     issues.sort(key=lambda item: (item.reason, item.path))
-    return ScanOutcome(sources=tuple(candidates), issues=tuple(issues))
+    return ScanOutcome(
+        sources=tuple(candidates),
+        issues=tuple(issues),
+        incomplete_roots=tuple(sorted(incomplete)),
+    )

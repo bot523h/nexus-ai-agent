@@ -48,7 +48,12 @@ scan (symlink/traversal/secret/oversize guards)
 - A crash between the two steps leaves an uncommitted derived state; the next run sees the
   registry without that sha and re-ingests — convergent, never half-trusted.
 - `replace_source` is delete-then-add per source id, so a modified file never leaves its old
-  version retrievable. Registry rows for files that vanished are dropped (`removed` counter).
+  version retrievable. Registry rows for files that vanished are dropped (`removed` counter) —
+  but only from a **completed** scan: if a root is missing, unreadable, or fails mid-walk
+  (`os.walk` `onerror`), presence under it is unknown, so those rows and their index evidence
+  are preserved, `IngestReport.scan_complete` is false with `incomplete_roots` and an explicit
+  `scan incomplete` error note, and the next complete run reconciles (budget truncation never
+  affects completeness; dropping the root from config remains the intentional-removal path).
 - `rebuild` = wipe index + registry rows, re-ingest everything, generation + 1. It is the
   recovery tool for every store-level corruption (§7).
 

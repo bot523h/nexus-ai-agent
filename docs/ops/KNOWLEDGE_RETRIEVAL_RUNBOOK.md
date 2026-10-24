@@ -54,6 +54,13 @@ stack trace.
 - **Interrupted index run**: rerun `index`. Ingest writes the index first and commits the
   registry second, so a crash converges on the next run; rows in `error` self-heal when the
   file is indexable again.
+- **Incomplete scan** (`index --json` shows `scan_complete: false`, non-empty
+  `incomplete_roots`, and a `scan incomplete: …` error note): a root was missing,
+  unreadable, or failed mid-walk — **nothing was deleted** there (presence unknown, not
+  absent; registry rows and index evidence preserved). Restore access/mount and rerun
+  `index` to reconcile, or remove the root from `NEXUS_KNOWLEDGE_SOURCE_ROOTS` if it is
+  gone for good — dropping the root from config is what licenses stale cleanup for it on
+  the next complete run.
 - **Source root rotated/renamed**: update `NEXUS_KNOWLEDGE_SOURCE_ROOTS`; the next `index`
   drops registry rows whose files no longer exist (`removed` counter) — evidence for them
   disappears from search immediately.

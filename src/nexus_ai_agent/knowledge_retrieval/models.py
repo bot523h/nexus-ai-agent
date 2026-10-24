@@ -150,6 +150,11 @@ class IngestReport:
     failed: int = 0
     chunks_written: int = 0
     truncated: bool = False
+    #: False when any configured root's traversal did not complete (missing,
+    #: unreadable, or walk error): registry evidence under those roots was
+    #: preserved because absence could not be proven.
+    scan_complete: bool = True
+    incomplete_roots: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     duration_s: float = 0.0
     rebuilt: bool = False
@@ -169,6 +174,8 @@ class IngestReport:
             "failed": self.failed,
             "chunks_written": self.chunks_written,
             "truncated": self.truncated,
+            "scan_complete": self.scan_complete,
+            "incomplete_roots": list(self.incomplete_roots),
             "errors": list(self.errors),
             "duration_s": round(self.duration_s, 3),
             "rebuilt": self.rebuilt,
