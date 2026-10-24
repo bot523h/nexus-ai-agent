@@ -34,19 +34,28 @@ _ONBOARDING_STEPS = [
 
 
 async def is_first_time_user(user_id: int, db_session_factory: Any) -> bool:
-    """Check if this is the user's first interaction with the bot."""
+    """Check if this is the user's first interaction with the bot.
+
+    Only *database* failures (locked file, missing table during a migration
+    window, lost Postgres connection) degrade to "first time": onboarding a
+    returning user is the cheaper mistake. Programming errors are allowed to
+    propagate — the previous blanket ``except Exception`` turned every
+    ``AttributeError`` into "first time" and hid a broken session factory for
+    weeks (audit finding A-01).
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+    from sqlmodel import select as _sel
+
+    from nexus_ai_agent.storage.models import UserLanguage
+
     try:
-        from sqlmodel import select as _sel
-
-        from nexus_ai_agent.storage.models import UserLanguage
-
         async with db_session_factory() as session:
             existing = (
                 await session.exec(_sel(UserLanguage).where(UserLanguage.user_id == user_id))
             ).first()
             return existing is None
-    except Exception:
-        # If we can't check, assume first time (better to onboard than not)
+    except SQLAlchemyError as exc:
+        logger.warning("onboarding first-time check degraded", user_id=user_id, error=str(exc))
         return True
 
 
