@@ -246,7 +246,7 @@ def test_bad_inputs_are_typed_errors(engine: str, media: dict[str, Path], tmp_pa
     with pytest.raises(AnalysisInputError, match="not a regular file"):
         analyzer.silences(tmp_path)
     junk = tmp_path / "junk.wav"
-    junk.write_text("this is not media at all")
+    junk.write_bytes(b"\x00\x01 not media at all \xff\xfe" * 8)  # binary, but no container
     with pytest.raises(AnalysisFailedError):
         analyzer.silences(junk)
     for bad in (-100.0, -9.0, 0.0):
@@ -426,7 +426,7 @@ def _fake(tmp_path: Path, body: str, name: str = "fake-ffmpeg") -> str:
 @pytest.fixture()
 def media_file(tmp_path: Path) -> Path:
     path = tmp_path / "input.wav"
-    path.write_bytes(b"RIFF....WAVEfmt original bytes")
+    path.write_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt \x00 original bytes")
     return path
 
 

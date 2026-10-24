@@ -62,6 +62,19 @@ operations that consume evidence only add reversible markers or return advice, w
 `timeline.mark` already allows — no privilege is gained. If evidence ever gates something
 irreversible, it must be signed (the pack trust root, ADR 0006, is the model).
 
+## 4b. Indirection formats are refused (HLS / concat / SDP / DASH)
+
+FFmpeg has text formats that *name other files or URLs* (HLS `.m3u8`, `ffconcat`, SDP, DASH `.mpd`);
+local-file-read attacks through them are a known class (CVE-2016-1897/1898). Defence in depth:
+
+1. `-protocol_whitelist file` before `-i` (no network, no `data:`/`crypto:`/`subfile:` chains);
+2. the analyzer sniffs the first KiB and **refuses any non-binary input** with `AnalysisInputError`
+   *before any process is started* (real containers carry NUL/high bytes; every indirection format is text);
+3. error messages echo the path only, never file content.
+
+Verified live on FFmpeg 6.1.1 (system) and 7.0.2 (bundled). Not independently confirmed: the exact CVE
+ids and versions in an external "BLOCKED" report that cited none checkable from this repository.
+
 ## 5. Known limits (stated, not hidden)
 
 * Scene detection is FFmpeg's scene-score heuristic: hard cuts are reliable, slow dissolves
