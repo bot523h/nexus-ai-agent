@@ -1,10 +1,13 @@
-"""Fail-closed proofs for the single-``gates_owner`` law (schema 2).
+"""Advisory ``gates_owner`` proofs for ``agent_board.py check`` (schema 2).
 
-``agent_board.py check`` must return exit 2 (UNVERIFIABLE) when the live board
-holds zero or multiple active, unexpired ``gates_owner`` claims, and must not
-treat an *expired* gate holder as live. The referee already enforces this
-(``cmd_check`` -> ``_active_gates_owners``); these tests pin the behaviour so a
-future edit cannot silently turn a broken governance state into a clean pass.
+POLICY (2026-10-22, PR #211): there is **no mandatory global gates_owner**.
+Every agent runs its own gates and records its own evidence; ``check`` must not
+be blocked by a missing, doubled, or expired gate holder. ``_active_gates_owners``
+therefore returns ``(live_owners, malformed)`` as *information*, and ``cmd_check``
+stays exit 0 regardless of how many owners exist. These tests pin that law so a
+future edit cannot silently reintroduce a fail-closed gate requirement — while
+still proving the **lease-liveness** property that decides which claims are
+"live" at all (the mutation probe below fails if the expiry check is dropped).
 
 Kept in its own module, separate from ``tests/unit/test_agent_board.py``, on
 purpose: several long-lived ``arena/*`` branches still edit that file, and a
@@ -100,52 +103,63 @@ def _wire(module: ModuleType, monkeypatch: pytest.MonkeyPatch, board: dict) -> N
     )
 
 
-def test_zero_live_gates_owners_is_exit_2(cli: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No live gate holder must never be reported as a clean pass."""
-    _wire(cli, monkeypatch, _board([_claim(task="no-gate", gates=False)]))
-    assert cli.cmd_check(_args()) == 2
-
-
-def test_multiple_live_gates_owners_is_exit_2(
+def test_zero_live_gates_owners_is_an_advisory_pass(
     cli: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Two live gate holders is an ambiguous governance state, not a healthy one."""
+    """No live gate holder is a valid governance state: check stays exit 0."""
+    _wire(cli, monkeypatch, _board([_claim(task="no-gate", gates=False)]))
+    owners, malformed = cli._active_gates_owners(cli.load_board())
+    assert owners == [] and malformed == []
+    assert cli.cmd_check(_args()) == 0
+
+
+def test_multiple_live_gates_owners_is_an_advisory_pass(
+    cli: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two live gate holders is informative, not an ambiguous failure."""
     board = _board([_claim(task="gate-a", gates=True), _claim(task="gate-b", gates=True)])
     _wire(cli, monkeypatch, board)
-    assert cli.cmd_check(_args()) == 2
+    owners, malformed = cli._active_gates_owners(board)
+    assert len(owners) == 2 and malformed == []
+    assert cli.cmd_check(_args()) == 0
 
 
 def test_expired_gates_owner_is_not_live(cli: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An expired gate holder is a departed holder: zero live owners, exit 2."""
+    """An expired gate holder is a departed holder: not counted as live."""
     board = _board(
         [_claim(task="gate", gates=True, claimed_at="2025-01-01T00:00:00Z", ttl_hours=1)]
     )
     _wire(cli, monkeypatch, board)
     owners, malformed = cli._active_gates_owners(board)
     assert owners == [] and malformed == []
-    assert cli.cmd_check(_args()) == 2
+    assert cli.cmd_check(_args()) == 0
 
 
-def test_exactly_one_live_gates_owner_is_exit_0(
+def test_exactly_one_live_gates_owner_is_reported(
     cli: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Positive control: the harness reaches exit 0 only when the law holds."""
-    _wire(cli, monkeypatch, _board([_claim(task="gate", gates=True)]))
+    """Positive control: a single live owner is reported as live."""
+    board = _board([_claim(task="gate", gates=True)])
+    _wire(cli, monkeypatch, board)
+    owners, malformed = cli._active_gates_owners(board)
+    assert len(owners) == 1 and malformed == []
     assert cli.cmd_check(_args()) == 0
 
 
 def test_expired_owner_proof_is_sensitive_to_the_liveness_gate(
     cli: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Mutation probe: if liveness were ignored, the expired case would pass.
+    """Mutation probe: dropping the lease-expiry check makes the expired owner live.
 
-    Patching ``_claim_live`` to always return True (mutation M: drop the lease
-    expiry check) turns the expired-owner board into a false clean pass, which
-    proves the exit-2 assertion above is exactly the liveness safety property.
+    Patching ``_claim_live`` to always return True (mutation M: remove the lease
+    expiry check) turns the expired claim into a live owner, which proves the
+    ``owners == []`` assertion above is exactly the liveness safety property and
+    not an artifact of the advisory policy.
     """
     board = _board(
         [_claim(task="gate", gates=True, claimed_at="2025-01-01T00:00:00Z", ttl_hours=1)]
     )
     _wire(cli, monkeypatch, board)
     monkeypatch.setattr(cli, "_claim_live", lambda claim: True)  # mutation M
-    assert cli.cmd_check(_args()) == 0
+    owners, malformed = cli._active_gates_owners(board)
+    assert len(owners) == 1 and malformed == []

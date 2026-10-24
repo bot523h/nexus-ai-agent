@@ -19,7 +19,7 @@
 | Python parity | the `test`-job selection on 3.10 / 3.11 / 3.12 | `python-parity` job (task-132) | yes |
 | Release lineage | tags + `VERSION` + lockstep on full history | `release-lineage` job (task-132) | yes |
 
-`make lint && make types && make test` is the local equivalent. **One agent owns the gates at a time** (`.agents/board.json` → `gates_owner`); everyone else may run read-only diagnostics but must not race the same CI job deliberately.
+`make lint && make types && make test` is the local equivalent. **Every agent runs the gates on its own branch and records the evidence (command, result, SHA).** A `gates_owner` claim (`.agents/board.json`) is optional and advisory — policy 2026-10-19 retired the mandatory single-owner rule — so no one must wait for it; still avoid deliberately racing the same CI job.
 
 ## 2. Taxonomy
 
@@ -43,7 +43,7 @@ flowchart LR
 **Determinism rules**
 - No network in unit tests; external services are faked (`llm/fake_llm.py`, `tests/unit/surface_fakes.py`).
 - Time is injected or frozen; ordering is asserted explicitly (no "usually sorted").
-- Golden files (`tests/architecture/legacy_baseline.json`, checkpoint fingerprints, caption/tone fixtures) are **updated by a human-run command** (`nexus golden update`), never auto-rewritten by a test run.
+- Golden files (`tests/architecture/legacy_baseline.json`, checkpoint fingerprints, caption/tone fixtures) are **updated by a human-run command** (`nexus checkpoints golden update --yes`), never auto-rewritten by a test run.
 - Real binaries are used where "it worked" would otherwise be a guess: the render lane runs genuine FFmpeg encodes supplied by the `imageio-ffmpeg` wheel (a dev extra), and CI installs it.
 - Byte stability is asserted where determinism is claimed (canonical JSON, filtergraph strings, `.srt`/`.vtt`/`.ass` output).
 

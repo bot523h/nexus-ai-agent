@@ -43,7 +43,7 @@ recognised:
 
 ```markdown
 <!-- truth:file=src/nexus_ai_agent/cli.py symbol=run_bot -->
-<!-- truth-absent:file=src/nexus_ai_agent/agents/planner_agent.py symbol=real_planner -->
+<!-- truth-absent:file=src/nexus_ai_agent/agents/base.py symbol=real_planner -->
 ```
 
 `truth:` asserts the file (and, when given, the symbol) **exists**.

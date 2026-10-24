@@ -69,7 +69,28 @@ Chosen option: **3**.
 
 ## More Information
 
-- [`../../../AGENTS.md`](../../../AGENTS.md) — protocol contract (identity by branch, one gates owner, leases)
+> **Update 2026-10-19 (policy):** the "one gates owner" rule this ADR assumed was
+> retired. There is no mandatory global `gates_owner`; each agent runs its own
+> gates and records its own evidence, and a `gates_owner` claim is optional and
+> advisory. The rest of the decision (schema 2, leases, one owner per file-zone)
+> is unchanged.
+
+- [`../../../AGENTS.md`](../../../AGENTS.md) — protocol contract (identity by branch, leases; no mandatory gates owner)
 - [`../../../.agents/board.json`](../../../.agents/board.json) — the board itself
 - [`../../../scripts/agent_board.py`](../../../scripts/agent_board.py) — the CLI (unchanged command surface)
 - [`../REFERENCES.md`](../REFERENCES.md) §6
+
+## Authority reconciliation (Option B, 2026-10-22)
+
+Option B, chosen by the owner: **`.agents/board.json` on `main` is the single
+authoritative board.** `refs/nexus/board` is deprecated and non-authoritative;
+the shipped CLI never reads it and it cannot grant execution authority. Remote
+PR/worktree boards remain overlap evidence and do not supersede canonical state.
+The ref-aware authority model proposed in unmerged PR #218 is **not** adopted.
+
+Removing the deprecated ref is a separate audited operation: preserve the exact
+commit object, tree and board bytes (with their SHA-256), confirm the remote SHA
+immediately beforehand, and refuse removal when it differs. Removal uses an
+exact-SHA lease so no concurrent update is lost.
+
+Enforced by `tests/unit/test_board_authority_option_b.py`.
