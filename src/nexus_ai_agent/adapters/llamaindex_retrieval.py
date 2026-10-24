@@ -285,8 +285,35 @@ class LlamaIndexKnowledgeIndex:
         index.storage_context.persist(persist_dir=str(self._store_dir()))  # type: ignore[attr-defined]
         self._write_manifest()
 
+    def _require_matching_embedding_space(self) -> None:
+        """Refuse mutations when the store belongs to another embedding space.
+
+        ``_persist`` re-writes the manifest after every mutation — without
+        this guard a single ``sources unregister`` would silently re-stamp a
+        store built with a *different* embedder as healthy (recorded ==
+        active), defeating the inspection mismatch (review finding). Only an
+        explicit ``clear()``/rebuild may stamp a new identity: it goes
+        through ``_clear_sync``, which never consults this guard. A store
+        whose manifest predates identity tracking (``embedding_model``
+        absent) is refused the same way — it must be rebuilt deliberately.
+        """
+        if not (self._store_dir() / _INDEX_MARKER).is_file():
+            return  # no store yet: the first write stamps the current space
+        recorded = self._read_manifest().get("embedding_model")
+        recorded = recorded if isinstance(recorded, str) else None
+        active = self._embedding_identity()
+        if recorded != active:
+            raise IndexUnavailableError(
+                "knowledge index store belongs to a different embedding space "
+                f"(recorded={recorded!r}, active={active!r}) — refusing mutation",
+                hint="run `nexus knowledge rebuild --yes` to rebuild the store "
+                "with the configured embedding model",
+                code="rebuild_required",
+            )
+
     def _replace_sync(self, source: SourceMeta, chunks: list[ChunkPayload]) -> None:
         with self._lock:
+            self._require_matching_embedding_space()
             index = self._load_or_create()
             from llama_index.core.schema import NodeRelationship, RelatedNodeInfo, TextNode
 
@@ -327,6 +354,7 @@ class LlamaIndexKnowledgeIndex:
         with self._lock:
             if not (self._store_dir() / _INDEX_MARKER).is_file():
                 return False
+            self._require_matching_embedding_space()
             index = self._load_or_create()
             ref_info = index.docstore.get_ref_doc_info(source_id)  # type: ignore[attr-defined]
             if ref_info is None:

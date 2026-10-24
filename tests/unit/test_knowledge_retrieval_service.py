@@ -10,6 +10,7 @@ without a model, a network or credentials.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -689,6 +690,10 @@ async def test_report_exposes_scan_completeness(
     assert payload["incomplete_roots"] == []
 
 
+@pytest.mark.skipif(
+    os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="directory permissions are not enforced for this user/platform",
+)
 async def test_unreadable_nested_directory_preserves_subtree_evidence(
     roots: Path, tmp_path: Path, db_ready: Path
 ) -> None:
@@ -780,8 +785,8 @@ async def test_failed_walk_traversal_preserves_unseen_subtree(
             dirnames[:] = [name for name in dirnames if name != "ghost"]
             yield dirpath, dirnames, filenames
 
-    monkeypatch.setattr(scanner_module.os, "walk", failing_walk)
-    try:
+    with monkeypatch.context() as patch:
+        patch.setattr(scanner_module.os, "walk", failing_walk)
         second = await service.index_sources()
         assert second.removed == 0, "unvisited subtree must not be treated as deleted"
         rows = {row.path for row in await service.list_sources()}
@@ -789,8 +794,6 @@ async def test_failed_walk_traversal_preserves_unseen_subtree(
         assert (await service.search("hidden bridges")).state is QueryState.OK
         assert second.scan_complete is False
         assert second.incomplete_roots
-    finally:
-        monkeypatch.undo()
 
     # Recovery: traversal succeeds again → complete run, evidence intact.
     third = await service.index_sources()
@@ -838,16 +841,16 @@ async def test_missing_root_preserves_registry_rows_until_it_returns(
             shutil.rmtree(root_b)
         return real_scan(config, roots)
 
-    monkeypatch.setattr(service_module, "scan_roots", vanishing_scan)
-    second = await service.index_sources()
-    assert second.removed == 0, "missing root must not delete its registry rows"
-    rows = {row.path for row in await service.list_sources()}
-    assert rows == {"keep.md", "gone.md"}
-    assert second.scan_complete is False
-    assert any(root_b.name in r for r in second.incomplete_roots), second.incomplete_roots
-    # Its evidence is still served: unknown presence, not proven absent.
-    assert (await service.search("volatile caches")).state is QueryState.OK
-    monkeypatch.undo()
+    with monkeypatch.context() as patch:
+        patch.setattr(service_module, "scan_roots", vanishing_scan)
+        second = await service.index_sources()
+        assert second.removed == 0, "missing root must not delete its registry rows"
+        rows = {row.path for row in await service.list_sources()}
+        assert rows == {"keep.md", "gone.md"}
+        assert second.scan_complete is False
+        assert any(root_b.name in r for r in second.incomplete_roots), second.incomplete_roots
+        # Its evidence is still served: unknown presence, not proven absent.
+        assert (await service.search("volatile caches")).state is QueryState.OK
 
     # Recovery: the root returns -> complete scan reconciles in place.
     root_b.mkdir()

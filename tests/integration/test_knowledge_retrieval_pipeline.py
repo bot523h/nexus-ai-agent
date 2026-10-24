@@ -471,3 +471,51 @@ async def test_embedding_model_change_requires_explicit_rebuild(
     manifest_after = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest_after.get("embedding_model") == "nexus-hash-v1-256dim"
     assert (await _service().status()).degraded_reason is None
+
+
+async def test_unregister_cannot_restamp_a_foreign_embedding_space(kb_env: Path) -> None:
+    """A mutation must never re-stamp a store built in another embedding space.
+
+    Review finding (major): `_persist` rewrites the manifest after every
+    mutation, so `sources unregister` used to overwrite the recorded
+    `embedding_model` with the *current* identity — silently healing the
+    mismatch and allowing mixed-space serving. Only `clear()`/rebuild may
+    stamp a new identity; every mutating path is guarded in the adapter.
+    """
+    import json
+
+    (kb_env / "doc.md").write_text("Space-locked content about glaciers.")
+    service = _service()
+    assert (await service.index_sources()).ingested == 1
+    rows = await service.list_sources()
+    assert len(rows) == 1
+
+    index_dir = Path(str(settings_module.get_settings().knowledge_index_path))
+    manifest_path = index_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["embedding_model"] = "sentence-transformers:other-model"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    # The mutation is refused with the typed rebuild error …
+    with pytest.raises(IndexUnavailableError) as caught:
+        await _service().unregister(rows[0].source_id)
+    assert caught.value.code == "rebuild_required"
+    # … and the manifest is NOT restamped (the guard fired before persist).
+    assert (
+        json.loads(manifest_path.read_text(encoding="utf-8"))["embedding_model"]
+        == "sentence-transformers:other-model"
+    )
+    # The registry row still exists (nothing was half-removed).
+    assert len(await _service().list_sources()) == 1
+    # The space guard still refuses search.
+    with pytest.raises(IndexUnavailableError) as search_error:
+        await _service().search("glaciers")
+    assert search_error.value.code == "rebuild_required"
+    # Explicit rebuild is the sanctioned path and re-stamps the identity.
+    rebuilt = await _service().rebuild()
+    assert rebuilt.rebuilt is True
+    assert (
+        json.loads(manifest_path.read_text(encoding="utf-8"))["embedding_model"]
+        == "nexus-hash-v1-256dim"
+    )
+    assert (await _service().search("glaciers")).state == QueryState.OK
