@@ -17,21 +17,21 @@ Cases:
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from nexus_ai_agent.config import settings as settings_module
-from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.knowledge_retrieval.config import (
     DEFAULT_ALLOWED_EXTENSIONS,
     KnowledgeConfig,
 )
 from nexus_ai_agent.knowledge_retrieval.models import QueryState
-from nexus_ai_agent.knowledge_retrieval.repository import KnowledgeSourceRepository
-from nexus_ai_agent.knowledge_retrieval.scanner import ScanOutcome, ScannedSource, scan_roots, source_id_for
+from nexus_ai_agent.knowledge_retrieval.scanner import (
+    ScanOutcome,
+    scan_roots,
+)
 from nexus_ai_agent.knowledge_retrieval.service import KnowledgeRetrievalService
 from nexus_ai_agent.storage.db import create_all_tables, get_session
 
@@ -175,17 +175,16 @@ async def test_unreadable_nested_directory_preserves_registry(
         assert len(await svc.list_sources()) == 2
         # Deep content still searchable (stale chunks preserved via registry)
         assert (await svc.search("quantum turnips")).state == QueryState.OK
-        assert "unreadable" in " ".join(second.errors).lower() or "incomplete" in " ".join(
-            second.errors
-        ).lower()
+        assert (
+            "unreadable" in " ".join(second.errors).lower()
+            or "incomplete" in " ".join(second.errors).lower()
+        )
 
 
 # ── 2. incomplete traversal via walk exception ────────────────────────────
 
 
-async def test_incomplete_traversal_preserves_all(
-    tmp_path: Path, db_ready: Path
-) -> None:
+async def test_incomplete_traversal_preserves_all(tmp_path: Path, db_ready: Path) -> None:
     """Any walk exception must preserve the registry."""
     root = tmp_path / "kb2"
     root.mkdir()
@@ -283,10 +282,10 @@ async def test_subsequent_successful_recovery_after_incomplete(
     assert len(await svc.list_sources()) == 2
 
     # Simulate incomplete scan (e.g., root temporarily unreadable)
-    incomplete = ScanOutcome(sources=tuple(), issues=tuple(), complete=False, incomplete_reason="unreadable_root")
-    with patch(
-        "nexus_ai_agent.knowledge_retrieval.service.scan_roots", return_value=incomplete
-    ):
+    incomplete = ScanOutcome(
+        sources=tuple(), issues=tuple(), complete=False, incomplete_reason="unreadable_root"
+    )
+    with patch("nexus_ai_agent.knowledge_retrieval.service.scan_roots", return_value=incomplete):
         r1 = await svc.index_sources()
         assert r1.removed == 0
         assert len(await svc.list_sources()) == 2

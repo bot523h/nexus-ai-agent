@@ -226,9 +226,7 @@ def scan_roots(config: KnowledgeConfig, roots: tuple[Path, ...]) -> ScanOutcome:
             issues.append(ScanIssue(path=str(target), reason="unreadable"))
 
         try:
-            for dirpath, dirnames, filenames in os.walk(
-                root, followlinks=False, onerror=_onerror
-            ):
+            for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=_onerror):
                 if walk_errors:
                     complete = False
                     if incomplete_reason is None:

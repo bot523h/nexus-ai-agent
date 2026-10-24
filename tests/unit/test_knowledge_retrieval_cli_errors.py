@@ -122,9 +122,7 @@ def test_cli_json_mode_error_is_typed_on_stderr(cli_env: Path, monkeypatch) -> N
     assert "Traceback" not in result.stderr
 
 
-def test_cli_internal_error_logs_but_shows_safe_detail(
-    cli_env: Path, monkeypatch
-) -> None:
+def test_cli_internal_error_logs_but_shows_safe_detail(cli_env: Path, monkeypatch) -> None:
     def boom():  # type: ignore[no-untyped-def]
         raise PermissionError(13, "Permission denied", str(cli_env / "knowledge_index"))
 
@@ -147,9 +145,7 @@ def test_cli_internal_error_logs_but_shows_safe_detail(
     assert result.stderr.strip().splitlines()[0].startswith("error[internal]:")
 
 
-def test_cli_unconfigured_roots_shows_hint_and_exit_1(
-    cli_env: Path, monkeypatch
-) -> None:
+def test_cli_unconfigured_roots_shows_hint_and_exit_1(cli_env: Path, monkeypatch) -> None:
     monkeypatch.setenv("NEXUS_KNOWLEDGE_SOURCE_ROOTS", "")
     settings_module.get_settings.cache_clear()
     result = _run("knowledge", "index")
