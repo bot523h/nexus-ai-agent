@@ -53,18 +53,35 @@ def _imports(path: Path) -> set[str]:
     names: set[str] = set()
 
     def _package_of(file: Path) -> str:
+        """Import package of ``file`` — relative to the *import* root.
+
+        Production files resolve against ``SRC.parent`` (``…/src``), so a
+        relative import inside ``src/nexus_ai_agent/…`` becomes
+        ``nexus_ai_agent.…`` — the exact runtime dotted name the boundary
+        checks test for. Deriving it from the repo ROOT instead would produce
+        a phantom ``src.`` prefix and silently bypass every adapter/authority
+        check (review finding). Files outside ``src`` (tests, fixtures) fall
+        back to a repo-root-relative package; files outside the repo get none.
+        """
+        resolved = file.resolve()
         try:
-            parts = list(file.resolve().relative_to(ROOT).parts[:-1])
-        except ValueError:  # not inside the repo (temp fixtures): no package
+            return ".".join(resolved.relative_to(SRC.parent).parts[:-1])
+        except ValueError:
+            pass
+        try:
+            return ".".join(resolved.relative_to(ROOT).parts[:-1])
+        except ValueError:
             return ""
-        return ".".join(parts)
 
     def _record(module: str | None, alias_name: str | None) -> None:
-        if module and alias_name:
-            names.add(f"{module}.{alias_name}")
-        elif module:
+        # Record BOTH the module itself (``from pkg import submodule`` must
+        # expose ``pkg.submodule`` for module-level bans) and the joined
+        # dotted name for each imported member.
+        if module:
             names.add(module)
-        elif alias_name:
+        if module and alias_name and alias_name != "*":
+            names.add(f"{module}.{alias_name}")
+        elif alias_name and not module:
             names.add(alias_name)
 
     for node in ast.walk(tree):
@@ -189,6 +206,22 @@ def test_import_resolution_catches_from_package_import_submodule() -> None:
     # The adapter file itself must surface its real package imports this way:
     adapter_imports = _imports(ADAPTER)
     assert any(name.startswith("nexus_ai_agent.") for name in adapter_imports)
+
+
+def test_relative_imports_resolve_to_runtime_dotted_names() -> None:
+    """Relative imports in production files must not gain a phantom ``src.`` prefix.
+
+    Review finding: deriving the package from the repo root yields
+    ``src.nexus_ai_agent…`` for ``from .x import y`` — a name no boundary
+    check recognises, so a relative import of an adapter or authority module
+    would sail past R22.
+    """
+    production_with_relative = SRC / "bot" / "handlers.py"
+    assert production_with_relative.is_file()
+    resolved = _imports(production_with_relative)
+    assert "nexus_ai_agent.bot.middleware" in resolved
+    assert not any(name.startswith("src.") for name in resolved)
+    assert all(not name.startswith("src.") for name in resolved)
 
 
 def test_composition_root_is_a_cli_file_that_builds_the_stack() -> None:

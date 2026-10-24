@@ -546,3 +546,62 @@ def test_read_content_refuses_a_redirected_parent_directory(tmp_path: Path) -> N
     (tmp_path / "sub-original").rename(sub)
     content = _read_content(root / "sub" / "note.md", _config(), root=root)
     assert content.text == "Legitimate body content."
+
+
+def test_read_content_does_not_leak_descriptors(tmp_path: Path) -> None:
+    """Every descriptor the rooted walk opens (root + intermediates) is closed.
+
+    Review finding: the successful-return path used to keep the root directory
+    handle open. On Linux the growth is directly observable through
+    /proc/self/fd: one leaked root handle per read would show as +N after N
+    reads.
+    """
+    import os
+
+    root = tmp_path / "root"
+    root.mkdir()
+    target = root / "note.md"
+    target.write_text("Descriptor hygiene content.")
+    cfg = _config()
+
+    # Warm up (imports, caches) so the measured window is steady-state.
+    _read_content(target, cfg, root=root)
+    before = set(os.listdir("/proc/self/fd"))
+    for _ in range(25):
+        _read_content(target, cfg, root=root)
+    after = set(os.listdir("/proc/self/fd"))
+    leaked = after - before
+    assert not leaked, f"descriptor(s) leaked by repeated rooted reads: {sorted(leaked)}"
+
+
+def test_read_content_fails_closed_without_dir_fd_support(tmp_path: Path) -> None:
+    """No ``dir_fd`` ⇒ typed ``unsupported`` rejection — never a path-based guess.
+
+    Review finding: the previous fallback re-opened and re-resolved the
+    pathname, which a redirect-then-restore could still dodge. The secure
+    behaviour is to refuse.
+    """
+    import os
+
+    root = tmp_path / "root"
+    root.mkdir()
+    target = root / "note.md"
+    target.write_text("Body content.")
+    real_open = os.open
+
+    def _no_dir_fd_open(path, flags, *, dir_fd=None, **kwargs):
+        if dir_fd is not None:
+            raise NotImplementedError("dir_fd unsupported (simulated)")
+        return real_open(path, flags, **kwargs)
+
+    import os as _os
+
+    _os.open = _no_dir_fd_open  # type: ignore[assignment]
+    try:
+        with pytest.raises(_ContentRejected) as caught:
+            _read_content(target, _config(), root=root)
+    finally:
+        _os.open = real_open  # type: ignore[assignment]
+    assert caught.value.reason == "unsupported"
+    # Direct (no-root) opens do not need dir_fd and keep working:
+    assert _read_content(target, _config()).text == "Body content."

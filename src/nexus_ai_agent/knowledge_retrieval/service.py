@@ -557,16 +557,20 @@ def _open_under_root(root: Path, rel: Path) -> int:
     descriptor, so:
 
     * a parent directory swapped to a symlink before the open cannot steer
-      the walk outside (the symlink component is refused, ``ELOOP``);
+      the walk outside (the symlink component is refused — ``ELOOP`` or, under
+      ``O_DIRECTORY``, ``ENOTDIR``);
     * there is nothing to race *after* the open: the path is never consulted
       again — no identity check and no containment re-check whose timing an
-      attacker could dodge with a redirect-then-restore (the sequence the
-      review identified: identity passes while redirected, containment passes
-      after restore). Bytes come from an unbroken chain of descriptors that
-      began at the root handle.
+      attacker could dodge with a redirect-then-restore (identity passes
+      while redirected, containment passes after restore). Bytes come from an
+      unbroken chain of descriptors that began at the root handle.
 
-    Platforms without ``dir_fd`` support fall back to a single no-follow open
-    plus a realpath containment check on the resolved descriptor path.
+    Every descriptor this function opens — the root handle and every
+    intermediate directory — is closed before it returns, on success *and* on
+    failure; only the final file descriptor is handed to the caller. A platform
+    without ``dir_fd`` support **fails closed** with reason ``unsupported``:
+    a pathname-based substitute would reintroduce the race the walk exists to
+    remove.
     """
     import errno
     import os
@@ -582,20 +586,20 @@ def _open_under_root(root: Path, rel: Path) -> int:
         if getattr(exc, "errno", None) == errno.ELOOP:
             raise _ContentRejected("symlink") from None
         raise _ContentRejected("unreadable") from None
-    fd = root_fd
+    current = root_fd
     try:
         for index, part in enumerate(parts):
             flags = base | nofollow
             if index < len(parts) - 1:
                 flags |= os.O_DIRECTORY
             try:
-                next_fd = os.open(part, flags, dir_fd=fd)
+                next_fd = os.open(part, flags, dir_fd=current)
             except NotImplementedError:
-                # No dir_fd on this platform: fall back to the classic
-                # no-follow open + realpath containment (documented weaker
-                # mode; CI and production run on Linux where dir_fd exists).
-                os.close(fd)
-                return _open_fallback_no_follow(root, parts)
+                # No dir_fd on this platform: refusing beats guessing — a
+                # path-based fallback would reopen the parent-redirect race.
+                raise _ContentRejected(
+                    "unsupported",
+                ) from None
             except OSError as exc:
                 # Linux: final-component symlink → ELOOP; symlink under
                 # O_DIRECTORY → ENOTDIR ("not a directory" — the link is
@@ -603,43 +607,18 @@ def _open_under_root(root: Path, rel: Path) -> int:
                 if getattr(exc, "errno", None) in (errno.ELOOP, errno.ENOTDIR):
                     raise _ContentRejected("symlink") from None
                 raise _ContentRejected("unreadable") from None
-            if fd != root_fd:
-                os.close(fd)
-            fd = next_fd
-        return fd
+            if current is not root_fd:
+                os.close(current)
+            current = next_fd
     except BaseException:
-        if fd != root_fd:
-            try:
-                os.close(fd)
-            finally:
-                os.close(root_fd)
-        elif fd == root_fd:
-            os.close(root_fd)
+        if current is not root_fd:
+            os.close(current)
+        os.close(root_fd)
         raise
-
-
-def _open_fallback_no_follow(root: Path, parts: tuple[str, ...]) -> int:
-    """Fallback opener for platforms without ``dir_fd`` (see above)."""
-    import errno
-    import os
-
-    target = root.joinpath(*parts)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(target, flags)
-    except OSError as exc:
-        if getattr(exc, "errno", None) == errno.ELOOP:
-            raise _ContentRejected("symlink") from None
-        raise _ContentRejected("unreadable") from None
-    try:
-        resolved_root = root.resolve()
-        resolved_target = target.resolve(strict=False)
-        if resolved_target != resolved_root and resolved_root not in resolved_target.parents:
-            raise _ContentRejected("traversal")
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
+    # Success: the walk is complete — the root handle is no longer needed and
+    # must not leak (the caller owns only the final file descriptor).
+    os.close(root_fd)
+    return current
 
 
 def _read_content(path: Path, config: KnowledgeConfig, *, root: Path | None = None) -> _Content:
@@ -655,7 +634,8 @@ def _read_content(path: Path, config: KnowledgeConfig, *, root: Path | None = No
     Deterministic failure taxonomy (also the report's reason vocabulary):
     ``symlink`` (a component refused the no-follow open — including a
     symlinked parent swapped in after the scan), ``traversal`` (path outside
-    the root / ``..`` component), ``unreadable`` (OSError / not a regular
+    the root / ``..`` component), ``unsupported`` (platform without
+    ``dir_fd`` — the secure walk refuses rather than guessing), ``unreadable`` (OSError / not a regular
     file), ``oversize`` (byte or text bound), ``binary`` (NUL sniff),
     ``decode`` (not UTF-8), ``empty`` (no retrievable text), ``pdf`` (parser
     failure), ``unsupported`` (pypdf absent — scan-time classification
