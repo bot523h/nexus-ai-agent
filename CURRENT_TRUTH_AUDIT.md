@@ -117,10 +117,10 @@ pytest -q test_execution_truth.py test_docs_integrity.py test_agent_board.py
 | زمان (UTC) | اقدام | نتیجهٔ قابل‌بررسی |
 |---|---|---|
 | 13:31 | ساخت `scripts/pr_convergence.py` + `tests/unit/test_pr_convergence.py` | ابتدا ۱۸ تست سبز؛ سپس ۸ تستِ guard/unknown افزوده شد (اکنون ۲۶) |
-| 13:31 | `collect` زنده از GitHub | ۶۹ PR، شش لایه، `.agents/evidence/PR_REGISTRY_2026-10-25.json` |
+| 13:31 | `collect` اولیه از GitHub | ۶۹ PR در stdout قبل از مرج #111؛ snapshot پایدار/قابل‌بازتولید از آن لحظه نگه نداشتم |
 | 13:32:42 | **مرجِ #111** (مرج‌کامیتِ `6ce6bfc`) | `main` از `063eb87` به `6ce6bfc` رسید — **اولین تحویلِ واقعیِ این خطِ کار** |
 | 13:32 | به‌روزرسانیِ شاخهٔ #190 (`update-branch`) | head جدید `4dd447e8`، CI روی base تازه در حال اجرا |
-| 13:33 | `collect` دوباره | ۶۸ PR، `main=6ce6bfc` |
+| 13:33:28 | `collect` دوباره | ۶۸ PR، `main=6ce6bfc`; snapshot مستقل `.agents/evidence/PR_REGISTRY_2026-10-25T1333Z.json` |
 | 13:52 | بازکردنِ **PR #249** (همین سند + ابزار) | روی head اولیه ۲۲/۲۲ pass؛ پس از مرج main، همان head stale شد و این CI دیگر قابل‌مصرف نبود |
 | 14:00 | آزمونِ ترکیبِ #125+#199+#203 روی یک درخت | `board-integrity: OK`، ۱۴۱ تست سبز |
 | 14:13 | `guard 190 --expect-sha 4dd447e8` → PASS، سپس **مرجِ #190** | مرج‌کامیتِ `cf8b7f6`، **+۱۴۸۷/−۰ در ۸ فایل**؛ `main` به `cf8b7f6` رسید |
@@ -128,7 +128,9 @@ pytest -q test_execution_truth.py test_docs_integrity.py test_agent_board.py
 | 14:17:28 | رجیستریِ اصلاح‌شده و settle‌شده | `CONFLICT 46`, `NEEDS_APPROVAL 9` (شامل PR #249)، `CI_RED 1`, `READY 0` — `.agents/evidence/PR_REGISTRY_2026-10-25.json` |
 | 14:34 | بازبینی مستقلِ CodeRabbit روی PR #249 | ۶ finding؛ ۴ سندی و ۲ fail-closed code finding؛ درخواست تغییر ثبت شد |
 | 14:45 | رفع ۶ finding + افزودن snapshot تاریخی 13:33 | guard روی SHA و aggregationِ checkها سخت‌گیرتر شد؛ ۳۷ تستِ registry و full suite (۴۵۱۷ پاس) سبز |
-| 14:47 | درخواستِ full review از CodeRabbit برای head `d6cea72` | rate-limited؛ reviewِ مستقلِ تازه انجام نشد؛ CI نهایی باید روی head آخر پاس شود |
+| 14:47 | درخواستِ full review از CodeRabbit برای head `d6cea72` | آن درخواست rate-limited شد |
+| 15:35 | exact-head CI روی `225054a` و full review جدید | CI: ۲۱/۲۱ job success؛ CodeRabbit چهار finding تازه ثبت کرد (۳ سندی، ۱ GraphQL error handling) |
+| 15:36 | رفع چهار finding تازه | آمار 13:31 از snapshot 13:33 جدا شد؛ collect به `/tmp` هدایت شد؛ GraphQL errors و non-objectها fail-closed شدند؛ ۴۰ تست متمرکز pass، full suite در حال اجرا |
 
 ### ۴.۱ چطور #111 مرج شد (مسیر دقیق، برای تکرار)
 
@@ -160,7 +162,7 @@ mergeable values: {'UNKNOWN': 66, 'CONFLICTING': 2}
   چون «اندازه‌گیری‌نشده» با «تمیز» یکی نیست؛
 * `collect` حالا تا settle شدنِ mergeability صبر می‌کند (`--no-wait` برای غیرفعال‌کردن) و
   اگر مهلت تمام شود، UNKNOWN را صادقانه در لایهٔ خودش ثبت می‌کند؛
-* تست‌ها این کلاسِ خطا را قفل می‌کنند: UNKNOWN، guard روی state نامعلوم، SHA pin نامعتبر، و conclusions ناشناخته؛ اکنون ۳۷ تست.
+* تست‌ها این کلاسِ خطا را قفل می‌کنند: UNKNOWN، guard روی state نامعلوم، SHA pin نامعتبر، conclusions ناشناخته، و پاسخ GraphQL خراب؛ اکنون ۴۰ تست.
 
 بازخوانی پس از اصلاح: `CONFLICT 46`، `MERGEABILITY_UNKNOWN 0` — تطابق با واقعیت. رجیستریِ آخر (14:17Z) در `.agents/evidence/PR_REGISTRY_2026-10-25.json` است؛ اختلافش با snapshot 13:33 این است که خودِ PR #249 حالا هم به تأیید نیاز دارد و `NEEDS_APPROVAL=9`.
 
@@ -173,20 +175,20 @@ mergeable values: {'UNKNOWN': 66, 'CONFLICTING': 2}
 `PR #249` باز است. SHA اولیه (`e51929d`) ۲۲/۲۲ check پاس کرد، ولی پس از دو مرجِ main
 دیگر قابل‌استفاده نبود (`BEHIND`). من شاخه را روی `cf8b7f6` rebase و force-with-lease push کردم.
 CodeRabbit روی head `4703c79` شش تغییرِ لازم (۴ سندی و ۲ در guard/aggregation) خواست؛ هر شش مورد
-در commit `d6cea72` اصلاح و با ۳۷ تستِ متمرکز + full suite سبز بررسی شدند. درخواستِ full review برای
-همان commit به علت محدودیتِ تعداد reviewها rate-limited شد؛ بنابراین reviewِ مستقلِ تازه ندارم و
-وضعیت قبلیِ `CHANGES_REQUESTED` مربوط به SHA قدیمی هنوز در GitHub دیده می‌شود. commitهای پس از
-`d6cea72` فقط گزارشِ زمانِ full suite و همین وضعیتِ review را مستند می‌کنند، نه تغییرِ کدِ اجرایی.
-PR را حسابِ مالک (`bot523h`) ساخته، پس تأیید خودی
-ممنوع است؛ تا review مستقل و exact-head CI سبز نشود، #249 را merge نمی‌کنم.
+در commit `d6cea72` اصلاح شدند. سپس review کامل روی head `225054a` چهار finding دیگر داد: سه مورد
+مربوط به timestamp/output path در سند و یکی اعتبارسنجیِ پاسخ GraphQL. همه را اکنون اصلاح کرده‌ام؛
+focused tests فعلی ۴۰ پاس است. CIِ ۲۱/۲۱ روی `225054a` **قبل از این چهار اصلاح** سبز شد؛ CI تازه روی
+شاخهٔ فعلی لازم است و پس از push باید دوباره اجرا شود. `reviewDecision=CHANGES_REQUESTED` فعلی نیز از آخرین review
+روی `225054a` است؛ تا review مجدد، approval مستقل و CIِ دقیقِ head جدید حاضر نشوند، #249 را merge نمی‌کنم.
+PR را حسابِ مالک (`bot523h`) ساخته، پس خودم قانوناً نمی‌توانم آن را approve کنم.
 
 `main` پس از #190 روی `cf8b7f665d8dc3ec94d52b3ea337ef2491961f33` است. CI مربوط به همین main
 در آخرین مشاهده هنوز در حال اجرا بود (run `40201219831`)؛ هیچ ادعایی دربارهٔ سبزشدنش نمی‌کنم.
 
 گیت‌های محلی پس از تمام اصلاحات CodeRabbit: `ruff check .` → pass؛ `ruff format --check .` → ۷۴۴ فایل
-pass؛ `mypy src` → pass (۳۱۰ فایل)؛ `pytest -q tests/unit/test_pr_convergence.py` → ۳۷ pass؛ کل
-`pytest -q -m "not slow"` → **۴۵۱۷ passed, 38 skipped, 0 failed** (273.32s). این نتایج محلية؛
-CIِ GitHub روی commit تازه پس از push در حال اجراست و جداگانه باید سبز شود.
+pass؛ `mypy src` → pass (۳۱۰ فایل)؛ `pytest -q tests/unit/test_pr_convergence.py` → ۴۰ pass؛ کل
+`pytest -q -m "not slow"` → **۴۵۲۰ passed, 38 skipped, 0 failed** (275.41s). این نتایج محلی‌اند؛
+CIِ GitHub روی commit تازه پس از push باید جداگانه و روی head دقیق سبز شود.
 
 
 ---
@@ -235,11 +237,12 @@ gh auth status
 gh api repos/bot523h/nexus-ai-agent --jq '.permissions'
 
 # ۲) وضعیت زندهٔ همهٔ PRها + شاهدِ JSON
-python scripts/pr_convergence.py collect --out .agents/evidence/PR_REGISTRY_2026-10-25.json
-python scripts/pr_convergence.py report  --in  .agents/evidence/PR_REGISTRY_2026-10-25.json
+python scripts/pr_convergence.py collect --out /tmp/pr_registry_live.json
+python scripts/pr_convergence.py report  --in  /tmp/pr_registry_live.json
+# فایل‌های timestamped زیر .agents/evidence/ snapshot هستند؛ خروجی live را رویشان overwrite نکن.
 
-# ۳) گاردِ پیش‌از‌مرج روی head فعلیِ #249 (هنگام بازبینی، باید BLOCKED باشد)
-python scripts/pr_convergence.py guard 249 --expect-sha 4703c79
+# ۳) گاردِ پیش‌از‌مرج: فقط اگر همین checkout همان SHAای است که بازبینی کردی.
+python scripts/pr_convergence.py guard 249 --expect-sha "$(git rev-parse HEAD)"
 
 # ۴) گاردِ base (حادثهٔ #143)
 python scripts/merge_base_guard.py check-pr 208  # expected nonzero: wrong base

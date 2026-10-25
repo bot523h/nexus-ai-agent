@@ -219,7 +219,14 @@ def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
         if value is None:
             continue
         args += ["-f", f"{key}={value}"]
-    return json.loads(_gh(args))
+    decoded = json.loads(_gh(args))
+    if not isinstance(decoded, dict):
+        raise RuntimeError("GitHub GraphQL returned a non-object response")
+    errors = decoded.get("errors")
+    if errors:
+        detail = json.dumps(errors, ensure_ascii=False)[:800]
+        raise RuntimeError(f"GitHub GraphQL returned errors: {detail}")
+    return decoded
 
 
 def fetch_open_prs(repo: str = DEFAULT_REPO) -> list[dict[str, Any]]:

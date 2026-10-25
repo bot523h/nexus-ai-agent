@@ -21,9 +21,11 @@ executed directly by CI), the same pattern as
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -296,3 +298,22 @@ def test_aggregate_returns_success_only_when_every_conclusion_is_recognized() ->
         )
         == "SUCCESS"
     )
+
+
+def test_graphql_rejects_a_non_object_response() -> None:
+    with patch.object(registry, "_gh", return_value=json.dumps(["not", "an object"])):
+        with pytest.raises(RuntimeError, match="non-object"):
+            registry._graphql("query { viewer { login } }", {})
+
+
+def test_graphql_rejects_top_level_errors() -> None:
+    response = {"errors": [{"message": "rate limit"}], "data": None}
+    with patch.object(registry, "_gh", return_value=json.dumps(response)):
+        with pytest.raises(RuntimeError, match="GraphQL returned errors"):
+            registry._graphql("query { viewer { login } }", {})
+
+
+def test_graphql_returns_a_valid_payload_unchanged() -> None:
+    response = {"data": {"viewer": {"login": "bot523h"}}}
+    with patch.object(registry, "_gh", return_value=json.dumps(response)):
+        assert registry._graphql("query { viewer { login } }", {}) == response
