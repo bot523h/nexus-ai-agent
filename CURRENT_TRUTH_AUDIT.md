@@ -181,7 +181,7 @@ PR را حسابِ مالک (`bot523h`) ساخته، پس تأیید خودی م
 
 گیت‌های محلی پس از تمام اصلاحات CodeRabbit: `ruff check .` → pass؛ `ruff format --check .` → ۷۴۴ فایل
 pass؛ `mypy src` → pass (۳۱۰ فایل)؛ `pytest -q tests/unit/test_pr_convergence.py` → ۳۷ pass؛ کل
-`pytest -q -m "not slow"` → **۴۵۱۷ passed, 38 skipped, 0 failed** (267.04s). این نتایج محلية؛
+`pytest -q -m "not slow"` → **۴۵۱۷ passed, 38 skipped, 0 failed** (273.32s). این نتایج محلية؛
 CIِ GitHub روی commit تازه پس از push در حال اجراست و جداگانه باید سبز شود.
 
 
