@@ -4,7 +4,7 @@
 **Scope:** the capability model, the pack substrate, the command bus, the render lane, and the honest coverage ledger
 **Verified against:** `main` @ `9ec312c` (re-measured 2026-09-24 during task-166) — numbers below were produced by executing the builders and the CLI, not by reading names
 
-Nagar is the studio inside NEXUS: a typed, permissioned, *pure-by-default* media pipeline whose only impure step is a single FFmpeg process at the very end.
+Nagar is the studio inside NEXUS: a typed, permissioned, *pure-by-default* media pipeline whose impure steps are bounded and enumerated: one FFmpeg process at the very end (render lane) and, before it, the read-only measurement adapter `creative/perception/` (FFmpeg `silencedetect`/`ebur128`/scene select; text inputs refused, demuxer and protocol whitelisted).
 
 ---
 
@@ -132,7 +132,7 @@ All `motion.*`, `audio.*`, and `timeline.*` TDD ids are now registered.
 | Evidence | `probe_video` + `sha256_file` on the published artifact; a run that cannot probe fails with `LaneExecutionError` |
 | Gates | `test_rendering_lane_boundary.py`: no ML imports, import allow-list, no zone cross-over, **exactly one** `subprocess` site, never `shell=True` |
 
-The lane is deliberately the *only* place in the creative tree that spawns a process (`test_slideshow_adapter_boundary.py::test_only_the_render_lane_spawns_a_process`).
+The render lane is the only place that spawns a process *to produce media*; the perception adapter is the only place that spawns one *to measure media* (`test_slideshow_adapter_boundary.py::test_only_the_render_lane_spawns_a_process`, `test_perception_boundary.py::test_adapter_is_the_only_process_runner_and_never_uses_a_shell`). No pack handler ever spawns a process.
 
 ## 7. Speech, captions, and offline translation
 

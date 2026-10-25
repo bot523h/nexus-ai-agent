@@ -650,7 +650,29 @@ def test_real_ffmpeg_enforces_the_format_whitelist(
     refused = run(wav, "mov")
     assert allowed.returncode == 0 and "Input #0, wav" in allowed.stderr
     assert refused.returncode != 0 and "Input #0" not in refused.stderr
+    # A probe-recognisable HLS playlist (TARGETDURATION) naming a local segment: FFmpeg
+    # recognises the format, and only the whitelist stands between it and opening the file.
+    segment = tmp_path / "seg.ts"
+    segment.write_bytes(b"\x47" + b"\x00" * 187)
     playlist = tmp_path / "evil.m3u8"
-    playlist.write_text("#EXTM3U\n#EXTINF:1,\n/etc/hostname\n#EXT-X-ENDLIST\n")
-    blocked = run(playlist, analyzer_module.FORMAT_WHITELIST)
-    assert blocked.returncode != 0 and "Input #0" not in blocked.stderr
+    playlist.write_text(
+        f"#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\n{segment}\n#EXT-X-ENDLIST\n"
+    )
+
+    def verbose(formats: str | None) -> subprocess.CompletedProcess[str]:
+        argv = [engine, "-hide_banner", "-nostdin", "-loglevel", "debug"]
+        argv += ["-protocol_whitelist", "file"]
+        if formats is not None:
+            argv += ["-format_whitelist", formats]
+        argv += ["-i", str(playlist), "-t", "0.05", "-f", "null", "-"]
+        return subprocess.run(  # noqa: S603 - fixed argv
+            argv, capture_output=True, text=True, timeout=20, check=False
+        )
+
+    control = verbose(None)  # no whitelist: the demuxer opens the named segment
+    assert "Format hls probed" in control.stderr
+    assert f"Opening '{segment}'" in control.stderr
+    blocked = verbose(analyzer_module.FORMAT_WHITELIST)
+    assert "Format hls probed" in blocked.stderr  # recognised, then refused by the whitelist
+    assert "Format not on whitelist" in blocked.stderr
+    assert f"Opening '{segment}'" not in blocked.stderr and blocked.returncode != 0
