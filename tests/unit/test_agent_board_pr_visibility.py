@@ -220,6 +220,46 @@ def test_cmd_praudit_refuses_live_mode_without_repo() -> None:
     assert code == 2
 
 
+@pytest.mark.parametrize(
+    ("expected_files", "logical_files", "complete"),
+    [
+        (2999, 2999, True),
+        (3000, 3000, True),
+        (3001, 3001, False),
+        (None, 3001, False),
+        ("malformed", 3001, False),
+    ],
+)
+def test_fetch_open_prs_is_deterministic_at_github_file_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    expected_files: object,
+    logical_files: int,
+    complete: bool,
+) -> None:
+    """A 3,000-file API ceiling is complete only with independent count proof."""
+    pr = {
+        "number": 1,
+        "title": "large",
+        "head": {"ref": "arena/large"},
+        "base": {"ref": "main", "sha": "base"},
+    }
+
+    def fake_get(url: str, _token: str | None) -> object:
+        if "/pulls?state=open" in url:
+            return [pr]
+        if url.endswith("/pulls/1"):
+            return {"changed_files": expected_files} if expected_files != "malformed" else []
+        page = int(url.rsplit("page=", 1)[1])
+        if page < 30:
+            return [{"filename": f"f-{page}-{i}"} for i in range(100)]
+        count = min(logical_files - 2900, 100)
+        return [{"filename": f"f-30-{i}"} for i in range(count)]
+
+    monkeypatch.setattr(agent_board, "_gh_get", fake_get)
+    result = agent_board.fetch_open_prs("owner/repo")
+    assert result[0]["files_complete"] is complete
+
+
 def test_path_matches_directory_and_exact_semantics() -> None:
     assert agent_board._path_matches("docs/", "docs/a.md") is True
     assert agent_board._path_matches("docs/", "docs") is True

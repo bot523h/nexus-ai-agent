@@ -16,7 +16,7 @@ async def test_session_initializes_tables(tmp_path: Path) -> None:
         await session.commit()
 
     async with get_session(str(db_path)) as session:
-        approvals = (await session.execute(select(PendingApproval))).scalars().all()
+        approvals = (await session.exec(select(PendingApproval))).all()
         assert len(approvals) == 1
 
 
@@ -30,7 +30,7 @@ async def test_session_switches_database_paths(tmp_path: Path) -> None:
         await session.commit()
 
     async with get_session(str(second_path)) as session:
-        approvals = (await session.execute(select(PendingApproval))).scalars().all()
+        approvals = (await session.exec(select(PendingApproval))).all()
         assert approvals == []
 
     assert first_path.exists()
