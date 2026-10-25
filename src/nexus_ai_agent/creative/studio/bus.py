@@ -180,6 +180,16 @@ class CommandBus:
             return self._project.model_copy(deep=True)
 
     @property
+    def registry(self) -> CapabilityRegistry:
+        """The authoritative operation allow-list this bus enforces.
+
+        Exposed read-only so an upstream planner (e.g. the creative spine) can
+        compile against the *same* registry the bus validates, instead of a
+        second copy that could drift.
+        """
+        return self._registry
+
+    @property
     def history(self) -> tuple[EditTransaction, ...]:
         with self._lock:
             return tuple(self._history)

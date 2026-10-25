@@ -44,15 +44,33 @@ weekly Mondays **04:23 UTC**. Set these repo secrets
 
 | Secret | Used by | Notes |
 |---|---|---|
-| `NEXUS_DATABASE_URL` | `backup-db` | Neon/Postgres URL; without it the job backs up the local SQLite file |
+| `NEXUS_DATABASE_URL` | `backup-db` | Neon/Postgres URL. **Required**: the production job refuses to fall back to a CI-local SQLite file (a dump of an empty checkout is not a backup). |
 | `R2_ACCOUNT_ID` | both | |
 | `R2_ACCESS_KEY_ID` | both | |
 | `R2_SECRET_ACCESS_KEY` | both | |
 | `R2_BUCKET` | both | |
 
+`backup-db` runs a deterministic **preflight** as its first step: it fails in
+seconds naming the exact missing secret(s), refuses a non-PostgreSQL
+`NEXUS_DATABASE_URL`, and refuses when `pg_dump` is not on `PATH`. Secret
+*names* are printed; values never are. The preflight is behavioural — extracted
+from the YAML and executed — in `tests/unit/test_maintenance_workflow_contract.py`.
+
 No bot token is used by this workflow. Both jobs share one
 `concurrency` group (`cancel-in-progress: false`) so runs never overlap.
 Test manually via the **Run workflow** button (`workflow_dispatch`).
+
+### Verification status — `VERIFIED_WITH_LIMITATIONS`
+
+- **Repository-side (verified):** preflight ordering, fail-closed configuration
+  handling, least privilege (`contents: read`, `persist-credentials: false`),
+  no failure masking, and scheduled-only triggers — all enforced by executable
+  contract tests.
+- **Owner-side / production (NOT verified here):** the real R2 upload, object
+  identity, retention, and a measured RPO/RTO require the five repository
+  secrets and an actual scheduled run against production. No restore proof is
+  fabricated. This leg stays `VERIFIED_WITH_LIMITATIONS` until a real
+  `backup-db` run succeeds with secrets set.
 
 ## CLI
 
