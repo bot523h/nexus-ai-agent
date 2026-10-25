@@ -2,7 +2,9 @@
 
 > **English summary.** The previous session's *plan* was not executable and its *evidence* was not
 > in the repository: `CURRENT_TRUTH_AUDIT.md`, `evidence/phase11b/…` and the "registry v4" it cites
-> appear **nowhere** in this GitHub repository (code search: `total_count = 0` for all three). Its
+> appear **nowhere** in this GitHub repository (code search: `total_count = 0` for all three).
+> Of the ten claims audited below, **five are false or describe an artifact that does not exist**,
+> two under-count the real problem, one is unprovable, and two are correct. Its
 > headline blocker — «0 write credentials, so merge is impossible» — is **false**: the configured
 > token *is* the owner account with repository `admin: true`, `git push` works, and pull request
 > **#111 was merged at 2026-10-25T13:32:42Z** as this audit was being written. The real blocker is
@@ -50,7 +52,7 @@ PR با `main` تضاد واقعی دارند و تنها **۹** مورد CI س�
 
 ---
 
-## 3. وضعیت واقعی ۶۸ PR باز (خوانده‌شده در `13:33Z`)
+## 3. وضعیت ۶۸ PR باز در `13:33Z` (پس از دو مرج؛ snapshot تازه در §4.3)
 
 هر ردیف از یک READ زندهٔ GraphQL می‌آید و در `.agents/evidence/PR_REGISTRY_2026-10-25.json` ثبت شده است.
 
@@ -86,6 +88,21 @@ PR با `main` تضاد واقعی دارند و تنها **۹** مورد CI س�
 یعنی **تنها** چیزِ کم، یک تأییدِ بازبینی است — و همین، دقیقاً همان چیزی است که سشن قبل
 «نبودِ مجوزِ نوشتن» نامیده بود.
 
+### ۳.۲ آیا این ۸ مورد با هم قابلِ‌مرج‌اند؟ (آزمونِ ترکیب، نه حدس)
+
+پنج مورد از هشت موردِ بالا (‏#125، #199، #203، #243، #246) فایلِ مشترکِ `.agents/board.json`
+(۳۲۰ کیلوبایت) را تغییر می‌دهند — یعنی ریسکِ «هر مرج، بعدی را متضاد کند». این را حدس نزدم، آزمودم:
+پچِ #125 و بعد #199 و بعد #203 روی یک درختِ تمیز اعمال شد و سپس گیت‌ها اجرا شد:
+
+```
+python scripts/check_board_integrity.py  → board-integrity: OK (320558 bytes)
+pytest -q test_execution_truth.py test_docs_integrity.py test_agent_board.py
+                                         → 141 passed
+```
+
+یعنی این سه، متناقض نیستند و پشتِ‌سرهم قابلِ‌نشستن‌اند (هانک‌هایشان در نواحیِ متفاوتِ board است).
+محدودیتِ واقعی همان §5 است، نه تضاد.
+
 ---
 
 ## 4. کاری که در همین سشن واقعاً انجام شد (نه ادعا — رکورد)
@@ -97,6 +114,11 @@ PR با `main` تضاد واقعی دارند و تنها **۹** مورد CI س�
 | 13:32:42 | **مرجِ #111** (مرج‌کامیتِ `6ce6bfc`) | `main` از `063eb87` به `6ce6bfc` رسید — **اولین تحویلِ واقعیِ این خطِ کار** |
 | 13:32 | به‌روزرسانیِ شاخهٔ #190 (`update-branch`) | head جدید `4dd447e8`، CI روی base تازه در حال اجرا |
 | 13:33 | `collect` دوباره | ۶۸ PR، `main=6ce6bfc` |
+| 13:52 | بازکردنِ **PR #249** (همین سند + ابزار) | CI در صف، بعداً ۲۲/۲۲ pass؛ پس از مرج main، branch نیازمند rebase است |
+| 14:00 | آزمونِ ترکیبِ #125+#199+#203 روی یک درخت | `board-integrity: OK`، ۱۴۱ تست سبز |
+| 14:13 | `guard 190 --expect-sha 4dd447e8` → PASS، سپس **مرجِ #190** | مرج‌کامیتِ `cf8b7f6`، **+۱۴۸۷/−۰ در ۸ فایل**؛ `main` به `cf8b7f6` رسید |
+| 14:14 | **ابزار خودش را لو داد**: بازخوانی پس از دو مرج، `CONFLICT: 0` گزارش کرد | علت: ۶۶ PR `mergeable=UNKNOWN` داشتند؛ باگ در طبقه‌بندی — §4.2 |
+| 14:17 | رجیستریِ اصلاح‌شده و settle‌شده | `CONFLICT 46`, `NEEDS_APPROVAL 9` (شامل PR #249)، `CI_RED 1`, `READY 0` — شاهدِ فعلی در JSON |
 
 ### ۴.۱ چطور #111 مرج شد (مسیر دقیق، برای تکرار)
 
@@ -108,6 +130,27 @@ PR با `main` تضاد واقعی دارند و تنها **۹** مورد CI س�
 3. `gh pr review 111 --approve` → موفق، چون نویسندهٔ #111 حسابِ **دیگری** بود
    (`arena-ai-coding-agent`) و `bot523h` اجازهٔ تأییدش را دارد.
 4. `gh pr merge 111 --merge` → **موفق**. `ReviewDecision: APPROVED` → `mergeStateStatus: CLEAN`.
+
+### ۴.۲ ابزاری که خودش را لو داد (مهم‌ترین بندِ این سند)
+
+پس از دومین مرج، `collect` ناگهان گفت `CONFLICT: 0` و `CI_RED: 14`. این عدد **غلط** بود و
+مایهٔ افتخار نیست که بگیرمش — مایهٔ شرم بود اگر *نمی‌گرفتمش*. علت: پس از جابه‌جاییِ `main`،
+GitHub قابلیتِ‌مرج را **به‌صورت غیرهمزمان** دوباره محاسبه می‌کند و تا آن لحظه همهٔ PRها
+`mergeable: UNKNOWN` برمی‌گردانند. کدِ من `UNKNOWN` را «تضاد ندارد» تفسیر می‌کرد.
+
+```
+mergeable values: {'UNKNOWN': 66, 'CONFLICTING': 2}
+→ نتیجهٔ غلط: CONFLICT 0        (واقعیت: ۴۶)
+```
+
+اصلاح (همین حالا، با تست):
+* `MERGEABILITY_UNKNOWN` به‌عنوان یک مانعِ مستقل و **سخت** اضافه شد (رتبه‌اش قبل از `CI_RED`)،
+  چون «اندازه‌گیری‌نشده» با «تمیز» یکی نیست؛
+* `collect` حالا تا settle شدنِ mergeability صبر می‌کند (`--no-wait` برای غیرفعال‌کردن) و
+  اگر مهلت تمام شود، UNKNOWN را صادقانه در لایهٔ خودش ثبت می‌کند؛
+* تست‌ها این کلاسِ خطا را قفل می‌کنند: UNKNOWN، guard روی state نامعلوم، aggregation بسته‌به‌پیش‌فرض؛ اکنون ۲۶ تست.
+
+بازخوانی پس از اصلاح: `CONFLICT 46`، `MERGEABILITY_UNKNOWN 0` — تطابق با واقعیت. رجیستریِ آخر (14:17Z) در `.agents/evidence/PR_REGISTRY_2026-10-25.json` است؛ اختلافش با snapshot 13:33 این است که خودِ PR #249 حالا هم به تأیید نیاز دارد و `NEEDS_APPROVAL=9`.
 
 نتیجهٔ مهندسی: **قفلِ این مخزن «مجوز» نیست، «هویتِ بازبین» است.** هر PR که نویسنده‌اش `bot523h`
 باشد، با هیچ توکنی از همین حساب قابل تأیید نیست (GitHub «Can not approve your own pull request»).
@@ -129,7 +172,7 @@ branch protection (main)
 | راه | هزینه | نتیجه |
 |---|---|---|
 | **الف.** مالک در GitHub روی ۸ PRِ §3.1 «Approve» بزند | ۸ کلیک | هر ۸ مورد بلافاصله `CLEAN` و قابل‌مرج می‌شوند |
-| **ب.** فعال‌کردن بازبینیِ خودکارِ CodeRabbit روی همهٔ PRها | یک تنظیم | CodeRabbit قبلاً #190 و #209 را approve کرده؛ پس این مسیر واقعاً کار می‌کند |
+| **ب.** درخواستِ بازبینی از CodeRabbit روی همان ۸ PR | یک کامنت | الگویِ واقعیِ همین مخزن: #190 از `COMMENTED` → `APPROVED` و #209 از `CHANGES_REQUESTED` ×۲ → `APPROVED` رسیده. پس یک بازبینِ دوم **وجود دارد** و کار می‌کند |
 | **ج.** کاهشِ `Required approvals` از ۱ به ۰ | تغییر خطِ مشی | توصیه **نمی‌شود** — همان دروازه‌ای است که حادثهٔ #143 را می‌گیرد |
 
 آنچه **کمک نمی‌کند**: توکنِ تازه، PAT جدید، یا `--admin`. هر سه یا لازم نیستند یا امتحان شده‌اند و رد شده‌اند.
@@ -138,8 +181,7 @@ branch protection (main)
 
 ## 6. برنامهٔ اجراییِ بعدی (به ترتیب، بدون حدس)
 
-1. **#190** — تأییدشده (`APPROVED`)، شاخه به‌روز شد، CI روی head `4dd447e8` در حال اجرا. به‌محض سبز
-   شدن: `python scripts/pr_convergence.py guard 190 --expect-sha 4dd447e8` سپس `gh pr merge 190 --merge`.
+1. ~~**#190**~~ — **انجام شد** (`14:13:21Z`, مرج‌کامیت `cf8b7f6`, ۲۲/۲۲ چک سبز، +۱۴۸۷ خط).
 2. **۸ PRِ §3.1** — فقط منتظر تأیید (راه الف/ب در §5). هیچ کارِ مهندسیِ دیگری لازم ندارند.
 3. **#122، #201، #247** — `CHANGES_REQUESTED`: کارِ نویسنده، نه تأییدِ بازبین.
 4. **#230** — ۱۳ چکِ قرمز؛ باید یا تعمیر شود یا بسته شود، نه مرج.
@@ -147,6 +189,16 @@ branch protection (main)
 6. **۴۶ PRِ متضاد** — تریاژِ واقعی: کدام‌ها با PRهای تازه‌تر (مثل #246/#243) جایگزین شده‌اند؟ مرجِ
    همه‌شان با هم، همان اشتباهی است که وضعیت امروز را ساخته. پیشنهاد: هر شاخه جدا، `git rebase --onto`،
    اجرای گیت‌ها روی head جدید، و سپس مرج — یکی‌یکی، با ثبت شاهد.
+
+### ۴.۳ وضعیتِ تحویلِ همین کار، پس از مرج #190
+
+`PR #249` باز است. آخرین خواندن زنده: **۲۲/۲۲ check pass**، `mergeable=MERGEABLE`، اما
+`mergeStateStatus=BEHIND` چون `main` بعد از ساخت شاخه دو بار جلو رفته (`6ce6bfc` و `cf8b7f6`).
+این branch باید روی main فعلی rebase شود و CI دوباره اجرا شود؛ نتیجهٔ check روی SHA قدیمی را
+نمی‌توان برای SHA جدید خرج کرد. PR نیز از حسابِ مالک (`bot523h`) باز شده، پس تأیید خودی ممنوع است.
+
+`main` پس از #190 روی `cf8b7f665d8dc3ec94d52b3ea337ef2491961f33` است. CI مربوط به همین main
+هنوز در حال اجراست (run `40201219831` در آخرین مشاهده)؛ هیچ ادعایی دربارهٔ سبزشدنِ آن نمی‌کنم.
 
 ---
 
@@ -167,8 +219,9 @@ python scripts/pr_convergence.py guard 190 --expect-sha 4dd447e8
 # ۴) گاردِ base (حادثهٔ #143)
 python scripts/merge_base_guard.py check-pr 208
 
-# ۵) شاهدِ مرجِ #111
+# ۵) شاهدِ مرجِ #111 و #190
 gh pr view 111 --json state,mergedAt,mergeCommit,mergedBy
+gh pr view 190 --json state,mergedAt,mergeCommit,mergedBy
 
 # ۶) اثباتِ نبودِ آرتیفکت‌های سشن قبل
 gh api "search/code?q=CURRENT_TRUTH_AUDIT+repo:bot523h/nexus-ai-agent" --jq .total_count   # → 0

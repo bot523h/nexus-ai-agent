@@ -32,6 +32,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
@@ -46,6 +47,7 @@ BLOCKERS: tuple[str, ...] = (
     "WRONG_BASE_BRANCH",
     "DRAFT",
     "CONFLICT",
+    "MERGEABILITY_UNKNOWN",
     "CI_RED",
     "CI_PENDING",
     "CHANGES_REQUESTED",
@@ -115,8 +117,14 @@ def blockers(pr: dict[str, Any], expected_base: str = EXPECTED_BASE) -> list[str
         found.append("WRONG_BASE_BRANCH")
     if pr.get("isDraft"):
         found.append("DRAFT")
-    if str(pr.get("mergeable") or "").upper() == "CONFLICTING":
+    mergeable = str(pr.get("mergeable") or "").upper()
+    if mergeable == "CONFLICTING":
         found.append("CONFLICT")
+    elif mergeable != "MERGEABLE":
+        # GitHub recomputes mergeability asynchronously whenever the base moves;
+        # "not computed yet" is NOT "no conflict".  Reporting it as clean is how
+        # a 46-conflict backlog turns into "0 conflicts" the moment main moves.
+        found.append("MERGEABILITY_UNKNOWN")
 
     state = _rollup_state(pr)
     if state in {"FAILURE", "ERROR"}:
@@ -132,10 +140,6 @@ def blockers(pr: dict[str, Any], expected_base: str = EXPECTED_BASE) -> list[str
 
     if str(pr.get("mergeStateStatus") or "").upper() in {"BEHIND", "DIRTY"}:
         found.append("REBASE_FIRST")
-    if str(pr.get("mergeable") or "").upper() not in {"MERGEABLE", "CONFLICTING"}:
-        # UNKNOWN: GitHub has not finished computing mergeability yet.
-        if "CI_PENDING" not in found:
-            found.append("CI_PENDING")
     return found
 
 
@@ -182,8 +186,11 @@ def check_guard(
             "review decision is not APPROVED — required review not satisfied "
             "(a pull request can never be approved by its own author)"
         )
-    if str(pr.get("mergeStateStatus") or "").upper() == "BEHIND":
+    merge_state = str(pr.get("mergeStateStatus") or "").upper()
+    if merge_state == "BEHIND":
         reasons.append("head is BEHIND main — CI did not run on the current base")
+    elif merge_state != "CLEAN":
+        reasons.append(f"mergeStateStatus is {merge_state!r}, expected 'CLEAN'")
     head = str(pr.get("headRefOid") or "")
     if expected_sha and not head.startswith(expected_sha):
         reasons.append(f"head moved: expected {expected_sha}, live {head}")
@@ -269,9 +276,31 @@ def as_pr_record(pr: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_registry(repo: str = DEFAULT_REPO) -> dict[str, Any]:
+def build_registry(
+    repo: str = DEFAULT_REPO, wait_seconds: float = 180.0, poll_seconds: float = 5.0
+) -> dict[str, Any]:
+    """One settled read.  Waits out GitHub's async mergeability recomputation.
+
+    After the base branch moves, every PR reports ``mergeable: UNKNOWN`` for a
+    while.  A snapshot taken in that window is not a *smaller* backlog, it is an
+    unmeasured one, so this function re-reads until the set settles (or the
+    deadline passes — then the unknowns are reported as their own tier).
+    """
     main_sha = fetch_main_sha(repo)
-    prs = fetch_open_prs(repo)
+    deadline = time.monotonic() + max(wait_seconds, 0.0)
+    while True:
+        prs = fetch_open_prs(repo)
+        unknown = sum(1 for pr in prs if pr["mergeable"] == "UNKNOWN")
+        remaining = deadline - time.monotonic()
+        if unknown == 0 or remaining <= 0:
+            break
+        if unknown:
+            print(
+                f"pr-registry: {unknown} of {len(prs)} PRs still report mergeable=UNKNOWN "
+                f"(GitHub recomputing) — re-reading in {poll_seconds:.0f}s ({remaining:.0f}s left)",
+                file=sys.stderr,
+            )
+        time.sleep(min(poll_seconds, remaining))
     for pr in prs:
         record = as_pr_record(pr)
         pr["blockers"] = blockers(record)
@@ -358,7 +387,7 @@ def _aggregate(checks: list[dict[str, Any]]) -> str:
     states = [(c.get("conclusion") or c.get("state") or "").upper() for c in checks]
     if any(s in {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"} for s in states):
         return "FAILURE"
-    if any(s in {"PENDING", "IN_PROGRESS", "QUEUED", "EXPECTED", "WAITING"} for s in states):
+    if any(s in {"PENDING", "IN_PROGRESS", "QUEUED", "EXPECTED", "WAITING", ""} for s in states):
         return "PENDING"
     if any(s in {"SUCCESS", "PASS", "SKIPPED", "NEUTRAL"} for s in states):
         return "SUCCESS"
@@ -372,6 +401,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_collect = sub.add_parser("collect", help="live read → JSON registry")
     p_collect.add_argument("--out", default="-")
+    p_collect.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="do not wait for GitHub to finish recomputing mergeability (may record UNKNOWN)",
+    )
 
     p_report = sub.add_parser("report", help="JSON registry → markdown table")
     p_report.add_argument("--in", dest="infile", default="-")
@@ -384,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "collect":
-            registry = build_registry(args.repo)
+            registry = build_registry(args.repo, wait_seconds=0.0 if args.no_wait else 180.0)
             text = json.dumps(registry, indent=2, ensure_ascii=False) + "\n"
             if args.out == "-":
                 sys.stdout.write(text)

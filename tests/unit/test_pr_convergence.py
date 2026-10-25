@@ -146,6 +146,12 @@ def test_guard_rejects_a_stale_base() -> None:
     assert any("BEHIND" in reason for reason in reasons)
 
 
+def test_guard_rejects_unknown_merge_state() -> None:
+    code, reasons = registry.check_guard(_pr(mergeStateStatus="UNKNOWN"))
+    assert code == 1
+    assert any("expected 'CLEAN'" in reason for reason in reasons)
+
+
 # ---------------------------------------------------------------------------
 # totals must be total
 # ---------------------------------------------------------------------------
@@ -204,3 +210,49 @@ def test_report_renders_every_tier_and_every_pr() -> None:
 def test_registry_schema_is_versioned() -> None:
     """A committed artifact must announce the shape a reader can parse."""
     assert registry.SCHEMA.startswith("nexus-pr-registry/v")
+
+
+# ---------------------------------------------------------------------------
+# mergeability is computed asynchronously — "not computed yet" is not "clean"
+# ---------------------------------------------------------------------------
+def test_unknown_mergeability_is_its_own_blocker_not_a_pass() -> None:
+    """The 2026-10-25 regression: after main moved twice, 66 of 68 PRs reported
+    ``mergeable: UNKNOWN`` and the registry first printed ``CONFLICT: 0``.
+
+    A snapshot of an unmeasured backlog is not an empty backlog, so UNKNOWN must
+    be a blocker in its own right, ranked with the hard structural ones.
+    """
+    pr = _pr(mergeable="UNKNOWN", mergeStateStatus="UNKNOWN")
+    assert "MERGEABILITY_UNKNOWN" in registry.blockers(pr)
+    assert registry.classify(pr) == "MERGEABILITY_UNKNOWN"
+    assert registry.BLOCKERS.index("MERGEABILITY_UNKNOWN") < registry.BLOCKERS.index("CI_RED")
+
+
+def test_unknown_mergeability_outranks_a_missing_approval() -> None:
+    """A PR we cannot even measure must not be filed as merely 'needs a review'."""
+    pr = _pr(mergeable="UNKNOWN", reviewDecision="REVIEW_REQUIRED")
+    assert registry.classify(pr) == "MERGEABILITY_UNKNOWN"
+
+
+def test_unknown_mergeability_does_not_hide_a_real_conflict() -> None:
+    pr = _pr(mergeable="CONFLICTING")
+    assert registry.classify(pr) == "CONFLICT"
+
+
+def test_unknown_merge_state_is_not_treated_as_behind() -> None:
+    pr = _pr(mergeStateStatus="UNKNOWN", mergeable="MERGEABLE")
+    assert "REBASE_FIRST" not in registry.blockers(pr)
+
+
+def test_guard_refuses_to_merge_while_mergeability_is_unknown() -> None:
+    code, reasons = registry.check_guard(_pr(mergeable="UNKNOWN"))
+    assert code == 1
+    assert any("not computed" in reason for reason in reasons)
+
+
+def test_aggregate_fails_closed_on_an_unclassified_check() -> None:
+    assert registry._aggregate([{"conclusion": "SUCCESS"}, {}]) == "PENDING"
+
+
+def test_aggregate_fails_closed_on_an_empty_check_list() -> None:
+    assert registry._aggregate([]) == "NONE"

@@ -1,17 +1,18 @@
 {
   "schema": "nexus-pr-registry/v1",
   "repo": "bot523h/nexus-ai-agent",
-  "generated_at": "2026-10-25T13:33:28Z",
-  "main_sha": "6ce6bfcf580572779501f18a323c5eba73783d07",
+  "generated_at": "2026-10-25T14:17:28Z",
+  "main_sha": "cf8b7f665d8dc3ec94d52b3ea337ef2491961f33",
   "open_total": 68,
   "totals": {
     "WRONG_BASE_BRANCH": 2,
     "DRAFT": 7,
     "CONFLICT": 46,
+    "MERGEABILITY_UNKNOWN": 0,
     "CI_RED": 1,
-    "CI_PENDING": 1,
+    "CI_PENDING": 0,
     "CHANGES_REQUESTED": 3,
-    "NEEDS_APPROVAL": 8,
+    "NEEDS_APPROVAL": 9,
     "REBASE_FIRST": 0,
     "READY": 0
   },
@@ -19,13 +20,39 @@
     "WRONG_BASE_BRANCH": 2,
     "DRAFT": 7,
     "CONFLICT": 54,
+    "MERGEABILITY_UNKNOWN": 0,
     "CI_RED": 18,
-    "CI_PENDING": 1,
+    "CI_PENDING": 0,
     "CHANGES_REQUESTED": 19,
-    "NEEDS_APPROVAL": 47,
-    "REBASE_FIRST": 67
+    "NEEDS_APPROVAL": 48,
+    "REBASE_FIRST": 68
   },
   "prs": [
+    {
+      "number": 249,
+      "title": "docs(truth): live PR audit + reproducible convergence registry",
+      "head": "arena/c888ae0d-nexus-ai-agent",
+      "head_sha": "e51929dd1d96c8b803510b2669544bc5487b33be",
+      "base": "main",
+      "is_draft": false,
+      "mergeable": "MERGEABLE",
+      "merge_state": "BEHIND",
+      "review_decision": "REVIEW_REQUIRED",
+      "ci_state": "SUCCESS",
+      "ci_contexts": 22,
+      "commits": 1,
+      "additions": 2680,
+      "deletions": 0,
+      "changed_files": 5,
+      "author": "bot523h",
+      "created_at": "2026-10-25T13:40:48Z",
+      "updated_at": "2026-10-25T13:40:57Z",
+      "tier": "NEEDS_APPROVAL",
+      "blockers": [
+        "NEEDS_APPROVAL",
+        "REBASE_FIRST"
+      ]
+    },
     {
       "number": 247,
       "title": "feat(creative): perception lane — measured silence/scene/loudness evidence (free offline FFmpeg)",
@@ -619,30 +646,6 @@
         "CI_RED",
         "CHANGES_REQUESTED",
         "REBASE_FIRST"
-      ]
-    },
-    {
-      "number": 190,
-      "title": "feat(integrations): thin Trigger.dev execution boundary (adapter, no domain logic)",
-      "head": "integrations/trigger-dev-boundary",
-      "head_sha": "4dd447e82855b7788aae738053c6815e88cccd27",
-      "base": "main",
-      "is_draft": false,
-      "mergeable": "MERGEABLE",
-      "merge_state": "BLOCKED",
-      "review_decision": "APPROVED",
-      "ci_state": "PENDING",
-      "ci_contexts": 22,
-      "commits": 2,
-      "additions": 1487,
-      "deletions": 0,
-      "changed_files": 8,
-      "author": "bot523h",
-      "created_at": "2026-10-08T11:11:11Z",
-      "updated_at": "2026-10-25T13:33:13Z",
-      "tier": "CI_PENDING",
-      "blockers": [
-        "CI_PENDING"
       ]
     },
     {
