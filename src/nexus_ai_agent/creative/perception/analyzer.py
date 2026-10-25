@@ -14,6 +14,11 @@ Safety properties, each pinned by a test:
   an absolute path of an existing regular file, and ``-protocol_whitelist file``
   makes FFmpeg refuse network/playlist indirection (``http:``, HLS entries,
   ``concat:``) even if a container tries to name one.
+* **one descriptor, one inode.**  The file is opened once with ``O_NOFOLLOW`` and
+  its type, size, text sniff and hash are read from that descriptor; FFmpeg is
+  handed the same descriptor (``/dev/fd/N`` via ``pass_fds``), never the pathname.
+  A concurrent swap of the pathname therefore cannot make the engine validate one
+  file and analyse another.
 * **bounded memory and time.**  stderr is *streamed*; only the lines a parser
   needs are kept (capped), and a watchdog kills the process at ``timeout_s``.
   Input reading is capped at ``max_media_s`` seconds.
@@ -38,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import os
 import signal
+import stat as stat_module
 import subprocess
 import threading
 from collections import deque
@@ -93,6 +99,33 @@ class _Source:
     mtime_ns: int
     device: int = 0
     inode: int = 0
+    fd: int = -1
+
+
+def _sha256_fd(fd: int) -> str:
+    """Hash an already-open descriptor, restoring its offset afterwards."""
+    digest = hashlib.sha256()
+    offset = os.lseek(fd, 0, os.SEEK_CUR)
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        while True:
+            chunk = os.read(fd, _HASH_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+    finally:
+        os.lseek(fd, offset, os.SEEK_SET)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _read_head_fd(fd: int, size: int) -> bytes:
+    """Read up to ``_SNIFF_BYTES`` from a descriptor, restoring its offset."""
+    offset = os.lseek(fd, 0, os.SEEK_CUR)
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        return os.read(fd, min(_SNIFF_BYTES, size))
+    finally:
+        os.lseek(fd, offset, os.SEEK_SET)
 
 
 def _sha256(path: Path) -> str:
@@ -139,16 +172,6 @@ def _refuse_indirection_bytes(path: Path) -> bool:
         return _looks_textual(handle.read(_SNIFF_BYTES))
 
 
-def _refuse_indirection(path: Path) -> None:
-    with path.open("rb") as handle:
-        head = handle.read(_SNIFF_BYTES)
-    if _looks_textual(head):
-        raise AnalysisInputError(
-            f"{path} is text, not a media container (playlists, concat lists and SDP "
-            "can reference other files or URLs and are refused)"
-        )
-
-
 def _fixed(value: float, digits: int) -> str:
     """Fixed-point text: never an exponent form FFmpeg's option parser could misread."""
     return f"{value:.{digits}f}"
@@ -185,24 +208,52 @@ class FfmpegAnalyzer:
                 raise AnalysisUnavailableError(str(error)) from error
         return self._resolved
 
-    def _source(self, path: Path | str) -> _Source:
+    def _open_checked(self, path: Path | str) -> tuple[Path, int, os.stat_result]:
+        """Resolve, open (no-follow) and validate one inode; return its descriptor.
+
+        The caller owns the descriptor.  Type, size and the text sniff are all read
+        from the descriptor, so a concurrent swap of the pathname cannot make us
+        validate one file and later analyse another.
+        """
         candidate = Path(path)
         try:
             resolved = candidate.resolve(strict=True)
         except (OSError, RuntimeError) as error:
             raise AnalysisInputError(f"media not found: {candidate}") from error
-        if not resolved.is_file():
-            raise AnalysisInputError(f"not a regular file: {resolved}")
-        _refuse_indirection(resolved)
-        stat = resolved.stat()
-        return _Source(
-            resolved,
-            _sha256(resolved),
-            stat.st_size,
-            stat.st_mtime_ns,
-            stat.st_dev,
-            stat.st_ino,
-        )
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(resolved, flags)
+        except OSError as error:
+            raise AnalysisInputError(f"cannot open {resolved}: {error}") from error
+        try:
+            stat = os.fstat(fd)
+            if not stat_module.S_ISREG(stat.st_mode):
+                raise AnalysisInputError(f"not a regular file: {resolved}")
+            if _looks_textual(_read_head_fd(fd, stat.st_size)):
+                raise AnalysisInputError(
+                    f"{resolved} is text, not a media container (playlists, concat lists "
+                    "and SDP can reference other files or URLs and are refused)"
+                )
+        except BaseException:
+            os.close(fd)
+            raise
+        return resolved, fd, stat
+
+    def _source(self, path: Path | str) -> _Source:
+        resolved, fd, stat = self._open_checked(path)
+        try:
+            return _Source(
+                resolved,
+                _sha256_fd(fd),
+                stat.st_size,
+                stat.st_mtime_ns,
+                stat.st_dev,
+                stat.st_ino,
+                fd,
+            )
+        except BaseException:
+            os.close(fd)
+            raise
 
     def _assert_unchanged(self, source: _Source) -> None:
         changed = AnalysisFailedError(
@@ -227,6 +278,8 @@ class FfmpegAnalyzer:
         self,
         arguments: Sequence[str],
         keep: Callable[[str], object],
+        *,
+        pass_fds: tuple[int, ...] = (),
     ) -> list[str]:
         """Run FFmpeg, stream stderr, keep only relevant lines, enforce the time budget."""
         argv = [self._binary(), "-hide_banner", "-nostdin", "-nostats", *arguments]
@@ -242,6 +295,7 @@ class FfmpegAnalyzer:
                 encoding="utf-8",
                 errors="replace",
                 start_new_session=True,  # own process group: a kill reaches every child
+                pass_fds=pass_fds,
             )
         except OSError as error:
             raise AnalysisUnavailableError(f"cannot execute FFmpeg: {error}") from error
@@ -303,6 +357,10 @@ class FfmpegAnalyzer:
         arguments = ["-protocol_whitelist", "file", "-format_whitelist", FORMAT_WHITELIST]
         if limit:
             arguments += ["-t", str(self.max_media_s)]
+        # Hand FFmpeg the *descriptor* we validated, not the pathname, so it reads
+        # the same inode whose type, sniff and hash are recorded in the evidence.
+        if source.fd >= 0:
+            return [*arguments, "-i", f"/dev/fd/{source.fd}"]
         return [*arguments, "-i", str(source.path)]
 
     # -- public API -----------------------------------------------------
@@ -329,17 +387,13 @@ class FfmpegAnalyzer:
 
     def probe(self, path: Path | str) -> parsers.MediaProbe:
         """Duration and stream presence of ``path`` (no evidence, no hashing)."""
-        candidate = Path(path)
+        resolved, fd, _stat = self._open_checked(path)
         try:
-            resolved = candidate.resolve(strict=True)
-        except (OSError, RuntimeError) as error:
-            raise AnalysisInputError(f"media not found: {candidate}") from error
-        if not resolved.is_file():
-            raise AnalysisInputError(f"not a regular file: {resolved}")
-        _refuse_indirection(resolved)
-        return self._probe_resolved(resolved)
+            return self._probe_source(_Source(resolved, "", 0, 0, fd=fd))
+        finally:
+            os.close(fd)
 
-    def _probe_resolved(self, resolved: Path) -> parsers.MediaProbe:
+    def _probe_source(self, source: _Source) -> parsers.MediaProbe:
         lines = self._run(
             [
                 "-protocol_whitelist",
@@ -347,7 +401,7 @@ class FfmpegAnalyzer:
                 "-format_whitelist",
                 FORMAT_WHITELIST,
                 "-i",
-                str(resolved),
+                f"/dev/fd/{source.fd}",
                 "-t",
                 "0.05",
                 "-f",
@@ -355,11 +409,12 @@ class FfmpegAnalyzer:
                 "-",
             ],
             parsers.PROBE_LINE.match,
+            pass_fds=(source.fd,),
         )
         try:
             return parsers.parse_probe(lines)
         except parsers.ParseError as error:
-            raise AnalysisFailedError(f"cannot probe {resolved}: {error}") from error
+            raise AnalysisFailedError(f"cannot probe {source.path}: {error}") from error
 
     def silences(
         self,
@@ -380,36 +435,43 @@ class FfmpegAnalyzer:
         if not -100.0 < noise_floor_db <= -10.0 or not 0.01 <= min_silence_s <= 600.0:
             raise AnalysisInputError("parameters are out of range after rounding")
         source = self._source(path)
-        probe = self._probe_resolved(source.path)
-        if not probe.has_audio:
-            raise AnalysisInputError(f"{source.path} has no audio stream")
-        self._require_within_limit(source, probe.duration_us)
-        lines = self._run(
-            [
-                *self._common_input(source),
-                "-vn",
-                "-af",
-                f"silencedetect=noise={_fixed(noise_floor_db, 1)}dB:d={_fixed(min_silence_s, 3)}",
-                "-f",
-                "null",
-                "-",
-            ],
-            parsers.SILENCE_LINE.search,
-        )
         try:
-            spans = parsers.parse_silences(lines, probe.duration_us)
-        except parsers.ParseError as error:
-            raise AnalysisFailedError(f"unreadable silencedetect output: {error}") from error
-        self._assert_unchanged(source)
-        return _seal(
-            SilenceEvidence,
-            engine=self.engine_id(),
-            asset_sha256=source.sha256,
-            duration_us=probe.duration_us,
-            noise_floor_db=noise_floor_db,
-            min_silence_us=parsers.to_us(min_silence_s),
-            spans=tuple(SilenceSpan(start_us=a, end_us=b) for a, b in spans),
-        )
+            probe = self._probe_source(source)
+            if not probe.has_audio:
+                raise AnalysisInputError(f"{source.path} has no audio stream")
+            self._require_within_limit(source, probe.duration_us)
+            lines = self._run(
+                [
+                    *self._common_input(source),
+                    "-vn",
+                    "-af",
+                    (
+                        f"silencedetect=noise={_fixed(noise_floor_db, 1)}dB:"
+                        f"d={_fixed(min_silence_s, 3)}"
+                    ),
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                parsers.SILENCE_LINE.search,
+                pass_fds=(source.fd,),
+            )
+            try:
+                spans = parsers.parse_silences(lines, probe.duration_us)
+            except parsers.ParseError as error:
+                raise AnalysisFailedError(f"unreadable silencedetect output: {error}") from error
+            self._assert_unchanged(source)
+            return _seal(
+                SilenceEvidence,
+                engine=self.engine_id(),
+                asset_sha256=source.sha256,
+                duration_us=probe.duration_us,
+                noise_floor_db=noise_floor_db,
+                min_silence_us=parsers.to_us(min_silence_s),
+                spans=tuple(SilenceSpan(start_us=a, end_us=b) for a, b in spans),
+            )
+        finally:
+            os.close(source.fd)
 
     def scene_cuts(self, path: Path | str, *, threshold: float = 0.3) -> SceneCutEvidence:
         """Scene-change instants of the video stream (``select='gt(scene,T)'``)."""
@@ -419,69 +481,77 @@ class FfmpegAnalyzer:
         if not 0.0 < threshold < 1.0:
             raise AnalysisInputError("threshold is out of range after rounding to 3 digits")
         source = self._source(path)
-        probe = self._probe_resolved(source.path)
-        if not probe.has_video:
-            raise AnalysisInputError(f"{source.path} has no video stream")
-        self._require_within_limit(source, probe.duration_us)
-        lines = self._run(
-            [
-                *self._common_input(source),
-                "-an",
-                "-vf",
-                f"select='gt(scene,{_fixed(threshold, 3)})',showinfo",
-                "-f",
-                "null",
-                "-",
-            ],
-            parsers.SCENE_LINE.search,
-        )
         try:
-            cuts = parsers.parse_scene_cuts(lines, probe.duration_us)
-        except parsers.ParseError as error:
-            raise AnalysisFailedError(f"unreadable showinfo output: {error}") from error
-        self._assert_unchanged(source)
-        return _seal(
-            SceneCutEvidence,
-            engine=self.engine_id(),
-            asset_sha256=source.sha256,
-            duration_us=probe.duration_us,
-            threshold=threshold,
-            cuts_us=tuple(cuts),
-        )
+            probe = self._probe_source(source)
+            if not probe.has_video:
+                raise AnalysisInputError(f"{source.path} has no video stream")
+            self._require_within_limit(source, probe.duration_us)
+            lines = self._run(
+                [
+                    *self._common_input(source),
+                    "-an",
+                    "-vf",
+                    f"select='gt(scene,{_fixed(threshold, 3)})',showinfo",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                parsers.SCENE_LINE.search,
+                pass_fds=(source.fd,),
+            )
+            try:
+                cuts = parsers.parse_scene_cuts(lines, probe.duration_us)
+            except parsers.ParseError as error:
+                raise AnalysisFailedError(f"unreadable showinfo output: {error}") from error
+            self._assert_unchanged(source)
+            return _seal(
+                SceneCutEvidence,
+                engine=self.engine_id(),
+                asset_sha256=source.sha256,
+                duration_us=probe.duration_us,
+                threshold=threshold,
+                cuts_us=tuple(cuts),
+            )
+        finally:
+            os.close(source.fd)
 
     def loudness(self, path: Path | str) -> LoudnessEvidence:
         """EBU R128 integrated loudness, loudness range and true peak (``ebur128``)."""
         source = self._source(path)
-        probe = self._probe_resolved(source.path)
-        if not probe.has_audio:
-            raise AnalysisInputError(f"{source.path} has no audio stream")
-        self._require_within_limit(source, probe.duration_us)
-        lines = self._run(
-            [
-                *self._common_input(source),
-                "-vn",
-                "-af",
-                "ebur128=peak=true:framelog=quiet",
-                "-f",
-                "null",
-                "-",
-            ],
-            parsers.LOUDNESS_SUMMARY_LINE.search,
-        )
         try:
-            result = parsers.parse_loudness("\n".join(lines))
-        except parsers.ParseError as error:
-            raise AnalysisFailedError(f"unreadable ebur128 output: {error}") from error
-        self._assert_unchanged(source)
-        return _seal(
-            LoudnessEvidence,
-            engine=self.engine_id(),
-            asset_sha256=source.sha256,
-            duration_us=probe.duration_us,
-            integrated_lufs=result.integrated_lufs,
-            loudness_range_lu=result.loudness_range_lu,
-            true_peak_dbfs=result.true_peak_dbfs,
-        )
+            probe = self._probe_source(source)
+            if not probe.has_audio:
+                raise AnalysisInputError(f"{source.path} has no audio stream")
+            self._require_within_limit(source, probe.duration_us)
+            lines = self._run(
+                [
+                    *self._common_input(source),
+                    "-vn",
+                    "-af",
+                    "ebur128=peak=true:framelog=quiet",
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                parsers.LOUDNESS_SUMMARY_LINE.search,
+                pass_fds=(source.fd,),
+            )
+            try:
+                result = parsers.parse_loudness("\n".join(lines))
+            except parsers.ParseError as error:
+                raise AnalysisFailedError(f"unreadable ebur128 output: {error}") from error
+            self._assert_unchanged(source)
+            return _seal(
+                LoudnessEvidence,
+                engine=self.engine_id(),
+                asset_sha256=source.sha256,
+                duration_us=probe.duration_us,
+                integrated_lufs=result.integrated_lufs,
+                loudness_range_lu=result.loudness_range_lu,
+                true_peak_dbfs=result.true_peak_dbfs,
+            )
+        finally:
+            os.close(source.fd)
 
 
 __all__ = [

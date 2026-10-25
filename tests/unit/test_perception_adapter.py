@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -314,6 +315,23 @@ def test_real_ffmpeg_never_sees_a_network_playlist(engine: str, tmp_path: Path) 
 
 
 @needs_ffmpeg
+def test_a_nul_bearing_playlist_is_refused_by_the_demuxer_allowlist(
+    engine: str, tmp_path: Path
+) -> None:
+    """A playlist that hides a NUL byte defeats the text sniff on purpose.
+
+    The demuxer allowlist still refuses it: FFmpeg never selects the HLS demuxer, so
+    the indirection is never followed and no evidence is produced.  This is the
+    defence-in-depth the whitelist provides beyond the sniff.
+    """
+    playlist = tmp_path / "nul.m3u8"
+    playlist.write_bytes(b"#EXTM3U\n\x00#EXTINF:1,\nhttp://127.0.0.1:9/never.ts\n#EXT-X-ENDLIST\n")
+    assert not analyzer_module._looks_textual(playlist.read_bytes()[:1024])
+    with pytest.raises(analyzer_module.AnalysisError):
+        FfmpegAnalyzer(binary=engine, timeout_s=20).silences(playlist)
+
+
+@needs_ffmpeg
 def test_binary_media_is_not_mistaken_for_text(engine: str, media: dict[str, Path]) -> None:
     for name in ("tone.wav", "scenes.mp4", "av.mp4"):
         head = media[name].read_bytes()[:1024]
@@ -443,6 +461,33 @@ def test_non_executable_binary_is_unavailable(tmp_path: Path, media_file: Path) 
         FfmpegAnalyzer(binary=str(script)).silences(media_file)
 
 
+def test_ffmpeg_reads_the_validated_inode_not_the_pathname(tmp_path: Path) -> None:
+    """TOCTOU: a writer swaps the pathname mid-run; FFmpeg must still read the file we validated.
+
+    The stand-in, on the run it is handed the input, first replaces the pathname with a
+    symlink to a *text* playlist (the swap a concurrent writer would race in), then copies
+    what its inherited descriptor actually points at.  If the engine handed FFmpeg the
+    pathname, the copy would be the playlist; because it hands the descriptor, the copy is
+    the original bytes we hashed and sniffed.
+    """
+    good = tmp_path / "good.wav"
+    original = b"RIFF\x00\x00\x00\x00WAVEfmt \x00 the validated bytes"
+    good.write_bytes(original)
+    evil = tmp_path / "evil.m3u8"
+    evil.write_text("#EXTM3U\n#EXTINF:1,\nhttp://127.0.0.1:9/never.ts\n#EXT-X-ENDLIST\n")
+    capture = tmp_path / "captured.bin"
+    body = (
+        'prev=""; for a in "$@"; do if [ "$prev" = "-i" ]; then inp="$a"; fi; prev="$a"; done\n'
+        f"rm -f {good}\nln -s {evil} {good}\n"
+        f'cp "$inp" {capture}\n' + BANNER_AUDIO
+    )
+    analyzer = FfmpegAnalyzer(binary=_fake(tmp_path, body))
+    probe = analyzer.probe(good)
+    assert probe.duration_us > 0
+    assert capture.read_bytes() == original, "FFmpeg followed the swapped pathname"
+    assert b"EXTM3U" not in capture.read_bytes()
+
+
 def test_timeout_kills_the_process(tmp_path: Path, media_file: Path) -> None:
     marker = tmp_path / "still-running"
     binary = _fake(tmp_path, f"touch {marker}\nsleep 30\n")
@@ -507,13 +552,16 @@ def test_media_longer_than_the_limit_is_refused_not_truncated(
 
 
 def test_argv_contract(tmp_path: Path, media_file: Path) -> None:
-    """Every call: no shell, an option-proof absolute input and a protocol whitelist."""
+    """Every call: no shell, a descriptor input and a protocol/format whitelist."""
     log = tmp_path / "argv.log"
+    fd_target = tmp_path / "fd.target"
     body = (
         f'printf "%s\\n" "$@" > {log}.$$\n'
         'case "$*" in\n'
         '  *"-version"*) echo "ffmpeg version 9.9-test" ;;\n'
-        "  *)\n" + BANNER_AUDIO + "    ;;\n"
+        "  *)\n" + BANNER_AUDIO + f'    prev=""; for a in "$@"; do if [ "$prev" = "-i" ]; then '
+        f'readlink /proc/self/fd/"${{a#/dev/fd/}}" > {fd_target}; fi; prev="$a"; done\n'
+        "    ;;\n"
         "esac\n"
     )
     binary = _fake(tmp_path, body)
@@ -532,8 +580,11 @@ def test_argv_contract(tmp_path: Path, media_file: Path) -> None:
         assert argv.index("-format_whitelist") < argv.index("-i")
         assert {"wav", "mov", "matroska"} <= set(allowed)
         assert not {"hls", "applehttp", "concat", "sdp", "image2", "data", "dash"} & set(allowed)
+        # The input is a descriptor FFmpeg inherits, never a re-resolvable pathname.
         given = argv[argv.index("-i") + 1]
-        assert os.path.isabs(given) and given == str(media_file.resolve())
+        assert re.fullmatch(r"/dev/fd/\d+", given), given
+    # ...and that descriptor is the validated inode, not some other file.
+    assert Path(fd_target.read_text().strip()).resolve() == media_file.resolve()
     assert analyzer.engine_id() == "ffmpeg 9.9-test"
 
 

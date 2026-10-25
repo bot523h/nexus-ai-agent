@@ -36,6 +36,7 @@ ADAPTER_ALLOWED = {
     "pathlib",
     "re",
     "signal",
+    "stat",
     "subprocess",
     "threading",
     "math",
