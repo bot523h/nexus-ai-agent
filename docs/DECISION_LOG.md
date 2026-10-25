@@ -2104,7 +2104,48 @@ workflow; (c) creating a per-run database — `CREATE DATABASE` is not granted o
 PostgreSQL (notably Neon), so it would have traded a data-safety guarantee for a
 coverage gap on exactly the deployments the test exists to protect.
 
-### D-0030 — Storage has three products, capacity is a typed claim with a source, and a second storage seam is allowed only because neither existing one can carry a user asset (task-272, **PROPOSED**)
+### D-0030 — Knowledge retrieval V1: evidence over convenience — a vector hit is not evidence until the registry vouches for it (task-273)
+
+**Date recorded:** 2026-10-24 · **Status:** implemented under owner-mandated task-273; agent-authored record, **not** an owner acceptance — owner review happens on PR #245. **Identifier note:** the D-0029 slot is reserved for the app-first product frame (owner direction stated 2026-10-20, proposed by PR #240, explicitly awaiting owner acceptance) and must not be reused here. · **Scope:** `knowledge_retrieval/`, `adapters/llamaindex_retrieval.py`, CLI `knowledge`, migration `d4e1c0a79b21`
+
+**Decision.** The LlamaIndex-backed knowledge subsystem ships with four non-negotiable semantics:
+(1) **verified evidence** — a retrieval hit becomes evidence only after its `source_id` resolves to an
+`ingested` registry row whose sha256 equals the hit's; mismatches are dropped (`dropped_stale`) and
+zero-query-overlap nearest neighbours are discarded (`filtered_unrelated`, ≥ 4-char distinctive-token
+overlap), so the subsystem answers `no_matches` rather than fabricate relevance; (2) **derived store,
+authoritative DB** — the LlamaIndex storage context is disposable (`rebuild` recreates it, generation
++ 1), `knowledgesource` in the one SQLite/Postgres authority records identity/hash/status, and ingest
+commits the index write before the registry row so interrupted runs converge on the next run
+(duplicate-run INSERT races collapse through the IntegrityError→UPDATE retry instead of failing the
+run); (3) **local-first by default** — pinned `llama-index-core==0.14.25` (MIT, no LLM extras,
+telemetry disabled in-process), hash embeddings by default, `sentence-transformers` only from an
+existing local directory (a missing directory is `error[embedding]`, never a download), PDF only via
+the already-declared `pypdf` extra; (4) **operations through existing boundaries** — CLI-only
+(`index|search|status|rebuild|sources list|remove`, `--json`, `error[code]` + hint, exit 1, no stack
+traces), no new API routes (the fail-closed route inventory stays untouched), no new UI.
+
+**Alternatives rejected.** *Serve the raw top-k from the vector store* — rejected: pure vector search
+always returns a nearest neighbour, so an unrelated document would be presented as evidence for a
+niche query (the exact failure the mission forbids). *Reuse/extend `features/rag.py`* — rejected: it is
+a per-user upload engine (Chroma + flashrank) without authorized-root registration, hash change
+detection, incremental reindex, stale cleanup or versioned citations — the mission's gaps. *Hosted
+embeddings / managed vector store* — rejected: violates local-first, adds keys and per-query cost.
+*Expose an API route now* — rejected: each route must enter the fail-closed inventory with
+hostile-state tests; V1's operator surface is the CLI behind existing authz.
+
+**Consequences.** Precision is favoured over recall (paraphrases sharing no distinctive token are
+dropped, visible as `filtered_unrelated`); per-project scoping and reranking are deferred; the hash
+provider's scores are ordering signals, not calibrated probabilities. Recovery is uniform: any
+store-level corruption ⇒ `nexus knowledge rebuild --yes`.
+
+**Evidence.** `tests/unit/test_knowledge_retrieval_identity.py`,
+`tests/unit/test_knowledge_retrieval_service.py`, `tests/unit/test_knowledge_retrieval_cli.py`,
+`tests/integration/test_knowledge_retrieval_pipeline.py`,
+`tests/architecture/test_knowledge_retrieval_boundaries.py` (law R22). Living view:
+`docs/architecture/KNOWLEDGE_RETRIEVAL.md`; ADR 0012 records only the docs-enforcement
+decision and links back here (behaviour authority = this entry).
+
+### D-0031 — Storage has three products, capacity is a typed claim with a source, and a second storage seam is allowed only because neither existing one can carry a user asset (task-272, **PROPOSED**)
 
 **Status: PROPOSED — not accepted.** This entry records an implemented and tested *adapter and
 contract* plus the design direction behind them. The direction itself awaits owner review; per
@@ -2164,7 +2205,7 @@ Auth because storage is Neon-hosted — identity and storage are independent pro
 R2 user-asset wiring, no UI, no installable extension runtime. Those are Waves 2–6 in
 `architecture/DATA_AND_STORAGE.md` §7.7, each with its own claim.
 
-**D-0030 amendment (2026-10-22, PR #244 independent review).** The review found the contract's
+**D-0031 amendment (2026-10-22, PR #244 independent review).** The review found the contract's
 *prefix* and *integrity* semantics were conventions rather than law, so two adapters disagreed and a
 documentation claim outran the code. The status stays **PROPOSED**; the following are corrections to
 the proposal, not new decisions:
@@ -2180,7 +2221,7 @@ the proposal, not new decisions:
 3. **Environment sourcing is explicit.** The region is never taken from `AWS_REGION`; the endpoint is
    parsed by authority so look-alike hosts, embedded credentials, paths and non-443 ports are refused.
 
-**D-0030 amendment 2 (2026-10-22, PR #244 round-2 review).** Still **PROPOSED**. Three corrections:
+**D-0031 amendment 2 (2026-10-22, PR #244 round-2 review).** Still **PROPOSED**. Three corrections:
 
 1. **Ownership is a segment boundary, not a string prefix.** `nagar/assets` does not own
    `nagar/assets-other/…`. Every key operation now proves membership before any provider request (a
