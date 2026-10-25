@@ -496,3 +496,30 @@ class AppProjectMembership(SQLModel, table=True):
     principal_id: str = Field(foreign_key="appprincipal.principal_id", primary_key=True)
     permissions_json: str = "[]"
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ── Knowledge retrieval (task-273) ──────────────────────────────────────────
+# Canonical registry of *authorized knowledge sources* — the authoritative
+# record of what the local-first knowledge index was built from.  The index
+# itself (embeddings, nodes) is derived state under data/knowledge_index/;
+# these rows are what makes citations resolvable and stale hits detectable
+# after a restart, a rebuild, or a source edit.  Table name follows the
+# SQLModel convention (lowercased class name): ``knowledgesource``.
+
+
+class KnowledgeSource(SQLModel, table=True):
+    """One registered knowledge source and the version the index reflects."""
+
+    __table_args__ = (UniqueConstraint("root", "path", name="uq_knowledgesource_root_path"),)
+
+    source_id: str = Field(primary_key=True)  # stable: sha256(root + rel_path)[:32]
+    root: str = Field(index=True)  # resolved authorized root (display form)
+    path: str = Field(index=True)  # POSIX-style path relative to its root
+    sha256: str = Field(index=True)  # content hash of the indexed version
+    size_bytes: int = 0
+    status: str = Field(default="ingested", index=True)  # ingested | error
+    chunks: int = 0
+    indexed_at: datetime | None = Field(default=None)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    # Operator-safe failure detail only: a reason string, never file content.
+    last_error: str | None = Field(default=None)
