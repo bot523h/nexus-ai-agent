@@ -1,0 +1,41 @@
+{
+  "schema": "nexus-merge-evidence/v1",
+  "captured_at": "2026-10-25T13:35:27Z",
+  "repo": "bot523h/nexus-ai-agent",
+  "merge": {
+    "pr": 111,
+    "title": "docs(queue): bind merged timeout-contract evidence",
+    "author": "app/arena-ai-coding-agent",
+    "base": "main",
+    "state": "MERGED",
+    "head_sha": "5918d3bf40ba2a41f3620118b38c6f738c5c6346",
+    "merge_commit": "6ce6bfcf580572779501f18a323c5eba73783d07",
+    "merged_at": "2026-10-25T13:32:42Z",
+    "merged_by": "bot523h",
+    "approvals": [
+      "bot523h"
+    ],
+    "files": [
+      "MASTER_ENGINEERING_TRUTH_REPORT_2026-09-27.md"
+    ]
+  },
+  "pre_merge_gate": {
+    "command": "python scripts/pr_convergence.py guard 111 --expect-sha 5918d3bf",
+    "result": "PASS",
+    "checks_total": 22,
+    "checks_passing": 22
+  },
+  "blocked_attempts_recorded": [
+    {
+      "command": "gh pr merge 111 --merge",
+      "exit": 1,
+      "stderr": "X Pull request #111 is not mergeable: the base branch policy prohibits the merge."
+    },
+    {
+      "command": "gh pr merge 111 --merge --admin",
+      "exit": 1,
+      "stderr": "Message: At least 1 approving review is required by reviewers with write access."
+    }
+  ],
+  "main_after_merge": "6ce6bfcf580572779501f18a323c5eba73783d07"
+}
