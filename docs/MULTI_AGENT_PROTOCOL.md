@@ -23,8 +23,10 @@ several Claude Code sessions over git worktrees of one repo):
   an owner, a scope of exclusive paths, and a TTL) plus a **deferral log** so a
   stopped agent leaves a durable note instead of a silent conflict.
 * **Referee layer** — a deterministic overlap check that any agent (or CI) can run
-  before pushing, and a single **gates owner** rule so two agents never race the
-  same lint/test suite.
+  before pushing, so two agents do not silently edit the same exclusive paths.
+  There is **no mandatory global gates owner** (policy 2026-10-19): each agent runs
+  its own gates and records its own evidence. A `gates_owner` claim remains an
+  optional, advisory, at-most-one marker — it never locks the project.
 
 ## 2. Task lifecycle
 
@@ -79,11 +81,24 @@ python scripts/agent_board.py claim TASK --branch BR [--ttl 24] [--gates]
 python scripts/agent_board.py release TASK --branch BR
 python scripts/agent_board.py defer TASK --branch BR --fa "…" --resume-when "…"
 python scripts/agent_board.py check --files "src/a.py,src/b.py" --branch BR   # referee
+python scripts/agent_board.py check --files "src/a.py" --branch BR --no-remote  # local only
 ```
 
-`check` exits `1` when any listed file overlaps another branch's **active**
-`exclusive_paths` — wire it into a pre-push hook or a CI job; either way it is the
-mechanical answer to "may I push this?"
+`check` is a **multi-source referee**. It reads the local board, every sibling
+git worktree's board, and `origin/main`'s board, then exits:
+
+| exit | meaning |
+|---|---|
+| `0` | no overlap **and** every consulted source was readable |
+| `1` | a proven overlap with another branch's active `exclusive_paths` |
+| `2` | a source could not be read (git/remote/worktree unavailable) — **not** a pass |
+
+Exit `2` is the honesty gate: "no overlap" is only claimed when the data was
+actually read. `--no-remote` narrows the check to the local board and says so
+loudly — its `0` is a *local* verdict, never a global pass. A proven overlap
+(`1`) is reported even when another source is unreadable, because the conflict
+is confirmed and hiding it would be worse. Wire it into a pre-push hook or a CI
+job; either way it is the mechanical answer to "may I push this?"
 
 ## 5. Failure modes and how the protocol absorbs them
 
@@ -100,3 +115,23 @@ New task → add a `claims` entry with `status: "queued"`, a `zone`, a crisp
 `scope`, and explicit `exclusive_paths` (directories with trailing `/`, files
 verbatim). New zone → add to `zones` with the path prefix list. Schema is
 versioned (`"schema": 1`); bump deliberately and update this document.
+
+## 7. Single board authority — owner decision (Option B, 2026-10-22)
+
+The single authoritative coordination board is `.agents/board.json` on `main`.
+`refs/nexus/board` is deprecated and non-authoritative.
+
+- The shipped CLI (`scripts/agent_board.py`) reads and writes the tree board only;
+  its canonical path is the module constant `BOARD`.
+- Branch and worktree boards are still **required overlap evidence**; they never
+  supersede canonical `main` state.
+- A remote ref, manifest or branch board cannot grant execution authority.
+- Schema/integrity validation and the fail-closed exit 2 for unreadable required
+  sources are preserved. Exit 0 (readable, disjoint), 1 (proven overlap) and
+  2 (unreadable/unverifiable shared state) are unchanged.
+- The `gates_owner` field is optional and advisory and never a global prerequisite.
+- Retiring the deprecated ref is a separate audited operation: preserve its exact
+  commit, tree and board bytes first, re-read the remote SHA immediately before
+  deletion, and use an exact-SHA lease (`--force-with-lease`) so a concurrent
+  update is never overwritten.
+- Enforced by `tests/unit/test_board_authority_option_b.py`.

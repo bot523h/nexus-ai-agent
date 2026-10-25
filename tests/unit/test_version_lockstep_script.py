@@ -47,7 +47,12 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _fixture(
-    root: Path, *, version: str = "3.13.0", pyproject: str = "3.13.0", changelog: str = "3.13.0"
+    root: Path,
+    *,
+    version: str = "3.13.0",
+    pyproject: str = "3.13.0",
+    changelog: str = "3.13.0",
+    readme: str = "3.13.0",
 ) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     (root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
@@ -56,6 +61,12 @@ def _fixture(
     )
     (root / "CHANGELOG.md").write_text(
         f"# Changelog\n\n## [Unreleased]\n\n## [{changelog}] - 2026-01-01\n",
+        encoding="utf-8",
+    )
+    # The README canonical Version label is one of the guarded declarations, so
+    # every fixture must carry one or the guard exits 2 (missing declaration).
+    (root / "README.md").write_text(
+        f"# fixture\n\n> **Version: v{readme}** (see `VERSION`).\n",
         encoding="utf-8",
     )
     return root
@@ -93,6 +104,15 @@ def test_the_script_is_red_when_one_source_drifts(
     result = _run("--root", str(root))
     assert result.returncode == 1
     assert expected_offender in result.stderr
+    assert "drift detected" in result.stderr
+
+
+def test_the_script_is_red_when_the_readme_version_label_drifts(tmp_path: Path) -> None:
+    """The README canonical Version label is a guarded declaration, so a stale one is red."""
+    root = _fixture(tmp_path / "stale-readme", readme="3.12.0")
+    result = _run("--root", str(root))
+    assert result.returncode == 1
+    assert "README.md" in result.stderr
     assert "drift detected" in result.stderr
 
 
@@ -139,7 +159,9 @@ def test_the_script_imports_standard_library_only() -> None:
             imported.add(node.module.split(".")[0])
     # tomllib is standard from 3.11 and the parser degrades gracefully on 3.10 (see
     # toml_cross_check): allow it explicitly so the test is version-independent.
-    allowed = set(sys.stdlib_module_names) | {"tomllib", "tomli"}
+    # tomli is deliberately NOT allowed: it is not a dependency (not even
+    # transitively), so any import of it would crash the rail at runtime.
+    allowed = set(sys.stdlib_module_names) | {"tomllib"}
     third_party = sorted(name for name in imported if name not in allowed)
     assert not third_party, (
         f"{SCRIPT.name} must stay standard-library only — lint-fast installs nothing, "

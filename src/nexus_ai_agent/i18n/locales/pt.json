@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *Dica:* basta digitar uma mensagem e respondo com IA!\n\nVocê também pode usar:\n• `/ask <pergunta>` — Perguntas rápidas\n• `/code <código>` — Revisão de código\n• `/translate <texto>` — Tradução inteligente",
   "onboarding.image_hint": "💡 *Dica:* use `/image <descrição>` para gerar imagens!\n\nTente: `/image um gato no espaço digital-art`\n\nEstilos: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 Envie uma mensagem para começar a conversar!",
-  "onboarding.explore_hint": "🗺️ **Todos os comandos:**\n\n🤖 `/ai` — Conversar com Gemini\n🎨 `/image` — Gerar imagens\n🔊 `/tts` — Texto para fala\n☁️ `/cloud` — Enviar arquivos\n🔗 `/referral` — Convidar amigos\n🎮 `/quiz` — Jogar\n🌐 `/language` — Mudar idioma\n❓ `/help` — Lista completa"
+  "onboarding.explore_hint": "🗺️ **Todos os comandos:**\n\n🤖 `/ai` — Conversar com Gemini\n🎨 `/image` — Gerar imagens\n🔊 `/tts` — Texto para fala\n☁️ `/cloud` — Enviar arquivos\n🔗 `/referral` — Convidar amigos\n🎮 `/quiz` — Jogar\n🌐 `/language` — Mudar idioma\n❓ `/help` — Lista completa",
+  "creative.invalid_command": "❌ Comando de estúdio desconhecido. Use /edit, /caption ou /grade.",
+  "creative.invalid_operation": "❌ Operação não suportada por /{command}. Opções: {operations}",
+  "creative.not_replied": "❌ Responda a uma mensagem de vídeo (ou áudio) com este comando.",
+  "creative.limit_exceeded": "❌ A mídia deve ter no máximo {max_seconds} segundos.",
+  "creative.media_too_large": "❌ A mídia é maior que {max_mb} MB.",
+  "creative.media_download_failed": "❌ Falha ao baixar a mídia do Telegram; tente novamente.",
+  "creative.queue_failed": "❌ A fila de renderização está indisponível no momento; tente novamente.",
+  "creative.queued": "⏳ /{command} {operation} na fila — tarefa {job_id}",
+  "creative.completed": "✅ /{command} {operation} concluído",
+  "creative.failed.invalid_request": "❌ O pedido é inválido ({detail}).",
+  "creative.failed.unsupported_operation": "❌ Esta operação não está disponível para renderizações instantâneas.",
+  "creative.failed.media_missing": "❌ O arquivo preparado está ausente; envie o comando novamente.",
+  "creative.failed.caption_profile_unavailable": "❌ As legendas não estão disponíveis nesta instalação (sem motor de fala).",
+  "creative.failed.render_failed": "❌ A renderização falhou; tente uma mídia mais curta ou outros parâmetros.",
+  "creative.failed.ffmpeg_unavailable": "❌ O motor de renderização não está instalado nesta implantação.",
+  "creative.failed.internal": "❌ Ocorreu um erro interno; os detalhes estão visíveis para a equipe."
 }

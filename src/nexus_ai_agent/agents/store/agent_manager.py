@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlmodel import select
 
 from nexus_ai_agent.storage.db import get_session
 from nexus_ai_agent.storage.models import UserActiveAgent
 
-from .specialized_agents import AGENTS, StoreAgent
+from .base_agent import StoreAgent
+from .specialized_agents import AGENTS
 
 logger = logging.getLogger(__name__)
+
+
+def _naive_utcnow() -> datetime:
+    """Current UTC time as the naive value the DATETIME columns store.
+
+    ``datetime.utcnow()`` is deprecated (Python 3.12) and silently mixes naive
+    and aware values; this keeps the stored representation unchanged (DTZ003,
+    audit A-12).
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class AgentManager:
@@ -38,11 +49,11 @@ class AgentManager:
 
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
-            existing = (await session.execute(stmt)).scalar_one_or_none()
+            existing = (await session.exec(stmt)).one_or_none()
 
             if existing:
                 existing.agent_name = agent_id
-                existing.activated_at = datetime.utcnow()
+                existing.activated_at = _naive_utcnow()
                 session.add(existing)
             else:
                 new_active = UserActiveAgent(user_id=user_id, agent_name=agent_id)
@@ -56,7 +67,7 @@ class AgentManager:
         """Deactivate any active agent for a user."""
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
-            existing = (await session.execute(stmt)).scalar_one_or_none()
+            existing = (await session.exec(stmt)).one_or_none()
             if existing:
                 await session.delete(existing)
                 await session.commit()
@@ -66,7 +77,7 @@ class AgentManager:
         """Get the currently active agent for a user."""
         async with get_session() as session:
             stmt = select(UserActiveAgent).where(UserActiveAgent.user_id == user_id)
-            active_record = (await session.execute(stmt)).scalar_one_or_none()
+            active_record = (await session.exec(stmt)).one_or_none()
 
             if active_record and active_record.agent_name in AGENTS:
                 agent_class = AGENTS[active_record.agent_name]

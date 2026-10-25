@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *小提示：* 直接输入消息，我就会用 AI 回复！\n\n你还可以用：\n• `/ask <问题>` — 快速问答\n• `/code <代码>` — 代码审查\n• `/translate <文本>` — 智能翻译",
   "onboarding.image_hint": "💡 *小提示：* 用 `/image <描述>` 生成图像！\n\n试试：`/image 太空中的猫 digital-art`\n\n风格：realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 发送任意消息开始聊天！",
-  "onboarding.explore_hint": "🗺️ **全部命令：**\n\n🤖 `/ai` — 与 Gemini 聊天\n🎨 `/image` — 生成图像\n🔊 `/tts` — 文字转语音\n☁️ `/cloud` — 上传文件\n🔗 `/referral` — 邀请好友\n🎮 `/quiz` — 玩游戏\n🌐 `/language` — 切换语言\n❓ `/help` — 完整命令列表"
+  "onboarding.explore_hint": "🗺️ **全部命令：**\n\n🤖 `/ai` — 与 Gemini 聊天\n🎨 `/image` — 生成图像\n🔊 `/tts` — 文字转语音\n☁️ `/cloud` — 上传文件\n🔗 `/referral` — 邀请好友\n🎮 `/quiz` — 玩游戏\n🌐 `/language` — 切换语言\n❓ `/help` — 完整命令列表",
+  "creative.invalid_command": "❌ 未知的工作室命令。请使用 /edit、/caption 或 /grade。",
+  "creative.invalid_operation": "❌ /{command} 不支持此操作。可用项：{operations}",
+  "creative.not_replied": "❌ 请回复一条视频（或音频）消息并发送此命令。",
+  "creative.limit_exceeded": "❌ 媒体时长最多 {max_seconds} 秒。",
+  "creative.media_too_large": "❌ 媒体大小超过 {max_mb} MB。",
+  "creative.media_download_failed": "❌ 从 Telegram 下载媒体失败，请重试。",
+  "creative.queue_failed": "❌ 渲染队列暂时不可用，请重试。",
+  "creative.queued": "⏳ /{command} {operation} 已排队 — 任务 {job_id}",
+  "creative.completed": "✅ /{command} {operation} 完成",
+  "creative.failed.invalid_request": "❌ 请求无效（{detail}）。",
+  "creative.failed.unsupported_operation": "❌ 此操作暂不支持一键渲染。",
+  "creative.failed.media_missing": "❌ 暂存的媒体文件缺失，请重新发送命令。",
+  "creative.failed.caption_profile_unavailable": "❌ 此安装未提供字幕功能（无语音引擎）。",
+  "creative.failed.render_failed": "❌ 渲染失败，请尝试更短的媒体或其他参数。",
+  "creative.failed.ffmpeg_unavailable": "❌ 此部署未安装渲染引擎。",
+  "creative.failed.internal": "❌ 发生内部错误；团队可查看详情。"
 }
