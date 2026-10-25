@@ -44,10 +44,12 @@ from pathlib import Path
 VERSION_FILENAME = "VERSION"
 PYPROJECT_FILENAME = "pyproject.toml"
 CHANGELOG_FILENAME = "CHANGELOG.md"
+README_FILENAME = "README.md"
 
 _SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 #: ``## [3.13.0] — 2026-09-21`` / ``## [3.13.0] - 2026-09-21``; ``[Unreleased]`` never matches.
 _RELEASED_HEADING = re.compile(r"^##[ \t]*\[(\d+\.\d+\.\d+)\]", re.MULTILINE)
+_README_VERSION = re.compile(r"^[> \t]*\*\*Version:[ \t]*v?(\d+\.\d+\.\d+)\*\*", re.MULTILINE)
 _PROJECT_TABLE = re.compile(r"^\[project\][ \t]*$", re.MULTILINE)
 _ANY_TABLE = re.compile(r"^\[[^\[\]]+\][ \t]*$", re.MULTILINE)
 _PROJECT_VERSION = re.compile(r'^version[ \t]*=[ \t]*"([^"]+)"[ \t]*$', re.MULTILINE)
@@ -102,26 +104,45 @@ def read_changelog_version(root: Path) -> str:
     return match.group(1)
 
 
+def read_readme_version(root: Path) -> str:
+    path = root / README_FILENAME
+    if not path.is_file():
+        raise MissingDeclaration(f"{README_FILENAME} is missing")
+    match = _README_VERSION.search(path.read_text(encoding="utf-8"))
+    if match is None:
+        raise MissingDeclaration(f"{README_FILENAME} has no canonical Version label")
+    return match.group(1)
+
+
 def lockstep_violations(
-    version_file: str, pyproject_version: str, changelog_version: str
+    version_file: str,
+    pyproject_version: str,
+    changelog_version: str,
+    readme_version: str | None = None,
 ) -> list[str]:
-    """Every disagreement between the three declarations (empty list = in lock-step)."""
+    """Every disagreement between release declarations (empty list = in lock-step)."""
     problems: list[str] = []
-    for label, value in (
+    declarations = [
         (VERSION_FILENAME, version_file),
         (f"{PYPROJECT_FILENAME} [project].version", pyproject_version),
         (f"{CHANGELOG_FILENAME} newest released heading", changelog_version),
-    ):
+    ]
+    if readme_version is not None:
+        declarations.append((f"{README_FILENAME} Version label", readme_version))
+    for label, value in declarations:
         if not _SEMVER.match(value):
             problems.append(f"{label} is not a semantic version: {value!r}")
     if problems:
         return problems
 
     canonical = version_file
-    for label, value in (
+    comparisons = [
         (f"{PYPROJECT_FILENAME} [project].version", pyproject_version),
         (f"{CHANGELOG_FILENAME} newest released heading", changelog_version),
-    ):
+    ]
+    if readme_version is not None:
+        comparisons.append((f"{README_FILENAME} Version label", readme_version))
+    for label, value in comparisons:
         if value != canonical:
             problems.append(f"{label} ({value}) != {VERSION_FILENAME} ({canonical})")
     return problems
@@ -161,20 +182,23 @@ def main(argv: list[str] | None = None) -> int:
         version_file = read_version_file(root)
         pyproject_version = read_pyproject_version(root)
         changelog_version = read_changelog_version(root)
+        readme_version = read_readme_version(root)
         pyproject_text = (root / PYPROJECT_FILENAME).read_text(encoding="utf-8")
     except MissingDeclaration as exc:
         print(f"cannot check the release version: {exc}", file=sys.stderr)
         return 2
 
-    problems = lockstep_violations(version_file, pyproject_version, changelog_version)
+    problems = lockstep_violations(
+        version_file, pyproject_version, changelog_version, readme_version
+    )
     problems += toml_cross_check(pyproject_text, pyproject_version)
     if problems:
         print("release version drift detected:", file=sys.stderr)
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         print(
-            "  fix: align VERSION, pyproject.toml [project].version and the newest "
-            "released CHANGELOG heading",
+            "  fix: align VERSION, pyproject.toml [project].version, README Version "
+            "label and the newest released CHANGELOG heading",
             file=sys.stderr,
         )
         return 1

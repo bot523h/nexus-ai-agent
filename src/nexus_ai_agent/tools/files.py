@@ -4,18 +4,23 @@ import os
 from pathlib import Path
 
 from nexus_ai_agent.tools.base import BaseTool, RiskLevel
+from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
 
 
 def _workspace_root() -> Path:
-    # Default to current working directory; can be overridden for deployments/tests.
-    return Path(os.environ.get("NEXUS_WORKSPACE_ROOT", ".")).resolve()
+    """Resolve the legacy environment-configured workspace root.
+
+    New composition roots should pass ``workspace_root`` to each tool. The
+    environment fallback remains for direct callers and backwards-compatible
+    CLI usage, but this module never mutates that process-global setting.
+    """
+    return Path(os.environ.get("NEXUS_WORKSPACE_ROOT", ".")).expanduser()
 
 
-def _resolve_sandboxed(path: str) -> Path:
-    if path.startswith("/") or ".." in Path(path).parts:
-        raise ValueError("Path must be relative and must not contain '..'")
-    root = _workspace_root()
-    return (root / path).resolve()
+def _resolve_sandboxed(path: str, *, workspace_root: str | Path | None = None) -> Path:
+    """Resolve a path through the same physical containment policy as I/O."""
+    root = workspace_root if workspace_root is not None else _workspace_root()
+    return WorkspaceFilesystem(root).resolve(path, allow_root=path in ("", "."))
 
 
 class ReadFileTool(BaseTool):
@@ -23,14 +28,19 @@ class ReadFileTool(BaseTool):
     description = "Read a text file from the sandboxed workspace."
     risk_level = RiskLevel.SAFE
 
+    def __init__(self, workspace_root: str | Path | None = None) -> None:
+        self._workspace = WorkspaceFilesystem(workspace_root or _workspace_root())
+
+    def bind_workspace(self, workspace_root: str | Path) -> None:
+        self._workspace = WorkspaceFilesystem(workspace_root)
+
     async def execute(self, inputs: dict) -> dict:
         try:
-            p = _resolve_sandboxed(str(inputs.get("path", "")))
-            if not p.exists() or not p.is_file():
-                return {"success": False, "output": "", "error": "File not found"}
-            return {"success": True, "output": p.read_text(encoding="utf-8"), "error": None}
-        except Exception as e:  # noqa: BLE001
-            return {"success": False, "output": "", "error": str(e)}
+            path = str(inputs.get("path", ""))
+            output = self._workspace.read_text(path)
+            return {"success": True, "output": output, "error": None}
+        except Exception as exc:  # noqa: BLE001 - tool boundary returns typed failure
+            return {"success": False, "output": "", "error": str(exc)}
 
 
 class WriteFileTool(BaseTool):
@@ -38,15 +48,20 @@ class WriteFileTool(BaseTool):
     description = "Write a text file into the sandboxed workspace."
     risk_level = RiskLevel.GUARDED
 
+    def __init__(self, workspace_root: str | Path | None = None) -> None:
+        self._workspace = WorkspaceFilesystem(workspace_root or _workspace_root())
+
+    def bind_workspace(self, workspace_root: str | Path) -> None:
+        self._workspace = WorkspaceFilesystem(workspace_root)
+
     async def execute(self, inputs: dict) -> dict:
         try:
-            p = _resolve_sandboxed(str(inputs.get("path", "")))
+            path = str(inputs.get("path", ""))
             content = str(inputs.get("content", ""))
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
-            return {"success": True, "output": f"Wrote {p}", "error": None}
-        except Exception as e:  # noqa: BLE001
-            return {"success": False, "output": "", "error": str(e)}
+            written = self._workspace.write_text(path, content)
+            return {"success": True, "output": f"Wrote {written}", "error": None}
+        except Exception as exc:  # noqa: BLE001 - tool boundary returns typed failure
+            return {"success": False, "output": "", "error": str(exc)}
 
 
 class ListDirTool(BaseTool):
@@ -54,12 +69,16 @@ class ListDirTool(BaseTool):
     description = "List directory contents in the sandboxed workspace."
     risk_level = RiskLevel.SAFE
 
+    def __init__(self, workspace_root: str | Path | None = None) -> None:
+        self._workspace = WorkspaceFilesystem(workspace_root or _workspace_root())
+
+    def bind_workspace(self, workspace_root: str | Path) -> None:
+        self._workspace = WorkspaceFilesystem(workspace_root)
+
     async def execute(self, inputs: dict) -> dict:
         try:
-            p = _resolve_sandboxed(str(inputs.get("path", "")) or ".")
-            if not p.exists() or not p.is_dir():
-                return {"success": False, "output": "", "error": "Directory not found"}
-            items = sorted([child.name for child in p.iterdir()])
+            path = str(inputs.get("path", "")) or "."
+            items = self._workspace.list_names(path)
             return {"success": True, "output": "\n".join(items), "error": None}
-        except Exception as e:  # noqa: BLE001
-            return {"success": False, "output": "", "error": str(e)}
+        except Exception as exc:  # noqa: BLE001 - tool boundary returns typed failure
+            return {"success": False, "output": "", "error": str(exc)}

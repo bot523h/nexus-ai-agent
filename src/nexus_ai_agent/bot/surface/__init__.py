@@ -28,6 +28,9 @@ Modules
 ``channel_management`` ``/post`` ``/schedule`` ``/pin`` ``/ban`` ``/unban`` ``/stats``
                        ``/welcome``
 ``onboarding``         the ``onboarding_*`` inline-keyboard callbacks
+``moderation``         ``/mod_config`` ``/warn`` ``/mute`` ``/unmute`` ``/reputation``
+                       (+ the group-message ingress ``evaluate_message``)
+``viral``              ``/viral_preview`` ``/viral_stats`` ``/viral_post``
 """
 
 from __future__ import annotations
@@ -66,7 +69,16 @@ from .gamification import (
     profile_cmd,
     xp_leaderboard_cmd,
 )
+from .moderation import (
+    evaluate_message,
+    mod_config_cmd,
+    mute_cmd,
+    reputation_cmd,
+    unmute_cmd,
+    warn_cmd,
+)
 from .onboarding import onboarding_callback_cmd
+from .viral import viral_post_cmd, viral_preview_cmd, viral_stats_cmd
 
 __all__ = [
     "achievements_cmd",
@@ -82,15 +94,24 @@ __all__ = [
     "daily_cmd",
     "doc_delete_cmd",
     "docs_list_cmd",
+    "evaluate_message",
+    "mod_config_cmd",
+    "mute_cmd",
     "onboarding_callback_cmd",
     "pin_cmd",
     "post_cmd",
     "profile_cmd",
+    "reputation_cmd",
     "route_doc_text",
     "schedule_cmd",
     "session_for",
     "stats_cmd",
     "unban_cmd",
+    "unmute_cmd",
+    "viral_post_cmd",
+    "viral_preview_cmd",
+    "viral_stats_cmd",
+    "warn_cmd",
     "welcome_cmd",
     "xp_leaderboard_cmd",
 ]
@@ -122,4 +143,13 @@ COMMAND_HANDLERS: dict[str, Callable[[Any, Any], Awaitable[None]]] = {
     "unban": unban_cmd,
     "stats": stats_cmd,
     "welcome": welcome_cmd,
+    # audit 2026-10-15 (A-03): the last five canned command groups.
+    "mod_config": mod_config_cmd,
+    "warn": warn_cmd,
+    "mute": mute_cmd,
+    "unmute": unmute_cmd,
+    "reputation": reputation_cmd,
+    "viral_preview": viral_preview_cmd,
+    "viral_stats": viral_stats_cmd,
+    "viral_post": viral_post_cmd,
 }
