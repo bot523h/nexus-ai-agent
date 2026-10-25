@@ -138,7 +138,7 @@ def test_video_edit_rejects_unsafe_url_with_400(
     settings_module.get_settings.cache_clear()
     headers = _signed_form_headers("test-key", {"video_url": url})
     response = api_client.post(
-        "/creative/video-edit", data=urlencode({"video_url": url}), headers=headers
+        "/creative/video-edit", content=urlencode({"video_url": url}), headers=headers
     )
     assert response.status_code == 400, f"{url} must be rejected before a job is created"
     assert "rejected" in response.json()["detail"]
@@ -155,7 +155,7 @@ def test_video_edit_accepts_safe_url_shape(
     headers = _signed_form_headers("test-key", {"video_url": "https://cdn.example.com/video.mp4"})
     response = api_client.post(
         "/creative/video-edit",
-        data=urlencode({"video_url": "https://cdn.example.com/video.mp4"}),
+        content=urlencode({"video_url": "https://cdn.example.com/video.mp4"}),
         headers=headers,
     )
     assert response.status_code == 200

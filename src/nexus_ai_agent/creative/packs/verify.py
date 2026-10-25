@@ -30,11 +30,28 @@ from nexus_ai_agent.creative.packs.manifest import (
     load_manifest,
     parse_semver,
 )
+from nexus_ai_agent.creative.packs.trust import (
+    TRUSTED_STATES,
+    TrustDecision,
+    TrustRoot,
+    TrustRootError,
+    evaluate_trust,
+)
 
 Anchor = Literal["builtin", "external"]
 Severity = Literal["error", "warning"]
 
 ANCHORS: tuple[Anchor, ...] = ("builtin", "external")
+
+#: Sentinel for "load the runtime trust root" — distinct from ``None``, which
+#: means "there is deliberately no authority available".
+USE_DEFAULT_TRUST_ROOT = "<default>"
+
+#: Signature states that make an **external** pack activatable.  Exactly one
+#: state qualifies, and it can only be produced by a real Ed25519 signature
+#: over :func:`~nexus_ai_agent.creative.packs.trust.canonical_signing_bytes`
+#: that validates against an active key in the trust root.
+TRUSTED_SIGNATURE_STATES: frozenset[str] = frozenset(state.value for state in TRUSTED_STATES)
 
 #: Permission token that must accompany ``network_policy.upload_media: true``.
 MEDIA_EGRESS_PERMISSION = "egress_media_optin"
@@ -55,7 +72,10 @@ class VerificationReport:
     package_version: str
     capabilities: tuple[str, ...]
     pending_capabilities: tuple[str, ...]
-    signature_state: Literal["placeholder", "format_only_unverified"]
+    #: One :class:`~nexus_ai_agent.creative.packs.trust.TrustState` value.
+    signature_state: str
+    trust_reason: str
+    trust_key_id: str | None
     external_binaries: tuple[str, ...]
     issues: tuple[VerificationIssue, ...]
 
@@ -66,6 +86,15 @@ class VerificationReport:
     @property
     def warnings(self) -> tuple[VerificationIssue, ...]:
         return tuple(issue for issue in self.issues if issue.severity == "warning")
+
+    @property
+    def trusted(self) -> bool:
+        """True only for a signature verified against the trust root.
+
+        Never confuse this with :attr:`ok` (structure + policy) — an ``ok``
+        pack can be completely unsigned.
+        """
+        return self.signature_state in TRUSTED_SIGNATURE_STATES
 
     @property
     def ok(self) -> bool:
@@ -99,8 +128,17 @@ def verify_manifest(
     known_operations: Iterable[str] | None = None,
     current_version: str | None = None,
     anchor: Anchor = "external",
+    trust_root: TrustRoot | None | str = USE_DEFAULT_TRUST_ROOT,
 ) -> VerificationReport:
-    """Verify one manifest; returns every finding instead of raising."""
+    """Verify one manifest; returns every finding instead of raising.
+
+    ``trust_root`` is the *authority* used to judge ``security.signature``.  The
+    default loads the runtime trust root; pass an explicit
+    :class:`~nexus_ai_agent.creative.packs.trust.TrustRoot` (tests, operators
+    with their own root) or ``None`` to state that no authority exists.  A
+    configured-but-broken trust root is an **error** on the report, never a
+    silent downgrade to "unverified but fine".
+    """
     if anchor not in ANCHORS:  # pragma: no cover - defensive
         raise ValueError(f"unknown anchor: {anchor!r}")
 
@@ -188,24 +226,39 @@ def verify_manifest(
                 )
             )
 
-    # --- signature ---------------------------------------------------------
-    if manifest.signature_is_placeholder:
-        signature_state: Literal["placeholder", "format_only_unverified"] = "placeholder"
-        issues.append(
-            VerificationIssue(
-                "unsigned_manifest",
-                "manifest signature is still the documented placeholder; "
-                "the pack must not be downloaded from an untrusted source",
-                severity="warning",
-            )
-        )
+    # --- signature: claim vs evidence vs authority -------------------------
+    root: TrustRoot | None
+    root_error: str | None = None
+    if isinstance(trust_root, str):
+        try:
+            root = TrustRoot.load()
+        except TrustRootError as exc:  # misconfiguration must be visible
+            root, root_error = None, str(exc)
     else:
-        signature_state = "format_only_unverified"
+        root = trust_root
+
+    decision: TrustDecision = evaluate_trust(manifest, root)
+    signature_state = decision.state.value
+    if root_error is not None:
+        issues.append(VerificationIssue("trust_root_unusable", root_error))
+    if not decision.trusted:
+        # Deliberately a *warning*, not an error: verification answers "is this
+        # manifest well formed and policy-compliant?".  Trust is a separate
+        # question with a separate enforcement point —
+        # :meth:`PackRegistry.activate` refuses any external pack whose
+        # ``signature_state`` is not in ``TRUSTED_SIGNATURE_STATES``.  Keeping
+        # them apart is what stops a *report* from becoming an *authority*.
+        # ``unsigned_manifest`` is kept as the code for the placeholder state:
+        # it is the published contract other surfaces already match on.
+        code = (
+            "unsigned_manifest"
+            if decision.state.value == "placeholder"
+            else f"signature_{decision.state.value}"
+        )
         issues.append(
             VerificationIssue(
-                "signature_not_verified",
-                "signature format accepted, but Ed25519 verification is not enabled in this "
-                "wave (no cryptography dependency); treat the pack as unverified",
+                code,
+                f"{decision.reason} (state={decision.state.value})",
                 severity="warning",
             )
         )
@@ -236,6 +289,8 @@ def verify_manifest(
         capabilities=capabilities,
         pending_capabilities=pending,
         signature_state=signature_state,
+        trust_reason=decision.reason,
+        trust_key_id=decision.key_id,
         external_binaries=tuple(manifest.external_binaries),
         issues=tuple(issues),
     )
@@ -247,6 +302,7 @@ def verify_manifest_file(
     known_operations: Iterable[str] | None = None,
     current_version: str | None = None,
     anchor: Anchor = "external",
+    trust_root: TrustRoot | None | str = USE_DEFAULT_TRUST_ROOT,
 ) -> VerificationReport:
     """Load and verify a manifest file (raises ``PackManifestError`` if unreadable)."""
     return verify_manifest(
@@ -254,4 +310,5 @@ def verify_manifest_file(
         known_operations=known_operations,
         current_version=current_version,
         anchor=anchor,
+        trust_root=trust_root,
     )

@@ -18,7 +18,6 @@ from typing import Any
 
 from sqlmodel import Session, col, select
 
-from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.models import ViralPost
 
@@ -26,11 +25,15 @@ logger = get_logger(__name__)
 
 
 def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for feature CRUD."""
-    from sqlalchemy import create_engine as _ce
+    """The process-wide synchronous engine (``storage.db.sync_engine``).
 
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+    Audit A-02: this module used to build its own ``sqlite:///`` engine and
+    therefore ignored ``NEXUS_DATABASE_URL``; the central helper resolves
+    PostgreSQL-or-SQLite exactly like ``get_session``.
+    """
+    from nexus_ai_agent.storage.db import sync_engine
+
+    return sync_engine()
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +193,7 @@ class ViralEngine:
     @staticmethod
     def is_duplicate(text: str, chat_id: int = 0) -> bool:
         """Check if *text* has been posted before (by content hash)."""
-        content_hash = hashlib.md5(text.encode()).hexdigest()[:12]
+        content_hash = hashlib.sha256(text.encode()).hexdigest()[:12]
         engine = _sync_engine()
         with Session(engine) as session:
             existing = session.exec(
@@ -242,6 +245,22 @@ class ViralEngine:
                 }
                 for r in results
             ]
+
+    @staticmethod
+    def get_post(post_id: int) -> dict[str, Any] | None:
+        """Return one post with its *full* text (the queue listing truncates)."""
+        engine = _sync_engine()
+        with Session(engine) as session:
+            post = session.get(ViralPost, post_id)
+            if post is None:
+                return None
+            return {
+                "id": post.id,
+                "chat_id": post.chat_id,
+                "text": post.text,
+                "viral_score": post.viral_score,
+                "status": post.status,
+            }
 
     @staticmethod
     def mark_posted(post_id: int) -> None:

@@ -54,6 +54,8 @@ The lifecycle gate is the single seam between the canonical Gate-2 contract and 
 
 `Project.state_hash` is **derived** from a canonical JSON serialization on every construction (revision excluded, so revision+hash preconditions survive undo cycles). A stored hash therefore cannot drift from the state it describes.
 
+Undo is **transaction-scoped**: `system.undo` accepts an optional `transaction_id`, and the stage-9 handler refuses with `UndoConflictError` unless that id is still the newest editable transaction. The gate runs inside the handler, under the bus lock, so a rollback can never rewind a concurrent foreign edit (task-223; [`COMMAND_CAPABILITY_CONTRACT.md`](COMMAND_CAPABILITY_CONTRACT.md) §7.1).
+
 ## 3. The pack substrate (data, never code-on-arrival)
 
 A pack is a directory with a `pack.manifest.json` validated against `nexus.capability-pack.v1` plus pure handler modules:
@@ -70,20 +72,21 @@ A pack is a directory with a `pack.manifest.json` validated against `nexus.capab
 - No executable key at any depth of any manifest (`test_pack_manifest_is_data_only.py`).
 - A pack's declared capabilities must equal the operations its registration function adds, and it must activate against its own manifest (`test_slideshow_adapter_boundary.py`).
 - An **external** pack that declares an operation the runtime does not know is rejected at registration; a **builtin** pack may register with *pending* capabilities but cannot be activated until they resolve (`creative/packs/registry.py`).
-- Verification reports every finding; signature state is reported honestly (`placeholder`, `format_only_unverified`) — no pack claims a verified signature today.
+- Verification reports every finding; the signature state is one of the nine `TrustState` values decided against the **trust root** (`creative/packs/trust.py`), never against the manifest's own claim. No shipped pack is `verified` today — all six carry a documented placeholder.
+- `registered` ≠ `verified` ≠ `trusted` ≠ `active`: registration checks structure and policy, the trust root decides trust, and `PackRegistry.activate()` refuses any **external** pack whose state is not `verified` ([ADR 0006](adr/0006-capability-pack-trust-root.md)).
 
 ## 4. Pack inventory and the activation gap (re-measured 2026-09-24)
 
-`nexus packs list` output at `9ec312c` (executed, not paraphrased):
+`nexus packs list` output on this branch (executed, not paraphrased — `signature state` is now the trust-root verdict):
 
-| Pack | Version | Capabilities | Pending | Signature | Binaries |
-|---|---|---:|---:|---|---|
-| `nexus.slideshow.compose` | 0.2.0 | 6 | 0 | placeholder | ffmpeg |
-| `nexus.language.caption` | 1.0.0 | 10 | 0 | placeholder | — |
-| `nexus.edit.timeline` | 1.0.0 | 9 | 0 | format_only_unverified | — |
-| `nexus.motion.graphics` | 1.0.0 | 10 | 0 | format_only_unverified | — |
-| `nexus.audio.studio` | 1.0.0 | 10 | 0 | format_only_unverified | — |
-| `nexus.color.delivery` | 1.0.0 | 7 | 0 | format_only_unverified | — |
+| Pack | Version | Capabilities | Pending | Signature state | Trusted | Binaries |
+|---|---|---:|---:|---|---|---|
+| `nexus.audio.studio` | 1.0.0 | 10 | 0 | placeholder | False | — |
+| `nexus.language.caption` | 1.0.0 | 10 | 0 | placeholder | False | — |
+| `nexus.color.delivery` | 1.0.0 | 7 | 0 | placeholder | False | — |
+| `nexus.edit.timeline` | 1.0.0 | 9 | 0 | placeholder | False | — |
+| `nexus.motion.graphics` | 1.0.0 | 10 | 0 | placeholder | False | — |
+| `nexus.slideshow.compose` | 0.2.0 | 6 | 0 | placeholder | False | ffmpeg |
 
 The activation gap is **closed** (board task-126, landed): `cli.py::_packs_registry`
 now composes `creative.packs.runtime.build_pack_registry()` — the runtime and the
