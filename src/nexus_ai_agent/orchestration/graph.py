@@ -122,12 +122,23 @@ async def _executor_agent(
             ]
             state["response"] = f"Failed to execute {tool_name}: {e}"
     else:
-        # Default MVP step execution
-        first_pending["status"] = "done"
+        # A plan without a registered executable tool is not an execution.
+        # Returning success here used to create a fake-success result for
+        # unsupported operations. Keep the step failed and expose a stable
+        # typed refusal so callers can distinguish it from a successful run.
+        error_code = "unsupported_operation"
+        message = "No registered executable tool was selected for this task."
+        first_pending["status"] = "failed"
         state["tool_results"] = state.get("tool_results", []) + [
-            {"step_id": first_pending.get("id"), "success": True, "output": "noop"}
+            {
+                "step_id": first_pending.get("id"),
+                "success": False,
+                "error_code": error_code,
+                "output": message,
+            }
         ]
-        state["response"] = state.get("response") or "Task executed."
+        state["error"] = f"{error_code}: {message}"
+        state["response"] = message
 
     state["current_task"] = task
     return state

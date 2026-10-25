@@ -14,7 +14,25 @@ probe   mutation                                     killed by
 #4      drop job_id from the trace binding             trace regression
 #5      notifier trusts result.success                 lying-result regression
 #6      bypass failure_status() classification         classification tests
+M1      reservation re-claims a PROCESSING row        T5
+M2–M4   _mark_pending/_completed/_failed unfenced     T1+T1b / T2 / T3
+M5a/b   success notified without a committed row      T15
+M6      publication skips the ownership re-check      T8 / T8b
+M7/M8   retract drops bytes / publish keeps no backup T9 / T9+T10
+M9      resume_pending ignores the stale_after cutoff  T7
+M10     bare success=False treated as success          R4
 ======  ==========================================  ==============================
+
+GOV-2 (2026-10-15) accounting: 12 + 5 re-anchored probes = 17 (the earlier
+"11 + 5 = 16" was a counting error).  M2–M4 are *multi-edit* probes: every
+``_mark_*`` CAS is guarded three times — a fenced SELECT, the attempt-ledger
+status filter and the fenced UPDATE — so a probe that weakens only one layer
+is an equivalent mutant, not an attack; the probe now weakens all three and
+the targeted tests flip RED.  Mutants keep the SQL binding count (``AND ? >= 0``
+instead of dropping the placeholder) so the tests fail for the right reason.
+The harness pins ``PYTHONPATH`` to the tree under mutation: run in an isolated
+worktree (``git worktree add --detach``) an editable install would otherwise
+shadow every mutation and the campaign would report 0/17 while touching nothing.
 
 Protocol per probe (task-181 acceptance): baseline GREEN → apply mutant →
 expect RED → restore bytes → SHA restored → GREEN again.  Nothing is left
@@ -27,13 +45,24 @@ Usage:  .venv/bin/python scripts/gate5_mutation_probes.py
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-PYTEST = [sys.executable, "-m", "pytest", "-q", "-p", "no:warnings", "--tb=no"]
+PYTEST = [
+    sys.executable,
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "no:warnings",
+    "-p",
+    "no:cacheprovider",
+    "--tb=no",
+]
 
 
 @dataclass(frozen=True)
@@ -43,7 +72,28 @@ class Probe:
     anchor: str  # exact text to replace (must be unique in the file)
     mutant: str  # replacement
     tests: tuple[str, ...]  # targeted tests that must flip GREEN → RED
+    #: Further (anchor, mutant) pairs applied with the first one. A fence that
+    #: is enforced twice (a fenced SELECT *and* a fenced UPDATE) is only
+    #: "forgotten" when both are weakened — weakening one layer and watching
+    #: the other hold is not an attack on the invariant (GOV-2, 2026-10-15).
+    extra_edits: tuple[tuple[str, str], ...] = ()
 
+    def edits(self) -> tuple[tuple[str, str], ...]:
+        return ((self.anchor, self.mutant), *self.extra_edits)
+
+
+#: The fenced read each ``_mark_*`` CAS performs before its fenced UPDATE
+#: (20-space indent inside ``_mark_pending``'s ``try``, 16 elsewhere).
+_FENCED_SELECT_20 = (
+    "                    SELECT attempt_history_json FROM nexus_job_queue\n"
+    "                    WHERE id = ? AND status IN (?, ?) AND attempt = ?"
+)
+_UNFENCED_SELECT_20 = _FENCED_SELECT_20.replace("AND attempt = ?", "AND ? >= 0  -- MUTATION")
+_FENCED_SELECT_16 = (
+    "                SELECT attempt_history_json FROM nexus_job_queue\n"
+    "                WHERE id = ? AND status IN (?, ?) AND attempt = ?"
+)
+_UNFENCED_SELECT_16 = _FENCED_SELECT_16.replace("AND attempt = ?", "AND ? >= 0  -- MUTATION")
 
 F = "tests/integration/test_gate5_execution_fencing.py::"
 QUEUE = REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py"
@@ -142,59 +192,146 @@ PROBES: tuple[Probe, ...] = (
         name="M2 _mark_pending forgets the fence",
         target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
         anchor=(
-            "                SET status = ?, started_at = NULL\n"
-            "                WHERE id = ? AND status IN (?, ?) AND attempt = ?"
+            "                    SET status = ?, started_at = NULL, attempt_history_json = ?\n"
+            "                    WHERE id = ? AND status IN (?, ?) AND attempt = ?"
         ),
         mutant=(
-            "                SET status = ?, started_at = NULL\n"
-            "                WHERE id = ? AND status IN (?, ?) AND ? >= 0  -- MUTATION: unfenced"
+            "                    SET status = ?, started_at = NULL, attempt_history_json = ?\n"
+            "                    WHERE id = ? AND status IN (?, ?) AND ? >= 0  -- MUTATION"
         ),
         tests=(
             f"{F}test_t1_cancelled_old_worker_cannot_reopen_a_newer_execution",
             f"{F}test_t1b_cancelled_old_worker_cannot_reset_the_new_owners_processing_row",
+        ),
+        extra_edits=(
+            (
+                '"""PROCESSING/VERIFYING → PENDING for OUR execution only (fenced CAS)."""\n'
+                "        try:\n"
+                "            with self._db_lock, self._connection() as connection:\n"
+                "                row = connection.execute(\n"
+                '                    """\n' + _FENCED_SELECT_20,
+                '"""PROCESSING/VERIFYING → PENDING for OUR execution only (fenced CAS)."""\n'
+                "        try:\n"
+                "            with self._db_lock, self._connection() as connection:\n"
+                "                row = connection.execute(\n"
+                '                    """\n' + _UNFENCED_SELECT_20,
+            ),
+            (
+                (
+                    '                elif attempt.get("status") != "verified":\n'
+                    "                    raise _AttemptTransitionError("
+                    '"attempt is not recoverable")'
+                ),
+                (
+                    "                elif False:  # MUTATION: ledger status ignored\n"
+                    "                    raise _AttemptTransitionError("
+                    '"attempt is not recoverable")'
+                ),
+            ),
         ),
     ),
     Probe(
         name="M3 _mark_completed forgets the fence",
         target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
         anchor=(
-            "                SET status = ?, result_json = ?, error = NULL, finished_at = ?\n"
+            "                    attempt_history_json = ?, error = NULL, finished_at = ?\n"
             "                WHERE id = ? AND status IN (?, ?) AND attempt = ?"
         ),
         mutant=(
-            "                SET status = ?, result_json = ?, error = NULL, finished_at = ?\n"
+            "                    attempt_history_json = ?, error = NULL, finished_at = ?\n"
             "                WHERE id = ? AND status IN (?, ?) AND ? >= 0  -- MUTATION: unfenced"
         ),
         tests=(f"{F}test_t2_old_worker_cannot_mark_newer_attempt_completed",),
+        extra_edits=(
+            (
+                "        result_json = canonical_json(result)\n"
+                "        with self._db_lock, self._connection() as connection:\n"
+                "            row = connection.execute(\n"
+                '                """\n' + _FENCED_SELECT_16,
+                "        result_json = canonical_json(result)\n"
+                "        with self._db_lock, self._connection() as connection:\n"
+                "            row = connection.execute(\n"
+                '                """\n' + _UNFENCED_SELECT_16,
+            ),
+            (
+                (
+                    '                    and entry.get("status") in '
+                    '{"processing", "verifying", "verified"}\n'
+                    "                ),\n"
+                    "                None,\n"
+                    "            )\n"
+                    "            if attempt is None:\n"
+                    "                return False\n"
+                    "            now = _now()"
+                ),
+                (
+                    "                    and True  # MUTATION: ledger status ignored\n"
+                    "                ),\n"
+                    "                None,\n"
+                    "            )\n"
+                    "            if attempt is None:\n"
+                    "                return False\n"
+                    "            now = _now()"
+                ),
+            ),
+        ),
     ),
     Probe(
         name="M4 _mark_failed forgets the fence",
         target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
         anchor=(
-            "                SET status = ?, error = ?, result_json = ?, finished_at = ?\n"
+            "                    attempt_history_json = ?, finished_at = ?\n"
             "                WHERE id = ? AND status IN (?, ?) AND attempt = ?"
         ),
         mutant=(
-            "                SET status = ?, error = ?, result_json = ?, finished_at = ?\n"
+            "                    attempt_history_json = ?, finished_at = ?\n"
             "                WHERE id = ? AND status IN (?, ?) AND ? >= 0  -- MUTATION: unfenced"
         ),
         tests=(f"{F}test_t3_old_worker_cannot_mark_newer_attempt_failed",),
+        extra_edits=(
+            (
+                "        result_json = canonical_json(result) if result is not None else None\n"
+                "        with self._db_lock, self._connection() as connection:\n"
+                "            row = connection.execute(\n"
+                '                """\n' + _FENCED_SELECT_16,
+                "        result_json = canonical_json(result) if result is not None else None\n"
+                "        with self._db_lock, self._connection() as connection:\n"
+                "            row = connection.execute(\n"
+                '                """\n' + _UNFENCED_SELECT_16,
+            ),
+            (
+                (
+                    '                    and entry.get("status") in '
+                    '{"processing", "verifying", "verified"}\n'
+                    "                ),\n"
+                    "                None,\n"
+                    "            )\n"
+                    "            if attempt is None:\n"
+                    "                return False\n"
+                    '            attempt["status"] = status.value'
+                ),
+                (
+                    "                    and True  # MUTATION: ledger status ignored\n"
+                    "                ),\n"
+                    "                None,\n"
+                    "            )\n"
+                    "            if attempt is None:\n"
+                    "                return False\n"
+                    '            attempt["status"] = status.value'
+                ),
+            ),
+        ),
     ),
     Probe(
         name="M5a success notified without a committed COMPLETED (verified lane)",
         target=QUEUE,
         anchor=(
-            "                if not await asyncio.to_thread("
-            "self._mark_completed, claim, final_result):\n"
-            "                    # Durable commit refused"
+            "                if not committed:\n"
+            "                    # Durable commit refused: we are no longer the owner."
         ),
         mutant=(
-            "                if not (\n"
-            "                    await asyncio.to_thread("
-            "self._mark_completed, claim, final_result)\n"
-            "                    or True  # MUTATION: notify regardless of the commit\n"
-            "                ):\n"
-            "                    # Durable commit refused"
+            "                if not (committed or True):  # MUTATION: notify unconditionally\n"
+            "                    # Durable commit refused: we are no longer the owner."
         ),
         tests=(f"{F}test_t15_no_success_notification_without_durable_completed_state[verified]",),
     ),
@@ -257,10 +394,13 @@ PROBES: tuple[Probe, ...] = (
         name="M9 resume_pending ignores the stale_after window",
         target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
         anchor=(
-            "                    if cutoff is not None and started_at is not None "
-            "and started_at >= cutoff:"
+            "                        if started_at is None or started_at >= cutoff:\n"
+            "                            continue"
         ),
-        mutant="                    if False:  # MUTATION: every in-flight row is taken over",
+        mutant=(
+            "                        if False:  # MUTATION: every in-flight row is taken over\n"
+            "                            continue"
+        ),
         tests=(f"{F}test_t7_takeover_without_valid_expiry_is_rejected",),
     ),
     Probe(
@@ -286,18 +426,28 @@ def _sha(path: Path) -> str:
 
 
 def _run_tests(tests: tuple[str, ...]) -> int:
-    result = subprocess.run([*PYTEST, *tests], cwd=REPO, capture_output=True, text=True)
+    # ``PYTHONPATH`` pins the *mutated* tree: when the campaign runs in an
+    # isolated worktree (the only safe place for it — a crash must never leave
+    # a production checkout mutated) an editable install of the package would
+    # otherwise shadow the mutation and every probe would "survive" (GOV-2).
+    env = {**os.environ, "PYTHONPATH": str(REPO / "src")}
+    result = subprocess.run(
+        [*PYTEST, *tests], cwd=REPO, capture_output=True, text=True, env=env, check=False
+    )
     return result.returncode
 
 
 def _apply(probe: Probe) -> None:
     text = probe.target.read_text()
-    if text.count(probe.anchor) != 1:
-        raise SystemExit(
-            f"anchor for {probe.name} is not unique in {probe.target}: "
-            f"{text.count(probe.anchor)} matches"
-        )
-    probe.target.write_text(text.replace(probe.anchor, probe.mutant))
+    for anchor, _mutant in probe.edits():
+        if text.count(anchor) != 1:
+            raise SystemExit(
+                f"anchor for {probe.name} is not unique in {probe.target}: "
+                f"{text.count(anchor)} matches"
+            )
+    for anchor, mutant in probe.edits():
+        text = text.replace(anchor, mutant, 1)
+    probe.target.write_text(text)
 
 
 def _restore(probe: Probe, original: bytes) -> None:

@@ -510,13 +510,16 @@ def run_slice(workdir: Path) -> dict[str, Any]:
         }
         proof["verification"] = first
 
-        # UNDO on the exact bus that executed the command
+        # UNDO on the exact bus that executed the command. The bus is
+        # authorizer-backed (server policy), so the undo carries the same
+        # trusted actor claim as the command it rewinds.
         undo = bus.dispatch(
             TypedCommand(
                 command_id=f"{command.command_id}-undo",
                 operation="system.undo",
                 input={},
                 target=command.target,
+                actor=command.actor,
             )
         )
         proof["undo"] = {
