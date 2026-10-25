@@ -398,7 +398,12 @@ def main() -> int:
             failures.append(f"{probe.name}: {exc}")
             print(f"  mutant: NOT APPLIED — {exc}")
             continue
-        mutant_exit = _run_tests(probe.tests)
+        # Restore in a ``finally`` so an exception from the test run (or an
+        # interrupt) can never leave the mutant in the production source file.
+        try:
+            mutant_exit = _run_tests(probe.tests)
+        finally:
+            probe.target.write_bytes(original)
         if mutant_exit == 0:
             failures.append(f"{probe.name}: mutant survived (tests stayed GREEN)")
             print("  mutant:  SURVIVED (tests still green) — invariant NOT protected")
@@ -406,7 +411,6 @@ def main() -> int:
             caught += 1
             print(f"  mutant:  RED (exit {mutant_exit}) — caught")
 
-        probe.target.write_bytes(original)
         if _sha(probe.target) != before_sha:
             failures.append(f"{probe.name}: restore changed the file")
             print(f"  restore: SHA MISMATCH != {before_sha[:12]}…")
