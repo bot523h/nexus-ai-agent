@@ -426,20 +426,20 @@ same proof is debt, not evidence.
 
 ### The tests that are `xfail`, and why that is not fake success
 
-`xfail` is a declaration, not a pass. Each of the 10 carries the lease that blocks it:
+H1 has landed, so the ten tripwires that used to be `xfail` now pass — the current
+state is **25 passed, 2 xfailed** (§5.3). The two remaining `xfail`s each name a
+*decision*, not a lease:
 
-```
-H1 is blocked: src/nexus_ai_agent/orchestration/graph.py is under the live
-lease of task-202 (branch arena/01a0e907, PR #119, expires 2026-09-29T17:51:40Z)
-```
+- `task-215` (LAW 11) — a dead backend is still reported as a successful empty recall;
+- `task-210` — a Telegram group shares one memory scope across its members.
 
 They are **not** vacuous, on three independent grounds:
 
 - a **control test** (`test_control_an_intent_that_reads_memory_really_delivers_it`)
   proves the harness detects a positive, so a "not reached" result means something;
-- `xfail` is **non-strict**, so when H1 lands the tests XPASS and pytest reports them as
-  passed — the fix can never be followed by a stale red;
-- the mutation harness **kills 4/4 mutants**, which is what proves the guards bite.
+- `xfail` is **non-strict**, so when either decision lands the tests XPASS and pytest
+  reports them as passed — a fix can never be followed by a stale red;
+- the mutation harness **kills 6/6 mutants**, which is what proves the guards bite.
 
 `tests/unit/test_chat_memory_reachability.py::test_the_writer_and_the_reader_cover_the_same_intents`
 is the one guard that caught **its own author**: an earlier draft asserted only "some read

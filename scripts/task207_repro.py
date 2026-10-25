@@ -1,25 +1,31 @@
-"""REPRODUCTION for task-207 — agent_board.py check fails OPEN.
+"""REPRODUCTION for task-207 — ``agent_board.py check`` must not fail OPEN.
 
-The governance tool that decides whether an agent may touch a file reads only
-the LOCAL .agents/board.json.  A claim that exists only on an unmerged PR branch
-is therefore invisible, and `check` prints
+Before task-207, ``check`` read only the LOCAL ``.agents/board.json``. A live
+lease that lived only in another checkout — a sibling worktree, or a pushed PR
+branch — was therefore invisible: ``check`` printed
 
     no overlap — safe to proceed.
 
-and exits 0 for a file that is, in fact, under somebody else's live lease.
+and exited 0 for a file that was, in fact, under somebody else's live lease.
+That was observed twice in one session (task-202 on ``graph.py``, PR #119, and
+task-203 on ``memory/``, PR #121).
 
-This is not a theoretical gap.  It was observed twice in one session:
-  * task-202 (graph.py, PR #119) and task-203 (memory/, PR #121) were both live
-    while `check` reported no overlap;
-  * a scan whose input file list had been wiped reported "no lease found" from
-    ZERO boards and looked exactly like a clean result.
+This script builds the smallest world that shows the hole is now closed, using
+the REAL tool and a REAL ``git worktree`` so the only synthetic thing is the
+lease itself:
 
-This script builds the smallest world that shows the hole: a local board with no
-claim, and a foreign board — reachable only if the tool looked — holding a live
-lease on the file being checked.
+  * ``local``   — a git repository whose ``.agents/board.json`` has NO claims;
+  * ``foreign`` — a sibling worktree of ``local`` whose board holds a LIVE lease
+                  on the file being checked.
+
+``check`` must consult the sibling worktree (a source it reads via
+``git worktree list``) and refuse: exit 1. A tool that read only the local board
+would exit 0 — the shipped defect. The script exits non-zero if ``check`` does
+not block, so it can never report success without asserting the outcome.
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -29,8 +35,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "scripts" / "agent_board.py"
 TARGET = "src/nexus_ai_agent/orchestration/graph.py"
-FOREIGN_BRANCH = "arena/01a0e907-nexus-ai-agent"
 MY_BRANCH = "arena/01a0eade-nexus-ai-agent"
+
+_GIT_ENV = {
+    "GIT_AUTHOR_NAME": "task207-repro",
+    "GIT_AUTHOR_EMAIL": "task207-repro@example.invalid",
+    "GIT_COMMITTER_NAME": "task207-repro",
+    "GIT_COMMITTER_EMAIL": "task207-repro@example.invalid",
+    "PATH": os.environ.get("PATH", ""),
+}
 
 
 def iso(dt: datetime) -> str:
@@ -68,17 +81,20 @@ def live_claim(task: str, branch: str, hours: int = 24) -> dict:
     }
 
 
-def run_check(workdir: Path, extra: list[str] | None = None) -> tuple[int, str]:
+def git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=_GIT_ENV)
+
+
+def run_check(workdir: Path) -> tuple[int, str]:
     proc = subprocess.run(
         [
             sys.executable,
-            str(TOOL),
+            str(workdir / "scripts" / "agent_board.py"),
             "check",
             "--files",
             TARGET,
             "--branch",
             MY_BRANCH,
-            *(extra or []),
         ],
         cwd=workdir,
         capture_output=True,
@@ -89,44 +105,46 @@ def run_check(workdir: Path, extra: list[str] | None = None) -> tuple[int, str]:
 
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
-        work = Path(tmp)
-        (work / "scripts").mkdir()
-        (work / ".agents").mkdir()
-        # Reuse the REAL tool; only the board it reads is synthetic.
-        (work / "scripts" / "agent_board.py").write_text(TOOL.read_text(encoding="utf-8"))
-
-        foreign = make_board([live_claim("task-202-memory-write-observability", FOREIGN_BRANCH)])
-        (work / ".agents" / "board.json").write_text(
+        local = Path(tmp) / "local"
+        foreign = Path(tmp) / "foreign"
+        (local / "scripts").mkdir(parents=True)
+        (local / ".agents").mkdir()
+        # Reuse the REAL tool; only the boards are synthetic.
+        (local / "scripts" / "agent_board.py").write_text(TOOL.read_text(encoding="utf-8"))
+        (local / ".agents" / "board.json").write_text(
             json.dumps(make_board([]), indent=2), encoding="utf-8"
         )
-        (work / "foreign_board.json").write_text(json.dumps(foreign, indent=2), encoding="utf-8")
+
+        # A real repo with a real sibling worktree, so `git worktree list` (the
+        # source `check` consults) actually sees the foreign checkout.
+        for cmd in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "base"]):
+            git(cmd, local)
+        git(["worktree", "add", "-q", str(foreign), "-b", "foreign-lease"], local)
+        (foreign / ".agents").mkdir(exist_ok=True)
+        foreign_claim = live_claim("task-202-memory-write-observability", "arena/foreign-lease")
+        (foreign / ".agents" / "board.json").write_text(
+            json.dumps(make_board([foreign_claim]), indent=2), encoding="utf-8"
+        )
 
         print("=" * 74)
-        print("WORLD: a foreign PR branch holds a LIVE 7-day lease on")
+        print("WORLD: a sibling worktree holds a LIVE lease on")
         print(f"       {TARGET}")
         print("       The local board has no claims at all.")
         print("=" * 74)
 
-        code, out = run_check(work)
-        print("\n[1] check, no remote view available (the shipped behaviour)")
-        print(f"    exit={code}")
+        code, out = run_check(local)
+        print(f"\ncheck exit={code}")
         for line in out.splitlines():
             print(f"      {line}")
-        verdict = "THE BUG" if code == 0 else "blocked"
-        print(f"    -> {verdict}: a live foreign lease did not stop the check\n")
 
-        code, out = run_check(work, ["--board-json", str(work / "foreign_board.json")])
-        print("[2] check, with the foreign board visible")
-        print(f"    exit={code}")
-        for line in out.splitlines():
-            print(f"      {line}")
-        print(f"    -> {'BLOCKED correctly — task-207 fixed' if code == 1 else 'still leaking'}")
-
-        print()
-        print("VERDICT: case [1] is the pre-task-207 behaviour and case [2] is the fix.")
-        print("The tool is the enforcement mechanism; it used to fail open, silently,")
-        print("with the most reassuring wording it owns.")
-        return 0
+        if code == 1:
+            print("\n-> BLOCKED: the sibling worktree lease was consulted — task-207 holds.")
+            return 0
+        if code == 0:
+            print("\n-> THE BUG: a live foreign lease did not stop the check.")
+            return 1
+        print(f"\n-> UNEXPECTED exit {code}: expected 1 (blocked) or 0 (the defect).")
+        return 1
 
 
 if __name__ == "__main__":

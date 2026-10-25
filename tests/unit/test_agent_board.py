@@ -503,6 +503,44 @@ def test_check_no_remote_narrows_the_claim_loudly(
     out = capsys.readouterr().out
     assert code == 0
     assert "NOT a global pass" in out
+    assert "local board only" in out
+
+
+def test_check_skips_an_unreadable_sibling_worktree_board_but_stays_loud(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A sibling worktree whose board cannot be parsed is unverifiable, never skipped.
+
+    Guards the C2 mutant: a malformed foreign board must be recorded as an
+    unreadable source (exit 2 when nothing else proves a conflict), not swallowed.
+    """
+    board = _synthetic_directory_claim_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+
+    other_root = tmp_path / "broken-worktree"
+    (other_root / ".agents").mkdir(parents=True)
+    (other_root / ".agents" / "board.json").write_text("{ not valid json", encoding="utf-8")
+
+    def _fake_git(args: list[str], cwd: Path) -> object:
+        if args[:2] == ["worktree", "list"]:
+            listing = f"worktree {board_module.BOARD.parents[1]}\nworktree {other_root}\n"
+            return subprocess.CompletedProcess(args, 0, stdout=listing, stderr="")
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(board_module, "_git", _fake_git)
+    # origin/main and the open-PR branch source are readable-and-empty, so the
+    # broken sibling worktree is the *only* unverifiable source.
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(board_module, "_open_pr_branches", lambda repo, token: ([], ""))
+    code = board_module.cmd_check(
+        type(
+            "A",
+            (),
+            {"files": "docs/not-owned.md", "branch": "arena/999-me", "no_remote": False},
+        )()
+    )
+    assert code == 2, "an unreadable sibling worktree board must not be a silent pass"
 
 
 def test_check_consults_sibling_worktree_boards(

@@ -40,8 +40,8 @@ BOARD = ROOT / "scripts" / "agent_board.py"
 SUITE = "tests/unit/test_agent_board.py"
 
 # Split so the mutation snippets stay readable and under the line limit.
-_C3_OLD = '    if no_remote:\n        print(\n            "\\n!!  --no-remote: FOREIGN'
-_C3_NEW = '    if False:\n        print(\n            "\\n!!  --no-remote: FOREIGN'
+_C3_OLD = '        scope = "local (--no-remote: local board only; NOT a global pass)"'
+_C3_NEW = '        scope = "local"  # C3: the opt-out stops disclosing its own gap'
 
 
 # (name, old, new, tests that must go red)
@@ -53,22 +53,20 @@ MUTANTS: dict[str, tuple[str, str]] = {
     # that does not reproduce the defect is worse than no mutant, because it
     # reports a green run that means nothing.
     "C1_foreign_boards_ignored": (
-        '                boards.append((path, json.loads(Path(path).read_text(encoding="utf-8"))))',
-        "                pass  # C1: read the local board only, as before task-207",
+        "        for board_path in worktree_boards:",
+        "        for board_path in []:  # C1: read the local board only, as before task-207",
     ),
     # C2: an unreadable foreign board is treated as "nothing found".
     "C2_fails_open_on_a_bad_remote": (
-        '                print(f"could not read board {path}: {exc}", file=sys.stderr)\n'
-        "                unconsulted.append(path)",
-        '                print(f"could not read board {path}: {exc}", file=sys.stderr)\n'
+        '                unreadable.append(f"{board_path}: {exc}")',
         "                pass  # C2: swallow it and keep going",
     ),
     # C3: the explicit local-only opt-out stops saying what it skipped.
     "C3_offline_opt_out_goes_quiet": (_C3_OLD, _C3_NEW),
     # C4: "could not verify" is handed the exit code for "verified clear".
     "C4_unverified_collapses_to_clear": (
-        "        return CHECK_CLEAR if no_remote else CHECK_UNVERIFIED",
-        "        return CHECK_CLEAR  # C4: never distinguish unverified from clear",
+        'rerun once the source is reachable)")\n        return 2',
+        'rerun once the source is reachable)")\n        return 0  # C4: no distinction',
     ),
 }
 
