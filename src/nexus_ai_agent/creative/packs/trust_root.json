@@ -1,0 +1,17 @@
+{
+  "schema": "nexus.pack-trust-root.v1",
+  "version": 1,
+  "threshold": 1,
+  "comment": [
+    "Production trust root for external capability packs.",
+    "It contains PUBLIC keys only, and today it contains none: no external",
+    "publisher has been onboarded, so every external pack resolves to",
+    "'no_trusted_keys'/'unknown_publisher' and is refused activation.",
+    "Adding a publisher is a data change here (public key + key_id + status);",
+    "no private key material exists in this repository and none is needed to",
+    "verify. Revocation is 'status': 'revoked' on the key entry - keep the",
+    "entry so a signature made with it is reported as REVOKED_KEY instead of",
+    "degrading into the indistinguishable 'unknown publisher' state."
+  ],
+  "publishers": {}
+}

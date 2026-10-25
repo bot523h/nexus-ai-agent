@@ -58,6 +58,6 @@ Documentation that cites nothing is opinion. This page records *which* industry 
 
 | Practice | Where |
 |---|---|
-| Claim-before-code with leases, one owner per file-zone, one gates owner | [`../../AGENTS.md`](../../AGENTS.md), `.agents/board.json`, `scripts/agent_board.py` |
+| Claim-before-code with leases, one owner per file-zone, no mandatory gates owner (advisory only) | [`../../AGENTS.md`](../../AGENTS.md), `.agents/board.json`, `scripts/agent_board.py` |
 | Identity by branch, not by letter (collision-proof) | `AGENTS.md` identity rule (introduced after the 2026-09-21 triple-E / double-F collisions) |
 | Board restructured to declare prerequisites and acceptance criteria | `.agents/board.json` schema 2 ([`adr/0004`](adr/0004-board-schema-2.md)) |

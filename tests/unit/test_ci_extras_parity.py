@@ -29,6 +29,7 @@ dependency); the workflow is scanned as text, exactly like the task-113 rail.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -288,16 +289,35 @@ _SRC = REPO_ROOT / "src"
 
 
 def _py310_runtime_blockers(root: Path = _SRC) -> list[str]:
+    """Files under *root* that actually import a Python>3.10 construct.
+
+    Detection is AST-based, not substring-based: a comment or docstring that
+    *mentions* ``StrEnum`` (for example the note in ``creative/intelligence/ir.py``
+    explaining why ``(str, Enum)`` is used instead) must not be flagged.  Only a
+    real ``import``/``from ... import`` (or ``enum.StrEnum`` attribute access) is
+    a blocker.  A file that cannot be parsed is skipped rather than crashing.
+    """
+
     blockers: list[str] = []
     for path in sorted(root.rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        for marker in _PY310_RUNTIME_BLOCKERS:
-            if marker in text:
-                try:
-                    shown = path.relative_to(REPO_ROOT)
-                except ValueError:  # a fixture tree outside the repo (red-proof)
-                    shown = path.name
-                blockers.append(f"{shown} uses {marker}")
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.Attribute):
+                # ``enum.StrEnum`` is a real use even though it is not an import.
+                names = [node.attr]
+            for marker in _PY310_RUNTIME_BLOCKERS:
+                if any(n == marker or n.endswith(f".{marker}") for n in names):
+                    try:
+                        shown = path.relative_to(REPO_ROOT)
+                    except ValueError:  # a fixture tree outside the repo (red-proof)
+                        shown = path.name
+                    blockers.append(f"{shown} uses {marker}")
     return blockers
 
 
@@ -338,6 +358,28 @@ def test_red_proof_the_blocker_detector_fires_on_a_fixture(tmp_path: Path) -> No
     assert _py310_runtime_blockers(tmp_path) != []
     dirty.write_text("from enum import Enum\n", encoding="utf-8")
     assert _py310_runtime_blockers(tmp_path) == []
+
+
+def test_a_comment_that_mentions_strenum_is_not_a_blocker(tmp_path: Path) -> None:
+    """Regression: a docstring/comment explaining why ``StrEnum`` is *avoided* must
+    not be flagged.  A substring scan misreads ``# not StrEnum, which is 3.11+`` as
+    a real use and fails the 3.10 parity leg for a runtime that is actually clean."""
+    note = tmp_path / "comment_only.py"
+    note.write_text(
+        "# These are (str, Enum), not StrEnum, which is 3.11+.\n"
+        '"""A docstring that merely mentions StrEnum."""\n'
+        "from enum import Enum\n",
+        encoding="utf-8",
+    )
+    assert _py310_runtime_blockers(tmp_path) == []
+
+
+def test_attribute_access_to_strenum_is_a_blocker(tmp_path: Path) -> None:
+    """``enum.StrEnum`` does not exist on 3.10, so referencing it is a real blocker
+    even without an import statement."""
+    dotted = tmp_path / "dotted.py"
+    dotted.write_text("import enum\n\nx = enum.StrEnum\n", encoding="utf-8")
+    assert _py310_runtime_blockers(tmp_path) != []
 
 
 # --------------------------------------------------------------------------- #

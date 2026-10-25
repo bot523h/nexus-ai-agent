@@ -42,6 +42,7 @@ from nexus_ai_agent.features.games import NumberGuess, QuickPoll, QuizGame, Word
 from nexus_ai_agent.features.referral import ReferralEngine
 from nexus_ai_agent.features.tools import Calculator, ReminderSystem, Translator, UnitConverter
 from nexus_ai_agent.observability.logging import get_logger
+from nexus_ai_agent.storage.db import sync_db_path_for
 
 logger = get_logger(__name__)
 
@@ -108,7 +109,7 @@ def build_feature_engines(
     ``bot_data``) so that only one referral instance exists per process.
     """
     return FeatureEngines(
-        reminders=ReminderSystem(db_path=settings.db_path),
+        reminders=ReminderSystem(db_path=sync_db_path_for(settings)),
         calculator=Calculator(),
         translator=Translator(),
         converter=UnitConverter(),
@@ -116,7 +117,7 @@ def build_feature_engines(
         number_guess=NumberGuess(),
         wordle=WordleFA(),
         poll=QuickPoll(),
-        referral=referral or ReferralEngine(db_path=settings.db_path),
+        referral=referral or ReferralEngine(db_path=sync_db_path_for(settings)),
         force_join=ForceJoinManager(),
         anon=AnonymousChatManager(),
         # Single shared instance (task-102 acceptance): the P0-7 consent

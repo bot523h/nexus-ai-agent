@@ -14,6 +14,12 @@ committed and pushed through git, backed by a zero-dependency CLI
 (`scripts/agent_board.py`) whose behaviour and schema are themselves tested
 (`tests/unit/test_agent_board.py`).
 
+The single authoritative coordination board is `.agents/board.json` on `main`.
+`refs/nexus/board` is deprecated and non-authoritative: the shipped CLI never
+reads it, and it can never grant execution authority. Branch and worktree boards
+remain required overlap evidence, not a competing canonical authority (owner
+decision Option B, issue #236).
+
 The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, `deferred_log`,
 `takeover_log`, `next_work`, `history`). Structure is enforced, not requested.
 
@@ -24,16 +30,22 @@ The board is `.agents/board.json` (**schema 2**: `protocol`, `zones`, `claims`, 
    an unpushed claim does not exist for the other sandbox. Finish → `release`; blocked → `defer`
    (the Persian note template is built into the CLI).
 2. **ONE OWNER PER FILE-ZONE.** Claims carry `exclusive_paths`. Before pushing, run
-   `python scripts/agent_board.py check --files <changed,files> --branch <you>`; exit 1 means overlap
-   with another agent's live lease — do not push that work, pick another task or defer.
+   `python scripts/agent_board.py check --files <changed,files> --branch <you>`; exit `1` means a
+   proven overlap with another agent's live lease — do not push that work, pick another task or
+   defer. Exit `2` means a source (git/remote/worktree) was unreadable — that is **not** a pass;
+   retry once it is reachable. Only exit `0` means "every consulted source was readable and disjoint".
 3. **BRANCH NAME IS THE CANONICAL IDENTITY.** Letters (A/B/C/…) are convenience labels only.
    A newcomer must state its identity as *its branch*, after checking `git ls-remote origin "arena/*"`,
    the open PRs, and this board. (The rule exists because three sessions once declared "agent E".)
-4. **ONE GATES OWNER.** Exactly one agent (the holder of `gates_owner: true`) runs the full gates on
-   main-bound work. Everyone else writes "deferred to gates owner" in the PR body. Local *diagnostic*
-   checks (`ruff check`, targeted `pytest`) are always allowed and encouraged — they are not the gate.
+4. **NO MANDATORY GATES OWNER (policy 2026-10-19).** Every agent runs its own gates
+   (`make lint`, `make types`, `make test`) on its own branch and records its own evidence —
+   the exact command, the observed result, and the SHA it ran against. A `gates_owner: true`
+   claim is **optional and advisory only**: it never blocks another agent's work, CI, or a PR
+   review, and its absence never makes the referee "unverifiable". Do **not** invent or restore
+   an owner to satisfy the retired rule.
 5. **LEASES EXPIRE (24 h TTL).** `show`/`next`/`gc` auto-release stale leases. Renew by re-running
-   `claim` (heartbeat; refreshes the clock). `gates_owner` is exclusive: taking it clears any other.
+   `claim` (heartbeat; refreshes the clock). `gates_owner` is optional; if claimed it stays
+   exclusive (at most one at a time), but it is never a global lock on the project.
 
 ## 2. Evidence rules (new in v2)
 
@@ -60,23 +72,25 @@ distribution-version test fail for purely environmental reasons — documented i
 
 ## 4. Board state (schema 2 — summary; always verify with `show`)
 
-Verified at `2026-09-21T16:45Z`, `main` @ `7573249` (v3.13.0).
+Verified at `2026-10-06T23:20Z`, `main` @ `b733fb0` (after the #126 → #183 → #128 spine stack and the #184 owner-gate fix merged).
 
 | Task | Zone | Owner (branch) | Status |
 |---|---|---|---|
-| `task-131` documentation & architecture suite + board rewrite | `docs-architecture` | `arena/01a0c4c1-…` | **active** (this contract's author) |
-| `task-111` release version lock-step guard (tests-only) | `ci-quality` | `arena/01a0c4c1-…` | **active** |
-| `ci-gates-steward` interim gates stewardship | `ci-quality` | `arena/01a0c460-…` | **active** (`gates_owner: true`) |
-| `feature-wiring-batch` PR#32 | `feature-wiring` | `arena/01a0c34d-…` | **active** — needs rebase (see `task-122`) |
-| `pr33-in-review` PR#33 (legacy record, no path claim) | `packaging+interop` | `arena/01a0c3aa-…` | active_in_review — needs slim-down (`task-123`) |
+| `task-186` intent-first creative spine + `task-207` referee / `task-219` lease fencing / `task-220` gc-note | `nagar-creative-graph` / `coordination-referee` | merged | `done` (PR#126) |
+| `task-221` spine plan atomicity · `task-222` transaction-scoped rollback · `task-223` identity-aware `system.undo` | `nagar-creative-graph` / `nagar-contract-gate` | merged | `done` (#126 / #183 / #128) |
+| `task-190` SQLite WAL init race | `storage-observability` | merged | `done` (#132 → #174) |
+| `task-253` owner identity gate fails closed when unconfigured | `features-owner-control` | merged | `done` (PR#184) |
+| `task-131` documentation & architecture suite + board rewrite | `docs-architecture` | — | `done` |
+| `ci-gates-steward` interim gates stewardship | `ci-quality` | — | `completed_released` (no live `gates_owner`) |
+| `task-122` PR#32 rebase + dedupe | `feature-wiring` | عامل B | `assigned_to_B` (stale lease) |
+| `task-123` PR#33 slim-down | `packaging+interop` | شاخه 3aa | `assigned_to_E_pr33` (stale lease) |
+| `task-124` P0-8 single wiring + P0-9 graph memory | `audit-remainder` | free | `available_sequenced_post_32_33` — **P0** |
 | `task-126` unified pack registry (4 packs pending) | `cli-packs-registry` | free | `available_sequenced_post_33` — **P0** |
-| `task-124` P0-8 single wiring + P0-9 graph memory | `audit-remainder` | free | `available_sequenced_post_32_33` |
-| `task-122` PR#32 rebase + dedupe | `feature-wiring` | عامل B | `assigned_to_B` |
-| `task-123` PR#33 slim-down | `packaging+interop` | شاخه 3aa | `assigned_to_E_pr33` |
-| `task-121` OTIO markers · `task-128` async DB · `task-106` studio surface · `task-127` real RAG | — | free / B | sequenced (prerequisites in the board) |
-| `task-132` extras CI matrix · `task-134` portrait slice | `ci-quality` / `nagar-portrait` | free | `queued` |
+| `task-121` OTIO markers · `task-128` async DB · `task-127` real RAG | — | free / B | sequenced (prerequisites in the board) |
+| `task-134` portrait slice | `nagar-portrait` | free | `queued` |
+| `task-106` studio surface · `task-132` extras CI matrix | — | — | `done` |
 
-Closed waves, merged PRs (#19–#38) and the four recorded incidents live in
+Closed waves, merged PRs (#19–#38 and the spine stack) and the four recorded incidents live in
 `history` inside `.agents/board.json`; the durable narrative is
 `docs/architecture/` plus `docs/audits/`.
 
@@ -97,6 +111,11 @@ Deferred improvements (toolchain adoption triggers) are recorded in
 `protocol.deferred_improvements` so they are not forgotten.
 
 ## 6. Merge order
+
+Landed (do not re-order): the creative-spine stack **#126 → #183 → #128** (task-186/-207/-219/-220,
+task-221, task-222, task-223) merged into `main` @ `090f35d`.
+
+Remaining main-bound order:
 
 1. **`task-123`** (PR#33 slim-down) — frees `cli.py`, largest conflict surface.
 2. **`task-122`** (PR#32 rebase + dedupe against the merged #34).

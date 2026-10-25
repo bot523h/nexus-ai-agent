@@ -27,6 +27,11 @@ make test           # pytest -q -m "not slow"
   `make version-check` locally), so a drifted `VERSION` / `pyproject.toml` /
   `CHANGELOG.md` is reported in about a second instead of after a full dependency
   install.
+* **A corrupt coordination board fails before the install.**
+  `scripts/check_board_integrity.py` is standard-library only and runs in both the
+  required `lint` job and `lint-fast` (and as `make board-check` locally). It rejects an
+  empty, base64-encoded, truncated, wrong-schema or duplicate-task `.agents/board.json`
+  (the failure PR #207 shipped) in about a second, before any dependency install.
 
 ## Multi-agent coordination (required reading for AI agents)
 
@@ -37,5 +42,8 @@ and deferrals are managed through `.agents/board.json` and
 `docs/MULTI_AGENT_PROTOCOL.fa.md`). Claim your task, push the board change
 immediately, never touch a file under another agent's active exclusive paths,
 and record a deferral note when you must stop because another agent holds the
-zone. Only the current `gates_owner` claim runs the shared quality gates
-(`make lint`, `make types`, `make test`) against main-bound work.
+zone. There is **no mandatory global `gates_owner`** (policy 2026-10-19): every
+agent runs the shared quality gates (`make lint`, `make types`, `make test`) on
+its own branch and records the exact commands, results and SHA as evidence. A
+`gates_owner` claim is optional and advisory; it never blocks CI, review or
+another agent's work.

@@ -255,7 +255,7 @@ class TestGetSessionBackendSelection:
             await session.commit()
 
         async with get_session(str(db_path)) as session:
-            rows = (await session.execute(select(PendingApproval))).scalars().all()
+            rows = (await session.exec(select(PendingApproval))).all()
 
         # Real SQLite round-trip: the explicit path is untouched by the URL.
         assert len(rows) == 1
