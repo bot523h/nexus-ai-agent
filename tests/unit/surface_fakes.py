@@ -50,6 +50,7 @@ class FakeBot:
         self.deleted: list[tuple[int, int]] = []
         self.banned: list[tuple[int, int]] = []
         self.unbanned: list[tuple[int, int]] = []
+        self.restricted: list[dict[str, Any]] = []
 
     def _guard(self) -> None:
         if self._raises is not None:
@@ -77,6 +78,10 @@ class FakeBot:
     async def unban_chat_member(self, chat_id: int, user_id: int, **_: Any) -> None:
         self._guard()
         self.unbanned.append((chat_id, user_id))
+
+    async def restrict_chat_member(self, chat_id: int, user_id: int, **kwargs: Any) -> None:
+        self._guard()
+        self.restricted.append({"chat_id": chat_id, "user_id": user_id, **kwargs})
 
     async def get_chat_member_count(self, chat_id: int, **_: Any) -> int:
         self._guard()
@@ -113,16 +118,26 @@ class FakeMessage:
         *,
         message_id: int | None = None,
         author_id: int | None = None,
+        caption: str | None = None,
+        photo: tuple[Any, ...] = (),
     ) -> None:
         self.text = text
+        # Telegram keeps the text of a photo/document in ``caption``; the
+        # moderation ingress reads both (review finding, 2026-10-17).
+        self.caption = caption
+        self.photo = list(photo)
         self.message_id = message_id
         self.replies: list[str] = []
+        self.deleted = False
         if author_id is not None:
             self.from_user = type("User", (), {"id": author_id})()
 
     async def reply_text(self, text: str, **_: Any) -> FakeMessage:
         self.replies.append(text)
         return self
+
+    async def delete(self) -> None:
+        self.deleted = True
 
     async def reply_document(self, *_: Any, **__: Any) -> None:  # pragma: no cover
         return None
@@ -144,8 +159,10 @@ class FakeUpdate:
         callback: FakeCallback | None = None,
         language_code: str | None = "en",
         reply_to: FakeMessage | None = None,
+        caption: str | None = None,
+        photo: tuple[Any, ...] = (),
     ) -> None:
-        self.message = FakeMessage(text)
+        self.message = FakeMessage(text, caption=caption, photo=photo)
         self.message.reply_to_message = reply_to
         self.edited_message = None
         self.callback_query = callback
@@ -194,8 +211,14 @@ def make_update(
     callback: FakeCallback | None = None,
     language_code: str | None = "en",
     reply_to: FakeMessage | None = None,
+    caption: str | None = None,
+    photo: tuple[Any, ...] = (),
 ) -> FakeUpdate:
-    """Build an update for a command, a free-text message, or a callback."""
+    """Build an update for a command, a free-text message, or a callback.
+
+    ``caption``/``photo`` build a *media* message the way Telegram does: no
+    ``text``, the text in ``caption``.
+    """
     return FakeUpdate(
         user_id=user_id,
         chat_id=chat_id,
@@ -204,6 +227,8 @@ def make_update(
         callback=callback,
         language_code=language_code,
         reply_to=reply_to,
+        caption=caption,
+        photo=photo,
     )
 
 

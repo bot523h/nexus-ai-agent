@@ -13,7 +13,6 @@ from typing import Any
 from sqlmodel import Session, desc, select
 from telegram.error import TelegramError
 
-from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.features.viral_engine import ViralEngine
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.models import ChannelSchedule, User, ViralPost, WelcomeMessage
@@ -22,11 +21,15 @@ logger = get_logger(__name__)
 
 
 def _sync_engine() -> Any:
-    """Return a synchronous SQLAlchemy engine for simple CRUD inside features."""
-    from sqlalchemy import create_engine as _ce
+    """The process-wide synchronous engine (``storage.db.sync_engine``).
 
-    settings = get_settings()
-    return _ce(f"sqlite:///{settings.db_path}", echo=False)
+    Audit A-02: this module used to build its own ``sqlite:///`` engine and
+    therefore ignored ``NEXUS_DATABASE_URL``; the central helper resolves
+    PostgreSQL-or-SQLite exactly like ``get_session``.
+    """
+    from nexus_ai_agent.storage.db import sync_engine
+
+    return sync_engine()
 
 
 class ChannelManager:
