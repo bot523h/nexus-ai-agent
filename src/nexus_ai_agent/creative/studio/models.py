@@ -106,6 +106,18 @@ class UndoStackEmptyError(CommandExecutionError):
     """``system.undo`` was requested but the transaction history is empty."""
 
 
+class UndoConflictError(CommandExecutionError):
+    """``system.undo`` named a transaction that is not the newest editable one.
+
+    Undo restores a *full-state snapshot*, so rewinding a transaction while
+    newer edits still stand would clobber them. The identity argument is a
+    guard, not an arbitrary-index rewind: a caller may only confirm that the
+    newest editable transaction is the one it means to undo. A mismatch (a
+    concurrent foreign edit committed in between, or a stale/unknown identity)
+    is refused with this error and the state is left untouched.
+    """
+
+
 class PermissionLevel(str, Enum):
     """Permission ladder from the Nagar TDD (section 1.1).
 

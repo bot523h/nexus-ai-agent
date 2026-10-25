@@ -51,6 +51,16 @@ sequenceDiagram
 - Provider failure → the chain moves down (Ollama → Groq → Gemini → OpenRouter); a drained free tier is cooled down, never retried in place ([`LLM_PROVIDERS.md`](LLM_PROVIDERS.md)).
 - Checkpoint write failure → the answer still returns; the lifecycle hook logs a redacted structured event and mirrors a metric ([`OBSERVABILITY.md`](OBSERVABILITY.md) §2).
 - Memory write failure → swallowed by design (`orchestration/graph.py::_memory_writer`); a memory outage must not become a chat outage.
+- Offline fake embeddings → `run_bot` passes the provider selected by `build_llm_provider` to SQLite-backed `LongTermMemory`; when no routed provider, llama.cpp server, or GGUF model is available, the factory selects `FakeLLMProvider`. The file path is `settings.vector_path` (default `data/vector.sqlite`); restart survival depends on that filesystem persisting.
+
+### H5: synthetic embedding stability is not semantic or storage compatibility
+
+- **Reachability and what is proven:** `cli.run_bot` → `build_llm_provider` → `LongTermMemory(settings.vector_path, llm)` → graph memory writer/search. The no-provider factory selects `FakeLLMProvider`. Its SHA-512-derived seed makes the same exact UTF-8 string yield the same 384 finite floats in fresh processes with different `PYTHONHASHSEED` values on the same Python/runtime platform. A focused parity test also observes byte-identical Fake/Gemini synthetic vectors for empty, ASCII, and Unicode inputs; Gemini's `embed()` is itself a deterministic pseudo-vector, not a real embedding endpoint. The focused contract test exercises the actual factory, a SQLite/`sqlite-vec` write and second-process read, exact-text retrieval, A→A/B→B/A↛B thread scoping, concurrent fake-provider calls, and simultaneous factory-process writers sharing one SQLite file.
+- **Semantic and portability limits:** the values are synthetic pseudo-vectors. Repeatability is not semantic similarity, paraphrase recall, a collision-free identity, or evidence about real-provider quality. Text is not Unicode-normalized. Cross-Python-minor and cross-architecture serialized-byte reproducibility are explicitly excluded: the test compares processes on one runtime/platform, and `LongTermMemory` serializes floats with native `struct` format.
+- **Legacy compatibility is not fixed:** the current `memories` schema stores `(id, thread_id, content, embedding)` without a provider/algorithm version. Changing the Fake seed does not re-embed old rows; a file can contain vectors from the old process-salted Fake or a different provider. The text column is not rewritten by this change, but without versioning/rebuild the dense search can misrank or omit it after an upgrade or provider switch. The 384-dimension parity documented for current synthetic providers is not proof for historical or mixed-provider rows.
+- **Provider/data validation remains incomplete:** `LLMProvider.embed` exposes only `list[float]`; the current `LongTermMemory.store` path does not reject wrong-width or non-finite vectors. A vector-query exception can be silently converted to recency results, while provider failures at graph boundaries are swallowed rather than reported as a typed recall outcome. FakeLLM's own output shape/range is tested; that does not establish the generic provider contract.
+- **Isolation is thread-scoped, not user-authorized:** memory SQL filters by `thread_id`, and the H5 test proves separation for two distinct thread IDs. The Telegram graph uses `tg:{chat_id}` as its thread ID, so members of one group chat share a thread. The H5 test does not prove per-user authorization, group-member isolation, or cache isolation.
+- **Production durability is unverified:** `vector_path` is a separate local SQLite file. `maintenance.create_backup` backs up `settings.db_path`, not `vector_path`, and the Koyeb runbook says local `data/` is ephemeral on web instances. A local process-restart test is not evidence of scale-to-zero persistence, backup/restore, or a live deployment guarantee.
 
 ## 2. Slideshow: uploads → durable job → one FFmpeg encode → delivery
 
@@ -153,16 +163,16 @@ flowchart TD
     sqlite -->|fresh| up["alembic upgrade head (under migration lock)"]
     sqlite -->|legacy tables, unstamped| adopt["adopt legacy sqlite: stamp, never replay DDL"]
     pg -->|pre-Alembic database| adoptpg["nexus adopt-pg: inspect → decide → stamp (D10)"]
-    pg -->|already stamped| head["verify head == 7c2f9d41e8a3"]
+    pg -->|already stamped| head["verify head == d4e1c0a79b21"]
     up --> ready["ensure_startup_schema() → session factory"]
     adopt --> ready
     adoptpg --> ready
     head --> ready
 ```
 
-- Chain (3 revisions): `47903d282ede` (initial) → `f4a9c2e71b08` (checkpoint lifecycle table) → `7c2f9d41e8a3` (ai-memory consent) = **head**.
+- Chain (6 revisions): `47903d282ede` (initial) → `f4a9c2e71b08` (checkpoint lifecycle table) → `7c2f9d41e8a3` (ai-memory consent) → `e575469d90b9` (nagar asset library v1) → `b5d8e2f4a917` (Telegram ids BIGINT on PostgreSQL, audit A-17) → `d4e1c0a79b21` (knowledge source registry, task-273) = **head**.
 - Migrations are idempotent: re-running `nexus migrate` at head is a no-op; CI proves it on a real `pgvector/pgvector:pg16` service container.
-- Schema drift fails fast rather than silently repairing: `storage/checkpoint_fingerprint.py` compares a DB fingerprint against a golden manifest, and `nexus golden update` is human-only.
+- Schema drift fails fast rather than silently repairing: `storage/checkpoint_fingerprint.py` compares a DB fingerprint against a golden manifest, and `nexus checkpoints golden update` is human-only.
 
 ## 6. Webhook mode, cold start, and scale-to-zero
 

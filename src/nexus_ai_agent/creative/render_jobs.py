@@ -48,8 +48,8 @@ logger = get_logger(__name__)
 
 CREATIVE_RENDER_JOB_TYPE = "creative_render"
 
-#: The surface identity used by the proof-carrying execution spine (task-215).
-#: Closed vocabulary: ``ExecutionTrace`` refuses an unknown surface rather than
+#: Surface identity for the proof-carrying execution spine (task-215).  Closed
+#: vocabulary: ``ExecutionTrace`` refuses an unknown surface rather than
 #: silently forking the trace namespace.
 CREATIVE_SURFACE = "telegram.creative"
 WORKSPACE_PREFIX = "creative_"
@@ -218,6 +218,39 @@ def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: 
     return project.model_copy(update={"assets": [src]})
 
 
+def build_job_bus(
+    project: Any,  # noqa: ANN401
+    *,
+    operation: str | None = None,
+    authorizer: Any = None,  # noqa: ANN401
+) -> Any:  # noqa: ANN401
+    """The canonical, server-policy bus factory for job-side callers.
+
+    This is the single reviewed construction site for a ``CommandBus`` outside
+    ``studio.bus`` itself (pinned by
+    ``tests/architecture/test_lifecycle_gate_boundary.py``).  It guarantees two
+    invariants no caller may bypass:
+
+    * the registry is always the runtime registry (never a caller-built one);
+    * the EXPERIMENTAL opt-in is derived only from the server-controlled
+      ``EXPERIMENTAL_OPT_IN_OPERATIONS`` for the operation actually being run —
+      a caller can never pass ``allow_experimental``.
+
+    ``authorizer`` is optional: a caller that needs authority (the cognition
+    slice) supplies its own trusted ``ProjectAuthorizer``; the render lane
+    leaves it unset and keeps the bus's legacy no-authorizer semantics.
+    """
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.studio.bus import CommandBus
+
+    return CommandBus(
+        state=project,
+        registry=build_runtime_registry(),
+        allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
+        authorizer=authorizer,
+    )
+
+
 def _bound_trace_id(payload: CreativeRenderPayload) -> str:
     """Return the trace identity for this row, refusing a forged one.
 
@@ -264,20 +297,31 @@ def _dispatch(
     from the bus's idempotency fingerprint by design, so attaching it cannot
     change which logical command a redelivery collapses into; it is carried,
     not authoritative."""
-    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
-    from nexus_ai_agent.creative.studio.bus import CommandBus
-    from nexus_ai_agent.creative.studio.models import RequestContext, TargetRef, TypedCommand
-
-    bus = CommandBus(
-        state=project,
-        registry=build_runtime_registry(),
-        allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        InputRef,
+        RequestContext,
+        TargetRef,
+        TypedCommand,
     )
+
+    service_actor = ActorIdentity(kind="service", actor_id="creative-render-runtime")
+    service_access = ProjectAccess(
+        actor=service_actor,
+        project_id=project.project_id,
+        permissions=frozenset({"project:read", "project:write"}),
+    )
+    bus = build_job_bus(project, operation=operation, authorizer=service_access)
     command = TypedCommand(
         command_id=f"cmd-{idempotency_key}-{operation}",
         operation=operation,
         input=input_data,
         target=TargetRef(project_id=project.project_id, track_id="main"),
+        actor=service_actor,
+        input_refs=(
+            InputRef(ref_type="asset", project_id=project.project_id, ref_id=SOURCE_ASSET_ID),
+        ),
         idempotency_key=idempotency_key,
         trace_id=trace_id,
         request_context=RequestContext(channel="telegram", request_id=trace_id),
@@ -398,7 +442,6 @@ async def _run_render_branch(
     workspace: Path,
     canonical_id: str,
 ) -> dict[str, Any]:
-    trace_id = _bound_trace_id(payload)
     from nexus_ai_agent.creative.rendering.executor import render_lane
     from nexus_ai_agent.creative.rendering.ir import lane_ir_from_project
     from nexus_ai_agent.creative.slideshow.ffmpeg import (
@@ -429,7 +472,7 @@ async def _run_render_branch(
         operation=canonical_id,
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
-        trace_id=trace_id,
+        trace_id=_bound_trace_id(payload),
     )
     render_project = project  # lane instrumentation below mirrors the SAME op
 
@@ -470,7 +513,6 @@ async def _run_render_branch(
 
 
 async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> dict[str, Any]:
-    trace_id = _bound_trace_id(payload)
     input_path = _guarded_input(payload, workspace) if payload.input_path else None
     duration_us = payload.media_duration_us or 0
     if input_path is not None:
@@ -485,7 +527,7 @@ async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> d
         operation="delivery.export_otio",
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
-        trace_id=trace_id,
+        trace_id=_bound_trace_id(payload),
     )
     otio_text = output.get("otio_json")
     if not isinstance(otio_text, str) or not otio_text.strip():
@@ -510,7 +552,6 @@ async def _run_caption_branch(
     workspace: Path,
     canonical_id: str,
 ) -> dict[str, Any]:
-    trace_id = _bound_trace_id(payload)
     from nexus_ai_agent.creative.packs.caption.formatters import format_srt
 
     input_path = _guarded_input(payload, workspace)
@@ -539,7 +580,7 @@ async def _run_caption_branch(
             "transcript": transcript.model_dump(mode="json"),
         },
         idempotency_key=payload.idempotency_key,
-        trace_id=trace_id,
+        trace_id=_bound_trace_id(payload),
     )
 
     out_path = workspace / "captions.srt"
