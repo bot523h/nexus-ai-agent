@@ -17,6 +17,7 @@ from nexus_ai_agent.creative.temporal import (
     FrameRateResolver,
     Timebase,
 )
+from nexus_ai_agent.creative.temporal.adapters import timebase_from_spec
 
 
 def test_frame_rate_resolver_classification() -> None:
@@ -59,6 +60,26 @@ def test_frame_rate_resolver_invalid_rejections() -> None:
     # Boolean
     with pytest.raises(TypeError, match="Boolean"):
         FrameRateResolver.resolve(True)
+
+
+def test_suffixed_rates_strip_the_whitespace_after_the_unit() -> None:
+    # ``"23.976 fps"`` must not resolve to 2997/125 via a stray trailing space.
+    assert FrameRateResolver.resolve("23.976 fps") == Timebase(24000, 1001)
+    assert FrameRateResolver.resolve("29.97 fps") == Timebase(30000, 1001)
+    assert FrameRateResolver.resolve("59.94 fps") == Timebase(60000, 1001)
+    assert FrameRateResolver.resolve("60 hz") == Timebase(60, 1)
+    assert FrameRateResolver.resolve("25FPS") == Timebase(25, 1)
+
+
+def test_timebase_from_spec_rejects_fractional_fields() -> None:
+    # A fractional numerator must be rejected, not silently truncated.
+    with pytest.raises(ValueError, match="positive integer"):
+        timebase_from_spec({"numerator": 24.9, "denominator": 1})
+    with pytest.raises(ValueError, match="positive integer"):
+        timebase_from_spec({"numerator": 24000, "denominator": 1001.0})
+    # Valid integer dictionaries still resolve, and normalize like Timebase.
+    assert timebase_from_spec({"numerator": 24000, "denominator": 1001}) == Timebase(24000, 1001)
+    assert timebase_from_spec({"numerator": 60, "denominator": 2}) == Timebase(30, 1)
 
 
 def test_clock_relation_audio_video_conversions() -> None:
