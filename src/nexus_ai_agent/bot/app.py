@@ -19,6 +19,7 @@ from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.presence import PresenceStore
 from nexus_ai_agent.storage.ai_storage import AIStorageManager, ProviderConfig
+from nexus_ai_agent.storage.db import sync_db_path_for
 
 from .handlers import (
     build_handlers,
@@ -245,7 +246,7 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     engines["causal_journal"] = causal_journal
 
     # Persistent conversation store
-    conv_store = ConversationStore(db_path=settings.db_path)
+    conv_store = ConversationStore(db_path=sync_db_path_for(settings))
     engines["conversation_store"] = conv_store
 
     # Request queue for fair Gemini API access
@@ -284,7 +285,7 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     engines["summarizer_engine"] = summarizer_engine
 
     # Referral
-    engines["referral_engine"] = ReferralEngine(db_path=settings.db_path)
+    engines["referral_engine"] = ReferralEngine(db_path=sync_db_path_for(settings))
 
     # Unified Cloud Storage
     engines["unified_cloud"] = UnifiedCloudStorage(
@@ -352,8 +353,24 @@ def build_application(
             except Exception:  # noqa: BLE001 — ledger recovery must not kill the bot
                 logger.exception("causal_journal_backfill_failed")
         await job_queue.resume_pending()
+        # Living Core phase 2b: opt-in vital signs (off unless
+        # SELF_VITALS_ENABLED=true). Observation only — it never acts.
+        try:
+            from nexus_ai_agent.agent.self_vitals import start_vitals
+
+            application.bot_data["self_vitals"] = await start_vitals(
+                enabled=settings.self_vitals_enabled,
+                db_path=str(settings.db_path),
+                period_s=settings.self_vitals_period_s,
+                max_ram_mb=settings.max_ram_mb,
+            )
+        except Exception:  # noqa: BLE001 — observation must never kill the bot
+            logger.exception("self_vitals_startup_failed")
 
     async def _post_shutdown(application: Any) -> None:
+        vitals_handle = application.bot_data.get("self_vitals")
+        if vitals_handle is not None:
+            await vitals_handle.stop()
         try:
             feature_engines.reminders.close()
         except Exception:  # noqa: BLE001
@@ -380,6 +397,12 @@ def build_application(
     from nexus_ai_agent.bot.access_guard import build_access_guard
 
     application.add_handler(build_access_guard(settings), group=-1)
+    # Smart moderation ingress (audit A-03, 2026-10-15): same group, right
+    # after the guard, so a violating group message is removed before the
+    # group-0 handlers (and the AI) ever see it.
+    from nexus_ai_agent.bot.handlers import build_moderation_gate
+
+    application.add_handler(build_moderation_gate(), group=-1)
 
     for handler in build_handlers(
         graph,
