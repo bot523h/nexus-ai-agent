@@ -205,7 +205,9 @@ async def test_completion_hook_fires_on_terminal_states(tmp_path: Path) -> None:
     )
 
     await _wait_for_status(queue, ok_id, JobStatus.COMPLETED)
-    await _wait_for_status(queue, failed_id, JobStatus.FAILED)
+    # an unexpected RuntimeError escaping the handler is classified RETRYABLE
+    # (worker-crash class, task-181) — the precise durable status.
+    await _wait_for_status(queue, failed_id, JobStatus.FAILED_RETRYABLE)
     # `enqueue` schedules one task per job, so the two jobs run concurrently and
     # the *order* of the notifications is a scheduling accident (it flips under
     # full-suite load). The contract is per job: each terminal state notifies
@@ -215,7 +217,7 @@ async def test_completion_hook_fires_on_terminal_states(tmp_path: Path) -> None:
     assert set(by_job) == {ok_id, failed_id}, f"hook fired for the wrong jobs: {log}"
     completed, failed = by_job[ok_id], by_job[failed_id]
     assert completed.status is JobStatus.COMPLETED
-    assert failed.status is JobStatus.FAILED
+    assert failed.status is JobStatus.FAILED_RETRYABLE
     assert completed.result == {"echo": 1}
     assert completed.payload == {"value": 1, "chat_id": 42}
     assert completed.error is None
@@ -284,7 +286,7 @@ async def test_job_queue_failure_is_persisted(tmp_path: Path) -> None:
         payload={"value": "boom"},
     )
 
-    await _wait_for_status(queue, job_id, JobStatus.FAILED)
+    await _wait_for_status(queue, job_id, JobStatus.FAILED_RETRYABLE)
     assert await queue.get_result(job_id) is None
 
     with sqlite3.connect(tmp_path / "jobs.sqlite3") as connection:
@@ -330,7 +332,18 @@ async def test_pdf_job_extracts_text_with_pypdf(
     )
 
     await _wait_for_status(queue, job_id, JobStatus.COMPLETED)
-    assert (await queue.get_result(job_id)) == {"message": "Successfully processed file-7"}
+    # task-180 (GAP-B): the result dialect grew the artifact claim, and the
+    # job only completes because the queue independently re-measured the
+    # persisted extracted-text artifact (default registry).
+    result = await queue.get_result(job_id)
+    assert result is not None
+    assert result["message"] == "Successfully processed file-7"
+    extracted = tmp_path / "document.extracted.txt"
+    assert result["artifact_path"] == str(extracted)
+    assert extracted.read_text(encoding="utf-8") == "Hello NEXUS job queue"
+    verification = result["artifact_verification"]
+    assert verification["status"] == "verified"
+    assert verification["physical_identity"]["sha256"] == result["content_sha256"]
     assert captured == {
         "user_id": 7,
         "text": "Hello NEXUS job queue",
@@ -377,7 +390,9 @@ async def test_pdf_job_without_pypdf_persists_clear_failure(
         payload={"user_id": 1, "file_path": str(source), "file_id": "file-x"},
     )
 
-    await _wait_for_status(queue, job_id, JobStatus.FAILED)
+    # missing dependency is classified RETRYABLE (installing pypdf makes the
+    # identical job succeed — task-181 classification table).
+    await _wait_for_status(queue, job_id, JobStatus.FAILED_RETRYABLE)
     row = (
         sqlite3.connect(tmp_path / "jobs.sqlite3")
         .execute("SELECT error FROM nexus_job_queue WHERE id = ?", (job_id,))
@@ -400,6 +415,13 @@ async def test_story_job_executes_through_in_process_queue(tmp_path: Path) -> No
     )
 
     await _wait_for_status(queue, job_id, JobStatus.COMPLETED)
-    assert (await queue.get_result(job_id)) == {"output_path": str(output)}
+    # task-180 (GAP-C): completion now requires the queue's independent
+    # re-measurement of the rendered PNG (default registry verifier).
+    result = await queue.get_result(job_id)
+    assert result is not None
+    assert result["output_path"] == str(output)
     assert output.is_file()
     assert output.stat().st_size > 0
+    verification = result["artifact_verification"]
+    assert verification["status"] == "verified"
+    assert verification["probe"]["format"] == "PNG"

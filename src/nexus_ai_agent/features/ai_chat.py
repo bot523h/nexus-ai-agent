@@ -164,7 +164,11 @@ class GeminiEngine:
         system_instruction: str | None = None,
     ) -> str:
         """Make a request to the Gemini API."""
-        url = f"{self.BASE_URL}/models/{self._model}:generateContent?key={self._api_key}"
+        # API key rides in the x-goog-api-key header, never in the URL:
+        # query parameters end up in httpx INFO log lines, proxy logs and
+        # exception reprs (the redaction layer is defence-in-depth, not
+        # the primary control).
+        url = f"{self.BASE_URL}/models/{self._model}:generateContent"
         payload: dict[str, Any] = {"contents": contents}
         if system_instruction:
             payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
@@ -175,7 +179,7 @@ class GeminiEngine:
             "maxOutputTokens": 4096,
         }
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, json=payload, headers={"x-goog-api-key": self._api_key})
             if resp.status_code != 200:
                 error_text = resp.text[:500]
                 log.error("gemini_api_error", status=resp.status_code, body=error_text)

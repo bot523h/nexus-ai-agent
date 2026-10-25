@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac as hmac_mod
 import os
 import secrets
@@ -15,7 +16,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
+from nexus_ai_agent.api.studio import router as studio_router
 from nexus_ai_agent.config.settings import get_settings
+from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
 from nexus_ai_agent.creative import image_post
 from nexus_ai_agent.creative.ffmpeg_executor import execute_ffmpeg_commands
 from nexus_ai_agent.creative.job_registry import JobRegistry
@@ -102,6 +105,7 @@ async def require_hmac_signature(request: Request) -> None:
 
 
 app.include_router(dashboard_router)
+app.include_router(studio_router)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -160,10 +164,35 @@ async def root() -> str:
         </div>
 
         <script>
+            // The dashboard API is bearer-token gated (NEXUS_DASHBOARD_TOKEN);
+            // the token is asked for once per tab and kept in sessionStorage.
+            const TOKEN_KEY = 'nexus_dashboard_token';
+            function dashboardToken(force) {
+                let token = sessionStorage.getItem(TOKEN_KEY);
+                if (!token || force) {
+                    const ask = 'توکن داشبورد (NEXUS_DASHBOARD_TOKEN) را وارد کنید:';
+                    token = window.prompt(ask) || '';
+                    sessionStorage.setItem(TOKEN_KEY, token);
+                }
+                return token;
+            }
+            async function apiFetch(path) {
+                const authed = (force) => fetch(path, {
+                    headers: { 'Authorization': 'Bearer ' + dashboardToken(force) }
+                });
+                let res = await authed(false);
+                if (res.status === 401) { res = await authed(true); }
+                if (res.status === 503) {
+                    const note = 'داشبورد غیرفعال است: NEXUS_DASHBOARD_TOKEN تنظیم نشده.';
+                    document.getElementById('recent_users').innerHTML =
+                        '<p class="text-amber-400">' + note + '</p>';
+                }
+                if (!res.ok) { throw new Error('dashboard API ' + res.status); }
+                return res.json();
+            }
             async function loadStats() {
                 try {
-                    const res = await fetch('/api/dashboard/stats');
-                    const data = await res.json();
+                    const data = await apiFetch('/api/dashboard/stats');
                     document.getElementById('total_users').innerText = data.total_users;
                     document.getElementById('total_chats').innerText = data.total_chats;
                     document.getElementById('total_files').innerText = data.total_files;
@@ -174,23 +203,31 @@ async def root() -> str:
 
             async function loadRecentUsers() {
                 try {
-                    const res = await fetch('/api/dashboard/recent_users');
-                    const data = await res.json();
+                    const data = await apiFetch('/api/dashboard/recent_users');
                     const container = document.getElementById('recent_users');
                     if (data.length === 0) {
                         container.innerHTML = '<p class="text-slate-400">هیچ کاربری یافت نشد.</p>';
                         return;
                     }
                     let html = '<ul class="divide-y divide-slate-700">';
+                    // PII-free payload (P0-5): surrogate id + join time only.
+                    // `joined_at` is published with an explicit UTC offset by
+                    // `api/dashboard.py`; `new Date()` reads an ISO string
+                    // *without* an offset as local time, which shifted every
+                    // join time by the viewer's UTC offset. Normalise here so
+                    // an older/foreign payload stays correct too.
+                    const utcStamp = v =>
+                        /(?:Z|[+-]\\d{2}:?\\d{2})$/.test(v) ? v : v + 'Z';
                     data.forEach(u => {
-                        const name = u.username || 'بدون نام';
+                        const joined = u.joined_at
+                            ? new Date(utcStamp(u.joined_at)).toLocaleString('fa-IR') : '—';
                         html += `
                             <li class="py-3 flex justify-between items-center">
                                 <div>
-                                    <span class="font-bold text-blue-300">${name}</span>
+                                    <span class="font-bold text-blue-300">کاربر #${u.id}</span>
                                     <span class="text-slate-500 text-sm ml-2">
-                             ID: ${u.telegram_id}
-                         </span>
+                                        عضویت: ${joined}
+                                    </span>
                                 </div>
                                 <span class="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">
                                     User #${u.id}
@@ -253,6 +290,24 @@ async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
 
 
 async def _download_video_to_temp(video_url: str) -> str:
+    """Download a user-supplied video URL to a temp file (SSRF-hardened).
+
+    Defence in depth (the URL is attacker-controlled input on a
+    deprecated-but-live route):
+
+    1. ``validate_url`` fail-fast *before* any temp file is created —
+       https-only and every resolved address must be public (blocks
+       loopback, RFC1918, cloud metadata, IPv6 loopback, IPv4-mapped
+       forms and ``user@host`` tricks).
+    2. The fetch itself runs through :class:`SafeAsyncTransport`, whose
+       httpcore backend re-resolves and re-checks the address at every
+       TCP connection — including every redirect hop — and pins the
+       connection to the validated IP (closes the DNS-rebinding TOCTOU
+       that a preflight-only check would leave open).
+    """
+    # Sync DNS resolution: keep it off the event loop.
+    await asyncio.to_thread(validate_url, video_url)
+
     settings = get_settings()
     temp_dir = Path(settings.creative_temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -260,13 +315,16 @@ async def _download_video_to_temp(video_url: str) -> str:
     fd, temp_path = tempfile.mkstemp(prefix="creative-url-", suffix=suffix, dir=temp_dir)
     os.close(fd)
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=60.0, transport=SafeAsyncTransport(), follow_redirects=True
+        ) as client:
             async with client.stream("GET", video_url) as response:
                 response.raise_for_status()
                 with Path(temp_path).open("wb") as handle:
                     async for chunk in response.aiter_bytes():
                         handle.write(chunk)
     except Exception:
+        # A refused/blocked/failed download never leaves a partial file.
         Path(temp_path).unlink(missing_ok=True)
         raise
     return temp_path
@@ -351,6 +409,13 @@ async def create_video_edit_job(
         normalized_url = (video_url or "").strip()
         if not normalized_url:
             raise HTTPException(status_code=400, detail="video_url must not be empty")
+        # SSRF fail-fast at request time: reject unsafe targets with a 400
+        # *before* a job row is created. The background download re-validates
+        # at connect time via SafeAsyncTransport (defence in depth).
+        try:
+            await asyncio.to_thread(validate_url, normalized_url)
+        except SSRFBlockError as exc:
+            raise HTTPException(status_code=400, detail=f"video_url rejected: {exc}") from exc
         source = normalized_url
         input_data = {
             "source_type": "url",

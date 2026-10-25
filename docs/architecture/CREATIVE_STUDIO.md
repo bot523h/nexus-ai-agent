@@ -36,7 +36,7 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 | Domain | `Domain` | first id segment: `media`, `timeline`, `motion`, `audio`, `caption`, `color`, `delivery`, `slideshow`, `system` |
 | Capability | `Capability` | a named grouping inside a domain (for example `timeline.edit`) |
 | Operation | `OperationSpec` | `operation_id`, typed `input_model` (pydantic, `extra="forbid"`), handler, `permission_level`, `undoable` |
-| Envelope | `TypedCommand` | `operation`, `input`, `target`, `preconditions`, `idempotency_key`, `confirmed`, `protocol_version` |
+| Envelope | `TypedCommand` | Protocol `nagar.command.v1`, envelope schema 1 (legacy) or 2 (explicit `actor`, `target.project_id`, `provenance`); typed `input_refs`, execution policy, request context, optional capability snapshot, idempotency key, preconditions. See [Gate 2](COMMAND_CAPABILITY_CONTRACT.md). |
 
 **Permission ladder** (`PermissionLevel`):
 
@@ -48,9 +48,13 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 | D | Denied | refused by policy: shell, raw upload, code execution, anything unregistered | — |
 
 **Dispatch pipeline** (`creative/studio/bus.py::_dispatch_locked`) — strict order, each step failing closed:
-1. envelope validation (protocol v1) → 2. idempotency replay → 3. registry lookup (`UnknownOperationError`) → 4. permission gate (`PermissionDeniedError`) → 5. typed input validation → 6. precondition check (`state_revision` / `state_hash`) → 7. atomic apply + `EditTransaction` push → 8. deep-copied `project` snapshot for safe reads.
+1. parse → 2. envelope + operation schema → 3. actor/project grant → 4. capability + version + permissions → **4b. capability lifecycle / pack gate** (`creative/studio/lifecycle.py`: `required_packs` must be `AVAILABLE`, or `EXPERIMENTAL` with the bus-level `allow_experimental=True`; unknown / `STUB` / `RETIRED` refuse) → 5. execution policy + A/B/C/D → 6. input refs + pinned time refs → 7. idempotency reserve/replay → 8. revision preconditions → 9. atomic apply + `EditTransaction` push (deep-copied `project` snapshots for safe reads).
+
+The lifecycle gate is the single seam between the canonical Gate-2 contract and the pack runtime (board task-183): it runs after the actor grant (so an unauthorized actor can never be granted anything by pack metadata) and before the idempotency reservation and the handler (so a refused pack performs zero work). `allow_experimental` is composition-root state, never a command-envelope field and never a queue-row field: the render worker derives it from the canonical operation via the server-controlled `render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS` (exactly the surface operations on an `EXPERIMENTAL` pack, pinned by test), and `CreativeRenderPayload` (`extra="forbid"`) rejects a row that tries to carry an opt-in. Lifecycle = pack *maturity*; `packs/availability.py` = pack *runnability* at render/preflight time. See [`COMMAND_CAPABILITY_CONTRACT.md`](COMMAND_CAPABILITY_CONTRACT.md) §2.
 
 `Project.state_hash` is **derived** from a canonical JSON serialization on every construction (revision excluded, so revision+hash preconditions survive undo cycles). A stored hash therefore cannot drift from the state it describes.
+
+Undo is **transaction-scoped**: `system.undo` accepts an optional `transaction_id`, and the stage-9 handler refuses with `UndoConflictError` unless that id is still the newest editable transaction. The gate runs inside the handler, under the bus lock, so a rollback can never rewind a concurrent foreign edit (task-223; [`COMMAND_CAPABILITY_CONTRACT.md`](COMMAND_CAPABILITY_CONTRACT.md) §7.1).
 
 ## 3. The pack substrate (data, never code-on-arrival)
 
@@ -68,20 +72,21 @@ A pack is a directory with a `pack.manifest.json` validated against `nexus.capab
 - No executable key at any depth of any manifest (`test_pack_manifest_is_data_only.py`).
 - A pack's declared capabilities must equal the operations its registration function adds, and it must activate against its own manifest (`test_slideshow_adapter_boundary.py`).
 - An **external** pack that declares an operation the runtime does not know is rejected at registration; a **builtin** pack may register with *pending* capabilities but cannot be activated until they resolve (`creative/packs/registry.py`).
-- Verification reports every finding; signature state is reported honestly (`placeholder`, `format_only_unverified`) — no pack claims a verified signature today.
+- Verification reports every finding; the signature state is one of the nine `TrustState` values decided against the **trust root** (`creative/packs/trust.py`), never against the manifest's own claim. No shipped pack is `verified` today — all six carry a documented placeholder.
+- `registered` ≠ `verified` ≠ `trusted` ≠ `active`: registration checks structure and policy, the trust root decides trust, and `PackRegistry.activate()` refuses any **external** pack whose state is not `verified` ([ADR 0006](adr/0006-capability-pack-trust-root.md)).
 
 ## 4. Pack inventory and the activation gap (re-measured 2026-09-24)
 
-`nexus packs list` output at `9ec312c` (executed, not paraphrased):
+`nexus packs list` output on this branch (executed, not paraphrased — `signature state` is now the trust-root verdict):
 
-| Pack | Version | Capabilities | Pending | Signature | Binaries |
-|---|---|---:|---:|---|---|
-| `nexus.slideshow.compose` | 0.2.0 | 6 | 0 | placeholder | ffmpeg |
-| `nexus.language.caption` | 1.0.0 | 10 | 0 | placeholder | — |
-| `nexus.edit.timeline` | 1.0.0 | 9 | 0 | format_only_unverified | — |
-| `nexus.motion.graphics` | 1.0.0 | 10 | 0 | format_only_unverified | — |
-| `nexus.audio.studio` | 1.0.0 | 10 | 0 | format_only_unverified | — |
-| `nexus.color.delivery` | 1.0.0 | 7 | 0 | format_only_unverified | — |
+| Pack | Version | Capabilities | Pending | Signature state | Trusted | Binaries |
+|---|---|---:|---:|---|---|---|
+| `nexus.audio.studio` | 1.0.0 | 10 | 0 | placeholder | False | — |
+| `nexus.language.caption` | 1.0.0 | 10 | 0 | placeholder | False | — |
+| `nexus.color.delivery` | 1.0.0 | 7 | 0 | placeholder | False | — |
+| `nexus.edit.timeline` | 1.0.0 | 9 | 0 | placeholder | False | — |
+| `nexus.motion.graphics` | 1.0.0 | 10 | 0 | placeholder | False | — |
+| `nexus.slideshow.compose` | 0.2.0 | 6 | 0 | placeholder | False | ffmpeg |
 
 The activation gap is **closed** (board task-126, landed): `cli.py::_packs_registry`
 now composes `creative.packs.runtime.build_pack_registry()` — the runtime and the

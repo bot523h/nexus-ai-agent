@@ -13,10 +13,21 @@ Translation and user-facing copy live in the bot completion notifier; this
 module returns typed results instead:
 
 * ``{"success": True, ...}`` — measured artifact facts (sha256-only truth),
+  including the ``spec_ir_hash`` lane identity; since task-178 the queue
+  independently re-verifies every claim before the job may succeed;
 * ``{"success": False, "error_code": <typed>}`` — expected, user-typed
   failure (bad args, unavailable caption engine, ...) — the job COMPLETES,
   the notifier translates the code;
 * **raises** — unexpected environment failure → job FAILED, operator-visible.
+
+Destination safety (task-178): a render never deletes first. The lane
+publishes by staging (``.part``) + atomic rename; ``overwrite=True`` is
+scoped to THIS job's own key-derived workspace path, so a retry can replace
+only its own previous attempt — never an artifact owned by anyone else —
+and a failed re-render leaves the previous bytes in place instead of
+deleting them. Document artifacts (``.srt`` / ``.otio``) are materialised
+with the same atomic temp-then-rename pattern; a half-written destination
+is never visible under the final name.
 
 Nothing here imports Telegram; the worker runs outside the bot process.
 """
@@ -53,6 +64,25 @@ SURFACE_TO_CANONICAL: dict[tuple[str, str], str] = {
     ("grade", "proxy"): "delivery.make_proxy_480p",
     ("grade", "otio"): "delivery.export_otio",
 }
+
+#: Server-controlled EXPERIMENTAL-pack opt-in (task-183 trust boundary).
+#: The canonical operations below run on the ``EXPERIMENTAL``
+#: ``nexus.color.delivery`` pack, and the bus lifecycle gate (Gate-2 stage 4b)
+#: refuses them unless the composition root opts in. That opt-in is decided
+#: *here*, by the worker, from the canonical operation id -- never from the
+#: queue row. A payload is an untrusted structure (see the containment
+#: section below), so a row cannot carry, widen, or narrow its own lifecycle:
+#: ``CreativeRenderPayload`` has no opt-in field and ``extra="forbid"`` rejects
+#: one. Adding an operation here is the explicit, reviewed operator act;
+#: ``tests/unit/test_creative_render_jobs.py`` pins that the set is exactly the
+#: surface operations whose packs are EXPERIMENTAL (no over-grant, no gap).
+EXPERIMENTAL_OPT_IN_OPERATIONS: frozenset[str] = frozenset(
+    {
+        "color.adjust_exposure",
+        "delivery.make_proxy_480p",
+        "delivery.export_otio",
+    }
+)
 
 #: Typed failure codes surfaced to users via ``creative.failed.<code>``.
 ERROR_CODES: frozenset[str] = frozenset(
@@ -94,6 +124,9 @@ class CreativeRenderPayload(BaseModel):
     chat_id: int
     lang: str = "en"
     idempotency_key: str = Field(min_length=1)
+    # Deliberately no lifecycle opt-in field: the EXPERIMENTAL-pack opt-in is
+    # server policy (``EXPERIMENTAL_OPT_IN_OPERATIONS``), and ``extra="forbid"``
+    # rejects a row that tries to carry one (task-183 trust boundary).
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +207,39 @@ def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: 
     return project.model_copy(update={"assets": [src]})
 
 
+def build_job_bus(
+    project: Any,  # noqa: ANN401
+    *,
+    operation: str | None = None,
+    authorizer: Any = None,  # noqa: ANN401
+) -> Any:  # noqa: ANN401
+    """The canonical, server-policy bus factory for job-side callers.
+
+    This is the single reviewed construction site for a ``CommandBus`` outside
+    ``studio.bus`` itself (pinned by
+    ``tests/architecture/test_lifecycle_gate_boundary.py``).  It guarantees two
+    invariants no caller may bypass:
+
+    * the registry is always the runtime registry (never a caller-built one);
+    * the EXPERIMENTAL opt-in is derived only from the server-controlled
+      ``EXPERIMENTAL_OPT_IN_OPERATIONS`` for the operation actually being run —
+      a caller can never pass ``allow_experimental``.
+
+    ``authorizer`` is optional: a caller that needs authority (the cognition
+    slice) supplies its own trusted ``ProjectAuthorizer``; the render lane
+    leaves it unset and keeps the bus's legacy no-authorizer semantics.
+    """
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.studio.bus import CommandBus
+
+    return CommandBus(
+        state=project,
+        registry=build_runtime_registry(),
+        allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
+        authorizer=authorizer,
+    )
+
+
 def _dispatch(
     project: Any,  # noqa: ANN401
     *,
@@ -182,17 +248,35 @@ def _dispatch(
     idempotency_key: str,
 ) -> dict[str, Any]:
     """Registry lookup → bus dispatch. Bad args become typed
-    ``invalid_request`` (a retry with the same payload fails identically)."""
-    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
-    from nexus_ai_agent.creative.studio.bus import CommandBus
-    from nexus_ai_agent.creative.studio.models import TargetRef, TypedCommand
+    ``invalid_request`` (a retry with the same payload fails identically).
 
-    bus = CommandBus(state=project, registry=build_runtime_registry())
+    The bus's EXPERIMENTAL opt-in is derived from the canonical operation via
+    the server-controlled ``EXPERIMENTAL_OPT_IN_OPERATIONS``; no caller (and no
+    queue row) can pass it in."""
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        InputRef,
+        TargetRef,
+        TypedCommand,
+    )
+
+    service_actor = ActorIdentity(kind="service", actor_id="creative-render-runtime")
+    service_access = ProjectAccess(
+        actor=service_actor,
+        project_id=project.project_id,
+        permissions=frozenset({"project:read", "project:write"}),
+    )
+    bus = build_job_bus(project, operation=operation, authorizer=service_access)
     command = TypedCommand(
         command_id=f"cmd-{idempotency_key}-{operation}",
         operation=operation,
         input=input_data,
         target=TargetRef(project_id=project.project_id, track_id="main"),
+        actor=service_actor,
+        input_refs=(
+            InputRef(ref_type="asset", project_id=project.project_id, ref_id=SOURCE_ASSET_ID),
+        ),
         idempotency_key=idempotency_key,
     )
     try:
@@ -276,6 +360,19 @@ def _sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Materialise a document artifact atomically: temp file → rename.
+
+    A crash mid-write can never leave a half-written file under the final
+    name, so the destination path is only ever a whole document (the same
+    guarantee the render lane gives media via its ``.part`` staging).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = path.with_name(f".{path.stem}.part{path.suffix}")
+    staging.write_text(text, encoding="utf-8")
+    staging.replace(path)
+
+
 def _default_caption_engine() -> Any:  # noqa: ANN401 - CaptionEnginePort
     """Optional-extra resolution (SLIDESHOW.md ``[speech]`` row): default
     installs report unavailable and the chain fails *closed*, typed and
@@ -342,8 +439,11 @@ async def _run_render_branch(
         raise CreativeRenderError("invalid_request", f"lane materialisation failed: {exc}") from exc
 
     out_path = workspace / "output.mp4"
-    out_path.unlink(missing_ok=True)
     try:
+        # No unlink: the lane stages to ``.part`` and publishes by atomic
+        # rename. ``overwrite=True`` is scoped to this job's own workspace
+        # path — a retry replaces only its own previous attempt, and a
+        # failed re-render leaves the previous bytes untouched.
         artifact = render_lane(ir, out_path, binary=binary, overwrite=True)
     except Exception as exc:
         raise CreativeRenderError("render_failed", f"{type(exc).__name__}: {exc}") from exc
@@ -354,12 +454,13 @@ async def _run_render_branch(
         "artifact_path": str(out_path),
         "artifact_kind": "video",
         "sha256": sha256_file(out_path),
+        "size_bytes": out_path.stat().st_size,
         "duration_us": measured.duration_us,
         "height": measured.height,
         "operation": canonical_id,
         "output_asset_id": str(output.get("asset_id", "out")),
         "workspace_dir": str(workspace),
-        "_artifact_probe": repr(artifact)[:120],  # debugging only, never user-facing
+        "spec_ir_hash": artifact.lane_ir_hash,
     }
 
 
@@ -383,12 +484,13 @@ async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> d
     if not isinstance(otio_text, str) or not otio_text.strip():
         raise CreativeRenderError("render_failed", "export produced no OTIO document")
     out_path = workspace / "timeline.otio"
-    out_path.write_text(otio_text, encoding="utf-8")
+    _atomic_write_text(out_path, otio_text)
     return {
         "success": True,
         "artifact_path": str(out_path),
         "artifact_kind": "document",
-        "sha256": _sha256_text(otio_text),
+        "sha256": sha256_file(out_path),
+        "size_bytes": out_path.stat().st_size,
         "duration_us": duration_us,
         "operation": "delivery.export_otio",
         "output_asset_id": str(output.get("asset_id", "timeline")),
@@ -434,7 +536,7 @@ async def _run_caption_branch(
     out_path = workspace / "captions.srt"
     try:
         srt_text = format_srt(transcript)
-        out_path.write_text(srt_text, encoding="utf-8")
+        _atomic_write_text(out_path, srt_text)
     except Exception as exc:
         raise CreativeRenderError("render_failed", f"srt materialisation failed: {exc}") from exc
 
@@ -443,6 +545,7 @@ async def _run_caption_branch(
         "artifact_path": str(out_path),
         "artifact_kind": "document",
         "sha256": sha256_file(out_path),
+        "size_bytes": out_path.stat().st_size,
         "duration_us": duration_us,
         "operation": canonical_id,
         "output_asset_id": "captions",

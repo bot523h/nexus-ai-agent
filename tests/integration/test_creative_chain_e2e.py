@@ -124,7 +124,7 @@ async def _drain(queue: InProcessJobQueue, job_id: str, timeout: float = 120.0) 
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
         status = await queue.get_status(job_id)
-        if status in {JobStatus.COMPLETED, JobStatus.FAILED}:
+        if status in {JobStatus.COMPLETED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}:
             return status
         await asyncio.sleep(0.1)
     raise TimeoutError(f"job {job_id} did not reach a terminal state")
@@ -193,13 +193,18 @@ async def test_typed_failure_reaches_user_translated(harness) -> None:  # noqa: 
         payload=_payload(workspace, key, operation="lut", command="grade"),
     )
     status = await _drain(queue, job_id)
-    assert status is JobStatus.COMPLETED
+    # task-181 (GAP-A): a typed user failure is a FAILURE status — never
+    # COMPLETED — classified TERMINAL (unsupported_operation) and still
+    # delivered to the user as translated failure copy.
+    assert status is JobStatus.FAILED_TERMINAL
     result = await queue.get_result(job_id)
     assert result is not None and result["success"] is False
     assert result["error_code"] == "unsupported_operation"
     assert bot.messages, "typed failure must reach the user"
     text = bot.messages[-1]
-    assert text == i18n.t("creative.failed.unsupported_operation", lang="fa", detail="x")
+    assert text.startswith("❌"), "terminal failures carry the terminal class line"
+    assert text.endswith(i18n.t("creative.failed.unsupported_operation", lang="fa", detail="x"))
+    assert "✅" not in text
     assert "creative." not in text and "lut" not in text.replace("creative.failed", "")
 
 
@@ -213,7 +218,8 @@ async def test_unexpected_crash_is_durable_failed_and_safe(
     workspace.mkdir(parents=True)
     _clip(workspace / "input.mp4")
 
-    # simulate a catastrophic environment failure past every typed guard
+    # Deterministic input-evidence infrastructure failure: the new preflight
+    # must stop before the real render handler can observe it.
     def _boom(raw: str) -> Path:
         raise OSError("disk exploded")
 
@@ -223,11 +229,18 @@ async def test_unexpected_crash_is_durable_failed_and_safe(
         job_type="creative_render", idempotency_key=key, payload=_payload(workspace, key)
     )
     status = await _drain(queue, job_id)
-    assert status is JobStatus.FAILED, "unexpected exceptions must persist FAILED"
-    row_error = await queue.get_result(job_id)
-    assert row_error is None  # FAILED jobs have no result payload
+    # Evidence preflight is a deterministic terminal failure; no result or
+    # passport is manufactured from the unavailable source evidence.
+    assert status is JobStatus.FAILED_TERMINAL
+    assert await queue.get_result(job_id) is None
+    row = queue._fetch_row_full(job_id)
+    assert row is not None
+    assert row["error"] == "creative_passport_source_unavailable:CreativePassportError"
+    assert row["artifact_passport_json"] is None
+    assert not queue._artifact_root.exists()
     assert bot.messages, "failed job must notify the user"
     text = bot.messages[-1]
-    assert text == i18n.t("creative.failed.internal", lang="fa", detail="x")
+    assert text.startswith("❌"), "terminal failures carry the terminal class line"
+    assert text.endswith(i18n.t("creative.failed.internal", lang="fa", detail="x"))
     assert "disk exploded" not in text, "internal errors must not leak to users"
     assert "creative_" not in text and "/tmp" not in text, "internal paths must not leak"

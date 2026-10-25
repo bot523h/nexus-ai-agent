@@ -135,7 +135,9 @@ async def test_typed_failure_sends_the_mapped_message(
 
     assert [name for name, _ in _RecordingBot.calls] == ["message"]
     _kind, kwargs = _RecordingBot.calls[0]
-    assert kwargs["text"] == friendly_render_error("unusable_image")
+    # task-181: failure copy carries the failure-class line (never success)
+    # and then the mapped message.
+    assert kwargs["text"].endswith(friendly_render_error("unusable_image"))
     assert "❌" in kwargs["text"]
     assert "/" not in kwargs["text"]
     assert not workspace.exists()
@@ -145,14 +147,15 @@ async def test_queue_level_failure_without_a_result_is_still_human_readable(
     telegram_stub: ModuleType, temp_root: Path
 ) -> None:
     completion = _completion(
-        status=JobStatus.FAILED,
+        status=JobStatus.FAILED_TERMINAL,
         result=None,
         payload={"chat_id": 7, "workspace_dir": str(_workspace(temp_root, with_master=False))},
     )
     await slideshow_notify.notify_slideshow_completion(completion, "token")
 
     _kind, kwargs = _RecordingBot.calls[0]
-    assert kwargs["text"] == friendly_render_error(None)
+    assert kwargs["text"].endswith(friendly_render_error(None))
+    assert kwargs["text"].startswith("❌")
     assert "Traceback" not in kwargs["text"]
 
 
@@ -170,7 +173,7 @@ async def test_missing_artifact_falls_back_to_internal_message(
     await slideshow_notify.notify_slideshow_completion(completion, "token")
 
     assert [name for name, _ in _RecordingBot.calls] == ["message"]
-    assert _RecordingBot.calls[0][1]["text"] == friendly_render_error("internal")
+    assert _RecordingBot.calls[0][1]["text"].endswith(friendly_render_error("internal"))
 
 
 async def test_no_origin_chat_means_silent_but_still_cleaned(

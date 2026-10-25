@@ -24,6 +24,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nexus_ai_agent.creative.studio.models import (
     MICROSECONDS_PER_SECOND,
+    InputRef,
+    InputReferenceError,
     Playhead,
     Project,
     ReferenceResolutionError,
@@ -121,6 +123,50 @@ class ReferenceResolver:
             captured_at_command=True,
             is_playing=playhead.is_playing,
         )
+
+    def validate_input_refs(self, refs: tuple[InputRef, ...], project: Project) -> None:
+        """Validate *every* logical ref against this project's authoritative state.
+
+        This is deliberately not a filesystem/URL resolver. File existence and
+        containment belong to the adapter that stages media; an asset record
+        proves logical project membership, not a local file's physical bytes.
+        """
+        assets = {asset.asset_id: asset for asset in project.assets}
+        for ref in refs:
+            if ref.project_id != project.project_id:
+                raise InputReferenceError("input reference crosses the project boundary")
+            if ref.ref_type == "asset":
+                asset = assets.get(ref.ref_id)
+                if asset is None:
+                    raise InputReferenceError(
+                        f"asset is not registered in this project: {ref.ref_id!r}"
+                    )
+                kind, digest = asset.media_kind, asset.content_sha256
+            elif ref.ref_type == "clip":
+                clip = next(
+                    (
+                        clip
+                        for track in project.timeline.tracks
+                        for clip in track.clips
+                        if clip.clip_id == ref.ref_id
+                    ),
+                    None,
+                )
+                if clip is None:
+                    raise InputReferenceError(
+                        f"clip is not in this project's timeline: {ref.ref_id!r}"
+                    )
+                kind, digest = clip.media_ref.media_kind, clip.media_ref.content_sha256
+            else:
+                if ref.ref_id != project.timeline.timeline_id:
+                    raise InputReferenceError("timeline is not in this project")
+                if ref.metadata.media_kind is not None or ref.metadata.content_sha256 is not None:
+                    raise InputReferenceError("timeline references cannot carry asset metadata")
+                continue
+            if ref.metadata.media_kind is not None and ref.metadata.media_kind != kind:
+                raise InputReferenceError(f"reference has wrong media kind: {ref.ref_id!r}")
+            if ref.metadata.content_sha256 is not None and ref.metadata.content_sha256 != digest:
+                raise InputReferenceError(f"reference has wrong content digest: {ref.ref_id!r}")
 
     def _to_timecode_us(
         self, expression: ReferenceInput, project: Project, playhead: Playhead

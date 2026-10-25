@@ -159,6 +159,9 @@ class CreativeSurfaceMapper:
             "chat_id": chat_id,
             "lang": lang,
             "idempotency_key": idempotency_key,
+            # No lifecycle opt-in travels in the job row: the worker derives
+            # the EXPERIMENTAL-pack opt-in from the canonical operation
+            # (render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS, task-183).
         }
 
 

@@ -36,20 +36,22 @@ flowchart LR
 
 | # | Threat | Scenario | Control (code) | Evidence (test) | Status |
 |---|---|---|---|---|---|
-| T1 | **Spoofing** | stranger finds the bot and commands it | deny-by-default access gate at handler group −1 | `tests/unit/test_access_gate.py`, `tests/unit/test_auth_middleware.py` | closed (PR#34, P0-2) |
+| T1 | **Spoofing** | stranger finds the bot and commands it | deny-by-default access gate at handler group −1: sync `check_update` (PTB calls it unawaited) + `ApplicationHandlerStop` on every denial path, proven through the real `Application.process_update` group loop | `tests/unit/test_access_guard.py`, `tests/unit/test_auth_middleware.py` | closed (PR#34, P0-2; dispatcher semantics re-proven sec-boundary salvage) |
 | T2 | **Spoofing** | forged webhook deliveries | `X-Telegram-Bot-Api-Secret-Token` compared with `secrets.compare_digest` | `tests/unit/test_webhook_mode.py` | closed |
 | T3 | **Spoofing** | dashboard scraping | bearer token required, constant-time compare, PII-free payloads | `tests/unit/test_dashboard_api.py`, `tests/unit/test_dashboard_privacy.py` | closed (P0-5) |
 | T4 | **Elevation** | bypassing force-join gates | real `get_chat_member` check with cache; confirmation button cannot self-approve | `tests/unit/test_force_join_gate.py` | closed (P0-3) |
-| T5 | **Tampering** | path traversal on `/cloud`, `/download`, uploads | `safe_paths.safe_join` + `sanitize_file_name` | `tests/unit/test_safe_paths.py`, `tests/unit/test_security_hardening.py` | closed (P0-6) |
-| T6 | **Tampering** | prompt-injected tool execution / shell escape | shell tool off by default, allow-listed commands, path validation | `tests/unit/test_shell_sandbox.py`, `tests/unit/test_tools_sandbox.py` | closed |
+| T5 | **Tampering** | path traversal on `/cloud`, `/download`, uploads, and the local cache | `safe_paths.safe_join` + `sanitize_file_name` at ingress; the external name is sanitised **before** it becomes a provider object key; `LocalCacheProvider` validates every remote key (absolute/`..`/NUL/Windows separators/percent-encoded traversal refused), rejects any symlink component, pins its root to the canonical directory, and re-checks containment after creating parents and before opening | `tests/unit/test_safe_paths.py`, `tests/unit/test_security_hardening.py`, `tests/unit/test_local_cache_provider.py`, `tests/architecture/test_storage_key_boundary.py`, `scripts/security_mutations_remote_key.py` | closed (P0-6 + REMOTE-KEY; `main@8de0edd` did `cache_dir / remote_key`, so `../x` uploaded/read outside the cache and `list_files(prefix="..")` listed outside files) |
+| T6 | **Tampering** | prompt-injected tool execution / shell escape | shell tool off by default, allow-listed commands, and a **declared per-command argument grammar** after ADR 0011: an unlisted flag is refused, every `path`-kind flag value is validated by `WorkspaceFilesystem`, symlink-following options (`ls -L`, `grep -R`, `find -L`) are absent from the tables by design, and no shell metacharacter reaches a `shell=False` argv | `tests/unit/test_shell_sandbox.py` (attack half + legitimate-surface half), `tests/unit/test_filesystem_boundary.py`, `tests/unit/test_tools_sandbox.py`, `scripts/shell_sandbox_mutations.py` | closed (ADR 0011; T6 was **false** before it — `date -f`, `grep -fFILE` and `grep -R` were measured escape/disclosure paths on `main@8de0edd`) |
 | T7 | **Information disclosure** | private prompts or transcripts sent to a third party | per-user consent gate (tri-state) + minimum-egress interval + strict-privacy provider removal | `tests/unit/test_ai_memory_consent.py` | closed (P0-7) |
-| T8 | **Information disclosure** | secrets in logs | redaction at the observability boundary (bearer values, `token=`, `api_key=`, `password=`, bot tokens, URL userinfo) | `tests/unit/test_observability.py`, `tests/unit/test_structured_events.py` | closed |
-| T9 | **Information disclosure** | SSRF via summariser/WebTrainer/image URLs | DNS/address validation + validating transport (private ranges refused) | `tests/unit/test_http_client_ssrf.py`, `tests/unit/test_summarizer_ssrf.py` | closed |
+| T7 | **Information disclosure** | private prompts or transcripts sent to a third party | per-user consent gate (tri-state) + minimum-egress interval + strict-privacy provider removal | `tests/unit/test_ai_memory_consent.py` | closed (P0-7) |
+| T8 | **Information disclosure** | secrets in logs | redaction at the observability boundary in *both* pipelines (stdlib filter + structlog processor + wrapped rendered-line formatter, and the lifecycle `redact_fields` gate): bearer **and Basic-scheme** values, `token=`/`api_key=`/`password=` incl. single-quoted dict-repr keys, bare `?key=`/`?token=` query params, `x-goog-api-key` headers, bare and API-URL bot tokens, URL userinfo, secret-ish keys in nested structures, mapping-style (`%(password)s`) and non-string args, and `exc_info`/`stack_info` traceback text — asserted on captured rendered log output | `tests/unit/test_observability.py`, `tests/unit/test_structured_events.py` | closed (S3 closure, D-0016) |
+| T9 | **Information disclosure** | SSRF via summariser/WebTrainer/image URLs and the legacy `video_url` download | DNS/address validation + validating transport (private, metadata, loopback **and CGNAT 100.64.0.0/10** ranges refused): fail-fast `validate_url` at job creation **and** `SafeAsyncTransport` at fetch time — every connection incl. redirect hops is re-resolved, re-checked and IP-pinned (DNS-rebinding TOCTOU closed), and the **https-only scheme is re-enforced on every request** so an https→http redirect downgrade is refused, never followed | `tests/unit/test_http_client_ssrf.py`, `tests/unit/test_summarizer_ssrf.py`, `tests/unit/test_api_ssrf_download.py` | closed (S5 closure, D-0016) |
 | T10 | **Denial of service** | message flooding, LLM quota drain | rate limiter; per-provider cooldowns; one bounded retry policy for images; one timeout per media process | `tests/unit/test_rate_limiter.py`, `tests/unit/test_image_gen_adapters.py` | closed |
 | T11 | **Tampering (supply chain)** | a pack ships executable code or an unknown operation | data-only manifests (no executable key at any depth), external packs cannot register unknown operations, activation refuses pending capabilities | `tests/architecture/test_pack_manifest_is_data_only.py`, `tests/unit/test_pack_manifest_verify.py` | closed |
 | T12 | **Elevation** | media command escapes the studio permission ladder | `PermissionLevel` A–D enforced in the bus before any handler runs | `tests/unit/test_creative_studio.py`, `tests/unit/test_nagar_wave1_green_cockpit.py` | closed |
 | T13 | **Information disclosure** | destructive cleanup deletes history | messages never deleted by checkpoint cleanup; unknown state ⇒ no delete; human-only golden updates | `tests/unit/test_checkpoint_lifecycle.py`, `tests/unit/test_lifecycle_adversarial.py`, `tests/unit/test_reconciler.py` | closed |
 | T14 | **Elevation** | any user mutates another chat's data by guessing an id (the ad engine's `pause/resume/delete_campaign` take a bare `campaign_id`) | `bot/surface/ads.py::_load_owned` re-reads the row and compares `chat_id`; the owner bypasses; channel moderation commands are owner-gated and no longer answer anyone with a fake success | `tests/unit/test_surface_ads.py::test_pausing_another_chats_campaign_is_refused_and_changes_nothing`, `tests/unit/test_surface_channel_management.py::test_ban_is_owner_only_and_sends_nothing` | closed (D-0009) |
+| T15 | **Elevation** | a new HTTP operation (or a router mounted without a gate) reaches production without ever meeting a security boundary | the route inventory is derived from the application's own OpenAPI document and cross-checked against the routes FastAPI really registered — including the operations of a mounted sub-application, which the parent's document does not describe; every operation is either on the explicit public allowlist (`GET /`, `GET /healthz`, plus FastAPI's own documentation endpoints) or owned by one named surface — dashboard bearer token, Studio project scope, Telegram webhook shared secret, legacy creative HMAC signature; an unclassified operation, an operation hidden from the OpenAPI document (`include_in_schema=False`), a container the inventory cannot look into (unless it is explicitly exempted, with a reason), a gate that stops running, and a credential that opens a second surface are all failures | `tests/integration/test_api_gate_inventory.py` (inventory cross-check, classification, three hostile states with the exact status per surface, per-surface positive cases, the cross-surface independence case, the no-side-effect case, and the mutation probes) | closed (task-271, P2 / A-06) |
 
 ## 3. P0 audit follow-through (honest status)
 
@@ -79,6 +81,29 @@ The single process boundary in the creative tree is treated as hostile-input han
 - argv is built from typed ops, never from string interpolation of user text (title text is escaped by the compiler);
 - one timeout per call, output written to `.part` and atomically renamed, `overwrite=False` by default;
 - the produced file is probed by the same binary — evidence, not assumption.
+
+## 4b. The capability-pack supply-chain boundary
+
+A downloaded pack manifest is hostile input, and its own fields are never its
+credentials ([ADR 0006](adr/0006-capability-pack-trust-root.md)):
+
+- authority lives in `creative/packs/trust_root.json` — public keys only, and
+  currently **empty**, so every external pack is refused activation;
+- the trust root is not swappable through an environment variable; a caller
+  that owns a different root passes it explicitly;
+- `security.trusted_publisher` and `security.signature` are *claims*: the
+  signature is checked with RFC 8032 Ed25519 over `canonical_signing_bytes()`
+  (the whole manifest minus the signature field) against an **active** key
+  listed for that publisher in the trust root;
+- nine distinct outcomes (`placeholder`, `unsupported_algorithm`,
+  `malformed_signature`, `no_trust_root`, `unknown_publisher`,
+  `no_trusted_keys`, `revoked_key`, `signature_invalid`, `verified`); exactly
+  one of them — `verified` — allows `PackRegistry.activate()` to grant an
+  external pack execution authority;
+- the delivery pack's `signing.py` seam is **not** an activation authority (its PyNaCl-less fallback is symmetric HMAC under the verification secret); the boundary map is [`TRUST_CONTROL_PLANE.md`](TRUST_CONTROL_PLANE.md);
+- no signing primitive and no private key material ship in the runtime;
+  `tests/architecture/test_pack_trust_boundary.py` fails if one appears,
+  and `scripts/pack_trust_mutations.py` proves the guards kill 12 attacks.
 
 ## 5. Secrets and configuration
 

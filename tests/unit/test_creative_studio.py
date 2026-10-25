@@ -52,9 +52,11 @@ async def test_video_director_calls_gemini(monkeypatch: pytest.MonkeyPatch) -> N
         url: str,
         *,
         json: dict[str, Any],
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         captured["url"] = url
         captured["json"] = json
+        captured["headers"] = headers or {}
         return httpx.Response(200, json=response_payload)
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
@@ -65,8 +67,11 @@ async def test_video_director_calls_gemini(monkeypatch: pytest.MonkeyPatch) -> N
     assert plan.cuts[0].end == 1.5
     assert captured["json"]["generationConfig"]["temperature"] == 0
     assert captured["json"]["generationConfig"]["responseMimeType"] == "application/json"
-    assert "creative-key" in captured["url"]
     assert "generateContent" in captured["url"]
+    # S4: the API key must ride in the header, never in the URL.
+    assert captured["headers"].get("x-goog-api-key") == "creative-key"
+    assert "creative-key" not in captured["url"]
+    assert "?key=" not in captured["url"]
 
 
 @pytest.mark.asyncio

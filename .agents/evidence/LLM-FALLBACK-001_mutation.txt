@@ -1,0 +1,23 @@
+# EVIDENCE: LLM-FALLBACK-001 MUTATION TESTING (LAW 15)
+# captured_utc=2026-09-26T05:21:25Z
+# A mutation that survives means the invariant is NOT proven. Both mutations below are KILLED.
+
+===== MUTATION 1: re-introduce success-channel prose scan =====
+----------------------------- Captured stdout call -----------------------------
+2026-09-26 05:21:25 [info     ] using_fallback_provider        prompt_len=20
+=========================== short test summary info ============================
+FAILED tests/unit/test_fallback_provider_law10.py::test_successful_output_mentioning_429_stays_success
+FAILED tests/unit/test_fallback_provider_law10.py::test_successful_output_mentioning_quota_and_rate_limit_stays_success
+2 failed, 4 passed in 0.23s
+
+===== MUTATION 2: re-introduce text-based exception classification =====
+tests/unit/test_fallback_provider_law10.py:120: Failed
+----------------------------- Captured stdout call -----------------------------
+2026-09-26 05:21:26 [info     ] using_fallback_provider        prompt_len=2
+=========================== short test summary info ============================
+FAILED tests/unit/test_fallback_provider_law10.py::test_untyped_exception_propagates_regardless_of_text
+1 failed, 5 passed in 0.23s
+
+===== RESTORE: fixed code re-verified GREEN =====
+......                                                                   [100%]
+6 passed in 0.21s
