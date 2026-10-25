@@ -14,7 +14,8 @@ services:
     command: uvicorn nexus_ai_agent.api.app:app --host 0.0.0.0 --port 8000
     env_file: .env
     ports:
-      # P0-5: host-only bind by default. Exposing port 8000 publicly
-      # requires BOTH a reverse proxy and NEXUS_DASHBOARD_TOKEN set.
+      # P0-5: host-only bind by default. The dashboard API is fail-closed:
+      # it answers 503 until NEXUS_DASHBOARD_TOKEN is set in .env. Exposing
+      # port 8000 publicly additionally requires a TLS reverse proxy.
       - "127.0.0.1:8000:8000"
     restart: unless-stopped

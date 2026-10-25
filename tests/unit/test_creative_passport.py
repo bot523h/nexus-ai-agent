@@ -10,12 +10,17 @@ from pathlib import Path
 import pytest
 
 import nexus_ai_agent.adapters.in_process_job_queue as queue_module
+import nexus_ai_agent.jobs.creative_passport as passport_module
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.execution.staging import AttemptStaging
 from nexus_ai_agent.jobs.creative_passport import (
     CreativePassportError,
+    FileSnapshot,
     _fsync_directory,
     _resolve_store_path,
+    archive_trim_evidence,
     attempt_id,
+    hash_file,
     is_timeline_trim_request,
     request_identity,
 )
@@ -56,6 +61,87 @@ def test_attempt_identity_is_stable_and_increments_by_generation() -> None:
     assert attempt_id("job-1", 1) != attempt_id("job-1", 2)
     with pytest.raises(ValueError):
         attempt_id("job-1", 0)
+
+
+def test_archived_passport_evidence_uses_the_attempt_staging_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "output.mp4"
+    source.write_bytes(b"source")
+    output.write_bytes(b"output")
+    job_id = "job-1"
+    attempt_identifier = attempt_id(job_id, 1)
+    source_sha, source_size = hash_file(source)
+    captured_destinations: list[Path] = []
+
+    def copy_for_test(
+        source_path: Path,
+        destination: Path,
+        *,
+        too_large_code: str,
+    ) -> tuple[str, int]:
+        del too_large_code
+        captured_destinations.append(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source_path.read_bytes())
+        return hash_file(destination)
+
+    monkeypatch.setattr(passport_module, "_copy_verified", copy_for_test)
+    monkeypatch.setattr(
+        passport_module,
+        "runtime_evidence",
+        lambda: {
+            "capability": {"operation_id": "timeline.trim"},
+            "policy": {"allowed": True},
+            "authorization": {"status": "not_recorded"},
+            "runtime": {},
+        },
+    )
+    monkeypatch.setattr(passport_module, "build_passport", lambda **_: "passport")
+
+    archived = archive_trim_evidence(
+        artifact_root=artifact_root,
+        job_id=job_id,
+        attempt_number=1,
+        attempt_identifier=attempt_identifier,
+        identity=request_identity("creative_render", "key", {"x": 1}),
+        payload={"command": "edit", "operation": "trim"},
+        result={"operation": "timeline.trim", "artifact_path": str(output)},
+        verification={"status": "verified"},
+        source_snapshot=FileSnapshot(source, source_sha, source_size),
+        verifier=lambda _payload, _result: passport_module.VerificationOutcome(
+            ok=True, reason_code=None, summary={"status": "verified"}
+        ),
+    )
+
+    assert archived.passport == "passport"
+    expected_staging = AttemptStaging(
+        artifact_root, job_id=job_id, attempt_id=attempt_identifier
+    ).staging_dir
+    assert captured_destinations[0] == expected_staging / "input.mp4"
+
+
+def test_archive_rejects_an_attempt_identifier_for_a_different_generation(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(CreativePassportError, match="attempt identifier"):
+        archive_trim_evidence(
+            artifact_root=tmp_path,
+            job_id="job-1",
+            attempt_number=1,
+            attempt_identifier=attempt_id("job-1", 2),
+            identity=request_identity("creative_render", "key", {"x": 1}),
+            payload={},
+            result={},
+            verification={},
+            source_snapshot=None,
+            verifier=lambda _payload, _result: passport_module.VerificationOutcome(
+                ok=True, reason_code=None, summary={}
+            ),
+        )
 
 
 def test_queue_fingerprint_matches_the_exact_payload_json_snapshot(

@@ -7,13 +7,20 @@ test drives a real temporary filesystem; symlinks are the attack surface.
 
 from __future__ import annotations
 
+import errno
+import io
 import os
+import stat
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
-from nexus_ai_agent.tools.filesystem_policy import FilesystemBoundaryError, WorkspaceFilesystem
+from nexus_ai_agent.tools.filesystem_policy import (
+    ContentLimitExceeded,
+    FilesystemBoundaryError,
+    WorkspaceFilesystem,
+)
 
 
 def _ws(tmp_path: Path, name: str = "ws") -> WorkspaceFilesystem:
@@ -228,6 +235,101 @@ def test_write_bytes_rejects_parent_replaced_with_symlink_after_validation(
     assert (ws.root / "job.saved" / "attempt" / "staging").is_dir()
 
 
+def _swap_job_to_symlink_before_parent_walk(ws: WorkspaceFilesystem, outside: Path, *, victim: str):
+    """Patch ``ws._parent_fd`` to swap ``job`` for a symlink just before the
+    descriptor walk (i.e. after ``resolve`` validated the real directory)."""
+    original_parent_fd = ws._parent_fd
+
+    @contextmanager
+    def swap_before_descriptor_walk(parts: tuple[str, ...], *, create: bool = False):
+        if parts == ("job", "attempt", "staging", victim):
+            (ws.root / "job").rename(ws.root / "job.saved")
+            os.symlink(outside, ws.root / "job")
+        with original_parent_fd(parts, create=create) as opened:
+            yield opened
+
+    return swap_before_descriptor_walk
+
+
+def test_write_stream_wraps_a_parent_symlink_swap_as_boundary_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parent swapped to a symlink between resolve() and _parent_fd() must
+    surface as the typed boundary error, never a raw OSError."""
+    ws = _ws(tmp_path)
+    (ws.root / "job" / "attempt" / "staging").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "marker").write_bytes(b"untouched")
+    monkeypatch.setattr(
+        ws,
+        "_parent_fd",
+        _swap_job_to_symlink_before_parent_walk(ws, outside, victim="victim.bin"),
+    )
+    with pytest.raises(FilesystemBoundaryError):
+        ws.write_stream("job/attempt/staging/victim.bin", io.BytesIO(b"payload"), max_bytes=1024)
+    assert (outside / "marker").read_bytes() == b"untouched"
+    assert not (outside / "attempt").exists()
+    assert not (outside / "victim.bin").exists()
+    # The real (renamed-away) tree is intact and holds no staging residue.
+    staging_dir = ws.root / "job.saved" / "attempt" / "staging"
+    assert staging_dir.is_dir()
+    assert not any(staging_dir.iterdir()), "no staging file may survive the failure"
+
+
+def test_write_stream_wraps_a_staging_open_failure_as_boundary_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raw OSError from the staging os.open is wrapped at this boundary."""
+    ws = _ws(tmp_path)
+    (ws.root / "job").mkdir()
+    real_open = os.open
+
+    def failing_staging_open(name, flags, mode=0o777, *, dir_fd=None):  # noqa: ANN001, ANN202
+        if isinstance(name, str) and name.startswith(".staging-"):
+            raise OSError(errno.ENOSPC, "no space left on device", name)
+        return real_open(name, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", failing_staging_open)
+    with pytest.raises(FilesystemBoundaryError):
+        ws.write_stream("job/victim.bin", io.BytesIO(b"payload"), max_bytes=1024)
+    monkeypatch.undo()
+    # Neither the target nor any staging residue exists after the failure.
+    assert not (ws.root / "job" / "victim.bin").exists()
+    assert not any(p.name.startswith(".staging-") for p in (ws.root / "job").iterdir())
+
+
+def test_write_stream_keeps_content_limit_exceeded_typed(
+    tmp_path: Path,
+) -> None:
+    """ContentLimitExceeded is a FilesystemBoundaryError subclass and must keep
+    its own type across the boundary so callers can switch on it exactly."""
+    ws = _ws(tmp_path)
+    with pytest.raises(ContentLimitExceeded):
+        ws.write_stream("big.bin", io.BytesIO(b"y" * 200), max_bytes=50)
+    # No partial target and no staging residue survive the refused stream.
+    assert not (ws.root / "big.bin").exists()
+    assert not any(p.name.startswith(".staging-") for p in ws.root.iterdir())
+
+
+def test_write_stream_cleans_staging_when_the_stream_is_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read failure mid-stream still removes the staging file and wraps the
+    error at the boundary."""
+    ws = _ws(tmp_path)
+    (ws.root / "job").mkdir()
+
+    class ExplodingStream(io.BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            raise OSError(errno.EIO, "input stream died")
+
+    with pytest.raises(FilesystemBoundaryError):
+        ws.write_stream("job/victim.bin", ExplodingStream(), max_bytes=1024)
+    assert not (ws.root / "job" / "victim.bin").exists()
+    assert not any(p.name.startswith(".staging-") for p in (ws.root / "job").iterdir())
+
+
 def test_remove_tree_wraps_parent_reopen_symlink_race_as_boundary_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -293,3 +395,110 @@ def test_require_regular_file_wraps_parent_symlink_swap_as_boundary_error(
         ws.require_regular_file("job/attempt/artifact.bin")
     assert (outside / "marker").read_bytes() == b"untouched"
     assert (ws.root / "job.saved" / "attempt" / "artifact.bin").read_bytes() == b"inside"
+
+
+def _run_with_deadline(ws: WorkspaceFilesystem, call: str, seconds: float = 5.0) -> str:
+    """Run ``ws.<call>`` in a child process so a regression hangs the child, not pytest."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from nexus_ai_agent.tools.filesystem_policy import (\n"
+        "    FilesystemBoundaryError, WorkspaceFilesystem)\n"
+        f"ws = WorkspaceFilesystem({str(ws.root)!r})\n"
+        "try:\n"
+        f"    ws.{call}\n"
+        "    print('OK')\n"
+        "except FilesystemBoundaryError:\n"
+        "    print('BOUNDARY')\n"
+    )
+    try:
+        done = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=seconds
+        )
+    except subprocess.TimeoutExpired:
+        return "HANG"
+    return done.stdout.strip() or done.stderr.strip()[-300:]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs need POSIX")
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        # A FIFO is not a directory: opening it as one must be refused (fail closed).
+        ('list_names("pipe")', "BOUNDARY"),
+        ('ensure_directory("pipe")', "BOUNDARY"),
+        # remove_tree is documented best-effort cleanup: it skips a target it cannot
+        # safely open as a directory and returns normally, leaving the FIFO alone.
+        ('remove_tree("pipe")', "OK"),
+    ],
+)
+def test_a_fifo_in_the_workspace_never_blocks_directory_opens(
+    tmp_path: Path, call: str, expected: str
+) -> None:
+    """DoS contract (CWE-400): a planted FIFO is refused promptly, never waited on.
+
+    The outcome is asserted exactly per primitive so that losing the descriptor
+    type check (which would let ``ensure_directory`` return OK) fails the test.
+    """
+    ws = _ws(tmp_path)
+    os.mkfifo(ws.root / "pipe")
+    outcome = _run_with_deadline(ws, call)
+    assert outcome != "HANG", f"{call} blocked on a FIFO"
+    assert outcome == expected, f"{call}: expected {expected}, got {outcome}"
+    assert stat.S_ISFIFO(os.lstat(ws.root / "pipe").st_mode), "the FIFO must be left untouched"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs need POSIX")
+def test_a_fifo_as_an_intermediate_component_never_blocks(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    os.mkfifo(ws.root / "pipe")
+    assert _run_with_deadline(ws, 'list_names("pipe/child")') == "BOUNDARY"
+
+
+def test_a_path_through_a_regular_file_is_a_typed_boundary_error(tmp_path: Path) -> None:
+    """``file/child`` must raise FilesystemBoundaryError, not a raw NotADirectoryError."""
+    ws = _ws(tmp_path)
+    (ws.root / "f.txt").write_text("x")
+    for call in (
+        lambda: ws.list_names("f.txt/child"),
+        lambda: ws.ensure_directory("f.txt/child"),
+        lambda: ws.write_text("f.txt/child", "x"),
+        lambda: ws.read_text("f.txt/child"),
+    ):
+        with pytest.raises(FilesystemBoundaryError):
+            call()
+
+
+def test_final_symlink_to_a_directory_is_refused_by_every_directory_primitive(
+    tmp_path: Path,
+) -> None:
+    """The O_DIRECTORY|O_NOFOLLOW hole: a final symlink to a dir must not be followed."""
+    ws = _ws(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "victim.txt").write_text("v")
+    os.symlink(outside, ws.root / "link")
+    with pytest.raises(FilesystemBoundaryError):
+        ws.list_names("link")
+    with pytest.raises(FilesystemBoundaryError):
+        ws.ensure_directory("link")
+    # Every primitive rejects the symlink at resolve() before any open happens,
+    # so nothing outside the workspace is ever reached.
+    with pytest.raises(FilesystemBoundaryError):
+        ws.remove_tree("link")
+    assert (outside / "victim.txt").read_text() == "v"
+
+
+def test_intermediate_symlink_and_traversal_are_refused(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside, ws.root / "mid")
+    with pytest.raises(FilesystemBoundaryError):
+        ws.ensure_directory("mid/child")
+    assert not (outside / "child").exists()
+    for bad in ("../escape", "a/../../escape", "/abs"):
+        with pytest.raises(FilesystemBoundaryError):
+            ws.ensure_directory(bad)
