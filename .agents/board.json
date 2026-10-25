@@ -889,6 +889,16 @@
         "docs/architecture/RUNTIME_FLOWS.md",
         "tests/integration/test_knowledge_retrieval_postgres.py"
       ]
+    },
+    {
+      "id": "pr-convergence",
+      "description": "Live PR-state convergence registry: one reproducible command classifies every open PR and a pre-merge guard pins the reviewed head SHA (fails closed on unreadable data); plus the dated evidence snapshots and the current-truth audit that cite it.",
+      "paths": [
+        "scripts/pr_convergence.py",
+        "tests/unit/test_pr_convergence.py",
+        "CURRENT_TRUTH_AUDIT.md",
+        ".agents/evidence/"
+      ]
     }
   ],
   "claims": [
@@ -4034,6 +4044,37 @@
       "gates_owner": false,
       "note": "",
       "generation": 1
+    },
+    {
+      "task": "task-276-pr-convergence-registry",
+      "title": "PR convergence registry and merge-readiness guard (repair of PR #249)",
+      "title_fa": "رجیستری همگرایی PRها و گارد آمادگی مرج (اصلاح PR #249)",
+      "zone": "pr-convergence",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Make PR #249 mergeable on its own evidence: every CodeRabbit finding re-checked against the current head, valid ones fixed with deterministic tests, stale audit statements (pending CI, PR counts, #111 merge state) corrected from live data. Scope is limited to the four paths below; no feature work.",
+      "scope_fa": "PR #249 با شواهد خودش قابل مرج شود: هر یافتهٔ بازبین با head فعلی تطبیق داده شود، موارد معتبر با تست قطعی رفع شود و گزاره‌های کهنهٔ audit با داده زنده اصلاح شود. دامنه فقط چهار مسیر زیر است.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "scripts/agent_board.py check --repo bot523h/nexus-ai-agent --branch <claim branch> --files <changed files> exits 0 with readable origin/main and open-PR branches",
+        "every open review thread on PR #249 is either fixed by a commit that is cited in the reply or answered with an evidence-based reason; none is resolved without that",
+        "tests/unit/test_pr_convergence.py passes locally and all required CI checks pass on the exact final head",
+        "scripts/pr_convergence.py fails closed (exit 2) for unreadable or error-bearing GitHub responses and pins the reviewed head SHA",
+        "CURRENT_TRUTH_AUDIT.md states only counts and states that a recorded command reproduces"
+      ],
+      "evidence_required": [
+        "final head SHA and exact-head CI run link",
+        "referee exit code and stdout for the branch and the changed files",
+        "pytest command and result for tests/unit/test_pr_convergence.py",
+        "a review approval from an eligible reviewer other than the author"
+      ],
+      "exclusive_paths": [
+        "scripts/pr_convergence.py",
+        "tests/unit/test_pr_convergence.py",
+        "CURRENT_TRUTH_AUDIT.md",
+        ".agents/evidence/"
+      ],
+      "owner_hint": "PR #249 repair; claim with agent_branch arena/c888ae0d-nexus-ai-agent before editing"
     }
   ],
   "deferred_log": [
