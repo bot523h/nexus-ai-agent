@@ -27,7 +27,13 @@ from nexus_ai_agent.creative.packs.manifest import (
     PackManifestError,
     load_manifest,
 )
-from nexus_ai_agent.creative.packs.verify import VerificationReport, verify_manifest
+from nexus_ai_agent.creative.packs.trust import TrustRoot
+from nexus_ai_agent.creative.packs.verify import (
+    TRUSTED_SIGNATURE_STATES,
+    USE_DEFAULT_TRUST_ROOT,
+    VerificationReport,
+    verify_manifest,
+)
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 
 Anchor = Literal["builtin", "external"]
@@ -68,9 +74,19 @@ class RegisteredPack:
 class PackRegistry:
     """Validated packs over one runtime capability registry."""
 
-    def __init__(self, runtime_registry: CapabilityRegistry, *, current_version: str | None = None):
+    def __init__(
+        self,
+        runtime_registry: CapabilityRegistry,
+        *,
+        current_version: str | None = None,
+        trust_root: TrustRoot | None | str = USE_DEFAULT_TRUST_ROOT,
+    ):
         self._runtime = runtime_registry
         self._current_version = current_version
+        #: Authority used to judge external pack signatures.  It is held by the
+        #: registry, never by the pack: a manifest can never supply the thing
+        #: that decides whether the manifest is trusted.
+        self._trust_root = trust_root
         self._packs: dict[str, RegisteredPack] = {}
 
     # -- introspection ------------------------------------------------------
@@ -127,6 +143,7 @@ class PackRegistry:
             known_operations=self._runtime.list_operations(),
             current_version=self._current_version,
             anchor=anchor,
+            trust_root=self._trust_root,
         )
         report.raise_for_errors()
         if manifest.package_id in self._packs:
@@ -148,6 +165,18 @@ class PackRegistry:
         learns them (Wave 2b), with no re-registration.
         """
         pack = self.get(package_id)
+        # Trust gate (PACK-SEC-001).  Registration proves the manifest is
+        # *well formed*; activation grants *authority to execute*.  The two are
+        # not synonyms: an external pack only crosses this line when its
+        # signature verified against an active key in the trust root.  Builtins
+        # are authorised by the repository that ships them.
+        if pack.anchor == "external" and pack.report.signature_state not in (
+            TRUSTED_SIGNATURE_STATES
+        ):
+            raise PackRegistryError(
+                f"{package_id}: cannot activate — external pack is not trusted "
+                f"(signature state {pack.report.signature_state!r}: {pack.report.trust_reason})"
+            )
         unknown = tuple(
             capability
             for capability in pack.manifest.capabilities

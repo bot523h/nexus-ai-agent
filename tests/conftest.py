@@ -33,6 +33,12 @@ async def _dispose_db_engine():
         db_module._engine = None
         db_module._engine_path = None
         db_module._session_factory = None
+    # "This path already has its tables" is per-test knowledge too. Tests that
+    # chdir into a temp dir all share the CWD-relative default path string
+    # ``data/app.sqlite``; if it stays marked, the next test's brand-new empty
+    # file is skipped by ``create_all_tables`` and fails with "no such table"
+    # (order-dependent; see tests/unit/test_conftest_db_isolation.py).
+    db_module._initialized_paths.clear()
 
 
 @pytest.fixture()

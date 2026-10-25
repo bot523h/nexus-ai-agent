@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *टिप:* बस कोई संदेश लिखें, मैं AI से जवाब दूंगा!\n\nआप यह भी इस्तेमाल कर सकते हैं:\n• `/ask <प्रश्न>` — त्वरित प्रश्नोत्तर\n• `/code <कोड>` — कोड समीक्षा\n• `/translate <टेक्स्ट>` — स्मार्ट अनुवाद",
   "onboarding.image_hint": "💡 *टिप:* इमेज बनाने के लिए `/image <विवरण>` इस्तेमाल करें!\n\nआज़माएं: `/image अंतरिक्ष में बिल्ली digital-art`\n\nस्टाइल: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 चैट शुरू करने के लिए कोई संदेश भेजें!",
-  "onboarding.explore_hint": "🗺️ **सभी कमांड:**\n\n🤖 `/ai` — Gemini से चैट\n🎨 `/image` — इमेज बनाएं\n🔊 `/tts` — टेक्स्ट से वाणी\n☁️ `/cloud` — फ़ाइलें अपलोड करें\n🔗 `/referral` — दोस्तों को आमंत्रित करें\n🎮 `/quiz` — खेलें\n🌐 `/language` — भाषा बदलें\n❓ `/help` — पूरी कमांड सूची"
+  "onboarding.explore_hint": "🗺️ **सभी कमांड:**\n\n🤖 `/ai` — Gemini से चैट\n🎨 `/image` — इमेज बनाएं\n🔊 `/tts` — टेक्स्ट से वाणी\n☁️ `/cloud` — फ़ाइलें अपलोड करें\n🔗 `/referral` — दोस्तों को आमंत्रित करें\n🎮 `/quiz` — खेलें\n🌐 `/language` — भाषा बदलें\n❓ `/help` — पूरी कमांड सूची",
+  "creative.invalid_command": "❌ अज्ञात स्टूडियो कमांड। /edit, /caption या /grade का उपयोग करें।",
+  "creative.invalid_operation": "❌ /{command} के लिए यह कार्रवाई समर्थित नहीं है। विकल्प: {operations}",
+  "creative.not_replied": "❌ इस कमांड को किसी वीडियो (या ऑडियो) संदेश के जवाब में भेजें।",
+  "creative.limit_exceeded": "❌ मीडिया अधिकतम {max_seconds} सेकंड का होना चाहिए।",
+  "creative.media_too_large": "❌ मीडिया {max_mb} MB से बड़ा है।",
+  "creative.media_download_failed": "❌ Telegram से मीडिया डाउनलोड नहीं हो सका; दोबारा प्रयास करें।",
+  "creative.queue_failed": "❌ रेंडर कतार अभी उपलब्ध नहीं है; दोबारा प्रयास करें।",
+  "creative.queued": "⏳ /{command} {operation} कतार में — कार्य {job_id}",
+  "creative.completed": "✅ /{command} {operation} पूरा हुआ",
+  "creative.failed.invalid_request": "❌ अनुरोध अमान्य है ({detail})।",
+  "creative.failed.unsupported_operation": "❌ यह कार्रवाई वन-शॉट रेंडर के लिए उपलब्ध नहीं है।",
+  "creative.failed.media_missing": "❌ तैयार की गई मीडिया फ़ाइल नहीं मिली; कमांड दोबारा भेजें।",
+  "creative.failed.caption_profile_unavailable": "❌ इस इंस्टॉलेशन पर कैप्शन उपलब्ध नहीं है (कोई स्पीच इंजन नहीं)।",
+  "creative.failed.render_failed": "❌ रेंडर विफल; छोटा मीडिया या अन्य पैरामीटर आज़माएँ।",
+  "creative.failed.ffmpeg_unavailable": "❌ इस डिप्लॉयमेंट पर रेंडर इंजन इंस्टॉल नहीं है।",
+  "creative.failed.internal": "❌ आंतरिक त्रुटि हुई; विवरण टीम को दिखाई देता है।"
 }

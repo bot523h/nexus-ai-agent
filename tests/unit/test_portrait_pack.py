@@ -99,7 +99,7 @@ def _setup_bus() -> CommandBus:
             ]
         }
     )
-    return CommandBus(project, registry=build_portrait_registry())
+    return CommandBus(project, registry=build_portrait_registry(), allow_experimental=True)
 
 
 def _cmd(
@@ -397,7 +397,7 @@ def test_derived_assets_survive_undo_cycles_with_stable_hashes() -> None:
             ]
         }
     )
-    bus = CommandBus(project, registry=registry)
+    bus = CommandBus(project, registry=registry, allow_experimental=True)
     res = _cmd(
         bus,
         "c1",

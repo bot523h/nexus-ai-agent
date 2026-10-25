@@ -8,10 +8,31 @@ handler **group -1**, i.e. before every other handler.
 
 The trick is in ``check_update``: it returns ``True`` **only for
 updates from users the allow-list rejects**. PTB then runs the guard's
-callback (rate-limited denial + audit log) and *blocks* the update from
-reaching any other handler. For allowed users ``check_update`` returns
-``False`` and the update flows through as if the guard did not exist —
-no per-command changes required, no double-processing.
+callback (rate-limited denial + audit log) and the callback finishes by
+raising :class:`telegram.ext.ApplicationHandlerStop`, which is the
+*only* mechanism that stops PTB from evaluating the remaining handler
+groups — ``Application.process_update`` iterates every group in order
+and treats ``ApplicationHandlerStop`` as a hard stop. Without that
+raise, a denial in group -1 would be followed by the real command
+handler in group 0 (fail-open). For allowed users ``check_update``
+returns ``False`` and the update flows through as if the guard did not
+exist — no per-command changes required, no double-processing.
+
+Two PTB contract details this handler must honour (verified against
+``telegram.ext`` v21.0 and v22.8 — ``BaseHandler.check_update`` and
+``Application.process_update`` source):
+
+1. ``check_update`` is a **synchronous** method: the dispatcher calls
+   it as ``check = handler.check_update(update)`` *without* awaiting.
+   An ``async def check_update`` would return a coroutine, which is
+   always truthy — the guard would then run for *every* update,
+   including allowed users, and the allow-list would never be
+   consulted. It must stay a plain ``def``.
+2. Only ``ApplicationHandlerStop`` (or an error handler that swallows
+   the error and returns ``True``) stops later groups; ``block=True``
+   merely makes the dispatcher ``await`` the callback instead of
+   scheduling it with ``create_task`` (relevant when
+   ``concurrent_updates=True``).
 
 Updates without an ``effective_user`` (rare; e.g. some channel service
 messages) are let through: every real command handler degrades safely
@@ -25,7 +46,7 @@ from collections.abc import Callable
 from typing import Any
 
 from telegram import Update
-from telegram.ext import BaseHandler, CallbackContext
+from telegram.ext import ApplicationHandlerStop, BaseHandler, CallbackContext
 
 from nexus_ai_agent.bot.middleware import AuthMiddleware, RateLimiter
 from nexus_ai_agent.config.settings import Settings
@@ -55,8 +76,13 @@ class AccessGuardHandler(BaseHandler[Update, CallbackContext, None]):
             max_messages=_DENIAL_REPLY_LIMIT, window_seconds=_DENIAL_REPLY_WINDOW
         )
 
-    async def check_update(self, update: Any) -> bool:
-        """Only *denied* updates are handled — i.e. blocked from further handlers."""
+    def check_update(self, update: Any) -> bool:
+        """Only *denied* updates are handled — i.e. blocked from further handlers.
+
+        Synchronous by PTB contract: ``Application.process_update`` calls this
+        without awaiting, so an ``async def`` override would return a truthy
+        coroutine for *every* update and the allow-list would never run.
+        """
         user = getattr(update, "effective_user", None)
         if user is None:
             return False
@@ -71,9 +97,10 @@ class AccessGuardHandler(BaseHandler[Update, CallbackContext, None]):
             command = (message.text.split() or [""])[0]
 
         if not self._limiter.is_allowed(user_id):
-            # Flooded denials: drop silently, keep the audit trail.
+            # Flooded denials: drop silently, keep the audit trail — but the
+            # update is still denied, so it must never reach another group.
             logger.warning("access_denied_dropped", user_id=user_id, command=command)
-            return
+            raise ApplicationHandlerStop
 
         logger.warning("access_denied", user_id=user_id, command=command)
         query = update.callback_query
@@ -82,12 +109,15 @@ class AccessGuardHandler(BaseHandler[Update, CallbackContext, None]):
                 await query.answer(_DENIAL_ALERT, show_alert=True)
             except Exception:  # noqa: BLE001 — denial UX must never raise
                 logger.exception("access_denial_answer_failed", user_id=user_id)
-            return
+            raise ApplicationHandlerStop
         if message is not None:
             try:
                 await message.reply_text(_DENIAL_TEXT)
             except Exception:  # noqa: BLE001
                 logger.exception("access_denial_reply_failed", user_id=user_id)
+        # Every denial path ends here: without the stop, PTB would continue
+        # with group 0 and execute the very command we just denied.
+        raise ApplicationHandlerStop
 
 
 def build_access_guard(settings: Settings) -> AccessGuardHandler:

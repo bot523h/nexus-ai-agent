@@ -113,7 +113,7 @@ def _project() -> Project:
 
 
 def _bus(registry) -> CommandBus:  # noqa: ANN001 - test helper
-    return CommandBus(_project(), registry=registry)
+    return CommandBus(_project(), registry=registry, allow_experimental=True)
 
 
 def _dispatch(bus: CommandBus, operation: str, payload: dict[str, object]) -> object:

@@ -1,0 +1,7 @@
+# EVIDENCE: LLM-FALLBACK-001 REGRESSION (GREEN after fix)
+# captured_utc=2026-09-26T05:21:11Z
+# command: PYTHONPATH=src python -m pytest tests/unit/test_fallback_provider_law10.py tests/unit/test_litellm_provider.py -q --noconftest
+# code under test: fixed fallback_provider.py + errors.py + litellm_provider.py (typed LLMError)
+#
+.......................                                                  [100%]
+23 passed in 3.13s

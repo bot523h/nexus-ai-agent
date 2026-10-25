@@ -92,7 +92,7 @@ def _setup_bus() -> CommandBus:
             ]
         }
     )
-    return CommandBus(project, registry=build_scene_registry())
+    return CommandBus(project, registry=build_scene_registry(), allow_experimental=True)
 
 
 def _cmd(

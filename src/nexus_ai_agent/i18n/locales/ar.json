@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *نکته:* هر پیامی بفرستی، AI جوابت رو میده!\n\nهمچنین:\n• `/ask <سوال>` — سوال سریع\n• `/code <کد>` — بررسی کد\n• `/translate <متن>` — ترجمه هوشمند",
   "onboarding.image_hint": "💡 *نکته:* با `/image <توضیح>` عکس بساز!\n\nمثال: `/image یک گربه در فضا digital-art`\n\nاستایل‌ها: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 پیامت رو بفرست و چت رو شروع کن!",
-  "onboarding.explore_hint": "🗺️ **همه دستورات:**\n\n🤖 `/ai` — چت با Gemini\n🎨 `/image` — ساخت عکس\n🔊 `/tts` — متن به صدا\n☁️ `/cloud` — آپلود فایل\n🔗 `/referral` — دعوت دوستان\n🎮 `/quiz` — بازی\n🌐 `/language` — تغییر زبان\n❓ `/help` — لیست کامل دستورات"
+  "onboarding.explore_hint": "🗺️ **همه دستورات:**\n\n🤖 `/ai` — چت با Gemini\n🎨 `/image` — ساخت عکس\n🔊 `/tts` — متن به صدا\n☁️ `/cloud` — آپلود فایل\n🔗 `/referral` — دعوت دوستان\n🎮 `/quiz` — بازی\n🌐 `/language` — تغییر زبان\n❓ `/help` — لیست کامل دستورات",
+  "creative.invalid_command": "❌ أمر استوديو غير معروف. جرّب /edit أو /caption أو /grade.",
+  "creative.invalid_operation": "❌ عملية غير مدعومة لـ /{command}. الخيارات: {operations}",
+  "creative.not_replied": "❌ رُدَّ على رسالة فيديو (أو صوت) بهذا الأمر.",
+  "creative.limit_exceeded": "❌ يجب ألا تتجاوز مدة الوسائط {max_seconds} ثانية.",
+  "creative.media_too_large": "❌ حجم الوسائط أكبر من {max_mb} ميغابايت.",
+  "creative.media_download_failed": "❌ تعذّر تنزيل الوسائط من تيليغرام؛ حاول مجددًا.",
+  "creative.queue_failed": "❌ قائمة انتظار العرض غير متاحة الآن؛ حاول مجددًا.",
+  "creative.queued": "⏳ تمت إضافة /{command} {operation} إلى القائمة — المهمة {job_id}",
+  "creative.completed": "✅ اكتمل /{command} {operation}",
+  "creative.failed.invalid_request": "❌ الطلب غير صالح ({detail}).",
+  "creative.failed.unsupported_operation": "❌ هذه العملية غير مدعومة للعروض الفورية.",
+  "creative.failed.media_missing": "❌ ملف الوسائط المُجهَّز مفقود؛ أعد إرسال الأمر.",
+  "creative.failed.caption_profile_unavailable": "❌ الترجمة غير متاحة في هذا التثبيت (لا يوجد محرك كلام).",
+  "creative.failed.render_failed": "❌ فشل العرض؛ جرّب وسائط أقصر أو معطيات أخرى.",
+  "creative.failed.ffmpeg_unavailable": "❌ محرك العرض غير مثبَّت في هذا النشر.",
+  "creative.failed.internal": "❌ حدث خطأ داخلي؛ التفاصيل متاحة للفريق."
 }

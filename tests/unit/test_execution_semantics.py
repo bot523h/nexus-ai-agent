@@ -150,7 +150,7 @@ def test_missing_primitives_cover_every_effect_description() -> None:
 
 def test_srt_emission_carries_real_document_bytes() -> None:
     project = _project_with_assets()
-    bus = CommandBus(project, registry=build_caption_registry())
+    bus = CommandBus(project, registry=build_caption_registry(), allow_experimental=True)
     result = bus.dispatch(
         TypedCommand(
             command_id="cmd-srt",
@@ -170,7 +170,7 @@ def test_srt_emission_carries_real_document_bytes() -> None:
 
 def test_ass_emission_carries_real_document_bytes() -> None:
     project = _project_with_assets()
-    bus = CommandBus(project, registry=build_caption_registry())
+    bus = CommandBus(project, registry=build_caption_registry(), allow_experimental=True)
     result = bus.dispatch(
         TypedCommand(
             command_id="cmd-ass",
@@ -187,7 +187,7 @@ def test_ass_emission_carries_real_document_bytes() -> None:
 
 def test_export_otio_emission_carries_a_real_otio_document() -> None:
     project = _project_with_assets()
-    bus = CommandBus(project, registry=build_delivery_registry())
+    bus = CommandBus(project, registry=build_delivery_registry(), allow_experimental=True)
     result = bus.dispatch(
         TypedCommand(command_id="cmd-otio", operation="delivery.export_otio", input={})
     )
