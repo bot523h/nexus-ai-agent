@@ -14,7 +14,6 @@ dependencies = [
   "python-telegram-bot>=21.0",
   "langgraph>=0.2",
   "langgraph-checkpoint-sqlite==3.1.1",
-  "langchain-community>=0.2",
   "sqlmodel==0.0.42",
   "sqlalchemy==2.0.54",
   "alembic==1.20.0",
@@ -23,8 +22,10 @@ dependencies = [
   "psycopg[binary,pool]==3.3.5",
   "langgraph-checkpoint-postgres==3.1.2",
   "pydantic-settings>=2.0",
+  "pydantic>=2.7,<3",  # imported directly by 29 modules (audit A-05); was only transitive
     "sentence-transformers>=3.0",
     "llama-cpp-python>=0.2",
+    "llama-index-core==0.14.25",  # task-273: knowledge retrieval adapter (MIT, pinned 2026-10-23)
     "structlog>=24.0",
     "sqlite-vec>=0.1",
     "typer>=0.12",
@@ -63,9 +64,9 @@ dev = [
   "pytest-asyncio>=0.23",
   "ruff>=0.4",
   "mypy>=1.10",
-  "pytest-mock>=3.12",
   "pypdf>=5.1",  # keep the pdf-extraction test path real, not mocked
   "imageio-ffmpeg>=0.5",  # bundles a static FFmpeg: the render test runs a real encode
+  "deptry>=0.20",  # declared-vs-imported dependency gate (`make deps`, CI lint job)
 ]
 
 [tool.setuptools]
@@ -112,7 +113,6 @@ module = [
     "psycopg",
     "psycopg_pool",
     "asyncpg",
-    "langchain_community",
     "mega",
     "sqlite_vec",
     "telegram",
@@ -129,3 +129,30 @@ module = [
     "nacl.exceptions",
 ]
 ignore_missing_imports = true
+
+# ── Dependency truth (audit A-05, 2026-10-15) ────────────────────────────────
+# `deptry src` is part of `make lint` and the CI lint job: every import must be
+# a declared dependency, and every declared runtime dependency must be used.
+[tool.deptry]
+known_first_party = ["nexus_ai_agent"]
+pep621_dev_dependency_groups = ["dev"]
+
+[tool.deptry.per_rule_ignores]
+# DEP001 — imported but not declared: *optional* integrations that are probed
+# at import time and degrade with a typed error when absent.
+#   nacl  → creative/packs/delivery/signing.py (Ed25519 backend; pure fallback)
+#   gtts  → features/speech.py (online TTS; returns success=False when missing)
+#   mega  → storage/providers/mega.py (ProviderUnavailable when missing)
+DEP001 = ["nacl", "gtts", "mega"]
+# DEP004 — imported at runtime but declared only in the dev extra: the bundled
+# static FFmpeg is the *last* fallback of creative/slideshow/ffmpeg.py (after
+# NEXUS_FFMPEG_BIN and PATH) and fails with a typed error when absent.
+DEP004 = ["imageio_ffmpeg"]
+# DEP002 — declared but not imported by name: database drivers selected through
+# URL schemes / dialect strings, FastAPI's form parser, and the dynamic
+# `duckduckgo_search` import in integrations/external.py.
+DEP002 = ["asyncpg", "python-multipart", "duckduckgo-search"]
+# DEP003 — transitive packages imported directly, each owned by a declared
+# dependency: starlette (fastapi), httpcore (httpx), botocore (boto3),
+# psycopg_pool (psycopg[pool]).
+DEP003 = ["starlette", "httpcore", "botocore", "psycopg_pool"]
