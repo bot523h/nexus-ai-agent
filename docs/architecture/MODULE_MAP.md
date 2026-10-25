@@ -41,6 +41,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | `provenance/` | L3 | causal ledger: hash-chained journal, fail-safe queue observer, Artifact Passport projection (read-only, no authority) | `CausalJournal`, `QueueLedgerObserver`, `PassportBuilder` |
 | `selfhood/` | L3 | Living Core constitutional zone: immutable charter, append-only hash-chained Self-Ledger, fail-closed boot, human-only amendment door | `CHARTER`, `SelfLedger`, `boot_self` |
 | `adapters/` | L4 | port implementations: in-process job queue, Whisper caption engine, LangGraph lifecycle hooks | `InProcessJobQueue`, `WhisperLocalCaptionEngine` |
+| `knowledge_retrieval/` | L4 | local-first knowledge subsystem: scanner/chunking, source registry (SQLAlchemy, `knowledgesource`), evidence-search service, typed errors — talks `KnowledgeIndexPort` only, wired by the `cli.py` composition root | `KnowledgeRetrievalService`, `KnowledgeIndexPort`, `scan_roots` |
 | `llm/` | L4 | provider chain (litellm router), local llama.cpp server provider, fake provider for tests | `build_router`, `LocalServerProvider`, `FakeLLMProvider` |
 | `orchestration/` | L4 | LangGraph state machine + intent router + persona selection | `compile_graph`, `classify_intent` |
 | `features/` | L4 | 26 product engines (chat, memory, gamification, RAG, moderation, …) | per-module services |
@@ -49,7 +50,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | `creative/image_gen/` | L4 | image providers behind a provider protocol, bounded retry + cache | `ImageGenProvider`, `CachedImageAdapter` |
 | `bot/` | L5 | Telegram surface: access guard, middleware, handlers, surface modules (`surface/onboarding`, `channel_management`, `gamification`, `ads`, `docs`, `moderation`, `viral` — every registered command is backed by an engine), moderation ingress, notifications | `build_application`, `build_access_guard` |
 | `api/` | L5 | FastAPI app: `/healthz`, Telegram webhook, creative endpoints, dashboard router | `app`, `require_dashboard_token` |
-| `cli.py`, `worker.py` | L5 | composition roots: migrations, checkpoints, jobs, packs, slideshow, bot run | `main()` |
+| `cli.py`, `worker.py` | L5 | composition roots: migrations, checkpoints, jobs, packs, slideshow, knowledge retrieval ops, bot run | `main()` |
 
 (`agents/`, `agent/`, `personality/`, `presence.py`, `knowledge/`, `tools/`, `memory/` sit at L4 and are intentionally small: 98–461 lines each.)
 
@@ -79,6 +80,7 @@ Dependencies point **downward**. A lower layer may never import a higher one, an
 | R19 | One database per deployment: synchronous feature code obtains its engine from `storage.db.sync_engine()` (PostgreSQL via psycopg when `NEXUS_DATABASE_URL` is set, else the configured SQLite file), feature modules never build a `create_engine("sqlite:///…")` of their own, and feature modules never redeclare a table that `storage/models.py` owns | `tests/unit/test_sync_engine_resolution.py` (every `_sync_engine` helper resolves to the shared engine; the PostgreSQL URL wins), `tests/unit/test_referral_models.py` (single `Referral`/`ReferralCode` definitions) |
 | R20 | Every production module is reachable: something in `src/`, `tests/`, `scripts/` or `migrations/` imports it (statically or by dotted string), or it is a declared composition root (`cli`, `api.app`). Nine never-imported modules found by the 2026-10-15 audit (A-10) were deleted rather than kept as aspiration | `test_no_orphan_modules.py` (all three tests; the entry-point allowlist carries a reason per entry and is itself checked for staleness) |
 | R21 | The constitutional zone (`selfhood/`) is a pure core (stdlib + `provenance.models`), its Self-Ledger has no UPDATE/DELETE path, and nothing in `src/` imports the human-only `selfhood.amend` door — agents and learners cannot edit the charter | `tests/architecture/test_selfhood_boundary.py` (all three tests), `tests/unit/test_selfhood_ledger.py` (tamper, truncation-with-anchor, drift, crash-injection) |
+| R22 | LlamaIndex is quarantined: only `src/nexus_ai_agent/adapters/llamaindex_retrieval.py` may import `llama_index`; the `knowledge_retrieval/` core package imports neither the framework nor `nexus_ai_agent.adapters`; the sole adapter→service wiring lives in the `cli.py` composition root; retrieval imports no orchestration or command-bus module | `tests/architecture/test_knowledge_retrieval_boundaries.py` (all five tests), `tests/architecture/test_import_boundaries.py` (legacy baseline sweep) |
 
 **Legacy baseline.** `tests/architecture/legacy_baseline.json` freezes the pre-existing `langgraph`/`sqlmodel`/`telegram` import set with an explicit `approval: ARCH_BASELINE_APPROVED`. New violations fail; removing a baseline entry is allowed (and should be celebrated, not blocked).
 
