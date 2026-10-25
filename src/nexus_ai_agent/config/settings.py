@@ -56,6 +56,15 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("NEXUS_AUTO_UPDATE", "AUTO_UPDATE"),
     )
+    self_vitals_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("NEXUS_SELF_VITALS_ENABLED", "SELF_VITALS_ENABLED"),
+    )
+    self_vitals_period_s: float = Field(
+        default=60.0,
+        ge=5.0,
+        validation_alias=AliasChoices("NEXUS_SELF_VITALS_PERIOD_S", "SELF_VITALS_PERIOD_S"),
+    )
     allowed_user_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list,
         validation_alias=AliasChoices("NEXUS_ALLOWED_USER_IDS", "ALLOWED_USER_IDS"),
@@ -204,6 +213,69 @@ class Settings(BaseSettings):
     vazir_font_path: str = Field(
         default="assets/fonts/Vazirmatn.ttf",
         validation_alias=AliasChoices("VAZIR_FONT_PATH", "NEXUS_VAZIR_FONT_PATH"),
+    )
+
+    # ── Knowledge retrieval — local-first LlamaIndex adapter (task-273) ──
+    # Master switch: when false, every knowledge operation fails closed with
+    # a typed "disabled" error (status still reports honestly).
+    knowledge_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_ENABLED", "KNOWLEDGE_ENABLED"),
+    )
+    # The authorization allowlist: directories the scanner may walk (comma-
+    # separated or JSON list). Empty = unconfigured: indexing refuses, search
+    # reports the defined empty-index state.
+    knowledge_source_roots: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_SOURCE_ROOTS", "KNOWLEDGE_SOURCE_ROOTS"),
+    )
+    # Derived, rebuildable LlamaIndex store (JSON) — never authoritative.
+    knowledge_index_path: str = Field(
+        default="data/knowledge_index",
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_INDEX_PATH", "KNOWLEDGE_INDEX_PATH"),
+    )
+    # "hash" (default: deterministic, offline, no weights) or
+    # "sentence-transformers" (requires an already-downloaded local model
+    # directory in knowledge_embedding_model_path — never a silent download).
+    knowledge_embedding_provider: str = Field(
+        default="hash",
+        validation_alias=AliasChoices(
+            "NEXUS_KNOWLEDGE_EMBEDDING_PROVIDER", "KNOWLEDGE_EMBEDDING_PROVIDER"
+        ),
+    )
+    knowledge_embedding_model_path: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "NEXUS_KNOWLEDGE_EMBEDDING_MODEL_PATH", "KNOWLEDGE_EMBEDDING_MODEL_PATH"
+        ),
+    )
+    # Resource bounds: one file's bytes, files per index run, chunk window.
+    knowledge_max_file_bytes: int = Field(
+        default=2_000_000,
+        ge=1,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_MAX_FILE_BYTES", "KNOWLEDGE_MAX_FILE_BYTES"),
+    )
+    knowledge_max_files: int = Field(
+        default=2000,
+        ge=1,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_MAX_FILES", "KNOWLEDGE_MAX_FILES"),
+    )
+    knowledge_chunk_tokens: int = Field(
+        default=384,
+        ge=1,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_CHUNK_TOKENS", "KNOWLEDGE_CHUNK_TOKENS"),
+    )
+    knowledge_chunk_overlap_ratio: float = Field(
+        default=0.15,
+        ge=0.0,
+        lt=1.0,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_CHUNK_OVERLAP", "KNOWLEDGE_CHUNK_OVERLAP"),
+    )
+    knowledge_search_top_k: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_SEARCH_TOP_K", "KNOWLEDGE_SEARCH_TOP_K"),
     )
 
     # ── v3.7.0: Multi-provider LLM routing (litellm) ─────────────────
@@ -443,6 +515,25 @@ class Settings(BaseSettings):
             return [int(p) for p in parts]
         return v
 
+    @field_validator("knowledge_source_roots", mode="before")
+    @classmethod
+    def _parse_knowledge_source_roots(cls, v):  # type: ignore[no-untyped-def]
+        # Accept: "", "docs,../shared", '["docs"]' (JSON), or a real list.
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return [str(item) for item in v]
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return []
+            if s.startswith("["):
+                import json
+
+                return [str(item) for item in json.loads(s)]
+            return [p.strip() for p in s.split(",") if p.strip()]
+        return v
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -454,4 +545,5 @@ def get_settings() -> Settings:
     Path(settings.model_path).parent.mkdir(parents=True, exist_ok=True)
     Path(settings.cache_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.creative_temp_dir).mkdir(parents=True, exist_ok=True)
+    Path(settings.knowledge_index_path).mkdir(parents=True, exist_ok=True)
     return settings
