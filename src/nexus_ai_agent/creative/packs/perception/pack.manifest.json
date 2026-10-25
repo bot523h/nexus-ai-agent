@@ -23,6 +23,7 @@
   },
   "permissions": [
     "read_project_audio",
+    "read_project_video_frames",
     "write_timeline_layers"
   ],
   "network_policy": {

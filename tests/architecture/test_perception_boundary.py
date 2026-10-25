@@ -1,8 +1,8 @@
-"""Perception lane gates: the pack stays pure, the adapter owns every process.
+"""Perception lane gates: the pack stays pure, the adapter owns perception processes.
 
 1. the pack (``creative/packs/perception``) is stdlib + pydantic + studio only and
    never spawns a process, opens a socket or touches the file system;
-2. the adapter (``creative/perception``) is the only place that runs FFmpeg, never
+2. the adapter (``creative/perception``) runs FFmpeg for perception measurements, never
    uses a shell, and has no network client;
 3. the manifest is data-only, declares no network, and matches the operations;
 4. the pack is composed and has a lifecycle record (never dead weight).
@@ -86,7 +86,7 @@ def test_pack_is_pure() -> None:
             ), f"{path.name} crosses the pack boundary via {module}"
 
 
-def test_adapter_is_the_only_process_runner_and_never_uses_a_shell() -> None:
+def test_perception_adapter_runs_ffmpeg_and_never_uses_a_shell() -> None:
     files = sorted(ADAPTER.glob("*.py"))
     assert {p.name for p in files} >= {"analyzer.py", "parsers.py", "__init__.py"}
     for path in files:

@@ -134,7 +134,7 @@ All `motion.*`, `audio.*`, and `timeline.*` TDD ids are now registered.
 | Evidence | `probe_video` + `sha256_file` on the published artifact; a run that cannot probe fails with `LaneExecutionError` |
 | Gates | `test_rendering_lane_boundary.py`: no ML imports, import allow-list, no zone cross-over, **exactly one** `subprocess` site, never `shell=True` |
 
-The render lane is the only place that spawns a process *to produce media*; the perception adapter is the only place that spawns one *to measure media* (`test_slideshow_adapter_boundary.py::test_only_the_render_lane_spawns_a_process`, `test_perception_boundary.py::test_adapter_is_the_only_process_runner_and_never_uses_a_shell`). Pack handlers do not import process-spawning primitives (`tests/architecture/test_pack_manifest_is_data_only.py::test_pack_substrate_imports_stay_in_the_allowlist`).
+The render lane is the only place that spawns a process *to produce media*; the perception adapter is the only place that spawns one *to measure media* (`test_slideshow_adapter_boundary.py::test_only_the_render_lane_spawns_a_process`, `test_perception_boundary.py::test_perception_adapter_runs_ffmpeg_and_never_uses_a_shell`). Pack handlers do not import process-spawning primitives (`tests/architecture/test_pack_manifest_is_data_only.py::test_pack_substrate_imports_stay_in_the_allowlist`).
 
 ## 7. Speech, captions, and offline translation
 
