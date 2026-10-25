@@ -128,6 +128,7 @@ pytest -q test_execution_truth.py test_docs_integrity.py test_agent_board.py
 | 14:17:28 | رجیستریِ اصلاح‌شده و settle‌شده | `CONFLICT 46`, `NEEDS_APPROVAL 9` (شامل PR #249)، `CI_RED 1`, `READY 0` — `.agents/evidence/PR_REGISTRY_2026-10-25.json` |
 | 14:34 | بازبینی مستقلِ CodeRabbit روی PR #249 | ۶ finding؛ ۴ سندی و ۲ fail-closed code finding؛ درخواست تغییر ثبت شد |
 | 14:45 | رفع ۶ finding + افزودن snapshot تاریخی 13:33 | guard روی SHA و aggregationِ checkها سخت‌گیرتر شد؛ ۳۷ تستِ registry و full suite (۴۵۱۷ پاس) سبز |
+| 14:47 | درخواستِ full review از CodeRabbit برای head `d6cea72` | rate-limited؛ reviewِ مستقلِ تازه انجام نشد؛ CI نهایی باید روی head آخر پاس شود |
 
 ### ۴.۱ چطور #111 مرج شد (مسیر دقیق، برای تکرار)
 
@@ -171,10 +172,13 @@ mergeable values: {'UNKNOWN': 66, 'CONFLICTING': 2}
 
 `PR #249` باز است. SHA اولیه (`e51929d`) ۲۲/۲۲ check پاس کرد، ولی پس از دو مرجِ main
 دیگر قابل‌استفاده نبود (`BEHIND`). من شاخه را روی `cf8b7f6` rebase و force-with-lease push کردم.
-CodeRabbit روی head `4703c79` شش تغییرِ لازم (۴ سندی و ۲ در guard/aggregation) خواست؛ همگی را
-در حال اعمال و تست هستم. این بررسی نشان داد که approval route و SHA pin باید fail-closed باشند.
-PR را حسابِ مالک (`bot523h`) ساخته، پس تأیید خودی ممنوع است؛ تا بررسیِ مجددِ کد و exact-head CI
-سبز نشود، #249 را merge نمی‌کنم.
+CodeRabbit روی head `4703c79` شش تغییرِ لازم (۴ سندی و ۲ در guard/aggregation) خواست؛ هر شش مورد
+در commit `d6cea72` اصلاح و با ۳۷ تستِ متمرکز + full suite سبز بررسی شدند. درخواستِ full review برای
+همان commit به علت محدودیتِ تعداد reviewها rate-limited شد؛ بنابراین reviewِ مستقلِ تازه ندارم و
+وضعیت قبلیِ `CHANGES_REQUESTED` مربوط به SHA قدیمی هنوز در GitHub دیده می‌شود. commitهای پس از
+`d6cea72` فقط گزارشِ زمانِ full suite و همین وضعیتِ review را مستند می‌کنند، نه تغییرِ کدِ اجرایی.
+PR را حسابِ مالک (`bot523h`) ساخته، پس تأیید خودی
+ممنوع است؛ تا review مستقل و exact-head CI سبز نشود، #249 را merge نمی‌کنم.
 
 `main` پس از #190 روی `cf8b7f665d8dc3ec94d52b3ea337ef2491961f33` است. CI مربوط به همین main
 در آخرین مشاهده هنوز در حال اجرا بود (run `40201219831`)؛ هیچ ادعایی دربارهٔ سبزشدنش نمی‌کنم.
