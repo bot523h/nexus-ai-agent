@@ -12,12 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from functools import lru_cache
 from typing import Any
 
 from sqlmodel import Session, col, select
 
-from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.models import ForceJoinConfig
 
@@ -34,22 +32,15 @@ _CACHE_TTL = 300.0  # 5 minutes
 _PUBLIC_COMMANDS = frozenset({"start", "help", "forcejoin_status"})
 
 
-@lru_cache(maxsize=8)
-def _sync_engine(db_path: str) -> Any:
-    """Return a (cached) synchronous SQLAlchemy engine for feature CRUD.
+def _sync_engine(db_path: str | None = None) -> Any:
+    """The process-wide synchronous engine for ``db_path`` (``storage.db.sync_engine``).
 
-    P1-2: the gate's DB read runs in worker threads (``asyncio.to_thread``),
-    so the engine is created with ``check_same_thread=False``; caching it
-    per path also removes the per-message engine churn of the old
-    create-per-call behaviour.
+    P1-2: the callers run in worker threads (``asyncio.to_thread``); the central
+    engine is created with ``check_same_thread=False`` and cached (audit A-02).
     """
-    from sqlalchemy import create_engine as _ce
+    from nexus_ai_agent.storage.db import sync_engine
 
-    return _ce(
-        f"sqlite:///{db_path}",
-        echo=False,
-        connect_args={"check_same_thread": False},
-    )
+    return sync_engine(db_path)
 
 
 class ForceJoinManager:
@@ -80,7 +71,7 @@ class ForceJoinManager:
     @staticmethod
     def get_config(chat_id: int) -> ForceJoinConfig | None:
         """Return the force-join config for *chat_id*, or None."""
-        engine = _sync_engine(get_settings().db_path)
+        engine = _sync_engine()
         with Session(engine) as session:
             return session.exec(
                 select(ForceJoinConfig).where(ForceJoinConfig.chat_id == chat_id)
@@ -95,7 +86,7 @@ class ForceJoinManager:
         welcome_message: str = "",
     ) -> ForceJoinConfig:
         """Create or update force-join config for *chat_id*."""
-        engine = _sync_engine(get_settings().db_path)
+        engine = _sync_engine()
         with Session(engine) as session:
             existing = session.exec(
                 select(ForceJoinConfig).where(ForceJoinConfig.chat_id == chat_id)
@@ -186,7 +177,7 @@ class ForceJoinManager:
 
     def _is_enabled_anywhere_sync(self) -> bool:
         """Synchronous DB core for :meth:`should_block` (worker thread)."""
-        engine = _sync_engine(get_settings().db_path)
+        engine = _sync_engine()
         with Session(engine) as session:
             # ColumnElement.is_() builds a SQL ``enabled IS true`` (SQLite:
             # ``enabled IS 1``) predicate. A Python ``is`` comparison here

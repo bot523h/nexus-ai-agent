@@ -24,12 +24,6 @@
       ]
     },
     {
-      "file": "src/nexus_ai_agent/agent/feedback.py",
-      "imports": [
-        "telegram"
-      ]
-    },
-    {
       "file": "src/nexus_ai_agent/agent/self_monitor.py",
       "imports": [
         "telegram"
