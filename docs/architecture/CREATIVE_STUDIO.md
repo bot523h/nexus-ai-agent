@@ -4,7 +4,7 @@
 **Scope:** the capability model, the pack substrate, the command bus, the render lane, and the honest coverage ledger
 **Verified against:** `main` @ `9ec312c` (re-measured 2026-09-24 during task-166) — numbers below were produced by executing the builders and the CLI, not by reading names
 
-Nagar is the studio inside NEXUS: a typed, permissioned, *pure-by-default* media pipeline whose impure steps are bounded and enumerated: one FFmpeg process at the very end (render lane) and, before it, the read-only measurement adapter `creative/perception/` (FFmpeg `silencedetect`/`ebur128`/scene select; text inputs refused, demuxer and protocol whitelisted).
+Nagar is the studio inside NEXUS: a typed, permissioned, *pure-by-default* media pipeline with two bounded, enumerated impure paths: **producing** media (one FFmpeg process at the very end, the render lane) and **measuring** media (the read-only perception adapter `creative/perception/`: FFmpeg `silencedetect`/`ebur128`/scene select, which runs before and outside the bus). Input safety of the measuring path is enforced by `test_perception_adapter.py::test_text_inputs_are_refused_before_any_process_runs` (playlists/concat/SDP/DASH refused before any process starts), `::test_real_ffmpeg_enforces_the_format_whitelist` (demuxer whitelist, both FFmpeg builds) and `::test_argv_contract` (`-protocol_whitelist file`, `-format_whitelist`, absolute input).
 
 ---
 
@@ -19,15 +19,17 @@ flowchart TB
         packs["7 packs: edit · motion · audio · caption · color/delivery · slideshow · analysis/perception"]
         proj["Project state<br/>Timeline/Track/Clip/AssetRecord/EffectLayerRef<br/>derived state_hash"]
     end
-    subgraph impure["Impure — one process, one file, one measurement"]
-        lane["Render lane<br/>LaneIR → filtergraph → argv → FFmpeg"]
+    subgraph impure["Impure — bounded, enumerated"]
+        measure["Measuring (read-only, before the bus)<br/>creative/perception → sealed evidence"]
+        lane["Render lane (sole media-production path)<br/>LaneIR → filtergraph → argv → FFmpeg"]
         probe["probe_video + sha256 evidence"]
     end
+    measure -->|evidence in typed commands| cmd
     cmd --> bus --> reg --> packs --> proj
     proj -->|lane_ir_from_project| lane --> probe
 ```
 
-The split is the load-bearing decision: **evidence is gathered above the bus** (probing, analysis, image generation), **handlers inside the bus stay pure**, and **execution happens exactly once, in the lane**. See [`../DECISION_LOG.md`](../DECISION_LOG.md) Wave 2/2c entries.
+The split is the load-bearing decision: **evidence is gathered above the bus** (probing, analysis, image generation), **handlers inside the bus stay pure**, and **media production happens exactly once, in the lane** (measurement is a separate, read-only path whose results enter only as sealed, content-bound evidence). See [`../DECISION_LOG.md`](../DECISION_LOG.md) Wave 2/2c entries.
 
 ## 2. Capability model
 
