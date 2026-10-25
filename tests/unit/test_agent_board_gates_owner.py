@@ -7,7 +7,8 @@ therefore returns ``(live_owners, malformed)`` as *information*, and ``cmd_check
 stays exit 0 regardless of how many owners exist. These tests pin that law so a
 future edit cannot silently reintroduce a fail-closed gate requirement — while
 still proving the **lease-liveness** property that decides which claims are
-"live" at all (the mutation probe below fails if the expiry check is dropped).
+"live" at all (``test_expired_gates_owner_is_not_live`` fails if the expiry
+check is dropped; ``test_expiry_check_is_load_bearing`` shows the flip).
 
 Kept in its own module, separate from ``tests/unit/test_agent_board.py``, on
 purpose: several long-lived ``arena/*`` branches still edit that file, and a
@@ -146,20 +147,25 @@ def test_exactly_one_live_gates_owner_is_reported(
     assert cli.cmd_check(_args()) == 0
 
 
-def test_expired_owner_proof_is_sensitive_to_the_liveness_gate(
-    cli: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Mutation probe: dropping the lease-expiry check makes the expired owner live.
+def test_expiry_check_is_load_bearing(cli: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mutation probe: dropping the expiry comparison makes the expired owner live.
 
-    Patching ``_claim_live`` to always return True (mutation M: remove the lease
-    expiry check) turns the expired claim into a live owner, which proves the
-    ``owners == []`` assertion above is exactly the liveness safety property and
-    not an artifact of the advisory policy.
+    ``test_expired_gates_owner_is_not_live`` pins the safety result. This probe
+    proves that result is caused by the expiry comparison and not by some other
+    branch of ``_claim_live``: it replaces ``_claim_live`` with the *same*
+    predicate minus the ``now <= claimed + ttl`` check. The expired claim then
+    becomes live, so removing that one comparison is what breaks the invariant.
     """
     board = _board(
         [_claim(task="gate", gates=True, claimed_at="2025-01-01T00:00:00Z", ttl_hours=1)]
     )
     _wire(cli, monkeypatch, board)
-    monkeypatch.setattr(cli, "_claim_live", lambda claim: True)  # mutation M
+
+    def _claim_live_without_expiry(claim: dict) -> bool:  # mutation M: drop expiry check
+        if not cli._is_active_claim(claim):
+            return False
+        return cli._parse(claim.get("claimed_at")) is not None
+
+    monkeypatch.setattr(cli, "_claim_live", _claim_live_without_expiry)
     owners, malformed = cli._active_gates_owners(board)
     assert len(owners) == 1 and malformed == []
