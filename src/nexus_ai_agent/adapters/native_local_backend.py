@@ -77,7 +77,12 @@ class NativeLocalBackend:
 
     # -- identity -------------------------------------------------------- #
     def _identity_from_facts(
-        self, job_id: str, idempotency_key: str, facts: object | None
+        self,
+        job_id: str,
+        idempotency_key: str,
+        facts: object | None,
+        *,
+        bind_attempt: bool = True,
     ) -> ExecutionIdentity:
         if facts is None:
             return ExecutionIdentity(
@@ -96,7 +101,14 @@ class NativeLocalBackend:
                 bound_key,
                 dict(getattr(facts, "payload", {}) or {}),
             ).request_id
-        attempt = int(getattr(facts, "attempt", 0) or 0)
+        # ``submit`` returns the job-level identity: it may legitimately read the
+        # row *after* the worker already reserved it (the row is PROCESSING at
+        # attempt >= 1), and leaking that attempt's token here would hand the
+        # caller a fence it never owned.  ``bind_attempt=False`` strips the
+        # attempt-scoped fields so the submit-time identity stays unbound; the
+        # canonical request_id/idempotency_key are still resolved from the
+        # durable row.
+        attempt = int(getattr(facts, "attempt", 0) or 0) if bind_attempt else 0
         return ExecutionIdentity(
             request_id=str(request_id),
             idempotency_key=bound_key,
@@ -128,7 +140,7 @@ class NativeLocalBackend:
             payload=dict(request.payload),
         )
         facts = await self._queue.get_job_facts_async(job_id)
-        return self._identity_from_facts(job_id, request.idempotency_key, facts)
+        return self._identity_from_facts(job_id, request.idempotency_key, facts, bind_attempt=False)
 
     async def observe(self, identity: ExecutionIdentity) -> ExecutionObservation:
         facts = await self._queue.get_job_facts_async(identity.job_id)
