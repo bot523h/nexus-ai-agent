@@ -25,6 +25,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "pr_convergence.py"
 
@@ -201,6 +203,10 @@ def test_report_renders_every_tier_and_every_pr() -> None:
             },
         ],
     }
+    # A committed 13:33 v1 snapshot predates MERGEABILITY_UNKNOWN. Reporting
+    # remains backward-compatible; the absent category is rendered as zero.
+    built["totals"].pop("MERGEABILITY_UNKNOWN", None)
+    built["blockers"].pop("MERGEABILITY_UNKNOWN", None)
     text = registry.render_report(built)
     for tier in registry.TIERS:
         assert f"`{tier}`" in text, tier
@@ -256,3 +262,37 @@ def test_aggregate_fails_closed_on_an_unclassified_check() -> None:
 
 def test_aggregate_fails_closed_on_an_empty_check_list() -> None:
     assert registry._aggregate([]) == "NONE"
+
+
+def test_guard_accepts_case_insensitive_sha_prefix() -> None:
+    code, reasons = registry.check_guard(_pr(), expected_sha="A" * 12)
+    assert (code, reasons) == (0, [])
+
+
+@pytest.mark.parametrize("expected_sha", ["", "a" * 6, "z" * 12, "a" * 41])
+def test_guard_rejects_invalid_expected_sha_pins(expected_sha: str) -> None:
+    code, reasons = registry.check_guard(_pr(), expected_sha=expected_sha)
+    assert code == 1
+    assert any("7–40 hexadecimal" in reason for reason in reasons)
+
+
+def test_aggregate_treats_startup_failure_as_failure() -> None:
+    assert registry._aggregate([{"conclusion": "STARTUP_FAILURE"}]) == "FAILURE"
+
+
+def test_aggregate_treats_stale_as_failure() -> None:
+    assert registry._aggregate([{"conclusion": "STALE"}]) == "FAILURE"
+
+
+@pytest.mark.parametrize("unknown", ["SOME_NEW_STATE", "STALE_UNKNOWN", "ACTION_REQUIRED_NEW"])
+def test_aggregate_never_turns_unknown_conclusions_into_success(unknown: str) -> None:
+    assert registry._aggregate([{"conclusion": "SUCCESS"}, {"conclusion": unknown}]) == "PENDING"
+
+
+def test_aggregate_returns_success_only_when_every_conclusion_is_recognized() -> None:
+    assert (
+        registry._aggregate(
+            [{"conclusion": "SUCCESS"}, {"conclusion": "SKIPPED"}, {"state": "PASS"}]
+        )
+        == "SUCCESS"
+    )

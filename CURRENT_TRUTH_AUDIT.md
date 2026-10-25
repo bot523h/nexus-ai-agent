@@ -1,8 +1,9 @@
 # CURRENT_TRUTH_AUDIT — 2026-10-25
 
-> **English summary.** The previous session's *plan* was not executable and its *evidence* was not
-> in the repository: `CURRENT_TRUTH_AUDIT.md`, `evidence/phase11b/…` and the "registry v4" it cites
-> appear **nowhere** in this GitHub repository (code search: `total_count = 0` for all three).
+> **English summary.** At the start of this session the previous session's *plan* had no durable
+> evidence in the repository: `CURRENT_TRUTH_AUDIT.md`, `evidence/phase11b/…` and the "registry v4"
+> it cites were absent from the live tree (the pre-audit code searches returned `total_count = 0`).
+> This session has now added a replacement audit, a tested registry tool, and timestamped evidence.
 > Of the ten claims audited below, **five are false or describe an artifact that does not exist**,
 > two under-count the real problem, one is unprovable, and two are correct. Its
 > headline blocker — «0 write credentials, so merge is impossible» — is **false**: the configured
@@ -36,8 +37,8 @@ PR با `main` تضاد واقعی دارند و تنها **۹** مورد CI س�
 | # | ادعای سشن قبل | مشاهدهٔ زندهٔ امروز | حکم |
 |---|---|---|---|
 | 1 | «۰ مجوزِ نوشتن؛ push/merge ممکن نیست» | `gh api repos/… --jq .permissions` → `push:true, admin:true`؛ `git push --dry-run` موفق؛ **PR #111 مرج شد** | **غلط** |
-| 2 | «`CURRENT_TRUTH_AUDIT.md` پر شد» | `search/code` روی مخزن → `total_count = 0` | **وجود ندارد** |
-| 3 | «registry v4 کامل و به‌روز است» | همان جست‌وجو برای `nexus-pr-registry`/`phase11b` → `0` | **وجود ندارد** |
+| 2 | «`CURRENT_TRUTH_AUDIT.md` پر شد» | پیش از ایجاد این فایل، `search/code` → `total_count = 0`؛ بررسیِ تاریخیِ tree در §7 نیز همان را تأیید می‌کند | **در شروع وجود نداشت** |
+| 3 | «registry v4 کامل و به‌روز است» | جست‌وجوی پیش از ایجاد ابزار برای `nexus-pr-registry`/`phase11b` → `0`؛ در treeِ `063eb87` هم نبود | **در شروع وجود نداشت** |
 | 4 | «۲ PR آمادهٔ مرج (111, 125)» | ۹ PR با CI سبزِ کامل روی head دقیق (پس از مرج #111: ۸) | **کم‌شماری** |
 | 5 | «#190 مسدودِ امنیتی به‌خاطر شکاف `dataEcho`» | #190 = پوشهٔ تازهٔ `integrations/trigger/` (۸ فایل TypeScript، صفر کد پایتون)، `reviewDecision=APPROVED`، صفر چکِ قرمز؛ رشتهٔ `dataEcho` در کل مخزن **صفر** بار | **غلط** |
 | 6 | «111/125 clean، 190/122 clean» | زنده: 111 `BLOCKED`، 125 `BLOCKED`، 190 `BEHIND`، 122 `BEHIND` | **غلط** |
@@ -52,9 +53,15 @@ PR با `main` تضاد واقعی دارند و تنها **۹** مورد CI س�
 
 ---
 
-## 3. وضعیت ۶۸ PR باز در `13:33Z` (پس از دو مرج؛ snapshot تازه در §4.3)
+## 3. snapshot تاریخیِ ۶۸ PR در `13:33:28Z` (پس از #111 و پیش از #190)
 
-هر ردیف از یک READ زندهٔ GraphQL می‌آید و در `.agents/evidence/PR_REGISTRY_2026-10-25.json` ثبت شده است.
+این جدول **تاریخی** است، نه وضعیتِ لحظه‌ای: main آن snapshot برابر `6ce6bfc` (پس از #111) بود؛
+#190 هنوز باز بود و ۱۴:۱۳Z بعداً merge شد. JSON همان snapshot به‌طور مستقل در
+`.agents/evidence/PR_REGISTRY_2026-10-25T1333Z.json` نگه‌داری شده است. snapshot بعد از #190 در §4.2.
+
+هر ردیف از یک READ زندهٔ GraphQL می‌آید و در snapshot متناظر با زمانش ثبت شده است:
+`.agents/evidence/PR_REGISTRY_2026-10-25T1333Z.json` برای این جدول؛ snapshot تازهٔ 14:17Z در
+`.agents/evidence/PR_REGISTRY_2026-10-25.json`.
 
 | لایه (tier) | تعداد | معنا |
 |---|---|---|
@@ -109,7 +116,7 @@ pytest -q test_execution_truth.py test_docs_integrity.py test_agent_board.py
 
 | زمان (UTC) | اقدام | نتیجهٔ قابل‌بررسی |
 |---|---|---|
-| 13:31 | ساخت `scripts/pr_convergence.py` + `tests/unit/test_pr_convergence.py` | ۱۸ تست سبز، `ruff` پاک |
+| 13:31 | ساخت `scripts/pr_convergence.py` + `tests/unit/test_pr_convergence.py` | ابتدا ۱۸ تست سبز؛ سپس ۸ تستِ guard/unknown افزوده شد (اکنون ۲۶) |
 | 13:31 | `collect` زنده از GitHub | ۶۹ PR، شش لایه، `.agents/evidence/PR_REGISTRY_2026-10-25.json` |
 | 13:32:42 | **مرجِ #111** (مرج‌کامیتِ `6ce6bfc`) | `main` از `063eb87` به `6ce6bfc` رسید — **اولین تحویلِ واقعیِ این خطِ کار** |
 | 13:32 | به‌روزرسانیِ شاخهٔ #190 (`update-branch`) | head جدید `4dd447e8`، CI روی base تازه در حال اجرا |
@@ -118,7 +125,9 @@ pytest -q test_execution_truth.py test_docs_integrity.py test_agent_board.py
 | 14:00 | آزمونِ ترکیبِ #125+#199+#203 روی یک درخت | `board-integrity: OK`، ۱۴۱ تست سبز |
 | 14:13 | `guard 190 --expect-sha 4dd447e8` → PASS، سپس **مرجِ #190** | مرج‌کامیتِ `cf8b7f6`، **+۱۴۸۷/−۰ در ۸ فایل**؛ `main` به `cf8b7f6` رسید |
 | 14:14 | **ابزار خودش را لو داد**: بازخوانی پس از دو مرج، `CONFLICT: 0` گزارش کرد | علت: ۶۶ PR `mergeable=UNKNOWN` داشتند؛ باگ در طبقه‌بندی — §4.2 |
-| 14:17 | رجیستریِ اصلاح‌شده و settle‌شده | `CONFLICT 46`, `NEEDS_APPROVAL 9` (شامل PR #249)، `CI_RED 1`, `READY 0` — شاهدِ فعلی در JSON |
+| 14:17:28 | رجیستریِ اصلاح‌شده و settle‌شده | `CONFLICT 46`, `NEEDS_APPROVAL 9` (شامل PR #249)، `CI_RED 1`, `READY 0` — `.agents/evidence/PR_REGISTRY_2026-10-25.json` |
+| 14:34 | بازبینی مستقلِ CodeRabbit روی PR #249 | ۶ finding؛ ۴ سندی و ۲ fail-closed code finding؛ درخواست تغییر ثبت شد |
+| 14:45 | رفع ۶ finding + افزودن snapshot تاریخی 13:33 | guard روی SHA و aggregationِ checkها سخت‌گیرتر شد؛ ۳۷ تستِ registry و full suite (۴۵۱۷ پاس) سبز |
 
 ### ۴.۱ چطور #111 مرج شد (مسیر دقیق، برای تکرار)
 
@@ -150,7 +159,7 @@ mergeable values: {'UNKNOWN': 66, 'CONFLICTING': 2}
   چون «اندازه‌گیری‌نشده» با «تمیز» یکی نیست؛
 * `collect` حالا تا settle شدنِ mergeability صبر می‌کند (`--no-wait` برای غیرفعال‌کردن) و
   اگر مهلت تمام شود، UNKNOWN را صادقانه در لایهٔ خودش ثبت می‌کند؛
-* تست‌ها این کلاسِ خطا را قفل می‌کنند: UNKNOWN، guard روی state نامعلوم، aggregation بسته‌به‌پیش‌فرض؛ اکنون ۲۶ تست.
+* تست‌ها این کلاسِ خطا را قفل می‌کنند: UNKNOWN، guard روی state نامعلوم، SHA pin نامعتبر، و conclusions ناشناخته؛ اکنون ۳۷ تست.
 
 بازخوانی پس از اصلاح: `CONFLICT 46`، `MERGEABILITY_UNKNOWN 0` — تطابق با واقعیت. رجیستریِ آخر (14:17Z) در `.agents/evidence/PR_REGISTRY_2026-10-25.json` است؛ اختلافش با snapshot 13:33 این است که خودِ PR #249 حالا هم به تأیید نیاز دارد و `NEEDS_APPROVAL=9`.
 
@@ -160,19 +169,20 @@ mergeable values: {'UNKNOWN': 66, 'CONFLICTING': 2}
 
 ### ۴.۳ وضعیتِ تحویلِ همین کار، پس از مرج #190
 
-`PR #249` باز است. SHA اولیه (`e51929d`) به‌درستی ۲۲/۲۲ check پاس کرد، ولی پس از دو مرجِ main
-دیگر قابل‌استفاده نبود (`BEHIND`). من شاخه را روی main فعلی rebase و force-with-lease push کردم؛
-head فعلی `c4d635c3c5f9` هم‌پایهٔ `cf8b7f6` است و CI دقیقاً روی همین SHA در صف است (run `40201976020`).
-`@coderabbitai review` نیز برای همین head در https://github.com/bot523h/nexus-ai-agent/pull/249#issuecomment-6398822867
-درخواست شد؛ تا این مشاهده هنوز approval ثبت نشده بود. PR را حسابِ مالک (`bot523h`) ساخته، پس تأیید
-خودی ممنوع است؛ #249 را بدون review و CIِ نهایی merge نمی‌کنم.
+`PR #249` باز است. SHA اولیه (`e51929d`) ۲۲/۲۲ check پاس کرد، ولی پس از دو مرجِ main
+دیگر قابل‌استفاده نبود (`BEHIND`). من شاخه را روی `cf8b7f6` rebase و force-with-lease push کردم.
+CodeRabbit روی head `4703c79` شش تغییرِ لازم (۴ سندی و ۲ در guard/aggregation) خواست؛ همگی را
+در حال اعمال و تست هستم. این بررسی نشان داد که approval route و SHA pin باید fail-closed باشند.
+PR را حسابِ مالک (`bot523h`) ساخته، پس تأیید خودی ممنوع است؛ تا بررسیِ مجددِ کد و exact-head CI
+سبز نشود، #249 را merge نمی‌کنم.
 
 `main` پس از #190 روی `cf8b7f665d8dc3ec94d52b3ea337ef2491961f33` است. CI مربوط به همین main
 در آخرین مشاهده هنوز در حال اجرا بود (run `40201219831`)؛ هیچ ادعایی دربارهٔ سبزشدنش نمی‌کنم.
 
-گیت‌های محلی پس از اصلاحِ classifier و guard: `ruff check .` → pass؛ `mypy src` → pass (۳۱۰ فایل)؛
-`pytest -q tests/unit/test_pr_convergence.py` → ۲۶ pass؛ کل `pytest -q -m "not slow"` →
-**۴۵۰۶ passed, 38 skipped, 0 failed** (270.28s؛ بعد از اضافه‌شدن ۸ تستِ fail-closed).
+گیت‌های محلی پس از تمام اصلاحات CodeRabbit: `ruff check .` → pass؛ `ruff format --check .` → ۷۴۴ فایل
+pass؛ `mypy src` → pass (۳۱۰ فایل)؛ `pytest -q tests/unit/test_pr_convergence.py` → ۳۷ pass؛ کل
+`pytest -q -m "not slow"` → **۴۵۱۷ passed, 38 skipped, 0 failed** (267.04s). این نتایج محلية؛
+CIِ GitHub روی commit تازه پس از push در حال اجراست و جداگانه باید سبز شود.
 
 
 ---
@@ -191,7 +201,7 @@ branch protection (main)
 
 | راه | هزینه | نتیجه |
 |---|---|---|
-| **الف.** مالک در GitHub روی ۸ PRِ §3.1 «Approve» بزند | ۸ کلیک | در snapshot ساعت 13:33 همین کافی بود؛ پس از دو مرجِ main، ابتدا هر branch باید update/rebase و CI روی head تازه سبز شود، بعد approval معتبر است |
+| **الف.** reviewer مستقل با دسترسی write (مثلاً CodeRabbit اگر review را بپذیرد، یا collaborator) روی PRهای §3.1 approve کند | ۸ تأیید مستقل | نویسندهٔ هر ۸ مورد `bot523h` است؛ خودِ مالک نمی‌تواند تأیید کند. پس از دو مرجِ main، ابتدا هر branch باید update/rebase و CI روی head تازه سبز شود، بعد approval معتبر است |
 | **ب.** درخواستِ بازبینی از CodeRabbit روی همان ۸ PR | یک کامنت | الگوی واقعی در #190 و #209؛ برای #249 هم درخواست شده، اما تا آخرین مشاهده پاسخی نرسیده — **قابلیتِ پاسخ خودکار را تضمین نمی‌کنم** |
 | **ج.** کاهشِ `Required approvals` از ۱ به ۰ | تغییر خطِ مشی | توصیه **نمی‌شود** — همان دروازه‌ای است که حادثهٔ #143 را می‌گیرد |
 
@@ -224,19 +234,23 @@ gh api repos/bot523h/nexus-ai-agent --jq '.permissions'
 python scripts/pr_convergence.py collect --out .agents/evidence/PR_REGISTRY_2026-10-25.json
 python scripts/pr_convergence.py report  --in  .agents/evidence/PR_REGISTRY_2026-10-25.json
 
-# ۳) گاردِ پیش‌از‌مرج روی یک PR (head دقیق را پین می‌کند)
-python scripts/pr_convergence.py guard 190 --expect-sha 4dd447e8
+# ۳) گاردِ پیش‌از‌مرج روی head فعلیِ #249 (هنگام بازبینی، باید BLOCKED باشد)
+python scripts/pr_convergence.py guard 249 --expect-sha 4703c79
 
 # ۴) گاردِ base (حادثهٔ #143)
-python scripts/merge_base_guard.py check-pr 208
+python scripts/merge_base_guard.py check-pr 208  # expected nonzero: wrong base
 
 # ۵) شاهدِ مرجِ #111 و #190
 gh pr view 111 --json state,mergedAt,mergeCommit,mergedBy
 gh pr view 190 --json state,mergedAt,mergeCommit,mergedBy
 
-# ۶) اثباتِ نبودِ آرتیفکت‌های سشن قبل
-gh api "search/code?q=CURRENT_TRUTH_AUDIT+repo:bot523h/nexus-ai-agent" --jq .total_count   # → 0
-gh api "search/code?q=phase11b+repo:bot523h/nexus-ai-agent"            --jq .total_count   # → 0
+# ۶) اثباتِ نبودِ آرتیفکت‌ها در درختِ main پیش از این سشن (063eb87)
+# git cat-file returns 128 when an object/path is absent; expected: 128.
+git cat-file -e 063eb87:CURRENT_TRUTH_AUDIT.md 2>/dev/null; echo "exit=$?"  # expected: 128
+# رجیستریِ این سشن در 063eb87 نیز وجود نداشت:
+git cat-file -e 063eb87:.agents/evidence/PR_REGISTRY_2026-10-25.json 2>/dev/null; echo "exit=$?"  # expected: 128
+# پوشهٔ phase11b در آن tree موجود نبود:
+git ls-tree -r --name-only 063eb87 | grep '^evidence/phase11b/'  # expected: no output
 ```
 
 ---
@@ -245,10 +259,10 @@ gh api "search/code?q=phase11b+repo:bot523h/nexus-ai-agent"            --jq .tot
 
 - ادعا نمی‌کند ۶۸ PR باز «در حال تکمیل»‌اند. ۴۶ موردشان با `main` تضاد دارند و بدون کارِ نویسنده
   تکان نمی‌خورند.
-- ادعا نمی‌کند محصول آمادهٔ تولید است. هیچ‌کدام از این مرج‌ها (به‌جز #111 که فقط مستندات است)
-  تولید را تغییر نمی‌دهد.
+- ادعا نمی‌کند محصول آمادهٔ تولید است. #111 فقط سند را تغییر داد؛ #190 یک adapter در
+  `integrations/trigger/` اضافه کرد. این دو تحویل، به‌تنهایی، اثباتِ آمادگیِ کل محصول برای تولید نیستند.
 - ادعا نمی‌کند علتِ همهٔ ۴۶ تضاد یک چیز است. تا تریاژِ جداگانه انجام نشود، فقط می‌دانیم تضاد دارند.
-- ادعا نمی‌کند #190 قطعاً مرج می‌شود؛ CI آن روی head تازه در حال اجراست و تا سبز نشدن، هیچ تضمینی نیست.
+- ادعا نمی‌کند CIِ main پس از merge #190 سبز است؛ در آخرین مشاهده run `40201219831` هنوز در حال اجرا بود.
 
 ---
 

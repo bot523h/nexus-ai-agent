@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -192,8 +193,13 @@ def check_guard(
     elif merge_state != "CLEAN":
         reasons.append(f"mergeStateStatus is {merge_state!r}, expected 'CLEAN'")
     head = str(pr.get("headRefOid") or "")
-    if expected_sha and not head.startswith(expected_sha):
-        reasons.append(f"head moved: expected {expected_sha}, live {head}")
+    if expected_sha is not None:
+        if not re.fullmatch(r"[0-9a-fA-F]{7,40}", expected_sha):
+            reasons.append(
+                f"expected SHA must contain 7–40 hexadecimal characters (received {expected_sha!r})"
+            )
+        elif not head.lower().startswith(expected_sha.lower()):
+            reasons.append(f"head moved: expected {expected_sha}, live {head}")
     return (0 if not reasons else 1), reasons
 
 
@@ -335,8 +341,11 @@ def render_report(registry: dict[str, Any]) -> str:
         "| tier | count |",
         "|---|---|",
     ]
+    recorded_totals = registry.get("totals", {})
     for tier in TIERS:
-        lines.append(f"| `{tier}` | {registry['totals'][tier]} |")
+        # Older v1 snapshots predate MERGEABILITY_UNKNOWN; missing means zero
+        # only for report rendering, never for live collection/classification.
+        lines.append(f"| `{tier}` | {recorded_totals.get(tier, 0)} |")
     lines += [
         "",
         "blockers (a PR can carry several; tier = the hardest one)",
@@ -344,8 +353,9 @@ def render_report(registry: dict[str, Any]) -> str:
         "| blocker | PRs |",
         "|---|---|",
     ]
+    recorded_blockers = registry.get("blockers", {})
     for code in BLOCKERS:
-        lines.append(f"| `{code}` | {registry['blockers'][code]} |")
+        lines.append(f"| `{code}` | {recorded_blockers.get(code, 0)} |")
     lines += [
         "",
         "| PR | tier | base | CI | review | files | +/- | title |",
@@ -385,13 +395,28 @@ def _live_pr(number: int, repo: str) -> dict[str, Any]:
 def _aggregate(checks: list[dict[str, Any]]) -> str:
     """Worst-wins aggregation of the REST/CLI check list."""
     states = [(c.get("conclusion") or c.get("state") or "").upper() for c in checks]
-    if any(s in {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"} for s in states):
+    if any(
+        s
+        in {
+            "FAILURE",
+            "STARTUP_FAILURE",
+            "ERROR",
+            "TIMED_OUT",
+            "CANCELLED",
+            "ACTION_REQUIRED",
+            "STALE",
+        }
+        for s in states
+    ):
         return "FAILURE"
-    if any(s in {"PENDING", "IN_PROGRESS", "QUEUED", "EXPECTED", "WAITING", ""} for s in states):
-        return "PENDING"
-    if any(s in {"SUCCESS", "PASS", "SKIPPED", "NEUTRAL"} for s in states):
+    if not states:
+        return "NONE"
+    success_states = {"SUCCESS", "PASS", "SKIPPED", "NEUTRAL"}
+    if all(state in success_states for state in states):
         return "SUCCESS"
-    return "NONE"
+    # Unknown conclusions are not evidence of success.  Pending is the only
+    # safe aggregate until GitHub reports a recognized terminal conclusion.
+    return "PENDING"
 
 
 def main(argv: list[str] | None = None) -> int:
