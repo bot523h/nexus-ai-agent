@@ -29,7 +29,7 @@ flowchart TB
     proj -->|lane_ir_from_project| lane --> probe
 ```
 
-The split is the load-bearing decision: **evidence is gathered above the bus** (probing, analysis, image generation), **handlers inside the bus stay pure**, and **media production happens exactly once, in the lane** (measurement is a separate, read-only path whose results enter only as sealed, content-bound evidence). See [`../DECISION_LOG.md`](../DECISION_LOG.md) Wave 2/2c entries.
+The split is the load-bearing decision: **evidence is gathered outside the handlers** (analysis produces pre-bus evidence; image generation and the render lane's `probe_video` / `sha256_file` checks of the published artifact produce post-render evidence), **handlers inside the bus stay pure**, and **media production happens exactly once, in the lane** (measurement is a separate, read-only path whose results enter only as sealed, content-bound evidence). See [`../DECISION_LOG.md`](../DECISION_LOG.md) Wave 2/2c entries.
 
 ## 2. Capability model
 
@@ -134,7 +134,7 @@ All `motion.*`, `audio.*`, and `timeline.*` TDD ids are now registered.
 | Evidence | `probe_video` + `sha256_file` on the published artifact; a run that cannot probe fails with `LaneExecutionError` |
 | Gates | `test_rendering_lane_boundary.py`: no ML imports, import allow-list, no zone cross-over, **exactly one** `subprocess` site, never `shell=True` |
 
-The render lane is the only place that spawns a process *to produce media*; the perception adapter is the only place that spawns one *to measure media* (`test_slideshow_adapter_boundary.py::test_only_the_render_lane_spawns_a_process`, `test_perception_boundary.py::test_adapter_is_the_only_process_runner_and_never_uses_a_shell`). No pack handler ever spawns a process.
+The render lane is the only place that spawns a process *to produce media*; the perception adapter is the only place that spawns one *to measure media* (`test_slideshow_adapter_boundary.py::test_only_the_render_lane_spawns_a_process`, `test_perception_boundary.py::test_adapter_is_the_only_process_runner_and_never_uses_a_shell`). Pack handlers do not import process-spawning primitives (`tests/architecture/test_pack_manifest_is_data_only.py::test_pack_substrate_imports_stay_in_the_allowlist`).
 
 ## 7. Speech, captions, and offline translation
 
