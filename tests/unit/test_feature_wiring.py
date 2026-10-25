@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import create_engine
-from sqlmodel import Session, SQLModel
+from sqlmodel import Session, SQLModel, select
 
 from nexus_ai_agent.bot.feature_handlers import (
     ActiveAnonSessionFilter,
@@ -135,7 +135,7 @@ async def test_remind_persists_row_in_originating_chat(env: SimpleNamespace) -> 
     assert "یادآوری #" in reply_text(update)
     engine = create_engine(f"sqlite:///{env.db}")
     with Session(engine) as session:
-        rows = session.query(Reminder).all()
+        rows = session.exec(select(Reminder)).all()
     engine.dispose()
     assert len(rows) == 1
     assert rows[0].user_id == 1
@@ -149,7 +149,7 @@ async def test_cancel_remind_command(env: SimpleNamespace) -> None:
     await env.cmds["remind"](update, make_context(["1h", "جلسه"], bot=bot))
     engine = create_engine(f"sqlite:///{env.db}")
     with Session(engine) as session:
-        rid = session.query(Reminder).first().id
+        rid = session.exec(select(Reminder)).first().id
     engine.dispose()
 
     cancel_update = make_update(user_id=1, chat_id=10)
@@ -290,7 +290,7 @@ async def test_start_deep_link_records_referral(env: SimpleNamespace) -> None:
 
     engine = create_engine(f"sqlite:///{env.db}")
     with Session(engine) as session:
-        ref = session.query(Referral).filter_by(referee_id=200).first()
+        ref = session.exec(select(Referral).where(Referral.referee_id == 200)).first()
     engine.dispose()
     assert ref is not None
     assert ref.referrer_id == 100

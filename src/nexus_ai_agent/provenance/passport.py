@@ -480,16 +480,25 @@ class PassportBuilder:
         """Worst-severity wins; a terminal, fully-accounted row verifies."""
         worst = max((_SEVERITY_ORDER.get(finding.severity, 0) for finding in findings), default=0)
         remeasurement = (subject or {}).get("remeasurement", {})
-        if remeasurement.get("possible") and not remeasurement.get("matches", True):
-            findings.append(
-                Finding(
-                    "compromised",
-                    "artifact_digest_mismatch",
-                    "the artifact bytes on disk no longer match the recorded identity",
+        possible = remeasurement.get("possible", False)
+        matches = remeasurement.get("matches")
+        if possible and matches is not True:
+            # Fail-closed: only an explicit boolean ``true`` counts as a match.
+            # ``_remeasure`` always writes the boolean when it can measure, but a
+            # subject carrying a re-measurement with no verdict (or a non-boolean
+            # one) must never read as agreement — a missing key is not a pass.
+            if matches is False:
+                code = "artifact_digest_mismatch"
+                detail = "the artifact bytes on disk no longer match the recorded identity"
+            else:
+                code = "artifact_remeasurement_indeterminate"
+                detail = (
+                    "the artifact bytes were re-measured but the comparison produced no"
+                    " boolean verdict; fail-closed rather than assume a match"
                 )
-            )
+            findings.append(Finding("compromised", code, detail))
             worst = max(worst, _SEVERITY_ORDER["compromised"])
-        elif facts.status == _TERMINAL_SUCCESS and not remeasurement.get("possible", False):
+        elif facts.status == _TERMINAL_SUCCESS and not possible:
             findings.append(
                 Finding(
                     "limitation",

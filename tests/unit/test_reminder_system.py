@@ -86,24 +86,18 @@ async def test_delivers_to_originating_chat_not_user_id(reminder_sys: ReminderSy
     # user_id and chat_id deliberately differ and chat is a *group* id.
     await reminder_sys.set_reminder(user_id=111, chat_id=-1001234567, time_str="1s", text="آب بنوش")
 
-    # Wait for the *durable* outcome, never for the in-memory send. ``_deliver``
-    # records the terminal status only after ``send_message`` returns, in a
-    # worker thread, so ``bot.sent`` becomes non-empty strictly before the row
-    # is committed; reading the row right after ``bot.sent`` is a race. It was
-    # observed on CI (run 37451126180, python-parity 3.11) as
-    # ``assert 'pending' == 'sent'`` *after* a successful send, and the same
-    # commit passed the same leg in the push run 37451051208.
-    def _delivery_recorded() -> bool:
+    # ``bot.sent`` is set inside the send; the ``sent`` status write is a later
+    # hop (to_thread). Wait on the row, not the send, or the read races it.
+    def _sent() -> bool:
         saved = rows(reminder_sys._db_path)  # type: ignore[arg-type]
-        return bool(saved) and saved[0].status in {"sent", "failed"}
+        return bool(saved) and saved[0].status == "sent"
 
-    await _sleep_until(_delivery_recorded, seconds=3.0)
+    await _sleep_until(_sent, seconds=3.0)
     assert len(bot.sent) == 1
     chat_id, text = bot.sent[0]
     assert chat_id == -1001234567  # the originating chat, NOT user 111
     assert "آب بنوش" in text
-    saved = rows(reminder_sys._db_path)  # type: ignore[arg-type]
-    assert saved[0].status == "sent"
+    assert rows(reminder_sys._db_path)[0].status == "sent"  # type: ignore[arg-type]
 
 
 async def test_cancel_by_non_owner_rejected(reminder_sys: ReminderSystem) -> None:

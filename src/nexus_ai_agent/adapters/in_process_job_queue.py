@@ -296,6 +296,10 @@ class InProcessJobQueue:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._handlers: dict[str, JobHandler] = dict(handlers or {})
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        # Active task -> reserved attempt.  Shutdown snapshots these exact
+        # fencing tokens before cancelling tasks, so it can never infer an
+        # attempt from a job id and accidentally reset a peer's newer work.
+        self._local_claims: dict[str, tuple[asyncio.Task[None], ExecutionClaim]] = {}
         self._db_lock = threading.Lock()
         self._memory_connection: sqlite3.Connection | None = None
         if self._sqlite_path == ":memory:":
@@ -316,6 +320,16 @@ class InProcessJobQueue:
         if not normalized:
             raise ValueError("job_type must not be empty")
         self._artifact_verifiers[normalized] = verifier
+
+    def has_artifact_verifier(self, job_type: str) -> bool:
+        """Whether this queue can independently verify ``job_type`` results.
+
+        Public policy query for provider-neutral adapters. The queue retains
+        ownership of the verifier registry; callers need not inspect its
+        private mapping, and a missing verifier is never inferred from a
+        handler's success result.
+        """
+        return self._artifact_verifiers.get(job_type) is not None
 
     def register_artifact_publication(
         self, job_type: str, publication: ArtifactPublication
@@ -704,11 +718,13 @@ class InProcessJobQueue:
         composition roots guarantee one queue-owning process per sidecar, so
         at startup the previous owner is dead by construction.  With
         ``stale_after`` set, only in-flight rows whose ``started_at`` is
-        older than the window are taken over (expiry-gated takeover — the
-        safe form when a live peer might still own recent rows); ``pending``
-        rows are always re-scheduled.  Rows this very process is executing
-        are never taken over (that would strand its own live execution).
-        Terminal rows are never touched.
+        strictly older than the window are taken over (expiry-gated takeover —
+        the safe form when a live peer might still own recent rows); a row
+        whose age cannot be proven (missing ``started_at``) is refused exactly
+        like a fresh one (ambiguity fails closed).  ``pending`` rows are always
+        re-scheduled.  Rows this very process is executing are never taken over
+        (that would strand its own live execution).  Terminal rows are never
+        touched.
         """
         live = {job_id for job_id, task in self._tasks.items() if not task.done()}
         reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
@@ -753,23 +769,144 @@ class InProcessJobQueue:
             self._schedule(job_id)
         return job_ids
 
+    async def recover_job(self, job_id: str, *, stale_after: timedelta | None = None) -> list[str]:
+        """Recover **one** orphaned job (job-scoped, expiry-gated takeover).
+
+        Unlike :meth:`resume_pending` (whole-sidecar startup recovery), this is
+        the small, precise primitive an arbitrary runtime reconciliation may
+        use: it can only ever touch ``job_id``, so recovering one job can never
+        reset an unrelated in-flight row.  It is **never** the silent
+        ``stale_after=None`` startup takeover: with ``stale_after=None`` the
+        call observes only and takes nothing over (a runtime caller must pass
+        an explicit stale window, otherwise a live peer could still own the
+        row).  When a window is supplied, only a row whose ``started_at`` is
+        strictly older than it is taken over; a row whose age cannot be proven
+        (missing ``started_at``) is refused exactly like a fresh one.
+
+        Returns the list of job ids actually recovered (empty when nothing was
+        eligible).  Terminal rows are never touched.
+        """
+        if stale_after is None:
+            return []  # observe-only: a runtime reconcile must opt in explicitly
+        live = {jid for jid, task in self._tasks.items() if not task.done()}
+        reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live, {job_id})
+        for jid, job_type, attempt in reset:
+            if attempt is not None:
+                await self._record(
+                    CausalEvent(
+                        kind=EventKind.JOB_TAKEOVER,
+                        job_id=jid,
+                        job_type=job_type,
+                        attempt=attempt,
+                        status=JobStatus.PENDING.value,
+                        detail={
+                            "mode": "job_scoped",
+                            "fencing": "previous token superseded by the next reservation",
+                        },
+                        occurred_at=_now(),
+                    )
+                )
+            self._schedule(jid)
+        return [jid for jid, _, _ in reset]
+
+    async def cancel(self, job_id: str, *, expected_attempt: int) -> bool:
+        """Request cancellation of an in-flight job (fenced, additive primitive).
+
+        Cancellation is a **process-lifecycle** event, never a business
+        failure: an in-flight row (``processing``/``verifying``) is reset to
+        ``pending`` under its *current* fencing token, so the row stays
+        recoverable and the cancelled attempt's later completion is rejected by
+        every fenced CAS.  This is the public, per-job form of the edge
+        ``(PROCESSING/VERIFYING, PENDING)`` documented in
+        ``jobs.lifecycle.TRANSITIONS`` (owner: *"queue (cancellation /
+        shutdown)"*) and the ``JOB_REOPENED`` event kind.
+
+        ``expected_attempt`` **binds** the cancellation to one specific
+        execution and is mandatory: a caller that holds an attempt-scoped
+        identity passes its fencing token, and the reset commits **only if the
+        row is still that attempt**.  A stale identity (an older token) is
+        therefore rejected and can never cancel a newer attempt; a bare
+        ``job_id`` is never sufficient authority to cancel anything (fail
+        closed — there is deliberately no job-level fallback).
+
+        Returns ``True`` iff an in-flight attempt was affected.  A terminal row
+        is never reopened, and a row that was never owned (``pending``) is not
+        an in-flight attempt, so both return ``False``.  The reset CAS is fenced
+        on ``attempt``: if a takeover or a competing reservation changed the row
+        between the read and the write, the write commits nothing and this
+        returns ``False`` (the caller must not announce anything).
+        """
+        row = await asyncio.to_thread(self._fetch_row, job_id)
+        if row is None:
+            return False
+        try:
+            status = parse_job_status(str(row["status"]))
+        except ValueError:
+            return False  # unknown durable spelling: never touch it (fail-closed)
+        if status not in {JobStatus.PROCESSING, JobStatus.VERIFYING}:
+            return False  # terminal rows are never reopened; pending was never owned
+        attempt = int(row["attempt"] or 0)
+        if attempt < 1:
+            return False  # an in-flight row always carries a minted token
+        if attempt != expected_attempt:
+            # A stale identity (or a lost race): the current owner is a newer
+            # attempt.  Never mutate a newer execution on behalf of an older one.
+            return False
+        claim = ExecutionClaim(job_id=job_id, attempt=attempt)
+        reset = await asyncio.to_thread(self._mark_pending, claim)
+        if not reset:
+            return False  # lost the fence: a newer owner (or terminal row) won
+        # Stop the local execution if this process owns it.  The fenced reset
+        # above already guarantees its later completion cannot commit, so this
+        # is only about not leaving a doomed task running.
+        task = self._tasks.get(job_id)
+        if task is not None and not task.done():
+            task.cancel()
+        await self._record(
+            CausalEvent(
+                kind=EventKind.JOB_REOPENED,
+                job_id=job_id,
+                job_type=str(row["job_type"]),
+                attempt=claim.attempt,
+                status=JobStatus.PENDING.value,
+                detail={"mode": "cancel"},
+                occurred_at=_now(),
+            )
+        )
+        return True
+
     async def shutdown(self) -> None:
-        """Cancel local tasks and leave them recoverable as pending jobs."""
+        """Cancel local tasks and leave their own attempts recoverable.
+
+        Snapshot each live task's *reserved attempt* before cancellation.
+        The worker's ``CancelledError`` path normally reopens that same fenced
+        attempt; this fallback handles cancellation in the small pre-handler
+        window.  The reservation await is shielded too: if shutdown cancels it,
+        the minted claim is awaited and reopened under its own fence before the
+        cancellation propagates. Both paths use the original ``ExecutionClaim``
+        CAS, never a job-id-only sweep, so a peer's newer attempt remains untouched.
+        """
         tasks = list(self._tasks.values())
+        task_set = set(tasks)
+        local_claims = {
+            job_id: claim
+            for job_id, (owner, claim) in self._local_claims.items()
+            if owner in task_set
+        }
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        reset = await asyncio.to_thread(self._reset_unfinished, None, set())
-        for job_id, job_type, attempt in reset:
-            if attempt is None:
-                continue  # never owned: re-listed pending, not a takeover
+        for job_id, claim in local_claims.items():
+            if not await asyncio.to_thread(self._mark_pending, claim):
+                continue  # already settled, terminal, or superseded by a peer
+            row = await asyncio.to_thread(self._fetch_row, job_id)
             await self._record(
                 CausalEvent(
-                    kind=EventKind.JOB_TAKEOVER,
+                    kind=EventKind.JOB_REOPENED,
                     job_id=job_id,
-                    job_type=job_type,
-                    attempt=attempt,
+                    job_type=str(row["job_type"]) if row is not None else "",
+                    attempt=claim.attempt,
                     status=JobStatus.PENDING.value,
                     detail={"mode": "shutdown"},
                     occurred_at=_now(),
@@ -782,7 +919,15 @@ class InProcessJobQueue:
             return
         task = asyncio.create_task(self._process_job(job_id))
         self._tasks[job_id] = task
-        task.add_done_callback(lambda _: self._tasks.pop(job_id, None))
+
+        def forget_task(completed: asyncio.Task[None]) -> None:
+            if self._tasks.get(job_id) is completed:
+                self._tasks.pop(job_id, None)
+            local = self._local_claims.get(job_id)
+            if local is not None and local[0] is completed:
+                self._local_claims.pop(job_id, None)
+
+        task.add_done_callback(forget_task)
 
     @staticmethod
     def _is_typed_render_preflight_error(exc: BaseException) -> bool:
@@ -872,8 +1017,43 @@ class InProcessJobQueue:
         # PENDING-only CAS mints this execution's fencing token; a row that
         # is already PROCESSING/VERIFYING belongs to someone else (another
         # process over the same sidecar, or a live task) and is NOT ours.
+        reservation = asyncio.create_task(asyncio.to_thread(self._mark_processing, job_id))
         try:
-            claim = await asyncio.to_thread(self._mark_processing, job_id)
+            # Shield the thread-backed CAS: cancelling this coroutine cannot
+            # stop the worker thread after it has begun committing the claim.
+            claim = await asyncio.shield(reservation)
+        except asyncio.CancelledError:
+            # A cancelled await does not imply that the SQLite reservation
+            # did not commit. Wait for the shielded operation, then reopen only
+            # its returned claim before propagating cancellation; a peer's
+            # later attempt remains protected by _mark_pending's fence.
+            try:
+                claim = await asyncio.shield(reservation)
+            except CreativePassportError:
+                logger.warning(
+                    "job_attempt_history_unreadable_during_cancellation job_id=%s; "
+                    "no reservation claim was returned",
+                    job_id,
+                    exc_info=True,
+                )
+            except Exception:
+                logger.exception("job_reservation_failed_during_cancellation job_id=%s", job_id)
+            else:
+                if claim is not None and await asyncio.to_thread(self._mark_pending, claim):
+                    await self._record(
+                        CausalEvent(
+                            kind=EventKind.JOB_REOPENED,
+                            job_id=job_id,
+                            job_type=job_type,
+                            idempotency_key=str(row["idempotency_key"] or ""),
+                            attempt=claim.attempt,
+                            status=JobStatus.PENDING.value,
+                            payload_digest=payload_digest,
+                            detail={"phase": "reservation_cancellation"},
+                            occurred_at=_now(),
+                        )
+                    )
+            raise
         except CreativePassportError:
             # Never execute a row whose queue-owned attempt evidence cannot
             # be decoded and extended atomically. Recovery leaves it pending
@@ -888,6 +1068,10 @@ class InProcessJobQueue:
         if claim is None:
             logger.info("job_reservation_rejected job_id=%s type=%s", job_id, job_type)
             return
+        owner = asyncio.current_task()
+        if owner is None:  # private worker entry point must be task-owned
+            raise RuntimeError("job processing requires an asyncio task")
+        self._local_claims[job_id] = (owner, claim)
         logger.info("job_processing job_id=%s type=%s attempt=%d", job_id, job_type, claim.attempt)
         await self._record(
             CausalEvent(
@@ -1934,7 +2118,10 @@ class InProcessJobQueue:
         )
 
     def _reset_unfinished(
-        self, stale_after: timedelta | None, exclude: set[str]
+        self,
+        stale_after: timedelta | None,
+        exclude: set[str],
+        only: set[str] | None = None,
     ) -> list[tuple[str, str, int | None]]:
         """Reset orphaned rows and return only CAS-confirmed takeovers.
 
@@ -1942,6 +2129,9 @@ class InProcessJobQueue:
         never owned and is not a takeover. In-flight rows carry their previous
         attempt only when the status-and-attempt CAS actually commits, so a
         racing reservation cannot be misreported as superseded.
+
+        ``only`` restricts the sweep to a specific set of job ids (the
+        job-scoped recovery primitive); ``None`` sweeps the whole sidecar.
         """
         in_flight = (JobStatus.PROCESSING.value, JobStatus.VERIFYING.value)
         cutoff = (
@@ -1965,10 +2155,18 @@ class InProcessJobQueue:
                 job_type = str(row["job_type"])
                 if job_id in exclude:
                     continue
+                if only is not None and job_id not in only:
+                    continue  # job-scoped sweep: never touch unrelated rows
                 if str(row["status"]) in in_flight:
                     started_at = row["started_at"]
-                    if cutoff is not None and started_at is not None and started_at >= cutoff:
-                        continue  # a live peer may still own a recent row
+                    if cutoff is not None:
+                        # Expiry-gated mode: staleness must be *proven*.  A row
+                        # whose age cannot be established (missing ``started_at``)
+                        # is ambiguous, and ambiguity fails closed — only rows
+                        # strictly older than the window are eligible; a recent
+                        # (or unproven) row may still be owned by a live peer.
+                        if started_at is None or started_at >= cutoff:
+                            continue
                     current_attempt = int(row["attempt"] or 0)
                     raw_history = row["attempt_history_json"]
                     try:
