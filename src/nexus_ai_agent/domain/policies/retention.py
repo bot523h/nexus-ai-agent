@@ -10,7 +10,7 @@ level re-implementing another:
 * **thread level** -- :func:`thread_retention` quantifies over *every* row a
   thread owns.  This is the safety-critical level.
 * **product level** -- the window and the expired-resume behaviour are
-  re-exported from :mod:`nexus_ai_agent.domain.retention`, never re-spelled.
+  declared once in this module, never re-spelled.
 
 The thread level's quantifier asymmetry **is** the safety property:
 
@@ -50,7 +50,28 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Final
 
-from nexus_ai_agent.domain.retention import DEFAULT_RETENTION_DECISION
+
+@dataclass(frozen=True)
+class RetentionDecision:
+    """The product contract for resumability and history retention.
+
+    Kept in this module (the single surviving retention-policy home on ``main``)
+    rather than in a separate ``domain/retention`` module: checkpoints are
+    workflow state, not conversation history, and one product number has one
+    place to change it.
+    """
+
+    resumability_window: timedelta
+    message_history_retention: timedelta | None
+    checkpoint_delete_unit: str = "thread"
+    expired_resume_behavior: str = "fork_new_thread_from_message_history"
+
+
+# Product decision record.
+DEFAULT_RETENTION_DECISION = RetentionDecision(
+    resumability_window=timedelta(days=30),
+    message_history_retention=None,
+)
 
 
 class JournalStatus(str, Enum):
@@ -103,7 +124,7 @@ class RetentionRecord:
 
 
 #: The resumability window and the expired-resume behaviour are PRODUCT
-#: decisions, recorded once in :mod:`nexus_ai_agent.domain.retention`.  They
+#: decisions, recorded once in this module (:class:`RetentionDecision`).  They
 #: are re-exported here (never re-spelled) so a change to the product
 #: decision cannot silently leave a second, divergent copy behind.
 RESUMABILITY_WINDOW: Final[timedelta] = DEFAULT_RETENTION_DECISION.resumability_window

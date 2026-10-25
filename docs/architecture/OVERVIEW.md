@@ -32,7 +32,7 @@ Both products share one runtime, one persistence layer, and one quality contract
 | Repository owner / operator | cost = 0 at idle; nothing leaves the machine without explicit consent; a failed job never lies | §3 Q1/Q2, [`SECURITY.md`](SECURITY.md), [`../ops/DEPLOY_RUNBOOK.md`](../ops/DEPLOY_RUNBOOK.md) |
 | End user (Telegram) | responsive commands, predictable failures, own language | [`RUNTIME_FLOWS.md`](RUNTIME_FLOWS.md), `src/nexus_ai_agent/i18n/locales/*.json` |
 | Maintainer / coding agent | a rule that is written down is a rule that a test enforces; no collateral edits | [`MODULE_MAP.md`](MODULE_MAP.md) §4, [`TESTING.md`](TESTING.md) §3 |
-| Parallel agents (multi-agent network) | zero overlap, claim before code, one gates owner | [`../../AGENTS.md`](../../AGENTS.md), `.agents/board.json`, `scripts/agent_board.py` |
+| Parallel agents (multi-agent network) | zero overlap, claim before code, no mandatory gates owner (advisory only) | [`../../AGENTS.md`](../../AGENTS.md), `.agents/board.json`, `scripts/agent_board.py` |
 | Deployment platform (Koyeb/Neon/R2) | health semantics, cold starts, durable state off ephemeral disk | [`../ops/deployment-koyeb.md`](../ops/deployment-koyeb.md), [`DATA_AND_STORAGE.md`](DATA_AND_STORAGE.md) §5 |
 
 ## 3. Quality attributes (the top five, and what protects each)

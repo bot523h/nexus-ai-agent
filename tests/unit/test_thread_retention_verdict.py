@@ -226,10 +226,10 @@ def test_the_resumability_window_has_exactly_one_source() -> None:
     even while the numbers still happen to agree.
     """
     from nexus_ai_agent.domain.policies.retention import (
+        DEFAULT_RETENTION_DECISION,
         FORK_AFTER_RESUMABILITY,
         RESUMABILITY_WINDOW,
     )
-    from nexus_ai_agent.domain.retention import DEFAULT_RETENTION_DECISION
     from nexus_ai_agent.storage.checkpoint_lifecycle import RetentionPolicy
 
     product = DEFAULT_RETENTION_DECISION.resumability_window

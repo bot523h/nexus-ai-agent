@@ -71,7 +71,7 @@ class CheckpointRecord:
 @dataclass(frozen=True)
 class RetentionPolicy:
     #: Defaults to the single product decision
-    #: (:data:`~nexus_ai_agent.domain.retention.DEFAULT_RETENTION_DECISION`),
+    #: (:data:`~nexus_ai_agent.domain.policies.retention.DEFAULT_RETENTION_DECISION`),
     #: re-exported as
     #: :data:`~nexus_ai_agent.domain.policies.retention.RESUMABILITY_WINDOW`.
     #: It is deliberately not a second literal ``timedelta(days=30)``: one

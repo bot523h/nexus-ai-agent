@@ -9,33 +9,25 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import Any
 
 from sqlmodel import Session, select
 
-from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.models import AnonSession
 
 logger = get_logger(__name__)
 
 
-@lru_cache(maxsize=8)
-def _sync_engine(db_path: str) -> Any:
-    """Return a (cached) synchronous SQLAlchemy engine for feature CRUD.
+def _sync_engine(db_path: str | None = None) -> Any:
+    """The process-wide synchronous engine for ``db_path`` (``storage.db.sync_engine``).
 
-    P1-2: the async methods' DB blocks run in worker threads (``asyncio.to_thread``),
-    so the engine is created with ``check_same_thread=False`` and cached
-    to remove the per-call engine construction.
+    P1-2: the callers run in worker threads (``asyncio.to_thread``); the central
+    engine is created with ``check_same_thread=False`` and cached (audit A-02).
     """
-    from sqlalchemy import create_engine as _ce
+    from nexus_ai_agent.storage.db import sync_engine
 
-    return _ce(
-        f"sqlite:///{db_path}",
-        echo=False,
-        connect_args={"check_same_thread": False},
-    )
+    return sync_engine(db_path)
 
 
 class AnonymousChatManager:
@@ -110,7 +102,7 @@ class AnonymousChatManager:
 
     def _create_session_sync(self, user1: int, user2: int) -> None:
         """Synchronous DB core for :meth:`_create_session` (worker thread)."""
-        engine = _sync_engine(get_settings().db_path)
+        engine = _sync_engine()
         with Session(engine) as session:
             anon = AnonSession(
                 user1_id=user1,
@@ -167,7 +159,7 @@ class AnonymousChatManager:
 
     def _end_sessions_sync(self, user_id: int) -> None:
         """Synchronous DB core for :meth:`leave_chat` (worker thread)."""
-        engine = _sync_engine(get_settings().db_path)
+        engine = _sync_engine()
         with Session(engine) as session:
             stmt = (
                 select(AnonSession)
@@ -212,7 +204,7 @@ class AnonymousChatManager:
 
     def _report_sessions_sync(self, reporter_id: int) -> None:
         """Synchronous DB core for :meth:`report_user` (worker thread)."""
-        engine = _sync_engine(get_settings().db_path)
+        engine = _sync_engine()
         with Session(engine) as session:
             stmt = (
                 select(AnonSession)
@@ -232,7 +224,7 @@ class AnonymousChatManager:
 
     def get_active_sessions(self) -> list[dict[str, Any]]:
         """Return active sessions for the owner to inspect."""
-        engine = _sync_engine(get_settings().db_path)
+        engine = _sync_engine()
         with Session(engine) as session:
             stmt = select(AnonSession).where(AnonSession.status == "active")
             results = session.exec(stmt).all()
