@@ -58,7 +58,7 @@ class SpeechEngine:
             from gtts import gTTS
 
             # Generate filename
-            h = hashlib.md5(f"{text}{lang}".encode()).hexdigest()[:10]
+            h = hashlib.sha256(f"{text}{lang}".encode()).hexdigest()[:10]
             filename = f"tts_{h}.mp3"
             filepath = self._output_dir / filename
 

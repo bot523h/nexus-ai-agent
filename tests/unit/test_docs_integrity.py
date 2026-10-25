@@ -21,7 +21,12 @@ Checks (stdlib only, no network, milliseconds):
 5. **ADR index agreement** — ``docs/architecture/adr/README.md`` lists exactly the
    ADR files that exist (plus the template, which is listed separately);
 6. **living pages are titled** — each ``docs/architecture/*.md`` page starts with a
-   single H1, so navigation and the docs index stay predictable.
+   single H1, so navigation and the docs index stay predictable;
+7. **no unresolved merge conflicts** — no tracked text file contains a Git conflict
+   marker (``<<<<<<<``, ``=======``, ``>>>>>>>``). A merge that was committed with its
+   markers intact corrupts the rendered document (and the tree) while every other
+   gate stays green, because none of them parse prose; this check makes that state a
+   red build.
 """
 
 from __future__ import annotations
@@ -234,3 +239,91 @@ def test_architecture_pages_start_with_a_single_h1(path: Path) -> None:
     assert lines and lines[0].startswith("# "), f"{path.name} does not start with an H1"
     h1_count = sum(1 for line in lines if line.startswith("# "))
     assert h1_count == 1, f"{path.name} has {h1_count} H1 headings (expected exactly 1)"
+
+
+# --------------------------------------------------------------------------- #
+# 7. no unresolved merge-conflict markers in the tree
+# --------------------------------------------------------------------------- #
+#: The two unambiguous Git conflict markers: seven ``<``/``>`` characters at the
+#: start of a line followed by a space (and the incoming ref). The ``=======``
+#: separator is deliberately *not* matched on its own — a Setext H1 underline is
+#: exactly seven ``=`` — so a file counts as conflicted only when it carries both
+#: an opening and a closing marker.
+_CONFLICT_OPEN = re.compile(r"^<{7} \S", re.MULTILINE)
+_CONFLICT_CLOSE = re.compile(r"^>{7} \S", re.MULTILINE)
+
+#: Text extensions worth scanning; binary artifacts are skipped by construction.
+_SCANNED_SUFFIXES = {
+    ".md",
+    ".py",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".toml",
+    ".txt",
+    ".cfg",
+    ".ini",
+    ".sh",
+    ".html",
+    ".css",
+    ".js",
+    ".ts",
+    ".mako",
+    ".sql",
+    ".env",
+}
+
+#: Directories that never carry first-party sources (VCS, venvs, caches, deps).
+_SKIPPED_DIRS = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    ".mypy_cache",
+    ".ruff_cache",
+    "__pycache__",
+    ".pytest_cache",
+    ".openhands",
+}
+
+
+def _tracked_text_files() -> list[Path]:
+    """Every first-party text file in the tree (sorted, deterministic)."""
+    files: list[Path] = []
+    for path in REPO_ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in _SKIPPED_DIRS for part in path.relative_to(REPO_ROOT).parts):
+            continue
+        if path.suffix in _SCANNED_SUFFIXES:
+            files.append(path)
+    return sorted(files)
+
+
+def _has_conflict_marker(text: str) -> bool:
+    """A file is conflicted iff it opens with ``<<<<<<<`` **and** closes with ``>>>>>>>``."""
+    return bool(_CONFLICT_OPEN.search(text)) and bool(_CONFLICT_CLOSE.search(text))
+
+
+def test_no_unresolved_merge_conflict_markers_anywhere() -> None:
+    conflicted: list[str] = []
+    for path in _tracked_text_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if _has_conflict_marker(text):
+            conflicted.append(str(path.relative_to(REPO_ROOT)))
+    assert not conflicted, (
+        "unresolved Git conflict markers committed to the tree — resolve the merge "
+        f"before pushing: {conflicted}"
+    )
+
+
+def test_conflict_marker_scanner_detects_a_real_conflict() -> None:
+    """Positive control: the scanner must flag a genuine conflict block (vacuity guard)."""
+    sample = "intro\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> 93f75d5 (docs: example)\noutro\n"
+    assert _has_conflict_marker(sample)
+    # A Setext H1 underline of exactly seven ``=`` is legitimate Markdown and must
+    # not be mistaken for a conflict separator.
+    assert not _has_conflict_marker("Title\n=======\n\nbody\n")

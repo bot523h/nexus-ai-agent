@@ -54,8 +54,15 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import (
     render_ir_hash,
 )
 from nexus_ai_agent.creative.slideshow.probe import probe_audio, probe_image
+from nexus_ai_agent.creative.studio.authorization import ProjectAccess
 from nexus_ai_agent.creative.studio.bus import CommandBus
-from nexus_ai_agent.creative.studio.models import Playhead, Timeline, new_project
+from nexus_ai_agent.creative.studio.models import (
+    ActorIdentity,
+    InputRef,
+    Playhead,
+    Timeline,
+    new_project,
+)
 
 DEFAULT_FALLBACK_BPM = 100.0
 
@@ -98,13 +105,40 @@ class PlanningOutcome:
     asset_count: int
 
 
-def _command(operation: str, payload: dict[str, Any], *, confirmed: bool = False) -> dict[str, Any]:
+_SERVICE_ACTOR = ActorIdentity(kind="service", actor_id="slideshow-runtime")
+
+
+def _service_access(project_id: str) -> ProjectAccess:
+    return ProjectAccess(
+        actor=_SERVICE_ACTOR,
+        project_id=project_id,
+        permissions=frozenset({"project:read", "project:write"}),
+    )
+
+
+def _asset_refs(project_id: str, asset_ids: tuple[str, ...]) -> tuple[InputRef, ...]:
+    return tuple(
+        InputRef(ref_type="asset", project_id=project_id, ref_id=asset_id) for asset_id in asset_ids
+    )
+
+
+def _command(
+    operation: str,
+    payload: dict[str, Any],
+    *,
+    project_id: str,
+    input_refs: tuple[InputRef, ...] = (),
+    confirmed: bool = False,
+) -> dict[str, Any]:
     return {
         "protocol_version": "nagar.command.v1",
         "command_id": f"cmd_{uuid4().hex[:16]}",
         "session_id": "slideshow-cli",
+        "actor": _SERVICE_ACTOR,
+        "target": {"project_id": project_id, "track_id": "main"},
         "operation": operation,
         "input": payload,
+        "input_refs": input_refs,
         "confirmed": confirmed,
         "idempotency_key": f"{operation}:{uuid4().hex[:16]}",
     }
@@ -170,7 +204,11 @@ def _planned_session(request: PlanningRequest) -> _Session:
             playhead=Playhead(timecode_us=0),
         ),
     )
-    bus = CommandBus(project, registry=build_slideshow_registry(library=library))
+    bus = CommandBus(
+        project,
+        registry=build_slideshow_registry(library=library),
+        authorizer=_service_access(project.project_id),
+    )
     commands: list[str] = []
 
     scan_payload: dict[str, Any] = {
@@ -178,8 +216,11 @@ def _planned_session(request: PlanningRequest) -> _Session:
     }
     if audio_evidence is not None:
         scan_payload["assets"].append(audio_evidence.model_dump(mode="json"))
-    bus.dispatch(_command(OPERATION_SCAN, scan_payload))
+    bus.dispatch(_command(OPERATION_SCAN, scan_payload, project_id=project.project_id))
     commands.append(OPERATION_SCAN)
+    input_refs = _asset_refs(
+        project.project_id, tuple(asset.asset_id for asset in bus.project.assets)
+    )
 
     analysis: SlideshowAnalysis | None = None
     if request.mode == "auto":
@@ -198,7 +239,11 @@ def _planned_session(request: PlanningRequest) -> _Session:
         }
         if analysis.source == "gemini":
             score_payload["preferred_order"] = list(analysis.ordered_evidence_ids)
-        scored = bus.dispatch(_command(OPERATION_SCORE, score_payload))
+        scored = bus.dispatch(
+            _command(
+                OPERATION_SCORE, score_payload, project_id=project.project_id, input_refs=input_refs
+            )
+        )
         commands.append(OPERATION_SCORE)
         analysis = analysis.model_copy(
             update={
@@ -215,7 +260,14 @@ def _planned_session(request: PlanningRequest) -> _Session:
         "requested_template_id": request.template_id,
         "recommended_template_id": analysis.recommended_template_id if analysis else None,
     }
-    tone = bus.dispatch(_command(OPERATION_SUGGEST_TONE, tone_payload))
+    tone = bus.dispatch(
+        _command(
+            OPERATION_SUGGEST_TONE,
+            tone_payload,
+            project_id=project.project_id,
+            input_refs=input_refs,
+        )
+    )
     commands.append(OPERATION_SUGGEST_TONE)
     template_id = tone.output["template_id"]
 
@@ -263,7 +315,11 @@ def _planned_session(request: PlanningRequest) -> _Session:
         compose_payload["shots"] = [shot.model_dump(mode="json") for shot in shots]
 
     ComposeInput.model_validate(compose_payload)  # fail with a typed error before dispatch
-    result = bus.dispatch(_command(OPERATION_COMPOSE, compose_payload))
+    result = bus.dispatch(
+        _command(
+            OPERATION_COMPOSE, compose_payload, project_id=project.project_id, input_refs=input_refs
+        )
+    )
     commands.append(OPERATION_COMPOSE)
 
     plan = result.output["plan"]
@@ -345,7 +401,16 @@ def render_from_files(
         template_id=session.outcome.template_id,
     )
     result = session.bus.dispatch(
-        _command(OPERATION_RENDER, payload.model_dump(mode="json"), confirmed=True)
+        _command(
+            OPERATION_RENDER,
+            payload.model_dump(mode="json"),
+            project_id=session.bus.project.project_id,
+            input_refs=_asset_refs(
+                session.bus.project.project_id,
+                tuple(asset.asset_id for asset in session.bus.project.assets),
+            ),
+            confirmed=True,
+        )
     )
     return RenderOutcome(
         plan=session.outcome.plan,

@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *ヒント:* メッセージを入力するだけでAIが返答します！\n\nこちらも使えます:\n• `/ask <質問>` — クイックQ&A\n• `/code <コード>` — コードレビュー\n• `/translate <テキスト>` — スマート翻訳",
   "onboarding.image_hint": "💡 *ヒント:* `/image <説明>`で画像を生成できます！\n\n試してみましょう: `/image 宇宙の猫 digital-art`\n\nスタイル: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 メッセージを送信してチャットを始めましょう！",
-  "onboarding.explore_hint": "🗺️ **全コマンド:**\n\n🤖 `/ai` — Geminiとチャット\n🎨 `/image` — 画像生成\n🔊 `/tts` — テキスト読み上げ\n☁️ `/cloud` — ファイルをアップロード\n🔗 `/referral` — 友達を招待\n🎮 `/quiz` — ゲームで遊ぶ\n🌐 `/language` — 言語変更\n❓ `/help` — コマンド一覧"
+  "onboarding.explore_hint": "🗺️ **全コマンド:**\n\n🤖 `/ai` — Geminiとチャット\n🎨 `/image` — 画像生成\n🔊 `/tts` — テキスト読み上げ\n☁️ `/cloud` — ファイルをアップロード\n🔗 `/referral` — 友達を招待\n🎮 `/quiz` — ゲームで遊ぶ\n🌐 `/language` — 言語変更\n❓ `/help` — コマンド一覧",
+  "creative.invalid_command": "❌ 不明なスタジオコマンドです。/edit、/caption、/grade を使ってください。",
+  "creative.invalid_operation": "❌ /{command} ではこの操作はサポートされていません。選択肢: {operations}",
+  "creative.not_replied": "❌ 動画（または音声）メッセージに返信してこのコマンドを送ってください。",
+  "creative.limit_exceeded": "❌ メディアは最大 {max_seconds} 秒までです。",
+  "creative.media_too_large": "❌ メディアが {max_mb} MB を超えています。",
+  "creative.media_download_failed": "❌ Telegram からのメディア取得に失敗しました。もう一度お試しください。",
+  "creative.queue_failed": "❌ レンダーキューが現在利用できません。もう一度お試しください。",
+  "creative.queued": "⏳ /{command} {operation} をキューに登録 — ジョブ {job_id}",
+  "creative.completed": "✅ /{command} {operation} が完了しました",
+  "creative.failed.invalid_request": "❌ リクエストが無効です（{detail}）。",
+  "creative.failed.unsupported_operation": "❌ この操作はワンショットレンダーではサポートされていません。",
+  "creative.failed.media_missing": "❌ 準備されたメディアが見つかりません。コマンドを再送してください。",
+  "creative.failed.caption_profile_unavailable": "❌ この環境では字幕を利用できません（音声エンジン未導入）。",
+  "creative.failed.render_failed": "❌ レンダリングに失敗しました。短いメディアや別のパラメータをお試しください。",
+  "creative.failed.ffmpeg_unavailable": "❌ このデプロイにはレンダーエンジンがインストールされていません。",
+  "creative.failed.internal": "❌ 内部エラーが発生しました。詳細はチームが確認できます。"
 }

@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *Tips:* Ketik saja pesan apa pun dan aku akan menjawab dengan AI!\n\nKamu juga bisa pakai:\n• `/ask <pertanyaan>` — Tanya jawab cepat\n• `/code <kode>` — Ulasan kode\n• `/translate <teks>` — Terjemahan cerdas",
   "onboarding.image_hint": "💡 *Tips:* Pakai `/image <deskripsi>` untuk membuat gambar!\n\nCoba: `/image kucing di luar angkasa digital-art`\n\nGaya: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 Kirim pesan apa pun untuk mulai mengobrol!",
-  "onboarding.explore_hint": "🗺️ **Semua Perintah:**\n\n🤖 `/ai` — Chat dengan Gemini\n🎨 `/image` — Buat gambar\n🔊 `/tts` — Teks ke suara\n☁️ `/cloud` — Unggah file\n🔗 `/referral` — Undang teman\n🎮 `/quiz` — Main\n🌐 `/language` — Ganti bahasa\n❓ `/help` — Daftar perintah lengkap"
+  "onboarding.explore_hint": "🗺️ **Semua Perintah:**\n\n🤖 `/ai` — Chat dengan Gemini\n🎨 `/image` — Buat gambar\n🔊 `/tts` — Teks ke suara\n☁️ `/cloud` — Unggah file\n🔗 `/referral` — Undang teman\n🎮 `/quiz` — Main\n🌐 `/language` — Ganti bahasa\n❓ `/help` — Daftar perintah lengkap",
+  "creative.invalid_command": "❌ Perintah studio tidak dikenal. Gunakan /edit, /caption, atau /grade.",
+  "creative.invalid_operation": "❌ Operasi tidak didukung untuk /{command}. Pilihan: {operations}",
+  "creative.not_replied": "❌ Kirim perintah ini sebagai balasan ke pesan video (atau audio).",
+  "creative.limit_exceeded": "❌ Media maksimal {max_seconds} detik.",
+  "creative.media_too_large": "❌ Media lebih besar dari {max_mb} MB.",
+  "creative.media_download_failed": "❌ Gagal mengunduh media dari Telegram; coba lagi.",
+  "creative.queue_failed": "❌ Antrean render sedang tidak tersedia; coba lagi.",
+  "creative.queued": "⏳ /{command} {operation} masuk antrean — tugas {job_id}",
+  "creative.completed": "✅ /{command} {operation} selesai",
+  "creative.failed.invalid_request": "❌ Permintaan tidak valid ({detail}).",
+  "creative.failed.unsupported_operation": "❌ Operasi ini tidak tersedia untuk render satu langkah.",
+  "creative.failed.media_missing": "❌ Berkas media yang disiapkan hilang; kirim ulang perintahnya.",
+  "creative.failed.caption_profile_unavailable": "❌ Teks tidak tersedia di instalasi ini (tanpa mesin suara).",
+  "creative.failed.render_failed": "❌ Render gagal; coba media lebih pendek atau parameter lain.",
+  "creative.failed.ffmpeg_unavailable": "❌ Mesin render tidak terpasang pada deployment ini.",
+  "creative.failed.internal": "❌ Terjadi kesalahan internal; detailnya dapat dilihat tim."
 }

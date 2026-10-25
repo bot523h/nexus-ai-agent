@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *Quick tip:* Just type any message and I'll respond with AI!\n\nYou can also use:\n• `/ask <question>` — Quick Q&A\n• `/code <code>` — Code review\n• `/translate <text>` — Smart translation",
   "onboarding.image_hint": "💡 *Quick tip:* Use `/image <description>` to generate images!\n\nTry: `/image a cat in space digital-art`\n\nStyles: realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 Send any message to start chatting!",
-  "onboarding.explore_hint": "🗺️ **All Commands:**\n\n🤖 `/ai` — Chat with Gemini\n🎨 `/image` — Generate images\n🔊 `/tts` — Text to speech\n☁️ `/cloud` — Upload files\n🔗 `/referral` — Invite friends\n🎮 `/quiz` — Play games\n🌐 `/language` — Change language\n❓ `/help` — Full command list"
+  "onboarding.explore_hint": "🗺️ **All Commands:**\n\n🤖 `/ai` — Chat with Gemini\n🎨 `/image` — Generate images\n🔊 `/tts` — Text to speech\n☁️ `/cloud` — Upload files\n🔗 `/referral` — Invite friends\n🎮 `/quiz` — Play games\n🌐 `/language` — Change language\n❓ `/help` — Full command list",
+  "creative.invalid_command": "❌ Unknown studio command. Use /edit, /caption or /grade.",
+  "creative.invalid_operation": "❌ Unsupported operation for /{command}. Options: {operations}",
+  "creative.not_replied": "❌ Reply to a video (or audio) message with this command.",
+  "creative.limit_exceeded": "❌ Media must be at most {max_seconds} seconds long.",
+  "creative.media_too_large": "❌ Media is larger than {max_mb} MB.",
+  "creative.media_download_failed": "❌ Downloading the media from Telegram failed. Please try again.",
+  "creative.queue_failed": "❌ The render queue is unavailable right now. Please try again.",
+  "creative.queued": "⏳ Queued /{command} {operation} — job {job_id}",
+  "creative.completed": "✅ /{command} {operation} finished",
+  "creative.failed.invalid_request": "❌ The request was invalid ({detail}).",
+  "creative.failed.unsupported_operation": "❌ This operation isn't supported for one-shot renders.",
+  "creative.failed.media_missing": "❌ The staged media file is missing. Send the command again.",
+  "creative.failed.caption_profile_unavailable": "❌ Captions are unavailable on this installation (no speech engine).",
+  "creative.failed.render_failed": "❌ Rendering failed. Try shorter media or different parameters.",
+  "creative.failed.ffmpeg_unavailable": "❌ The render engine isn't installed on this deployment.",
+  "creative.failed.internal": "❌ An internal error occurred. The details are visible to the team."
 }

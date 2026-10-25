@@ -61,5 +61,21 @@
   "onboarding.ai_hint": "💡 *Astuce :* Tapez simplement un message et je réponds avec l'IA !\n\nVous pouvez aussi utiliser :\n• `/ask <question>` — Questions rapides\n• `/code <code>` — Revue de code\n• `/translate <texte>` — Traduction intelligente",
   "onboarding.image_hint": "💡 *Astuce :* Utilisez `/image <description>` pour générer des images !\n\nEssayez : `/image un chat dans l'espace digital-art`\n\nStyles : realistic, anime, digital-art, oil-painting, pixel-art, watercolor, cyberpunk, fantasy, 3d, sketch",
   "onboarding.go_chat": "💬 Envoyez un message pour commencer à discuter !",
-  "onboarding.explore_hint": "🗺️ **Toutes les commandes :**\n\n🤖 `/ai` — Discuter avec Gemini\n🎨 `/image` — Générer des images\n🔊 `/tts` — Texte vers parole\n☁️ `/cloud` — Téléverser des fichiers\n🔗 `/referral` — Inviter des amis\n🎮 `/quiz` — Jouer\n🌐 `/language` — Changer de langue\n❓ `/help` — Liste complète"
+  "onboarding.explore_hint": "🗺️ **Toutes les commandes :**\n\n🤖 `/ai` — Discuter avec Gemini\n🎨 `/image` — Générer des images\n🔊 `/tts` — Texte vers parole\n☁️ `/cloud` — Téléverser des fichiers\n🔗 `/referral` — Inviter des amis\n🎮 `/quiz` — Jouer\n🌐 `/language` — Changer de langue\n❓ `/help` — Liste complète",
+  "creative.invalid_command": "❌ Commande studio inconnue. Utilisez /edit, /caption ou /grade.",
+  "creative.invalid_operation": "❌ Opération non prise en charge pour /{command}. Options : {operations}",
+  "creative.not_replied": "❌ Répondez à un message vidéo (ou audio) avec cette commande.",
+  "creative.limit_exceeded": "❌ Le média doit durer au maximum {max_seconds} secondes.",
+  "creative.media_too_large": "❌ Le média dépasse {max_mb} Mo.",
+  "creative.media_download_failed": "❌ Échec du téléchargement du média depuis Telegram ; réessayez.",
+  "creative.queue_failed": "❌ La file de rendu est indisponible pour le moment ; réessayez.",
+  "creative.queued": "⏳ /{command} {operation} en file — tâche {job_id}",
+  "creative.completed": "✅ /{command} {operation} terminé",
+  "creative.failed.invalid_request": "❌ Requête invalide ({detail}).",
+  "creative.failed.unsupported_operation": "❌ Cette opération n'est pas disponible en rendu immédiat.",
+  "creative.failed.media_missing": "❌ Le média préparé est introuvable ; renvoyez la commande.",
+  "creative.failed.caption_profile_unavailable": "❌ Les sous-titres ne sont pas disponibles sur cette installation (aucun moteur vocal).",
+  "creative.failed.render_failed": "❌ Échec du rendu ; essayez un média plus court ou d'autres paramètres.",
+  "creative.failed.ffmpeg_unavailable": "❌ Le moteur de rendu n'est pas installé sur ce déploiement.",
+  "creative.failed.internal": "❌ Une erreur interne est survenue ; les détails sont visibles par l'équipe."
 }

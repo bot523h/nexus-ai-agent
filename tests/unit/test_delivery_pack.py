@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from fractions import Fraction
 
 import pytest
 from pydantic import ValidationError
@@ -14,9 +15,11 @@ from nexus_ai_agent.creative.packs.delivery.models import (
     RenderMaster4KInput,
 )
 from nexus_ai_agent.creative.packs.delivery.operations import (
+    _export_otio,
     build_delivery_registry,
 )
 from nexus_ai_agent.creative.studio.bus import CommandBus
+from nexus_ai_agent.creative.studio.capabilities import OperationContext
 from nexus_ai_agent.creative.studio.models import (
     AssetRecord,
     PermissionDeniedError,
@@ -53,7 +56,7 @@ def _setup_delivery_bus() -> tuple[Project, CommandBus]:
     timeline = Timeline(timeline_id="tl_delivery", duration_us=10_000_000)
     project = new_project("p_delivery_01", "Cinema Delivery Project", timeline)
     project = project.model_copy(update={"assets": [clip_1, clip_2, audio_1]})
-    bus = CommandBus(project, registry=registry)
+    bus = CommandBus(project, registry=registry, allow_experimental=True)
     return project, bus
 
 
@@ -213,6 +216,88 @@ def test_export_otio_execution() -> None:
     otio_asset = next(a for a in bus.project.assets if a.provenance.get("format") == "otio")
     assert otio_asset.provenance["format"] == "otio"
     assert otio_asset.provenance["frame_rate"] == 24.0
+
+
+def test_otio_export_boundary_and_emitted_evidence() -> None:
+    asset_zero = AssetRecord(
+        asset_id="v_zero",
+        media_kind="video",
+        content_sha256="sha256:" + "0" * 64,
+        duration_us=0,
+    )
+    timeline = Timeline(timeline_id="main", duration_us=1_000_000)
+    project = Project(project_id="p1", name="Test", timeline=timeline, assets=[asset_zero])
+
+    cmd = TypedCommand(command_id="cmd_1", operation="delivery.export_otio")
+    ctx = OperationContext(
+        command=cmd,
+        input_data={"frame_rate": 23.976},
+        history=(),
+    )
+
+    outcome = _export_otio(project, ctx)
+    otio_doc = json.loads(outcome.output["otio_json"])
+
+    clip = otio_doc["tracks"]["children"][0]["children"][0]
+    rate_emitted = clip["source_range"]["duration"]["rate"]
+
+    assert abs(rate_emitted - (24000 / 1001)) < 1e-6
+    assert clip["source_range"]["duration"]["value"] == 0
+
+    meta_conv = clip["metadata"]["temporal_conversion"]
+    assert meta_conv["raw_conv_frames"] == 0
+    assert meta_conv["emitted_frames"] == 0
+    assert meta_conv["lossless"] is True
+    assert meta_conv["residual_seconds"] == "0"
+
+
+# ---------------------------------------------------------------------------
+# The production consumer: delivery.export_otio.
+#
+# Every other export test on this path used a *lossless* rate (24.0) or a zero
+# duration, so a float-truncation regression in the shipped handler went
+# unnoticed.  5 s at 23.976 is the probe that separates them: exact NEAREST is
+# 120 frames, ``int(float(5) * float(24000/1001))`` is 119.
+# ---------------------------------------------------------------------------
+
+
+def test_otio_export_rounds_exactly_at_ntsc_and_reports_the_loss() -> None:
+    asset = AssetRecord(
+        asset_id="v_ntsc",
+        media_kind="video",
+        content_sha256="sha256:" + "a" * 64,
+        duration_us=5_000_000,  # exactly 5 s
+    )
+    project = Project(
+        project_id="p_ntsc",
+        name="NTSC",
+        timeline=Timeline(timeline_id="tl_ntsc", duration_us=5_000_000),
+        assets=[asset],
+    )
+    ctx = OperationContext(
+        command=TypedCommand(command_id="cmd_ntsc", operation="delivery.export_otio"),
+        input_data={"frame_rate": 23.976},
+        history=(),
+    )
+
+    outcome = _export_otio(project, ctx)
+    clip = json.loads(outcome.output["otio_json"])["tracks"]["children"][0]["children"][0]
+
+    # 5 s * 24000/1001 = 120000/1001 = 119.880... -> NEAREST is 120, truncation is 119.
+    assert clip["source_range"]["duration"]["value"] == 120
+    conv = clip["metadata"]["temporal_conversion"]
+    assert conv["raw_conv_frames"] == 120
+    assert conv["emitted_frames"] == 120
+    # 120 frames at 24000/1001 is 1001/200 s = 5.005 s, i.e. 5 ms over the source.
+    assert conv["lossless"] is False
+    assert conv["residual_seconds"] == str(Fraction(-1, 200))
+    assert conv["absolute_error_seconds"] == str(Fraction(1, 200))
+    assert conv["target_timebase"] == {"numerator": 24000, "denominator": 1001}
+
+    # The emitted rate must be the exact rational rendered as a float, and the
+    # artifact provenance must carry it so the output is traceable to its timebase.
+    assert clip["source_range"]["duration"]["rate"] == pytest.approx(24000 / 1001, rel=1e-12)
+    assert outcome.output["frame_rate"] == pytest.approx(24000 / 1001, rel=1e-12)
 
 
 def test_render_master_4k_requires_confirmation() -> None:

@@ -2,7 +2,7 @@
 
 **Status:** Living document (wave state + coverage matrix regenerated each release)
 **Scope:** the capability model, the pack substrate, the command bus, the render lane, and the honest coverage ledger
-**Verified against:** `main` @ `7573249` — numbers below were produced by executing the builders and the CLI, not by reading names
+**Verified against:** `main` @ `9ec312c` (re-measured 2026-09-24 during task-166) — numbers below were produced by executing the builders and the CLI, not by reading names
 
 Nagar is the studio inside NEXUS: a typed, permissioned, *pure-by-default* media pipeline whose only impure step is a single FFmpeg process at the very end.
 
@@ -36,7 +36,7 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 | Domain | `Domain` | first id segment: `media`, `timeline`, `motion`, `audio`, `caption`, `color`, `delivery`, `slideshow`, `system` |
 | Capability | `Capability` | a named grouping inside a domain (for example `timeline.edit`) |
 | Operation | `OperationSpec` | `operation_id`, typed `input_model` (pydantic, `extra="forbid"`), handler, `permission_level`, `undoable` |
-| Envelope | `TypedCommand` | `operation`, `input`, `target`, `preconditions`, `idempotency_key`, `confirmed`, `protocol_version` |
+| Envelope | `TypedCommand` | Protocol `nagar.command.v1`, envelope schema 1 (legacy) or 2 (explicit `actor`, `target.project_id`, `provenance`); typed `input_refs`, execution policy, request context, optional capability snapshot, idempotency key, preconditions. See [Gate 2](COMMAND_CAPABILITY_CONTRACT.md). |
 
 **Permission ladder** (`PermissionLevel`):
 
@@ -48,9 +48,13 @@ The split is the load-bearing decision: **evidence is gathered above the bus** (
 | D | Denied | refused by policy: shell, raw upload, code execution, anything unregistered | — |
 
 **Dispatch pipeline** (`creative/studio/bus.py::_dispatch_locked`) — strict order, each step failing closed:
-1. envelope validation (protocol v1) → 2. idempotency replay → 3. registry lookup (`UnknownOperationError`) → 4. permission gate (`PermissionDeniedError`) → 5. typed input validation → 6. precondition check (`state_revision` / `state_hash`) → 7. atomic apply + `EditTransaction` push → 8. deep-copied `project` snapshot for safe reads.
+1. parse → 2. envelope + operation schema → 3. actor/project grant → 4. capability + version + permissions → **4b. capability lifecycle / pack gate** (`creative/studio/lifecycle.py`: `required_packs` must be `AVAILABLE`, or `EXPERIMENTAL` with the bus-level `allow_experimental=True`; unknown / `STUB` / `RETIRED` refuse) → 5. execution policy + A/B/C/D → 6. input refs + pinned time refs → 7. idempotency reserve/replay → 8. revision preconditions → 9. atomic apply + `EditTransaction` push (deep-copied `project` snapshots for safe reads).
+
+The lifecycle gate is the single seam between the canonical Gate-2 contract and the pack runtime (board task-183): it runs after the actor grant (so an unauthorized actor can never be granted anything by pack metadata) and before the idempotency reservation and the handler (so a refused pack performs zero work). `allow_experimental` is composition-root state, never a command-envelope field and never a queue-row field: the render worker derives it from the canonical operation via the server-controlled `render_jobs.EXPERIMENTAL_OPT_IN_OPERATIONS` (exactly the surface operations on an `EXPERIMENTAL` pack, pinned by test), and `CreativeRenderPayload` (`extra="forbid"`) rejects a row that tries to carry an opt-in. Lifecycle = pack *maturity*; `packs/availability.py` = pack *runnability* at render/preflight time. See [`COMMAND_CAPABILITY_CONTRACT.md`](COMMAND_CAPABILITY_CONTRACT.md) §2.
 
 `Project.state_hash` is **derived** from a canonical JSON serialization on every construction (revision excluded, so revision+hash preconditions survive undo cycles). A stored hash therefore cannot drift from the state it describes.
+
+Undo is **transaction-scoped**: `system.undo` accepts an optional `transaction_id`, and the stage-9 handler refuses with `UndoConflictError` unless that id is still the newest editable transaction. The gate runs inside the handler, under the bus lock, so a rollback can never rewind a concurrent foreign edit (task-223; [`COMMAND_CAPABILITY_CONTRACT.md`](COMMAND_CAPABILITY_CONTRACT.md) §7.1).
 
 ## 3. The pack substrate (data, never code-on-arrival)
 
@@ -68,59 +72,58 @@ A pack is a directory with a `pack.manifest.json` validated against `nexus.capab
 - No executable key at any depth of any manifest (`test_pack_manifest_is_data_only.py`).
 - A pack's declared capabilities must equal the operations its registration function adds, and it must activate against its own manifest (`test_slideshow_adapter_boundary.py`).
 - An **external** pack that declares an operation the runtime does not know is rejected at registration; a **builtin** pack may register with *pending* capabilities but cannot be activated until they resolve (`creative/packs/registry.py`).
-- Verification reports every finding; signature state is reported honestly (`placeholder`, `format_only_unverified`) — no pack claims a verified signature today.
+- Verification reports every finding; the signature state is one of the nine `TrustState` values decided against the **trust root** (`creative/packs/trust.py`), never against the manifest's own claim. No shipped pack is `verified` today — all six carry a documented placeholder.
+- `registered` ≠ `verified` ≠ `trusted` ≠ `active`: registration checks structure and policy, the trust root decides trust, and `PackRegistry.activate()` refuses any **external** pack whose state is not `verified` ([ADR 0006](adr/0006-capability-pack-trust-root.md)).
 
-## 4. Pack inventory and the activation gap (verified 2026-09-21)
+## 4. Pack inventory and the activation gap (re-measured 2026-09-24)
 
-`nexus packs list` output at `7573249` (executed, not paraphrased):
+`nexus packs list` output on this branch (executed, not paraphrased — `signature state` is now the trust-root verdict):
 
-| Pack | Version | Capabilities | Pending | Signature | Binaries |
-|---|---|---:|---:|---|---|
-| `nexus.slideshow.compose` | 0.2.0 | 6 | 0 | placeholder | ffmpeg |
-| `nexus.language.caption` | 1.0.0 | 10 | 0 | placeholder | — |
-| `nexus.edit.timeline` | 1.0.0 | 8 | **8** | format_only_unverified | — |
-| `nexus.motion.graphics` | 1.0.0 | 7 | **7** | format_only_unverified | — |
-| `nexus.audio.studio` | 1.0.0 | 8 | **8** | format_only_unverified | — |
-| `nexus.color.delivery` | 1.0.0 | 7 | **7** | format_only_unverified | — |
+| Pack | Version | Capabilities | Pending | Signature state | Trusted | Binaries |
+|---|---|---:|---:|---|---|---|
+| `nexus.audio.studio` | 1.0.0 | 10 | 0 | placeholder | False | — |
+| `nexus.language.caption` | 1.0.0 | 10 | 0 | placeholder | False | — |
+| `nexus.color.delivery` | 1.0.0 | 7 | 0 | placeholder | False | — |
+| `nexus.edit.timeline` | 1.0.0 | 9 | 0 | placeholder | False | — |
+| `nexus.motion.graphics` | 1.0.0 | 10 | 0 | placeholder | False | — |
+| `nexus.slideshow.compose` | 0.2.0 | 6 | 0 | placeholder | False | ffmpeg |
 
-```text
-$ nexus packs activate nexus.audio.studio
-✗ nexus.audio.studio: cannot activate — the runtime does not know audio.detect_beats,
-  audio.normalize_loudness, audio.duck_music, audio.beat_sync_cut, audio.remove_noise,
-  audio.deess, audio.eq_voice, audio.time_stretch
-```
-
-**Why:** the CLI composition root (`cli.py::_packs_registry`) composes only the slideshow and caption registries, so the runtime sees **21** of the **51** implemented operation ids. The handlers for edit/motion/audio/delivery exist and pass their own tests; they are not yet *reachable* through the CLI registry. This is board task **task-126**, sequenced after PR#33 because that PR rewrites `cli.py`. Until it lands, treat the four pending packs as **implemented but not activatable** — the honest status.
+The activation gap is **closed** (board task-126, landed): `cli.py::_packs_registry`
+now composes `creative.packs.runtime.build_pack_registry()` — the runtime and the
+CLI see the same **57** registered operation ids, and every builtin manifest
+verifies clean. Activation remains an explicit, auditable step (`nexus packs
+activate`), which is why `packs list` still reports each pack's `active` flag
+as false until an operator activates it.
 
 ## 5. Coverage ledger vs. the TDD catalogue
 
-Measured by diffing the operation ids in [`../NAGAR_70_OPERATIONS_TDD.md`](../NAGAR_70_OPERATIONS_TDD.md) against the union of all registry builders:
+Measured 2026-09-24 by diffing the operation ids in
+[`../NAGAR_70_OPERATIONS_TDD.md`](../NAGAR_70_OPERATIONS_TDD.md) against
+`build_runtime_registry().list_operations()`:
 
 | Metric | Value |
 |---|---:|
-| Operation ids catalogued by the TDD | 71 |
-| Implemented and registered by a builder | 51 unique (77 registrations across 7 registries, with inherited Wave-1 ops shared) |
-| TDD ids implemented | 42 |
-| TDD ids remaining | **29** |
+| Operation ids catalogued by the TDD (parsed, family-filtered) | 69 |
+| Registered at runtime (CLI == builders) | **57 unique** |
+| TDD ids implemented | 46 |
+| TDD ids remaining | **23** |
+| Registered beyond the TDD catalogue (post-TDD additions: slideshow 6, `media.pause`, `timeline.mark`, `system.undo`, `delivery.make_proxy_480p`, `delivery.render_master_4k`) | 11 |
 
-Remaining, by family:
+Remaining, by family (all in the `portrait.*` / `scene.*` / `color.*` AI lanes):
 
 | Family | Remaining ids |
 |---|---|
-| `portrait.*` (9) | `detect_landmarks`, `smooth_skin`, `whiten_teeth`, `retouch_blemish`, `enhance_eyes`, `relight_face`, `background_blur`, `mask_hair`, `correct_gaze`, `stabilize_face` |
-| `scene.*` (9) | `detect_shot_boundaries`, `auto_reframe_subject`, `remove_object`, `remove_background`, `replace_sky`, `segment_subject`, `track_object`, `track_face`, `find_subject_moment`, `remove_logo` |
-| `motion.*` (3) | `add_particles`, `apply_mask`, `warp` |
+| `portrait.*` (10) | `detect_landmarks`, `smooth_skin`, `whiten_teeth`, `retouch_blemish`, `enhance_eyes`, `relight_face`, `background_blur`, `mask_hair`, `correct_gaze`, `stabilize_face` |
+| `scene.*` (10) | `detect_shot_boundaries`, `auto_reframe_subject`, `remove_object`, `remove_background`, `replace_sky`, `segment_subject`, `track_object`, `track_face`, `find_subject_moment`, `remove_logo` |
 | `color.*` (3) | `white_balance`, `deband_denoise`, `hdr_tonemap` |
-| `audio.*` (2) | `align_music`, `remove_vocal` |
-| `timeline.*` (1) | `sync_multicam` |
 
-(Counts in the "Remaining" table are per-id; the TDD list also contains the six `nexus.*` pack ids and non-operation tokens, which are excluded here.)
+All `motion.*`, `audio.*`, and `timeline.*` TDD ids are now registered.
 
 ## 6. The render lane
 
 | Property | Implementation |
 |---|---|
-| Typed ops | 8 (`TrimOp`, `SpeedOp`, `ReverseOp`, `FreezeOp`, `XfadeOp`, `TitleOp`, `LoudnormOp`, `DuckOp`) in `creative/rendering/ir.py` |
+| Typed ops | 9 (`TrimOp`, `SpeedOp`, `ReverseOp`, `FreezeOp`, `XfadeOp`, `TitleOp`, `LoudnormOp`, `DuckOp`, `ExposureOp`) in `creative/rendering/ir.py` |
 | Duration algebra | integer microseconds — trim/speed/reverse/freeze/xfade have explicit formulas; no float drift |
 | Purity | `compile_lane`, `compile_measure` are pure and golden-tested; `lane_ir_from_project` bridges packs' `Project` IR to lane IR |
 | Process policy | one process per call, no shell, one timeout, binary allow-list (`override → NEXUS_FFMPEG_BIN → PATH → imageio-ffmpeg`) |
@@ -139,14 +142,38 @@ The lane is deliberately the *only* place in the creative tree that spawns a pro
 ## 8. How to verify this document
 
 ```bash
-# inventory (expect: 6 packs, 51 unique ops across builders, 21 in the CLI registry)
+# inventory (expect: 6 packs, 57 unique registered ops; CLI == builders)
 python - <<'PY'
 from nexus_ai_agent.cli import _packs_registry
 print(len(_packs_registry().runtime_registry.list_operations()))
 PY
-nexus packs list          # pending counts per pack (§4 table)
+from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+print(len(build_runtime_registry().list_operations()))   # also 57
+nexus packs list          # pending counts per pack (§4 table — all 0)
 nexus packs verify <id>   # every finding, not a summary
 pytest -q tests/architecture tests/unit/test_caption_pack.py tests/unit/test_rendering_lane.py
+pytest -q tests/unit/test_creative_render_jobs.py tests/unit/test_creative_surface.py
 ```
+
+## 9. The one-shot Telegram surface (task-166, 2026-09-24)
+
+`/edit`, `/caption`, `/grade` are live commands on the canonical chain:
+
+`Telegram → creative_surface (mapper + staging) → JobQueuePort (idempotency
+key = message identity) → worker ``creative_render`` → packs runtime registry
+→ CommandBus (typed op, idempotency-keyed) → render lane (allow-listed FFmpeg)
+→ measured artifact → translated completion notify.`
+
+- Surface ops are exactly the honestly-executable matrix: `edit trim|speed|reverse`,
+  `grade exposure|proxy|otio`, `caption transcribe`. The mapper (and the worker
+  map) refuses `lut` — no shipped `.cube` assets and no lane LUT op — and
+  `burnin` — no subtitles instrument in the lane IR. Both are refused typed, at
+  the surface, never faked (see ADR 0006 for the same anti-silent-degradation
+  rule as §7).
+- Every user-visible string comes from the i18n catalog (`creative.*` keys in
+  all 15 locales); a raw key never reaches Telegram.
+- Verification: `tests/unit/test_creative_render_jobs.py` renders real
+  two-second clips through the whole chain with the imageio-ffmpeg binary;
+  `tests/architecture/test_creative_channels.py` ratchets the wiring.
 
 If a number here disagrees with the output, the document is wrong — fix it in the same PR that changed the code (rule in [`../README.md`](../README.md)).
