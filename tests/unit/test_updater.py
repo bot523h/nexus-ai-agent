@@ -40,13 +40,13 @@ def temp_db(tmp_path, monkeypatch):
 
 async def _first_pending(temp_db: Any) -> PendingApproval | None:
     async with temp_db() as session:
-        result = await session.execute(
+        result = await session.exec(
             select(PendingApproval).where(
                 PendingApproval.change_type == "self_update",
                 PendingApproval.status == "pending",
             )
         )
-        return result.scalars().first()
+        return result.first()
 
 
 @pytest.mark.asyncio
@@ -144,3 +144,34 @@ async def test_stale_approval_requires_fresh_approval(
     assert ok is False
     assert "approval" in detail
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_do_update_does_not_block_the_event_loop(settings_override, monkeypatch) -> None:
+    """Audit A-07 (2026-10-15): ``git pull`` / ``pip install`` used to run
+    synchronously inside the coroutine, freezing every other handler for the
+    whole update. A slow subprocess must now leave the loop free."""
+    import asyncio
+    import time
+
+    def slow_run(*args: Any, **kwargs: Any) -> None:
+        assert kwargs.get("timeout"), "every subprocess step must be bounded"
+        time.sleep(0.3)
+
+    monkeypatch.setattr("nexus_ai_agent.agent.updater.subprocess.run", slow_run)
+    ticks = 0
+
+    async def heartbeat() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    beat = asyncio.create_task(heartbeat())
+    try:
+        ok, _ = await AutoUpdater("v3.0.0").do_update(None)
+    finally:
+        beat.cancel()
+    assert ok is True
+    # Two 0.3 s steps = 0.6 s; a blocked loop would record ~0 ticks.
+    assert ticks >= 10, ticks

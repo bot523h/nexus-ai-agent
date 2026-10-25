@@ -285,14 +285,40 @@ def _conflicting_paths(board: dict, branch: str, files: list[str]) -> list[tuple
     return hits
 
 
+def _active_gates_owners(board: dict) -> tuple[list[dict], list[str]]:
+    """Return live gates owners and malformed claims (both advisory only).
+
+    POLICY (2026-10-19): there is **no mandatory global gates_owner**. Every
+    agent runs its own gates and records its own evidence; ``check`` must not be
+    blocked by a missing or doubled gate holder. Malformed claims are still
+    surfaced so a broken record is visible, but neither condition produces
+    exit 2 — only a genuinely unsafe shared-state condition does.
+    """
+    owners: list[dict] = []
+    malformed: list[str] = []
+    for claim in board.get("claims", []):
+        if not claim.get("gates_owner"):
+            continue
+        try:
+            live = _claim_live(claim)
+        except (TypeError, ValueError, OverflowError) as exc:
+            malformed.append(f"{claim.get('task', '<unknown>')}: {exc}")
+            continue
+        if live:
+            owners.append(claim)
+    return owners, malformed
+
+
 # ── commands ──────────────────────────────────────────────────────────
 
 
 def cmd_show(_args: argparse.Namespace) -> int:
-    board = load_board()
-    freed = gc_expired(board)
+    with board_lock():
+        board = load_board()
+        freed = gc_expired(board)
+        if freed:
+            save_board(board)
     if freed:
-        save_board(board)
         print(f"[gc] auto-released expired leases: {', '.join(freed)}")
     print(f"board updated_at: {board['updated_at']}")
     for claim in board.get("claims", []):
@@ -365,6 +391,12 @@ def _claim_locked(args: argparse.Namespace) -> int:
         if refusal:
             print(refusal)
             return 2
+    # gc stamps ``release_reason`` on the record it frees. A takeover reuses that
+    # record, and an ACTIVE lease must not still claim to have been released
+    # (PR #211 review). Retire the reason into history instead of dropping it.
+    stale_reason = claim.pop("release_reason", None)
+    if stale_reason:
+        claim["previous_release_reason"] = stale_reason
     claim.update(
         status="active",
         agent_branch=args.branch,
@@ -373,6 +405,12 @@ def _claim_locked(args: argparse.Namespace) -> int:
         gates_owner=bool(args.gates),
         note="",
     )
+    # A takeover/re-claim of a lease that ``gc`` freed must not keep gc's
+    # "auto-released" reason on what is now a live lease. Retire it into
+    # ``previous_release_reason`` so the record stays honest (task-220).
+    retired = claim.pop("release_reason", None)
+    if retired:
+        claim["previous_release_reason"] = retired
     # Fencing epoch: strictly monotonic across every (re)claim. A brand-new or
     # legacy claim (generation 0) becomes 1; a takeover or re-claim advances it
     # so any superseded holder's recorded expectation is invalidated — including
@@ -455,9 +493,10 @@ def _defer_locked(args: argparse.Namespace) -> int:
 
 
 def cmd_next(args: argparse.Namespace) -> int:
-    board = load_board()
-    gc_expired(board)
-    save_board(board)
+    with board_lock():
+        board = load_board()
+        gc_expired(board)
+        save_board(board)
     for claim in board.get("claims", []):
         if claim["status"] in ("queued", "expired", "deferred"):
             blockers = []
@@ -674,6 +713,10 @@ def cmd_check(args: argparse.Namespace) -> int:
     ``origin/main``, not checked out locally). A source that cannot be read is a
     loud exit 2: "no overlap" is only honest when every consulted source was
     actually read.
+
+    POLICY (2026-10-19): a global ``gates_owner`` is **not required**. The gate
+    holder is advisory only — its presence (or absence, or duplication) never
+    produces exit 2. Every agent runs its own gates and records its own evidence.
     """
     files = [f for f in args.files.split(",") if f.strip()]
     sources: list[tuple[str, dict]] = []
@@ -758,6 +801,20 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(STOP_BANNER)
         return 1
 
+    owners, malformed_owners = _active_gates_owners(local_board)
+    # POLICY (2026-10-19): gates_owner is advisory, not a global lock. Report the
+    # state so a malformed or doubled record is visible, but never fail the check
+    # because of it — a missing owner must not make independent work unverifiable.
+    if owners:
+        print(
+            f"gates_owner (advisory): {len(owners)} active — "
+            f"{', '.join(str(o.get('task', '?')) for o in owners)}"
+        )
+    else:
+        print("gates_owner (advisory): none — no mandatory global gates owner")
+    for reason in malformed_owners:
+        print(f"  malformed gates-owner claim (advisory): {reason}")
+
     if unreadable:
         print("UNVERIFIABLE: cannot establish the absence of overlap — source(s) unreadable:")
         for reason in unreadable:
@@ -807,12 +864,24 @@ def audit_pr_visibility(board: dict, prs: list[dict]) -> dict:
         uncovered = [f for f in audited_files if not covered(f)]
 
         reasons: list[str] = []
+        files_complete = bool(pr.get("files_complete", not pr.get("files_truncated", False)))
         if not head:
             reasons.append("missing head branch")
+        if not files_complete:
+            reasons.append("changed-file source is incomplete")
         if not own_claims:
             reasons.append("no live board claim for head branch")
         if uncovered:
             reasons.append(f"{len(uncovered)} file(s) outside every exclusive_paths")
+
+        if not head or not files_complete:
+            classification = "BLOCKED"
+        elif own_claims and not uncovered:
+            classification = "OWNED"
+        elif not uncovered:
+            classification = "SCOPED"
+        else:
+            classification = "BLOCKED"
 
         results.append(
             {
@@ -823,6 +892,8 @@ def audit_pr_visibility(board: dict, prs: list[dict]) -> dict:
                 "own_claims": own_claims,
                 "foreign_fences": foreign,
                 "uncovered_files": uncovered,
+                "files_complete": files_complete,
+                "classification": classification,
                 "invisible": bool(reasons),
                 "reasons": reasons,
             }
@@ -850,20 +921,54 @@ def _gh_get(url: str, token: str | None) -> object:
 
 def fetch_open_prs(repo: str, token: str | None = None) -> list[dict]:
     """Live open-PR snapshot (GitHub REST, stdlib urllib)."""
-    pulls = _gh_get(f"https://api.github.com/repos/{repo}/pulls?state=open&per_page=100", token)
-    out: list[dict] = []
-    for pr in pulls:  # type: ignore[assignment]
-        number = pr["number"]
+    pulls: list[dict] = []
+    page = 1
+    while True:
         rows = _gh_get(
-            f"https://api.github.com/repos/{repo}/pulls/{number}/files?per_page=100", token
+            f"https://api.github.com/repos/{repo}/pulls?state=open&per_page=100&page={page}",
+            token,
         )
+        if not isinstance(rows, list):
+            raise ValueError("GitHub open-PR response is not a list")
+        pulls.extend(rows)
+        if len(rows) < 100:
+            break
+        page += 1
+    out: list[dict] = []
+    for pr in pulls:
+        number = pr["number"]
+        detail = _gh_get(f"https://api.github.com/repos/{repo}/pulls/{number}", token)
+        expected_files = detail.get("changed_files") if isinstance(detail, dict) else None
+        file_rows: list[dict] = []
+        page = 1
+        files_complete = True
+        while True:
+            rows = _gh_get(
+                f"https://api.github.com/repos/{repo}/pulls/{number}/files?"
+                f"per_page=100&page={page}",
+                token,
+            )
+            if not isinstance(rows, list):
+                raise ValueError(f"GitHub files response for PR #{number} is not a list")
+            file_rows.extend(rows)
+            if len(rows) < 100:
+                break
+            if len(file_rows) >= 3000:
+                files_complete = isinstance(expected_files, int) and expected_files <= len(
+                    file_rows
+                )
+                break
+            page += 1
         out.append(
             {
                 "number": number,
                 "title": pr.get("title", ""),
                 "head_branch": (pr.get("head") or {}).get("ref", ""),
-                "files": [row["filename"] for row in rows],  # type: ignore[index]
-                "files_truncated": len(rows) >= 100,  # type: ignore[arg-type]
+                "files": [row["filename"] for row in file_rows],
+                "files_complete": files_complete,
+                "base_ref": (pr.get("base") or {}).get("ref", ""),
+                "base_sha": (pr.get("base") or {}).get("sha", ""),
+                "head_sha": (pr.get("head") or {}).get("sha", ""),
             }
         )
     return out
@@ -893,7 +998,7 @@ def cmd_praudit(args: argparse.Namespace) -> int:
         token = args.token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None
         try:
             prs = fetch_open_prs(repo, token)
-        except (urllib.error.URLError, OSError) as exc:
+        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
             # URLError covers HTTP errors; OSError covers socket timeouts —
             # both must degrade to an actionable exit, never an unhandled trace.
             print(f"praudit: GitHub API error: {exc}")

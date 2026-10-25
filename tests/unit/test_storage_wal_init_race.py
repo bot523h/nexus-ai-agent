@@ -81,7 +81,7 @@ async def test_first_use_wal_survives_a_concurrent_writer(tmp_path: Path) -> Non
 
     assert _journal_mode(db_path) == "wal"
     async with get_session(str(db_path)) as session:
-        await session.execute(text("SELECT 1"))
+        await session.exec(text("SELECT 1"))  # type: ignore[call-overload]
 
 
 @pytest.mark.asyncio
@@ -120,3 +120,125 @@ async def test_wal_retry_absorbs_contention_longer_than_the_busy_timeout(
         await create_all_tables(str(db_path))
 
     assert _journal_mode(db_path) == "wal"
+
+
+@pytest.mark.asyncio
+async def test_stampede_of_first_use_never_surfaces_schema_changed(tmp_path: Path) -> None:
+    """Behavioural contract: N coroutines booting one fresh path all succeed.
+
+    Regression for ``sqlite3.OperationalError: database schema has changed``
+    (SQLITE_SCHEMA) seen on CI ``python-parity``: unserialised coroutines ran
+    ``create_all`` DDL concurrently, so a pooled connection's prepared
+    statement went stale.  Repeated over many fresh paths because the race is
+    probabilistic; no internal function is mocked.
+    """
+    failures: list[str] = []
+    for i in range(25):
+        db_path = tmp_path / f"stampede-{i}.sqlite"
+        db_module._initialized_paths.discard(str(db_path))
+        sqlite3.connect(db_path).close()
+        results = await asyncio.gather(
+            *[create_all_tables(str(db_path)) for _ in range(8)],
+            *[_use_session(str(db_path)) for _ in range(4)],
+            return_exceptions=True,
+        )
+        failures += [repr(r) for r in results if isinstance(r, BaseException)]
+        assert _journal_mode(db_path) == "wal"
+    assert failures == [], f"first-use stampede failed: {failures[:3]}"
+
+
+async def _use_session(db_path: str) -> None:
+    async with get_session(db_path) as session:
+        await session.execute(text("SELECT count(*) FROM user"))
+
+
+@pytest.mark.asyncio
+async def test_coroutine_stampede_runs_schema_ddl_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Serialisation, not retry, resolves in-loop races: no lost-race retries."""
+    db_path = tmp_path / "serial.sqlite"
+    db_module._initialized_paths.discard(str(db_path))
+    sqlite3.connect(db_path).close()
+    with caplog.at_level("WARNING", logger=db_module.log.name):
+        await asyncio.gather(*[create_all_tables(str(db_path)) for _ in range(8)])
+    retries = [r for r in caplog.records if "concurrent schema creation" in r.getMessage()]
+    assert retries == [], f"in-loop race should not need retries: {len(retries)}"
+
+
+def test_separate_processes_initialising_one_path_all_succeed(tmp_path: Path) -> None:
+    """Cross-process contract: an in-process lock cannot cover this case.
+
+    Independent interpreters boot the same fresh database at once; the
+    idempotent ``create_all`` plus conflict retry must absorb the race.
+    """
+    import subprocess
+    import sys
+
+    db_path = tmp_path / "multiproc.sqlite"
+    sqlite3.connect(db_path).close()
+    code = (
+        "import asyncio,sys;"
+        "from nexus_ai_agent.storage.db import create_all_tables;"
+        "asyncio.run(create_all_tables(sys.argv[1]))"
+    )
+    procs = [
+        subprocess.Popen(
+            [sys.executable, "-c", code, str(db_path)],
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(4)
+    ]
+    outputs = [(p.wait(timeout=60), p.stderr.read() if p.stderr else "") for p in procs]
+    bad = [(rc, err[-400:]) for rc, err in outputs if rc != 0]
+    assert bad == [], f"cross-process first use failed: {bad}"
+    assert _journal_mode(db_path) == "wal"
+
+
+@pytest.mark.parametrize(
+    ("message", "is_conflict"),
+    [
+        ("table user already exists", True),
+        ("database schema has changed", True),
+        ("no such table: user", False),
+        ("database disk image is malformed", False),
+        ('near "X": syntax error', False),
+        ("database is locked", False),
+    ],
+)
+def test_only_benign_race_signatures_count_as_create_conflicts(
+    message: str, is_conflict: bool
+) -> None:
+    """The retry classifier must stay narrow: real schema/DDL errors are not races."""
+    from sqlalchemy.exc import OperationalError
+
+    exc = OperationalError("stmt", {}, Exception(message))
+    assert db_module._is_concurrent_create_conflict(exc) is is_conflict
+
+
+@pytest.mark.asyncio
+async def test_persistent_schema_changed_is_bounded_then_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A conflict that never resolves is not a race: it raises after the bound."""
+    from sqlalchemy import MetaData
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    monkeypatch.setattr(db_module, "_CREATE_ALL_ATTEMPTS", 3)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'p.sqlite'}")
+    attempts = 0
+
+    class _AlwaysStale(MetaData):
+        def create_all(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+            nonlocal attempts
+            attempts += 1
+            raise OperationalError("stmt", {}, Exception("database schema has changed"))
+
+    try:
+        with pytest.raises(OperationalError):
+            await db_module.create_all_metadata(engine, _AlwaysStale())
+    finally:
+        await engine.dispose()
+    assert attempts == 3

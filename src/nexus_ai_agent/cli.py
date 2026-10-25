@@ -899,6 +899,297 @@ def slideshow_render(
     typer.echo(f"  • {artifact['output_sha256']}")
 
 
+# ── task-273: nexus knowledge — local-first knowledge index (LlamaIndex) ──
+
+knowledge_app = typer.Typer(
+    help="Local-first knowledge index over authorized sources (LlamaIndex adapter)"
+)
+knowledge_sources_app = typer.Typer(help="Registered knowledge sources")
+
+
+def _knowledge_service() -> Any:
+    # Composition root (L5): settings → validated config → service + adapter.
+    # The knowledge_retrieval package itself never imports the adapter.
+    # Construction itself can fail closed (unknown provider, bad limits) —
+    # those are operator-facing typed errors, never tracebacks.
+    from nexus_ai_agent.adapters.llamaindex_retrieval import LlamaIndexKnowledgeIndex
+    from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.knowledge_retrieval import (
+        KnowledgeConfig,
+        KnowledgeRetrievalService,
+    )
+    from nexus_ai_agent.observability.logging import configure_logging
+
+    try:
+        import os as _os
+
+        # Logs first (stderr, redacted): even a settings/index-directory
+        # startup failure must land somewhere real before the CLI prints
+        # "details are in the application log". The level is refined right
+        # after the settings object exists.
+        configure_logging((_os.environ.get("NEXUS_LOG_LEVEL") or "INFO").lower())
+        settings = get_settings()
+        configure_logging(settings.log_level)
+        config = KnowledgeConfig.from_settings(settings)
+        return KnowledgeRetrievalService(config, LlamaIndexKnowledgeIndex(config))
+    except Exception as exc:  # noqa: BLE001 — mapped to a typed line + exit 1
+        _knowledge_exit(exc)
+
+
+def _safe_error_detail(exc: Exception) -> str:
+    """Operator-safe one-line detail for a non-typed failure.
+
+    Pydantic settings errors are reduced to field *locations* — their ``input``
+    values may contain secrets and must never be echoed. Everything else is
+    truncated type + message (errno strings carry the configured path, which
+    the operator set themselves — allowed by the error contract).
+    """
+    try:
+        from pydantic import ValidationError
+
+        if isinstance(exc, ValidationError):
+            locations = [
+                ".".join(str(part) for part in error.get("loc", ())) for error in exc.errors()[:4]
+            ]
+            return "ValidationError: invalid settings field(s): " + ", ".join(
+                location for location in locations if location
+            )
+    except Exception:  # noqa: BLE001 — diagnostic helper never fails the exit path
+        pass
+    return f"{type(exc).__name__}: {exc}"[:400]
+
+
+def _knowledge_exit(exc: Any) -> None:
+    """Map a typed knowledge failure to a clean stderr line + exit 1.
+
+    Non-typed failures (startup: settings load, index-directory creation) are
+    *actually* logged — structured, redacted, with the traceback on stderr —
+    so the printed hint is true, and the CLI line carries the safe detail
+    above, never a bare exception name alone.
+    """
+    from nexus_ai_agent.knowledge_retrieval import KnowledgeRetrievalError
+
+    if isinstance(exc, KnowledgeRetrievalError):
+        typer.echo(f"error[{exc.code}]: {exc.message}", err=True)
+        if exc.hint:
+            typer.echo(f"hint: {exc.hint}", err=True)
+    else:
+        from nexus_ai_agent.observability.logging import get_logger
+
+        get_logger(__name__).error(
+            "knowledge_command_failed",
+            error_type=type(exc).__name__,
+            exc_info=True,
+        )
+        typer.echo(f"error[internal]: {_safe_error_detail(exc)}", err=True)
+        typer.echo(
+            "hint: full details (traceback) are in the application log on stderr",
+            err=True,
+        )
+    raise typer.Exit(code=1)
+
+
+def _run_knowledge(op: Any) -> Any:
+    try:
+        return asyncio.run(op)
+    except Exception as exc:  # noqa: BLE001 — every failure maps to a typed line
+        _knowledge_exit(exc)
+
+
+@knowledge_app.command("index")
+def knowledge_index(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable report"),
+) -> None:
+    """Scan the authorized roots and (re)index changed sources incrementally."""
+    service = _knowledge_service()
+    report = _run_knowledge(service.index_sources())
+    if json_output:
+        typer.echo(json.dumps(report.as_dict(), indent=2, ensure_ascii=False))
+        return
+    typer.echo(
+        f"✓ run {report.run_id}: {report.ingested} ingested "
+        f"({report.new} new, {report.modified} modified), "
+        f"{report.unchanged} unchanged, {report.removed} removed, "
+        f"{report.chunks_written} chunks in {report.duration_s:.2f}s"
+    )
+    if report.rejected or report.unsupported or report.failed:
+        typer.echo(
+            f"  • skipped: {report.rejected} rejected, {report.unsupported} unsupported, "
+            f"{report.failed} failed"
+        )
+    for line in report.errors:
+        typer.echo(f"  • {line}", err=True)
+    if report.truncated:
+        typer.echo("  • truncated: raise NEXUS_KNOWLEDGE_MAX_FILES to index more", err=True)
+
+
+@knowledge_app.command("search")
+def knowledge_search(
+    query: str = typer.Argument(..., help="Natural-language query"),
+    top_k: int = typer.Option(0, "--top-k", min=0, max=50, help="0 = configured default"),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable evidence"),
+) -> None:
+    """Retrieve source-grounded evidence (excerpts + verified citations)."""
+    service = _knowledge_service()
+    response = _run_knowledge(service.search(query, top_k or None))
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "query": response.query,
+                    "state": response.state.value,
+                    "dropped_stale": response.dropped_stale,
+                    "filtered_unrelated": response.filtered_unrelated,
+                    "index_generation": response.index_generation,
+                    "evidence": [
+                        {
+                            "source_id": item.source_id,
+                            "path": item.path,
+                            "root": item.root,
+                            "sha256": item.sha256,
+                            "chunk_index": item.chunk_index,
+                            "start": item.start,
+                            "end": item.end,
+                            "score": round(item.score, 6),
+                            "page": item.page,
+                            "excerpt": item.excerpt,
+                            "citation": item.citation,
+                        }
+                        for item in response.evidence
+                    ],
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+    if not response.evidence:
+        typer.echo(f"(no evidence: {response.state.value})")
+        return
+    for item in response.evidence:
+        page = f" p.{item.page}" if item.page is not None else ""
+        typer.echo(
+            f"[{item.score:.4f}] {item.path} @ {item.sha256[:12]} "
+            f"#chunk {item.chunk_index} ({item.start}:{item.end}){page}"
+        )
+        typer.echo(f"    {item.excerpt}")
+    if response.dropped_stale:
+        typer.echo(f"  • dropped {response.dropped_stale} stale hit(s)")
+    if response.filtered_unrelated:
+        typer.echo(f"  • filtered {response.filtered_unrelated} unrelated hit(s)")
+
+
+@knowledge_app.command("status")
+def knowledge_status(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable status"),
+) -> None:
+    """Report subsystem/index health honestly (never fabricates success)."""
+    service = _knowledge_service()
+    status = _run_knowledge(service.status())
+    if json_output:
+        typer.echo(json.dumps(status.as_dict(), indent=2, ensure_ascii=False))
+        return
+    typer.echo(f"enabled:      {status.enabled}")
+    typer.echo(f"configured:   {status.configured}")
+    typer.echo(
+        f"store:        {'present' if status.store_present else 'absent'}"
+        + (" CORRUPT" if status.store_corrupt else "")
+    )
+    typer.echo(f"nodes:        {status.node_count if status.node_count is not None else '?'}")
+    typer.echo(f"generation:   {status.generation if status.generation is not None else '-'}")
+    typer.echo(
+        f"sources:      {status.source_count} registered, "
+        f"{status.ingested_count} ingested, {status.error_count} error"
+    )
+    typer.echo(
+        f"embeddings:   {status.embedding_provider} "
+        f"({'available' if status.provider_available else 'UNAVAILABLE'})"
+    )
+    if status.degraded:
+        typer.echo(f"⚠ degraded:   {status.degraded_reason}")
+    typer.echo(f"index path:   {status.index_path}")
+
+
+@knowledge_app.command("rebuild")
+def knowledge_rebuild(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable report"),
+) -> None:
+    """Drop the derived index + registry view, then reindex from disk."""
+    if not yes:
+        typer.confirm(
+            "Rebuild deletes the derived knowledge index and reingests every "
+            "configured source. Continue?",
+            abort=True,
+        )
+    service = _knowledge_service()
+    report = _run_knowledge(service.rebuild())
+    if json_output:
+        typer.echo(json.dumps(report.as_dict(), indent=2, ensure_ascii=False))
+        return
+    typer.echo(
+        f"✓ rebuilt run {report.run_id}: {report.ingested} ingested, "
+        f"{report.chunks_written} chunks in {report.duration_s:.2f}s"
+    )
+    for line in report.errors:
+        typer.echo(f"  • {line}", err=True)
+
+
+@knowledge_sources_app.command("list")
+def knowledge_sources_list(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable rows"),
+) -> None:
+    """List every registered knowledge source (canonical registry)."""
+    service = _knowledge_service()
+    rows = _run_knowledge(service.list_sources())
+    if json_output:
+        typer.echo(
+            json.dumps(
+                [
+                    {
+                        "source_id": row.source_id,
+                        "root": row.root,
+                        "path": row.path,
+                        "sha256": row.sha256,
+                        "size_bytes": row.size_bytes,
+                        "status": row.status.value,
+                        "chunks": row.chunks,
+                        "indexed_at": row.indexed_at,
+                        "updated_at": row.updated_at,
+                        "last_error": row.last_error,
+                    }
+                    for row in rows
+                ],
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+    if not rows:
+        typer.echo("(no registered sources — run `nexus knowledge index`)")
+        return
+    for row in rows:
+        typer.echo(
+            f"{row.source_id}  {row.status.value:8}  {row.chunks:4} chunks  "
+            f"{row.sha256[:12] or '-':12}  {row.path}"
+        )
+
+
+@knowledge_sources_app.command("remove")
+def knowledge_sources_remove(
+    reference: str = typer.Argument(..., help="source_id or path of the source"),
+) -> None:
+    """Unregister one source: index entries and registry row are removed."""
+    service = _knowledge_service()
+    removed = _run_knowledge(service.unregister(reference))
+    if not removed:
+        typer.echo(f"error[not_found]: no registered source matches {reference!r}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"✓ unregistered {reference}")
+
+
+knowledge_app.add_typer(knowledge_sources_app, name="sources")
+
 checkpoints_app.add_typer(golden_app, name="golden")
 app.add_typer(checkpoints_app, name="checkpoints")
 app.add_typer(metrics_app, name="metrics")
@@ -906,6 +1197,7 @@ app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(packs_app, name="packs")
 app.add_typer(slideshow_app, name="slideshow")
+app.add_typer(knowledge_app, name="knowledge")
 
 
 # ── D1: nexus jobs resume — operator drain of the durable in-process queue ──
