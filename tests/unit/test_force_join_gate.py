@@ -28,7 +28,7 @@ from sqlalchemy.dialects import postgresql, sqlite
 from sqlmodel import Session, SQLModel, create_engine, select
 
 import nexus_ai_agent.features.force_join as force_join_module
-from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.features.force_join import ForceJoinManager
 from nexus_ai_agent.storage.models import ForceJoinConfig
 
@@ -49,14 +49,21 @@ class _FakeBot:
 
 
 @pytest.fixture()
-def gate_db(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> str:
-    """Point the force-join engine at a fresh SQLite file with the table."""
+def gate_db(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Point the force-join engine at a fresh SQLite file with the table.
+
+    The engine comes from ``storage.db.sync_engine`` (audit A-02), which reads
+    ``NEXUS_DB_PATH`` through the settings cache — so the fixture configures
+    the environment, exactly as a deployment would.
+    """
     db_path = str(tmp_path / "forcejoin-test.db")
-    settings = Settings().model_copy(update={"db_path": db_path})
-    monkeypatch.setattr(force_join_module, "get_settings", lambda: settings)
+    monkeypatch.setenv("NEXUS_DB_PATH", db_path)
+    monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
+    settings_module.get_settings.cache_clear()
     engine = force_join_module._sync_engine(db_path)
     SQLModel.metadata.create_all(engine)
-    return db_path
+    yield db_path
+    settings_module.get_settings.cache_clear()
 
 
 def _add_enabled_config(db_path: str, enabled: bool = True) -> None:

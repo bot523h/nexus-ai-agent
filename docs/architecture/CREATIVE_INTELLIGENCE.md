@@ -345,7 +345,7 @@ claim.
 
 ## 9. Decision record
 
-See `D-0025`, `D-0026` and `D-0027` in [`DECISION_LOG.md`](../DECISION_LOG.md)
+See `D-0032`, `D-0033` and `D-0034` in [`DECISION_LOG.md`](../DECISION_LOG.md)
 for the accepted decisions, the rejected alternatives (a scene-graph over the
 studio `Project`, reusing `rendering/ir.py` as the authoring surface, UUID
 identities, float quantities, free dict mutation and ambiguity-by-guessing) and
