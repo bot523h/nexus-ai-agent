@@ -21,7 +21,12 @@ placeholder text.
 | [architecture/MODULE_MAP.md](architecture/MODULE_MAP.md) | Layer diagram, package inventory, boundary laws → the tests that enforce them, extension recipes. |
 | [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
 | [architecture/CREATIVE_STUDIO.md](architecture/CREATIVE_STUDIO.md) | Nagar: capability model, permission ladder, packs, activation gap, TDD coverage ledger, render lane. |
+| [architecture/CREATIVE_DIRECTION.md](architecture/CREATIVE_DIRECTION.md) | Nagar product direction: the intent-first backbone loop, the first vertical slice (single-project intent loop), deferred capabilities and their triggers. |
 | [architecture/COMMAND_CAPABILITY_CONTRACT.md](architecture/COMMAND_CAPABILITY_CONTRACT.md) | Nagar Gate 2: canonical command envelope, authorization/capability/policy/reference pipeline, idempotency, revision, and evidence limits. |
+| [architecture/LIVING_INTELLIGENCE_ROADMAP.md](architecture/LIVING_INTELLIGENCE_ROADMAP.md) | Proposed direction (owner review pending): the Living Core — persistent self-ledger, measured self-model, vital signs, provenance-tagged memory, verifier-gated learning — with evidence table, ten phases, exit evidence, aliveness metrics and the honest-claims policy. |
+| [architecture/LIVING_INTELLIGENCE_ROADMAP.fa.md](architecture/LIVING_INTELLIGENCE_ROADMAP.fa.md) | خلاصهٔ فارسی نقشهٔ راه هوش زنده (English wins on conflict). |
+| [architecture/SELF_CHARTER.md](architecture/SELF_CHARTER.md) | Living Core Phase 1: the immutable charter, the append-only hash-chained Self-Ledger, fail-closed boot, the human-only amendment door, honest limits, acceptance evidence. |
+| [architecture/PROVENANCE_LEDGER.md](architecture/PROVENANCE_LEDGER.md) | The causal ledger (Project Graph journal): tamper-evident recording of every durable job transition, and the Artifact Passport — the read-only, fail-closed projection that reconciles chain vs. authority and re-measures artifacts. |
 | [architecture/JOB_LIFECYCLE.md](architecture/JOB_LIFECYCLE.md) | Canonical job lifecycle: chain, state machine with owners+invariants, side-effect boundary, artifact verification contract, retry/failure semantics, Result chain. |
 | [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, ownership, Alembic chain, retention, portability, and what never enters a store. |
 | [architecture/SECURITY.md](architecture/SECURITY.md) | Trust boundaries, STRIDE threat → control → evidence table, P0 audit follow-through, review checklist. |
@@ -32,6 +37,7 @@ placeholder text.
 | [architecture/DATA_LIFECYCLE.md](architecture/DATA_LIFECYCLE.md) | Data lifecycle contract: stages, retention, checkpoint schemas, the forbidden operation journal. |
 | [architecture/RETENTION_DECISION.md](architecture/RETENTION_DECISION.md) | Retention policy decision record (30-day resumability window, circuit breaker). |
 | [architecture/LLM_PROVIDERS.md](architecture/LLM_PROVIDERS.md) | Provider chain, cooldowns, anti-retry-storm rule, strict-privacy flag. |
+| [architecture/KNOWLEDGE_RETRIEVAL.md](architecture/KNOWLEDGE_RETRIEVAL.md) | Local-first LlamaIndex knowledge retrieval: adapter-only confinement, verified-evidence search semantics, derived rebuildable store, failure taxonomy, honest limitations. |
 | [architecture/adr/README.md](architecture/adr/README.md) | Doc-layer decision index + rules. |
 | [architecture/adr/template.md](architecture/adr/template.md) | MADR 4.0-lite template (Confirmation section mandatory). |
 | [architecture/adr/0001-docs-as-code-layout.md](architecture/adr/0001-docs-as-code-layout.md) | Documentation layout: living views + one index + language policy. |
@@ -39,6 +45,23 @@ placeholder text.
 | [architecture/adr/0003-mermaid-flowchart-for-c4-views.md](architecture/adr/0003-mermaid-flowchart-for-c4-views.md) | Express C4 views with Mermaid `flowchart`. |
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
 | [architecture/adr/0005-canonical-command-capability-contract.md](architecture/adr/0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation. |
+| [architecture/adr/0006-capability-pack-trust-root.md](architecture/adr/0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root (Ed25519, offline, fail-closed). |
+| [architecture/adr/0007-multisource-referee-exit-codes.md](architecture/adr/0007-multisource-referee-exit-codes.md) | The overlap referee reports unverifiable data as exit 2, not as a pass. |
+| [architecture/adr/0008-canonical-identity-arbitration.md](architecture/adr/0008-canonical-identity-arbitration.md) | One authority per identity, one durable lineage; dispositions for competing open PRs. |
+| [architecture/adr/0011-restricted-shell-flag-grammar.md](architecture/adr/0011-restricted-shell-flag-grammar.md) | The restricted shell validates a declared argument grammar, not a forbidden-option list. |
+| [architecture/adr/0012-local-first-llamaindex-retrieval.md](architecture/adr/0012-local-first-llamaindex-retrieval.md) | Knowledge-retrieval docs: living view + law R22 fitness test (behaviour record lives in DECISION_LOG D-0030). |
+| [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
+| [architecture/TRUTH_DOCTOR.md](architecture/TRUTH_DOCTOR.md) | The repo-truth authority (law R16): one pure-stdlib scanner for version lock-step, docs index/link integrity, boundary-law→test resolution, documentation claim witnesses, and truthy-default verdict reads — with its finding codes and honest limits. |
+
+## Overnight (dated engineering record — one-night session)
+
+| Document | What it is |
+|---|---|
+| [overnight/RECON.md](overnight/RECON.md) | Live read-only reconnaissance of `main` @ `e5b326b` with file:line evidence (what exists, what is absent). |
+| [overnight/MODEL_OPTIONAL.md](overnight/MODEL_OPTIONAL.md) | The additive model-optional cognition boundary: contract, invariants, Model Kill Test, honest limits. |
+| [overnight/RESEARCH.md](overnight/RESEARCH.md) | Dated deep-research record: each source → finding → decision → Nagar impact. |
+| [overnight/COGNITION_CONVERGENCE.md](overnight/COGNITION_CONVERGENCE.md) | One path from model cognition to execution: gateway, registry-derived authority, fail-closed selection, mechanical anti-bypass gates, honest limits. |
+| [overnight/FREE_TEXT_SLICE.md](overnight/FREE_TEXT_SLICE.md) | The Gate-C vertical slice: free text → typed proposal → registry → CommandBus → verified `timeline.trim` artifact, with the adversarial matrix and honest limits. |
 
 ## Authoritative records
 
@@ -70,6 +93,13 @@ placeholder text.
 | [ops/COLOR_LANE.md](ops/COLOR_LANE.md) | Color/exposure lane runbook: EV→filter mapping, hard contracts, FFmpeg-free validation, troubleshooting. |
 | [ops/PACK_RUNTIME.md](ops/PACK_RUNTIME.md) | Unified pack runtime (wave 5): composition, activation gate, op-gap ledger, composition checklist for new packs. |
 | [ops/RUNBOOK_HARDENING.md](ops/RUNBOOK_HARDENING.md) | Runbook hardening pass (wave-4 step 8): boundary conditions, failure modes, operator knobs. |
+| [ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md](ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md) | Knowledge retrieval runbook: configuration, status meanings, recovery (corrupt store, interrupted run, root rotation), safety notes. |
+
+## Examples
+
+| Document | What it is |
+|---|---|
+| [examples/KNOWLEDGE_RETRIEVAL.md](examples/KNOWLEDGE_RETRIEVAL.md) | Copy-paste knowledge-retrieval CLI examples: index, verified search, defined empty states, fail-closed errors. |
 
 ## Audits (dated, immutable records)
 
@@ -90,6 +120,12 @@ placeholder text.
 | [audits/GATE5_CLOSURE_2026-09-24.md](audits/GATE5_CLOSURE_2026-09-24.md) | Task-181 Gate 5 closure/reconciliation (Agent E): claim-audit truth matrix (prior Gate-5-local claims vs GitHub), PR#71/#74 reconciliation, four reproduced defects (typed failure → COMPLETED, one-state failures, publication leak, trace job_id=null), fixes with regression + 6/6 mutation probes. |
 | [audits/GATE5_TRUTH_MATRIX.json](audits/GATE5_TRUTH_MATRIX.json) | Machine-readable Gate 5 claim→evidence matrix + acceptance-gate answers (CLOSED only with Git + CI evidence). |
 | [audits/DEAD_ENGINES_2026-09-22.md](audits/DEAD_ENGINES_2026-09-22.md) | Dead-engine verification (zero importers, measured gates), five-option wiring analysis, negative controls, and the recorded residuals. |
+| [audits/CONTINUUM_CLOSURE_2026-09-27.md](audits/CONTINUUM_CLOSURE_2026-09-27.md) | Continuum evidence-foundation closure (task-184 / task-154): 95%-per-pack coverage gate, fail-closed snapshot, replayable mutation campaign, exact-SHA CI — with the recorded lost-lineage recovery. |
+| [audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md](audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md) | Exact-SHA Phase Zero assessment: actual runtime, trust boundaries, Continuum/GitHub truth, five-angle research decisions, gaps, and risk register. |
+| [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |
+| [audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md](audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md) | Exact-SHA mainline truth audit: release-metadata defects (README version, lockstep guard, Continuum snapshot) with the delivered fixes and honest production limitations. |
+| [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
+| [audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md](audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md) | Dated Phase-1 stabilization handoff: live PR inventory, exact-SHA remediation evidence, Board fence correction, CI blockers, and backup/restore limits. |
 
 ## History (archived — read-only, never a source of truth)
 

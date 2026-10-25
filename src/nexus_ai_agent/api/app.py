@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
+from nexus_ai_agent.api.studio import router as studio_router
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
 from nexus_ai_agent.creative import image_post
@@ -105,6 +106,7 @@ async def require_hmac_signature(request: Request) -> None:
 
 
 app.include_router(dashboard_router)
+app.include_router(studio_router)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -163,10 +165,35 @@ async def root() -> str:
         </div>
 
         <script>
+            // The dashboard API is bearer-token gated (NEXUS_DASHBOARD_TOKEN);
+            // the token is asked for once per tab and kept in sessionStorage.
+            const TOKEN_KEY = 'nexus_dashboard_token';
+            function dashboardToken(force) {
+                let token = sessionStorage.getItem(TOKEN_KEY);
+                if (!token || force) {
+                    const ask = 'توکن داشبورد (NEXUS_DASHBOARD_TOKEN) را وارد کنید:';
+                    token = window.prompt(ask) || '';
+                    sessionStorage.setItem(TOKEN_KEY, token);
+                }
+                return token;
+            }
+            async function apiFetch(path) {
+                const authed = (force) => fetch(path, {
+                    headers: { 'Authorization': 'Bearer ' + dashboardToken(force) }
+                });
+                let res = await authed(false);
+                if (res.status === 401) { res = await authed(true); }
+                if (res.status === 503) {
+                    const note = 'داشبورد غیرفعال است: NEXUS_DASHBOARD_TOKEN تنظیم نشده.';
+                    document.getElementById('recent_users').innerHTML =
+                        '<p class="text-amber-400">' + note + '</p>';
+                }
+                if (!res.ok) { throw new Error('dashboard API ' + res.status); }
+                return res.json();
+            }
             async function loadStats() {
                 try {
-                    const res = await fetch('/api/dashboard/stats');
-                    const data = await res.json();
+                    const data = await apiFetch('/api/dashboard/stats');
                     document.getElementById('total_users').innerText = data.total_users;
                     document.getElementById('total_chats').innerText = data.total_chats;
                     document.getElementById('total_files').innerText = data.total_files;
@@ -177,23 +204,31 @@ async def root() -> str:
 
             async function loadRecentUsers() {
                 try {
-                    const res = await fetch('/api/dashboard/recent_users');
-                    const data = await res.json();
+                    const data = await apiFetch('/api/dashboard/recent_users');
                     const container = document.getElementById('recent_users');
                     if (data.length === 0) {
                         container.innerHTML = '<p class="text-slate-400">هیچ کاربری یافت نشد.</p>';
                         return;
                     }
                     let html = '<ul class="divide-y divide-slate-700">';
+                    // PII-free payload (P0-5): surrogate id + join time only.
+                    // `joined_at` is published with an explicit UTC offset by
+                    // `api/dashboard.py`; `new Date()` reads an ISO string
+                    // *without* an offset as local time, which shifted every
+                    // join time by the viewer's UTC offset. Normalise here so
+                    // an older/foreign payload stays correct too.
+                    const utcStamp = v =>
+                        /(?:Z|[+-]\\d{2}:?\\d{2})$/.test(v) ? v : v + 'Z';
                     data.forEach(u => {
-                        const name = u.username || 'بدون نام';
+                        const joined = u.joined_at
+                            ? new Date(utcStamp(u.joined_at)).toLocaleString('fa-IR') : '—';
                         html += `
                             <li class="py-3 flex justify-between items-center">
                                 <div>
-                                    <span class="font-bold text-blue-300">${name}</span>
+                                    <span class="font-bold text-blue-300">کاربر #${u.id}</span>
                                     <span class="text-slate-500 text-sm ml-2">
-                             ID: ${u.telegram_id}
-                         </span>
+                                        عضویت: ${joined}
+                                    </span>
                                 </div>
                                 <span class="bg-slate-700 px-2 py-1 rounded text-xs text-slate-300">
                                     User #${u.id}

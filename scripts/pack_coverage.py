@@ -11,21 +11,34 @@ Usage
 -----
 
 ```bash
-python scripts/pack_coverage.py                       # default pack test set, 95% bar
-python scripts/pack_coverage.py --threshold 90 --json
-python scripts/pack_coverage.py --tests tests/unit/test_opgap_wave5.py --pack core
-python scripts/pack_coverage.py --pack-audio          # alias: --pack audio --pack core
+python scripts/pack_coverage.py                          # canonical run, 95% per-pack contract
+python scripts/pack_coverage.py --json-out cov.json      # + canonical SHA-bound artifact
+python scripts/pack_coverage.py --verify-artifact cov.json  # re-measure; byte-for-byte
+python scripts/pack_coverage.py --threshold 85 --json    # diagnostic only: never accepted
+python scripts/pack_coverage.py --tests tests/unit/test_opgap_wave5.py --pack core  # diagnostic
+python scripts/pack_coverage.py --list-tests
 ```
 
-Exit status: ``0`` every measured unit is at/above the threshold, ``1`` at least
-one unit is below it, ``2`` bad CLI usage.  No third-party dependency is
-required: the harness uses stdlib ``trace``/``dis`` only.
+Exit status
+-----------
+
+* ``0`` — ACCEPTED: the canonical target set ran in full on a clean commit, the
+  whole pack surface was measured, and every pack is >= 95%
+  (``ACCEPTANCE_THRESHOLD``); for ``--verify-artifact``: the stored artifact was
+  reproduced byte for byte by a fresh accepted measurement.
+* ``1`` — NOT ACCEPTED: below the bar, incomplete/diagnostic evidence (partial
+  targets or packs, custom root, lowered threshold, dirty tree, failed or
+  deselected tests), evidence unavailable, or an artifact that does not
+  reproduce.
+* ``2`` — invalid request (bad CLI usage, NaN/negative threshold, unknown pack,
+  missing or duplicate target).
+
+No third-party dependency is required: the harness uses stdlib ``trace``/``dis``.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -35,51 +48,83 @@ if str(REPO_ROOT / "src") not in sys.path:  # allow running from a source checko
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from nexus_ai_agent.continuum.pack_coverage import (  # noqa: E402
+    ACCEPTANCE_THRESHOLD,
     DEFAULT_TEST_TARGETS,
     DEFAULT_THRESHOLD,
+    canonical_json,
     coverage_failures,
     format_table,
     measure,
+    verify_artifact,
 )
+from nexus_ai_agent.continuum.provenance import atomic_write_bytes  # noqa: E402
+
+EXIT_ACCEPTED = 0
+EXIT_NOT_ACCEPTED = 1
+EXIT_USAGE = 2
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pack_coverage.py",
-        description="Dependency-free line coverage for the Nagar capability packs.",
+        description="Dependency-free line coverage evidence for the Nagar capability packs.",
     )
     parser.add_argument(
         "--threshold",
         type=float,
         default=DEFAULT_THRESHOLD,
-        help=f"minimum acceptable coverage per pack (default: {DEFAULT_THRESHOLD})",
+        help=(
+            f"per-pack bar (default and acceptance contract: {ACCEPTANCE_THRESHOLD}); "
+            "a lower value is a diagnostic run that is never accepted"
+        ),
     )
     parser.add_argument(
         "--pack",
         action="append",
         dest="packs",
         metavar="NAME",
-        help="restrict to one pack directory (repeatable); 'core' = the substrate files",
+        help="restrict to one pack directory (repeatable; diagnostic); 'core' = the substrate",
     )
     parser.add_argument(
         "--tests",
         nargs="*",
         default=None,
-        help=f"test modules to run (default: {len(DEFAULT_TEST_TARGETS)} pack-focused modules)",
+        help=f"test targets to run (diagnostic; default: the {len(DEFAULT_TEST_TARGETS)} "
+        "canonical modules)",
     )
     parser.add_argument(
         "--list-tests",
         action="store_true",
-        help="print the default test target list and exit",
+        help="print the canonical test target list and exit",
     )
-    parser.add_argument("--json", action="store_true", help="machine-readable report on stdout")
+    parser.add_argument("--json", action="store_true", help="canonical JSON report on stdout")
     parser.add_argument(
         "--json-out",
         metavar="PATH",
-        help="also write the JSON report to PATH (useful in CI artefacts)",
+        help="also write the canonical JSON artifact to PATH (removed first; written atomically)",
+    )
+    parser.add_argument(
+        "--verify-artifact",
+        metavar="PATH",
+        help="re-measure canonically and require PATH to be reproduced byte for byte",
     )
     parser.add_argument("--quiet", action="store_true", help="suppress the human table")
     return parser
+
+
+def _verify(path: Path) -> int:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        print(f"✗ artifact unreadable: {exc}", file=sys.stderr)
+        return EXIT_NOT_ACCEPTED
+    problems = verify_artifact(raw)
+    for problem in problems:
+        print(f"✗ {problem}", file=sys.stderr)
+    if problems:
+        return EXIT_NOT_ACCEPTED
+    print(f"✓ {path} reproduced byte-for-byte by an accepted measurement")
+    return EXIT_ACCEPTED
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -89,32 +134,41 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.list_tests:
         for target in DEFAULT_TEST_TARGETS:
             print(target)
-        return 0
+        return EXIT_ACCEPTED
 
-    if args.threshold < 0:
-        parser.error("--threshold must be >= 0")
+    if args.verify_artifact:
+        if args.tests is not None or args.packs or args.json_out:
+            parser.error(
+                "--verify-artifact re-measures canonically; drop --tests/--pack/--json-out"
+            )
+        return _verify(Path(args.verify_artifact))
 
-    report = measure(
-        args.tests,
-        packs=args.packs,
-        threshold=args.threshold,
-    )
-    payload = json.dumps(report.as_dict(), ensure_ascii=False, indent=2)
+    # A stale artifact from an earlier run must never survive a failed run.
+    json_out = Path(args.json_out) if args.json_out else None
+    if json_out is not None:
+        json_out.unlink(missing_ok=True)
 
-    if args.json_out:
-        Path(args.json_out).write_text(payload + "\n", encoding="utf-8")
+    try:
+        report = measure(args.tests, packs=args.packs, threshold=args.threshold)
+    except (TypeError, ValueError) as exc:
+        print(f"✗ invalid measurement request: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except (OSError, RuntimeError) as exc:
+        print(f"✗ coverage evidence unavailable: {exc}", file=sys.stderr)
+        return EXIT_NOT_ACCEPTED
+
+    payload = canonical_json(report)
+    if json_out is not None:
+        atomic_write_bytes(json_out, payload.encode("utf-8"))
     if args.json:
-        print(payload)
+        sys.stdout.write(payload)
     if not args.quiet:
         print(format_table(report))
 
     failures = coverage_failures(report)
     for failure in failures:
         print(f"✗ {failure}", file=sys.stderr)
-    if report.pytest_exit_code != 0:
-        print(f"✗ pytest exited with {report.pytest_exit_code}", file=sys.stderr)
-        return 1
-    return 1 if failures else 0
+    return EXIT_NOT_ACCEPTED if failures else EXIT_ACCEPTED
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from nexus_ai_agent.creative.studio.models import (
     CapabilityError,
@@ -44,6 +44,7 @@ from nexus_ai_agent.creative.studio.models import (
     Project,
     TimeRangeUS,
     TypedCommand,
+    UndoConflictError,
     UndoStackEmptyError,
     UnknownCapabilityError,
     UnknownOperationError,
@@ -334,6 +335,18 @@ class SplitCommandInput(BaseModel):
 class UndoCommandInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Optional transaction identity: a caller that means to undo a *specific*
+    # edit names it, and the gate below refuses unless it is still the newest
+    # editable transaction. Absent -> classic NLE "undo the most recent edit".
+    transaction_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("transaction_id")
+    @classmethod
+    def _non_blank_id(cls, value: str | None) -> str | None:
+        if value is not None and (value != value.strip() or any(c.isspace() for c in value)):
+            raise ValueError("transaction_id must not contain whitespace")
+        return value
+
 
 # ---------------------------------------------------------------------------
 # Wave 1 pure handlers
@@ -482,6 +495,18 @@ def _system_undo(project: Project, context: OperationContext) -> OperationOutcom
             "nothing to undo: no editable transaction remains on the history stack"
         )
     last = history[target_index]
+    # Identity gate, inside the stage-9 handler and therefore under the same bus
+    # lock as the state swap below. A caller that names a transaction may only
+    # confirm it is the newest editable one; anything else (a concurrent foreign
+    # commit, a stale id) is refused so a foreign edit is never rewound. This
+    # closes the check-then-act window a caller-side check cannot.
+    requested = context.input_data.get("transaction_id")
+    if requested is not None and requested != last.transaction_id:
+        raise UndoConflictError(
+            "refusing to undo: requested transaction "
+            f"{requested!r} is not the newest editable transaction {last.transaction_id!r} "
+            "(a concurrent edit or a stale identity)"
+        )
     restored = Project.model_validate(last.state_before)
     remaining = history[:target_index] + history[target_index + 1 :]
     return OperationOutcome(
@@ -490,6 +515,7 @@ def _system_undo(project: Project, context: OperationContext) -> OperationOutcom
         {
             "undone_operation": last.operation,
             "undone_transaction_id": last.transaction_id,
+            "requested_transaction_id": requested,
             "restored_state_hash": last.previous_state_hash,
         },
     )

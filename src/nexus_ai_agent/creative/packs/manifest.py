@@ -28,8 +28,16 @@ MANIFEST_SCHEMA: Literal["nexus.capability-pack.v1"] = "nexus.capability-pack.v1
 PROTOCOL_VERSION: Literal["nagar.command.v1"] = "nagar.command.v1"
 STATE_SCHEMA: Literal["nagar.state.v1"] = "nagar.state.v1"
 
-#: A ``base64:replace-…`` signature is the documented unsigned placeholder.
-PLACEHOLDER_SIGNATURE_PREFIX = "base64:replace"
+#: Documented unsigned placeholders.  ``base64:replace-…`` is the form in the
+#: TDD; ``base64:placeholder-…`` is the form four shipped manifests actually
+#: use.  Before this list existed only the first was recognised, so the audio,
+#: delivery, edit and motion packs were reported as *format_only_unverified*
+#: ("a signature we merely did not check") when they in fact carry no
+#: signature at all — a report that claimed more trust than the bytes support.
+PLACEHOLDER_SIGNATURE_PREFIXES: tuple[str, ...] = ("base64:replace", "base64:placeholder")
+
+#: Back-compat alias for the primary placeholder prefix.
+PLACEHOLDER_SIGNATURE_PREFIX = PLACEHOLDER_SIGNATURE_PREFIXES[0]
 
 _PACKAGE_ID_RE = re.compile(r"^nexus(\.[a-z][a-z0-9_]*)+$")
 _CAPABILITY_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
@@ -212,7 +220,7 @@ class SecuritySpec(BaseModel):
 
     @property
     def signature_is_placeholder(self) -> bool:
-        return self.signature.startswith(PLACEHOLDER_SIGNATURE_PREFIX)
+        return self.signature.startswith(PLACEHOLDER_SIGNATURE_PREFIXES)
 
 
 # ---------------------------------------------------------------------------

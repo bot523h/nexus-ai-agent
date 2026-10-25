@@ -111,7 +111,11 @@ flowchart LR
 9. **Apply.** The registered pure handler runs against an isolated copy; the
    new project, bumped revision, recomputed hash, `EditTransaction`, and the
    reservation result commit together. A handler that mutates-then-fails or
-   renames the project cannot corrupt central state.
+   renames the project cannot corrupt central state. `system.undo` additionally
+   enforces a transaction-identity gate *here*, inside the lock (§7.1): because
+   the handler runs in the same critical section as the state swap, "is the
+   named transaction still the newest editable one?" and "restore its snapshot"
+   are one atomic step — a concurrent foreign commit can never be rewound.
 
 ## 3. Capability contract
 
@@ -155,6 +159,8 @@ an authorizer configured, a missing actor claim is denied.
 | `IdempotencyConflictError` | 7 | same key, different logical payload |
 | `PreconditionError` | 8 | stale revision or hash |
 | `CommandExecutionError` | 9 | handler failure, nested dispatch, identity change |
+| `UndoConflictError` (⊂ `CommandExecutionError`) | 9 | `system.undo` named a transaction that is not the newest editable one |
+| `UndoStackEmptyError` (⊂ `CommandExecutionError`) | 9 | `system.undo` with no editable transaction left |
 
 ## 6. Idempotency
 
@@ -193,6 +199,25 @@ pairs survive undo cycles: undo restores the exact previous hash and new
 commands can precondition on it. An old command presented to a newer state
 fails closed; replay is the only path that returns an older result, and only
 for the identical logical payload under its own key.
+
+### 7.1 Transaction-scoped undo (`system.undo`)
+
+`system.undo` rewinds the newest *editable* transaction (undo records are
+skipped) by restoring that transaction's full `state_before` snapshot. Its
+input carries an optional `transaction_id` (task-223). When supplied, the
+stage-9 handler refuses unless the id equals the newest editable transaction,
+raising `UndoConflictError` (`CommandExecutionError`); no state change is
+committed. The gate runs *inside* the handler, under the same bus lock as the
+state swap, so "is the named transaction still the newest?" and "restore its
+snapshot" are one linearizable critical section — a concurrent foreign commit
+between a caller's read and its dispatch is seen and refused, never rewound.
+When `transaction_id` is absent the operation is unchanged (classic "undo the
+most recent edit"), preserving the runtime/pack call sites that dispatch it
+with empty input. The id is a *guard*, not an arbitrary-index rewind: the
+snapshot model makes rewinding a non-newest transaction unsound, so identity
+can only confirm the newest, not select an older one. The spine passes its
+recorded per-step transaction id and translates `UndoConflictError` into
+`SpineRollbackError`.
 
 ## 8. Compatibility strategy
 
@@ -255,6 +280,7 @@ valid follow-ups for their lanes.
 | Gap | Status |
 |---|---|
 | Bus reservation across instances / processes / restart | NOT VERIFIED by design (in-memory); no claim |
+| Transaction-identity-addressed `system.undo` across processes / restart | NOT VERIFIED by design (history and snapshots are in-memory, per instance); identity-addressed undo is PROVEN only for threads sharing one bus instance (§7.1) |
 | Durable queue payload-conflict | GAP, lifecycle lane (task-182) |
 | Explicit service grants at the three runtime call sites | RUNTIME GAP, owner Agent 1 (task-181) |
 | Integration with PR#67's `required_packs`/lifecycle bus gate | INTEGRATED at stage 4b (task-183, stacked on PR#72; PR#67's lifecycle suite runs unchanged on this tree); `MERGED` only after PR#72 lands and CI re-runs. Merging PR#67 afterwards is a *semantic* resolution: keep stage 4b and drop PR#67's stage-3.5 call and its `CreativeRenderPayload.allow_experimental` / surface flag (the architecture guards fail otherwise), and add `color.apply_lut` to `EXPERIMENTAL_OPT_IN_OPERATIONS` |
@@ -274,6 +300,7 @@ bus construction set, opt-in derived only from server policy),
 `tests/architecture/test_test_suite_hygiene.py` (no cross-test package imports), `tests/architecture/test_command_capability_boundary.py`
 (R13 in [MODULE_MAP.md](MODULE_MAP.md) §3), `tests/architecture/test_nagar_studio_isolation.py`
 (R6), `tests/unit/test_nagar_wave1_green_cockpit.py`,
+`tests/unit/test_undo_contract_mutations.py` (task-223 undo-identity mutants M1–M3),
 `tests/unit/test_docs_integrity.py`.
 
 ```bash

@@ -133,8 +133,13 @@ class R2Provider:
                     break
                 token = response.get("NextContinuationToken")
                 if not token:
-                    break
+                    raise StorageError(
+                        "R2 list failed: provider returned a truncated page without "
+                        "NextContinuationToken"
+                    )
         except ProviderUnavailable:
+            raise
+        except StorageError:
             raise
         except Exception as e:
             raise StorageError(f"R2 list failed (prefix='{prefix}'): {e}") from e
@@ -157,7 +162,26 @@ class R2Provider:
                     Bucket=bucket,
                     Delete={"Objects": [{"Key": k} for k in batch], "Quiet": True},
                 )
-                deleted += len(response.get("Deleted", []))
+                errors = response.get("Errors", [])
+                if errors:
+                    codes = sorted(
+                        {
+                            str(error.get("Code", "Unknown"))
+                            for error in errors
+                            if isinstance(error, dict)
+                        }
+                    )
+                    code_summary = ",".join(codes) if codes else "Unknown"
+                    raise StorageError(
+                        "R2 delete partial failure: "
+                        f"{len(errors)} provider error(s), codes={code_summary}"
+                    )
+                # AWS omits successful keys from ``Deleted`` when Quiet=True, so
+                # the returned count is unreliable; the whole batch is deleted
+                # once the error check above passes.
+                deleted += len(batch)
+        except StorageError:
+            raise
         except Exception as e:
             raise StorageError(f"R2 delete failed ({len(keys)} keys): {e}") from e
         return deleted
