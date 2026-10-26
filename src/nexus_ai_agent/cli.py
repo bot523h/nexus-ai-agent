@@ -1676,6 +1676,11 @@ def run_bot(
 
     settings = get_settings()
     configure_logging(settings.log_level)
+    # task-274: opt-in tracing, after logging exists so the outcome is visible.
+    # Never fatal — a misconfigured tracing setup must not stop the bot.
+    from nexus_ai_agent.observability.tracing import bootstrap_tracing
+
+    bootstrap_tracing(settings)
 
     # Bring the schema up (Alembic-first, create_all fallback for legacy files)
     Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)

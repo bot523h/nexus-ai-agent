@@ -951,7 +951,7 @@
       "claimed_at": "2026-10-26T07:07:56Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "",
+      "note": "Evidence (branch arena/task-274-langsmith-tracing): `pytest -q tests/unit/test_tracing_bootstrap.py` 8 passed; `pytest -q tests/unit/test_docs_integrity.py tests/unit/test_ci_extras_parity.py tests/unit/test_optional_extras.py` 131 passed/10 skipped; `python scripts/extras_matrix.py check` legs=[core,pdf,speech,translate,tracing]; `make lint` clean, `make types` clean, `make deps` clean (langsmith added to DEP002 allow-list); full suite in a venv `pytest -q -m 'not slow'` 4493 passed/38 skipped/0 failed. Smoke: `scripts/langsmith_smoke.py` → SKIPPED_NO_SECRET(exit0) without key, FAILED(exit1) on a bogus key, OK(exit0) with the real key. Orphan workflow langsmith-connectivity-smoke-20261026 disabled (204).",
       "generation": 1
     },
     {

@@ -294,6 +294,30 @@ def test_translate_leg_reports_available() -> None:
         _skip_without_leg("translate")
 
 
+def test_tracing_leg_enables_real_tracing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On the `tracing` leg the SDK is present, so enabling must actually export."""
+    if LEG == "tracing":
+        importlib.import_module("langsmith")  # real import, not just find_spec
+        from nexus_ai_agent.observability.tracing import configure_tracing
+
+        for name in ("LANGSMITH_TRACING", "LANGSMITH_API_KEY", "LANGSMITH_PROJECT"):
+            monkeypatch.delenv(name, raising=False)
+        state = configure_tracing(
+            enabled=True,
+            api_key="leg-key",
+            project="leg-project",
+            endpoint="https://api.smith.langchain.com",
+        )
+        assert state.active is True and state.reason == "enabled"
+        assert os.environ["LANGSMITH_TRACING"] == "true"
+    elif LEG is None and _module_available("langsmith"):
+        from nexus_ai_agent.observability.tracing import configure_tracing
+
+        assert configure_tracing(enabled=False, api_key=None, project="p").reason == "disabled"
+    else:
+        _skip_without_leg("tracing")
+
+
 # --------------------------------------------------------------------------- #
 # 4. leg consistency (TEST)
 # --------------------------------------------------------------------------- #
