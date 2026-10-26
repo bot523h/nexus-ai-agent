@@ -2,10 +2,14 @@
 
 The rule under test is the one every observability path in this repository
 follows: *a tracing failure can never break the caller's work*.  These tests
-pin the four outcomes of ``configure_tracing`` — disabled, enabled,
+pin the four outcomes of ``configure_tracing`` — disabled, active,
 SDK-missing, key-missing — plus the "never raises" contract of
 ``bootstrap_tracing``, by driving the real functions (no SDK is mocked; the
-``sdk_missing`` path is proven by construction with a fake module finder).
+``sdk_missing`` path is proven by construction with a monkeypatched probe).
+
+``langsmith`` ships with the core install (transitively, via
+``langgraph`` → ``langchain-core``), so there is no ``[tracing]`` extra and the
+real-SDK path is provable on every leg.
 """
 
 from __future__ import annotations
@@ -19,18 +23,32 @@ import pytest
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.observability import tracing
 
+#: Every name the SDK resolves to decide whether tracing is on.  ``langsmith``
+#: looks up ``TRACING_V2``/``TRACING`` under both the ``LANGSMITH_`` and
+#: ``LANGCHAIN_`` namespaces; ``LANGCHAIN_HANDLER`` is the legacy V1 flag.
 LANGSMITH_ENV = (
     "LANGSMITH_TRACING",
     "LANGSMITH_API_KEY",
     "LANGSMITH_PROJECT",
     "LANGSMITH_ENDPOINT",
+    "LANGCHAIN_TRACING_V2",
+    "LANGCHAIN_TRACING",
+    "LANGCHAIN_HANDLER",
 )
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _clean_env(monkeypatch: pytest.MonkeyPatch) -> object:
     for name in LANGSMITH_ENV:
         monkeypatch.delenv(name, raising=False)
+    yield
+    # The SDK's process-global override is a real module global; reset it so one
+    # test cannot leak "off"/"on" into the next.
+    try:
+        context = importlib.import_module("langsmith._internal._context")
+        context._GLOBAL_TRACING_ENABLED = None
+    except Exception:  # noqa: BLE001 - the SDK may be absent; nothing to reset
+        pass
 
 
 def _sdk_present() -> bool:
@@ -66,7 +84,7 @@ def test_enabled_exports_the_full_langsmith_contract(monkeypatch: pytest.MonkeyP
     state = tracing.configure_tracing(
         enabled=True, api_key="secret", project="nexus", endpoint="https://example.test"
     )
-    assert state == tracing.TracingState(active=True, reason="enabled", project="nexus")
+    assert state == tracing.TracingState(active=True, reason="active", project="nexus")
     assert os.environ["LANGSMITH_TRACING"] == "true"
     assert os.environ["LANGSMITH_API_KEY"] == "secret"
     assert os.environ["LANGSMITH_PROJECT"] == "nexus"
@@ -114,13 +132,13 @@ def test_bootstrap_reads_settings_and_respects_default_off(
 
 
 # --------------------------------------------------------------------------- #
-# 3. the real SDK path (skips visibly when the extra is absent)
+# 3. the real SDK path (the SDK ships with the core install)
 # --------------------------------------------------------------------------- #
 def test_real_sdk_path_exports_and_is_importable(monkeypatch: pytest.MonkeyPatch) -> None:
     if not _sdk_present():
         pytest.skip(
-            "langsmith not installed; the real-SDK path is proven by the "
-            "`extras-matrix` tracing CI leg (NEXUS_EXTRA_LEG=tracing)"
+            "langsmith not installed; it ships with the core install "
+            "(langgraph -> langchain-core), so this never skips in a normal install"
         )
     importlib.import_module("langsmith")  # a real import, not just find_spec
     state = tracing.configure_tracing(enabled=True, api_key="k", project="real")
@@ -128,3 +146,109 @@ def test_real_sdk_path_exports_and_is_importable(monkeypatch: pytest.MonkeyPatch
     # The SDK reads these at import time; assert the exact names it consumes.
     assert os.environ["LANGSMITH_TRACING"] == "true"
     assert os.environ["LANGSMITH_API_KEY"] == "k"
+
+
+def test_disabled_bootstrap_stops_a_real_sdk_that_was_already_tracing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The boundary must hold even after the SDK cached the env: a disabled
+    bootstrap forces tracing off through the SDK's cache-independent override."""
+    if not _sdk_present():
+        pytest.skip("langsmith not installed; it ships with the core install")
+    from importlib import import_module
+
+    tracing_is_enabled = import_module("langsmith.utils").tracing_is_enabled
+
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    assert tracing_is_enabled() is True  # prime the SDK's cached env read
+
+    assert tracing.configure_tracing(enabled=False, api_key="k", project="p").reason == "disabled"
+    assert tracing_is_enabled() is False
+
+    assert tracing.configure_tracing(enabled=True, api_key="k", project="p").active is True
+    assert tracing_is_enabled() is True
+
+
+# --------------------------------------------------------------------------- #
+# 2. the default-off security boundary is real
+# --------------------------------------------------------------------------- #
+def test_disabled_clears_a_stale_environment_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pre-existing ``LANGSMITH_TRACING=true`` must not survive a disabled bootstrap."""
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "true")
+    monkeypatch.setenv("LANGCHAIN_TRACING", "true")
+    monkeypatch.setenv("LANGCHAIN_HANDLER", "true")
+    state = tracing.configure_tracing(enabled=False, api_key="k", project="p")
+    assert state.reason == "disabled"
+    for name in (
+        "LANGSMITH_TRACING",
+        "LANGCHAIN_TRACING_V2",
+        "LANGCHAIN_TRACING",
+        "LANGCHAIN_HANDLER",
+    ):
+        assert name not in os.environ, f"{name} must be cleared when tracing is off"
+
+
+def test_incomplete_configuration_clears_stale_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enabling without a key must still disable any stale flag — no partial activation."""
+    monkeypatch.setattr(tracing, "_langsmith_available", lambda: True)
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    state = tracing.configure_tracing(enabled=True, api_key=None, project="p")
+    assert state.reason == "key_missing"
+    assert "LANGSMITH_TRACING" not in os.environ
+
+
+def test_active_path_clears_legacy_v1_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Enabling must leave exactly one switch on: the current ``LANGSMITH_`` one."""
+    monkeypatch.setattr(tracing, "_langsmith_available", lambda: True)
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "true")
+    monkeypatch.setenv("LANGCHAIN_TRACING", "true")
+    monkeypatch.setenv("LANGCHAIN_HANDLER", "true")
+    state = tracing.configure_tracing(enabled=True, api_key="k", project="p")
+    assert state.active is True
+    assert os.environ["LANGSMITH_TRACING"] == "true"
+    for name in ("LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING", "LANGCHAIN_HANDLER"):
+        assert name not in os.environ, f"{name} (legacy) must be cleared when tracing activates"
+
+
+def test_bootstrap_is_idempotent_and_redetermines_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-running the bootstrap must reflect the *current* settings, not history."""
+    monkeypatch.setattr(tracing, "_langsmith_available", lambda: True)
+    on = Settings(_env_file=None, NEXUS_TRACING_ENABLED="true", NEXUS_TRACING_API_KEY="k")
+    off = Settings(_env_file=None)
+
+    assert tracing.bootstrap_tracing(on).active is True
+    assert os.environ["LANGSMITH_TRACING"] == "true"
+    # A later disabled bootstrap in the same process must fully disable tracing.
+    assert tracing.bootstrap_tracing(off).reason == "disabled"
+    assert "LANGSMITH_TRACING" not in os.environ
+
+
+# --------------------------------------------------------------------------- #
+# 5. safe diagnostics (never leak the key, URL or payload)
+# --------------------------------------------------------------------------- #
+def test_sanitize_exception_reports_class_and_status_only() -> None:
+    class FakeAPIStatusError(Exception):
+        status_code = 403
+
+    text = tracing.sanitize_exception(FakeAPIStatusError("secret-key http://u:p@h/x payload"))
+    assert text == "FakeAPIStatusError status=403"
+    assert "secret" not in text and "http" not in text and "payload" not in text
+
+
+def test_sanitize_exception_never_echoes_the_message() -> None:
+    exc = RuntimeError("api_key=sk-live-DEADBEEF at https://x.test?a=b payload=hi")
+    assert tracing.sanitize_exception(exc) == "RuntimeError"
+
+
+def test_sanitize_exception_rejects_an_unsafe_class_name() -> None:
+    BadName = type("BadName", (Exception,), {})
+    BadName.__name__ = "Bad Name\nwith newline"
+    assert tracing.sanitize_exception(BadName("boom")) == "Exception"
+
+
+def test_sanitize_status_drops_urls_and_long_tokens() -> None:
+    assert tracing._sanitize_status("https://api.smith.langchain.com/runs") is None
+    assert tracing._sanitize_status("x" * 64) is None
+    assert tracing._sanitize_status(429) == "429"
+    assert tracing._sanitize_status("invalid_api_key") == "invalid_api_key"

@@ -11,9 +11,9 @@ the decision is explicit, testable, and impossible to turn on by accident.
 
 Tracing here follows the same three rules as the rest of observability
 (§[`OBSERVABILITY.md`](OBSERVABILITY.md)): **dependency-free by default**
-(the SDK is an extra, never a core import), **off unless asked** (enabling it is an
-explicit egress decision), and **never fatal** (a tracing failure can never break a
-request).
+(the SDK ships with the core install, but core code never imports it at module
+top level), **off unless asked** (enabling it is an explicit egress decision),
+and **never fatal** (a tracing failure can never break a request).
 
 ---
 
@@ -33,24 +33,34 @@ do that silently.
 
 ## 2. The bootstrap
 
-`observability/tracing.py::configure_tracing` is pure with respect to its arguments
-and mutates the environment **only on the active path**, so a partial configuration
-can never leave a half-enabled state behind. It returns a typed `TracingState`
-(`active`, `reason`, `project`) rather than a bare boolean, so callers and tests can
-branch on *why*.
+`observability/tracing.py::configure_tracing` is deterministic with respect to its
+arguments: the environment is mutated on **every** path — the enable flags are set
+on the active path and *cleared* on every non-active path, and each non-active path
+also forces the SDK's process-global override to `False`. Because the SDK reads its
+env flags through a `functools.lru_cache`, clearing env vars alone cannot undo a read
+that already happened; the override is the cache-independent switch that guarantees a
+stale `LANGSMITH_TRACING`/`LANGCHAIN_TRACING_V2` cannot smuggle egress past the switch
+and that a partial configuration never leaves a half-enabled state behind. It returns
+a typed `TracingState` (`active`, `reason`, `project`) rather than a bare boolean, so
+callers and tests can branch on *why*.
 
 ```mermaid
 flowchart TD
     start["bootstrap_tracing(settings)"] --> enabled{"NEXUS_TRACING_ENABLED?"}
-    enabled -- no --> off["TracingState(disabled)<br/>nothing exported"]
+    enabled -- no --> off["clear SDK flags + override off<br/>TracingState(disabled)"]
     enabled -- yes --> sdk{"langsmith SDK importable?"}
-    sdk -- no --> nosdk["TracingState(sdk_missing)<br/>logged, not fatal"]
+    sdk -- no --> nosdk["clear SDK flags + override off<br/>TracingState(sdk_missing)<br/>logged, not fatal"]
     sdk -- yes --> key{"api key present?"}
-    key -- no --> nokey["TracingState(key_missing)<br/>logged, not fatal"]
-    key -- yes --> on["export LANGSMITH_TRACING/API_KEY/PROJECT/ENDPOINT<br/>TracingState(enabled)"]
+    key -- no --> nokey["clear SDK flags + override off<br/>TracingState(key_missing)<br/>logged, not fatal"]
+    key -- yes --> on["set LANGSMITH_TRACING/API_KEY/PROJECT/ENDPOINT<br/>clear legacy LANGCHAIN_* flags + release override<br/>TracingState(active)"]
     on --> anyfail{"any exception?"}
-    anyfail -- yes --> off2["TracingState(disabled)<br/>warning logged"]
+    anyfail -- yes --> off2["clear SDK flags + override off<br/>TracingState(disabled)<br/>warning logged"]
 ```
+
+The SDK resolves its enable flags through a `functools.lru_cache`, so the first read
+wins: `bootstrap_tracing` is a *startup* contract and must run once, early — before
+the first LangGraph/LangChain call. (The override above still makes a later
+*disabled* bootstrap effective, so a re-run is safe, not silently ignored.)
 
 `bootstrap_tracing(settings)` wraps `configure_tracing` in a broad guard: a tracing
 failure is an observability failure, and observability failures are never fatal here.
@@ -66,11 +76,16 @@ It is a *connectivity* check, not a unit test, so it fails **visible**, never gr
 |---|---|---|
 | `LANGSMITH_API_KEY` unset | `RESULT=SKIPPED_NO_SECRET` | 0 |
 | SDK missing | `RESULT=FAILED DETAIL=...` | 2 |
-| Endpoint refuses the key | `RESULT=FAILED DETAIL=<ErrorType>` | 1 |
+| Endpoint refuses the key | `RESULT=FAILED DETAIL=<ClassName> [status=<code>]` | 1 |
 | Trace accepted | `RESULT=OK` | 0 |
 
 A missing secret is a visible skip; a fabricated pass would be the exact lie this
-check exists to prevent. The workflow `.github/workflows/langsmith-smoke.yml` runs it
+check exists to prevent. The failure `DETAIL` is *allow-listed* — the exception
+class name and an optional status code only (`observability.tracing.sanitize_exception`),
+never `str(exc)`: SDK/HTTP error text can embed the key, the request URL (with
+credentials or query parameters) and the payload, so it is never echoed
+(`tests/unit/test_langsmith_smoke_safe_output.py` proves a sentinel-laden exception
+cannot leak). The workflow `.github/workflows/langsmith-smoke.yml` runs it
 on `workflow_dispatch` and on changes to the tracing module, script, or workflow.
 (It replaces the orphan `langsmith-connectivity-smoke-20261026.yml` registration whose
 branch was deleted, leaving a workflow with no source file.)
@@ -91,8 +106,9 @@ branch was deleted, leaving a workflow with no source file.)
 
 ## 5. Adding a traced surface
 
-1. Keep the SDK behind the `tracing` extra; never import `langsmith` at module top level
-   in core code (deptry fails the lint gate).
+1. Never import `langsmith` at module top level in core code (deptry fails the lint
+   gate); the SDK is present, but the runtime reaches it only through environment
+   variables that `bootstrap_tracing` sets.
 2. Call `bootstrap_tracing(settings)` once, at startup, after `configure_logging`.
 3. Do not read `TracingState` to gate business logic — tracing is observation only.
 4. If you add a traced surface worth verifying, extend `scripts/langsmith_smoke.py`

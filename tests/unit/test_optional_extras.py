@@ -307,7 +307,7 @@ def test_tracing_bootstrap_exports_when_the_sdk_is_present(monkeypatch: pytest.M
         project="leg-project",
         endpoint="https://api.smith.langchain.com",
     )
-    assert state.active is True and state.reason == "enabled"
+    assert state.active is True and state.reason == "active"
     assert os.environ["LANGSMITH_TRACING"] == "true"
 
 

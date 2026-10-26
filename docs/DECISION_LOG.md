@@ -2154,7 +2154,7 @@ decision and links back here (behaviour authority = this entry).
 
 **Decision.** LangGraph/LangChain trace through the `LANGSMITH_*` environment variables,
 so the runtime needs exactly one place that decides whether those traces leave the
-process. That place is `observability/tracing.py`, and it ships with four
+process. That place is `observability/tracing.py`, and it ships with a set of
 non-negotiable semantics: (1) **default off** — nothing is exported unless
 `NEXUS_TRACING_ENABLED=true`, because enabling tracing exports user prompts to a
 third party and the default must never do that silently; (2) **fail closed, never
@@ -2164,9 +2164,19 @@ error, so a tracing failure can never break startup (the same rule
 `observability/logging.py` follows); (3) **explicit egress surface** — the SDK
 (`langsmith`) already ships with the core install (it is pulled in transitively by
 `langgraph` → `langchain-core`), so there is no extra to install and no core import to
-add; the bootstrap exports the four `LANGSMITH_*` names only on the active path, so a
-partial configuration cannot leave a half-enabled state and the switch governs
-*egress*, not installation; (4) **visible
+add; the bootstrap sets the `LANGSMITH_*` names on the active path only, so a partial
+configuration cannot leave a half-enabled state and the switch governs *egress*, not
+installation; (3a) **the switch is the sole authority** — `NEXUS_TRACING_ENABLED` is
+the only thing that can turn tracing on, so every non-active outcome *clears* the
+SDK's enable flags (`LANGSMITH_TRACING`, `LANGCHAIN_TRACING_V2`, `LANGCHAIN_TRACING`,
+`LANGCHAIN_HANDLER`) *and* forces the SDK's process-global override
+(`langsmith._internal._context._GLOBAL_TRACING_ENABLED = False`), and the active path
+clears the legacy `LANGCHAIN_*` flags and releases the override: because the SDK reads
+its env flags through a `lru_cache`, the override is the cache-independent switch that
+stops a stale flag already in the process environment from smuggling egress past the
+switch; (4) **safe diagnostics** — the smoke reports an allow-listed
+`sanitize_exception()` (exception class + optional status code) and never `str(exc)`,
+because SDK/HTTP error text can embed the key, the URL and the payload; (5) **visible
 evidence** — `scripts/langsmith_smoke.py` proves the key can accept a real
 parent/child trace and fails *visible*: `RESULT=SKIPPED_NO_SECRET` (exit 0) when the
 secret is absent, `RESULT=FAILED` (non-zero) when the endpoint refuses it, never a

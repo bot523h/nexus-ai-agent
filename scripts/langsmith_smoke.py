@@ -9,7 +9,9 @@ fails *visible*, never *green*:
   and exit 0.  A missing secret is a visible skip; a fabricated pass would be
   the exact lie this check exists to prevent.
 * the key is present but the endpoint refuses it → ``RESULT=FAILED`` and a
-  non-zero exit, with the error *type* only (never the key, never the payload).
+  non-zero exit, with an *allow-listed* diagnostic only: the exception class
+  name and an optional status code (``sanitize_exception``).  The key, the URL
+  and the payload are never printed.
 
 The emitted ``RESULT=`` line is the evidence CI records.
 """
@@ -19,6 +21,8 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+
+from nexus_ai_agent.observability.tracing import sanitize_exception
 
 
 def _emit(result: str, detail: str = "") -> None:
@@ -63,7 +67,9 @@ def main() -> int:
         )
         client.flush()
     except Exception as exc:  # noqa: BLE001 - the whole point is to report any failure
-        _emit("FAILED", f"{type(exc).__name__}: {exc}")
+        # Allow-listed diagnostic only: class name + optional status code.  The
+        # key, URL and payload are never echoed (see sanitize_exception).
+        _emit("FAILED", sanitize_exception(exc))
         return 1
 
     _emit("OK", f"project={project}")
