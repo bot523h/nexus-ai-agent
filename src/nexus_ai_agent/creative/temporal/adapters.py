@@ -43,5 +43,5 @@ def timebase_to_dict(tb: Timebase) -> dict[str, Any]:
 def timebase_from_spec(spec: str | float | int | dict[str, Any] | Timebase) -> Timebase:
     """Reconstruct Timebase from spec or dictionary."""
     if isinstance(spec, dict):
-        return Timebase(spec["numerator"], spec["denominator"])
+        return Timebase(int(spec["numerator"]), int(spec["denominator"]))
     return FrameRateResolver.resolve(spec)

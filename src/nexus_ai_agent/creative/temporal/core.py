@@ -191,7 +191,7 @@ class FrameRateResolver:
             return Timebase(frac.numerator, frac.denominator)
 
         if isinstance(value, str):
-            clean = value.strip().lower().removesuffix("fps").removesuffix("hz").strip()
+            clean = value.strip().lower().removesuffix("fps").removesuffix("hz")
             if clean in cls._STANDARD_PROFILES:
                 return cls._STANDARD_PROFILES[clean]
             if "/" in clean:
