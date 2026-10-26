@@ -4057,7 +4057,7 @@
         "tests/integration/test_job_queue_heartbeat.py green on the claim head, proving: (a) a beating in-flight row is never a takeover/recover candidate regardless of started_at age, (b) a row silent past the window is recovered with today's exact semantics, (c) a row whose heartbeat cannot be proven fails closed and is never stolen",
         "the retained T1/T2 stale-attempt race proof: tests/integration/test_execution_native_backend.py, test_execution_races.py and test_in_process_job_queue.py stay green UNEDITED (read-only for this task)",
         "mutation probe: removing the heartbeat freshness check turns the new test RED, restoring it returns GREEN with the tree byte-identical (git diff --stat empty)",
-        "exact commands + observed results in the PR body ('tests pass' without a command is not evidence), and `python scripts/agent_board.py check --files <changed> --branch <branch>` exit 0 with every source readable; full lint/types/test deferred to the single gates owner"
+        "exact commands + observed results in the PR body ('tests pass' without a command is not evidence), and `python scripts/agent_board.py check --files <changed> --branch <branch>` exit 0 with every source readable; each implementation agent runs and records its own lint/types/test gates; gates_owner is optional and advisory"
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/adapters/in_process_job_queue.py",
