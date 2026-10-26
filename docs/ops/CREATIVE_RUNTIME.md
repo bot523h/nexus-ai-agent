@@ -140,6 +140,7 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import (
     resolve_ffmpeg_bin,
 )
 
+
 def _resolve_binary(name: str) -> str | None:
     if name == "ffmpeg":
         try:
@@ -149,6 +150,7 @@ def _resolve_binary(name: str) -> str | None:
     import shutil
 
     return shutil.which(name)
+
 
 rows = build_pack_runtime(activate=True).availability(resolve_binary=_resolve_binary)
 ```

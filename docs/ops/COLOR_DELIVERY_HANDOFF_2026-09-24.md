@@ -188,8 +188,7 @@ def _deband_denoise(project: Project, context: OperationContext) -> OperationOut
         )
     output_id = payload.output_asset_id or f"{payload.clip_asset_id}_deband"
     digest_seed = (
-        f"{clip_rec.content_sha256}:deband:{payload.quality_profile}:"
-        f"{payload.temporal_radius}"
+        f"{clip_rec.content_sha256}:deband:{payload.quality_profile}:{payload.temporal_radius}"
     )
     derived_sha256 = hashlib.sha256(digest_seed.encode("utf-8")).hexdigest()
     cleaned_record = AssetRecord(
