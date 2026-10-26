@@ -11,6 +11,12 @@ from nexus_ai_agent.observability.logging import get_logger
 
 log = get_logger(__name__)
 
+
+def _is_real_user_id(user_id: object) -> bool:
+    """Only a positive, non-bool integer may identify a speech caller."""
+    return isinstance(user_id, int) and not isinstance(user_id, bool) and user_id > 0
+
+
 # Supported TTS languages (most popular)
 TTS_LANGUAGES: dict[str, str] = {
     "fa": "فارسی (Persian)",
@@ -97,10 +103,17 @@ class SpeechEngine:
         *,
         lang: str = "fa",
         gemini_engine: Any = None,
+        user_id: int | None = None,
     ) -> dict[str, Any]:
         """Transcribe audio file using Gemini.
 
         Returns dict with: success, text, lang, error.
+
+        ``user_id`` is the real caller identity and is forwarded to the
+        Gemini metering layer.  A missing or ambiguous identity (``None``,
+        ``0``, a boolean, a non-integer, or a negative group id) fails closed
+        *before* any provider call — an anonymous request is never charged to
+        a shared bucket.
         """
         filepath = Path(audio_path)
         if not filepath.exists():
@@ -109,6 +122,15 @@ class SpeechEngine:
                 "text": "",
                 "lang": lang,
                 "error": "❌ فایل صوتی یافت نشد.",
+            }
+
+        if not _is_real_user_id(user_id):
+            # Fail closed: no valid identity ⇒ no provider call, no shared bucket.
+            return {
+                "success": False,
+                "text": "",
+                "lang": lang,
+                "error": "❌ شناسهٔ کاربر معتبر نیست.",
             }
 
         if gemini_engine is None or not gemini_engine.is_configured:
@@ -141,6 +163,7 @@ class SpeechEngine:
                 audio_bytes,
                 question=prompt,
                 mime_type=mime_type,
+                user_id=user_id,
             )
             return {
                 "success": True,
