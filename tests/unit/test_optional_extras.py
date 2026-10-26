@@ -294,28 +294,21 @@ def test_translate_leg_reports_available() -> None:
         _skip_without_leg("translate")
 
 
-def test_tracing_leg_enables_real_tracing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """On the `tracing` leg the SDK is present, so enabling must actually export."""
-    if LEG == "tracing":
-        importlib.import_module("langsmith")  # real import, not just find_spec
-        from nexus_ai_agent.observability.tracing import configure_tracing
+def test_tracing_bootstrap_exports_when_the_sdk_is_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The SDK ships with the core install (langgraph → langchain-core), so
+    enabling tracing must actually export the LANGSMITH_* env on every leg."""
+    from nexus_ai_agent.observability.tracing import configure_tracing
 
-        for name in ("LANGSMITH_TRACING", "LANGSMITH_API_KEY", "LANGSMITH_PROJECT"):
-            monkeypatch.delenv(name, raising=False)
-        state = configure_tracing(
-            enabled=True,
-            api_key="leg-key",
-            project="leg-project",
-            endpoint="https://api.smith.langchain.com",
-        )
-        assert state.active is True and state.reason == "enabled"
-        assert os.environ["LANGSMITH_TRACING"] == "true"
-    elif LEG is None and _module_available("langsmith"):
-        from nexus_ai_agent.observability.tracing import configure_tracing
-
-        assert configure_tracing(enabled=False, api_key=None, project="p").reason == "disabled"
-    else:
-        _skip_without_leg("tracing")
+    for name in ("LANGSMITH_TRACING", "LANGSMITH_API_KEY", "LANGSMITH_PROJECT"):
+        monkeypatch.delenv(name, raising=False)
+    state = configure_tracing(
+        enabled=True,
+        api_key="leg-key",
+        project="leg-project",
+        endpoint="https://api.smith.langchain.com",
+    )
+    assert state.active is True and state.reason == "enabled"
+    assert os.environ["LANGSMITH_TRACING"] == "true"
 
 
 # --------------------------------------------------------------------------- #

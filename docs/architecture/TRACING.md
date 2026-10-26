@@ -25,7 +25,7 @@ request).
 | Key | `NEXUS_TRACING_API_KEY` (falls back to `LANGSMITH_API_KEY`) |
 | Project | `NEXUS_TRACING_PROJECT` (default `nexus-ai-agent`; falls back to `LANGSMITH_PROJECT`) |
 | Endpoint | `NEXUS_TRACING_ENDPOINT` (default `https://api.smith.langchain.com`) |
-| SDK | `pip install "nexus-ai-agent[tracing]"` (pins `langsmith==0.14.12`) |
+| SDK | `langsmith` (ships with the core install: `langgraph` → `langchain-core`) |
 
 Tracing is **off** unless the enable flag is set. Turning it on is a deliberate
 choice because it exports user prompts to a third party; the default must never

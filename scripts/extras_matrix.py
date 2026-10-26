@@ -128,12 +128,6 @@ LEG_DEFINITIONS: dict[str, LegDefinition] = {
         import_modules=("argostranslate",),
         focused_tests=("tests/unit/test_caption_engine_adapters.py (argos adapter)",),
     ),
-    "tracing": LegDefinition(
-        extra="tracing",
-        requirements=("langsmith==0.14.12",),
-        import_modules=("langsmith",),
-        focused_tests=("tests/unit/test_tracing_bootstrap.py (enabled+SDK path traces for real)",),
-    ),
 }
 
 CORE_LEG = "core"

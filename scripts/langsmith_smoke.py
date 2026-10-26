@@ -37,7 +37,7 @@ def main() -> int:
     try:
         from langsmith import Client
     except ImportError:
-        _emit("FAILED", "langsmith SDK not installed (pip install '.[tracing]')")
+        _emit("FAILED", "langsmith SDK not installed (it ships with the core install)")
         return 2
 
     project = os.environ.get("LANGSMITH_PROJECT", "nexus-ai-agent-smoke")
