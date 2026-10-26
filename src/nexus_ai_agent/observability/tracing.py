@@ -99,17 +99,17 @@ def _clear_tracing_flags() -> None:
 
 
 def _set_sdk_override(enabled: bool | None) -> None:
-    """Best-effort: set the SDK's process-global tracing override.
+    """Set the SDK's process-global tracing override to ``enabled`` (or ``None``).
 
     ``langsmith.tracing_is_enabled()`` decides in this order: a per-context
     override, the current run tree, a process-global override, then the
     environment.  The environment read is ``functools.lru_cache``d, so clearing
     env vars cannot undo a read that already happened — the process-global
-    override is the only cache-independent switch.  ``False`` forces off,
-    ``None`` clears the override.  Reached through ``importlib`` (never a
-    top-level ``import langsmith``) so ``deptry`` does not treat a transitive
-    dependency as a direct one; a missing attribute on SDK drift degrades to
-    env-only behaviour rather than raising.
+    override (checked *before* the env) is the only cache-independent switch, and
+    the bootstrap drives it in both directions.  Reached through ``importlib``
+    (never a top-level ``import langsmith``) so ``deptry`` does not treat a
+    transitive dependency as a direct one; if the attribute is missing on SDK
+    drift this degrades to env-only behaviour rather than raising.
     """
     try:
         import importlib
@@ -214,9 +214,9 @@ def configure_tracing(
     os.environ["LANGSMITH_ENDPOINT"] = endpoint
     for name in ("LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING", "LANGCHAIN_HANDLER"):
         os.environ.pop(name, None)
-    # Release any "off" override left by an earlier disabled bootstrap so the SDK
-    # falls through to the (now true) environment.
-    _set_sdk_override(None)
+    # Force the process-global override on, so the switch wins even over a warm
+    # (stale) SDK env cache; the disabled path forces it off symmetrically.
+    _set_sdk_override(True)
     logger.info("tracing_enabled", project=project, endpoint=endpoint)
     return TracingState(active=True, reason="active", project=project)
 

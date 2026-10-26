@@ -34,15 +34,15 @@ do that silently.
 ## 2. The bootstrap
 
 `observability/tracing.py::configure_tracing` is deterministic with respect to its
-arguments: the environment is mutated on **every** path — the enable flags are set
-on the active path and *cleared* on every non-active path, and each non-active path
-also forces the SDK's process-global override to `False`. Because the SDK reads its
-env flags through a `functools.lru_cache`, clearing env vars alone cannot undo a read
-that already happened; the override is the cache-independent switch that guarantees a
-stale `LANGSMITH_TRACING`/`LANGCHAIN_TRACING_V2` cannot smuggle egress past the switch
-and that a partial configuration never leaves a half-enabled state behind. It returns
-a typed `TracingState` (`active`, `reason`, `project`) rather than a bare boolean, so
-callers and tests can branch on *why*.
+arguments: the environment is mutated on **every** path and the SDK's process-global
+override is forced to match — `False` on every non-active path, `True` on the active
+path. Because the SDK reads its env flags through a `functools.lru_cache`, clearing
+env vars alone cannot undo a read that already happened; the override (checked *before*
+the env) is the cache-independent switch that makes the outcome authoritative in both
+directions — a stale `LANGSMITH_TRACING`/`LANGCHAIN_TRACING_V2` cannot smuggle egress
+past the switch, and a primed SDK cannot ignore an enable. It returns a typed
+`TracingState` (`active`, `reason`, `project`) rather than a bare boolean, so callers
+and tests can branch on *why*.
 
 ```mermaid
 flowchart TD
@@ -52,7 +52,7 @@ flowchart TD
     sdk -- no --> nosdk["clear SDK flags + override off<br/>TracingState(sdk_missing)<br/>logged, not fatal"]
     sdk -- yes --> key{"api key present?"}
     key -- no --> nokey["clear SDK flags + override off<br/>TracingState(key_missing)<br/>logged, not fatal"]
-    key -- yes --> on["set LANGSMITH_TRACING/API_KEY/PROJECT/ENDPOINT<br/>clear legacy LANGCHAIN_* flags + release override<br/>TracingState(active)"]
+    key -- yes --> on["set LANGSMITH_TRACING/API_KEY/PROJECT/ENDPOINT<br/>clear legacy LANGCHAIN_* flags + override on<br/>TracingState(active)"]
     on --> anyfail{"any exception?"}
     anyfail -- yes --> off2["clear SDK flags + override off<br/>TracingState(disabled)<br/>warning logged"]
 ```

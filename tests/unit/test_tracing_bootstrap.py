@@ -41,13 +41,26 @@ LANGSMITH_ENV = (
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> object:
     for name in LANGSMITH_ENV:
         monkeypatch.delenv(name, raising=False)
+    # The SDK's process-global override is a real module global; reset it on both
+    # sides so neither this module nor a neighbour can leak "off"/"on" state.
+    _reset_sdk_override()
     yield
-    # The SDK's process-global override is a real module global; reset it so one
-    # test cannot leak "off"/"on" into the next.
+    _reset_sdk_override()
+
+
+def _reset_sdk_override() -> None:
     try:
         context = importlib.import_module("langsmith._internal._context")
         context._GLOBAL_TRACING_ENABLED = None
     except Exception:  # noqa: BLE001 - the SDK may be absent; nothing to reset
+        pass
+
+
+def _clear_sdk_env_cache() -> None:
+    """Drop the SDK's ``lru_cache``d env reads so a test controls what it sees."""
+    try:
+        importlib.import_module("langsmith.utils").get_env_var.cache_clear()
+    except Exception:  # noqa: BLE001 - the SDK may be absent
         pass
 
 
@@ -151,20 +164,31 @@ def test_real_sdk_path_exports_and_is_importable(monkeypatch: pytest.MonkeyPatch
 def test_disabled_bootstrap_stops_a_real_sdk_that_was_already_tracing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The boundary must hold even after the SDK cached the env: a disabled
-    bootstrap forces tracing off through the SDK's cache-independent override."""
+    """The switch wins over a warm (stale) SDK env cache, in both directions.
+
+    ``langsmith.tracing_is_enabled`` reads its env flags through a
+    ``functools.lru_cache``, so an earlier read (in this test or a neighbour)
+    freezes the env answer.  The bootstrap must therefore drive the SDK's
+    process-global override, which is checked *before* the env — otherwise a
+    disabled bootstrap could not turn a primed SDK back off.
+    """
     if not _sdk_present():
         pytest.skip("langsmith not installed; it ships with the core install")
     from importlib import import_module
 
     tracing_is_enabled = import_module("langsmith.utils").tracing_is_enabled
 
+    # Prime the SDK's cached env read as "on" (this is what happens when the
+    # ambient environment has a stale LANGSMITH_TRACING=true).
     monkeypatch.setenv("LANGSMITH_TRACING", "true")
-    assert tracing_is_enabled() is True  # prime the SDK's cached env read
+    _clear_sdk_env_cache()
+    assert tracing_is_enabled() is True
 
+    # A disabled bootstrap must now force it back off, cache notwithstanding.
     assert tracing.configure_tracing(enabled=False, api_key="k", project="p").reason == "disabled"
     assert tracing_is_enabled() is False
 
+    # ...and an enabled bootstrap must force it on again, symmetrically.
     assert tracing.configure_tracing(enabled=True, api_key="k", project="p").active is True
     assert tracing_is_enabled() is True
 

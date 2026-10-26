@@ -2171,10 +2171,12 @@ the only thing that can turn tracing on, so every non-active outcome *clears* th
 SDK's enable flags (`LANGSMITH_TRACING`, `LANGCHAIN_TRACING_V2`, `LANGCHAIN_TRACING`,
 `LANGCHAIN_HANDLER`) *and* forces the SDK's process-global override
 (`langsmith._internal._context._GLOBAL_TRACING_ENABLED = False`), and the active path
-clears the legacy `LANGCHAIN_*` flags and releases the override: because the SDK reads
-its env flags through a `lru_cache`, the override is the cache-independent switch that
-stops a stale flag already in the process environment from smuggling egress past the
-switch; (4) **safe diagnostics** — the smoke reports an allow-listed
+clears the legacy `LANGCHAIN_*` flags and forces the override *on*: because the SDK
+reads its env flags through a `lru_cache`, the override (checked before the env) is the
+cache-independent switch that makes the outcome authoritative in both directions —
+stopping a stale flag already in the process environment from smuggling egress past the
+switch, and stopping a primed SDK from ignoring an enable; (4) **safe diagnostics** —
+the smoke reports an allow-listed
 `sanitize_exception()` (exception class + optional status code) and never `str(exc)`,
 because SDK/HTTP error text can embed the key, the URL and the payload; (5) **visible
 evidence** — `scripts/langsmith_smoke.py` proves the key can accept a real
