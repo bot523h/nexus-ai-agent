@@ -30,12 +30,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-import nexus_ai_agent.agent.approval as approval_module
 import pytest
+from sqlmodel import select
+
+import nexus_ai_agent.agent.approval as approval_module
 from nexus_ai_agent.agent.approval import ApprovalSystem
 from nexus_ai_agent.storage.db import get_session as real_get_session
 from nexus_ai_agent.storage.models import PendingApproval
-from sqlmodel import select
 
 REPO_ROOT = Path(__file__).parents[2]
 AMBIENT_DB = Path("data") / "app.sqlite"
