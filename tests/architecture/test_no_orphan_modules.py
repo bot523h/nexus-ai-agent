@@ -28,6 +28,7 @@ PACKAGE = "nexus_ai_agent"
 ENTRY_POINTS: dict[str, str] = {
     f"{PACKAGE}.cli": "console script `nexus` (pyproject [project.scripts])",
     f"{PACKAGE}.api.app": "ASGI target `nexus_ai_agent.api.app:app` (uvicorn, Dockerfile, compose)",
+    f"{PACKAGE}.nagar.__main__": "`python -m nexus_ai_agent.nagar` truth generator and --check",
 }
 
 #: Files whose imports count as "reaching" a module.
