@@ -297,18 +297,40 @@ def test_translate_leg_reports_available() -> None:
 def test_tracing_bootstrap_exports_when_the_sdk_is_present(monkeypatch: pytest.MonkeyPatch) -> None:
     """The SDK ships with the core install (langgraph → langchain-core), so
     enabling tracing must actually export the LANGSMITH_* env on every leg."""
-    from nexus_ai_agent.observability.tracing import configure_tracing
+    from nexus_ai_agent.observability import tracing
 
-    for name in ("LANGSMITH_TRACING", "LANGSMITH_API_KEY", "LANGSMITH_PROJECT"):
-        monkeypatch.delenv(name, raising=False)
-    state = configure_tracing(
-        enabled=True,
-        api_key="leg-key",
-        project="leg-project",
-        endpoint="https://api.smith.langchain.com",
+    names = (
+        "LANGSMITH_TRACING",
+        "LANGSMITH_API_KEY",
+        "LANGSMITH_PROJECT",
+        "LANGSMITH_ENDPOINT",
+        "LANGCHAIN_TRACING_V2",
+        "LANGCHAIN_TRACING",
+        "LANGCHAIN_HANDLER",
     )
-    assert state.active is True and state.reason == "active"
-    assert os.environ["LANGSMITH_TRACING"] == "true"
+    for name in names:
+        # setenv first so monkeypatch records "unset" as the state to restore.
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+    try:
+        state = tracing.configure_tracing(
+            enabled=True,
+            api_key="leg-key",
+            project="leg-project",
+            endpoint="https://api.smith.langchain.com",
+        )
+        assert state.active is True and state.reason == "active"
+        assert os.environ["LANGSMITH_TRACING"] == "true"
+    finally:
+        # ``configure_tracing`` writes os.environ directly and flips the SDK's
+        # process-global override; leave neither behind for the next test/module.
+        for name in names:
+            os.environ.pop(name, None)
+        try:
+            context = importlib.import_module("langsmith._internal._context")
+            context._GLOBAL_TRACING_ENABLED = None
+        except Exception:  # noqa: BLE001 - the SDK may be absent; nothing to reset
+            pass
 
 
 # --------------------------------------------------------------------------- #

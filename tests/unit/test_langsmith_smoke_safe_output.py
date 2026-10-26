@@ -123,3 +123,31 @@ def test_success_path_emits_ok_with_synthetic_data(monkeypatch: pytest.MonkeyPat
     assert code == 0
     assert "RESULT=OK" in combined
     assert len(calls) == 2  # a parent/child pair proves trace ingest
+
+
+def test_background_ingestion_failure_is_not_a_false_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``create_run`` returns before the collector accepts a batch; an error the
+    SDK reports through ``tracing_error_callback`` during ``flush`` must fail the
+    smoke, not print RESULT=OK."""
+    smoke = _load_smoke()
+
+    class _BatchedClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self._on_error = kwargs["tracing_error_callback"]
+
+        def create_run(self, **kwargs: object) -> None:
+            pass
+
+        def flush(self) -> None:
+            self._on_error(RuntimeError(f"collector rejected key={SENTINEL_KEY}"))
+
+    fake = types.ModuleType("langsmith")
+    fake.Client = _BatchedClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "langsmith", fake)
+    monkeypatch.setenv("LANGSMITH_API_KEY", SENTINEL_KEY)
+
+    code, combined = _run(smoke)
+    assert code == 1
+    assert "RESULT=FAILED" in combined
+    for sentinel in SENTINELS:
+        assert sentinel not in combined

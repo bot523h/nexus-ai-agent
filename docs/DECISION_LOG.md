@@ -2167,7 +2167,9 @@ error, so a tracing failure can never break startup (the same rule
 add; the bootstrap sets the `LANGSMITH_*` names on the active path only, so a partial
 configuration cannot leave a half-enabled state and the switch governs *egress*, not
 installation; (3a) **the switch is the sole authority** — `NEXUS_TRACING_ENABLED` is
-the only thing that can turn tracing on, so every non-active outcome *clears* the
+the only thing that can turn tracing on (it has no `TRACING_ENABLED` fallback, unlike
+the key/project/endpoint, so there is no accidental second switch), so every non-active
+outcome *clears* the
 SDK's enable flags (`LANGSMITH_TRACING`, `LANGCHAIN_TRACING_V2`, `LANGCHAIN_TRACING`,
 `LANGCHAIN_HANDLER`) *and* forces the SDK's process-global override
 (`langsmith._internal._context._GLOBAL_TRACING_ENABLED = False`), and the active path
@@ -2175,14 +2177,18 @@ clears the legacy `LANGCHAIN_*` flags and forces the override *on*: because the 
 reads its env flags through a `lru_cache`, the override (checked before the env) is the
 cache-independent switch that makes the outcome authoritative in both directions —
 stopping a stale flag already in the process environment from smuggling egress past the
-switch, and stopping a primed SDK from ignoring an enable; (4) **safe diagnostics** —
+switch, and stopping a primed SDK from ignoring an enable; the override helper reports
+whether it applied and the disabled path *warns* if the SDK attribute is gone (SDK
+drift), rather than silently losing the fail-closed guarantee; (4) **safe diagnostics** —
 the smoke reports an allow-listed
 `sanitize_exception()` (exception class + optional status code) and never `str(exc)`,
 because SDK/HTTP error text can embed the key, the URL and the payload; (5) **visible
 evidence** — `scripts/langsmith_smoke.py` proves the key can accept a real
 parent/child trace and fails *visible*: `RESULT=SKIPPED_NO_SECRET` (exit 0) when the
 secret is absent, `RESULT=FAILED` (non-zero) when the endpoint refuses it, never a
-fabricated pass.
+fabricated pass; because `langsmith.Client` batches in the background, the smoke
+registers the SDK's `tracing_error_callback` and flushes before trusting the result,
+so an ingestion-time rejection fails the smoke instead of printing a false `RESULT=OK`.
 
 **Alternatives rejected.** *Always-on tracing* — rejected: silent egress of prompt
 text to a third party is the failure the switch exists to prevent. *Make tracing

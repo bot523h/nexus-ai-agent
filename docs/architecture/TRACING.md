@@ -27,9 +27,11 @@ and **never fatal** (a tracing failure can never break a request).
 | Endpoint | `NEXUS_TRACING_ENDPOINT` (default `https://api.smith.langchain.com`) |
 | SDK | `langsmith` (ships with the core install: `langgraph` → `langchain-core`) |
 
-Tracing is **off** unless the enable flag is set. Turning it on is a deliberate
-choice because it exports user prompts to a third party; the default must never
-do that silently.
+Tracing is **off** unless the enable flag is set, and `NEXUS_TRACING_ENABLED` is the
+*only* name that turns it on — unlike the key/project/endpoint, there is no
+`TRACING_ENABLED` fallback, because an accidental second switch would defeat the
+default-off guarantee. Turning it on is a deliberate choice because it exports user
+prompts to a third party; the default must never do that silently.
 
 ## 2. The bootstrap
 
@@ -85,7 +87,10 @@ class name and an optional status code only (`observability.tracing.sanitize_exc
 never `str(exc)`: SDK/HTTP error text can embed the key, the request URL (with
 credentials or query parameters) and the payload, so it is never echoed
 (`tests/unit/test_langsmith_smoke_safe_output.py` proves a sentinel-laden exception
-cannot leak). The workflow `.github/workflows/langsmith-smoke.yml` runs it
+cannot leak). Because `langsmith.Client` batches in the background, the smoke registers
+the SDK's `tracing_error_callback` and `flush()`es before trusting the result, so a
+collector that rejects the batch during ingestion fails the smoke instead of printing
+a false `RESULT=OK`. The workflow `.github/workflows/langsmith-smoke.yml` runs it
 on `workflow_dispatch` and on changes to the tracing module, script, or workflow.
 (It replaces the orphan `langsmith-connectivity-smoke-20261026.yml` registration whose
 branch was deleted, leaving a workflow with no source file.)

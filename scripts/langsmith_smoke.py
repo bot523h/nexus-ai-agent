@@ -48,7 +48,16 @@ def main() -> int:
     endpoint = os.environ.get("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
     trace_id = uuid.uuid4()
     try:
-        client = Client(api_key=api_key, api_url=endpoint)
+        # ``Client`` batches in the background, so ``create_run`` can return
+        # before the collector accepts anything.  Capture the SDK's tracing
+        # errors and flush before trusting the result — otherwise a rejected
+        # collector would still print RESULT=OK.
+        tracing_errors: list[Exception] = []
+        client = Client(
+            api_key=api_key,
+            api_url=endpoint,
+            tracing_error_callback=tracing_errors.append,
+        )
         # A parent/child pair exercises the real run-ingest path the runtime
         # would use — a single ping would not prove trace ingest works.
         client.create_run(
@@ -66,6 +75,8 @@ def main() -> int:
             project_name=project,
         )
         client.flush()
+        if tracing_errors:
+            raise tracing_errors[0]
     except Exception as exc:  # noqa: BLE001 - the whole point is to report any failure
         # Allow-listed diagnostic only: class name + optional status code.  The
         # key, URL and payload are never echoed (see sanitize_exception).

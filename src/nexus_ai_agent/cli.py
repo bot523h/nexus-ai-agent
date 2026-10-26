@@ -1738,8 +1738,10 @@ def smoke(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full state"),
 ) -> None:
     """Run the full AI graph without Telegram (for testing)."""
+    from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
     from nexus_ai_agent.memory.long_term import LongTermMemory
+    from nexus_ai_agent.observability.tracing import bootstrap_tracing
     from nexus_ai_agent.orchestration.graph import compile_graph
     from nexus_ai_agent.orchestration.state import NexusState
     from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
@@ -1749,6 +1751,11 @@ def smoke(
         WriteFileTool,
     )
     from nexus_ai_agent.tools.registry import ToolRegistry
+
+    # task-274: this path also drives the graph, so it must enforce the same
+    # fail-closed tracing contract as ``run`` (a stale LANGSMITH_TRACING=true
+    # must not silently enable egress here).
+    bootstrap_tracing(get_settings())
 
     llm = FakeLLMProvider()
     os.environ["NEXUS_WORKSPACE_ROOT"] = "."

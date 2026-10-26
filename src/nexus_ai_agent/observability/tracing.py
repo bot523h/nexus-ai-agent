@@ -98,8 +98,8 @@ def _clear_tracing_flags() -> None:
         os.environ.pop(name, None)
 
 
-def _set_sdk_override(enabled: bool | None) -> None:
-    """Set the SDK's process-global tracing override to ``enabled`` (or ``None``).
+def _set_sdk_override(enabled: bool | None) -> bool:
+    """Set the SDK's process-global tracing override; report whether it applied.
 
     ``langsmith.tracing_is_enabled()`` decides in this order: a per-context
     override, the current run tree, a process-global override, then the
@@ -108,22 +108,34 @@ def _set_sdk_override(enabled: bool | None) -> None:
     override (checked *before* the env) is the only cache-independent switch, and
     the bootstrap drives it in both directions.  Reached through ``importlib``
     (never a top-level ``import langsmith``) so ``deptry`` does not treat a
-    transitive dependency as a direct one; if the attribute is missing on SDK
-    drift this degrades to env-only behaviour rather than raising.
+    transitive dependency as a direct one.
+
+    Returns ``True`` only when the SDK actually holds the attribute and the
+    assignment succeeded; on SDK drift (a renamed/removed attribute) it returns
+    ``False`` so the caller can warn — silently creating an unused global would
+    hide the loss of the fail-closed guarantee.
     """
     try:
         import importlib
 
         context = importlib.import_module("langsmith._internal._context")
-        vars(context)["_GLOBAL_TRACING_ENABLED"] = enabled
+        if not hasattr(context, "_GLOBAL_TRACING_ENABLED"):
+            return False
+        context._GLOBAL_TRACING_ENABLED = enabled  # type: ignore[attr-defined]
+        return True
     except Exception:  # noqa: BLE001 - best-effort; env-only fallback is still correct
-        pass
+        return False
 
 
 def _deactivate_tracing() -> None:
     """Make tracing unambiguously off: clear env flags and force the SDK override."""
     _clear_tracing_flags()
-    _set_sdk_override(False)
+    if not _set_sdk_override(False):
+        logger.warning(
+            "tracing_override_unavailable",
+            hint="langsmith._GLOBAL_TRACING_ENABLED missing; "
+            "a warm SDK env cache may still trace until restart",
+        )
 
 
 def _sanitize_class_name(name: object) -> str:

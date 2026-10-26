@@ -501,7 +501,7 @@ class Settings(BaseSettings):
     # degrades to a logged no-op instead of raising.
     tracing_enabled: bool = Field(
         default=False,
-        validation_alias=AliasChoices("NEXUS_TRACING_ENABLED", "TRACING_ENABLED"),
+        validation_alias="NEXUS_TRACING_ENABLED",
     )
     tracing_api_key: str | None = Field(
         default=None,

@@ -40,12 +40,19 @@ LANGSMITH_ENV = (
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> object:
     for name in LANGSMITH_ENV:
-        monkeypatch.delenv(name, raising=False)
-    # The SDK's process-global override is a real module global; reset it on both
-    # sides so neither this module nor a neighbour can leak "off"/"on" state.
+        # setenv first so monkeypatch records "unset" as the state to restore;
+        # ``configure_tracing`` writes ``os.environ`` directly, and a bare
+        # ``delenv`` on an absent name records no undo.
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+    # The SDK's process-global override is a real module global and its env read
+    # is ``lru_cache``d; reset both on each side so neither this module nor a
+    # neighbour can leak "off"/"on" state.
     _reset_sdk_override()
+    _clear_sdk_env_cache()
     yield
     _reset_sdk_override()
+    _clear_sdk_env_cache()
 
 
 def _reset_sdk_override() -> None:
@@ -276,3 +283,26 @@ def test_sanitize_status_drops_urls_and_long_tokens() -> None:
     assert tracing._sanitize_status("x" * 64) is None
     assert tracing._sanitize_status(429) == "429"
     assert tracing._sanitize_status("invalid_api_key") == "invalid_api_key"
+
+
+# --------------------------------------------------------------------------- #
+# 6. the override reports whether it actually applied (fail-closed evidence)
+# --------------------------------------------------------------------------- #
+def test_set_sdk_override_reports_success_and_absence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The off switch must report honestly: ``False`` on SDK drift (no silent
+    false-green), ``True`` when the SDK's global is really set."""
+    import importlib
+
+    if not _sdk_present():
+        pytest.skip("langsmith not installed; it ships with the core install")
+    context = importlib.import_module("langsmith._internal._context")
+
+    assert tracing._set_sdk_override(False) is True
+    assert context._GLOBAL_TRACING_ENABLED is False
+
+    monkeypatch.delattr(context, "_GLOBAL_TRACING_ENABLED", raising=False)
+    assert tracing._set_sdk_override(False) is False
+    # ...and it did not silently re-create an unused global.
+    assert not hasattr(context, "_GLOBAL_TRACING_ENABLED")
