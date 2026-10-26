@@ -112,33 +112,75 @@ async def _executor_agent(
         state["tool_results"] = state.get("tool_results", [])
         return state
 
+    def _confirmation_refusal(tool_name: str) -> NexusState:
+        """Typed, truthful refusal for a tool that the registry did not run."""
+        error_code = "confirmation_required"
+        message = f"Confirmation required before tool '{tool_name}' can run. The tool did not run."
+        first_pending["status"] = "failed"
+        state["tool_results"] = state.get("tool_results", []) + [
+            {
+                "step_id": first_pending.get("id"),
+                "tool": tool_name,
+                "success": False,
+                "error_code": error_code,
+                "output": message,
+                "error": message,
+            }
+        ]
+        state["error"] = f"{error_code}: {message}"
+        state["response"] = message
+        state["current_task"] = task
+        return state
+
     tool_name = first_pending.get("tool")
     if tool_registry and tool_name:
         tool_inputs = first_pending.get("inputs", {})
+        # A confirmation is an explicit, one-shot boolean attached to THIS
+        # pending step by a trusted caller; it is never inferred from free text.
+        confirmed = first_pending.pop("confirmed", None) is True
+        policy = {"confirmed": True} if confirmed else None
         try:
-            res = await tool_registry.run(tool_name, tool_inputs)
-            is_success = res.get("success", False)
+            res = await tool_registry.run(tool_name, tool_inputs, policy=policy)
+            if res.get("needs_confirmation"):
+                # The registry's GUARDED refusal has no "success" key.  The
+                # tool body did not run, so never emit an "executed" claim.
+                return _confirmation_refusal(tool_name)
+
+            is_success = res.get("success") is True
             first_pending["status"] = "done" if is_success else "failed"
             output_text = res.get("output", "") or res.get("error", "")
-            state["tool_results"] = state.get("tool_results", []) + [
-                {
-                    "step_id": first_pending.get("id"),
-                    "tool": tool_name,
-                    "success": is_success,
-                    "output": output_text,
-                }
-            ]
-            state["response"] = output_text or f"Tool {tool_name} executed."
-        except Exception as e:
+            tool_result: dict[str, Any] = {
+                "step_id": first_pending.get("id"),
+                "tool": tool_name,
+                "success": is_success,
+                "output": output_text,
+            }
+            if not is_success:
+                tool_result["error_code"] = "tool_failure"
+            state["tool_results"] = state.get("tool_results", []) + [tool_result]
+            if is_success:
+                state["response"] = output_text or f"Tool {tool_name} executed."
+            else:
+                # A failed tool with empty output must not become "executed.".
+                state["response"] = (
+                    res.get("error")
+                    or output_text
+                    or f"Tool {tool_name} did not complete successfully."
+                )
+                state["error"] = f"tool_failure: {state['response']}"
+        except Exception as e:  # noqa: BLE001 - command boundary reports failures
             first_pending["status"] = "failed"
             state["tool_results"] = state.get("tool_results", []) + [
                 {
                     "step_id": first_pending.get("id"),
                     "tool": tool_name,
                     "success": False,
+                    "error_code": "tool_exception",
                     "output": str(e),
+                    "error": str(e),
                 }
             ]
+            state["error"] = f"tool_exception: {e}"
             state["response"] = f"Failed to execute {tool_name}: {e}"
     else:
         # A plan without a registered executable tool is not an execution.
@@ -154,6 +196,7 @@ async def _executor_agent(
                 "success": False,
                 "error_code": error_code,
                 "output": message,
+                "error": message,
             }
         ]
         state["error"] = f"{error_code}: {message}"
