@@ -4181,7 +4181,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".github/DEPENDENCY_MATRIX.md",
         ".github/workflows/ci.yml",
         "CHANGELOG.md",
@@ -4251,7 +4250,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "docs/DECISION_LOG.md",
         "docs/README.md",
         "docs/architecture/RESEARCH_V2_P1_P2.md",
@@ -4295,7 +4293,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "src/nexus_ai_agent/api/app.py",
         "src/nexus_ai_agent/bot/access_guard.py",
         "src/nexus_ai_agent/core/ssrf_guard.py",
@@ -4385,7 +4382,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "docs/DECISION_LOG.md",
         "docs/architecture/OBSERVABILITY_M0.md",
         "docs/architecture/RELIABILITY_M0.md",
@@ -4444,7 +4440,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".env.example",
         ".github/workflows/ci.yml",
         "CHANGELOG.md",
@@ -4576,7 +4571,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "CHANGELOG.md",
         "docs/DECISION_LOG.md",
         "docs/NAGAR_70_OPERATIONS_TDD.md",
@@ -4705,7 +4699,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".github/workflows/ci.yml",
         "OPERATION_TRUTH.json",
         "docs/L0_L4_MATURITY.md",
@@ -4755,7 +4748,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".github/PULL_REQUEST_TEMPLATE.md",
         ".github/workflows/ci.yml",
         "AGENTS.md",
@@ -4800,7 +4792,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "NAGAR_AGENT_03_FINAL_2026-09-25.md",
         "NAGAR_MASTER_SESSION_2026-09-25.md",
         "docs/architecture/SECURITY.md",
@@ -4840,7 +4831,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "FORENSIC_REPORT_task122.md",
         "src/nexus_ai_agent/bot/handlers.py",
         "src/nexus_ai_agent/features/moderation.py",
@@ -4877,7 +4867,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".github/workflows/maintenance.yml",
         "OWNER_MASTER_AUDIT_2026-09-26.md",
         "README.md",
@@ -5045,7 +5034,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "src/nexus_ai_agent/agents/store/agent_manager.py",
         "src/nexus_ai_agent/application/runtime.py",
         "src/nexus_ai_agent/bot/app.py",
@@ -5180,7 +5168,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".github/workflows/publication-frontier.yml",
         ".github/workflows/wheel-contract.yml",
         "AGENTS.md",
@@ -5251,7 +5238,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "W2_GOLDEN_PROOF_2026-09-28.md",
         "W2_LLM_GATEWAY_TRUTH_REPORT_2026-09-28.md",
         "docs/DECISION_LOG.md",
@@ -5333,7 +5319,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "docs/README.md",
         "docs/audits/2026-09-28-value-engineering-and-differentiation.md",
         "scripts/memory_retrieval_mutations.py",
@@ -5424,7 +5409,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "src/nexus_ai_agent/creative/studio/__init__.py",
         "src/nexus_ai_agent/creative/studio/bus.py",
         "src/nexus_ai_agent/creative/studio/capabilities.py",
@@ -5545,7 +5529,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "docs/MULTI_AGENT_PROTOCOL.md",
         "docs/README.md",
         "docs/architecture/adr/0012-board-composition-and-evidence-governance.md",
@@ -5660,7 +5643,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "src/nexus_ai_agent/continuum/pack_coverage.py",
         "src/nexus_ai_agent/creative/packs/delivery/operations.py",
         "src/nexus_ai_agent/creative/temporal/__init__.py",
@@ -5702,7 +5684,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".github/workflows/security_remote_key.yml",
         ".github/workflows/security_stop_b.yml",
         ".github/workflows/security_stop_c.yml",
@@ -5783,7 +5764,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "docs/DECISION_LOG.md",
         "src/nexus_ai_agent/bot/agent_intelligence_surface.py",
         "src/nexus_ai_agent/bot/app.py",
@@ -5842,7 +5822,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".github/workflows/ci.yml",
         "AGENTS.md",
         "BOOTSTRAP_ATTESTATION.md",
@@ -5896,7 +5875,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".agents/evidence/GOVERNANCE_GITHUB_2026-10-07.json",
         ".agents/evidence/PR_CONVERGENCE_2026-10-07.json",
         ".github/workflows/ci.yml",
@@ -5951,7 +5929,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".github/DEPENDENCY_MATRIX.md",
         ".github/workflows/ci.yml",
         "Dockerfile",
@@ -5996,7 +5973,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "src/nexus_ai_agent/agents/chat_agent.py",
         "src/nexus_ai_agent/agents/gemma_agent.py",
         "src/nexus_ai_agent/agents/phi_agent.py",
@@ -6056,7 +6032,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "docs/README.md",
         "docs/architecture/REQUEST_QUEUE.md",
         "tests/unit/test_agent_board_gates_owner.py"
@@ -6090,7 +6065,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".agents/evidence/PHASE0_BASELINE_2026-10-11.md",
         ".agents/evidence/TASK266_REVIEW_CLOSURE.md",
         ".agents/evidence/TASK266_REVIEW_CLOSURE_mutation_campaign.txt",
@@ -6129,7 +6103,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".agents/evidence/NEXUS202_HEALTH_LEDGER.json",
         ".agents/evidence/NEXUS202_MODULE_INVENTORY.json",
         ".agents/evidence/OH_SESSION_2026-10-14.json",
@@ -6186,7 +6159,7 @@
       "title": "Repair existing PR #208: chore(board): register task-269 cognition quality evaluation",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/208 on its existing branch arena/task-269-cognition-registration-20261011, preserving intent and published history. Snapshot head 45b5e17823fea4578ddb9e665f58dc8924e1a9b4; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6201,16 +6174,15 @@
         "Relevant regression and architecture tests; make lint, make types and make test (or the canonical policy's justified targeted equivalent), with exact commands, results and input SHA.",
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
-      "exclusive_paths": [
-        ".agents/board.json"
-      ],
+      "exclusive_paths": [],
       "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 0,
       "owner_hint": "Registered for a future authorized repair session on arena/task-269-cognition-registration-20261011; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": "ADMINISTRATIVE RETIREMENT ONLY: this future repair registration is inapplicable under the required #203 -> #208 -> #252 order, because target #208 must already have landed before this record reaches canonical main. Existing legal terminal status done removes it from next task selection; it does NOT assert #208 is merged now, that its reviews/CI passed, or that application work ran under this task. No lease was acquired; owner remains empty, claimed_at null, generation 0. Preserve original scope, acceptance criteria and evidence as history. Shared .agents/board.json is non-exclusive and grants no application path. Do not reactivate this record or recreate Task-269; any changed integration order or new work requires reviewed canonical scope reconciliation. Keep #208 open for its actual migration-contract correction and formal review.",
+      "disposition": "retired_without_execution"
     },
     {
       "task": "pr-repair-213",
@@ -6233,7 +6205,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "docs/DECISION_LOG.md",
         "pyproject.toml",
         "scripts/asset_library_mutation_check.py",
@@ -6278,7 +6249,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         ".env.example",
         ".github/workflows/ci.yml",
         ".github/workflows/dependency-audit.yml",
@@ -6681,7 +6651,6 @@
         "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
       ],
       "exclusive_paths": [
-        ".agents/board.json",
         "docs/README.md",
         "docs/architecture/CREATIVE_STUDIO.md",
         "docs/architecture/MODULE_MAP.md",
