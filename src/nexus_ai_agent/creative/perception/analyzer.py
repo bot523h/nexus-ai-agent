@@ -359,9 +359,12 @@ class FfmpegAnalyzer:
             arguments += ["-t", str(self.max_media_s)]
         # Hand FFmpeg the *descriptor* we validated, not the pathname, so it reads
         # the same inode whose type, sniff and hash are recorded in the evidence.
-        if source.fd >= 0:
-            return [*arguments, "-i", f"/dev/fd/{source.fd}"]
-        return [*arguments, "-i", str(source.path)]
+        if source.fd < 0:
+            # Fail closed: a pathname here would silently reopen the TOCTOU window.
+            raise AnalysisFailedError(
+                "no validated descriptor to hand FFmpeg; refusing to fall back to a pathname"
+            )
+        return [*arguments, "-i", f"/dev/fd/{source.fd}"]
 
     # -- public API -----------------------------------------------------
 

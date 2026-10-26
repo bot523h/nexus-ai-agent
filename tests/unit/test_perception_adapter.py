@@ -488,6 +488,15 @@ def test_ffmpeg_reads_the_validated_inode_not_the_pathname(tmp_path: Path) -> No
     assert b"EXTM3U" not in capture.read_bytes()
 
 
+def test_input_without_a_validated_descriptor_fails_closed(tmp_path: Path) -> None:
+    """Never fall back to handing FFmpeg a re-resolvable pathname."""
+    good = tmp_path / "good.wav"
+    good.write_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt \x00")
+    source = analyzer_module._Source(good, "sha256:x", 1, 0)  # fd defaults to -1
+    with pytest.raises(AnalysisFailedError, match="refusing to fall back to a pathname"):
+        FfmpegAnalyzer(binary=_fake(tmp_path, BANNER_AUDIO))._common_input(source)
+
+
 def test_timeout_kills_the_process(tmp_path: Path, media_file: Path) -> None:
     marker = tmp_path / "still-running"
     binary = _fake(tmp_path, f"touch {marker}\nsleep 30\n")

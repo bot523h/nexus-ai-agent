@@ -74,14 +74,16 @@ local-file-read attacks through them are a known class (CVE-2016-1897/1898). Def
    a playlist that slipped past the sniff would still be refused by FFmpeg itself (tested on both builds);
 4. error messages echo the path only, never file content.
 
-Content binding: after the run the analyzer re-resolves the path and checks device, inode, size, mtime
-**and a fresh SHA-256**; any mismatch yields an error, never evidence. FFmpeg receives the already
-resolved real path as a *pathname argument*, not an open file handle, so a replacement of that path between
-`resolve()` and FFmpeg's own `open()` could make FFmpeg read the replacement; the post-run re-hash detects
-it whenever the path still differs at check time. Residual (stated, not hidden): a writer that swaps the
-file for the duration of the run and restores the original before the re-hash is not detected. Closing that
-fully needs an fd-passing input (`/proc/self/fd`), deliberately not used so the evidence stays portable;
-the threat requires write access to the media directory, which already lets an attacker change the media.
+Content binding: the analyzer opens the input **once** with `O_NOFOLLOW` and reads the file type, size, text
+sniff and SHA-256 from that open descriptor. FFmpeg is handed the *same descriptor* (`pass_fds`, `-i /dev/fd/N`),
+never the pathname, so a writer that swaps the path after validation cannot make the engine validate one file and
+analyse another; the evidence binds one inode. After the run the analyzer still re-resolves the path and checks
+device, inode, size, mtime **and a fresh SHA-256**; any mismatch yields an error, never evidence (so evidence is
+never issued for a path whose content is no longer what was measured). Residual (stated, not hidden): a writer
+that modifies the same inode for the duration of the run and restores the original bytes before the re-hash is not
+detected; that needs write access to the media directory, which already lets an attacker change the media.
+Portability: the descriptor hand-off needs `/dev/fd` (Linux with `/proc` mounted, or macOS). It is not available on
+Windows; there the analyzer fails closed (FFmpeg is never given a pathname as a fallback).
 
 Verified live on FFmpeg 6.1.1 (system) and 7.0.2 (bundled). Not independently confirmed: the exact CVE
 ids and versions in an external "BLOCKED" report that cited none checkable from this repository.
