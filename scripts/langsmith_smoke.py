@@ -51,12 +51,15 @@ def main() -> int:
         # ``Client`` batches in the background, so ``create_run`` can return
         # before the collector accepts anything.  Capture the SDK's tracing
         # errors and flush before trusting the result — otherwise a rejected
-        # collector would still print RESULT=OK.
+        # collector would still print RESULT=OK.  Force a 1.0 sampling rate: the
+        # SDK otherwise honours LANGSMITH_TRACING_SAMPLING_RATE and could drop
+        # both runs before submission, making the probe test nothing.
         tracing_errors: list[Exception] = []
         client = Client(
             api_key=api_key,
             api_url=endpoint,
             tracing_error_callback=tracing_errors.append,
+            tracing_sampling_rate=1.0,
         )
         # A parent/child pair exercises the real run-ingest path the runtime
         # would use — a single ping would not prove trace ingest works.

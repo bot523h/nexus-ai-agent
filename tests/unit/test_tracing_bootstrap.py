@@ -302,7 +302,11 @@ def test_set_sdk_override_reports_success_and_absence(
     assert tracing._set_sdk_override(False) is True
     assert context._GLOBAL_TRACING_ENABLED is False
 
-    monkeypatch.delattr(context, "_GLOBAL_TRACING_ENABLED", raising=False)
-    assert tracing._set_sdk_override(False) is False
-    # ...and it did not silently re-create an unused global.
-    assert not hasattr(context, "_GLOBAL_TRACING_ENABLED")
+    # Scope the delattr to its own context so its restoration happens *before*
+    # the autouse ``_clean_env`` teardown resets the override; otherwise pytest's
+    # reverse-order teardown would restore the saved ``False`` afterwards.
+    with monkeypatch.context() as m:
+        m.delattr(context, "_GLOBAL_TRACING_ENABLED", raising=False)
+        assert tracing._set_sdk_override(False) is False
+        # ...and it did not silently re-create an unused global.
+        assert not hasattr(context, "_GLOBAL_TRACING_ENABLED")
