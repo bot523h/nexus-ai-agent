@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T11:27:21Z",
+  "updated_at": "2026-10-27T12:45:39Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -6592,7 +6592,7 @@
       "title": "Repair existing PR #240: docs: app-first product frame (Telegram is one channel adapter)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/240 on its existing branch docs/app-first-frame, preserving intent and published history. Snapshot head 566318936b3cd09187da10b09ae141f8db7b9dd3; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6614,11 +6614,11 @@
         "docs/architecture/PRODUCT_FRAME.md",
         "tests/unit/test_docs_integrity.py"
       ],
-      "agent_branch": "docs/app-first-frame",
-      "claimed_at": "2026-10-27T06:55:16Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "Registered for a future authorized repair session on docs/app-first-frame; not assigned or claimed by this registration.",
       "note": ""
     },
