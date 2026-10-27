@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T20:20:00Z",
+  "updated_at": "2026-10-27T21:39:27Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7071,7 +7071,7 @@
       "title_fa": "رجیستری همگرایی PRها و گارد آمادگی مرج (اصلاح PR #249)",
       "zone": "pr-convergence",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "Make PR #249 mergeable on its own evidence: every CodeRabbit finding re-checked against the current head, valid ones fixed with deterministic tests, stale audit statements (pending CI, PR counts, #111 merge state) corrected from live data. Scope is limited to the four paths below; no feature work.",
       "scope_fa": "PR #249 با شواهد خودش قابل مرج شود: هر یافتهٔ بازبین با head فعلی تطبیق داده شود، موارد معتبر با تست قطعی رفع شود و گزاره‌های کهنهٔ audit با داده زنده اصلاح شود. دامنه فقط چهار مسیر زیر است.",
       "prerequisites": [],
@@ -7094,7 +7094,13 @@
         "CURRENT_TRUTH_AUDIT.md",
         ".agents/evidence/"
       ],
-      "owner_hint": "PR #249 repair; claim with agent_branch arena/c888ae0d-nexus-ai-agent before editing"
+      "owner_hint": "PR #249 repair; claim with agent_branch arena/c888ae0d-nexus-ai-agent before editing",
+      "agent_branch": "arena/pr-convergence-registry-20261027",
+      "claimed_at": "2026-10-27T21:39:27Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
