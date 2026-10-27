@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T06:55:16Z",
+  "updated_at": "2026-10-27T01:14:33Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -4019,7 +4019,7 @@
       "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "expired",
+      "status": "active",
       "scope": "Run scripts/execution_core_mutations.py as a CI mutation job",
       "scope_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "prerequisites": [
@@ -4039,11 +4039,10 @@
       "agent_branch": "arena/task-260-exec-mutations-ci",
       "claimed_at": "2026-10-22T18:46:06Z",
       "ttl_hours": 24,
-      "gates_owner": false,
+      "gates_owner": true,
       "note": "Execution-core mapping: the native execution core (Task-254) merged via PR #192 (merge commit a48326ded85bbe4e0972d645ee0ea6e877935362, 'supersedes #191'); PR #191 (arena/execution-core-v1-nexus-ai-agent) is CLOSED and superseded. PR #241 is the separate Task-260 mutation-CI follow-up, not the execution-core implementation. CI wiring lives in .github/workflows/ci.yml (zone ci-quality); the harness scripts/execution_core_mutations.py is the execution-core zone (task-254, done).",
       "generation": 2,
-      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)",
-      "release_reason": "auto-released by gc at 2026-10-27T06:55:16Z (stale active lease)"
+      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)"
     },
     {
       "task": "task-265-flaky-cancel-identity-race",
@@ -4051,7 +4050,7 @@
       "title_fa": "",
       "zone": "execution-core",
       "priority": "P2",
-      "status": "expired",
+      "status": "active",
       "scope": "test_execution_native_backend.py::test_cancel_without_a_fencing_token_is_refused failed once in a full-suite run (1 failed,3878 passed) and passed on immediate rerun (3879 passed,31 skipped). submit() reads facts after a to_thread yield, so the worker can reserve (attempt=1) before the facts read, binding a fencing_token; the test assumes a fresh submit is unbound. Make the assertion robust or gate the reservation deterministically.",
       "scope_fa": "",
       "prerequisites": [],
@@ -4069,8 +4068,7 @@
       "claimed_at": "2026-10-24T04:48:15Z",
       "gates_owner": false,
       "generation": 1,
-      "ttl_hours": 24,
-      "release_reason": "auto-released by gc at 2026-10-27T06:55:16Z (stale active lease)"
+      "ttl_hours": 24
     },
     {
       "task": "task-264-passport-attempt-id-alignment",
@@ -4078,7 +4076,7 @@
       "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
       "zone": "durable-creative-queue-evidence",
       "priority": "P3",
-      "status": "expired",
+      "status": "active",
       "scope": "Align CreativeExecutionPassport attempt identity and evidence storage with the existing AttemptStaging attempt-scoped contract; change only the passport implementation and its unit tests.",
       "scope_fa": "شناسه‌های attempt در passport و staging از یک منبع باید بیایند تا ردیابی artifact یکتا بماند.",
       "prerequisites": [
@@ -4105,8 +4103,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1,
-      "release_reason": "auto-released by gc at 2026-10-27T06:55:16Z (stale active lease)"
+      "generation": 1
     },
     {
       "task": "task-256-heartbeat-staleness-proof",
