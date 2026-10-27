@@ -134,7 +134,7 @@ def test_execution_core_mutations_anchor_exactly_once(
             if count != 1:
                 drift[f"{probe.name}:{Path(target).name}"] = count
     assert drift == {}, f"execution-core anchors must occur exactly once: {drift}"
-    assert len(execution_core["PROBES"]) == 17
+    assert len(execution_core["PROBES"]) == 25
 
 
 def test_execution_core_pins_pythonpath_to_the_tree_under_mutation(

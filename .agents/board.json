@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T06:39:52Z",
+  "updated_at": "2026-10-27T08:20:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -804,7 +804,9 @@
         "tests/unit/test_filesystem_policy_primitives.py",
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py",
-        "tests/integration/test_job_queue_heartbeat.py"
+        "tests/integration/test_job_queue_heartbeat.py",
+        "tests/integration/test_execution_process_crash.py",
+        "tests/unit/test_mutation_harness_anchors.py"
       ]
     },
     {
@@ -6874,6 +6876,43 @@
       "generation": 1,
       "owner_hint": "Claimed by successor PR #253 on arena/7395b06d-nexus-ai-agent.",
       "note": "Active successor lease for PR #253. Owns graph.py for both PR #125 execution truth and the ported PR #198 memory-isolation changes."
+    },
+    {
+      "task": "pr-repair-195-successor",
+      "title": "Close the Task-254 AC-5 proof gap via PR #195 (I1-I10 mutation proofs)",
+      "zone": "execution-core",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Rebase PR #195 (arena/290bc0d6-nexus-ai-agent) onto current main and land the M18-M25 execution-core mutation proofs plus the real process-crash recovery test, closing the Task-254 AC-5 evidence gap without weakening any test.",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "Registration and claim are pushed before any further implementation on this branch and the full ownership referee exits 0.",
+        "The Task-254 AC-5 proof gap is closed: every invariant I1-I10 has a named mutant (M1-M25) that is CAUGHT, and the real process-crash recovery test runs in CI.",
+        "No existing test is weakened, deleted, skipped or reordered to obtain green; the campaign reports 25/25 caught.",
+        "Exact-head CI is green on the final head; independent review approved on that head; no protection bypass."
+      ],
+      "evidence_required": [
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <actual-changed-files> --branch arena/290bc0d6-nexus-ai-agent: exit 0.",
+        "python scripts/execution_core_mutations.py => '25/25 mutations caught'; pytest AC-5 surface.",
+        "Exact final head SHA, GitHub Actions run URL and conclusions, review URLs/states, and the final merge SHA."
+      ],
+      "exclusive_paths": [
+        "scripts/execution_core_mutations.py",
+        "tests/architecture/test_execution_contract_boundary.py",
+        "tests/architecture/test_execution_boundary_enforcement.py",
+        "tests/integration/test_execution_native_backend.py",
+        "tests/integration/test_execution_process_crash.py",
+        "tests/unit/test_mutation_harness_anchors.py"
+      ],
+      "agent_branch": "arena/290bc0d6-nexus-ai-agent",
+      "claimed_at": "2026-10-27T07:00:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "owner_hint": "Claimed for the PR #195 AC-5 closure on arena/290bc0d6-nexus-ai-agent.",
+      "note": "Successor lease closing the Task-254 AC-5 proof gap via PR #195. The 2-line .github/workflows/ci.yml count update rides on the lapsed task-260 reservation (stale >24h; referee exit 0)."
     }
   ],
   "deferred_log": [
