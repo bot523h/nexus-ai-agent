@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T01:14:33Z",
+  "updated_at": "2026-10-27T07:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -804,8 +804,11 @@
         "tests/unit/test_filesystem_policy_primitives.py",
         "scripts/execution_core_mutations.py",
         "src/nexus_ai_agent/tools/filesystem_policy.py",
-        "tests/integration/test_job_queue_heartbeat.py"
-      ]
+        "tests/integration/test_job_queue_heartbeat.py",
+        "tests/integration/test_execution_process_crash.py",
+        "tests/unit/test_mutation_harness_anchors.py"
+      ],
+      "note": "2026-10-27: extended with tests/integration/test_execution_process_crash.py and tests/unit/test_mutation_harness_anchors.py — the PR #195 AC-5 real-process crash proof and the mutation-harness anchor test live there."
     },
     {
       "id": "nagar-asset-library",
@@ -6750,6 +6753,43 @@
       "gates_owner": false,
       "note": "Evidence (branch arena/task-274-langsmith-tracing @ 983e336): `pytest -q tests/unit/test_tracing_bootstrap.py` 8 passed; `pytest -q tests/unit/test_docs_integrity.py tests/unit/test_ci_extras_parity.py tests/unit/test_optional_extras.py` 129 passed/10 skipped; `python scripts/extras_matrix.py check` legs=[core,pdf,speech,translate]; `make lint` clean, `make types` clean, `make deps` clean (langsmith stays in the DEP002 allow-list); full suite in a venv `pytest -q -m 'not slow'` 4491 passed/38 skipped/0 failed. Core-absence contract honoured: langsmith is a core transitive dep (langgraph -> langchain-core), so no `tracing` extra/leg — the opt-in switch governs egress, not installation; the earlier extras leg was removed after the core leg correctly red-flagged the leak. Smoke: `scripts/langsmith_smoke.py` -> SKIPPED_NO_SECRET(exit0) without key, FAILED(exit1) on a bogus key, OK(exit0) with the real key; CI workflow LangSmith tracing smoke run 40287959103 success. Orphan workflow langsmith-connectivity-smoke-20261026 disabled (204). PR #251.",
       "generation": 2
+    },
+    {
+      "task": "pr-repair-195-successor",
+      "title": "Close the Task-254 AC-5 proof gap via PR #195 (I1-I10 mutation proofs)",
+      "zone": "execution-core",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Rebase PR #195 (arena/290bc0d6-nexus-ai-agent) onto current main and land the M18-M25 execution-core mutation proofs plus the real process-crash recovery test, closing the Task-254 AC-5 evidence gap without weakening any test.",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "Registration and claim are pushed before any further implementation on this branch and the full ownership referee exits 0.",
+        "The Task-254 AC-5 proof gap is closed: every invariant I1-I10 has a named mutant (M1-M25) that is CAUGHT, and the real process-crash recovery test runs in CI.",
+        "No existing test is weakened, deleted, skipped or reordered to obtain green; the campaign reports 25/25 caught.",
+        "Exact-head CI (lint, types, deptry, board-integrity, version-lockstep, test, execution-core-mutations, governance-mutations) is green on the final head; independent review approved on that head; no protection bypass."
+      ],
+      "evidence_required": [
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <actual-changed-files> --branch arena/290bc0d6-nexus-ai-agent: exit 0.",
+        "python scripts/execution_core_mutations.py => '25/25 mutations caught'; pytest -q tests/architecture/test_execution_contract_boundary.py tests/architecture/test_execution_boundary_enforcement.py tests/integration/test_execution_native_backend.py tests/integration/test_execution_process_crash.py tests/unit/test_mutation_harness_anchors.py.",
+        "Exact final head SHA, GitHub Actions run URL and conclusions, review URLs/states, and the final merge SHA."
+      ],
+      "exclusive_paths": [
+        "scripts/execution_core_mutations.py",
+        "tests/architecture/test_execution_contract_boundary.py",
+        "tests/architecture/test_execution_boundary_enforcement.py",
+        "tests/integration/test_execution_native_backend.py",
+        "tests/integration/test_execution_process_crash.py",
+        "tests/unit/test_mutation_harness_anchors.py"
+      ],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0,
+      "owner_hint": "Unclaimed; registered for the PR #195 AC-5 closure on arena/290bc0d6-nexus-ai-agent.",
+      "note": "Successor lease closing the Task-254 AC-5 proof gap via PR #195. The 2-line .github/workflows/ci.yml count update rides on the lapsed task-260 reservation (stale >24h; referee exit 0). Does not touch the #198/#173/#125 successor zone."
     }
   ],
   "deferred_log": [
