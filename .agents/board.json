@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T14:00:00Z",
+  "updated_at": "2026-10-27T16:10:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -6074,7 +6074,7 @@
       "title": "Repair existing PR #202: fix(board): the coordination referee must not report success it did not achieve (task-266)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/202 on its existing branch arena/b561a2be-nexus-ai-agent, preserving intent and published history. Snapshot head 49662ed968bd4a503916bb871a2218192f4a39f4; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6105,7 +6105,7 @@
       "gates_owner": false,
       "generation": 0,
       "owner_hint": "Registered for a future authorized repair session on arena/b561a2be-nexus-ai-agent; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": "DELIVERED: PR #202 merged to main as fac43a33 (2026-10-27T12:44:37Z). Record reconciled from live GitHub state."
     },
     {
       "task": "pr-repair-205",
@@ -6627,7 +6627,7 @@
       "title": "Repair existing PR #242: feat(selfhood): two-witness ledger check (Living Core)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/242 on its existing branch feat/selfhood-witness, preserving intent and published history. Snapshot head 8cef57bc710aef98cfd87ef812929b467a824789; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6647,13 +6647,13 @@
         "src/nexus_ai_agent/selfhood/witness.py",
         "tests/unit/test_selfhood_witness.py"
       ],
-      "agent_branch": "feat/selfhood-witness",
-      "claimed_at": "2026-10-26T21:58:21Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
       "owner_hint": "Registered for a future authorized repair session on feat/selfhood-witness; not assigned or claimed by this registration.",
-      "note": ""
+      "note": "DELIVERED: PR #242 merged to main as 83d3f02888 (2026-10-27T15:32:35Z) by a concurrent session. Record reconciled from live GitHub state."
     },
     {
       "task": "pr-repair-247",
@@ -7186,25 +7186,6 @@
       ]
     },
     {
-      "id": "task-258-execution-core-architecture-doc",
-      "priority": "P2",
-      "zone": "docs-architecture",
-      "title": "docs/architecture/EXECUTION_CORE.md — contract, authority laws, I1-I10",
-      "title_fa": "سند معماری هستهٔ اجرا: قرارداد، قوانین اقتدار، I1-I10",
-      "why_fa": "جدول I1-I10 اکنون فقط در تست‌هاست؛ reviewer و مالک آینده باید سند مرجع داشته باشند.",
-      "acceptance_criteria": [
-        "doc maps I1-I10 to enforcing symbols and proving tests (mirrors the test table)",
-        "authority laws + four-verb contract + staging boundary policy documented",
-        "docs integrity suite green"
-      ],
-      "exclusive_paths": [
-        "docs/architecture/EXECUTION_CORE.md"
-      ],
-      "prerequisites": [
-        "task-254 merged"
-      ]
-    },
-    {
       "id": "task-259-inflight-started-at-schema-invariant",
       "priority": "P2",
       "zone": "storage-observability",
@@ -7315,6 +7296,28 @@
       "prerequisites": [
         "task-254 merged"
       ]
+    },
+    {
+      "id": "task-269-cognition-quality-evaluation",
+      "priority": "P1",
+      "zone": "cognition-quality-evaluation",
+      "title": "Cognition quality evaluation harness",
+      "title_fa": "هارنس ارزیابی کیفیت شناخت",
+      "why_fa": "جایگزینِ task-258 که تحویل شد (PR #199/#258)؛ وظیفهٔ رو-به-جلوِ بعدی با ناحیه و معیار پذیرش مشخص.",
+      "acceptance_criteria": [
+        "The harness uses existing TypedProposal, Refusal, ProposalSchema, and current Cognition boundary contracts without introducing runtime authority.",
+        "Default execution is deterministic, local, network-free, and requires no API keys.",
+        "Tests cover valid output, malformed output, out-of-scope operation, authority-field injection, prompt-injection-shaped input, explicit refusal, provider failure, no-model state, and invalid output.",
+        "Proposal acceptance is measured separately from independent verification success; a proposal never counts as execution success.",
+        "Synthetic fixtures and any optional real-model evidence are reported in separate channels with no raw sensitive prompt or response logging.",
+        "Repeatability and latency are measured from bounded synthetic fixtures, and unsupported multi-model claims are reported as insufficient evidence.",
+        "Only the two exclusive paths in this claim are changed and the existing execution authority remains in Policy, CommandBus, and Verification."
+      ],
+      "exclusive_paths": [
+        "scripts/cognition_quality_eval.py",
+        "tests/unit/test_cognition_quality_eval.py"
+      ],
+      "prerequisites": []
     }
   ],
   "history": {
