@@ -1,0 +1,82 @@
+killed         D1   exit=1 restored=True count the synthetic RESUME line 0 (3.11+ only emits it)
+not-applicable D2   exit=None restored=True let a comment-only module own an implicit-return line (3.10 numbers it > 0)
+killed         D3   exit=1 restored=True drop nested function bodies from the denominator
+killed         D4   exit=1 restored=True keep zero-line modules as fake surface entries
+killed         D5   exit=1 restored=True measure a zero-line surface instead of refusing it
+killed         D6   exit=1 restored=True silently drop a pack whose every module is comment-only from the verdict
+killed         N1   exit=1 restored=True count executed lines outside the executable surface
+killed         N2   exit=1 restored=True accept negative hit counts
+killed         N3   exit=1 restored=True accept duplicated line events
+killed         N4   exit=1 restored=True allow executed > executable
+killed         N5   exit=1 restored=True accept bool/float counts
+killed         T1   exit=1 restored=True accept True as a 1% threshold
+killed         T2   exit=1 restored=True accept NaN/inf thresholds (NaN makes every comparison false = green)
+killed         T3   exit=1 restored=True accept negative thresholds
+killed         T4   exit=1 restored=True accept a run whose bar was lowered below the contract
+killed         T5   exit=1 restored=True move the boundary (95.00% must pass)
+killed         T6   exit=1 restored=True silently lower the contract
+killed         T7   exit=1 restored=True CLI default below the contract
+killed         G1   exit=1 restored=True drop a pack test module from the canonical set
+killed         G2   exit=1 restored=True accept duplicate (respelled) targets
+killed         G3   exit=1 restored=True accept missing targets
+killed         G4   exit=1 restored=True accept a subset of the canonical targets
+killed         G5   exit=1 restored=True accept an alternate pack root
+killed         G6   exit=1 restored=True keep a stale mapping for a pack that no longer ships
+killed         G7   exit=1 restored=True accept an unknown pack selection
+killed         G8   exit=1 restored=True accept a partial pack selection
+killed         G9   exit=1 restored=True stop checking the test tree for orphaned pack tests
+killed         P1   exit=1 restored=True ignore a crashed trace child
+killed         P2   exit=1 restored=True accept a trace artifact from another run
+killed         P3   exit=1 restored=True accept extra keys in the trace artifact
+killed         P4   exit=1 restored=True accept a run that deselected tests
+killed         P5   exit=1 restored=True accept exit 0 that contradicts failed tests
+killed         P6   exit=1 restored=True treat a failed pytest run as verified
+killed         P7   exit=1 restored=True the real child under-reports passing tests
+killed         P8   exit=1 restored=True the real child hides deselection
+killed         P9   exit=1 restored=True verify a report that carries no run outcomes
+killed         P10  exit=1 restored=True script exits 0 on a rejected measurement
+killed         P11  exit=1 restored=True a stale artifact survives a failed run
+killed         P12  exit=1 restored=True script exits 0 on an invalid request
+killed         S1   exit=1 restored=True accept a symbolic step such as HEAD
+killed         S2   exit=1 restored=True accept abbreviated or uppercase commit ids
+killed         S3   exit=1 restored=True report state loss (or green) when history is merely unavailable
+killed         S4   exit=1 restored=True treat a shallow negative ancestry answer as definitive
+killed         S5   exit=1 restored=True ignore later committed source drift
+killed         S6   exit=1 restored=True reintroduce the stale 'alembic' root (migrations drift undetected)
+killed         S7   exit=1 restored=True ignore ignored-but-importable source files
+killed         S8   exit=1 restored=True verify only part of the checkout
+killed         S9   exit=1 restored=True reintroduce the porcelain strip bug (first record misparsed)
+killed         S10  exit=1 restored=True accept non-canonical bytes
+killed         S11  exit=1 restored=True let a duplicate key shadow a value
+killed         S12  exit=1 restored=True accept extra keys (forged verdicts)
+killed         S13  exit=1 restored=True accept bool/string test counts
+killed         S14  exit=1 restored=True count a collection that deselected tests
+killed         S15  exit=1 restored=True ignore test-count drift
+killed         S16  exit=1 restored=True ignore environment drift
+killed         S17  exit=1 restored=True publish from a dirty checkout
+killed         S18  exit=1 restored=True leave a partial publication behind
+killed         S19  exit=1 restored=True let PYTEST_ADDOPTS steer evidence runs
+killed         S20  exit=1 restored=True ignore dirt outside the evidence roots (e.g. a leftover publication temp file)
+killed         C1   exit=1 restored=True `continuum verify` exits 0 with findings
+killed         C2   exit=1 restored=True `continuum show` exits 0 on an unreadable snapshot
+killed         C3   exit=1 restored=True table labels unverified evidence OK
+killed         C4   exit=1 restored=True table labels a lowered-threshold run OK
+killed         C5   exit=1 restored=True artifact claims acceptance regardless of failures
+killed         C6   exit=1 restored=True trust a reproduced artifact that was never accepted
+killed         C7   exit=1 restored=True trust a forged artifact
+killed         C8   exit=1 restored=True gate accepts a rejection for the wrong reason
+killed         C9   exit=1 restored=True gate accepts any exit code
+killed         C10  exit=1 restored=True gate reports PASSED with failing rows
+killed         R1   exit=1 restored=True artifact bytes depend on discovery order
+killed         K1   exit=1 restored=True accept an unordered beat grid
+killed         K2   exit=1 restored=True accept overlapping shots
+killed         K3   exit=1 restored=True audio outlasts the video
+killed         K4   exit=1 restored=True accept an upscale whose measured output misses the target
+killed         CI1  exit=1 restored=True evidence produced for a different commit than the one under test
+killed         CI2  exit=1 restored=True a red evidence job no longer fails the workflow
+killed         CI3  exit=1 restored=True a missing evidence artifact is uploaded as success
+killed         CI4  exit=1 restored=True coverage reproducibility is no longer compared
+killed         CI5  exit=1 restored=True the historically failing 3.10 leg is dropped from the evidence matrix
+killed         CI6  exit=1 restored=True a failed mutation campaign is laundered into a green step
+killed         CI7  exit=1 restored=True the uploaded evidence is no longer bound to the commit
+mutation campaign @ 2feac8a91ed32cf5b0b3a8ddba3f48beca7755b3: PASSED
