@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-26T10:47:52Z",
+  "updated_at": "2026-10-27T00:06:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -938,6 +938,26 @@
         "src/",
         "tests/",
         "uv.lock"
+      ]
+    },
+    {
+      "id": "observability-tracing",
+      "description": "Opt-in LangSmith tracing: the fail-closed bootstrap, its settings, its smoke workflow and its docs.",
+      "paths": [
+        "src/nexus_ai_agent/observability/tracing.py",
+        "tests/unit/test_tracing_bootstrap.py",
+        "scripts/langsmith_smoke.py",
+        ".github/workflows/langsmith-smoke.yml",
+        "src/nexus_ai_agent/config/settings.py",
+        "src/nexus_ai_agent/cli.py",
+        ".env.example",
+        "pyproject.toml",
+        "docs/architecture/TRACING.md",
+        "docs/architecture/OBSERVABILITY.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md",
+        "tests/unit/test_langsmith_smoke_safe_output.py",
+        "tests/unit/test_optional_extras.py"
       ]
     }
   ],
@@ -6684,6 +6704,52 @@
       "generation": 0,
       "owner_hint": "Registered for a future authorized repair session on feat/analysis-perception-pack; not assigned or claimed by this registration.",
       "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+    },
+    {
+      "task": "task-274-langsmith-tracing",
+      "title": "LangSmith tracing integration (opt-in, fail-closed) + clean connectivity smoke",
+      "title_fa": "یکپارچه‌سازی رهگیری LangSmith (اختیاری، fail-closed) + دود اتصال تمیز",
+      "zone": "observability-tracing",
+      "priority": "P2",
+      "status": "active",
+      "scope": "Wire LangSmith tracing into the runtime behind an explicit opt-in: a fail-closed bootstrap that never raises, never enables egress by default, and proves connectivity with a clean in-repo workflow; retire the orphan workflow registration left by a deleted branch.",
+      "scope_fa": "رهگیری LangSmith را پشت یک سوئیچ صریح به رانتایم وصل کن: bootstrap ای که هرگز exception نمی‌دهد، به‌صورت پیش‌فرض egress را روشن نمی‌کند، اتصال را با یک workflow تمیز درون‌مخزنی اثبات می‌کند و ثبت workflow یتیم را پاک می‌کند.",
+      "prerequisites": [
+        "task-131"
+      ],
+      "acceptance_criteria": [
+        "tracing is OFF unless NEXUS_TRACING_ENABLED=true; enabling it without the SDK or a key degrades to a logged, typed no-op, never an exception",
+        "when enabled+configured the bootstrap exports LANGSMITH_* so LangGraph/LangChain trace without code changes",
+        "scripts/langsmith_smoke.py proves the real endpoint accepts a trace; absence of the secret is a visible skip, never a false pass",
+        "the orphan langsmith-connectivity-smoke-20261026 workflow registration is retired and replaced by .github/workflows/langsmith-smoke.yml"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_tracing_bootstrap.py (red-first on the disabled/absent paths)",
+        "the langsmith-smoke workflow run URL + its RESULT line",
+        "make lint && make types && make test on the branch SHA"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/observability/tracing.py",
+        "tests/unit/test_tracing_bootstrap.py",
+        "scripts/langsmith_smoke.py",
+        ".github/workflows/langsmith-smoke.yml",
+        "src/nexus_ai_agent/config/settings.py",
+        "src/nexus_ai_agent/cli.py",
+        ".env.example",
+        "pyproject.toml",
+        "docs/architecture/TRACING.md",
+        "docs/architecture/OBSERVABILITY.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md",
+        "tests/unit/test_langsmith_smoke_safe_output.py",
+        "tests/unit/test_optional_extras.py"
+      ],
+      "agent_branch": "arena/task-274-langsmith-tracing",
+      "claimed_at": "2026-10-26T07:07:56Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Evidence (branch arena/task-274-langsmith-tracing @ 983e336): `pytest -q tests/unit/test_tracing_bootstrap.py` 8 passed; `pytest -q tests/unit/test_docs_integrity.py tests/unit/test_ci_extras_parity.py tests/unit/test_optional_extras.py` 129 passed/10 skipped; `python scripts/extras_matrix.py check` legs=[core,pdf,speech,translate]; `make lint` clean, `make types` clean, `make deps` clean (langsmith stays in the DEP002 allow-list); full suite in a venv `pytest -q -m 'not slow'` 4491 passed/38 skipped/0 failed. Core-absence contract honoured: langsmith is a core transitive dep (langgraph -> langchain-core), so no `tracing` extra/leg — the opt-in switch governs egress, not installation; the earlier extras leg was removed after the core leg correctly red-flagged the leak. Smoke: `scripts/langsmith_smoke.py` -> SKIPPED_NO_SECRET(exit0) without key, FAILED(exit1) on a bogus key, OK(exit0) with the real key; CI workflow LangSmith tracing smoke run 40287959103 success. Orphan workflow langsmith-connectivity-smoke-20261026 disabled (204). PR #251.",
+      "generation": 1
     }
   ],
   "deferred_log": [
