@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T12:45:39Z",
+  "updated_at": "2026-10-27T13:05:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7015,6 +7015,41 @@
         "a deliberately weakened assertion that turns the rail red (before/after run links)",
         "python scripts/board_referee_mutations.py -> N/N killed, exit 0, on the final SHA"
       ]
+    },
+    {
+      "task": "task-258-execution-core-architecture-doc",
+      "title": "docs/architecture/EXECUTION_CORE.md — contract, authority laws, I1-I10",
+      "title_fa": "سند معماری هستهٔ اجرا: قرارداد، قوانین اقتدار، I1-I10",
+      "zone": "docs-architecture",
+      "priority": "P2",
+      "status": "deferred",
+      "scope": "Author the reference architecture page for the V1 execution core: four-verb contract, authority laws, provider-neutral boundary, attempt/fencing model, staging boundary, and the I1-I10 invariant table mapped to enforcing symbols and proving tests.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "doc maps I1-I10 to enforcing symbols and proving tests (mirrors the test table)",
+        "authority laws + four-verb contract + staging boundary policy documented",
+        "docs integrity suite green"
+      ],
+      "evidence_required": [
+        "docs/architecture/EXECUTION_CORE.md committed with the I1-I10 table mapping each invariant to its enforcing symbol and proving test node",
+        "the contract/authority/staging sections present and provider-neutral (four verbs only: submit/observe/cancel/reconcile)",
+        "pytest -q tests/unit/test_docs_integrity.py green on the claim head (exact command + observed count in the PR body)",
+        "every relative link resolves and the page is indexed in docs/README.md"
+      ],
+      "exclusive_paths": [
+        "docs/architecture/EXECUTION_CORE.md",
+        "tests/unit/test_docs_integrity.py"
+      ],
+      "note": "",
+      "agent_branch": "arena/nexus-night-task258-exec-core-doc",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 3,
+      "previous_release_reason": "auto-released by gc at 2026-10-27T10:24:50Z (stale active lease)"
     }
   ],
   "deferred_log": [
@@ -7075,6 +7110,14 @@
       "reason_fa": "در حلقهٔ task-223 کشف شد اما خارج از ناحیهٔ claim من است و رفع آن یک PR چهارم پشت سه PR باز می‌سازد؛ به‌جای گسترش دامنه، با شواهد ثبت شد.",
       "reason_en": "Found during the task-223 loop but out of my claim's zone; fixing it would open a 4th PR stacked behind three open PRs. Recorded with reproduction instead of widening scope.",
       "resume_when": "next storage-observability window (after #126/#127/#128 merge)"
+    },
+    {
+      "task": "task-258-execution-core-architecture-doc",
+      "deferred_by_branch": "arena/nexus-night-task258-exec-core-doc",
+      "at": "2026-10-27T10:28:46Z",
+      "reason_fa": "چون عامل دیگری روی این محدوده کار می‌کرد متوقف شدم؛ این کار پس از آزاد شدن ناحیه انجام خواهد شد تا فراموش نشود.",
+      "reason_en": "docs/README.md + tests/unit/test_docs_integrity.py are reserved by pr-repair-240; PR #199 rebased/green and awaits the docs-architecture zone",
+      "resume_when": "claim task-258-execution-core-architecture-doc is free"
     }
   ],
   "next_work": [
