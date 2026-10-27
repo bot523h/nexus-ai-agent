@@ -76,7 +76,7 @@ class LocalLlamaServerProvider(LLMProvider):
             f"llama.cpp server unreachable at {self._base_url}{path}: {exc} ({START_HINT})"
         )
 
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: str, system: str = "", *, user_id: int | None = None) -> str:
         """Complete ``prompt`` via ``/v1/chat/completions`` (non-streaming)."""
         messages: list[dict[str, str]] = []
         if system:

@@ -276,6 +276,7 @@ def inspect_checkpoints(
 ) -> None:
     """Read checkpoint lifecycle state without touching access timestamps."""
     import json
+    import logging
     from datetime import datetime, timezone
 
     from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
@@ -284,14 +285,31 @@ def inspect_checkpoints(
     from nexus_ai_agent.storage.db import resolve_database_url
 
     settings = get_settings()
+    logger = logging.getLogger(__name__)
     access_token = nexus_access_context.set("admin")
-    adapter, _ = _open_checkpoint_backend()
-    # Read-only by contract: inspect never creates or mutates the lifecycle
-    # index (on PostgreSQL the read-only connection is server-enforced).
-    # A missing local index file simply means "no metadata yet".
-    database_url = resolve_database_url()
-    lifecycle = _open_lifecycle_store(settings, database_url, strict=True, read_only=True)
+    adapter: Any = None
+    lifecycle: Any = None
+    primary_error: BaseException | None = None
+
+    def _close(resource: Any, name: str) -> BaseException | None:
+        """Close one resource without preventing the remaining cleanup."""
+        if resource is None or not hasattr(resource, "close"):
+            return None
+        try:
+            resource.close()
+        except BaseException as exc:  # noqa: BLE001 - cleanup must continue
+            logger.warning("checkpoint_inspect_cleanup_failed: %s: %s", name, exc)
+            return exc
+        return None
+
     try:
+        adapter, _ = _open_checkpoint_backend()
+        # Read-only by contract: inspect never creates or mutates the lifecycle
+        # index (on PostgreSQL the read-only connection is server-enforced).
+        # A missing local index file simply means "no metadata yet".
+        database_url = resolve_database_url()
+        lifecycle = _open_lifecycle_store(settings, database_url, strict=True, read_only=True)
+
         now = datetime.now(timezone.utc)
         records = lifecycle.records() if lifecycle is not None else []
         grouped: dict[str, list] = {}
@@ -351,11 +369,28 @@ def inspect_checkpoints(
         else:
             for item in output:
                 typer.echo(json.dumps(item, default=str, sort_keys=True))
+    except BaseException as exc:
+        # Preserve the setup/body exception even if cleanup also fails.
+        primary_error = exc
+        raise
     finally:
-        adapter.close()
-        if lifecycle is not None:
-            lifecycle.close()
-        nexus_access_context.reset(access_token)
+        # Close in reverse acquisition order; attempt BOTH closes and always
+        # reset the exact ContextVar token exactly once, on every path.
+        cleanup_errors = [
+            err
+            for err in (
+                _close(lifecycle, "lifecycle"),
+                _close(adapter, "checkpoint_adapter"),
+            )
+            if err is not None
+        ]
+        try:
+            nexus_access_context.reset(access_token)
+        except BaseException as exc:  # pragma: no cover - defensive reset fence
+            logger.warning("checkpoint_inspect_context_reset_failed: %s", exc)
+            cleanup_errors.append(exc)
+        if primary_error is None and cleanup_errors:
+            raise cleanup_errors[0]
 
 
 @checkpoints_app.command("reconcile")
@@ -1701,6 +1736,11 @@ def run_bot(
 
     settings = get_settings()
     configure_logging(settings.log_level)
+    # task-274: opt-in tracing, after logging exists so the outcome is visible.
+    # Never fatal — a misconfigured tracing setup must not stop the bot.
+    from nexus_ai_agent.observability.tracing import bootstrap_tracing
+
+    bootstrap_tracing(settings)
 
     # Bring the schema up (Alembic-first, create_all fallback for legacy files)
     Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -1758,8 +1798,10 @@ def smoke(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full state"),
 ) -> None:
     """Run the full AI graph without Telegram (for testing)."""
+    from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
     from nexus_ai_agent.memory.long_term import LongTermMemory
+    from nexus_ai_agent.observability.tracing import bootstrap_tracing
     from nexus_ai_agent.orchestration.graph import compile_graph
     from nexus_ai_agent.orchestration.state import NexusState
     from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
@@ -1769,6 +1811,11 @@ def smoke(
         WriteFileTool,
     )
     from nexus_ai_agent.tools.registry import ToolRegistry
+
+    # task-274: this path also drives the graph, so it must enforce the same
+    # fail-closed tracing contract as ``run`` (a stale LANGSMITH_TRACING=true
+    # must not silently enable egress here).
+    bootstrap_tracing(get_settings())
 
     llm = FakeLLMProvider()
     os.environ["NEXUS_WORKSPACE_ROOT"] = "."
