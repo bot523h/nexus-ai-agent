@@ -56,11 +56,16 @@ async def _memory_reader(long_term_memory: LongTermMemory, state: NexusState) ->
 
 
 async def _chat_agent(llm: LLMProvider, state: NexusState) -> NexusState:
+    # Legacy helper mirroring the deleted ``agents/chat_agent.py`` module.
+    # ``compile_graph`` wires the persona nodes instead, but any future caller
+    # of this helper must still carry the real principal into the quota seam.
     messages = state.get("messages", [])[-10:]
     memory_context = state.get("memory_context", "")
     prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
     system = f"You are NEXUS, a helpful AI assistant.\nContext from memory: {memory_context}"
-    state["response"] = await llm.generate(prompt=prompt, system=system)
+    state["response"] = await llm.generate(
+        prompt=prompt, system=system, user_id=state.get("user_id") or None
+    )
     return state
 
 

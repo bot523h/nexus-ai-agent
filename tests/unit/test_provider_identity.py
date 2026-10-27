@@ -198,6 +198,48 @@ def test_no_user_id_zero_sentinel_in_identity_surface() -> None:
 
 
 @pytest.mark.asyncio
+async def test_graph_chat_agent_forwards_caller_identity() -> None:
+    """The deleted ChatAgent's identity behavior survives in the graph helper.
+
+    ``agents/chat_agent.py`` was removed as an orphan module, but PR #198's
+    meaningful change there was ``user_id`` propagation to ``LLMProvider``.
+    The current graph helper is not wired by ``compile_graph`` (persona nodes
+    are), yet it must not regress to an anonymous shared quota bucket if a
+    future caller uses it.
+    """
+    from nexus_ai_agent.orchestration.graph import _chat_agent
+
+    class _IdSpy(FakeLLMProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ids: list[int | None] = []
+
+        async def generate(self, prompt: str, system: str = "", **kwargs: Any) -> str:
+            self.ids.append(kwargs.get("user_id"))
+            return "ok"
+
+    llm = _IdSpy()
+    state: dict[str, Any] = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "memory_context": "",
+        "user_id": 4242,
+        "response": "",
+    }
+    await _chat_agent(llm, state)  # type: ignore[arg-type]
+    assert llm.ids == [4242], f"_chat_agent dropped the caller identity: {llm.ids!r}"
+
+    anonymous: dict[str, Any] = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "memory_context": "",
+        "response": "",
+    }
+    await _chat_agent(llm, anonymous)  # type: ignore[arg-type]
+    assert llm.ids[-1] is None, (
+        f"identity-less _chat_agent must map to the system principal: {llm.ids!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_moderate_forwards_caller_identity() -> None:
     """Moderation runs per user turn — it must bill that user, not the system.
 
