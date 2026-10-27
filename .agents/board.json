@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T10:28:46Z",
+  "updated_at": "2026-10-27T13:05:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -4075,41 +4075,6 @@
       "release_reason": "auto-released by gc at 2026-10-27T06:39:52Z (stale active lease)"
     },
     {
-      "task": "task-258-execution-core-architecture-doc",
-      "title": "docs/architecture/EXECUTION_CORE.md — contract, authority laws, I1-I10",
-      "title_fa": "سند معماری هستهٔ اجرا: قرارداد، قوانین اقتدار، I1-I10",
-      "zone": "docs-architecture",
-      "priority": "P2",
-      "status": "deferred",
-      "scope": "Author the reference architecture page for the V1 execution core: four-verb contract, authority laws, provider-neutral boundary, attempt/fencing model, staging boundary, and the I1-I10 invariant table mapped to enforcing symbols and proving tests.",
-      "scope_fa": "",
-      "prerequisites": [
-        "task-254-execution-core-v1"
-      ],
-      "acceptance_criteria": [
-        "doc maps I1-I10 to enforcing symbols and proving tests (mirrors the test table)",
-        "authority laws + four-verb contract + staging boundary policy documented",
-        "docs integrity suite green"
-      ],
-      "evidence_required": [
-        "docs/architecture/EXECUTION_CORE.md committed with the I1-I10 table mapping each invariant to its enforcing symbol and proving test node",
-        "the contract/authority/staging sections present and provider-neutral (four verbs only: submit/observe/cancel/reconcile)",
-        "pytest -q tests/unit/test_docs_integrity.py green on the claim head (exact command + observed count in the PR body)",
-        "every relative link resolves and the page is indexed in docs/README.md"
-      ],
-      "exclusive_paths": [
-        "docs/architecture/EXECUTION_CORE.md",
-        "tests/unit/test_docs_integrity.py"
-      ],
-      "note": "",
-      "agent_branch": "arena/nexus-night-task258-exec-core-doc",
-      "claimed_at": null,
-      "ttl_hours": 24,
-      "gates_owner": false,
-      "generation": 3,
-      "previous_release_reason": "auto-released by gc at 2026-10-27T10:24:50Z (stale active lease)"
-    },
-    {
       "task": "task-264-passport-attempt-id-alignment",
       "title": "Bind CreativeExecutionPassport attempt ids to the AttemptStaging layout",
       "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
@@ -6627,7 +6592,7 @@
       "title": "Repair existing PR #240: docs: app-first product frame (Telegram is one channel adapter)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/240 on its existing branch docs/app-first-frame, preserving intent and published history. Snapshot head 566318936b3cd09187da10b09ae141f8db7b9dd3; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6653,9 +6618,9 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 2,
       "owner_hint": "Registered for a future authorized repair session on docs/app-first-frame; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": ""
     },
     {
       "task": "pr-repair-242",
@@ -6917,7 +6882,7 @@
       "title": "Close the Task-254 AC-5 proof gap via PR #195 (I1-I10 mutation proofs)",
       "zone": "execution-core",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Rebase PR #195 (arena/290bc0d6-nexus-ai-agent) onto current main and land the M18-M25 execution-core mutation proofs plus the real process-crash recovery test, closing the Task-254 AC-5 evidence gap without weakening any test.",
       "prerequisites": [
         "task-254-execution-core-v1"
@@ -6941,13 +6906,150 @@
         "tests/integration/test_execution_process_crash.py",
         "tests/unit/test_mutation_harness_anchors.py"
       ],
-      "agent_branch": "arena/290bc0d6-nexus-ai-agent",
-      "claimed_at": "2026-10-27T07:00:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
-      "owner_hint": "Claimed for the PR #195 AC-5 closure on arena/290bc0d6-nexus-ai-agent.",
-      "note": "Successor lease closing the Task-254 AC-5 proof gap via PR #195. The 2-line .github/workflows/ci.yml count update rides on the lapsed task-260 reservation (stale >24h; referee exit 0)."
+      "generation": 2,
+      "owner_hint": "Lease released — task done (PR #195 merged as 64db67f); the execution-core zone is free for the next agent.",
+      "note": "CLOSED: PR #195 merged into main as 64db67f1877e3fefc58fb242298796c2b8bdad7d (2026-10-27), closing the Task-254 AC-5 proof gap. Evidence on head 2f11afb: execution-core mutation campaign 25/25 caught; AC-5 surface 66 passed; CI 23/23 green; ownership referee exit 0 (30 sources); CodeRabbit findings (I5 provider_run_id assertion, M23 verdict, MODULE_MAP R23) all fixed and acknowledged; Sourcery approved. Lease released so the execution-core zone is free for the next agent."
+    },
+    {
+      "task": "task-266-gate-bootstrap-integrity",
+      "title": "P0 GOVERNANCE GAP: `claim --gates` silently no-ops on a live own lease (heartbeat path) -> the board can never reach exactly one gates_owner by the documented route",
+      "title_fa": "شکاف P0 حاکمیتی: `claim --gates` روی اجارهٔ زندهٔ خودِ عامل بی‌صدا بی‌اثر است، پس برد از مسیر مستند هرگز به «دقیقاً یک مالک گیت» نمی‌رسد.",
+      "zone": "coordination-referee",
+      "priority": "P0",
+      "status": "done",
+      "scope": "DELIVERED (PR#202) + REVIEW CLOSURE in progress. Delivered: the heartbeat `--gates` grant, and the referee reading every pushed open-PR head. Review closure (two CodeRabbit findings, both reproduced RED first): (A) `_open_pr_heads` now walks every page of the listing and treats a failed or malformed page, an over-long listing and a head without repository identity as unverifiable; (B) PR heads are read by full identity — (repository, ref) — fetched from their own repository into their own ref namespace, with the URL derived from the validated owner/name rather than any payload URL, and dedupe by identity so two forks sharing a ref name stay two sources.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "heartbeat (`claim <task> --branch <own> --gates --expected-generation N`) on a live gate-less own lease sets gates_owner=True and leaves exactly one live owner, clearing any other holder",
+        "the same command when the caller already holds the gate is idempotent: still exactly one owner, board otherwise unchanged",
+        "a heartbeat WITHOUT --gates leaves gates_owner unchanged (never silently drops the gate)",
+        "a stale generation with --gates is still refused with exit 2 and the board stays byte-identical",
+        "the success line reports the resulting gate state (no success message without the effect)",
+        "the referee's gate-ownership handling matches the adopted advisory policy: it reports the live owner count at zero, one, and two owners without failing, and the historical fail-closed exit-2 results are recorded in this task's evidence as pre-policy behaviour",
+        "scripts/board_referee_mutations.py kills every new guard (N/N)",
+        "scripts/agent_board.py, tests/unit/test_agent_board.py, scripts/board_referee_mutations.py, docs/MULTI_AGENT_PROTOCOL.md only",
+        "all open-PR pages are read; a failed/malformed page or an over-long listing is unverifiable, never partial",
+        "a PR head is read from its own repository+ref; a fork head named `main` is never resolved via origin/main",
+        "a fetch URL is derived from a validated owner/name identity, never from a payload-supplied URL",
+        "two repositories sharing a ref name are two sources",
+        "each new guard is killed by its own test and by the permanent mutation campaign (no survivor, no drift)"
+      ],
+      "evidence_required": [
+        "RED reproduction of the silent no-op before the fix (command + observed output)",
+        "pytest --noconftest -q tests/unit/test_agent_board.py green after the fix",
+        "python scripts/board_referee_mutations.py -> N/N killed, exit 0",
+        "make lint && make types && make test on the final SHA",
+        "python scripts/agent_board.py check --files <changed> --branch <branch> with the exit code interpreted (2 is not a pass)"
+      ],
+      "exclusive_paths": [
+        "scripts/agent_board.py",
+        "tests/unit/test_agent_board.py",
+        "scripts/board_referee_mutations.py",
+        "docs/MULTI_AGENT_PROTOCOL.md"
+      ],
+      "owner_hint": "unclaimed; zone coordination-referee",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 8,
+      "evidence": "RED before the fix (stdlib import-by-path, temp board copy): `claim synthetic-dir-claim --branch arena/111-someone-else --gates` on a live gate-less own lease -> exit 0, \"renewed lease … generation 0\", gates_owner still False, live owners 0. GREEN after: same command -> gates_owner: True (taken now), exactly one live owner. Referee coverage, live: `check --files scripts/agent_board.py,tests/unit/test_agent_board.py --branch arena/b561a2be-nexus-ai-agent` reported 27 source(s) read before the fix and 55 after (53 open-PR branches + local + origin/main); with 53 open PRs the old cap dropped 28 pushed boards while still printing 'no overlap — safe to proceed' (exit 0). Adversarial proof: each of the four new guards re-introduced in isolation -> the NEW test fails on the assertion (not on an import error): 4/4 killed. Permanent campaign: `python scripts/board_referee_mutations.py` -> 18/18 killed, exit 0 (was 13/14 on the pristine tree, exit 1: `foreign_worktree_boards_skipped` survived because the test asserted only the exit code, which the gates fail-closed branch also produced). Full gates as the live gates owner: `make lint` / `make types` / `make version-check` clean, `pytest -q -m \"not slow\"` -> 3881 passed, 31 skipped in 210.85s. Gate-invariant coverage added after the first push: check is now tested at ZERO and at TWO live gate holders (both exit 2 with the reason asserted) plus a permanent mutant (exactly_one_gate_owner_ignored) -> campaign 19/19. | REVIEW CLOSURE: RED probes (5/5 red before, all green after): 101-PR listing with the conflict on page two -> exit 0 before / exit 1 after; page-2 fetch failure -> exit 0 before / exit 2 after; fork PR named `main` -> origin/main read before (exit 0) / fork read after (exit 1); two forks sharing `release` -> deduped to nothing before / two sources after. Mutation campaign 26/26 killed, exit 0, no survivor and no drifted mutant (a survivor was found first: the read used a hard-coded ref while the test only asserted the fetch — the assertion now pins the `git show` ref too). Targeted suites 200 passed; ruff + mypy clean. A self-inflicted regression was caught before pushing: the first version of the head type was a dataclass, which raises AttributeError under the by-path module loading used by two sibling referee test files; it is a NamedTuple now.",
+      "ci_evidence": "Local full gates (run as the live gates owner, before release): make lint clean; make types -> 289 files; make version-check ok; pytest -q -m 'not slow' -> 3883 passed, 31 skipped in 195.70s. Mutation campaign: 19/19 killed, exit 0. Referee: check on the five changed files -> 55 source(s) read, no overlap, exit 0. GitHub Actions on the final pushed SHA is the record for CI; see the PR checks.",
+      "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/202"
+    },
+    {
+      "task": "task-267-truth041-live-lease-alignment",
+      "title": "P1 GOVERNANCE GAP (covered by open PR#189): the truth doctor and the referee disagree about what a live lease is",
+      "title_fa": "",
+      "zone": "runtime-truth-tooling",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "truth.py::check_board_truth flags `gates_owner and status != \"active\"` while scripts/agent_board.py ACTIVE_STATUSES treats active_in_review as a live lease and _active_gates_owners counts it as the one valid gate holder — two validators, one invariant, opposite verdicts. Direction 2 is also uncovered: a claim with status=active but an EXPIRED lease keeps gates_owner while the referee already treats the board as holding zero owners, and TRUTH041 stays silent. tests/architecture/test_repo_truth_consistency.py runs the doctor against the real tree in CI, so direction 1 is a red main for a state the referee accepts. NOT duplicated here: open PR#189 already implements LIVE_LEASE_STATUSES + test_live_lease_statuses_match_the_board_cli + the two negative tests.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "TRUTH041 uses the referee's live-lease predicate (status in ACTIVE_STATUSES AND unexpired)",
+        "a board-level test pins the doctor's status set equal to scripts/agent_board.py::ACTIVE_STATUSES",
+        "an active-but-expired gates_owner IS reported (the direction that is silent today)",
+        "reconcile with PR#189 rather than shipping a second implementation"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/diagnostics/truth.py",
+        "tests/unit/test_truth_doctor.py"
+      ],
+      "owner_hint": "unclaimed; recorded by task-266 so it is not forgotten",
+      "evidence_required": [
+        "RED: a live-but-expired gates_owner that TRUTH041 misses today (command + observed output)",
+        "pytest -q on the board-level status-set lockstep test (doctor set == ACTIVE_STATUSES) green",
+        "python -m nexus_ai_agent.diagnostics.truth on the final SHA (no findings)",
+        "the PR#189 reconciliation diff, or a note why it was superseded"
+      ]
+    },
+    {
+      "task": "task-268-board-referee-mutation-campaign-in-ci",
+      "title": "P1 EVIDENCE GAP: the board-referee mutation campaign is not wired into CI, and one of its mutants survived unnoticed",
+      "title_fa": "",
+      "zone": "ci-quality",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "scripts/board_referee_mutations.py is the adversarial proof for the coordination referee, but no CI job runs it: grep 'board_referee_mutations' .github/workflows/ci.yml -> nothing (continuum/temporal/trust/remote-key campaigns ARE wired). Measured on the pristine main tree (isolated archive copy): 13/14 killed, EXIT 1 — `foreign_worktree_boards_skipped` survived because test_check_unreliable_worktree_enumeration_is_exit_2 asserted only the exit code, and the zero-gates-owner fail-closed branch produced exit 2 as well. task-266 made that test falsifiable (18/18 killed) but the campaign still has no CI rail, so the next survivor will be invisible again.",
+      "scope_fa": "",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a CI job runs scripts/board_referee_mutations.py and fails the build when any mutant survives",
+        "the job is pinned to a full commit SHA like the other mutation rails",
+        "a deliberately weak assertion is shown to turn the rail red (the rail is not a rubber stamp)"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/ci.yml"
+      ],
+      "owner_hint": "unclaimed; recorded by task-266 so it is not forgotten",
+      "evidence_required": [
+        "the CI job name and the pinned commit SHA of its actions",
+        "a deliberately weakened assertion that turns the rail red (before/after run links)",
+        "python scripts/board_referee_mutations.py -> N/N killed, exit 0, on the final SHA"
+      ]
+    },
+    {
+      "task": "task-258-execution-core-architecture-doc",
+      "title": "docs/architecture/EXECUTION_CORE.md — contract, authority laws, I1-I10",
+      "title_fa": "سند معماری هستهٔ اجرا: قرارداد، قوانین اقتدار، I1-I10",
+      "zone": "docs-architecture",
+      "priority": "P2",
+      "status": "deferred",
+      "scope": "Author the reference architecture page for the V1 execution core: four-verb contract, authority laws, provider-neutral boundary, attempt/fencing model, staging boundary, and the I1-I10 invariant table mapped to enforcing symbols and proving tests.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "doc maps I1-I10 to enforcing symbols and proving tests (mirrors the test table)",
+        "authority laws + four-verb contract + staging boundary policy documented",
+        "docs integrity suite green"
+      ],
+      "evidence_required": [
+        "docs/architecture/EXECUTION_CORE.md committed with the I1-I10 table mapping each invariant to its enforcing symbol and proving test node",
+        "the contract/authority/staging sections present and provider-neutral (four verbs only: submit/observe/cancel/reconcile)",
+        "pytest -q tests/unit/test_docs_integrity.py green on the claim head (exact command + observed count in the PR body)",
+        "every relative link resolves and the page is indexed in docs/README.md"
+      ],
+      "exclusive_paths": [
+        "docs/architecture/EXECUTION_CORE.md",
+        "tests/unit/test_docs_integrity.py"
+      ],
+      "note": "",
+      "agent_branch": "arena/nexus-night-task258-exec-core-doc",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 3,
+      "previous_release_reason": "auto-released by gc at 2026-10-27T10:24:50Z (stale active lease)"
     }
   ],
   "deferred_log": [
@@ -7736,5 +7838,6 @@
       "reason": "Session-bound-branch rule: this session is fixed to arena/290bc0d6-nexus-ai-agent and cannot push to arena/execution-core-v1-nexus-ai-agent (the claim's predecessor branch / PR #191, head 08060d5). Per the PR#102->PR#107 salvage precedent the predecessor's commits are adopted VERBATIM (git merge --ff-only 48f280c..08060d5, authorship preserved) and the Task-254 closure continues on the successor branch under this claim (generation 1->2 fences the departed holder). The predecessor session is gone and its branch cannot renew; per the orphaned-lease rule this claim must follow its live work, not a dead branch."
     }
   ],
-  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins."
+  "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins.",
+  "merge_resolution_note": "2026-10-27: arena/b561a2be-nexus-ai-agent merged origin/main (64db67f, post-PR#195) into its task-266 branch. Only .agents/board.json, scripts/board_referee_mutations.py and tests/unit/test_agent_board.py conflicted. Resolution is a UNION: main's board is the base (newest state wins for shared records), then the three task-266 records (task-266-gate-bootstrap-integrity, task-267-truth041-live-lease-alignment, task-268-board-referee-mutation-campaign-in-ci) are re-applied on top. No main claim, note or deferral was dropped."
 }
