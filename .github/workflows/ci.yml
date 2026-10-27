@@ -363,7 +363,7 @@ jobs:
   # Budget: referee ≈20 s, Gate-5 ≈2 min on the hosted runner (17 probes × 3
   # targeted pytest runs); the 25-minute cap is the same as the other campaigns.
   governance-mutations:
-    name: governance-mutations (board referee 16 + Gate-5 fencing 17)
+    name: governance-mutations (board referee 28 + Gate-5 fencing 17)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -376,7 +376,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - name: isolated worktree for the campaigns
         run: git worktree add --detach "$RUNNER_TEMP/mutation-worktree" HEAD
-      - name: board referee mutations (16/16 must be killed)
+      - name: board referee mutations (28/28 must be killed)
         working-directory: ${{ runner.temp }}/mutation-worktree
         run: python scripts/board_referee_mutations.py
       - name: Gate-5 execution-fencing probes (17/17 must be caught)

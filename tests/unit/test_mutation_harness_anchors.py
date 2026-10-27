@@ -62,7 +62,8 @@ def test_referee_mutations_anchor_exactly_once_in_agent_board(referee: dict[str,
     assert Path(referee["SCRIPT"]) == REPO / "scripts" / "agent_board.py"
     drift = {m.name: source.count(m.old) for m in referee["MUTATIONS"] if source.count(m.old) != 1}
     assert drift == {}, f"referee anchors must occur exactly once: {drift}"
-    assert len(referee["MUTATIONS"]) == 16
+    # 28 after the PR #202 task-266 review closure (was 16).
+    assert len(referee["MUTATIONS"]) == 28
 
 
 def test_gate5_probe_anchors_occur_exactly_once_in_their_targets(gate5: dict[str, Any]) -> None:
