@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T01:14:33Z",
+  "updated_at": "2026-10-27T06:39:52Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -4019,7 +4019,7 @@
       "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Run scripts/execution_core_mutations.py as a CI mutation job",
       "scope_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "prerequisites": [
@@ -4039,10 +4039,11 @@
       "agent_branch": "arena/task-260-exec-mutations-ci",
       "claimed_at": "2026-10-22T18:46:06Z",
       "ttl_hours": 24,
-      "gates_owner": true,
+      "gates_owner": false,
       "note": "Execution-core mapping: the native execution core (Task-254) merged via PR #192 (merge commit a48326ded85bbe4e0972d645ee0ea6e877935362, 'supersedes #191'); PR #191 (arena/execution-core-v1-nexus-ai-agent) is CLOSED and superseded. PR #241 is the separate Task-260 mutation-CI follow-up, not the execution-core implementation. CI wiring lives in .github/workflows/ci.yml (zone ci-quality); the harness scripts/execution_core_mutations.py is the execution-core zone (task-254, done).",
       "generation": 2,
-      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)"
+      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)",
+      "release_reason": "auto-released by gc at 2026-10-27T06:39:52Z (stale active lease)"
     },
     {
       "task": "task-265-flaky-cancel-identity-race",
@@ -4050,7 +4051,7 @@
       "title_fa": "",
       "zone": "execution-core",
       "priority": "P2",
-      "status": "active",
+      "status": "expired",
       "scope": "test_execution_native_backend.py::test_cancel_without_a_fencing_token_is_refused failed once in a full-suite run (1 failed,3878 passed) and passed on immediate rerun (3879 passed,31 skipped). submit() reads facts after a to_thread yield, so the worker can reserve (attempt=1) before the facts read, binding a fencing_token; the test assumes a fresh submit is unbound. Make the assertion robust or gate the reservation deterministically.",
       "scope_fa": "",
       "prerequisites": [],
@@ -4068,7 +4069,8 @@
       "claimed_at": "2026-10-24T04:48:15Z",
       "gates_owner": false,
       "generation": 1,
-      "ttl_hours": 24
+      "ttl_hours": 24,
+      "release_reason": "auto-released by gc at 2026-10-27T06:39:52Z (stale active lease)"
     },
     {
       "task": "task-264-passport-attempt-id-alignment",
@@ -4076,7 +4078,7 @@
       "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
       "zone": "durable-creative-queue-evidence",
       "priority": "P3",
-      "status": "active",
+      "status": "expired",
       "scope": "Align CreativeExecutionPassport attempt identity and evidence storage with the existing AttemptStaging attempt-scoped contract; change only the passport implementation and its unit tests.",
       "scope_fa": "شناسه‌های attempt در passport و staging از یک منبع باید بیایند تا ردیابی artifact یکتا بماند.",
       "prerequisites": [
@@ -4103,7 +4105,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-10-27T06:39:52Z (stale active lease)"
     },
     {
       "task": "task-256-heartbeat-staleness-proof",
@@ -5977,7 +5980,7 @@
       "title": "Repair existing PR #198: fix(p1-privacy): /stt identity, ask() quota accounting, per-user memory scope, consent copy truth (task-p1a..d)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/198 on its existing branch arena/c5efc6a3-nexus-ai-agent, preserving intent and published history. Snapshot head 25c4965b7bfb751cfa9fd60b09962ee27d8bad80; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6029,7 +6032,7 @@
       "gates_owner": false,
       "generation": 0,
       "owner_hint": "Registered for a future authorized repair session on arena/c5efc6a3-nexus-ai-agent; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently. | REGISTRATION RETIRED: successor PR #253 carries the #198 semantics on arena/7395b06d-nexus-ai-agent; this original-branch registration was never claimed and must not be used as cross-branch authority."
     },
     {
       "task": "pr-repair-201",
@@ -6750,6 +6753,127 @@
       "gates_owner": false,
       "note": "Evidence (branch arena/task-274-langsmith-tracing @ 983e336): `pytest -q tests/unit/test_tracing_bootstrap.py` 8 passed; `pytest -q tests/unit/test_docs_integrity.py tests/unit/test_ci_extras_parity.py tests/unit/test_optional_extras.py` 129 passed/10 skipped; `python scripts/extras_matrix.py check` legs=[core,pdf,speech,translate]; `make lint` clean, `make types` clean, `make deps` clean (langsmith stays in the DEP002 allow-list); full suite in a venv `pytest -q -m 'not slow'` 4491 passed/38 skipped/0 failed. Core-absence contract honoured: langsmith is a core transitive dep (langgraph -> langchain-core), so no `tracing` extra/leg — the opt-in switch governs egress, not installation; the earlier extras leg was removed after the core leg correctly red-flagged the leak. Smoke: `scripts/langsmith_smoke.py` -> SKIPPED_NO_SECRET(exit0) without key, FAILED(exit1) on a bogus key, OK(exit0) with the real key; CI workflow LangSmith tracing smoke run 40287959103 success. Orphan workflow langsmith-connectivity-smoke-20261026 disabled (204). PR #251.",
       "generation": 2
+    },
+    {
+      "task": "pr-repair-198-successor",
+      "title": "Repair PR #198 semantics in successor PR #253",
+      "zone": "pr-repair-campaign",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Port and harden PR #198 privacy, identity, quota, memory and consent behavior onto current main through successor PR #253. Obsolete agents/chat_agent.py is not resurrected; its identity propagation is verified in the current graph/persona architecture.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Registration and claim are pushed before any further implementation on this branch and the full ownership referee exits 0.",
+        "All intended source-PR behavior is preserved or proven obsolete with repository evidence; current main behavior (including LangSmith tracing) remains intact.",
+        "Exact-head CI, lint, types, dependency, board-integrity, version-lockstep and test gates are green on the final head.",
+        "Independent review and required approvals are recorded on the exact final head; no force-push or protection bypass."
+      ],
+      "evidence_required": [
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <actual-changed-files> --branch arena/7395b06d-nexus-ai-agent: exit 0.",
+        "git diff --check; python scripts/check_board_integrity.py; pytest -q tests/unit/test_agent_board.py tests/unit/test_board_authority_option_b.py tests/unit/test_board_integrity_gate.py tests/unit/test_agent_board_pr_visibility.py.",
+        "Exact final head SHA, GitHub Actions run URL and conclusions, review URLs/states and final merge SHA."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/agents/gemma_agent.py",
+        "src/nexus_ai_agent/agents/phi_agent.py",
+        "src/nexus_ai_agent/agents/qwen_agent.py",
+        "src/nexus_ai_agent/agents/store/base_agent.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "src/nexus_ai_agent/bot/memory_handlers.py",
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/speech.py",
+        "src/nexus_ai_agent/llm/fake_llm.py",
+        "src/nexus_ai_agent/llm/fallback_provider.py",
+        "src/nexus_ai_agent/llm/gemini_provider.py",
+        "src/nexus_ai_agent/llm/litellm_provider.py",
+        "src/nexus_ai_agent/llm/local_llama_cpp.py",
+        "src/nexus_ai_agent/llm/local_server_provider.py",
+        "src/nexus_ai_agent/llm/provider.py",
+        "src/nexus_ai_agent/memory/eval.py",
+        "src/nexus_ai_agent/memory/long_term.py",
+        "src/nexus_ai_agent/orchestration/state.py",
+        "tests/unit/test_fallback_provider_law10.py",
+        "tests/unit/test_gemini_ask_quota.py",
+        "tests/unit/test_graph_memory.py",
+        "tests/unit/test_memory_consent_scope.py",
+        "tests/unit/test_memory_context_failclosed.py",
+        "tests/unit/test_memory_scope_isolation.py",
+        "tests/unit/test_phi_moderation_fail_closed.py",
+        "tests/unit/test_provider_identity.py",
+        "tests/unit/test_stt_identity.py"
+      ],
+      "agent_branch": "arena/7395b06d-nexus-ai-agent",
+      "claimed_at": "2026-10-27T06:39:52Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "owner_hint": "Claimed by successor PR #253 on arena/7395b06d-nexus-ai-agent.",
+      "note": "Active successor lease for PR #253. Excludes graph.py to keep active lease paths disjoint; graph.py #198 memory isolation is carried by pr-repair-125-successor."
+    },
+    {
+      "task": "pr-repair-173-successor",
+      "title": "Repair PR #173 semantics in successor PR #253",
+      "zone": "pr-repair-campaign",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Port and harden PR #173 access-context restoration and typed signing failures onto current main through successor PR #253, preserving merged LangSmith tracing in cli.py.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Registration and claim are pushed before any further implementation on this branch and the full ownership referee exits 0.",
+        "All intended source-PR behavior is preserved or proven obsolete with repository evidence; current main behavior (including LangSmith tracing) remains intact.",
+        "Exact-head CI, lint, types, dependency, board-integrity, version-lockstep and test gates are green on the final head.",
+        "Independent review and required approvals are recorded on the exact final head; no force-push or protection bypass."
+      ],
+      "evidence_required": [
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <actual-changed-files> --branch arena/7395b06d-nexus-ai-agent: exit 0.",
+        "git diff --check; python scripts/check_board_integrity.py; pytest -q tests/unit/test_agent_board.py tests/unit/test_board_authority_option_b.py tests/unit/test_board_integrity_gate.py tests/unit/test_agent_board_pr_visibility.py.",
+        "Exact final head SHA, GitHub Actions run URL and conclusions, review URLs/states and final merge SHA."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/cli.py",
+        "src/nexus_ai_agent/creative/packs/delivery/signing.py",
+        "tests/unit/test_delivery_signing.py",
+        "tests/unit/test_inspect_contract.py"
+      ],
+      "agent_branch": "arena/7395b06d-nexus-ai-agent",
+      "claimed_at": "2026-10-27T06:39:52Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "owner_hint": "Claimed by successor PR #253 on arena/7395b06d-nexus-ai-agent.",
+      "note": "Active successor lease for PR #253. Owns cli.py after task-274 release in merged PR #254; preserves tracing bootstrap and inspect cleanup in cli.py."
+    },
+    {
+      "task": "pr-repair-125-successor",
+      "title": "Repair PR #125 semantics in successor PR #253",
+      "zone": "pr-repair-campaign",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Port and harden PR #125 truthful guarded-tool execution semantics onto current main through successor PR #253.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Registration and claim are pushed before any further implementation on this branch and the full ownership referee exits 0.",
+        "All intended source-PR behavior is preserved or proven obsolete with repository evidence; current main behavior (including LangSmith tracing) remains intact.",
+        "Exact-head CI, lint, types, dependency, board-integrity, version-lockstep and test gates are green on the final head.",
+        "Independent review and required approvals are recorded on the exact final head; no force-push or protection bypass."
+      ],
+      "evidence_required": [
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <actual-changed-files> --branch arena/7395b06d-nexus-ai-agent: exit 0.",
+        "git diff --check; python scripts/check_board_integrity.py; pytest -q tests/unit/test_agent_board.py tests/unit/test_board_authority_option_b.py tests/unit/test_board_integrity_gate.py tests/unit/test_agent_board_pr_visibility.py.",
+        "Exact final head SHA, GitHub Actions run URL and conclusions, review URLs/states and final merge SHA."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/agents/executor_agent.py",
+        "src/nexus_ai_agent/orchestration/graph.py",
+        "tests/unit/test_execution_truth.py"
+      ],
+      "agent_branch": "arena/7395b06d-nexus-ai-agent",
+      "claimed_at": "2026-10-27T06:39:52Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "owner_hint": "Claimed by successor PR #253 on arena/7395b06d-nexus-ai-agent.",
+      "note": "Active successor lease for PR #253. Owns graph.py for both PR #125 execution truth and the ported PR #198 memory-isolation changes."
     }
   ],
   "deferred_log": [
