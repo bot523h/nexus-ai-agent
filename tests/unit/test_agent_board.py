@@ -2035,6 +2035,7 @@ def test_a_proven_conflict_survives_an_unreadable_fork_head(
     assert code == 1, "a proven conflict is exit 1, even next to an unreadable source"
     assert "forkb/nexus-ai-agent" in captured, "the unreadable source must not be hidden"
 
+
 # --------------------------------------------------------------------------- #
 # Ported from main (task-220 takeover retirement + the 2026-10-19 advisory
 # gates-owner policy) when #202 was merged up to 64db67f. main retired the
