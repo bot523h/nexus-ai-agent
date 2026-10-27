@@ -23,8 +23,10 @@ several Claude Code sessions over git worktrees of one repo):
   an owner, a scope of exclusive paths, and a TTL) plus a **deferral log** so a
   stopped agent leaves a durable note instead of a silent conflict.
 * **Referee layer** — a deterministic overlap check that any agent (or CI) can run
-  before pushing, and a single **gates owner** rule so two agents never race the
-  same lint/test suite.
+  before pushing, so two agents do not silently edit the same exclusive paths.
+  There is **no mandatory global gates owner** (policy 2026-10-19): each agent runs
+  its own gates and records its own evidence. A `gates_owner` claim remains an
+  optional, advisory, at-most-one marker — it never locks the project.
 
 ## 2. Task lifecycle
 
@@ -140,3 +142,23 @@ New task → add a `claims` entry with `status: "queued"`, a `zone`, a crisp
 `scope`, and explicit `exclusive_paths` (directories with trailing `/`, files
 verbatim). New zone → add to `zones` with the path prefix list. Schema is
 versioned (`"schema": 1`); bump deliberately and update this document.
+
+## 7. Single board authority — owner decision (Option B, 2026-10-22)
+
+The single authoritative coordination board is `.agents/board.json` on `main`.
+`refs/nexus/board` is deprecated and non-authoritative.
+
+- The shipped CLI (`scripts/agent_board.py`) reads and writes the tree board only;
+  its canonical path is the module constant `BOARD`.
+- Branch and worktree boards are still **required overlap evidence**; they never
+  supersede canonical `main` state.
+- A remote ref, manifest or branch board cannot grant execution authority.
+- Schema/integrity validation and the fail-closed exit 2 for unreadable required
+  sources are preserved. Exit 0 (readable, disjoint), 1 (proven overlap) and
+  2 (unreadable/unverifiable shared state) are unchanged.
+- The `gates_owner` field is optional and advisory and never a global prerequisite.
+- Retiring the deprecated ref is a separate audited operation: preserve its exact
+  commit, tree and board bytes first, re-read the remote SHA immediately before
+  deletion, and use an exact-SHA lease (`--force-with-lease`) so a concurrent
+  update is never overwritten.
+- Enforced by `tests/unit/test_board_authority_option_b.py`.

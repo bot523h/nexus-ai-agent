@@ -550,54 +550,6 @@ def _check_with_clean_sources(board_module: ModuleType, monkeypatch: pytest.Monk
     )
 
 
-def test_check_fails_closed_with_no_gate_owner(
-    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
-) -> None:
-    """Zero live gate holders is not "no one is running the gates" — it is unverifiable.
-
-    The gate is lease-scoped, so an idle board legitimately holds none; the
-    referee must then refuse to certify anything (exit 2), because nobody is
-    accountable for the full gates.  Asserting the *reason*, not just the code,
-    is what keeps this honest (see the worktree-source test above for the failure
-    mode that creates: the same exit code from an unrelated branch).
-    """
-    board = _synthetic_directory_claim_board()
-    board["claims"][0]["gates_owner"] = False
-    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
-
-    code = _check_with_clean_sources(board_module, monkeypatch)
-    assert code == 2, "zero gate holders must be fail-closed"
-    assert "exactly one active, unexpired gates_owner" in capsys.readouterr().out
-
-
-def test_check_fails_closed_with_two_gate_owners(
-    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
-) -> None:
-    """The invariant is *exactly* one: a second live holder is a refusal, not a tie-break."""
-    board = _synthetic_directory_claim_board()
-    first = board["claims"][0]
-    first["gates_owner"] = True
-    board["claims"].append(
-        {
-            "task": "task-9999-second-gate-holder",
-            "status": "active",
-            "zone": first["zone"],
-            "agent_branch": "arena/999-second-gate-holder",
-            "claimed_at": first["claimed_at"],
-            "ttl_hours": 24,
-            "gates_owner": True,
-            "exclusive_paths": [],
-        }
-    )
-    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    _pin_clock_inside_lease(monkeypatch, board_module, first)
-
-    code = _check_with_clean_sources(board_module, monkeypatch)
-    assert code == 2, "two live gate holders must be fail-closed"
-    assert "exactly one active, unexpired gates_owner" in capsys.readouterr().out
-
-
 def test_check_proven_conflict_wins_over_unreadable_remote(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2082,3 +2034,142 @@ def test_a_proven_conflict_survives_an_unreadable_fork_head(
     captured = capsys.readouterr().out
     assert code == 1, "a proven conflict is exit 1, even next to an unreadable source"
     assert "forkb/nexus-ai-agent" in captured, "the unreadable source must not be hidden"
+
+# --------------------------------------------------------------------------- #
+# Ported from main (task-220 takeover retirement + the 2026-10-19 advisory
+# gates-owner policy) when #202 was merged up to 64db67f. main retired the
+# mandatory global gates_owner; #202's fail-closed-on-gates tests are therefore
+# removed and these policy tests take their place.
+# --------------------------------------------------------------------------- #
+
+
+def _gated_synthetic_board() -> dict:
+    """The synthetic board with its one lease also holding the (advisory) gate."""
+    board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = True
+    return board
+
+
+def _isolate_worktree_source(board_module: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """origin/main readable and clean, open-PR head source readable and empty."""
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: ({"claims": []}, ""))
+    monkeypatch.setattr(board_module, "_open_pr_heads", lambda repo, token: ([], ""))
+
+
+def _check_args(files: str = "docs/not-owned.md") -> object:
+    return type("A", (), {"files": files, "branch": "arena/999-me", "no_remote": False})()
+
+
+def test_check_git_unavailable_for_worktrees_is_exit_2(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``_git`` returning ``None`` (binary missing) is the same unverifiable verdict."""
+    board = _gated_synthetic_board()
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    _isolate_worktree_source(board_module, monkeypatch)
+    monkeypatch.setattr(board_module, "_git", lambda args, cwd: None)
+    code = board_module.cmd_check(_check_args())
+    assert code == 2
+    assert "git worktree enumeration" in capsys.readouterr().out
+
+
+def test_check_is_clean_with_no_gates_owner_policy_2026_10_19(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """No mandatory global gates_owner: zero owners must NOT block the check.
+
+    Policy 2026-10-19: every agent runs its own gates; a missing (or doubled)
+    gates_owner is advisory and never makes independent work unverifiable.
+    """
+    board = _synthetic_directory_claim_board()  # gates_owner is False
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    _isolate_worktree_source(board_module, monkeypatch)
+    code = board_module.cmd_check(_check_args("docs/not-owned-by-anyone.md"))
+    out = capsys.readouterr().out
+    assert code == 0, "zero gates_owners must be verifiable (exit 0), not fail-closed"
+    assert "gates_owner (advisory)" in out
+
+
+def test_check_reports_multiple_gates_owners_without_blocking(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Two gates_owners is a reported anomaly, never a global lock."""
+    board = _synthetic_directory_claim_board()
+    board["claims"][0]["gates_owner"] = True
+    board["claims"].append(
+        {
+            "task": "synthetic-second-gate",
+            "status": "active",
+            "zone": "synthetic",
+            "agent_branch": "arena/222-other",
+            "claimed_at": "2026-01-01T00:00:00Z",
+            "ttl_hours": 24,
+            "gates_owner": True,
+            "exclusive_paths": ["docs/elsewhere.md"],
+        }
+    )
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    _isolate_worktree_source(board_module, monkeypatch)
+    code = board_module.cmd_check(_check_args("docs/not-owned-by-anyone.md"))
+    out = capsys.readouterr().out
+    assert code == 0, "a doubled gates_owner must be advisory, not fail-closed"
+    assert "2 active" in out
+
+
+def test_check_still_fails_closed_when_a_source_is_unreadable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The safety floor is unchanged: an unreadable source is still exit 2."""
+    board = _synthetic_directory_claim_board()  # no gates owner
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    monkeypatch.setattr(board_module, "_read_remote_board", lambda: (None, "test: remote offline"))
+    code = board_module.cmd_check(_check_args("docs/not-owned-by-anyone.md"))
+    assert code == 2, "an unreadable source must stay exit 2 (safety floor preserved)"
+
+
+def test_takeover_of_a_never_released_lease_records_no_release_history(
+    board_module: ModuleType,
+) -> None:
+    """Control: with nothing to retire, a claim adds neither reason key."""
+    task = _first_claimable(board_module.BOARD)
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    claim = next(c for c in board["claims"] if c["task"] == task)
+    claim.pop("release_reason", None)
+    claim.pop("previous_release_reason", None)
+    board_module.BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
+    args = type("A", (), {"task": task, "branch": "arena/fresh", "ttl": 24, "gates": False})()
+    assert board_module.cmd_claim(args) == 0
+    reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    live = next(c for c in reloaded["claims"] if c["task"] == task)
+    assert "release_reason" not in live and "previous_release_reason" not in live
+
+
+def test_takeover_retires_the_gc_release_reason(board_module: ModuleType) -> None:
+    """A takeover must not leave gc's "auto-released" reason on a live lease."""
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    stale = next(c for c in board["claims"] if c["task"] == "synthetic-dir-claim")
+    stale["claimed_at"] = _iso(datetime.now(timezone.utc) - timedelta(hours=48))
+    stale["ttl_hours"] = 1
+    stale["generation"] = 2
+    board_module.BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
+    args = type(
+        "A",
+        (),
+        {
+            "task": "synthetic-dir-claim",
+            "branch": "arena/new-owner",
+            "ttl": 24,
+            "gates": False,
+            "expected_generation": 2,
+        },
+    )()
+    assert board_module.cmd_claim(args) == 0
+    reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    live = next(c for c in reloaded["claims"] if c["task"] == "synthetic-dir-claim")
+    assert live["status"] == "active" and live["agent_branch"] == "arena/new-owner"
+    assert "release_reason" not in live, "a live lease must not carry a stale release reason"
+    assert "stale active lease" in live["previous_release_reason"]

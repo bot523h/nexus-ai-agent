@@ -33,7 +33,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "agent_board.py"
-TESTS = ("tests/unit/test_agent_board.py",)
+TESTS = (
+    "tests/unit/test_agent_board.py",
+    "tests/unit/test_board_authority_option_b.py",
+)
 
 
 @dataclass(frozen=True)
@@ -202,16 +205,24 @@ MUTATIONS: tuple[Mutation, ...] = (
         "two forks sharing a ref name are two sources, not one (task-266 review B)",
     ),
     Mutation(
-        "exactly_one_gate_owner_ignored",
-        "    if not no_remote and (malformed_owners or len(owners) != 1):",
-        "    if False:  # mutation: ignore the exactly-one-gates-owner invariant\n        pass\n    if not no_remote and (malformed_owners or len(owners) != 1) and False:",
-        "the referee must refuse to certify anything without exactly one live gate holder",
-    ),
-    Mutation(
         "open_pr_source_set_truncated",
         "    for start in range(0, len(local), _REMOTE_BRANCH_FETCH_LIMIT):",
         "    for start in range(0, min(len(local), _REMOTE_BRANCH_FETCH_LIMIT), _REMOTE_BRANCH_FETCH_LIMIT):  # mutation: cap the source set",
         "every open-PR head must be consulted; a capped source set is a false clean pass (task-266)",
+    ),
+    Mutation(
+        "authority_ref_reintroduced",
+        'BOARD = ROOT / ".agents" / "board.json"',
+        'BOARD = ROOT / ".agents" / "board.json"\n_BOARD_AUTHORITY_REF = "refs/nexus/board"  # mutation: deprecated ref becomes an authority path',
+        "Option B: the tree board is the only authority; a ref-shaped authority "
+        "path must be killed by test_board_authority_option_b.py",
+    ),
+    Mutation(
+        "gates_owner_absence_fails_the_check",
+        '        print("gates_owner (advisory): none — no mandatory global gates owner")',
+        "        return 2  # mutation: reintroduce the mandatory gates_owner (fail-closed on absence)",
+        "policy 2026-10-19: a missing gates_owner must not fail the check "
+        "(zero owners is verifiable, never unverifiable)",
     ),
 )
 

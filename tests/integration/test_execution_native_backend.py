@@ -251,6 +251,37 @@ async def test_submit_is_idempotent_on_the_nexus_key(tmp_path: Path) -> None:
     await _drain(queue, first.job_id)
 
 
+@pytest.mark.asyncio
+async def test_idempotent_submit_returns_the_unbound_job_identity(tmp_path: Path) -> None:
+    """I8/I1: ``submit`` is job-level; it must never leak the live attempt's fence.
+
+    ``submit`` reads the durable row *after* the worker may already have
+    reserved it (the row is PROCESSING at ``attempt >= 1``).  Returning that
+    attempt's ``fencing_token`` would hand the caller a fence it never owned —
+    the source of the intermittent failure of
+    ``test_cancel_without_a_fencing_token_is_refused``, where a raced ``submit``
+    bound a token and then cancelled the live attempt.  The deterministic form
+    is an idempotent duplicate ``submit`` on an already-in-flight row.
+    """
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+
+    first = await backend.submit(_request("same-key"))
+    await _wait_status(queue, first.job_id, JobStatus.PROCESSING)  # attempt = 1 durable
+
+    second = await backend.submit(_request("same-key"))  # idempotent duplicate
+    assert second.job_id == first.job_id
+    assert second.fencing_token is None, "submit leaked the live attempt's fence"
+    assert second.attempt_id is None
+    assert second.request_id == first.request_id  # canonical identity still resolved
+    assert second.idempotency_key == "same-key"
+
+    gate.event(1).set()
+    assert await _drain(queue, first.job_id) is JobStatus.COMPLETED
+
+
 # --------------------------------------------------------------------------- #
 # I7 — observe maps durable status; an unknown job is UNKNOWN, never FAILED
 # --------------------------------------------------------------------------- #
@@ -287,6 +318,42 @@ async def test_observe_unknown_job_is_unknown_not_failed(tmp_path: Path) -> None
     assert observation.failure is not None
     assert observation.failure.disposition is FailureDisposition.UNKNOWN
     assert not observation.failure.is_terminal_business_failure
+
+
+@pytest.mark.asyncio
+async def test_observe_corrupt_status_is_unknown_not_failed(tmp_path: Path) -> None:
+    """I7 (2): an unreadable/corrupt persisted status is UNKNOWN, never FAILED.
+
+    ``parse_job_status`` fail-closes on an unknown spelling; the backend must
+    surface that as an *unreadable* UNKNOWN observation, not launder it into a
+    canonical success or a terminal business failure.
+    """
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+
+    submitted = await backend.submit(_request("corrupt-status"))
+    await _wait_status(queue, submitted.job_id, JobStatus.PROCESSING)
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE nexus_job_queue SET status = 'not-a-real-status' WHERE id = ?",
+            (submitted.job_id,),
+        )
+
+    identity = ExecutionIdentity(
+        request_id=submitted.request_id,
+        idempotency_key=submitted.idempotency_key,
+        job_id=submitted.job_id,
+    )
+    observation = await backend.observe(identity)
+    assert observation.state is ObservationState.UNKNOWN
+    assert observation.failure is not None
+    assert observation.failure.disposition is FailureDisposition.UNKNOWN
+    assert not observation.failure.is_terminal_business_failure
+
+    gate.event(1).set()
+    await queue.shutdown()
 
 
 @pytest.mark.asyncio
@@ -342,6 +409,9 @@ async def test_provider_run_id_never_changes_observed_truth(tmp_path: Path) -> N
     )
     observation = await backend.observe(claimed)
     assert observation.state is ObservationState.PROCESSING, "a provider claim is not authority"
+    assert observation.identity.provider_run_id is None, (
+        "the observed identity never retains the caller's provider run id"
+    )
     gate.event(1).set()
     await _drain(queue, identity.job_id)
 
@@ -449,8 +519,10 @@ async def test_cancel_running_job_is_fenced_and_recoverable(tmp_path: Path) -> N
 async def test_cancel_without_a_fencing_token_is_refused(tmp_path: Path) -> None:
     """P0-1: ``job_id`` alone is never cancellation authority (fail closed).
 
-    An unbound identity (submit-time identity, no fencing token) cannot name
-    the attempt it speaks for, so it must not cancel the current attempt.
+    An unbound identity (no fencing token) cannot name the attempt it speaks
+    for, so it must not cancel the current attempt. Whether ``submit()``
+    returns a bound handle is scheduling-dependent (see the body), so the
+    assertion is on the durable attempt truth, not on a per-run timing.
     """
     db = tmp_path / "jobs.sqlite3"
     gate = _Gate()
@@ -459,15 +531,31 @@ async def test_cancel_without_a_fencing_token_is_refused(tmp_path: Path) -> None
 
     identity = await backend.submit(_request())
     await _wait_status(queue, identity.job_id, JobStatus.PROCESSING)
-    assert identity.fencing_token is None  # the submit-time identity is unbound
+    worker = queue._tasks[identity.job_id]
 
-    assert await backend.cancel(identity) is False
+    # Whether the returned handle is bound is inherently scheduling-dependent:
+    # ``submit()`` reads the row's facts *after* ``enqueue()`` has yielded, so a
+    # worker that reserves within that window binds the durable row to attempt 1
+    # before the facts are read. Both outcomes are contract-legal — the contract
+    # never promises an unbound submit-time identity — so assert the durable
+    # truth (exactly one active attempt) instead of a per-run timing.
+    attempt = _row(db, identity.job_id)["attempt"]
+    assert attempt == 1
+
+    # Deterministic: a bare job handle (no fencing token) never cancels, whether
+    # or not the submit-time handle happened to bind during the enqueue window.
+    bare = ExecutionIdentity(
+        request_id=identity.request_id,
+        idempotency_key=identity.idempotency_key,
+        job_id=identity.job_id,
+    )
+    assert await backend.cancel(bare) is False
     row = _row(db, identity.job_id)
     assert row["status"] == JobStatus.PROCESSING.value  # the attempt is untouched
-    assert not queue._tasks[identity.job_id].cancelled()
+    assert not worker.cancelled()
 
     # The same job, presented with its current fencing token, cancels cleanly.
-    current = identity.with_attempt(attempt_id="a#1", fencing_token=1)
+    current = identity.with_attempt(attempt_id="a#1", fencing_token=attempt)
     assert await backend.cancel(current) is True
     assert (await queue.get_status(identity.job_id)) is JobStatus.PENDING
     gate.event(1).set()
