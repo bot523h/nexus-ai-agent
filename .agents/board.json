@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T21:39:27Z",
+  "updated_at": "2026-10-27T21:45:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -6774,7 +6774,7 @@
       "title": "Repair PR #198 semantics in successor PR #253",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Port and harden PR #198 privacy, identity, quota, memory and consent behavior onto current main through successor PR #253. Obsolete agents/chat_agent.py is not resurrected; its identity propagation is verified in the current graph/persona architecture.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6817,20 +6817,21 @@
         "tests/unit/test_provider_identity.py",
         "tests/unit/test_stt_identity.py"
       ],
-      "agent_branch": "arena/7395b06d-nexus-ai-agent",
-      "claimed_at": "2026-10-27T06:39:52Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "Claimed by successor PR #253 on arena/7395b06d-nexus-ai-agent.",
-      "note": "Active successor lease for PR #253. Excludes graph.py to keep active lease paths disjoint; graph.py #198 memory isolation is carried by pr-repair-125-successor."
+      "note": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing).",
+      "release_reason": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing)."
     },
     {
       "task": "pr-repair-173-successor",
       "title": "Repair PR #173 semantics in successor PR #253",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Port and harden PR #173 access-context restoration and typed signing failures onto current main through successor PR #253, preserving merged LangSmith tracing in cli.py.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6850,20 +6851,21 @@
         "tests/unit/test_delivery_signing.py",
         "tests/unit/test_inspect_contract.py"
       ],
-      "agent_branch": "arena/7395b06d-nexus-ai-agent",
-      "claimed_at": "2026-10-27T06:39:52Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "Claimed by successor PR #253 on arena/7395b06d-nexus-ai-agent.",
-      "note": "Active successor lease for PR #253. Owns cli.py after task-274 release in merged PR #254; preserves tracing bootstrap and inspect cleanup in cli.py."
+      "note": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing).",
+      "release_reason": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing)."
     },
     {
       "task": "pr-repair-125-successor",
       "title": "Repair PR #125 semantics in successor PR #253",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Port and harden PR #125 truthful guarded-tool execution semantics onto current main through successor PR #253.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6882,13 +6884,14 @@
         "src/nexus_ai_agent/orchestration/graph.py",
         "tests/unit/test_execution_truth.py"
       ],
-      "agent_branch": "arena/7395b06d-nexus-ai-agent",
-      "claimed_at": "2026-10-27T06:39:52Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "Claimed by successor PR #253 on arena/7395b06d-nexus-ai-agent.",
-      "note": "Active successor lease for PR #253. Owns graph.py for both PR #125 execution truth and the ported PR #198 memory-isolation changes."
+      "note": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing).",
+      "release_reason": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing)."
     },
     {
       "task": "pr-repair-195-successor",
