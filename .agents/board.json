@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T08:20:00Z",
+  "updated_at": "2026-10-27T10:40:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -6882,7 +6882,7 @@
       "title": "Close the Task-254 AC-5 proof gap via PR #195 (I1-I10 mutation proofs)",
       "zone": "execution-core",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Rebase PR #195 (arena/290bc0d6-nexus-ai-agent) onto current main and land the M18-M25 execution-core mutation proofs plus the real process-crash recovery test, closing the Task-254 AC-5 evidence gap without weakening any test.",
       "prerequisites": [
         "task-254-execution-core-v1"
@@ -6906,13 +6906,13 @@
         "tests/integration/test_execution_process_crash.py",
         "tests/unit/test_mutation_harness_anchors.py"
       ],
-      "agent_branch": "arena/290bc0d6-nexus-ai-agent",
-      "claimed_at": "2026-10-27T07:00:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "Claimed for the PR #195 AC-5 closure on arena/290bc0d6-nexus-ai-agent.",
-      "note": "Successor lease closing the Task-254 AC-5 proof gap via PR #195. The 2-line .github/workflows/ci.yml count update rides on the lapsed task-260 reservation (stale >24h; referee exit 0)."
+      "note": "CLOSED: PR #195 merged into main as 64db67f1877e3fefc58fb242298796c2b8bdad7d (2026-10-27), closing the Task-254 AC-5 proof gap. Evidence on head 2f11afb: execution-core mutation campaign 25/25 caught; AC-5 surface 66 passed; CI 23/23 green; ownership referee exit 0 (30 sources); CodeRabbit findings (I5 provider_run_id assertion, M23 verdict, MODULE_MAP R23) all fixed and acknowledged; Sourcery approved. Lease released so the execution-core zone is free for the next agent."
     }
   ],
   "deferred_log": [
