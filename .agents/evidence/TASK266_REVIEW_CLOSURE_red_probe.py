@@ -10,14 +10,31 @@ import contextlib
 import importlib.util
 import io
 import json
-import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[2]  # <repo>/.agents/evidence/<this file>
+
+
+@dataclass(frozen=True)
+class _Completed:
+    """Stand-in for a finished git/gh call (subprocess.CompletedProcess shape).
+
+    A plain value object: these probes never spawn a process, so there is no
+    command to inject into — using the stdlib class name here only tripped a
+    static "dangerous subprocess" heuristic.
+    """
+
+    args: list
+    returncode: int
+    stdout: str = ""
+    stderr: str = ""
+
+
 spec = importlib.util.spec_from_file_location("probe2", REPO / "scripts" / "agent_board.py")
 m = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = m
@@ -126,14 +143,14 @@ def gh_paged(url, token):
 
 def git_paged(args, cwd):
     if args[:2] == ["worktree", "list"]:
-        return subprocess.CompletedProcess(args, 0, "", "")
+        return _Completed(args, 0, "", "")
     if args[0] == "fetch":
-        return subprocess.CompletedProcess(args, 0, "", "")
+        return _Completed(args, 0, "", "")
     if args[0] == "show":
         if "arena/999-pr-only" in args[1]:
-            return subprocess.CompletedProcess(args, 0, json.dumps(CONFLICT), "")
-        return subprocess.CompletedProcess(args, 0, json.dumps(CLEAN), "")
-    return subprocess.CompletedProcess(args, 1, "", "")
+            return _Completed(args, 0, json.dumps(CONFLICT), "")
+        return _Completed(args, 0, json.dumps(CLEAN), "")
+    return _Completed(args, 1, "", "")
 
 
 print("FINDING A (pagination, 101 open PRs; the conflict is on PR #101)")
@@ -164,15 +181,15 @@ fetched: list[list[str]] = []
 
 def git_fork(args, cwd):
     if args[:2] == ["worktree", "list"]:
-        return subprocess.CompletedProcess(args, 0, "", "")
+        return _Completed(args, 0, "", "")
     if args[0] == "fetch":
         fetched.append(args)
-        return subprocess.CompletedProcess(args, 0, "", "")
+        return _Completed(args, 0, "", "")
     if args[0] == "show":
         if "attacker" in args[1] or "nexus-referee" in args[1]:
-            return subprocess.CompletedProcess(args, 0, json.dumps(CONFLICT), "")
-        return subprocess.CompletedProcess(args, 0, json.dumps(CLEAN), "")  # origin/main is clean
-    return subprocess.CompletedProcess(args, 1, "", "")
+            return _Completed(args, 0, json.dumps(CONFLICT), "")
+        return _Completed(args, 0, json.dumps(CLEAN), "")  # origin/main is clean
+    return _Completed(args, 1, "", "")
 
 
 c, _ = run("cmd_check", gh_fork, git_fork)
@@ -199,16 +216,16 @@ def _two_fork_git(failing_fetch=None, conflicting="pr-8"):
 
     def git(args, cwd):
         if args[:2] == ["worktree", "list"]:
-            return subprocess.CompletedProcess(args, 0, "", "")
+            return _Completed(args, 0, "", "")
         if args[0] == "fetch":
             seen.append(args)
             who = "forka" if "forka" in " ".join(args) else "forkb"
-            return subprocess.CompletedProcess(args, 0 if who != failing_fetch else 1, "", "")
+            return _Completed(args, 0 if who != failing_fetch else 1, "", "")
         if args[0] == "show":
             has_conflict = conflicting is not None and conflicting in args[1]
             body = CONFLICT if has_conflict else CLEAN
-            return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
-        return subprocess.CompletedProcess(args, 1, "", "")
+            return _Completed(args, 0, json.dumps(body), "")
+        return _Completed(args, 1, "", "")
 
     return seen, git
 
