@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T08:20:00Z",
+  "updated_at": "2026-10-27T10:24:50Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -4101,12 +4101,13 @@
         "docs/architecture/EXECUTION_CORE.md",
         "tests/unit/test_docs_integrity.py"
       ],
-      "note": " | sync test lives in tests/unit/test_docs_integrity.py (zone-listed)",
+      "note": "",
       "agent_branch": "arena/nexus-night-task258-exec-core-doc",
-      "claimed_at": "2026-10-24T04:48:16Z",
+      "claimed_at": "2026-10-27T10:24:50Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1
+      "generation": 2,
+      "previous_release_reason": "auto-released by gc at 2026-10-27T10:24:50Z (stale active lease)"
     },
     {
       "task": "task-264-passport-attempt-id-alignment",

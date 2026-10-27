@@ -155,9 +155,9 @@ that proves it; the mirror is kept honest by
 | I5 | `provider_run_id` is never authority | `nexus_ai_agent.adapters.native_local_backend:NativeLocalBackend.observe` | `tests/integration/test_execution_native_backend.py::test_provider_run_id_never_changes_observed_truth` |
 | I6 | verification is independent from execution | `nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._verify_safely` | `tests/integration/test_execution_native_backend.py::test_handler_success_without_independent_verification_is_not_job_success` |
 | I7 | `UNKNOWN` is not automatically `FAILED` | `nexus_ai_agent.execution.contract:FailureDisposition.is_terminal_business_failure` | `tests/integration/test_execution_native_backend.py::test_observe_unknown_job_is_unknown_not_failed` |
-| I8 | idempotency remains Nexus-owned | `nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue.enqueue` | `tests/integration/test_execution_native_backend.py::test_submit_is_idempotent_on_the_nexus_key` |
+| I8 | idempotency remains Nexus-owned | `nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._insert_or_get` | `tests/integration/test_execution_native_backend.py::test_submit_is_idempotent_on_the_nexus_key` |
 | I9 | `NativeLocalBackend` creates no second queue | `nexus_ai_agent.adapters.native_local_backend:NativeLocalBackend.__init__` | `tests/architecture/test_execution_contract_boundary.py::test_backend_never_constructs_a_queue` |
-| I10 | success notification only after the authoritative commit | `nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._notify_completion` | `tests/integration/test_execution_races.py::test_success_notification_only_after_the_commit` |
+| I10 | success notification only after the authoritative commit | `nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._process_job` | `tests/integration/test_execution_races.py::test_success_notification_only_after_the_commit` |
 
 Boundary laws enforced by architecture tests:
 
