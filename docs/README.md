@@ -17,6 +17,7 @@ placeholder text.
 |---|---|
 | [architecture.md](architecture.md) | Front door: the system in one picture + the reading order. |
 | [architecture/OVERVIEW.md](architecture/OVERVIEW.md) | C4 context & container views, stakeholders, the five quality attributes, frozen constraints, deployment topologies. |
+| [architecture/PRODUCT_FRAME.md](architecture/PRODUCT_FRAME.md) | The product frame: NEXUS is an app with a living core and Telegram is one channel adapter — rules for every agent, reproducible coupling evidence, the F0–F3 migration ladder (owner direction; decision record pending). |
 | [architecture/OVERVIEW.fa.md](architecture/OVERVIEW.fa.md) | خلاصهٔ فارسی و نقشهٔ مسیر مطالعه (navigation summary; English wins on conflict). |
 | [architecture/MODULE_MAP.md](architecture/MODULE_MAP.md) | Layer diagram, package inventory, boundary laws → the tests that enforce them, extension recipes. |
 | [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
@@ -28,6 +29,7 @@ placeholder text.
 | [architecture/SELF_CHARTER.md](architecture/SELF_CHARTER.md) | Living Core Phase 1: the immutable charter, the append-only hash-chained Self-Ledger, fail-closed boot, the human-only amendment door, honest limits, acceptance evidence. |
 | [architecture/PROVENANCE_LEDGER.md](architecture/PROVENANCE_LEDGER.md) | The causal ledger (Project Graph journal): tamper-evident recording of every durable job transition, and the Artifact Passport — the read-only, fail-closed projection that reconciles chain vs. authority and re-measures artifacts. |
 | [architecture/JOB_LIFECYCLE.md](architecture/JOB_LIFECYCLE.md) | Canonical job lifecycle: chain, state machine with owners+invariants, side-effect boundary, artifact verification contract, retry/failure semantics, Result chain. |
+| [architecture/EXECUTION_CORE.md](architecture/EXECUTION_CORE.md) | NEXUS V1 execution core: the four-verb provider-neutral contract, authority laws, identity separation, staging/publication boundary, and the I1–I10 invariant matrix. |
 | [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, ownership, Alembic chain, retention, portability, and what never enters a store. |
 | [architecture/SECURITY.md](architecture/SECURITY.md) | Trust boundaries, STRIDE threat → control → evidence table, P0 audit follow-through, review checklist. |
 | [architecture/OBSERVABILITY.md](architecture/OBSERVABILITY.md) | Structured events, metric policy, health semantics, inspection commands, the short alert list. |
@@ -108,6 +110,10 @@ placeholder text.
 | [audits/AUDIT_REPORT_2026-09-21.md](audits/AUDIT_REPORT_2026-09-21.md) | Full architecture audit (P0 findings + command honesty matrix). |
 | [audits/HANDOFF_ANALYSIS_2026-09-21.md](audits/HANDOFF_ANALYSIS_2026-09-21.md) | Board GC + engineered handoff analysis (agent D session). |
 | [audits/REPO_HYGIENE_REPORT_2026-09-21.md](audits/REPO_HYGIENE_REPORT_2026-09-21.md) | Repository hygiene pass: docs reorganisation, release alignment, branch janitorial work. |
+| [audits/COORDINATION_2026-09-21.md](audits/COORDINATION_2026-09-21.md) | Coordination record, session 01a0c54f (task-113 lint rail): claim mirrors and re-apply blobs — superseded by the live board. Archived from the repository root in the task-162 wave. |
+| [audits/WAVE5_COORDINATION_01a0c5da.md](audits/WAVE5_COORDINATION_01a0c5da.md) | Wave-5 session record (branch arena/01a0c5da): zero-overlap fences, collision record and delivery evidence. Archived from the repository root in the task-162 wave. |
+| [audits/STORAGE_RESILIENCE_CHECKUP_2026-09-21.md](audits/STORAGE_RESILIENCE_CHECKUP_2026-09-21.md) | Storage-resilience ten-step checkup and delivery record backing PR#43 (branch arena/01a0c58a). Archived from the repository root in the task-162 wave. |
+| [audits/REPO_HYGIENE_2026-09-22.md](audits/REPO_HYGIENE_2026-09-22.md) | Janitorial wave (task-162): merged-branch deletion evidence, dated root-doc archival, zero-drift diagnostics — with reproduction commands. |
 | [audits/ARCHITECTURE_DOCS_2026-09-21.md](audits/ARCHITECTURE_DOCS_2026-09-21.md) | Architecture-documentation pass (task-131): what was written, verified, and enforced. |
 | [audits/WAVE5_ACTIVATION_2026-09-21.md](audits/WAVE5_ACTIVATION_2026-09-21.md) | Wave-5 activation audit: unified runtime, six packs active, coverage harness, honest 10-task forward network. |
 | [audits/FORENSIC_PR40_CI_2026-09-21.md](audits/FORENSIC_PR40_CI_2026-09-21.md) | Forensic CI analysis of the red PR#40 wave-4 batch (root cause + A/B proof). |
