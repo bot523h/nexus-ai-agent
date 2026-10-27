@@ -615,7 +615,16 @@ PROBES: tuple[Probe, ...] = (
             '                failure=unknown_failure("job_not_found", f"no durable row for {identity.job_id}"),\n'
             "            )"
         ),
-        mutant="            pass  # MUTATION: missing job falls through to a known verdict",
+        mutant=(
+            "            # MUTATION: a missing job is laundered into a terminal SUCCEEDED verdict\n"
+            "            return ExecutionObservation(\n"
+            "                identity=self._identity_from_facts(\n"
+            "                    identity.job_id, identity.idempotency_key, None\n"
+            "                ),\n"
+            "                state=ObservationState.SUCCEEDED,\n"
+            "                result={},\n"
+            "            )"
+        ),
         tests=(f"{BACKEND_T}test_observe_unknown_job_is_unknown_not_failed",),
     ),
     Probe(

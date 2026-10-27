@@ -409,6 +409,9 @@ async def test_provider_run_id_never_changes_observed_truth(tmp_path: Path) -> N
     )
     observation = await backend.observe(claimed)
     assert observation.state is ObservationState.PROCESSING, "a provider claim is not authority"
+    assert observation.identity.provider_run_id is None, (
+        "the observed identity never retains the caller's provider run id"
+    )
     gate.event(1).set()
     await _drain(queue, identity.job_id)
 
