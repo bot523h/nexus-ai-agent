@@ -1,0 +1,414 @@
+"""The PR convergence registry is infrastructure for a merge campaign — so it is tested.
+
+The 2026-10-25 incident this file guards against: a prior session reported PR
+state from memory ("2 verified ready", "30/30 patch sets merge-ready", "merge is
+impossible: 0 write credentials").  A live read showed 69 open PRs, 46 with real
+conflicts, and a merge that worked on the first attempt.  Both halves of that
+failure are pinned here:
+
+* :func:`pr_convergence.blockers` must never report "ready" for a PR that
+  GitHub will refuse to merge (the classification bug that turns into a plan
+  that cannot execute), and
+* the tier listing must be **total** — every PR lands in a bucket, including the
+  zero-count ones, because a category that disappears from the report is how
+  "30/30 ready" survived three rounds of review.
+
+The module is loaded by path (it lives in ``scripts/``, is stdlib-only, and is
+executed directly by CI), the same pattern as
+``tests/unit/test_board_integrity_gate.py``.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+from typing import Any
+from unittest.mock import patch
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "scripts" / "pr_convergence.py"
+
+_spec = importlib.util.spec_from_file_location("pr_convergence", SCRIPT)
+assert _spec and _spec.loader
+registry = importlib.util.module_from_spec(_spec)
+sys.modules["pr_convergence"] = registry
+_spec.loader.exec_module(registry)
+
+
+#: The real required contexts of this repository's ``main`` protection, read
+#: live from the branch-protection API.  Tests pin the guard against *these*
+#: names so a silent rename of a required check cannot make the guard pass.
+REQUIRED_CONTEXTS = [
+    "lint (ruff + mypy + version lockstep)",
+    'test (pytest -m "not slow")',
+    "merge-base-guard (base == main)",
+]
+
+#: A protection payload with three required contexts and **no** required review
+#: — the actual gate on this repository.  A guard that demanded a review would
+#: wrongly report mergeable PRs as BLOCKED.
+PROTECTION = {
+    "required_status_checks": {"strict": True, "contexts": list(REQUIRED_CONTEXTS)},
+    "required_pull_request_reviews": None,
+}
+
+#: A protection payload that *does* require one approval (for the review tests).
+PROTECTION_WITH_REVIEW = {
+    "required_status_checks": {"strict": True, "contexts": list(REQUIRED_CONTEXTS)},
+    "required_pull_request_reviews": {"required_approving_review_count": 1},
+}
+
+
+def _green_contexts() -> list[dict[str, str]]:
+    return [{"name": name, "conclusion": "SUCCESS"} for name in REQUIRED_CONTEXTS]
+
+
+def _pr(**overrides: Any) -> dict[str, Any]:
+    """A PR that is green, main-bound, up to date — i.e. mergeable."""
+    record: dict[str, Any] = {
+        "baseRefName": "main",
+        "isDraft": False,
+        "mergeable": "MERGEABLE",
+        "mergeStateStatus": "CLEAN",
+        "reviewDecision": "",
+        "headRefOid": "a" * 40,
+        "statusCheckRollup": {"state": "SUCCESS", "contexts": _green_contexts()},
+    }
+    record.update(overrides)
+    return record
+
+
+def _guard(pr: dict[str, Any], **kwargs: Any) -> tuple[int, list[str]]:
+    kwargs.setdefault("protection", PROTECTION)
+    return registry.check_guard(pr, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# the deadlock this tool exists to make visible
+# ---------------------------------------------------------------------------
+def test_green_but_unapproved_is_not_ready() -> None:
+    """When a repo *does* require approval, a green PR without one is blocked."""
+    pr = _pr(reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED")
+    assert registry.blockers(pr, required_approvals=1) == ["NEEDS_APPROVAL"]
+    assert registry.classify(pr, required_approvals=1) == "NEEDS_APPROVAL"
+
+
+def test_a_repo_requiring_no_approval_does_not_invent_one() -> None:
+    """This repository requires 0 approvals; a green PR must be READY, not blocked.
+
+    The mirror of the original bug: a gate that does not exist reported as if it
+    did.  Classification must follow the repository's live requirement.
+    """
+    pr = _pr(reviewDecision="REVIEW_REQUIRED")
+    assert registry.blockers(pr, required_approvals=0) == []
+    assert registry.classify(pr, required_approvals=0) == "READY"
+
+
+def test_needs_approval_is_distinct_from_changes_requested() -> None:
+    """Opposite remedies: one needs a reviewer, the other needs the author.
+
+    Collapsing them is what produced a merge plan with no executable step, so
+    the two codes must never be the same string.
+    """
+    assert "NEEDS_APPROVAL" in registry.BLOCKERS
+    assert "CHANGES_REQUESTED" in registry.BLOCKERS
+    assert registry.BLOCKERS.index("NEEDS_APPROVAL") != registry.BLOCKERS.index("CHANGES_REQUESTED")
+    assert registry.classify(_pr(reviewDecision="CHANGES_REQUESTED")) == "CHANGES_REQUESTED"
+
+
+def test_changes_requested_blocks_even_when_no_approval_is_required() -> None:
+    """A requested change is always a blocker — it is work for the author."""
+    pr = _pr(reviewDecision="CHANGES_REQUESTED")
+    assert registry.classify(pr, required_approvals=0) == "CHANGES_REQUESTED"
+
+
+def test_fully_green_pr_is_ready() -> None:
+    assert registry.blockers(_pr()) == []
+    assert registry.classify(_pr()) == "READY"
+
+
+# ---------------------------------------------------------------------------
+# hard blockers outrank soft ones
+# ---------------------------------------------------------------------------
+def test_wrong_base_outranks_every_other_blocker() -> None:
+    pr = _pr(baseRefName="arena/other", mergeable="CONFLICTING", isDraft=True)
+    assert registry.classify(pr) == "WRONG_BASE_BRANCH"
+
+
+def test_draft_outranks_conflict() -> None:
+    pr = _pr(isDraft=True, mergeable="CONFLICTING")
+    assert registry.classify(pr) == "DRAFT"
+
+
+def test_conflict_outranks_red_ci() -> None:
+    pr = _pr(mergeable="CONFLICTING", statusCheckRollup={"state": "FAILURE"})
+    assert registry.classify(pr) == "CONFLICT"
+
+
+def test_red_ci_is_detected_from_the_rollup_state() -> None:
+    for state in ("FAILURE", "ERROR"):
+        pr = _pr(statusCheckRollup={"state": state})
+        assert registry.classify(pr) == "CI_RED", state
+
+
+def test_pending_ci_is_not_treated_as_a_pass() -> None:
+    for state in ("PENDING", "EXPECTED", "NONE"):
+        pr = _pr(statusCheckRollup={"state": state})
+        assert registry.classify(pr) == "CI_PENDING", state
+
+
+def test_behind_head_requires_a_rebase_even_when_everything_else_is_green() -> None:
+    """`BEHIND` means CI never ran on the current base — merge on this is a guess."""
+    pr = _pr(mergeStateStatus="BEHIND")
+    assert registry.blockers(pr) == ["REBASE_FIRST"]
+    assert registry.classify(pr) == "REBASE_FIRST"
+
+
+def test_blockers_accumulate_in_priority_order() -> None:
+    pr = _pr(mergeable="CONFLICTING", statusCheckRollup={"state": "FAILURE"}, reviewDecision="")
+    assert registry.blockers(pr, required_approvals=1) == ["CONFLICT", "CI_RED", "NEEDS_APPROVAL"]
+
+
+# ---------------------------------------------------------------------------
+# the pre-merge guard must fail closed
+# ---------------------------------------------------------------------------
+def test_guard_passes_a_green_pr_with_the_expected_sha() -> None:
+    code, reasons = _guard(_pr(), expected_sha="a" * 12)
+    assert (code, reasons) == (0, [])
+
+
+def test_guard_rejects_a_moved_head() -> None:
+    """Pinning the reviewed SHA is the whole point: a moved head is not a pass."""
+    code, reasons = _guard(_pr(), expected_sha="b" * 12)
+    assert code == 1
+    assert any("head moved" in reason for reason in reasons)
+
+
+def test_guard_blocks_on_a_missing_required_context() -> None:
+    """A required check absent from the head is not a pass, however green the rest."""
+    contexts = [c for c in _green_contexts() if c["name"] != "merge-base-guard (base == main)"]
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": contexts})
+    code, reasons = _guard(pr)
+    assert code == 1
+    assert any("required checks missing" in reason for reason in reasons)
+
+
+def test_guard_blocks_on_a_red_required_context() -> None:
+    contexts = _green_contexts()
+    contexts[0] = {"name": contexts[0]["name"], "conclusion": "FAILURE"}
+    pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
+    code, reasons = _guard(pr)
+    assert code == 1
+    assert any("not green" in reason for reason in reasons)
+
+
+def test_guard_ignores_a_non_required_context_that_is_skipped() -> None:
+    """A non-required job that is SKIPPED (e.g. merge-base-guard on a push) is fine."""
+    contexts = _green_contexts() + [{"name": "extras-matrix (speech)", "conclusion": "SKIPPED"}]
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": contexts})
+    code, reasons = _guard(pr)
+    assert (code, reasons) == (0, [])
+
+
+def test_guard_ignores_a_missing_review_when_none_is_required() -> None:
+    """This repo requires 0 approvals; a green PR must PASS without a review."""
+    code, reasons = _guard(_pr(reviewDecision="REVIEW_REQUIRED"))
+    assert (code, reasons) == (0, [])
+
+
+def test_guard_explains_the_self_approval_deadlock_when_a_review_is_required() -> None:
+    code, reasons = _guard(_pr(reviewDecision="REVIEW_REQUIRED"), protection=PROTECTION_WITH_REVIEW)
+    assert code == 1
+    assert any("never be approved by its own author" in reason for reason in reasons)
+
+
+def test_required_contexts_refuses_an_unreadable_protection() -> None:
+    """Unreadable protection is not 'no gate' — it must raise, and guard exits 2."""
+    with pytest.raises(RuntimeError, match="unreadable"):
+        registry.required_contexts(None)
+
+
+def test_required_contexts_reads_names_and_approvals_from_the_payload() -> None:
+    contexts, approvals = registry.required_contexts(PROTECTION_WITH_REVIEW)
+    assert contexts == REQUIRED_CONTEXTS
+    assert approvals == 1
+    assert registry.required_contexts(PROTECTION) == (REQUIRED_CONTEXTS, 0)
+
+
+def test_guard_rejects_a_stale_base() -> None:
+    code, reasons = _guard(_pr(mergeStateStatus="BEHIND"))
+    assert code == 1
+    assert any("BEHIND" in reason for reason in reasons)
+
+
+def test_guard_rejects_unknown_merge_state() -> None:
+    code, reasons = _guard(_pr(mergeStateStatus="UNKNOWN"))
+    assert code == 1
+    assert any("expected 'CLEAN'" in reason for reason in reasons)
+
+
+# ---------------------------------------------------------------------------
+# totals must be total
+# ---------------------------------------------------------------------------
+def test_every_tier_is_counted_including_the_zeroes() -> None:
+    counts = registry.summarise([_pr(), _pr(mergeable="CONFLICTING")])
+    assert set(counts) == set(registry.TIERS)
+    assert counts["READY"] == 1
+    assert counts["CONFLICT"] == 1
+    assert counts["DRAFT"] == 0
+
+
+def test_tier_list_is_blockers_plus_ready_in_one_place() -> None:
+    assert registry.TIERS == (*registry.BLOCKERS, "READY")
+
+
+def test_report_renders_every_tier_and_every_pr() -> None:
+    built = {
+        "schema": registry.SCHEMA,
+        "repo": "bot523h/nexus-ai-agent",
+        "generated_at": "2026-10-25T00:00:00Z",
+        "main_sha": "c" * 40,
+        "open_total": 2,
+        "totals": registry.summarise([_pr(), _pr(isDraft=True)]),
+        "blockers": {code: 0 for code in registry.BLOCKERS},
+        "prs": [
+            {
+                "number": 1,
+                "title": "green",
+                "base": "main",
+                "ci_state": "SUCCESS",
+                "review_decision": "APPROVED",
+                "changed_files": 1,
+                "additions": 1,
+                "deletions": 0,
+                "tier": "READY",
+            },
+            {
+                "number": 2,
+                "title": "draft",
+                "base": "main",
+                "ci_state": "SUCCESS",
+                "review_decision": "",
+                "changed_files": 1,
+                "additions": 1,
+                "deletions": 0,
+                "tier": "DRAFT",
+            },
+        ],
+    }
+    # A committed 13:33 v1 snapshot predates MERGEABILITY_UNKNOWN. Reporting
+    # remains backward-compatible; the absent category is rendered as zero.
+    built["totals"].pop("MERGEABILITY_UNKNOWN", None)
+    built["blockers"].pop("MERGEABILITY_UNKNOWN", None)
+    text = registry.render_report(built)
+    for tier in registry.TIERS:
+        assert f"`{tier}`" in text, tier
+    assert "#1" in text and "#2" in text
+
+
+def test_registry_schema_is_versioned() -> None:
+    """A committed artifact must announce the shape a reader can parse."""
+    assert registry.SCHEMA.startswith("nexus-pr-registry/v")
+
+
+# ---------------------------------------------------------------------------
+# mergeability is computed asynchronously — "not computed yet" is not "clean"
+# ---------------------------------------------------------------------------
+def test_unknown_mergeability_is_its_own_blocker_not_a_pass() -> None:
+    """The 2026-10-25 regression: after main moved twice, 66 of 68 PRs reported
+    ``mergeable: UNKNOWN`` and the registry first printed ``CONFLICT: 0``.
+
+    A snapshot of an unmeasured backlog is not an empty backlog, so UNKNOWN must
+    be a blocker in its own right, ranked with the hard structural ones.
+    """
+    pr = _pr(mergeable="UNKNOWN", mergeStateStatus="UNKNOWN")
+    assert "MERGEABILITY_UNKNOWN" in registry.blockers(pr)
+    assert registry.classify(pr) == "MERGEABILITY_UNKNOWN"
+    assert registry.BLOCKERS.index("MERGEABILITY_UNKNOWN") < registry.BLOCKERS.index("CI_RED")
+
+
+def test_unknown_mergeability_outranks_a_missing_approval() -> None:
+    """A PR we cannot even measure must not be filed as merely 'needs a review'."""
+    pr = _pr(mergeable="UNKNOWN", reviewDecision="REVIEW_REQUIRED")
+    assert registry.classify(pr) == "MERGEABILITY_UNKNOWN"
+
+
+def test_unknown_mergeability_does_not_hide_a_real_conflict() -> None:
+    pr = _pr(mergeable="CONFLICTING")
+    assert registry.classify(pr) == "CONFLICT"
+
+
+def test_unknown_merge_state_is_not_treated_as_behind() -> None:
+    pr = _pr(mergeStateStatus="UNKNOWN", mergeable="MERGEABLE")
+    assert "REBASE_FIRST" not in registry.blockers(pr)
+
+
+def test_guard_refuses_to_merge_while_mergeability_is_unknown() -> None:
+    code, reasons = _guard(_pr(mergeable="UNKNOWN"))
+    assert code == 1
+    assert any("not computed" in reason for reason in reasons)
+
+
+def test_aggregate_fails_closed_on_an_unclassified_check() -> None:
+    assert registry._aggregate([{"conclusion": "SUCCESS"}, {}]) == "PENDING"
+
+
+def test_aggregate_fails_closed_on_an_empty_check_list() -> None:
+    assert registry._aggregate([]) == "NONE"
+
+
+def test_guard_accepts_case_insensitive_sha_prefix() -> None:
+    code, reasons = _guard(_pr(), expected_sha="A" * 12)
+    assert (code, reasons) == (0, [])
+
+
+@pytest.mark.parametrize("expected_sha", ["", "a" * 6, "z" * 12, "a" * 41])
+def test_guard_rejects_invalid_expected_sha_pins(expected_sha: str) -> None:
+    code, reasons = _guard(_pr(), expected_sha=expected_sha)
+    assert code == 1
+    assert any("7–40 hexadecimal" in reason for reason in reasons)
+
+
+def test_aggregate_treats_startup_failure_as_failure() -> None:
+    assert registry._aggregate([{"conclusion": "STARTUP_FAILURE"}]) == "FAILURE"
+
+
+def test_aggregate_treats_stale_as_failure() -> None:
+    assert registry._aggregate([{"conclusion": "STALE"}]) == "FAILURE"
+
+
+@pytest.mark.parametrize("unknown", ["SOME_NEW_STATE", "STALE_UNKNOWN", "ACTION_REQUIRED_NEW"])
+def test_aggregate_never_turns_unknown_conclusions_into_success(unknown: str) -> None:
+    assert registry._aggregate([{"conclusion": "SUCCESS"}, {"conclusion": unknown}]) == "PENDING"
+
+
+def test_aggregate_returns_success_only_when_every_conclusion_is_recognized() -> None:
+    assert (
+        registry._aggregate(
+            [{"conclusion": "SUCCESS"}, {"conclusion": "SKIPPED"}, {"state": "PASS"}]
+        )
+        == "SUCCESS"
+    )
+
+
+def test_graphql_rejects_a_non_object_response() -> None:
+    with patch.object(registry, "_gh", return_value=json.dumps(["not", "an object"])):
+        with pytest.raises(RuntimeError, match="non-object"):
+            registry._graphql("query { viewer { login } }", {})
+
+
+def test_graphql_rejects_top_level_errors() -> None:
+    response = {"errors": [{"message": "rate limit"}], "data": None}
+    with patch.object(registry, "_gh", return_value=json.dumps(response)):
+        with pytest.raises(RuntimeError, match="GraphQL returned errors"):
+            registry._graphql("query { viewer { login } }", {})
+
+
+def test_graphql_returns_a_valid_payload_unchanged() -> None:
+    response = {"data": {"viewer": {"login": "bot523h"}}}
+    with patch.object(registry, "_gh", return_value=json.dumps(response)):
+        assert registry._graphql("query { viewer { login } }", {}) == response
