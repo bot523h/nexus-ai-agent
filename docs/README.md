@@ -17,6 +17,7 @@ placeholder text.
 |---|---|
 | [architecture.md](architecture.md) | Front door: the system in one picture + the reading order. |
 | [architecture/OVERVIEW.md](architecture/OVERVIEW.md) | C4 context & container views, stakeholders, the five quality attributes, frozen constraints, deployment topologies. |
+| [architecture/PRODUCT_FRAME.md](architecture/PRODUCT_FRAME.md) | The product frame: NEXUS is an app with a living core and Telegram is one channel adapter — rules for every agent, reproducible coupling evidence, the F0–F3 migration ladder (owner direction; decision record pending). |
 | [architecture/OVERVIEW.fa.md](architecture/OVERVIEW.fa.md) | خلاصهٔ فارسی و نقشهٔ مسیر مطالعه (navigation summary; English wins on conflict). |
 | [architecture/MODULE_MAP.md](architecture/MODULE_MAP.md) | Layer diagram, package inventory, boundary laws → the tests that enforce them, extension recipes. |
 | [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
@@ -28,9 +29,11 @@ placeholder text.
 | [architecture/SELF_CHARTER.md](architecture/SELF_CHARTER.md) | Living Core Phase 1: the immutable charter, the append-only hash-chained Self-Ledger, fail-closed boot, the human-only amendment door, honest limits, acceptance evidence. |
 | [architecture/PROVENANCE_LEDGER.md](architecture/PROVENANCE_LEDGER.md) | The causal ledger (Project Graph journal): tamper-evident recording of every durable job transition, and the Artifact Passport — the read-only, fail-closed projection that reconciles chain vs. authority and re-measures artifacts. |
 | [architecture/JOB_LIFECYCLE.md](architecture/JOB_LIFECYCLE.md) | Canonical job lifecycle: chain, state machine with owners+invariants, side-effect boundary, artifact verification contract, retry/failure semantics, Result chain. |
+| [architecture/EXECUTION_CORE.md](architecture/EXECUTION_CORE.md) | NEXUS V1 execution core: the four-verb provider-neutral contract, authority laws, identity separation, staging/publication boundary, and the I1–I10 invariant matrix. |
 | [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, ownership, Alembic chain, retention, portability, and what never enters a store. |
 | [architecture/SECURITY.md](architecture/SECURITY.md) | Trust boundaries, STRIDE threat → control → evidence table, P0 audit follow-through, review checklist. |
 | [architecture/OBSERVABILITY.md](architecture/OBSERVABILITY.md) | Structured events, metric policy, health semantics, inspection commands, the short alert list. |
+| [architecture/TRACING.md](architecture/TRACING.md) | Opt-in LangSmith tracing: the switch, the fail-closed bootstrap, the connectivity smoke, honest limits. |
 | [architecture/TESTING.md](architecture/TESTING.md) | Test taxonomy, the four gates, determinism rules, baseline numbers, honest gaps. |
 | [architecture/PORTS.md](architecture/PORTS.md) | The six hexagonal ports, their invariants and their signature tests. |
 | [architecture/REFERENCES.md](architecture/REFERENCES.md) | The external standards followed (C4, arc42, MADR 4.0, fitness functions, docs-as-code, STRIDE) and what was deliberately not adopted. |

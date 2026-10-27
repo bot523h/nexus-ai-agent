@@ -363,7 +363,7 @@ jobs:
   # Budget: referee ≈20 s, Gate-5 ≈2 min on the hosted runner (17 probes × 3
   # targeted pytest runs); the 25-minute cap is the same as the other campaigns.
   governance-mutations:
-    name: governance-mutations (board referee 16 + Gate-5 fencing 17)
+    name: governance-mutations (board referee 28 + Gate-5 fencing 17)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -376,7 +376,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - name: isolated worktree for the campaigns
         run: git worktree add --detach "$RUNNER_TEMP/mutation-worktree" HEAD
-      - name: board referee mutations (16/16 must be killed)
+      - name: board referee mutations (28/28 must be killed)
         working-directory: ${{ runner.temp }}/mutation-worktree
         run: python scripts/board_referee_mutations.py
       - name: Gate-5 execution-fencing probes (17/17 must be caught)
@@ -398,7 +398,7 @@ jobs:
   # otherwise an isolated worktree would import the editable-installed package
   # and every probe would "survive" while the mutated bytes never ran.
   execution-core-mutations:
-    name: execution-core-mutations (V1 execution core 17)
+    name: execution-core-mutations (V1 execution core 25)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -413,7 +413,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - name: isolated worktree for the campaign
         run: git worktree add --detach "$RUNNER_TEMP/mutation-worktree" HEAD
-      - name: execution-core mutations (17/17 must be killed)
+      - name: execution-core mutations (25/25 must be killed)
         working-directory: ${{ runner.temp }}/mutation-worktree
         run: python scripts/execution_core_mutations.py
       - name: the worktree and the checkout must be unchanged after mutation testing
