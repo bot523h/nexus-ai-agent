@@ -126,6 +126,12 @@ placeholder text.
 | [audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md](audits/FORENSIC_MAINLINE_RECOVERY_2026-10-06.md) | Exact-SHA mainline truth audit: release-metadata defects (README version, lockstep guard, Continuum snapshot) with the delivered fixes and honest production limitations. |
 | [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
 | [audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md](audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md) | Dated Phase-1 stabilization handoff: live PR inventory, exact-SHA remediation evidence, Board fence correction, CI blockers, and backup/restore limits. |
+| [wave3d-closure-v4/docs/README.md](wave3d-closure-v4/docs/README.md) | Wave 3D closure bundle (v4): how to use the manifest, patches, evidence logs and reproduce script. |
+| [wave3d-closure-v4/docs/CLOSURE_REPORT.md](wave3d-closure-v4/docs/CLOSURE_REPORT.md) | Wave 3D closure report (2026-10-14): baselines, reconciled state and what is still open. |
+| [wave3d-closure-v4/docs/SOURCE_TRUTH_MATRIX.md](wave3d-closure-v4/docs/SOURCE_TRUTH_MATRIX.md) | Wave 3D source-truth matrix: point-in-time repository truth per claim. |
+| [wave3d-closure-v4/docs/INTEGRATION_MATRIX.md](wave3d-closure-v4/docs/INTEGRATION_MATRIX.md) | Wave 3D overlap and integration matrix computed per PR with git diff. |
+| [wave3d-closure-v4/docs/POSTGRES_LIMITATIONS.md](wave3d-closure-v4/docs/POSTGRES_LIMITATIONS.md) | PostgreSQL checkpointing limitations: deferred, not tested and not claimed. |
+| [wave3d-closure-v4/docs/PR211_OWNER_ACTION_PACKET.md](wave3d-closure-v4/docs/PR211_OWNER_ACTION_PACKET.md) | PR 211 owner action packet: what the owner must decide, no branch modified. |
 
 ## History (archived — read-only, never a source of truth)
 

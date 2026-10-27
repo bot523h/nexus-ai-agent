@@ -1,0 +1,17 @@
+# step 16 targeted regression — candidate
+head=b2aebdbca56822327aae2254a8888d3243c581c5 tree_before=023842458329e5304b078e1a82573f1dc64e6c74
+python=Python 3.11.2 pytest=pytest 9.1.1 ruff=ruff 0.17.0 mypy=mypy 2.4.0 (compiled: yes)
+
+$ pytest -q -p no:randomly tests/unit/test_agent_board.py tests/unit/test_agent_board_pr_visibility.py tests/unit/test_agent_board_active_in_review.py [tests/unit/test_agent_board_pr_inventory.py]
+........................................................................ [ 65%]
+......................................                                   [100%]
+110 passed in 1.11s
+--- collected node count ---
+
+110 tests collected in 0.10s
+--- ruff / mypy on the touched surface ---
+All checks passed!
+Success: no issues found in 1 source file
+--- hygiene ---
+git_status_porcelain=[]
+tree_after=023842458329e5304b078e1a82573f1dc64e6c74

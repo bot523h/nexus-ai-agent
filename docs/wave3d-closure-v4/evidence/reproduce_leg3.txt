@@ -1,0 +1,20 @@
+3.1.2 -> 6 failed, 108 passed, 19 skipped in 8.74s
+3.1.1 -> 114 passed, 19 skipped in 8.35s
+tests/integration/test_checkpoint_adapter.py::test_setup_schema_matches_golden
+  3.1.2: 1 failed in 0.37s
+  3.1.1: 1 passed in 0.35s
+tests/unit/test_lifecycle_adversarial.py::test_apply_under_lock_contention_fails_safe
+  3.1.2: 1 failed in 0.52s
+  3.1.1: 1 passed in 0.47s
+tests/unit/test_reconciler.py::test_apply_backfills_missing_with_protected_age
+  3.1.2: 1 failed in 0.47s
+  3.1.1: 1 passed in 0.58s
+tests/unit/test_reconciler.py::test_purge_eligible_orphan_is_applied
+  3.1.2: 1 failed in 0.82s
+  3.1.1: 1 passed in 0.93s
+tests/unit/test_reconciler.py::test_scan_error_disables_apply
+  3.1.2: 1 failed in 0.50s
+  3.1.1: 1 passed in 0.46s
+tests/unit/test_reconciler.py::test_cli_reconcile_apply_requires_flag
+  3.1.2: 1 failed in 0.85s
+  3.1.1: 1 passed in 0.77s

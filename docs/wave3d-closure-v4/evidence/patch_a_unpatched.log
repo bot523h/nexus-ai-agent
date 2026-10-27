@@ -1,0 +1,45 @@
+FF.F.                                                                    [100%]
+=================================== FAILURES ===================================
+________________ test_upsert_user_accepts_a_plain_async_session ________________
+tests/unit/test_async_session_api_boundary.py:67: in test_upsert_user_accepts_a_plain_async_session
+    row = await asyncio.wait_for(_upsert_user(session_factory, user), timeout=15)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.11/asyncio/tasks.py:479: in wait_for
+    return fut.result()
+           ^^^^^^^^^^^^
+src/nexus_ai_agent/bot/handlers.py:130: in _upsert_user
+    existing = (await session.exec(stmt)).first()
+                      ^^^^^^^^^^^^
+E   AttributeError: 'AsyncSession' object has no attribute 'exec'
+________________ test_upsert_chat_accepts_a_plain_async_session ________________
+tests/unit/test_async_session_api_boundary.py:78: in test_upsert_chat_accepts_a_plain_async_session
+    row = await asyncio.wait_for(_upsert_chat(session_factory, 111, "tg:111"), timeout=15)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.11/asyncio/tasks.py:479: in wait_for
+    return fut.result()
+           ^^^^^^^^^^^^
+src/nexus_ai_agent/bot/handlers.py:145: in _upsert_chat
+    existing = (await session.exec(stmt)).first()
+                      ^^^^^^^^^^^^
+E   AttributeError: 'AsyncSession' object has no attribute 'exec'
+_______ test_no_async_session_call_site_uses_the_sqlmodel_only_exec_api ________
+tests/unit/test_async_session_api_boundary.py:106: in test_no_async_session_call_site_uses_the_sqlmodel_only_exec_api
+    assert offenders == [], "await <session>.exec(...) on a plain AsyncSession:\n" + "\n".join(
+E   AssertionError: await <session>.exec(...) on a plain AsyncSession:
+E     nexus_ai_agent/bot/handlers.py:130: existing = (await session.exec(stmt)).first()
+E     nexus_ai_agent/bot/handlers.py:145: existing = (await session.exec(stmt)).first()
+E     nexus_ai_agent/bot/handlers.py:645: files = (await session.exec(stmt)).all()
+E     nexus_ai_agent/bot/handlers.py:669: cloud_file = (await session.exec(stmt)).first()
+E     nexus_ai_agent/bot/handlers.py:754: ul = (await session.exec(stmt)).first()
+E     nexus_ai_agent/bot/handlers.py:774: ul = (await session.exec(stmt)).first()
+E     nexus_ai_agent/features/onboarding.py:45: await session.exec(_sel(UserLanguage).where(UserLanguage.user_id == user_id))
+E   assert ['nexus_ai_ag...first()', ...] == []
+E     
+E     Left contains 7 more items, first extra item: 'nexus_ai_agent/bot/handlers.py:130: existing = (await session.exec(stmt)).first()'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED tests/unit/test_async_session_api_boundary.py::test_upsert_user_accepts_a_plain_async_session
+FAILED tests/unit/test_async_session_api_boundary.py::test_upsert_chat_accepts_a_plain_async_session
+FAILED tests/unit/test_async_session_api_boundary.py::test_no_async_session_call_site_uses_the_sqlmodel_only_exec_api
+3 failed, 2 passed in 1.31s
+exit=1

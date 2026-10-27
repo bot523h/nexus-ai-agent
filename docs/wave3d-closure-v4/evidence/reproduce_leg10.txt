@@ -1,0 +1,3 @@
+base -> 5 failed, 22 passed in 3.23s
+patch B only -> 3 failed, 24 passed in 2.94s
+composed (A+B) -> 1 failed, 81 passed in 9.54s

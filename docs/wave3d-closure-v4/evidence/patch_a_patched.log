@@ -1,0 +1,41 @@
+......................................                                   [100%]
+=============================== warnings summary ===============================
+tests/unit/test_feature_wiring.py::test_remind_persists_row_in_originating_chat
+  /home/user/wave3d/clones/pr210/tests/unit/test_feature_wiring.py:138: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    rows = session.query(Reminder).all()
+
+tests/unit/test_feature_wiring.py::test_cancel_remind_command
+  /home/user/wave3d/clones/pr210/tests/unit/test_feature_wiring.py:152: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    rid = session.query(Reminder).first().id
+
+tests/unit/test_feature_wiring.py::test_start_deep_link_records_referral
+  /home/user/wave3d/clones/pr210/tests/unit/test_feature_wiring.py:293: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with improved type
+          annotations.
+  
+          Otherwise, you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    ref = session.query(Referral).filter_by(referee_id=200).first()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+38 passed, 3 warnings in 6.13s
+exit=0

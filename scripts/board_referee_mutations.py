@@ -122,8 +122,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     ),
     Mutation(
         "pr_branch_self_exclusion_removed",
-        "        if branch and branch != exclude_branch and branch not in targets:",
-        "        if branch and branch not in targets:  # mutation: no self-exclusion",
+        "    targets = _dedupe([branch for branch in branches if branch != exclude_branch])",
+        "    targets = _dedupe(list(branches))  # mutation: no self-exclusion",
         "a branch must not conflict with its own pushed lease",
     ),
     Mutation(
