@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T11:27:21Z",
+  "updated_at": "2026-10-27T14:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -6595,7 +6595,7 @@
       "title": "Repair existing PR #240: docs: app-first product frame (Telegram is one channel adapter)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/240 on its existing branch docs/app-first-frame, preserving intent and published history. Snapshot head 566318936b3cd09187da10b09ae141f8db7b9dd3; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6621,16 +6621,16 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 2,
       "owner_hint": "Registered for a future authorized repair session on docs/app-first-frame; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": ""
     },
     {
       "task": "pr-repair-242",
       "title": "Repair existing PR #242: feat(selfhood): two-witness ledger check (Living Core)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/242 on its existing branch feat/selfhood-witness, preserving intent and published history. Snapshot head 8cef57bc710aef98cfd87ef812929b467a824789; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6650,13 +6650,13 @@
         "src/nexus_ai_agent/selfhood/witness.py",
         "tests/unit/test_selfhood_witness.py"
       ],
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "feat/selfhood-witness",
+      "claimed_at": "2026-10-26T21:58:21Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 1,
       "owner_hint": "Registered for a future authorized repair session on feat/selfhood-witness; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": ""
     },
     {
       "task": "pr-repair-247",
@@ -7018,6 +7018,42 @@
         "a deliberately weakened assertion that turns the rail red (before/after run links)",
         "python scripts/board_referee_mutations.py -> N/N killed, exit 0, on the final SHA"
       ]
+    },
+    {
+      "task": "task-258-execution-core-architecture-doc",
+      "title": "docs/architecture/EXECUTION_CORE.md — contract, authority laws, I1-I10",
+      "title_fa": "سند معماری هستهٔ اجرا: قرارداد، قوانین اقتدار، I1-I10",
+      "zone": "docs-architecture",
+      "priority": "P2",
+      "status": "done",
+      "scope": "Author the reference architecture page for the V1 execution core: four-verb contract, authority laws, provider-neutral boundary, attempt/fencing model, staging boundary, and the I1-I10 invariant table mapped to enforcing symbols and proving tests.",
+      "scope_fa": "",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "doc maps I1-I10 to enforcing symbols and proving tests (mirrors the test table)",
+        "authority laws + four-verb contract + staging boundary policy documented",
+        "docs integrity suite green"
+      ],
+      "evidence_required": [
+        "docs/architecture/EXECUTION_CORE.md committed with the I1-I10 table mapping each invariant to its enforcing symbol and proving test node",
+        "the contract/authority/staging sections present and provider-neutral (four verbs only: submit/observe/cancel/reconcile)",
+        "pytest -q tests/unit/test_docs_integrity.py green on the claim head (exact command + observed count in the PR body)",
+        "every relative link resolves and the page is indexed in docs/README.md"
+      ],
+      "exclusive_paths": [
+        "docs/architecture/EXECUTION_CORE.md",
+        "tests/unit/test_docs_integrity.py"
+      ],
+      "note": "DELIVERED: docs/architecture/EXECUTION_CORE.md + the I1-I10 invariant mirror in tests/unit/test_docs_integrity.py merged to main via PR #199 (merge commit 6ae7042a83). Reconciled onto main 83cf7e9f after the pr-repair-240 lease release.",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 3,
+      "previous_release_reason": "auto-released by gc at 2026-10-27T10:24:50Z (stale active lease)",
+      "delivered": true
     }
   ],
   "deferred_log": [
@@ -7078,6 +7114,17 @@
       "reason_fa": "در حلقهٔ task-223 کشف شد اما خارج از ناحیهٔ claim من است و رفع آن یک PR چهارم پشت سه PR باز می‌سازد؛ به‌جای گسترش دامنه، با شواهد ثبت شد.",
       "reason_en": "Found during the task-223 loop but out of my claim's zone; fixing it would open a 4th PR stacked behind three open PRs. Recorded with reproduction instead of widening scope.",
       "resume_when": "next storage-observability window (after #126/#127/#128 merge)"
+    },
+    {
+      "task": "task-258-execution-core-architecture-doc",
+      "deferred_by_branch": "arena/nexus-night-task258-exec-core-doc",
+      "at": "2026-10-27T10:28:46Z",
+      "reason_fa": "چون عامل دیگری روی این محدوده کار می‌کرد متوقف شدم؛ این کار پس از آزاد شدن ناحیه انجام خواهد شد تا فراموش نشود.",
+      "reason_en": "docs/README.md + tests/unit/test_docs_integrity.py are reserved by pr-repair-240; PR #199 rebased/green and awaits the docs-architecture zone",
+      "resume_when": "claim task-258-execution-core-architecture-doc is free",
+      "resolved": true,
+      "resolved_at": "2026-10-27T14:00:00Z",
+      "resolution": "zone freed (pr-repair-240 released) and task-258 delivered in PR #199 (merged 6ae7042a83)."
     }
   ],
   "next_work": [
