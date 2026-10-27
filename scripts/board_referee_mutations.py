@@ -159,7 +159,7 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "failed_listing_page_degrades_to_a_partial_list",
         '            return [], f"open-PR API page {page} unavailable ({exc})"',
-        "            break  # mutation: keep the pages already read and call it complete",
+        '            return heads, ""  # mutation: keep the pages already read and call it complete',
         "a page that cannot be read must make the whole listing unverifiable, never partial (task-266 review A)",
     ),
     Mutation(

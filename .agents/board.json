@@ -6930,7 +6930,7 @@
         "a heartbeat WITHOUT --gates leaves gates_owner unchanged (never silently drops the gate)",
         "a stale generation with --gates is still refused with exit 2 and the board stays byte-identical",
         "the success line reports the resulting gate state (no success message without the effect)",
-        "the referee's fail-closed contract is covered by tests at zero owners and at two owners (currently untested)",
+        "the referee's gate-ownership handling matches the adopted advisory policy: it reports the live owner count at zero, one, and two owners without failing, and the historical fail-closed exit-2 results are recorded in this task's evidence as pre-policy behaviour",
         "scripts/board_referee_mutations.py kills every new guard (N/N)",
         "scripts/agent_board.py, tests/unit/test_agent_board.py, scripts/board_referee_mutations.py, docs/MULTI_AGENT_PROTOCOL.md only",
         "all open-PR pages are read; a failed/malformed page or an over-long listing is unverifiable, never partial",
@@ -6983,7 +6983,13 @@
         "src/nexus_ai_agent/diagnostics/truth.py",
         "tests/unit/test_truth_doctor.py"
       ],
-      "owner_hint": "unclaimed; recorded by task-266 so it is not forgotten"
+      "owner_hint": "unclaimed; recorded by task-266 so it is not forgotten",
+      "evidence_required": [
+        "RED: a live-but-expired gates_owner that TRUTH041 misses today (command + observed output)",
+        "pytest -q on the board-level status-set lockstep test (doctor set == ACTIVE_STATUSES) green",
+        "python -m nexus_ai_agent.diagnostics.truth on the final SHA (no findings)",
+        "the PR#189 reconciliation diff, or a note why it was superseded"
+      ]
     },
     {
       "task": "task-268-board-referee-mutation-campaign-in-ci",
@@ -7003,7 +7009,12 @@
       "exclusive_paths": [
         ".github/workflows/ci.yml"
       ],
-      "owner_hint": "unclaimed; recorded by task-266 so it is not forgotten"
+      "owner_hint": "unclaimed; recorded by task-266 so it is not forgotten",
+      "evidence_required": [
+        "the CI job name and the pinned commit SHA of its actions",
+        "a deliberately weakened assertion that turns the rail red (before/after run links)",
+        "python scripts/board_referee_mutations.py -> N/N killed, exit 0, on the final SHA"
+      ]
     }
   ],
   "deferred_log": [
