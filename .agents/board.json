@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-26T21:58:21Z",
+  "updated_at": "2026-10-27T01:14:33Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -938,6 +938,26 @@
         "src/",
         "tests/",
         "uv.lock"
+      ]
+    },
+    {
+      "id": "observability-tracing",
+      "description": "Opt-in LangSmith tracing: the fail-closed bootstrap, its settings, its smoke workflow and its docs.",
+      "paths": [
+        "src/nexus_ai_agent/observability/tracing.py",
+        "tests/unit/test_tracing_bootstrap.py",
+        "scripts/langsmith_smoke.py",
+        ".github/workflows/langsmith-smoke.yml",
+        "src/nexus_ai_agent/config/settings.py",
+        "src/nexus_ai_agent/cli.py",
+        ".env.example",
+        "pyproject.toml",
+        "docs/architecture/TRACING.md",
+        "docs/architecture/OBSERVABILITY.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md",
+        "tests/unit/test_langsmith_smoke_safe_output.py",
+        "tests/unit/test_optional_extras.py"
       ]
     }
   ],
@@ -3999,7 +4019,7 @@
       "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "expired",
+      "status": "active",
       "scope": "Run scripts/execution_core_mutations.py as a CI mutation job",
       "scope_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "prerequisites": [
@@ -4019,11 +4039,10 @@
       "agent_branch": "arena/task-260-exec-mutations-ci",
       "claimed_at": "2026-10-22T18:46:06Z",
       "ttl_hours": 24,
-      "gates_owner": false,
+      "gates_owner": true,
       "note": "Execution-core mapping: the native execution core (Task-254) merged via PR #192 (merge commit a48326ded85bbe4e0972d645ee0ea6e877935362, 'supersedes #191'); PR #191 (arena/execution-core-v1-nexus-ai-agent) is CLOSED and superseded. PR #241 is the separate Task-260 mutation-CI follow-up, not the execution-core implementation. CI wiring lives in .github/workflows/ci.yml (zone ci-quality); the harness scripts/execution_core_mutations.py is the execution-core zone (task-254, done).",
       "generation": 2,
-      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)",
-      "release_reason": "auto-released by gc at 2026-10-26T21:58:21Z (stale active lease)"
+      "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)"
     },
     {
       "task": "task-265-flaky-cancel-identity-race",
@@ -4031,7 +4050,7 @@
       "title_fa": "",
       "zone": "execution-core",
       "priority": "P2",
-      "status": "expired",
+      "status": "active",
       "scope": "test_execution_native_backend.py::test_cancel_without_a_fencing_token_is_refused failed once in a full-suite run (1 failed,3878 passed) and passed on immediate rerun (3879 passed,31 skipped). submit() reads facts after a to_thread yield, so the worker can reserve (attempt=1) before the facts read, binding a fencing_token; the test assumes a fresh submit is unbound. Make the assertion robust or gate the reservation deterministically.",
       "scope_fa": "",
       "prerequisites": [],
@@ -4049,8 +4068,7 @@
       "claimed_at": "2026-10-24T04:48:15Z",
       "gates_owner": false,
       "generation": 1,
-      "ttl_hours": 24,
-      "release_reason": "auto-released by gc at 2026-10-26T21:58:21Z (stale active lease)"
+      "ttl_hours": 24
     },
     {
       "task": "task-264-passport-attempt-id-alignment",
@@ -4058,7 +4076,7 @@
       "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
       "zone": "durable-creative-queue-evidence",
       "priority": "P3",
-      "status": "expired",
+      "status": "active",
       "scope": "Align CreativeExecutionPassport attempt identity and evidence storage with the existing AttemptStaging attempt-scoped contract; change only the passport implementation and its unit tests.",
       "scope_fa": "شناسه‌های attempt در passport و staging از یک منبع باید بیایند تا ردیابی artifact یکتا بماند.",
       "prerequisites": [
@@ -4085,8 +4103,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1,
-      "release_reason": "auto-released by gc at 2026-10-26T21:58:21Z (stale active lease)"
+      "generation": 1
     },
     {
       "task": "task-256-heartbeat-staleness-proof",
@@ -6687,6 +6704,52 @@
       "generation": 0,
       "owner_hint": "Registered for a future authorized repair session on feat/analysis-perception-pack; not assigned or claimed by this registration.",
       "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+    },
+    {
+      "task": "task-274-langsmith-tracing",
+      "title": "LangSmith tracing integration (opt-in, fail-closed) + clean connectivity smoke",
+      "title_fa": "یکپارچه‌سازی رهگیری LangSmith (اختیاری، fail-closed) + دود اتصال تمیز",
+      "zone": "observability-tracing",
+      "priority": "P2",
+      "status": "done",
+      "scope": "Wire LangSmith tracing into the runtime behind an explicit opt-in: a fail-closed bootstrap that never raises, never enables egress by default, and proves connectivity with a clean in-repo workflow; retire the orphan workflow registration left by a deleted branch.",
+      "scope_fa": "رهگیری LangSmith را پشت یک سوئیچ صریح به رانتایم وصل کن: bootstrap ای که هرگز exception نمی‌دهد، به‌صورت پیش‌فرض egress را روشن نمی‌کند، اتصال را با یک workflow تمیز درون‌مخزنی اثبات می‌کند و ثبت workflow یتیم را پاک می‌کند.",
+      "prerequisites": [
+        "task-131"
+      ],
+      "acceptance_criteria": [
+        "tracing is OFF unless NEXUS_TRACING_ENABLED=true; enabling it without the SDK or a key degrades to a logged, typed no-op, never an exception",
+        "when enabled+configured the bootstrap exports LANGSMITH_* so LangGraph/LangChain trace without code changes",
+        "scripts/langsmith_smoke.py proves the real endpoint accepts a trace; absence of the secret is a visible skip, never a false pass",
+        "the orphan langsmith-connectivity-smoke-20261026 workflow registration is retired and replaced by .github/workflows/langsmith-smoke.yml"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_tracing_bootstrap.py (red-first on the disabled/absent paths)",
+        "the langsmith-smoke workflow run URL + its RESULT line",
+        "make lint && make types && make test on the branch SHA"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/observability/tracing.py",
+        "tests/unit/test_tracing_bootstrap.py",
+        "scripts/langsmith_smoke.py",
+        ".github/workflows/langsmith-smoke.yml",
+        "src/nexus_ai_agent/config/settings.py",
+        "src/nexus_ai_agent/cli.py",
+        ".env.example",
+        "pyproject.toml",
+        "docs/architecture/TRACING.md",
+        "docs/architecture/OBSERVABILITY.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md",
+        "tests/unit/test_langsmith_smoke_safe_output.py",
+        "tests/unit/test_optional_extras.py"
+      ],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Evidence (branch arena/task-274-langsmith-tracing @ 983e336): `pytest -q tests/unit/test_tracing_bootstrap.py` 8 passed; `pytest -q tests/unit/test_docs_integrity.py tests/unit/test_ci_extras_parity.py tests/unit/test_optional_extras.py` 129 passed/10 skipped; `python scripts/extras_matrix.py check` legs=[core,pdf,speech,translate]; `make lint` clean, `make types` clean, `make deps` clean (langsmith stays in the DEP002 allow-list); full suite in a venv `pytest -q -m 'not slow'` 4491 passed/38 skipped/0 failed. Core-absence contract honoured: langsmith is a core transitive dep (langgraph -> langchain-core), so no `tracing` extra/leg — the opt-in switch governs egress, not installation; the earlier extras leg was removed after the core leg correctly red-flagged the leak. Smoke: `scripts/langsmith_smoke.py` -> SKIPPED_NO_SECRET(exit0) without key, FAILED(exit1) on a bogus key, OK(exit0) with the real key; CI workflow LangSmith tracing smoke run 40287959103 success. Orphan workflow langsmith-connectivity-smoke-20261026 disabled (204). PR #251.",
+      "generation": 2
     }
   ],
   "deferred_log": [

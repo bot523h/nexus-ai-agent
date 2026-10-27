@@ -31,6 +31,7 @@ placeholder text.
 | [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, ownership, Alembic chain, retention, portability, and what never enters a store. |
 | [architecture/SECURITY.md](architecture/SECURITY.md) | Trust boundaries, STRIDE threat → control → evidence table, P0 audit follow-through, review checklist. |
 | [architecture/OBSERVABILITY.md](architecture/OBSERVABILITY.md) | Structured events, metric policy, health semantics, inspection commands, the short alert list. |
+| [architecture/TRACING.md](architecture/TRACING.md) | Opt-in LangSmith tracing: the switch, the fail-closed bootstrap, the connectivity smoke, honest limits. |
 | [architecture/TESTING.md](architecture/TESTING.md) | Test taxonomy, the four gates, determinism rules, baseline numbers, honest gaps. |
 | [architecture/PORTS.md](architecture/PORTS.md) | The six hexagonal ports, their invariants and their signature tests. |
 | [architecture/REFERENCES.md](architecture/REFERENCES.md) | The external standards followed (C4, arc42, MADR 4.0, fitness functions, docs-as-code, STRIDE) and what was deliberately not adopted. |
