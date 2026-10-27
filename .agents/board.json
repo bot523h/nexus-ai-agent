@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T13:05:00Z",
+  "updated_at": "2026-10-27T14:00:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7022,7 +7022,7 @@
       "title_fa": "سند معماری هستهٔ اجرا: قرارداد، قوانین اقتدار، I1-I10",
       "zone": "docs-architecture",
       "priority": "P2",
-      "status": "deferred",
+      "status": "done",
       "scope": "Author the reference architecture page for the V1 execution core: four-verb contract, authority laws, provider-neutral boundary, attempt/fencing model, staging boundary, and the I1-I10 invariant table mapped to enforcing symbols and proving tests.",
       "scope_fa": "",
       "prerequisites": [
@@ -7043,13 +7043,14 @@
         "docs/architecture/EXECUTION_CORE.md",
         "tests/unit/test_docs_integrity.py"
       ],
-      "note": "",
-      "agent_branch": "arena/nexus-night-task258-exec-core-doc",
+      "note": "DELIVERED: docs/architecture/EXECUTION_CORE.md + the I1-I10 invariant mirror in tests/unit/test_docs_integrity.py merged to main via PR #199 (merge commit 6ae7042a83). Reconciled onto main 83cf7e9f after the pr-repair-240 lease release.",
+      "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 3,
-      "previous_release_reason": "auto-released by gc at 2026-10-27T10:24:50Z (stale active lease)"
+      "previous_release_reason": "auto-released by gc at 2026-10-27T10:24:50Z (stale active lease)",
+      "delivered": true
     }
   ],
   "deferred_log": [
@@ -7117,7 +7118,10 @@
       "at": "2026-10-27T10:28:46Z",
       "reason_fa": "چون عامل دیگری روی این محدوده کار می‌کرد متوقف شدم؛ این کار پس از آزاد شدن ناحیه انجام خواهد شد تا فراموش نشود.",
       "reason_en": "docs/README.md + tests/unit/test_docs_integrity.py are reserved by pr-repair-240; PR #199 rebased/green and awaits the docs-architecture zone",
-      "resume_when": "claim task-258-execution-core-architecture-doc is free"
+      "resume_when": "claim task-258-execution-core-architecture-doc is free",
+      "resolved": true,
+      "resolved_at": "2026-10-27T14:00:00Z",
+      "resolution": "zone freed (pr-repair-240 released) and task-258 delivered in PR #199 (merged 6ae7042a83)."
     }
   ],
   "next_work": [
