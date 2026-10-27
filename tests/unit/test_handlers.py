@@ -94,6 +94,7 @@ async def test_menu_callback_lang_select(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_agent_callback_handler_invalid(monkeypatch) -> None:
     from unittest.mock import AsyncMock, MagicMock
+
     from nexus_ai_agent.bot.agent_handlers import agent_callback_handler
 
     update = MagicMock()
