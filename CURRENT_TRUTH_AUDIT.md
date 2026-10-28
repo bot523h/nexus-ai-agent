@@ -19,6 +19,49 @@ claims carried over from the previous session.
 
 ---
 
+## 0.1 Correction — 2026-10-28 (Mission 5: the unfinished convergence campaign)
+
+> **Newer than §0.** Where they disagree, this section wins. Every number is reproducible with §7.
+
+Mission 5 revived the campaign, repaired, merged, verified, and terminated **four** PRs on
+`2026-10-28`, taking the open set from **52 → 50**:
+
+| PR | Action | Result | main |
+|---|---|---|---|
+| #263 | repair of #201 rebuilt on current `main` (REQUEST_QUEUE doc + board-gates test) | merged | `0c1e63a3` |
+| #264 | **fix**: pre-merge guard must use the *latest* run of each required context | merged | `f09cf734` |
+| #265 | board bookkeeping: release `task-276` after its fix merged | merged | `7e10105e` |
+| #201 | stale original, superseded by #263 | closed | — |
+| #213 | `WRONG_BASE_BRANCH`, content byte-identical to `main` | closed | — |
+
+**Live defect found and fixed (#264).** The guard shipped by #261 kept the *first* non-success
+conclusion per context. A workflow re-run **cancels** the superseded attempt, so one head carries an
+old `CANCELLED` beside a new `SUCCESS`; the guard then reported `BLOCKED` for a head whose required
+checks had all passed (observed live on #263: `lint` success `05:48:52Z`, `test` success `05:53:21Z`,
+yet the guard named `CANCELLED`). GitHub's required-check evaluation is **latest-run-wins**, so the
+guard now agrees with it: `_contexts_of` returns the most recent conclusion per context, ordered by
+`completedAt` (else reader order), and `_live_pr` carries the timestamp through. Three regression
+tests pin it (latest `SUCCESS` beats an earlier `CANCELLED`; a later `FAILURE` still blocks;
+no-timestamp order fallback). `tests/unit/test_pr_convergence.py` → **51 passed**.
+
+**Repair evidence for #201 → #263.** The stale branch failed for two reasons, not one: the test
+stubbed the board CLI by the pre-rename `_open_pr_branches`, **and** it passed
+`_remote_branch_boards` arguments the current `(heads, coordination_repo, exclude_branch)` signature
+does not accept (`TypeError`). The repair rebuilt the semantic content directly on current `main`:
+`docs/architecture/REQUEST_QUEUE.md` + `docs/README.md` index + `tests/unit/test_agent_board_gates_owner.py`,
+aligned to the live interface. Full suite on the repair branch: **4793 passed, 39 skipped**.
+
+**#213 uniqueness proof.** Against `main@7e10105e`, every file #213 touches is byte-identical to
+`main` (`creative/assets/{errors,ingestion,mime,ports,repository}.py` and the five asset-library
+tests + `scripts/asset_library_mutation_check.py` — all `SAME`) or behind `main`
+(`creative/assets/service.py`). Its base `arena/claude-5-5-sqlite-init-serialize-20261012` is not an
+ancestor of `main`. No unique content → closed.
+
+**Registry on this date** (`.agents/evidence/PR_REGISTRY_2026-10-28T0700Z.json`, main `f09cf734`,
+50 open): `CONFLICT 36 · DRAFT 8 · REBASE_FIRST 5 · CI_RED 3 · WRONG_BASE_BRANCH 1`.
+
+---
+
 ## 0. Correction — 2026-10-27 (supersedes §5; the rest of the file stays as history)
 
 > **This section is newer than the body below.** The body is a dated record of `2026-10-25`; where
