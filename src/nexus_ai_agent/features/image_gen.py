@@ -182,7 +182,7 @@ class ImageGenEngine:
                         "error": f"❌ خطای API: {resp.status_code}",
                     }
                 # Save image
-                img_hash = hashlib.md5(f"{prompt}{style}{time.time()}".encode()).hexdigest()[:12]
+                img_hash = hashlib.sha256(f"{prompt}{style}{time.time()}".encode()).hexdigest()[:12]
                 filename = f"img_{img_hash}.png"
                 filepath = self._output_dir / filename
                 filepath.write_bytes(resp.content)

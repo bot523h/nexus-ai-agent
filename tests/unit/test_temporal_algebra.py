@@ -46,6 +46,13 @@ def test_framerate_resolver_parsing_and_hardening() -> None:
     assert FrameRateResolver.resolve(24) == Timebase.fps_24()
     assert FrameRateResolver.resolve("24000/1001") == Timebase.fps_23_976()
 
+    # Preserve exact decimal semantics for non-canonical finite floats
+    tb_25_5 = FrameRateResolver.resolve(25.5)
+    assert tb_25_5 == Timebase(51, 2)
+
+    tb_23_9760001 = FrameRateResolver.resolve(23.9760001)
+    assert tb_23_9760001.rate == Fraction("23.9760001")
+
     for malformed in ("24/", "24/1/2", "24/0", "a/b", "-24/1"):
         with pytest.raises(ValueError):
             FrameRateResolver.resolve(malformed)
@@ -55,6 +62,10 @@ def test_framerate_resolver_parsing_and_hardening() -> None:
 
     with pytest.raises(ValueError):
         FrameRateResolver.resolve(float("nan"))
+    with pytest.raises(ValueError):
+        FrameRateResolver.resolve(float("inf"))
+    with pytest.raises(ValueError):
+        FrameRateResolver.resolve(float("-inf"))
 
 
 def test_typed_frame_and_sample_index() -> None:

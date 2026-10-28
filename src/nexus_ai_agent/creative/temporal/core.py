@@ -21,7 +21,7 @@ import math
 from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, overload
 
 
 class RoundingPolicy(str, Enum):
@@ -185,9 +185,7 @@ class FrameRateResolver:
         if isinstance(value, float):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"Frame rate float must be positive and finite, got {value}")
-            if value in cls._STANDARD_PROFILES:
-                return cls._STANDARD_PROFILES[value]
-            frac = Fraction(value).limit_denominator(1_000_000_000)
+            frac = Fraction(str(value))
             return Timebase(frac.numerator, frac.denominator)
 
         if isinstance(value, str):
@@ -206,9 +204,9 @@ class FrameRateResolver:
                     flt = float(clean)
                     if not math.isfinite(flt) or flt <= 0:
                         raise ValueError(f"Frame rate float must be positive, got {flt}")
-                    if clean in cls._STANDARD_PROFILES:
-                        return cls._STANDARD_PROFILES[clean]
-                    frac = Fraction(clean).limit_denominator(1_000_000_000)
+                    if flt in cls._STANDARD_PROFILES:
+                        return cls._STANDARD_PROFILES[flt]
+                    frac = Fraction(clean)
                     return Timebase(frac.numerator, frac.denominator)
                 ival = int(clean)
                 if ival <= 0:
@@ -296,7 +294,6 @@ class Duration:
     """Nonnegative temporal span primitive (duration >= 0)."""
 
     _seconds: Fraction
-
     __slots__ = ("_seconds",)
 
     def __init__(self, seconds: Fraction | int | str | Duration) -> None:
@@ -391,6 +388,12 @@ class Duration:
     def __rmul__(self, scalar: Fraction | int) -> Duration:
         return self.__mul__(scalar)
 
+    @overload
+    def __truediv__(self, other: Duration) -> Fraction: ...
+
+    @overload
+    def __truediv__(self, other: Fraction | int) -> Duration: ...
+
     def __truediv__(self, other: Duration | Fraction | int) -> Duration | Fraction:
         if isinstance(other, Duration):
             if other._seconds == 0:
@@ -440,7 +443,6 @@ class TimePosition:
     """Signed time coordinate primitive (e.g. pre-roll offset, playhead position)."""
 
     _seconds: Fraction
-
     __slots__ = ("_seconds",)
 
     def __init__(self, seconds: Fraction | int | str | TimePosition) -> None:
@@ -500,12 +502,21 @@ class TimePosition:
         exact_ticks = self._seconds * tb.rate
         return _round_exact_ticks(exact_ticks, rounding, tb)
 
-    def __add__(self, other: Duration | TimePosition) -> TimePosition:
-        if isinstance(other, TimePosition):
-            raise TypeError("Adding two TimePositions is mathematically undefined")
+    def __add__(self, other: Any) -> TimePosition:
         if isinstance(other, Duration):
             return TimePosition(self._seconds + other.seconds)
+        if isinstance(other, TimePosition):
+            raise TypeError(
+                "Adding two TimePositions is mathematically undefined. "
+                "Add a Duration to a TimePosition instead."
+            )
         return NotImplemented
+
+    @overload
+    def __sub__(self, other: TimePosition) -> Duration: ...
+
+    @overload
+    def __sub__(self, other: Duration) -> TimePosition: ...
 
     def __sub__(self, other: TimePosition | Duration) -> TimePosition | Duration:
         if isinstance(other, TimePosition):
@@ -616,9 +627,7 @@ class TemporalInterval:
 
     @property
     def duration(self) -> Duration:
-        res = self._end - self._start
-        assert isinstance(res, Duration)
-        return res
+        return self._end - self._start
 
     @classmethod
     def from_start_duration(cls, start: TimePosition, duration: Duration) -> TemporalInterval:
@@ -702,9 +711,7 @@ class TemporalTransform:
 
     def map_source_to_timeline_duration(self, source_duration: Duration) -> Duration:
         """Timeline duration = source duration / speed_ratio."""
-        res = source_duration / self._speed_ratio
-        assert isinstance(res, Duration)
-        return res
+        return source_duration / self._speed_ratio
 
     def map_timeline_to_source_duration(self, timeline_duration: Duration) -> Duration:
         """Source duration = timeline duration * speed_ratio."""

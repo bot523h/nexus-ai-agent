@@ -45,6 +45,23 @@ EXPECTED: dict[str, str] = {
     "unban": "unban_cmd",
     "stats": "stats_cmd",
     "welcome": "welcome_cmd",
+    # audit 2026-10-15 (A-03): moderation and viral-queue commands were the
+    # last canned replies left in handlers.py; none of the moderation ones
+    # checked the caller.
+    "mod_config": "mod_config_cmd",
+    "warn": "warn_cmd",
+    "mute": "mute_cmd",
+    "unmute": "unmute_cmd",
+    "reputation": "reputation_cmd",
+    "viral_preview": "viral_preview_cmd",
+    "viral_stats": "viral_stats_cmd",
+    "viral_post": "viral_post_cmd",
+}
+
+#: Commands whose registration must point at an *existing* real handler
+#: (aliases), checked like ``EXPECTED`` but not exported by the surface map.
+EXPECTED_ALIASES: dict[str, str] = {
+    "leaderboard": "xp_leaderboard_cmd",
 }
 
 #: callback pattern → the surface symbol that must handle it. Kept separate from
@@ -78,6 +95,17 @@ STUB_STRINGS = (
     "📊 Group stats: 150 members, 1.2k messages/day.",
     "👋 Welcome message updated.",
     "📌 Message pinned.",
+    # audit 2026-10-15 (A-03)
+    "🏆 **Leaderboard**\n\n1. UserA: 1500 XP\n2. UserB: 1200 XP",
+    "I see a beautiful landscape in this image.",
+    "🔥 Preview: Top AI trends of the week...",
+    "🔥 Viral Engine: 12 posts sent, 450 likes total.",
+    "📋 Pending viral posts: 3 in queue.",
+    "🛡️ Moderation rules updated.",
+    "⚠️ User warned (1/3).",
+    "🔇 User muted for 10 minutes.",
+    "🔊 User unmuted.",
+    "👤 User Reputation: 85/100 (Good).",
 )
 
 
@@ -122,7 +150,7 @@ def test_the_surface_handlers_are_imported_from_the_surface_package(tree: ast.Mo
 
 def test_every_command_is_registered_once_with_the_surface_handler(tree: ast.Module) -> None:
     registrations = _command_registrations(tree)
-    for command, handler in EXPECTED.items():
+    for command, handler in {**EXPECTED, **EXPECTED_ALIASES}.items():
         assert registrations.get(command) == handler, f"/{command} → {registrations.get(command)!r}"
 
 

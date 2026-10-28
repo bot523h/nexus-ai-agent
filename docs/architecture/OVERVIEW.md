@@ -18,12 +18,12 @@
 
 ## 1. Purpose
 
-NEXUS AI Agent is an **offline-first, single-process, multi-agent system** with two products on one runtime:
+NEXUS AI Agent is an **offline-first, single-process, multi-agent application with a living core**. Its direction is app-first: the web/mobile application is the product and Telegram is one channel adapter — see [PRODUCT_FRAME.md](PRODUCT_FRAME.md) (owner direction; the decision record is pending). Today the code still ships two application surfaces on one runtime:
 
-1. **A Telegram assistant surface** — chat, memory, tools, moderation, gamification, community features, 15 locales (`src/nexus_ai_agent/features/`, `src/nexus_ai_agent/bot/`, `src/nexus_ai_agent/i18n/locales/`).
+1. **A Telegram channel** — chat, memory, tools, moderation, gamification, community features, 15 locales (`src/nexus_ai_agent/features/`, `src/nexus_ai_agent/bot/`, `src/nexus_ai_agent/i18n/locales/`).
 2. **Nagar, a creative studio** — typed, permissioned media operations (edit / motion / audio / caption / color / delivery) that compile to deterministic FFmpeg invocations and measured artifacts (`src/nexus_ai_agent/creative/`).
 
-Both products share one runtime, one persistence layer, and one quality contract. Nothing is a fleet: there is no broker, no worker cluster, no sidecar database. See §4.
+Both surfaces share one runtime, one persistence layer, and one quality contract. Nothing is a fleet: there is no broker, no worker cluster, no sidecar database. See §4.
 
 ## 2. Stakeholders and their concerns
 
@@ -32,7 +32,7 @@ Both products share one runtime, one persistence layer, and one quality contract
 | Repository owner / operator | cost = 0 at idle; nothing leaves the machine without explicit consent; a failed job never lies | §3 Q1/Q2, [`SECURITY.md`](SECURITY.md), [`../ops/DEPLOY_RUNBOOK.md`](../ops/DEPLOY_RUNBOOK.md) |
 | End user (Telegram) | responsive commands, predictable failures, own language | [`RUNTIME_FLOWS.md`](RUNTIME_FLOWS.md), `src/nexus_ai_agent/i18n/locales/*.json` |
 | Maintainer / coding agent | a rule that is written down is a rule that a test enforces; no collateral edits | [`MODULE_MAP.md`](MODULE_MAP.md) §4, [`TESTING.md`](TESTING.md) §3 |
-| Parallel agents (multi-agent network) | zero overlap, claim before code, one gates owner | [`../../AGENTS.md`](../../AGENTS.md), `.agents/board.json`, `scripts/agent_board.py` |
+| Parallel agents (multi-agent network) | zero overlap, claim before code, no mandatory gates owner (advisory only) | [`../../AGENTS.md`](../../AGENTS.md), `.agents/board.json`, `scripts/agent_board.py` |
 | Deployment platform (Koyeb/Neon/R2) | health semantics, cold starts, durable state off ephemeral disk | [`../ops/deployment-koyeb.md`](../ops/deployment-koyeb.md), [`DATA_AND_STORAGE.md`](DATA_AND_STORAGE.md) §5 |
 
 ## 3. Quality attributes (the top five, and what protects each)

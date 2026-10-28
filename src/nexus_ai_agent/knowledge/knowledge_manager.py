@@ -172,12 +172,9 @@ class KnowledgeManager:
         self.wiki = wiki or WikipediaTrainer()
         self.web = web or WebTrainer()
         # ``None`` keeps the repository-wide resolution (PostgreSQL via
-        # NEXUS_DATABASE_URL, else the default SQLite file).  An explicit path
-        # pins the cache to one database — CROSS-ZONE NOTE: storage/db.py's
-        # ``get_session(None)`` hard-codes "data/app.sqlite" and ignores
-        # ``settings.db_path``/NEXUS_DB_PATH, so without this seam the knowledge
-        # cache is untestable and unconfigurable.  Recorded, not fixed here:
-        # storage/ belongs to another zone.
+        # NEXUS_DATABASE_URL, else the SQLite file named by NEXUS_DB_PATH —
+        # ``storage/db.py`` honours the setting since the 2026-10-15 audit,
+        # finding A-02b).  An explicit path pins the cache to one database.
         self._db_path = db_path
         if gemini_provider is not None:
             self.gemini: GeminiProvider = gemini_provider
@@ -205,8 +202,7 @@ class KnowledgeManager:
                 .order_by(col(KnowledgeCache.expires_at).desc())
                 .limit(1)
             )
-            result = await session.execute(statement)
-            entry = result.scalars().first()
+            entry = (await session.exec(statement)).first()
         if entry is None or not entry.content.strip():
             return None
         return entry.content
@@ -228,8 +224,7 @@ class KnowledgeManager:
                 .order_by(col(KnowledgeCache.expires_at).desc())
                 .limit(1)
             )
-            result = await session.execute(statement)
-            entry = result.scalars().first()
+            entry = (await session.exec(statement)).first()
         if entry is None or not entry.content.strip():
             return None
         return entry.content, entry.source or "cache"
@@ -256,7 +251,7 @@ class KnowledgeManager:
         makes the duplicate state that broke reads unreachable.
         """
         async with get_session(self._db_path) as session:
-            await session.execute(delete(KnowledgeCache).where(col(KnowledgeCache.query) == key))
+            await session.exec(delete(KnowledgeCache).where(col(KnowledgeCache.query) == key))
             session.add(
                 KnowledgeCache(
                     query=key,

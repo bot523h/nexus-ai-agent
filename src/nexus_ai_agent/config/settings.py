@@ -56,6 +56,15 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("NEXUS_AUTO_UPDATE", "AUTO_UPDATE"),
     )
+    self_vitals_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("NEXUS_SELF_VITALS_ENABLED", "SELF_VITALS_ENABLED"),
+    )
+    self_vitals_period_s: float = Field(
+        default=60.0,
+        ge=5.0,
+        validation_alias=AliasChoices("NEXUS_SELF_VITALS_PERIOD_S", "SELF_VITALS_PERIOD_S"),
+    )
     allowed_user_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list,
         validation_alias=AliasChoices("NEXUS_ALLOWED_USER_IDS", "ALLOWED_USER_IDS"),
@@ -206,6 +215,69 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("VAZIR_FONT_PATH", "NEXUS_VAZIR_FONT_PATH"),
     )
 
+    # ── Knowledge retrieval — local-first LlamaIndex adapter (task-273) ──
+    # Master switch: when false, every knowledge operation fails closed with
+    # a typed "disabled" error (status still reports honestly).
+    knowledge_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_ENABLED", "KNOWLEDGE_ENABLED"),
+    )
+    # The authorization allowlist: directories the scanner may walk (comma-
+    # separated or JSON list). Empty = unconfigured: indexing refuses, search
+    # reports the defined empty-index state.
+    knowledge_source_roots: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_SOURCE_ROOTS", "KNOWLEDGE_SOURCE_ROOTS"),
+    )
+    # Derived, rebuildable LlamaIndex store (JSON) — never authoritative.
+    knowledge_index_path: str = Field(
+        default="data/knowledge_index",
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_INDEX_PATH", "KNOWLEDGE_INDEX_PATH"),
+    )
+    # "hash" (default: deterministic, offline, no weights) or
+    # "sentence-transformers" (requires an already-downloaded local model
+    # directory in knowledge_embedding_model_path — never a silent download).
+    knowledge_embedding_provider: str = Field(
+        default="hash",
+        validation_alias=AliasChoices(
+            "NEXUS_KNOWLEDGE_EMBEDDING_PROVIDER", "KNOWLEDGE_EMBEDDING_PROVIDER"
+        ),
+    )
+    knowledge_embedding_model_path: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "NEXUS_KNOWLEDGE_EMBEDDING_MODEL_PATH", "KNOWLEDGE_EMBEDDING_MODEL_PATH"
+        ),
+    )
+    # Resource bounds: one file's bytes, files per index run, chunk window.
+    knowledge_max_file_bytes: int = Field(
+        default=2_000_000,
+        ge=1,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_MAX_FILE_BYTES", "KNOWLEDGE_MAX_FILE_BYTES"),
+    )
+    knowledge_max_files: int = Field(
+        default=2000,
+        ge=1,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_MAX_FILES", "KNOWLEDGE_MAX_FILES"),
+    )
+    knowledge_chunk_tokens: int = Field(
+        default=384,
+        ge=1,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_CHUNK_TOKENS", "KNOWLEDGE_CHUNK_TOKENS"),
+    )
+    knowledge_chunk_overlap_ratio: float = Field(
+        default=0.15,
+        ge=0.0,
+        lt=1.0,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_CHUNK_OVERLAP", "KNOWLEDGE_CHUNK_OVERLAP"),
+    )
+    knowledge_search_top_k: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        validation_alias=AliasChoices("NEXUS_KNOWLEDGE_SEARCH_TOP_K", "KNOWLEDGE_SEARCH_TOP_K"),
+    )
+
     # ── v3.7.0: Multi-provider LLM routing (litellm) ─────────────────
     # Priority chain: Ollama (local, unlimited) → Groq → Gemini → OpenRouter:free.
     # Only providers with credentials/settings enter the chain. The chain is
@@ -328,11 +400,13 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="NEXUS_API_HMAC_KEY",
     )
-    # Bearer token for the dashboard API (P0-5). When set, every
-    # /api/dashboard/* request must send "Authorization: Bearer <token>"
-    # (constant-time comparison). When unset the API is open — the
-    # deployment MUST keep the port private (docker-compose binds
-    # 127.0.0.1 by default). Generate with:
+    # Bearer token for the dashboard API (P0-5). Every /api/dashboard/* and
+    # /api/studio/* request must send "Authorization: Bearer <token>"
+    # (constant-time comparison). When unset the API is **closed**, not open:
+    # the gate answers 503 "Security configuration incomplete" (audit A-06,
+    # hardened in api/dashboard.py). The earlier "open when unset, keep the
+    # port private" posture silently published aggregate user data on every
+    # host that exposes the API port, and it is gone. Generate with:
     #   python -c "import secrets; print(secrets.token_urlsafe(32))"
     api_dashboard_token: str | None = Field(
         default=None,
@@ -343,8 +417,14 @@ class Settings(BaseSettings):
         validation_alias="NEXUS_CREATIVE_GEMINI_API_KEY",
     )
     creative_temp_dir: str = Field(
-        default="/tmp/nexus_creative",
-        description="Temporary directory for creative jobs",
+        # Under the persistent data directory, next to ``db_path``: the
+        # creative job registry (creative_jobs.sqlite3) and in-flight
+        # workspaces live here, so a world-writable, reboot-cleared /tmp path
+        # (bandit B108; audit A-12) was the wrong default. Override with
+        # CREATIVE_TEMP_DIR to keep a custom location.
+        default="data/creative",
+        validation_alias=AliasChoices("CREATIVE_TEMP_DIR", "NEXUS_CREATIVE_TEMP_DIR"),
+        description="Workspace directory for creative jobs (registry + render workspaces)",
     )
 
     # Image generation is distinct from image analysis/upload authorization.
@@ -414,6 +494,28 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("R2_BUCKET", "NEXUS_R2_BUCKET"),
     )
 
+    # ── task-274: opt-in LangSmith tracing ────────────────────────────
+    # Default OFF: enabling tracing exports prompts to a third party, so it is
+    # never on unless an operator explicitly asks for it.  When on but
+    # incomplete (no SDK / no key) the bootstrap in ``observability/tracing.py``
+    # degrades to a logged no-op instead of raising.
+    tracing_enabled: bool = Field(
+        default=False,
+        validation_alias="NEXUS_TRACING_ENABLED",
+    )
+    tracing_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_TRACING_API_KEY", "LANGSMITH_API_KEY"),
+    )
+    tracing_project: str = Field(
+        default="nexus-ai-agent",
+        validation_alias=AliasChoices("NEXUS_TRACING_PROJECT", "LANGSMITH_PROJECT"),
+    )
+    tracing_endpoint: str = Field(
+        default="https://api.smith.langchain.com",
+        validation_alias=AliasChoices("NEXUS_TRACING_ENDPOINT", "LANGSMITH_ENDPOINT"),
+    )
+
     @field_validator("allowed_user_ids", mode="before")
     @classmethod
     def _parse_allowed_user_ids(cls, v):  # type: ignore[no-untyped-def]
@@ -435,6 +537,25 @@ class Settings(BaseSettings):
             return [int(p) for p in parts]
         return v
 
+    @field_validator("knowledge_source_roots", mode="before")
+    @classmethod
+    def _parse_knowledge_source_roots(cls, v):  # type: ignore[no-untyped-def]
+        # Accept: "", "docs,../shared", '["docs"]' (JSON), or a real list.
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return [str(item) for item in v]
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return []
+            if s.startswith("["):
+                import json
+
+                return [str(item) for item in json.loads(s)]
+            return [p.strip() for p in s.split(",") if p.strip()]
+        return v
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -446,4 +567,5 @@ def get_settings() -> Settings:
     Path(settings.model_path).parent.mkdir(parents=True, exist_ok=True)
     Path(settings.cache_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.creative_temp_dir).mkdir(parents=True, exist_ok=True)
+    Path(settings.knowledge_index_path).mkdir(parents=True, exist_ok=True)
     return settings

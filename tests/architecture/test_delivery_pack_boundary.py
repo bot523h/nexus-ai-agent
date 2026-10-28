@@ -149,7 +149,7 @@ def test_delivery_pack_does_not_cross_package_boundaries() -> None:
                 )
             ), (
                 f"{file_path.relative_to(REPO_ROOT)} crosses boundary via {module!r}; "
-                "packs may only use studio contracts and temporal algebra"
+                "packs may only use studio and temporal contracts"
             )
 
 

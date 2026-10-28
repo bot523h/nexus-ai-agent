@@ -25,7 +25,7 @@ class LocalLlamaCppProvider(LLMProvider):
             n_gpu_layers=n_gpu_layers,
         )
 
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: str, system: str = "", *, user_id: int | None = None) -> str:
         formatted_prompt = f"<|system|>{system}<|user|>{prompt}<|assistant|>"
 
         def _run() -> str:
