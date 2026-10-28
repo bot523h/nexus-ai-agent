@@ -17,9 +17,10 @@ placeholder text.
 |---|---|
 | [architecture.md](architecture.md) | Front door: the system in one picture + the reading order. |
 | [architecture/OVERVIEW.md](architecture/OVERVIEW.md) | C4 context & container views, stakeholders, the five quality attributes, frozen constraints, deployment topologies. |
+| [architecture/PRODUCT_FRAME.md](architecture/PRODUCT_FRAME.md) | The product frame: NEXUS is an app with a living core and Telegram is one channel adapter — rules for every agent, reproducible coupling evidence, the F0–F3 migration ladder (owner direction; decision record pending). |
 | [architecture/OVERVIEW.fa.md](architecture/OVERVIEW.fa.md) | خلاصهٔ فارسی و نقشهٔ مسیر مطالعه (navigation summary; English wins on conflict). |
 | [architecture/MODULE_MAP.md](architecture/MODULE_MAP.md) | Layer diagram, package inventory, boundary laws → the tests that enforce them, extension recipes. |
-| [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
+| [architecture/RUNTIME_FLOWS.md](architecture/RUNTIME_FLOWS.md) | Message, slideshow, canonical schema-2 trim, render-lane, checkpoint, migration, and webhook flows — each with its failure contract. |
 | [architecture/CREATIVE_STUDIO.md](architecture/CREATIVE_STUDIO.md) | Nagar: capability model, permission ladder, packs, activation gap, TDD coverage ledger, render lane. |
 | [architecture/CREATIVE_DIRECTION.md](architecture/CREATIVE_DIRECTION.md) | Nagar product direction: the intent-first backbone loop, the first vertical slice (single-project intent loop), deferred capabilities and their triggers. |
 | [architecture/COMMAND_CAPABILITY_CONTRACT.md](architecture/COMMAND_CAPABILITY_CONTRACT.md) | Nagar Gate 2: canonical command envelope, authorization/capability/policy/reference pipeline, idempotency, revision, and evidence limits. |
@@ -28,11 +29,14 @@ placeholder text.
 | [architecture/SELF_CHARTER.md](architecture/SELF_CHARTER.md) | Living Core Phase 1: the immutable charter, the append-only hash-chained Self-Ledger, fail-closed boot, the human-only amendment door, honest limits, acceptance evidence. |
 | [architecture/PROVENANCE_LEDGER.md](architecture/PROVENANCE_LEDGER.md) | The causal ledger (Project Graph journal): tamper-evident recording of every durable job transition, and the Artifact Passport — the read-only, fail-closed projection that reconciles chain vs. authority and re-measures artifacts. |
 | [architecture/JOB_LIFECYCLE.md](architecture/JOB_LIFECYCLE.md) | Canonical job lifecycle: chain, state machine with owners+invariants, side-effect boundary, artifact verification contract, retry/failure semantics, Result chain. |
-| [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, ownership, Alembic chain, retention, portability, and what never enters a store. |
+| [architecture/EXECUTION_CORE.md](architecture/EXECUTION_CORE.md) | NEXUS V1 execution core: the four-verb provider-neutral contract, authority laws, identity separation, staging/publication boundary, and the I1–I10 invariant matrix. |
+| [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, application-owned identity, Alembic chain, retention, portability, and what never enters a store. |
 | [architecture/SECURITY.md](architecture/SECURITY.md) | Trust boundaries, STRIDE threat → control → evidence table, P0 audit follow-through, review checklist. |
 | [architecture/OBSERVABILITY.md](architecture/OBSERVABILITY.md) | Structured events, metric policy, health semantics, inspection commands, the short alert list. |
+| [architecture/TRACING.md](architecture/TRACING.md) | Opt-in LangSmith tracing: the switch, the fail-closed bootstrap, the connectivity smoke, honest limits. |
 | [architecture/TESTING.md](architecture/TESTING.md) | Test taxonomy, the four gates, determinism rules, baseline numbers, honest gaps. |
 | [architecture/PORTS.md](architecture/PORTS.md) | The six hexagonal ports, their invariants and their signature tests. |
+| [architecture/REQUEST_QUEUE.md](architecture/REQUEST_QUEUE.md) | The cancellation boundary between the in-memory LLM request queue and the durable execution core: each surface's authority and identity model, and the no-cross-subsystem-leak audit note. |
 | [architecture/REFERENCES.md](architecture/REFERENCES.md) | The external standards followed (C4, arc42, MADR 4.0, fitness functions, docs-as-code, STRIDE) and what was deliberately not adopted. |
 | [architecture/DATA_LIFECYCLE.md](architecture/DATA_LIFECYCLE.md) | Data lifecycle contract: stages, retention, checkpoint schemas, the forbidden operation journal. |
 | [architecture/RETENTION_DECISION.md](architecture/RETENTION_DECISION.md) | Retention policy decision record (30-day resumability window, circuit breaker). |
@@ -44,6 +48,7 @@ placeholder text.
 | [architecture/adr/0002-docs-as-code-enforcement.md](architecture/adr/0002-docs-as-code-enforcement.md) | Enforce documentation in Python now; Node toolchain on a recorded trigger. |
 | [architecture/adr/0003-mermaid-flowchart-for-c4-views.md](architecture/adr/0003-mermaid-flowchart-for-c4-views.md) | Express C4 views with Mermaid `flowchart`. |
 | [architecture/adr/0004-board-schema-2.md](architecture/adr/0004-board-schema-2.md) | Coordination board schema 2: prerequisites, acceptance criteria, history split. |
+| [architecture/adr/0013-three-layer-operation-truth.md](architecture/adr/0013-three-layer-operation-truth.md) | Decoupling Product Catalog, Runtime Registry, and Executable Surface. |
 | [architecture/adr/0005-canonical-command-capability-contract.md](architecture/adr/0005-canonical-command-capability-contract.md) | Canonical command and capability contract: versioning, location, and reconciliation. |
 | [architecture/adr/0006-capability-pack-trust-root.md](architecture/adr/0006-capability-pack-trust-root.md) | Capability packs get an explicit trust root (Ed25519, offline, fail-closed). |
 | [architecture/adr/0007-multisource-referee-exit-codes.md](architecture/adr/0007-multisource-referee-exit-codes.md) | The overlap referee reports unverifiable data as exit 2, not as a pass. |
@@ -72,6 +77,9 @@ placeholder text.
 | [../REQUIREMENTS_LEDGER.md](../REQUIREMENTS_LEDGER.md) | PR1/PR2/PR3 checkpoint-lifecycle requirements ledger. |
 | [../AGENTS.md](../AGENTS.md) | Multi-agent coordination contract + current board summary. |
 | [NAGAR_70_OPERATIONS_TDD.md](NAGAR_70_OPERATIONS_TDD.md) | Phase 6 (Nagar creative studio) technical design baseline — 71 operation ids. |
+| [OPERATION_CONTRACT_MATRIX.md](OPERATION_CONTRACT_MATRIX.md) | Living operation contract matrix & truth table across all 80 universe operations. |
+| [RECONCILIATION.md](RECONCILIATION.md) | Reconciling Product Catalog (70) vs Runtime Registry (57) vs Executable Surface (9) and preserving 23 gaps. |
+| [L0_L4_MATURITY.md](L0_L4_MATURITY.md) | Nagar operation capability maturity model (L0 Not Implemented to L4 Surface Proven). |
 | [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | End-user guide: bring any NEXUS database to the Alembic head. |
 
 ## Protocols
@@ -86,6 +94,7 @@ placeholder text.
 | Document | What it is |
 |---|---|
 | [ops/DEPLOY_RUNBOOK.md](ops/DEPLOY_RUNBOOK.md) | Koyeb deploy runbook: preflight → deploy → smoke → rollback → incidents. |
+| [ops/DISASTER_RECOVERY_RUNBOOK.md](ops/DISASTER_RECOVERY_RUNBOOK.md) | DR runbook: backup→sidecar→drill→restore chain, failure taxonomy, chaos matrix, owner dependency register. |
 | [ops/deployment-koyeb.md](ops/deployment-koyeb.md) | Koyeb scale-to-zero deployment guide. |
 | [ops/NEON_LIFECYCLE_RUNBOOK.md](ops/NEON_LIFECYCLE_RUNBOOK.md) | Neon/PostgreSQL lifecycle runbook. |
 | [ops/r2-storage.md](ops/r2-storage.md) | Cloudflare R2 blob tier: setup + maintenance secrets. |
@@ -108,6 +117,10 @@ placeholder text.
 | [audits/AUDIT_REPORT_2026-09-21.md](audits/AUDIT_REPORT_2026-09-21.md) | Full architecture audit (P0 findings + command honesty matrix). |
 | [audits/HANDOFF_ANALYSIS_2026-09-21.md](audits/HANDOFF_ANALYSIS_2026-09-21.md) | Board GC + engineered handoff analysis (agent D session). |
 | [audits/REPO_HYGIENE_REPORT_2026-09-21.md](audits/REPO_HYGIENE_REPORT_2026-09-21.md) | Repository hygiene pass: docs reorganisation, release alignment, branch janitorial work. |
+| [audits/COORDINATION_2026-09-21.md](audits/COORDINATION_2026-09-21.md) | Coordination record, session 01a0c54f (task-113 lint rail): claim mirrors and re-apply blobs — superseded by the live board. Archived from the repository root in the task-162 wave. |
+| [audits/WAVE5_COORDINATION_01a0c5da.md](audits/WAVE5_COORDINATION_01a0c5da.md) | Wave-5 session record (branch arena/01a0c5da): zero-overlap fences, collision record and delivery evidence. Archived from the repository root in the task-162 wave. |
+| [audits/STORAGE_RESILIENCE_CHECKUP_2026-09-21.md](audits/STORAGE_RESILIENCE_CHECKUP_2026-09-21.md) | Storage-resilience ten-step checkup and delivery record backing PR#43 (branch arena/01a0c58a). Archived from the repository root in the task-162 wave. |
+| [audits/REPO_HYGIENE_2026-09-22.md](audits/REPO_HYGIENE_2026-09-22.md) | Janitorial wave (task-162): merged-branch deletion evidence, dated root-doc archival, zero-drift diagnostics — with reproduction commands. |
 | [audits/ARCHITECTURE_DOCS_2026-09-21.md](audits/ARCHITECTURE_DOCS_2026-09-21.md) | Architecture-documentation pass (task-131): what was written, verified, and enforced. |
 | [audits/WAVE5_ACTIVATION_2026-09-21.md](audits/WAVE5_ACTIVATION_2026-09-21.md) | Wave-5 activation audit: unified runtime, six packs active, coverage harness, honest 10-task forward network. |
 | [audits/FORENSIC_PR40_CI_2026-09-21.md](audits/FORENSIC_PR40_CI_2026-09-21.md) | Forensic CI analysis of the red PR#40 wave-4 batch (root cause + A/B proof). |
@@ -120,6 +133,7 @@ placeholder text.
 | [audits/GATE5_CLOSURE_2026-09-24.md](audits/GATE5_CLOSURE_2026-09-24.md) | Task-181 Gate 5 closure/reconciliation (Agent E): claim-audit truth matrix (prior Gate-5-local claims vs GitHub), PR#71/#74 reconciliation, four reproduced defects (typed failure → COMPLETED, one-state failures, publication leak, trace job_id=null), fixes with regression + 6/6 mutation probes. |
 | [audits/GATE5_TRUTH_MATRIX.json](audits/GATE5_TRUTH_MATRIX.json) | Machine-readable Gate 5 claim→evidence matrix + acceptance-gate answers (CLOSED only with Git + CI evidence). |
 | [audits/DEAD_ENGINES_2026-09-22.md](audits/DEAD_ENGINES_2026-09-22.md) | Dead-engine verification (zero importers, measured gates), five-option wiring analysis, negative controls, and the recorded residuals. |
+| [audits/CAPTION_PRODUCTION_LANE_2026-09-26.md](audits/CAPTION_PRODUCTION_LANE_2026-09-26.md) | Caption Pack production audit: operation truth matrix, golden engineering invariants, timing/RTL/engine decisions, and evidence limits. |
 | [audits/CONTINUUM_CLOSURE_2026-09-27.md](audits/CONTINUUM_CLOSURE_2026-09-27.md) | Continuum evidence-foundation closure (task-184 / task-154): 95%-per-pack coverage gate, fail-closed snapshot, replayable mutation campaign, exact-SHA CI — with the recorded lost-lineage recovery. |
 | [audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md](audits/MASTER_ARCHITECTURAL_ASSESSMENT_2026-09-27.md) | Exact-SHA Phase Zero assessment: actual runtime, trust boundaries, Continuum/GitHub truth, five-angle research decisions, gaps, and risk register. |
 | [audits/EXECUTION_PLAN_2026-09-27.md](audits/EXECUTION_PLAN_2026-09-27.md) | Phased implementation plan with dependencies, verification/CI strategy, operational gates, and Definition of Done. |

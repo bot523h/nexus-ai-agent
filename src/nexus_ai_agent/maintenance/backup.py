@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hashlib
+import json
 import shutil
 import sqlite3
 import subprocess
@@ -34,9 +35,13 @@ from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.config.settings import Settings
+from nexus_ai_agent.maintenance.failures import (
+    MaintenanceOperationError,
+    classify_storage_failure,
+)
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.db import resolve_database_url
-from nexus_ai_agent.storage.providers.base import ProviderUnavailable
+from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
 from nexus_ai_agent.storage.providers.r2 import R2Provider
 
 log = get_logger(__name__)
@@ -44,6 +49,10 @@ log = get_logger(__name__)
 # Blob-tier prefix — recognized by AIStorageManager.is_blob_key.
 BLOB_BACKUP_PREFIX = "backups/db"
 STAMP_FORMAT = "%Y%m%d-%H%M%S"
+
+# Self-describing manifest written next to every artifact so a restore drill
+# can prove identity from the bucket alone (legacy backups simply lack it).
+SIDECAR_SUFFIX = ".meta.json"
 
 # pg_dump's own end-of-file marker for plain-text dumps (stable across
 # versions; absent ⇒ truncated dump).
@@ -171,6 +180,33 @@ def _build_provider(settings: Settings) -> R2Provider:
     return R2Provider.from_settings(settings)
 
 
+def _upload_actionable(
+    provider: R2Provider, *, local_path: Path, key: str, bucket: str | None = None
+) -> None:
+    """Upload with the operator-actionable failure taxonomy — never a bare raise."""
+    try:
+        asyncio.run(provider.upload(local_path=local_path, remote_key=key))
+    except (ProviderUnavailable, MaintenanceOperationError):
+        raise
+    except StorageError as exc:
+        raise MaintenanceOperationError(
+            classify_storage_failure(operation="upload", where=key, exc=exc, bucket=bucket)
+        ) from exc
+
+
+def _build_sidecar(*, key: str, summary: dict[str, Any]) -> dict[str, Any]:
+    """Self-describing remote manifest for exactly one artifact version."""
+    return {
+        "kind": "nexus.db-backup.meta/v1",
+        "key": key,
+        "sha256": summary["sha256"],
+        "size_bytes": summary["size_bytes"],
+        "timestamp": summary["timestamp"],
+        "source": summary["source"],
+        "verification": summary["verification"],
+    }
+
+
 def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any]:
     """Dump the active database, verify the artifact, upload, re-verify.
 
@@ -224,10 +260,18 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
             raise RuntimeError("backup artifact is empty — refusing to upload")
         sha256 = _sha256(dump_path)
 
-        asyncio.run(provider.upload(local_path=dump_path, remote_key=key))
-        verification.update(
-            _verify_round_trip(provider, key=key, local_path=dump_path, expected_sha256=sha256)
-        )
+        bucket_attr = getattr(provider, "_bucket", None)
+        _upload_actionable(provider, local_path=dump_path, key=key, bucket=bucket_attr)
+        try:
+            verification.update(
+                _verify_round_trip(provider, key=key, local_path=dump_path, expected_sha256=sha256)
+            )
+        except StorageError as exc:
+            raise MaintenanceOperationError(
+                classify_storage_failure(
+                    operation="readback", where=key, exc=exc, bucket=bucket_attr
+                )
+            ) from exc
 
     summary.update(
         {
@@ -239,6 +283,40 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
             "timestamp": now.isoformat(),
         }
     )
+
+    # Sidecar manifest: makes the artifact self-describing remotely. A
+    # restore drill can then prove artifact identity from the bucket alone
+    # (backups written before this feature simply have no sidecar; a drill
+    # must report that honestly as "structural verification only").
+    sidecar_key = f"{key}{SIDECAR_SUFFIX}"
+    with tempfile.TemporaryDirectory(prefix="nexus_backup_sidecar_") as sidecar_tmp:
+        sidecar_path = Path(sidecar_tmp) / "manifest.json"
+        sidecar_path.write_text(
+            json.dumps(_build_sidecar(key=key, summary=summary), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        _upload_actionable(provider, local_path=sidecar_path, key=sidecar_key, bucket=bucket_attr)
+        sidecar_bytes = sidecar_path.read_bytes()
+        try:
+            verification.update(
+                _verify_round_trip(
+                    provider,
+                    key=sidecar_key,
+                    local_path=sidecar_path,
+                    expected_sha256=hashlib.sha256(sidecar_bytes).hexdigest(),
+                )
+            )
+        except StorageError as exc:
+            raise MaintenanceOperationError(
+                classify_storage_failure(
+                    operation="sidecar readback",
+                    where=sidecar_key,
+                    exc=exc,
+                    bucket=bucket_attr,
+                )
+            ) from exc
+    summary["sidecar"] = {"key": sidecar_key, "verified": True}
+
     log.info(
         "maintenance_backup_ok",
         key=key,

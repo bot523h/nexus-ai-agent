@@ -242,13 +242,13 @@ def test_otio_export_boundary_and_emitted_evidence() -> None:
     rate_emitted = clip["source_range"]["duration"]["rate"]
 
     assert abs(rate_emitted - (24000 / 1001)) < 1e-6
-    assert clip["source_range"]["duration"]["value"] == 0
+    assert clip["source_range"]["duration"]["value"] == 1
 
     meta_conv = clip["metadata"]["temporal_conversion"]
     assert meta_conv["raw_conv_frames"] == 0
-    assert meta_conv["emitted_frames"] == 0
-    assert meta_conv["lossless"] is True
-    assert meta_conv["residual_seconds"] == "0"
+    assert meta_conv["emitted_frames"] == 1
+    assert meta_conv["lossless"] is False
+    assert meta_conv["residual_seconds"] == "-1001/24000"
 
 
 # ---------------------------------------------------------------------------
