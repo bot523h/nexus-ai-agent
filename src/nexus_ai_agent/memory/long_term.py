@@ -55,6 +55,7 @@ def _open_sqlite_connection(path: str) -> tuple[Any, bool]:
     except ImportError:
         return conn, False
 
+
 def _is_real_user_id(user_id: object) -> bool:
     """A personal principal is a positive, non-bool integer — never a group id."""
     return isinstance(user_id, int) and not isinstance(user_id, bool) and user_id > 0
