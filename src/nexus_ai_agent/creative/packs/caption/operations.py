@@ -853,7 +853,7 @@ def register_caption_operations(registry: CapabilityRegistry) -> CapabilityRegis
             input_model=TranscribeInput,
             handler=_transcribe,
             required_packs=(CAPTION_PACKAGE_ID,),
-            deterministic=False,
+            deterministic=True,
         ),
     )
     registry.register_operation(
