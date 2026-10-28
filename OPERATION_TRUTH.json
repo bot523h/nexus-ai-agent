@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "0d5edafb656a5c3e8e9a8611075d5735ce5bb3f3",
-    "generated_at": "2026-10-28T22:21:54Z",
+    "source_revision": "4eb315de09bd42595f264e66b098a3fe0f7eb65a",
+    "generated_at": "2026-10-28T23:46:42Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -404,6 +404,9 @@
           "dispatch"
         ],
         "files": [
+          "tests/unit/creative_ir_testkit.py",
+          "tests/unit/test_creative_ir.py",
+          "tests/unit/test_creative_ir_determinism.py",
           "tests/unit/test_creative_render_jobs.py",
           "tests/unit/test_delivery_pack.py",
           "tests/unit/test_delivery_signing.py"
@@ -414,6 +417,7 @@
           "dispatch"
         ],
         "files": [
+          "tests/unit/test_creative_ir_determinism.py",
           "tests/unit/test_delivery_pack.py",
           "tests/unit/test_delivery_signing.py"
         ]
@@ -500,6 +504,9 @@
           "handler"
         ],
         "files": [
+          "tests/unit/creative_ir_testkit.py",
+          "tests/unit/test_creative_ir.py",
+          "tests/unit/test_creative_ir_determinism.py",
           "tests/unit/test_motion_pack.py",
           "tests/unit/test_opgap_wave5.py"
         ]
@@ -530,6 +537,8 @@
           "handler"
         ],
         "files": [
+          "tests/unit/creative_ir_testkit.py",
+          "tests/unit/test_creative_semantics.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       },
@@ -588,6 +597,7 @@
           "handler"
         ],
         "files": [
+          "tests/unit/creative_ir_testkit.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       },
@@ -2741,6 +2751,9 @@
           "dispatch"
         ],
         "suite_reference_files": [
+          "tests/unit/creative_ir_testkit.py",
+          "tests/unit/test_creative_ir.py",
+          "tests/unit/test_creative_ir_determinism.py",
           "tests/unit/test_creative_render_jobs.py",
           "tests/unit/test_delivery_pack.py",
           "tests/unit/test_delivery_signing.py"
@@ -2797,6 +2810,7 @@
           "dispatch"
         ],
         "suite_reference_files": [
+          "tests/unit/test_creative_ir_determinism.py",
           "tests/unit/test_delivery_pack.py",
           "tests/unit/test_delivery_signing.py"
         ],
@@ -3392,6 +3406,9 @@
           "handler"
         ],
         "suite_reference_files": [
+          "tests/unit/creative_ir_testkit.py",
+          "tests/unit/test_creative_ir.py",
+          "tests/unit/test_creative_ir_determinism.py",
           "tests/unit/test_motion_pack.py",
           "tests/unit/test_opgap_wave5.py"
         ],
@@ -3560,6 +3577,8 @@
           "handler"
         ],
         "suite_reference_files": [
+          "tests/unit/creative_ir_testkit.py",
+          "tests/unit/test_creative_semantics.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
@@ -3894,6 +3913,7 @@
           "handler"
         ],
         "suite_reference_files": [
+          "tests/unit/creative_ir_testkit.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
