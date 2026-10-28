@@ -5703,7 +5703,6 @@
         "src/nexus_ai_agent/creative/temporal/adapters.py",
         "src/nexus_ai_agent/creative/temporal/core.py",
         "tests/architecture/test_delivery_pack_boundary.py",
-        "tests/architecture/test_pack_manifest_is_data_only.py",
         "tests/unit/test_delivery_pack.py",
         "tests/unit/test_temporal_adversarial.py",
         "tests/unit/test_temporal_algebra.py",
@@ -5715,7 +5714,7 @@
       "gates_owner": false,
       "generation": 0,
       "owner_hint": "Registered for a future authorized repair session on jules-940713209102888185-f8f59acc; not assigned or claimed by this registration.",
-      "note": ""
+      "note": " | NEXUS-PRC-2026-10-28: narrowed exclusive_paths — the actual #144 diff never touches tests/architecture/test_pack_manifest_is_data_only.py (verified: git diff origin/main...HEAD). Dropping the unused reservation unblocks PR #100, which legitimately needs that allowlist line."
     },
     {
       "task": "pr-repair-149",
