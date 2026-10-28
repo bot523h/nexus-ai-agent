@@ -17,6 +17,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
 from nexus_ai_agent.adapters.native_local_backend import NativeLocalBackend
 from nexus_ai_agent.execution import contract as contract_module
@@ -154,13 +156,20 @@ def test_backend_owns_no_persistence_verifier_or_passport() -> None:
 
 
 def test_backend_never_constructs_a_queue_at_runtime() -> None:
-    """Runtime construction check: the backend keeps the injected queue only."""
+    """Runtime construction check: the backend keeps the injected queue only.
+
+    With no queue injected it fails closed rather than manufacturing a second
+    authority: a missing queue is a refusal, never a fresh ``InProcessJobQueue``.
+    """
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
         queue = InProcessJobQueue(Path(tmp) / "jobs.sqlite3", artifact_verifiers={})
         backend = NativeLocalBackend(queue)
         assert backend._queue is queue, "the backend must delegate to the injected queue"
+
+    with pytest.raises(ValueError):
+        NativeLocalBackend(None)  # type: ignore[arg-type]
 
 
 def test_backend_defines_only_the_backend_class() -> None:
