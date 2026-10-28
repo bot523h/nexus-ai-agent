@@ -15,6 +15,7 @@ so no codec, filter or timing claim is mocked. Caption tests fake only the
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -306,6 +307,8 @@ def test_caption_transcribe_with_engine_serves_srt(
             return TranscriptRef(
                 transcript_id="t-1",
                 language=language or "fa",
+                engine="unit-test-engine",
+                source_sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest(),
                 segments=(
                     TranscriptSegment(start_us=0, end_us=500_000, text="سلام دنیا"),
                     TranscriptSegment(start_us=500_000, end_us=1_000_000, text="تست دوم"),
