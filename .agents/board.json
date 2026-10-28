@@ -979,6 +979,14 @@
         "CURRENT_TRUTH_AUDIT.md",
         ".agents/evidence/"
       ]
+    },
+    {
+      "id": "storage-provider-rclone",
+      "description": "REL-006: rclone storage provider failure semantics (list_files must not swallow errors)",
+      "paths": [
+        "src/nexus_ai_agent/storage/providers/rclone.py",
+        "tests/unit/test_rclone_provider_list_errors.py"
+      ]
     }
   ],
   "claims": [
@@ -7375,6 +7383,37 @@
         "tests/unit/test_caption_pack.py",
         "tests/unit/test_creative_render_jobs.py"
       ]
+    },
+    {
+      "task": "rel-006-rclone-list-failure",
+      "title": "REL-006: rclone provider failure must not become an empty listing",
+      "zone": "storage-provider-rclone",
+      "priority": "P2",
+      "status": "active",
+      "scope": "Fix src/nexus_ai_agent/storage/providers/rclone.py list_files: return a typed error for non-zero exits and for provider unavailability/not-configured, instead of a silent empty list. Bounded, redacted diagnostics.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Non-zero rclone exit raises a typed StorageError/ProviderUnavailable, never an empty list.",
+        "Unconfigured provider raises ProviderUnavailable, not an empty list.",
+        "A genuinely empty remote still returns [].",
+        "Diagnostics are bounded and redacted.",
+        "Regression tests cover each path."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_rclone_provider_list_errors.py -> passed",
+        "make lint + make types clean",
+        "referee exit 0"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/providers/rclone.py",
+        "tests/unit/test_rclone_provider_list_errors.py"
+      ],
+      "agent_branch": "arena/m6-rel006-rclone-list-errors",
+      "claimed_at": "2026-10-28T08:47:59Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
