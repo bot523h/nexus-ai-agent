@@ -34,6 +34,7 @@ class RcloneProvider:
     """
 
     name = "rclone"
+    COMMAND_TIMEOUT_SECONDS = 120.0
 
     def __init__(self, *, remote: str):
         self._remote = remote.rstrip("/")
@@ -100,16 +101,84 @@ class RcloneProvider:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        out, err = await proc.communicate()
+        try:
+            out, err = await asyncio.wait_for(
+                proc.communicate(), timeout=self.COMMAND_TIMEOUT_SECONDS
+            )
+        except TimeoutError as exc:
+            proc.kill()
+            await proc.communicate()
+            raise RcloneOperationError(
+                operation="list",
+                category="timeout",
+                retryable=True,
+                detail=(
+                    "rclone listing exceeded its bounded timeout; retry after checking the remote"
+                ),
+            ) from exc
         if proc.returncode != 0:
             # A failed listing must not masquerade as a valid empty listing: the
             # housekeeping/rotation callers prune backups from this result, so a
             # silent [] would look like "nothing to keep" and risk deleting the
-            # wrong set.  Raise a typed error with bounded, redacted diagnostics.
-            raise StorageError(
-                f"rclone list failed (exit {proc.returncode}): {_bounded_diagnostics(out + err)}"
+            # wrong set.  Raise a typed error carrying the exit code (REL-006's
+            # contract) plus a bounded, redacted diagnostic.
+            raise RcloneOperationError(
+                operation="list",
+                category=_classify_failure(err),
+                retryable=_is_retryable(err),
+                detail=_safe_detail(err),
+                exit_code=proc.returncode,
             )
         files = [
             line.strip() for line in out.decode("utf-8", "ignore").splitlines() if line.strip()
         ]
         return [f"{prefix.rstrip('/')}/{f}".lstrip("/") for f in files]
+
+
+class RcloneOperationError(StorageError):
+    """A failed rclone operation; never confuse it with an empty listing."""
+
+    def __init__(
+        self,
+        *,
+        operation: str,
+        category: str,
+        retryable: bool,
+        detail: str,
+        exit_code: int | None = None,
+    ) -> None:
+        self.operation = operation
+        self.category = category
+        self.retryable = retryable
+        self.detail = detail
+        self.exit_code = exit_code
+        # The exit code is part of the operator-facing contract (REL-006): a
+        # failure must be attributable, not just "an error happened".
+        where = f"exit {exit_code}" if exit_code is not None else "no exit code"
+        super().__init__(f"rclone {operation} failed ({where}, {category}): {detail}")
+
+
+def _safe_detail(raw: bytes) -> str:
+    """Bounded, credential-redacted diagnostics for a failed rclone call."""
+    text = _bounded_diagnostics(raw).strip()
+    text = re.sub(
+        r"(?i)(password|secret|token|access[_ -]?key)\s*[=:]\s*\S+", r"\1=<redacted>", text
+    )
+    return text or "provider returned no diagnostic output"
+
+
+def _classify_failure(raw: bytes) -> str:
+    text = raw.decode("utf-8", "ignore").lower()
+    if any(
+        word in text for word in ("authentication", "unauthorized", "invalid credentials", "login")
+    ):
+        return "authentication"
+    if any(word in text for word in ("permission denied", "access denied", "forbidden")):
+        return "permission"
+    if any(word in text for word in ("timeout", "timed out", "connection reset", "temporary")):
+        return "network"
+    return "provider"
+
+
+def _is_retryable(raw: bytes) -> bool:
+    return _classify_failure(raw) == "network"
