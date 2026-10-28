@@ -200,11 +200,17 @@ def required_contexts(protection: dict[str, Any] | None) -> tuple[list[str], int
 
 
 def _contexts_of(pr: dict[str, Any]) -> dict[str, str]:
-    """Map each check context name to its conclusion/state, worst-first if dup.
+    """Map each check context name to its **latest** conclusion/state.
 
     Handles both the GraphQL ``statusCheckRollup.contexts`` shape (used by
     ``collect``/``guard``) and the flat REST check-run list, so the guard does
     not depend on which reader produced the record.
+
+    A context can appear more than once on one head: re-running a workflow
+    *cancels* the superseded run, so the same name shows up as an old
+    ``CANCELLED`` next to a new ``SUCCESS``.  GitHub's own required-check
+    evaluation uses the **most recent** run, so the guard must too — otherwise a
+    green head reads as red and a genuinely mergeable PR is refused.
     """
     rollup = pr.get("statusCheckRollup")
     if isinstance(rollup, dict) and isinstance(rollup.get("contexts"), list):
@@ -213,19 +219,28 @@ def _contexts_of(pr: dict[str, Any]) -> dict[str, str]:
         nodes = rollup
     else:
         return {}
-    out: dict[str, str] = {}
-    for node in nodes:
+    newest: dict[str, tuple[tuple[int, Any], str]] = {}
+    for index, node in enumerate(nodes):
         if not isinstance(node, dict):
             continue
         name = node.get("name") or node.get("context") or ""
-        state = str(node.get("conclusion") or node.get("state") or "").upper()
         if not name:
             continue
-        # A context reported more than once: a single non-success wins.
-        if name in out and out[name] not in _NON_GATING_OK:
-            continue
-        out[name] = state
-    return out
+        state = str(node.get("conclusion") or node.get("state") or "").upper()
+        stamp = str(
+            node.get("completedAt")
+            or node.get("completed_at")
+            or node.get("updatedAt")
+            or node.get("updated_at")
+            or ""
+        )
+        # Prefer an explicit completion timestamp; fall back to list position
+        # (the REST reader returns oldest→newest).  The leading flag keeps the
+        # two key kinds comparable without mixing str/int.
+        key: tuple[int, Any] = (1, stamp) if stamp else (0, index)
+        if name not in newest or key >= newest[name][0]:
+            newest[name] = (key, state)
+    return {name: state for name, (_key, state) in newest.items()}
 
 
 def check_guard(
@@ -497,12 +512,15 @@ def _live_pr(number: int, repo: str) -> dict[str, Any]:
     checks = payload.get("statusCheckRollup") or []
     # Keep both shapes: the coarse rollup ``state`` for classify(), and the
     # per-context list so the guard can check the *required* contexts by name.
+    # The completion timestamp is carried through so a superseded (cancelled)
+    # re-run cannot outvote the newest run of the same context.
     payload["statusCheckRollup"] = {
         "state": _aggregate(checks),
         "contexts": [
             {
                 "name": c.get("name") or c.get("context") or "",
                 "conclusion": (c.get("conclusion") or c.get("state") or "").upper(),
+                "completedAt": c.get("completedAt") or c.get("completed_at") or "",
             }
             for c in checks
         ],

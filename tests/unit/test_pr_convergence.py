@@ -214,6 +214,61 @@ def test_guard_ignores_a_non_required_context_that_is_skipped() -> None:
     assert (code, reasons) == (0, [])
 
 
+def test_guard_uses_the_latest_run_of_a_required_context_not_a_superseded_one() -> None:
+    """A re-run cancels the old attempt; the newest run decides the gate.
+
+    GitHub's required-check evaluation looks at the *most recent* run of each
+    context.  A guard that let the earlier ``CANCELLED`` veto the later
+    ``SUCCESS`` reported a genuinely mergeable head as BLOCKED (observed live on
+    PR #263, whose lint/test were re-run and cancelled the first attempt).
+    """
+    contexts = _green_contexts() + [
+        {
+            "name": REQUIRED_CONTEXTS[0],
+            "conclusion": "CANCELLED",
+            "completedAt": "2026-10-28T05:41:39Z",
+        },
+        {
+            "name": REQUIRED_CONTEXTS[0],
+            "conclusion": "SUCCESS",
+            "completedAt": "2026-10-28T05:48:52Z",
+        },
+    ]
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": contexts})
+    code, reasons = _guard(pr)
+    assert (code, reasons) == (0, [])
+
+
+def test_guard_still_fails_when_the_latest_run_of_a_required_context_is_red() -> None:
+    """Latest-wins must not become last-listed-wins in the unsafe direction."""
+    contexts = _green_contexts() + [
+        {
+            "name": REQUIRED_CONTEXTS[0],
+            "conclusion": "SUCCESS",
+            "completedAt": "2026-10-28T05:41:39Z",
+        },
+        {
+            "name": REQUIRED_CONTEXTS[0],
+            "conclusion": "FAILURE",
+            "completedAt": "2026-10-28T05:48:52Z",
+        },
+    ]
+    pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
+    code, reasons = _guard(pr)
+    assert code == 1
+    assert any("not green" in reason for reason in reasons)
+
+
+def test_guard_latest_run_falls_back_to_order_without_timestamps() -> None:
+    """Without timestamps, the REST reader's oldest→newest order decides."""
+    contexts = _green_contexts() + [
+        {"name": REQUIRED_CONTEXTS[0], "conclusion": "CANCELLED"},
+        {"name": REQUIRED_CONTEXTS[0], "conclusion": "SUCCESS"},
+    ]
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": contexts})
+    assert _guard(pr) == (0, [])
+
+
 def test_guard_ignores_a_missing_review_when_none_is_required() -> None:
     """This repo requires 0 approvals; a green PR must PASS without a review."""
     code, reasons = _guard(_pr(reviewDecision="REVIEW_REQUIRED"))
