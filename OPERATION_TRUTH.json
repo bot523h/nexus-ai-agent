@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "bdf2853fddcc33c755b0beac6e67861d1282c5a2",
-    "generated_at": "2026-10-28T10:13:25Z",
+    "source_revision": "7d653bb1baa379d9166cd645becfa940b551d2a9",
+    "generated_at": "2026-10-28T15:08:46Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -440,7 +440,8 @@
         ],
         "files": [
           "tests/unit/test_delivery_pack.py",
-          "tests/unit/test_job_lifecycle.py"
+          "tests/unit/test_job_lifecycle.py",
+          "tests/unit/test_temporal_adversarial.py"
         ]
       },
       "delivery.make_proxy_480p": {
@@ -3100,7 +3101,8 @@
         ],
         "suite_reference_files": [
           "tests/unit/test_delivery_pack.py",
-          "tests/unit/test_job_lifecycle.py"
+          "tests/unit/test_job_lifecycle.py",
+          "tests/unit/test_temporal_adversarial.py"
         ],
         "recorded_execution_proof": false,
         "recorded_artifact_proof": false,
