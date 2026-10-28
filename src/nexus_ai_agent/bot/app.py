@@ -327,6 +327,7 @@ def build_application(
     feature_engines = engines["feature_engines"]
 
     async def _post_init(application: Any) -> None:
+        application.bot_data["startup_status"] = {"state": "starting", "degraded": False}
         # Bind the runtime bot to the bindable engines (reminders,
         # force-join, anonymous chat) and restore pending reminders so
         # a restart does not silently drop them.
@@ -335,8 +336,15 @@ def build_application(
             feature_engines.force_join.bind(application.bot)
             feature_engines.anon.bind(application.bot)
             await feature_engines.reminders.restore_pending()
-        except Exception:  # noqa: BLE001 — startup wiring must not kill the bot
+        except Exception as exc:  # noqa: BLE001 — mandatory recovery blocks startup
+            application.bot_data["startup_status"] = {
+                "state": "failed",
+                "phase": "feature_engines_and_reminders",
+                "degraded": False,
+                "detail": f"{type(exc).__name__}: {exc}"[:240],
+            }
             logger.exception("feature_engines_startup_failed")
+            raise RuntimeError("mandatory feature-engine/reminder recovery failed") from exc
         # task-231: close any crash-window holes in the causal journal with
         # explicitly labeled reconstructions (idempotent, fail-safe). A
         # degraded (None) journal simply has nothing to backfill into.
@@ -350,9 +358,28 @@ def build_application(
                     job_queue,
                     await asyncio.to_thread(job_queue.job_ids),
                 )
-            except Exception:  # noqa: BLE001 — ledger recovery must not kill the bot
+            except Exception:  # noqa: BLE001 — ledger is optional evidence
+                application.bot_data["startup_status"] = {
+                    "state": "degraded",
+                    "phase": "causal_journal_backfill",
+                    "degraded": True,
+                    "detail": (
+                        "causal journal backfill unavailable; "
+                        "pending work remains authoritative"
+                    ),
+                }
                 logger.exception("causal_journal_backfill_failed")
-        await job_queue.resume_pending()
+        try:
+            await job_queue.resume_pending()
+        except Exception as exc:  # noqa: BLE001 — mandatory queue recovery
+            application.bot_data["startup_status"] = {
+                "state": "failed",
+                "phase": "queue_recovery",
+                "degraded": False,
+                "detail": f"{type(exc).__name__}: {exc}"[:240],
+            }
+            logger.exception("queue_recovery_failed")
+            raise RuntimeError("mandatory queue recovery failed") from exc
         # Living Core phase 2b: opt-in vital signs (off unless
         # SELF_VITALS_ENABLED=true). Observation only — it never acts.
         try:
@@ -366,6 +393,9 @@ def build_application(
             )
         except Exception:  # noqa: BLE001 — observation must never kill the bot
             logger.exception("self_vitals_startup_failed")
+        else:
+            if application.bot_data["startup_status"].get("state") != "degraded":
+                application.bot_data["startup_status"] = {"state": "ready", "degraded": False}
 
     async def _post_shutdown(application: Any) -> None:
         vitals_handle = application.bot_data.get("self_vitals")

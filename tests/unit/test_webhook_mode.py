@@ -9,6 +9,7 @@ without update_id → 400.
 from __future__ import annotations
 
 import asyncio
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -305,3 +306,74 @@ def test_run_webhook_requires_webhook_secret() -> None:
     )
     with pytest.raises(WebhookConfigError, match="NEXUS_WEBHOOK_SECRET"):
         run_webhook(StubApplication(), settings=settings)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("failure_phase", ["initialize", "resume", "start", "webhook", "serve"])
+def test_webhook_failure_cleans_acquired_resources(
+    monkeypatch: pytest.MonkeyPatch, failure_phase: str
+) -> None:
+    """Every acquired PTB resource is released when any startup phase fails."""
+    from nexus_ai_agent.bot import webhook as webhook_module
+
+    class FakeApp:
+        def __init__(self) -> None:
+            self.bot_data = {"job_queue": self}
+            self.bot = self
+            self.events: list[str] = []
+
+        async def initialize(self) -> None:
+            self.events.append("initialize")
+            if failure_phase == "initialize":
+                raise RuntimeError("initialize boom")
+
+        async def resume_pending(self) -> None:
+            self.events.append("resume")
+            if failure_phase == "resume":
+                raise RuntimeError("resume boom")
+
+        async def start(self) -> None:
+            self.events.append("start")
+            if failure_phase == "start":
+                raise RuntimeError("start boom")
+
+        async def set_webhook(self, **_: Any) -> None:
+            self.events.append("webhook")
+            if failure_phase == "webhook":
+                raise RuntimeError("webhook boom")
+
+        async def stop(self) -> None:
+            self.events.append("stop")
+
+        async def shutdown(self) -> None:
+            self.events.append("shutdown")
+
+    class FakeConfig:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+    class FakeServer:
+        def __init__(self, *_: Any, **__: Any) -> None:
+            pass
+
+        async def serve(self) -> None:
+            if failure_phase == "serve":
+                raise RuntimeError("serve boom")
+
+    monkeypatch.setitem(
+        sys.modules, "uvicorn", SimpleNamespace(Config=FakeConfig, Server=FakeServer)
+    )
+    application = FakeApp()
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(
+            webhook_module._serve_webhook(
+                application=application,
+                api_app=object(),
+                webhook_url="https://example.test/webhook",
+                webhook_secret=SECRET,
+                host="127.0.0.1",
+                port=8000,
+                log_level="info",
+            )
+        )
+    assert application.events.count("shutdown") == (0 if failure_phase == "initialize" else 1)
+    assert application.events.count("stop") == (1 if failure_phase in {"webhook", "serve"} else 0)

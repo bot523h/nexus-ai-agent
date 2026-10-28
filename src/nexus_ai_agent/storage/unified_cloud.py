@@ -506,9 +506,12 @@ class UnifiedCloudStorage:
         """List files from all providers."""
         all_files: list[dict[str, Any]] = []
         seen: set[str] = set()
+        failures: list[StorageError] = []
+        configured = 0
         for provider in self._providers:
             if not provider.is_configured():
                 continue
+            configured += 1
             try:
                 keys = await provider.list_files(prefix=prefix)
                 for key in keys:
@@ -516,8 +519,16 @@ class UnifiedCloudStorage:
                         seen.add(key)
                         all_files.append({"name": key, "provider": provider.name})
                         self._file_map[key] = provider.name
-            except Exception:
-                continue
+            except StorageError as exc:
+                failures.append(exc)
+                log.warning("cloud_provider_listing_failed", provider=provider.name, error=str(exc))
+        if failures and not all_files:
+            # An actually empty listing is [] only when every configured
+            # provider completed successfully.  Preserve the first typed
+            # failure so callers cannot interpret an outage as "no files".
+            raise failures[0]
+        if configured == 0:
+            return []
         return all_files
 
     async def get_status(self) -> str:

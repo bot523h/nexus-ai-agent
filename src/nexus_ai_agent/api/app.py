@@ -350,9 +350,13 @@ async def readyz() -> JSONResponse:
     never silently accepted here.
     """
     db_ok, db_detail = await _database_readiness()
+    application = getattr(app.state, "webhook_application", None)
+    startup = dict(getattr(application, "bot_data", {}).get("startup_status", {}))
+    startup_state = startup.get("state")
+    startup_ok = startup_state in (None, "ready")
     identity = _deployment_identity()
     payload: dict[str, object] = {
-        "status": "ready" if db_ok else "not_ready",
+        "status": "ready" if db_ok and startup_ok else "not_ready",
         "version": identity["version"],
         "deploy_git_sha": identity["deploy_git_sha"],
         "db": {
@@ -360,8 +364,14 @@ async def readyz() -> JSONResponse:
             "backend": db_detail if db_ok else None,
             "detail": None if db_ok else db_detail,
         },
+        "startup": {
+            "ok": startup_ok,
+            "state": startup_state or "not_observed",
+            "phase": startup.get("phase"),
+            "detail": startup.get("detail"),
+        },
     }
-    return JSONResponse(payload, status_code=200 if db_ok else 503)
+    return JSONResponse(payload, status_code=200 if db_ok and startup_ok else 503)
 
 
 async def _save_upload_to_temp(upload: StarletteUploadFile) -> str:
