@@ -9,11 +9,11 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-NEL_VERSION = 1
+NEL_VERSION: Literal[1] = 1
 
 
 class NELDiagnostic(BaseModel):
@@ -85,7 +85,7 @@ def _duration_us(raw: str) -> int:
 
 def parse(source: str) -> tuple[NELAst | None, tuple[NELDiagnostic, ...]]:
     lines = source.splitlines()
-    values: dict[str, object] = {"preserve": [], "requirements": []}
+    values: dict[str, Any] = {"preserve": [], "requirements": []}
     errors: list[NELDiagnostic] = []
     for line_no, raw in enumerate(lines, 1):
         line = raw.strip()
@@ -102,12 +102,12 @@ def parse(source: str) -> tuple[NELAst | None, tuple[NELDiagnostic, ...]]:
                 values["select"] = SemanticSelect(label=m.group(1))
             elif m := re.fullmatch(r"TRIM duration_delta=(-?\d+(?:\.\d+)?)s", line):
                 values["trim"] = TrimAction(duration_delta_us=_duration_us(m.group(1) + "s"))
-            elif m := re.fullmatch(r"PRESERVE ([a-z_]+)=(true|false)", line):
+            elif m := re.fullmatch(r"PRESERVE speech_continuity=(true|false)", line):
                 values["preserve"].append(
-                    PreserveAction(field=m.group(1), value=m.group(2) == "true")
-                )  # type: ignore[union-attr]
+                    PreserveAction(field="speech_continuity", value=m.group(1) == "true")
+                )
             elif m := re.fullmatch(r'REQUIRE evidence\("([a-z][a-z0-9_.-]{0,63})"\)', line):
-                values["requirements"].append(EvidenceRequirement(evidence_type=m.group(1)))  # type: ignore[union-attr]
+                values["requirements"].append(EvidenceRequirement(evidence_type=m.group(1)))
             elif line == "PREVIEW":
                 values["preview"] = True
             else:

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SCHEMA_VERSION = "nagar.intent.v1"
+SCHEMA_VERSION: Literal["nagar.intent.v1"] = "nagar.intent.v1"
 
 
 class IntentStatus(str, Enum):

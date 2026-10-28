@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "0d5edafb656a5c3e8e9a8611075d5735ce5bb3f3",
-    "generated_at": "2026-10-28T22:21:54Z",
+    "source_revision": "517c42b501236802a30abced3ad8737711bb5b7b",
+    "generated_at": "2026-10-28T23:23:12Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -830,6 +830,7 @@
           "tests/unit/test_job_lifecycle.py",
           "tests/unit/test_nagar_cognition_queue_handoff.py",
           "tests/unit/test_nagar_intent_cli.py",
+          "tests/unit/test_nagar_p0_contracts.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       }
@@ -5904,6 +5905,7 @@
           "tests/unit/test_job_lifecycle.py",
           "tests/unit/test_nagar_cognition_queue_handoff.py",
           "tests/unit/test_nagar_intent_cli.py",
+          "tests/unit/test_nagar_p0_contracts.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
