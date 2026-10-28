@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "mission": "Mission 6 — campaign convergence, PR repair, reliability fixes, verified integration",
+  "generated_at": "2026-10-28T09:30:55Z",
+  "main_sha_at_start": "394279da94f22e8043517a84e58fa25a831b8ab1",
+  "open_prs": 50,
+  "registry_totals": {
+    "WRONG_BASE_BRANCH": 0,
+    "DRAFT": 8,
+    "CONFLICT": 35,
+    "MERGEABILITY_UNKNOWN": 0,
+    "CI_RED": 3,
+    "CI_PENDING": 4,
+    "CHANGES_REQUESTED": 0,
+    "NEEDS_APPROVAL": 0,
+    "REBASE_FIRST": 0,
+    "READY": 0
+  },
+  "triage_disposition_counts": {
+    "conflict-large": 13,
+    "conflict-sequenced": 22,
+    "draft-skipped": 8,
+    "repaired": 6,
+    "governance-pr": 1
+  },
+  "repairs": [
+    {
+      "pr": 124,
+      "head": "ccc6a028ce",
+      "zone": "pr-repair-campaign",
+      "kind": "semantic-merge-resolution",
+      "detail": "Reconciled task-215 trace spine with main's canonical schema-2 (#246). _dispatch accepts both trace_id and canonical; legacy identity preserved, canonical proposal_id authoritative. 88+272+29 tests green; ruff+mypy clean.",
+      "files": [
+        "src/nexus_ai_agent/creative/render_jobs.py"
+      ]
+    },
+    {
+      "pr": 246,
+      "head": "67310252f0",
+      "zone": "pr-repair-campaign",
+      "kind": "rebased+merged",
+      "detail": "Rebased onto current main and merged as 394279da. CI 21/21 green.",
+      "files": []
+    },
+    {
+      "pr": 100,
+      "head": "158e42a51c",
+      "zone": "pr-repair-campaign",
+      "kind": "rebased",
+      "detail": "Rebased onto main; caption lane tests 84 green.",
+      "files": []
+    },
+    {
+      "pr": 70,
+      "head": "343311cc21",
+      "zone": "pr-repair-campaign",
+      "kind": "rebased",
+      "detail": "Rebased onto main; operation-matrix tests 14 green.",
+      "files": []
+    },
+    {
+      "pr": 83,
+      "head": "9d6d9bbe8a",
+      "zone": "pr-repair-campaign",
+      "kind": "rebased",
+      "detail": "Rebased onto main; operation-truth tests 61 green.",
+      "files": []
+    },
+    {
+      "pr": 64,
+      "head": "5e877d7a80",
+      "zone": "pr-repair-campaign",
+      "kind": "rebased",
+      "detail": "Rebased onto main; 127 passed/2 skipped. Canonical vision packs (matches main TDD §1.3).",
+      "files": []
+    },
+    {
+      "pr": 97,
+      "head": "ab77aac6d5",
+      "zone": "pr-repair-campaign",
+      "kind": "duplicate-sequenced",
+      "detail": "Reimplements the identical 20 portrait/scene ops as a unified vision pack that #64 already delivers per main's documented design. Sequenced behind #64; not pushed to avoid a semantic fork.",
+      "files": []
+    }
+  ],
+  "reliability": [
+    {
+      "id": "REL-006",
+      "branch": "arena/m6-rel006-rclone-list-errors",
+      "status": "implemented+tested",
+      "detail": "RcloneProvider.list_files returned a silent [] on non-zero exit and on an unconfigured provider, which the housekeeping/rotation callers read as 'no files to keep'. Now raises typed StorageError (bounded, credential-redacted diagnostics) / ProviderUnavailable; a genuine empty remote still returns []. 5 regression tests drive the real list_files path.",
+      "files": [
+        "src/nexus_ai_agent/storage/providers/rclone.py",
+        "tests/unit/test_rclone_provider_list_errors.py"
+      ]
+    }
+  ],
+  "governance_pr": 267,
+  "notes": [
+    "35 open PRs conflict with current main; 8 are drafts. Large semantic rebases are sequenced for owner triage rather than force-merged.",
+    "#64 and #97 are a genuine duplicate (identical 20 op ids); #64 is canonical (matches main docs/NAGAR_70_OPERATIONS_TDD.md §1.3).",
+    "All work is protected-branch compatible: no force-push, no protection changes, no approval fabrication."
+  ]
+}
