@@ -1,0 +1,32 @@
+{
+  "mission": "5 — complete the unfinished PR convergence campaign",
+  "date": "2026-10-28",
+  "repo": "bot523h/nexus-ai-agent",
+  "main_start": "bab5fc9d764777593a887d957ccca0cf5e040e47",
+  "main_end": "7e10105e3fd933b772074df936a788ee1ad654fa",
+  "open_prs_start": 52,
+  "open_prs_end": 50,
+  "required_approvals": 0,
+  "required_contexts": [
+    "lint (ruff + mypy + version lockstep)",
+    "test (pytest -m \"not slow\")",
+    "merge-base-guard (base == main)"
+  ],
+  "merged": [
+    {"pr": 263, "sha": "0c1e63a30f2fea460ddb142619cd6f6d96b4a288", "role": "repair of #201 rebuilt on current main"},
+    {"pr": 264, "sha": "f09cf734d2eedeafd80385d04c8a9c1a5618a3ef", "role": "fix: pre-merge guard latest-run-per-context"},
+    {"pr": 265, "sha": "7e10105e3fd933b772074df936a788ee1ad654fa", "role": "board release task-276"}
+  ],
+  "closed": [
+    {"pr": 201, "reason": "superseded by #263"},
+    {"pr": 213, "reason": "WRONG_BASE_BRANCH; content byte-identical to main"}
+  ],
+  "board_claims": {"pr-repair-201": "done (gen 2)", "task-276-pr-convergence-registry": "done (gen 4)"},
+  "active_claims_at_end": 0,
+  "evidence": {
+    "targeted_tests": "pytest -q tests/unit/test_pr_convergence.py -> 51 passed",
+    "repair_full_suite": "pytest -q -m 'not slow' -> 4793 passed, 39 skipped",
+    "gates": "ruff check/format clean; mypy src 312 files clean",
+    "referee": "agent_board.py check -> exit 0 (55 sources read)"
+  }
+}
