@@ -14,6 +14,7 @@ import json
 
 import pytest
 
+from nexus_ai_agent.application.principal import PrincipalId
 from nexus_ai_agent.creative.render_jobs import CreativeRenderPayload, build_job_bus
 from nexus_ai_agent.creative.studio.authorization import ProjectAccess
 from nexus_ai_agent.creative.studio.models import (
@@ -24,6 +25,7 @@ from nexus_ai_agent.creative.studio.models import (
 )
 from nexus_ai_agent.nagar.cognition import build_cognition_gateway
 from nexus_ai_agent.nagar.creative import (
+    CanonicalHandoffFacts,
     derive_intent_idempotency_key,
     run_free_text_intent_durable,
 )
@@ -178,6 +180,79 @@ def test_payload_carries_no_authority_and_no_raw_text(tmp_path, source) -> None:
         assert forbidden not in payload
     # The free text never enters the queue.
     assert "trim from 1s to 8s" not in json.dumps(payload)
+
+
+def test_schema2_handoff_carries_validated_intent_but_no_raw_text_or_rationale(
+    tmp_path, source
+) -> None:  # noqa: ANN001
+    _, project = _project()
+    principal = PrincipalId.new()
+    actor = ActorIdentity(kind="user", actor_id=str(principal))
+    producer = ScriptedProducer(_proposal())
+    gateway = _gateway(actor, project, producer)
+    queue = RecordingQueue()
+    canonical = CanonicalHandoffFacts(
+        principal_id=str(principal),
+        channel_binding_id="cbn_" + "a" * 64,
+        project_id=PROJECT_ID,
+    )
+    outcome = asyncio.run(
+        run_free_text_intent_durable(
+            "trim from 1s to 8s",
+            gateway=gateway,
+            queue=queue,
+            project=project,
+            source_path=str(source),
+            workspace_dir=str(tmp_path / "creative_ws"),
+            user_id=0,
+            chat_id=0,
+            canonical=canonical,
+        )
+    )
+    assert outcome.status == "enqueued"
+    payload = queue.enqueues[0][2]
+    typed = CreativeRenderPayload.model_validate(payload)
+    assert typed.schema_version == 2
+    assert typed.principal_id == str(principal)
+    assert typed.project_id == PROJECT_ID
+    assert typed.intent is not None
+    assert typed.intent.intent_id.startswith("intent_")
+    assert typed.intent.proposal_id.startswith("proposal_")
+    serialized = json.dumps(payload)
+    assert "trim from 1s to 8s" not in serialized
+    assert "trim 1s..8s" not in serialized
+    assert "permissions" not in payload
+
+
+def test_schema2_handoff_rejects_facts_that_disagree_with_the_gateway(tmp_path, source) -> None:  # noqa: ANN001
+    _, project = _project()
+    principal = PrincipalId.new()
+    actor = ActorIdentity(kind="user", actor_id=str(principal))
+    producer = ScriptedProducer(_proposal())
+    gateway = _gateway(actor, project, producer)
+    queue = RecordingQueue()
+    canonical = CanonicalHandoffFacts(
+        principal_id=str(principal),
+        channel_binding_id="cbn_" + "a" * 64,
+        project_id="some-other-project",
+    )
+    outcome = asyncio.run(
+        run_free_text_intent_durable(
+            "trim from 1s to 8s",
+            gateway=gateway,
+            queue=queue,
+            project=project,
+            source_path=str(source),
+            workspace_dir=str(tmp_path / "creative_ws"),
+            user_id=0,
+            chat_id=0,
+            canonical=canonical,
+        )
+    )
+    assert outcome.status == "refused"
+    assert outcome.refusal_reason == "invalid_identity"
+    assert producer.calls == 0
+    assert queue.enqueues == []
 
 
 # ── refusals enqueue NOTHING ────────────────────────────────────────────────

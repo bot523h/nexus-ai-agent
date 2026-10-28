@@ -2,7 +2,7 @@
 
 **Status:** Living document
 **Scope:** the end-to-end paths that matter — message handling, creative jobs, the render lane, checkpoint lifecycle, schema bootstrap, webhook/cold-start
-**Verified against:** `main` @ `7573249`
+**Verified against:** `arena/94286869-nexus-ai-agent` (base `main` @ `d7bbd147`)
 
 Each flow below is written from the code, and each has a **failure contract** — what the user/operator sees when it breaks. "It works" without a failure path is not a flow, it is a hope.
 
@@ -220,3 +220,63 @@ sequenceDiagram
 | `nexus slideshow plan|render` | §2–§3 without Telegram |
 | `nexus smoke` | §1 without Telegram |
 | `nexus maintenance backup|housekeeping` | R2 backups + temp prune |
+| `nexus intent` | §9 (canonical schema-2 trim; model optional and proposal-only) |
+
+## 9. Canonical free-text trim (schema 2)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant OP as Operator / nexus intent
+    participant D as SQLApplicationDirectory
+    participant C as CognitionGateway (proposal only)
+    participant Q as InProcessJobQueue (SQLite sidecar)
+    participant W as creative_render_job
+    participant B as CommandBus + runtime registry
+    participant L as Existing FFmpeg lane
+    participant V as Independent artifact verifier + passport
+
+    OP->>D: migrate; resolve CLI binding; ensure first-use project
+    D-->>OP: canonical principal + membership + binding reference
+    OP->>C: bounded text + validated trim proposal request
+    C-->>OP: TypedProposal (operation and points; no execution)
+    OP->>Q: enqueue schema-2 payload + content-addressed intent
+    Q->>W: reserve attempt with fencing token
+    W->>D: re-read principal, project membership and binding
+    D-->>W: persistent ProjectAccess or denial
+    W->>B: schema-2 command + state hash/revision preconditions
+    B->>D: authorize actor/project again
+    B-->>W: applied command + transaction/revision/state hash
+    W->>L: validated LaneIR projection (no shell)
+    L-->>W: measured output bytes and digest
+    W-->>Q: result + canonical execution evidence
+    Q->>V: verify stored bytes; archive attempt-scoped evidence
+    V-->>OP: verified schema-2 passport on read/reverification
+```
+
+**Boundaries and evidence**
+
+- `--actor` names an external CLI binding, not a canonical principal. `SQLApplicationDirectory` durably resolves that binding and the fixed CLI project membership; payload IDs are references to check, never grants.
+- Raw text and model rationale are not queued. The payload contains a bounded `CanonicalCreativeIntent`, its content-addressed ID, proposal/source-text digests, validated points, and canonical identity references.
+- The worker checks persistent membership, binding ownership, and the operation's **effective** permissions before FFprobe/rendering. The existing CommandBus independently reauthorizes and checks the actual asset-bearing project's state hash/revision before applying the trim.
+- The schema-2 passport carries the actual CommandBus transaction ID, revision, previous/new state hashes, authorization decision, measured artifacts, independent verification, and lineage. Re-read recomputes the projection and rejects divergent result/evidence/passport data; it remains usable after the ephemeral workspace is removed because the attempt artifacts are archived.
+- Duplicate delivery with the same idempotency key and payload returns the existing job. The same key with contradictory content is refused. This is idempotent durable enqueue, **not** a claim of exactly-once external effects.
+
+**Failure contract**
+
+- No available model, malformed/hostile proposal, mismatched gateway facts, or contradictory durable intent ⇒ no enqueue.
+- Unknown principal, missing/wrong membership, read-only membership, wrong binding, or intent/argument divergence ⇒ typed failure before media probing.
+- Render, verification, evidence-archiving, or passport-reverification divergence ⇒ no verified completion/passport; archived bytes and evidence are not replaced with a new success claim.
+
+**Verified local operator flow** (requires an available configured cognition provider and FFmpeg; supply the real source duration in microseconds):
+
+```bash
+nexus migrate
+nexus intent "trim the first second" \
+  --source /absolute/path/source.mp4 \
+  --duration-us 2000000 \
+  --actor local-operator \
+  --timeout 120
+```
+
+**Limit:** canonical identity/membership and queue evidence are durable, but CommandBus project state is still attempt-scoped and the LaneIR is materialized from the same validated input. This slice does not claim a shared durable project-state store, a persisted CreativeWork graph, or the legacy schema-1 worker's missing canonical transaction facts.
