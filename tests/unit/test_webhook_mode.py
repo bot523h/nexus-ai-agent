@@ -375,5 +375,5 @@ def test_webhook_failure_cleans_acquired_resources(
                 log_level="info",
             )
         )
-    assert application.events.count("shutdown") == (0 if failure_phase == "initialize" else 1)
+    assert application.events.count("shutdown") == 1
     assert application.events.count("stop") == (1 if failure_phase in {"webhook", "serve"} else 0)

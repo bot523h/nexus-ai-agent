@@ -364,8 +364,7 @@ def build_application(
                     "phase": "causal_journal_backfill",
                     "degraded": True,
                     "detail": (
-                        "causal journal backfill unavailable; "
-                        "pending work remains authoritative"
+                        "causal journal backfill unavailable; pending work remains authoritative"
                     ),
                 }
                 logger.exception("causal_journal_backfill_failed")
@@ -413,6 +412,15 @@ def build_application(
         .post_shutdown(_post_shutdown)
         .build()
     )
+    application.bot_data["startup_status"] = {"state": "not_started", "degraded": False}
+    # Readiness must observe the same lifecycle for polling and webhook mode;
+    # the latter also publishes this object under webhook_application.
+    try:
+        from nexus_ai_agent.api.app import app as api_app
+
+        api_app.state.runtime_application = application
+    except Exception:  # noqa: BLE001 - API is optional for CLI-only callers
+        logger.debug("api_runtime_state_unavailable", exc_info=True)
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager

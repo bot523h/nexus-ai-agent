@@ -41,6 +41,36 @@ PROVIDER_LIMITS: dict[str, float] = {
 TOTAL_FREE_GB = sum(PROVIDER_LIMITS.values())
 
 
+class StorageListingError(StorageError):
+    """Base error for a listing that cannot be represented as a complete list."""
+
+
+class StorageNotConfiguredError(StorageListingError):
+    """No cloud provider is configured; this is not an empty remote listing."""
+
+
+class PartialStorageListingError(StorageListingError):
+    """At least one configured provider failed, so returned data is incomplete."""
+
+    def __init__(
+        self,
+        *,
+        successful_providers: tuple[str, ...],
+        failed_providers: tuple[str, ...],
+        diagnostics: dict[str, str],
+    ) -> None:
+        self.successful_providers = successful_providers
+        self.failed_providers = failed_providers
+        self.diagnostics = diagnostics
+        super().__init__(
+            "cloud listing incomplete: failed providers="
+            + ",".join(failed_providers)
+            + "; successful providers="
+            + (",".join(successful_providers) or "none")
+            + "; retry before treating the result as complete"
+        )
+
+
 class CloudProviderInfo:
     """Info about a single cloud provider."""
 
@@ -507,6 +537,8 @@ class UnifiedCloudStorage:
         all_files: list[dict[str, Any]] = []
         seen: set[str] = set()
         failures: list[StorageError] = []
+        failed_providers: list[str] = []
+        successful_providers: list[str] = []
         configured = 0
         for provider in self._providers:
             if not provider.is_configured():
@@ -514,6 +546,7 @@ class UnifiedCloudStorage:
             configured += 1
             try:
                 keys = await provider.list_files(prefix=prefix)
+                successful_providers.append(provider.name)
                 for key in keys:
                     if key not in seen:
                         seen.add(key)
@@ -521,14 +554,22 @@ class UnifiedCloudStorage:
                         self._file_map[key] = provider.name
             except StorageError as exc:
                 failures.append(exc)
+                failed_providers.append(provider.name)
                 log.warning("cloud_provider_listing_failed", provider=provider.name, error=str(exc))
-        if failures and not all_files:
-            # An actually empty listing is [] only when every configured
-            # provider completed successfully.  Preserve the first typed
-            # failure so callers cannot interpret an outage as "no files".
-            raise failures[0]
         if configured == 0:
-            return []
+            raise StorageNotConfiguredError(
+                "no cloud provider is configured; cannot distinguish an outage "
+                "from an empty listing"
+            )
+        if failures:
+            raise PartialStorageListingError(
+                successful_providers=tuple(successful_providers),
+                failed_providers=tuple(failed_providers),
+                diagnostics={
+                    name: type(exc).__name__
+                    for name, exc in zip(failed_providers, failures, strict=False)
+                },
+            )
         return all_files
 
     async def get_status(self) -> str:

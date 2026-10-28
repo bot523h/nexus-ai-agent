@@ -1404,6 +1404,10 @@ def backup(
         raise typer.Exit(code=1) from e
     typer.echo(f"source: {result['source']}")
     typer.echo(f"key:    {result['key']}")
+    if not result["dry_run"]:
+        typer.echo(f"sha256: {result.get('sha256', 'unavailable')}")
+        typer.echo(f"timestamp: {result.get('timestamp', 'unavailable')}")
+        typer.echo(f"verified: {result.get('verified', False)}")
     if result["dry_run"]:
         typer.echo("dry-run: nothing dumped or uploaded")
     else:

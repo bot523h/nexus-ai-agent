@@ -350,10 +350,12 @@ async def readyz() -> JSONResponse:
     never silently accepted here.
     """
     db_ok, db_detail = await _database_readiness()
-    application = getattr(app.state, "webhook_application", None)
+    application = getattr(app.state, "webhook_application", None) or getattr(
+        app.state, "runtime_application", None
+    )
     startup = dict(getattr(application, "bot_data", {}).get("startup_status", {}))
     startup_state = startup.get("state")
-    startup_ok = startup_state in (None, "ready")
+    startup_ok = startup_state == "ready"
     identity = _deployment_identity()
     payload: dict[str, object] = {
         "status": "ready" if db_ok and startup_ok else "not_ready",

@@ -81,6 +81,7 @@ class _ReadyzStub(BaseHTTPRequestHandler):
                     "version": "3.14.0",
                     "deploy_git_sha": "deadbeef",
                     "db": {"ok": True, "backend": "sqlite", "detail": None},
+                    "startup": {"ok": True, "state": "ready", "detail": None},
                 },
             )
         elif self.mode == "not_ready":

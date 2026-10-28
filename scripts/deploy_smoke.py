@@ -3,7 +3,7 @@
 Offline checks (always run, no network, no side effects):
 
 * ``manifest`` — ``koyeb.yaml`` declares the documented deploy shape: a
-  ``web``-type ``bot`` service, health path ``/healthz``, and the required
+  ``web``-type ``bot`` service, readiness path ``/readyz``, and the required
   webhook env vars (needs PyYAML; ``SKIP`` without it, ``FAIL`` under
   ``--strict``).
 * ``contract`` — the repo carries what the manifest promises: a
@@ -41,7 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 SERVICE_NAME = "bot"
 EXPECTED_SERVICE_TYPE = "web"
-EXPECTED_HEALTH_PATH = "/healthz"
+EXPECTED_LIVENESS_PATH = "/healthz"
 EXPECTED_WEBHOOK_PATH = "/webhook/telegram"
 EXPECTED_READINESS_PATH = "/readyz"
 
@@ -103,16 +103,16 @@ def check_manifest(manifest_path: Path) -> list[CheckResult]:
         results.append(CheckResult("manifest", "PASS", f"service {SERVICE_NAME!r} is type 'web'"))
 
     health_path = (service.get("health_check") or {}).get("path")
-    if health_path != EXPECTED_HEALTH_PATH:
+    if health_path != EXPECTED_READINESS_PATH:
         results.append(
             CheckResult(
                 "manifest",
                 "FAIL",
-                f"health_check.path must be {EXPECTED_HEALTH_PATH!r}, got {health_path!r}",
+                f"health_check.path must be {EXPECTED_READINESS_PATH!r}, got {health_path!r}",
             )
         )
     else:
-        results.append(CheckResult("manifest", "PASS", "health_check.path is /healthz"))
+        results.append(CheckResult("manifest", "PASS", "health_check.path is /readyz"))
 
     env_entries = service.get("env", []) or []
     env_names = {entry.get("name") for entry in env_entries if isinstance(entry, dict)}
@@ -170,7 +170,7 @@ def check_contract(repo_root: Path) -> list[CheckResult]:
         results.append(CheckResult("contract", "FAIL", "web app module (api/app.py) missing"))
     else:
         source = app_py.read_text(encoding="utf-8")
-        for route in (EXPECTED_HEALTH_PATH, EXPECTED_WEBHOOK_PATH, EXPECTED_READINESS_PATH):
+        for route in (EXPECTED_LIVENESS_PATH, EXPECTED_WEBHOOK_PATH, EXPECTED_READINESS_PATH):
             if route in source:
                 results.append(CheckResult("contract", "PASS", f"route {route} present"))
             else:
@@ -227,7 +227,7 @@ def _read_json_response(url: str, timeout: float) -> tuple[int, Any]:
 
 def check_healthz(base_url: str, timeout: float) -> CheckResult:
     """Probe the liveness endpoint of a deployed instance."""
-    url = base_url.rstrip("/") + EXPECTED_HEALTH_PATH
+    url = base_url.rstrip("/") + EXPECTED_LIVENESS_PATH
     try:
         status, payload = _read_json_response(url, timeout)
     except Exception as exc:  # noqa: BLE001 - network failures fail the check
@@ -241,6 +241,7 @@ def check_readyz(
     base_url: str,
     timeout: float,
     expect_version: str | None = None,
+    expect_sha: str | None = None,
 ) -> CheckResult:
     """Probe readiness + deploy identity of a deployed instance.
 
@@ -256,7 +257,11 @@ def check_readyz(
     except Exception as exc:  # noqa: BLE001 - network failures fail the check
         return CheckResult("readyz", "FAIL", f"{url} unreachable: {exc}")
     if status == 503:
-        detail = (payload or {}).get("db", {}).get("detail") if isinstance(payload, dict) else None
+        detail = None
+        if isinstance(payload, dict):
+            detail = (payload.get("startup") or {}).get("detail") or (payload.get("db") or {}).get(
+                "detail"
+            )
         return CheckResult(
             "readyz",
             "FAIL",
@@ -270,6 +275,17 @@ def check_readyz(
         return CheckResult(
             "readyz", "FAIL", f"{url} answered 200 but payload is incomplete: {payload!r}"
         )
+    startup = payload.get("startup")
+    if (
+        not isinstance(startup, dict)
+        or startup.get("ok") is not True
+        or startup.get("state") != "ready"
+    ):
+        return CheckResult(
+            "readyz",
+            "FAIL",
+            f"{url} is not fully recovered: startup={startup!r} — do not promote traffic",
+        )
     if expect_version is not None and version != expect_version:
         return CheckResult(
             "readyz",
@@ -277,7 +293,15 @@ def check_readyz(
             f"deployed version mismatch: expected {expect_version}, running {version} — "
             "likely a stale deployment or wrong build; roll back or redeploy before promoting",
         )
-    sha = payload.get("deploy_git_sha") or "unknown-sha"
+    sha = payload.get("deploy_git_sha")
+    if expect_sha is not None and sha != expect_sha:
+        return CheckResult(
+            "readyz",
+            "FAIL",
+            f"deployed git SHA mismatch: expected {expect_sha}, running {sha or 'unknown-sha'} — "
+            "exact build identity is required; roll back or redeploy before promoting",
+        )
+    sha = sha or "unknown-sha"
     return CheckResult("readyz", "PASS", f"{url} ready (version={version}, sha={sha})")
 
 
@@ -316,6 +340,7 @@ def run_smoke(
     base_url: str | None = None,
     timeout: float = 15.0,
     expect_version: str | None = None,
+    expect_sha: str | None = None,
 ) -> list[CheckResult]:
     """Run the offline checks plus the live probes when ``base_url`` is set."""
     results = [
@@ -325,7 +350,9 @@ def run_smoke(
     if base_url:
         results.append(check_healthz(base_url, timeout))
         results.append(check_webhook_gate(base_url, timeout))
-        results.append(check_readyz(base_url, timeout, expect_version=expect_version))
+        results.append(
+            check_readyz(base_url, timeout, expect_version=expect_version, expect_sha=expect_sha)
+        )
     return results
 
 
@@ -367,6 +394,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Version the deployed instance MUST report at /readyz "
         "(stale-deployment / wrong-build detector).",
     )
+    parser.add_argument(
+        "--expect-sha",
+        default=None,
+        help="Exact deployed git SHA the /readyz identity MUST report.",
+    )
     return parser
 
 
@@ -376,7 +408,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.timeout <= 0:
         print("smoke: --timeout must be positive", file=sys.stderr)
         return 2
-    results = run_smoke(base_url=args.url, timeout=args.timeout, expect_version=args.expect_version)
+    results = run_smoke(
+        base_url=args.url,
+        timeout=args.timeout,
+        expect_version=args.expect_version,
+        expect_sha=args.expect_sha,
+    )
     return summarize(results, strict=args.strict)
 
 

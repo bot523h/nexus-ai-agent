@@ -79,6 +79,7 @@ PUBLIC_OPERATIONS: frozenset[tuple[str, str]] = frozenset(
     {
         ("GET", "/"),
         ("GET", "/healthz"),
+        ("GET", "/readyz"),
     }
 )
 
@@ -812,7 +813,7 @@ def test_the_inventory_covers_every_registered_operation(api_env: ApiEnv) -> Non
     assert any(path.startswith("/api/studio/") for path in paths)
     assert {"/creative/video-edit", "/creative/jobs/{job_id}"} <= paths
     assert "/webhook/telegram" in paths
-    assert {"/", "/healthz"} <= paths
+    assert {"/", "/healthz", "/readyz"} <= paths
 
 
 def test_every_registered_operation_is_classified(api_env: ApiEnv) -> None:
@@ -843,7 +844,7 @@ def test_the_public_allowlist_is_reachable_without_any_credential(api_env: ApiEn
 
     # The public surface is exactly the allowlist plus those endpoints.
     public_paths = {path for _method, path in inventory.public}
-    assert {"/", "/healthz"} <= public_paths
+    assert {"/", "/healthz", "/readyz"} <= public_paths
 
 
 # ── the negative matrix ─────────────────────────────────────────────────────

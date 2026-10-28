@@ -26,6 +26,7 @@ converted into PTB ``Update`` objects by ``WebhookApplicationAdapter`` in
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Any
 
@@ -42,6 +43,7 @@ TELEGRAM_SECRET_TOKEN_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
 _UVICORN_LOG_LEVELS = {"critical", "error", "warning", "info", "debug", "trace"}
 _SHUTDOWN_TIMEOUT_SECONDS = 10.0
+log = logging.getLogger(__name__)
 
 
 class WebhookConfigError(RuntimeError):
@@ -151,11 +153,15 @@ async def _serve_webhook(
     """Serve webhook mode on a running event loop (see :func:`run_webhook`)."""
     import uvicorn
 
+    initialization_attempted = False
     initialized = False
     started = False
     try:
         # 1) Bring the application up.  No Updater is started, so nothing polls:
         #    Telegram POSTs updates to /webhook/telegram instead.
+        # PTB may acquire bot/session resources before initialize() returns.
+        # A failed attempt therefore still owns the legal shutdown boundary.
+        initialization_attempted = True
         await application.initialize()
         initialized = True
         job_queue = getattr(application, "bot_data", {}).get("job_queue")
@@ -179,12 +185,18 @@ async def _serve_webhook(
         )
         server = uvicorn.Server(config)
         await server.serve()
-    except BaseException:
-        # Initialization, pending recovery, and application.start can fail
-        # before the old inner ``finally`` was entered.  The acquired state
-        # determines exactly which cleanup is legal and prevents double-stop.
-        if initialized:
-            await _cleanup_webhook_application(application, started=started, initialized=True)
+    except BaseException as primary:
+        # Cleanup after a partial initialize is legal and required by PTB's
+        # lifecycle contract.  It is bounded and attempted once.  A cleanup
+        # failure is attached to (and never replaces) the primary failure.
+        if initialization_attempted:
+            try:
+                await _cleanup_webhook_application(application, started=started, initialized=True)
+            except BaseException as cleanup_error:
+                log.exception("webhook_cleanup_failed_after_primary_error")
+                primary.add_note(
+                    f"webhook cleanup also failed: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
         raise
     else:
         # Normal serving and webhook-registration failures use the same

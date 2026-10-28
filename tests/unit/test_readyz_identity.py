@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import time
 from importlib.metadata import version as distribution_version
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -41,7 +42,19 @@ def ready_client(settings_override) -> TestClient:
     from nexus_ai_agent.storage.db import create_all_tables
 
     asyncio.run(create_all_tables(settings_override.db_path))
-    return TestClient(app_module.app)
+    saved = getattr(app_module.app.state, "runtime_application", None)
+    app_module.app.state.runtime_application = SimpleNamespace(
+        bot_data={"startup_status": {"state": "ready", "degraded": False}}
+    )
+    client = TestClient(app_module.app)
+    yield client
+    if saved is None:
+        try:
+            del app_module.app.state.runtime_application
+        except AttributeError:
+            pass
+    else:
+        app_module.app.state.runtime_application = saved
 
 
 class TestReadyzContract:
