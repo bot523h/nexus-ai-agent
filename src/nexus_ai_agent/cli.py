@@ -1491,12 +1491,15 @@ def _run_durable_intent(
     import asyncio as _asyncio
 
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.adapters.sql_application_directory import (
+        SQLApplicationDirectory,
+        channel_binding_id,
+    )
     from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.application.principal import ChannelBinding
     from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.creative.render_jobs import build_job_bus
-    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
     from nexus_ai_agent.creative.studio.models import (
-        ActorIdentity,
         AssetRecord,
         Timeline,
         new_project,
@@ -1504,12 +1507,27 @@ def _run_durable_intent(
     from nexus_ai_agent.nagar.cognition import build_cognition_gateway
     from nexus_ai_agent.nagar.composition import ProviderStatus, build_cognition_provider
     from nexus_ai_agent.nagar.creative import (
+        CanonicalHandoffFacts,
         derive_intent_idempotency_key,
         run_free_text_intent_durable,
     )
+    from nexus_ai_agent.storage.migrations import ensure_startup_schema
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
-    actor = ActorIdentity(kind="user", actor_id=actor_id)
+    # The CLI is a channel, not the canonical identity.  First contact and
+    # project membership live in the configured application database; the
+    # worker will independently re-read both before it touches source media.
+    ensure_startup_schema()
+    directory = SQLApplicationDirectory()
+    binding = ChannelBinding("cli", actor_id)
+    principal = directory.resolve_or_create(binding)
+    access = directory.ensure_project(NEXUS_INTENT_PROJECT_ID, principal)
+    canonical = CanonicalHandoffFacts(
+        principal_id=str(principal),
+        channel_binding_id=channel_binding_id(binding),
+        project_id=NEXUS_INTENT_PROJECT_ID,
+    )
+    actor = access.actor
     source = AssetRecord(
         asset_id="src",
         media_kind="video",
@@ -1521,13 +1539,8 @@ def _run_durable_intent(
         "free-text-intent",
         Timeline(timeline_id="tl_intent", duration_us=duration_us),
     ).model_copy(update={"assets": [source]})
-    # The one canonical, server-policy bus factory.  ``ProjectAccess`` is the
-    # canonical authorizer for an ephemeral local project; no bespoke authorizer.
-    access = ProjectAccess(
-        actor=actor,
-        project_id=NEXUS_INTENT_PROJECT_ID,
-        permissions=frozenset({"project:read", "project:write"}),
-    )
+    # Planning uses the same persistent access grant; execution independently
+    # re-authorizes the canonical references in the worker's own bus.
     bus = build_job_bus(project, authorizer=access)
 
     provider, status = build_cognition_provider()
@@ -1570,6 +1583,7 @@ def _run_durable_intent(
             user_id=0,
             chat_id=0,
             clip_asset_id=clip_asset_id,
+            canonical=canonical,
         )
         if outcome.status != "enqueued" or outcome.job_id is None:
             return outcome
@@ -1604,7 +1618,9 @@ def intent(
         help="Authoritative source duration (microseconds) the project commits.",
     ),
     actor_id: str = typer.Option(
-        "local-operator", "--actor", help="Actor identity for this intent (host-owned)."
+        "local-operator",
+        "--actor",
+        help="External CLI binding identity; a durable canonical principal is resolved from it.",
     ),
     workspace_root: str | None = typer.Option(
         None, "--workspace-root", help="Root for the guarded job workspace (default: settings)."
@@ -1670,6 +1686,15 @@ def intent(
             typer.echo(f"duration_us: {result.get('duration_us')}")
             verification = result.get("artifact_verification") or {}
             typer.echo(f"verified: {verification.get('status') == 'verified'}")
+            canonical_execution = result.get("canonical_execution")
+            if isinstance(canonical_execution, dict):
+                authorization = canonical_execution.get("authorization") or {}
+                command_result = canonical_execution.get("command_result") or {}
+                typer.echo(f"principal_id: {authorization.get('principal_id')}")
+                typer.echo(f"project_id: {authorization.get('project_id')}")
+                typer.echo(f"commandbus_transaction_id: {command_result.get('transaction_id')}")
+                typer.echo(f"project_revision: {command_result.get('state_revision')}")
+                typer.echo(f"project_state_hash: {command_result.get('state_hash')}")
         if journal is not None:
             typer.echo(f"journal: {journal_db}")
 

@@ -12,6 +12,7 @@ real queue, worker, registry, CommandBus and FFmpeg lane run for real.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 from pathlib import Path
@@ -134,3 +135,38 @@ def test_cli_intent_with_model_produces_a_verified_artifact(
     assert "durable_status: completed" in result.output
     assert "verified: True" in result.output
     assert "sha256: sha256:" in result.output
+    assert "principal_id: prn_" in result.output
+    assert "project_id: nagar-free-text-demo" in result.output
+    assert "commandbus_transaction_id: tx_" in result.output
+    assert "project_revision: 1" in result.output
+    assert "project_state_hash: sha256:" in result.output
+
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.worker import job_queue_db_path
+
+    queue_db = job_queue_db_path(settings_module.get_settings().db_path)
+    queue = InProcessJobQueue(queue_db)
+    job_ids = queue.job_ids()
+    assert len(job_ids) == 1
+    passport = asyncio.run(queue.get_artifact_passport(job_ids[0]))
+    assert passport["schema_version"] == 2
+    assert passport["transaction"]["canonical_commandbus_transaction_id"].startswith("tx_")
+    assert passport["transaction"]["canonical_command_id"].startswith("cmd-")
+    assert passport["revision"]["kind"] == "canonical_commandbus_revision"
+    assert passport["revision"]["sequence"] == 1
+    assert passport["revision"]["parent_revision"] == 0
+    assert passport["revision"]["previous_state_hash"].startswith("sha256:")
+    assert passport["revision"]["canonical_project_state_hash"].startswith("sha256:")
+    assert passport["authorization"]["status"] == "authorized"
+    assert passport["authorization"]["persistent"] is True
+    assert passport["authorization"]["principal_id"].startswith("prn_")
+    assert passport["intent"]["intent_kind"] == "CanonicalCreativeIntent"
+    assert passport["intent"]["proposal_id"].startswith("proposal_")
+    assert (
+        passport["lineage"]["canonical_commandbus_transaction_id"]
+        == (passport["transaction"]["canonical_commandbus_transaction_id"])
+    )
+    assert all("not returned by the legacy worker" not in item for item in passport["limitations"])
+
+    reopened = InProcessJobQueue(queue_db)
+    assert asyncio.run(reopened.get_artifact_passport(job_ids[0])) == passport

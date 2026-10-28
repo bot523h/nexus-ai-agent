@@ -450,6 +450,54 @@ class AssetIngest(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
+# ── Application-owned identity and project membership (task-275) ─────
+# These records deliberately do not replace the legacy Telegram User/Chat
+# tables.  A Principal is the channel-independent identity; Telegram, CLI and
+# future transports are only bindings to it.  Project authorization is a
+# durable membership row, never a user/chat ID asserted by a queue payload.
+
+
+class AppPrincipal(SQLModel, table=True):
+    """Durable canonical principal; the ID format is validated at the port."""
+
+    principal_id: str = Field(primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AppChannelBinding(SQLModel, table=True):
+    """One external channel account bound to exactly one canonical principal."""
+
+    __table_args__ = (
+        UniqueConstraint(
+            "channel",
+            "external_id",
+            name="uq_appchannelbinding_channel_external",
+        ),
+    )
+
+    binding_id: str = Field(primary_key=True)
+    principal_id: str = Field(foreign_key="appprincipal.principal_id", index=True)
+    channel: str
+    external_id: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AppProject(SQLModel, table=True):
+    """Application-owned project identity, independent of a message channel."""
+
+    project_id: str = Field(primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AppProjectMembership(SQLModel, table=True):
+    """Immutable principal/project grant; changes require explicit application code."""
+
+    project_id: str = Field(foreign_key="appproject.project_id", primary_key=True)
+    principal_id: str = Field(foreign_key="appprincipal.principal_id", primary_key=True)
+    permissions_json: str = "[]"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 # ── Knowledge retrieval (task-273) ──────────────────────────────────────────
 # Canonical registry of *authorized knowledge sources* — the authoritative
 # record of what the local-first knowledge index was built from.  The index
