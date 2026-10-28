@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-28T14:51:19Z",
+  "updated_at": "2026-10-28T14:55:20Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -978,6 +978,14 @@
         "tests/unit/test_pr_convergence.py",
         "CURRENT_TRUTH_AUDIT.md",
         ".agents/evidence/"
+      ]
+    },
+    {
+      "id": "storage-provider-rclone",
+      "description": "REL-006: rclone storage provider failure semantics (list_files must not swallow errors)",
+      "paths": [
+        "src/nexus_ai_agent/storage/providers/rclone.py",
+        "tests/unit/test_rclone_provider_list_errors.py"
       ]
     }
   ],
@@ -4897,7 +4905,7 @@
       "title": "Repair existing PR #96: task-192: Production/DR/Deployment truth — executable restore drill, actionable R2 taxonomy, readiness+identity probes, version-gated deploy smoke",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "deferred",
+      "status": "active",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/96 on its existing branch arena/01a0dee1-nexus-ai-agent, preserving intent and published history. Snapshot head 01eb2217f44311631eb250e6e23df888f1c78e45; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -4940,10 +4948,10 @@
         "tests/unit/test_version_command.py"
       ],
       "agent_branch": "arena/01a0dee1-nexus-ai-agent",
-      "claimed_at": null,
+      "claimed_at": "2026-10-28T14:55:20Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 2,
+      "generation": 3,
       "owner_hint": "Registered for a future authorized repair session on arena/01a0dee1-nexus-ai-agent; not assigned or claimed by this registration.",
       "note": ""
     },
@@ -7119,7 +7127,7 @@
       "title": "Repair existing PR #124: feat(spine): proof-carrying execution trace",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/124 on current main, preserving intent. Re-read live head/base/reviews/checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7143,11 +7151,11 @@
         "tests/unit/test_creative_surface.py",
         "tests/unit/test_execution_trace_causality.py"
       ],
-      "agent_branch": "arena/pr-repair-124-20261028",
-      "claimed_at": "2026-10-28T08:32:50Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "",
+      "note": " [released 2026-10-28: PR #124 merged 85c502ed; zone freed]",
       "generation": 1
     },
     {
@@ -7267,7 +7275,7 @@
       "title": "Repair existing PR #70: feat(nagar): Operation Matrix + Evidence Gate",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/70 on current main, preserving intent. Re-read live head/base/reviews/checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7292,7 +7300,10 @@
         "docs/architecture/adr/0013-three-layer-operation-truth.md",
         "docs/architecture/adr/README.md",
         "tests/unit/test_operation_matrix_reconciliation.py"
-      ]
+      ],
+      "agent_branch": "",
+      "claimed_at": null,
+      "gates_owner": false
     },
     {
       "task": "pr-repair-83",
@@ -7372,6 +7383,37 @@
         "tests/unit/test_caption_pack.py",
         "tests/unit/test_creative_render_jobs.py"
       ]
+    },
+    {
+      "task": "rel-006-rclone-list-failure",
+      "title": "REL-006: rclone provider failure must not become an empty listing",
+      "zone": "storage-provider-rclone",
+      "priority": "P2",
+      "status": "done",
+      "scope": "Fix src/nexus_ai_agent/storage/providers/rclone.py list_files: return a typed error for non-zero exits and for provider unavailability/not-configured, instead of a silent empty list. Bounded, redacted diagnostics.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Non-zero rclone exit raises a typed StorageError/ProviderUnavailable, never an empty list.",
+        "Unconfigured provider raises ProviderUnavailable, not an empty list.",
+        "A genuinely empty remote still returns [].",
+        "Diagnostics are bounded and redacted.",
+        "Regression tests cover each path."
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_rclone_provider_list_errors.py -> passed",
+        "make lint + make types clean",
+        "referee exit 0"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/providers/rclone.py",
+        "tests/unit/test_rclone_provider_list_errors.py"
+      ],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 2
     }
   ],
   "deferred_log": [
@@ -7443,14 +7485,6 @@
       "resolved": true,
       "resolved_at": "2026-10-27T14:00:00Z",
       "resolution": "zone freed (pr-repair-240 released) and task-258 delivered in PR #199 (merged 6ae7042a83)."
-    },
-    {
-      "task": "pr-repair-96",
-      "deferred_by_branch": "arena/01a0dee1-nexus-ai-agent",
-      "at": "2026-10-28T14:51:19Z",
-      "reason_fa": "به‌دلیل ثبت‌نشدن آزادسازی REL-006 روی main پس از merge شدن PR#268، اصلاح PR#96 فعلاً متوقف شد تا claim دیگر را مسدود نکند.",
-      "reason_en": "PR #96 cannot proceed until canonical main records the post-merge release of REL-006; defer this repair claim to avoid holding docs and deployment paths while owner transition is unavailable.",
-      "resume_when": "canonical main records REL-006 release and pr-repair-96 is lawfully reclaimed"
     }
   ],
   "next_work": [
