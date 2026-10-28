@@ -7119,7 +7119,7 @@
       "title": "Repair existing PR #124: feat(spine): proof-carrying execution trace",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/124 on current main, preserving intent. Re-read live head/base/reviews/checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7143,11 +7143,11 @@
         "tests/unit/test_creative_surface.py",
         "tests/unit/test_execution_trace_causality.py"
       ],
-      "agent_branch": "arena/pr-repair-124-20261028",
-      "claimed_at": "2026-10-28T08:32:50Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "",
+      "note": " [released 2026-10-28: PR #124 merged 85c502ed; zone freed]",
       "generation": 1
     },
     {
@@ -7267,7 +7267,7 @@
       "title": "Repair existing PR #70: feat(nagar): Operation Matrix + Evidence Gate",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/70 on current main, preserving intent. Re-read live head/base/reviews/checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7292,7 +7292,10 @@
         "docs/architecture/adr/0013-three-layer-operation-truth.md",
         "docs/architecture/adr/README.md",
         "tests/unit/test_operation_matrix_reconciliation.py"
-      ]
+      ],
+      "agent_branch": "",
+      "claimed_at": null,
+      "gates_owner": false
     },
     {
       "task": "pr-repair-83",
