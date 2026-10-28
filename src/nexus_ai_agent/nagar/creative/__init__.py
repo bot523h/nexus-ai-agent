@@ -56,6 +56,7 @@ from nexus_ai_agent.nagar.cognition.router import (
 from nexus_ai_agent.nagar.creative.handoff import (
     MAX_INTENT_CHARS,
     TRIM_OPERATION,
+    CanonicalHandoffFacts,
     CognitionJobOutcome,
     HandoffRefusal,
     derive_intent_idempotency_key,
@@ -317,6 +318,7 @@ def verify_trim_artifact(
 __all__ = [
     "MAX_INTENT_CHARS",
     "TRIM_OPERATION",
+    "CanonicalHandoffFacts",
     "CognitionJobOutcome",
     "FreeTextOutcome",
     "HandoffRefusal",
