@@ -51,6 +51,11 @@ from nexus_ai_agent.observability.logging import get_logger
 logger = get_logger(__name__)
 
 CREATIVE_RENDER_JOB_TYPE = "creative_render"
+
+#: Surface identity for the proof-carrying execution spine (task-215).  Closed
+#: vocabulary: ``ExecutionTrace`` refuses an unknown surface rather than
+#: silently forking the trace namespace.
+CREATIVE_SURFACE = "telegram.creative"
 WORKSPACE_PREFIX = "creative_"
 SOURCE_ASSET_ID = "src"
 
@@ -128,6 +133,12 @@ class CreativeRenderPayload(BaseModel):
     chat_id: int
     lang: str = "en"
     idempotency_key: str = Field(min_length=1)
+    # Proof-carrying execution spine (task-215): the trace identity the surface
+    # minted for this request. ``None`` means the row predates the spine; the
+    # worker then derives the canonical identity from the row's own durable key
+    # instead of inventing one. A row that DOES carry one must carry the
+    # identity its own key implies -- see ``_bound_trace_id``.
+    trace_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     # Schema 1 is the complete legacy contract above.  Schema 2 adds canonical
     # references only: every one is revalidated against server-owned state in
@@ -293,15 +304,56 @@ def build_job_bus(
     )
 
 
+def _bound_trace_id(payload: CreativeRenderPayload) -> str:
+    """Return the trace identity for this row, refusing a forged one.
+
+    A queue row is an untrusted structure -- the same trust boundary this
+    module already documents for workspaces and lifecycle opt-ins. So a
+    ``trace_id`` arriving from a row is only trusted once it is proven to be
+    the identity ``CREATIVE_SURFACE`` derives from that row's own durable
+    ``idempotency_key``. A row written before the spine existed carries
+    ``None``; its identity is *derived*, never invented, so an old row stays
+    explainable without pretending it carried a link it never had.
+    """
+    from nexus_ai_agent.application.execution_trace import trace_id_for, verify_bound_trace_id
+
+    try:
+        if payload.trace_id is None:
+            return trace_id_for(CREATIVE_SURFACE, payload.idempotency_key)
+        return verify_bound_trace_id(
+            surface=CREATIVE_SURFACE,
+            idempotency_key=payload.idempotency_key,
+            trace_id=payload.trace_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - a forged identity is a typed refusal
+        raise CreativeRenderError(
+            "invalid_request", f"unbound execution trace: {type(exc).__name__}"
+        ) from exc
+
+
 def _dispatch(
     project: Any,  # noqa: ANN401
     *,
     operation: str,
     input_data: dict[str, Any],
     idempotency_key: str,
+    trace_id: str | None = None,
     canonical: _CanonicalExecution | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Dispatch once and return output plus actual schema-2 execution evidence.
+    """Registry lookup → bus dispatch; returns output plus schema-2 evidence.
+
+    Bad args become typed ``invalid_request`` (a retry with the same payload
+    fails identically).  The bus's EXPERIMENTAL opt-in is derived from the
+    canonical operation via the server-controlled
+    ``EXPERIMENTAL_OPT_IN_OPERATIONS``; no caller (and no queue row) can pass it
+    in.
+
+    ``trace_id`` rides along on the typed command (task-215).  It is excluded
+    from the bus's idempotency fingerprint by design, so attaching it cannot
+    change which logical command a redelivery collapses into; it is carried,
+    not authoritative.  For a canonical job the authoritative identity is the
+    intent's ``proposal_id`` instead, so the legacy surface-minted ``trace_id``
+    never overrides the canonical one.
 
     Legacy jobs retain their trusted ephemeral service grant.  Canonical jobs
     use the persistent directory both before media work and here inside the
@@ -331,7 +383,11 @@ def _dispatch(
         actor = service_actor
         authorizer = service_access
         provenance = None
-        request_context = RequestContext()
+        # Legacy request context carries the surface-minted trace identity so the
+        # job row and the studio command that produced it share one inspectable
+        # identity (task-215).  Canonical jobs use the intent request context
+        # below instead.
+        request_context = RequestContext(channel="telegram", request_id=trace_id)
         preconditions = Preconditions()
         input_ref = InputRef(
             ref_type="asset",
@@ -384,7 +440,7 @@ def _dispatch(
         provenance=provenance,
         request_context=request_context,
         preconditions=preconditions,
-        trace_id=canonical.intent.proposal_id if canonical is not None else None,
+        trace_id=(canonical.intent.proposal_id if canonical is not None else trace_id),
         idempotency_key=idempotency_key,
     )
     try:
@@ -652,6 +708,7 @@ async def _run_render_branch(
             else _operation_inputs(payload, duration_us)
         ),
         idempotency_key=payload.idempotency_key,
+        trace_id=_bound_trace_id(payload),
         canonical=canonical,
     )
     render_project = project  # lane instrumentation below mirrors the SAME op
@@ -710,6 +767,7 @@ async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> d
         operation="delivery.export_otio",
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
+        trace_id=_bound_trace_id(payload),
     )
     otio_text = output.get("otio_json")
     if not isinstance(otio_text, str) or not otio_text.strip():
@@ -762,6 +820,7 @@ async def _run_caption_branch(
             "transcript": transcript.model_dump(mode="json"),
         },
         idempotency_key=payload.idempotency_key,
+        trace_id=_bound_trace_id(payload),
     )
 
     out_path = workspace / "captions.srt"
@@ -815,6 +874,10 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
         idempotency_key=data.idempotency_key,
     )
     try:
+        # Proof-carrying execution spine (task-215): the trace identity is
+        # resolved BEFORE any engine is touched, so a row that cannot prove its
+        # own causal identity never reaches a provider.
+        trace_id = _bound_trace_id(data)
         canonical_execution = _canonical_execution(data, canonical_id)
         if not workspace.exists():
             return {
@@ -836,8 +899,16 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
     except CreativeRenderError as exc:
         logger.warning("creative_render_typed_failure", code=exc.code, detail=exc.detail)
         return {"success": False, "error_code": exc.code, "error_detail": exc.detail}
-    logger.info("creative_render_done", operation=data.operation, sha256=result["sha256"][:26])
+    logger.info(
+        "creative_render_done",
+        operation=data.operation,
+        sha256=result["sha256"][:26],
+        trace_id=trace_id,
+    )
     result.pop("_artifact_probe", None)
+    # The trace identity rides in the durable result so the job row and the
+    # studio command that produced it share one inspectable identity.
+    result["trace_id"] = trace_id
     return result
 
 
