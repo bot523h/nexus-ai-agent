@@ -96,8 +96,7 @@ class RcloneProvider:
                 category="timeout",
                 retryable=True,
                 detail=(
-                    "rclone listing exceeded its bounded timeout; "
-                    "retry after checking the remote"
+                    "rclone listing exceeded its bounded timeout; retry after checking the remote"
                 ),
             ) from exc
         if proc.returncode != 0:
