@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-27T14:00:00Z",
+  "updated_at": "2026-10-28T06:20:01Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -960,6 +960,16 @@
         "docs/DECISION_LOG.md",
         "tests/unit/test_langsmith_smoke_safe_output.py",
         "tests/unit/test_optional_extras.py"
+      ]
+    },
+    {
+      "id": "pr-convergence",
+      "description": "Live PR-state convergence registry: one reproducible command classifies every open PR and a pre-merge guard pins the reviewed head SHA (fails closed on unreadable data); plus the dated evidence snapshots and the current-truth audit that cite it.",
+      "paths": [
+        "scripts/pr_convergence.py",
+        "tests/unit/test_pr_convergence.py",
+        "CURRENT_TRUTH_AUDIT.md",
+        ".agents/evidence/"
       ]
     }
   ],
@@ -4118,20 +4128,23 @@
       "zone": "execution-core",
       "priority": "P1",
       "status": "queued",
-      "scope": "Measure liveness by silence, not only by age. An in-flight queue row carries a queue-owned last-heartbeat fact that a working worker refreshes, and the staleness decision (recover_job / takeover-candidate filtering, the ``stale_after`` window) consults it: a beating row is never a takeover candidate however old ``started_at`` is, while a row silent past the window is recovered exactly as today. Fail closed: a row whose heartbeat cannot be proven is treated as fresh and refused, never stolen. The column is queue-owned and additive — ``InProcessJobQueue._initialize_db`` already backfills missing columns through its ``additions`` map — so no alembic migration under ``migrations/`` is required, and ``migrations/`` stays out of scope (it is task-259's declared surface). New test file ``tests/integration/test_job_queue_heartbeat.py`` carries the proof; ``tests/integration/test_execution_native_backend.py`` is explicitly NOT in scope for this task and must be read, not edited.",
+      "scope": "Measure liveness by silence, not only by age. An in-flight queue row carries a queue-owned last-heartbeat fact that a working worker refreshes, and the staleness decision (recover_job / takeover-candidate filtering, the ``stale_after`` window) consults it: a beating row is never a takeover candidate however old ``started_at`` is, while a row with a proven heartbeat strictly older than the window retains the existing fenced takeover semantics. Fail closed in normal recovery: a missing, null, invalid or unprovable heartbeat means UNKNOWN liveness, not evidence of freshness or death; refuse automatic takeover regardless of started_at age, including after upgrade. Do not synthesize heartbeat values from started_at, migration time or wall-clock age. The column is queue-owned and additive — ``InProcessJobQueue._initialize_db`` already backfills missing columns through its ``additions`` map — so no alembic migration under ``migrations/`` is required, and ``migrations/`` stays out of scope (it is task-259's declared surface). New test file ``tests/integration/test_job_queue_heartbeat.py`` carries the proof; ``tests/integration/test_execution_native_backend.py`` is explicitly NOT in scope for this task and must be read, not edited. UPGRADE/RECOVERY CONTRACT: pause admissions and automatic reconciliation, drain old workers to terminal states where possible, then stop and fence every old worker (including restart paths) before additive schema upgrade. Preserve existing identities, attempts, history and terminal results; legacy in-flight rows retain an unknown heartbeat. If an original worker has stopped, an authorized operator must first prove exclusive maintenance ownership of the affected queue and prevent all old workers from returning. In that controlled context only, use the existing queue.cancel(job_id, expected_attempt=current_attempt) API to reopen the exact abandoned attempt, preserving its JOB_REOPENED audit and CAS fencing; do not use raw SQL, invent a heartbeat, weaken runtime recover_job, or call broad startup takeover as a shortcut. A missing/invalid attempt, ownership uncertainty, lost CAS, or unverified external side effects stops recovery with the row/evidence preserved for investigation. After a successful fenced cancellation, reconcile prior outputs and establish retry/idempotency safety before resume_pending_jobs on the same job identity; a successor reservation receives a higher attempt and establishes its own real heartbeat. Repeated cancellation must not affect a newer attempt or reopen terminal results. This is a future implementation/operator contract, not evidence that heartbeat migration or an operator CLI already exists.",
       "prerequisites": [
         "task-254-execution-core-v1"
       ],
       "acceptance_criteria": [
-        "in-flight rows carry a last-heartbeat; a beating worker is never stolen regardless of age",
-        "a silent worker past the window is recoverable exactly as today; T1/T2 race proof retained",
-        "migration + tests; no behaviour change for rows without the column (fail closed)"
+        "in-flight rows carry a queue-owned heartbeat; a beating worker is never taken over regardless of started_at age",
+        "normal recovery requires a proven heartbeat strictly older than the stale window; unknown heartbeat refuses takeover; T1/T2 fencing and rollback invariants are retained",
+        "Intentional upgrade behavior change: existing processing/verifying rows with no proven heartbeat are not automatically recovered based on old started_at. Add the nullable column without fabricating liveness, changing identity/attempt/history, or reopening terminal rows.",
+        "Before upgrade, pause admissions/reconciliation, drain workers when possible, then stop and fence all old workers/restarts. After upgrade, unknown-heartbeat rows stay blocked until independently proven exclusive maintenance ownership and a valid current attempt permit authorized queue.cancel with expected_attempt; refusal or uncertainty leaves state intact.",
+        "Only after fenced cancellation and external-output/idempotency reconciliation may the same pending job be resumed; the next attempt is higher, has a real heartbeat, and rejects stale cancel/finish/publication. No raw SQL, heartbeat backdating or automatic fallback is allowed."
       ],
       "evidence_required": [
-        "tests/integration/test_job_queue_heartbeat.py green on the claim head, proving: (a) a beating in-flight row is never a takeover/recover candidate regardless of started_at age, (b) a row silent past the window is recovered with today's exact semantics, (c) a row whose heartbeat cannot be proven fails closed and is never stolen",
-        "the retained T1/T2 stale-attempt race proof: tests/integration/test_execution_native_backend.py, test_execution_races.py and test_in_process_job_queue.py stay green UNEDITED (read-only for this task)",
+        "tests/integration/test_job_queue_heartbeat.py must cover proven fresh/equal-boundary/stale heartbeats, missing/null/invalid heartbeats with old started_at in processing and verifying rows, additive upgrade with identity/history preservation, and refusal without mutation or fabricated liveness.",
+        "Run tests/integration/test_execution_native_backend.py, tests/integration/test_execution_races.py and tests/integration/test_in_process_job_queue.py as read-only baseline evidence. Preserve their cancellation, T1/T2 fencing, rollback and terminal-state guarantees. Existing age-only recovery fixtures conflict with the intentionally new heartbeat gate: if they need adaptation, obtain a reviewed canonical path-scope amendment before editing them; do not weaken their safety assertions or declare implementation complete while they fail.",
         "mutation probe: removing the heartbeat freshness check turns the new test RED, restoring it returns GREEN with the tree byte-identical (git diff --stat empty)",
-        "exact commands + observed results in the PR body ('tests pass' without a command is not evidence), and `python scripts/agent_board.py check --files <changed> --branch <branch>` exit 0 with every source readable; each implementation agent runs and records its own lint/types/test gates; gates_owner is optional and advisory"
+        "exact commands + observed results in the PR body ('tests pass' without a command is not evidence), and `python scripts/agent_board.py check --files <changed> --branch <branch>` exit 0 with every source readable; each implementation agent runs and records its own lint/types/test gates; gates_owner is optional and advisory",
+        "Upgrade/recovery evidence matrix: drained upgrade; stopped legacy worker under proven exclusive maintenance; uncertain ownership refused; invalid/missing attempt refused; CAS loss; higher-attempt cancellation refused; terminal preservation; successful cancel then same-identity safe resume with higher attempt; prior irreversible side effects unresolved means no retry. Capture JOB_REOPENED/attempt evidence and mutation probes. No new operator CLI or heartbeat runtime is claimed by this registration."
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/adapters/in_process_job_queue.py",
@@ -6041,7 +6054,7 @@
       "title": "Repair existing PR #201: docs(architecture): request-queue vs execution-core cancellation boundary (task-261)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/201 on its existing branch arena/nexus-night-task261-request-queue-doc, preserving intent and published history. Snapshot head 03234642a7f4947ce5a8abbb6ab4307ecb55f9b4; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6065,16 +6078,16 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 2,
       "owner_hint": "Registered for a future authorized repair session on arena/nexus-night-task261-request-queue-doc; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": ""
     },
     {
       "task": "pr-repair-202",
       "title": "Repair existing PR #202: fix(board): the coordination referee must not report success it did not achieve (task-266)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/202 on its existing branch arena/b561a2be-nexus-ai-agent, preserving intent and published history. Snapshot head 49662ed968bd4a503916bb871a2218192f4a39f4; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6105,7 +6118,7 @@
       "gates_owner": false,
       "generation": 0,
       "owner_hint": "Registered for a future authorized repair session on arena/b561a2be-nexus-ai-agent; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": "DELIVERED: PR #202 merged to main as fac43a33 (2026-10-27T12:44:37Z). Record reconciled from live GitHub state."
     },
     {
       "task": "pr-repair-205",
@@ -6627,7 +6640,7 @@
       "title": "Repair existing PR #242: feat(selfhood): two-witness ledger check (Living Core)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/242 on its existing branch feat/selfhood-witness, preserving intent and published history. Snapshot head 8cef57bc710aef98cfd87ef812929b467a824789; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6647,13 +6660,13 @@
         "src/nexus_ai_agent/selfhood/witness.py",
         "tests/unit/test_selfhood_witness.py"
       ],
-      "agent_branch": "feat/selfhood-witness",
-      "claimed_at": "2026-10-26T21:58:21Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
       "owner_hint": "Registered for a future authorized repair session on feat/selfhood-witness; not assigned or claimed by this registration.",
-      "note": ""
+      "note": "DELIVERED: PR #242 merged to main as 83d3f02888 (2026-10-27T15:32:35Z) by a concurrent session. Record reconciled from live GitHub state."
     },
     {
       "task": "pr-repair-247",
@@ -6761,7 +6774,7 @@
       "title": "Repair PR #198 semantics in successor PR #253",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Port and harden PR #198 privacy, identity, quota, memory and consent behavior onto current main through successor PR #253. Obsolete agents/chat_agent.py is not resurrected; its identity propagation is verified in the current graph/persona architecture.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6804,20 +6817,21 @@
         "tests/unit/test_provider_identity.py",
         "tests/unit/test_stt_identity.py"
       ],
-      "agent_branch": "arena/7395b06d-nexus-ai-agent",
-      "claimed_at": "2026-10-27T06:39:52Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "Claimed by successor PR #253 on arena/7395b06d-nexus-ai-agent.",
-      "note": "Active successor lease for PR #253. Excludes graph.py to keep active lease paths disjoint; graph.py #198 memory isolation is carried by pr-repair-125-successor."
+      "note": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing).",
+      "release_reason": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing)."
     },
     {
       "task": "pr-repair-173-successor",
       "title": "Repair PR #173 semantics in successor PR #253",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Port and harden PR #173 access-context restoration and typed signing failures onto current main through successor PR #253, preserving merged LangSmith tracing in cli.py.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6837,20 +6851,21 @@
         "tests/unit/test_delivery_signing.py",
         "tests/unit/test_inspect_contract.py"
       ],
-      "agent_branch": "arena/7395b06d-nexus-ai-agent",
-      "claimed_at": "2026-10-27T06:39:52Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "Claimed by successor PR #253 on arena/7395b06d-nexus-ai-agent.",
-      "note": "Active successor lease for PR #253. Owns cli.py after task-274 release in merged PR #254; preserves tracing bootstrap and inspect cleanup in cli.py."
+      "note": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing).",
+      "release_reason": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing)."
     },
     {
       "task": "pr-repair-125-successor",
       "title": "Repair PR #125 semantics in successor PR #253",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Port and harden PR #125 truthful guarded-tool execution semantics onto current main through successor PR #253.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -6869,13 +6884,14 @@
         "src/nexus_ai_agent/orchestration/graph.py",
         "tests/unit/test_execution_truth.py"
       ],
-      "agent_branch": "arena/7395b06d-nexus-ai-agent",
-      "claimed_at": "2026-10-27T06:39:52Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "Claimed by successor PR #253 on arena/7395b06d-nexus-ai-agent.",
-      "note": "Active successor lease for PR #253. Owns graph.py for both PR #125 execution truth and the ported PR #198 memory-isolation changes."
+      "note": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing).",
+      "release_reason": "Released 2026-10-27 (campaign session). Evidence: successor PR #253 merged as 4c4590c8ad75bf6b4b0acddbc2916d75209209ce (ancestor of main); branch arena/7395b06d-nexus-ai-agent tip ff91e5dc5d is fully merged (0 unique commits); all declared test files present on main. No residual work. Released via scripts/agent_board.py release --expected-generation 1 (fencing)."
     },
     {
       "task": "pr-repair-195-successor",
@@ -7051,6 +7067,44 @@
       "generation": 3,
       "previous_release_reason": "auto-released by gc at 2026-10-27T10:24:50Z (stale active lease)",
       "delivered": true
+    },
+    {
+      "task": "task-276-pr-convergence-registry",
+      "title": "PR convergence registry and merge-readiness guard (repair of PR #249)",
+      "title_fa": "رجیستری همگرایی PRها و گارد آمادگی مرج (اصلاح PR #249)",
+      "zone": "pr-convergence",
+      "priority": "P1",
+      "status": "done",
+      "scope": "Make PR #249 mergeable on its own evidence: every CodeRabbit finding re-checked against the current head, valid ones fixed with deterministic tests, stale audit statements (pending CI, PR counts, #111 merge state) corrected from live data. Scope is limited to the four paths below; no feature work.",
+      "scope_fa": "PR #249 با شواهد خودش قابل مرج شود: هر یافتهٔ بازبین با head فعلی تطبیق داده شود، موارد معتبر با تست قطعی رفع شود و گزاره‌های کهنهٔ audit با داده زنده اصلاح شود. دامنه فقط چهار مسیر زیر است.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "scripts/agent_board.py check --repo bot523h/nexus-ai-agent --branch <claim branch> --files <changed files> exits 0 with readable origin/main and open-PR branches",
+        "every open review thread on PR #249 is either fixed by a commit that is cited in the reply or answered with an evidence-based reason; none is resolved without that",
+        "tests/unit/test_pr_convergence.py passes locally and all required CI checks pass on the exact final head",
+        "scripts/pr_convergence.py fails closed (exit 2) for unreadable or error-bearing GitHub responses and pins the reviewed head SHA",
+        "CURRENT_TRUTH_AUDIT.md states only counts and states that a recorded command reproduces"
+      ],
+      "evidence_required": [
+        "final head SHA and exact-head CI run link",
+        "referee exit code and stdout for the branch and the changed files",
+        "pytest command and result for tests/unit/test_pr_convergence.py",
+        "a review approval from an eligible reviewer other than the author"
+      ],
+      "exclusive_paths": [
+        "scripts/pr_convergence.py",
+        "tests/unit/test_pr_convergence.py",
+        "CURRENT_TRUTH_AUDIT.md",
+        ".agents/evidence/"
+      ],
+      "owner_hint": "PR #249 repair; claim with agent_branch arena/c888ae0d-nexus-ai-agent before editing",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 4,
+      "previous_release_reason": "Delivered and merged (PR #261). Zone released."
     }
   ],
   "deferred_log": [
@@ -7153,9 +7207,11 @@
       "title_fa": "اثبات زنده‌بودن مبتنی بر heartbeat تا recover_job کند-ولی-زنده را از مرده تمیز دهد",
       "why_fa": "اکنون تنها سنجهٔ staleness سن started_at است؛ worker کندِ زنده ممکن است واجد شرایط takeover شود.",
       "acceptance_criteria": [
-        "in-flight rows carry a last-heartbeat; a beating worker is never stolen regardless of age",
-        "a silent worker past the window is recoverable exactly as today; T1/T2 race proof retained",
-        "migration + tests; no behaviour change for rows without the column (fail closed)"
+        "in-flight rows carry a queue-owned heartbeat; a beating worker is never taken over regardless of started_at age",
+        "normal recovery requires a proven heartbeat strictly older than the stale window; unknown heartbeat refuses takeover; T1/T2 fencing and rollback invariants are retained",
+        "Intentional upgrade behavior change: existing processing/verifying rows with no proven heartbeat are not automatically recovered based on old started_at. Add the nullable column without fabricating liveness, changing identity/attempt/history, or reopening terminal rows.",
+        "Before upgrade, pause admissions/reconciliation, drain workers when possible, then stop and fence all old workers/restarts. After upgrade, unknown-heartbeat rows stay blocked until independently proven exclusive maintenance ownership and a valid current attempt permit authorized queue.cancel with expected_attempt; refusal or uncertainty leaves state intact.",
+        "Only after fenced cancellation and external-output/idempotency reconciliation may the same pending job be resumed; the next attempt is higher, has a real heartbeat, and rejects stale cancel/finish/publication. No raw SQL, heartbeat backdating or automatic fallback is allowed."
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/adapters/in_process_job_queue.py",
@@ -7180,25 +7236,6 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/execution/contract.py",
         "src/nexus_ai_agent/adapters/native_local_backend.py"
-      ],
-      "prerequisites": [
-        "task-254 merged"
-      ]
-    },
-    {
-      "id": "task-258-execution-core-architecture-doc",
-      "priority": "P2",
-      "zone": "docs-architecture",
-      "title": "docs/architecture/EXECUTION_CORE.md — contract, authority laws, I1-I10",
-      "title_fa": "سند معماری هستهٔ اجرا: قرارداد، قوانین اقتدار، I1-I10",
-      "why_fa": "جدول I1-I10 اکنون فقط در تست‌هاست؛ reviewer و مالک آینده باید سند مرجع داشته باشند.",
-      "acceptance_criteria": [
-        "doc maps I1-I10 to enforcing symbols and proving tests (mirrors the test table)",
-        "authority laws + four-verb contract + staging boundary policy documented",
-        "docs integrity suite green"
-      ],
-      "exclusive_paths": [
-        "docs/architecture/EXECUTION_CORE.md"
       ],
       "prerequisites": [
         "task-254 merged"
@@ -7315,6 +7352,28 @@
       "prerequisites": [
         "task-254 merged"
       ]
+    },
+    {
+      "id": "task-269-cognition-quality-evaluation",
+      "priority": "P1",
+      "zone": "cognition-quality-evaluation",
+      "title": "Cognition quality evaluation harness",
+      "title_fa": "هارنس ارزیابی کیفیت شناخت",
+      "why_fa": "جایگزینِ task-258 که تحویل شد (PR #199/#258)؛ وظیفهٔ رو-به-جلوِ بعدی با ناحیه و معیار پذیرش مشخص.",
+      "acceptance_criteria": [
+        "The harness uses existing TypedProposal, Refusal, ProposalSchema, and current Cognition boundary contracts without introducing runtime authority.",
+        "Default execution is deterministic, local, network-free, and requires no API keys.",
+        "Tests cover valid output, malformed output, out-of-scope operation, authority-field injection, prompt-injection-shaped input, explicit refusal, provider failure, no-model state, and invalid output.",
+        "Proposal acceptance is measured separately from independent verification success; a proposal never counts as execution success.",
+        "Synthetic fixtures and any optional real-model evidence are reported in separate channels with no raw sensitive prompt or response logging.",
+        "Repeatability and latency are measured from bounded synthetic fixtures, and unsupported multi-model claims are reported as insufficient evidence.",
+        "Only the two exclusive paths in this claim are changed and the existing execution authority remains in Policy, CommandBus, and Verification."
+      ],
+      "exclusive_paths": [
+        "scripts/cognition_quality_eval.py",
+        "tests/unit/test_cognition_quality_eval.py"
+      ],
+      "prerequisites": []
     }
   ],
   "history": {

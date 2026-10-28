@@ -54,7 +54,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -309,6 +309,11 @@ class RouteTable:
     containers: frozenset[tuple[str, str]]
     #: The containers whose interior the inventory cannot enumerate.
     opaque: frozenset[tuple[str, str]]
+    #: Identity-aware keys are retained so nested containers sharing a path
+    #: cannot collapse into one another during enumeration.
+    container_keys: frozenset[tuple[int, str]]
+    enumerated_container_keys: frozenset[tuple[int, str]]
+    opaque_container_keys: frozenset[tuple[int, str]]
 
 
 def _registered_routes(app: FastAPI) -> RouteTable:
@@ -340,11 +345,14 @@ def _registered_routes(app: FastAPI) -> RouteTable:
     # mounted static file server, for example.  Such a route is invisible to
     # every OpenAPI-based inventory, so it has to be exempted explicitly
     # instead of being dropped silently.
-    opaque = {entry for key, entry in containers.items() if key not in enumerated}
+    opaque_keys = {key for key in containers if key not in enumerated}
     return RouteTable(
         operations=frozenset(operations),
         containers=frozenset(containers.values()),
-        opaque=frozenset(opaque),
+        opaque=frozenset(containers[key] for key in opaque_keys),
+        container_keys=frozenset(containers),
+        enumerated_container_keys=frozenset(enumerated),
+        opaque_container_keys=frozenset(opaque_keys),
     )
 
 
@@ -714,6 +722,50 @@ def _arm_security(monkeypatch: pytest.MonkeyPatch) -> None:
 # ── the inventory itself ────────────────────────────────────────────────────
 
 
+def _assert_opaque_containers_classified(inventory: Inventory) -> None:
+    """Every non-enumerable container is explicitly exempted with a reason."""
+    unclassified_containers = sorted(
+        (kind, path) for kind, path in inventory.opaque if path not in OPAQUE_ROUTE_EXEMPTIONS
+    )
+    assert not unclassified_containers, (
+        "routes the inventory cannot look into are invisible to every "
+        "HTTP-based inventory (mount a sub-application whose operations are "
+        "visible, or exempt the route in OPAQUE_ROUTE_EXEMPTIONS with a "
+        f"reason): {unclassified_containers}"
+    )
+    for path, reason in OPAQUE_ROUTE_EXEMPTIONS.items():
+        assert reason.strip(), f"the exemption for {path!r} has no reason"
+
+
+def _assert_every_registered_operation_classified(inventory: Inventory) -> None:
+    """Require a named owner for OpenAPI and mounted operations separately."""
+    unclassified = sorted(
+        operation
+        for operation in inventory.operations
+        if operation not in inventory.public and surface_of(operation) is None
+    )
+    assert not unclassified, (
+        "operations that are neither public by design nor owned by a security "
+        f"surface (classify them, or add them to the public allowlist): {unclassified}"
+    )
+
+    # Mounted operations are absent from the parent's OpenAPI document, so
+    # they have their own fail-closed ownership assertion rather than relying
+    # on OpenAPI classification to catch them indirectly.
+    unowned_mounted = sorted(
+        operation for operation in inventory.mounted if surface_of(operation) is None
+    )
+    assert not unowned_mounted, (
+        "operations reached through a mount are invisible to the OpenAPI "
+        "document and must be owned by a named security surface: "
+        f"{unowned_mounted}"
+    )
+
+    for surface in SURFACES:
+        owned = sorted(op for op in inventory.served if surface.owns(op))
+        assert owned, f"security surface {surface.name!r} owns no registered operation"
+
+
 def test_the_inventory_covers_every_registered_operation(api_env: ApiEnv) -> None:
     """The inventory is the application's own document, cross-checked.
 
@@ -752,17 +804,7 @@ def test_the_inventory_covers_every_registered_operation(api_env: ApiEnv) -> Non
         f"operations excluded from the OpenAPI document are invisible to the inventory: {hidden}"
     )
 
-    unclassified_containers = sorted(
-        (kind, path) for kind, path in inventory.opaque if path not in OPAQUE_ROUTE_EXEMPTIONS
-    )
-    assert not unclassified_containers, (
-        "routes the inventory cannot look into are invisible to every "
-        "HTTP-based inventory (mount a sub-application whose operations are "
-        "visible, or exempt the route in OPAQUE_ROUTE_EXEMPTIONS with a "
-        f"reason): {unclassified_containers}"
-    )
-    for path, reason in OPAQUE_ROUTE_EXEMPTIONS.items():
-        assert reason.strip(), f"the exemption for {path!r} has no reason"
+    _assert_opaque_containers_classified(inventory)
 
     # The audited surfaces are really present (the routers are mounted).
     paths = {path for _method, path in inventory.served}
@@ -775,34 +817,7 @@ def test_the_inventory_covers_every_registered_operation(api_env: ApiEnv) -> Non
 
 def test_every_registered_operation_is_classified(api_env: ApiEnv) -> None:
     """Every operation is public by design, or owned by a named surface."""
-    inventory = build_inventory(api_env.app)
-    unclassified = sorted(
-        operation
-        for operation in inventory.served
-        if operation not in inventory.public and surface_of(operation) is None
-    )
-    assert not unclassified, (
-        "operations that are neither public by design nor owned by a security "
-        f"surface (classify them, or add them to the public allowlist): {unclassified}"
-    )
-
-    # An operation reached through a mount is not described by the OpenAPI
-    # document of the parent application, so it needs a named owner even more
-    # explicitly than a described one.
-    unowned_mounted = sorted(
-        operation for operation in inventory.mounted if surface_of(operation) is None
-    )
-    assert not unowned_mounted, (
-        "operations reached through a mount are invisible to the OpenAPI "
-        "document and must be owned by a named security surface: "
-        f"{unowned_mounted}"
-    )
-
-    # Every declared surface must really be exercised by a real operation —
-    # a policy entry that covers nothing would rot silently.
-    for surface in SURFACES:
-        owned = sorted(op for op in inventory.served if surface.owns(op))
-        assert owned, f"security surface {surface.name!r} owns no registered operation"
+    _assert_every_registered_operation_classified(build_inventory(api_env.app))
 
 
 def test_the_public_allowlist_is_reachable_without_any_credential(api_env: ApiEnv) -> None:
@@ -912,14 +927,18 @@ def test_the_studio_surface_enforces_project_scope_after_authentication(
         f"/api/studio/projects/{DENIED_PROJECT}/jobs/{job_id}/state", headers=authorized
     )
     assert denied.status_code == 404, denied.text[:200]
-    assert denied.json()["detail"] == "studio project not found"
+    assert denied.json()["detail"] == "studio project not found", (
+        f"project scope was bypassed: {denied.json().get('detail')}"
+    )
 
     # And the very same job under the authorised project is not readable
     # without the token.
     unauthenticated = api_env.client.get(
         f"/api/studio/projects/{AUTHORIZED_PROJECT}/jobs/{job_id}/state"
     )
-    assert unauthenticated.status_code == 401, unauthenticated.text[:200]
+    assert unauthenticated.status_code == 401, (
+        f"Studio route accepted missing bearer: {unauthenticated.status_code}"
+    )
 
 
 def test_the_legacy_creative_surface_opens_only_with_a_valid_signature(
@@ -939,7 +958,7 @@ def test_the_legacy_creative_surface_opens_only_with_a_valid_signature(
         content=b"",
         headers=_hmac_headers(HMAC_KEY, b"", timestamp=int(time.time()) - 4000),
     )
-    assert stale.status_code == 401, stale.text[:200]
+    assert stale.status_code == 401, f"stale signature accepted with status {stale.status_code}"
     assert "stale signature timestamp" in stale.json()["detail"]
 
     # A fresh timestamp with the wrong signature is rejected on its own terms.
@@ -948,7 +967,9 @@ def test_the_legacy_creative_surface_opens_only_with_a_valid_signature(
         content=b"",
         headers=_hmac_headers("another-key", b""),
     )
-    assert invalid.status_code == 401, invalid.text[:200]
+    assert invalid.status_code == 401, (
+        f"invalid signature accepted with status {invalid.status_code}"
+    )
     assert "invalid signature" in invalid.json()["detail"]
 
     # A valid signature reaches the handler (which then rejects the empty
@@ -1091,6 +1112,157 @@ def test_a_rejected_creative_request_creates_no_job_and_persists_no_upload(
 # ── the guard has teeth ─────────────────────────────────────────────────────
 
 
+def test_unexempted_opaque_container_requires_an_explicit_owner(api_env: ApiEnv) -> None:
+    """A non-enumerable mount must fail the inventory contract unless exempted."""
+    before_routes = list(api_env.app.router.routes)
+    mount_path = "/__p2_opaque_contract_probe__"
+    api_env.app.mount(
+        mount_path,
+        app=StaticFiles(directory=str(api_env.root), html=False),
+    )
+    added = [route for route in api_env.app.router.routes if route not in before_routes]
+    try:
+        assert len(added) == 1, "the opaque contract mount was not registered"
+        inventory = build_inventory(api_env.app)
+        assert ("Mount", mount_path) in inventory.opaque
+        assert mount_path not in OPAQUE_ROUTE_EXEMPTIONS
+        try:
+            _assert_opaque_containers_classified(inventory)
+        except AssertionError as exc:
+            assert "routes the inventory cannot look into" in str(exc)
+        else:
+            pytest.fail("opaque-route classification accepted an unexempted container")
+    finally:
+        for route in added:
+            api_env.app.router.routes.remove(route)
+        api_env.app.openapi_schema = None
+
+    assert list(api_env.app.router.routes) == before_routes
+
+
+def test_mounted_operations_are_required_to_have_a_named_security_owner(
+    api_env: ApiEnv,
+) -> None:
+    """Mounted operations need the dedicated owner check, outside OpenAPI."""
+    inventory = build_inventory(api_env.app)
+    probe = ("GET", "/__p2_unowned_mounted_contract_probe__")
+    synthetic = replace(inventory, mounted=inventory.mounted | {probe})
+    assert surface_of(probe) is None
+    try:
+        _assert_every_registered_operation_classified(synthetic)
+    except AssertionError as exc:
+        assert "operations reached through a mount" in str(exc)
+    else:
+        pytest.fail("unowned mounted operation passed the security-owner contract")
+
+
+def test_root_mount_empty_path_is_recorded_as_a_container(api_env: ApiEnv) -> None:
+    """Starlette stores a root mount as an empty path; the inventory must retain it."""
+    before_routes = list(api_env.app.router.routes)
+    api_env.app.mount(
+        "/",
+        app=StaticFiles(directory=str(api_env.root), html=False),
+    )
+    added = [route for route in api_env.app.router.routes if route not in before_routes]
+    try:
+        assert len(added) == 1, "the root mount was not registered"
+        inventory = build_inventory(api_env.app)
+        assert ("Mount", "/") in inventory.containers, (
+            "root mount missing from inventory.containers"
+        )
+        assert ("Mount", "/") in inventory.opaque, "opaque root mount was dropped"
+    finally:
+        for route in added:
+            api_env.app.router.routes.remove(route)
+        api_env.app.openapi_schema = None
+
+    assert list(api_env.app.router.routes) == before_routes
+
+
+def test_parent_operation_prefix_does_not_enumerate_a_static_mount(api_env: ApiEnv) -> None:
+    """A sibling path prefix is not proof that a static mount was enumerated."""
+    before_routes = list(api_env.app.router.routes)
+    mount_path = "/__p2_prefix_contract_probe__"
+
+    @api_env.app.get(f"{mount_path}/list")
+    async def _prefix_parent_route() -> dict[str, str]:
+        return {"ok": "parent route"}
+
+    api_env.app.mount(
+        mount_path,
+        app=StaticFiles(directory=str(api_env.root), html=False),
+    )
+    added = [route for route in api_env.app.router.routes if route not in before_routes]
+    try:
+        assert len(added) == 2, "the parent route and prefix mount were not registered"
+        inventory = build_inventory(api_env.app)
+        assert ("GET", f"{mount_path}/list") in inventory.operations
+        assert ("Mount", mount_path) in inventory.opaque, (
+            "a parent operation sharing the prefix incorrectly made the mount look enumerated"
+        )
+    finally:
+        for route in added:
+            api_env.app.router.routes.remove(route)
+        api_env.app.openapi_schema = None
+
+    assert list(api_env.app.router.routes) == before_routes
+
+
+def test_nested_root_mount_chain_keeps_route_object_identity(api_env: ApiEnv) -> None:
+    """The nested root mount's enclosing-chain key retains its outer route id."""
+    before_routes = list(api_env.app.router.routes)
+    inner_app = FastAPI()
+    inner_app.mount("/", app=StaticFiles(directory=str(api_env.root), html=False))
+    inner_mount = inner_app.router.routes[-1]
+    api_env.app.mount("/", app=inner_app)
+    added = [route for route in api_env.app.router.routes if route not in before_routes]
+    try:
+        assert len(added) == 1, "the outer root mount was not registered"
+        outer_mount = added[0]
+        nested = [
+            route for route in _iter_routes(api_env.app.router.routes) if route.route is inner_mount
+        ]
+        assert len(nested) == 1, "the inner root mount was not enumerated exactly once"
+        assert nested[0].containers == ((id(outer_mount), ""),), (
+            "container chain lost the enclosing route identity: "
+            f"expected {(id(outer_mount), '')!r}, observed {nested[0].containers!r}"
+        )
+    finally:
+        for route in added:
+            api_env.app.router.routes.remove(route)
+        api_env.app.openapi_schema = None
+
+    assert list(api_env.app.router.routes) == before_routes
+
+
+def test_nested_root_mount_table_keeps_route_object_identity(api_env: ApiEnv) -> None:
+    """The table keeps distinct keys when two mounts share the root path."""
+    before_routes = list(api_env.app.router.routes)
+    inner_app = FastAPI()
+    inner_app.mount("/", app=StaticFiles(directory=str(api_env.root), html=False))
+    inner_mount = inner_app.router.routes[-1]
+    api_env.app.mount("/", app=inner_app)
+    added = [route for route in api_env.app.router.routes if route not in before_routes]
+    try:
+        assert len(added) == 1, "the outer root mount was not registered"
+        outer_mount = added[0]
+        table = _registered_routes(api_env.app)
+        outer_key = (id(outer_mount), "")
+        inner_key = (id(inner_mount), "")
+        assert table.container_keys == frozenset({outer_key, inner_key}), (
+            "container table keys are not object-identity keyed: "
+            f"expected {sorted((outer_key, inner_key))!r}, observed {table.container_keys!r}"
+        )
+        assert table.enumerated_container_keys == frozenset({outer_key})
+        assert table.opaque_container_keys == frozenset({inner_key})
+    finally:
+        for route in added:
+            api_env.app.router.routes.remove(route)
+        api_env.app.openapi_schema = None
+
+    assert list(api_env.app.router.routes) == before_routes
+
+
 def test_a_newly_registered_unprotected_route_is_detected(api_env: ApiEnv, monkeypatch) -> None:
     """A new, unprotected operation must turn the inventory red.
 
@@ -1166,7 +1338,9 @@ def test_a_mounted_sub_application_cannot_hide_from_the_inventory(
         probe_operation = ("GET", "/__p2_mount_probe__/leak")
 
         # 1. the operation is part of the inventory, with its real path …
-        assert probe_operation in inventory.mounted, inventory.mounted
+        assert probe_operation in inventory.mounted, (
+            f"mounted operation missing from inventory.mounted: {inventory.mounted}"
+        )
         assert probe_operation in inventory.registered, inventory.registered
         # 2. … it is not owned by any security surface …
         assert surface_of(probe_operation) is None
