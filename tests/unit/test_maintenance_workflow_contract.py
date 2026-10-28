@@ -269,8 +269,13 @@ def test_the_workflow_exposes_only_the_scheduled_and_manual_triggers() -> None:
         f"reachable from push/pull_request runs (found triggers: {sorted(triggers)})"
     )
     crons = [line.strip() for line in _top_block("on") if line.strip().startswith("- cron:")]
-    assert crons == ['- cron: "17 3 * * *"', '- cron: "23 4 * * 1"'], (
-        "the nightly backup and weekly housekeeping schedules must stay unchanged"
+    assert crons == [
+        '- cron: "17 3 * * *"',
+        '- cron: "23 4 * * 1"',
+        '- cron: "41 5 * * 0"',
+    ], (
+        "the nightly backup, weekly housekeeping, and weekly restore-drill "
+        "schedules must stay explicit"
     )
 
 

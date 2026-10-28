@@ -1404,6 +1404,10 @@ def backup(
         raise typer.Exit(code=1) from e
     typer.echo(f"source: {result['source']}")
     typer.echo(f"key:    {result['key']}")
+    if not result["dry_run"]:
+        typer.echo(f"sha256: {result.get('sha256', 'unavailable')}")
+        typer.echo(f"timestamp: {result.get('timestamp', 'unavailable')}")
+        typer.echo(f"verified: {result.get('verified', False)}")
     if result["dry_run"]:
         typer.echo("dry-run: nothing dumped or uploaded")
     else:
@@ -1439,15 +1443,23 @@ def housekeeping(
         temp_max_age_hours=temp_max_age_hours,
         backup_retention_days=backup_retention_days,
     )
-    typer.echo(f"temp files removed: {len(result['temp_files_removed'])}")
-    for path in result["temp_files_removed"]:
-        typer.echo(f"  - {path}")
-    if result["backups_deleted"]:
+    # A dry run is a PREVIEW: it must list the planned selections — printing
+    # only the (always empty) mutation results would show the operator an
+    # empty report and hide exactly what the real run would destroy.
+    if result["dry_run"]:
+        typer.echo(f"temp files planned for removal: {len(result['temp_files_planned'])}")
+        for path in result["temp_files_planned"]:
+            typer.echo(f"  - {path}")
+        typer.echo(f"R2 backups planned for deletion: {len(result['backups_planned'])}")
+        for key in result["backups_planned"]:
+            typer.echo(f"  - {key}")
+    else:
+        typer.echo(f"temp files removed: {len(result['temp_files_removed'])}")
+        for path in result["temp_files_removed"]:
+            typer.echo(f"  - {path}")
         typer.echo(f"R2 backups deleted: {len(result['backups_deleted'])}")
         for key in result["backups_deleted"]:
             typer.echo(f"  - {key}")
-    else:
-        typer.echo("R2 backups deleted: 0")
     if result["r2_skipped_reason"]:
         typer.echo(f"note: {result['r2_skipped_reason']}")
     if result["dry_run"]:
