@@ -23,8 +23,10 @@ several Claude Code sessions over git worktrees of one repo):
   an owner, a scope of exclusive paths, and a TTL) plus a **deferral log** so a
   stopped agent leaves a durable note instead of a silent conflict.
 * **Referee layer** — a deterministic overlap check that any agent (or CI) can run
-  before pushing, and a single **gates owner** rule so two agents never race the
-  same lint/test suite.
+  before pushing, so two agents do not silently edit the same exclusive paths.
+  There is **no mandatory global gates owner** (policy 2026-10-19): each agent runs
+  its own gates and records its own evidence. A `gates_owner` claim remains an
+  optional, advisory, at-most-one marker — it never locks the project.
 
 ## 2. Task lifecycle
 
@@ -46,7 +48,18 @@ queued ──claim──▶ active (lease: owner + TTL + exclusive_paths)
 * **TTL / stale takeover** — every lease has `ttl_hours` (default 24). `gc` (run
   automatically inside `show`/`next`) flips expired leases to `expired`, making
   the task claimable again. An agent that is still working re-runs `claim` to
-  renew its own lease (heartbeat).
+  renew its own lease (heartbeat). A renewal is a *mutation of a live lease*, so
+  it carries `--expected-generation N`; a superseded owner is refused.
+* **the single gate (`--gates`)** — `claim … --gates` **ensures the caller holds
+  the one `gates_owner` role**, on every path that can grant it: a fresh claim, a
+  takeover of an expired lease, and the heartbeat renewal of a lease the caller
+  already owns. It is exclusive, so taking it clears every other holder (a board
+  that somehow carries two holders collapses to the caller), and it is
+  *additive*: renewing **without** `--gates` never drops a gate the owner already
+  holds. `show` and the claim output state the resulting flag, so the operator
+  reads the effect rather than the request. Because the gate is lease-scoped, the
+  board legitimately holds **zero** gates owners while nobody is running the full
+  gates.
 * **defer** — the "stop politely" primitive. Writes a permanent entry to
   `deferred_log` with both a Persian and English note (the Persian template is the
   canonical one from `AGENTS.md`) plus a `resume_when` condition. A deferred task
@@ -79,11 +92,40 @@ python scripts/agent_board.py claim TASK --branch BR [--ttl 24] [--gates]
 python scripts/agent_board.py release TASK --branch BR
 python scripts/agent_board.py defer TASK --branch BR --fa "…" --resume-when "…"
 python scripts/agent_board.py check --files "src/a.py,src/b.py" --branch BR   # referee
+python scripts/agent_board.py check --files "src/a.py" --branch BR --no-remote  # local only
 ```
 
-`check` exits `1` when any listed file overlaps another branch's **active**
-`exclusive_paths` — wire it into a pre-push hook or a CI job; either way it is the
-mechanical answer to "may I push this?"
+`check` is a **multi-source referee**. It reads the local board, every sibling
+git worktree's board, `origin/main`'s board, and **every** open PR's pushed head
+board — across **every page** of the listing, and read by each head's **full
+identity** (repository + ref), so a fork PR and PR number 101+ are sources too.
+The reader is deliberately literal about that:
+
+* a page that cannot be fetched or interpreted makes the whole listing
+  **unverifiable** — a partial list is never presented as a complete one, and a
+  listing longer than the page bound is refused rather than truncated;
+* a head is fetched **from its own repository** into its own ref namespace and the
+  board is read from exactly that ref: a fork PR whose branch is called `main`
+  must never be resolved through this clone's `origin/main` (a different
+  repository, a different commit, a different board);
+* the fetch target is derived from the validated `owner/name` identity, never
+  from a URL supplied in the API payload;
+* a same-named branch in two repositories is **two** sources, not one.
+
+then exits:
+
+| exit | meaning |
+|---|---|
+| `0` | no overlap **and** every consulted source was readable |
+| `1` | a proven overlap with another branch's active `exclusive_paths` |
+| `2` | a source could not be read (git/remote/worktree/branch unavailable) — **not** a pass |
+
+Exit `2` is the honesty gate: "no overlap" is only claimed when the data was
+actually read. `--no-remote` narrows the check to the local board and says so
+loudly — its `0` is a *local* verdict, never a global pass. A proven overlap
+(`1`) is reported even when another source is unreadable, because the conflict
+is confirmed and hiding it would be worse. Wire it into a pre-push hook or a CI
+job; either way it is the mechanical answer to "may I push this?"
 
 ## 5. Failure modes and how the protocol absorbs them
 
@@ -100,3 +142,23 @@ New task → add a `claims` entry with `status: "queued"`, a `zone`, a crisp
 `scope`, and explicit `exclusive_paths` (directories with trailing `/`, files
 verbatim). New zone → add to `zones` with the path prefix list. Schema is
 versioned (`"schema": 1`); bump deliberately and update this document.
+
+## 7. Single board authority — owner decision (Option B, 2026-10-22)
+
+The single authoritative coordination board is `.agents/board.json` on `main`.
+`refs/nexus/board` is deprecated and non-authoritative.
+
+- The shipped CLI (`scripts/agent_board.py`) reads and writes the tree board only;
+  its canonical path is the module constant `BOARD`.
+- Branch and worktree boards are still **required overlap evidence**; they never
+  supersede canonical `main` state.
+- A remote ref, manifest or branch board cannot grant execution authority.
+- Schema/integrity validation and the fail-closed exit 2 for unreadable required
+  sources are preserved. Exit 0 (readable, disjoint), 1 (proven overlap) and
+  2 (unreadable/unverifiable shared state) are unchanged.
+- The `gates_owner` field is optional and advisory and never a global prerequisite.
+- Retiring the deprecated ref is a separate audited operation: preserve its exact
+  commit, tree and board bytes first, re-read the remote SHA immediately before
+  deletion, and use an exact-SHA lease (`--force-with-lease`) so a concurrent
+  update is never overwritten.
+- Enforced by `tests/unit/test_board_authority_option_b.py`.

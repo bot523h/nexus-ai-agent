@@ -13,7 +13,7 @@
 - 👤 **Anonymous Chat** — Random queue-based pairing, live message delivery, report system
 - 🎮 **Games** — Quiz, number guessing, Persian Wordle, quick polls (all real, stateful engines)
 - 🛠️ **Tools** — Reminders (persistent, cancellable, restart-safe), translation, unit conversion, safe calculator (no `eval`)
-- 📢 **Channel Management** — ⚠️ *simulated replies; see "Real vs. Simulated" table below*
+- 📢 **Channel Management** — Posts, scheduling, pin, ban/unban, stats and welcome messages through the real `ChannelManager` (`bot/surface/channel_management.py`)
 - 📋 **Inline Menu System** — Full interactive keyboard navigation
 
 ### Community OS (v1.3.0)
@@ -21,10 +21,10 @@
 - 📢 **Force Join** — Real channel membership verification (bot-injected `get_chat_member`), 5-minute cache, verify button, and a message-flow gate while enabled
 - 🎭 **AI Personalities** — 10 distinct personalities with per-group config and persistence
 - 💬 **Auto Engagement** — Ice breakers, jokes, challenges, daily questions, events with rate limiting
-- 🔥 **Viral Engine** — Real post generation/scoring/storage via `/viral_now`; preview/stats/post views are ⚠️ *simulated*
-- 📢 **Ad System** — ⚠️ *simulated replies; no persistence yet*
-- 🛡️ **Smart Moderation** — Config on/off is real; warn/mute/unmute/reputation are ⚠️ *simulated*
-- 🏆 **Gamification** — ⚠️ *simulated at the command level* (quiz scoring is real)
+- 🔥 **Viral Engine** — Post generation/scoring/storage via `/viral_now`; `/viral_preview`, `/viral_stats`, `/viral_post` read and publish the real `ViralPost` queue (owner-only publish)
+- 📢 **Ad System** — Persistent campaigns (`/ad_create` … `/ad_stats`) on the real `AdEngine`
+- 🛡️ **Smart Moderation** — `/mod_config`, `/warn`, `/mute`, `/unmute`, `/reputation` on the real `ModerationEngine`, plus a wired group-message ingress (spam/toxicity verdicts stop propagation; Telegram restrictions reported honestly)
+- 🏆 **Gamification** — XP, daily reward, profile, achievements and leaderboard on the real `GamificationEngine`
 - 📊 **Analytics** — Active users, engagement rate, peak hours, cohort retention, command usage, dashboard
 - 🎨 **Advanced UI** — 6-row main menu, nested submenus, admin dashboard panel
 
@@ -72,7 +72,7 @@
 
 ---
 
-## Nagar image generation and slideshow (v3.12.0)
+## Nagar image generation and slideshow (v3.13.0)
 
 ### `/imagine`: text to image
 
@@ -262,9 +262,8 @@ MEGA_PASSWORD=           # MEGA account password
 NEXUS_OWNER_TELEGRAM_ID=your_telegram_id
 NEXUS_ALLOWED_USER_IDS=12345,67890     # optional extra users
 
-# v3.13.0: Dashboard API bearer token. Set this whenever the dashboard
-# port is reachable beyond localhost. Responses are PII-free; the token
-# gates access.
+# Dashboard API bearer token (fail-closed): with it unset, /api/dashboard/*
+# answers 503 — the API is never open by accident. Responses are PII-free.
 NEXUS_DASHBOARD_TOKEN=                 # python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
@@ -273,7 +272,8 @@ NEXUS_DASHBOARD_TOKEN=                 # python -c "import secrets; print(secret
 > get one rate-limited denial and nothing else — this closes the hole
 > where only `/ai`-family and `/imagine` were checked. The dashboard
 > API no longer returns `telegram_id`/`username`, is bearer-token gated
-> when `NEXUS_DASHBOARD_TOKEN` is set, and docker-compose binds port
+> by `NEXUS_DASHBOARD_TOKEN` (disabled with `503` while the token is
+> unset — audit 2026-10-15), and docker-compose binds port
 > 8000 to `127.0.0.1` by default. `/cloud` and `/download` sanitize
 > file names (no path traversal). **AIMemory egress (P0-7)** is
 > default-deny: `/memory` extraction only sends text to the external
@@ -307,12 +307,14 @@ source of truth. **Real** = wired to a working engine with tests.
 
 | Status | Commands |
 |---|---|
-| ✅ Real | `/ai`, `/ask`, `/code`, `/translate`, `/summarize`, `/image`, `/imagine`, `/slideshow`, `/tts`, `/stt`, `/cloud`, `/myfiles`, `/download`, `/cloud_status`, `/referral`, `/referral_board`, `/start` (referral deep-link), `/calc`, `/remind`, `/cancel_remind`, `/reminds`, `/tr`, `/convert`, `/quiz`, `/guess_start`, `/guess`, `/guess_stop`, `/wordle`, `/wordle_stop`, `/poll`, `/anon_start`, `/anon_stop`, `/anon_report` (plus live anonymous delivery), force-join (`/forcejoin_on` + verify gate), `/owner`, `/system`, `/broadcast`, `/admin_logs`, `/personality`, `/engagement_*`, `/joke`, `/challenge`, `/analytics*`, `/track`, `/viral_now`, `/health`, `/agents`, `/myagent`, `/memory`, `/forget_me`, `/story` |
-| ⚠️ Simulated | `/vision` (canned image description), `/post`, `/schedule`, `/ban`, `/unban`, `/stats`, `/welcome`, `/pin`, `/leaderboard`, `/daily`, `/xp_leaderboard`, `/achievements`, `/docs`, `/doc_delete`, `/chat_with_doc`, `/newchat` (claims to clear history but does not), `/ad_*`, `/mod_config`, `/warn`, `/mute`, `/unmute`, `/reputation`, `/viral_preview`, `/viral_stats`, `/viral_post`, `/companion`, `/analyze` |
+| ✅ Real | `/ai`, `/ask`, `/code`, `/translate`, `/summarize`, `/image`, `/imagine`, `/vision`, `/slideshow`, `/tts`, `/stt`, `/cloud`, `/myfiles`, `/download`, `/cloud_status`, `/referral`, `/referral_board`, `/start` (referral deep-link), `/calc`, `/remind`, `/cancel_remind`, `/reminds`, `/tr`, `/convert`, `/quiz`, `/guess_start`, `/guess`, `/guess_stop`, `/wordle`, `/wordle_stop`, `/poll`, `/anon_start`, `/anon_stop`, `/anon_report` (plus live anonymous delivery), force-join (`/forcejoin_on` + verify gate), `/owner`, `/system`, `/broadcast`, `/broadcast_all`, `/admin_logs`, `/personality`, `/engagement_*`, `/joke`, `/challenge`, `/analytics*`, `/track`, `/viral_now`, `/viral_preview`, `/viral_stats`, `/viral_post`, `/post`, `/schedule`, `/pin`, `/ban`, `/unban`, `/stats`, `/welcome`, `/daily`, `/profile`, `/achievements`, `/xp_leaderboard`, `/leaderboard` (alias), `/docs`, `/doc_delete`, `/chat_with_doc`, `/ad_create`, `/ad_list`, `/ad_pause`, `/ad_resume`, `/ad_delete`, `/ad_stats`, `/mod_config`, `/warn`, `/mute`, `/unmute`, `/reputation`, `/health`, `/agents`, `/myagent`, `/memory`, `/forget_me`, `/newchat` (drops the chat's checkpoint thread), `/story` |
+| ⚠️ Simulated | — none. The last ten canned replies (`/vision`, `/leaderboard`, `/mod_config`, `/warn`, `/mute`, `/unmute`, `/reputation`, `/viral_preview`, `/viral_stats`, `/viral_post`) were replaced by real surfaces in the 2026-10-15 full-audit remediation (`bot/surface/moderation.py`, `bot/surface/viral.py`). |
+| ❌ Not registered | `/companion`, `/analyze` — listed in older READMEs, never registered as handlers; the personas are reached through auto-routing of ordinary messages. |
 
-Simulated commands reply with "(simulated)" or a canned string; they
-are on the roadmap (see `AUDIT_REPORT_2026-09-21.md` §12) but should
-not be treated as working features.
+Every registered command resolves to a real engine; the
+`tests/unit/test_surface_registration.py` guard fails CI if a stub string
+reappears. Moderation and viral commands are owner-only except `/reputation`
+for your own score (see `bot/surface/moderation.py`, `bot/surface/viral.py`).
 
 ### 🤖 AI (v2.0.0)
 | Command | Description |
@@ -420,8 +422,9 @@ not be treated as working features.
 | Command | Description |
 |---------|-------------|
 | `/viral_now` | Generate viral post |
-| `/viral_preview` | Preview viral post |
-| `/viral_stats` | Viral engine stats |
+| `/viral_preview` | Preview the best pending post (what `publish` would send next) |
+| `/viral_stats` | Viral engine stats (pending / published / average score) |
+| `/viral_post` | List the pending queue; `/viral_post publish [id]` sends one (owner only) |
 | `/ad_create <hours> <text>` | Create ad campaign |
 | `/ad_list` | List ad campaigns |
 | `/ad_pause <id>` | Pause campaign |
@@ -432,11 +435,11 @@ not be treated as working features.
 |---------|-------------|
 | `/mod_on` | Enable smart moderation |
 | `/mod_off` | Disable moderation |
-| `/mod_config` | Show moderation settings |
-| `/warn <user_id>` | Warn user |
-| `/mute <user_id> [min]` | Mute user |
-| `/unmute <user_id>` | Unmute user |
-| `/reputation [user_id]` | Show user reputation |
+| `/mod_config` | Show moderation settings; `/mod_config <anti_spam\|anti_flood\|link_filter\|profanity_filter> <on\|off>`, `max_warnings <1-10>`, `mute_minutes <1-10080>` (owner) |
+| `/warn <user_id>` | Warn user — auto-mute at `max_warnings` (owner) |
+| `/mute <user_id> [min]` | Mute user — recorded + Telegram `restrict_chat_member` attempted and reported honestly (owner) |
+| `/unmute <user_id>` | Unmute user (owner) |
+| `/reputation [user_id]` | Your reputation; another user's is owner-only |
 
 ### 🏆 Gamification
 | Command | Description |
@@ -500,7 +503,7 @@ make types       # mypy
 ```
 src/nexus_ai_agent/
 ├── adapters/                # Out-of-band adapters (caption unavailable shim, in-process job queue)
-├── agent/                   # Governance: approval, feedback, self-monitor, updater
+├── agent/                   # Governance: approval, self-monitor, updater
 ├── agents/                  # Persona agents (planner/executor/chat + model-tuned variants) & agent store
 ├── api/                     # FastAPI dashboard app
 ├── application/             # Hexagon core: image-generation app service + ports/ (typed seams)

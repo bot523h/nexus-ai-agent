@@ -21,11 +21,22 @@ Checks (stdlib only, no network, milliseconds):
 5. **ADR index agreement** — ``docs/architecture/adr/README.md`` lists exactly the
    ADR files that exist (plus the template, which is listed separately);
 6. **living pages are titled** — each ``docs/architecture/*.md`` page starts with a
-   single H1, so navigation and the docs index stay predictable.
+   single H1, so navigation and the docs index stay predictable;
+7. **no unresolved merge conflicts** — no tracked text file contains a Git conflict
+   marker (``<<<<<<<``, ``=======``, ``>>>>>>>``). A merge that was committed with its
+   markers intact corrupts the rendered document (and the tree) while every other
+   gate stays green, because none of them parse prose; this check makes that state a
+   red build.
+8. **execution-core mirror** — ``docs/architecture/EXECUTION_CORE.md`` restates the
+   I1–I10 invariant table; it must equal the canonical table in
+   ``tests/architecture/test_execution_contract_boundary.py`` row-for-row (identifiers,
+   enforcing symbols, proving test ids), rejecting a missing, duplicate, malformed, or
+   altered row.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -234,3 +245,289 @@ def test_architecture_pages_start_with_a_single_h1(path: Path) -> None:
     assert lines and lines[0].startswith("# "), f"{path.name} does not start with an H1"
     h1_count = sum(1 for line in lines if line.startswith("# "))
     assert h1_count == 1, f"{path.name} has {h1_count} H1 headings (expected exactly 1)"
+
+
+# --------------------------------------------------------------------------- #
+# 7. no unresolved merge-conflict markers in the tree
+# --------------------------------------------------------------------------- #
+#: The two unambiguous Git conflict markers: seven ``<``/``>`` characters at the
+#: start of a line followed by a space (and the incoming ref). The ``=======``
+#: separator is deliberately *not* matched on its own — a Setext H1 underline is
+#: exactly seven ``=`` — so a file counts as conflicted only when it carries both
+#: an opening and a closing marker.
+_CONFLICT_OPEN = re.compile(r"^<{7} \S", re.MULTILINE)
+_CONFLICT_CLOSE = re.compile(r"^>{7} \S", re.MULTILINE)
+
+#: Text extensions worth scanning; binary artifacts are skipped by construction.
+_SCANNED_SUFFIXES = {
+    ".md",
+    ".py",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".toml",
+    ".txt",
+    ".cfg",
+    ".ini",
+    ".sh",
+    ".html",
+    ".css",
+    ".js",
+    ".ts",
+    ".mako",
+    ".sql",
+    ".env",
+}
+
+#: Directories that never carry first-party sources (VCS, venvs, caches, deps).
+_SKIPPED_DIRS = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    ".mypy_cache",
+    ".ruff_cache",
+    "__pycache__",
+    ".pytest_cache",
+    ".openhands",
+}
+
+
+def _tracked_text_files() -> list[Path]:
+    """Every first-party text file in the tree (sorted, deterministic)."""
+    files: list[Path] = []
+    for path in REPO_ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in _SKIPPED_DIRS for part in path.relative_to(REPO_ROOT).parts):
+            continue
+        if path.suffix in _SCANNED_SUFFIXES:
+            files.append(path)
+    return sorted(files)
+
+
+def _has_conflict_marker(text: str) -> bool:
+    """A file is conflicted iff it opens with ``<<<<<<<`` **and** closes with ``>>>>>>>``."""
+    return bool(_CONFLICT_OPEN.search(text)) and bool(_CONFLICT_CLOSE.search(text))
+
+
+def test_no_unresolved_merge_conflict_markers_anywhere() -> None:
+    conflicted: list[str] = []
+    for path in _tracked_text_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if _has_conflict_marker(text):
+            conflicted.append(str(path.relative_to(REPO_ROOT)))
+    assert not conflicted, (
+        "unresolved Git conflict markers committed to the tree — resolve the merge "
+        f"before pushing: {conflicted}"
+    )
+
+
+def test_conflict_marker_scanner_detects_a_real_conflict() -> None:
+    """Positive control: the scanner must flag a genuine conflict block (vacuity guard)."""
+    sample = "intro\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> 93f75d5 (docs: example)\noutro\n"
+    assert _has_conflict_marker(sample)
+    # A Setext H1 underline of exactly seven ``=`` is legitimate Markdown and must
+    # not be mistaken for a conflict separator.
+    assert not _has_conflict_marker("Title\n=======\n\nbody\n")
+
+
+# --------------------------------------------------------------------------- #
+# 8. The EXECUTION_CORE.md invariant mirror stays in lockstep with its source
+# --------------------------------------------------------------------------- #
+EXECUTION_CORE = DOCS / "architecture" / "EXECUTION_CORE.md"
+EXECUTION_BOUNDARY_TEST = REPO_ROOT / "tests/architecture/test_execution_contract_boundary.py"
+
+#: A well-formed invariant row: ``| I1 | invariant | `symbol` | `test` |``. The
+#: invariant cell is the *only* place ``I<n>`` may appear in the row, so a stray
+#: identifier in the prose column is caught too.
+_INVARIANT_ROW = re.compile(
+    r"^\|\s*(I\d+)\s*\|\s*(?:(?!I\d)[^|])*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*$",
+    re.MULTILINE,
+)
+#: A row that *starts* like an invariant row (identifier in the first cell) but is
+#: not a well-formed one — it would otherwise be silently skipped by the parser.
+_NEAR_MISS_INVARIANT_ROW = re.compile(r"^\|\s*(I\d+)\s*\|", re.MULTILINE)
+
+
+def _load_invariant_enforcement() -> dict[str, tuple[str, str]]:
+    """Import the canonical I1–I10 table from its enforcing test module."""
+    spec = importlib.util.spec_from_file_location(
+        "_execution_contract_boundary", EXECUTION_BOUNDARY_TEST
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return dict(module.INVARIANT_ENFORCEMENT)
+
+
+def _parse_invariant_rows(text: str) -> list[tuple[str, str, str]]:
+    """Parse ``(invariant, symbol, test)`` rows from the doc, in file order.
+
+    Deliberately returns a *list*, not a dict: a dict would silently collapse two
+    rows that share an identifier, hiding a duplicate. A row that starts with an
+    ``I<n>`` cell but is not well-formed raises, so it cannot be skipped in silence.
+    """
+    well_formed = {(m.group(1), m.start()) for m in _INVARIANT_ROW.finditer(text)}
+    rows: list[tuple[str, str, str]] = []
+    for match in _INVARIANT_ROW.finditer(text):
+        rows.append((match.group(1), match.group(2), match.group(3)))
+    for match in _NEAR_MISS_INVARIANT_ROW.finditer(text):
+        if (match.group(1), match.start()) not in well_formed:
+            raise AssertionError(
+                "malformed invariant row in EXECUTION_CORE.md (would be silently "
+                f"ignored by the parser): {match.group(0)!r}"
+            )
+    return rows
+
+
+def _mirror_violations(
+    documented: list[tuple[str, str, str]], canonical: dict[str, tuple[str, str]]
+) -> list[str]:
+    """Return human-readable ways ``documented`` differs from ``canonical``.
+
+    Empty list == the mirror is exact. Detects, in order: a malformed row, a
+    duplicate identifier, a missing identifier, an unexpected extra identifier, a
+    changed enforcing symbol, a changed proving test, and a wrong invariant count.
+    """
+    violations: list[str] = []
+
+    identifiers = [invariant for invariant, _symbol, _test in documented]
+    for invariant in sorted({i for i in identifiers if identifiers.count(i) > 1}):
+        violations.append(f"duplicate invariant row: {invariant}")
+
+    documented_map: dict[str, tuple[str, str]] = {}
+    for invariant, symbol, test in documented:
+        documented_map.setdefault(invariant, (symbol, test))
+
+    for invariant in sorted(set(canonical) - set(documented_map)):
+        violations.append(f"missing invariant row: {invariant}")
+    for invariant in sorted(set(documented_map) - set(canonical)):
+        violations.append(f"unexpected invariant row: {invariant}")
+    for invariant in sorted(set(canonical) & set(documented_map)):
+        symbol, test = documented_map[invariant]
+        expected_symbol, expected_test = canonical[invariant]
+        if symbol != expected_symbol:
+            violations.append(
+                f"{invariant} enforcing symbol: doc={symbol!r} canonical={expected_symbol!r}"
+            )
+        if test != expected_test:
+            violations.append(f"{invariant} proving test: doc={test!r} canonical={expected_test!r}")
+
+    if len(documented) != len(canonical):
+        violations.append(f"invariant row count: doc={len(documented)} canonical={len(canonical)}")
+    return violations
+
+
+def test_execution_core_doc_mirrors_the_invariant_table() -> None:
+    """The doc's I1–I10 matrix must equal the enforcing table, row-for-row.
+
+    ``docs/architecture/EXECUTION_CORE.md`` restates the invariant table that is
+    canonically defined in ``tests/architecture/test_execution_contract_boundary.py``.
+    A restated table can silently drift from the code that enforces it, so this check
+    pins the copy to its source: same identifiers, same enforcing symbols, same proving
+    tests — and no missing, duplicate, extra, or malformed row.
+    """
+    documented = _parse_invariant_rows(EXECUTION_CORE.read_text(encoding="utf-8"))
+    canonical = _load_invariant_enforcement()
+    violations = _mirror_violations(documented, canonical)
+    assert not violations, "EXECUTION_CORE.md drifted from the canonical table: " + "; ".join(
+        violations
+    )
+
+
+def test_execution_core_invariant_parser_sees_every_row() -> None:
+    """Vacuity guard: the parser must find exactly one row per canonical invariant."""
+    documented = _parse_invariant_rows(EXECUTION_CORE.read_text(encoding="utf-8"))
+    assert [invariant for invariant, _symbol, _test in documented] == sorted(
+        _load_invariant_enforcement(), key=lambda i: int(i[1:])
+    ), "the mirror parser did not read every invariant row (would pass vacuously)"
+
+
+# -- negative controls: each drives the *real* comparison helper and must be flagged -
+
+
+def test_mirror_flags_a_missing_row() -> None:
+    documented = _parse_invariant_rows(EXECUTION_CORE.read_text(encoding="utf-8"))
+    canonical = _load_invariant_enforcement()
+    dropped = [row for row in documented if row[0] != "I10"]
+    assert any("missing invariant row: I10" in v for v in _mirror_violations(dropped, canonical))
+
+
+def test_mirror_flags_a_duplicate_row() -> None:
+    documented = _parse_invariant_rows(EXECUTION_CORE.read_text(encoding="utf-8"))
+    canonical = _load_invariant_enforcement()
+    duplicated = [*documented, next(row for row in documented if row[0] == "I1")]
+    assert any(
+        "duplicate invariant row: I1" in v for v in _mirror_violations(duplicated, canonical)
+    )
+
+
+def test_mirror_flags_a_changed_enforcing_symbol() -> None:
+    documented = _parse_invariant_rows(EXECUTION_CORE.read_text(encoding="utf-8"))
+    canonical = _load_invariant_enforcement()
+    mutated_symbol = "nexus_ai_agent.adapters.in_process_job_queue:InProcessJobQueue._mark_pending"
+    altered = [
+        (invariant, mutated_symbol if invariant == "I3" else symbol, test)
+        for invariant, symbol, test in documented
+    ]
+    assert any("I3 enforcing symbol" in v for v in _mirror_violations(altered, canonical))
+
+
+def test_mirror_flags_a_changed_proving_test() -> None:
+    documented = _parse_invariant_rows(EXECUTION_CORE.read_text(encoding="utf-8"))
+    canonical = _load_invariant_enforcement()
+    altered = [
+        (invariant, symbol, "tests/integration/test_execution_native_backend.py::test_bogus")
+        if invariant == "I3"
+        else (invariant, symbol, test)
+        for invariant, symbol, test in documented
+    ]
+    assert any("I3 proving test" in v for v in _mirror_violations(altered, canonical))
+
+
+def test_mirror_flags_a_wrong_row_count() -> None:
+    documented = _parse_invariant_rows(EXECUTION_CORE.read_text(encoding="utf-8"))
+    canonical = _load_invariant_enforcement()
+    # A well-formed extra row for an unknown invariant: extra + wrong count, no missing.
+    extra = [*documented, ("I11", documented[0][1], documented[0][2])]
+    violations = _mirror_violations(extra, canonical)
+    assert any("unexpected invariant row: I11" in v for v in violations)
+    assert any("invariant row count" in v for v in violations)
+
+
+def test_parser_flags_a_malformed_invariant_row() -> None:
+    malformed = "| I3 | only the current fence may complete | `sym` | not-a-backticked-test |\n"
+    with pytest.raises(AssertionError, match="malformed invariant row"):
+        _parse_invariant_rows(malformed)
+
+
+def test_parser_flags_an_identifier_in_the_prose_column() -> None:
+    # The invariant must live in the identifier cell, not be smuggled into the prose.
+    smuggled = "| I1 | not I2 | `a:b` | `tests/x.py::y` |\n"
+    with pytest.raises(AssertionError, match="malformed invariant row"):
+        _parse_invariant_rows(smuggled)
+
+
+def test_agents_and_overview_point_at_the_product_frame() -> None:
+    """The app-first frame must stay discoverable: AGENTS.md and OVERVIEW.md link to it."""
+    frame = DOCS / "architecture" / "PRODUCT_FRAME.md"
+    assert frame.is_file(), "docs/architecture/PRODUCT_FRAME.md is missing"
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    overview = (DOCS / "architecture" / "OVERVIEW.md").read_text(encoding="utf-8")
+
+    def _links_to_frame(text: str, base: Path) -> bool:
+        # A Markdown link (not a bare path mention) whose destination resolves to the frame.
+        for target in _LINK.findall(text):
+            path = target.split("#", 1)[0]
+            if path and (base / path).resolve() == frame.resolve():
+                return True
+        return False
+
+    assert _links_to_frame(agents, REPO_ROOT), "AGENTS.md lost the product-frame link"
+    assert _links_to_frame(overview, DOCS / "architecture"), (
+        "OVERVIEW.md lost the product-frame link"
+    )

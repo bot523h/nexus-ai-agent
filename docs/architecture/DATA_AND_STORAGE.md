@@ -2,7 +2,7 @@
 
 **Status:** Living document
 **Scope:** every store the runtime touches, what owns it, how it is migrated, and how data leaves
-**Verified against:** `main` @ `7573249`
+**Verified against:** `arena/94286869-nexus-ai-agent` (base `main` @ `d7bbd147`)
 
 The system uses **one logical data model with two physical backends** (SQLite for local, PostgreSQL/Neon for scale-to-zero) plus three purpose-built stores. Nothing is shared by accident: each store has exactly one owner module.
 
@@ -13,7 +13,7 @@ The system uses **one logical data model with two physical backends** (SQLite fo
 ```mermaid
 flowchart LR
     subgraph appdb["Application DB (SQLModel + Alembic)"]
-        tables["31 tables<br/>users · messages · memory · gamification · knowledge · approvals"]
+        tables["37 tables<br/>identity · users · messages · memory · knowledge · approvals"]
     end
     subgraph sidecar["Queue sidecar (SQLite, own DDL)"]
         q["nexus_job_queue<br/>id · job_type · idempotency_key UNIQUE · payload · status"]
@@ -35,7 +35,7 @@ flowchart LR
 
 | Store | Owner module | Backend | Lifetime | Notes |
 |---|---|---|---|---|
-| Application DB | `storage/models.py` (+ 2 tables in `features/referral.py`) | SQLite (WAL) or PostgreSQL | durable | 31 tables; the product's source of truth for user-visible history |
+| Application DB | `storage/models.py` (+ 2 tables in `features/referral.py`) | SQLite (WAL) or PostgreSQL | durable | 37 tables; the product's source of truth for user-visible history and application-owned identity |
 | Job queue | `adapters/in_process_job_queue.py` | SQLite sidecar `<db>.jobs.sqlite3` | durable, disposable | owns its table and **no** Alembic migration; payloads must pass adapter validation |
 | Checkpoints | `storage/langgraph_checkpoint.py` (`get_checkpointer`) | SQLite or PostgreSQL | disposable | LangGraph runtime state only; deletion never touches messages |
 | Lifecycle index | `storage/checkpoint_lifecycle*.py` | PG table `nexus_checkpoint_lifecycle` / SQLite sidecar table | durable | metadata about checkpoints: age, lineage, lock state, access |
@@ -46,17 +46,7 @@ flowchart LR
 ## 2. Schema management
 
 - **Alembic is the only schema authority.** The stopgap `create_all` path was retired (D7); startup either verifies head or runs the chain under a migration lock.
-- Chain (3 revisions, current head `7c2f9d41e8a3`):
-
-```text
-47903d282ede  initial schema
-   └── f4a9c2e71b08  nexus_checkpoint_lifecycle (PostgreSQL only)
-          └── 7c2f9d41e8a3  ai-memory consent columns on usermemory  ← HEAD
-```
-
-- **URL normalisation** accepts `postgresql://`, `postgres://`, `postgresql+asyncpg://` and rejects everything else with a clear error (`storage/db.py::normalize_database_url`).
-- **Legacy adoption instead of replay:** an existing, unstamped SQLite database or a pre-Alembic PostgreSQL database is *inspected, decided, then stamped* (`storage/adopt_pg.py`, `nexus adopt-pg`) — never re-created.
-- **Drift is a failure, not a repair:** `storage/checkpoint_fingerprint.py` compares a live fingerprint to a golden manifest; updating goldens is human-only (`nexus golden update`, enforced by tests).
+- **Drift is a failure, not a repair:** `storage/checkpoint_fingerprint.py` compares a live fingerprint to a golden manifest; updating goldens is human-only (`nexus checkpoints golden update --yes`, enforced by tests). The PostgreSQL golden includes the Alembic head, so every new revision is followed by a reviewed golden update (last: `d4e1c0a79b21`, fingerprint `5aba181f…` — regenerated on PostgreSQL 16.2 with the old head reproduced as the test vector first). The SQLite goldens stay head-independent for a fresh `SqliteSaver.setup()` database and did not change.
 - **Concurrency:** migrations take a lock (`storage/migrations.py::migration_lock`); concurrent first-run migrations are covered by `tests/integration/test_migrate_race_condition.py` and the CI `migrate-postgres` job (real `pgvector/pgvector:pg16`), which also asserts the stamp equals the head revision and that a second `nexus migrate` is a no-op.
 
 ## 3. Entity ownership (naming discipline)
@@ -65,6 +55,7 @@ SQLModel classes are the schema; product names are the contract.
 
 | Aggregate | Table(s) | Owner |
 |---|---|---|
+| Canonical application identity | `appprincipal`, `appchannelbinding`, `appproject`, `appprojectmembership` | `application/principal.py`, `adapters/sql_application_directory.py` |
 | User / chat history | `user`, `chat`, `message` | `features/ai_chat.py`, `storage/models.py` |
 | Memory | `usermemory` (+ `ai_memory_consent*`), `useractiveagent`, `documentchunk`, `knowledgecache` | `features/ai_memory.py`, `knowledge/` |
 | Community | `referral`, `referralcode`, `userreputation`, `userxp`, `quizzescore`, `anonsession` | `features/{referral,gamification,anonymous_chat}.py` |
@@ -95,7 +86,7 @@ Full policy text: [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md), [`RETENTION_DECISION
 
 ## 6. What never enters a store
 
-- No credentials, tokens, or raw prompts in the operation journal or lifecycle metadata (redacted error codes only).
+- No credentials, tokens, or raw prompts in the operation journal or lifecycle metadata (redacted error codes only). Schema-2 creative queue payloads and passports carry the bounded validated intent plus a source-text SHA-256, not the raw prompt or model rationale.
 - No PII in dashboard responses (`api/dashboard.py`, `tests/unit/test_dashboard_privacy.py`).
 - No user prompt egress to a training-capable free endpoint unless the strict-privacy flag is off and the user consented (`features/ai_memory.py` consent gate + `LLM_PROVIDERS.md`).
 - No manifest, tone template, or pack resource may contain an executable key (§[`CREATIVE_STUDIO.md`](CREATIVE_STUDIO.md) §3).
