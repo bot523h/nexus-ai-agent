@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-28T08:31:47Z",
+  "updated_at": "2026-10-28T08:32:50Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7119,7 +7119,7 @@
       "title": "Repair existing PR #124: feat(spine): proof-carrying execution trace",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/124 on current main, preserving intent. Re-read live head/base/reviews/checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7142,7 +7142,13 @@
         "tests/unit/test_creative_render_jobs.py",
         "tests/unit/test_creative_surface.py",
         "tests/unit/test_execution_trace_causality.py"
-      ]
+      ],
+      "agent_branch": "arena/pr-repair-124-20261028",
+      "claimed_at": "2026-10-28T08:32:50Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     },
     {
       "task": "pr-repair-246",
