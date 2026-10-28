@@ -364,6 +364,8 @@ def test_inspect_does_not_claim_resumability_it_has_no_evidence_for(cli_env: Pat
     assert entry["would_delete"] is False  # retained, fail-closed
     assert entry["resumable_within_window"] is False  # but NOT claimed resumable
     assert entry["pinned"] == "unknown"
+
+
 def test_inspect_restores_access_context_when_backend_open_fails(
     cli_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
