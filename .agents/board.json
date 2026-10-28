@@ -7390,7 +7390,7 @@
       "title": "REL-006: rclone provider failure must not become an empty listing",
       "zone": "storage-provider-rclone",
       "priority": "P2",
-      "status": "active",
+      "status": "done",
       "scope": "Fix src/nexus_ai_agent/storage/providers/rclone.py list_files: return a typed error for non-zero exits and for provider unavailability/not-configured, instead of a silent empty list. Bounded, redacted diagnostics.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7413,7 +7413,7 @@
       "claimed_at": "2026-10-28T08:47:59Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "",
+      "note": " | Reconciled during NEXUS-PRC-2026-10-28 convergence: rel-006 is done on origin/main (gen 2); this branch carried a stale active copy (gen 1). Marked done to match the authoritative board; no code change.",
       "generation": 1
     }
   ],
