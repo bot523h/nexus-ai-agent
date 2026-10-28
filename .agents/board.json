@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-28T12:20:38Z",
+  "updated_at": "2026-10-28T14:51:19Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -4897,7 +4897,7 @@
       "title": "Repair existing PR #96: task-192: Production/DR/Deployment truth — executable restore drill, actionable R2 taxonomy, readiness+identity probes, version-gated deploy smoke",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "deferred",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/96 on its existing branch arena/01a0dee1-nexus-ai-agent, preserving intent and published history. Snapshot head 01eb2217f44311631eb250e6e23df888f1c78e45; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -4940,10 +4940,10 @@
         "tests/unit/test_version_command.py"
       ],
       "agent_branch": "arena/01a0dee1-nexus-ai-agent",
-      "claimed_at": "2026-10-28T12:20:38Z",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "Registered for a future authorized repair session on arena/01a0dee1-nexus-ai-agent; not assigned or claimed by this registration.",
       "note": ""
     },
@@ -7443,6 +7443,14 @@
       "resolved": true,
       "resolved_at": "2026-10-27T14:00:00Z",
       "resolution": "zone freed (pr-repair-240 released) and task-258 delivered in PR #199 (merged 6ae7042a83)."
+    },
+    {
+      "task": "pr-repair-96",
+      "deferred_by_branch": "arena/01a0dee1-nexus-ai-agent",
+      "at": "2026-10-28T14:51:19Z",
+      "reason_fa": "به‌دلیل ثبت‌نشدن آزادسازی REL-006 روی main پس از merge شدن PR#268، اصلاح PR#96 فعلاً متوقف شد تا claim دیگر را مسدود نکند.",
+      "reason_en": "PR #96 cannot proceed until canonical main records the post-merge release of REL-006; defer this repair claim to avoid holding docs and deployment paths while owner transition is unavailable.",
+      "resume_when": "canonical main records REL-006 release and pr-repair-96 is lawfully reclaimed"
     }
   ],
   "next_work": [
