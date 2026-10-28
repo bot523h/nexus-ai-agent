@@ -364,3 +364,194 @@ def test_inspect_does_not_claim_resumability_it_has_no_evidence_for(cli_env: Pat
     assert entry["would_delete"] is False  # retained, fail-closed
     assert entry["resumable_within_window"] is False  # but NOT claimed resumable
     assert entry["pinned"] == "unknown"
+def test_inspect_restores_access_context_when_backend_open_fails(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed setup must not leak the admin access context (task-250).
+
+    ``inspect_checkpoints`` raises the access context to ``"admin"`` *before*
+    it opens the checkpoint backend.  When that open fails (a missing driver,
+    an unreachable database), the reset used to be skipped entirely because the
+    only ``finally`` started after the setup — so ``"admin"`` stayed installed
+    in the caller's context.  That silently disables every lifecycle access
+    touch (``LifecycleRecordingSaver`` only records while the context is
+    ``"user"``) and poisons whatever runs next in the same context.
+    """
+    from nexus_ai_agent import cli as cli_module
+    from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
+
+    assert nexus_access_context.get() == "system"
+
+    def _unavailable_backend() -> object:
+        raise ModuleNotFoundError("No module named 'psycopg'")
+
+    monkeypatch.setattr(cli_module, "_open_checkpoint_backend", _unavailable_backend)
+    with pytest.raises(ModuleNotFoundError):
+        cli_module.inspect_checkpoints(json_output=False, thread=None)
+
+    assert nexus_access_context.get() == "system"
+
+
+def test_inspect_restores_access_context_when_cleanup_fails(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit path G: a raising ``close()`` must not skip the context reset (task-250).
+
+    The setup guard closes paths A/B; this test pins the *cleanup* half of the
+    same invariant.  ``adapter.close()`` used to run before the reset inside the
+    outer ``finally``, so a failing close skipped the reset and leaked
+    ``"admin"`` into the caller's context — the same silent access-touch
+    disablement the task-250 leak caused.  The backend is stubbed so no file or
+    connection is involved.
+    """
+    from nexus_ai_agent import cli as cli_module
+    from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
+
+    class _Adapter:
+        def list_threads(self) -> list[str]:
+            return []
+
+        def list_checkpoints(self, thread_id: str) -> list[object]:
+            return []
+
+        def estimate_thread_bytes(self, thread_id: str) -> int:
+            return 0
+
+        def close(self) -> None:
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(cli_module, "_open_checkpoint_backend", lambda: (_Adapter(), None))
+    monkeypatch.setattr(cli_module, "_open_lifecycle_store", lambda *args, **kwargs: None)
+
+    assert nexus_access_context.get() == "system"
+    with pytest.raises(RuntimeError, match="close failed"):
+        cli_module.inspect_checkpoints(json_output=False, thread=None)
+
+    assert nexus_access_context.get() == "system"
+
+
+def test_access_context_is_independent_of_a_previous_failed_inspect() -> None:
+    """Order-sensitivity half of the regression (task-250).
+
+    The next thing to run in the same context must observe the untouched
+    default, not a leftover ``"admin"`` from the failed command above.  This
+    test is red whenever :func:`test_inspect_restores_access_context_when_backend_open_fails`
+    leaks, so the leak cannot come back silently.
+    """
+    from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
+
+    assert nexus_access_context.get() == "system"
+
+
+class _CountingAdapter:
+    def __init__(self, *, body_error: bool = False, close_error: bool = False) -> None:
+        self.body_error = body_error
+        self.close_error = close_error
+        self.closes = 0
+
+    def list_threads(self) -> list[str]:
+        if self.body_error:
+            raise LookupError("body failed")
+        return []
+
+    def list_checkpoints(self, thread_id: str) -> list[object]:
+        return []
+
+    def estimate_thread_bytes(self, thread_id: str) -> int:
+        return 0
+
+    def close(self) -> None:
+        self.closes += 1
+        if self.close_error:
+            raise RuntimeError("close failed")
+
+
+class _ContextSpy:
+    def __init__(self, real: object) -> None:
+        self._real = real
+        self.tokens: list[object] = []
+        self.resets: list[object] = []
+
+    def set(self, value: str) -> object:
+        token = self._real.set(value)  # type: ignore[attr-defined]
+        self.tokens.append(token)
+        return token
+
+    def reset(self, token: object) -> None:
+        self.resets.append(token)
+        self._real.reset(token)  # type: ignore[attr-defined]
+
+    def get(self) -> str:
+        return self._real.get()  # type: ignore[attr-defined,no-any-return]
+
+
+def test_inspect_closes_partial_setup_and_resets_token_once(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lifecycle-open failure after adapter acquisition must close both."""
+    from nexus_ai_agent import cli as cli_module
+    from nexus_ai_agent.adapters.langgraph import lifecycle_recording as recording
+
+    spy = _ContextSpy(recording.nexus_access_context)
+    monkeypatch.setattr(recording, "nexus_access_context", spy)
+    adapter = _CountingAdapter()
+    monkeypatch.setattr(cli_module, "_open_checkpoint_backend", lambda: (adapter, None))
+
+    def _lifecycle_unavailable(*args: object, **kwargs: object) -> None:
+        raise OSError("lifecycle unavailable")
+
+    monkeypatch.setattr(cli_module, "_open_lifecycle_store", _lifecycle_unavailable)
+    with pytest.raises(OSError, match="lifecycle unavailable"):
+        cli_module.inspect_checkpoints(json_output=False, thread=None)
+    assert adapter.closes == 1, "partially acquired adapter was not closed"
+    assert spy.get() == "system"
+    assert len(spy.resets) == 1 and spy.resets[0] is spy.tokens[0]
+
+
+def test_inspect_preserves_original_body_error_when_cleanup_fails(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cleanup exception must not replace the original inspect failure."""
+    from nexus_ai_agent import cli as cli_module
+    from nexus_ai_agent.adapters.langgraph import lifecycle_recording as recording
+
+    spy = _ContextSpy(recording.nexus_access_context)
+    monkeypatch.setattr(recording, "nexus_access_context", spy)
+    adapter = _CountingAdapter(body_error=True, close_error=True)
+    monkeypatch.setattr(cli_module, "_open_checkpoint_backend", lambda: (adapter, None))
+    monkeypatch.setattr(cli_module, "_open_lifecycle_store", lambda *args, **kwargs: None)
+
+    with pytest.raises(LookupError, match="body failed"):
+        cli_module.inspect_checkpoints(json_output=False, thread=None)
+    assert adapter.closes == 1
+    assert spy.get() == "system"
+    assert len(spy.resets) == 1
+
+
+def test_repeated_inspects_use_fresh_tokens_and_do_not_poison_next_call(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A prior failed call cannot change the next call's effective context."""
+    from nexus_ai_agent import cli as cli_module
+    from nexus_ai_agent.adapters.langgraph import lifecycle_recording as recording
+
+    spy = _ContextSpy(recording.nexus_access_context)
+    monkeypatch.setattr(recording, "nexus_access_context", spy)
+
+    def _backend_unavailable() -> object:
+        raise ModuleNotFoundError("first call failed")
+
+    monkeypatch.setattr(cli_module, "_open_checkpoint_backend", _backend_unavailable)
+    with pytest.raises(ModuleNotFoundError, match="first call failed"):
+        cli_module.inspect_checkpoints(json_output=False, thread=None)
+    assert spy.get() == "system"
+
+    adapter = _CountingAdapter()
+    monkeypatch.setattr(cli_module, "_open_checkpoint_backend", lambda: (adapter, None))
+    monkeypatch.setattr(cli_module, "_open_lifecycle_store", lambda *args, **kwargs: None)
+    cli_module.inspect_checkpoints(json_output=False, thread=None)
+
+    assert spy.get() == "system"
+    assert adapter.closes == 1
+    assert len(spy.tokens) == len(spy.resets) == 2
+    assert spy.resets == spy.tokens
