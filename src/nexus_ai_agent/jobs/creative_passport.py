@@ -337,7 +337,7 @@ def archive_trim_evidence(
         raise CreativePassportError(f"archived output failed independent verification: {reason}")
 
     try:
-        evidence = runtime_evidence()
+        evidence = runtime_evidence(result)
     except Exception as exc:  # noqa: BLE001 - missing registry facts invalidate the passport
         raise CreativePassportError("timeline.trim capability/policy evidence unavailable") from exc
     input_asset = StoredAsset(
@@ -376,8 +376,8 @@ def archive_trim_evidence(
     )
 
 
-def runtime_evidence() -> dict[str, Any]:
-    """Snapshot the capability/policy facts the existing worker can expose."""
+def runtime_evidence(result: Mapping[str, object] | None = None) -> dict[str, Any]:
+    """Return legacy facts or the actual canonical execution snapshot."""
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 
     registry = build_runtime_registry()
@@ -388,7 +388,7 @@ def runtime_evidence() -> dict[str, Any]:
         version = importlib.metadata.version("nexus-ai-agent")
     except importlib.metadata.PackageNotFoundError:
         version = "source-checkout"
-    return {
+    evidence: dict[str, Any] = {
         "capability": description.model_dump(mode="json"),
         "policy": {
             "operation_id": decision.operation_id,
@@ -412,6 +412,149 @@ def runtime_evidence() -> dict[str, Any]:
             "render_operation": TIMELINE_TRIM_OPERATION,
         },
     }
+    canonical = result.get("canonical_execution") if result is not None else None
+    if canonical is None:
+        return evidence
+    if not isinstance(canonical, dict):
+        raise CreativePassportError("canonical execution evidence is not an object")
+    for key in ("capability", "policy", "authorization"):
+        value = canonical.get(key)
+        if not isinstance(value, dict):
+            raise CreativePassportError(f"canonical execution omitted {key} evidence")
+        evidence[key] = dict(value)
+    command_result = canonical.get("command_result")
+    if not isinstance(command_result, dict):
+        raise CreativePassportError("canonical execution omitted its CommandResult")
+    evidence["canonical_execution"] = dict(canonical)
+    evidence["runtime"].update(
+        {
+            "command_schema_version": 2,
+            "commandbus_transaction_id": command_result.get("transaction_id"),
+            "project_revision": command_result.get("state_revision"),
+            "project_state_hash": command_result.get("state_hash"),
+        }
+    )
+    return evidence
+
+
+def _canonical_parts(
+    payload: Any,  # noqa: ANN401 - CreativeRenderPayload, imported lazily to avoid a cycle
+    evidence: Mapping[str, Any],
+    *,
+    project_id: str,
+    input_asset: StoredAsset,
+) -> dict[str, dict[str, Any]]:
+    """Cross-check all schema-2 facts before they become passport lineage."""
+
+    names = (
+        "intent",
+        "command",
+        "command_result",
+        "edit_transaction",
+        "project",
+        "authorization",
+    )
+    parts: dict[str, dict[str, Any]] = {}
+    for name in names:
+        value = evidence.get(name)
+        if not isinstance(value, dict):
+            raise CreativePassportError(f"canonical execution omitted {name}")
+        parts[name] = dict(value)
+    if evidence.get("schema_version") != 2:
+        raise CreativePassportError("canonical execution has an unsupported schema")
+
+    intent = parts["intent"]
+    command = parts["command"]
+    result = parts["command_result"]
+    transaction = parts["edit_transaction"]
+    project = parts["project"]
+    authorization = parts["authorization"]
+    if intent != payload.intent.model_dump(mode="json"):
+        raise CreativePassportError("canonical intent evidence differs from the durable request")
+    if (
+        command.get("schema_version") != 2
+        or command.get("operation") != TIMELINE_TRIM_OPERATION
+        or command.get("actor") != {"kind": "user", "actor_id": payload.principal_id}
+        or command.get("input") != payload.intent.input
+        or command.get("idempotency_key") != payload.idempotency_key
+        or command.get("target", {}).get("project_id") != project_id
+        or command.get("trace_id") != payload.intent.proposal_id
+    ):
+        raise CreativePassportError("canonical TypedCommand does not match the durable request")
+    provenance = command.get("provenance")
+    request_context = command.get("request_context")
+    if (
+        not isinstance(provenance, dict)
+        or provenance.get("source") != "user"
+        or provenance.get("source_id") != payload.principal_id
+        or not isinstance(request_context, dict)
+        or request_context.get("request_id") != payload.intent.intent_id
+    ):
+        raise CreativePassportError("canonical command provenance/request identity is inconsistent")
+
+    refs = command.get("input_refs")
+    if not isinstance(refs, list) or len(refs) != 1 or not isinstance(refs[0], dict):
+        raise CreativePassportError("canonical command must pin exactly one source asset")
+    metadata = refs[0].get("metadata")
+    if (
+        refs[0].get("project_id") != project_id
+        or refs[0].get("ref_id") != input_asset.logical_asset_id
+        or not isinstance(metadata, dict)
+        or metadata.get("content_sha256") != input_asset.sha256
+    ):
+        raise CreativePassportError("canonical command is not bound to the measured source bytes")
+
+    preconditions = command.get("preconditions")
+    transaction_id = result.get("transaction_id")
+    revision = result.get("state_revision")
+    parent_revision = transaction.get("parent_revision")
+    if (
+        result.get("status") != "applied"
+        or not isinstance(transaction_id, str)
+        or not transaction_id.startswith("tx_")
+        or transaction.get("transaction_id") != transaction_id
+        or transaction.get("command_id") != command.get("command_id")
+        or transaction.get("operation") != TIMELINE_TRIM_OPERATION
+        or not isinstance(revision, int)
+        or revision < 1
+        or parent_revision != revision - 1
+        or project.get("state_revision") != revision
+        or project.get("project_id") != project_id
+        or project.get("state_storage") != "attempt_scoped_in_memory"
+        or not isinstance(preconditions, dict)
+        or preconditions.get("state_revision") != parent_revision
+        or preconditions.get("state_hash") != transaction.get("previous_state_hash")
+        or result.get("state_hash") != transaction.get("new_state_hash")
+        or project.get("state_hash") != result.get("state_hash")
+    ):
+        raise CreativePassportError("canonical transaction/revision/state-hash evidence diverges")
+    for state_hash in (
+        result.get("state_hash"),
+        transaction.get("previous_state_hash"),
+        transaction.get("new_state_hash"),
+    ):
+        if not isinstance(state_hash, str) or not state_hash.startswith("sha256:"):
+            raise CreativePassportError("canonical project state hash is missing or malformed")
+
+    permissions = authorization.get("permissions")
+    permissions_valid = (
+        isinstance(permissions, list)
+        and all(isinstance(permission, str) for permission in permissions)
+        and {"project:read", "project:write"}.issubset(set(permissions))
+    )
+    if (
+        authorization.get("status") != "authorized"
+        or authorization.get("persistent") is not True
+        or authorization.get("principal_id") != payload.principal_id
+        or authorization.get("actor_id") != payload.principal_id
+        or authorization.get("project_id") != project_id
+        or authorization.get("channel_binding_id") != payload.channel_binding_id
+        or authorization.get("decision_source") != "SQLApplicationDirectory.authorize"
+        or authorization.get("binding_decision_source") != "SQLApplicationDirectory.require_binding"
+        or not permissions_valid
+    ):
+        raise CreativePassportError("canonical persistent authorization evidence is incomplete")
+    return parts
 
 
 def build_passport(
@@ -459,40 +602,120 @@ def build_passport(
     if not isinstance(lane_ir_hash, str) or not lane_ir_hash.startswith("sha256:"):
         raise CreativePassportError("render result omitted canonical lane IR hash")
 
-    intent = {
-        "intent_kind": "CreativeRenderPayloadProjection",
-        "command": creative_payload.command,
-        "surface_operation": creative_payload.operation,
-        "operation_id": canonical_operation,
-        "args": list(creative_payload.args),
-        "media_duration_us": creative_payload.media_duration_us,
-        "input_asset_id": input_asset.logical_asset_id,
-        "input_asset_sha256": input_asset.sha256,
-    }
-    intent_id = content_id("intent", intent)
-    plan = {
-        "plan_kind": "render_lane_projection",
-        "operation_id": canonical_operation,
-        "lane_ir_hash": lane_ir_hash,
-        "input_asset_id": input_asset.asset_id,
-        "output_asset_id": artifact_asset.asset_id,
-    }
-    plan_id = content_id("plan", plan)
-    revision_basis = {
-        "project_id": project_id,
-        "parent_revision_id": None,
-        "intent_id": intent_id,
-        "plan_id": plan_id,
-        "output_asset_id": artifact_asset.asset_id,
-    }
-    revision = {
-        "revision_id": content_id("revision_projection", revision_basis),
-        "kind": "execution_projection_only",
-        "sequence": 1,
-        "parent_revision_id": None,
-        "basis": revision_basis,
-        "canonical_project_state_hash": None,
-    }
+    canonical_raw = execution_evidence.get("canonical_execution")
+    result_canonical = result.get("canonical_execution")
+    canonical_parts: dict[str, dict[str, Any]] | None = None
+    if creative_payload.schema_version == 2:
+        if creative_payload.project_id != project_id:
+            raise CreativePassportError(
+                "verification and durable request target different projects"
+            )
+        if (
+            not isinstance(canonical_raw, dict)
+            or not isinstance(result_canonical, dict)
+            or canonical_raw != result_canonical
+        ):
+            raise CreativePassportError("canonical result and runtime evidence disagree")
+        canonical_parts = _canonical_parts(
+            creative_payload,
+            canonical_raw,
+            project_id=project_id,
+            input_asset=input_asset,
+        )
+    elif canonical_raw is not None or result_canonical is not None:
+        raise CreativePassportError("legacy request cannot manufacture canonical execution facts")
+
+    intent: dict[str, Any]
+    plan: dict[str, Any]
+    revision_basis: dict[str, Any]
+    revision: dict[str, Any]
+    if canonical_parts is None:
+        intent = {
+            "intent_kind": "CreativeRenderPayloadProjection",
+            "command": creative_payload.command,
+            "surface_operation": creative_payload.operation,
+            "operation_id": canonical_operation,
+            "args": list(creative_payload.args),
+            "media_duration_us": creative_payload.media_duration_us,
+            "input_asset_id": input_asset.logical_asset_id,
+            "input_asset_sha256": input_asset.sha256,
+        }
+        intent_id = content_id("intent", intent)
+        plan = {
+            "plan_kind": "render_lane_projection",
+            "operation_id": canonical_operation,
+            "lane_ir_hash": lane_ir_hash,
+            "input_asset_id": input_asset.asset_id,
+            "output_asset_id": artifact_asset.asset_id,
+        }
+        plan_id = content_id("plan", plan)
+        revision_basis = {
+            "project_id": project_id,
+            "parent_revision_id": None,
+            "intent_id": intent_id,
+            "plan_id": plan_id,
+            "output_asset_id": artifact_asset.asset_id,
+        }
+        revision = {
+            "revision_id": content_id("revision_projection", revision_basis),
+            "kind": "execution_projection_only",
+            "sequence": 1,
+            "parent_revision_id": None,
+            "basis": revision_basis,
+            "canonical_project_state_hash": None,
+        }
+    else:
+        assert creative_payload.intent is not None
+        command = canonical_parts["command"]
+        command_result = canonical_parts["command_result"]
+        edit_transaction = canonical_parts["edit_transaction"]
+        intent = {
+            "intent_kind": "CanonicalCreativeIntent",
+            "schema_id": creative_payload.intent.schema_id,
+            "proposal_id": creative_payload.intent.proposal_id,
+            "source_text_sha256": creative_payload.intent.source_text_sha256,
+            "command": creative_payload.command,
+            "surface_operation": creative_payload.operation,
+            "operation_id": canonical_operation,
+            "args": list(creative_payload.args),
+            "typed_input": dict(creative_payload.intent.input),
+            "media_duration_us": creative_payload.media_duration_us,
+            "input_asset_id": input_asset.logical_asset_id,
+            "input_asset_sha256": input_asset.sha256,
+        }
+        intent_id = creative_payload.intent.intent_id
+        plan = {
+            "plan_kind": "render_lane_projection",
+            "operation_id": canonical_operation,
+            "command_id": command["command_id"],
+            "command_schema_version": 2,
+            "lane_ir_hash": lane_ir_hash,
+            "input_asset_id": input_asset.asset_id,
+            "output_asset_id": artifact_asset.asset_id,
+        }
+        plan_id = content_id("plan", plan)
+        revision_basis = {
+            "project_id": project_id,
+            "parent_revision_id": None,
+            "parent_revision": edit_transaction["parent_revision"],
+            "previous_state_hash": edit_transaction["previous_state_hash"],
+            "new_state_hash": edit_transaction["new_state_hash"],
+            "commandbus_transaction_id": command_result["transaction_id"],
+            "intent_id": intent_id,
+            "plan_id": plan_id,
+            "output_asset_id": artifact_asset.asset_id,
+        }
+        revision = {
+            "revision_id": content_id("revision", revision_basis),
+            "kind": "canonical_commandbus_revision",
+            "sequence": command_result["state_revision"],
+            "parent_revision_id": None,
+            "parent_revision": edit_transaction["parent_revision"],
+            "previous_state_hash": edit_transaction["previous_state_hash"],
+            "basis": revision_basis,
+            "canonical_project_state_hash": command_result["state_hash"],
+            "project_state_storage": "attempt_scoped_in_memory",
+        }
 
     normalized_verification = normalize_verification(verification, artifact_asset)
     verification_id = content_id("verification", normalized_verification)
@@ -505,18 +728,77 @@ def build_passport(
     if policy.get("allowed") is not True:
         raise CreativePassportError("timeline.trim capability policy did not allow execution")
 
+    lineage = {
+        "request_id": identity.request_id,
+        "transaction_id": identity.transaction_id,
+        "job_id": job_id,
+        "attempt_id": attempt_identifier,
+        "project_id": project_id,
+        "intent_id": intent_id,
+        "plan_id": plan_id,
+        "revision_id": revision["revision_id"],
+        "input_asset_id": input_asset.asset_id,
+        "artifact_id": artifact_asset.asset_id,
+        "verification_id": verification_id,
+    }
+    limitations: tuple[str, ...]
+    if canonical_parts is None:
+        transaction = {
+            "transaction_id": identity.transaction_id,
+            "kind": "queue_request_transaction_projection",
+            "canonical_commandbus_transaction_id": None,
+        }
+        limitations = (
+            "This is a queue execution projection, not a persisted CreativeWork "
+            "or canonical project revision.",
+            "The CommandBus transaction is in-memory; its transaction ID, revision, "
+            "and state hash are not returned by the legacy worker.",
+            "The queue records capability and policy facts but no actor authorization "
+            "decision; user_id is not treated as authorization evidence.",
+            "Source bytes are sampled before and after execution; the legacy worker "
+            "does not bind its CommandBus source-asset digest into the queue result.",
+        )
+    else:
+        assert isinstance(canonical_raw, dict)
+        if (
+            capability != canonical_raw.get("capability")
+            or policy != canonical_raw.get("policy")
+            or authorization != canonical_parts["authorization"]
+        ):
+            raise CreativePassportError("canonical capability/policy/authorization copies diverge")
+        command = canonical_parts["command"]
+        command_result = canonical_parts["command_result"]
+        transaction = {
+            "transaction_id": identity.transaction_id,
+            "kind": "queue_request_with_canonical_commandbus_execution",
+            "canonical_commandbus_transaction_id": command_result["transaction_id"],
+            "canonical_command_id": command["command_id"],
+        }
+        lineage.update(
+            {
+                "canonical_commandbus_transaction_id": command_result["transaction_id"],
+                "canonical_command_id": command["command_id"],
+                "proposal_id": creative_payload.intent.proposal_id
+                if creative_payload.intent is not None
+                else None,
+            }
+        )
+        limitations = (
+            "Principal, channel binding, project and membership are durable; the "
+            "CommandBus project state remains attempt-scoped rather than a shared "
+            "durable project-state store.",
+            "The render lane consumes a separately materialized LaneIR projection "
+            "from the same validated trim input, not a persisted CreativeWork graph.",
+        )
+
     body: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 1 if canonical_parts is None else 2,
         "request": {
             "request_id": identity.request_id,
             "request_fingerprint": identity.request_fingerprint,
         },
         "transaction_id": identity.transaction_id,
-        "transaction": {
-            "transaction_id": identity.transaction_id,
-            "kind": "queue_request_transaction_projection",
-            "canonical_commandbus_transaction_id": None,
-        },
+        "transaction": transaction,
         "job": {
             "job_id": job_id,
             "job_type": CREATIVE_RENDER_JOB_TYPE,
@@ -541,29 +823,8 @@ def build_passport(
             "verification_id": verification_id,
             **normalized_verification,
         },
-        "lineage": {
-            "request_id": identity.request_id,
-            "transaction_id": identity.transaction_id,
-            "job_id": job_id,
-            "attempt_id": attempt_identifier,
-            "project_id": project_id,
-            "intent_id": intent_id,
-            "plan_id": plan_id,
-            "revision_id": revision["revision_id"],
-            "input_asset_id": input_asset.asset_id,
-            "artifact_id": artifact_asset.asset_id,
-            "verification_id": verification_id,
-        },
-        "limitations": (
-            "This is a queue execution projection, not a persisted CreativeWork "
-            "or canonical project revision.",
-            "The CommandBus transaction is in-memory; its transaction ID, revision, "
-            "and state hash are not returned by the legacy worker.",
-            "The queue records capability and policy facts but no actor authorization "
-            "decision; user_id is not treated as authorization evidence.",
-            "Source bytes are sampled before and after execution; the legacy worker "
-            "does not bind its CommandBus source-asset digest into the queue result.",
-        ),
+        "lineage": lineage,
+        "limitations": limitations,
     }
     passport_id = content_id("passport", body)
     return CreativeExecutionPassport(passport_id=passport_id, **body)
