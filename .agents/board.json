@@ -7382,7 +7382,8 @@
         "tests/unit/test_caption_engine_adapters.py",
         "tests/unit/test_caption_pack.py",
         "tests/unit/test_creative_render_jobs.py"
-      ]
+      ],
+      "note": "PR #100 repair status (branch arena/01a0df8c-nexus-ai-agent). REAL regression found and fixed locally: #100 flipped caption.transcribe deterministic=True->False, which the truth model reads as 'not a real typed domain operation' (RuntimeOperation.domain_ready=False) and demotes the op L3->L0 while breaking the substrate invariant tests/unit/test_operation_truth_sources.py::test_runtime_registry_is_a_measurement_with_domain_facts (every registered operation must be deterministic). The flag's only consumer is sources.RuntimeOperation.domain_ready; it has no runtime effect. Reverted to True (the pure transcribe handler IS deterministic given the supplied typed transcript) and regenerated OPERATION_TRUTH.json. Evidence: full non-slow suite 4978 passed / 39 skipped; operation-truth + caption suites 94 passed; ruff/mypy clean. BLOCKED from push: the ownership referee (agent_board.py check) exits 1 on tests/architecture/test_pack_manifest_is_data_only.py, held by the LIVE pr-repair-144 lease (branch jules-940713209102888185-f8f59acc, claimed 2026-10-28T14:54:42Z, ttl 24h). #100 needs a 1-line 'unicodedata' allowlist append there (its formatters.py legitimately imports unicodedata for NFC + control-char sanitisation). Per AGENTS.md 1.2 the overlap is not pushed; the repaired head is held locally pending that lease's release."
     },
     {
       "task": "rel-006-rclone-list-failure",
