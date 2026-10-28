@@ -1,10 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 from pathlib import Path
 
 from .base import ProviderUnavailable, StorageError
+
+# rclone can echo the remote's configured credentials back in error output
+# (for example an ``http://user:pass@host`` webdav/s3 endpoint).  Diagnostics are
+# surfaced to operators and logs, so redact anything that looks like an inline
+# credential and cap the length before it is ever stored or printed.
+_CREDENTIAL_RE = re.compile(r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s]*@")
+_DIAGNOSTIC_LIMIT = 200
+
+
+def _bounded_diagnostics(raw: bytes) -> str:
+    """Decode, redact inline credentials, and bound provider output for logging."""
+    text = raw.decode("utf-8", "ignore")
+    text = _CREDENTIAL_RE.sub(r"\g<scheme><redacted>@", text)
+    return text[:_DIAGNOSTIC_LIMIT]
 
 
 class RcloneProvider:
@@ -73,7 +88,10 @@ class RcloneProvider:
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
         if not self.is_configured():
-            return []
+            # An unconfigured provider is a caller error, not an empty remote:
+            # returning [] here would let callers treat "no credentials / no
+            # binary" as "the remote has no files" (REL-006).
+            raise ProviderUnavailable("rclone is not configured")
         proc = await asyncio.create_subprocess_exec(
             "rclone",
             "lsf",
@@ -82,9 +100,15 @@ class RcloneProvider:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        out, _err = await proc.communicate()
+        out, err = await proc.communicate()
         if proc.returncode != 0:
-            return []
+            # A failed listing must not masquerade as a valid empty listing: the
+            # housekeeping/rotation callers prune backups from this result, so a
+            # silent [] would look like "nothing to keep" and risk deleting the
+            # wrong set.  Raise a typed error with bounded, redacted diagnostics.
+            raise StorageError(
+                f"rclone list failed (exit {proc.returncode}): {_bounded_diagnostics(out + err)}"
+            )
         files = [
             line.strip() for line in out.decode("utf-8", "ignore").splitlines() if line.strip()
         ]
