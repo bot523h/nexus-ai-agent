@@ -199,7 +199,7 @@ class LiteLLMRoutingProvider(LLMProvider):
         }
 
     # ── LLMProvider ────────────────────────────────────────────────────
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: str, system: str = "", *, user_id: int | None = None) -> str:
         """Route *prompt* through the chain; first healthy deployment wins."""
         messages: list[dict[str, str]] = []
         if system:
