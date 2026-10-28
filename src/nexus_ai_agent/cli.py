@@ -276,6 +276,7 @@ def inspect_checkpoints(
 ) -> None:
     """Read checkpoint lifecycle state without touching access timestamps."""
     import json
+    import logging
     from datetime import datetime, timezone
 
     from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
@@ -284,14 +285,31 @@ def inspect_checkpoints(
     from nexus_ai_agent.storage.db import resolve_database_url
 
     settings = get_settings()
+    logger = logging.getLogger(__name__)
     access_token = nexus_access_context.set("admin")
-    adapter, _ = _open_checkpoint_backend()
-    # Read-only by contract: inspect never creates or mutates the lifecycle
-    # index (on PostgreSQL the read-only connection is server-enforced).
-    # A missing local index file simply means "no metadata yet".
-    database_url = resolve_database_url()
-    lifecycle = _open_lifecycle_store(settings, database_url, strict=True, read_only=True)
+    adapter: Any = None
+    lifecycle: Any = None
+    primary_error: BaseException | None = None
+
+    def _close(resource: Any, name: str) -> BaseException | None:
+        """Close one resource without preventing the remaining cleanup."""
+        if resource is None or not hasattr(resource, "close"):
+            return None
+        try:
+            resource.close()
+        except BaseException as exc:  # noqa: BLE001 - cleanup must continue
+            logger.warning("checkpoint_inspect_cleanup_failed: %s: %s", name, exc)
+            return exc
+        return None
+
     try:
+        adapter, _ = _open_checkpoint_backend()
+        # Read-only by contract: inspect never creates or mutates the lifecycle
+        # index (on PostgreSQL the read-only connection is server-enforced).
+        # A missing local index file simply means "no metadata yet".
+        database_url = resolve_database_url()
+        lifecycle = _open_lifecycle_store(settings, database_url, strict=True, read_only=True)
+
         now = datetime.now(timezone.utc)
         records = lifecycle.records() if lifecycle is not None else []
         grouped: dict[str, list] = {}
@@ -351,11 +369,28 @@ def inspect_checkpoints(
         else:
             for item in output:
                 typer.echo(json.dumps(item, default=str, sort_keys=True))
+    except BaseException as exc:
+        # Preserve the setup/body exception even if cleanup also fails.
+        primary_error = exc
+        raise
     finally:
-        adapter.close()
-        if lifecycle is not None:
-            lifecycle.close()
-        nexus_access_context.reset(access_token)
+        # Close in reverse acquisition order; attempt BOTH closes and always
+        # reset the exact ContextVar token exactly once, on every path.
+        cleanup_errors = [
+            err
+            for err in (
+                _close(lifecycle, "lifecycle"),
+                _close(adapter, "checkpoint_adapter"),
+            )
+            if err is not None
+        ]
+        try:
+            nexus_access_context.reset(access_token)
+        except BaseException as exc:  # pragma: no cover - defensive reset fence
+            logger.warning("checkpoint_inspect_context_reset_failed: %s", exc)
+            cleanup_errors.append(exc)
+        if primary_error is None and cleanup_errors:
+            raise cleanup_errors[0]
 
 
 @checkpoints_app.command("reconcile")
@@ -1369,6 +1404,10 @@ def backup(
         raise typer.Exit(code=1) from e
     typer.echo(f"source: {result['source']}")
     typer.echo(f"key:    {result['key']}")
+    if not result["dry_run"]:
+        typer.echo(f"sha256: {result.get('sha256', 'unavailable')}")
+        typer.echo(f"timestamp: {result.get('timestamp', 'unavailable')}")
+        typer.echo(f"verified: {result.get('verified', False)}")
     if result["dry_run"]:
         typer.echo("dry-run: nothing dumped or uploaded")
     else:
@@ -1404,15 +1443,23 @@ def housekeeping(
         temp_max_age_hours=temp_max_age_hours,
         backup_retention_days=backup_retention_days,
     )
-    typer.echo(f"temp files removed: {len(result['temp_files_removed'])}")
-    for path in result["temp_files_removed"]:
-        typer.echo(f"  - {path}")
-    if result["backups_deleted"]:
+    # A dry run is a PREVIEW: it must list the planned selections — printing
+    # only the (always empty) mutation results would show the operator an
+    # empty report and hide exactly what the real run would destroy.
+    if result["dry_run"]:
+        typer.echo(f"temp files planned for removal: {len(result['temp_files_planned'])}")
+        for path in result["temp_files_planned"]:
+            typer.echo(f"  - {path}")
+        typer.echo(f"R2 backups planned for deletion: {len(result['backups_planned'])}")
+        for key in result["backups_planned"]:
+            typer.echo(f"  - {key}")
+    else:
+        typer.echo(f"temp files removed: {len(result['temp_files_removed'])}")
+        for path in result["temp_files_removed"]:
+            typer.echo(f"  - {path}")
         typer.echo(f"R2 backups deleted: {len(result['backups_deleted'])}")
         for key in result["backups_deleted"]:
             typer.echo(f"  - {key}")
-    else:
-        typer.echo("R2 backups deleted: 0")
     if result["r2_skipped_reason"]:
         typer.echo(f"note: {result['r2_skipped_reason']}")
     if result["dry_run"]:
@@ -1456,12 +1503,15 @@ def _run_durable_intent(
     import asyncio as _asyncio
 
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.adapters.sql_application_directory import (
+        SQLApplicationDirectory,
+        channel_binding_id,
+    )
     from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.application.principal import ChannelBinding
     from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.creative.render_jobs import build_job_bus
-    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
     from nexus_ai_agent.creative.studio.models import (
-        ActorIdentity,
         AssetRecord,
         Timeline,
         new_project,
@@ -1469,12 +1519,27 @@ def _run_durable_intent(
     from nexus_ai_agent.nagar.cognition import build_cognition_gateway
     from nexus_ai_agent.nagar.composition import ProviderStatus, build_cognition_provider
     from nexus_ai_agent.nagar.creative import (
+        CanonicalHandoffFacts,
         derive_intent_idempotency_key,
         run_free_text_intent_durable,
     )
+    from nexus_ai_agent.storage.migrations import ensure_startup_schema
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
-    actor = ActorIdentity(kind="user", actor_id=actor_id)
+    # The CLI is a channel, not the canonical identity.  First contact and
+    # project membership live in the configured application database; the
+    # worker will independently re-read both before it touches source media.
+    ensure_startup_schema()
+    directory = SQLApplicationDirectory()
+    binding = ChannelBinding("cli", actor_id)
+    principal = directory.resolve_or_create(binding)
+    access = directory.ensure_project(NEXUS_INTENT_PROJECT_ID, principal)
+    canonical = CanonicalHandoffFacts(
+        principal_id=str(principal),
+        channel_binding_id=channel_binding_id(binding),
+        project_id=NEXUS_INTENT_PROJECT_ID,
+    )
+    actor = access.actor
     source = AssetRecord(
         asset_id="src",
         media_kind="video",
@@ -1486,13 +1551,8 @@ def _run_durable_intent(
         "free-text-intent",
         Timeline(timeline_id="tl_intent", duration_us=duration_us),
     ).model_copy(update={"assets": [source]})
-    # The one canonical, server-policy bus factory.  ``ProjectAccess`` is the
-    # canonical authorizer for an ephemeral local project; no bespoke authorizer.
-    access = ProjectAccess(
-        actor=actor,
-        project_id=NEXUS_INTENT_PROJECT_ID,
-        permissions=frozenset({"project:read", "project:write"}),
-    )
+    # Planning uses the same persistent access grant; execution independently
+    # re-authorizes the canonical references in the worker's own bus.
     bus = build_job_bus(project, authorizer=access)
 
     provider, status = build_cognition_provider()
@@ -1535,6 +1595,7 @@ def _run_durable_intent(
             user_id=0,
             chat_id=0,
             clip_asset_id=clip_asset_id,
+            canonical=canonical,
         )
         if outcome.status != "enqueued" or outcome.job_id is None:
             return outcome
@@ -1569,7 +1630,9 @@ def intent(
         help="Authoritative source duration (microseconds) the project commits.",
     ),
     actor_id: str = typer.Option(
-        "local-operator", "--actor", help="Actor identity for this intent (host-owned)."
+        "local-operator",
+        "--actor",
+        help="External CLI binding identity; a durable canonical principal is resolved from it.",
     ),
     workspace_root: str | None = typer.Option(
         None, "--workspace-root", help="Root for the guarded job workspace (default: settings)."
@@ -1635,6 +1698,15 @@ def intent(
             typer.echo(f"duration_us: {result.get('duration_us')}")
             verification = result.get("artifact_verification") or {}
             typer.echo(f"verified: {verification.get('status') == 'verified'}")
+            canonical_execution = result.get("canonical_execution")
+            if isinstance(canonical_execution, dict):
+                authorization = canonical_execution.get("authorization") or {}
+                command_result = canonical_execution.get("command_result") or {}
+                typer.echo(f"principal_id: {authorization.get('principal_id')}")
+                typer.echo(f"project_id: {authorization.get('project_id')}")
+                typer.echo(f"commandbus_transaction_id: {command_result.get('transaction_id')}")
+                typer.echo(f"project_revision: {command_result.get('state_revision')}")
+                typer.echo(f"project_state_hash: {command_result.get('state_hash')}")
         if journal is not None:
             typer.echo(f"journal: {journal_db}")
 
@@ -1676,6 +1748,11 @@ def run_bot(
 
     settings = get_settings()
     configure_logging(settings.log_level)
+    # task-274: opt-in tracing, after logging exists so the outcome is visible.
+    # Never fatal — a misconfigured tracing setup must not stop the bot.
+    from nexus_ai_agent.observability.tracing import bootstrap_tracing
+
+    bootstrap_tracing(settings)
 
     # Bring the schema up (Alembic-first, create_all fallback for legacy files)
     Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -1733,8 +1810,10 @@ def smoke(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full state"),
 ) -> None:
     """Run the full AI graph without Telegram (for testing)."""
+    from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
     from nexus_ai_agent.memory.long_term import LongTermMemory
+    from nexus_ai_agent.observability.tracing import bootstrap_tracing
     from nexus_ai_agent.orchestration.graph import compile_graph
     from nexus_ai_agent.orchestration.state import NexusState
     from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
@@ -1744,6 +1823,11 @@ def smoke(
         WriteFileTool,
     )
     from nexus_ai_agent.tools.registry import ToolRegistry
+
+    # task-274: this path also drives the graph, so it must enforce the same
+    # fail-closed tracing contract as ``run`` (a stale LANGSMITH_TRACING=true
+    # must not silently enable egress here).
+    bootstrap_tracing(get_settings())
 
     llm = FakeLLMProvider()
     os.environ["NEXUS_WORKSPACE_ROOT"] = "."

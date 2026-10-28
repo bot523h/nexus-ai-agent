@@ -76,21 +76,25 @@ class FallbackProvider(LLMProvider):
             ),
         }
 
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: str, system: str = "", *, user_id: int | None = None) -> str:
         """Return the primary's answer; degrade only on a typed retryable error.
 
         A normally-returned, non-empty string is a *successful generation* and
         is returned as-is. Model-generated text is never searched for error
         keywords (LAW 10): an answer that merely mentions "429"/"quota" stays a
         success. Degradation is driven solely by a typed :class:`LLMError`.
+
+        The authenticated ``user_id`` is threaded to both legs so per-user
+        quota accounting stays attached to the human caller (never dropped,
+        never collapsed into a shared bucket).
         """
         try:
-            result = await self._primary.generate(prompt, system)
+            result = await self._primary.generate(prompt, system, user_id=user_id)
         except LLMError as exc:
             self._primary_count += 1
             if exc.retryable:
                 logger.warning("primary_retryable_failure", kind=exc.kind, error=str(exc)[:100])
-                return await self._do_fallback(prompt, system)
+                return await self._do_fallback(prompt, system, user_id=user_id)
             # Typed but non-retryable (e.g. INVALID_RESPONSE): fail closed.
             raise
         except Exception:
@@ -101,12 +105,12 @@ class FallbackProvider(LLMProvider):
             self._primary_count += 1
             return result
 
-    async def _do_fallback(self, prompt: str, system: str) -> str:
+    async def _do_fallback(self, prompt: str, system: str, *, user_id: int | None = None) -> str:
         """Execute fallback provider and append disclaimer."""
         self._fallback_count += 1
         logger.info("using_fallback_provider", prompt_len=len(prompt))
         try:
-            result = await self._fallback.generate(prompt, system)
+            result = await self._fallback.generate(prompt, system, user_id=user_id)
         except Exception as fallback_exc:
             logger.error("fallback_also_failed", error=str(fallback_exc)[:100])
             # Return a user-friendly message rather than crashing

@@ -106,9 +106,11 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "zero_duration_emitted_as_one_frame",
         DELIVERY / "operations.py",
-        "        emitted_frames = max(1, raw_conv_frames) if has_missing_dur else raw_conv_frames",
         "        emitted_frames = max(1, raw_conv_frames)",
-        "0 duration must be 0 frames; forcing >=1 is the pre-fix truncation bug",
+        "        emitted_frames = raw_conv_frames",
+        "OTIO cannot represent a zero-duration clip, so a 0-frame conversion must "
+        "still emit one frame; dropping max(1, ...) restores the pre-fix "
+        "zero-frame truncation that produced unplayable timeline items",
     ),
     Mutation(
         "deserialized_timebase_components_coerced",
@@ -121,8 +123,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "otio_export_reverts_to_float_truncation",
         DELIVERY / "operations.py",
-        "        raw_conv_frames = dur.to_ticks(target_tb, rounding=RoundingPolicy.NEAREST).value",
-        "        raw_conv_frames = int(float(dur.seconds) * float(target_tb.rate))",
+        "        raw_conv_frames = conversion.value",
+        "        raw_conv_frames = int(float(dur.seconds) * float(timebase.rate))",
         "float truncation loses sub-frame precision at NTSC rates and reports the "
         "conversion as lossless when it is not",
     ),

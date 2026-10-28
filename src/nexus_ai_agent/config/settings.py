@@ -494,6 +494,28 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("R2_BUCKET", "NEXUS_R2_BUCKET"),
     )
 
+    # ── task-274: opt-in LangSmith tracing ────────────────────────────
+    # Default OFF: enabling tracing exports prompts to a third party, so it is
+    # never on unless an operator explicitly asks for it.  When on but
+    # incomplete (no SDK / no key) the bootstrap in ``observability/tracing.py``
+    # degrades to a logged no-op instead of raising.
+    tracing_enabled: bool = Field(
+        default=False,
+        validation_alias="NEXUS_TRACING_ENABLED",
+    )
+    tracing_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_TRACING_API_KEY", "LANGSMITH_API_KEY"),
+    )
+    tracing_project: str = Field(
+        default="nexus-ai-agent",
+        validation_alias=AliasChoices("NEXUS_TRACING_PROJECT", "LANGSMITH_PROJECT"),
+    )
+    tracing_endpoint: str = Field(
+        default="https://api.smith.langchain.com",
+        validation_alias=AliasChoices("NEXUS_TRACING_ENDPOINT", "LANGSMITH_ENDPOINT"),
+    )
+
     @field_validator("allowed_user_ids", mode="before")
     @classmethod
     def _parse_allowed_user_ids(cls, v):  # type: ignore[no-untyped-def]

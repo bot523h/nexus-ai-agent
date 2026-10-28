@@ -80,6 +80,7 @@ Why no Prometheus exporter: the deployment target is a single scale-to-zero proc
 | Does the evidence system still defend itself? | `python scripts/continuum_gate.py` + `python scripts/continuum_mutations.py` | `nexus.continuum-gate/1`, `nexus.continuum-mutations/1` |
 | Are packs coherent? | `nexus packs list|verify <id>` | manifests + runtime registry |
 | What metrics exist right now? | `nexus metrics snapshot --json` | in-process registry |
+| Can the tracing key accept a trace? | `python scripts/langsmith_smoke.py` | the real collector ([`TRACING.md`](TRACING.md)) |
 
 ## 6. What to alert on (an honest short list)
 

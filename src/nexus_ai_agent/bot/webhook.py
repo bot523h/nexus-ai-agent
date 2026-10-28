@@ -26,6 +26,7 @@ converted into PTB ``Update`` objects by ``WebhookApplicationAdapter`` in
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Any
 
@@ -41,6 +42,8 @@ DEFAULT_WEBHOOK_PORT = 8000
 TELEGRAM_SECRET_TOKEN_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
 _UVICORN_LOG_LEVELS = {"critical", "error", "warning", "info", "debug", "trace"}
+_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+log = logging.getLogger(__name__)
 
 
 class WebhookConfigError(RuntimeError):
@@ -150,14 +153,22 @@ async def _serve_webhook(
     """Serve webhook mode on a running event loop (see :func:`run_webhook`)."""
     import uvicorn
 
-    # 1) Bring the application up.  No Updater is started, so nothing polls:
-    #    Telegram POSTs updates to /webhook/telegram instead.
-    await application.initialize()
-    job_queue = getattr(application, "bot_data", {}).get("job_queue")
-    if job_queue is not None:
-        await job_queue.resume_pending()
-    await application.start()
+    initialization_attempted = False
+    initialized = False
+    started = False
     try:
+        # 1) Bring the application up.  No Updater is started, so nothing polls:
+        #    Telegram POSTs updates to /webhook/telegram instead.
+        # PTB may acquire bot/session resources before initialize() returns.
+        # A failed attempt therefore still owns the legal shutdown boundary.
+        initialization_attempted = True
+        await application.initialize()
+        initialized = True
+        job_queue = getattr(application, "bot_data", {}).get("job_queue")
+        if job_queue is not None:
+            await job_queue.resume_pending()
+        await application.start()
+        started = True
         # 2) Register the webhook.  Telegram will echo `webhook_secret` back
         #    in TELEGRAM_SECRET_TOKEN_HEADER on every delivery.
         await application.bot.set_webhook(url=webhook_url, secret_token=webhook_secret)
@@ -174,9 +185,36 @@ async def _serve_webhook(
         )
         server = uvicorn.Server(config)
         await server.serve()
-    finally:
-        # 4) Graceful application shutdown: stop consuming updates and close
-        #    the bot's HTTP sessions.  Runs even if serving failed, so a
-        #    platform-issued SIGTERM never leaves half-open resources behind.
-        await application.stop()
-        await application.shutdown()
+    except BaseException as primary:
+        # Cleanup after a partial initialize is legal and required by PTB's
+        # lifecycle contract.  It is bounded and attempted once.  A cleanup
+        # failure is attached to (and never replaces) the primary failure.
+        if initialization_attempted:
+            try:
+                await _cleanup_webhook_application(application, started=started, initialized=True)
+            except BaseException as cleanup_error:
+                log.exception("webhook_cleanup_failed_after_primary_error")
+                primary.add_note(
+                    f"webhook cleanup also failed: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
+        raise
+    else:
+        # Normal serving and webhook-registration failures use the same
+        # idempotent boundary as failed startup.
+        await _cleanup_webhook_application(application, started=started, initialized=initialized)
+
+
+async def _cleanup_webhook_application(
+    application: Any, *, started: bool, initialized: bool
+) -> None:
+    """Release only acquired resources, with bounded, observable cleanup."""
+    stop_error: BaseException | None = None
+    if started:
+        try:
+            await asyncio.wait_for(application.stop(), timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+        except BaseException as exc:
+            stop_error = exc
+    if initialized:
+        await asyncio.wait_for(application.shutdown(), timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+    if stop_error is not None:
+        raise stop_error
