@@ -7409,12 +7409,12 @@
         "src/nexus_ai_agent/storage/providers/rclone.py",
         "tests/unit/test_rclone_provider_list_errors.py"
       ],
-      "agent_branch": "arena/m6-rel006-rclone-list-errors",
-      "claimed_at": "2026-10-28T08:47:59Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": " | Reconciled during NEXUS-PRC-2026-10-28 convergence: rel-006 is done on origin/main (gen 2); this branch carried a stale active copy (gen 1). Marked done to match the authoritative board; no code change.",
-      "generation": 1
+      "note": "",
+      "generation": 2
     }
   ],
   "deferred_log": [
