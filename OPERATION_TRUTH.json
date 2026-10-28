@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "372643afaafd60f2ab79462b14520e46c6ac50f8",
-    "generated_at": "2026-10-25T18:55:37Z",
+    "source_revision": "bdf2853fddcc33c755b0beac6e67861d1282c5a2",
+    "generated_at": "2026-10-28T10:13:25Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -459,7 +459,8 @@
         ],
         "files": [
           "tests/unit/test_delivery_pack.py",
-          "tests/unit/test_delivery_signing.py"
+          "tests/unit/test_delivery_signing.py",
+          "tests/unit/test_operation_matrix_reconciliation.py"
         ]
       },
       "media.pause": {
@@ -486,6 +487,7 @@
           "tests/unit/test_creative_spine.py",
           "tests/unit/test_nagar_free_text_slice.py",
           "tests/unit/test_nagar_wave1_green_cockpit.py",
+          "tests/unit/test_operation_matrix_reconciliation.py",
           "tests/unit/test_product_studio.py",
           "tests/unit/test_slideshow_pack.py"
         ]
@@ -593,6 +595,7 @@
           "service"
         ],
         "files": [
+          "tests/unit/test_operation_matrix_reconciliation.py",
           "tests/unit/test_pack_manifest_verify.py",
           "tests/unit/test_pack_runtime_composition.py",
           "tests/unit/test_slideshow_cli.py",
@@ -608,6 +611,7 @@
           "service"
         ],
         "files": [
+          "tests/unit/test_operation_matrix_reconciliation.py",
           "tests/unit/test_pack_manifest_verify.py",
           "tests/unit/test_product_studio.py",
           "tests/unit/test_slideshow_pack.py",
@@ -807,6 +811,7 @@
           "handler"
         ],
         "files": [
+          "tests/integration/test_canonical_creative_execution.py",
           "tests/integration/test_creative_chain_e2e.py",
           "tests/integration/test_gate5_closure.py",
           "tests/integration/test_job_lifecycle_queue.py",
@@ -816,6 +821,7 @@
           "tests/unit/test_cognition_boundary.py",
           "tests/unit/test_cognition_bus_integration.py",
           "tests/unit/test_cognition_model_kill.py",
+          "tests/unit/test_creative_intent.py",
           "tests/unit/test_creative_passport.py",
           "tests/unit/test_creative_render_jobs.py",
           "tests/unit/test_edit_pack.py",
@@ -3205,7 +3211,8 @@
         ],
         "suite_reference_files": [
           "tests/unit/test_delivery_pack.py",
-          "tests/unit/test_delivery_signing.py"
+          "tests/unit/test_delivery_signing.py",
+          "tests/unit/test_operation_matrix_reconciliation.py"
         ],
         "recorded_execution_proof": false,
         "recorded_artifact_proof": false,
@@ -3324,6 +3331,7 @@
           "tests/unit/test_creative_spine.py",
           "tests/unit/test_nagar_free_text_slice.py",
           "tests/unit/test_nagar_wave1_green_cockpit.py",
+          "tests/unit/test_operation_matrix_reconciliation.py",
           "tests/unit/test_product_studio.py",
           "tests/unit/test_slideshow_pack.py"
         ],
@@ -4877,6 +4885,7 @@
           "service"
         ],
         "suite_reference_files": [
+          "tests/unit/test_operation_matrix_reconciliation.py",
           "tests/unit/test_pack_manifest_verify.py",
           "tests/unit/test_pack_runtime_composition.py",
           "tests/unit/test_slideshow_cli.py",
@@ -4938,6 +4947,7 @@
           "service"
         ],
         "suite_reference_files": [
+          "tests/unit/test_operation_matrix_reconciliation.py",
           "tests/unit/test_pack_manifest_verify.py",
           "tests/unit/test_product_studio.py",
           "tests/unit/test_slideshow_pack.py",
@@ -5873,6 +5883,7 @@
           "handler"
         ],
         "suite_reference_files": [
+          "tests/integration/test_canonical_creative_execution.py",
           "tests/integration/test_creative_chain_e2e.py",
           "tests/integration/test_gate5_closure.py",
           "tests/integration/test_job_lifecycle_queue.py",
@@ -5882,6 +5893,7 @@
           "tests/unit/test_cognition_boundary.py",
           "tests/unit/test_cognition_bus_integration.py",
           "tests/unit/test_cognition_model_kill.py",
+          "tests/unit/test_creative_intent.py",
           "tests/unit/test_creative_passport.py",
           "tests/unit/test_creative_render_jobs.py",
           "tests/unit/test_edit_pack.py",
