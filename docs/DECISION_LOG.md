@@ -1,6 +1,7 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 14 effective 2026-10-17  
+**Status:** Canonical historical record; revision 15 effective 2026-10-26
+**r15 scope:** observability decision (D-0031; board `task-274`, branch `arena/task-274-langsmith-tracing`): opt-in LangSmith tracing behind a fail-closed, default-off switch — the switch, the never-fatal bootstrap, the visible-skip connectivity smoke, and the retirement of the orphan smoke workflow registration left by a deleted branch.  
 **r14 scope:** review closeout of the task-270 P1 layer (D-0028; session `arena/525960ca-nexus-ai-agent`, PR#219): the seven CodeRabbit findings closed as code — destructive PostgreSQL test data safety, one persistent referral identity, moderation coverage for commands and media captions, `/vision` caption dispatch, serialised `sync_engine` first use, UTC-anchored dashboard timestamps, and the `TelegramId` documentation — each with a failing-first regression test.  
 **r13 scope:** full-audit remediation (D-0026; session `arena/26f7d958-nexus-ai-agent`, board `task-270`): the sixteen findings of the 2026-10-15 full audit (PR#198 comments 6190228525/6190229601) closed as code, not prose — the `main` message-path crash, one database per deployment, the last ten canned commands, declared dependencies, the fail-closed dashboard, the non-blocking updater, CI hygiene, single table definitions, hashes/codes/timestamps, explicit imports — each with a regression test.  
 **r12 scope:** product-direction decision (D-0025): the Nagar creative backbone is an intent-first loop (Intent → Creative Graph → Capability Compiler → CommandBus → render lane → verification → artifact + lineage), not a feature. The first vertical slice — the in-memory, single-project intent loop over the existing operation matrix — is implemented in `creative/spine/` with its own boundary and mutation guards; reference reverse engineering ships as the first *capability* over it (heuristic port, low confidence, never a copy). Direction record: `docs/architecture/CREATIVE_DIRECTION.md`.  
@@ -24,6 +25,7 @@
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
 - **r10 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
 - **r11 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
+- **r15 (2026-10-26, opt-in tracing):** recorded the observability decision (D-0031): LangSmith tracing is off by default and the SDK already ships with core, boots fail-closed and never fatally, proves connectivity with a visible-skip smoke, and retires the orphan smoke workflow registration. Branch `arena/task-274-langsmith-tracing`; board `task-274`.
 - **r14 (2026-10-17, review closeout of the P1 layer):** the seven findings of the PR#219 review closed with failing-first tests; a test that writes to `NEXUS_DATABASE_URL` needs an explicit second opt-in and may only ever delete rows it created. D-0028.  
 - **r13 (2026-10-15, full-audit remediation):** owner-mandated remediation of audit findings A-01…A-13 on one branch with a regression test per fix; the audit itself (244 modules, 23 verified) remains the published evidence on PR#198. D-0026.  
 - **r12 (2026-09-30, creative direction):** recorded the product frame (intent, not tools) and the backbone loop above the proven execution chain, then *built the first vertical slice* — the in-memory, single-project intent loop (typed intent → creative graph → capability compiler → CommandBus → artifact + evidence) in `creative/spine/`, with its own boundary and mutation guards. Reverse engineering, multiverse, social feedback, pack marketplace and style DNA stay deferred behind evidence-based triggers. Direction page: `docs/architecture/CREATIVE_DIRECTION.md`; D-0025.  
@@ -2145,7 +2147,77 @@ store-level corruption ⇒ `nexus knowledge rebuild --yes`.
 `docs/architecture/KNOWLEDGE_RETRIEVAL.md`; ADR 0012 records only the docs-enforcement
 decision and links back here (behaviour authority = this entry).
 
-### D-0031 — Storage has three products, capacity is a typed claim with a source, and a second storage seam is allowed only because neither existing one can carry a user asset (task-272, **PROPOSED**)
+
+### D-0031 — Opt-in LangSmith tracing: default-off, fail-closed, never fatal (task-274)
+
+**Date recorded:** 2026-10-26 · **Status:** implemented (agent-authored record; owner review on the PR) · **Scope:** `observability/tracing.py`, `config/settings.py` (`tracing_*`), `cli.py::run_bot`, `scripts/langsmith_smoke.py`, `.github/workflows/langsmith-smoke.yml`
+
+**Decision.** LangGraph/LangChain trace through the `LANGSMITH_*` environment variables,
+so the runtime needs exactly one place that decides whether those traces leave the
+process. That place is `observability/tracing.py`, and it ships with a set of
+non-negotiable semantics: (1) **default off** — nothing is exported unless
+`NEXUS_TRACING_ENABLED=true`, because enabling tracing exports user prompts to a
+third party and the default must never do that silently; (2) **fail closed, never
+fatal** — an enabled-but-incomplete configuration (no SDK, no key) degrades to a
+typed, logged `TracingState` no-op and `bootstrap_tracing` swallows any unexpected
+error, so a tracing failure can never break startup (the same rule
+`observability/logging.py` follows); (3) **explicit egress surface** — the SDK
+(`langsmith`) already ships with the core install (it is pulled in transitively by
+`langgraph` → `langchain-core`), so there is no extra to install and no core import to
+add; the bootstrap sets the `LANGSMITH_*` names on the active path only, so a partial
+configuration cannot leave a half-enabled state and the switch governs *egress*, not
+installation; (3a) **the switch is the sole authority** — `NEXUS_TRACING_ENABLED` is
+the only thing that can turn tracing on (it has no `TRACING_ENABLED` fallback, unlike
+the key/project/endpoint, so there is no accidental second switch), so every non-active
+outcome *clears* the
+SDK's enable flags (`LANGSMITH_TRACING`, `LANGCHAIN_TRACING_V2`, `LANGCHAIN_TRACING`,
+`LANGCHAIN_HANDLER`) *and* forces the SDK's process-global override
+(`langsmith._internal._context._GLOBAL_TRACING_ENABLED = False`), and the active path
+clears the legacy `LANGCHAIN_*` flags and forces the override *on*: because the SDK
+reads its env flags through a `lru_cache`, the override (checked before the env) is the
+cache-independent switch that makes the outcome authoritative in both directions —
+stopping a stale flag already in the process environment from smuggling egress past the
+switch, and stopping a primed SDK from ignoring an enable; the override helper reports
+whether it applied and the disabled path *warns* if the SDK attribute is gone (SDK
+drift), rather than silently losing the fail-closed guarantee; (4) **safe diagnostics** —
+the smoke reports an allow-listed
+`sanitize_exception()` (exception class + optional status code) and never `str(exc)`,
+because SDK/HTTP error text can embed the key, the URL and the payload; (5) **visible
+evidence** — `scripts/langsmith_smoke.py` proves the key can accept a real
+parent/child trace and fails *visible*: `RESULT=SKIPPED_NO_SECRET` (exit 0) when the
+secret is absent, `RESULT=FAILED` (non-zero) when the endpoint refuses it, never a
+fabricated pass; because `langsmith.Client` batches in the background, the smoke
+registers the SDK's `tracing_error_callback` and flushes before trusting the result,
+so an ingestion-time rejection fails the smoke instead of printing a false `RESULT=OK`.
+
+**Alternatives rejected.** *Always-on tracing* — rejected: silent egress of prompt
+text to a third party is the failure the switch exists to prevent. *Make tracing
+fatal on misconfiguration* — rejected: observability must never be able to break a
+request (the repository-wide rule). *Ship the SDK as a separate `tracing` extra* —
+rejected as a false premise: `langsmith` is already a core transitive dependency
+(`langgraph` → `langchain-core` requires `langsmith<1.0.0,>=0.14.9`), so a `tracing`
+extra could never make the SDK "absent" in core and the core-absence proof
+(`tests/unit/test_optional_extras.py`) correctly red-flagged it; the opt-in switch is
+what gates egress, and the extra/leg were removed rather than papering over the leak.
+*Keep the orphan `langsmith-connectivity-smoke-20261026.yml` registration*
+— rejected: its branch was deleted, leaving a workflow with no source file; the
+registration is retired (disabled) and replaced by a committed
+`.github/workflows/langsmith-smoke.yml`. *Mock the SDK in tests* — rejected: the
+enabled path asserts the real `langsmith` import and the real environment contract,
+which is present on every leg.
+
+**Consequences.** Tracing is observation only — `TracingState` must not gate business
+logic. The smoke proves ingest, not correctness. A tracing-only LangSmith key is the
+intended credential (such a key can write runs but not read projects/settings), so a
+leaked key cannot read other tenants' data. No CI leg needs the secret except the
+smoke job, which degrades to a visible skip without one.
+
+**Evidence.** `tests/unit/test_tracing_bootstrap.py` (the four outcomes + never-fatal),
+`tests/unit/test_optional_extras.py::test_tracing_bootstrap_exports_when_the_sdk_is_present`
+(the real SDK path, provable on every leg because the SDK ships with core),
+`scripts/langsmith_smoke.py` + the `langsmith-smoke` workflow run. Living view:
+`docs/architecture/TRACING.md`.
+### D-0032 — Storage has three products, capacity is a typed claim with a source, and a second storage seam is allowed only because neither existing one can carry a user asset (task-272, **PROPOSED**)
 
 **Status: PROPOSED — not accepted.** This entry records an implemented and tested *adapter and
 contract* plus the design direction behind them. The direction itself awaits owner review; per
@@ -2205,7 +2277,7 @@ Auth because storage is Neon-hosted — identity and storage are independent pro
 R2 user-asset wiring, no UI, no installable extension runtime. Those are Waves 2–6 in
 `architecture/DATA_AND_STORAGE.md` §7.7, each with its own claim.
 
-**D-0031 amendment (2026-10-22, PR #244 independent review).** The review found the contract's
+**D-0032 amendment (2026-10-22, PR #244 independent review).** The review found the contract's
 *prefix* and *integrity* semantics were conventions rather than law, so two adapters disagreed and a
 documentation claim outran the code. The status stays **PROPOSED**; the following are corrections to
 the proposal, not new decisions:
@@ -2221,7 +2293,7 @@ the proposal, not new decisions:
 3. **Environment sourcing is explicit.** The region is never taken from `AWS_REGION`; the endpoint is
    parsed by authority so look-alike hosts, embedded credentials, paths and non-443 ports are refused.
 
-**D-0031 amendment 2 (2026-10-22, PR #244 round-2 review).** Still **PROPOSED**. Three corrections:
+**D-0032 amendment 2 (2026-10-22, PR #244 round-2 review).** Still **PROPOSED**. Three corrections:
 
 1. **Ownership is a segment boundary, not a string prefix.** `nagar/assets` does not own
    `nagar/assets-other/…`. Every key operation now proves membership before any provider request (a

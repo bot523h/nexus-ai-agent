@@ -239,7 +239,13 @@ class SelfLedger:
 
     def verify(self, *, expected_head: str | None = None) -> SelfVerdict:
         """Recompute the whole chain from genesis; pinpoint the first break."""
-        records = self.records()
+        return self.verify_records(self.records(), expected_head=expected_head)
+
+    @staticmethod
+    def verify_records(
+        records: list[SelfRecord], *, expected_head: str | None = None
+    ) -> SelfVerdict:
+        """Verify an already-read snapshot, so callers can verify and use the *same* rows."""
         previous = GENESIS_HASH
         for index, record in enumerate(records, start=1):
             if record.seq != index:

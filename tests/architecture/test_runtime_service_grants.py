@@ -320,7 +320,7 @@ def test_direct_slideshow_buses_require_non_null_scoped_service_grants() -> None
     )
 
 
-def test_render_job_factory_and_command_use_the_same_scoped_service_grant() -> None:
+def test_render_job_legacy_and_canonical_commands_keep_trusted_grants() -> None:
     tree = _tree(RENDER_FILE)
     assignments = _assignments(tree)
     _assert_service_identity(tree, actor_name="service_actor", actor_id="creative-render-runtime")
@@ -328,17 +328,34 @@ def test_render_job_factory_and_command_use_the_same_scoped_service_grant() -> N
     assert isinstance(service_access, ast.Call)
     _assert_project_access_call(service_access, actor_name="service_actor")
 
+    def values_assigned_to(name: str) -> list[ast.AST]:
+        return [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == name
+        ]
+
+    # Preserve the legacy scoped service grant, and pin the schema-2 branch to
+    # the canonical actor plus the persistent directory (never payload grants).
+    actor_values = {ast.unparse(value) for value in values_assigned_to("actor")}
+    authorizer_values = {ast.unparse(value) for value in values_assigned_to("authorizer")}
+    assert {"service_actor", "canonical.access.actor"} <= actor_values
+    assert {"service_access", "canonical.directory"} <= authorizer_values
+
     factory_calls = _calls(tree, "build_job_bus")
     assert factory_calls
     for call in factory_calls:
         authorizer = _keyword(call, "authorizer").value
         assert not (isinstance(authorizer, ast.Constant) and authorizer.value is None)
-        assert _name(authorizer) == "service_access"
+        assert _name(authorizer) == "authorizer"
 
     typed_commands = _calls(tree, "TypedCommand")
     assert len(typed_commands) == 1
     command = typed_commands[0]
-    assert _name(_keyword(command, "actor").value) == "service_actor"
+    assert _name(_keyword(command, "actor").value) == "actor"
     target = _keyword(command, "target").value
     assert isinstance(target, ast.Call) and isinstance(target.func, ast.Name)
     assert target.func.id == "TargetRef"
@@ -346,14 +363,27 @@ def test_render_job_factory_and_command_use_the_same_scoped_service_grant() -> N
         dict((item.arg, item.value) for item in target.keywords)["project_id"], attr="project_id"
     )
     refs = _keyword(command, "input_refs").value
-    assert isinstance(refs, ast.Tuple) and refs.elts
-    ref = refs.elts[0]
-    assert (
-        isinstance(ref, ast.Call) and isinstance(ref.func, ast.Name) and ref.func.id == "InputRef"
-    )
-    ref_fields = {item.arg: item.value for item in ref.keywords}
-    _attribute(ref_fields["project_id"], attr="project_id")
-    assert _name(ref_fields["ref_id"]) == "SOURCE_ASSET_ID"
+    assert isinstance(refs, ast.Tuple) and len(refs.elts) == 1
+    assert _name(refs.elts[0]) == "input_ref"
+    input_refs = values_assigned_to("input_ref")
+    assert len(input_refs) == 2  # legacy and canonical branches
+    saw_digest_metadata = False
+    for ref in input_refs:
+        assert (
+            isinstance(ref, ast.Call)
+            and isinstance(ref.func, ast.Name)
+            and ref.func.id == "InputRef"
+        )
+        ref_fields = {item.arg: item.value for item in ref.keywords}
+        _attribute(ref_fields["project_id"], attr="project_id")
+        assert _name(ref_fields["ref_id"]) == "SOURCE_ASSET_ID"
+        metadata = ref_fields.get("metadata")
+        if metadata is not None:
+            assert isinstance(metadata, ast.Call) and metadata.func.id == "InputRefMetadata"
+            metadata_fields = {item.arg: item.value for item in metadata.keywords}
+            assert "content_sha256" in metadata_fields
+            saw_digest_metadata = True
+    assert saw_digest_metadata
 
 
 def test_each_runtime_command_declares_the_correct_target_and_post_scan_refs() -> None:
