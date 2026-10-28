@@ -88,6 +88,26 @@ def _read_changelog_latest(root: Path) -> str | None:
     return None
 
 
+_README_BANNER = re.compile(r"^\s*>?\s*\*\*Version:\s*v(?P<ver>\d+\.\d+\.\d+)\*\*")
+
+
+def _read_readme_banner(root: Path) -> str | None:
+    """Return the ``> **Version: vX.Y.Z**`` banner version from README.md.
+
+    Historical section headings (``## … (v3.12.0)``) are feature-era
+    annotations, not the release claim — only the explicit banner counts.
+    Returns ``None`` when no banner exists (or README.md is absent).
+    """
+    readme = root / "README.md"
+    if not readme.is_file():
+        return None
+    for line in readme.read_text(encoding="utf-8").splitlines():
+        m = _README_BANNER.match(line)
+        if m:
+            return m.group("ver")
+    return None
+
+
 def assert_versions_in_lockstep(root: Path) -> None:
     """Fail with a human-readable message if the three sources diverge.
 
@@ -98,6 +118,7 @@ def assert_versions_in_lockstep(root: Path) -> None:
     version_file = _read_version_file(root)
     pyproject_version = _read_pyproject_version(root)
     changelog_version = _read_changelog_latest(root)
+    readme_version = _read_readme_banner(root)
 
     if changelog_version is None:
         raise AssertionError("CHANGELOG.md contains no released ## [x.y.z] heading")
@@ -109,6 +130,15 @@ def assert_versions_in_lockstep(root: Path) -> None:
             f"pyproject={pyproject_version!r} "
             f"CHANGELOG latest={changelog_version!r} — "
             "all three must match; bump them together"
+        )
+
+    if readme_version is None:
+        raise AssertionError("README.md has no Version banner line to keep in lockstep")
+    if readme_version != version_file:
+        raise AssertionError(
+            "version lockstep drift: "
+            f"VERSION={version_file!r} README banner=v{readme_version!r} — "
+            "the user-facing banner must match the release metadata"
         )
 
 
@@ -235,6 +265,52 @@ def test_changelog_unreleased_heading_is_ignored(tmp_path: Path) -> None:
         "## [2.0.0] — 2026-09-21\n\n- first release\n"
     )
     (tmp_path / "CHANGELOG.md").write_text(unreleased, encoding="utf-8")
+    (tmp_path / "README.md").write_text("> **Version: v2.0.0**\n", encoding="utf-8")
     # Must remain green — Unreleased does not participate
     assert_versions_in_lockstep(tmp_path)
     assert _read_changelog_latest(tmp_path) == "2.0.0"
+
+
+# -- README banner lockstep (user-facing release truth) ----------------------
+
+
+def _aligned_fixture(root: Path, version: str, *, readme_banner: str | None) -> None:
+    (root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text(
+        f'[project]\nname="x"\nversion="{version}"\n', encoding="utf-8"
+    )
+    (root / "CHANGELOG.md").write_text(
+        f"# Changelog\n\n## [{version}] — 2026-09-26\n\n- aligned\n", encoding="utf-8"
+    )
+    if readme_banner is not None:
+        (root / "README.md").write_text(readme_banner, encoding="utf-8")
+
+
+def test_lockstep_passes_when_readme_banner_matches(tmp_path: Path) -> None:
+    _aligned_fixture(tmp_path, "3.0.0", readme_banner="# x\n\n> **Version: v3.0.0**\n")
+    assert_versions_in_lockstep(tmp_path)
+    assert _read_readme_banner(tmp_path) == "3.0.0"
+
+
+def test_lockstep_fails_on_readme_banner_drift(tmp_path: Path) -> None:
+    # The exact 2026-09-26 defect: release files at 3.13.0, banner at v3.12.0.
+    _aligned_fixture(tmp_path, "3.13.0", readme_banner="> **Version: v3.12.0**\n")
+    with pytest.raises(AssertionError, match=r"README banner=v'3\.12\.0'"):
+        assert_versions_in_lockstep(tmp_path)
+    # Sanity: the same fixture with the honest banner is green.
+    _aligned_fixture(tmp_path, "3.13.0", readme_banner="> **Version: v3.13.0**\n")
+    assert_versions_in_lockstep(tmp_path)
+
+
+def test_lockstep_fails_when_readme_banner_missing(tmp_path: Path) -> None:
+    _aligned_fixture(tmp_path, "4.0.0", readme_banner=None)
+    with pytest.raises(AssertionError, match="README.md has no Version banner"):
+        assert_versions_in_lockstep(tmp_path)
+
+
+def test_readme_banner_ignores_historical_section_headings(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "# x\n\n> **Version: v3.13.0**\n\n## Feature wave notes (v3.12.0)\n\n- notes\n",
+        encoding="utf-8",
+    )
+    assert _read_readme_banner(tmp_path) == "3.13.0"
