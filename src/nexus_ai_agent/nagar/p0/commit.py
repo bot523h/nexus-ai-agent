@@ -17,6 +17,8 @@ from nexus_ai_agent.nagar.creative.handoff import (
     build_creative_payload,
     source_asset_facts,
 )
+from nexus_ai_agent.provenance.models import CausalEvent, EventKind, digest_of
+from nexus_ai_agent.provenance.observer import utc_now_iso
 
 from .runtime import P0Preview, canonical_command_input
 
@@ -37,6 +39,7 @@ class P0CommitContext(BaseModel):
     user_id: int
     chat_id: int
     lang: str = "en"
+    causal_observer: Any | None = None
 
 
 class P0CommitResult(BaseModel):
@@ -47,6 +50,7 @@ class P0CommitResult(BaseModel):
     operation: Literal["timeline.trim"] = "timeline.trim"
     preview_revision: int
     canonical_payload: dict[str, object]
+    causal_recorded: bool = True
 
 
 def _idempotency_key(preview: P0Preview, context: P0CommitContext, payload: dict[str, Any]) -> str:
@@ -87,6 +91,8 @@ async def commit_preview(preview: P0Preview, context: P0CommitContext) -> P0Comm
         raise ValueError("commit_revision_seam_unavailable")
     if preview.segment.asset_id != "src":
         raise ValueError("canonical_worker_requires_src_asset")
+    if context.causal_observer is None:
+        raise ValueError("causal_observer_required")
 
     # Authoritative membership/binding checks happen before queue insertion.
     access = context.directory.authorize(context.actor, context.project.project_id)
@@ -128,6 +134,24 @@ async def commit_preview(preview: P0Preview, context: P0CommitContext) -> P0Comm
         job_type=CREATIVE_RENDER_JOB_TYPE,
         idempotency_key=idempotency_key,
         payload=payload,
+    )
+    context.causal_observer.observe(
+        CausalEvent(
+            kind=EventKind.JOB_ENQUEUED,
+            job_id=job_id,
+            job_type=CREATIVE_RENDER_JOB_TYPE,
+            idempotency_key=idempotency_key,
+            status="PENDING",
+            payload_digest=digest_of(payload),
+            detail={
+                "intent_id": preview.plan.canonical_nel_hash,
+                "operation_id": idempotency_key,
+                "semantic_segment_id": preview.plan.semantic_segment_id,
+                "timeline_revision": preview.plan.timeline_revision,
+                "required_evidence": list(preview.plan.required_evidence),
+            },
+            occurred_at=utc_now_iso(),
+        )
     )
     return P0CommitResult(
         status="enqueued",

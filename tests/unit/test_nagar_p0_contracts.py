@@ -5,6 +5,7 @@ import pytest
 from nexus_ai_agent.nagar.p0 import (
     CausalGraph,
     EvidenceKind,
+    EvidenceRef,
     GraphEdge,
     GraphNode,
     IntentStatus,
@@ -30,7 +31,17 @@ def _segment(**overrides: object) -> SemanticSegment:
         "end_pts": 120,
         "timebase_num": 1,
         "timebase_den": 30,
-        "evidence_refs": ("detector:pause-1",),
+        "evidence_refs": (
+            EvidenceRef(
+                evidence_id="detector:pause-1",
+                project_id="project-1",
+                tenant_id="tenant-1",
+                timeline_revision=3,
+                kind=EvidenceKind.DETERMINISTIC_CHECK,
+                digest="sha256:" + "b" * 64,
+                verified=True,
+            ),
+        ),
         "evidence_kind": EvidenceKind.DETERMINISTIC_CHECK,
         "confidence": 0.95,
         "uncertainty": 0.02,
@@ -148,11 +159,11 @@ def test_causal_graph_rejects_cross_scope_edge_and_verified_without_evidence() -
         with pytest.raises(PermissionError, match="cross_scope"):
             graph.add_edge(
                 GraphEdge(
-                edge_id="edge-2",
-                relation="targets",
-                source_id="intent-1",
-                target_id="op-1",
-                project_id="p",
+                    edge_id="edge-2",
+                    relation="targets",
+                    source_id="intent-1",
+                    target_id="op-1",
+                    project_id="p",
                     tenant_id="other",
                 )
             )

@@ -16,6 +16,7 @@ from .nel import (
 from .runtime import P0PlanEnvelope, P0Preview, canonical_command_input, preview_nel
 from .semantic_time import (
     EvidenceKind,
+    EvidenceRef,
     SegmentResolution,
     SemanticSegment,
     invalidate_after_revision,
@@ -52,6 +53,7 @@ __all__ = [
     "canonical_command_input",
     "preview_nel",
     "EvidenceKind",
+    "EvidenceRef",
     "SemanticSegment",
     "SegmentResolution",
     "invalidate_after_revision",

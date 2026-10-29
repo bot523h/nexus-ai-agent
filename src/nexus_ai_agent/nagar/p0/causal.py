@@ -149,7 +149,7 @@ class CausalGraph:
             artifact_sha = artifact_evidence.get("sha256")
             verifier_sha = verifier_evidence.get("sha256")
             if (
-                artifact_evidence.get("status") not in {None, "present"}
+                artifact_evidence.get("status") != "present"
                 or verifier_evidence.get("status") != "verified"
                 or not isinstance(artifact_sha, str)
                 or not artifact_sha.startswith("sha256:")

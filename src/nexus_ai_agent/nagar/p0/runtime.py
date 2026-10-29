@@ -56,6 +56,16 @@ def preview_nel(
         return P0Preview(status="REJECTED", diagnostics=compiled.diagnostics)
     if compiled.ir.project_id != project_id:
         return P0Preview(status="REJECTED", ir=compiled.ir, diagnostics=("project_mismatch",))
+    if compiled.ir.duration_delta_us == 0:
+        return P0Preview(status="REJECTED", ir=compiled.ir, diagnostics=("noop_trim",))
+    if compiled.ir.duration_delta_us < 0 and "pause" in compiled.ast.intent.casefold():
+        return P0Preview(status="REJECTED", ir=compiled.ir, diagnostics=("unsupported_intent",))
+    if compiled.ir.preserve_speech_continuity:
+        return P0Preview(
+            status="NEEDS_CLARIFICATION",
+            ir=compiled.ir,
+            diagnostics=("unsupported_constraint:speech_continuity",),
+        )
     if source_duration_us is not None and source_duration_us <= 0:
         return P0Preview(
             status="REJECTED", ir=compiled.ir, diagnostics=("invalid_source_duration",)
@@ -116,7 +126,14 @@ def preview_nel(
             segment=segment,
             diagnostics=("source_bounds_required_for_positive_delta",),
         )
-    available = set(segment.evidence_refs) | {segment.source_model}
+    available = {
+        item.evidence_id
+        for item in segment.evidence_refs
+        if item.project_id == project_id
+        and item.tenant_id == tenant_id
+        and item.timeline_revision == timeline_revision
+        and item.verified
+    }
     missing = tuple(item for item in compiled.ir.required_evidence if item not in available)
     if missing:
         return P0Preview(

@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from nexus_ai_agent.creative.packs.edit.models import TrimInput
-from nexus_ai_agent.nagar.p0 import EvidenceKind, SemanticSegment, compile_nel
+from nexus_ai_agent.nagar.p0 import EvidenceKind, EvidenceRef, SemanticSegment, compile_nel
 from nexus_ai_agent.nagar.p0.runtime import canonical_command_input, preview_nel
 
 
@@ -20,6 +20,17 @@ def segment(**changes: object) -> SemanticSegment:
         "end_pts": 120,
         "timebase_num": 1,
         "timebase_den": 30,
+        "evidence_refs": (
+            EvidenceRef(
+                evidence_id="scene-detector.v1",
+                project_id="project-1",
+                tenant_id="tenant-1",
+                timeline_revision=3,
+                kind=EvidenceKind.DETERMINISTIC_CHECK,
+                digest="sha256:" + "b" * 64,
+                verified=True,
+            ),
+        ),
         "evidence_kind": EvidenceKind.DETERMINISTIC_CHECK,
         "confidence": 0.95,
         "uncertainty": 0.01,
@@ -212,7 +223,9 @@ def test_unverified_preserve_constraint_requires_clarification() -> None:
 
 
 def test_source_model_name_alone_is_not_evidence() -> None:
-    source = SOURCE.replace('REQUIRE evidence("scene-detector.v1")', 'REQUIRE evidence("unlisted-model")')
+    source = SOURCE.replace(
+        'REQUIRE evidence("scene-detector.v1")', 'REQUIRE evidence("unlisted-model")'
+    )
     result = preview_nel(
         source,
         project_id="project-1",

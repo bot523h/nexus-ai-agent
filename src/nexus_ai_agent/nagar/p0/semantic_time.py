@@ -15,6 +15,17 @@ class EvidenceKind(str, Enum):
     DETERMINISTIC_CHECK = "DETERMINISTIC_CHECK"
 
 
+class EvidenceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    evidence_id: str = Field(min_length=1, max_length=128)
+    project_id: str
+    tenant_id: str
+    timeline_revision: int = Field(ge=0)
+    kind: EvidenceKind
+    digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    verified: bool = False
+
+
 class SemanticSegment(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     segment_id: str = Field(min_length=1, max_length=128)
@@ -27,7 +38,7 @@ class SemanticSegment(BaseModel):
     end_pts: int = Field(gt=0)
     timebase_num: int = Field(gt=0)
     timebase_den: int = Field(gt=0)
-    evidence_refs: tuple[str, ...] = ()
+    evidence_refs: tuple[EvidenceRef, ...] = ()
     evidence_kind: EvidenceKind
     confidence: float = Field(ge=0, le=1)
     uncertainty: float = Field(ge=0, le=1)

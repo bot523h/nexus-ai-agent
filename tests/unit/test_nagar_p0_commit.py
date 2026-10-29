@@ -32,6 +32,14 @@ class Queue:
         return "job-1"
 
 
+class Observer:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    def observe(self, event: object) -> None:
+        self.events.append(event)
+
+
 class Directory:
     def __init__(self, actor: ActorIdentity, project_id: str) -> None:
         self.access = ProjectAccess(
@@ -69,7 +77,7 @@ def project(revision: int = 3) -> Project:
 
 
 def preview(revision: int = 0):
-    from nexus_ai_agent.nagar.p0.semantic_time import EvidenceKind, SemanticSegment
+    from nexus_ai_agent.nagar.p0.semantic_time import EvidenceKind, EvidenceRef, SemanticSegment
 
     segment = SemanticSegment(
         segment_id="seg-intro",
@@ -82,6 +90,17 @@ def preview(revision: int = 0):
         end_pts=120,
         timebase_num=1,
         timebase_den=30,
+        evidence_refs=(
+            EvidenceRef(
+                evidence_id="scene-detector.v1",
+                project_id="project-1",
+                tenant_id="tenant-1",
+                timeline_revision=revision,
+                kind=EvidenceKind.DETERMINISTIC_CHECK,
+                digest="sha256:" + "b" * 64,
+                verified=True,
+            ),
+        ),
         evidence_kind=EvidenceKind.DETERMINISTIC_CHECK,
         confidence=0.95,
         uncertainty=0.01,
@@ -97,9 +116,10 @@ def preview(revision: int = 0):
     )
 
 
-def context(*, revision: int = 0) -> tuple[P0CommitContext, Queue, Directory]:
+def context(*, revision: int = 0) -> tuple[P0CommitContext, Queue, Directory, Observer]:
     actor = ActorIdentity(kind="user", actor_id="prn_" + "1" * 32)
     queue = Queue()
+    observer = Observer()
     directory = Directory(actor, "project-1")
     ctx = P0CommitContext(
         actor=actor,
@@ -113,12 +133,13 @@ def context(*, revision: int = 0) -> tuple[P0CommitContext, Queue, Directory]:
         source_text=SOURCE,
         user_id=1,
         chat_id=2,
+        causal_observer=observer,
     )
-    return ctx, queue, directory
+    return ctx, queue, directory, observer
 
 
 def test_commit_rechecks_authority_and_enqueues_existing_creative_job() -> None:
-    ctx, queue, directory = context()
+    ctx, queue, directory, observer = context()
     result = asyncio.run(commit_preview(preview(), ctx))
     assert result.status == "enqueued"
     assert result.job_id == "job-1"
@@ -129,10 +150,15 @@ def test_commit_rechecks_authority_and_enqueues_existing_creative_job() -> None:
     }
     assert directory.authorized == 1 and directory.bound == 1
     assert queue.calls[0]["job_type"] == "creative_render"
+    assert len(observer.events) == 1
+    event = observer.events[0]
+    assert event.kind.value == "job_enqueued"
+    assert event.detail["operation_id"] == result.idempotency_key
+    assert event.detail["required_evidence"] == ["scene-detector.v1"]
 
 
 def test_commit_rejects_stale_preview_before_queue_insert() -> None:
-    ctx, queue, _ = context(revision=4)
+    ctx, queue, _, _ = context(revision=4)
     with pytest.raises(ValueError, match="stale_preview_revision"):
         asyncio.run(commit_preview(preview(), ctx))
     assert queue.calls == []

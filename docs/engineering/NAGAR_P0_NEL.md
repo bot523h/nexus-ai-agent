@@ -31,10 +31,10 @@ NEL source
   -> preview or canonical CommandBus commit
 ```
 
-`PROPOSED`: the runtime adapter should refuse commit when the semantic segment is stale, ambiguous, below the confidence threshold, or outside the actor’s project/tenant scope. The AST and IR are not authorization grants.
+`IMPLEMENTED`: the runtime adapter refuses commit planning when the semantic segment is stale, ambiguous, below the confidence threshold, outside the actor’s project/tenant scope, zero-delta, or backed only by a model name rather than a verified `EvidenceRef`. A negative trim whose intent names a pause is an explicit `unsupported_intent`; preservation constraints are typed clarification until a verifier exists. The AST and IR are not authorization grants.
 
 ## Security properties
 
 `TESTED` by the focused P0 tests once the repository dev dependencies are installed: the intended contracts reject shell-like statements, keep operation names allowlisted, use integer microseconds in IR, and produce stable canonical JSON for hashing and replay.
 
-The current implementation does not accept paths, FFmpeg argv, imports, eval, dynamic operation names, actor IDs, tenant IDs, or policy overrides from NEL input.
+The current implementation does not accept paths, FFmpeg argv, imports, eval, dynamic operation names, actor IDs, tenant IDs, or policy overrides from NEL input. It also does not claim to generate NEL from intent, and it does not claim durable nonzero-revision mutation safety.
