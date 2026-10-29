@@ -34,6 +34,7 @@ a verbose provider response cannot be used as a side channel.
 
 from __future__ import annotations
 
+import inspect
 import json
 import sqlite3
 import threading
@@ -43,6 +44,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Final
 
+from nexus_ai_agent.adapters.effect import effect_delivery, observability_backend
 from nexus_ai_agent.application.ports.outbox_port import DeliveryError, EffectAdapter
 from nexus_ai_agent.domain.policies import effect_key as effect_key_api
 from nexus_ai_agent.domain.policies.outbox_policy import (
@@ -52,6 +54,35 @@ from nexus_ai_agent.domain.policies.outbox_policy import (
     classify_failure,
     classify_row,
 )
+
+
+def _as_effect_handler(adapter: EffectAdapter) -> effect_delivery.EffectHandler:
+    """Adapt one ``EffectAdapter`` to the handler contract the dispatcher runs.
+
+    An adapter that does not expose an async ``deliver`` resolves to the
+    fail-closed ``unavailable_effect`` handler — a permanent ``DeliveryError``,
+    never a fabricated SUCCEEDED.
+    """
+    deliver = getattr(adapter, "deliver", None)
+    if not callable(deliver):
+        return effect_delivery.unavailable_effect(
+            getattr(adapter, "operation_type", type(adapter).__name__),
+            reason="adapter has no deliver()",
+        )
+
+    async def _handler(
+        *,
+        effect_key: str,
+        destination: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        result = deliver(effect_key=effect_key, payload=payload, destination=destination)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    return _handler
+
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS nexus_effect_outbox (
@@ -78,6 +109,13 @@ CREATE TABLE IF NOT EXISTS nexus_effect_outbox (
 """
 
 #: Column list shared by every read (keeps row shapes identical under dict()).
+#: SQL-injection note (static-analysis false positive): the ``f"SELECT
+#: {_ROW_COLUMNS} ..."`` call sites interpolate **only this module-level
+#: constant** — a frozen literal of column names, never runtime data. Every
+#: value from a caller (``operation_type``, ``effect_key``, ``attempt_id``,
+#: payload) travels as a bound ``?`` parameter, so no external input can alter
+#: the SQL text. ``grep`` proof: the only ``f``-strings handed to ``execute``
+#: are these three, and each interpolates nothing but ``_ROW_COLUMNS``.
 _ROW_COLUMNS = (
     "seq, operation_type, effect_key, attempt_id, destination, logical_entity, "
     "payload_json, status, attempt, claimed_by, lease_until, not_before, "
@@ -402,6 +440,12 @@ class OutboxDispatcher:
         self.store = store
         self.adapters = adapters
         self.dispatcher_id = dispatcher_id
+        #: The runnable handler per operation type — the one path a delivery
+        #: takes, so ``effect_delivery``'s key-aware contract is always applied.
+        self.handlers: dict[str, effect_delivery.EffectHandler] = {
+            operation_type: _as_effect_handler(adapter)
+            for operation_type, adapter in adapters.items()
+        }
 
     # -- producer side -------------------------------------------------------
 
@@ -430,7 +474,7 @@ class OutboxDispatcher:
             logical_slot=logical_slot,
         )
         typed = effect_key_api.serialize_effect_key(operation_type, key)
-        row, _created = self.store.append_or_get(
+        row, created = self.store.append_or_get(
             operation_type=operation_type,
             effect_key=typed,
             attempt_id=attempt_id,
@@ -439,6 +483,14 @@ class OutboxDispatcher:
             payload=payload,
             now=now if now is not None else _now_epoch(),
         )
+        event = "effect_created" if created else "effect_duplicate"
+        observability_backend.emit_effect_event(
+            event,
+            effect_key=typed,
+            operation_type=operation_type,
+            attempt=str(row.get("attempt", 0)),
+        )
+        observability_backend.increment_effect_counter(event)
         return row
 
     # -- consumer side ---------------------------------------------------------
@@ -460,6 +512,13 @@ class OutboxDispatcher:
             attempt_id=attempt_id,
             now=t,
         ):
+            observability_backend.emit_effect_event(
+                "effect_claimed",
+                effect_key=effect_key,
+                operation_type=operation_type,
+                attempt=attempt_id,
+            )
+            observability_backend.increment_effect_counter("claimed")
             return await self._deliver(operation_type=operation_type, effect_key=effect_key, now=t)
         row = self.store.snapshot(operation_type, effect_key)
         if row is None:
@@ -471,9 +530,9 @@ class OutboxDispatcher:
 
     async def _deliver(self, *, operation_type: str, effect_key: str, now: int) -> Outcome:
         row = self.store.snapshot(operation_type, effect_key)
-        adapter = self.adapters.get(operation_type)
+        handler = self.handlers.get(operation_type)
         attempt_id = str(row["attempt_id"]) if row else ""
-        if adapter is None:
+        if handler is None:
             self.store.record_attempt(
                 operation_type=operation_type,
                 effect_key=effect_key,
@@ -486,8 +545,11 @@ class OutboxDispatcher:
         payload = _decode_payload(row)
         destination = str(row["destination"]) if row else ""
         try:
-            result = await adapter.deliver(
-                effect_key=effect_key, payload=payload, destination=destination
+            result = await effect_delivery.deliver_through_handler(
+                handler,
+                effect_key=effect_key,
+                destination=destination,
+                payload=payload,
             )
             success = self.store.mark_succeeded(
                 operation_type=operation_type,
@@ -498,6 +560,13 @@ class OutboxDispatcher:
             )
             if not success:
                 return Outcome(operation_type, effect_key, "retrying", "superseded")
+            observability_backend.emit_effect_event(
+                "effect_succeeded",
+                effect_key=effect_key,
+                operation_type=operation_type,
+                attempt=attempt_id,
+            )
+            observability_backend.increment_effect_counter("succeeded")
             return Outcome(operation_type, effect_key, "dispatched", "succeeded")
         except DeliveryError as exc:
             self.store.record_attempt(
@@ -510,6 +579,17 @@ class OutboxDispatcher:
             )
             status = "failed_permanent" if not exc.retryable else "failed_retryable"
             action = "permanent" if not exc.retryable else "retrying"
+            observability_backend.emit_effect_event(
+                "effect_failed",
+                effect_key=effect_key,
+                operation_type=operation_type,
+                attempt=attempt_id,
+                outcome=status,
+                reason="retryable" if exc.retryable else "permanent",
+            )
+            observability_backend.increment_effect_counter(
+                "failed_permanent" if not exc.retryable else "failed_retryable"
+            )
             return Outcome(operation_type, effect_key, action, status)
         except Exception as exc:  # noqa: BLE001 — an unknown remote result is a retryable ambiguity
             self.store.record_attempt(
@@ -520,4 +600,13 @@ class OutboxDispatcher:
                 now=now,
                 error=f"{type(exc).__name__}: {exc}",
             )
+            observability_backend.emit_effect_event(
+                "effect_failed",
+                effect_key=effect_key,
+                operation_type=operation_type,
+                attempt=attempt_id,
+                outcome="failed_retryable",
+                reason="unknown",
+            )
+            observability_backend.increment_effect_counter("failed_retryable")
             return Outcome(operation_type, effect_key, "retrying", "failed_retryable")
