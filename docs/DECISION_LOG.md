@@ -2217,6 +2217,101 @@ smoke job, which degrades to a visible skip without one.
 (the real SDK path, provable on every leg because the SDK ships with core),
 `scripts/langsmith_smoke.py` + the `langsmith-smoke` workflow run. Living view:
 `docs/architecture/TRACING.md`.
+### D-0035 — Storage has three products, capacity is a typed claim with a source, and a second storage seam is allowed only because neither existing one can carry a user asset (task-272, **PROPOSED**)
+
+**Status: PROPOSED — not accepted.** This entry records an implemented and tested *adapter and
+contract* plus the design direction behind them. The direction itself awaits owner review; per
+`AGENTS.md` §7 a proposal is not an accepted decision, and no later wave may cite it as authority
+until it is accepted.
+
+**Context.** A source audit of `main` @ `04469ed` found: the Asset Library's blob store is a local
+content-addressed directory with no cloud backend wired to it; Cloudflare R2 exists but is the
+*maintenance* tier (database backups, heavy RAG documents) and is deliberately outside the user-file
+path; `storage/unified_cloud.py` models Dropbox, pCloud and Internxt with **static environment
+tokens** and publishes a `TOTAL_FREE_GB` that sums advertised free plans; pCloud/Internxt `get_usage`
+return a hard-coded allocation with `used_bytes: 0`; Google Drive is reachable only through a
+pre-configured `rclone` remote; OneDrive is absent; and no Neon Object Storage code existed although
+Neon PostgreSQL is a supported database backend.
+
+**Decision (four parts).**
+
+1. **Three products, three boundaries.** (A) *Storage backends* for files Nagar owns; (B)
+   *user-authorized drive connectors* for accounts the user connects (per-user OAuth, durable
+   ownership, least-privilege scopes); (C) *user-installable capability extensions*. An OAuth
+   connection grants no right to execute third-party code, and no layer may be described using
+   another layer's evidence. Recorded in `architecture/DATA_AND_STORAGE.md` §7.
+2. **A new seam, justified rather than convenient.** `storage/object_store.py` is the typed contract
+   for immutable content-addressed blobs. The two existing seams cannot carry it:
+   `StorageProvider` is path-based with no checksum/idempotency/capacity semantics, and
+   `BlobStore` is a filesystem *staging* contract. Neither existing seam is replaced or rewired:
+   R2 keeps its backup/RAG routing, and the Asset Library keeps its staging path until an explicit
+   composition step exists (law R22 keeps that one-way).
+3. **Capacity is a typed claim.** `CapacityReport` requires a source and an aware timestamp, and
+   distinguishes `AUTHORITATIVE` / `ADVERTISED` / `UNKNOWN`; only authoritative quota+usage yields
+   `verified_remaining_bytes`; an `UNKNOWN` report cannot carry numbers; unique and replicated bytes
+   are separate fields; deletion is not reclamation where the provider soft-deletes (Neon does).
+   This supersedes the "sum of free tiers" model in `storage/unified_cloud.py` **for the user-asset
+   path only** — that module's legacy behaviour is left untouched in this wave so existing
+   deployments do not change silently.
+4. **Neon Object Storage is a backend, verified from its documentation before implementation.** The
+   adapter targets the documented branch endpoint (`https://br-….storage.c-<N>.<region>.aws.neon.tech`),
+   path-style + SigV4, lazy `boto3`, bounded retry, typed non-retry of authorization failures, and
+   soft-delete-aware accounting. It is **feature-gated**: an incomplete environment returns `None`
+   and the local backend remains the default.
+
+**Evidence.** `tests/unit/test_object_store_contract.py` (33 tests over two independent
+implementations), `tests/unit/test_neon_object_storage.py` (29 tests against an injected fake S3
+client), `tests/architecture/test_storage_backend_boundary.py` (10 laws). Live provider round-trip:
+**BLOCKED** — no Neon Object Storage credential exists in the implementation environment; mocks are
+not live evidence. `docs/architecture/DATA_AND_STORAGE.md` §7.3 is the operative policy text.
+
+**Rejected.** (a) Reusing `unified_cloud` as the user-asset path — its routing is round-robin over
+static tokens and its capacity numbers are advertised, not measured; (b) implementing the four drive
+connectors as S3 buckets — they are OAuth'd user accounts with per-provider quota and error
+semantics; (c) reporting a single "total available" across backends — that is the exact arithmetic
+that produced the previous fiction; (d) making Neon the default backend before a live round-trip —
+an unverified default is an outage waiting for a deploy; (e) replacing the Principal model with Neon
+Auth because storage is Neon-hosted — identity and storage are independent products.
+
+**Limits.** No per-user OAuth connector, no quota API integration, no placement/fallback engine, no
+R2 user-asset wiring, no UI, no installable extension runtime. Those are Waves 2–6 in
+`architecture/DATA_AND_STORAGE.md` §7.7, each with its own claim.
+
+**D-0032 amendment (2026-10-22, PR #244 independent review).** The review found the contract's
+*prefix* and *integrity* semantics were conventions rather than law, so two adapters disagreed and a
+documentation claim outran the code. The status stays **PROPOSED**; the following are corrections to
+the proposal, not new decisions:
+
+1. **`namespace` is contract.** Each store declares its root key prefix; `list_keys(prefix=...)`
+   filters the same absolute keys that `head`/`open_bytes` accept, defaults to `namespace`, and
+   refuses a prefix outside it. Neon previously prepended `nagar/assets` internally while the local
+   and in-memory stores filtered relative keys, so the *same call* meant different things per backend.
+2. **Integrity is claimed only where measured.** `head` reports recorded metadata and never verifies
+   bytes; `verify_bytes` re-reads and hashes; `PutResult.content_verified` is `True` only after a real
+   byte check, and `put_stream(verify_existing=True)` makes a dedupe safe. The earlier wording
+   ("post-upload verification") is narrowed in code, docs and the PR body.
+3. **Environment sourcing is explicit.** The region is never taken from `AWS_REGION`; the endpoint is
+   parsed by authority so look-alike hosts, embedded credentials, paths and non-443 ports are refused.
+
+**D-0032 amendment 2 (2026-10-22, PR #244 round-2 review).** Still **PROPOSED**. Three corrections:
+
+1. **Ownership is a segment boundary, not a string prefix.** `nagar/assets` does not own
+   `nagar/assets-other/…`. Every key operation now proves membership before any provider request (a
+   foreign key raises `InvalidObjectKey` instead of reading as "absent"), and `list_keys` /
+   `measure_namespace` exclude siblings *after* the provider returns them, because `list_objects_v2`
+   matches prefixes literally. One shared rule (`is_within_namespace`) serves both backends. A root
+   namespace (`""`) must be opted into explicitly; it is never inherited from a missing variable.
+2. **Local reads stream.** `iter_chunks` reads through the filesystem boundary chunk by chunk with an
+   incremental digest, and `open_bytes(max_bytes=…)` enforces its bound while reading. Previously both
+   materialized the whole object first, so the documented bound did not exist.
+3. **Two identities, not one.** `verify_bytes` compares against the digest encoded in the
+   content-addressed key *and* the recorded metadata, and raises `IntegrityMismatch` when they
+   disagree — so rewriting bytes and metadata together while keeping the key no longer passes. The
+   existing corruption tests (bytes changed, metadata untouched) are unchanged and still pass.
+
+Evidence: `tests/unit/test_object_store_contract.py` (47), `tests/unit/test_neon_object_storage.py`
+(48), `tests/architecture/test_storage_backend_boundary.py` (14). Still **no live provider round-trip**
+— BLOCKED on an operator-provisioned branch, bucket and scoped credential.
 ### D-0032 — The Creative Intelligence Plane gets its own typed intermediate representation, content-addressed like a compiler IR, and is forbidden from executing
 
 *Problem.* Verified on `main` @ `e5b326b`: `creative/` has no `Strategy`
