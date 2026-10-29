@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-29T19:39:44Z",
+  "updated_at": "2026-10-29T20:05:44Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7436,7 +7436,7 @@
       "title_fa": "حافظهٔ علّی ناگار و اجماع محدود Director",
       "zone": "nagar-causal-memory-director",
       "priority": "P1",
-      "status": "active",
+      "status": "deferred",
       "scope": "Implement a typed, rebuildable, read-only projection over canonical causal journal, execution/passport evidence, plus a bounded typed Director preview/consensus over existing contracts. Do not add another journal, graph database, queue, policy, CommandBus, verifier, or execution path. Do not edit NEL/semantic-time paths in PR #273, Cognition evaluation paths in PR #276, queue heartbeat paths, or docs files currently changed by PR #273. No NEL integration or real execution is included; it requires a separate registered follow-up after its dependency is canonical.",
       "scope_fa": "فقط projection تایپ‌شده و بازسازی‌پذیر از journal و شواهد canonical موجود، به‌علاوهٔ preview و consensus محدود Director روی قراردادهای موجود. بدون journal/graph/queue/policy/CommandBus/verifier یا مسیر اجرای موازی. مسیرهای NEL و Semantic Time در PR #273، ارزیابی شناخت در PR #276، صف heartbeat و فایل‌های مستنداتی که PR #273 تغییر داده دست‌نخورده بمانند. اتصال NEL و اجرای واقعی خارج از scope است و فقط پس از canonical شدن وابستگی، در task جداگانه انجام شود.",
       "prerequisites": [
@@ -7474,11 +7474,11 @@
       ],
       "owner_hint": "Registration only: remains unclaimed until this additive board entry is on canonical main. Then the implementation agent must claim it via scripts/agent_board.py before feature code.",
       "agent_branch": "arena/nagar-causal-memory-director-impl-20261029-2208",
-      "claimed_at": "2026-10-29T19:39:44Z",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 2
     }
   ],
   "deferred_log": [
@@ -7550,6 +7550,14 @@
       "resolved": true,
       "resolved_at": "2026-10-27T14:00:00Z",
       "resolution": "zone freed (pr-repair-240 released) and task-258 delivered in PR #199 (merged 6ae7042a83)."
+    },
+    {
+      "task": "task-278-nagar-causal-memory-director",
+      "deferred_by_branch": "arena/nagar-causal-memory-director-impl-20261029-2208",
+      "at": "2026-10-29T20:05:44Z",
+      "reason_fa": "مسدود: تست‌های task-278 در projection رسمی Operation Truth شناسایی شده‌اند و OPERATION_TRUTH.json اکنون stale است. فایل تولیدشده خارج از claim فعلی است؛ بدون claim جداگانه یا گسترش رسمی محدوده، فایل مشترک با PR #273 را تغییر نده.",
+      "reason_en": "Blocked: task-278 test additions are discovered by the official operation-truth projection, so OPERATION_TRUTH.json is stale. The required generated artifact is outside this claim; do not change the PR #273 shared path without an explicit separate/expanded claim.",
+      "resume_when": "Resume after a valid claim authorizes the official generated-truth update for these test references and the truth gate plus make test pass on the final SHA."
     }
   ],
   "next_work": [
