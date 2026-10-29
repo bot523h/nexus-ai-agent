@@ -866,3 +866,50 @@ def test_the_report_is_identical_from_a_foreign_working_directory(tmp_path: Path
     # The default baseline path is resolved against the repository root, not the CWD.
     checked = _check_cli("--check", "--repeats", "1", cwd=tmp_path)
     assert checked.returncode == 0, checked.stderr
+
+
+def test_case_order_is_stable_across_runs(report: dict[str, Any]) -> None:
+    # Ordering is part of the report contract: the baseline is compared by id,
+    # but a human diff of two ``--json`` runs must not churn.
+    again = harness.evaluate(repeats=1)
+    assert [case["case_id"] for case in report["cases"]] == [
+        case["case_id"] for case in again["cases"]
+    ]
+
+
+def test_a_failing_fixture_is_visible_and_fails_the_cli(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cases = list(harness._build_cases())
+    target = cases[0]
+    cases[0] = harness._Case(
+        case_id=target.case_id,
+        scenario=target.scenario,
+        expected=target.expected,
+        probe=target.probe,
+        run=lambda: "malformed",  # a wrong outcome: must not be hidden
+    )
+    monkeypatch.setattr(harness, "_build_cases", lambda: tuple(cases))
+    assert harness.main(["--repeats", "1"]) == harness.EXIT_MISMATCH
+    printed = capsys.readouterr().out
+    assert f"FAIL {target.case_id}" in printed
+    assert "failed=1" in printed
+
+
+def test_a_failing_fixture_also_fails_the_baseline_check(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cases = list(harness._build_cases())
+    target = cases[0]
+    cases[0] = harness._Case(
+        case_id=target.case_id,
+        scenario=target.scenario,
+        expected=target.expected,
+        probe=target.probe,
+        run=lambda: "malformed",
+    )
+    monkeypatch.setattr(harness, "_build_cases", lambda: tuple(cases))
+    # A mismatch must never degrade to a warning: the check stays non-zero.
+    assert harness.main(["--check", "--repeats", "1"]) == harness.EXIT_MISMATCH
+    captured = capsys.readouterr()
+    assert "baseline check FAIL" in captured.out
