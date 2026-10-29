@@ -7,11 +7,14 @@ import json
 import re
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-NEL_VERSION = 1
+# ``Final`` (not a bare ``int``) is what lets ``version: Literal[1]`` default to
+# this name: mypy treats a plain ``int`` as a wider type and rejects the
+# assignment, while ``Final[int]`` narrows to the literal value.
+NEL_VERSION: Final = 1
 
 
 class NELDiagnostic(BaseModel):
