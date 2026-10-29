@@ -489,15 +489,84 @@ def test_the_committed_baseline_is_not_generated_from_the_run_it_verifies(
     assert harness.build_baseline(report) == harness.load_baseline(BASELINE)
 
 
-def test_a_changed_outcome_is_detected(report: dict[str, Any]) -> None:
-    tampered = json.loads(json.dumps(report))
-    tampered["cases"][0]["observed"] = (
-        "proposal" if tampered["cases"][0]["observed"] != "proposal" else "malformed"
+def _restate(data: dict[str, Any]) -> None:
+    """Recompute a baseline's own aggregates after an intentional case edit.
+
+    Without this, a drifted case would still be caught by the aggregate
+    counters — which would hide a checker that stopped comparing the cases
+    themselves.  Restating the aggregates makes the case-level comparison the
+    only thing left that can notice the edit.
+    """
+    cases = data["cases"]
+    data["counts"]["cases_total"] = len(cases)
+    data["counts"]["cases_passed"] = sum(1 for case in cases if case["passed"])
+    data["counts"]["cases_failed"] = sum(1 for case in cases if not case["passed"])
+    data["counts"]["valid_proposals_accepted"] = sum(
+        1 for case in cases if case["observed"] == "proposal"
     )
-    tampered["cases"][0]["passed"] = True  # keep the tampered report self-consistent
+    data["counts"]["synthetic_boundary_probe_cases"] = sum(
+        1 for case in cases if case["probe"] == "synthetic_boundary_probe"
+    )
+    reasons: dict[str, int] = {}
+    for case in cases:
+        if case["observed"] not in {"proposal", "separated"}:
+            reasons[case["observed"]] = reasons.get(case["observed"], 0) + 1
+    data["refusal_reasons"] = dict(sorted(reasons.items()))
+    data["counts"]["refusals_observed"] = sum(reasons.values())
+
+
+def _edit_case(data: dict[str, Any], case_id: str, **changes: Any) -> None:
+    for case in data["cases"]:
+        if case["case_id"] == case_id:
+            case.update(changes)
+            return
+    raise AssertionError(f"baseline has no case {case_id!r}")
+
+
+def test_a_changed_outcome_is_detected_even_when_the_baseline_is_self_consistent(
+    tmp_path: Path,
+) -> None:
+    case_id = "A-valid-json-caller-provenance"
+
+    def drift(data: dict[str, Any]) -> None:
+        _edit_case(data, case_id, observed="malformed", passed=False)
+        _restate(data)
+
+    path = _baseline_copy(tmp_path, drift)
+    report = harness.evaluate(repeats=1)
+    problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert any(case_id in problem and "observed changed" in problem for problem in problems), (
+        problems
+    )
+
+
+def test_a_changed_expectation_is_detected_even_when_counts_agree(tmp_path: Path) -> None:
+    case_id = "B-empty-string"
+
+    def drift(data: dict[str, Any]) -> None:
+        _edit_case(data, case_id, expected="proposal", passed=False)
+        _restate(data)
+
+    path = _baseline_copy(tmp_path, drift)
+    report = harness.evaluate(repeats=1)
+    problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert any(case_id in problem and "expected changed" in problem for problem in problems), (
+        problems
+    )
+
+
+def test_a_tampered_report_verdict_is_detected(report: dict[str, Any]) -> None:
+    # A refusal fixture relabelled as an accepted proposal, with ``passed`` still
+    # True: the pair (expected=malformed, observed=proposal) contradicts itself,
+    # so a checker that trusted ``passed`` would accept it.
+    tampered = json.loads(json.dumps(report))
+    for case in tampered["cases"]:
+        if case["case_id"] == "B-empty-string":
+            case["observed"] = "proposal"
+            case["passed"] = True
     problems = harness.check_baseline(tampered, harness.load_baseline(BASELINE))
-    assert any(report["cases"][0]["case_id"] in problem for problem in problems)
-    assert any("observed" in problem or "verdict" in problem for problem in problems)
+    assert any("B-empty-string" in problem for problem in problems), problems
+    assert any("verdict does not match its own outcomes" in problem for problem in problems)
 
 
 def test_a_missing_fixture_is_detected(report: dict[str, Any], tmp_path: Path) -> None:
