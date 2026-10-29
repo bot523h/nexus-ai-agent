@@ -376,9 +376,7 @@ def _authored_constraints(work: CreativeWork) -> tuple[Constraint, ...]:
     is about to be dropped, so reporting a collision it causes would block a
     request that is internally consistent.
     """
-    return tuple(
-        c for c in work.constraints if c.origin.reference_id != _DERIVED_ORIGIN_MARKER
-    )
+    return tuple(c for c in work.constraints if c.origin.reference_id != _DERIVED_ORIGIN_MARKER)
 
 
 # ── Resolution ───────────────────────────────────────────────────────────────
@@ -541,11 +539,7 @@ def resolve_semantics(work: CreativeWork) -> SemanticResolution:
         resolved_phrases=tuple(resolved),
     )
     return resolution.model_copy(
-        update={
-            "collisions": detect_collisions(
-                (*_authored_constraints(work), *constraints), work
-            )
-        }
+        update={"collisions": detect_collisions((*_authored_constraints(work), *constraints), work)}
     )
 
 

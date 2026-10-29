@@ -676,9 +676,7 @@ def _apply_text_change(
         layer.content.text.model_copy(update={"text": change.text}).model_dump(mode="json")
     )
     rewritten_layer = layer.model_copy(
-        update={
-            "content": layer.content.model_copy(update={"text": new_text})
-        }
+        update={"content": layer.content.model_copy(update={"text": new_text})}
     )
     rewritten_scene = scene.model_copy(
         update={
@@ -843,9 +841,7 @@ def _apply_effect_change(
                     )
                 )
         if touched:
-            pending.append(
-                _PendingPair(kind="scene", before_ref=scene.scene_id, index=scene_index)
-            )
+            pending.append(_PendingPair(kind="scene", before_ref=scene.scene_id, index=scene_index))
     return revised, tuple(pending)
 
 
