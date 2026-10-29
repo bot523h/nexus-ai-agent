@@ -21,7 +21,7 @@ ownership and lease) is pinned by ``tests/unit/test_outbox_policy.py``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from typing import Final
 
 # ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ BUILD_MAX_JITTER_SECONDS: Final[int] = 5
 DEAD_LETTER_TOGGLE_DEFAULT: Final[bool] = False
 
 
-class EffectStatus(StrEnum):
+class EffectStatus(str, Enum):
     PENDING = "pending"
     CLAIMED = "claimed"
     SUCCEEDED = "succeeded"
