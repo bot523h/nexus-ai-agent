@@ -984,6 +984,13 @@ def _report_cases_by_id(
     problems: list[str] = []
     by_id: dict[str, dict[str, Any]] = {}
     for position, case in enumerate(report["cases"]):
+        if not isinstance(case, dict):
+            problems.append(f"report case #{position} is not an object")
+            continue
+        missing = [key for key in BASELINE_CASE_KEYS if key not in case]
+        if missing:
+            problems.append(f"report case #{position} is missing {', '.join(missing)}")
+            continue
         case_id = case.get("case_id")
         if not isinstance(case_id, str) or not case_id.strip():
             problems.append(f"report case #{position} has a blank case_id")
@@ -995,24 +1002,38 @@ def _report_cases_by_id(
     return by_id, problems
 
 
+def _observed_outcomes(cases: Sequence[dict[str, Any]]) -> list[str]:
+    """Every ``observed`` value in the case list, tolerating malformed entries."""
+    return [
+        case["observed"]
+        for case in cases
+        if isinstance(case, dict) and isinstance(case.get("observed"), str)
+    ]
+
+
 def _recompute_counts(cases: Sequence[dict[str, Any]]) -> dict[str, int]:
     """Recount the aggregates from the case list (never from the report's own numbers)."""
-    accepted = sum(1 for case in cases if case["observed"] == _OUTCOME_PROPOSAL)
-    refusals = Counter(case["observed"] for case in cases if case["observed"] in _REFUSAL_OUTCOMES)
+    observed = _observed_outcomes(cases)
+    accepted = sum(1 for value in observed if value == _OUTCOME_PROPOSAL)
+    refusals = Counter(value for value in observed if value in _REFUSAL_OUTCOMES)
     return {
         "cases_total": len(cases),
-        "cases_passed": sum(1 for case in cases if case["passed"]),
-        "cases_failed": sum(1 for case in cases if not case["passed"]),
+        "cases_passed": sum(
+            1 for case in cases if isinstance(case, dict) and case.get("passed") is True
+        ),
+        "cases_failed": sum(
+            1 for case in cases if not (isinstance(case, dict) and case.get("passed") is True)
+        ),
         "valid_proposals_accepted": accepted,
         "refusals_observed": sum(refusals.values()),
         "synthetic_boundary_probe_cases": sum(
-            1 for case in cases if case["probe"] == _PROBE_INJECTION
+            1 for case in cases if isinstance(case, dict) and case.get("probe") == _PROBE_INJECTION
         ),
     }
 
 
 def _recompute_refusal_reasons(cases: Sequence[dict[str, Any]]) -> dict[str, int]:
-    counts = Counter(case["observed"] for case in cases if case["observed"] in _REFUSAL_OUTCOMES)
+    counts = Counter(value for value in _observed_outcomes(cases) if value in _REFUSAL_OUTCOMES)
     return dict(sorted(counts.items()))
 
 

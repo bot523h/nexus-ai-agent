@@ -913,3 +913,19 @@ def test_a_failing_fixture_also_fails_the_baseline_check(
     assert harness.main(["--check", "--repeats", "1"]) == harness.EXIT_MISMATCH
     captured = capsys.readouterr()
     assert "baseline check FAIL" in captured.out
+
+
+def test_a_structurally_broken_report_is_reported_not_crashed(report: dict[str, Any]) -> None:
+    baseline = harness.load_baseline(BASELINE)
+    missing_key = json.loads(json.dumps(report))
+    del missing_key["cases"][3]["observed"]
+    problems = harness.check_baseline(missing_key, baseline)
+    assert any("is missing observed" in problem for problem in problems)
+
+    not_an_object = json.loads(json.dumps(report))
+    not_an_object["cases"][2] = "not-an-object"
+    problems = harness.check_baseline(not_an_object, baseline)
+    assert any("is not an object" in problem for problem in problems)
+
+    # A clean report is still clean: the guard must not turn into noise.
+    assert harness.check_baseline(report, baseline) == []
