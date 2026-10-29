@@ -334,6 +334,28 @@ def test_sealing_rejects_duplicate_provisional_identities() -> None:
         doubled_scenes.seal()
 
 
+def test_sealing_rejects_two_unassigned_referenceable_ids() -> None:
+    """Two *empty* ids on a referenceable kind are the same silent overwrite.
+
+    ``asset_id``/``effect_id`` default to ``""``, so a caller who adds two
+    assets and never names either hands the seal two entries under the same
+    key. The later one wins and every layer reference to the asset remaps to
+    the wrong content. That must fail closed, exactly like a repeated non-empty
+    id -- while an unreferenced kind (a constraint) may still repeat ``""``,
+    because it is rebuilt rather than remapped.
+    """
+    work = product_teaser(sealed=False)
+    unassigned = tuple(a.model_copy(update={"asset_id": ""}) for a in work.assets[:2])
+    doubled = work.model_copy(update={"assets": (*unassigned, *work.assets[2:])})
+    with pytest.raises(IdentityError, match="duplicate provisional identities"):
+        doubled.seal()
+
+    # constraints are never remapped through an id dict, so a blank id is safe
+    blank_constraints = tuple(c.model_copy(update={"constraint_id": ""}) for c in work.constraints)
+    allowed = work.model_copy(update={"constraints": blank_constraints}).seal()
+    allowed.assert_valid()
+
+
 def test_a_layer_cannot_escape_its_scene() -> None:
     work = product_teaser()
     scene = work.scenes[0]

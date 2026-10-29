@@ -1293,24 +1293,34 @@ def _reject_duplicate_provisional_identities(work: CreativeWork) -> None:
     wrong element.  Distinct content ids keep the mapping injective; provisional
     ids do not, so the duplicate is rejected here rather than corrupted.
     """
-    seen: dict[str, str] = {}
-    buckets: tuple[tuple[str, tuple[str, ...]], ...] = (
-        ("asset", tuple(a.asset_id for a in work.assets)),
-        ("effect", tuple(e.effect_id for e in work.effects)),
-        ("scene", tuple(s.scene_id for s in work.scenes)),
-        ("layer", tuple(layer.layer_id for layer in work.all_layers())),
-        ("transition", tuple(t.transition_id for t in work.transitions)),
-        ("constraint", tuple(c.constraint_id for c in work.constraints)),
-        ("track", tuple(t.track_id for t in work.layout if t.track_id)),
+    # (kind, ids, referenced): only a *referenced* kind is remapped through an
+    # id dict, so only there can a duplicate empty provisional id silently
+    # overwrite. Constraints and layout tracks are rebuilt, never remapped.
+    buckets: tuple[tuple[str, tuple[str, ...], bool], ...] = (
+        ("asset", tuple(a.asset_id for a in work.assets), True),
+        ("effect", tuple(e.effect_id for e in work.effects), True),
+        ("scene", tuple(s.scene_id for s in work.scenes), True),
+        ("layer", tuple(layer.layer_id for layer in work.all_layers()), True),
+        ("transition", tuple(t.transition_id for t in work.transitions), True),
+        ("constraint", tuple(c.constraint_id for c in work.constraints), False),
+        ("track", tuple(t.track_id for t in work.layout if t.track_id), False),
     )
+    seen: dict[str, str] = {}
     collisions: list[str] = []
-    for kind, ids in buckets:
+    for kind, ids, referenced in buckets:
+        empty_seen = 0
         for element_id in ids:
-            # An empty id is "not yet assigned", not a name two elements share:
-            # seal fills it with a content address, and two *identical* contents
-            # collide later in ``_check_unique_identities``. Only a non-empty
-            # provisional id that repeats is the silent-overwrite hazard.
             if not element_id:
+                # A referenced kind cannot hold two unassigned ids: the seal
+                # would map both to one key and silently drop one element. An
+                # unreferenced kind (constraint/track) is rebuilt, so empty ids
+                # there are harmless and stay allowed.
+                if referenced:
+                    empty_seen += 1
+                    if empty_seen > 1:
+                        collisions.append(
+                            f"{kind} identity '' (unassigned) is declared more than once"
+                        )
                 continue
             if element_id in seen:
                 collisions.append(
