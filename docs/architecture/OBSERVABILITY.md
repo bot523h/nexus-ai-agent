@@ -40,6 +40,7 @@ Representative events and where they come from:
 | `lifecycle operation skipped` | `adapters/langgraph/lifecycle_recording.py` | the loop was closed/absent; the operation was dropped, not retried |
 | `lifecycle operation failed` | same | lifecycle metadata write failed; the user-visible flow continued |
 | `reconcile … failed …` (`scan`, `backfill`, `purge`, per-thread) | `storage/checkpoint_reconciler.py` | a reconciler step degraded; mutation stops rather than guessing |
+| `effect_created` / `effect_claimed` / `effect_succeeded` / `effect_failed` / `effect_recovered` / `effect_duplicate` | `adapters/observability_backend.py::emit_effect_event` | effect-lifecycle states; fields stay tight (`effect_key_prefix`, `operation_type`, `outcome`, `reason`, `attempt`) and the full key never leaves the process |
 
 Design rule: **an event exists for every path where the system chose to continue despite a failure** — silent degradation is the thing observability is here to prevent.
 
@@ -49,8 +50,9 @@ Design rule: **an event exists for every path where the system chose to continue
 
 | Property | Value |
 |---|---|
-| Name pattern | `nexus_<lifecycle_operation>_total` (for example `nexus_touch_total`, `nexus_aput_total`) |
+| Name pattern | `nexus_<lifecycle_operation>_total` (for example `nexus_touch_total`, `nexus_aput_total`) plus `nexus_effect_<state>_total` (effect layer) |
 | Allowed labels (hard allow-list) | `backend`, `scope`, `error_code`, `reason`, `outcome` |
+| Banned labels | `telegram_id`, `effect_key` (full token), payload fields, secrets/API keys, attempt ids — any high-cardinality identifier raises or is stripped |
 | Unknown label | **raises** `ValueError` — cardinality explosions are a programming error, not a runtime surprise |
 | Read path | `nexus metrics snapshot [--json]` |
 | Failure mode | increments are wrapped best-effort: a metrics failure logs one warning and never affects the request |
