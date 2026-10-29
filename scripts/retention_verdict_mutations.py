@@ -57,13 +57,29 @@ Usage:  python scripts/retention_verdict_mutations.py
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-PYTEST = [sys.executable, "-m", "pytest", "-q", "-p", "no:warnings", "--tb=no"]
+PYTEST = [
+    sys.executable,
+    "-m",
+    "pytest",
+    "-q",
+    "-p",
+    "no:warnings",
+    "-p",
+    "no:cacheprovider",
+    "--tb=no",
+]
+
+# Per-run cap: a mutated test that hangs must not stall the campaign.  Each run
+# targets a single test file (seconds, not the full suite); 300 s is a wide
+# safety margin that still fails far below the CI job's limit.
+TEST_TIMEOUT_S = 300
 
 POLICY = REPO / "src/nexus_ai_agent/domain/policies/retention.py"
 CLI = REPO / "src/nexus_ai_agent/cli.py"
@@ -351,8 +367,29 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _run_tests(tests: tuple[str, ...]) -> int:
-    return subprocess.run([*PYTEST, *tests], cwd=REPO, capture_output=True, text=True).returncode
+def _run_tests(tests: tuple[str, ...]) -> int | None:
+    """pytest's exit code, or ``None`` when the run exceeded ``TEST_TIMEOUT_S``.
+
+    ``None`` is deliberately distinct from a non-zero code: a timed-out run is
+    *inconclusive* and must never be counted as a caught mutation.
+
+    ``PYTHONPATH`` is pinned to this tree's ``src`` so the mutated file is the
+    one imported even when the package is editable-installed elsewhere — without
+    it every probe would "survive" against the installed copy (GOV-2).
+    """
+    env = {**os.environ, "PYTHONPATH": str(REPO / "src")}
+    try:
+        result = subprocess.run(
+            [*PYTEST, *tests],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=TEST_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    return result.returncode
 
 
 def _apply(probe: Probe) -> None:
@@ -386,6 +423,10 @@ def main() -> int:
         print(f"\n=== {probe.name} ({probe.target.relative_to(REPO)})")
 
         baseline = _run_tests(probe.tests)
+        if baseline is None:
+            failures.append(f"{probe.name}: baseline TIMED OUT after {TEST_TIMEOUT_S}s")
+            print(f"  baseline: TIMED OUT after {TEST_TIMEOUT_S}s — probe invalid")
+            continue
         if baseline != 0:
             failures.append(f"{probe.name}: baseline not GREEN (exit {baseline})")
             print(f"  baseline: NOT GREEN (exit {baseline}) — probe invalid")
@@ -404,7 +445,10 @@ def main() -> int:
             mutant_exit = _run_tests(probe.tests)
         finally:
             probe.target.write_bytes(original)
-        if mutant_exit == 0:
+        if mutant_exit is None:
+            failures.append(f"{probe.name}: mutant run TIMED OUT after {TEST_TIMEOUT_S}s")
+            print(f"  mutant:  TIMED OUT after {TEST_TIMEOUT_S}s — NOT counted as caught")
+        elif mutant_exit == 0:
             failures.append(f"{probe.name}: mutant survived (tests stayed GREEN)")
             print("  mutant:  SURVIVED (tests still green) — invariant NOT protected")
         else:
@@ -418,7 +462,10 @@ def main() -> int:
         print(f"  restore: SHA restored {before_sha[:12]}…")
 
         restored = _run_tests(probe.tests)
-        if restored != 0:
+        if restored is None:
+            failures.append(f"{probe.name}: restored run TIMED OUT after {TEST_TIMEOUT_S}s")
+            print(f"  rerun:   TIMED OUT after {TEST_TIMEOUT_S}s")
+        elif restored != 0:
             failures.append(f"{probe.name}: not GREEN after restore (exit {restored})")
             print(f"  rerun:   NOT GREEN (exit {restored})")
         else:
