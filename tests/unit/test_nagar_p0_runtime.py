@@ -169,3 +169,57 @@ def test_duplicate_directives_fail_closed() -> None:
     result = compile_nel(duplicate)
     assert result.ast is None
     assert any(item.code == "duplicate_statement" for item in result.diagnostics)
+
+
+def test_trim_pause_intent_is_not_silently_mapped_to_keep_only_the_pause() -> None:
+    source = SOURCE.replace('INTENT "tighten_intro"', 'INTENT "shorten pause"')
+    result = preview_nel(
+        source,
+        project_id="project-1",
+        tenant_id="tenant-1",
+        timeline_revision=3,
+        segments=[segment(end_pts=12_800, timebase_num=1, timebase_den=1_000)],
+        source_duration_us=60_000_000,
+    )
+    assert result.status == "REJECTED"
+    assert "unsupported_intent" in result.diagnostics
+
+
+def test_zero_delta_is_rejected_as_noop() -> None:
+    result = preview_nel(
+        SOURCE.replace("duration_delta=-2.0s", "duration_delta=0.0s"),
+        project_id="project-1",
+        tenant_id="tenant-1",
+        timeline_revision=3,
+        segments=[segment()],
+        source_duration_us=4_000_000,
+    )
+    assert result.status == "REJECTED"
+    assert result.diagnostics == ("noop_trim",)
+
+
+def test_unverified_preserve_constraint_requires_clarification() -> None:
+    result = preview_nel(
+        SOURCE.replace("PREVIEW\n", "PRESERVE speech_continuity=true\nPREVIEW\n"),
+        project_id="project-1",
+        tenant_id="tenant-1",
+        timeline_revision=3,
+        segments=[segment()],
+        source_duration_us=4_000_000,
+    )
+    assert result.status == "NEEDS_CLARIFICATION"
+    assert result.diagnostics == ("unsupported_constraint:speech_continuity",)
+
+
+def test_source_model_name_alone_is_not_evidence() -> None:
+    source = SOURCE.replace('REQUIRE evidence("scene-detector.v1")', 'REQUIRE evidence("unlisted-model")')
+    result = preview_nel(
+        source,
+        project_id="project-1",
+        tenant_id="tenant-1",
+        timeline_revision=3,
+        segments=[segment()],
+        source_duration_us=4_000_000,
+    )
+    assert result.status == "NEEDS_CLARIFICATION"
+    assert result.diagnostics == ("missing_evidence:unlisted-model",)

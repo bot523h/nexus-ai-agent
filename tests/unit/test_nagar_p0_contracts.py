@@ -145,14 +145,30 @@ def test_causal_graph_rejects_cross_scope_edge_and_verified_without_evidence() -
             evidence_refs=(),
             status="VERIFIED_SUCCESS",
         )
-    with pytest.raises(PermissionError, match="cross_scope"):
-        graph.add_edge(
-            GraphEdge(
+        with pytest.raises(PermissionError, match="cross_scope"):
+            graph.add_edge(
+                GraphEdge(
                 edge_id="edge-2",
                 relation="targets",
                 source_id="intent-1",
                 target_id="op-1",
                 project_id="p",
-                tenant_id="other",
+                    tenant_id="other",
+                )
             )
+
+
+def test_verified_receipt_requires_explicit_present_artifact_status() -> None:
+    graph = CausalGraph()
+    with pytest.raises(ValueError, match="verified_receipt_evidence"):
+        graph.receipt(
+            intent_id="intent-1",
+            operation_id="op-1",
+            job_id="job",
+            artifact_id="artifact",
+            verification_id="verification",
+            evidence_refs=("evidence",),
+            status="VERIFIED_SUCCESS",
+            artifact_evidence={"sha256": "sha256:" + "a" * 64},
+            verifier_evidence={"status": "verified", "sha256": "sha256:" + "a" * 64},
         )
