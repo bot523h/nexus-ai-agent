@@ -331,18 +331,25 @@ _PUNCTUATION = re.compile(r"[^\w\s]+", re.UNICODE)
 _WHITESPACE = re.compile(r"\s+")
 #: Arabic/Persian digit forms, so "۱۵" and "15" normalise the same.
 _DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+#: Arabic letters that Persian types as a different code point, so a phrase
+#: typed on an Arabic layout ("سينمايي") matches the Persian lexicon key
+#: ("سینمایی"). NFKC and case folding do not cover these equivalences.
+#: ``ي`` and alef maksura ``ى`` -> ``ی`` (yeh); ``ك`` -> ``ک`` (kaf).
+_ARABIC_TO_PERSIAN = str.maketrans({"ي": "ی", "ى": "ی", "ك": "ک"})
 
 
 def normalize_phrase(phrase: str) -> str:
     """Reduce a phrase to the one key the lexicon is written against.
 
     NFKC (so compatibility forms collapse), case fold, ZWNJ removed, Arabic and
-    Persian digits mapped to ASCII, punctuation dropped, whitespace collapsed.
-    Normalization lives in exactly one function so the lexicon can be written in
-    plain words and still match what people type.
+    Persian digits mapped to ASCII, Arabic yeh/kaf folded to their Persian
+    forms, punctuation dropped, whitespace collapsed. Normalization lives in
+    exactly one function so the lexicon can be written in plain words and still
+    match what people type.
     """
     text = unicodedata.normalize("NFKC", phrase)
     text = text.translate(_DIGITS)
+    text = text.translate(_ARABIC_TO_PERSIAN)
     text = "".join(ch for ch in text if ch not in _ZWNJ)
     text = _PUNCTUATION.sub(" ", text.casefold())
     return _WHITESPACE.sub(" ", text).strip()
@@ -351,6 +358,27 @@ def normalize_phrase(phrase: str) -> str:
 #: The lookup table: every surface form reduced to its normalised key. Built
 #: rather than written, so an unreachable entry cannot exist.
 LEXICON: dict[str, SemanticMeaning] = _build_lexicon(_SURFACE_FORMS)
+
+#: Stamped on every constraint the semantic layer derives, in
+#: ``Origin.reference_id``. ``apply_semantics`` is called on every revision
+#: pass, so without this marker a phrase that a later pass drops would leave its
+#: constraint behind as a stale hard requirement. ``source="user"`` is kept (the
+#: phrase *is* the user's), but a marker -- rather than the phrase text, which an
+#: authored constraint could coincidentally share -- is what makes the derived
+#: set unambiguous to filter.
+_DERIVED_ORIGIN_MARKER = "semantic-derived"
+
+
+def _authored_constraints(work: CreativeWork) -> tuple[Constraint, ...]:
+    """The document's constraints minus the ones this layer derived earlier.
+
+    A stale derived constraint must not participate in collision detection: it
+    is about to be dropped, so reporting a collision it causes would block a
+    request that is internally consistent.
+    """
+    return tuple(
+        c for c in work.constraints if c.origin.reference_id != _DERIVED_ORIGIN_MARKER
+    )
 
 
 # ── Resolution ───────────────────────────────────────────────────────────────
@@ -404,7 +432,7 @@ def _build_constraint(
     "you asked for a fast hook and this piece has no hook" is information the
     user needs.
     """
-    origin = Origin(source="user", detail=phrase)
+    origin = Origin(source="user", detail=phrase, reference_id=_DERIVED_ORIGIN_MARKER)
     if kind == "quality":
         return Constraint(priority=Priority.HARD, spec=QualityConstraint(**payload), origin=origin)
     if kind == "exclusion":
@@ -513,7 +541,11 @@ def resolve_semantics(work: CreativeWork) -> SemanticResolution:
         resolved_phrases=tuple(resolved),
     )
     return resolution.model_copy(
-        update={"collisions": detect_collisions((*work.constraints, *constraints), work)}
+        update={
+            "collisions": detect_collisions(
+                (*_authored_constraints(work), *constraints), work
+            )
+        }
     )
 
 
@@ -619,6 +651,11 @@ def apply_semantics(work: CreativeWork) -> CreativeWork:
     requirements -- a property worth having, because a revision loop will call
     this on every pass.
 
+    Every previously derived constraint is dropped before the merge, so a phrase
+    a later pass removes does not leave a stale hard requirement behind. Authored
+    constraints (which never carry :data:`_DERIVED_ORIGIN_MARKER`) are kept
+    verbatim -- the semantic layer only owns what it created.
+
     Raises :class:`SemanticCollisionError` when recognised phrases contradict
     each other. The alternative -- silently keeping one and dropping the other --
     is the exact failure this plane exists to prevent.
@@ -627,7 +664,8 @@ def apply_semantics(work: CreativeWork) -> CreativeWork:
     resolution.assert_no_collision()
 
     brief = work.brief
-    merged = tuple(dict.fromkeys((*work.constraints, *resolution.constraints)))
+    authored = _authored_constraints(work)
+    merged = tuple(dict.fromkeys((*authored, *resolution.constraints)))
     sealed = work.model_copy(
         update={
             "constraints": merged,

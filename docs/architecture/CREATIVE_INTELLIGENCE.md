@@ -143,6 +143,7 @@ API. [`test_creative_ir.py`](../../tests/unit/test_creative_ir.py) pins this.
 | `ExclusionConstraint` | an operation or asset kind must not appear | yes |
 | `EmphasisConstraint` | a role must claim at least a share of attention | yes |
 | `QualityConstraint` | a floor on resolution, frame rate or duration | yes |
+| `PacingConstraint` | a bound on how long a single scene may run | yes |
 
 `priority` separates a requirement that blocks the job (`HARD`) from a
 preference the compiler may trade away and must report (`SOFT`).

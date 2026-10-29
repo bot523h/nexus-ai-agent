@@ -310,6 +310,30 @@ def test_an_unsealed_document_fails_validation() -> None:
         work.assert_valid()
 
 
+def test_sealing_rejects_duplicate_provisional_identities() -> None:
+    """Two same-kind elements sharing a pre-seal id must fail closed on seal.
+
+    The seal maps are keyed by the provisional id, so a duplicate silently
+    overwrites an entry and remaps every reference to the wrong content. The
+    guard must fire *before* any identity is assigned, for every referenceable
+    kind (here: assets, then scenes).
+    """
+    work = product_teaser(sealed=False)
+    a0 = work.assets[0]
+    twin = a0.model_copy(update={"uri": "asset:different", "role": SemanticRole.BROLL})
+    doubled_assets = work.model_copy(update={"assets": (a0, twin, *work.assets[1:])})
+    with pytest.raises(IdentityError, match="duplicate provisional identities"):
+        doubled_assets.seal()
+
+    # the same guard covers scenes (they are remapped into transition/constraint refs)
+    scene = work.scenes[0]
+    doubled_scenes = work.model_copy(
+        update={"scenes": (scene, scene.model_copy(update={"label": "clone"}), *work.scenes[1:])}
+    )
+    with pytest.raises(IdentityError, match="duplicate provisional identities"):
+        doubled_scenes.seal()
+
+
 def test_a_layer_cannot_escape_its_scene() -> None:
     work = product_teaser()
     scene = work.scenes[0]

@@ -43,6 +43,7 @@ from nexus_ai_agent.creative.intelligence.ir import (
     QualityConstraint,
     Scene,
     TextContent,
+    TextSpec,
     Timing,
     TimingConstraint,
     Transition,
@@ -187,7 +188,10 @@ class TextSpecChange(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     kind: Literal["text_spec"] = "text_spec"
-    text: str = Field(min_length=1, max_length=5000)
+    #: Must match :attr:`TextSpec.text`'s ceiling: a revision that passes this
+    #: bound but exceeds the target model's would be silently applied (a
+    #: ``model_copy`` skips validation) and produce an invalid document.
+    text: str = Field(min_length=1, max_length=4000)
 
 
 class TransitionIntentChange(BaseModel):
@@ -500,8 +504,14 @@ def _retime_layer(layer: Layer, *, old_scene: Scene, new_timing: Timing) -> Laye
         new_span = layer.content.segment.timeline.model_copy(
             update={"start_us": new_start, "duration_us": new_duration}
         )
+        # Preserve the source/timeline ratio the segment declared: a retimed
+        # segment consumes ``duration * speed_milli / 1000`` microseconds of
+        # source, so ``source_duration_us = new_duration`` is only correct at
+        # normal speed and would lie for any other rate.
+        speed_milli = layer.content.segment.speed_milli
+        new_source_duration = new_duration * speed_milli // 1000
         new_segment = layer.content.segment.model_copy(
-            update={"timeline": new_span, "source_duration_us": new_duration}
+            update={"timeline": new_span, "source_duration_us": new_source_duration}
         )
         return layer.model_copy(
             update={"content": layer.content.model_copy(update={"segment": new_segment})}
@@ -659,11 +669,15 @@ def _apply_text_change(
     layer = scene.layers[layer_index]
     if not isinstance(layer.content, TextContent):
         raise UnsupportedRevisionError("the targeted layer is not a TextContent layer")
+    # Reconstruct the TextSpec through its validator instead of ``model_copy``:
+    # ``model_copy`` skips validation, so a length the change model would allow
+    # but the target model forbids must be rejected here, not silently applied.
+    new_text = TextSpec.model_validate(
+        layer.content.text.model_copy(update={"text": change.text}).model_dump(mode="json")
+    )
     rewritten_layer = layer.model_copy(
         update={
-            "content": layer.content.model_copy(
-                update={"text": layer.content.text.model_copy(update={"text": change.text})}
-            )
+            "content": layer.content.model_copy(update={"text": new_text})
         }
     )
     rewritten_scene = scene.model_copy(
@@ -749,6 +763,10 @@ def _apply_audio_change(
             if change.loudness_target_lufs_milli is None
             else change.loudness_target_lufs_milli
         ),
+        # ``gain_milli`` is not part of this revision's typed contract, so it must
+        # survive unchanged: constructing a fresh ``AudioIntent`` without it would
+        # silently reset a mixer setting the user never asked to touch.
+        gain_milli=audio.gain_milli,
     )
     rewritten_layer = layer.model_copy(
         update={"content": layer.content.model_copy(update={"audio": revised_audio})}
@@ -801,7 +819,34 @@ def _apply_effect_change(
         }
     )
     revised.assert_valid()
-    return revised, (_PendingPair(kind="effect", before_ref=effect.effect_id, index=index),)
+    # A layer commits its effect ids through ``child_identities``, so changing an
+    # effect's intensity changes the identity of every layer that uses it, and of
+    # each such layer's scene. Without lineage for those, ``diff_works`` (which
+    # pairs scenes/layers only by lineage or identical id, with no signature
+    # fallback) would report the affected scene as removed *and* added, and the
+    # transitions and scene-scoped constraints that reference it likewise.
+    pending: list[_PendingPair] = [
+        _PendingPair(kind="effect", before_ref=effect.effect_id, index=index)
+    ]
+    for scene_index, scene in enumerate(work.scenes):
+        touched = False
+        for layer_index, layer in enumerate(scene.layers):
+            if effect.effect_id in layer.effects:
+                touched = True
+                pending.append(
+                    _PendingPair(
+                        kind="layer",
+                        before_ref=layer.layer_id,
+                        index=layer_index,
+                        scene_index=scene_index,
+                        layer_index=layer_index,
+                    )
+                )
+        if touched:
+            pending.append(
+                _PendingPair(kind="scene", before_ref=scene.scene_id, index=scene_index)
+            )
+    return revised, tuple(pending)
 
 
 def _resolve_pending_pairs(

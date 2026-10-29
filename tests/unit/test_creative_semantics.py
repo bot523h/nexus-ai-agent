@@ -521,3 +521,59 @@ def test_a_semantic_brief_can_be_carried_without_any_resolution() -> None:
         ),
     ).seal()
     work.assert_valid()
+
+
+def test_arabic_yeh_and_kaf_fold_to_their_persian_forms() -> None:
+    """A phrase typed on an Arabic layout must resolve like its Persian twin.
+
+    NFKC and case folding leave Arabic yeh (U+064A) / alef maksura (U+0649) and
+    kaf (U+0643) untouched, so "سينمايي" would not match the "سینمایی" key and
+    the phrase would be recorded as unresolved rather than CINEMATIC.
+    """
+    assert normalize_phrase("سينمايي") == normalize_phrase("سینمایی")
+    assert normalize_phrase("كیك") == normalize_phrase("کیک")
+    arabic = resolve_semantics(_with_intents(product_teaser(), "سينمايي"))
+    persian = resolve_semantics(_with_intents(product_teaser(), "سینمایی"))
+    assert arabic.meanings == persian.meanings
+    assert arabic.unresolved == ()
+
+
+def test_a_dropped_phrase_leaves_no_stale_derived_constraint() -> None:
+    """``apply_semantics`` owns only what it derived; a removed phrase goes away.
+
+    A revision loop calls this on every pass. Merging a growing union would keep
+    a PacingConstraint the current brief no longer implies as a stale HARD
+    requirement -- and, worse, feed a contradictory pair to collision detection.
+    """
+    first = apply_semantics(_with_intents(product_teaser(), "fast paced", "cinematic"))
+    assert any(isinstance(c.spec, PacingConstraint) for c in first.constraints)
+
+    without = first.model_copy(
+        update={"brief": first.brief.model_copy(update={"semantic_intents": ("cinematic",)})}
+    ).seal()
+    second = apply_semantics(without)
+    assert not any(isinstance(c.spec, PacingConstraint) for c in second.constraints)
+    # authored constraints (no derived marker) survive untouched
+    from nexus_ai_agent.creative.intelligence.semantics import _DERIVED_ORIGIN_MARKER
+
+    assert all(
+        c.origin.reference_id != _DERIVED_ORIGIN_MARKER for c in product_teaser().constraints
+    )
+    kept = [c for c in second.constraints if c.origin.reference_id != _DERIVED_ORIGIN_MARKER]
+    assert len(kept) == len(product_teaser().constraints)
+
+
+def test_a_dropped_phrase_does_not_leave_a_collision_behind() -> None:
+    """The stale-constraint bug's worst case: a phantom 15 s ceiling.
+
+    Replacing "social short" with "long form" must not keep the old ceiling and
+    then collide with the new floor on a request that is internally consistent.
+    """
+    first = apply_semantics(_bare_with_intents(product_teaser(), "social short"))
+    assert first.constraints
+    without = first.model_copy(
+        update={"brief": first.brief.model_copy(update={"semantic_intents": ("long form",)})}
+    ).seal()
+    # must not raise SemanticCollisionError
+    second = apply_semantics(without)
+    assert second.constraints

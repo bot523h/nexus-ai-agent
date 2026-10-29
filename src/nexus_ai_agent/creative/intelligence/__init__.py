@@ -18,10 +18,12 @@ The plane *proposes*; authority to execute belongs elsewhere. The boundary is
 enforced by ``tests/architecture/test_creative_intelligence_boundary.py``, which
 fails the build on a forbidden import rather than trusting this docstring.
 
-Current slice (task-224): :mod:`nexus_ai_agent.creative.intelligence.ir` -- the
-Typed Creative IR. Later slices (semantic layer, deterministic compiler,
-semantic revision, reference recipe) are defined against it, which is exactly
-why it lands first.
+Landed slices: :mod:`~nexus_ai_agent.creative.intelligence.ir` (the Typed
+Creative IR), :mod:`~nexus_ai_agent.creative.intelligence.semantics` (brief
+phrases to typed constraints), :mod:`~nexus_ai_agent.creative.intelligence.diff`
+(semantic diff) and :mod:`~nexus_ai_agent.creative.intelligence.revision`
+(deterministic revisions). Each is defined against the IR, which is why it
+landed first.
 """
 
 from __future__ import annotations

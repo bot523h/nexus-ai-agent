@@ -1284,6 +1284,48 @@ def _remap(mapping: dict[str, str], reference: str, *, what: str) -> str:
         ) from exc
 
 
+def _reject_duplicate_provisional_identities(work: CreativeWork) -> None:
+    """Fail closed when two same-kind elements share a provisional identity.
+
+    The seal maps (``asset_ids``, ``effect_ids``, ``layer_ids``, ``scene_ids``,
+    ``track_ids``) are keyed by the *pre-seal* id, so a duplicate key silently
+    overwrites the earlier entry and every reference to that id remaps to the
+    wrong element.  Distinct content ids keep the mapping injective; provisional
+    ids do not, so the duplicate is rejected here rather than corrupted.
+    """
+    seen: dict[str, str] = {}
+    buckets: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("asset", tuple(a.asset_id for a in work.assets)),
+        ("effect", tuple(e.effect_id for e in work.effects)),
+        ("scene", tuple(s.scene_id for s in work.scenes)),
+        ("layer", tuple(layer.layer_id for layer in work.all_layers())),
+        ("transition", tuple(t.transition_id for t in work.transitions)),
+        ("constraint", tuple(c.constraint_id for c in work.constraints)),
+        ("track", tuple(t.track_id for t in work.layout if t.track_id)),
+    )
+    collisions: list[str] = []
+    for kind, ids in buckets:
+        for element_id in ids:
+            # An empty id is "not yet assigned", not a name two elements share:
+            # seal fills it with a content address, and two *identical* contents
+            # collide later in ``_check_unique_identities``. Only a non-empty
+            # provisional id that repeats is the silent-overwrite hazard.
+            if not element_id:
+                continue
+            if element_id in seen:
+                collisions.append(
+                    f"{kind} identity {element_id!r} is declared more than once "
+                    f"(already used by a {seen[element_id]})"
+                )
+            else:
+                seen[element_id] = kind
+    if collisions:
+        raise IdentityError(
+            "creative document has duplicate provisional identities: " + "; ".join(collisions),
+            problems=tuple(collisions),
+        )
+
+
 def seal_work(work: CreativeWork) -> CreativeWork:
     """Return ``work`` with every identity replaced by its content address.
 
@@ -1293,8 +1335,13 @@ def seal_work(work: CreativeWork) -> CreativeWork:
 
     Raises :class:`DanglingReferenceError` if the document references an asset,
     effect, scene or layer it does not declare -- sealing resolves references,
-    so it cannot proceed on an unresolved one.
+    so it cannot proceed on an unresolved one.  Raises :class:`IdentityError` if
+    two same-kind elements share a provisional identity: the id map is keyed by
+    that id, so a duplicate would silently overwrite one entry and remap every
+    reference to the wrong content.  Sealing is fail-closed on duplicates.
     """
+    _reject_duplicate_provisional_identities(work)
+
     # 1. assets -- leaves of the tree
     asset_ids: dict[str, str] = {}
     sealed_assets: list[Asset] = []

@@ -254,3 +254,176 @@ def test_revision_determinism_survives_python_hash_randomization() -> None:
         assert proc.returncode == 0, proc.stderr
         outputs.add(proc.stdout)
     assert len(outputs) == 1
+
+
+# ── Adversarial regressions (audit M10) ──────────────────────────────────────
+
+
+def test_a_text_revision_cannot_exceed_the_text_spec_ceiling() -> None:
+    """The change bound must match the target model's, or the diff lies.
+
+    ``_apply_text_change`` uses ``model_copy``, which skips validation; a change
+    model that allowed 5000 chars would let a 4500-char revision pass and then
+    produce a document whose ``TextSpec`` invariant (max 4000) is violated.
+    """
+    from pydantic import ValidationError
+
+    base = product_teaser()
+    target = base.scenes[3].layers[1].layer_id  # the CTA caption
+    with pytest.raises(ValidationError):
+        TextSpecChange(text="x" * 4001)
+    # the boundary is inclusive on both sides
+    ok = apply_revision(
+        base,
+        RevisionIntent(
+            source_work_id=base.work_id,
+            target=NodeTarget(kind="layer", ref=target),
+            change=TextSpecChange(text="x" * 4000),
+        ),
+    )
+    assert any(
+        layer.content.text.text == "x" * 4000
+        for scene in ok.work.scenes
+        for layer in scene.layers
+        if hasattr(layer.content, "text")
+    )
+
+
+def test_retiming_a_speed_changed_layer_preserves_the_source_ratio() -> None:
+    """A retimed segment must keep ``source = timeline * speed``, not collapse it."""
+    from creative_ir_testkit import _media_layer, _span
+
+    base = product_teaser()
+    fast = _media_layer(
+        "fast", base.scenes[1].layers[0].role, base.assets[1].asset_id, 3, 1
+    ).model_copy(
+        update={
+            "content": base.scenes[1]
+            .layers[0]
+            .content.model_copy(
+                update={
+                    "segment": _segment_2x(_span(3, 1)),
+                }
+            )
+        }
+    )
+    scene = base.scenes[1]
+    work = base.model_copy(
+        update={
+            "scenes": (
+                base.scenes[0],
+                scene.model_copy(update={"layers": (*scene.layers, fast)}),
+                *base.scenes[2:],
+            )
+        }
+    ).seal()
+    fast_ref = work.scenes[1].layers[-1].layer_id
+    result = apply_revision(
+        work,
+        RevisionIntent(
+            source_work_id=work.work_id,
+            target=NodeTarget(kind="scene", ref=work.scenes[1].scene_id),
+            change=SceneTimingChange(start_us=3 * ONE_SECOND_US, duration_us=ONE_SECOND_US),
+        ),
+    )
+    retimed = next(
+        layer
+        for scene in result.work.scenes
+        for layer in scene.layers
+        if layer.layer_id == fast_ref
+    )
+    segment = retimed.content.segment
+    assert segment.speed_milli == 2000
+    assert segment.source_duration_us == segment.timeline.duration_us * 2
+
+
+def _segment_2x(span):
+    from nexus_ai_agent.creative.intelligence import Segment
+
+    return Segment(
+        source_in_us=0,
+        source_duration_us=span.duration_us * 2,
+        timeline=span,
+        speed_milli=2000,
+    )
+
+
+def test_an_audio_revision_preserves_gain_it_does_not_own() -> None:
+    """``gain_milli`` is outside the audio change contract and must survive."""
+    from nexus_ai_agent.creative.intelligence import AudioIntentChange
+
+    base = product_teaser()
+    music_layer = next(
+        layer
+        for scene in base.scenes
+        for layer in scene.layers
+        if hasattr(layer.content, "audio") and layer.content.audio is not None
+    )
+    boosted = base.model_copy(update={"scenes": _with_audio_gain(base, music_layer, 5000)}).seal()
+    target = next(
+        layer
+        for scene in boosted.scenes
+        for layer in scene.layers
+        if hasattr(layer.content, "audio")
+        and layer.content.audio is not None
+        and layer.content.audio.gain_milli == 5000
+    )
+    result = apply_revision(
+        boosted,
+        RevisionIntent(
+            source_work_id=boosted.work_id,
+            target=NodeTarget(kind="layer", ref=target.layer_id),
+            change=AudioIntentChange(duck_under_voiceover=True),
+        ),
+    )
+    revised = next(
+        layer
+        for scene in result.work.scenes
+        for layer in scene.layers
+        if hasattr(layer.content, "audio")
+        and layer.content.audio is not None
+        and layer.content.audio.duck_under_voiceover is True
+    )
+    assert revised.content.audio.gain_milli == 5000
+
+
+def _with_audio_gain(base, target_layer, gain_milli):
+
+    scenes = []
+    for scene in base.scenes:
+        layers = []
+        for layer in scene.layers:
+            if layer.layer_id == target_layer.layer_id:
+                audio = layer.content.audio.model_copy(update={"gain_milli": gain_milli})
+                layer = layer.model_copy(
+                    update={"content": layer.content.model_copy(update={"audio": audio})}
+                )
+            layers.append(layer)
+        scenes.append(scene.model_copy(update={"layers": tuple(layers)}))
+    return tuple(scenes)
+
+
+def test_revising_an_effect_does_not_report_its_layers_or_scenes_as_replaced() -> None:
+    """Effect intensity flows into every layer that uses the effect.
+
+    A layer commits its effect ids through ``child_identities``, so the layer and
+    its scene get new ids. ``diff_works`` pairs them only by lineage, so the
+    revision must emit lineage for them -- otherwise the scene is reported as
+    both removed and added, contradicting the revision contract.
+    """
+    from nexus_ai_agent.creative.intelligence import EffectIntentChange
+
+    work = product_teaser()
+    glow = next(e for e in work.effects if e.operation == "motion.add_glow")
+    result = apply_revision(
+        work,
+        RevisionIntent(
+            source_work_id=work.work_id,
+            target=NodeTarget(kind="effect", ref=glow.effect_id),
+            change=EffectIntentChange(intensity=900),
+        ),
+    )
+    assert result.semantic_diff.scenes == ()
+    assert result.semantic_diff.transitions == ()
+    kinds = {node.kind for node in result.affected_nodes}
+    assert {"effect", "layer", "scene"} <= kinds
