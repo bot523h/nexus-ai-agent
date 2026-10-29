@@ -100,6 +100,10 @@ HOST_LAYER_PACK_IMPORTERS: Mapping[str, str] = {
     "tests/unit/test_cognition_model_kill.py": (
         "Model Kill Test: deterministic path survives with no model (nagar.cognition, host layer)"
     ),
+    "tests/unit/test_nagar_p0_runtime.py": (
+        "P0 NEL runtime: the canonical command payload is round-tripped through the "
+        "edit pack's TrimInput; host-layer (nagar/p0), not the edit pack's own evidence"
+    ),
 }
 
 #: The substrate (``core``) and cross-pack contracts that compose every pack.

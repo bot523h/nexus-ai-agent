@@ -68,6 +68,15 @@ placeholder text.
 | [overnight/COGNITION_CONVERGENCE.md](overnight/COGNITION_CONVERGENCE.md) | One path from model cognition to execution: gateway, registry-derived authority, fail-closed selection, mechanical anti-bypass gates, honest limits. |
 | [overnight/FREE_TEXT_SLICE.md](overnight/FREE_TEXT_SLICE.md) | The Gate-C vertical slice: free text → typed proposal → registry → CommandBus → verified `timeline.trim` artifact, with the adversarial matrix and honest limits. |
 
+## Engineering (dated design records — Nagar P0 vertical slice)
+
+| Document | What it is |
+|---|---|
+| [engineering/NAGAR_P0_REPO_AUDIT.md](engineering/NAGAR_P0_REPO_AUDIT.md) | Read-only audit of the existing substrate before the P0 slice: what already exists, what is absent, and the no-second-execution-path constraint. |
+| [engineering/ADR-NAGAR-P0-NEL-SEMANTIC-CAUSAL.md](engineering/ADR-NAGAR-P0-NEL-SEMANTIC-CAUSAL.md) | Decision record: typed authority-separated User Intent v1, constrained NEL v1, revision/tenant-aware Semantic Time, and the causal contract — with fail-closed clarification. |
+| [engineering/NAGAR_P0_NEL.md](engineering/NAGAR_P0_NEL.md) | NEL v1 language definition: grammar, source-span diagnostics, canonical AST hashing, and typed `timeline.trim` IR. |
+| [engineering/NAGAR_P0_RUNTIME.md](engineering/NAGAR_P0_RUNTIME.md) | Runtime composition of the P0 slice: intent → NEL → semantic time → causal contracts, with its evidence and honest limits. |
+
 ## Authoritative records
 
 | Document | What it is |
