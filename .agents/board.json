@@ -1002,6 +1002,20 @@
         "tests/integration/test_nagar_director_provenance_projection.py",
         "tests/architecture/test_nagar_director_boundary.py"
       ]
+    },
+    {
+      "id": "operation-matrix-reconciliation",
+      "description": "Operation truth reconciliation: align OPERATION_MATRIX/RECONCILIATION truth files, the reconciliation guard test, and derived docs so implemented portrait/scene packs register legally (single owner for #64/#97 scope).",
+      "paths": [
+        "OPERATION_MATRIX.json",
+        "RECONCILIATION.json",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "RECONCILIATION.md",
+        "OPERATION_WAVE_PLAN.md",
+        "L0_L4_MATURITY.md",
+        "tests/unit/test_operation_matrix_reconciliation.py",
+        "src/nexus_ai_agent/nagar/docs_projection.py"
+      ]
     }
   ],
   "claims": [
@@ -7481,6 +7495,45 @@
       "gates_owner": false,
       "note": "Queued by a governance-only registration PR. This is not a claim, takeover, or proof of implementation authorization; do not code until canonical main contains this task and the official claim succeeds.",
       "generation": 0
+    },
+    {
+      "task": "task-280-operation-matrix-reconciliation",
+      "title": "Operation-matrix reconciliation: legalize implemented portrait/scene registrations",
+      "title_fa": "تطبیق ماتریس عملیات: قانونی‌سازی ثبت پک‌های پرتره/صحنه پیاده‌شده",
+      "zone": "operation-matrix-reconciliation",
+      "priority": "P1",
+      "status": "queued",
+      "agent_branch": "",
+      "claimed_at": null,
+      "generation": 0,
+      "gates_owner": false,
+      "scope": "Single-owner reconciliation of the operation-truth contract that blocks PR #64 and PR #97. Reclassify the now-implemented portrait/scene operations in OPERATION_MATRIX.json, drop them from RECONCILIATION.json::missing_gaps, update tests/unit/test_operation_matrix_reconciliation.py invariants to the newly agreed numbers, and regenerate the derived .md docs via `python -m nexus_ai_agent.nagar --docs`. Do not add any new operation registry, journal, queue, or execution path. Do not edit PR #97's pack sources or PR #273/#276 exclusive paths.",
+      "exclusive_paths": [
+        "OPERATION_MATRIX.json",
+        "RECONCILIATION.json",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "RECONCILIATION.md",
+        "OPERATION_WAVE_PLAN.md",
+        "L0_L4_MATURITY.md",
+        "tests/unit/test_operation_matrix_reconciliation.py",
+        "src/nexus_ai_agent/nagar/docs_projection.py"
+      ],
+      "acceptance_criteria": [
+        "The reconciliation is decided once, by one owner, and applied to both truth files, the guard test, and the derived docs together.",
+        "The guard test is not weakened: it is updated only because the underlying contract genuinely changed, and the change is recorded in the same PR.",
+        "After repair, `pytest -q tests/unit/test_operation_matrix_reconciliation.py` is green and `python -m nexus_ai_agent.nagar --check` prints TRUTH GATE: GREEN.",
+        "PRs #64 and #97 are re-evaluated only after the contract is reconciled; neither is merged while the blocker stands."
+      ],
+      "evidence_required": [
+        "Exact commands + exit codes for the reconciliation test, the truth gate, and the vision-pack tests on the final SHA.",
+        "The before/after registry count (57 -> 77) and the missing_gaps change (23 -> 3 color-only) with the governance decision recorded.",
+        "The regenerated derived docs diff."
+      ],
+      "prerequisites": [
+        "task-152-portrait-pack",
+        "task-153-scene-pack"
+      ],
+      "note": "Registered by the M12 repair shift per mission §C8. Diagnosis dossier: .agents/evidence/OPERATION_MATRIX_ROOTCAUSE_M12.md. Implementation must be a separate claimed task; the M12 shift is not authorized to start it."
     }
   ],
   "deferred_log": [
