@@ -1,7 +1,4 @@
-"""NEL v1: a deliberately small declarative editing language.
-
-No shell, eval, imports, arbitrary paths, or free-form FFmpeg arguments are accepted.
-"""
+"""NEL v1: a deliberately small declarative editing language."""
 
 from __future__ import annotations
 
@@ -9,11 +6,12 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-NEL_VERSION: Literal[1] = 1
+NEL_VERSION = 1
 
 
 class NELDiagnostic(BaseModel):
@@ -77,39 +75,67 @@ class CompileResult:
 
 
 def _duration_us(raw: str) -> int:
-    match = re.fullmatch(r"(-?\d+(?:\.\d+)?)s", raw)
+    match = re.fullmatch(r"(-?\d+(?:\.\d{1,9})?)s", raw)
     if not match:
         raise ValueError("duration must be signed seconds, e.g. -2.0s")
-    return round(float(match.group(1)) * 1_000_000)
+    try:
+        value = Decimal(match.group(1)) * Decimal(1_000_000)
+        return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    except InvalidOperation as exc:
+        raise ValueError("duration is not a finite decimal") from exc
 
 
 def parse(source: str) -> tuple[NELAst | None, tuple[NELDiagnostic, ...]]:
     lines = source.splitlines()
     values: dict[str, Any] = {"preserve": [], "requirements": []}
     errors: list[NELDiagnostic] = []
+    seen: set[str] = set()
+
+    def duplicate(key: str, line_no: int, raw: str) -> bool:
+        if key in seen:
+            errors.append(
+                NELDiagnostic(
+                    code="duplicate_statement",
+                    message=f"duplicate or conflicting {key} statement",
+                    line=line_no,
+                    column=max(1, raw.find(key) + 1),
+                )
+            )
+            return True
+        seen.add(key)
+        return False
+
     for line_no, raw in enumerate(lines, 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         try:
             if line == "NEL 1":
-                values["version"] = 1
+                if not duplicate("NEL", line_no, raw):
+                    values["version"] = 1
             elif m := re.fullmatch(r"PROJECT ([A-Za-z0-9_.:-]+)", line):
-                values["project"] = m.group(1)
-            elif m := re.fullmatch(r'INTENT "([^"]{1,128})"', line):
-                values["intent"] = m.group(1)
+                if not duplicate("PROJECT", line_no, raw):
+                    values["project"] = m.group(1)
+            elif m := re.fullmatch(r'INTENT "([^\"]{1,128})"', line):
+                if not duplicate("INTENT", line_no, raw):
+                    values["intent"] = m.group(1)
             elif m := re.fullmatch(r'SELECT semantic_segment\("([a-z][a-z0-9_]{0,63})"\)', line):
-                values["select"] = SemanticSelect(label=m.group(1))
-            elif m := re.fullmatch(r"TRIM duration_delta=(-?\d+(?:\.\d+)?)s", line):
-                values["trim"] = TrimAction(duration_delta_us=_duration_us(m.group(1) + "s"))
+                if not duplicate("SELECT", line_no, raw):
+                    values["select"] = SemanticSelect(label=m.group(1))
+            elif m := re.fullmatch(r"TRIM duration_delta=(-?\d+(?:\.\d{1,9})?)s", line):
+                if not duplicate("TRIM", line_no, raw):
+                    values["trim"] = TrimAction(duration_delta_us=_duration_us(m.group(1) + "s"))
             elif m := re.fullmatch(r"PRESERVE speech_continuity=(true|false)", line):
-                values["preserve"].append(
-                    PreserveAction(field="speech_continuity", value=m.group(1) == "true")
-                )
+                if not duplicate("PRESERVE:speech_continuity", line_no, raw):
+                    values["preserve"].append(
+                        PreserveAction(field="speech_continuity", value=m.group(1) == "true")
+                    )
             elif m := re.fullmatch(r'REQUIRE evidence\("([a-z][a-z0-9_.-]{0,63})"\)', line):
-                values["requirements"].append(EvidenceRequirement(evidence_type=m.group(1)))
+                if not duplicate(f"REQUIRE:{m.group(1)}", line_no, raw):
+                    values["requirements"].append(EvidenceRequirement(evidence_type=m.group(1)))
             elif line == "PREVIEW":
-                values["preview"] = True
+                if not duplicate("PREVIEW", line_no, raw):
+                    values["preview"] = True
             else:
                 raise ValueError("unknown statement")
         except (ValueError, TypeError) as exc:
@@ -121,8 +147,7 @@ def parse(source: str) -> tuple[NELAst | None, tuple[NELDiagnostic, ...]]:
                     column=max(1, raw.find(line) + 1),
                 )
             )
-    required = ("version", "project", "intent", "select", "trim")
-    for name in required:
+    for name in ("version", "project", "intent", "select", "trim"):
         if name not in values:
             errors.append(
                 NELDiagnostic(code="missing_statement", message=f"missing {name}", line=1, column=1)
@@ -147,8 +172,7 @@ def compile_nel(source: str) -> CompileResult:
         preserve_speech_continuity=bool(preserve.get("speech_continuity", False)),
         required_evidence=tuple(item.evidence_type for item in ast.requirements),
     )
-    canonical = canonicalize(ast)
-    return CompileResult(ast=ast, ir=ir, diagnostics=(), canonical=canonical)
+    return CompileResult(ast=ast, ir=ir, diagnostics=(), canonical=canonicalize(ast))
 
 
 def canonicalize(ast: NELAst) -> str:

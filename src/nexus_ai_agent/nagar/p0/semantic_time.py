@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
+from fractions import Fraction
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class EvidenceKind(str, Enum):
@@ -33,6 +34,12 @@ class SemanticSegment(BaseModel):
     source_model: str = Field(min_length=1, max_length=128)
     valid: bool = True
 
+    @model_validator(mode="after")
+    def validate_extent(self) -> SemanticSegment:
+        if self.end_pts <= self.start_pts:
+            raise ValueError("end_pts must be greater than start_pts")
+        return self
+
     def overlaps(self, *, start_pts: int, end_pts: int) -> bool:
         return self.start_pts < end_pts and start_pts < self.end_pts
 
@@ -46,6 +53,38 @@ class SegmentResolution(BaseModel):
     reason: str | None = None
 
 
+def _round_half_up(value: Fraction) -> int:
+    if value < 0:
+        return -_round_half_up(-value)
+    return (value.numerator * 2 + value.denominator) // (2 * value.denominator)
+
+
+def pts_to_microseconds(*, pts: int, timebase_num: int, timebase_den: int) -> int:
+    """Convert PTS using ``seconds = pts * num / den`` without floats."""
+    if pts < 0 or timebase_num <= 0 or timebase_den <= 0:
+        raise ValueError("PTS and timebase must be non-negative/positive")
+    return _round_half_up(Fraction(pts * timebase_num * 1_000_000, timebase_den))
+
+
+def pts_with_delta_to_microseconds(
+    *, pts: int, delta_microseconds: int, timebase_num: int, timebase_den: int
+) -> int:
+    """Convert a PTS endpoint plus a microsecond delta before one rounding."""
+    if pts < 0 or timebase_num <= 0 or timebase_den <= 0:
+        raise ValueError("PTS and timebase must be non-negative/positive")
+    value = Fraction(pts * timebase_num * 1_000_000, timebase_den) + delta_microseconds
+    if value < 0:
+        raise ValueError("converted coordinate must be non-negative")
+    return _round_half_up(value)
+
+
+def microseconds_to_pts(*, microseconds: int, timebase_num: int, timebase_den: int) -> int:
+    """Convert microseconds to the nearest PTS tick with explicit rounding."""
+    if microseconds < 0 or timebase_num <= 0 or timebase_den <= 0:
+        raise ValueError("microseconds and timebase must be non-negative/positive")
+    return _round_half_up(Fraction(microseconds * timebase_den, timebase_num * 1_000_000))
+
+
 def resolve_segment(
     *,
     label: str,
@@ -55,6 +94,10 @@ def resolve_segment(
     candidates: list[SemanticSegment],
     min_confidence: float = 0.7,
 ) -> SegmentResolution:
+    if timeline_revision < 0:
+        return SegmentResolution(
+            label=label, clarification_required=True, reason="invalid_revision"
+        )
     visible = tuple(
         item
         for item in candidates

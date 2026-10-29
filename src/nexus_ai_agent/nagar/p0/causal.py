@@ -138,11 +138,24 @@ class CausalGraph:
         verification_id: str | None,
         evidence_refs: tuple[str, ...],
         status: str,
+        artifact_evidence: dict[str, Any] | None = None,
+        verifier_evidence: dict[str, Any] | None = None,
     ) -> CausalReceipt:
-        if status == "VERIFIED_SUCCESS" and (
-            not artifact_id or not verification_id or not evidence_refs
-        ):
-            raise ValueError("verified_receipt_requires_artifact_verification_evidence")
+        if status == "VERIFIED_SUCCESS":
+            if not artifact_id or not verification_id or not evidence_refs:
+                raise ValueError("verified_receipt_requires_artifact_verification_evidence")
+            if not artifact_evidence or not verifier_evidence:
+                raise ValueError("verified_receipt_requires_live_evidence")
+            artifact_sha = artifact_evidence.get("sha256")
+            verifier_sha = verifier_evidence.get("sha256")
+            if (
+                artifact_evidence.get("status") not in {None, "present"}
+                or verifier_evidence.get("status") != "verified"
+                or not isinstance(artifact_sha, str)
+                or not artifact_sha.startswith("sha256:")
+                or artifact_sha != verifier_sha
+            ):
+                raise ValueError("verified_receipt_evidence_mismatch")
         return CausalReceipt(
             intent_id=intent_id,
             operation_id=operation_id,
