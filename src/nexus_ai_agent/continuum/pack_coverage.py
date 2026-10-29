@@ -77,6 +77,10 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         "tests/unit/test_motion_pack.py",
         "tests/architecture/test_motion_pack_boundary.py",
     ),
+    "perception": (
+        "tests/unit/test_perception_pack.py",
+        "tests/architecture/test_perception_boundary.py",
+    ),
     "slideshow": (
         "tests/unit/test_slideshow_pack.py",
         "tests/unit/test_slideshow_invariants.py",
@@ -96,6 +100,13 @@ HOST_LAYER_PACK_IMPORTERS: Mapping[str, str] = {
     "tests/unit/test_optional_extras.py": "optional-extras install legs (CI extras matrix)",
     "tests/unit/test_cognition_bus_integration.py": (
         "cognition boundary -> CommandBus integration (nagar.cognition, host layer)"
+    ),
+    "tests/unit/test_perception_adapter.py": (
+        "perception adapter (creative/perception): real FFmpeg subprocess, not the pure pack"
+    ),
+    "tests/unit/test_perception_cli.py": "`nexus analyze` CLI over the perception adapter",
+    "tests/unit/test_perception_composition_contract.py": (
+        "cross-pack contract: perception advice feeds audio.normalize_loudness"
     ),
     "tests/unit/test_cognition_model_kill.py": (
         "Model Kill Test: deterministic path survives with no model (nagar.cognition, host layer)"

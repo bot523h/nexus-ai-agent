@@ -856,6 +856,21 @@
       ]
     },
     {
+      "id": "nagar-perception",
+      "description": "Measured media evidence: pure pack + free offline FFmpeg adapter",
+      "paths": [
+        "src/nexus_ai_agent/creative/packs/perception/",
+        "src/nexus_ai_agent/creative/perception/",
+        "tests/unit/test_perception_pack.py",
+        "tests/unit/test_perception_parsers.py",
+        "tests/unit/test_perception_adapter.py",
+        "tests/unit/test_perception_cli.py",
+        "tests/unit/test_perception_composition_contract.py",
+        "tests/architecture/test_perception_boundary.py",
+        "docs/ops/PERCEPTION_LANE.md"
+      ]
+    },
+    {
       "id": "knowledge-retrieval-llamaindex",
       "description": "Production-grade local-first knowledge retrieval: controlled ingestion of authorized source roots, LlamaIndex adapter behind a port (core never imports llama_index), SQLite source registry + derived rebuildable index, evidence-grounded citations, CLI ops (knowledge index/search/status/rebuild/sources).",
       "paths": [
@@ -7413,7 +7428,38 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 2
+      "generation": 2,
+      "task": "task-perception-lane",
+      "title": "Perception lane - measured silence/scene/loudness evidence from a free offline FFmpeg engine",
+      "title_fa": "لایه‌ی ادراک - شواهد اندازه‌گیری‌شده‌ی سکوت، تغییر صحنه و لودنس با موتور رایگان و آفلاین FFmpeg",
+      "zone": "nagar-perception",
+      "priority": "P1",
+      "status": "active",
+      "scope": "New builtin pack nexus.analysis.perception (pure: content-bound sealed evidence + 3 operations) and creative/perception adapter (FFmpeg silencedetect/scene/ebur128, argv-only, protocol-whitelisted, bounded time/memory) + `nexus analyze` CLI. No new dependency, no network, no API key.",
+      "scope_fa": "پک داخلی nexus.analysis.perception (خالص) و آداپتور creative/perception با FFmpeg؛ بدون وابستگی جدید، بدون شبکه، بدون کلید API.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "evidence is bound to content sha256 and refused on mismatch",
+        "marker edits are idempotent and reversible",
+        "FFmpeg runs argv-only with a protocol whitelist, a timeout and bounded stderr",
+        "pack coverage >= 95% and all architecture gates green"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_perception_* tests/architecture",
+        "scripts/pack_coverage.py accepted"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/perception/",
+        "src/nexus_ai_agent/creative/perception/",
+        "tests/architecture/test_perception_boundary.py"
+      ],
+      "owner_hint": "agent: Claude, branch feat/analysis-perception-pack",
+      "agent_branch": "feat/analysis-perception-pack",
+      "claimed_at": "2026-10-24T10:30:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [

@@ -96,8 +96,9 @@ def test_gate_names_the_first_refusal() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_table_covers_exactly_the_eight_manifest_packs() -> None:
+def test_table_covers_exactly_the_nine_manifest_packs() -> None:
     assert sorted(PACK_LIFECYCLE) == [
+        "nexus.analysis.perception",
         "nexus.audio.studio",
         "nexus.color.delivery",
         "nexus.edit.timeline",

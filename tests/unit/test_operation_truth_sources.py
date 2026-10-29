@@ -154,6 +154,31 @@ def test_declared_symbols_match_the_registry_both_ways() -> None:
     assert declared.count == len(runtime)
 
 
+def test_every_pack_operations_module_is_discovered() -> None:
+    """Regression (mission 9, Finding B): the declaration scan must follow the tree.
+
+    The scan once hardcoded six packs, so the ``perception`` pack registered
+    three ``analysis.*`` ids at runtime with no declaration symbol — a live
+    contract-drift the projection could not see.  Discovery must now include
+    *every* ``creative/packs/<id>/operations.py`` on disk, so a new pack can
+    never land silently again.
+    """
+    on_disk = {
+        f"nexus_ai_agent.creative.packs.{path.parent.name}.operations"
+        for path in sources._PACKS_DIR.glob("*/operations.py")
+    }
+    assert on_disk, "no pack operations modules found — discovery path is wrong"
+    assert set(sources._discover_pack_modules()) == on_disk
+    assert "nexus_ai_agent.creative.packs.perception.operations" in on_disk
+    # and the discovered set must cover the registry's own operation ids
+    declared = set(sources.read_declared_operations().pack_constants)
+    assert {
+        "analysis.mark_silences",
+        "analysis.mark_scene_cuts",
+        "analysis.assess_loudness",
+    } <= declared
+
+
 # --------------------------------------------------------------------------- #
 # Source 5 — proof evidence
 # --------------------------------------------------------------------------- #
