@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-29T09:17:50Z",
+  "updated_at": "2026-10-29T09:40:24Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -986,6 +986,16 @@
       "paths": [
         "src/nexus_ai_agent/storage/providers/rclone.py",
         "tests/unit/test_rclone_provider_list_errors.py"
+      ]
+    },
+    {
+      "id": "nagar-p0-pr273-closure",
+      "description": "Nagar P0 PR-273 correctness, evidence, and review closure; additive contracts only, no parallel execution authority.",
+      "paths": [
+        "src/nexus_ai_agent/nagar/p0/",
+        "tests/unit/",
+        "tests/integration/",
+        "docs/engineering/"
       ]
     }
   ],
@@ -7424,10 +7434,7 @@
       "status": "active",
       "scope": "Reproduce and minimally close evidenced PR-273 Nagar P0 findings without adding a second execution path: clarify trim semantics, reject unsupported/no-op constraints, make evidence and causal receipt boundaries fail-closed, document durable revision limitations, and update only the Nagar P0 contract/test/engineering paths. Do not touch continuum/pack_coverage.py, worker/payload expansion, or unrelated PRs.",
       "scope_fa": "بازآفرینی و بستن حداقلی یافته‌های اثبات‌شدهٔ PR-273 در مسیرهای قرارداد/تست/مستندات Nagar P0، بدون مسیر اجرای دوم؛ مسیرهای مالکیت‌دار و توسعهٔ worker/payload خارج از دامنه‌اند.",
-      "prerequisites": [
-        "PR #273 live-head reconciliation",
-        "no overlap with active board leases"
-      ],
+      "prerequisites": [],
       "acceptance_criteria": [
         "D1 trim semantics cannot silently turn a selected pause into the whole output; unsupported semantics are typed fail-closed or explicitly modeled with a golden-duration proof",
         "D4 evidence requirements use typed, revision-scoped evidence and do not accept source_model or arbitrary strings as proof",
@@ -7456,7 +7463,7 @@
       "claimed_at": "2026-10-29T09:17:50Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "",
+      "note": "Governance bootstrap authorized by M10.1 brief for the missing PR-273 Nagar P0 task. Live-head reconciliation is recorded in mission evidence; source changes require this active claim and board preflight.",
       "generation": 1
     }
   ],
