@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-29T13:25:40Z",
+  "updated_at": "2026-10-29T14:28:02Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -4180,7 +4180,7 @@
       "title_fa": "هارنس ارزیابی کیفیت شناخت Nagar",
       "zone": "cognition-quality-evaluation",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Build only a local deterministic evaluation harness over existing Cognition contracts. Cover valid and malformed output, unauthorized operations, authority/prompt-injection attempts, explicit refusal, provider failure, no-model state, and proposal-vs-independent-verification separation. No router, provider, policy, CommandBus, verifier, CI, or blocked LLM file changes; no raw prompt/response logging.",
       "scope_fa": "فقط هارنس قطعی و محلی برای ارزیابی قراردادهای موجود Cognition؛ بدون Router، Provider، Policy، CommandBus، Verification، CI یا فایل‌های مسدودشدهٔ LLM.",
       "prerequisites": [],
@@ -4207,12 +4207,12 @@
         "tests/unit/test_cognition_quality_eval.py"
       ],
       "owner_hint": "Independent cognition evaluation lane; claim through the official CLI only after canonical registration lands on main. gates_owner is optional and advisory.",
-      "agent_branch": "arena/b68a8452-nexus-ai-agent",
-      "claimed_at": "2026-10-29T13:25:40Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 2
     },
     {
       "task": "pr-repair-33",
