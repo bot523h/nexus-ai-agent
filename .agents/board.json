@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-29T19:11:26Z",
+  "updated_at": "2026-10-29T19:39:44Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -5643,11 +5643,11 @@
         "tests/unit/test_retention_policy_divergence.py",
         "tests/unit/test_thread_retention_verdict.py"
       ],
-      "agent_branch": "arena/m11-live-truth",
-      "claimed_at": "2026-10-29T13:04:26Z",
+      "agent_branch": "arena/01a0fac1-nexus-ai-agent",
+      "claimed_at": "2026-10-29T18:58:33Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 3,
       "owner_hint": "Registered for a future authorized repair session on arena/01a0fac1-nexus-ai-agent; not assigned or claimed by this registration.",
       "note": ""
     },
@@ -5695,7 +5695,7 @@
       "title": "Repair existing PR #144: Master Engineering Audit Report for NEXUS AI Agent",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "expired",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/144 on its existing branch jules-940713209102888185-f8f59acc, preserving intent and published history. Snapshot head cc236d3b755cdb4f84aac54304d005ff2b7cd853; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -5722,14 +5722,14 @@
         "tests/unit/test_temporal_algebra.py",
         "tests/unit/test_temporal_mutation.py"
       ],
-      "agent_branch": "jules-940713209102888185-f8f59acc",
-      "claimed_at": "2026-10-28T14:54:42Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 1,
       "owner_hint": "Registered for a future authorized repair session on jules-940713209102888185-f8f59acc; not assigned or claimed by this registration.",
       "note": " | NEXUS-PRC-2026-10-28: narrowed exclusive_paths — the actual #144 diff never touches tests/architecture/test_pack_manifest_is_data_only.py (verified: git diff origin/main...HEAD). Dropping the unused reservation unblocks PR #100, which legitimately needs that allowlist line.",
-      "release_reason": "auto-released by gc at 2026-10-29T19:09:54Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-10-29T18:58:33Z (stale active lease)"
     },
     {
       "task": "pr-repair-149",
@@ -7474,7 +7474,7 @@
       ],
       "owner_hint": "Registration only: remains unclaimed until this additive board entry is on canonical main. Then the implementation agent must claim it via scripts/agent_board.py before feature code.",
       "agent_branch": "arena/nagar-causal-memory-director-impl-20261029-2208",
-      "claimed_at": "2026-10-29T19:11:26Z",
+      "claimed_at": "2026-10-29T19:39:44Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
