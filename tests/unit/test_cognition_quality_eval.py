@@ -16,7 +16,14 @@ what is *new* and would otherwise be unverified:
   and the module's import allowlist is checked statically);
 * the report is **non-disclosing** — prompt/intent text, model prose and
   provider exception text never reach stdout, stderr or the JSON payload;
-* invalid CLI input is refused with exit 2 and no traceback.
+* invalid CLI input is refused with exit 2 and no traceback;
+* the committed **versioned baseline** is a real regression contract: the
+  checker independently recomputes verdicts and aggregates instead of trusting
+  the report's own ``passed``/counter fields, ignores latency and timestamps,
+  fails closed on a missing, malformed, duplicated, version-incompatible or
+  stale baseline, and never rewrites the committed baseline;
+* the fixture set itself is validated like data (unique ids, known scenarios,
+  documented outcomes, no silently dropped scenario).
 
 The script is loaded by path (``scripts/`` is deliberately not a package — see
 ``tests/architecture/test_scripts_import_boundary.py``), the same pattern as
@@ -38,6 +45,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "cognition_quality_eval.py"
+BASELINE = ROOT / "tests" / "fixtures" / "cognition_quality_eval" / "v1_baseline.json"
 
 _spec = importlib.util.spec_from_file_location("cognition_quality_eval", SCRIPT)
 assert _spec and _spec.loader
@@ -396,6 +404,7 @@ def test_the_script_imports_only_stdlib_and_the_cognition_contract() -> None:
         "hashlib",
         "inspect",
         "json",
+        "pathlib",
         "sys",
         "time",
         "typing",
@@ -417,3 +426,374 @@ def test_the_script_never_reaches_the_execution_lane() -> None:
     assert "dispatch" not in attributes
     for module in _imported_modules():
         assert not module.startswith("nexus_ai_agent.creative.studio"), module
+
+
+# -- versioned regression baseline ----------------------------------------
+
+
+def _baseline_copy(tmp_path: Path, mutate: Any) -> Path:
+    """Copy the committed baseline through ``mutate`` into ``tmp_path``."""
+    data = json.loads(BASELINE.read_text(encoding="utf-8"))
+    mutate(data)
+    target = tmp_path / "baseline.json"
+    target.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return target
+
+
+def _check_cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *args],
+        capture_output=True,
+        text=True,
+        cwd=cwd or ROOT,
+        check=False,
+    )
+
+
+def test_committed_baseline_matches_the_current_evaluation(report: dict[str, Any]) -> None:
+    baseline = harness.load_baseline(BASELINE)
+    assert harness.check_baseline(report, baseline) == []
+    assert baseline["baseline_schema_version"] == harness.BASELINE_SCHEMA_VERSION
+    assert baseline["evaluation_version"] == report["evaluation_version"]
+    assert baseline["fingerprint"] == report["repeatability"]["fingerprints"][0]
+    assert [case["case_id"] for case in baseline["cases"]] == sorted(
+        case["case_id"] for case in baseline["cases"]
+    )
+
+
+def test_the_committed_baseline_pins_no_timestamps_paths_or_latency() -> None:
+    text = BASELINE.read_text(encoding="utf-8")
+    for forbidden in ("latency", "suite_ms", "timestamp", "created_at", "/home/", "T00:00"):
+        assert forbidden not in text, forbidden
+    data = json.loads(text)
+    assert set(data) == {
+        "baseline_schema_version",
+        "evaluation_version",
+        "contract",
+        "counts",
+        "refusal_reasons",
+        "fingerprint",
+        "cases",
+    }
+    for marker in ("Ignore the safety policy", "deny_by_contract", "clip_eval_1"):
+        assert marker not in text
+
+
+def test_the_committed_baseline_is_not_generated_from_the_run_it_verifies(
+    report: dict[str, Any], tmp_path: Path
+) -> None:
+    # A candidate is derived from a report; the *committed* baseline is a
+    # separate reviewed artifact.  If it were rewritten from the current run it
+    # would be an expected-output cache, so the check must be sensitive to any
+    # real drift between the two.
+    assert harness.build_baseline(report) == harness.load_baseline(BASELINE)
+
+
+def test_a_changed_outcome_is_detected(report: dict[str, Any]) -> None:
+    tampered = json.loads(json.dumps(report))
+    tampered["cases"][0]["observed"] = (
+        "proposal" if tampered["cases"][0]["observed"] != "proposal" else "malformed"
+    )
+    tampered["cases"][0]["passed"] = True  # keep the tampered report self-consistent
+    problems = harness.check_baseline(tampered, harness.load_baseline(BASELINE))
+    assert any(report["cases"][0]["case_id"] in problem for problem in problems)
+    assert any("observed" in problem or "verdict" in problem for problem in problems)
+
+
+def test_a_missing_fixture_is_detected(report: dict[str, Any], tmp_path: Path) -> None:
+    def drop(data: dict[str, Any]) -> None:
+        removed = data["cases"].pop(10)
+        data["counts"]["cases_total"] -= 1
+        data["counts"]["cases_passed"] -= 1 if removed["passed"] else 0
+        data["counts"]["refusals_observed"] -= 1
+        data["refusal_reasons"][removed["observed"]] -= 1
+
+    path = _baseline_copy(tmp_path, drop)
+    problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert any("unexpected case" in problem for problem in problems)
+
+
+def test_an_unexpected_case_is_detected(report: dict[str, Any], tmp_path: Path) -> None:
+    def add(data: dict[str, Any]) -> None:
+        extra = dict(data["cases"][0])
+        extra["case_id"] = "Z-injected-case"
+        data["cases"].append(extra)
+        data["counts"]["cases_total"] += 1
+        data["counts"]["cases_passed"] += 1
+
+    path = _baseline_copy(tmp_path, add)
+    problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert any("missing from the report" in problem for problem in problems)
+
+
+def test_duplicate_fixture_ids_fail_closed(report: dict[str, Any], tmp_path: Path) -> None:
+    def duplicate(data: dict[str, Any]) -> None:
+        data["cases"].append(dict(data["cases"][0]))
+
+    path = _baseline_copy(tmp_path, duplicate)
+    baseline_problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert any("duplicate case_id" in problem for problem in baseline_problems)
+
+    duplicated_report = json.loads(json.dumps(report))
+    duplicated_report["cases"].append(dict(duplicated_report["cases"][0]))
+    report_problems = harness.check_baseline(duplicated_report, harness.load_baseline(BASELINE))
+    assert any("report has duplicate case_id" in problem for problem in report_problems)
+
+
+def test_an_incompatible_baseline_version_fails_closed(
+    report: dict[str, Any], tmp_path: Path
+) -> None:
+    def bump(data: dict[str, Any]) -> None:
+        data["baseline_schema_version"] = harness.BASELINE_SCHEMA_VERSION + 1
+
+    path = _baseline_copy(tmp_path, bump)
+    problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert any("baseline_schema_version" in problem for problem in problems)
+
+    def retag(data: dict[str, Any]) -> None:
+        data["evaluation_version"] = "nexus-cognition-quality-eval/v0"
+
+    path = _baseline_copy(tmp_path, retag)
+    problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert any("evaluation_version drifted" in problem for problem in problems)
+
+
+def test_a_mutated_expected_outcome_cannot_be_silently_accepted(
+    report: dict[str, Any], tmp_path: Path
+) -> None:
+    case_id = report["cases"][0]["case_id"]
+    original = report["cases"][0]["observed"]
+
+    def mutate(data: dict[str, Any]) -> None:
+        for case in data["cases"]:
+            if case["case_id"] == case_id:
+                case["expected"] = "deliberately_wrong"
+                # ``passed`` is left alone on purpose: a checker that trusted it
+                # would now accept a baseline that contradicts itself.
+                case["passed"] = True
+
+    path = _baseline_copy(tmp_path, mutate)
+    problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert any(case_id in problem and "self-inconsistent" in problem for problem in problems)
+    assert any(case_id in problem and "expected" in problem for problem in problems), original
+
+
+def test_latency_and_timestamp_changes_alone_do_not_break_the_baseline(
+    report: dict[str, Any],
+) -> None:
+    drifted = json.loads(json.dumps(report))
+    drifted["latency_summary"]["suite_ms_p50"] = 999.999
+    drifted["latency_summary"]["suite_ms_max"] = 12345.0
+    drifted["repeats"] = 7
+    drifted["repeatability"]["fingerprints"] = drifted["repeatability"]["fingerprints"][:1]
+    drifted["observed_at"] = "2030-01-01T00:00:00Z"  # a field the baseline must ignore
+    assert harness.check_baseline(drifted, harness.load_baseline(BASELINE)) == []
+
+
+def test_a_fingerprint_drift_is_reported(report: dict[str, Any], tmp_path: Path) -> None:
+    def drift(data: dict[str, Any]) -> None:
+        data["fingerprint"] = "deadbeefdeadbeef"
+
+    path = _baseline_copy(tmp_path, drift)
+    problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert any("fingerprint drifted" in problem for problem in problems)
+
+
+def test_a_tampered_report_counter_is_recomputed_and_rejected(report: dict[str, Any]) -> None:
+    tampered = json.loads(json.dumps(report))
+    tampered["valid_proposals_accepted"] += 1
+    problems = harness.check_baseline(tampered, harness.load_baseline(BASELINE))
+    assert any("valid_proposals_accepted" in problem for problem in problems)
+
+
+def test_check_cli_passes_on_the_committed_baseline_and_never_writes_it() -> None:
+    before = BASELINE.read_bytes()
+    completed = _check_cli("--check", "--repeats", "1")
+    assert completed.returncode == 0, completed.stderr
+    assert "baseline check PASS" in completed.stdout
+    assert BASELINE.read_bytes() == before
+
+
+def test_check_cli_reports_a_mismatch_with_exit_code_1(tmp_path: Path) -> None:
+    def drift(data: dict[str, Any]) -> None:
+        data["cases"][0]["observed"] = "malformed"
+        data["cases"][0]["passed"] = False
+        data["fingerprint"] = "0000000000000000"
+
+    path = _baseline_copy(tmp_path, drift)
+    before = path.read_bytes()
+    completed = _check_cli("--check", "--baseline", str(path), "--repeats", "1")
+    assert completed.returncode == 1, completed.stderr
+    assert "baseline check FAIL" in completed.stdout
+    assert "Traceback" not in completed.stderr
+    assert "was NOT modified" in completed.stdout
+    assert path.read_bytes() == before  # --check never rewrites its own input
+
+
+def test_check_cli_json_mode_is_machine_readable(tmp_path: Path) -> None:
+    completed = _check_cli("--check", "--json", "--repeats", "1")
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "PASS"
+    assert payload["problems"] == []
+    assert payload["report"]["verification_status"] == "NOT_RUN"
+    assert set(payload["report"]) == REPORT_KEYS
+
+
+@pytest.mark.parametrize(
+    "content",
+    ['{"baseline_schema_version": 1,', "[]", '{"cases": "not-a-list", "counts": 1}'],
+)
+def test_check_cli_refuses_a_malformed_baseline_without_traceback(
+    tmp_path: Path, content: str
+) -> None:
+    path = tmp_path / "broken.json"
+    path.write_text(content, encoding="utf-8")
+    completed = _check_cli("--check", "--baseline", str(path), "--repeats", "1")
+    assert completed.returncode == 2, completed.stdout
+    assert "error:" in completed.stderr
+    assert "Traceback" not in completed.stderr
+    assert completed.stdout == ""
+
+
+def test_check_cli_refuses_a_missing_baseline_without_traceback(tmp_path: Path) -> None:
+    completed = _check_cli("--check", "--baseline", str(tmp_path / "nope.json"), "--repeats", "1")
+    assert completed.returncode == 2
+    assert "cannot be read" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_check_output_discloses_no_fixture_text(tmp_path: Path) -> None:
+    def drift(data: dict[str, Any]) -> None:
+        data["fingerprint"] = "1111111111111111"
+
+    path = _baseline_copy(tmp_path, drift)
+    for args in (("--check", "--repeats", "1"), ("--check", "--json", "--repeats", "1")):
+        completed = _check_cli(*args)
+        combined = completed.stdout + completed.stderr
+        for marker in SECRET_MARKERS:
+            assert marker not in combined, marker
+    failed = _check_cli("--check", "--baseline", str(path), "--repeats", "1")
+    for marker in SECRET_MARKERS:
+        assert marker not in failed.stdout + failed.stderr
+
+
+def test_write_candidate_refuses_to_overwrite_the_committed_baseline() -> None:
+    completed = _check_cli("--write-candidate", str(BASELINE), "--repeats", "1")
+    assert completed.returncode == 2
+    assert "refusing to overwrite the committed baseline" in completed.stderr
+    assert json.loads(BASELINE.read_text(encoding="utf-8"))["fingerprint"] == "8c58bcd45ea8632a"
+
+
+def test_write_candidate_rejects_a_path_outside_the_repository(tmp_path: Path) -> None:
+    report = harness.evaluate(repeats=1)
+    with pytest.raises(harness.BaselineError):
+        harness.write_candidate_baseline(report, tmp_path / "candidate.json", allowed_root=ROOT)
+
+
+def test_write_candidate_produces_a_reviewable_equivalent_baseline(tmp_path: Path) -> None:
+    report = harness.evaluate(repeats=1)
+    target = tmp_path / "candidate.json"
+    harness.write_candidate_baseline(report, target, allowed_root=tmp_path)
+    candidate = json.loads(target.read_text(encoding="utf-8"))
+    assert harness.check_baseline(report, candidate) == []
+    assert candidate == json.loads(BASELINE.read_text(encoding="utf-8"))
+
+
+def test_check_and_write_candidate_cannot_be_combined() -> None:
+    completed = _check_cli("--check", "--write-candidate", "x.json")
+    assert completed.returncode == 2
+    assert "cannot be combined" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+# -- fixture-set validation -----------------------------------------------
+
+
+def test_the_real_fixture_set_is_valid() -> None:
+    assert harness.validate_fixture_set(harness._build_cases()) == []
+
+
+def _case(**overrides: Any) -> Any:
+    base = dict(
+        case_id="X-valid",
+        scenario="A",
+        expected="proposal",
+        probe="fixture",
+        run=lambda: "proposal",
+    )
+    base.update(overrides)
+    return harness._Case(**base)
+
+
+@pytest.mark.parametrize(
+    ("cases", "needle"),
+    [
+        ([], "fixture set is empty"),
+        ([_case(), _case()], "duplicate case_id"),
+        ([_case(case_id="")], "non-blank string"),
+        ([_case(scenario="Q")], "unknown scenario 'Q'"),
+        ([_case(expected="looks_fine")], "undocumented expected outcome"),
+        ([_case(probe="wishful")], "unknown probe label"),
+        ([_case(scenario="J")], "suite-level and must not be a fixture"),
+    ],
+)
+def test_invalid_fixture_sets_are_rejected(cases: list[Any], needle: str) -> None:
+    problems = harness.validate_fixture_set(cases)
+    assert any(needle in problem for problem in problems), problems
+
+
+def test_a_dropped_scenario_is_an_invalid_fixture_set() -> None:
+    cases = [case for case in harness._build_cases() if case.scenario != "E"]
+    problems = harness.validate_fixture_set(cases)
+    assert any("scenario E has no fixture" in problem for problem in problems)
+
+
+def test_evaluate_fails_closed_on_an_invalid_fixture_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(harness, "_build_cases", lambda: (_case(), _case()))
+    with pytest.raises(ValueError, match="invalid fixture set"):
+        harness.evaluate(repeats=1)
+
+
+def test_the_cli_reports_an_invalid_fixture_set_with_exit_code_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(harness, "_build_cases", lambda: ())
+    assert harness.main(["--repeats", "1"]) == 2
+    captured = capsys.readouterr()
+    assert "invalid fixture set" in captured.err
+
+
+# -- cross-environment determinism ----------------------------------------
+
+
+@pytest.mark.parametrize("seed", ["0", "1", "12345"])
+def test_the_fingerprint_is_stable_across_hash_seeds(seed: str) -> None:
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "--json", "--repeats", "2"],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+        env={"PYTHONHASHSEED": seed, "PATH": "/usr/bin:/bin"},
+    )
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["repeatability"]["identical"] is True
+    assert payload["repeatability"]["fingerprints"][0] == "8c58bcd45ea8632a"
+
+
+def test_the_report_is_identical_from_a_foreign_working_directory(tmp_path: Path) -> None:
+    from_cwd = _check_cli("--json", "--repeats", "1", cwd=tmp_path)
+    from_root = _check_cli("--json", "--repeats", "1")
+    assert from_cwd.returncode == 0, from_cwd.stderr
+    first = json.loads(from_root.stdout)
+    second = json.loads(from_cwd.stdout)
+    assert first["cases"] == second["cases"]
+    assert first["repeatability"]["fingerprints"] == second["repeatability"]["fingerprints"]
+    assert first["refusal_reasons"] == second["refusal_reasons"]
+    # The default baseline path is resolved against the repository root, not the CWD.
+    checked = _check_cli("--check", "--repeats", "1", cwd=tmp_path)
+    assert checked.returncode == 0, checked.stderr

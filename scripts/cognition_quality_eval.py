@@ -14,9 +14,23 @@ have is a single, repeatable measurement of the boundary's behaviour:
   latency reported separately;
 * honest labels for what the run does **not** prove.
 
-    python scripts/cognition_quality_eval.py            # human table, exit 0/1
-    python scripts/cognition_quality_eval.py --json     # machine-readable
-    python scripts/cognition_quality_eval.py --repeats 5
+    python scripts/cognition_quality_eval.py                    # human table
+    python scripts/cognition_quality_eval.py --json             # machine-readable
+    python scripts/cognition_quality_eval.py --repeats 5        # bounded repeats
+    python scripts/cognition_quality_eval.py --check            # vs committed baseline
+    python scripts/cognition_quality_eval.py --check --json     # machine-readable verdict
+    python scripts/cognition_quality_eval.py --write-candidate .candidates/next.json
+
+``--check`` compares this run with the reviewed baseline at
+``tests/fixtures/cognition_quality_eval/v1_baseline.json`` (or ``--baseline
+PATH``).  It never writes, it recomputes verdicts and aggregates instead of
+trusting the report's own ``passed``/counter fields, it ignores latency and
+timestamps, and it exits **0** only when the contract holds, **1** on any
+mismatch, **2** on unusable input (bad arguments, unreadable or malformed
+baseline, invalid fixture set).  ``--write-candidate`` is the only way to
+produce a new baseline projection, it refuses to overwrite the committed file,
+and its output is a candidate to review rather than an automatically refreshed
+expectation.
 
 Guarantees of the default run (all enforced by
 ``tests/unit/test_cognition_quality_eval.py``):
@@ -59,6 +73,7 @@ import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from nexus_ai_agent.nagar.cognition import (
@@ -80,6 +95,24 @@ from nexus_ai_agent.nagar.cognition import (
 #: Version of the fixture set / report contract.  Bump when a fixture, an
 #: expectation or a reported field changes meaning.
 EVALUATION_VERSION = "nexus-cognition-quality-eval/v1"
+
+#: Version of the committed regression baseline *format* (not of the fixture
+#: set).  A baseline whose ``baseline_schema_version`` differs is refused, never
+#: silently reinterpreted.
+BASELINE_SCHEMA_VERSION = 1
+
+#: Where the reviewed, committed baseline lives.  Resolved against the
+#: repository root (not the caller's CWD) so the checker behaves identically
+#: from any working directory.
+BASELINE_RELPATH = "tests/fixtures/cognition_quality_eval/v1_baseline.json"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: Exit codes of ``main``: 0 = satisfied, 1 = evaluation/contract mismatch,
+#: 2 = unusable input (bad arguments, unreadable or malformed baseline,
+#: invalid fixture set).  "Unreadable is not a pass" — 2 is never success.
+EXIT_OK = 0
+EXIT_MISMATCH = 1
+EXIT_UNUSABLE_INPUT = 2
 
 #: A local, deterministic run: no network, no real model.
 EXECUTION_MODE = "local_deterministic"
@@ -670,6 +703,66 @@ def _is_execution_module(name: str) -> bool:
     return any(name == module or name.startswith(f"{module}.") for module in _EXECUTION_MODULES)
 
 
+#: The scenarios the evaluation contract promises.  A fixture set that drops one
+#: is invalid, not merely smaller.
+REQUIRED_SCENARIOS: tuple[str, ...] = ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J")
+
+#: Scenarios produced by the runner itself (suite-level invariants), not by
+#: ``_build_cases``.  Scenario J asks the whole suite a question — "is
+#: acceptance being reported as verification?" — so it cannot be one fixture.
+SUITE_SCENARIOS: tuple[str, ...] = ("J",)
+
+#: The probes a fixture may declare.  A case that is really a suite-level
+#: invariant must not masquerade as a boundary probe and vice versa.
+_VALID_PROBES: frozenset[str] = frozenset({_PROBE_FIXTURE, _PROBE_INJECTION, _PROBE_SUITE})
+
+#: Every outcome code the reporter may print: a proposal, the separation
+#: marker, or a documented refusal reason.
+_KNOWN_OUTCOMES: frozenset[str] = frozenset(
+    {_OUTCOME_PROPOSAL, _OUTCOME_SEPARATED} | set(_REFUSAL_OUTCOMES)
+)
+
+
+def validate_fixture_set(cases: Sequence[_Case]) -> list[str]:
+    """Return every structural problem with a fixture set (empty list = valid).
+
+    The evaluator itself is data, so it is validated like data: a duplicated or
+    blank case id, an unknown scenario, an outcome nobody documented, or a
+    scenario that quietly disappeared must fail closed instead of producing a
+    green report that measures less than it claims.
+    """
+    problems: list[str] = []
+    if not cases:
+        return ["fixture set is empty"]
+
+    seen: set[str] = set()
+    for index, case in enumerate(cases):
+        where = f"case #{index}"
+        if not isinstance(case.case_id, str) or not case.case_id.strip():
+            problems.append(f"{where}: case_id must be a non-blank string")
+        elif case.case_id in seen:
+            problems.append(f"{where}: duplicate case_id {case.case_id!r}")
+        else:
+            seen.add(case.case_id)
+        if case.scenario not in REQUIRED_SCENARIOS:
+            problems.append(f"{where}: unknown scenario {case.scenario!r}")
+        if case.expected not in _KNOWN_OUTCOMES:
+            problems.append(f"{where}: undocumented expected outcome {case.expected!r}")
+        if case.probe not in _VALID_PROBES:
+            problems.append(f"{where}: unknown probe label {case.probe!r}")
+        if not callable(case.run):
+            problems.append(f"{where}: fixture is not runnable")
+
+    covered = {case.scenario for case in cases} | set(SUITE_SCENARIOS)
+    for scenario in REQUIRED_SCENARIOS:
+        if scenario not in covered:
+            problems.append(f"scenario {scenario} has no fixture")
+    for scenario in SUITE_SCENARIOS:
+        if any(case.scenario == scenario for case in cases):
+            problems.append(f"scenario {scenario} is suite-level and must not be a fixture")
+    return problems
+
+
 def evaluate(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
     """Run the fixture suite ``repeats`` times and return the report."""
     if isinstance(repeats, bool) or not isinstance(repeats, int):
@@ -678,6 +771,9 @@ def evaluate(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
         raise ValueError(f"repeats must be between 1 and {MAX_REPEATS}")
 
     cases = _build_cases()
+    problems = validate_fixture_set(cases)
+    if problems:
+        raise ValueError("invalid fixture set: " + "; ".join(problems))
     modules_before = set(sys.modules)
     runs: list[list[dict[str, Any]]] = []
     durations_ms: list[float] = []
@@ -745,6 +841,309 @@ def evaluate(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
     }
 
 
+# -- regression baseline ---------------------------------------------------
+#
+# The baseline is *reviewed data*, never a cache of whatever the last run
+# produced.  It pins only the stable contract: the fixture identities, their
+# scenario and probe membership, the expected and observed outcomes, the
+# pass/fail verdicts, the refusal taxonomy, the aggregate counters, the
+# behaviour fingerprint and the evaluation/execution/verification separation.
+#
+# It deliberately pins nothing that varies per machine or per run: no
+# timestamps, no absolute paths, no temporary directories, no latency values,
+# no unordered dict dumps and no fixture text.
+
+BASELINE_CASE_KEYS: tuple[str, ...] = (
+    "case_id",
+    "scenario",
+    "expected",
+    "observed",
+    "passed",
+    "probe",
+)
+
+#: Report fields that must hold a fixed value for the contract to mean anything.
+_BASELINE_CONTRACT_KEYS: tuple[str, ...] = (
+    "execution_mode",
+    "network_used",
+    "real_model_used",
+    "verification_status",
+    "execution_dispatched",
+    "execution_modules_loaded_during_run",
+)
+
+
+class BaselineError(ValueError):
+    """The baseline could not be read or is structurally unusable."""
+
+
+def default_baseline_path() -> Path:
+    """The committed baseline, resolved against the repository root."""
+    return _REPO_ROOT / BASELINE_RELPATH
+
+
+def build_baseline(report: dict[str, Any]) -> dict[str, Any]:
+    """Project a report onto the stable contract (a *candidate* baseline).
+
+    Callers write the result to a candidate path and review it; nothing here
+    touches the committed baseline.
+    """
+    cases = [
+        {key: case[key] for key in BASELINE_CASE_KEYS}
+        for case in sorted(report["cases"], key=lambda item: item["case_id"])
+    ]
+    return {
+        "baseline_schema_version": BASELINE_SCHEMA_VERSION,
+        "evaluation_version": report["evaluation_version"],
+        "contract": {key: report[key] for key in _BASELINE_CONTRACT_KEYS},
+        "counts": {
+            "cases_total": report["cases_total"],
+            "cases_passed": report["cases_passed"],
+            "cases_failed": report["cases_failed"],
+            "valid_proposals_accepted": report["valid_proposals_accepted"],
+            "refusals_observed": report["refusals_observed"],
+            "synthetic_boundary_probe_cases": report["synthetic_boundary_probe_cases"],
+        },
+        "refusal_reasons": dict(sorted(report["refusal_reasons"].items())),
+        "fingerprint": report["repeatability"]["fingerprints"][0],
+        "cases": cases,
+    }
+
+
+#: Structural shape every baseline must have before it is *interpreted*.
+#: A file that fails this is unusable input (exit 2), not a contract mismatch.
+_BASELINE_SHAPE: tuple[tuple[str, type], ...] = (
+    ("baseline_schema_version", int),
+    ("evaluation_version", str),
+    ("contract", dict),
+    ("counts", dict),
+    ("refusal_reasons", dict),
+    ("fingerprint", str),
+    ("cases", list),
+)
+
+
+def load_baseline(path: Path) -> dict[str, Any]:
+    """Read a baseline file, converting every failure into :class:`BaselineError`."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BaselineError(f"baseline cannot be read: {path} ({type(exc).__name__})") from exc
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError) as exc:
+        raise BaselineError(f"baseline is not valid JSON: {path} ({type(exc).__name__})") from exc
+    if not isinstance(data, dict):
+        raise BaselineError(f"baseline must be a JSON object: {path}")
+    for key, expected_type in _BASELINE_SHAPE:
+        if key not in data:
+            raise BaselineError(f"baseline is missing {key!r}: {path}")
+        value = data[key]
+        if expected_type is int:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise BaselineError(f"baseline {key!r} must be an integer: {path}")
+        elif not isinstance(value, expected_type):
+            raise BaselineError(f"baseline {key!r} must be {expected_type.__name__}: {path}")
+    if not data["cases"]:
+        raise BaselineError(f"baseline has no cases: {path}")
+    if not all(isinstance(entry, dict) for entry in data["cases"]):
+        raise BaselineError(f"baseline cases must be objects: {path}")
+    return data
+
+
+def _baseline_case_index(baseline: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Index baseline cases by id, reporting structural problems."""
+    problems: list[str] = []
+    raw = baseline.get("cases")
+    if not isinstance(raw, list) or not raw:
+        return {}, ["baseline.cases must be a non-empty list"]
+    index: dict[str, dict[str, Any]] = {}
+    for position, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            problems.append(f"baseline.cases[{position}] is not an object")
+            continue
+        missing = [key for key in BASELINE_CASE_KEYS if key not in entry]
+        if missing:
+            problems.append(f"baseline.cases[{position}] is missing {', '.join(missing)}")
+            continue
+        case_id = entry["case_id"]
+        if not isinstance(case_id, str) or not case_id.strip():
+            problems.append(f"baseline.cases[{position}] has a blank case_id")
+            continue
+        if case_id in index:
+            problems.append(f"baseline has duplicate case_id {case_id!r}")
+            continue
+        index[case_id] = entry
+    return index, problems
+
+
+def _report_cases_by_id(
+    report: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Index report cases by id, detecting duplicates and blank ids."""
+    problems: list[str] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    for position, case in enumerate(report["cases"]):
+        case_id = case.get("case_id")
+        if not isinstance(case_id, str) or not case_id.strip():
+            problems.append(f"report case #{position} has a blank case_id")
+            continue
+        if case_id in by_id:
+            problems.append(f"report has duplicate case_id {case_id!r}")
+            continue
+        by_id[case_id] = case
+    return by_id, problems
+
+
+def _recompute_counts(cases: Sequence[dict[str, Any]]) -> dict[str, int]:
+    """Recount the aggregates from the case list (never from the report's own numbers)."""
+    accepted = sum(1 for case in cases if case["observed"] == _OUTCOME_PROPOSAL)
+    refusals = Counter(case["observed"] for case in cases if case["observed"] in _REFUSAL_OUTCOMES)
+    return {
+        "cases_total": len(cases),
+        "cases_passed": sum(1 for case in cases if case["passed"]),
+        "cases_failed": sum(1 for case in cases if not case["passed"]),
+        "valid_proposals_accepted": accepted,
+        "refusals_observed": sum(refusals.values()),
+        "synthetic_boundary_probe_cases": sum(
+            1 for case in cases if case["probe"] == _PROBE_INJECTION
+        ),
+    }
+
+
+def _recompute_refusal_reasons(cases: Sequence[dict[str, Any]]) -> dict[str, int]:
+    counts = Counter(case["observed"] for case in cases if case["observed"] in _REFUSAL_OUTCOMES)
+    return dict(sorted(counts.items()))
+
+
+def check_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
+    """Compare a report with a baseline; return every contract violation.
+
+    The check is independent of the evaluator's own ``passed`` bookkeeping: it
+    recomputes pass/fail from ``expected`` vs ``observed`` for both sides, and
+    recomputes every aggregate from the case list instead of trusting the
+    reported counters.
+    """
+    problems: list[str] = []
+
+    schema_version = baseline.get("baseline_schema_version")
+    if schema_version != BASELINE_SCHEMA_VERSION:
+        problems.append(
+            "baseline_schema_version is "
+            f"{schema_version!r}, this harness speaks {BASELINE_SCHEMA_VERSION}"
+        )
+    evaluation_version = baseline.get("evaluation_version")
+    if evaluation_version != report["evaluation_version"]:
+        problems.append(
+            f"evaluation_version drifted: baseline {evaluation_version!r} "
+            f"vs report {report['evaluation_version']!r}"
+        )
+
+    contract = baseline.get("contract")
+    if not isinstance(contract, dict):
+        problems.append("baseline.contract must be an object")
+    else:
+        for key in _BASELINE_CONTRACT_KEYS:
+            if key not in contract:
+                problems.append(f"baseline.contract is missing {key!r}")
+                continue
+            if contract[key] != report[key]:
+                problems.append(
+                    f"contract field {key!r} changed: baseline {contract[key]!r} "
+                    f"vs report {report[key]!r}"
+                )
+
+    expected_cases, case_problems = _baseline_case_index(baseline)
+    problems.extend(case_problems)
+    report_cases, report_problems = _report_cases_by_id(report)
+    problems.extend(report_problems)
+
+    missing = sorted(set(expected_cases) - set(report_cases))
+    unexpected = sorted(set(report_cases) - set(expected_cases))
+    if missing:
+        problems.append(f"{len(missing)} baseline case(s) missing from the report: {missing}")
+    if unexpected:
+        problems.append(f"{len(unexpected)} unexpected case(s) in the report: {unexpected}")
+
+    for case_id in sorted(set(expected_cases) & set(report_cases)):
+        want = expected_cases[case_id]
+        got = report_cases[case_id]
+        # Recompute the verdict from the two outcomes; never trust ``passed``.
+        if not isinstance(want["expected"], str) or not isinstance(want["observed"], str):
+            problems.append(f"{case_id}: baseline outcomes must be strings")
+            continue
+        expected_verdict = want["expected"] == want["observed"]
+        if expected_verdict != want["passed"]:
+            problems.append(
+                f"{case_id}: baseline is self-inconsistent "
+                f"({want['expected']!r} vs {want['observed']!r} marked passed={want['passed']})"
+            )
+        for key in ("scenario", "expected", "observed", "passed", "probe"):
+            if want[key] != got.get(key):
+                problems.append(
+                    f"{case_id}: {key} changed: baseline {want[key]!r} vs report {got.get(key)!r}"
+                )
+        if got.get("passed") is not (got.get("expected") == got.get("observed")):
+            problems.append(f"{case_id}: report verdict does not match its own outcomes")
+
+    recomputed = _recompute_counts(report["cases"])
+    baseline_counts = baseline.get("counts")
+    if not isinstance(baseline_counts, dict):
+        problems.append("baseline.counts must be an object")
+    else:
+        for key, value in sorted(recomputed.items()):
+            if baseline_counts.get(key) != value:
+                problems.append(
+                    f"count {key!r} changed: baseline {baseline_counts.get(key)!r} vs {value!r}"
+                )
+    for key, value in sorted(recomputed.items()):
+        if report.get(key) != value:
+            problems.append(f"report counter {key!r} is {report.get(key)!r}, recomputed {value!r}")
+
+    reasons = _recompute_refusal_reasons(report["cases"])
+    if baseline.get("refusal_reasons") != reasons:
+        problems.append(
+            f"refusal taxonomy changed: baseline {baseline.get('refusal_reasons')!r} vs {reasons!r}"
+        )
+    if report.get("refusal_reasons") != reasons:
+        problems.append("report refusal_reasons do not match its own cases")
+
+    fingerprint = report["repeatability"]["fingerprints"][0]
+    if baseline.get("fingerprint") != fingerprint:
+        problems.append(
+            "fingerprint drifted: "
+            f"baseline {baseline.get('fingerprint')!r} vs report {fingerprint!r}"
+        )
+
+    return problems
+
+
+def write_candidate_baseline(report: dict[str, Any], path: Path, *, allowed_root: Path) -> None:
+    """Write a *candidate* baseline outside the committed contract path.
+
+    Regenerating the committed baseline in place is exactly how an expected
+    output cache starts verifying itself, so the candidate path may not be the
+    committed baseline and must stay inside the repository.
+    """
+    candidate = build_baseline(report)
+    problems = check_baseline(report, candidate)
+    if problems:
+        raise BaselineError(
+            "candidate baseline would not describe this run: " + "; ".join(problems[:5])
+        )
+    target = path.resolve()
+    committed = default_baseline_path().resolve()
+    if target == committed:
+        raise BaselineError(
+            f"refusing to overwrite the committed baseline in place ({BASELINE_RELPATH}); "
+            "write a candidate elsewhere, review it, then replace the baseline deliberately"
+        )
+    root = allowed_root.resolve()
+    if root not in target.parents:
+        raise BaselineError(f"candidate baseline must live inside {root}")
+    path.write_text(json.dumps(candidate, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 # -- reporting ------------------------------------------------------------
 
 
@@ -793,6 +1192,28 @@ def _print_report(report: dict[str, Any]) -> None:
     )
 
 
+def _print_baseline_check(path: Path, problems: Sequence[str], report: dict[str, Any]) -> None:
+    """Concise, actionable baseline verdict (never conceals a failure)."""
+    if not problems:
+        print(
+            f"baseline check PASS — {path} "
+            f"({report['cases_total']} cases, fingerprint "
+            f"{report['repeatability']['fingerprints'][0]})"
+        )
+        return
+    print(f"baseline check FAIL — {path}: {len(problems)} problem(s)")
+    for problem in problems[:MAX_REPORTED_PROBLEMS]:
+        print(f"  - {problem}")
+    remaining = len(problems) - MAX_REPORTED_PROBLEMS
+    if remaining > 0:
+        print(f"  … and {remaining} more")
+    print("(the committed baseline was NOT modified)")
+
+
+#: A mismatch report stays readable: cap the printed problems, never the count.
+MAX_REPORTED_PROBLEMS = 40
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Deterministic local quality evaluation of the Cognition boundary.",
@@ -808,21 +1229,86 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_REPEATS,
         help=f"bounded repeat count, 1..{MAX_REPEATS} (default {DEFAULT_REPEATS})",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="compare this run with the committed regression baseline (exit 0 only on a match)",
+    )
+    parser.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"baseline to check against (default: {BASELINE_RELPATH})",
+    )
+    parser.add_argument(
+        "--write-candidate",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write a reviewable candidate baseline (never the committed one)",
+    )
     args = parser.parse_args(argv)
 
+    if args.check and args.write_candidate is not None:
+        parser.error("--check and --write-candidate cannot be combined")
+    if args.baseline is not None and args.write_candidate is not None:
+        parser.error("--baseline and --write-candidate cannot be combined")
     if not 1 <= args.repeats <= MAX_REPEATS:
         print(
             f"error: --repeats must be between 1 and {MAX_REPEATS}, got {args.repeats}",
             file=sys.stderr,
         )
-        return 2
+        return EXIT_UNUSABLE_INPUT
 
-    report = evaluate(repeats=args.repeats)
+    try:
+        report = evaluate(repeats=args.repeats)
+    except ValueError as exc:  # invalid fixture set: fail closed, never a partial run
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_UNUSABLE_INPUT
+
+    if args.write_candidate is not None:
+        try:
+            write_candidate_baseline(report, args.write_candidate, allowed_root=_REPO_ROOT)
+        except (BaselineError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_UNUSABLE_INPUT
+        print(f"candidate baseline written: {args.write_candidate} (review before committing)")
+        return EXIT_OK if report["cases_failed"] == 0 else EXIT_MISMATCH
+
+    if args.check:
+        baseline_path = args.baseline if args.baseline is not None else default_baseline_path()
+        try:
+            baseline = load_baseline(baseline_path)
+        except BaselineError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_UNUSABLE_INPUT
+        problems = check_baseline(report, baseline)
+        if report["cases_failed"]:
+            problems.insert(0, f"{report['cases_failed']} fixture(s) failed in this run")
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "baseline_path": str(baseline_path),
+                        "baseline_schema_version": BASELINE_SCHEMA_VERSION,
+                        "status": "PASS" if not problems else "FAIL",
+                        "problems": problems,
+                        "report": report,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            _print_baseline_check(baseline_path, problems, report)
+        return EXIT_OK if not problems else EXIT_MISMATCH
+
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         _print_report(report)
-    return 0 if report["cases_failed"] == 0 else 1
+    return EXIT_OK if report["cases_failed"] == 0 else EXIT_MISMATCH
 
 
 if __name__ == "__main__":
