@@ -502,3 +502,56 @@ def test_intermediate_symlink_and_traversal_are_refused(tmp_path: Path) -> None:
     for bad in ("../escape", "a/../../escape", "/abs"):
         with pytest.raises(FilesystemBoundaryError):
             ws.ensure_directory(bad)
+
+
+# --------------------------------------------------------------------------- #
+# Chunked reads (review round 2, finding B)
+#
+# The object store must enforce a byte bound *while* reading, so the boundary
+# needs a read that never buffers the whole file. It must not be a weaker
+# boundary than `read_bytes`: same descriptor-relative walk, same O_NOFOLLOW.
+# --------------------------------------------------------------------------- #
+def test_iter_bytes_yields_bounded_chunks_that_reassemble(tmp_path: Path) -> None:
+    fs = _ws(tmp_path)
+    payload = bytes(range(256)) * 40
+    (tmp_path / "ws" / "data.bin").write_bytes(payload)
+
+    chunks = list(fs.iter_bytes("data.bin", chunk_size=100))
+    assert len(chunks) > 1
+    assert all(len(chunk) <= 100 for chunk in chunks)
+    assert b"".join(chunks) == payload
+
+
+def test_iter_bytes_is_lazy_and_closable_mid_stream(tmp_path: Path) -> None:
+    fs = _ws(tmp_path)
+    (tmp_path / "ws" / "data.bin").write_bytes(b"a" * 5000)
+
+    iterator = fs.iter_bytes("data.bin", chunk_size=64)
+    assert next(iterator) == b"a" * 64
+    iterator.close()  # abandoning a stream must not error or leak the descriptor
+
+
+def test_iter_bytes_rejects_a_symlinked_leaf(tmp_path: Path) -> None:
+    fs = _ws(tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"secret")
+    os.symlink(outside, tmp_path / "ws" / "link.txt")
+
+    with pytest.raises(FilesystemBoundaryError):
+        list(fs.iter_bytes("link.txt"))
+
+
+def test_iter_bytes_rejects_a_directory_and_a_missing_file(tmp_path: Path) -> None:
+    fs = _ws(tmp_path)
+    (tmp_path / "ws" / "dir").mkdir()
+    with pytest.raises(FilesystemBoundaryError):
+        list(fs.iter_bytes("dir"))
+    with pytest.raises(FilesystemBoundaryError):
+        list(fs.iter_bytes("missing.bin"))
+
+
+def test_iter_bytes_rejects_a_non_positive_chunk_size(tmp_path: Path) -> None:
+    fs = _ws(tmp_path)
+    (tmp_path / "ws" / "data.bin").write_bytes(b"x")
+    with pytest.raises(ValueError):
+        list(fs.iter_bytes("data.bin", chunk_size=0))
