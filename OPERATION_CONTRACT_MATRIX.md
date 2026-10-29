@@ -7,10 +7,13 @@ nine-stage pipeline for every operation of the universe (catalogue ∪ runtime).
 Statuses: `MISSING` / `PARTIAL` (design-only or wired-unproven) / `PRESENT`
 (static fact) / `PROVEN` (backed by executable evidence).
 
-Universe: **80** operations — catalogue 70, runtime 57, overlap 47, missing 23, runtime-only 10, surface-reachable 12.
+Universe: **83** operations — catalogue 70, runtime 60, overlap 47, missing 23, runtime-only 13, surface-reachable 12.
 
 | operation | id | flag | product | contract | registry | capability | | surface | command | execution | artifact | proof | L | UX modes | pack | | locality | registrar |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| analysis.assess_loudness | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.analysis.perception |
+| analysis.mark_scene_cuts | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.analysis.perception |
+| analysis.mark_silences | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.analysis.perception |
 | audio.align_music | T49 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.beat_sync_cut | T42 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.deess | T48 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |

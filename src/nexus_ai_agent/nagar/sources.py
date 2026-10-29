@@ -87,14 +87,22 @@ PROOF_REGISTRY_PATH = Path("docs") / "audits" / "OPERATION_PROOF_REGISTRY.json"
 GATE4_EVIDENCE = Path("docs") / "audits" / "GATE4_TRUTH_MATRIX.json"
 
 #: Pack operation modules scanned for ``OPERATION_*`` declarations.
-_PACK_MODULES = (
-    "nexus_ai_agent.creative.packs.slideshow.operations",
-    "nexus_ai_agent.creative.packs.caption.operations",
-    "nexus_ai_agent.creative.packs.edit.operations",
-    "nexus_ai_agent.creative.packs.motion.operations",
-    "nexus_ai_agent.creative.packs.audio.operations",
-    "nexus_ai_agent.creative.packs.delivery.operations",
-)
+#:
+#: Discovered from the tree, never hand-maintained: the ``perception`` pack's
+#: three ``analysis.*`` ids once registered at runtime without a declaration
+#: symbol because this list still named only the six original packs (mission 9,
+#: Finding B).  Any ``creative/packs/<id>/operations.py`` now contributes its
+#: declarations the moment it lands.
+_PACKS_DIR = Path(__file__).resolve().parent.parent / "creative" / "packs"
+
+
+def _discover_pack_modules() -> tuple[str, ...]:
+    """Every ``creative.packs.<id>.operations`` module present on disk."""
+    return tuple(
+        f"nexus_ai_agent.creative.packs.{path.parent.name}.operations"
+        for path in sorted(_PACKS_DIR.glob("*/operations.py"))
+    )
+
 
 #: The studio core module scanned for ``operation_id=`` literals.
 _STUDIO_MODULE = "nexus_ai_agent.creative.studio.capabilities"
@@ -704,7 +712,7 @@ def read_declared_operations() -> Declared:
     )
 
     pack_constants: set[str] = set()
-    for module_name in _PACK_MODULES:
+    for module_name in _discover_pack_modules():
         pack_module = importlib.import_module(module_name)
         for name, value in vars(pack_module).items():
             if name.startswith("OPERATION_") and isinstance(value, str):

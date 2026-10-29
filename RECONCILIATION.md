@@ -10,11 +10,11 @@ recomputed on every run. No number on this page is hand-maintained.
 | quantity | value | rule |
 |---|---|---|
 | product catalogue | 70 | rows of the pack tables in `docs/NAGAR_70_OPERATIONS_TDD.md` |
-| runtime registry | 57 | `build_runtime_registry()` |
+| runtime registry | 60 | `build_runtime_registry()` |
 | overlap | 47 | catalogue ∩ registry |
 | missing | 23 | catalogue − registry |
-| runtime-only | 10 | registry − catalogue |
-| universe | 80 | catalogue ∪ registry |
+| runtime-only | 13 | registry − catalogue |
+| universe | 83 | catalogue ∪ registry |
 | surface-reachable | 12 | allow-list ∪ slideshow entrypoint |
 | suite-executed | 57 | tests AST execution probe |
 
@@ -50,11 +50,15 @@ recomputed on every run. No number on this page is hand-maintained.
 
 ## Runtime-only (dispatchable, never catalogued)
 
+* `analysis` — 3
 * `media` — 2
 * `slideshow` — 6
 * `system` — 1
 * `timeline` — 1
 
+* `analysis.assess_loudness`
+* `analysis.mark_scene_cuts`
+* `analysis.mark_silences`
 * `media.pause`
 * `media.play`
 * `slideshow.compose`

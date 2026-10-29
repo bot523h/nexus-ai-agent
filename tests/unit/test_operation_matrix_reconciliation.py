@@ -2,7 +2,7 @@
 
 Mission: Agent B — Operation Truth & Wave Planning Mission.
 Verifies:
-1. Product Catalog (70) != Runtime Registry (57) != Executable Surface (9).
+1. Product Catalog (70) != Runtime Registry (60) != Executable Surface (9).
 2. Exactly 23 operations are missing and preserved as EvidenceClass.MISSING / L0 / NOT_IMPLEMENTED.
 3. No fake or stub implementations exist to artificially inflate the registry.
 4. Error taxonomy and contract violations (unknown op, missing cap, schema error, duplicate op).
@@ -63,7 +63,7 @@ def test_reconciliation_numbers_invariant() -> None:
     catalog_ops = [op for op in matrix_data["operations"] if op["product_defined"]]
     assert len(catalog_ops) == 70, f"Expected 70 catalog operations, got {len(catalog_ops)}"
 
-    assert len(runtime_ops) == 57, f"Expected 57 registered operations, got {len(runtime_ops)}"
+    assert len(runtime_ops) == 60, f"Expected 60 registered operations, got {len(runtime_ops)}"
 
     overlap = set(op["operation_id"] for op in catalog_ops) & runtime_ops
     assert len(overlap) == 47, f"Expected 47 overlapping operations, got {len(overlap)}"
@@ -96,7 +96,7 @@ def test_three_layers_are_strictly_decoupled() -> None:
     # 1. Catalog != Registry
     assert catalog_ops != runtime_ops
     assert len(catalog_ops) == 70
-    assert len(runtime_ops) == 57
+    assert len(runtime_ops) == 60
 
     # 2. Registry != Executable Surface
     assert runtime_ops != surface_ops
