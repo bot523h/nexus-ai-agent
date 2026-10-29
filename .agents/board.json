@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-28T17:32:21Z",
+  "updated_at": "2026-10-29T13:04:26Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -5605,7 +5605,7 @@
       "title": "Repair existing PR #139: fix(retention): a thread's destructive verdict must span all its lifecycle rows, not one arbitrary row",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/139 on its existing branch arena/01a0fac1-nexus-ai-agent, preserving intent and published history. Snapshot head 76a43eb2c44e37445db0e97eecd78b8a5ba1dc6d; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -5629,13 +5629,13 @@
         "tests/unit/test_retention_policy_divergence.py",
         "tests/unit/test_thread_retention_verdict.py"
       ],
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/m11-live-truth",
+      "claimed_at": "2026-10-29T13:04:26Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 1,
       "owner_hint": "Registered for a future authorized repair session on arena/01a0fac1-nexus-ai-agent; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": ""
     },
     {
       "task": "pr-repair-140",
