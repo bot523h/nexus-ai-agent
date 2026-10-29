@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-29T13:04:26Z",
+  "updated_at": "2026-10-29T14:39:04Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -986,6 +986,20 @@
       "paths": [
         "src/nexus_ai_agent/storage/providers/rclone.py",
         "tests/unit/test_rclone_provider_list_errors.py"
+      ]
+    },
+    {
+      "id": "nagar-causal-memory-director",
+      "description": "Nagar causal-memory projection and bounded, non-executing Director consensus; NEL integration is explicitly deferred.",
+      "paths": [
+        "src/nexus_ai_agent/nagar/causal_memory/",
+        "src/nexus_ai_agent/nagar/director/",
+        "tests/unit/test_nagar_causal_memory.py",
+        "tests/unit/test_nagar_director.py",
+        "tests/unit/test_nagar_director_consensus.py",
+        "tests/integration/test_nagar_causal_memory_rebuild.py",
+        "tests/integration/test_nagar_director_provenance_projection.py",
+        "tests/architecture/test_nagar_director_boundary.py"
       ]
     }
   ],
@@ -7414,6 +7428,56 @@
       "gates_owner": false,
       "note": "",
       "generation": 2
+    },
+    {
+      "task": "task-278-nagar-causal-memory-director",
+      "title": "Nagar causal memory and bounded Director consensus",
+      "title_fa": "حافظهٔ علّی ناگار و اجماع محدود Director",
+      "zone": "nagar-causal-memory-director",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Implement a typed, rebuildable, read-only projection over canonical causal journal, execution/passport evidence, plus a bounded typed Director preview/consensus over existing contracts. Do not add another journal, graph database, queue, policy, CommandBus, verifier, or execution path. Do not edit NEL/semantic-time paths in PR #273, Cognition evaluation paths in PR #276, queue heartbeat paths, or docs files currently changed by PR #273. No NEL integration or real execution is included; it requires a separate registered follow-up after its dependency is canonical.",
+      "scope_fa": "فقط projection تایپ‌شده و بازسازی‌پذیر از journal و شواهد canonical موجود، به‌علاوهٔ preview و consensus محدود Director روی قراردادهای موجود. بدون journal/graph/queue/policy/CommandBus/verifier یا مسیر اجرای موازی. مسیرهای NEL و Semantic Time در PR #273، ارزیابی شناخت در PR #276، صف heartbeat و فایل‌های مستنداتی که PR #273 تغییر داده دست‌نخورده بمانند. اتصال NEL و اجرای واقعی خارج از scope است و فقط پس از canonical شدن وابستگی، در task جداگانه انجام شود.",
+      "prerequisites": [
+        "task-231-provenance-ledger",
+        "task-233-nagar-durable-cognition-handoff"
+      ],
+      "acceptance_criteria": [
+        "Causal memory is a typed, deterministic, read-only projection of canonical journal and existing execution/passport evidence; it creates no parallel persistence or authority.",
+        "Only recorded facts are asserted; unknown, incomplete, unverified, missing-artifact, or invalid-chain states remain explicit and fail closed.",
+        "Tenant/project scope is enforced on every query; foreign-scope reads are rejected by negative tests.",
+        "Projection rebuild after restart from canonical durable sources preserves stable identities and causal relationships; replay is idempotent.",
+        "Journal tampering, truncation, reorder, broken links, artifact digest mismatch, and missing independent verification cannot yield a verified success.",
+        "Director emits typed non-executable previews only, with at most five candidates and three review rounds; timeout/resource limits and deterministic tie-breaking are explicit.",
+        "Safety veto is absolute; malformed candidates, refusal, timeout, disagreement, and budget exhaustion yield typed rejection, clarification, or failure, never execution authority.",
+        "No direct access to shell, renderer, filesystem mutation, CommandBus, queue dispatch, policy authority, or verifier is introduced; no raw sensitive prompts/responses are persisted.",
+        "NEL/semantic-time integration and end-to-end creative execution remain explicitly deferred until their canonical dependency and a separate integration claim are approved."
+      ],
+      "evidence_required": [
+        "Focused unit tests for canonical source validation, typed projection queries, tenant/project isolation, consensus determinism, absolute veto, and typed failure outcomes.",
+        "Integration test proving projection rebuild/replay after restart from existing canonical journal and evidence, including tamper and incomplete-lineage fixtures.",
+        "Architecture test proving Director cannot dispatch to CommandBus, queue, renderer, shell, or verifier.",
+        "Adversarial/mutation evidence for tamper rejection, cross-scope denial, authority injection, safety veto under majority, malformed output, and bounded candidate/round budgets.",
+        "Exact commands, result counts, exit codes, and tested SHA for targeted tests and make lint, make types, make test.",
+        "Full multi-source agent_board.py check on actual changed paths with exit code 0 before each push; CI evidence bound to the exact tested SHA."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/causal_memory/",
+        "src/nexus_ai_agent/nagar/director/",
+        "tests/unit/test_nagar_causal_memory.py",
+        "tests/unit/test_nagar_director.py",
+        "tests/unit/test_nagar_director_consensus.py",
+        "tests/integration/test_nagar_causal_memory_rebuild.py",
+        "tests/integration/test_nagar_director_provenance_projection.py",
+        "tests/architecture/test_nagar_director_boundary.py"
+      ],
+      "owner_hint": "Registration only: remains unclaimed until this additive board entry is on canonical main. Then the implementation agent must claim it via scripts/agent_board.py before feature code.",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Queued by a governance-only registration PR. This is not a claim, takeover, or proof of implementation authorization; do not code until canonical main contains this task and the official claim succeeds.",
+      "generation": 0
     }
   ],
   "deferred_log": [
