@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-30T00:52:34Z",
+  "updated_at": "2026-10-30T07:30:32Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1015,6 +1015,20 @@
         "L0_L4_MATURITY.md",
         "tests/unit/test_operation_matrix_reconciliation.py",
         "src/nexus_ai_agent/nagar/docs_projection.py"
+      ]
+    },
+    {
+      "id": "durable-project-state-lifecycle",
+      "description": "Durable, restartable Studio Project revisions and verified creative lineage. Candidate implementation paths only; finalize all integration and documentation paths after the canonical design lock and a fresh ownership audit.",
+      "paths": [
+        "src/nexus_ai_agent/creative/project_state/",
+        "src/nexus_ai_agent/creative/studio/persistence.py",
+        "src/nexus_ai_agent/creative/studio/persistence_models.py",
+        "migrations/versions/20261030_durable_project_state.py",
+        "tests/unit/test_durable_project_state.py",
+        "tests/integration/test_durable_project_restart.py",
+        "tests/integration/test_project_artifact_lineage.py",
+        "tests/architecture/test_durable_project_state_boundary.py"
       ]
     }
   ],
@@ -7535,6 +7549,54 @@
       ],
       "note": "",
       "ttl_hours": 24
+    },
+    {
+      "task": "task-282-durable-project-state-lifecycle",
+      "title": "Durable Studio Project state, revisions, and verified artifact lineage",
+      "title_fa": "وضعیت پایدار پروژهٔ استودیو، بازبینی‌ها و زنجیرهٔ شواهد دارایی",
+      "zone": "durable-project-state-lifecycle",
+      "priority": "P1",
+      "status": "deferred",
+      "scope": "Lock the canonical source-of-truth contracts, then implement one real, restartable Project-to-verified-Artifact lifecycle using the existing Studio transaction/CommandBus, intent execution, queue-owned Job/Attempt, Asset Library, Verification, and Provenance/Passport. No parallel queue, authority, renderer, or provenance ledger. The row remains deferred until the design is locked and every required integration, migration, and documentation path has been added to exclusive_paths and cleared.",
+      "scope_fa": "ابتدا قراردادهای منبع حقیقت را قفل کنید؛ سپس فقط یک مسیر واقعی و قابل‌بازیابی از Project تا Artifact تأییدشده بسازید و از تراکنش/CommandBus، اجرای Intent، Job/Attempt صف موجود، Asset Library، Verification و Provenance/Passport فعلی استفاده کنید. صف، مرجع حقیقت، Renderer یا دفتر Provenance موازی نسازید. تا قفل طراحی و افزودن و ممیزی تمام مسیرهای اتصال، migration و مستندات در exclusive_paths، این Task deferred می‌ماند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Before implementation, publish a canonical contract matrix for Project, Revision, Intent, Transaction, Job, Attempt, Artifact/AssetVersion, Verification, and Lineage. For each, name the authoritative owner, durable record, identity/hash/version rule, transaction boundary, idempotency key, recovery behavior, and forbidden duplicate authority.",
+        "After the design and exact path list are approved, a real product path creates or loads a Project, commits an immutable revision with deterministic identity/hash and concurrency protection, executes a supported Intent through the existing queue, produces a real Artifact/AssetVersion, records canonical Verification, and reconstructs the linked evidence/Passport.",
+        "A fresh process/composition rebuilds the same Project revision and verified lineage from canonical persistent storage; in-memory-only state, mocks, and disconnected repositories do not satisfy this criterion.",
+        "Fault-injection at transaction commit, queue reservation/lease, artifact publication, and verification boundaries proves crash recovery and idempotent replay: no duplicate successful artifacts, no lost committed revision, and no false success without verified evidence.",
+        "Cross-project/tenant authorization, concurrent revision conflicts, malformed or tampered snapshots, mismatched job/revision/artifact links, and replay attempts fail closed with typed outcomes and no leaked data.",
+        "No parallel execution queue, artifact authority, verification system, or provenance/passport store is introduced; existing owners remain authoritative.",
+        "Before claiming or coding, finalize the complete exclusive path set (including real composition-root and documentation-index paths), run the official global Board check, and resolve every live-PR overlap without editing another owner’s PR.",
+        "Run make lint, make types, and make test on the exact final SHA; obtain independent review of recovery, isolation, idempotency, replay, and integrity evidence."
+      ],
+      "evidence_required": [
+        "Canonical source-of-truth matrix and transaction/recovery state table, with the final repository paths and design decision recorded.",
+        "Focused unit, integration, and architecture tests for immutable revisions, idempotency, concurrent updates, and no parallel authority.",
+        "Process-restart proof through the real composition root, existing queue, real produced artifact, canonical verifier, and rebuildable provenance/passport lineage.",
+        "Fault-injection results across all declared crash boundaries, plus cross-project isolation and tamper/replay rejection results.",
+        "Exact official agent_board.py check command, exit code, and consulted-source count immediately before claim/push; changed-path/PR-overlap audit.",
+        "Exact make lint, make types, and make test commands, exit codes, pass/skip counts, final SHA, and CI run/job conclusions.",
+        "Independent reviewer checklist/result for Crash Recovery, Idempotency, Isolation, Replay, Integrity, and durable data recovery."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/project_state/",
+        "src/nexus_ai_agent/creative/studio/persistence.py",
+        "src/nexus_ai_agent/creative/studio/persistence_models.py",
+        "migrations/versions/20261030_durable_project_state.py",
+        "tests/unit/test_durable_project_state.py",
+        "tests/integration/test_durable_project_restart.py",
+        "tests/integration/test_project_artifact_lineage.py",
+        "tests/architecture/test_durable_project_state_boundary.py"
+      ],
+      "owner_hint": "Deferred until canonical design lock and complete path-ownership review; no claim yet.",
+      "agent_branch": "",
+      "claimed_at": null,
+      "generation": 0,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "Registration-only governance state. Do not claim or code until this task is on canonical main, the Stage-2 design lock is complete, the final integration/migration/documentation paths are included in exclusive_paths, and a fresh official global check exits 0. The paths currently listed are provisional new-file candidates only. Do not edit PRs #273, #276, #285, #287, #129, #283, or #205. PR #276 is already merged; PR #287 separately proposes task-281. Current open PRs own or touch shared Board/documentation/Studio paths; resolve their state through their owners and the repository newest-state Board rule, never by changing their branches. Do not touch docs/README.md, docs/architecture/CREATIVE_STUDIO.md, studio/__init__.py, studio/lifecycle.py, CommandBus, render_jobs, or the official Truth generator as part of this registration. Re-audit before claim."
     }
   ],
   "deferred_log": [
