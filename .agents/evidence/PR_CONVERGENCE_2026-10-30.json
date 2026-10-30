@@ -1,8 +1,8 @@
 {
   "schema": "nexus-pr-registry/v1",
   "repo": "bot523h/nexus-ai-agent",
-  "generated_at": "2026-10-30T07:50:47Z",
-  "main_sha": "dc23968d670e8949c9453ee5392e37f61134542a",
+  "generated_at": "2026-10-30T10:10:41Z",
+  "main_sha": "8d1e716764f7107b1479c96750da045ca4211909",
   "required_approvals": 0,
   "required_contexts": [
     "lint (ruff + mypy + version lockstep)",
@@ -12,33 +12,546 @@
   "protection_state": "readable",
   "protection_source": "branch-protection API",
   "protection_error": "",
-  "open_total": 43,
+  "open_total": 44,
   "totals": {
     "WRONG_BASE_BRANCH": 0,
     "DRAFT": 12,
-    "CONFLICT": 27,
+    "CONFLICT": 28,
     "MERGEABILITY_UNKNOWN": 0,
-    "CI_RED": 2,
+    "CI_RED": 3,
     "CI_PENDING": 0,
     "CHANGES_REQUESTED": 0,
     "NEEDS_APPROVAL": 0,
-    "REBASE_FIRST": 0,
+    "REBASE_FIRST": 1,
     "PROTECTION_UNREADABLE": 0,
-    "READY": 2
+    "READY": 0
   },
   "blockers": {
     "WRONG_BASE_BRANCH": 0,
     "DRAFT": 12,
-    "CONFLICT": 34,
+    "CONFLICT": 36,
     "MERGEABILITY_UNKNOWN": 0,
-    "CI_RED": 12,
-    "CI_PENDING": 0,
+    "CI_RED": 7,
+    "CI_PENDING": 20,
     "CHANGES_REQUESTED": 12,
     "NEEDS_APPROVAL": 0,
-    "REBASE_FIRST": 40,
+    "REBASE_FIRST": 43,
     "PROTECTION_UNREADABLE": 0
   },
   "prs": [
+    {
+      "number": 292,
+      "title": "fix(truth): TRUTH041 must use the referee's live-lease predicate (task-267)",
+      "head": "arena/m14-truth041-lease-expiry",
+      "head_sha": "63d46a4c4eed2f0f0b82c1473f78d9ed03229c7e",
+      "base": "main",
+      "is_draft": false,
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "review_decision": "APPROVED",
+      "ci_state": "SUCCESS",
+      "ci_contexts": 46,
+      "status_contexts": [
+        {
+          "name": "lint (ruff + mypy + version lockstep)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:36Z"
+        },
+        {
+          "name": "lint (ruff + mypy + version lockstep)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:18:15Z"
+        },
+        {
+          "name": "test (pytest -m \"not slow\")",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:36Z"
+        },
+        {
+          "name": "test (pytest -m \"not slow\")",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:22:00Z"
+        },
+        {
+          "name": "extras-matrix (core)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:21Z"
+        },
+        {
+          "name": "extras-matrix (core)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:11:14Z"
+        },
+        {
+          "name": "extras-matrix (pdf)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:36Z"
+        },
+        {
+          "name": "extras-matrix (pdf)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:11:03Z"
+        },
+        {
+          "name": "extras-matrix (speech)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:21Z"
+        },
+        {
+          "name": "extras-matrix (speech)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:18:50Z"
+        },
+        {
+          "name": "extras-matrix (translate)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:21Z"
+        },
+        {
+          "name": "extras-matrix (translate)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:14:39Z"
+        },
+        {
+          "name": "python-parity (3.10)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:24Z"
+        },
+        {
+          "name": "python-parity (3.10)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:20:45Z"
+        },
+        {
+          "name": "python-parity (3.11)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:21Z"
+        },
+        {
+          "name": "python-parity (3.11)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:24:57Z"
+        },
+        {
+          "name": "python-parity (3.12)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:37Z"
+        },
+        {
+          "name": "python-parity (3.12)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:24:48Z"
+        },
+        {
+          "name": "continuum-evidence (3.10)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:21Z"
+        },
+        {
+          "name": "continuum-evidence (3.10)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:40:07Z"
+        },
+        {
+          "name": "continuum-evidence (3.11)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:37Z"
+        },
+        {
+          "name": "continuum-evidence (3.11)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:44:29Z"
+        },
+        {
+          "name": "continuum-evidence (3.12)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:37Z"
+        },
+        {
+          "name": "continuum-evidence (3.12)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:38:18Z"
+        },
+        {
+          "name": "trust-mutations (pack trust plane)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:01:42Z"
+        },
+        {
+          "name": "trust-mutations (pack trust plane)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:11:40Z"
+        },
+        {
+          "name": "temporal-mutations (temporal truth algebra)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:36Z"
+        },
+        {
+          "name": "temporal-mutations (temporal truth algebra)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:11:45Z"
+        },
+        {
+          "name": "governance-mutations (board referee 28 + Gate-5 fencing 17)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:21Z"
+        },
+        {
+          "name": "governance-mutations (board referee 28 + Gate-5 fencing 17)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:15:45Z"
+        },
+        {
+          "name": "execution-core-mutations (V1 execution core 25)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:01:43Z"
+        },
+        {
+          "name": "execution-core-mutations (V1 execution core 25)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:17:26Z"
+        },
+        {
+          "name": "remote-key-mutations (ingress + cache containment)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:36Z"
+        },
+        {
+          "name": "remote-key-mutations (ingress + cache containment)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:12:39Z"
+        },
+        {
+          "name": "api-gate-mutations (A-06 security surface)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:38Z"
+        },
+        {
+          "name": "api-gate-mutations (A-06 security surface)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:17:54Z"
+        },
+        {
+          "name": "migrate-postgres",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:21Z"
+        },
+        {
+          "name": "migrate-postgres",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:17:55Z"
+        },
+        {
+          "name": "merge-base-guard (base == main)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:21Z"
+        },
+        {
+          "name": "merge-base-guard (base == main)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:11:53Z"
+        },
+        {
+          "name": "release-lineage",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:21Z"
+        },
+        {
+          "name": "release-lineage",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:11:12Z"
+        },
+        {
+          "name": "lint-fast (lockstep + pinned ruff, no install)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T08:00:21Z"
+        },
+        {
+          "name": "lint-fast (lockstep + pinned ruff, no install)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:06:47Z"
+        },
+        {
+          "name": "CodeRabbit",
+          "conclusion": "SKIPPED",
+          "completedAt": "2026-10-30T08:00:14Z"
+        },
+        {
+          "name": "Sourcery review",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:02:54Z"
+        }
+      ],
+      "commits": 2,
+      "additions": 185,
+      "deletions": 13,
+      "changed_files": 3,
+      "author": "bot523h",
+      "created_at": "2026-10-30T08:00:05Z",
+      "updated_at": "2026-10-30T08:02:53Z",
+      "tier": "CONFLICT",
+      "blockers": [
+        "CONFLICT",
+        "REBASE_FIRST"
+      ]
+    },
+    {
+      "number": 291,
+      "title": "fix(pr-convergence): latest-run classification + degrade on unreadable protection (task pr-repair-189)",
+      "head": "arena/m14-pr-convergence-defects",
+      "head_sha": "5cf3e610d55624a548415c16986c2974565f2e90",
+      "base": "main",
+      "is_draft": false,
+      "mergeable": "MERGEABLE",
+      "merge_state": "BLOCKED",
+      "review_decision": "",
+      "ci_state": "FAILURE",
+      "ci_contexts": 46,
+      "status_contexts": [
+        {
+          "name": "lint (ruff + mypy + version lockstep)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:21Z"
+        },
+        {
+          "name": "lint (ruff + mypy + version lockstep)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "test (pytest -m \"not slow\")",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:36Z"
+        },
+        {
+          "name": "test (pytest -m \"not slow\")",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "extras-matrix (core)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:36Z"
+        },
+        {
+          "name": "extras-matrix (core)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T10:09:49Z"
+        },
+        {
+          "name": "extras-matrix (pdf)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:36Z"
+        },
+        {
+          "name": "extras-matrix (pdf)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T10:09:29Z"
+        },
+        {
+          "name": "extras-matrix (speech)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:04:46Z"
+        },
+        {
+          "name": "extras-matrix (speech)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T10:10:22Z"
+        },
+        {
+          "name": "extras-matrix (translate)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:04:44Z"
+        },
+        {
+          "name": "extras-matrix (translate)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T10:09:19Z"
+        },
+        {
+          "name": "python-parity (3.10)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:24Z"
+        },
+        {
+          "name": "python-parity (3.10)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "python-parity (3.11)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:36Z"
+        },
+        {
+          "name": "python-parity (3.11)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "python-parity (3.12)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:36Z"
+        },
+        {
+          "name": "python-parity (3.12)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "continuum-evidence (3.10)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:24Z"
+        },
+        {
+          "name": "continuum-evidence (3.10)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "continuum-evidence (3.11)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:04:46Z"
+        },
+        {
+          "name": "continuum-evidence (3.11)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "continuum-evidence (3.12)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:37Z"
+        },
+        {
+          "name": "continuum-evidence (3.12)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "trust-mutations (pack trust plane)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:35Z"
+        },
+        {
+          "name": "trust-mutations (pack trust plane)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "temporal-mutations (temporal truth algebra)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:35Z"
+        },
+        {
+          "name": "temporal-mutations (temporal truth algebra)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T10:09:28Z"
+        },
+        {
+          "name": "governance-mutations (board referee 28 + Gate-5 fencing 17)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:35Z"
+        },
+        {
+          "name": "governance-mutations (board referee 28 + Gate-5 fencing 17)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "execution-core-mutations (V1 execution core 25)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:21Z"
+        },
+        {
+          "name": "execution-core-mutations (V1 execution core 25)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "remote-key-mutations (ingress + cache containment)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:35Z"
+        },
+        {
+          "name": "remote-key-mutations (ingress + cache containment)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "api-gate-mutations (A-06 security surface)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:36Z"
+        },
+        {
+          "name": "api-gate-mutations (A-06 security surface)",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "migrate-postgres",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:21Z"
+        },
+        {
+          "name": "migrate-postgres",
+          "conclusion": "",
+          "completedAt": ""
+        },
+        {
+          "name": "merge-base-guard (base == main)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T10:03:20Z"
+        },
+        {
+          "name": "merge-base-guard (base == main)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T10:04:55Z"
+        },
+        {
+          "name": "release-lineage",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:22Z"
+        },
+        {
+          "name": "release-lineage",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T10:04:59Z"
+        },
+        {
+          "name": "lint-fast (lockstep + pinned ruff, no install)",
+          "conclusion": "CANCELLED",
+          "completedAt": "2026-10-30T10:03:23Z"
+        },
+        {
+          "name": "lint-fast (lockstep + pinned ruff, no install)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T10:04:58Z"
+        },
+        {
+          "name": "CodeRabbit",
+          "conclusion": "SKIPPED",
+          "completedAt": "2026-10-30T10:03:16Z"
+        },
+        {
+          "name": "Sourcery review",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T10:03:48Z"
+        }
+      ],
+      "commits": 8,
+      "additions": 8646,
+      "deletions": 21,
+      "changed_files": 6,
+      "author": "bot523h",
+      "created_at": "2026-10-30T07:51:22Z",
+      "updated_at": "2026-10-30T10:03:16Z",
+      "tier": "CI_RED",
+      "blockers": [
+        "CI_RED"
+      ]
+    },
     {
       "number": 290,
       "title": "chore(board): register task-282 durable project state lifecycle",
@@ -46,10 +559,10 @@
       "head_sha": "a7490ab744914cf406c0a4e4cb5c5a4ffdd8f1f9",
       "base": "main",
       "is_draft": true,
-      "mergeable": "MERGEABLE",
-      "merge_state": "BLOCKED",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "FAILURE",
+      "ci_state": "SUCCESS",
       "ci_contexts": 68,
       "status_contexts": [
         {
@@ -79,8 +592,8 @@
         },
         {
           "name": "test (pytest -m \"not slow\")",
-          "conclusion": "",
-          "completedAt": ""
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T07:51:26Z"
         },
         {
           "name": "extras-matrix (core)",
@@ -169,8 +682,8 @@
         },
         {
           "name": "python-parity (3.11)",
-          "conclusion": "",
-          "completedAt": ""
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T07:52:17Z"
         },
         {
           "name": "python-parity (3.12)",
@@ -199,8 +712,8 @@
         },
         {
           "name": "continuum-evidence (3.10)",
-          "conclusion": "",
-          "completedAt": ""
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:05:44Z"
         },
         {
           "name": "continuum-evidence (3.11)",
@@ -214,8 +727,8 @@
         },
         {
           "name": "continuum-evidence (3.11)",
-          "conclusion": "",
-          "completedAt": ""
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:08:30Z"
         },
         {
           "name": "continuum-evidence (3.12)",
@@ -229,8 +742,8 @@
         },
         {
           "name": "continuum-evidence (3.12)",
-          "conclusion": "",
-          "completedAt": ""
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:12:49Z"
         },
         {
           "name": "trust-mutations (pack trust plane)",
@@ -403,7 +916,8 @@
       "tier": "DRAFT",
       "blockers": [
         "DRAFT",
-        "CI_RED"
+        "CONFLICT",
+        "REBASE_FIRST"
       ]
     },
     {
@@ -414,7 +928,7 @@
       "base": "main",
       "is_draft": false,
       "mergeable": "MERGEABLE",
-      "merge_state": "CLEAN",
+      "merge_state": "BEHIND",
       "review_decision": "APPROVED",
       "ci_state": "SUCCESS",
       "ci_contexts": 46,
@@ -657,262 +1171,10 @@
       "author": "bot523h",
       "created_at": "2026-10-30T02:54:41Z",
       "updated_at": "2026-10-30T02:58:03Z",
-      "tier": "READY",
-      "blockers": []
-    },
-    {
-      "number": 287,
-      "title": "chore(board): register task-281 cognition-eval live-registry binding (V2)",
-      "head": "arena/b68a8452-nexus-ai-agent",
-      "head_sha": "4216f1112ad3f9842280b854b022b35d26f2b30b",
-      "base": "main",
-      "is_draft": false,
-      "mergeable": "MERGEABLE",
-      "merge_state": "CLEAN",
-      "review_decision": "APPROVED",
-      "ci_state": "SUCCESS",
-      "ci_contexts": 46,
-      "status_contexts": [
-        {
-          "name": "lint (ruff + mypy + version lockstep)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:12Z"
-        },
-        {
-          "name": "lint (ruff + mypy + version lockstep)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:49:43Z"
-        },
-        {
-          "name": "test (pytest -m \"not slow\")",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:27Z"
-        },
-        {
-          "name": "test (pytest -m \"not slow\")",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T02:01:44Z"
-        },
-        {
-          "name": "extras-matrix (core)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:27Z"
-        },
-        {
-          "name": "extras-matrix (core)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:48:05Z"
-        },
-        {
-          "name": "extras-matrix (pdf)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:12Z"
-        },
-        {
-          "name": "extras-matrix (pdf)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:47:38Z"
-        },
-        {
-          "name": "extras-matrix (speech)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:12Z"
-        },
-        {
-          "name": "extras-matrix (speech)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:51:08Z"
-        },
-        {
-          "name": "extras-matrix (translate)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:12Z"
-        },
-        {
-          "name": "extras-matrix (translate)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:47:43Z"
-        },
-        {
-          "name": "python-parity (3.10)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:12Z"
-        },
-        {
-          "name": "python-parity (3.10)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:55:44Z"
-        },
-        {
-          "name": "python-parity (3.11)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:12Z"
-        },
-        {
-          "name": "python-parity (3.11)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:56:34Z"
-        },
-        {
-          "name": "python-parity (3.12)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:12Z"
-        },
-        {
-          "name": "python-parity (3.12)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:59:57Z"
-        },
-        {
-          "name": "continuum-evidence (3.10)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:15Z"
-        },
-        {
-          "name": "continuum-evidence (3.10)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T02:13:08Z"
-        },
-        {
-          "name": "continuum-evidence (3.11)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:12Z"
-        },
-        {
-          "name": "continuum-evidence (3.11)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T02:04:44Z"
-        },
-        {
-          "name": "continuum-evidence (3.12)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:41:39Z"
-        },
-        {
-          "name": "continuum-evidence (3.12)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T02:12:01Z"
-        },
-        {
-          "name": "trust-mutations (pack trust plane)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:12Z"
-        },
-        {
-          "name": "trust-mutations (pack trust plane)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:50:30Z"
-        },
-        {
-          "name": "temporal-mutations (temporal truth algebra)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:27Z"
-        },
-        {
-          "name": "temporal-mutations (temporal truth algebra)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:49:13Z"
-        },
-        {
-          "name": "governance-mutations (board referee 28 + Gate-5 fencing 17)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:27Z"
-        },
-        {
-          "name": "governance-mutations (board referee 28 + Gate-5 fencing 17)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:48:39Z"
-        },
-        {
-          "name": "execution-core-mutations (V1 execution core 25)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:27Z"
-        },
-        {
-          "name": "execution-core-mutations (V1 execution core 25)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:48:59Z"
-        },
-        {
-          "name": "remote-key-mutations (ingress + cache containment)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:41:38Z"
-        },
-        {
-          "name": "remote-key-mutations (ingress + cache containment)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:54:36Z"
-        },
-        {
-          "name": "api-gate-mutations (A-06 security surface)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:27Z"
-        },
-        {
-          "name": "api-gate-mutations (A-06 security surface)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:49:45Z"
-        },
-        {
-          "name": "migrate-postgres",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:41:42Z"
-        },
-        {
-          "name": "migrate-postgres",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:48:47Z"
-        },
-        {
-          "name": "merge-base-guard (base == main)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:12Z"
-        },
-        {
-          "name": "merge-base-guard (base == main)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:41:50Z"
-        },
-        {
-          "name": "release-lineage",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:16Z"
-        },
-        {
-          "name": "release-lineage",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:46:04Z"
-        },
-        {
-          "name": "lint-fast (lockstep + pinned ruff, no install)",
-          "conclusion": "CANCELLED",
-          "completedAt": "2026-10-30T01:40:16Z"
-        },
-        {
-          "name": "lint-fast (lockstep + pinned ruff, no install)",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:41:53Z"
-        },
-        {
-          "name": "CodeRabbit",
-          "conclusion": "SKIPPED",
-          "completedAt": "2026-10-30T01:40:09Z"
-        },
-        {
-          "name": "Sourcery review",
-          "conclusion": "SUCCESS",
-          "completedAt": "2026-10-30T01:40:28Z"
-        }
-      ],
-      "commits": 5,
-      "additions": 41,
-      "deletions": 2,
-      "changed_files": 1,
-      "author": "bot523h",
-      "created_at": "2026-10-30T00:46:00Z",
-      "updated_at": "2026-10-30T01:40:09Z",
-      "tier": "READY",
-      "blockers": []
+      "tier": "REBASE_FIRST",
+      "blockers": [
+        "REBASE_FIRST"
+      ]
     },
     {
       "number": 285,
@@ -1435,36 +1697,147 @@
       "number": 283,
       "title": "fix(execution): use queue-owned heartbeat for safe recovery",
       "head": "arena/1f7a74db-nexus-ai-agent",
-      "head_sha": "786a17e96580651e1fd689b898a3db259ba31251",
+      "head_sha": "c08e01e72de7269bbf79facb4a7b1d72cd3e761c",
       "base": "main",
       "is_draft": false,
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
-      "ci_contexts": 2,
+      "ci_state": "FAILURE",
+      "ci_contexts": 24,
       "status_contexts": [
+        {
+          "name": "lint (ruff + mypy + version lockstep)",
+          "conclusion": "FAILURE",
+          "completedAt": "2026-10-30T08:43:38Z"
+        },
+        {
+          "name": "test (pytest -m \"not slow\")",
+          "conclusion": "FAILURE",
+          "completedAt": "2026-10-30T08:51:14Z"
+        },
+        {
+          "name": "extras-matrix (core)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:43:33Z"
+        },
+        {
+          "name": "extras-matrix (pdf)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:42:16Z"
+        },
+        {
+          "name": "extras-matrix (speech)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:43:15Z"
+        },
+        {
+          "name": "extras-matrix (translate)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:43:36Z"
+        },
+        {
+          "name": "python-parity (3.10)",
+          "conclusion": "FAILURE",
+          "completedAt": "2026-10-30T08:48:34Z"
+        },
+        {
+          "name": "python-parity (3.11)",
+          "conclusion": "FAILURE",
+          "completedAt": "2026-10-30T08:50:22Z"
+        },
+        {
+          "name": "python-parity (3.12)",
+          "conclusion": "FAILURE",
+          "completedAt": "2026-10-30T08:51:32Z"
+        },
+        {
+          "name": "continuum-evidence (3.10)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T09:02:13Z"
+        },
+        {
+          "name": "continuum-evidence (3.11)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T09:03:12Z"
+        },
+        {
+          "name": "continuum-evidence (3.12)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T09:06:09Z"
+        },
+        {
+          "name": "trust-mutations (pack trust plane)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:43:35Z"
+        },
+        {
+          "name": "temporal-mutations (temporal truth algebra)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:43:18Z"
+        },
+        {
+          "name": "governance-mutations (board referee 28 + Gate-5 fencing 17)",
+          "conclusion": "FAILURE",
+          "completedAt": "2026-10-30T08:45:57Z"
+        },
+        {
+          "name": "execution-core-mutations (V1 execution core 25)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:45:31Z"
+        },
+        {
+          "name": "remote-key-mutations (ingress + cache containment)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:43:20Z"
+        },
+        {
+          "name": "api-gate-mutations (A-06 security surface)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:45:26Z"
+        },
+        {
+          "name": "migrate-postgres",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:42:27Z"
+        },
+        {
+          "name": "merge-base-guard (base == main)",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:37:36Z"
+        },
+        {
+          "name": "release-lineage",
+          "conclusion": "SUCCESS",
+          "completedAt": "2026-10-30T08:37:39Z"
+        },
+        {
+          "name": "lint-fast (lockstep + pinned ruff, no install)",
+          "conclusion": "FAILURE",
+          "completedAt": "2026-10-30T08:37:38Z"
+        },
         {
           "name": "CodeRabbit",
           "conclusion": "SKIPPED",
-          "completedAt": "2026-10-30T06:31:36Z"
+          "completedAt": "2026-10-30T08:36:19Z"
         },
         {
           "name": "Sourcery review",
           "conclusion": "SKIPPED",
-          "completedAt": "2026-10-30T06:31:29Z"
+          "completedAt": "2026-10-30T08:36:13Z"
         }
       ],
-      "commits": 21,
-      "additions": 2885,
+      "commits": 27,
+      "additions": 3628,
       "deletions": 112,
       "changed_files": 21,
       "author": "bot523h",
       "created_at": "2026-10-29T19:33:43Z",
-      "updated_at": "2026-10-30T06:32:26Z",
+      "updated_at": "2026-10-30T08:36:18Z",
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_RED",
         "REBASE_FIRST"
       ]
     },
@@ -3341,7 +3714,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "CHANGES_REQUESTED",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 35,
       "status_contexts": [
         {
@@ -3530,6 +3903,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "CHANGES_REQUESTED",
         "REBASE_FIRST"
       ]
@@ -3544,7 +3918,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "FAILURE",
+      "ci_state": "PENDING",
       "ci_contexts": 33,
       "status_contexts": [
         {
@@ -3724,7 +4098,7 @@
       "blockers": [
         "DRAFT",
         "CONFLICT",
-        "CI_RED",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -3738,7 +4112,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "CHANGES_REQUESTED",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 39,
       "status_contexts": [
         {
@@ -3947,6 +4321,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "CHANGES_REQUESTED",
         "REBASE_FIRST"
       ]
@@ -3961,7 +4336,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "CHANGES_REQUESTED",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 33,
       "status_contexts": [
         {
@@ -4140,6 +4515,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "CHANGES_REQUESTED",
         "REBASE_FIRST"
       ]
@@ -4154,7 +4530,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 33,
       "status_contexts": [
         {
@@ -4333,6 +4709,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -4346,7 +4723,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "CHANGES_REQUESTED",
-      "ci_state": "FAILURE",
+      "ci_state": "PENDING",
       "ci_contexts": 33,
       "status_contexts": [
         {
@@ -4525,7 +4902,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
-        "CI_RED",
+        "CI_PENDING",
         "CHANGES_REQUESTED",
         "REBASE_FIRST"
       ]
@@ -4540,7 +4917,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "CHANGES_REQUESTED",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 33,
       "status_contexts": [
         {
@@ -4719,6 +5096,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "CHANGES_REQUESTED",
         "REBASE_FIRST"
       ]
@@ -4871,7 +5249,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 32,
       "status_contexts": [
         {
@@ -5045,6 +5423,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -5058,7 +5437,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 32,
       "status_contexts": [
         {
@@ -5233,6 +5612,7 @@
       "blockers": [
         "DRAFT",
         "CONFLICT",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -5246,7 +5626,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 42,
       "status_contexts": [
         {
@@ -5471,6 +5851,7 @@
       "blockers": [
         "DRAFT",
         "CONFLICT",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -5845,7 +6226,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 32,
       "status_contexts": [
         {
@@ -6019,6 +6400,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -6654,7 +7036,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 24,
       "status_contexts": [
         {
@@ -6788,6 +7170,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -6801,7 +7184,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 24,
       "status_contexts": [
         {
@@ -6935,6 +7318,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -6948,7 +7332,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 8,
       "status_contexts": [
         {
@@ -7002,6 +7386,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -7015,7 +7400,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 8,
       "status_contexts": [
         {
@@ -7069,6 +7454,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -7082,7 +7468,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "SUCCESS",
+      "ci_state": "PENDING",
       "ci_contexts": 4,
       "status_contexts": [
         {
@@ -7116,6 +7502,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -7276,7 +7663,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "FAILURE",
+      "ci_state": "PENDING",
       "ci_contexts": 6,
       "status_contexts": [
         {
@@ -7320,7 +7707,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
-        "CI_RED",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -7334,7 +7721,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "FAILURE",
+      "ci_state": "PENDING",
       "ci_contexts": 8,
       "status_contexts": [
         {
@@ -7388,7 +7775,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
-        "CI_RED",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -7402,7 +7789,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "FAILURE",
+      "ci_state": "PENDING",
       "ci_contexts": 8,
       "status_contexts": [
         {
@@ -7457,7 +7844,7 @@
       "blockers": [
         "DRAFT",
         "CONFLICT",
-        "CI_RED",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },
@@ -7471,7 +7858,7 @@
       "mergeable": "CONFLICTING",
       "merge_state": "DIRTY",
       "review_decision": "",
-      "ci_state": "FAILURE",
+      "ci_state": "PENDING",
       "ci_contexts": 8,
       "status_contexts": [
         {
@@ -7525,7 +7912,7 @@
       "tier": "CONFLICT",
       "blockers": [
         "CONFLICT",
-        "CI_RED",
+        "CI_PENDING",
         "REBASE_FIRST"
       ]
     },

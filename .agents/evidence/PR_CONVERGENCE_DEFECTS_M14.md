@@ -98,3 +98,44 @@ mypy scripts/pr_convergence.py                                 # clean
   skipped); it never asserts the gate exists and never certifies `READY`.
 - `collect` still requires a credential that can read the PR list; only the
   branch-protection read degrades.
+
+---
+
+## M15 addendum (2026-10-30) — a missing required context certified READY
+
+**Sourcery finding (PR #291, human-review request).** `_latest_ci_verdict()`
+judged only the required contexts that happened to be *present* in the data.
+With live per-context data, a required context that had **never reported on the
+head** was silently ignored, so a head with 2-of-3 green checks and the third
+absent classified `READY`.
+
+**Reproduced (before the fix).**
+```
+REQ = [lint, test, merge-base-guard]
+contexts = [lint SUCCESS, test SUCCESS]      # merge-base-guard MISSING
+_latest_ci_verdict -> "SUCCESS"; classify -> "READY"     # DEFECT
+contexts = []  rollup=SUCCESS                # ALL required missing
+classify -> "READY"                                       # DEFECT
+```
+
+**Fix.** Strict (live) mode requires **every** required context to be present
+**and** its latest run green; a missing / running / unknown context is
+`CI_PENDING`, never `READY`. `_has_context_data()` distinguishes a live read
+(per-context list present) from a genuinely old snapshot (no list), which alone
+uses the coarse rollup — the explicit legacy contract. `require_all_present`
+ties the strict rule to a **readable** protection (the only state in which the
+required set is authoritative); when protection is unreadable the context list is
+a hint and `PROTECTION_UNREADABLE` fail-closes separately.
+
+**Proof.** `collect` on the corrected collector against live `main` `8d1e7167`:
+`READY 0` (was 2 under the permissive rule), `protection_state: readable`.
+#287/#289 are no longer false `CI_RED`; the remaining reds are genuine.
+
+**Tests.** The outdated `test_classify_missing_required_context_is_not_a_pass`
+was corrected, and the ten mandatory cases added (one/two/all missing; older
+fail→newer success; older success→newer fail; still running; duplicate ambiguous
+timestamps; no data; explicit zero required; unreadable protection). 82 pass.
+
+**Mutation.** 3/3 killed on the new logic (drop the `require_all_present` gate;
+treat a missing context as green; drop the coarse-rollup fallback); tree restored
+byte-identically.
