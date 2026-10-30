@@ -36,6 +36,7 @@ import sys
 import time
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 SCHEMA = "nexus-pr-registry/v1"
@@ -54,6 +55,10 @@ BLOCKERS: tuple[str, ...] = (
     "CHANGES_REQUESTED",
     "NEEDS_APPROVAL",
     "REBASE_FIRST",
+    # Lowest-priority blocker: the merge gate itself could not be read, so no PR
+    # may be certified READY.  It sits last so a *known* blocker (a conflict, a
+    # draft) still wins the tier — an unreadable gate never hides a real defect.
+    "PROTECTION_UNREADABLE",
 )
 
 TIERS: tuple[str, ...] = (*BLOCKERS, "READY")
@@ -86,7 +91,14 @@ query($owner: String!, $name: String!, $cursor: String) {
         commits(last: 1) { totalCount }
         statusCheckRollup {
           state
-          contexts(first: 100) { totalCount }
+          contexts(first: 100) {
+            totalCount
+            nodes {
+              __typename
+              ... on CheckRun { name conclusion completedAt }
+              ... on StatusContext { context state }
+            }
+          }
         }
       }
     }
@@ -103,10 +115,102 @@ def _rollup_state(pr: dict[str, Any]) -> str:
     return str(rollup.get("state") or "NONE").upper()
 
 
+#: Terminal conclusions that are *not* a green pass but still describe a
+#: finished run.  A context whose latest run is one of these is red, not pending.
+_RED_CONCLUSIONS = {
+    "FAILURE",
+    "ERROR",
+    "TIMED_OUT",
+    "CANCELLED",
+    "ACTION_REQUIRED",
+    "STARTUP_FAILURE",
+    "STALE",
+}
+#: Non-gating terminal states: a green pass, or a context that deliberately
+#: opted out (a skipped job is not a failure — mirrors ``_NON_GATING_OK``).
+_GREEN_CONCLUSIONS = {"SUCCESS", "PASS", "SKIPPED", "NEUTRAL"}
+
+
+def _latest_run_state(pr: dict[str, Any], name: str) -> str | None:
+    """The conclusion of the **most recent** run of context *name*, or ``None``.
+
+    A re-run *cancels* the superseded attempt, so the same context appears twice
+    on one head — an old ``CANCELLED`` next to a new ``SUCCESS``.  GitHub's own
+    required-check evaluation uses the latest run; so must the registry, or a
+    green head reads red (the observed #287 / #289 misclassification).
+
+    Ordering mirrors :func:`_contexts_of`: an explicit completion timestamp
+    wins, otherwise the list position does (the REST reader is oldest→newest).
+    ``None`` means the context never ran on this head — which is *not* a pass.
+    """
+    rollup = pr.get("statusCheckRollup")
+    if isinstance(rollup, dict) and isinstance(rollup.get("contexts"), list):
+        nodes = rollup["contexts"]
+    elif isinstance(rollup, list):
+        nodes = rollup
+    else:
+        return None
+    best_key: tuple[int, Any] | None = None
+    best_state: str | None = None
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        if (node.get("name") or node.get("context") or "") != name:
+            continue
+        state = str(node.get("conclusion") or node.get("state") or "").upper()
+        stamp = str(
+            node.get("completedAt")
+            or node.get("completed_at")
+            or node.get("updatedAt")
+            or node.get("updated_at")
+            or ""
+        )
+        key: tuple[int, Any] = (1, stamp) if stamp else (0, index)
+        if best_key is None or key >= best_key:
+            best_key, best_state = key, state
+    return best_state
+
+
+def _latest_ci_verdict(pr: dict[str, Any], required_contexts: Iterable[str]) -> str:
+    """``"SUCCESS"`` | ``"FAILURE"`` | ``"PENDING"`` from the latest run of each
+    required context; falls back to the coarse rollup when the per-context data
+    carries none of the required names (older snapshots / REST shape)."""
+    contexts = list(required_contexts)
+    relevant = [state for name in contexts if (state := _latest_run_state(pr, name)) is not None]
+    if not relevant:
+        # No required context is present in the per-context list.  Trust the
+        # coarse rollup (an unreadable rollup must never read as SUCCESS).
+        state = _rollup_state(pr)
+        if state in {"FAILURE", "ERROR"}:
+            return "FAILURE"
+        return "SUCCESS" if state == "SUCCESS" else "PENDING"
+    if any(state in _RED_CONCLUSIONS for state in relevant):
+        return "FAILURE"
+    if all(state in _GREEN_CONCLUSIONS for state in relevant):
+        return "SUCCESS"
+    # A non-terminal or unknown conclusion is never a pass (pending is safe).
+    return "PENDING"
+
+
+def _latest_ci_state(pr: dict[str, Any], required_contexts: Iterable[str]) -> str:
+    """One-word description of the latest per-context CI outcome (for the report)."""
+    contexts = list(required_contexts)
+    relevant = [state for name in contexts if (state := _latest_run_state(pr, name)) is not None]
+    if not relevant:
+        return _rollup_state(pr)
+    if any(state in _RED_CONCLUSIONS for state in relevant):
+        return "FAILURE"
+    if all(state in _GREEN_CONCLUSIONS for state in relevant):
+        return "SUCCESS"
+    return "PENDING"
+
+
 def blockers(
     pr: dict[str, Any],
     expected_base: str = EXPECTED_BASE,
     required_approvals: int = 0,
+    required_contexts: Iterable[str] = (),
+    protection_readable: bool = True,
 ) -> list[str]:
     """Every reason this PR cannot be merged right now, hardest first.
 
@@ -136,10 +240,10 @@ def blockers(
         # a 46-conflict backlog turns into "0 conflicts" the moment main moves.
         found.append("MERGEABILITY_UNKNOWN")
 
-    state = _rollup_state(pr)
-    if state in {"FAILURE", "ERROR"}:
+    state = _latest_ci_verdict(pr, required_contexts)
+    if state == "FAILURE":
         found.append("CI_RED")
-    elif state in {"PENDING", "EXPECTED", "NONE"}:
+    elif state == "PENDING":
         found.append("CI_PENDING")
 
     decision = str(pr.get("reviewDecision") or "").upper()
@@ -150,24 +254,36 @@ def blockers(
 
     if str(pr.get("mergeStateStatus") or "").upper() in {"BEHIND", "DIRTY"}:
         found.append("REBASE_FIRST")
+    if not protection_readable:
+        found.append("PROTECTION_UNREADABLE")
     return found
 
 
 def classify(
-    pr: dict[str, Any], expected_base: str = EXPECTED_BASE, required_approvals: int = 0
+    pr: dict[str, Any],
+    expected_base: str = EXPECTED_BASE,
+    required_approvals: int = 0,
+    required_contexts: Iterable[str] = (),
+    protection_readable: bool = True,
 ) -> str:
     """The single tier this PR belongs to — its hardest blocker, or ``READY``."""
-    found = blockers(pr, expected_base, required_approvals)
+    found = blockers(pr, expected_base, required_approvals, required_contexts, protection_readable)
     return found[0] if found else "READY"
 
 
 def summarise(
-    prs: Iterable[dict[str, Any]], expected_base: str = EXPECTED_BASE, required_approvals: int = 0
+    prs: Iterable[dict[str, Any]],
+    expected_base: str = EXPECTED_BASE,
+    required_approvals: int = 0,
+    required_contexts: Iterable[str] = (),
+    protection_readable: bool = True,
 ) -> dict[str, int]:
     """Count PRs per tier, including the zeroes (a missing key is a lie)."""
     counts = dict.fromkeys(TIERS, 0)
     for pr in prs:
-        counts[classify(pr, expected_base, required_approvals)] += 1
+        counts[
+            classify(pr, expected_base, required_approvals, required_contexts, protection_readable)
+        ] += 1
     return counts
 
 
@@ -349,6 +465,14 @@ def fetch_open_prs(repo: str = DEFAULT_REPO) -> list[dict[str, Any]]:
         for node in page["nodes"]:
             rollup = node.get("statusCheckRollup") or {}
             contexts = (rollup.get("contexts") or {}) if rollup else {}
+            context_nodes = [
+                {
+                    "name": (c.get("name") or c.get("context") or ""),
+                    "conclusion": (c.get("conclusion") or c.get("state") or "").upper(),
+                    "completedAt": c.get("completedAt") or "",
+                }
+                for c in (contexts.get("nodes") or [])
+            ]
             out.append(
                 {
                     "number": node["number"],
@@ -362,6 +486,7 @@ def fetch_open_prs(repo: str = DEFAULT_REPO) -> list[dict[str, Any]]:
                     "review_decision": node["reviewDecision"] or "",
                     "ci_state": rollup.get("state") or "NONE",
                     "ci_contexts": (contexts or {}).get("totalCount") or 0,
+                    "status_contexts": context_nodes,
                     "commits": (node.get("commits") or {}).get("totalCount") or 0,
                     "additions": node["additions"],
                     "deletions": node["deletions"],
@@ -387,8 +512,13 @@ def fetch_main_sha(repo: str = DEFAULT_REPO) -> str:
 
 
 def as_pr_record(pr: dict[str, Any]) -> dict[str, Any]:
-    """Map a registry row back onto the GraphQL shape :func:`classify` expects."""
-    return {
+    """Map a registry row back onto the GraphQL shape :func:`classify` expects.
+
+    ``status_contexts`` (the per-context check list with completion stamps) is
+    carried through when present so latest-run classification works on a
+    registry read back from disk, not only on a live GraphQL read.
+    """
+    record = {
         "baseRefName": pr["base"],
         "isDraft": pr["is_draft"],
         "mergeable": pr["mergeable"],
@@ -397,6 +527,10 @@ def as_pr_record(pr: dict[str, Any]) -> dict[str, Any]:
         "headRefOid": pr["head_sha"],
         "statusCheckRollup": {"state": pr["ci_state"]},
     }
+    contexts = pr.get("status_contexts")
+    if contexts:
+        record["statusCheckRollup"]["contexts"] = contexts
+    return record
 
 
 def build_registry(
@@ -411,8 +545,27 @@ def build_registry(
     """
     main_sha = fetch_main_sha(repo)
     # The review gate is the repository's live requirement, not a guess.  An
-    # unreadable protection raises here and the whole collect exits 2.
-    _contexts, required_approvals = required_contexts(_live_protection(repo))
+    # unreadable protection is *recorded*, never silently treated as "no gate":
+    # the registry stays useful (it still lists every PR and its real blockers)
+    # but every PR carries PROTECTION_UNREADABLE, so nothing is certified READY
+    # on an unverified gate.
+    protection, protection_reason = _read_protection(repo)
+    protection_readable = protection is not None
+    if protection_readable:
+        contexts, required_approvals = required_contexts(protection)
+        protection_source = "branch-protection API"
+    else:
+        # Best-effort: name the candidate gate from the committed workflow so the
+        # registry is informative, but keep the read failure loud and visible.
+        contexts = _required_contexts_from_workflow()
+        required_approvals = 0
+        protection_source = "ci.yml workflow (branch-protection API unreadable)"
+        print(
+            f"pr-registry: branch protection UNREADABLE ({protection_reason}); "
+            f"degrading to workflow-derived contexts {contexts!r}. No PR will be "
+            f"certified READY.",
+            file=sys.stderr,
+        )
     deadline = time.monotonic() + max(wait_seconds, 0.0)
     while True:
         prs = fetch_open_prs(repo)
@@ -429,8 +582,16 @@ def build_registry(
         time.sleep(min(poll_seconds, remaining))
     for pr in prs:
         record = as_pr_record(pr)
-        pr["blockers"] = blockers(record, required_approvals=required_approvals)
+        pr["blockers"] = blockers(
+            record,
+            required_approvals=required_approvals,
+            required_contexts=contexts,
+            protection_readable=protection_readable,
+        )
         pr["tier"] = pr["blockers"][0] if pr["blockers"] else "READY"
+        # The registry row reports the *latest run* of each required context, so
+        # a superseded CANCELLED next to a green re-run is not read as red.
+        pr["ci_state"] = _latest_ci_state(record, contexts)
     totals = dict.fromkeys(TIERS, 0)
     for pr in prs:
         totals[pr["tier"]] += 1
@@ -444,6 +605,10 @@ def build_registry(
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "main_sha": main_sha,
         "required_approvals": required_approvals,
+        "required_contexts": contexts,
+        "protection_state": "readable" if protection_readable else "unreadable",
+        "protection_source": protection_source,
+        "protection_error": protection_reason,
         "open_total": len(prs),
         "totals": totals,
         "blockers": blocker_counts,
@@ -459,6 +624,15 @@ def render_report(registry: dict[str, Any]) -> str:
         f"generated `{registry['generated_at']}` · main `{registry['main_sha'][:12]}` · "
         f"open **{registry['open_total']}**",
         "",
+    ]
+    protection_state = registry.get("protection_state")
+    if protection_state:
+        # An unreadable gate is a first-class fact in the artifact, not a silent
+        # default: a reader must never assume the merge gate was verified.
+        detail = registry.get("protection_error") or registry.get("protection_source") or ""
+        lines.append(f"protection: **{protection_state}** {detail}".rstrip())
+        lines.append("")
+    lines += [
         "| tier | count |",
         "|---|---|",
     ]
@@ -541,6 +715,53 @@ def _live_protection(repo: str, branch: str = EXPECTED_BASE) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("branch protection returned a non-object response")
     return payload
+
+
+#: The workflow that *defines* the required checks.  Used only to *name* the
+#: gate when the protection API is unreadable; it never asserts the gate exists.
+_CI_WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
+
+
+def _required_contexts_from_workflow(workflow: Path = _CI_WORKFLOW) -> list[str]:
+    """The CI job display-names, read from the committed workflow (best effort).
+
+    A protection read can fail (a 403 from a credential that is not an admin).
+    That must never be reported as "no gate" — but it also must not leave the
+    registry with *zero* information about which contexts matter.  This reads
+    the job ``name:`` lines of ``ci.yml`` so the registry can still *name* the
+    candidate gate.  It is deliberately conservative: a job with no explicit
+    ``name:`` (whose display name is the job id) is skipped, so the list is a
+    subset, and every caller treats it as a hint, never as proof the gate is on.
+    """
+    try:
+        text = workflow.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    names: list[str] = []
+    for line in text.splitlines():
+        # Job display-names sit at exactly four spaces; step names are deeper.
+        if line[:4] != "    " or line[4:5] == " ":
+            continue
+        stripped = line.strip()
+        if not stripped.startswith("name:"):
+            continue
+        value = stripped[len("name:") :].strip().strip("\"'")
+        if value and value.lower() != "ci":
+            names.append(value)
+    return names
+
+
+def _read_protection(repo: str, branch: str = EXPECTED_BASE) -> tuple[dict[str, Any] | None, str]:
+    """Read protection, degrading to ``(None, reason)`` instead of raising.
+
+    Returns ``(payload, "")`` on success, or ``(None, reason)`` when the read
+    fails.  The *reason* is preserved so the registry records *why* the gate is
+    unknown — an unreadable source is evidence, not silence.
+    """
+    try:
+        return _live_protection(repo, branch), ""
+    except (RuntimeError, json.JSONDecodeError, OSError) as exc:
+        return None, str(exc)[:400]
 
 
 def _aggregate(checks: list[dict[str, Any]]) -> str:

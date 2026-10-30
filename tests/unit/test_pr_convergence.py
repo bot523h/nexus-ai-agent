@@ -467,3 +467,217 @@ def test_graphql_returns_a_valid_payload_unchanged() -> None:
     response = {"data": {"viewer": {"login": "bot523h"}}}
     with patch.object(registry, "_gh", return_value=json.dumps(response)):
         assert registry._graphql("query { viewer { login } }", {}) == response
+
+
+# ---------------------------------------------------------------------------
+# M14 defect A — the registry must judge the LATEST run of each required
+# context, not the coarse rollup, which an older superseded run poisons.
+# Reproduced live on #287 and #289 (2026-10-30): every required context had an
+# older CANCELLED next to a newer SUCCESS, yet both were classified CI_RED.
+# ---------------------------------------------------------------------------
+def _required(name: str, conclusion: str, completed: str) -> dict[str, str]:
+    return {"name": name, "conclusion": conclusion, "completedAt": completed}
+
+
+def test_classify_uses_latest_required_context_not_coarse_rollup() -> None:
+    """The exact #287/#289 shape: coarse rollup FAILURE, every latest run green."""
+    contexts = [
+        _required(REQUIRED_CONTEXTS[0], "CANCELLED", "2026-10-30T01:40:12Z"),
+        _required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T01:49:43Z"),
+        _required(REQUIRED_CONTEXTS[1], "CANCELLED", "2026-10-30T01:40:27Z"),
+        _required(REQUIRED_CONTEXTS[1], "SUCCESS", "2026-10-30T02:01:44Z"),
+        _required(REQUIRED_CONTEXTS[2], "CANCELLED", "2026-10-30T01:40:12Z"),
+        _required(REQUIRED_CONTEXTS[2], "SUCCESS", "2026-10-30T01:41:50Z"),
+    ]
+    pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "READY"
+    assert registry.blockers(pr, required_contexts=REQUIRED_CONTEXTS) == []
+
+
+def test_classify_latest_failure_after_older_success_is_red() -> None:
+    """Latest-wins must not become last-listed-wins in the unsafe direction."""
+    contexts = _green_contexts() + [
+        _required(REQUIRED_CONTEXTS[1], "SUCCESS", "2026-10-28T05:41:39Z"),
+        _required(REQUIRED_CONTEXTS[1], "FAILURE", "2026-10-28T05:48:52Z"),
+    ]
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "CI_RED"
+
+
+def test_classify_old_failure_then_new_success_is_ready() -> None:
+    """PR #113's shape: an older FAILURE superseded by a newer SUCCESS."""
+    contexts = _green_contexts() + [
+        _required(REQUIRED_CONTEXTS[1], "FAILURE", "2026-09-27T21:06:42Z"),
+        _required(REQUIRED_CONTEXTS[1], "SUCCESS", "2026-09-27T21:10:41Z"),
+    ]
+    pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "READY"
+
+
+def test_classify_old_cancelled_then_new_success_is_ready() -> None:
+    contexts = _green_contexts() + [
+        _required(REQUIRED_CONTEXTS[0], "CANCELLED", "2026-10-30T01:40:12Z"),
+        _required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T01:49:43Z"),
+    ]
+    pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "READY"
+
+
+def test_classify_is_pending_while_a_required_run_is_in_flight() -> None:
+    contexts = _green_contexts() + [
+        _required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T01:40:12Z"),
+        _required(REQUIRED_CONTEXTS[0], "IN_PROGRESS", "2026-10-30T01:49:43Z"),
+    ]
+    pr = _pr(statusCheckRollup={"state": "PENDING", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "CI_PENDING"
+
+
+def test_classify_duplicate_context_names_use_the_latest() -> None:
+    contexts = [
+        _required(REQUIRED_CONTEXTS[0], "FAILURE", "2026-10-30T01:00:00Z"),
+        _required(REQUIRED_CONTEXTS[0], "FAILURE", "2026-10-30T02:00:00Z"),
+        _required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T03:00:00Z"),
+    ] + _green_contexts()[1:]
+    pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "READY"
+
+
+def test_classify_latest_without_timestamps_falls_back_to_order() -> None:
+    contexts = _green_contexts() + [
+        {"name": REQUIRED_CONTEXTS[0], "conclusion": "CANCELLED"},
+        {"name": REQUIRED_CONTEXTS[0], "conclusion": "SUCCESS"},
+    ]
+    pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "READY"
+
+
+def test_classify_missing_required_context_is_not_a_pass() -> None:
+    """A context that never ran on this head cannot be inferred green."""
+    contexts = [_required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T03:00:00Z")]
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": contexts})
+    assert registry._latest_ci_verdict(pr, REQUIRED_CONTEXTS) == "SUCCESS"
+    # ... but with no per-context data at all the coarse rollup decides:
+    pr_no = _pr(statusCheckRollup={"state": "FAILURE"})
+    assert registry._latest_ci_verdict(pr_no, REQUIRED_CONTEXTS) == "FAILURE"
+
+
+def test_latest_ci_state_reports_the_latest_per_context_outcome() -> None:
+    contexts = [
+        _required(REQUIRED_CONTEXTS[0], "CANCELLED", "2026-10-30T01:40:12Z"),
+        _required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T01:49:43Z"),
+    ]
+    pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
+    assert registry._latest_ci_state(pr, REQUIRED_CONTEXTS) == "SUCCESS"
+
+
+def test_latest_run_state_returns_none_for_an_absent_context() -> None:
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": _green_contexts()})
+    assert registry._latest_run_state(pr, "no-such-context") is None
+
+
+def test_registry_row_round_trips_latest_run_through_as_pr_record() -> None:
+    """A registry read back from disk must classify exactly like the live read."""
+    row = {
+        "base": "main",
+        "is_draft": False,
+        "mergeable": "MERGEABLE",
+        "merge_state": "CLEAN",
+        "review_decision": "",
+        "head_sha": "a" * 40,
+        "ci_state": "FAILURE",
+        "status_contexts": [
+            _required(REQUIRED_CONTEXTS[0], "CANCELLED", "2026-10-30T01:40:12Z"),
+            _required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T01:49:43Z"),
+            _required(REQUIRED_CONTEXTS[1], "SUCCESS", "2026-10-30T02:01:44Z"),
+            _required(REQUIRED_CONTEXTS[2], "SUCCESS", "2026-10-30T01:41:50Z"),
+        ],
+    }
+    record = registry.as_pr_record(row)
+    assert registry.classify(record, required_contexts=REQUIRED_CONTEXTS) == "READY"
+
+
+# ---------------------------------------------------------------------------
+# M14 defect B — an unreadable branch protection must not abort collection.
+# A 403 must leave a useful, honest registry that certifies NOTHING ready.
+# ---------------------------------------------------------------------------
+def test_protection_unreadable_is_its_own_lowest_priority_blocker() -> None:
+    pr = _pr()  # otherwise fully green
+    assert registry.blockers(pr, protection_readable=False) == ["PROTECTION_UNREADABLE"]
+    assert registry.classify(pr, protection_readable=False) == "PROTECTION_UNREADABLE"
+    # A real defect still outranks it — an unreadable gate never hides a conflict.
+    pr_bad = _pr(mergeable="CONFLICTING")
+    assert registry.classify(pr_bad, protection_readable=False) == "CONFLICT"
+
+
+def test_unreadable_protection_certifies_nothing_ready() -> None:
+    prs = [_pr(), _pr(), _pr(isDraft=True)]
+    counts = registry.summarise(prs, protection_readable=False)
+    assert counts["READY"] == 0
+    assert counts["PROTECTION_UNREADABLE"] == 2
+    assert counts["DRAFT"] == 1
+
+
+def test_read_protection_degrades_to_reason_on_403() -> None:
+    with patch.object(registry, "_gh", side_effect=RuntimeError("gh api ... failed: HTTP 403")):
+        payload, reason = registry._read_protection("bot523h/nexus-ai-agent")
+    assert payload is None
+    assert "403" in reason
+
+
+def test_read_protection_returns_payload_when_readable() -> None:
+    with patch.object(registry, "_gh", return_value=json.dumps(PROTECTION)):
+        payload, reason = registry._read_protection("bot523h/nexus-ai-agent")
+    assert reason == ""
+    assert registry.required_contexts(payload) == (REQUIRED_CONTEXTS, 0)
+
+
+def test_workflow_context_reader_names_the_ci_jobs() -> None:
+    """With protection unreadable, the committed workflow still names the gate."""
+    names = registry._required_contexts_from_workflow()
+    assert REQUIRED_CONTEXTS[0] in names
+    assert REQUIRED_CONTEXTS[1] in names
+    assert REQUIRED_CONTEXTS[2] in names
+
+
+def test_workflow_context_reader_is_empty_for_a_missing_file(tmp_path: Any) -> None:
+    assert registry._required_contexts_from_workflow(tmp_path / "nope.yml") == []
+
+
+def test_build_registry_degrades_without_raising_on_unreadable_protection() -> None:
+    """collect must still produce a registry when protection is a 403."""
+    sample = [
+        {
+            "number": 1,
+            "title": "green",
+            "head": "arena/x",
+            "head_sha": "a" * 40,
+            "base": "main",
+            "is_draft": False,
+            "mergeable": "MERGEABLE",
+            "merge_state": "CLEAN",
+            "review_decision": "",
+            "ci_state": "SUCCESS",
+            "ci_contexts": 0,
+            "status_contexts": [],
+            "commits": 1,
+            "additions": 1,
+            "deletions": 0,
+            "changed_files": 1,
+            "author": "bot523h",
+            "created_at": "2026-10-30T00:00:00Z",
+            "updated_at": "2026-10-30T00:00:00Z",
+            "tier": "",
+        }
+    ]
+    with (
+        patch.object(registry, "fetch_main_sha", return_value="b" * 40),
+        patch.object(registry, "fetch_open_prs", return_value=sample),
+        patch.object(registry, "_read_protection", return_value=(None, "HTTP 403")),
+    ):
+        reg = registry.build_registry("bot523h/nexus-ai-agent", wait_seconds=0.0)
+    assert reg["protection_state"] == "unreadable"
+    assert reg["protection_error"] == "HTTP 403"
+    assert reg["totals"]["READY"] == 0
+    assert reg["totals"]["PROTECTION_UNREADABLE"] == 1
+    text = registry.render_report(reg)
+    assert "protection: **unreadable**" in text
