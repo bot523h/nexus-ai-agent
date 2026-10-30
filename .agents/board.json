@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-30T00:44:37Z",
+  "updated_at": "2026-10-30T00:40:00Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -899,7 +899,8 @@
       "paths": [
         "scripts/cognition_quality_eval.py",
         "tests/unit/test_cognition_quality_eval.py",
-        "tests/fixtures/cognition_quality_eval/v1_baseline.json"
+        "tests/fixtures/cognition_quality_eval/v1_baseline.json",
+        "tests/fixtures/cognition_quality_eval/v2_baseline.json"
       ]
     },
     {
@@ -7534,6 +7535,44 @@
         "task-153-scene-pack"
       ],
       "note": "Registered by the M12 repair shift per mission §C8. Diagnosis dossier: .agents/evidence/OPERATION_MATRIX_ROOTCAUSE_M12.md. Implementation must be a separate claimed task; the M12 shift is not authorized to start it."
+    },
+    {
+      "task": "task-281-cognition-eval-live-registry-binding",
+      "title": "Cognition evaluation V2: bind the fixture schema to the live capability registry",
+      "title_fa": "ارزیابی شناخت نسخهٔ ۲: اتصال قرارداد fixture به رجیستری زندهٔ قابلیت‌ها",
+      "zone": "cognition-quality-evaluation",
+      "priority": "P2",
+      "status": "queued",
+      "agent_branch": "",
+      "claimed_at": null,
+      "generation": 0,
+      "gates_owner": false,
+      "scope": "V1 delivers a deterministic boundary evaluator with a reviewed baseline, a --check regression guard and fixture-contract validation (merged in PR #276, task-269). It measures a FROZEN fixture schema (nagar.eval.proposal.v1: timeline.trim, creative.caption), not what the runtime actually offers, so a registry-side change cannot move the evaluation. V2 closes that gap in the same two files plus one new baseline: derive the offered set from the authoritative CapabilityRegistry via cognition.capabilities.offered_operations, add a registry-drift fixture that fails closed when the registry offers nothing usable, and raise the evaluation contract to nexus-cognition-quality-eval/v2 with a v2 baseline committed and reviewed. The check mode, exit-code contract, non-disclosure rules, no-network/no-model guarantees and proposal-vs-verification separation stay exactly as delivered. No change to the registry, parser, policy, CommandBus, queue, verifier or CI.",
+      "scope_fa": "اتصال مجموعهٔ عملیات مجاز در هارنس ارزیابی به رجیستری واقعی قابلیت‌ها، افزودن fixture دریفت رجیستری و ارتقای قرارداد به v2 با baseline بازبینی‌شده؛ بدون تغییر رجیستری، parser، Policy، CommandBus، صف، verifier یا CI.",
+      "exclusive_paths": [
+        "scripts/cognition_quality_eval.py",
+        "tests/unit/test_cognition_quality_eval.py",
+        "tests/fixtures/cognition_quality_eval/v2_baseline.json"
+      ],
+      "acceptance_criteria": [
+        "The offered operation set comes from the live CapabilityRegistry (never hand-written), and a documented fallback keeps the harness runnable when the registry is empty.",
+        "A registry-drift fixture fails closed and is visible in the report; an empty or unusable registry cannot produce a green evaluation.",
+        "The evaluation contract is bumped to nexus-cognition-quality-eval/v2 with a reviewed v2 baseline; the v1 baseline is either retired explicitly or kept with a documented compatibility rule.",
+        "Default execution stays local, deterministic, network-free and key-free, with verification_status=NOT_RUN and execution_dispatched=false unchanged.",
+        "The V1 guarantees still hold: fixture-contract validation, duplicate-id failure, --check exit 0/1/2 semantics, no self-rewriting baseline, non-disclosure of fixture text."
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_cognition_quality_eval.py and the new registry-binding cases on the final SHA, with counts and runtime.",
+        "python scripts/cognition_quality_eval.py --check and --json --repeats 5 output, including the registry-derived offered set and the new fingerprint.",
+        "The committed v2 baseline plus the reviewed diff against v1 explaining every changed case.",
+        "make lint, make types and make test results on the exact final SHA.",
+        "Mutation evidence that removing the registry binding or the drift fixture turns the suite red.",
+        "agent_board.py check on the exact changed files with exit code 0."
+      ],
+      "prerequisites": [
+        "task-269-cognition-quality-evaluation"
+      ],
+      "note": "Registered after task-269 merged (PR #276, merge commit 055ad33). V1 headers and the baseline checker are the contract to extend, not to redesign: read docs/architecture/TESTING.md and the harness docstring first. Kept separate because binding to a live registry changes what is measured, which is a product decision, not a refactor."
     }
   ],
   "deferred_log": [
