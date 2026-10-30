@@ -256,9 +256,7 @@ def _latest_ci_state(
     coarse rollup only for a legacy snapshot.
     """
     if _has_context_data(pr):
-        return _latest_ci_verdict(
-            pr, required_contexts, require_all_present=require_all_present
-        )
+        return _latest_ci_verdict(pr, required_contexts, require_all_present=require_all_present)
     return _rollup_state(pr)
 
 
@@ -297,9 +295,7 @@ def blockers(
         # a 46-conflict backlog turns into "0 conflicts" the moment main moves.
         found.append("MERGEABILITY_UNKNOWN")
 
-    state = _latest_ci_verdict(
-        pr, required_contexts, require_all_present=protection_readable
-    )
+    state = _latest_ci_verdict(pr, required_contexts, require_all_present=protection_readable)
     if state == "FAILURE":
         found.append("CI_RED")
     elif state == "PENDING":
@@ -653,9 +649,7 @@ def build_registry(
         pr["tier"] = pr["blockers"][0] if pr["blockers"] else "READY"
         # The registry row reports the *latest run* of each required context, so
         # a superseded CANCELLED next to a green re-run is not read as red.
-        pr["ci_state"] = _latest_ci_state(
-            record, contexts, require_all_present=protection_readable
-        )
+        pr["ci_state"] = _latest_ci_state(record, contexts, require_all_present=protection_readable)
     totals = dict.fromkeys(TIERS, 0)
     for pr in prs:
         totals[pr["tier"]] += 1

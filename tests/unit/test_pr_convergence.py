@@ -666,8 +666,7 @@ def test_m15_unreadable_hint_with_no_matching_context_falls_back_to_rollup() -> 
         }
     )
     assert (
-        registry._latest_ci_verdict(pr, REQUIRED_CONTEXTS, require_all_present=False)
-        == "FAILURE"
+        registry._latest_ci_verdict(pr, REQUIRED_CONTEXTS, require_all_present=False) == "FAILURE"
     )
 
 
@@ -681,14 +680,16 @@ def test_m15_unreadable_hint_judges_the_present_contexts() -> None:
         }
     )
     assert (
-        registry._latest_ci_verdict(pr, REQUIRED_CONTEXTS, require_all_present=False)
-        == "SUCCESS"
+        registry._latest_ci_verdict(pr, REQUIRED_CONTEXTS, require_all_present=False) == "SUCCESS"
     )
 
 
 def test_m15_unreadable_protection_is_never_ready() -> None:
     pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": _green_contexts()})
-    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS, protection_readable=False) == "PROTECTION_UNREADABLE"
+    assert (
+        registry.classify(pr, required_contexts=REQUIRED_CONTEXTS, protection_readable=False)
+        == "PROTECTION_UNREADABLE"
+    )
 
 
 def test_latest_ci_state_reports_the_latest_per_context_outcome() -> None:
