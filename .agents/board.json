@@ -7032,7 +7032,7 @@
       "title_fa": "",
       "zone": "runtime-truth-tooling",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "truth.py::check_board_truth flags `gates_owner and status != \"active\"` while scripts/agent_board.py ACTIVE_STATUSES treats active_in_review as a live lease and _active_gates_owners counts it as the one valid gate holder — two validators, one invariant, opposite verdicts. Direction 2 is also uncovered: a claim with status=active but an EXPIRED lease keeps gates_owner while the referee already treats the board as holding zero owners, and TRUTH041 stays silent. tests/architecture/test_repo_truth_consistency.py runs the doctor against the real tree in CI, so direction 1 is a red main for a state the referee accepts. NOT duplicated here: open PR#189 already implements LIVE_LEASE_STATUSES + test_live_lease_statuses_match_the_board_cli + the two negative tests.",
       "scope_fa": "",
       "prerequisites": [],
@@ -7052,7 +7052,13 @@
         "pytest -q on the board-level status-set lockstep test (doctor set == ACTIVE_STATUSES) green",
         "python -m nexus_ai_agent.diagnostics.truth on the final SHA (no findings)",
         "the PR#189 reconciliation diff, or a note why it was superseded"
-      ]
+      ],
+      "agent_branch": "arena/m14-truth041-lease-expiry",
+      "claimed_at": "2026-10-30T10:11:42Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "M15 carrier decision: arena/m14-truth041-lease-expiry (PR #292) is the authoritative carrier for the live-lease status set AND the TTL-expiry direction. PR #189 declares the same LIVE_LEASE_STATUSES but lacks the expiry predicate; when #189 is repaired it must drop its duplicate truth.py hunk so exactly one implementation of the shared status definition remains. No simultaneous ownership of the truth.py path: this claim holds it now.",
+      "generation": 1
     },
     {
       "task": "task-268-board-referee-mutation-campaign-in-ci",

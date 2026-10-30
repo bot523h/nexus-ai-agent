@@ -34,6 +34,7 @@ import re
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # --------------------------------------------------------------------------- #
@@ -524,6 +525,52 @@ def check_fail_open_defaults(root: Path) -> list[Finding]:
 # --------------------------------------------------------------------------- #
 
 
+#: Statuses under which a lease is *live* — and therefore allowed to hold the
+#: single ``gates_owner`` role.  This mirrors
+#: ``scripts/agent_board.py::ACTIVE_STATUSES``, which is the board's own
+#: authority: ``active_in_review`` is a live lease because an open PR can still
+#: conflict even though its author has stopped coding.  The truth doctor cannot
+#: import the unpackaged CLI at runtime (it must stay pure-stdlib and run before
+#: ``pip install``), so the two are kept equal mechanically by
+#: ``tests/unit/test_truth_doctor.py::test_live_lease_statuses_match_the_board_cli``.
+LIVE_LEASE_STATUSES = frozenset({"active", "active_in_review"})
+
+#: Default lease length, matching ``scripts/agent_board.py`` (``--ttl`` default).
+_DEFAULT_TTL_HOURS = 24
+
+
+def _parse_utc(ts: object) -> datetime | None:
+    """Parse the board's ``YYYY-MM-DDTHH:MM:SSZ`` timestamp, or ``None``."""
+    if not isinstance(ts, str):
+        return None
+    try:
+        return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _lease_is_live(claim: dict, now: datetime | None = None) -> bool:
+    """True when *claim* holds its lease **right now** (the referee's predicate).
+
+    Mirrors ``scripts/agent_board.py::_claim_live``: the status must be in
+    :data:`LIVE_LEASE_STATUSES` **and** the lease must not have expired
+    (``claimed_at + ttl_hours`` still in the future).  An unknown or unparsable
+    ``claimed_at`` cannot be proven live and so is *not* live — uncertainty is
+    never a silent pass.
+    """
+    if claim.get("status") not in LIVE_LEASE_STATUSES:
+        return False
+    claimed = _parse_utc(claim.get("claimed_at"))
+    if claimed is None:
+        return False
+    try:
+        ttl = int(claim.get("ttl_hours", _DEFAULT_TTL_HOURS) or _DEFAULT_TTL_HOURS)
+    except (TypeError, ValueError):
+        return False
+    reference = now or datetime.now(timezone.utc)
+    return reference <= claimed + timedelta(hours=ttl)
+
+
 def check_board_truth(root: Path) -> list[Finding]:
     """The board is a truth surface: its zones, leases and references must be real.
 
@@ -568,16 +615,30 @@ def check_board_truth(root: Path) -> list[Finding]:
             )
 
     for claim in claims:
-        if claim.get("gates_owner") and claim.get("status") != "active":
-            findings.append(
-                Finding(
-                    "TRUTH041",
-                    "error",
-                    "gates_owner is held by a non-active lease",
-                    f"board.json {claim.get('task')} "
-                    f"status={claim.get('status')!r} gates_owner=true",
-                )
+        if not claim.get("gates_owner"):
+            continue
+        status = claim.get("status")
+        if status not in LIVE_LEASE_STATUSES:
+            detail = f"board.json {claim.get('task')} status={status!r} gates_owner=true"
+        elif not _lease_is_live(claim):
+            # Live by status but past its TTL: the lease no longer fences, yet the
+            # single-gates flag is still held.  This is the direction that was
+            # silent before — a status-only check reported nothing here.
+            detail = (
+                f"board.json {claim.get('task')} status={status!r} "
+                f"claimed_at={claim.get('claimed_at')!r} "
+                f"ttl_hours={claim.get('ttl_hours', _DEFAULT_TTL_HOURS)} gates_owner=true"
             )
+        else:
+            continue
+        findings.append(
+            Finding(
+                "TRUTH041",
+                "error",
+                "gates_owner is held by a non-live lease",
+                detail,
+            )
+        )
 
     for entry in board.get("deferred_log", []):
         if entry.get("task") not in claim_ids:
