@@ -405,6 +405,7 @@ def test_the_script_imports_only_stdlib_cognition_and_runtime_factory() -> None:
         "hashlib",
         "inspect",
         "json",
+        "math",
         "pathlib",
         "sys",
         "time",
@@ -1260,3 +1261,40 @@ def test_invalid_utf8_baseline_refused_without_traceback(tmp_path: Path) -> None
     assert result.returncode == 2
     assert "cannot be read" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_text_report_labels_both_execution_module_fields() -> None:
+    result = _run_cli("--repeats", "1")
+    assert result.returncode == 0
+    assert "execution_modules_loaded=['nexus_ai_agent.creative.studio.bus']" in result.stdout
+    assert "execution_modules_loaded_during_run=[]" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "expected"),
+    [
+        (harness._Diagnostic("unbounded_retry", 4), "unbounded_retry:4"),
+        (harness._Diagnostic("producer_refusal_retried", 2), "producer_refusal_retried:2"),
+        (harness._Diagnostic("timeout_not_bounded", 2.12), "timeout_not_bounded:2.12s"),
+        (harness._Diagnostic("unexpected_type", "int"), "unexpected_type:int"),
+        (harness._Diagnostic("unexpected_type", "must-never-be-logged"), "unexpected_outcome"),
+        (harness._Diagnostic("unexpected_type", []), "unexpected_outcome"),
+        (harness._Diagnostic("unbounded_retry", "must-never-be-logged"), "unexpected_outcome"),
+        ("model_consulted_unexpectedly", "model_consulted_unexpectedly"),
+        ("unbounded_retry:must-never-be-logged", "unexpected_outcome"),
+    ],
+)
+def test_diagnostics_are_structured_and_do_not_trust_fixture_text(
+    diagnostic: Any, expected: str
+) -> None:
+    case = harness._Case(
+        case_id="A-diagnostic",
+        scenario="A",
+        expected="proposal",
+        probe="fixture",
+        run=lambda: diagnostic,
+    )
+    result = _await(harness._execute_case(case))
+    assert result["observed"] == expected
+    assert result["passed"] is False
+    assert "must-never-be-logged" not in json.dumps(result)

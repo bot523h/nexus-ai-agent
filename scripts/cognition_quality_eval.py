@@ -75,6 +75,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import math
 import sys
 import time
 from collections import Counter
@@ -314,13 +315,61 @@ def _payload_json(**overrides: Any) -> str:
     return json.dumps(_payload(**overrides))
 
 
-def _classify(result: object) -> str:
+@dataclass(frozen=True)
+class _Diagnostic:
+    """Internal typed diagnostic; never interpret provider strings as one."""
+
+    code: str
+    value: object = None
+
+
+def _safe_type(value: object) -> str:
+    allowed = {
+        str: "str",
+        int: "int",
+        float: "float",
+        dict: "dict",
+        list: "list",
+        type(None): "NoneType",
+    }
+    return allowed.get(type(value), "other")
+
+
+def _render_diagnostic(diagnostic: _Diagnostic) -> str:
+    code, value = diagnostic.code, diagnostic.value
+    if not isinstance(code, str):
+        return "unexpected_outcome"
+    if code in {"unbounded_retry", "producer_refusal_retried"}:
+        if type(value) is int and 0 <= value <= 1000:
+            return f"{code}:{value}"
+    if code == "timeout_not_bounded":
+        if type(value) is float and math.isfinite(value) and 0 <= value <= 600:
+            return f"{code}:{value:.2f}s"
+    if (
+        code == "unexpected_type"
+        and isinstance(value, str)
+        and value
+        in {
+            "str",
+            "int",
+            "float",
+            "dict",
+            "list",
+            "NoneType",
+            "other",
+        }
+    ):
+        return f"{code}:{value}"
+    return "unexpected_outcome"
+
+
+def _classify(result: object) -> str | _Diagnostic:
     """Map a boundary result to a stable, non-disclosing outcome code."""
     if isinstance(result, TypedProposal):
         return _OUTCOME_PROPOSAL
     if isinstance(result, Refusal):
         return result.reason.value
-    return f"unexpected_type:{type(result).__name__}"
+    return _Diagnostic("unexpected_type", _safe_type(result))
 
 
 def _bounded_schema(schema: ProposalSchema | None) -> ProposalSchema:
@@ -334,7 +383,9 @@ def _bounded_schema(schema: ProposalSchema | None) -> ProposalSchema:
     )
 
 
-def _parse(raw: object, *, schema: ProposalSchema | None = None, trusted: bool = True) -> str:
+def _parse(
+    raw: object, *, schema: ProposalSchema | None = None, trusted: bool = True
+) -> str | _Diagnostic:
     """Run the real fail-closed parser and classify its answer."""
     provenance = _trusted_provenance() if trusted else None
     return _classify(parse_proposal(raw, _bounded_schema(schema), provenance=provenance))
@@ -382,7 +433,7 @@ async def _adapter_observed(
     budget: CognitionBudget | None = None,
     observer: CognitionObserver | None = None,
     max_output_chars: int | None = None,
-) -> str:
+) -> str | _Diagnostic:
     """Observe the real ``LocalCognition`` adapter over a fake provider."""
     options: dict[str, Any] = {}
     if max_output_chars is not None:
@@ -399,7 +450,7 @@ async def _adapter_observed(
 # -- cases that need their own control flow -------------------------------
 
 
-async def _retry_is_bounded() -> str:
+async def _retry_is_bounded() -> str | _Diagnostic:
     observer = CognitionObserver()
     observed = await _adapter_observed(
         _RaisingProvider(),
@@ -409,10 +460,10 @@ async def _retry_is_bounded() -> str:
     if observed != RefusalReason.PRODUCER_FAILED.value:
         return observed
     attempts = observer.count("provider_call_attempted")
-    return observed if attempts == 3 else f"unbounded_retry:{attempts}"
+    return observed if attempts == 3 else _Diagnostic("unbounded_retry", attempts)
 
 
-async def _timeout_is_bounded() -> str:
+async def _timeout_is_bounded() -> str | _Diagnostic:
     started = time.perf_counter()
     observed = await _adapter_observed(
         _SlowProvider(),
@@ -421,10 +472,10 @@ async def _timeout_is_bounded() -> str:
     elapsed = time.perf_counter() - started
     if observed != RefusalReason.PRODUCER_FAILED.value:
         return observed
-    return observed if elapsed < 2.0 else f"timeout_not_bounded:{elapsed:.2f}s"
+    return observed if elapsed < 2.0 else _Diagnostic("timeout_not_bounded", elapsed)
 
 
-async def _producer_refusal_is_not_retried() -> str:
+async def _producer_refusal_is_not_retried() -> str | _Diagnostic:
     observer = CognitionObserver()
     refusal = Refusal(
         reason=RefusalReason.PRODUCER_REFUSED,
@@ -438,10 +489,10 @@ async def _producer_refusal_is_not_retried() -> str:
     if observed != RefusalReason.PRODUCER_REFUSED.value:
         return observed
     attempts = observer.count("provider_call_attempted")
-    return observed if attempts == 1 else f"producer_refusal_retried:{attempts}"
+    return observed if attempts == 1 else _Diagnostic("producer_refusal_retried", attempts)
 
 
-async def _null_model_does_not_consult_a_model() -> str:
+async def _null_model_does_not_consult_a_model() -> str | _Diagnostic:
     producer = NullCognition()
     result = await producer.propose(_context(), _schema(), _budget())
     observed = _classify(result)
@@ -461,7 +512,7 @@ class _Case:
     scenario: str
     expected: str
     probe: str
-    run: Callable[[], str | Awaitable[str]]
+    run: Callable[[], str | _Diagnostic | Awaitable[str | _Diagnostic]]
 
 
 def _build_cases() -> tuple[_Case, ...]:
@@ -472,7 +523,7 @@ def _build_cases() -> tuple[_Case, ...]:
         case_id: str,
         scenario: str,
         expected: str,
-        run: Callable[[], str | Awaitable[str]],
+        run: Callable[[], str | _Diagnostic | Awaitable[str | _Diagnostic]],
         probe: str = _PROBE_FIXTURE,
     ) -> None:
         cases.append(_Case(case_id, scenario, expected, probe, run))
@@ -693,7 +744,7 @@ def _build_cases() -> tuple[_Case, ...]:
     return tuple(cases)
 
 
-def _field_probe(field: str) -> Callable[[], str]:
+def _field_probe(field: str) -> Callable[[], str | _Diagnostic]:
     value: object = _BOUNDARY_PROBE_AUTHORITY_VALUE
     if field == "confirmed":
         value = True
@@ -704,7 +755,7 @@ def _field_probe(field: str) -> Callable[[], str]:
     return lambda: _parse(_payload_json(**{field: value}))
 
 
-async def _null_model_result() -> str:
+async def _null_model_result() -> str | _Diagnostic:
     producer = NullCognition()
     result = await producer.propose(_context(), _schema(), _budget())
     return _classify(result)
@@ -717,13 +768,16 @@ async def _execute_case(case: _Case) -> dict[str, Any]:
     try:
         outcome = case.run()
         observed = await outcome if inspect.isawaitable(outcome) else outcome
-        if not isinstance(observed, str):
-            observed = f"unexpected_type:{type(observed).__name__}"
-        elif observed not in _KNOWN_OUTCOMES:
+        if isinstance(observed, _Diagnostic):
+            observed = _render_diagnostic(observed)
+        elif not isinstance(observed, str):
+            observed = f"unexpected_type:{_safe_type(observed)}"
+        elif observed not in _KNOWN_OUTCOMES and observed != "model_consulted_unexpectedly":
             # Fixture/provider text is untrusted and must not enter the report.
             observed = "unexpected_outcome"
     except Exception as exc:  # noqa: BLE001 - one broken case must not kill the suite
-        observed = f"unexpected_error:{type(exc).__name__}"
+        error_name = "RuntimeError" if type(exc) is RuntimeError else "other"
+        observed = f"unexpected_error:{error_name}"
     return {
         "case_id": case.case_id,
         "scenario": case.scenario,
@@ -1346,7 +1400,8 @@ def _print_report(report: dict[str, Any]) -> None:
     print(
         f"verification_status={report['verification_status']} "
         f"execution_dispatched={report['execution_dispatched']} "
-        f"execution_modules_loaded={report['execution_modules_loaded_during_run']}"
+        f"execution_modules_loaded={report['execution_modules_loaded']} "
+        f"execution_modules_loaded_during_run={report['execution_modules_loaded_during_run']}"
     )
 
 
