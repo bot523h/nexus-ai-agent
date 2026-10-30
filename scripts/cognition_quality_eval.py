@@ -10,8 +10,8 @@ have is a single, repeatable measurement of the boundary's behaviour:
 * every fixture, its expected outcome and the observed outcome in one table;
 * a machine-readable report that separates *proposal acceptance* from
   *independent verification* (a proposal is never an execution);
-* a determinism fingerprint computed only from behavioural results, with
-  latency reported separately;
+* a determinism fingerprint over the registry snapshot and behavioural results,
+  with latency reported separately;
 * honest labels for what the run does **not** prove.
 
     python scripts/cognition_quality_eval.py                    # human table
@@ -22,7 +22,7 @@ have is a single, repeatable measurement of the boundary's behaviour:
     python scripts/cognition_quality_eval.py --write-candidate .candidates/next.json
 
 ``--check`` compares this run with the reviewed baseline at
-``tests/fixtures/cognition_quality_eval/v1_baseline.json`` (or ``--baseline
+``tests/fixtures/cognition_quality_eval/v2_baseline.json`` (or ``--baseline
 PATH``).  It never writes, it recomputes verdicts and aggregates instead of
 trusting the report's own ``passed``/counter fields, it ignores latency and
 timestamps, and it exits **0** only when the contract holds, **1** on any
@@ -31,6 +31,13 @@ baseline, invalid fixture set).  ``--write-candidate`` is the only way to
 produce a new baseline projection, it refuses to overwrite the committed file,
 and its output is a candidate to review rather than an automatically refreshed
 expectation.
+
+V1 remains an immutable historical baseline and is not accepted as V2. The
+production catalog is constructed by ``creative.packs.runtime.build_runtime_registry``
+(Wave 1 plus builtin pack registrars) and read through cognition
+``offered_operations``. This is catalog membership, not activation or permission.
+The studio package eagerly imports the bus; importing it does not construct or
+dispatch a CommandBus. This pre-existing import is reported honestly.
 
 Guarantees of the default run (all enforced by
 ``tests/unit/test_cognition_quality_eval.py``):
@@ -42,10 +49,10 @@ Guarantees of the default run (all enforced by
   fixtures actually executed in this process, never from a constant;
 * **bounded** — ``--repeats`` is validated (1..10); provider timeouts use a
   synthetic budget of 50 ms, so the suite never waits on a network;
-* **authority-free** — the harness never imports the ``CommandBus``, never
+* **authority-free** — the harness never constructs the ``CommandBus``, never
   builds a command and never dispatches one; ``execution_dispatched`` is
-  reported as ``false`` with the runtime evidence
-  (``execution_modules_loaded_during_run``) attached;
+  reported as ``false``. The report distinguishes modules already imported
+  during initialization from modules newly imported while running the cases;
 * **non-disclosing** — the report carries case ids and structured refusal
   codes only, never prompt text, model output, exception messages or
   provider payloads.
@@ -72,6 +79,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -89,22 +97,23 @@ from nexus_ai_agent.nagar.cognition import (
     Refusal,
     RefusalReason,
     TypedProposal,
+    offered_operations,
     parse_proposal,
 )
 
 #: Version of the fixture set / report contract.  Bump when a fixture, an
 #: expectation or a reported field changes meaning.
-EVALUATION_VERSION = "nexus-cognition-quality-eval/v1"
+EVALUATION_VERSION = "nexus-cognition-quality-eval/v2"
 
 #: Version of the committed regression baseline *format* (not of the fixture
 #: set).  A baseline whose ``baseline_schema_version`` differs is refused, never
 #: silently reinterpreted.
-BASELINE_SCHEMA_VERSION = 1
+BASELINE_SCHEMA_VERSION = 2
 
 #: Where the reviewed, committed baseline lives.  Resolved against the
 #: repository root (not the caller's CWD) so the checker behaves identically
 #: from any working directory.
-BASELINE_RELPATH = "tests/fixtures/cognition_quality_eval/v1_baseline.json"
+BASELINE_RELPATH = "tests/fixtures/cognition_quality_eval/v2_baseline.json"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: Exit codes of ``main``: 0 = satisfied, 1 = evaluation/contract mismatch,
@@ -127,18 +136,73 @@ MAX_REPEATS = 10
 #: runtime evidence is ``execution_modules_loaded_during_run``.
 EXECUTION_DISPATCHED = False
 
-#: Modules whose import would mean the harness reached the execution lane.
+#: Execution modules to report, including imports already present at startup.
 _EXECUTION_MODULES = ("nexus_ai_agent.creative.studio.bus",)
 
 # -- fixture schema --------------------------------------------------------
 
-#: The fixture schema is explicit and local.  Real callers derive the offered
-#: set from the ``CapabilityRegistry``; the harness pins a stable set so the
-#: measurement does not drift with the registry.
+#: Proposal schema version remains the production V1 proposal contract.
 EVAL_SCHEMA_ID = "nagar.eval.proposal.v1"
-EVAL_OPERATION = "timeline.trim"
-EVAL_ALLOWED_OPERATIONS: frozenset[str] = frozenset({"timeline.trim", "creative.caption"})
-DISALLOWED_OPERATION = "shell.exec"
+DISALLOWED_OPERATION = "nagar.eval.unsupported"
+
+
+@dataclass(frozen=True)
+class _RegistrySnapshot:
+    status: str
+    operations: frozenset[str]
+
+
+_EMPTY_SNAPSHOT = _RegistrySnapshot("empty", frozenset())
+_CURRENT_SNAPSHOT: ContextVar[_RegistrySnapshot] = ContextVar(
+    "cognition_eval_registry", default=_EMPTY_SNAPSHOT
+)
+
+
+class _ValidatedRegistry:
+    """Validate the source shape before the canonical helper consumes it."""
+
+    def __init__(self, registry: Any) -> None:
+        self.registry = registry
+
+    def list_operations(self) -> list[str]:
+        values = self.registry.list_operations()
+        if not isinstance(values, list):
+            raise ValueError("invalid registry shape")
+        for value in values:
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value) > 128
+                or value != value.strip()
+                or any(c.isspace() for c in value)
+                or "." not in value
+            ):
+                raise ValueError("invalid operation identifier")
+        return values
+
+
+def _runtime_registry() -> Any:
+    # This is the same composition factory used by the production render lane.
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    return build_runtime_registry()
+
+
+def _capture_registry() -> _RegistrySnapshot:
+    """Capture once; never print an exception or fabricate an offer."""
+    try:
+        operations = offered_operations(_ValidatedRegistry(_runtime_registry()))
+    except Exception:  # noqa: BLE001 - fail closed, do not disclose provider data
+        return _RegistrySnapshot("unusable", frozenset())
+    return _RegistrySnapshot("ok" if operations else "empty", operations)
+
+
+def _unknown_operation() -> str:
+    operation = DISALLOWED_OPERATION
+    while operation in _CURRENT_SNAPSHOT.get().operations:
+        operation += "_x"
+    return operation
+
 
 #: Top-level keys that would turn a proposal into authority.  This list is the
 #: harness's own adversarial probe set, not an import of the production
@@ -193,11 +257,15 @@ def _schema(
     return ProposalSchema(
         schema_id=schema_id,
         schema_version=1,
-        allowed_operations=EVAL_ALLOWED_OPERATIONS if allowed is None else allowed,
+        allowed_operations=(
+            _CURRENT_SNAPSHOT.get().operations
+            if allowed is None
+            else _CURRENT_SNAPSHOT.get().operations & allowed
+        ),
     )
 
 
-def _context(intent_text: str = "trim the first clip") -> CognitionContext:
+def _context(intent_text: str = "propose one of the offered operations") -> CognitionContext:
     return CognitionContext(
         subject_id="eval.subject.1",
         intent_text=intent_text,
@@ -232,9 +300,10 @@ def _payload(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_id": EVAL_SCHEMA_ID,
         "schema_version": PROPOSAL_SCHEMA_VERSION,
-        "operation": EVAL_OPERATION,
-        "input": {"clip_asset_id": "clip_eval_1", "in_point_us": 0, "out_point_us": 1_000_000},
-        "rationale": "trim to the requested window",
+        "operation": next(iter(sorted(_CURRENT_SNAPSHOT.get().operations)), DISALLOWED_OPERATION),
+        # Proposal parsing does not validate operation-specific input models.
+        "input": {"fixture": "synthetic"},
+        "rationale": "synthetic boundary probe",
         "confidence": 0.75,
     }
     payload.update(overrides)
@@ -254,10 +323,21 @@ def _classify(result: object) -> str:
     return f"unexpected_type:{type(result).__name__}"
 
 
+def _bounded_schema(schema: ProposalSchema | None) -> ProposalSchema:
+    """Fixture-provided schemas may narrow, but never widen the snapshot."""
+    if schema is None:
+        return _schema()
+    return schema.model_copy(
+        update={
+            "allowed_operations": schema.allowed_operations & _CURRENT_SNAPSHOT.get().operations
+        }
+    )
+
+
 def _parse(raw: object, *, schema: ProposalSchema | None = None, trusted: bool = True) -> str:
     """Run the real fail-closed parser and classify its answer."""
     provenance = _trusted_provenance() if trusted else None
-    return _classify(parse_proposal(raw, schema or _schema(), provenance=provenance))
+    return _classify(parse_proposal(raw, _bounded_schema(schema), provenance=provenance))
 
 
 # -- fake providers (the existing ``generate`` seam) -----------------------
@@ -310,7 +390,7 @@ async def _adapter_observed(
     cognition = LocalCognition(provider, observer=observer, **options)
     result = await cognition.propose(
         context or _context(),
-        schema or _schema(),
+        _bounded_schema(schema),
         budget or _budget(),
     )
     return _classify(result)
@@ -385,7 +465,7 @@ class _Case:
 
 
 def _build_cases() -> tuple[_Case, ...]:
-    """The frozen fixture set: scenarios A..I (J is a suite-level invariant)."""
+    """Boundary fixtures A..I; J and K are suite-level invariants."""
     cases: list[_Case] = []
 
     def add(
@@ -473,7 +553,7 @@ def _build_cases() -> tuple[_Case, ...]:
         "D-operation-outside-offered-set",
         "D",
         RefusalReason.DISALLOWED_OPERATION.value,
-        lambda: _parse(_payload_json(operation=DISALLOWED_OPERATION)),
+        lambda: _parse(_payload_json(operation=_unknown_operation())),
     )
     add(
         "D-empty-offer-set",
@@ -538,7 +618,7 @@ def _build_cases() -> tuple[_Case, ...]:
         "F",
         RefusalReason.DISALLOWED_OPERATION.value,
         lambda: _adapter_observed(
-            _StaticProvider(_payload_json(operation=DISALLOWED_OPERATION)),
+            _StaticProvider(_payload_json(operation=_unknown_operation())),
             context=injected_context,
         ),
         probe=_PROBE_INJECTION,
@@ -639,6 +719,9 @@ async def _execute_case(case: _Case) -> dict[str, Any]:
         observed = await outcome if inspect.isawaitable(outcome) else outcome
         if not isinstance(observed, str):
             observed = f"unexpected_type:{type(observed).__name__}"
+        elif observed not in _KNOWN_OUTCOMES:
+            # Fixture/provider text is untrusted and must not enter the report.
+            observed = "unexpected_outcome"
     except Exception as exc:  # noqa: BLE001 - one broken case must not kill the suite
         observed = f"unexpected_error:{type(exc).__name__}"
     return {
@@ -679,8 +762,8 @@ def _verification_separation_result(results: Sequence[dict[str, Any]]) -> dict[s
     }
 
 
-def _fingerprint(results: Sequence[dict[str, Any]]) -> str:
-    """Behavioural fingerprint: ids, expectations, observations, verdicts only.
+def _fingerprint(results: Sequence[dict[str, Any]], operations: Sequence[str] = ()) -> str:
+    """Fingerprint the sorted offer and case identities, outcomes and verdicts.
 
     Timestamps and latency are deliberately excluded: they vary between runs
     and must never be mistaken for a behavioural difference.
@@ -689,7 +772,7 @@ def _fingerprint(results: Sequence[dict[str, Any]]) -> str:
         [item["case_id"], item["expected"], item["observed"], item["passed"]]
         for item in sorted(results, key=lambda item: item["case_id"])
     ]
-    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps([sorted(operations), canonical], sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 
 
@@ -705,12 +788,11 @@ def _is_execution_module(name: str) -> bool:
 
 #: The scenarios the evaluation contract promises.  A fixture set that drops one
 #: is invalid, not merely smaller.
-REQUIRED_SCENARIOS: tuple[str, ...] = ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J")
+REQUIRED_SCENARIOS: tuple[str, ...] = ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K")
 
 #: Scenarios produced by the runner itself (suite-level invariants), not by
-#: ``_build_cases``.  Scenario J asks the whole suite a question — "is
-#: acceptance being reported as verification?" — so it cannot be one fixture.
-SUITE_SCENARIOS: tuple[str, ...] = ("J",)
+#: ``_build_cases``. J checks verification separation and K checks the registry.
+SUITE_SCENARIOS: tuple[str, ...] = ("J", "K")
 
 #: The probes a fixture may declare.  A case that is really a suite-level
 #: invariant must not masquerade as a boundary probe and vice versa.
@@ -719,7 +801,7 @@ _VALID_PROBES: frozenset[str] = frozenset({_PROBE_FIXTURE, _PROBE_INJECTION, _PR
 #: Every outcome code the reporter may print: a proposal, the separation
 #: marker, or a documented refusal reason.
 _KNOWN_OUTCOMES: frozenset[str] = frozenset(
-    {_OUTCOME_PROPOSAL, _OUTCOME_SEPARATED} | set(_REFUSAL_OUTCOMES)
+    {_OUTCOME_PROPOSAL, _OUTCOME_SEPARATED, "registry_ready"} | set(_REFUSAL_OUTCOMES)
 )
 
 
@@ -764,7 +846,17 @@ def validate_fixture_set(cases: Sequence[_Case]) -> list[str]:
 
 
 def evaluate(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
-    """Run the fixture suite ``repeats`` times and return the report."""
+    """Capture one immutable runtime snapshot for the entire invocation."""
+    snapshot = _capture_registry()
+    token = _CURRENT_SNAPSHOT.set(snapshot)
+    try:
+        return _evaluate_snapshot(repeats=repeats, snapshot=snapshot)
+    finally:
+        _CURRENT_SNAPSHOT.reset(token)
+
+
+def _evaluate_snapshot(*, repeats: int, snapshot: _RegistrySnapshot) -> dict[str, Any]:
+    """Evaluate the supplied snapshot without acquiring another registry."""
     if isinstance(repeats, bool) or not isinstance(repeats, int):
         raise ValueError("repeats must be an integer")
     if not 1 <= repeats <= MAX_REPEATS:
@@ -781,6 +873,18 @@ def evaluate(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
         started = time.perf_counter()
         results = asyncio.run(_run_cases(cases))
         results.append(_verification_separation_result(results))
+        results.append(
+            {
+                "case_id": "K-registry-drift",
+                "scenario": "K",
+                "probe": _PROBE_SUITE,
+                "expected": "registry_ready",
+                "observed": "registry_ready"
+                if snapshot.status == "ok"
+                else "registry_" + snapshot.status,
+                "passed": snapshot.status == "ok",
+            }
+        )
         durations_ms.append((time.perf_counter() - started) * 1000.0)
         runs.append(results)
 
@@ -795,7 +899,7 @@ def evaluate(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
         item["observed"] for item in first if item["observed"] in _REFUSAL_OUTCOMES
     )
 
-    fingerprints = [_fingerprint(results) for results in runs]
+    fingerprints = [_fingerprint(results, sorted(snapshot.operations)) for results in runs]
     baseline = {item["case_id"]: item["observed"] for item in first}
     mismatched: list[str] = []
     for results in runs[1:]:
@@ -807,6 +911,10 @@ def evaluate(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
     return {
         "evaluation_version": EVALUATION_VERSION,
         "execution_mode": EXECUTION_MODE,
+        "registry": {"status": snapshot.status, "offered_operations": sorted(snapshot.operations)},
+        "execution_modules_loaded": sorted(
+            name for name in sys.modules if _is_execution_module(name)
+        ),
         "network_used": False,
         "real_model_used": False,
         "repeats": repeats,
@@ -895,6 +1003,7 @@ def build_baseline(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "baseline_schema_version": BASELINE_SCHEMA_VERSION,
         "evaluation_version": report["evaluation_version"],
+        "registry": report["registry"],
         "contract": {key: report[key] for key in _BASELINE_CONTRACT_KEYS},
         "counts": {
             "cases_total": report["cases_total"],
@@ -915,6 +1024,7 @@ def build_baseline(report: dict[str, Any]) -> dict[str, Any]:
 _BASELINE_SHAPE: tuple[tuple[str, type], ...] = (
     ("baseline_schema_version", int),
     ("evaluation_version", str),
+    ("registry", dict),
     ("contract", dict),
     ("counts", dict),
     ("refusal_reasons", dict),
@@ -1046,6 +1156,20 @@ def check_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> list[str
     reported counters.
     """
     problems: list[str] = []
+    if not isinstance(report, dict) or not isinstance(baseline, dict):
+        return ["report and baseline must be objects"]
+    if not isinstance(report.get("cases"), list) or not report["cases"]:
+        return ["report.cases must be a non-empty list"]
+    repeatability = report.get("repeatability")
+    if (
+        not isinstance(repeatability, dict)
+        or not isinstance(repeatability.get("fingerprints"), list)
+        or not repeatability["fingerprints"]
+        or not isinstance(repeatability["fingerprints"][0], str)
+    ):
+        return ["report.repeatability.fingerprints must be a non-empty list"]
+    if any(key not in report for key in ("evaluation_version", *_BASELINE_CONTRACT_KEYS)):
+        return ["report is missing required contract fields"]
 
     schema_version = baseline.get("baseline_schema_version")
     if schema_version != BASELINE_SCHEMA_VERSION:
@@ -1059,6 +1183,14 @@ def check_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> list[str
             f"evaluation_version drifted: baseline {evaluation_version!r} "
             f"vs report {report['evaluation_version']!r}"
         )
+
+    if report.get("evaluation_version") != EVALUATION_VERSION:
+        problems.append("report evaluation_version is incompatible")
+    registry = report.get("registry")
+    if not isinstance(registry, dict) or registry.get("status") != "ok":
+        problems.append("registry drift: registry is empty or unusable")
+    if baseline.get("registry") != registry:
+        problems.append("registry drift: offered operations changed")
 
     contract = baseline.get("contract")
     if not isinstance(contract, dict):
@@ -1130,6 +1262,16 @@ def check_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> list[str
         problems.append("report refusal_reasons do not match its own cases")
 
     fingerprint = report["repeatability"]["fingerprints"][0]
+    if not report_problems and isinstance(registry, dict):
+        operations = registry.get("offered_operations")
+        if (
+            not isinstance(operations, list)
+            or any(not isinstance(op, str) for op in operations)
+            or operations != sorted(set(operations))
+        ):
+            problems.append("invalid report registry operations")
+        elif fingerprint != _fingerprint(report["cases"], operations):
+            problems.append("report fingerprint does not match its cases and registry")
     if baseline.get("fingerprint") != fingerprint:
         problems.append(
             "fingerprint drifted: "
@@ -1148,13 +1290,16 @@ def write_candidate_baseline(report: dict[str, Any], path: Path, *, allowed_root
     """
     candidate = build_baseline(report)
     problems = check_baseline(report, candidate)
+    if report.get("cases_failed") != 0:
+        problems.append("candidate contains failed fixtures")
     if problems:
         raise BaselineError(
             "candidate baseline would not describe this run: " + "; ".join(problems[:5])
         )
     target = path.resolve()
     committed = default_baseline_path().resolve()
-    if target == committed:
+    historical = (_REPO_ROOT / "tests/fixtures/cognition_quality_eval/v1_baseline.json").resolve()
+    if target in {committed, historical}:
         raise BaselineError(
             f"refusing to overwrite the committed baseline in place ({BASELINE_RELPATH}); "
             "write a candidate elsewhere, review it, then replace the baseline deliberately"
@@ -1174,6 +1319,10 @@ def _print_report(report: dict[str, Any]) -> None:
         f"mode={report['execution_mode']} "
         f"network_used={report['network_used']} "
         f"real_model_used={report['real_model_used']}"
+    )
+    print(
+        f"registry={report['registry']['status']} "
+        f"offered={report['registry']['offered_operations']}"
     )
     print()
     for case in report["cases"]:
@@ -1288,7 +1437,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_UNUSABLE_INPUT
 
+    registry_exit = (
+        EXIT_UNUSABLE_INPUT if report["registry"]["status"] == "unusable" else EXIT_MISMATCH
+    )
     if args.write_candidate is not None:
+        if report["registry"]["status"] != "ok":
+            print("error: registry is empty or unusable", file=sys.stderr)
+            return registry_exit
         try:
             write_candidate_baseline(report, args.write_candidate, allowed_root=_REPO_ROOT)
         except (BaselineError, OSError) as exc:
@@ -1323,13 +1478,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             _print_baseline_check(baseline_path, problems, report)
-        return EXIT_OK if not problems else EXIT_MISMATCH
+        return (
+            EXIT_OK
+            if not problems
+            else (registry_exit if report["registry"]["status"] != "ok" else EXIT_MISMATCH)
+        )
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         _print_report(report)
-    return EXIT_OK if report["cases_failed"] == 0 else EXIT_MISMATCH
+    return (
+        EXIT_OK
+        if report["cases_failed"] == 0
+        else (registry_exit if report["registry"]["status"] != "ok" else EXIT_MISMATCH)
+    )
 
 
 if __name__ == "__main__":

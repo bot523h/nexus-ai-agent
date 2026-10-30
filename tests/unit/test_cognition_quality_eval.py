@@ -4,9 +4,8 @@ The parameterised boundary suites already prove individual properties of
 ``parse_proposal`` / ``LocalCognition`` / ``NullCognition``.  These tests cover
 what is *new* and would otherwise be unverified:
 
-* the harness is one **complete, frozen fixture set** (scenarios A..J) whose
-  expectations match the live contract — a silent contract change or a dropped
-  fixture turns this file red;
+* the harness has a complete fixture set (scenarios A..K) whose expectations
+  match the live registry contract; a dropped fixture turns this file red;
 * every reported counter is **recomputed here from the case results**, so a
   hard-coded number cannot survive;
 * acceptance is separated from execution and verification, and the separating
@@ -45,7 +44,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "cognition_quality_eval.py"
-BASELINE = ROOT / "tests" / "fixtures" / "cognition_quality_eval" / "v1_baseline.json"
+BASELINE = ROOT / "tests" / "fixtures" / "cognition_quality_eval" / "v2_baseline.json"
 
 _spec = importlib.util.spec_from_file_location("cognition_quality_eval", SCRIPT)
 assert _spec and _spec.loader
@@ -53,13 +52,15 @@ harness = importlib.util.module_from_spec(_spec)
 sys.modules["cognition_quality_eval"] = harness
 _spec.loader.exec_module(harness)
 
-REQUIRED_SCENARIOS = tuple("ABCDEFGHIJ")
+REQUIRED_SCENARIOS = tuple("ABCDEFGHIJK")
 
 #: The report contract.  A new field is fine, but it must be added here too —
 #: that is what stops "proposal accepted" from quietly becoming "verified".
 REPORT_KEYS = {
     "evaluation_version",
     "execution_mode",
+    "registry",
+    "execution_modules_loaded",
     "network_used",
     "real_model_used",
     "repeats",
@@ -169,7 +170,7 @@ def test_authority_fields_never_become_a_proposal(report: dict[str, Any]) -> Non
 def test_operation_outside_the_offered_set_is_never_accepted(report: dict[str, Any]) -> None:
     for case in _scenario_cases(report, "D"):
         assert case["observed"] == "disallowed_operation", case["case_id"]
-    assert "shell.exec" not in harness.EVAL_ALLOWED_OPERATIONS
+    assert harness.DISALLOWED_OPERATION not in report["registry"]["offered_operations"]
 
 
 def test_explicit_refusal_is_preserved_and_not_converted(report: dict[str, Any]) -> None:
@@ -224,10 +225,9 @@ def test_report_counters_are_recomputed_from_the_case_results(report: dict[str, 
             reasons[case["observed"]] = reasons.get(case["observed"], 0) + 1
     assert report["refusal_reasons"] == dict(sorted(reasons.items()))
     assert report["refusals_observed"] == sum(reasons.values())
-    # Scenario J is a suite-level invariant, not a producer outcome, so it is
-    # counted separately: every other case is exactly one proposal or refusal.
-    invariant = sum(1 for case in cases if case["scenario"] == "J")
-    assert invariant == 1
+    # J and K are suite invariants, not producer outcomes.
+    invariant = sum(1 for case in cases if case["scenario"] in {"J", "K"})
+    assert invariant == 2
     assert accepted + report["refusals_observed"] + invariant == report["cases_total"]
     for case in cases:
         assert set(case) == CASE_KEYS
@@ -393,13 +393,14 @@ def _imported_modules() -> set[str]:
     return modules
 
 
-def test_the_script_imports_only_stdlib_and_the_cognition_contract() -> None:
+def test_the_script_imports_only_stdlib_cognition_and_runtime_factory() -> None:
     allowed_stdlib = {
         "__future__",
         "argparse",
         "asyncio",
         "collections",
         "collections.abc",
+        "contextvars",
         "dataclasses",
         "hashlib",
         "inspect",
@@ -412,7 +413,9 @@ def test_the_script_imports_only_stdlib_and_the_cognition_contract() -> None:
     for module in _imported_modules():
         if module in allowed_stdlib:
             continue
-        assert module.startswith("nexus_ai_agent.nagar.cognition"), module
+        assert module.startswith("nexus_ai_agent.nagar.cognition") or module == (
+            "nexus_ai_agent.creative.packs.runtime"
+        ), module
     forbidden = ("socket", "urllib", "http", "httpx", "requests", "subprocess")
     for module in _imported_modules():
         assert not module.startswith(forbidden), module
@@ -469,6 +472,7 @@ def test_the_committed_baseline_pins_no_timestamps_paths_or_latency() -> None:
     assert set(data) == {
         "baseline_schema_version",
         "evaluation_version",
+        "registry",
         "contract",
         "counts",
         "refusal_reasons",
@@ -509,7 +513,7 @@ def _restate(data: dict[str, Any]) -> None:
     )
     reasons: dict[str, int] = {}
     for case in cases:
-        if case["observed"] not in {"proposal", "separated"}:
+        if case["observed"] in harness._REFUSAL_OUTCOMES:
             reasons[case["observed"]] = reasons.get(case["observed"], 0) + 1
     data["refusal_reasons"] = dict(sorted(reasons.items()))
     data["counts"]["refusals_observed"] = sum(reasons.values())
@@ -751,7 +755,7 @@ def test_write_candidate_refuses_to_overwrite_the_committed_baseline() -> None:
     completed = _check_cli("--write-candidate", str(BASELINE), "--repeats", "1")
     assert completed.returncode == 2
     assert "refusing to overwrite the committed baseline" in completed.stderr
-    assert json.loads(BASELINE.read_text(encoding="utf-8"))["fingerprint"] == "8c58bcd45ea8632a"
+    assert json.loads(BASELINE.read_text(encoding="utf-8"))["fingerprint"] == "268adff247b9060a"
 
 
 def test_write_candidate_rejects_a_path_outside_the_repository(tmp_path: Path) -> None:
@@ -851,7 +855,7 @@ def test_the_fingerprint_is_stable_across_hash_seeds(seed: str) -> None:
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout)
     assert payload["repeatability"]["identical"] is True
-    assert payload["repeatability"]["fingerprints"][0] == "8c58bcd45ea8632a"
+    assert payload["repeatability"]["fingerprints"][0] == "268adff247b9060a"
 
 
 def test_the_report_is_identical_from_a_foreign_working_directory(tmp_path: Path) -> None:
@@ -929,3 +933,256 @@ def test_a_structurally_broken_report_is_reported_not_crashed(report: dict[str, 
 
     # A clean report is still clean: the guard must not turn into noise.
     assert harness.check_baseline(report, baseline) == []
+
+
+# -- V2: production registry binding and fail-closed drift -----------------
+
+
+class _Registry:
+    def __init__(self, operations: Any) -> None:
+        self.operations = operations
+        self.calls = 0
+
+    def list_operations(self) -> Any:
+        self.calls += 1
+        return self.operations
+
+
+def test_v2_default_offer_is_the_production_runtime_catalog(report: dict[str, Any]) -> None:
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.nagar.cognition.capabilities import offered_operations
+
+    operations = offered_operations(build_runtime_registry())
+    assert report["registry"] == {"status": "ok", "offered_operations": sorted(operations)}
+    assert "creative.caption" not in operations
+    assert _by_id(report)["K-registry-drift"]["passed"] is True
+    assert report["evaluation_version"] == "nexus-cognition-quality-eval/v2"
+    assert "nexus_ai_agent.creative.studio.bus" in report["execution_modules_loaded"]
+
+
+def test_registry_additions_removals_and_order_change_the_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = _Registry(["probe.one", "probe.two"])
+    monkeypatch.setattr(harness, "_runtime_registry", lambda: registry)
+    first = harness.evaluate(repeats=1)
+    registry.operations = ["probe.two", "probe.one"]
+    reordered = harness.evaluate(repeats=1)
+    assert first["registry"] == reordered["registry"]
+    assert first["repeatability"]["fingerprints"] == reordered["repeatability"]["fingerprints"]
+
+    registry.operations = ["probe.one", "probe.two", "probe.three", "probe.op-with-dash"]
+    added = harness.evaluate(repeats=1)
+    assert "probe.three" in added["registry"]["offered_operations"]
+    assert "probe.op-with-dash" in added["registry"]["offered_operations"]
+    assert added["repeatability"]["fingerprints"] != first["repeatability"]["fingerprints"]
+    registry.operations = ["probe.one"]
+    removed = harness.evaluate(repeats=1)
+    assert "probe.two" not in removed["registry"]["offered_operations"]
+    assert removed["repeatability"]["fingerprints"] != first["repeatability"]["fingerprints"]
+    for changed in (added, removed):
+        assert any(
+            "registry drift" in p
+            for p in harness.check_baseline(changed, harness.build_baseline(first))
+        )
+
+
+def test_registry_is_snapshotted_once_for_all_repeats(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ChangingRegistry(_Registry):
+        def list_operations(self) -> Any:
+            self.calls += 1
+            return ["probe.first"] if self.calls == 1 else ["probe.second"]
+
+    registry = ChangingRegistry([])
+    monkeypatch.setattr(harness, "_runtime_registry", lambda: registry)
+    report = harness.evaluate(repeats=3)
+    assert registry.calls == 1
+    assert report["registry"]["offered_operations"] == ["probe.first"]
+    assert report["repeatability"]["identical"] is True
+
+
+def test_fixture_cannot_widen_the_snapshot() -> None:
+    token = harness._CURRENT_SNAPSHOT.set(harness._RegistrySnapshot("ok", frozenset({"probe.one"})))
+    try:
+        schema = harness._schema(allowed=frozenset({"probe.one", "probe.injected"}))
+        assert schema.allowed_operations == frozenset({"probe.one"})
+        assert harness._parse(harness._payload(operation="probe.injected"), schema=schema) == (
+            "disallowed_operation"
+        )
+        assert harness._parse(harness._payload(operation="probe.one", permissions=["*"])) == (
+            "authority_field"
+        )
+    finally:
+        harness._CURRENT_SNAPSHOT.reset(token)
+
+
+def test_empty_registry_is_diagnostic_but_never_green(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(harness, "_runtime_registry", lambda: _Registry([]))
+    report = harness.evaluate(repeats=1)
+    assert report["registry"] == {"status": "empty", "offered_operations": []}
+    assert report["valid_proposals_accepted"] == 0
+    assert _by_id(report)["K-registry-drift"]["observed"] == "registry_empty"
+    assert _by_id(report)["K-registry-drift"]["passed"] is False
+    assert harness.main(["--check", "--json", "--repeats", "1"]) == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "FAIL"
+    assert output["report"]["registry"]["status"] == "empty"
+
+
+@pytest.mark.parametrize(
+    "operations",
+    [
+        None,
+        "probe.one",
+        {"probe.one": 1},
+        [None],
+        [""],
+        ["bad id"],
+        ["no_dot"],
+        ["probe.ok", "BAD"],
+    ],
+)
+def test_unusable_registry_is_reported_without_sensitive_content(
+    operations: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(harness, "_runtime_registry", lambda: _Registry(operations))
+    assert harness.main(["--json", "--repeats", "1"]) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["registry"] == {"status": "unusable", "offered_operations": []}
+    assert output["valid_proposals_accepted"] == 0
+    assert _by_id(output)["K-registry-drift"]["passed"] is False
+
+
+def test_registry_exception_is_not_disclosed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def broken() -> Any:
+        raise RuntimeError("must-never-be-logged")
+
+    monkeypatch.setattr(harness, "_runtime_registry", broken)
+    assert harness.main(["--check", "--json", "--repeats", "1"]) == 2
+    output = capsys.readouterr()
+    assert "must-never-be-logged" not in output.out + output.err
+    assert json.loads(output.out)["report"]["registry"]["status"] == "unusable"
+
+
+def test_registry_method_exception_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Broken(_Registry):
+        def list_operations(self) -> Any:
+            raise RuntimeError("private-token")
+
+    monkeypatch.setattr(harness, "_runtime_registry", lambda: Broken([]))
+    report = harness.evaluate(repeats=1)
+    assert report["registry"]["status"] == "unusable"
+    assert report["cases_failed"] > 0
+    assert "private-token" not in json.dumps(report)
+
+
+def test_v1_baseline_is_historical_and_never_silently_accepted() -> None:
+    historical = ROOT / "tests" / "fixtures" / "cognition_quality_eval" / "v1_baseline.json"
+    before = historical.read_bytes()
+    result = _check_cli("--check", "--baseline", str(historical), "--repeats", "1")
+    assert result.returncode != 0
+    assert historical.read_bytes() == before
+    candidate = _check_cli("--write-candidate", str(historical), "--repeats", "1")
+    assert candidate.returncode == 2
+    assert historical.read_bytes() == before
+
+
+def test_report_fingerprint_is_recomputed_from_registry_and_cases(report: dict[str, Any]) -> None:
+    tampered = json.loads(json.dumps(report))
+    tampered["registry"]["offered_operations"].append("zz.injected")
+    baseline = harness.build_baseline(tampered)
+    assert any("report fingerprint" in p for p in harness.check_baseline(tampered, baseline))
+
+
+def test_evaluation_never_constructs_or_dispatches_bus(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nexus_ai_agent.creative.studio.bus import CommandBus
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("evaluation attempted execution")
+
+    monkeypatch.setattr(CommandBus, "__init__", forbidden)
+    monkeypatch.setattr(CommandBus, "dispatch", forbidden)
+    report = harness.evaluate(repeats=1)
+    assert report["cases_failed"] == 0
+    assert report["execution_dispatched"] is False
+    assert report["verification_status"] == "NOT_RUN"
+
+
+def test_removed_operation_is_refused_even_if_fixture_requests_it() -> None:
+    first = harness._RegistrySnapshot("ok", frozenset({"probe.one", "probe.two"}))
+    after = harness._RegistrySnapshot("ok", frozenset({"probe.one"}))
+    token = harness._CURRENT_SNAPSHOT.set(first)
+    try:
+        assert harness._parse(harness._payload(operation="probe.two")) == "proposal"
+        harness._CURRENT_SNAPSHOT.set(after)
+        schema = harness._schema(allowed=frozenset({"probe.one", "probe.two"}))
+        assert harness._parse(harness._payload(operation="probe.two"), schema=schema) == (
+            "disallowed_operation"
+        )
+    finally:
+        harness._CURRENT_SNAPSHOT.reset(token)
+
+
+def test_fixture_outcome_text_never_reaches_report() -> None:
+    case = harness._Case(
+        case_id="A-untrusted-output",
+        scenario="A",
+        expected="proposal",
+        probe="fixture",
+        run=lambda: "must-never-be-logged",
+    )
+    result = _await(harness._execute_case(case))
+    assert result["observed"] == "unexpected_outcome"
+    assert result["passed"] is False
+    assert "must-never-be-logged" not in json.dumps(result)
+
+
+def test_candidate_rejects_failed_fixture_results(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(harness, "_runtime_registry", lambda: _Registry([]))
+    report = harness.evaluate(repeats=1)
+    target = tmp_path / "candidate.json"
+    with pytest.raises(harness.BaselineError):
+        harness.write_candidate_baseline(report, target, allowed_root=tmp_path)
+    assert not target.exists()
+
+
+def test_report_shape_failures_are_not_crashes(report: dict[str, Any]) -> None:
+    baseline = harness.load_baseline(BASELINE)
+    for field in ("cases", "repeatability", "evaluation_version", "verification_status"):
+        damaged = json.loads(json.dumps(report))
+        del damaged[field]
+        assert harness.check_baseline(damaged, baseline), field
+
+
+def test_raw_fixture_schema_cannot_widen_registry_even_through_adapter() -> None:
+    token = harness._CURRENT_SNAPSHOT.set(harness._RegistrySnapshot("ok", frozenset({"probe.one"})))
+    try:
+        raw_schema = harness.ProposalSchema(
+            schema_id=harness.EVAL_SCHEMA_ID,
+            schema_version=1,
+            allowed_operations=frozenset({"probe.one", "probe.injected"}),
+        )
+        payload = harness._payload_json(operation="probe.injected")
+        assert harness._parse(payload, schema=raw_schema) == "disallowed_operation"
+        assert _await(
+            harness._adapter_observed(harness._StaticProvider(payload), schema=raw_schema)
+        ) == ("disallowed_operation")
+    finally:
+        harness._CURRENT_SNAPSHOT.reset(token)
+
+
+def test_tampered_baseline_aggregate_is_independently_recomputed(
+    report: dict[str, Any], tmp_path: Path
+) -> None:
+    def tamper(data: dict[str, Any]) -> None:
+        data["counts"]["valid_proposals_accepted"] += 1
+
+    path = _baseline_copy(tmp_path, tamper)
+    problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert any("count 'valid_proposals_accepted' changed" in problem for problem in problems)
