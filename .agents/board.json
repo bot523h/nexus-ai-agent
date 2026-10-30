@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-30T10:01:47Z",
+  "updated_at": "2026-10-30T10:12:25Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -5944,7 +5944,7 @@
       "title": "Repair existing PR #189: Foundation waves 1-3: governance enforcement, PR convergence, durable creative archive (base=main)",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "deferred",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/189 on its existing branch arena/79164857-nexus-ai-agent, preserving intent and published history. Snapshot head c2ab90d62ed4c791eb2e26219552c1b4e147af8e; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -5987,10 +5987,10 @@
         "tests/unit/test_pr_convergence.py"
       ],
       "agent_branch": "arena/m14-pr-convergence-defects",
-      "claimed_at": "2026-10-30T10:01:47Z",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "Registered for a future authorized repair session on arena/79164857-nexus-ai-agent; not assigned or claimed by this registration.",
       "note": "M15 continuation: the convergence collector's missing-required-context defect is fixed on arena/m14-pr-convergence-defects (a required context that never ran is CI_PENDING, never READY); test scope extended to tests/unit/test_pr_convergence.py. The actual PR #189 repair remains pending; this record is NOT done."
     },
@@ -7654,6 +7654,14 @@
       "reason_fa": "چون عامل دیگری روی این محدوده کار می‌کرد متوقف شدم؛ این کار پس از آزاد شدن ناحیه انجام خواهد شد تا فراموش نشود.",
       "reason_en": "Coupled to an owner product decision, not a mechanical fix. Closing the 20 portrait/scene ops requires (a) declaring them as source symbols (nagar/sources.py _PACK_MODULES + OPERATION_* constants) AND (b) reclassifying them from EvidenceClass.MISSING in OPERATION_MATRIX.json. PR #97's vision pack is a planning substrate (L1, no pixel/ML execution), so accepting it as a product_defined gap-closure is a product decision. Root cause + exact file set: .agents/evidence/OPERATION_MATRIX_ROOTCAUSE_M13.md",
       "resume_when": "owner rules whether an L1 planning substrate closes a product_defined gap; then edit OPERATION_MATRIX.json + sources.py + pack declarations and regenerate (python -m nexus_ai_agent.nagar --docs)"
+    },
+    {
+      "task": "pr-repair-189",
+      "deferred_by_branch": "arena/m14-pr-convergence-defects",
+      "at": "2026-10-30T10:12:25Z",
+      "reason_fa": "چون عامل دیگری روی این محدوده کار می‌کرد متوقف شدم؛ این کار پس از آزاد شدن ناحیه انجام خواهد شد تا فراموش نشود.",
+      "reason_en": "M15: the convergence-collector missing-required-context fix is delivered as PR #291; the actual PR #189 repair (governance_guard/provenance/creative-graph) is a separate large package deferred to its own session. Freeing the truth.py zone for task-267 (PR #292).",
+      "resume_when": "task-267 merged and the PR #189 repair package is started"
     }
   ],
   "next_work": [
