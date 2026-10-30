@@ -805,7 +805,7 @@ def _case(**overrides: Any) -> Any:
         ([], "fixture set is empty"),
         ([_case(), _case()], "duplicate case_id"),
         ([_case(case_id="")], "non-blank string"),
-        ([_case(scenario="Q")], "unknown scenario 'Q'"),
+        ([_case(scenario="Q")], "unknown scenario"),
         ([_case(expected="looks_fine")], "undocumented expected outcome"),
         ([_case(probe="wishful")], "unknown probe label"),
         ([_case(scenario="J")], "suite-level and must not be a fixture"),
@@ -1186,3 +1186,77 @@ def test_tampered_baseline_aggregate_is_independently_recomputed(
     path = _baseline_copy(tmp_path, tamper)
     problems = harness.check_baseline(report, harness.load_baseline(path))
     assert any("count 'valid_proposals_accepted' changed" in problem for problem in problems)
+
+
+@pytest.mark.parametrize("field", ["scenario", "expected", "probe"])
+def test_invalid_fixture_metadata_does_not_disclose_text(
+    field: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cases = list(harness._build_cases())
+    original = cases[0]
+    values = {
+        "case_id": original.case_id,
+        "scenario": original.scenario,
+        "expected": original.expected,
+        "probe": original.probe,
+        "run": original.run,
+    }
+    values[field] = "must-never-be-logged"
+    cases[0] = harness._Case(**values)
+    monkeypatch.setattr(harness, "_build_cases", lambda: tuple(cases))
+    assert harness.main(["--repeats", "1"]) == 2
+    captured = capsys.readouterr()
+    assert "must-never-be-logged" not in captured.out + captured.err
+
+
+def test_untrusted_baseline_outcome_is_not_disclosed(
+    report: dict[str, Any], tmp_path: Path
+) -> None:
+    def inject(data: dict[str, Any]) -> None:
+        data["cases"][0]["observed"] = "must-never-be-logged"
+
+    path = _baseline_copy(tmp_path, inject)
+    problems = harness.check_baseline(report, harness.load_baseline(path))
+    assert problems
+    assert "must-never-be-logged" not in json.dumps(problems)
+
+
+@pytest.mark.parametrize("field", ["expected", "probe", "scenario"])
+def test_unhashable_fixture_metadata_fails_closed_without_traceback(
+    field: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cases = list(harness._build_cases())
+    original = cases[0]
+    values = {
+        "case_id": original.case_id,
+        "scenario": original.scenario,
+        "expected": original.expected,
+        "probe": original.probe,
+        "run": original.run,
+    }
+    values[field] = ["secret"]
+    cases[0] = harness._Case(**values)
+    monkeypatch.setattr(harness, "_build_cases", lambda: tuple(cases))
+    assert harness.main(["--repeats", "1"]) == 2
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "secret" not in captured.err
+
+
+def test_non_case_fixture_is_rejected_without_crashing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(harness, "_build_cases", lambda: ({"secret": "value"},))
+    assert harness.main(["--repeats", "1"]) == 2
+    captured = capsys.readouterr()
+    assert "fixture must be a case" in captured.err
+    assert "secret" not in captured.err
+
+
+def test_invalid_utf8_baseline_refused_without_traceback(tmp_path: Path) -> None:
+    path = tmp_path / "invalid.json"
+    path.write_bytes(b"\xff\xfe")
+    result = _check_cli("--check", "--baseline", str(path), "--repeats", "1")
+    assert result.returncode == 2
+    assert "cannot be read" in result.stderr
+    assert "Traceback" not in result.stderr

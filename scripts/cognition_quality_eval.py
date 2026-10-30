@@ -820,27 +820,33 @@ def validate_fixture_set(cases: Sequence[_Case]) -> list[str]:
     seen: set[str] = set()
     for index, case in enumerate(cases):
         where = f"case #{index}"
+        if not isinstance(case, _Case):
+            problems.append(f"{where}: fixture must be a case")
+            continue
         if not isinstance(case.case_id, str) or not case.case_id.strip():
             problems.append(f"{where}: case_id must be a non-blank string")
         elif case.case_id in seen:
-            problems.append(f"{where}: duplicate case_id {case.case_id!r}")
+            problems.append(f"{where}: duplicate case_id")
         else:
             seen.add(case.case_id)
-        if case.scenario not in REQUIRED_SCENARIOS:
-            problems.append(f"{where}: unknown scenario {case.scenario!r}")
-        if case.expected not in _KNOWN_OUTCOMES:
-            problems.append(f"{where}: undocumented expected outcome {case.expected!r}")
-        if case.probe not in _VALID_PROBES:
-            problems.append(f"{where}: unknown probe label {case.probe!r}")
+        if not isinstance(case.scenario, str) or case.scenario not in REQUIRED_SCENARIOS:
+            problems.append(f"{where}: unknown scenario")
+        if not isinstance(case.expected, str) or case.expected not in _KNOWN_OUTCOMES:
+            problems.append(f"{where}: undocumented expected outcome")
+        if not isinstance(case.probe, str) or case.probe not in _VALID_PROBES:
+            problems.append(f"{where}: unknown probe label")
         if not callable(case.run):
             problems.append(f"{where}: fixture is not runnable")
 
-    covered = {case.scenario for case in cases} | set(SUITE_SCENARIOS)
+    valid_cases = [case for case in cases if isinstance(case, _Case)]
+    covered = {case.scenario for case in valid_cases if isinstance(case.scenario, str)} | set(
+        SUITE_SCENARIOS
+    )
     for scenario in REQUIRED_SCENARIOS:
         if scenario not in covered:
             problems.append(f"scenario {scenario} has no fixture")
     for scenario in SUITE_SCENARIOS:
-        if any(case.scenario == scenario for case in cases):
+        if any(case.scenario == scenario for case in valid_cases):
             problems.append(f"scenario {scenario} is suite-level and must not be a fixture")
     return problems
 
@@ -1037,7 +1043,7 @@ def load_baseline(path: Path) -> dict[str, Any]:
     """Read a baseline file, converting every failure into :class:`BaselineError`."""
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         raise BaselineError(f"baseline cannot be read: {path} ({type(exc).__name__})") from exc
     try:
         data = json.loads(text)
@@ -1174,15 +1180,12 @@ def check_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> list[str
     schema_version = baseline.get("baseline_schema_version")
     if schema_version != BASELINE_SCHEMA_VERSION:
         problems.append(
-            "baseline_schema_version is "
-            f"{schema_version!r}, this harness speaks {BASELINE_SCHEMA_VERSION}"
+            "baseline_schema_version is incompatible; "
+            f"this harness speaks {BASELINE_SCHEMA_VERSION}"
         )
     evaluation_version = baseline.get("evaluation_version")
     if evaluation_version != report["evaluation_version"]:
-        problems.append(
-            f"evaluation_version drifted: baseline {evaluation_version!r} "
-            f"vs report {report['evaluation_version']!r}"
-        )
+        problems.append("evaluation_version drifted")
 
     if report.get("evaluation_version") != EVALUATION_VERSION:
         problems.append("report evaluation_version is incompatible")
@@ -1201,10 +1204,7 @@ def check_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> list[str
                 problems.append(f"baseline.contract is missing {key!r}")
                 continue
             if contract[key] != report[key]:
-                problems.append(
-                    f"contract field {key!r} changed: baseline {contract[key]!r} "
-                    f"vs report {report[key]!r}"
-                )
+                problems.append(f"contract field {key!r} changed")
 
     expected_cases, case_problems = _baseline_case_index(baseline)
     problems.extend(case_problems)
@@ -1227,15 +1227,10 @@ def check_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> list[str
             continue
         expected_verdict = want["expected"] == want["observed"]
         if expected_verdict != want["passed"]:
-            problems.append(
-                f"{case_id}: baseline is self-inconsistent "
-                f"({want['expected']!r} vs {want['observed']!r} marked passed={want['passed']})"
-            )
+            problems.append(f"{case_id}: baseline is self-inconsistent")
         for key in ("scenario", "expected", "observed", "passed", "probe"):
             if want[key] != got.get(key):
-                problems.append(
-                    f"{case_id}: {key} changed: baseline {want[key]!r} vs report {got.get(key)!r}"
-                )
+                problems.append(f"{case_id}: {key} changed")
         if got.get("passed") is not (got.get("expected") == got.get("observed")):
             problems.append(f"{case_id}: report verdict does not match its own outcomes")
 
@@ -1246,18 +1241,14 @@ def check_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> list[str
     else:
         for key, value in sorted(recomputed.items()):
             if baseline_counts.get(key) != value:
-                problems.append(
-                    f"count {key!r} changed: baseline {baseline_counts.get(key)!r} vs {value!r}"
-                )
+                problems.append(f"count {key!r} changed")
     for key, value in sorted(recomputed.items()):
         if report.get(key) != value:
-            problems.append(f"report counter {key!r} is {report.get(key)!r}, recomputed {value!r}")
+            problems.append(f"report counter {key!r} does not match recomputed value")
 
     reasons = _recompute_refusal_reasons(report["cases"])
     if baseline.get("refusal_reasons") != reasons:
-        problems.append(
-            f"refusal taxonomy changed: baseline {baseline.get('refusal_reasons')!r} vs {reasons!r}"
-        )
+        problems.append("refusal taxonomy changed")
     if report.get("refusal_reasons") != reasons:
         problems.append("report refusal_reasons do not match its own cases")
 
@@ -1273,10 +1264,7 @@ def check_baseline(report: dict[str, Any], baseline: dict[str, Any]) -> list[str
         elif fingerprint != _fingerprint(report["cases"], operations):
             problems.append("report fingerprint does not match its cases and registry")
     if baseline.get("fingerprint") != fingerprint:
-        problems.append(
-            "fingerprint drifted: "
-            f"baseline {baseline.get('fingerprint')!r} vs report {fingerprint!r}"
-        )
+        problems.append("fingerprint drifted")
 
     return problems
 
