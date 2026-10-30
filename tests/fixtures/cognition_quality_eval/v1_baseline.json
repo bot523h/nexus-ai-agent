@@ -1,0 +1,433 @@
+{
+  "baseline_schema_version": 1,
+  "cases": [
+    {
+      "case_id": "A-valid-json-caller-provenance",
+      "expected": "proposal",
+      "observed": "proposal",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "A"
+    },
+    {
+      "case_id": "A-valid-json-producer-provenance",
+      "expected": "proposal",
+      "observed": "proposal",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "A"
+    },
+    {
+      "case_id": "A-valid-mapping-object",
+      "expected": "proposal",
+      "observed": "proposal",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "A"
+    },
+    {
+      "case_id": "A-valid-through-adapter",
+      "expected": "proposal",
+      "observed": "proposal",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "A"
+    },
+    {
+      "case_id": "B-empty-string",
+      "expected": "malformed",
+      "observed": "malformed",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "B"
+    },
+    {
+      "case_id": "B-invalid-utf8-bytes",
+      "expected": "malformed",
+      "observed": "malformed",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "B"
+    },
+    {
+      "case_id": "B-non-object-json",
+      "expected": "malformed",
+      "observed": "malformed",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "B"
+    },
+    {
+      "case_id": "B-truncated-json",
+      "expected": "malformed",
+      "observed": "malformed",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "B"
+    },
+    {
+      "case_id": "B-unsupported-python-type",
+      "expected": "malformed",
+      "observed": "malformed",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "B"
+    },
+    {
+      "case_id": "C-bool-schema-version-not-coerced",
+      "expected": "unsupported_schema_version",
+      "observed": "unsupported_schema_version",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "C"
+    },
+    {
+      "case_id": "C-confidence-out-of-range",
+      "expected": "schema_violation",
+      "observed": "schema_violation",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "C"
+    },
+    {
+      "case_id": "C-confidence-wrong-type",
+      "expected": "schema_violation",
+      "observed": "schema_violation",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "C"
+    },
+    {
+      "case_id": "C-missing-required-field",
+      "expected": "schema_violation",
+      "observed": "schema_violation",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "C"
+    },
+    {
+      "case_id": "C-nan-in-payload",
+      "expected": "non_finite",
+      "observed": "non_finite",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "C"
+    },
+    {
+      "case_id": "C-schema-id-mismatch",
+      "expected": "schema_violation",
+      "observed": "schema_violation",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "C"
+    },
+    {
+      "case_id": "C-unknown-extra-field",
+      "expected": "schema_violation",
+      "observed": "schema_violation",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "C"
+    },
+    {
+      "case_id": "C-unsupported-schema-version",
+      "expected": "unsupported_schema_version",
+      "observed": "unsupported_schema_version",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "C"
+    },
+    {
+      "case_id": "D-empty-offer-set",
+      "expected": "disallowed_operation",
+      "observed": "disallowed_operation",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "D"
+    },
+    {
+      "case_id": "D-operation-outside-offered-set",
+      "expected": "disallowed_operation",
+      "observed": "disallowed_operation",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "D"
+    },
+    {
+      "case_id": "E-authority-field-actor",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-argv",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-authorization",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-authorizer",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-capability_snapshot",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-command",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-confirmed",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-env",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-execution_policy",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-network_access",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-permission",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-permissions",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-role",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-shell",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-authority-field-sudo",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "E-nested-input-key-is-not-authority",
+      "expected": "proposal",
+      "observed": "proposal",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "E"
+    },
+    {
+      "case_id": "F-injection-context-valid-proposal",
+      "expected": "proposal",
+      "observed": "proposal",
+      "passed": true,
+      "probe": "synthetic_boundary_probe",
+      "scenario": "F"
+    },
+    {
+      "case_id": "F-injection-response-authority-fields",
+      "expected": "authority_field",
+      "observed": "authority_field",
+      "passed": true,
+      "probe": "synthetic_boundary_probe",
+      "scenario": "F"
+    },
+    {
+      "case_id": "F-injection-response-disallowed-operation",
+      "expected": "disallowed_operation",
+      "observed": "disallowed_operation",
+      "passed": true,
+      "probe": "synthetic_boundary_probe",
+      "scenario": "F"
+    },
+    {
+      "case_id": "F-injection-response-prose",
+      "expected": "malformed",
+      "observed": "malformed",
+      "passed": true,
+      "probe": "synthetic_boundary_probe",
+      "scenario": "F"
+    },
+    {
+      "case_id": "G-adapter-refusal-not-converted",
+      "expected": "producer_refused",
+      "observed": "producer_refused",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "G"
+    },
+    {
+      "case_id": "G-empty-model-response",
+      "expected": "malformed",
+      "observed": "malformed",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "G"
+    },
+    {
+      "case_id": "G-explicit-refusal-preserved",
+      "expected": "producer_refused",
+      "observed": "producer_refused",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "G"
+    },
+    {
+      "case_id": "H-oversized-response",
+      "expected": "schema_violation",
+      "observed": "schema_violation",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "H"
+    },
+    {
+      "case_id": "H-provider-exception",
+      "expected": "producer_failed",
+      "observed": "producer_failed",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "H"
+    },
+    {
+      "case_id": "H-provider-non-string-response",
+      "expected": "malformed",
+      "observed": "malformed",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "H"
+    },
+    {
+      "case_id": "H-provider-timeout-bounded",
+      "expected": "producer_failed",
+      "observed": "producer_failed",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "H"
+    },
+    {
+      "case_id": "H-retry-is-bounded",
+      "expected": "producer_failed",
+      "observed": "producer_failed",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "H"
+    },
+    {
+      "case_id": "I-null-cognition-consults-no-model",
+      "expected": "producer_refused",
+      "observed": "producer_refused",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "I"
+    },
+    {
+      "case_id": "I-null-cognition-refuses",
+      "expected": "producer_refused",
+      "observed": "producer_refused",
+      "passed": true,
+      "probe": "fixture",
+      "scenario": "I"
+    },
+    {
+      "case_id": "J-acceptance-is-not-verification",
+      "expected": "separated",
+      "observed": "separated",
+      "passed": true,
+      "probe": "suite_invariant",
+      "scenario": "J"
+    }
+  ],
+  "contract": {
+    "execution_dispatched": false,
+    "execution_mode": "local_deterministic",
+    "execution_modules_loaded_during_run": [],
+    "network_used": false,
+    "real_model_used": false,
+    "verification_status": "NOT_RUN"
+  },
+  "counts": {
+    "cases_failed": 0,
+    "cases_passed": 50,
+    "cases_total": 50,
+    "refusals_observed": 43,
+    "synthetic_boundary_probe_cases": 4,
+    "valid_proposals_accepted": 6
+  },
+  "evaluation_version": "nexus-cognition-quality-eval/v1",
+  "fingerprint": "8c58bcd45ea8632a",
+  "refusal_reasons": {
+    "authority_field": 16,
+    "disallowed_operation": 3,
+    "malformed": 8,
+    "non_finite": 1,
+    "producer_failed": 3,
+    "producer_refused": 4,
+    "schema_violation": 6,
+    "unsupported_schema_version": 2
+  }
+}
