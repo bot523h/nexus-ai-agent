@@ -552,19 +552,153 @@ def test_classify_latest_without_timestamps_falls_back_to_order() -> None:
 
 
 def test_classify_missing_required_context_is_not_a_pass() -> None:
-    """A context that never ran on this head cannot be inferred green."""
+    """A required context that never ran on this head can NEVER be inferred green.
+
+    This is the Sourcery-flagged defect: judging only the contexts that happen to
+    be present certified a head ``READY`` while a required check had not reported.
+    With live per-context data present, a missing required context is PENDING.
+    """
     contexts = [_required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T03:00:00Z")]
     pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": contexts})
-    assert registry._latest_ci_verdict(pr, REQUIRED_CONTEXTS) == "SUCCESS"
-    # ... but with no per-context data at all the coarse rollup decides:
+    assert registry._latest_ci_verdict(pr, REQUIRED_CONTEXTS) == "PENDING"
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "CI_PENDING"
+
+
+def test_legacy_snapshot_without_context_data_uses_the_coarse_rollup() -> None:
+    """The explicit legacy contract: no per-context list at all -> rollup decides."""
     pr_no = _pr(statusCheckRollup={"state": "FAILURE"})
     assert registry._latest_ci_verdict(pr_no, REQUIRED_CONTEXTS) == "FAILURE"
+    pr_ok = _pr(statusCheckRollup={"state": "SUCCESS"})
+    assert registry._latest_ci_verdict(pr_ok, REQUIRED_CONTEXTS) == "SUCCESS"
+
+
+# --- M15 Phase 2B: the ten mandatory missing-context / latest-run cases ---------
+def test_m15_one_of_three_required_contexts_missing_is_pending() -> None:
+    pr = _pr(
+        statusCheckRollup={
+            "state": "SUCCESS",
+            "contexts": [_required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T10:00:00Z")],
+        }
+    )
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "CI_PENDING"
+
+
+def test_m15_two_successful_third_missing_is_pending() -> None:
+    pr = _pr(
+        statusCheckRollup={
+            "state": "SUCCESS",
+            "contexts": [
+                _required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T10:00:00Z"),
+                _required(REQUIRED_CONTEXTS[1], "SUCCESS", "2026-10-30T10:00:00Z"),
+            ],
+        }
+    )
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "CI_PENDING"
+
+
+def test_m15_all_required_missing_but_rollup_success_is_not_ready() -> None:
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": []})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "CI_PENDING"
+
+
+def test_m15_older_failure_newer_success_is_ready() -> None:
+    contexts = _green_contexts()[:2] + [
+        _required(REQUIRED_CONTEXTS[2], "FAILURE", "2026-10-30T09:00:00Z"),
+        _required(REQUIRED_CONTEXTS[2], "SUCCESS", "2026-10-30T10:00:00Z"),
+    ]
+    pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "READY"
+
+
+def test_m15_older_success_newer_failure_is_ci_red() -> None:
+    contexts = _green_contexts()[:2] + [
+        _required(REQUIRED_CONTEXTS[2], "SUCCESS", "2026-10-30T09:00:00Z"),
+        _required(REQUIRED_CONTEXTS[2], "FAILURE", "2026-10-30T10:00:00Z"),
+    ]
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "CI_RED"
+
+
+def test_m15_required_context_still_running_is_pending() -> None:
+    contexts = _green_contexts()[:2] + [
+        _required(REQUIRED_CONTEXTS[2], "IN_PROGRESS", "2026-10-30T10:00:00Z"),
+    ]
+    pr = _pr(statusCheckRollup={"state": "PENDING", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "CI_PENDING"
+
+
+def test_m15_duplicate_context_with_ambiguous_timestamps_is_deterministic() -> None:
+    """Equal stamps: the later list position wins, and the result is not READY
+    unless that winner is green."""
+    contexts = _green_contexts()[:2] + [
+        _required(REQUIRED_CONTEXTS[2], "FAILURE", "2026-10-30T10:00:00Z"),
+        _required(REQUIRED_CONTEXTS[2], "SUCCESS", "2026-10-30T10:00:00Z"),
+    ]
+    pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "READY"
+    contexts_rev = _green_contexts()[:2] + [
+        _required(REQUIRED_CONTEXTS[2], "SUCCESS", "2026-10-30T10:00:00Z"),
+        _required(REQUIRED_CONTEXTS[2], "FAILURE", "2026-10-30T10:00:00Z"),
+    ]
+    pr_rev = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": contexts_rev})
+    assert registry.classify(pr_rev, required_contexts=REQUIRED_CONTEXTS) == "CI_RED"
+
+
+def test_m15_completely_unavailable_context_data_is_not_ready() -> None:
+    """No rollup at all is not a pass."""
+    pr = _pr(statusCheckRollup=None)
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS) == "CI_PENDING"
+
+
+def test_m15_explicit_zero_required_contexts_is_ready() -> None:
+    """A readable gate that requires nothing is a real READY."""
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": _green_contexts()})
+    assert registry.classify(pr, required_contexts=[]) == "READY"
+
+
+def test_m15_unreadable_hint_with_no_matching_context_falls_back_to_rollup() -> None:
+    """When protection is unreadable the context list is a hint: if none of the
+    hinted names ran, the coarse rollup decides — and a red rollup is CI_RED."""
+    pr = _pr(
+        statusCheckRollup={
+            "state": "FAILURE",
+            "contexts": [_required("some-other-check", "SUCCESS", "2026-10-30T10:00:00Z")],
+        }
+    )
+    assert (
+        registry._latest_ci_verdict(pr, REQUIRED_CONTEXTS, require_all_present=False)
+        == "FAILURE"
+    )
+
+
+def test_m15_unreadable_hint_judges_the_present_contexts() -> None:
+    """With a hint (unreadable protection) a present green context is a pass and
+    a missing hinted name is not a missing gate."""
+    pr = _pr(
+        statusCheckRollup={
+            "state": "FAILURE",
+            "contexts": [_required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T10:00:00Z")],
+        }
+    )
+    assert (
+        registry._latest_ci_verdict(pr, REQUIRED_CONTEXTS, require_all_present=False)
+        == "SUCCESS"
+    )
+
+
+def test_m15_unreadable_protection_is_never_ready() -> None:
+    pr = _pr(statusCheckRollup={"state": "SUCCESS", "contexts": _green_contexts()})
+    assert registry.classify(pr, required_contexts=REQUIRED_CONTEXTS, protection_readable=False) == "PROTECTION_UNREADABLE"
 
 
 def test_latest_ci_state_reports_the_latest_per_context_outcome() -> None:
+    # Every required context is present (strict mode) and the newest run of the
+    # first one is the green re-run, so the head reads SUCCESS.
     contexts = [
         _required(REQUIRED_CONTEXTS[0], "CANCELLED", "2026-10-30T01:40:12Z"),
         _required(REQUIRED_CONTEXTS[0], "SUCCESS", "2026-10-30T01:49:43Z"),
+        _required(REQUIRED_CONTEXTS[1], "SUCCESS", "2026-10-30T01:49:43Z"),
+        _required(REQUIRED_CONTEXTS[2], "SUCCESS", "2026-10-30T01:49:43Z"),
     ]
     pr = _pr(statusCheckRollup={"state": "FAILURE", "contexts": contexts})
     assert registry._latest_ci_state(pr, REQUIRED_CONTEXTS) == "SUCCESS"

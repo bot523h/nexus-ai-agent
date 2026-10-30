@@ -171,38 +171,95 @@ def _latest_run_state(pr: dict[str, Any], name: str) -> str | None:
     return best_state
 
 
-def _latest_ci_verdict(pr: dict[str, Any], required_contexts: Iterable[str]) -> str:
-    """``"SUCCESS"`` | ``"FAILURE"`` | ``"PENDING"`` from the latest run of each
-    required context; falls back to the coarse rollup when the per-context data
-    carries none of the required names (older snapshots / REST shape)."""
+def _has_context_data(pr: dict[str, Any]) -> bool:
+    """True when the record carries a per-context check list (a *live* read).
+
+    A live GraphQL/REST read always includes the per-context list, so a required
+    context that is absent from it genuinely did **not** run on this head.  Only
+    a genuinely old serialized snapshot (no list at all) may use the coarse
+    rollup, via the explicit legacy contract below — a current live response can
+    never take that path to bypass a missing required check.
+    """
+    rollup = pr.get("statusCheckRollup")
+    if isinstance(rollup, dict):
+        return isinstance(rollup.get("contexts"), list)
+    return isinstance(rollup, list)
+
+
+def _latest_ci_verdict(
+    pr: dict[str, Any],
+    required_contexts: Iterable[str],
+    *,
+    require_all_present: bool = True,
+) -> str:
+    """``"SUCCESS"`` | ``"FAILURE"`` | ``"PENDING"`` for the merge gate.
+
+    **Strict (live) mode** — when the record carries per-context data, *every*
+    required context must be present **and** its latest run must be green:
+
+    * a required context that is missing, running, or has an unknown conclusion
+      is never a pass (``PENDING``) — the earlier "only judge the contexts that
+      happen to be present" logic certified a head ``READY`` while a required
+      check had never reported;
+    * any latest run that is a failure is ``FAILURE``;
+    * only "every required context present and green" is ``SUCCESS``;
+    * zero required contexts is ``SUCCESS`` (a real, readable "no CI gate"
+      configuration — the readability of the gate is tracked separately by
+      ``PROTECTION_UNREADABLE``).
+
+    ``require_all_present`` is the caller's assertion that *required_contexts* is
+    the **authoritative** gate — true only when branch protection was read.  When
+    protection is unreadable the context list is a best-effort hint, so a context
+    missing from it is not a missing gate (``PROTECTION_UNREADABLE`` fail-closes
+    separately) and the present contexts (or the coarse rollup) decide.
+
+    **Legacy mode** — a genuinely old snapshot with no per-context list falls
+    back to the coarse rollup.  This is the explicit legacy-data contract; a
+    live response always has the list, so it cannot reach here.
+    """
     contexts = list(required_contexts)
-    relevant = [state for name in contexts if (state := _latest_run_state(pr, name)) is not None]
-    if not relevant:
-        # No required context is present in the per-context list.  Trust the
-        # coarse rollup (an unreadable rollup must never read as SUCCESS).
-        state = _rollup_state(pr)
-        if state in {"FAILURE", "ERROR"}:
+    if _has_context_data(pr):
+        states = {name: _latest_run_state(pr, name) for name in contexts}
+        if require_all_present and any(state is None for state in states.values()):
+            # A required context that never ran on this head is NOT a pass.
+            return "PENDING"
+        values = [state for state in states.values() if state is not None]
+        if not values:
+            # Nothing authoritative is present; fall back to the coarse rollup.
+            state = _rollup_state(pr)
+            if state in {"FAILURE", "ERROR"}:
+                return "FAILURE"
+            return "SUCCESS" if state == "SUCCESS" else "PENDING"
+        if any(state in _RED_CONCLUSIONS for state in values):
             return "FAILURE"
-        return "SUCCESS" if state == "SUCCESS" else "PENDING"
-    if any(state in _RED_CONCLUSIONS for state in relevant):
+        if all(state in _GREEN_CONCLUSIONS for state in values):
+            return "SUCCESS"
+        # A non-terminal or unknown conclusion is never a pass (pending is safe).
+        return "PENDING"
+    # Legacy snapshot: no per-context data.  Trust the coarse rollup, but an
+    # unreadable/missing rollup must never read as SUCCESS.
+    state = _rollup_state(pr)
+    if state in {"FAILURE", "ERROR"}:
         return "FAILURE"
-    if all(state in _GREEN_CONCLUSIONS for state in relevant):
-        return "SUCCESS"
-    # A non-terminal or unknown conclusion is never a pass (pending is safe).
-    return "PENDING"
+    return "SUCCESS" if state == "SUCCESS" else "PENDING"
 
 
-def _latest_ci_state(pr: dict[str, Any], required_contexts: Iterable[str]) -> str:
-    """One-word description of the latest per-context CI outcome (for the report)."""
-    contexts = list(required_contexts)
-    relevant = [state for name in contexts if (state := _latest_run_state(pr, name)) is not None]
-    if not relevant:
-        return _rollup_state(pr)
-    if any(state in _RED_CONCLUSIONS for state in relevant):
-        return "FAILURE"
-    if all(state in _GREEN_CONCLUSIONS for state in relevant):
-        return "SUCCESS"
-    return "PENDING"
+def _latest_ci_state(
+    pr: dict[str, Any],
+    required_contexts: Iterable[str],
+    *,
+    require_all_present: bool = True,
+) -> str:
+    """One-word description of the latest per-context CI outcome (for the report).
+
+    Mirrors :func:`_latest_ci_verdict`: strict when per-context data is present,
+    coarse rollup only for a legacy snapshot.
+    """
+    if _has_context_data(pr):
+        return _latest_ci_verdict(
+            pr, required_contexts, require_all_present=require_all_present
+        )
+    return _rollup_state(pr)
 
 
 def blockers(
@@ -240,7 +297,9 @@ def blockers(
         # a 46-conflict backlog turns into "0 conflicts" the moment main moves.
         found.append("MERGEABILITY_UNKNOWN")
 
-    state = _latest_ci_verdict(pr, required_contexts)
+    state = _latest_ci_verdict(
+        pr, required_contexts, require_all_present=protection_readable
+    )
     if state == "FAILURE":
         found.append("CI_RED")
     elif state == "PENDING":
@@ -528,7 +587,10 @@ def as_pr_record(pr: dict[str, Any]) -> dict[str, Any]:
         "statusCheckRollup": {"state": pr["ci_state"]},
     }
     contexts = pr.get("status_contexts")
-    if contexts:
+    if contexts is not None:
+        # Carry the list even when empty: its *presence* is what tells
+        # ``_has_context_data`` this is a live read (strict mode), so an empty
+        # list must not degrade to the legacy rollup path.
         record["statusCheckRollup"]["contexts"] = contexts
     return record
 
@@ -591,7 +653,9 @@ def build_registry(
         pr["tier"] = pr["blockers"][0] if pr["blockers"] else "READY"
         # The registry row reports the *latest run* of each required context, so
         # a superseded CANCELLED next to a green re-run is not read as red.
-        pr["ci_state"] = _latest_ci_state(record, contexts)
+        pr["ci_state"] = _latest_ci_state(
+            record, contexts, require_all_present=protection_readable
+        )
     totals = dict.fromkeys(TIERS, 0)
     for pr in prs:
         totals[pr["tier"]] += 1
