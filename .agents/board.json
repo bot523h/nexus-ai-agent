@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-30T00:27:02Z",
+  "updated_at": "2026-10-30T00:52:34Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7502,10 +7502,10 @@
       "title_fa": "تطبیق ماتریس عملیات: قانونی‌سازی ثبت پک‌های پرتره/صحنه پیاده‌شده",
       "zone": "operation-matrix-reconciliation",
       "priority": "P1",
-      "status": "active",
+      "status": "deferred",
       "agent_branch": "arena/m13-operation-matrix",
-      "claimed_at": "2026-10-30T00:27:02Z",
-      "generation": 1,
+      "claimed_at": null,
+      "generation": 2,
       "gates_owner": false,
       "scope": "Single-owner reconciliation of the operation-truth contract that blocks PR #64 and PR #97. Reclassify the now-implemented portrait/scene operations in OPERATION_MATRIX.json, drop them from RECONCILIATION.json::missing_gaps, update tests/unit/test_operation_matrix_reconciliation.py invariants to the newly agreed numbers, and regenerate the derived .md docs via `python -m nexus_ai_agent.nagar --docs`. Do not add any new operation registry, journal, queue, or execution path. Do not edit PR #97's pack sources or PR #273/#276 exclusive paths.",
       "exclusive_paths": [
@@ -7606,6 +7606,14 @@
       "resolved": true,
       "resolved_at": "2026-10-27T14:00:00Z",
       "resolution": "zone freed (pr-repair-240 released) and task-258 delivered in PR #199 (merged 6ae7042a83)."
+    },
+    {
+      "task": "task-280-operation-matrix-reconciliation",
+      "deferred_by_branch": "arena/m13-operation-matrix",
+      "at": "2026-10-30T00:52:34Z",
+      "reason_fa": "چون عامل دیگری روی این محدوده کار می‌کرد متوقف شدم؛ این کار پس از آزاد شدن ناحیه انجام خواهد شد تا فراموش نشود.",
+      "reason_en": "Coupled to an owner product decision, not a mechanical fix. Closing the 20 portrait/scene ops requires (a) declaring them as source symbols (nagar/sources.py _PACK_MODULES + OPERATION_* constants) AND (b) reclassifying them from EvidenceClass.MISSING in OPERATION_MATRIX.json. PR #97's vision pack is a planning substrate (L1, no pixel/ML execution), so accepting it as a product_defined gap-closure is a product decision. Root cause + exact file set: .agents/evidence/OPERATION_MATRIX_ROOTCAUSE_M13.md",
+      "resume_when": "owner rules whether an L1 planning substrate closes a product_defined gap; then edit OPERATION_MATRIX.json + sources.py + pack declarations and regenerate (python -m nexus_ai_agent.nagar --docs)"
     }
   ],
   "next_work": [
