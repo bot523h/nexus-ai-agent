@@ -7583,11 +7583,11 @@
       "ttl_hours": 24
     },
     {
-      "task": "task-282-m17-open-pr-convergence",
+      "task": "task-284-m17-open-pr-convergence",
       "title": "M17: full open-PR census, forensic disposition and safe repair of every open PR (no mega-PR, no blind rebase)",
       "zone": "coordination",
       "priority": "P0",
-      "status": "active",
+      "status": "queued",
       "scope": "Live census of every open PR; file-by-file diff classification against current main (NEW/DIVERGED/STALE_REVERT/BEHIND); ownership + lease reconciliation; safe additive repair of PRs whose scope is free; a persistent M17 ledger and machine-readable registry. Protects the active #298 scopes. Does not merge.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7606,16 +7606,16 @@
         ".agents/evidence/M17_OPEN_PR_REPAIR_2026-10-31.md",
         ".agents/evidence/M17_PR_REGISTRY_2026-10-31.json"
       ],
-      "agent_branch": "arena/m17-open-pr-repair",
-      "claimed_at": "2026-10-31T08:10:40Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 0,
       "owner_hint": "M17 coordinator; sequential single-writer repair campaign.",
-      "note": ""
+      "note": "Renumbered from task-282 to avoid a cross-branch id collision with task-282-durable-project-state-lifecycle (PR #290)."
     },
     {
-      "task": "task-283-repair-294-creative-graph",
+      "task": "task-285-repair-294-creative-graph",
       "title": "Repair PR #294: durable creative-graph package (law R28) — verify projection (not second authority), SQL-injection claim, rebase onto current main",
       "zone": "pr-repair-campaign",
       "priority": "P1",
@@ -7652,7 +7652,7 @@
       "note": "Registration only; grants no execution authority until claimed and pushed."
     },
     {
-      "task": "task-284-repair-295-asset-library",
+      "task": "task-286-repair-295-asset-library",
       "title": "Repair PR #295: content-addressed Asset Library — security review (O_NOFOLLOW/O_EXCL/fsync/link, symlink escape, GC, MIME) and dedupe vs #205",
       "zone": "pr-repair-campaign",
       "priority": "P1",
