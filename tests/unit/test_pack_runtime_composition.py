@@ -57,6 +57,8 @@ EXPECTED_PACKAGE_IDS = (
     "nexus.edit.timeline",
     "nexus.motion.graphics",
     "nexus.audio.studio",
+    "nexus.vision.portrait",
+    "nexus.vision.scene",
     "nexus.color.delivery",
 )
 
@@ -86,7 +88,7 @@ def test_composition_package_ids_match_the_manifests() -> None:
         )
 
 
-def test_composition_order_is_the_documented_six_pack_order() -> None:
+def test_composition_order_is_the_documented_pack_order() -> None:
     assert tuple(entry.package_id for entry in COMPOSITION) == EXPECTED_PACKAGE_IDS
 
 

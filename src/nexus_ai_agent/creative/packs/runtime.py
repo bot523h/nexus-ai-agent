@@ -106,6 +106,20 @@ def _register_audio(registry: CapabilityRegistry) -> object:
     return registry
 
 
+def _register_portrait(registry: CapabilityRegistry) -> object:
+    from nexus_ai_agent.creative.packs.portrait.operations import register_portrait_operations
+
+    register_portrait_operations(registry)
+    return registry
+
+
+def _register_scene(registry: CapabilityRegistry) -> object:
+    from nexus_ai_agent.creative.packs.scene.operations import register_scene_operations
+
+    register_scene_operations(registry)
+    return registry
+
+
 def _register_delivery(registry: CapabilityRegistry) -> object:
     from nexus_ai_agent.creative.packs.delivery.operations import register_delivery_operations
 
@@ -161,6 +175,15 @@ COMPOSITION: tuple[PackComposition, ...] = (
         "nexus.audio.studio",
         _register_audio,
         "loudness, ducking, beat grid, DSP derivations (Wave 5)",
+    ),
+    PackComposition(
+        "portrait",
+        "nexus.vision.portrait",
+        _register_portrait,
+        "semantic portrait analysis and edit plans",
+    ),
+    PackComposition(
+        "scene", "nexus.vision.scene", _register_scene, "semantic scene analysis and edit plans"
     ),
     PackComposition(
         "delivery",
