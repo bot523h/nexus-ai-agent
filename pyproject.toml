@@ -28,6 +28,7 @@ dependencies = [
     "llama-index-core==0.14.25",  # task-273: knowledge retrieval adapter (MIT, pinned 2026-10-23)
     "structlog>=24.0",
     "sqlite-vec>=0.1",
+    "pysqlite3-binary>=0.5; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "typer>=0.12",
     "httpx==0.28.1",  # pinned: core/ssrf_guard.py uses a private httpx API
     "python-multipart>=0.0.9",
@@ -122,6 +123,7 @@ module = [
     "asyncpg",
     "mega",
     "sqlite_vec",
+    "pysqlite3",
     "telegram",
     "telegram.ext",
     "chromadb",
@@ -144,6 +146,11 @@ ignore_missing_imports = true
 [tool.deptry]
 known_first_party = ["nexus_ai_agent"]
 pep621_dev_dependency_groups = ["dev"]
+
+[tool.deptry.package_module_name_map]
+# The PyPI distribution is `pysqlite3-binary` but the import name is `pysqlite3`
+# (the sqlite-vec extension-loading fallback in memory/long_term.py).
+pysqlite3-binary = "pysqlite3"
 
 [tool.deptry.per_rule_ignores]
 # DEP001 — imported but not declared: *optional* integrations that are probed
