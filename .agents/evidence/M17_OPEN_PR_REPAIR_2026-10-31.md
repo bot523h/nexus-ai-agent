@@ -24,17 +24,19 @@ merge. That is why most PRs read `BLOCKED`/`BEHIND`/`DIRTY`.
 
 | Disposition | Count | Meaning |
 |---|---|---|
-| `REPAIRED_PUSHED` | 4 | safe additive repair pushed to the PR head; awaiting CI + human review |
+| `REPAIRED_PUSHED` | 5 | safe additive repair pushed to the PR head; awaiting CI + human review |
 | `CONFLICTING_STALE_REBASE_REQUIRED` | 24 | conflicts with main; needs the owner to rebase |
 | `DRAFT_NOT_READY` | 11 | draft; author has not requested review |
 | `SYNC_REQUIRED` | 2 | mergeable but behind main; needs a sync |
-| `BLOCKED_TASK_ID_COLLISION` | 1 | #290 registers a task id that collides with main |
 | `DRAFT_ACTIVE_OWNER_PROTECTED` | 1 | #298 (protected scopes, live lease) |
 | `ACTIVE_FRESH_CI_RUNNING` | 1 | #299 (created this session) |
 
+The two mergeable-but-blocked PRs (#296, #297) are counted under `REPAIRED_PUSHED`
+because their only blocker was the defect/gap fixed here.
+
 ## 3. Repairs landed this session
 
-All four were pushed to the existing PR head branch (no new PR, no force-push);
+All five were pushed to the existing PR head branch (no new PR, no force-push);
 each ran the ownership referee (`agent_board.py check` → exit 0) immediately
 before the push.
 
@@ -76,6 +78,17 @@ before the push.
 - **Fix:** merge `origin/main` (clean, no conflicts).
 - **Verified:** board schema suite 75 passed.
 
+### #290 — `arena/nexus-durable-project-state-board-20261030-1028` → `d6437217`
+- **Defect:** conflicted **only** in `.agents/board.json` (`CONFLICTING/DIRTY`), so
+  the whole PR was unmergeable because of one coordination file.
+- **Fix:** rebuild the board from current `main` and re-append this PR's own
+  additions (`zone durable-project-state-lifecycle` + claim
+  `task-282-durable-project-state-lifecycle`) — a pure addition with no lost
+  records — then merge `main`. `git merge-tree` now reports no conflict.
+- **Verified:** board schema suite 75 passed.
+- **Note:** the registered id `task-282-durable-project-state-lifecycle` collides
+  by number with the main-board `task-282`; the owner should renumber before merge.
+
 ## 4. Board coordination
 
 - Registered and claimed `task-284-m17-open-pr-convergence` on
@@ -94,10 +107,18 @@ before the push.
   merge-ready.
 - The 24 conflicting PRs are **not** blind-rebased: a mass rebase of stale branches
   would rewrite history and is an owner decision, not a repair campaign action.
-- CI on the four repaired heads was **queued** at the time of writing; the local
+- CI on the five repaired heads was **queued** at the time of writing; the local
   gates above are the reproducible evidence.
 
-## 6. Reproduction
+## 6. External observability (LangSmith)
+
+The deployed `LANGSMITH_API_KEY` is a **tracing** key: it ingests runs
+(`POST /runs` → 202) but cannot read projects (`GET /sessions` → 403
+`Permission projects:read is not allowed for tracing keys`). The M17 campaign and
+each repair were emitted as runs to the `nexus-m17-open-pr-repair` project via a
+standalone HTTP helper outside the repository, adding no dependency to the tree.
+
+## 7. Reproduction
 
 ```bash
 python -m venv .venv && . .venv/bin/activate

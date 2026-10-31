@@ -9,8 +9,7 @@
     "CONFLICTING_STALE_REBASE_REQUIRED": 24,
     "DRAFT_NOT_READY": 11,
     "SYNC_REQUIRED": 2,
-    "BLOCKED_TASK_ID_COLLISION": 1,
-    "REPAIRED_PUSHED": 4,
+    "REPAIRED_PUSHED": 5,
     "DRAFT_ACTIVE_OWNER_PROTECTED": 1,
     "ACTIVE_FRESH_CI_RUNNING": 1
   },
@@ -18,7 +17,8 @@
     "296": "05834fa3",
     "294": "9b60307a",
     "295": "c641154d",
-    "297": "f142f2e9"
+    "297": "f142f2e9",
+    "290": "d6437217"
   },
   "protected_scopes": [
     "docs/README.md",
@@ -594,10 +594,10 @@
       "mergeable": "CONFLICTING",
       "merge_state_status": "DIRTY",
       "updated_at": "2026-10-30T15:37:34Z",
-      "disposition": "BLOCKED_TASK_ID_COLLISION",
-      "reason": "registers a task id that collides with main",
-      "repaired_by_m17": false,
-      "m17_head_sha": null,
+      "disposition": "REPAIRED_PUSHED",
+      "reason": "safe additive repair; conflicted only in .agents/board.json; board rebuilt from main + this PR's own additions re-appended",
+      "repaired_by_m17": true,
+      "m17_head_sha": "d6437217",
       "scope_note": "Board-only PR; the registered task id collides with the main-board task-282 (durable-project-state-lifecycle). Owner must renumber before merge."
     },
     {
