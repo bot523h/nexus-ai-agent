@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-30T15:39:23Z",
+  "updated_at": "2026-10-31T05:04:48Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1017,6 +1017,20 @@
         "tests/unit/test_operation_matrix_reconciliation.py",
         "src/nexus_ai_agent/nagar/docs_projection.py"
       ]
+    },
+    {
+      "id": "nagar-ibpc-live-editing",
+      "description": "NAGAR-IBPC-LIVE-EDITING-01: proof-carrying live creative editing — Intent -> Typed AST -> Scope -> Preview -> Approval Binding -> fenced canonical execution -> independent footprint verification -> IBPC capsule evidence on the existing provenance/passport chain. New package src/nexus_ai_agent/nagar/ibpc/ plus its tests and docs/engineering records. No second bus/queue/registry/verifier/authority; execution only via the existing JobQueuePort + creative_render worker.",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "tests/unit/test_ibpc_",
+        "tests/architecture/test_ibpc_boundary.py",
+        "tests/integration/test_ibpc_e2e.py",
+        "docs/engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md",
+        "docs/engineering/NAGAR_IBPC.md",
+        "docs/README.md"
+      ],
+      "note": "Registered 2026-10-31 by arena/7622c61d-nexus-ai-agent (mission NAGAR-IBPC-LIVE-EDITING-01). Out of scope by mission order: PR #273 (feat/nagar-p0-nel-semantic-time-causal-memory), PR #283 queue/heartbeat/execution-core files, task-281 files (scripts/cognition_quality_eval.py, tests/unit/test_cognition_quality_eval.py)."
     }
   ],
   "claims": [
@@ -7581,6 +7595,55 @@
       ],
       "note": "",
       "ttl_hours": 24
+    },
+    {
+      "task": "task-ibpc-live-editing-01",
+      "title": "NAGAR-IBPC-LIVE-EDITING-01: proof-carrying live creative editing (IBPC vertical slice through the canonical queue)",
+      "title_fa": "NAGAR-IBPC-LIVE-EDITING-01: ویرایش زندهٔ proof-carrying (کپسول IBPC) — از Intent تایپ‌شده تا artifact تأییدشدهٔ مستقل روی مسیر canonical صف",
+      "zone": "nagar-ibpc-live-editing",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Milestone 0 live audit doc; Milestone 1 real text-to-artifact vertical slice (timeline.trim via existing CapabilityRegistry -> CommandBus -> JobQueuePort -> InProcessJobQueue -> creative_render worker -> FFmpeg artifact -> registered verifier -> passport); Milestone 2 independent footprint verifier (PASS/FAIL/INCONCLUSIVE, no fake PASS under lossy encoding); Milestone 3 IBPC capsule + AST readback + single-use approval binding; Milestone 4 live session + voice turn fencing; Milestone 5 adversarial/architecture tests, docs, PR. All new code under src/nexus_ai_agent/nagar/ibpc/; execution only through injected canonical ports.",
+      "scope_fa": "ممیزی زنده، اسلایس عمودی متن‌به-artifact واقعی (timeline.trim از مسیر canonical)، verifier مستقل footprint با PASS/FAIL/INCONCLUSIVE، کپسول IBPC + readback + approval binding تک‌مصرف، session زنده با fencing مربوط به turnهای صوتی، تست‌های خصمانه و PR.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A real text intent becomes a typed AST validated against the live CapabilityRegistry (operation exists, schema version, permission level), with clarification (never guessing) when the scope is ambiguous.",
+        "A preview/readback is derived from the same compiled plan and bound by digest; approval binds principal + source_revision + ast/plan/preview digests and is single-use (replay refused, stale revision refused, tampered preview refused).",
+        "Execution goes only through the existing JobQueuePort -> creative_render worker -> CommandBus -> FFmpeg lane; the ibpc package imports no queue implementation, worker, render_jobs, studio.bus or packs.runtime (architecture test).",
+        "A real artifact is produced and independently re-measured; the footprint verifier compares decoded frames of source vs artifact (intended change + preservation) and returns PASS only on bit-exact preservation, INCONCLUSIVE under lossy encoding, FAIL on provable out-of-scope change.",
+        "The IBPC capsule binds all mission digests (intent/ast/scope/capability/plan/preview/approval/principal/attempt/artifact/verifier/evidence) with canonical deterministic serialization, and references the existing causal journal + passport (no parallel ledger).",
+        "Voice/live turns are fenced: partial transcripts, stale/cancelled/interrupted turns, duplicate turns and out-of-order messages can never create an approval or reach execution.",
+        "Privacy modes LOCAL_VAULT/TRUSTED_CLOUD/EXPERIMENTAL_CLOUD exist with explicit consent; default is LOCAL_VAULT; no user data egresses and raw transcripts never enter logs.",
+        "pytest on all new test files green; make lint / make types / make test green; agent_board.py check exit 0 on the exact changed files before every push; PR opened as draft from this branch."
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_ibpc_*.py tests/architecture/test_ibpc_boundary.py tests/integration/test_ibpc_e2e.py (counts + SHA)",
+        "make lint && make types && make test on the final branch SHA",
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <changed> --branch arena/7622c61d-nexus-ai-agent -> exit 0 (recorded before each push)",
+        "e2e evidence: job COMPLETED, artifact sha256 re-measured, verifier report verdict + capsule digest printed in the PR body",
+        "adversarial results (replay/stale/tampered/cancelled) as test names + outcomes in the PR body"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "tests/unit/test_ibpc_canonical_models.py",
+        "tests/unit/test_ibpc_intent_compiler.py",
+        "tests/unit/test_ibpc_approval.py",
+        "tests/unit/test_ibpc_session.py",
+        "tests/unit/test_ibpc_privacy.py",
+        "tests/unit/test_ibpc_footprint.py",
+        "tests/architecture/test_ibpc_boundary.py",
+        "tests/integration/test_ibpc_e2e.py",
+        "docs/engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md",
+        "docs/engineering/NAGAR_IBPC.md",
+        "docs/README.md"
+      ],
+      "owner_hint": "arena/7622c61d-nexus-ai-agent (session-fixed branch; mission suggested arena/nagar-proof-carrying-live-editing-20261031 but the session branch name is fixed)",
+      "agent_branch": "arena/7622c61d-nexus-ai-agent",
+      "claimed_at": "2026-10-31T05:04:48Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
