@@ -183,6 +183,26 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+#: Edge endpoints, in the only two spellings the schema has. ``direction`` is
+#: the caller-facing word for these columns; it is mapped through this table so
+#: no caller string ever reaches the SQL text (the column name is interpolated,
+#: the endpoint value is always parameter-bound).
+_DIRECTION_COLUMNS: dict[str, str] = {"out": "src", "in": "dst"}
+
+
+def _direction_column(direction: str) -> str:
+    """Map ``direction`` to its SQL column, refusing anything but ``in``/``out``.
+
+    A typed refusal, not a default: a malformed direction must never silently
+    resolve to an endpoint. The column name is still chosen from a closed set of
+    literals, so it cannot carry caller data into the statement.
+    """
+    try:
+        return _DIRECTION_COLUMNS[direction]
+    except KeyError:
+        raise ValueError(f"direction must be 'in' or 'out', not {direction!r}") from None
+
+
 def node_identity(kind: str, identity: dict[str, Any]) -> str:
     """The deterministic, scoped, auditable identity of a node.
 
@@ -581,7 +601,7 @@ class CreativeGraph:
     def edges(
         self, node_id: str, *, direction: str = "out", relation: str | None = None
     ) -> list[GraphEdge]:
-        column = "src" if direction == "out" else "dst"
+        column = _direction_column(direction)
         sql = f"SELECT edge_id FROM nexus_graph_edge WHERE {column} = ? AND status = 'active'"
         params: list[Any] = [node_id]
         if relation is not None:

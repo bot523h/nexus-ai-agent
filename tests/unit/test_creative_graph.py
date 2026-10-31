@@ -239,6 +239,50 @@ def test_a_cycle_cannot_hang_the_traversal(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# SQL safety: direction is a closed set; endpoint values are parameter-bound
+# --------------------------------------------------------------------------- #
+def test_a_malformed_direction_is_refused_not_silently_defaulted(tmp_path: Path) -> None:
+    """``direction`` selects a column; anything but ``in``/``out`` is a refusal.
+
+    The old code was ``"src" if direction == "out" else "dst"`` — a typo silently
+    read the wrong endpoint. A closed set turns that into a loud, typed error.
+    """
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    ids = build_slice(graph)
+    for bad in ("src", "dst", "OUT", "out' OR '1'='1", "", "in; DROP TABLE nexus_graph_edge"):
+        with pytest.raises(ValueError):
+            graph.edges(ids["EXECUTION"], direction=bad)
+        with pytest.raises(ValueError):
+            graph.traverse(ids["PROJECT"], direction=bad)
+
+
+def test_a_refused_direction_never_reaches_the_statement(tmp_path: Path) -> None:
+    """The SQL-injection static-analysis warning is a false positive, proven here.
+
+    Only the closed literal set ``{src, dst}`` is ever interpolated as a column
+    name; the endpoint *value* is parameter-bound. A malformed direction is
+    refused before any statement is built, so a would-be injection string cannot
+    execute and the graph stays intact.
+    """
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    ids = build_slice(graph)
+    before = graph.counts()
+    with pytest.raises(ValueError):
+        graph.edges(ids["PROJECT"], direction="src; DROP TABLE nexus_graph_edge; --")
+    assert graph.counts() == before, "nothing executed: the graph is unchanged"
+    assert graph.edges(ids["PROJECT"], direction="out"), "still queryable after the refusal"
+
+
+def test_edge_filter_values_are_data_not_code(tmp_path: Path) -> None:
+    graph = CreativeGraph(tmp_path / "graph.sqlite")
+    ids = build_slice(graph)
+    injected = "PROJECT_HAS_INTENT' OR '1'='1"
+    assert graph.edges(ids["PROJECT"], relation=injected) == [], (
+        "a relation filter is bound as data; it must not widen the result set"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # rebuild from the canonical source, honestly
 # --------------------------------------------------------------------------- #
 def _journal(tmp_path: Path) -> CausalJournal:
