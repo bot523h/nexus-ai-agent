@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-31T13:14:42Z",
+  "updated_at": "2026-10-31T15:35:11Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7614,12 +7614,12 @@
       "title_fa": "بستن شکاف‌های مالکیت صف، بازیابی راه‌اندازی و امنیت انتشار مصنوعات",
       "zone": "execution-queue-ownership",
       "priority": "P0",
-      "status": "active",
-      "agent_branch": "arena/ac3f046e-nexus-ai-agent",
-      "claimed_at": "2026-10-31T07:06:37Z",
+      "status": "done",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "base_sha": "87744dda90c7b6ea38100317afbd1f4c797768e6",
       "scope": "Close the queue ownership / startup recovery / artifact publication gaps exposed by PR #283 without regressing its heartbeat and attempt-fencing guarantees. (A) acquire_ownership() is absent from every composition root while resume_pending() runs; (B) the 'flock' primitive is actually an O_CREAT|O_EXCL PID file with TOCTOU stale reclamation and a leaked fd; (C) creative publication identifies ownership by attempt number only, fail-open on missing/malformed sidecar, prefix-based workspace containment and filename-shared .prev backups.",
       "prerequisites": [],
@@ -7671,7 +7671,7 @@
         "tests/unit/test_queue_ownership_mutations_harness.py",
         "tests/unit/test_webhook_mode.py"
       ],
-      "note": "Closure pass on PR #299 (findings from the independent review at b11c902). F1 lock-vs-publication-thread race, F2 webhook root never released queue ownership, F3 sidecar attempt not validated (None == None retract), F4 crash after publish/before durable completion, F5 mutation campaign not CI-wired: all five addressed on this branch with barrier-controlled / real-process-death tests and a 10-probe campaign wired into CI. Registration discrepancy (disclosed, not repaired): this claim was committed to the PR branch together with the work rather than pushed to the canonical main board first, so during the closure window the claim existed on the branch only. PR #69 (arena/01a0d3af..., head 7498074) touches in_process_job_queue.py and render_jobs.py for enqueue idempotency semantics; its board claim pr-repair-69 is queued with no branch/claimed_at and generation 0 (no live lease), and this referee check reports no overlap — recorded as a future textual-merge risk, not an ownership conflict. Ownership correction: `.github/workflows/ci.yml` is claimed by another active claim (task-ibpc-security-closure-01, arena/7622c61d..., claimed 2026-10-31T07:30:39Z); my claim did not list it at claim time, so I withdrew that edit and the campaign now lives in `.github/workflows/queue-ownership-mutations.yml` — the referee check is clean at exit 0."
+      "note": "Closure pass on PR #299 (findings from the independent review at b11c902). F1 lock-vs-publication-thread race, F2 webhook root never released queue ownership, F3 sidecar attempt not validated (None == None retract), F4 crash after publish/before durable completion, F5 mutation campaign not CI-wired: all five addressed on this branch with barrier-controlled / real-process-death tests and a 10-probe campaign wired into CI. Registration discrepancy (disclosed, not repaired): this claim was committed to the PR branch together with the work rather than pushed to the canonical main board first, so during the closure window the claim existed on the branch only. PR #69 (arena/01a0d3af..., head 7498074) touches in_process_job_queue.py and render_jobs.py for enqueue idempotency semantics; its board claim pr-repair-69 is queued with no branch/claimed_at and generation 0 (no live lease), and this referee check reports no overlap — recorded as a future textual-merge risk, not an ownership conflict. Ownership correction: `.github/workflows/ci.yml` is claimed by another active claim (task-ibpc-security-closure-01, arena/7622c61d..., claimed 2026-10-31T07:30:39Z); my claim did not list it at claim time, so I withdrew that edit and the campaign now lives in `.github/workflows/queue-ownership-mutations.yml` — the referee check is clean at exit 0. CLOSEOUT (post-transition annotation; status/generation/claimed_at were changed only by `agent_board.py release --expected-generation 1`, not by hand): work delivered at branch head 46e23d22071c5e04b613eba1aad199d0717c237c — CI run 41205544140 22/22 pass, queue-ownership-mutations run 41205531329 1/1 pass (10/10 mutants killed, tree restored), referee exit 0 with 44 sources over all 20 changed paths, full-suite baseline compared against a detached checkout of main@e2080db (identical failing node-id set). This record stays on the PR #299 branch and is not committed to main: it becomes canonical only if the owner merges the PR."
     }
   ],
   "deferred_log": [
