@@ -70,8 +70,8 @@ def _backdate_started_at(db: Path, job_id: str) -> None:
     """Make an in-flight row look long-orphaned (expiry-gated takeover idiom)."""
     with sqlite3.connect(db) as connection:
         connection.execute(
-            "UPDATE nexus_job_queue SET started_at = ? WHERE id = ?",
-            ("2000-01-01T00:00:00+00:00", job_id),
+            "UPDATE nexus_job_queue SET started_at = ?, heartbeat_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", "2000-01-01T00:00:00+00:00", job_id),
         )
 
 
@@ -837,8 +837,8 @@ async def test_reconcile_of_one_job_never_touches_an_unrelated_job(tmp_path: Pat
 def _set_started_at(db: Path, job_id: str, value: str | None) -> None:
     with sqlite3.connect(db) as connection:
         connection.execute(
-            "UPDATE nexus_job_queue SET started_at = ? WHERE id = ?",
-            (value, job_id),
+            "UPDATE nexus_job_queue SET started_at = ?, heartbeat_at = ? WHERE id = ?",
+            (value, value, job_id),
         )
 
 
