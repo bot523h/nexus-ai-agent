@@ -17,10 +17,23 @@ Every claim below is reproducible from the tree with the exact command shown.
 | PR convergence engine + evidence/scripts | #291 | `pytest -q tests/unit/test_pr_convergence.py` → 51 passed |
 | `AGENT_DEBT_WATCHDOG` | #289 | present under `.github/workflows/` |
 
-Board tasks closed through the official CLI only (no hand-edited JSON):
-`task-267` (truth041 live-lease alignment) → `done` gen 2;
-`task-268` (board-referee mutation campaign in CI) → `done` gen 2.
-Reconciliation branch `arena/m16-board-reconciliation` @ `1e17a571` (pushed).
+Board changes made through the official CLI only (no hand-edited JSON), folded
+into this PR so the closeout is self-consistent:
+
+- `task-268` (board-referee mutation campaign in CI) → **`done` gen 2**: the
+  deliverable is merged (`ci.yml` `governance-mutations` job) and all three
+  acceptance criteria were re-verified.
+- `task-267` (truth041 live-lease alignment) → **`deferred` with a Persian note**.
+  Its deliverable is merged (#292) and verified, **but** the board still shows an
+  *active, unexpired* lease on it held by `arena/m14-truth041-lease-expiry`
+  (generation 1). `agent_board.py release` correctly refuses
+  (`refusing: … belongs to arena/m14-truth041-lease-expiry`) and `claim` refuses
+  to take over a live lease, so the task is recorded `deferred` (nothing
+  forgotten) instead of being falsely forced to `done`. It becomes `done` when
+  that lease expires or its holder releases it.
+
+`pytest -q tests/unit/test_agent_board.py` → 75 passed;
+`python -m nexus_ai_agent.diagnostics.truth` → `OK — no findings`.
 
 ## 2. PR #189 — stale mega-PR, repaired and superseded by #294
 
@@ -121,8 +134,14 @@ access to this narrative; the commands in each section are the ones it ran.
 
 ## 7. Honest status
 
-- Merged into main this mission: **none** — both repairs are open PRs (#294, #295)
-  pending the required human review; the board/task closure is pushed.
+- Merged into main this mission: **none** — the repairs are open PRs (#294
+  creative graph, #295 asset library) pending the required human review; the
+  board closure and evidence are in this PR (#297).
+- Board: `task-268` → `done`; `task-267` → `deferred` (its lease is still held by
+  another branch — the CLI refuses to force it; deliverable merged in #292).
+  The earlier `arena/m16-board-reconciliation` branch is **superseded** by this
+  PR's board change (this one is rebased on current main `ab56becc`).
 - Deferred and named: `clock.py` A-12 migration (47 modules); `asset_library`
-  wiring into the render path (execution-core zone); the remaining 30-PR backlog
-  (`CONFLICT 25`, `DRAFT 11`, `REBASE_FIRST 1`).
+  wiring into the render path (execution-core zone); the remaining open-PR
+  backlog (`CONFLICT 25`, `DRAFT 11`, `REBASE_FIRST 1`) per
+  `M16_CONVERGENCE_PLAN_2026-10-31.md`.
