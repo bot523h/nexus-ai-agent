@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-31T07:30:39Z",
+  "updated_at": "2026-10-31T08:03:37Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7619,7 +7619,7 @@
       "title_fa": "NAGAR-IBPC-LIVE-EDITING-01: ویرایش زندهٔ proof-carrying (کپسول IBPC) — از Intent تایپ‌شده تا artifact تأییدشدهٔ مستقل روی مسیر canonical صف",
       "zone": "nagar-ibpc-live-editing",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "Milestone 0 live audit doc; Milestone 1 real text-to-artifact vertical slice (timeline.trim via existing CapabilityRegistry -> CommandBus -> JobQueuePort -> InProcessJobQueue -> creative_render worker -> FFmpeg artifact -> registered verifier -> passport); Milestone 2 independent footprint verifier (PASS/FAIL/INCONCLUSIVE, no fake PASS under lossy encoding); Milestone 3 IBPC capsule + AST readback + single-use approval binding; Milestone 4 live session + voice turn fencing; Milestone 5 adversarial/architecture tests, docs, PR. All new code under src/nexus_ai_agent/nagar/ibpc/; execution only through injected canonical ports.",
       "scope_fa": "ممیزی زنده، اسلایس عمودی متن‌به-artifact واقعی (timeline.trim از مسیر canonical)، verifier مستقل footprint با PASS/FAIL/INCONCLUSIVE، کپسول IBPC + readback + approval binding تک‌مصرف، session زنده با fencing مربوط به turnهای صوتی، تست‌های خصمانه و PR.",
       "prerequisites": [],
@@ -7655,12 +7655,12 @@
         "docs/README.md"
       ],
       "owner_hint": "arena/7622c61d-nexus-ai-agent (session-fixed branch; mission suggested arena/nagar-proof-carrying-live-editing-20261031 but the session branch name is fixed)",
-      "agent_branch": "arena/7622c61d-nexus-ai-agent",
-      "claimed_at": "2026-10-31T05:04:48Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 2
     },
     {
       "task": "task-ibpc-security-closure-01",
