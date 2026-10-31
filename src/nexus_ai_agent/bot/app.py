@@ -242,6 +242,16 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     )
     for job_type, handler in default_job_handlers().items():
         job_queue.register_handler(job_type, handler)
+
+    # Wire AttemptStaging-based publication for creative_render (task-255).
+    from pathlib import Path as _Path
+
+    from nexus_ai_agent.creative.render_jobs import build_creative_render_publication
+
+    _artifact_root = _Path(f"{_queue_db}.artifacts")
+    job_queue.register_artifact_publication(
+        "creative_render", build_creative_render_publication(_artifact_root)
+    )
     engines["job_queue"] = job_queue
     engines["causal_journal"] = causal_journal
 

@@ -78,6 +78,7 @@ CONTRACT = REPO / "src/nexus_ai_agent/execution/contract.py"
 RACES = "tests/integration/test_execution_races.py::"
 CRASH_T = "tests/integration/test_execution_crash_matrix.py::"
 BACKEND_T = "tests/integration/test_execution_native_backend.py::"
+QUEUE_T = "tests/integration/test_in_process_job_queue.py::"
 STAGING_T = "tests/unit/test_execution_staging.py::"
 FS_T = "tests/unit/test_filesystem_policy_primitives.py::"
 ARCH_T = "tests/architecture/test_execution_contract_boundary.py::"
@@ -377,24 +378,38 @@ PROBES: tuple[Probe, ...] = (
         name="M8 unproven staleness is taken over (fail-open)",
         target=QUEUE,
         anchor=(
-            "                    if cutoff is not None:\n"
-            "                        # Expiry-gated mode: staleness must be *proven*.  A row\n"
-            "                        # whose age cannot be established (missing ``started_at``)\n"
-            "                        # is ambiguous, and ambiguity fails closed — only rows\n"
-            "                        # strictly older than the window are eligible; a recent\n"
-            "                        # (or unproven) row may still be owned by a live peer.\n"
-            "                        if started_at is None or started_at >= cutoff:\n"
-            "                            continue"
+            "                    heartbeat = _parse_heartbeat(heartbeat_raw, now)\n"
+            "                    if heartbeat is None:\n"
+            "                        continue  # UNKNOWN is neither proof of life nor death\n"
+            "                    if cutoff is not None and heartbeat >= cutoff:\n"
+            "                        continue  # strict boundary: equality is not stale"
         ),
         mutant=(
-            "                    if cutoff is not None and started_at is not None:\n"
-            "                        # MUTATION: unproven age counts as stale (fail-open)\n"
-            "                        if started_at >= cutoff:\n"
-            "                            continue"
+            "                    heartbeat = _parse_heartbeat(heartbeat_raw, now)\n"
+            "                    # MUTATION: UNKNOWN heartbeat counts as stale (fail-open)\n"
+            "                    if cutoff is not None and heartbeat is not None and heartbeat >= cutoff:\n"
+            "                        continue"
+        ),
+        #  edit 2 — make the CAS match NULL heartbeat_at.  The original
+        #  ``heartbeat_at = ?`` never matches a NULL column in SQLite, so
+        #  removing the UNKNOWN guard alone (edit 1) is inert for NULL
+        #  heartbeats: the CAS rowcount is 0 and the row is never taken
+        #  over.  This second edit changes the CAS to ``IS NULL OR = ?`` so
+        #  the guard removal above actually causes the fail-open takeover
+        #  of unproven-heartbeat rows.
+        target2=QUEUE,
+        anchor2=(
+            "                        WHERE id = ? AND status IN (?, ?) AND attempt = ?\n"
+            "                          AND heartbeat_at = ?\n"
+        ),
+        mutant2=(
+            "                        WHERE id = ? AND status IN (?, ?) AND attempt = ?\n"
+            "                          AND (heartbeat_at IS NULL OR heartbeat_at = ?)\n"
         ),
         tests=(
             f"{BACKEND_T}test_reconcile_refuses_an_in_flight_row_whose_age_is_unprovable",
             f"{BACKEND_T}test_reconcile_with_policy_never_steals_a_fresh_live_job",
+            f"{QUEUE_T}test_job_queue_refuses_legacy_row_without_heartbeat",
         ),
     ),
     Probe(
