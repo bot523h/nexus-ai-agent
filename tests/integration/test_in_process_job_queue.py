@@ -112,6 +112,15 @@ async def test_job_queue_persistence_across_adapter_restart(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_job_queue_resumes_unfinished_rows(tmp_path: Path) -> None:
+    """Startup recovery reclaims an in-flight row that carries *valid*
+    queue-owned liveness evidence.
+
+    Under the heartbeat contract a row is only reclaimable at startup when its
+    heartbeat is a proven, canonical UTC fact (the exclusive-sidecar contract:
+    after a restart the new process is the sole owner).  The seeded row models
+    a worker that was alive — a minted attempt and a real heartbeat written by
+    its reservation — before the process restarted; its age is irrelevant.
+    """
     db_path = tmp_path / "jobs.sqlite3"
     InProcessJobQueue(db_path)
     job_id = "unfinished-job"
@@ -120,10 +129,21 @@ async def test_job_queue_resumes_unfinished_rows(tmp_path: Path) -> None:
         connection.execute(
             """
             INSERT INTO nexus_job_queue
-                (id, job_type, idempotency_key, payload_json, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (id, job_type, idempotency_key, payload_json, status, created_at,
+                 attempt, started_at, heartbeat_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (job_id, "resume", "resume-1", '{"value": 99}', "processing", "2026-01-01"),
+            (
+                job_id,
+                "resume",
+                "resume-1",
+                '{"value": 99}',
+                "processing",
+                "2026-01-01",
+                1,
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            ),
         )
 
     queue = InProcessJobQueue(db_path)
@@ -135,6 +155,66 @@ async def test_job_queue_resumes_unfinished_rows(tmp_path: Path) -> None:
     assert await queue.resume_pending() == [job_id]
     await _wait_for_status(queue, job_id, JobStatus.COMPLETED)
     assert await queue.get_result(job_id) == {"value": 99}
+
+
+@pytest.mark.asyncio
+async def test_job_queue_refuses_legacy_row_without_heartbeat(tmp_path: Path) -> None:
+    """Startup recovery is fail-closed: a legacy in-flight row with no
+    queue-owned heartbeat is UNKNOWN liveness, never proof of death.
+
+    The row carries a minted attempt (attempt=1) and an old ``started_at``;
+    without a valid heartbeat the startup sweep must refuse to take it over,
+    regardless of age.  This is the heartbeat contract's upgrade guarantee:
+    legacy rows are not automatically recovered on ``started_at`` age alone,
+    and the row is preserved untouched for authorized operator recovery.
+    """
+    db_path = tmp_path / "jobs.sqlite3"
+    InProcessJobQueue(db_path)
+    job_id = "legacy-no-heartbeat"
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO nexus_job_queue
+                (id, job_type, idempotency_key, payload_json, status, created_at,
+                 attempt, started_at, heartbeat_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                "resume",
+                "resume-legacy",
+                '{"value": 99}',
+                "processing",
+                "2000-01-01",
+                1,
+                "2000-01-01T00:00:00+00:00",
+                None,
+            ),
+        )
+
+    queue = InProcessJobQueue(db_path)
+
+    async def handler(payload: dict[str, object]) -> dict[str, object]:
+        return {"value": payload["value"]}
+
+    queue.register_handler("resume", handler)
+    # UNKNOWN heartbeat refuses automatic startup recovery.
+    assert await queue.resume_pending() == []
+
+    # The row is preserved untouched for authorized operator recovery.
+    row = (
+        sqlite3.connect(db_path)
+        .execute(
+            "SELECT status, attempt, heartbeat_at FROM nexus_job_queue WHERE id = ?",
+            (job_id,),
+        )
+        .fetchone()
+    )
+    assert row is not None
+    assert row[0] == "processing"
+    assert row[1] == 1
+    assert row[2] is None
 
 
 @pytest.mark.asyncio

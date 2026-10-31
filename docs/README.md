@@ -84,6 +84,9 @@ placeholder text.
 | [RECONCILIATION.md](RECONCILIATION.md) | Reconciling Product Catalog (70) vs Runtime Registry (57) vs Executable Surface (9) and preserving 23 gaps. |
 | [L0_L4_MATURITY.md](L0_L4_MATURITY.md) | Nagar operation capability maturity model (L0 Not Implemented to L4 Surface Proven). |
 | [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | End-user guide: bring any NEXUS database to the Alembic head. |
+| [MISSION1_EFFECT_FENNING_ARCHITECTURE.md](MISSION1_EFFECT_FENNING_ARCHITECTURE.md) | MISSION 1: External side-effect fencing (P0) — attempt identity, artifact collision sidecars, safe retry boundary. |
+| [MISSION3_QUEUE_OWNERSHIP_ARCHITECTURE.md](MISSION3_QUEUE_OWNERSHIP_ARCHITECTURE.md) | MISSION 3: Single queue owner enforcement (P1) — flock-based queue ownership, atomic lock files, stale lock reclamation. |
+| [TASK255_PUBLICATION_HARDENING.md](TASK255_PUBLICATION_HARDENING.md) | Task-255: AttemptStaging-based publication for creative_render — queue-minted attempt identity, artifact name collision sidecar. |
 
 ## Protocols
 
