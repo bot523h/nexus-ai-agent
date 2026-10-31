@@ -411,6 +411,18 @@ class InProcessJobQueue:
         # cancellation cannot leave an orphan refresh loop behind.
         self._heartbeat_tasks: dict[asyncio.Task[None], asyncio.Task[None]] = {}
         self._db_lock = threading.Lock()
+        # In-flight artifact publications.  ``asyncio.to_thread`` hands the
+        # work to a ThreadPoolExecutor thread; cancelling the awaiting task
+        # does NOT interrupt that thread, so shutdown must explicitly *drain*
+        # every registered future before it releases the exclusive process
+        # lock.  Otherwise a successor could acquire ownership while this
+        # process's old publication was still renaming files.
+        self._publication_threads: set[asyncio.Future[dict[str, object]]] = set()
+        # Set as soon as shutdown starts: no *new* publication may begin after
+        # that point (already-running ones are drained, never abandoned).
+        self._publishing_closed = False
+        self._shutdown_lock: asyncio.Lock | None = None
+        self._shutdown_complete = False
         self._memory_connection: sqlite3.Connection | None = None
         if self._sqlite_path == ":memory:":
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
@@ -1211,16 +1223,35 @@ class InProcessJobQueue:
         return True
 
     async def shutdown(self) -> None:
-        """Cancel local tasks and leave their own attempts recoverable.
+        """Stop execution, reopen owned attempts, then release the lock.
 
-        Snapshot each live task's *reserved attempt* before cancellation.
-        The worker's ``CancelledError`` path normally reopens that same fenced
-        attempt; this fallback handles cancellation in the small pre-handler
-        window.  The reservation await is shielded too: if shutdown cancels it,
-        the minted claim is awaited and reopened under its own fence before the
-        cancellation propagates. Both paths use the original ``ExecutionClaim``
-        CAS, never a job-id-only sweep, so a peer's newer attempt remains untouched.
+        Ordering is the contract, not an implementation detail:
+
+        1. close publication (no *new* publish may begin),
+        2. cancel and await every local worker task,
+        3. cancel and await every heartbeat child,
+        4. **drain in-flight publication threads** — cancelling a task that
+           awaits ``run_in_executor`` does not stop the thread, so an
+           un-drained publication could rename files after the lock was
+           released and a successor owned the queue,
+        5. reopen this queue's reserved attempts under their own fencing
+           tokens (never a job-id-only sweep),
+        6. release the exclusive process lock.
+
+        Idempotent: repeated or concurrent calls run the body once.  A second
+        call is a no-op rather than a second reopen/release pass.
         """
+        if self._shutdown_lock is None:
+            self._shutdown_lock = asyncio.Lock()
+        async with self._shutdown_lock:
+            if self._shutdown_complete:
+                return
+            await self._shutdown_once()
+            self._shutdown_complete = True
+
+    async def _shutdown_once(self) -> None:
+        """Single-shot body of :meth:`shutdown`; see its ordering contract."""
+        self._publishing_closed = True
         tasks = list(self._tasks.values())
         task_set = set(tasks)
         local_claims = {
@@ -1237,6 +1268,10 @@ class InProcessJobQueue:
             heartbeat.cancel()
         if heartbeats:
             await asyncio.gather(*heartbeats, return_exceptions=True)
+        # Workers are gone, but their executor threads are not: drain them
+        # before the row reopen below, so a drained publication cannot land
+        # after this attempt has been marked pending.
+        await self._drain_publications()
         for job_id, claim in local_claims.items():
             if not await asyncio.to_thread(self._mark_pending, claim):
                 continue  # already settled, terminal, or superseded by a peer
@@ -1252,10 +1287,11 @@ class InProcessJobQueue:
                     occurred_at=_now(),
                 )
             )
-        # Phase 3: release the process lock only *after* the workers and their
-        # heartbeat children above have stopped.  Releasing earlier would let a
-        # second process acquire ownership and start recovery while this one
-        # still had in-flight attempts.
+        # Phase 3: release the process lock only *after* the workers, their
+        # heartbeat children, and every in-flight publication thread above have
+        # stopped.  Releasing earlier would let a second process acquire
+        # ownership and start recovery while this one still had side effects
+        # in flight.
         self._release_flock()
 
     def _schedule(self, job_id: str) -> None:
@@ -1958,6 +1994,68 @@ class InProcessJobQueue:
             target.value,
         )
 
+    async def _publish_in_thread(
+        self,
+        publication: ArtifactPublication,
+        payload: dict[str, object],
+        publish_context: dict[str, object],
+    ) -> dict[str, object]:
+        """Run one ``publication.publish`` on a tracked executor thread.
+
+        Two details make cancellation safe:
+
+        * the future handed back by ``run_in_executor`` is the *asyncio*
+          wrapper.  Cancelling the awaiting task cancels that wrapper — it
+          becomes ``done`` while the thread is still running — so the await is
+          wrapped in :func:`asyncio.shield`, which cancels only the outer
+          await and leaves the wrapper (and therefore the drain handle) alive;
+        * the future is registered *before* the first await and unregistered by
+          its done-callback, i.e. when the thread has really finished.  A
+          cancelled awaiter therefore cannot drop a publication from
+          :meth:`_drain_publications`.
+        """
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[dict[str, object]] = loop.run_in_executor(
+            None, publication.publish, payload, publish_context
+        )
+        self._publication_threads.add(future)
+        future.add_done_callback(self._publication_settled)
+        return await asyncio.shield(future)
+
+    def _publication_settled(self, future: asyncio.Future[dict[str, object]]) -> None:
+        """Forget a finished publication and consume its outcome.
+
+        Retrieving the exception keeps a publication failure that nobody is
+        left to await from surfacing as an unhandled-future warning.
+        """
+        self._publication_threads.discard(future)
+        if future.cancelled():
+            return
+        try:
+            future.exception()
+        except Exception:  # noqa: BLE001 - the outcome is consumed, not re-raised
+            pass
+
+    async def _drain_publications(self) -> None:
+        """Wait for every in-flight publication thread to finish.
+
+        Called by :meth:`shutdown` *after* worker tasks are cancelled and
+        gathered but *before* the process lock is released.  A publication is
+        finite filesystem work (stage → rename → backup prune), so waiting on
+        it is bounded by that work; refusing to wait is what allowed an old
+        owner's rename to race a new owner.
+        """
+        while True:
+            pending = list(self._publication_threads)
+            if not pending:
+                return
+            await asyncio.gather(*pending, return_exceptions=True)
+            # Every publication is started by a worker task, and every worker
+            # task has already finished here; the set is normally empty now.
+            # The loop just guards against a done-callback racing this read.
+            if not self._publication_threads:
+                return
+
     async def _publish_and_reprobe(
         self,
         claim: ExecutionClaim,
@@ -1977,6 +2075,24 @@ class InProcessJobQueue:
         documented in JOB_LIFECYCLE.md §4 and bounded by the takeover rule
         (only startup recovery / expiry-gated reclaim can move a live row).
         """
+        if self._publishing_closed:
+            # Shutdown already started: publishing now could rename an
+            # artifact for this attempt *after* the process lock is released
+            # and a successor owns the queue.  Fail closed instead — the row
+            # is reopened by shutdown and recovery re-runs it.
+            return (
+                result,
+                VerificationOutcome(
+                    ok=False,
+                    reason_code="shutdown_in_progress",
+                    summary={
+                        "status": "failed",
+                        "reason_code": "shutdown_in_progress",
+                        "detail": "shutdown started before publication; nothing published",
+                    },
+                ),
+                False,
+            )
         if not await asyncio.to_thread(self._owns_execution, claim, JobStatus.VERIFYING):
             return (
                 result,
@@ -2002,7 +2118,7 @@ class InProcessJobQueue:
         publish_context["_queue_job_id"] = claim.job_id
         publish_context["_queue_attempt"] = claim.attempt
         try:
-            patch = await asyncio.to_thread(publication.publish, payload, publish_context)
+            patch = await self._publish_in_thread(publication, payload, publish_context)
         except Exception as exc:  # noqa: BLE001 - publication failure is a refusal
             logger.warning("artifact publish failed; keeping staged temp retracted: %s", exc)
             return (
