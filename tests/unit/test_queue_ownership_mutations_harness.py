@@ -112,38 +112,43 @@ def test_run_refuses_an_unvalidated_node_before_spawning(
     assert spawned == [], "an invalid node id must never reach subprocess.run"
 
 
+WORKFLOW = REPO_ROOT / ".github/workflows/queue-ownership-mutations.yml"
+
+
 def test_the_harness_is_wired_into_ci() -> None:
     """Review finding 5: the campaign must be CI-enforced, not locally claimed.
 
-    Parsed textually (no YAML dependency in the test environment): the job must
-    exist, be runtime-bounded, run the harness with a report, assert the report
-    rather than only exit codes, run in an isolated worktree, and upload its
-    evidence even when the job fails.
+    Parsed textually (no YAML dependency in the test environment): the workflow
+    must exist, be runtime-bounded, scoped to the queue/publication surface, run
+    the harness with a report, assert the report rather than only exit codes, run
+    in an isolated worktree, and upload its evidence even when it fails.
     """
-    text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    marker = "\n  queue-ownership-mutations:\n"
-    assert marker in text, "the mutation campaign is not wired into CI"
-    body = text.split(marker, 1)[1]
-    # the job body runs until the next top-level job key ("  <name>:" at column 2)
-    end = len(body)
-    for line in body.splitlines(keepends=True):
-        if line.startswith("  ") and not line.startswith("   ") and line.rstrip().endswith(":"):
-            end = body.index(line)
-            break
-    job = body[:end]
+    assert WORKFLOW.is_file(), "the mutation campaign is not wired into CI"
+    text = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "timeout-minutes:" in job, "the campaign must be runtime-bounded"
-    minutes = int(job.split("timeout-minutes:", 1)[1].splitlines()[0].strip())
+    assert "timeout-minutes:" in text, "the campaign must be runtime-bounded"
+    minutes = int(text.split("timeout-minutes:", 1)[1].splitlines()[0].strip())
     assert 0 < minutes <= 20, f"unexpected campaign budget: {minutes} minutes"
 
-    assert "scripts/queue_ownership_mutations.py" in job
-    assert "--report" in job, "the CI step must record machine-readable evidence"
-    assert '"survived": 0' in job, "the gate must assert zero surviving mutants"
-    assert 'report.get("accepted") is True' in job, (
+    assert "scripts/queue_ownership_mutations.py" in text
+    assert "--report" in text, "the CI step must record machine-readable evidence"
+    assert '"survived": 0' in text, "the gate must assert zero surviving mutants"
+    assert 'report.get("accepted") is True' in text, (
         "the gate must assert the report verdict, not only pytest exit codes"
     )
-    assert "git worktree add" in job, (
+    assert "git worktree add" in text, (
         "the campaign must run in an isolated worktree so a crash cannot mutate the checkout"
     )
-    assert "upload-artifact" in job, "evidence must be uploaded even when the job fails"
-    assert "if: always()" in job
+    assert "upload-artifact" in text, "evidence must be uploaded even when the job fails"
+    assert "if: always()" in text
+    # Scoped: the trigger paths must name the queue surface, not the whole repo.
+    assert "src/nexus_ai_agent/adapters/in_process_job_queue.py" in text
+    assert "scripts/queue_ownership_mutations.py" in text
+
+
+def test_the_workflow_is_not_a_second_copy_of_ci() -> None:
+    """The campaign lives in its own file; `ci.yml` is owned by another claim."""
+    ci = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "queue_ownership_mutations.py" not in ci, (
+        "duplicating the campaign inside ci.yml would give two sources of truth"
+    )
