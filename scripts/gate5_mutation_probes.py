@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E501  (the anchors/mutants are verbatim source lines, kept intact)
 """Gate 5 mutation probes (task-181) — a small, deterministic mutation harness.
 
 Seventeen adversarial mutations of the invariants this closure exists to protect
@@ -179,12 +180,12 @@ PROBES: tuple[Probe, ...] = (
         anchor=(
             "                WHERE id = ? AND status = ?\n"
             '                """,\n'
-            "                (JobStatus.PROCESSING.value, _now(), job_id, JobStatus.PENDING.value),"
+            "                (JobStatus.PROCESSING.value, now, now, job_id, JobStatus.PENDING.value),"
         ),
         mutant=(
             "                WHERE id = ? AND status IN (?, 'processing')  -- MUTATION\n"
             '                """,\n'
-            "                (JobStatus.PROCESSING.value, _now(), job_id, JobStatus.PENDING.value),"
+            "                (JobStatus.PROCESSING.value, now, now, job_id, JobStatus.PENDING.value),"
         ),
         tests=(f"{F}test_t5_two_processes_cannot_both_own_one_execution",),
     ),
@@ -192,11 +193,13 @@ PROBES: tuple[Probe, ...] = (
         name="M2 _mark_pending forgets the fence",
         target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
         anchor=(
-            "                    SET status = ?, started_at = NULL, attempt_history_json = ?\n"
+            "                    SET status = ?, started_at = NULL, heartbeat_at = NULL,\n"
+            "                        attempt_history_json = ?\n"
             "                    WHERE id = ? AND status IN (?, ?) AND attempt = ?"
         ),
         mutant=(
-            "                    SET status = ?, started_at = NULL, attempt_history_json = ?\n"
+            "                    SET status = ?, started_at = NULL, heartbeat_at = NULL,\n"
+            "                        attempt_history_json = ?\n"
             "                    WHERE id = ? AND status IN (?, ?) AND ? >= 0  -- MUTATION"
         ),
         tests=(
@@ -394,12 +397,18 @@ PROBES: tuple[Probe, ...] = (
         name="M9 resume_pending ignores the stale_after window",
         target=REPO / "src/nexus_ai_agent/adapters/in_process_job_queue.py",
         anchor=(
-            "                        if started_at is None or started_at >= cutoff:\n"
-            "                            continue"
+            "                    heartbeat = _parse_heartbeat(heartbeat_raw, now)\n"
+            "                    if heartbeat is None:\n"
+            "                        continue  # UNKNOWN is neither proof of life nor death\n"
+            "                    if cutoff is not None and heartbeat >= cutoff:\n"
+            "                        continue  # strict boundary: equality is not stale"
         ),
         mutant=(
-            "                        if False:  # MUTATION: every in-flight row is taken over\n"
-            "                            continue"
+            "                    heartbeat = _parse_heartbeat(heartbeat_raw, now)\n"
+            "                    if False:  # MUTATION: every in-flight row is taken over\n"
+            "                        continue\n"
+            "                    if False:  # MUTATION: staleness window ignored\n"
+            "                        continue"
         ),
         tests=(f"{F}test_t7_takeover_without_valid_expiry_is_rejected",),
     ),
