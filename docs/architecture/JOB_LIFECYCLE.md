@@ -263,9 +263,50 @@ row this one is still executing.
 | Root | Acquires | Releases |
 |---|---|---|
 | `bot/app.py::_post_init` / `_post_shutdown` (polling) | step 0 of `_post_init` | `_post_shutdown` → `job_queue.shutdown()` |
-| `bot/webhook.py::_serve_webhook` | re-asserted before `resume_pending()` (idempotent; `post_init` normally owns it) | `application.shutdown()` → the same `post_shutdown` hook |
+| `bot/webhook.py::_serve_webhook` | re-asserted before `resume_pending()` (idempotent; `post_init` normally owns it) | `_cleanup_webhook_application()` → `_shutdown_webhook_job_queue()` → `job_queue.shutdown()` (the `post_shutdown` hook repeats it; both are idempotent) |
 | `nexus jobs drain` (`cli.py::_run`) | before backfill/`resume_pending_jobs` | `finally` → `shutdown()` on every exit path |
 | one-shot intent runner (`cli.py::_run_all`) | before the first enqueue | `finally` → `shutdown()` |
+
+**A root that acquires must release by itself (review finding 2).** The webhook
+root used to rely on PTB's `post_shutdown` hook to reach `job_queue.shutdown()`.
+That hook is skipped when the application object is built elsewhere and is
+bypassed when `application.shutdown()` raises first — in both cases the flock
+outlived the process's useful life and every successor failed to open the queue.
+`_cleanup_webhook_application()` now runs an explicit, bounded, idempotent
+release after `stop()` and before `application.shutdown()`, and it runs **even
+when an earlier cleanup step failed** (each failure is captured and the first one
+re-raised, in acquisition order, so a broken `stop()` cannot strand workers,
+heartbeat children or the lock).
+
+**Task cancellation is not thread cancellation (review finding 1).**
+`publication.publish` runs on an executor thread. Cancelling the awaiting worker
+task stops the *await*, not the thread, so the previous shutdown could gather its
+tasks and release the lock while a rename was still in flight — a successor could
+then own the queue while the dying owner rewrote the same destination. Shutdown
+now:
+
+1. closes publication (no *new* publish may start: it fails closed with
+   `shutdown_in_progress` and publishes nothing),
+2. cancels and awaits worker tasks,
+3. cancels and awaits heartbeat children,
+4. **drains every tracked publication thread**,
+5. reopens this queue's attempts under their own `ExecutionClaim` fence,
+6. releases the lock.
+
+The drain handle is the future returned by `run_in_executor`, awaited through
+`asyncio.shield` so cancellation cannot mark it done while the thread runs, and
+unregistered by its done-callback (i.e. when the thread has really finished), not
+by the cancelled awaiter. Proven by a barrier-controlled test
+(`tests/integration/test_queue_ownership_publication_barrier.py`): the
+publication is held open, `shutdown()` is shown *not* to return, ownership is
+shown still held, a contender is refused, and the publication's own thread
+observes the lock still held when it finishes. `M9`/`M10` in
+`scripts/queue_ownership_mutations.py` prove both halves are load-bearing.
+
+**Residual limit (stated, not hidden):** a publication that was already inside
+`os.replace` when shutdown began cannot be un-renamed; draining guarantees it
+*completes before ownership is released* and that the row stays non-terminal, so
+recovery re-executes rather than assuming success (§4a, S3 crash).
 
 Enforced structurally by
 `tests/architecture/test_queue_ownership_startup_contract.py` (AST: acquire must
@@ -429,11 +470,41 @@ Layout (per job, so two jobs emitting the same file name never meet):
 truncated sidecar is treated as *absence of proof*, not permission to delete.
 An older attempt can never retract a newer attempt's artifact, a different job
 can never retract this one's, and an identity without an attempt never matches
-an attempt-scoped publication. Workspace membership is decided by resolved-path
+an attempt-scoped publication.
+
+**The attempt is an identity, not a field (review finding 3).** The sidecar
+reader used to validate `schema` and `job_id` only, and the retract comparison
+ran on raw values — so a sidecar whose `attempt` was missing or `null`
+(`{"schema":1,…,"attempt":null}` is exactly what a call without queue-minted
+identity writes) and a caller with no attempt satisfied `None == None` and
+authorised a rollback on an ownership claim that never existed. Both sides are
+now canonicalised through `_parse_attempt()`: a positive integer, or its decimal
+spelling (`"2"`, the historical sidecar form). `None`, `true`/`false` (a `bool`
+is an `int` subclass), `0`, negatives, floats, non-numeric strings, lists and
+objects are unprovable, on **either** side, and the read itself refuses a
+sidecar that has no valid attempt. The matrix in
+`tests/integration/test_artifact_publication_safety.py` (§D2) covers
+missing/null/bool/zero/negative/string/float/list/object attempts, a missing key,
+a wrong job id, a wrong attempt, a caller with no attempt, malformed and absent
+sidecars, and the valid retract. Workspace membership is decided by resolved-path
 containment (`Path.resolve().is_relative_to`), never by string prefix — the old
 `str(child).startswith(str(parent))` treated `/work/ws-evil` as inside
 `/work/ws` and misclassified a post-publication refusal as a pre-publication
 temp.
+
+**Crash *after* publish, before the durable commit (review finding 4).** The
+state "artifact published, row still `verifying`" is a real crash window
+(S3 → S4), and it is the one where "the file exists" most tempts a reader to
+assume success. It is covered by a real process death:
+`tests/integration/test_publication_crash_recovery.py` runs a child process that
+publishes and then `os._exit`s inside its post-publication re-probe, then
+asserts (a) the artifact is on disk, (b) the row is `verifying` — **never**
+`completed`, (c) a *new* owner acquires the freed lock, recovers, re-executes
+under a strictly higher fence (attempt 2), replaces the artifact and commits
+`completed`, (d) the previous bytes survive as `.prev`, and (e) an unrelated
+artifact under the same publication root is untouched. A second test pins that
+recovery alone never promotes a row to success: with no handler registered the
+requeued row ends `failed_terminal`, not `completed`.
 
 **Not claimed:** no atomicity is asserted across steps S2–S4 as a whole. Each
 mutation is atomic (`os.replace`/`rename`), and each *intermediate state* is
