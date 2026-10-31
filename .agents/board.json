@@ -7581,6 +7581,107 @@
       ],
       "note": "",
       "ttl_hours": 24
+    },
+    {
+      "task": "task-282-m17-open-pr-convergence",
+      "title": "M17: full open-PR census, forensic disposition and safe repair of every open PR (no mega-PR, no blind rebase)",
+      "zone": "coordination",
+      "priority": "P0",
+      "status": "queued",
+      "scope": "Live census of every open PR; file-by-file diff classification against current main (NEW/DIVERGED/STALE_REVERT/BEHIND); ownership + lease reconciliation; safe additive repair of PRs whose scope is free; a persistent M17 ledger and machine-readable registry. Protects the active #298 scopes. Does not merge.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Registration is present on canonical main before work; acquire and publish a valid claim, and pass the full ownership referee (exit 0) before every push.",
+        "Respect every live foreign lease and the protected #298 scopes (nagar/ibpc/, docs/README.md, OPERATION_TRUTH.json, .github/workflows/ci.yml); never force a takeover.",
+        "Preserve authorization, isolation, fail-closed behaviour, auditability and provenance; never weaken a guard, test or mutation gate to make a check green.",
+        "Every open PR gets exactly one disposition (KEEP/REPAIR/SUPERSEDED/DEFERRED_ACTIVE_OWNER/DRAFT_NOT_READY/BLOCKED_*/NO_UNIQUE_VALUE/VERIFIED_READY_FOR_HUMAN_REVIEW) backed by a file-by-file diff classification.",
+        "Leave every repaired PR open for independent human review; never merge, force-push, or alter protection."
+      ],
+      "evidence_required": [
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <changed> --branch <branch>: exit 0.",
+        "make lint && make types && make test (or a justified targeted equivalent) on the final SHA with exact commands and results.",
+        "M17 ledger + machine-readable registry (.agents/evidence/M17_*) with per-PR head/base SHAs, CI run URLs, unresolved threads and disposition."
+      ],
+      "exclusive_paths": [
+        ".agents/evidence/",
+        ".agents/board.json"
+      ],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0,
+      "owner_hint": "M17 coordinator; sequential single-writer repair campaign.",
+      "note": "Registration only; grants no execution authority until claimed and pushed."
+    },
+    {
+      "task": "task-283-repair-294-creative-graph",
+      "title": "Repair PR #294: durable creative-graph package (law R28) — verify projection (not second authority), SQL-injection claim, rebase onto current main",
+      "zone": "pr-repair-campaign",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Re-verify #294 against current main: the provenance graph must be a rebuildable projection, not a second authority; assess the graph.py SQL-injection static-analysis warning with an adversarial malformed-input test; sync base. Do NOT touch the protected docs/README.md or OPERATION_TRUTH.json (owned by active #298).",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Registration is present on canonical main before work; acquire and publish a valid claim, and pass the full ownership referee (exit 0) before every push.",
+        "Respect every live foreign lease and the protected #298 scopes (nagar/ibpc/, docs/README.md, OPERATION_TRUTH.json, .github/workflows/ci.yml); never force a takeover.",
+        "Preserve authorization, isolation, fail-closed behaviour, auditability and provenance; never weaken a guard, test or mutation gate to make a check green.",
+        "Every open PR gets exactly one disposition (KEEP/REPAIR/SUPERSEDED/DEFERRED_ACTIVE_OWNER/DRAFT_NOT_READY/BLOCKED_*/NO_UNIQUE_VALUE/VERIFIED_READY_FOR_HUMAN_REVIEW) backed by a file-by-file diff classification.",
+        "Leave every repaired PR open for independent human review; never merge, force-push, or alter protection."
+      ],
+      "evidence_required": [
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <changed> --branch <branch>: exit 0.",
+        "make lint && make types && make test (or a justified targeted equivalent) on the final SHA with exact commands and results.",
+        "M17 ledger + machine-readable registry (.agents/evidence/M17_*) with per-PR head/base SHAs, CI run URLs, unresolved threads and disposition."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/provenance/__init__.py",
+        "src/nexus_ai_agent/provenance/graph.py",
+        "tests/architecture/test_canonical_identity_contract.py",
+        "tests/architecture/test_creative_graph_boundary.py",
+        "tests/unit/test_creative_graph.py",
+        "docs/architecture/CREATIVE_GRAPH.md",
+        "docs/architecture/MODULE_MAP.md"
+      ],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0,
+      "owner_hint": "Successor to closed #189; M16 #294.",
+      "note": "Registration only; grants no execution authority until claimed and pushed."
+    },
+    {
+      "task": "task-284-repair-295-asset-library",
+      "title": "Repair PR #295: content-addressed Asset Library — security review (O_NOFOLLOW/O_EXCL/fsync/link, symlink escape, GC, MIME) and dedupe vs #205",
+      "zone": "pr-repair-campaign",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Full security review of src/nexus_ai_agent/execution/asset_library.py: symlink/path escape, atomic publish, crash consistency, CAS GC vs durable refs, MIME limits; dedupe against existing Asset Library (#205). Independent additive extraction; do not build a second asset library or wire the render path.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Registration is present on canonical main before work; acquire and publish a valid claim, and pass the full ownership referee (exit 0) before every push.",
+        "Respect every live foreign lease and the protected #298 scopes (nagar/ibpc/, docs/README.md, OPERATION_TRUTH.json, .github/workflows/ci.yml); never force a takeover.",
+        "Preserve authorization, isolation, fail-closed behaviour, auditability and provenance; never weaken a guard, test or mutation gate to make a check green.",
+        "Every open PR gets exactly one disposition (KEEP/REPAIR/SUPERSEDED/DEFERRED_ACTIVE_OWNER/DRAFT_NOT_READY/BLOCKED_*/NO_UNIQUE_VALUE/VERIFIED_READY_FOR_HUMAN_REVIEW) backed by a file-by-file diff classification.",
+        "Leave every repaired PR open for independent human review; never merge, force-push, or alter protection."
+      ],
+      "evidence_required": [
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <changed> --branch <branch>: exit 0.",
+        "make lint && make types && make test (or a justified targeted equivalent) on the final SHA with exact commands and results.",
+        "M17 ledger + machine-readable registry (.agents/evidence/M17_*) with per-PR head/base SHAs, CI run URLs, unresolved threads and disposition."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/execution/asset_library.py",
+        "tests/unit/test_asset_library.py"
+      ],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0,
+      "owner_hint": "Successor to closed #218; M16 #295.",
+      "note": "Registration only; grants no execution authority until claimed and pushed."
     }
   ],
   "deferred_log": [
