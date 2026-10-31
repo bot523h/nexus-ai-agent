@@ -232,7 +232,7 @@ The baseline recorded 6 PRs mislabeled `CI_RED` because `_rollup_state` ignored 
 ```python
 states = {name: _latest_run_state(pr, name) for name in contexts}
 if require_all_present and any(state is None for state in states.values()):
-    return "PENDING"          # <-- returns before the red check below
+    return "PENDING"  # <-- returns before the red check below
 values = [state for state in states.values() if state is not None]
 ...
 if any(state in _RED_CONCLUSIONS for state in values):
