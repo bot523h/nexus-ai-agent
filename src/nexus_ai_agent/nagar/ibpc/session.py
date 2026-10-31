@@ -21,6 +21,9 @@ digest (see ``evidence()`` / :mod:`nagar.ibpc.privacy`).
 
 from __future__ import annotations
 
+import os
+import re
+import secrets
 import threading
 import uuid
 from collections.abc import Callable
@@ -33,6 +36,32 @@ from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of, sha256_bytes
 from nexus_ai_agent.nagar.ibpc.models import ConsentRecord, PrivacyMode
 from nexus_ai_agent.nagar.ibpc.privacy import PrivacyPolicy, PrivacyViolation, redact_mapping
+
+#: Caller-supplied turn ids are a trust-boundary input: they are only ever used
+#: as logical dict keys after this strict validation, and NEVER to build a
+#: filesystem path (the physical audio file name is an independent random id).
+TURN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+#: Hard cap on one staged audio upload (25 MiB).
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
+
+#: How many random file names to try before giving up (O_EXCL collisions).
+_STAGE_ATTEMPTS = 8
+
+
+def validate_turn_id(turn_id: str) -> str:
+    """Validate a caller-supplied turn id at the boundary.
+
+    Rejects empty, overlong, absolute-path, traversal, backslash and any other
+    separator-bearing id with a typed error — no regex bypass is possible
+    because the id is additionally never used as a path component.
+    """
+    if not isinstance(turn_id, str) or not TURN_ID_RE.fullmatch(turn_id):
+        raise SessionError(
+            "invalid_turn_id",
+            "turn_id must match ^[A-Za-z0-9_-]{1,64}$ (no path separators, no '..')",
+        )
+    return turn_id
 
 
 class TranscriptState(str, Enum):
@@ -345,6 +374,7 @@ class LiveSessionManager:
     ) -> VoiceTurn:
         with self._lock:
             session = self.get_session(session_id)
+            validate_turn_id(turn_id)  # boundary validation: untrusted caller input
             if turn_id in session.turns:
                 raise DuplicateTurnError("duplicate_turn", f"turn {turn_id!r} already exists")
             if sequence_number <= session.max_sequence:
@@ -410,6 +440,94 @@ class LiveSessionManager:
 
     # -- transcript / audio -------------------------------------------------
 
+    # -- secure audio staging ----------------------------------------------
+    #
+    # Threat model (audio ingress): `turn_id` and `audio_dir` are caller-
+    # influenced, `audio` is untrusted bytes. The physical file name is an
+    # INDEPENDENT random id (secrets.token_hex) — never derived from turn_id —
+    # created with O_CREAT|O_EXCL (no overwrite, no symlink following), mode
+    # 0600, and proven by real Path.resolve() containment inside the resolved
+    # audio dir before and after creation. The file is deleted in a finally
+    # block on success, exception, timeout and cancellation, and cleanup only
+    # ever unlinks the exact regular file this call created inside the root.
+
+    @staticmethod
+    def _resolve_audio_root(audio_dir: Path) -> Path:
+        root = Path(audio_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        # resolve() follows symlinks: containment is checked against the REAL
+        # directory, not the textual spelling (startswith on text is not a check)
+        return root.resolve(strict=False)
+
+    @staticmethod
+    def _validate_audio(audio: object) -> bytes:
+        """Validate the untrusted payload BEFORE any state changes or file IO."""
+        if not isinstance(audio, (bytes, bytearray)):
+            raise SessionError("invalid_audio", "audio must be bytes")
+        data = bytes(audio)
+        if not data:
+            raise SessionError("invalid_audio", "empty audio payload")
+        if len(data) > MAX_AUDIO_BYTES:
+            raise SessionError("invalid_audio", f"audio exceeds {MAX_AUDIO_BYTES} bytes")
+        return data
+
+    @classmethod
+    def _stage_audio(cls, root: Path, audio: bytes) -> Path:
+        """Write ``audio`` to a fresh, unpredictable, O_EXCL file inside ``root``.
+
+        Returns the resolved path of the created file. Raises SessionError
+        (typed, fail-closed) on invalid input, escape, or creation failure.
+        """
+        data = cls._validate_audio(audio)
+        last_exc: OSError | None = None
+        for _ in range(_STAGE_ATTEMPTS):
+            candidate = root / f"audio_{secrets.token_hex(16)}.bin"
+            try:
+                # O_EXCL: fails if the name exists — including as a symlink —
+                # so no existing file (ours or anyone else's) is overwritten
+                fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError as exc:
+                last_exc = exc
+                continue
+            try:
+                resolved = Path(os.path.realpath(candidate))
+                # real containment check with real path operations
+                resolved.relative_to(root)
+                if resolved.parent != root:
+                    raise SessionError("audio_path_escape", str(candidate))
+                os.fchmod(fd, 0o600)  # force perms regardless of umask
+                view = memoryview(data)
+                while view:
+                    written = os.write(fd, view)
+                    view = view[written:]
+                return resolved
+            except SessionError:
+                os.close(fd)
+                candidate.unlink(missing_ok=True)
+                raise
+            except OSError as exc:
+                os.close(fd)
+                candidate.unlink(missing_ok=True)
+                last_exc = exc
+        raise SessionError("audio_stage_failed", f"could not create a fresh audio file: {last_exc}")
+
+    @staticmethod
+    def _cleanup_audio(root: Path, staged: Path | None) -> None:
+        """Delete exactly the file this call created — never anything else.
+
+        Only a regular, non-symlink file whose resolved parent is the audio
+        root is unlinked, so cleanup can never delete another turn's file,
+        another process's file, or a symlink target.
+        """
+        if staged is None:
+            return
+        try:
+            resolved = Path(os.path.realpath(staged))
+            if resolved.parent == root and resolved.is_file() and not resolved.is_symlink():
+                resolved.unlink(missing_ok=True)
+        except OSError:
+            pass  # cleanup failure is logged degradation, never a fake success
+
     async def submit_audio(
         self,
         session_id: str,
@@ -419,19 +537,32 @@ class LiveSessionManager:
         engine: CaptionEnginePort,
         audio_dir: Path,
     ) -> VoiceTurn:
-        """Audio → transcript via the injected local engine. The audio bytes
-        are written only inside the session's guarded audio dir; the turn keeps
-        just the digests."""
+        """Audio → transcript via the injected local engine.
+
+        The audio bytes are staged ONLY inside the resolved audio dir under a
+        random O_EXCL file with 0600 perms (see _stage_audio) and the file is
+        always removed afterwards — success, engine exception, timeout or
+        coroutine cancellation. The turn keeps just the digests.
+        """
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            validate_turn_id(turn_id)
+            turn = session.turns.get(turn_id)
+            if turn is None:
+                raise SessionError("unknown_turn", turn_id)
             self._guard_not_stale(session, turn)
+            # validate the untrusted payload BEFORE mutating turn state, so a
+            # refused payload leaves the turn exactly where it was
+            self._validate_audio(audio)
             self._transition(session, turn, TurnState.TRANSCRIBING)
-        audio_dir.mkdir(parents=True, exist_ok=True)
-        audio_path = audio_dir / f"{turn_id}.bin"
-        audio_path.write_bytes(audio)
-        transcript = await engine.transcribe(audio_path, language=None)
-        text = transcript.text
+        root = self._resolve_audio_root(audio_dir)
+        staged = self._stage_audio(root, audio)
+        try:
+            transcript = await engine.transcribe(staged, language=None)
+            text = transcript.text
+        finally:
+            # success, exception, timeout AND cancellation all land here
+            self._cleanup_audio(root, staged)
         with self._lock:
             turn = session.turns[turn_id]
             self._guard_not_stale(session, turn)
@@ -592,6 +723,8 @@ class LiveSessionManager:
 __all__ = [
     "ALLOWED_TRANSITIONS",
     "DuplicateTurnError",
+    "MAX_AUDIO_BYTES",
+    "TURN_ID_RE",
     "LiveSession",
     "LiveSessionManager",
     "SessionError",
@@ -602,4 +735,5 @@ __all__ = [
     "TranscriptState",
     "TurnState",
     "VoiceTurn",
+    "validate_turn_id",
 ]

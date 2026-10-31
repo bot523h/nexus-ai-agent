@@ -234,5 +234,5 @@ class TestVoiceTurns:
         assert turn.audio_sha256.startswith("sha256:")
         assert "fake-audio-bytes" not in str(turn.evidence())
         assert mgr.transcript_text(sid, "t1") == "trim from 0.5 to 1.5 seconds"
-        # audio file staged inside the guarded dir only
-        assert (tmp_path / "audio" / "t1.bin").read_bytes() == b"fake-audio-bytes"
+        # the staged audio file is always cleaned up after transcription
+        assert list((tmp_path / "audio").iterdir()) == []

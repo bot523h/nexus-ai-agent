@@ -35,7 +35,7 @@ from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort, JobStatus
 from nexus_ai_agent.creative.slideshow.ffmpeg import sha256_file
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
-from nexus_ai_agent.nagar.ibpc.approval import ApprovalError, ApprovalLedger
+from nexus_ai_agent.nagar.ibpc.approval import ApprovalError, ApprovalIdentity, ApprovalLedger
 from nexus_ai_agent.nagar.ibpc.compiler import CompilationRefused, compile_ast
 from nexus_ai_agent.nagar.ibpc.footprint import probe_media, verify_keep
 from nexus_ai_agent.nagar.ibpc.intent import (
@@ -59,6 +59,8 @@ from nexus_ai_agent.nagar.ibpc.privacy import PrivacyPolicy
 from nexus_ai_agent.nagar.ibpc.session import (
     LiveSessionManager,
     SessionError,
+    StaleTurnError,
+    TransitionError,
     TurnState,
 )
 
@@ -130,6 +132,11 @@ class _TurnContext:
     source_asset_digest: str
     duration_us: int
     fps: float
+    session_id: str
+    turn_id: str
+    tenant_id: str
+    project_id: str
+    principal_id: str
 
 
 class IBPCService:
@@ -143,6 +150,9 @@ class IBPCService:
             now=deps.now, privacy=self._privacy, on_revoke_turn=self._approvals.revoke_turn
         )
         self._contexts: dict[str, _TurnContext] = {}
+        # serializes the sensitive section of execute() (identity validation ->
+        # atomic consume -> turn-state transition) across concurrent requests
+        self._execute_lock = asyncio.Lock()
 
     # -- accessors ----------------------------------------------------------
 
@@ -248,6 +258,11 @@ class IBPCService:
             source_asset_digest=source_asset_digest,
             duration_us=duration_us,
             fps=fps,
+            session_id=session_id,
+            turn_id=turn_id,
+            tenant_id=session.tenant_id,
+            project_id=session.project_id,
+            principal_id=session.principal_id,
         )
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
         self._sessions.mark_plan_preview(session_id, turn_id)
@@ -271,15 +286,22 @@ class IBPCService:
         audio: bytes,
         asset_id: str,
         source_path: str,
-        audio_dir: Path,
+        audio_dir: Path | None = None,
     ) -> PipelineResult | Clarification | Refusal:
         """Voice turn: audio → local engine → FINAL transcript → same typed
-        pipeline. The transcript is untrusted input; approval is still required."""
+        pipeline. The transcript is untrusted input; approval is still required.
+
+        ``audio_dir`` defaults to a service-derived, session-scoped dir under
+        the workspace root (the session id is internally generated); whatever
+        dir is used, submit_audio enforces resolve-based containment inside it.
+        """
         engine = self._deps.caption_engine
         if engine is None or not engine.is_available():
             return Refusal("caption_profile_unavailable", "no local caption engine configured")
-        self._sessions.get_session(session_id)
+        session = self._sessions.get_session(session_id)
         self._sessions.assert_local_processing(session_id, "audio")
+        if audio_dir is None:
+            audio_dir = self._deps.workspace_root / "audio" / session.session_id
         revision = int(self._deps.revision_provider())
         self._sessions.begin_turn(
             session_id, turn_id, sequence_number=sequence_number, project_revision=revision
@@ -353,6 +375,11 @@ class IBPCService:
             source_asset_digest=sha256_file(src),
             duration_us=info.duration_us,
             fps=fps,
+            session_id=session_id,
+            turn_id=turn_id,
+            tenant_id=session.tenant_id,
+            project_id=session.project_id,
+            principal_id=session.principal_id,
         )
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
         self._sessions.mark_plan_preview(session_id, turn_id)
@@ -369,19 +396,106 @@ class IBPCService:
 
     # -- approval -------------------------------------------------------------
 
-    def approve(
+    def _resolve_identity(
         self, session_id: str, turn_id: str, approval_id: str, *, principal_id: str
-    ) -> ApprovalBinding:
-        self._sessions.get_session(session_id)
-        ctx = self._contexts[approval_id]
-        binding = self._approvals.approve(
-            approval_id,
+    ) -> tuple[Any, Any, _TurnContext, ApprovalIdentity]:
+        """Fail-closed full identity resolution — the Phase-C core.
+
+        Order (per mission §4.4): context → session/turn → binding → revision
+        → real asset re-hash → digest match. Every step raises a typed error;
+        nothing is trusted from the caller alone. Returns the session, turn,
+        context and the full ApprovalIdentity for the ledger.
+        """
+        # 1) execution context must exist (a deleted/incomplete context fails
+        #    closed with a typed error, never a KeyError/500)
+        ctx = self._contexts.get(approval_id)
+        if ctx is None:
+            raise ApprovalError("unknown_context", f"no execution context for {approval_id!r}")
+        # 2) session must exist (typed SessionError)
+        session = self._sessions.get_session(session_id)
+        # 3) turn must belong to THIS session and not be stale/terminal —
+        #    session-level guards surface as a typed approval refusal
+        try:
+            turn = self._sessions.get_turn(session_id, turn_id)
+        except (SessionError, StaleTurnError, TransitionError) as exc:
+            raise ApprovalError("turn_unavailable", f"{type(exc).__name__}: {exc}") from exc
+        # 4) binding must exist (typed ApprovalError)
+        binding = self._approvals.get(approval_id)
+        # 5) the binding must belong to this exact session/turn/tenant/project/
+        #    principal/sequence — cross-anything use is refused here
+        if binding.session_id != session.session_id:
+            raise ApprovalError(
+                "identity_mismatch_session_id", "binding belongs to another session"
+            )
+        if binding.turn_id != turn.turn_id:
+            raise ApprovalError("identity_mismatch_turn_id", "binding belongs to another turn")
+        if binding.sequence_number != turn.sequence_number:
+            raise ApprovalError(
+                "identity_mismatch_sequence_number", "sequence does not match the turn"
+            )
+        if binding.tenant_id != session.tenant_id:
+            raise ApprovalError("identity_mismatch_tenant_id", "binding belongs to another tenant")
+        if binding.project_id != session.project_id:
+            raise ApprovalError(
+                "identity_mismatch_project_id", "binding belongs to another project"
+            )
+        if binding.principal_id != principal_id or session.principal_id != principal_id:
+            raise ApprovalError("wrong_principal", "request principal differs from session/binding")
+        if ctx.session_id != session.session_id or ctx.turn_id != turn.turn_id:
+            raise ApprovalError(
+                "context_mismatch", "execution context does not match this session/turn"
+            )
+        # 6) revision must still be current
+        revision = int(self._deps.revision_provider())
+        if binding.source_revision != revision:
+            raise ApprovalError(
+                "stale_revision",
+                f"binding bound to revision {binding.source_revision}, current {revision}",
+            )
+        # 7) the REAL asset is re-hashed now — a changed file can never execute
+        try:
+            actual_asset = sha256_file(ctx.source_path)
+        except OSError as exc:
+            raise ApprovalError("asset_unreadable", str(exc)) from exc
+        if actual_asset != binding.source_asset_digest:
+            raise ApprovalError("asset_changed", "source asset changed after the preview")
+        # 8) context digests must match the binding (AST/plan/preview tamper)
+        if ctx.ast.ast_digest != binding.ast_digest:
+            raise ApprovalError("ast_mismatch", "AST digest differs from the binding")
+        if ctx.plan.plan_digest != binding.plan_digest:
+            raise ApprovalError("plan_mismatch", "plan digest differs from the binding")
+        if ctx.preview.preview_digest != binding.preview_digest:
+            raise ApprovalError("preview_tampered", "preview digest differs from the binding")
+        identity = ApprovalIdentity(
             principal_id=principal_id,
-            source_revision=int(self._deps.revision_provider()),
+            tenant_id=session.tenant_id,
+            project_id=session.project_id,
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            sequence_number=turn.sequence_number,
+            source_revision=revision,
+            source_asset_digest=actual_asset,
             ast_digest=ctx.ast.ast_digest,
             plan_digest=ctx.plan.plan_digest,
             preview_digest=ctx.preview.preview_digest,
-            source_asset_digest=ctx.source_asset_digest,
+        )
+        return session, turn, ctx, identity
+
+    def approve(
+        self, session_id: str, turn_id: str, approval_id: str, *, principal_id: str
+    ) -> ApprovalBinding:
+        """Approve only in the exact context the binding was issued in.
+
+        Raises typed ApprovalError/SessionError (fail-closed) on unknown
+        session/turn/approval/context, any identity mismatch, stale revision,
+        changed asset or tampered digests. Never changes another turn's state.
+        """
+        _session, _turn, _ctx, identity = self._resolve_identity(
+            session_id, turn_id, approval_id, principal_id=principal_id
+        )
+        binding = self._approvals.approve(
+            approval_id,
+            identity=identity,
             turn_is_active=lambda: self._sessions.turn_is_active(session_id, turn_id),
         )
         self._sessions.mark_approved(session_id, turn_id)
@@ -416,36 +530,30 @@ class IBPCService:
     ) -> ExecutionOutcome:
         """Re-validate every binding, consume the approval once, then enqueue
         exactly one canonical job through the injected queue port."""
-        session = self._sessions.get_session(session_id)
-        if session.principal_id != principal_id:
-            return ExecutionOutcome(status="refused", detail="wrong principal")
-        try:
-            turn = self._sessions.get_turn(session_id, turn_id)  # refuses stale turns
-        except SessionError as exc:
-            return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
-        ctx = self._contexts[approval_id]
-        revision = int(self._deps.revision_provider())
-        try:
-            # single-use consume FIRST: replay/stale/tamper/revoked all refused here
-            self._approvals.consume(
-                approval_id,
-                principal_id=principal_id,
-                source_revision=revision,
-                ast_digest=ctx.ast.ast_digest,
-                plan_digest=ctx.plan.plan_digest,
-                preview_digest=ctx.preview.preview_digest,
-                source_asset_digest=ctx.source_asset_digest,
-            )
-        except ApprovalError as exc:
-            return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
-        if turn.turn_state not in (TurnState.APPROVED, TurnState.EXECUTING):
-            return ExecutionOutcome(
-                status="refused",
-                detail=f"turn state {turn.turn_state.value} cannot execute "
-                "(cancelled/interrupted/partial/stale turns never execute)",
-            )
-
-        self._sessions.mark_executing(session_id, turn_id)
+        # Sensitive section, serialized: Context Validation → Session/Turn
+        # Validation → Binding Validation → Atomic Consume → state transition.
+        # A wrong or cross-context request is refused BEFORE the consume, so it
+        # can never burn a valid approval; the consume itself is the atomic
+        # compare-and-set under the ledger lock (concurrent double-consume
+        # yields exactly one winner, the rest are typed replay refusals).
+        async with self._execute_lock:
+            try:
+                session, turn, ctx, identity = self._resolve_identity(
+                    session_id, turn_id, approval_id, principal_id=principal_id
+                )
+            except (ApprovalError, SessionError) as exc:
+                return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
+            try:
+                self._approvals.consume(approval_id, identity=identity)
+            except ApprovalError as exc:
+                return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
+            if turn.turn_state not in (TurnState.APPROVED, TurnState.EXECUTING):
+                return ExecutionOutcome(
+                    status="refused",
+                    detail=f"turn state {turn.turn_state.value} cannot execute "
+                    "(cancelled/interrupted/partial/stale turns never execute)",
+                )
+            self._sessions.mark_executing(session_id, turn_id)
         workspace = self._guarded_workspace(approval_id)
         input_path = self._stage_source(ctx.source_path, workspace)
         in_us = int(ctx.ast.params["in_point_us"])

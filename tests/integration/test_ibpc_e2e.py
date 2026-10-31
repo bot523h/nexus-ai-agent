@@ -422,3 +422,35 @@ async def test_voice_turn_flows_through_the_same_pipeline(harness, tmp_path: Pat
     assert outcome.status == "executed", outcome.detail
     assert outcome.capsule is not None
     assert outcome.capsule.verifier_verdict is not CheckVerdict.FAIL
+
+
+@pytest.mark.asyncio
+async def test_concurrent_double_execute_has_exactly_one_winner(harness, tmp_path: Path) -> None:
+    """Two concurrent execute() calls for the same approval race through the
+    service-level lock + the ledger CAS: exactly one wins, the other is a
+    typed replay refusal, and the queue holds exactly one job."""
+    import asyncio
+
+    service, queue, _, _ = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id="user-1")
+    outcomes = await asyncio.gather(
+        service.execute(sid, "turn-1", result.approval_id, principal_id="user-1"),
+        service.execute(sid, "turn-1", result.approval_id, principal_id="user-1"),
+    )
+    statuses = sorted(o.status for o in outcomes)
+    assert statuses == ["executed", "refused"]
+    refused = next(o for o in outcomes if o.status == "refused")
+    assert "replay" in refused.detail or "invalid_state" in refused.detail
+    assert len(queue.job_ids()) == 1

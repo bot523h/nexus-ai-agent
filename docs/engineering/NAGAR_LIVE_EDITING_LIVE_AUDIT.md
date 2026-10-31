@@ -89,3 +89,14 @@ Evidence: `tests/integration/test_nagar_durable_handoff_e2e.py` (artifact-proven
 - **NOW (this mission):** M0 audit (this file) · M1 vertical slice text→typed AST→canonical queue→real artifact · M2 footprint verifier · M3 IBPC capsule + readback + approval binding · M4 session + voice turn fencing · M5 privacy modes + adversarial/architecture tests + docs + draft PR.
 - **NEXT (registered, not built here):** MODULE_MAP.md §3 register rows for the ibpc boundary (blocked by PR #273's fence on that file); durable (SQLite) approval/session store if the live-editing session must survive restarts (in-memory now, honestly documented); wiring the IBPC service into `bot/creative_surface.py`/`api/app.py` (owned by other zones); PR #273 D2/D6/D7 closure by its owner.
 - **LATER:** multi-provider voice benchmark (WebRTC/WebGPU/cloud ASR) — no new provider is added without necessity + consent; multi-asset/multi-track scopes; image/audio footprint scopes (the verifier core is media-kind generic, video-time scope is the proven slice).
+
+## 7. Security closure addendum (NAGAR-IBPC-SECURITY-CLOSURE-01, 2026-10-31)
+
+Maturity labels use **Implemented…ProductionVerified**: the audio-ingress hardening (turn-id
+validation, random O_EXCL 0600 staging, resolved-path containment, finally-cleanup) and the
+approval identity contract (full identity checked at approve AND consume, atomic single-use CAS,
+fail-closed typed refusals, fixed validation→consume→enqueue ordering) are **Implemented** and
+mutation-proven (13/13 killed, `scripts/ibpc_security_mutations.py`, also green in the minimal CI
+env) — but **not ProductionVerified**: sessions/approvals/contexts remain in-process only (see the
+lifecycle table in NAGAR_IBPC.md), so durability across restarts and multi-process fencing are NEXT,
+with no such claim made here.
