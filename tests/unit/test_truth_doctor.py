@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -277,11 +278,25 @@ def _write_board(root: Path, board: dict) -> None:
     (root / ".agents" / "board.json").write_text(json.dumps(board), encoding="utf-8")
 
 
+def _live_claimed_at() -> str:
+    """A lease claimed *now* (live for the default 24h TTL)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _minimal_board() -> dict:
     return {
         "schema": 2,
         "zones": [{"id": "z", "paths": ["src/z/"]}],
-        "claims": [{"task": "task-1", "status": "active", "zone": "z", "gates_owner": True}],
+        "claims": [
+            {
+                "task": "task-1",
+                "status": "active",
+                "zone": "z",
+                "gates_owner": True,
+                "claimed_at": _live_claimed_at(),
+                "ttl_hours": 24,
+            }
+        ],
         "next_work": [{"id": "task-9", "zone": "z"}],
         "deferred_log": [{"task": "task-1"}],
     }
@@ -374,3 +389,93 @@ def test_real_repository_is_truthful() -> None:
     """This repository itself must pass the doctor (no drift, no stale claim)."""
     report = truth.run_doctor(REPO_ROOT)
     assert report.findings == (), report.format_text()
+
+
+def test_gates_owner_on_a_live_but_expired_lease_is_reported(tmp_path: Path) -> None:
+    """The direction that was silent: status is live, but the lease TTL is past.
+
+    ``gc_expired`` releases the *status* only when a command runs; a lease that
+    is still ``active`` by status but whose ``claimed_at + ttl_hours`` is in the
+    past no longer fences its zone, yet a status-only check reported nothing.
+    """
+    _clean_tree(tmp_path)
+    board = _minimal_board()
+    stale = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    board["claims"] = [
+        {
+            "task": "task-1",
+            "status": "active",
+            "zone": "z",
+            "gates_owner": True,
+            "claimed_at": stale,
+            "ttl_hours": 24,
+        }
+    ]
+    _write_board(tmp_path, board)
+    report = truth.run_doctor(tmp_path, only=["board-truth"])
+    assert "TRUTH041" in _codes(report.findings)
+
+
+def test_gates_owner_on_a_live_lease_is_not_reported(tmp_path: Path) -> None:
+    _clean_tree(tmp_path)
+    _write_board(tmp_path, _minimal_board())  # fresh active lease
+    report = truth.run_doctor(tmp_path, only=["board-truth"])
+    assert "TRUTH041" not in _codes(report.findings)
+
+
+def test_gates_owner_on_an_active_in_review_lease_is_not_reported(tmp_path: Path) -> None:
+    """``active_in_review`` is a live lease — a review-phase PR still conflicts."""
+    _clean_tree(tmp_path)
+    board = _minimal_board()
+    board["claims"][0]["status"] = "active_in_review"
+    _write_board(tmp_path, board)
+    report = truth.run_doctor(tmp_path, only=["board-truth"])
+    assert "TRUTH041" not in _codes(report.findings)
+
+
+def test_gates_owner_with_an_unprovable_lease_is_reported(tmp_path: Path) -> None:
+    """A live status with no parsable ``claimed_at`` cannot be proven live."""
+    _clean_tree(tmp_path)
+    board = _minimal_board()
+    del board["claims"][0]["claimed_at"]
+    _write_board(tmp_path, board)
+    report = truth.run_doctor(tmp_path, only=["board-truth"])
+    assert "TRUTH041" in _codes(report.findings)
+
+
+def test_gates_owner_with_a_non_live_status_is_still_reported(tmp_path: Path) -> None:
+    _clean_tree(tmp_path)
+    board = _minimal_board()
+    board["claims"][0]["status"] = "expired"
+    _write_board(tmp_path, board)
+    report = truth.run_doctor(tmp_path, only=["board-truth"])
+    assert "TRUTH041" in _codes(report.findings)
+
+
+def test_lease_liveness_boundary_is_inclusive_of_the_deadline() -> None:
+    """Exactly at ``claimed_at + ttl`` the lease is still live (referee parity)."""
+    now = datetime(2026, 10, 30, 12, 0, 0, tzinfo=timezone.utc)
+    claim = {
+        "status": "active",
+        "claimed_at": "2026-10-30T11:00:00Z",
+        "ttl_hours": 1,
+    }
+    assert truth._lease_is_live(claim, now=now) is True
+    assert truth._lease_is_live(claim, now=now + timedelta(seconds=1)) is False
+
+
+def test_live_lease_statuses_match_the_board_cli() -> None:
+    """The doctor's status set must equal the referee's ``ACTIVE_STATUSES``.
+
+    The doctor stays pure-stdlib and cannot import the unpackaged CLI at runtime,
+    so this lockstep test is the mechanical guarantee that the two authorities
+    cannot drift apart.
+    """
+    import importlib.util
+
+    board_path = REPO_ROOT / "scripts" / "agent_board.py"
+    spec = importlib.util.spec_from_file_location("agent_board_lockstep", board_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert truth.LIVE_LEASE_STATUSES == module.ACTIVE_STATUSES
