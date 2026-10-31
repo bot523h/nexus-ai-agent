@@ -361,11 +361,13 @@ async def test_t6_takeover_after_valid_expiry_reclaims_the_row(tmp_path: Path) -
     job_id = await queue_a.enqueue(job_type="fenced", idempotency_key="k", payload={})
     await _wait_status(queue_a, job_id, JobStatus.PROCESSING)
 
-    # the row has been executing "for two hours"
+    # the row has been executing "for two hours" — and its queue-owned
+    # heartbeat stopped refreshing at that same instant (a genuinely expired
+    # worker), so the staleness is provable under the heartbeat contract.
     with sqlite3.connect(db) as connection:
         connection.execute(
-            "UPDATE nexus_job_queue SET started_at = ? WHERE id = ?",
-            ("2000-01-01T00:00:00+00:00", job_id),
+            "UPDATE nexus_job_queue SET started_at = ?, heartbeat_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", "2000-01-01T00:00:00+00:00", job_id),
         )
     assert await queue_b.resume_pending(stale_after=timedelta(hours=1)) == [job_id]
     await _wait_status(queue_b, job_id, JobStatus.PROCESSING)
