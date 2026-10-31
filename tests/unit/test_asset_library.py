@@ -137,6 +137,53 @@ def test_symlink_source_is_refused_before_reading(lib: AssetLibrary, tmp_path: P
     assert _blobs(lib) == []
 
 
+def test_symlinked_shard_directory_cannot_redirect_a_publish(
+    lib: AssetLibrary, tmp_path: Path
+) -> None:
+    """O_NOFOLLOW guards only the final component.
+
+    A symlinked intermediate shard (``cas/sha256`` → elsewhere) must be refused
+    *before* a blob is linked into it, otherwise ``admit`` publishes bytes
+    outside the artifact root while reporting success.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (lib.root / "cas").mkdir(parents=True)
+    (lib.root / "cas" / "sha256").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(AssetBoundaryError, match="symlink"):
+        lib.admit_bytes(b"y" * 10, attempt_id="job1:1")
+    assert list(outside.rglob("*")) == [], "no blob may land outside the root"
+
+
+def test_symlinked_deep_shard_directory_is_refused(lib: AssetLibrary, tmp_path: Path) -> None:
+    data = b"z" * 10
+    hex_digest = hashlib.sha256(data).hexdigest()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    shard = lib.root / "cas" / "sha256" / hex_digest[:2]
+    shard.parent.mkdir(parents=True)
+    shard.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(AssetBoundaryError, match="symlink"):
+        lib.admit_bytes(data, attempt_id="job1:1")
+    assert list(outside.rglob("*")) == []
+
+
+def test_symlinked_cas_root_is_refused(lib: AssetLibrary, tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    lib.root.mkdir(parents=True)
+    (lib.root / "cas").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(AssetBoundaryError, match="symlink"):
+        lib.admit_bytes(b"data", attempt_id="job1:1")
+    assert list(outside.rglob("*")) == []
+
+
+def test_legitimate_nested_admission_is_not_a_false_positive(lib: AssetLibrary) -> None:
+    asset = lib.admit_bytes(PNG, attempt_id="job1:1")
+    assert (lib.root / asset.storage_key).is_file()
+    assert lib.verify(asset.sha256) == len(PNG)
+
+
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are POSIX-only")
 def test_fifo_source_is_refused_and_does_not_block(lib: AssetLibrary, tmp_path: Path) -> None:
     fifo = tmp_path / "pipe"

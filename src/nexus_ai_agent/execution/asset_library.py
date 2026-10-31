@@ -179,6 +179,31 @@ def _fsync_dir(directory: Path) -> None:
         os.close(fd)
 
 
+def _reject_symlink_components(root: Path, target: Path) -> None:
+    """Refuse when any existing component of *target* (below *root*) is a symlink.
+
+    ``O_NOFOLLOW`` only guards the *final* component, so a symlinked intermediate
+    shard directory (``cas/sha256/aa`` → elsewhere) would silently redirect a
+    published blob outside the artifact root. Walk the components from *root*
+    down and require each existing one to be a real directory.
+    """
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:  # pragma: no cover - defensive
+        raise AssetBoundaryError(f"{target} is outside {root}") from exc
+    current = root
+    for part in relative.parts[:-1]:
+        current = current / part
+        try:
+            mode = os.lstat(current).st_mode
+        except FileNotFoundError:
+            break  # not created yet — nothing to follow
+        if stat.S_ISLNK(mode):
+            raise AssetBoundaryError(f"{current} is a symlink (path escape)")
+        if not stat.S_ISDIR(mode):
+            raise AssetBoundaryError(f"{current} is not a directory")
+
+
 class AssetLibrary:
     """SHA-256 content-addressed blob store rooted at ``root/cas``."""
 
@@ -209,10 +234,9 @@ class AssetLibrary:
             return False
 
     def _ensure_dirs(self) -> None:
-        for directory in (self._cas, self._incoming):
+        for directory in (self._root, self._cas, self._incoming):
+            _reject_symlink_components(self._root, directory / "_")
             directory.mkdir(parents=True, exist_ok=True)
-            if directory.is_symlink():
-                raise AssetBoundaryError(f"{directory} is a symlink")
 
     # ── admission ─────────────────────────────────────────────────────
 
@@ -283,6 +307,7 @@ class AssetLibrary:
                 os.fsync(out.fileno())
             hex_digest = digest.hexdigest()
             final = self._root / _key_of(hex_digest)
+            _reject_symlink_components(self._root, final)
             final.parent.mkdir(parents=True, exist_ok=True)
             os.chmod(part, 0o444)
             deduplicated = self._publish(part, final, hex_digest, size)
