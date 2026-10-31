@@ -81,6 +81,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = ["slow: marks tests as slow", "integration: requires an external service"]
 
 [tool.ruff]
@@ -92,6 +93,9 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/task255_mutation_probes.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

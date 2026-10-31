@@ -154,8 +154,8 @@ def test_real_process_kill_leaves_a_recoverable_durable_job(tmp_path: Path) -> N
     # (the owning process is dead; a one-hour window then recovers it).
     with sqlite3.connect(db) as connection:
         connection.execute(
-            "UPDATE nexus_job_queue SET started_at = ? WHERE id = ?",
-            ("2000-01-01T00:00:00+00:00", job_id),
+            "UPDATE nexus_job_queue SET started_at = ?, heartbeat_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", "2000-01-01T00:00:00+00:00", job_id),
         )
 
     # A second process recovers the orphaned row over the same sidecar.

@@ -149,9 +149,19 @@ Takeover is explicit and never silent: only `resume_pending` may move a
 live `processing`/`verifying` row back to `pending`, either at process
 startup (`stale_after=None` — the pre-existing recovery, now skipping rows
 this process is itself executing) or expiry-gated (`stale_after=Δ` —
-rows younger than Δ are left to their owner). A reservation never takes a
-`processing` row over (the pre-repair `status IN ('pending','processing')`
-claim let two processes own one execution — R5).
+rows whose **heartbeat** is fresher than the cutoff are left to their
+owner; `started_at` age is no longer the liveness signal, task-256). A
+reservation never takes a `processing` row over (the pre-repair `status IN
+('pending','processing')` claim let two processes own one execution — R5).
+
+**Heartbeat liveness (task-256).** In-flight rows carry a queue-owned
+`heartbeat_at` written atomically with the reservation attempt and refreshed
+every 5 s in `processing`/`verifying` under an attempt-fenced CAS. Recovery
+takes over only a row whose valid heartbeat is strictly older than the
+cutoff; a fresh/equal heartbeat or an UNKNOWN (missing/null/malformed/
+naive/non-UTC/future) heartbeat is refused — startup recovery also refuses
+UNKNOWN legacy rows rather than resurrecting an unprovable attempt. No fake
+heartbeat is ever injected.
 
 **Side-effect fencing point.** For published lanes the irreversible step is
 the rename onto the final name. Ownership is re-read immediately before it
