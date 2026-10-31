@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-30T15:39:23Z",
+  "updated_at": "2026-10-31T04:19:26Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7066,7 +7066,7 @@
       "title_fa": "",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "scripts/board_referee_mutations.py is the adversarial proof for the coordination referee, but no CI job runs it: grep 'board_referee_mutations' .github/workflows/ci.yml -> nothing (continuum/temporal/trust/remote-key campaigns ARE wired). Measured on the pristine main tree (isolated archive copy): 13/14 killed, EXIT 1 — `foreign_worktree_boards_skipped` survived because test_check_unreliable_worktree_enumeration_is_exit_2 asserted only the exit code, and the zero-gates-owner fail-closed branch produced exit 2 as well. task-266 made that test falsifiable (18/18 killed) but the campaign still has no CI rail, so the next survivor will be invisible again.",
       "scope_fa": "",
       "prerequisites": [],
@@ -7083,7 +7083,13 @@
         "the CI job name and the pinned commit SHA of its actions",
         "a deliberately weakened assertion that turns the rail red (before/after run links)",
         "python scripts/board_referee_mutations.py -> N/N killed, exit 0, on the final SHA"
-      ]
+      ],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 2
     },
     {
       "task": "task-258-execution-core-architecture-doc",
@@ -7668,6 +7674,14 @@
       "reason_fa": "ورود helper و factory رسمی رجیستری ناخواسته ماژول CommandBus را بارگذاری می‌کند؛ رفع آن خارج از مسیرهای مجاز است و به اصلاح معماری مستقل یا تصمیم صریح مالک نیاز دارد.",
       "reason_en": "Blocked by incompatible import boundary: importing canonical cognition offered_operations or creative.packs.runtime build_runtime_registry eagerly imports creative.studio.bus via package initializers. Strict no-CommandBus-import requirement cannot be met without a protected architectural change or an explicit owner-approved contract adjustment. No implementation was changed.",
       "resume_when": "Owner resolves protected import boundary or explicitly revises the no-import requirement without relaxing no-dispatch and no-authority guarantees."
+    },
+    {
+      "task": "task-267-truth041-live-lease-alignment",
+      "deferred_by_branch": "arena/m16-closeout-evidence",
+      "at": "2026-10-31T04:19:26Z",
+      "reason_fa": "کارِ این تسک در #292 مرج شده است؛ lease در دست شاخهٔ arena/m14-truth041-lease-expiry است و CLI تسخیر lease زنده را رد می‌کند. پس از انقضای lease یا release توسط دارنده، تسک را done کنید.",
+      "reason_en": "deliverable merged in #292; the lease is held by arena/m14-truth041-lease-expiry and the CLI refuses takeover of an unexpired lease",
+      "resume_when": "lease of arena/m14-truth041-lease-expiry expires or is released"
     }
   ],
   "next_work": [
