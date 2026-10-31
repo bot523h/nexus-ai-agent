@@ -166,6 +166,14 @@ async def _serve_webhook(
         initialized = True
         job_queue = getattr(application, "bot_data", {}).get("job_queue")
         if job_queue is not None:
+            # task-283: webhook mode must obey the same ownership contract as
+            # polling mode.  ``post_init`` normally already acquired the lock
+            # during ``initialize()`` above; re-asserting it here is an
+            # idempotent no-op for the owner and fails closed for a process that
+            # somehow reached this line without ownership.  Recovery must never
+            # run under uncertain ownership, so this precedes
+            # ``resume_pending`` — never the other way round.
+            await job_queue.acquire_ownership()
             await job_queue.resume_pending()
         await application.start()
         started = True

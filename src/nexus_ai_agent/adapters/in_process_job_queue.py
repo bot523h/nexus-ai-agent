@@ -121,24 +121,102 @@ JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
 
 
+try:  # pragma: no cover - import success, not a test, selects the backend
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    fcntl = None  # type: ignore[assignment]
+
+#: Whether ``fcntl`` is importable here.  ``bool(...)`` keeps this a plain
+#: ``bool`` so a static checker cannot fold the non-POSIX branch away and then
+#: report the guard itself as dead code.
+_HAS_FCNTL: bool = bool(fcntl)
+
+
 def _pid_alive(pid: int) -> bool:
-    """Check if a process is alive (best-effort, cross-platform)."""
+    """Check if a process is alive (best-effort, cross-platform).
+
+    **Diagnostics only.**  This is never treated as proof of lock ownership:
+    PIDs are recycled, so a live PID may name a different process than the
+    recorded owner and a dead PID may be the *new* owner of a recycled number.
+    Exclusive ownership is proved by :func:`_lock_descriptor`, never by this.
+    """
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True  # exists but not ours
+    except OSError:  # pragma: no cover - platform-specific kill() failure
+        return False
     return True
 
 
 class QueueOwnershipError(RuntimeError):
     """Raised when another process already owns this queue.
 
-    flock-based exclusive ownership: only one process may hold the
-    queue lock at a time. A second process attempting to acquire the
-    same lock receives this error and must not proceed.
+    Exclusive ownership is an **operating-system-managed advisory lock** on a
+    single rendezvous file (``fcntl.flock`` with ``LOCK_EX | LOCK_NB``).  A
+    platform without ``fcntl`` fails closed rather than degrading to a weaker
+    mechanism.  The lock lives on an open file
+    descriptor held by the owning process, so the kernel releases it when that
+    process dies — there is no stale-lock reclamation step, therefore no
+    stale-detection/deletion race and no PID-reuse hazard.
+
+    The ownership invariant, in one sentence: *at most one live process holds
+    the exclusive lock on the sidecar's rendezvous inode, and a process holds
+    it for exactly the interval between :meth:`acquire_ownership` and
+    :meth:`shutdown` (or its own death).*
+
+    A second process attempting to acquire the same lock receives this error
+    and must not start recovery or execute anything.
     """
+
+
+#: Suffix of the rendezvous file that backs the queue's exclusive lock.
+_LOCK_FILE_SUFFIX = ".lock"
+
+
+def _require_posix_locking() -> None:
+    """Fail closed when this platform has no OS-managed advisory lock.
+
+    NEXUS targets Linux (Dockerfile, Koyeb, every CI job runs
+    ``ubuntu-latest``), where ``fcntl.flock`` gives the property the ownership
+    invariant needs: the lock belongs to the open file description and the
+    kernel drops it when the owner dies.
+
+    A platform without ``fcntl`` gets **no** queue ownership rather than a
+    weaker substitute.  Silently degrading to a lock-file/PID scheme is exactly
+    the failure this module was fixed to remove, and an untested Windows
+    ``msvcrt`` branch would be code nobody runs.  Ownership is mandatory, so
+    the honest outcome is a refusal to start.
+    """
+    if not _HAS_FCNTL:  # pragma: no cover - non-POSIX
+        raise QueueOwnershipError(
+            "this platform provides no fcntl.flock; exclusive queue ownership "
+            "is unsupported here (NEXUS targets POSIX/Linux)"
+        )
+
+
+def _lock_descriptor(fd: int, *, blocking: bool) -> None:
+    """Take an exclusive OS lock on ``fd`` or raise :class:`OSError`.
+
+    ``flock`` semantics are the important part: the lock belongs to the open
+    file description, not to a path and not to a PID.  A crashed or killed
+    owner's descriptor is closed by the kernel and the lock disappears with it.
+    """
+    _require_posix_locking()
+    flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+    fcntl.flock(fd, flags)
+
+
+def _unlock_descriptor(fd: int) -> None:
+    """Release the OS lock held on ``fd`` (idempotent, never raises)."""
+    if not _HAS_FCNTL:  # pragma: no cover - non-POSIX
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:  # pragma: no cover - already released/closed
+        pass
 
 
 #: A verifier re-measures a handler result against the filesystem. It must
@@ -338,51 +416,102 @@ class InProcessJobQueue:
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
             self._memory_connection.row_factory = sqlite3.Row
         self._initialize_db()
-        # Phase 3: flock-based exclusive ownership.  Acquired explicitly
-        # via acquire_ownership() (not in __init__ or enqueue) so tests
-        # that create multiple queue instances for fencing don't block
-        # each other.
+        # Phase 3 (hardened): OS-managed exclusive ownership.  Acquired
+        # explicitly via acquire_ownership() — never in __init__ or enqueue —
+        # so tests that create several instances for CAS-fencing coverage are
+        # not accidentally serialised.  The composition root must acquire the
+        # lock *before* startup recovery; see docs/architecture/JOB_LIFECYCLE.md.
         self._lock_fd: int | None = None
         self._lock_file: Path | None = None
 
+    def _lock_path(self) -> Path:
+        """Path of the rendezvous file backing this queue's exclusive lock."""
+        return self.db_path.parent / (self.db_path.name + _LOCK_FILE_SUFFIX)
+
     def _acquire_flock(self) -> int:
-        """Acquire exclusive ownership via atomic lock file creation.
+        """Acquire exclusive process ownership of this queue's sidecar.
 
-        Uses O_CREAT|O_EXCL to atomically create a lock file. If the file
-        already exists, another process holds ownership. Stale locks (owner
-        process no longer alive) are reclaimed automatically.
+        Implements the :class:`QueueOwnershipError` invariant with an
+        operating-system-managed advisory lock::
 
-        Raises QueueOwnershipError if another live process holds the lock.
+            fd = open(<sidecar>.lock, O_CREAT | O_RDWR)   # stable rendezvous
+            flock(fd, LOCK_EX | LOCK_NB)                  # held by this fd
+            write PID into fd                             # diagnostics only
+
+        Why this is crash-safe and race-free, and what the previous PID
+        lock-file implementation got wrong:
+
+        * **No stale-lock reclamation.**  The kernel owns the lock's lifetime.
+          If the owner crashes, ``SIGKILL``-dies or is ``os._exit``-ed, its
+          descriptors close and the lock vanishes.  There is no
+          "is the PID alive? → unlink → retry" window, which is the window in
+          which two processes could previously both delete a *live* lock file
+          and both create their own — two owners, one sidecar.
+        * **No PID-reuse hazard.**  A recycled PID cannot inherit or forge
+          ownership, because ownership is a descriptor property, not a number.
+        * **No crash between create and write.**  A lock file with no (or a
+          truncated) PID is still a perfectly good rendezvous inode: the lock
+          is decided by ``flock``, and the PID content is only a diagnostic
+          hint.  The old code parsed that content and treated a parse failure
+          as "stale", i.e. it *granted* ownership on the basis of unreadable
+          evidence.
+        * **The rendezvous file is never deleted.**  Unlinking a lock file on
+          release is the classic way to manufacture two lockers on two
+          different inodes: process A holds inode 1, A releases *and unlinks*,
+          B creates inode 2 and locks it, while C (which opened the path
+          before the unlink) locks the now-orphaned inode 1.  B and C both
+          believe they are the owner.  Keeping one inode forever removes that
+          class of bug; the file is a lock *anchor*, not a lease record.
+
+        Raises :class:`QueueOwnershipError` if another live process holds the
+        lock or the rendezvous file cannot be opened.
         """
-        lock_path = self.db_path.parent / (self.db_path.name + ".lock")
-        for _attempt in range(3):
-            try:
-                fd = os.open(
-                    str(lock_path),
-                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                )
-                os.write(fd, str(os.getpid()).encode())
-                self._lock_file = lock_path
-                return fd
-            except FileExistsError:
-                # Check if the owner is still alive
-                try:
-                    owner_pid = int(lock_path.read_text().strip())
-                except (ValueError, OSError):
-                    owner_pid = 0
-                if owner_pid > 0 and _pid_alive(owner_pid):
-                    raise QueueOwnershipError(
-                        f"queue already owned by live process {owner_pid} (lock: {lock_path})"
-                    ) from None
-                # Stale lock: remove and retry
-                try:
-                    lock_path.unlink()
-                except FileNotFoundError:
-                    pass
-                continue
-        raise QueueOwnershipError(
-            f"could not acquire queue lock after 3 attempts (lock: {lock_path})"
-        )
+        lock_path = self._lock_path()
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise QueueOwnershipError(f"queue lock directory unavailable: {exc}") from exc
+
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError as exc:
+            raise QueueOwnershipError(f"queue lock file unavailable: {exc}") from exc
+
+        try:
+            _lock_descriptor(fd, blocking=False)
+        except OSError:
+            # Another live process holds the lock.  Read its diagnostic PID
+            # only to make the error message useful — never to decide.
+            os.close(fd)
+            raise QueueOwnershipError(
+                f"queue already owned by another live process "
+                f"(lock: {lock_path}, recorded pid hint: {self._read_owner_hint(lock_path)})"
+            ) from None
+        except QueueOwnershipError:
+            os.close(fd)
+            raise
+
+        # Diagnostic annotation only.  A failure here must not drop a lock we
+        # legitimately hold, so it is best-effort by construction.
+        try:
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, str(os.getpid()).encode("ascii"))
+            os.fsync(fd)
+        except OSError:  # pragma: no cover - exotic filesystems
+            pass
+
+        self._lock_file = lock_path
+        return fd
+
+    @staticmethod
+    def _read_owner_hint(lock_path: Path) -> str:
+        """Best-effort recorded-PID hint for diagnostics (never a decision)."""
+        try:
+            raw = lock_path.read_text().strip()
+        except OSError:
+            return "unreadable"
+        return raw or "unwritten"
 
     def mark_unknown(self, claim: ExecutionClaim) -> None:
         """Record an UNKNOWN outcome for the current attempt.
@@ -444,32 +573,58 @@ class InProcessJobQueue:
         return True
 
     async def acquire_ownership(self) -> None:
-        """Acquire exclusive queue ownership via lock file.
+        """Acquire exclusive queue ownership before any recovery or execution.
 
-        Phase 3: the application calls this when starting the queue
-        to ensure only one process owns it.  Raises QueueOwnershipError
-        if another live process already holds the lock.  Stale locks
-        (owner process dead) are reclaimed automatically.
+        Phase 3 (hardened): the application calls this when starting the queue
+        to ensure exactly one live process owns the sidecar.  Raises
+        :class:`QueueOwnershipError` if another live process holds the lock —
+        callers must treat that as fatal and **not** proceed to
+        ``resume_pending`` (recovery under uncertain ownership is how two
+        processes recover and execute the same row).
 
-        Tests that create multiple queue instances for fencing tests
-        should NOT call this method — they test multi-process coexistence
-        via CAS fencing, not exclusive ownership.
+        Idempotent for the owning process: a second call is a no-op while the
+        lock is held.  Safe to call after a failed attempt.
+
+        Tests that create multiple queue instances for fencing tests should
+        NOT call this method — they test multi-process coexistence via CAS
+        fencing, not exclusive ownership.
         """
         if self._sqlite_path == ":memory:":
             return
         if self._lock_fd is None:
             self._lock_fd = await asyncio.to_thread(self._acquire_flock)
 
+    @property
+    def owns_process_lock(self) -> bool:
+        """Whether this instance currently holds the exclusive process lock."""
+        return self._lock_fd is not None
+
     def _release_flock(self) -> None:
-        """Release the lock file (idempotent)."""
-        lock_path = getattr(self, "_lock_file", None)
-        if lock_path is not None and isinstance(lock_path, Path):
-            try:
-                lock_path.unlink()
-            except FileNotFoundError:
-                pass
-            self._lock_fd = None
-            self._lock_file = None
+        """Release the exclusive process lock (idempotent, safe to double-call).
+
+        Releases the OS lock and closes the descriptor.  The rendezvous file
+        itself is deliberately preserved (see :meth:`_acquire_flock`): deleting
+        it would let a later opener lock a *different* inode while a
+        concurrent opener still holds the old one.
+
+        Every unexpected failure is swallowed: releasing ownership must never
+        turn a clean shutdown into a crash, and a descriptor we fail to unlock
+        is still released by the kernel when the process exits.
+        """
+        fd, lock_path = self._lock_fd, self._lock_file
+        # Clear the state first so a re-entrant call cannot act on a descriptor
+        # that is already being closed.
+        self._lock_fd = None
+        self._lock_file = None
+        if fd is None:
+            return
+        _unlock_descriptor(fd)
+        try:
+            os.close(fd)
+        except OSError:  # pragma: no cover - already closed
+            pass
+        if lock_path is not None:  # pragma: no cover - diagnostics only
+            logger.debug("queue_ownership_released lock_file=%s", lock_path)
 
     def register_handler(self, job_type: str, handler: JobHandler) -> None:
         """Register the explicit application handler for ``job_type``."""
@@ -1097,7 +1252,10 @@ class InProcessJobQueue:
                     occurred_at=_now(),
                 )
             )
-        # Phase 3: release flock so other processes can acquire ownership
+        # Phase 3: release the process lock only *after* the workers and their
+        # heartbeat children above have stopped.  Releasing earlier would let a
+        # second process acquire ownership and start recovery while this one
+        # still had in-flight attempts.
         self._release_flock()
 
     def _schedule(self, job_id: str) -> None:

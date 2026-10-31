@@ -308,7 +308,9 @@ def test_run_webhook_requires_webhook_secret() -> None:
         run_webhook(StubApplication(), settings=settings)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("failure_phase", ["initialize", "resume", "start", "webhook", "serve"])
+@pytest.mark.parametrize(
+    "failure_phase", ["initialize", "ownership", "resume", "start", "webhook", "serve"]
+)
 def test_webhook_failure_cleans_acquired_resources(
     monkeypatch: pytest.MonkeyPatch, failure_phase: str
 ) -> None:
@@ -325,6 +327,15 @@ def test_webhook_failure_cleans_acquired_resources(
             self.events.append("initialize")
             if failure_phase == "initialize":
                 raise RuntimeError("initialize boom")
+
+        async def acquire_ownership(self) -> None:
+            # task-283: the queue object the webhook root sees must expose the
+            # ownership gate; recording it keeps the ordering assertion honest.
+            self.events.append("acquire_ownership")
+            if failure_phase == "ownership":
+                from nexus_ai_agent.adapters.in_process_job_queue import QueueOwnershipError
+
+                raise QueueOwnershipError("ownership boom")
 
         async def resume_pending(self) -> None:
             self.events.append("resume")
@@ -377,3 +388,73 @@ def test_webhook_failure_cleans_acquired_resources(
         )
     assert application.events.count("shutdown") == 1
     assert application.events.count("stop") == (1 if failure_phase in {"webhook", "serve"} else 0)
+
+
+def test_webhook_acquires_ownership_before_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """task-283: recovery must never run before exclusive process ownership.
+
+    The webhook root is a second composition root over the *same* sidecar as
+    polling mode, so it obeys the same ordering contract: acquire, then
+    ``resume_pending``, and only then start serving.
+    """
+    from nexus_ai_agent.bot import webhook as webhook_module
+
+    class FakeConfig:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+    class FakeServer:
+        def __init__(self, _config: Any) -> None:
+            pass
+
+        async def serve(self) -> None:
+            return None
+
+    class Recorder:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+            self.bot_data = {"job_queue": self}
+            self.bot = self
+
+        async def initialize(self) -> None:
+            self.events.append("initialize")
+
+        async def acquire_ownership(self) -> None:
+            self.events.append("acquire_ownership")
+
+        async def resume_pending(self) -> None:
+            self.events.append("resume")
+
+        async def start(self) -> None:
+            self.events.append("start")
+
+        async def set_webhook(self, **_: Any) -> None:
+            self.events.append("webhook")
+
+        async def stop(self) -> None:
+            self.events.append("stop")
+
+        async def shutdown(self) -> None:
+            self.events.append("shutdown")
+
+    monkeypatch.setitem(
+        sys.modules, "uvicorn", SimpleNamespace(Config=FakeConfig, Server=FakeServer)
+    )
+    recorder = Recorder()
+    asyncio.run(
+        webhook_module._serve_webhook(
+            application=recorder,
+            api_app=object(),
+            webhook_url="https://example.test/webhook",
+            webhook_secret=SECRET,
+            host="127.0.0.1",
+            port=8000,
+            log_level="info",
+        )
+    )
+    assert recorder.events.index("acquire_ownership") < recorder.events.index("resume"), (
+        f"ownership must precede recovery, saw {recorder.events}"
+    )
+    assert recorder.events.index("resume") < recorder.events.index("start")

@@ -12,6 +12,12 @@
 > historical task-231 queue label was corrected after task-231 became the
 > merged provenance-ledger identity (§10bis). Decision records:
 > `docs/DECISION_LOG.md` D-0017, D-0018, D-0019.
+>
+> **task-283** (queue ownership & publication closure) adds §3a (process
+> ownership, startup recovery, crash/restart), §4a (publication/rollback
+> states) and §11 (the handler side-effect boundary), and rewrites the lock
+> primitive described in §3a.  Locks are no longer described as a PID
+> lock-file because they no longer are one.
 
 ## 1. The canonical chain
 
@@ -203,6 +209,83 @@ only via atomic rename: media through the runtime's `.part` staging
 `render_jobs._atomic_write_text` (temp file → `os.replace`). A
 half-written destination is never visible under a final artifact name.
 
+## 3a. Process ownership, startup recovery and crash/restart (task-283)
+
+**One queue sidecar, one executor.** `InProcessJobQueue` opens `<db>.jobs.sqlite3`;
+if two *live* processes open it, both can recover and run the same rows. Row
+level CAS fencing (§2) prevents most duplicate *commits*, but it cannot undo an
+**external side effect a duplicate handler already caused** (see §11). So the
+process layer, not the row layer, is the first authority boundary.
+
+### The ownership invariant
+
+> *At most one live process holds the exclusive lock on the sidecar's
+> rendezvous inode, and a process holds it for exactly the interval between
+> `acquire_ownership()` and `shutdown()` — or its own death.*
+
+The primitive is an **operating-system-managed advisory lock**:
+`fcntl.flock(fd, LOCK_EX | LOCK_NB)` on a descriptor for `<db>.jobs.sqlite3.lock`.
+Because ownership is mandatory, a platform without `fcntl` **fails closed** with
+`QueueOwnershipError` rather than falling back to a weaker lock-file/PID scheme
+(`_require_posix_locking`). NEXUS targets Linux — Dockerfile, Koyeb, and every
+CI job run `ubuntu-latest`. Consequences that the previous implementation
+lacked:
+
+| Property | Why it holds |
+|---|---|
+| crash-safe release | the kernel drops the lock when the owner's descriptors close — `SIGKILL` included |
+| no stale-lock reclamation | there is no "read PID → test liveness → unlink → retry" step, so there is no window to race |
+| PID reuse cannot transfer ownership | ownership is a descriptor property, not a number |
+| a garbage/absent PID is harmless | the PID written into the file is an **operator hint only**, never evidence |
+| one inode forever | the anchor file is never unlinked; unlinking it lets a concurrent opener lock a *different* inode while another still holds the old one (two owners on two inodes) |
+
+`QueueOwnershipError` is raised, never swallowed: **a process that cannot prove
+ownership must not recover or execute.** `_release_flock()` unlocks, closes the
+descriptor and is idempotent (safe after a failed acquisition, safe twice).
+
+### Startup sequence (every composition root)
+
+```
+1. build queue  →  register handlers  →  register publications
+2. acquire_ownership()        # FAIL CLOSED: RuntimeError / typer.Exit(2)
+3. journal backfill           # recovery-adjacent, ownership already held
+4. resume_pending()           # startup recovery
+5. serve / drain
+   6. shutdown()              # cancel workers → cancel heartbeat children
+                              # → reopen their attempts → RELEASE ownership
+```
+
+Ownership is acquired **before** step 3, and recovery is never reached without
+it. Shutdown releases **after** the workers and their heartbeat children have
+stopped; releasing earlier lets a second process acquire the queue and recover a
+row this one is still executing.
+
+| Root | Acquires | Releases |
+|---|---|---|
+| `bot/app.py::_post_init` / `_post_shutdown` (polling) | step 0 of `_post_init` | `_post_shutdown` → `job_queue.shutdown()` |
+| `bot/webhook.py::_serve_webhook` | re-asserted before `resume_pending()` (idempotent; `post_init` normally owns it) | `application.shutdown()` → the same `post_shutdown` hook |
+| `nexus jobs drain` (`cli.py::_run`) | before backfill/`resume_pending_jobs` | `finally` → `shutdown()` on every exit path |
+| one-shot intent runner (`cli.py::_run_all`) | before the first enqueue | `finally` → `shutdown()` |
+
+Enforced structurally by
+`tests/architecture/test_queue_ownership_startup_contract.py` (AST: acquire must
+precede recovery in every root) and behaviourally by
+`tests/integration/test_queue_ownership_lifecycle.py` /
+`tests/integration/test_queue_ownership_processes.py` (real processes).
+
+### Crash / restart behaviour
+
+* **Clean shutdown** → workers stopped, in-flight attempts reopened to `pending`
+  under their own `ExecutionClaim` fence, lock released.
+* **Crash (`SIGKILL`, OOM, power loss)** → the kernel releases the lock; the next
+  start acquires it and `resume_pending()` takes the orphaned rows. The
+  heartbeat rule (§2, PR #283) still decides *which* orphaned rows are safe to
+  take over: a proven-live heartbeat is never taken over, and an unknown
+  heartbeat refuses takeover. **Ownership makes recovery singular; the heartbeat
+  makes it safe.**
+* **Ownership failure** (another live process) → startup aborts; nothing is
+  recovered, nothing executes.
+
 ## 4. Artifact verification contract
 
 **Execution success ≠ Job success.**
@@ -318,6 +401,44 @@ fail-closed (`typed_user_failure`) — no layer of the stack may let a
 non-success claim complete. Any `success: true` result MUST carry a
 verifiable artifact — there is no success-without-artifact path
 (`verification_failed:success_without_artifact_claim`).
+
+## 4a. Publication and rollback states (task-283)
+
+A published artifact must be attributable to **one complete identity: job *and*
+attempt.** Ownership evidence is written **before** the destination is mutated,
+because a crash between "backup created" and "bytes published" otherwise leaves
+a destination nobody can prove ownership of.
+
+Layout (per job, so two jobs emitting the same file name never meet):
+
+```
+<artifact_root>/published/<job_id>/<name>          published bytes
+<artifact_root>/published/<job_id>/.<name>.prev     previous bytes (rollback)
+<artifact_root>/published/<job_id>/.<name>.owner    {"schema":1,"job_id":…,"attempt":…}
+```
+
+| Step | State on disk | Recoverable by |
+|---|---|---|
+| S0 stage | staging only | `retract` removes this attempt's staged temp |
+| S1 claim | sidecar written (identity proven) | — |
+| S2 backup | `.prev` holds the previous artifact | `retract` sees `.prev` ∧ destination missing → restores it |
+| S3 publish | destination holds the new bytes | refusal → `retract` restores `.prev`, or removes the refused bytes when there was none |
+| S4 durable commit | row `completed` | `finalize` drops the staging tree; a stray `.prev` is replaced by the next publication |
+
+`retract` **fails closed**: a missing, unreadable, malformed, wrong-schema or
+truncated sidecar is treated as *absence of proof*, not permission to delete.
+An older attempt can never retract a newer attempt's artifact, a different job
+can never retract this one's, and an identity without an attempt never matches
+an attempt-scoped publication. Workspace membership is decided by resolved-path
+containment (`Path.resolve().is_relative_to`), never by string prefix — the old
+`str(child).startswith(str(parent))` treated `/work/ws-evil` as inside
+`/work/ws` and misclassified a post-publication refusal as a pre-publication
+temp.
+
+**Not claimed:** no atomicity is asserted across steps S2–S4 as a whole. Each
+mutation is atomic (`os.replace`/`rename`), and each *intermediate state* is
+enumerated above and covered by an adversarial test; a crash is always
+recoverable to S2 or S3, never to an unattributable destination.
 
 ## 5. Failure semantics (testable contract, task-181 taxonomy)
 
@@ -609,3 +730,63 @@ prints it. A lifecycle event belonging to a job can never record
 `test_gate5_closure.py::test_every_lifecycle_trace_event_carries_job_id`,
 `::test_result_and_completion_carry_the_durable_job_id` (and mutation
 probe #4, which turns the first RED).
+
+## 11. Handler side-effect boundary — what the queue can and cannot fence (task-283)
+
+**Queue fencing cannot undo an external side effect a stale handler already
+caused.** Fencing stops a stale attempt from *recording* a result; it cannot
+un-send a message, un-charge a card, or un-upload an object.
+
+| Operation (as wired today) | Idempotent? | Provider idempotency key? | Repeatable after UNKNOWN? |
+|---|---|---|---|
+| `pdf_extract`, `creative_render`, `slideshow_render` (local filesystem + FFmpeg) | yes — same workspace, same bytes, replaced by atomic rename | n/a (local) | yes: re-execution is safe |
+| artifact publication (§4a) | yes — same (job, attempt) republishes the same bytes | n/a (local) | yes, under the sidecar proof |
+| Telegram message send (`on_job_finished`) | **no** | **no** — a connect-lost-after-send followed by a retry *is a second message* | **no**; at-least-once by construction |
+| HTTP callback (`adapters/effect/effect_delivery.py`) | only if the receiver honours `Idempotency-Key` | yes — header sent on every attempt | only with receiver support |
+| Object upload (PUT, key-names-the-object) | yes | effectively yes | yes |
+| Database insert on the effect key | at-most-once by construction | yes (unique key) | yes |
+
+Rules:
+
+1. A handler whose external effect is **not** idempotent and has **no** provider
+   key must call `queue.mark_unknown(claim)` when the outcome is unproven. The
+   row then carries `unknown_outcome = 'unknown'`, `recover_job` refuses to
+   recover it, and only an explicit `queue.reconcile(job_id, outcome, evidence)`
+   reopens the path. UNKNOWN is a **fail-closed outcome, not a retry hint.**
+2. Exactly-once execution is **not** claimed anywhere in this system. The honest
+   statement is: at-most-once *commit* (CAS + fence), at-least-once *execution*,
+   and explicitly-reconciled external effects.
+3. Complete handler-side-effect fencing would need a **transactional outbox with
+   provider-side keys for every external effect** — a separate architectural
+   change, deliberately out of scope here. The contract it would require: an
+   effect intent row committed with the job transition, a per-effect adapter
+   with either a provider key or a reconciliation probe, and a test per adapter
+   proving `UNKNOWN → reconcile` never sends twice. Until then, the boundary is
+   `adapters/effect/effect_delivery.py`'s semantic ladder, and §11 is the honest
+   statement of it.
+
+## 12. Known limitations (honest, task-283)
+
+1. **POSIX/Linux only.** Windows has no supported ownership backend: the queue
+   refuses to start there (`QueueOwnershipError`) instead of shipping an
+   untested `msvcrt` branch. Adding one requires a real Windows concurrency test
+   first.
+2. **Single-host only.** `flock` is local. The storage layer already documents
+   that two hosts cannot coordinate through a local lock
+   (`src/nexus_ai_agent/storage/db.py`); multi-host deployment needs a database
+   advisory lock or a lease table, which is not implemented. **Do not deploy two
+   replicas against one shared sidecar** and expect exclusivity.
+3. **Network filesystems.** `flock` semantics depend on the mount; NFS/SMB
+   deployments were not tested. Local ext4/overlayfs is what is evidenced here.
+4. **Legacy flat publications.** Artifacts published before task-283 live at
+   `<artifact_root>/published/<name>` with an attempt-only sidecar. New
+   publications use the job-scoped layout; a `retract` for a legacy path finds no
+   job-scoped sidecar and therefore fails closed (leaves the artifact). No
+   migration is performed — legacy artifacts are read-only in practice.
+5. **Handler side effects** remain at-least-once (§11). No outbox with universal
+   provider keys exists.
+6. **The lock hint is advisory.** The PID written into the anchor file is
+   diagnostic only; operators must not use it to decide anything.
+7. **A one-shot CLI run competes with the bot.** By design: `nexus jobs drain`
+   refuses to run while the bot owns the queue (`typer.Exit(2)`) rather than
+   draining beside it.

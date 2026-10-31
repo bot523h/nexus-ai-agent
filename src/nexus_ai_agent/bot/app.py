@@ -338,6 +338,30 @@ def build_application(
 
     async def _post_init(application: Any) -> None:
         application.bot_data["startup_status"] = {"state": "starting", "degraded": False}
+        # ── Startup step 0 (task-283, P0): exclusive process ownership ───────
+        # Every startup action below — journal backfill, ``resume_pending``,
+        # and eventually job execution — mutates the *same* SQLite sidecar.
+        # If a second live process shares that sidecar, two processes would
+        # recover and execute the same rows; row-level CAS fencing alone cannot
+        # undo an external side effect that a duplicate handler already caused.
+        # So ownership is acquired FIRST and its failure is fatal: a process
+        # that cannot prove it is the sole owner must not touch recovery at all.
+        from nexus_ai_agent.adapters.in_process_job_queue import QueueOwnershipError
+
+        try:
+            await job_queue.acquire_ownership()
+        except QueueOwnershipError as exc:
+            application.bot_data["startup_status"] = {
+                "state": "failed",
+                "phase": "queue_ownership",
+                "degraded": False,
+                "detail": f"{type(exc).__name__}: {exc}"[:240],
+            }
+            logger.exception("queue_ownership_acquisition_failed")
+            raise RuntimeError(
+                "queue ownership could not be acquired; refusing to start a second executor"
+            ) from exc
+        application.bot_data["queue_ownership"] = {"acquired": True}
         # Bind the runtime bot to the bindable engines (reminders,
         # force-join, anonymous chat) and restore pending reminders so
         # a restart does not silently drop them.
@@ -410,6 +434,16 @@ def build_application(
         vitals_handle = application.bot_data.get("self_vitals")
         if vitals_handle is not None:
             await vitals_handle.stop()
+        # task-283: ownership is released LAST, and only after the queue has
+        # stopped its workers and their heartbeat children.  Ordering matters:
+        # releasing while an attempt is still in flight lets a second process
+        # acquire ownership and start recovery over a row this process is
+        # actively executing.  ``shutdown`` itself releases the lock (it is
+        # idempotent), so a failure here cannot leave ambiguous ownership.
+        try:
+            await job_queue.shutdown()
+        except Exception:  # noqa: BLE001 - shutdown must not raise past the hook
+            logger.exception("queue_shutdown_failed")
         try:
             feature_engines.reminders.close()
         except Exception:  # noqa: BLE001

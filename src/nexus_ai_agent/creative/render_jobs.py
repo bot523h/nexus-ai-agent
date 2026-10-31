@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -939,12 +940,13 @@ def cleanup_workspace(record: dict[str, Any]) -> None:
 # so a stale execution with a different workspace cannot address another
 # attempt's staging directory.
 #
-# The attempt_id and job_id are derived from the workspace and artifact paths
-# because the queue does not yet pass the minted attempt identifier to the
-# publication callback (task-255 limitation — full attempt-token fencing at
-# the filesystem boundary requires the queue to thread claim.attempt through
-# the ArtifactPublication callback; until then the workspace path provides
-# per-execution uniqueness).
+# task-283: the queue now threads ``_queue_job_id`` / ``_queue_attempt`` into
+# every publication callback (``_publish_and_reprobe``), so artifact ownership
+# evidence names the *complete* identity — job **and** attempt — rather than an
+# attempt number on its own.  When that identity is absent (a direct callback
+# invocation, e.g. in tests) the staging layout falls back to a path-derived
+# component, and any operation that would mutate published output fails closed
+# because ownership cannot be proved.
 
 CREATIVE_RENDER_PUBLICATION_JOB_TYPE = "creative_render"
 
@@ -986,18 +988,106 @@ def _creative_render_staging(
     )
 
 
+_OWNERSHIP_SIDECAR_SCHEMA = 1
+
+
+def _resolved_within(child: Path, parent: Path) -> bool:
+    """True when ``child`` resolves inside ``parent``.
+
+    Containment must be decided on *resolved* paths.  The previous check used
+    ``str(child).startswith(str(parent))``, which treats ``/work/ws-evil`` as
+    being inside ``/work/ws`` and therefore misclassifies a pre-publication
+    refusal as a post-publication one (or vice versa) purely from a shared
+    string prefix.
+    """
+    try:
+        return child.resolve(strict=False).is_relative_to(parent.resolve(strict=False))
+    except (OSError, RuntimeError):  # pragma: no cover - unresolvable path
+        return False
+
+
+def _publication_layout(staging: AttemptStaging, staged_name: str) -> tuple[Path, Path, Path, Path]:
+    """Return ``(job_dir, published, backup, sidecar)`` for this publication.
+
+    The published namespace is **job-scoped** (``published/<job_id>/<name>``).
+    A flat namespace let two different jobs that produce the same file name
+    overwrite each other's artifact *and* share one ``.prev`` backup, so one
+    job's rollback could restore another job's bytes.
+    """
+    final_root = staging.final_root
+    if final_root is None:  # pragma: no cover - guarded by callers
+        raise RuntimeError("publication requires a declared final_root")
+    job_id = staging.job_id
+    job_dir = Path(final_root) / job_id
+    return (
+        job_dir,
+        job_dir / staged_name,
+        job_dir / f".{staged_name}.prev",
+        job_dir / f".{staged_name}.owner",
+    )
+
+
+def _write_sidecar(sidecar: Path, *, job_id: str, attempt: str | None) -> None:
+    """Atomically record who owns this destination — **before** mutating it.
+
+    Ownership evidence is written first so that a crash between "backup
+    created" and "bytes published" leaves a destination whose owner is still
+    provable.  A torn sidecar would be indistinguishable from a foreign one, so
+    the write goes through a temp file and ``os.replace``.
+    """
+    payload = json.dumps(
+        {
+            "schema": _OWNERSHIP_SIDECAR_SCHEMA,
+            "job_id": job_id,
+            "attempt": attempt,
+        }
+    )
+    tmp = sidecar.with_name(sidecar.name + f".tmp.{os.getpid()}")
+    tmp.write_text(payload + "\n", encoding="utf-8")
+    os.replace(tmp, sidecar)
+
+
+def _read_sidecar(sidecar: Path) -> dict[str, object] | None:
+    """Return the parsed sidecar, or ``None`` when it is absent or unprovable.
+
+    Absent, unreadable, malformed, wrong-schema and truncated sidecars are all
+    reported the same way on purpose: an unreadable ownership record is *not*
+    permission to act, it is the absence of proof.
+    """
+    try:
+        raw = sidecar.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        document = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    if document.get("schema") != _OWNERSHIP_SIDECAR_SCHEMA:
+        return None
+    if not isinstance(document.get("job_id"), str):
+        return None
+    return document
+
+
 def creative_render_publication_callback(
     payload: dict[str, object], result: dict[str, object], artifact_root: Path
 ) -> dict[str, object]:
     """Publish a creative_render artifact via AttemptStaging.
 
-    Stages the artifact from the workspace into the attempt-scoped staging
-    tree, keeps the previous published artifact as ``.prev``, and atomically
-    publishes the staged bytes to the final destination.  Returns a patch
-    dict with the published ``artifact_path``.
+    Lifecycle (each intermediate state is a testable crash point)::
 
-    Idempotent: a retry with the same workspace produces the same staging
-    directory and re-publishes the same bytes.
+        1. stage      artifact bytes copied into this attempt's staging tree
+        2. claim      ownership sidecar (job_id + attempt) written atomically
+        3. backup     existing published bytes renamed to ``.<name>.prev``
+        4. publish    staged bytes atomically renamed into the job's namespace
+        5. patch      caller durably commits COMPLETED; ``finalize`` then runs
+
+    Returns a patch dict with the published ``artifact_path``.
+
+    Idempotent: a retry with the same (job, attempt) identity re-publishes the
+    same bytes into the same job-namespaced destination.
     """
     artifact_path_raw = result.get("artifact_path")
     if not isinstance(artifact_path_raw, str) or not artifact_path_raw:
@@ -1021,28 +1111,29 @@ def creative_render_publication_callback(
     assert staging.final_root is not None, "staging requires final_root"
     staging.prepare()
 
-    # Stage the artifact into the staging tree.
+    # 1) Stage the artifact into this attempt's tree.
     staged_name = artifact_path.name
     staged_path = staging.stage_path(staged_name)
     data = artifact_path.read_bytes()
     staging.write(staged_name, data)
 
-    target_rel = staged_name
-    published_path = staging.final_root / target_rel
-    backup_path = staging.final_root / f".{staged_name}.prev"
+    job_dir, published_path, backup_path, sidecar_path = _publication_layout(staging, staged_name)
+    try:
+        job_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(f"publish: job namespace unavailable: {exc}") from exc
 
+    attempt_component = str(_qatt) if isinstance(_qatt, (int, str)) else None
+
+    # 2) Claim the destination before touching it.
+    _write_sidecar(sidecar_path, job_id=staging.job_id, attempt=attempt_component)
+
+    # 3) Keep the previous bytes recoverable.
     if published_path.exists():
-        # Atomic same-directory rename: previous bytes move to .prev.
         published_path.rename(backup_path)
 
-    # Atomic publish: staging → final destination.
-    resolved = staging.publish(staged_path, target_rel)
-
-    # Write sidecar recording attempt ownership (queue-scoped only).
-    queue_attempt = payload.get("_queue_attempt") or result.get("_queue_attempt")
-    if isinstance(queue_attempt, (int, str)):
-        sidecar_path = resolved.parent / f".{resolved.name}.owner"
-        sidecar_path.write_text(json.dumps({"attempt": str(queue_attempt)}) + "\n")
+    # 4) Atomic publish: staging → final destination (inside the job namespace).
+    resolved = staging.publish(staged_path, f"{staging.job_id}/{staged_name}")
 
     return {
         "artifact_path": str(resolved),
@@ -1053,11 +1144,22 @@ def creative_render_publication_callback(
 def creative_render_retract_callback(
     payload: dict[str, object], result: dict[str, object], artifact_root: Path
 ) -> None:
-    """Retract a refused creative_render publication.
+    """Retract a refused creative_render publication — or nothing at all.
 
-    Removes the staged temp and restores the previous published artifact from
-    the ``.prev`` backup when present.  Never touches an artifact it cannot
-    prove to be this attempt's.
+    Fails **closed**: without a readable sidecar proving that this exact
+    ``(job_id, attempt)`` owns the destination, the published bytes and the
+    ``.prev`` backup are left untouched.  A missing, malformed or truncated
+    sidecar is the absence of proof, not permission to act.
+
+    Handled states:
+
+    * *pre-publish* (artifact still in the workspace) — remove only this
+      attempt's staged temp; never touch published output.
+    * *interrupted publication* (`.prev` exists, destination missing) — restore
+      the backup so a crash between backup and publish does not lose the
+      previous artifact.
+    * *post-publish* (destination replaced, re-probe refused) — restore the
+      backup, or remove the refused bytes when there was no previous artifact.
     """
     artifact_path_raw = result.get("artifact_path")
     if not isinstance(artifact_path_raw, str) or not artifact_path_raw:
@@ -1080,52 +1182,52 @@ def creative_render_retract_callback(
     )
     assert staging.final_root is not None, "staging requires final_root"
     staged_name = artifact_path.name
+
+    # Always allowed: discard this attempt's own staged temp (it is addressed
+    # by this attempt's staging directory, so it cannot name another attempt's
+    # bytes).
     staged_path = staging.staging_dir / staged_name
     if staged_path.exists():
         staged_path.unlink()
 
-    backup_path = staging.final_root / f".{staged_name}.prev"
-    published_path = staging.final_root / staged_name
+    # Everything below mutates published output, so it requires proof.
+    _, published_path, backup_path, sidecar_path = _publication_layout(staging, staged_name)
+    document = _read_sidecar(sidecar_path)
+    if document is None:
+        return  # missing/unreadable/malformed sidecar -> fail closed
+    if document.get("job_id") != staging.job_id:
+        return  # another job owns this destination
+    # Compare the *complete* identity.  ``None`` (no attempt supplied) only ever
+    # matches ``None``, so a job-scoped direct call can never retract an
+    # attempt-scoped publication, and an older attempt can never retract a
+    # newer attempt's artifact.
+    caller_attempt = str(_qatt) if isinstance(_qatt, (int, str)) else None
+    recorded_attempt = document.get("attempt")
+    if str(recorded_attempt) != str(caller_attempt):
+        return  # a newer (or older) attempt owns it -> never retract it
 
-    # Verify sidecar: if a newer attempt owns this artifact, fail closed
-    # (queue-scoped only — direct callback calls skip this check).
-    queue_attempt = payload.get("_queue_attempt") or result.get("_queue_attempt")
-    if isinstance(queue_attempt, (int, str)):
-        sidecar_path = staging.final_root / f".{staged_name}.owner"
-        if sidecar_path.exists():
-            try:
-                sidecar = json.loads(sidecar_path.read_text())
-                sidecar_attempt = sidecar.get("attempt")
-            except (json.JSONDecodeError, KeyError):
-                sidecar_attempt = None
-            if sidecar_attempt is not None and sidecar_attempt != str(queue_attempt):
-                # Fail-closed: refuse to touch newer attempt's output.
-                return
+    if backup_path.exists() and not published_path.exists():
+        # Crash between step 3 and step 4: the previous artifact is stranded in
+        # the backup and the destination is absent.  Roll the publication back.
+        backup_path.rename(published_path)
+        return
 
-    # Distinguish pre-publish (artifact_path is under workspace) from
-    # post-publish (artifact_path is the published path).
-    is_post_publish = not str(artifact_path).startswith(str(workspace))
+    is_post_publish = not _resolved_within(artifact_path, workspace)
     if is_post_publish:
-        # Post-publish refusal: restore previous from backup or remove
-        # the refused bytes when there was none.
         if backup_path.exists():
             if published_path.exists():
                 published_path.unlink()
             backup_path.rename(published_path)
         elif published_path.exists():
             published_path.unlink()
-    # Pre-publish refusal: only the staged temp was removed; the published
-    # artifact (if any) is untouched.
+    # Pre-publish refusal: only the staged temp was removed above; the
+    # published artifact (if any) is untouched.
 
 
 def creative_render_finalize_callback(
     payload: dict[str, object], result: dict[str, object], artifact_root: Path
 ) -> None:
-    """Clean up the staging directory after the durable COMPLETED commit.
-
-    Never raises — the published bytes are already durable and a stray
-    staging directory is cleaned by the next publication or an operator.
-    """
+    """Clean up after the durable COMPLETED commit (best-effort, never raises)."""
     artifact_path_raw = result.get("artifact_path")
     if not isinstance(artifact_path_raw, str) or not artifact_path_raw:
         return
