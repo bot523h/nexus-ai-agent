@@ -1,0 +1,59 @@
+[
+  {
+    "name": "session-default",
+    "sha": "244a01ce8b2d751e2f35699c82a4c758321691f8",
+    "mutation": "replace settings-derived path by data/app.sqlite in async def get_session(",
+    "command": [
+      "/home/user/night-shift/.venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/integration/test_owner_db_path_contract.py",
+      "--tb=short"
+    ],
+    "cwd": "/home/user/night-shift/mutation",
+    "environment": {
+      "PYTHONPATH": "/home/user/night-shift/mutation/src",
+      "python": "3.11.2"
+    },
+    "started_at": "2026-09-26T05:12:02.950754+00:00",
+    "finished_at": "2026-09-26T05:12:04.397896+00:00",
+    "exit_code": 1,
+    "killed": true
+  },
+  {
+    "name": "schema-default",
+    "sha": "244a01ce8b2d751e2f35699c82a4c758321691f8",
+    "mutation": "replace settings-derived path by data/app.sqlite in async def create_all_tables(",
+    "command": [
+      "/home/user/night-shift/.venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/integration/test_owner_db_path_contract.py",
+      "--tb=short"
+    ],
+    "cwd": "/home/user/night-shift/mutation",
+    "environment": {
+      "PYTHONPATH": "/home/user/night-shift/mutation/src",
+      "python": "3.11.2"
+    },
+    "started_at": "2026-09-26T05:12:04.398410+00:00",
+    "finished_at": "2026-09-26T05:12:06.261466+00:00",
+    "exit_code": 1,
+    "killed": true
+  },
+  {
+    "name": "restored",
+    "exit_code": 0,
+    "command": [
+      "/home/user/night-shift/.venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/integration/test_owner_db_path_contract.py",
+      "--tb=short"
+    ],
+    "timestamp": "2026-09-26T05:12:08.051042+00:00"
+  }
+]

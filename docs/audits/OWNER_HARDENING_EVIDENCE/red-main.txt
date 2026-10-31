@@ -1,0 +1,31 @@
+FFFF.F..                                                                 [100%]
+=================================== FAILURES ===================================
+______ test_runtime_migration_and_online_backup_share_database[absolute] _______
+/home/user/night-shift/main/tests/integration/test_owner_db_path_contract.py:48: in test_runtime_migration_and_online_backup_share_database
+    assert actual == expected
+E   AssertionError: assert PosixPath('/tmp/pytest-of-user/pytest-0/test_runtime_migration_and_onl0/data/app.sqlite') == PosixPath('/tmp/pytest-of-user/pytest-0/test_runtime_migration_and_onl0/configured/runtime.sqlite')
+______ test_runtime_migration_and_online_backup_share_database[relative] _______
+/home/user/night-shift/main/tests/integration/test_owner_db_path_contract.py:48: in test_runtime_migration_and_online_backup_share_database
+    assert actual == expected
+E   AssertionError: assert PosixPath('/tmp/pytest-of-user/pytest-0/test_runtime_migration_and_onl1/data/app.sqlite') == PosixPath('/tmp/pytest-of-user/pytest-0/test_runtime_migration_and_onl1/configured/runtime.sqlite')
+____ test_runtime_migration_and_online_backup_share_database[legacy_alias] _____
+/home/user/night-shift/main/tests/integration/test_owner_db_path_contract.py:48: in test_runtime_migration_and_online_backup_share_database
+    assert actual == expected
+E   AssertionError: assert PosixPath('/tmp/pytest-of-user/pytest-0/test_runtime_migration_and_onl2/data/app.sqlite') == PosixPath('/tmp/pytest-of-user/pytest-0/test_runtime_migration_and_onl2/configured/runtime.sqlite')
+____ test_runtime_migration_and_online_backup_share_database[primary_wins] _____
+/home/user/night-shift/main/tests/integration/test_owner_db_path_contract.py:48: in test_runtime_migration_and_online_backup_share_database
+    assert actual == expected
+E   AssertionError: assert PosixPath('/tmp/pytest-of-user/pytest-0/test_runtime_migration_and_onl3/data/app.sqlite') == PosixPath('/tmp/pytest-of-user/pytest-0/test_runtime_migration_and_onl3/configured/runtime.sqlite')
+____________ test_no_argument_schema_creation_uses_configured_path _____________
+/home/user/night-shift/main/tests/integration/test_owner_db_path_contract.py:76: in test_no_argument_schema_creation_uses_configured_path
+    assert expected.is_file()
+E   AssertionError: assert False
+E    +  where False = is_file()
+E    +    where is_file = PosixPath('/tmp/pytest-of-user/pytest-0/test_no_argument_schema_creati0/configured/schema.sqlite').is_file
+=========================== short test summary info ============================
+FAILED tests/integration/test_owner_db_path_contract.py::test_runtime_migration_and_online_backup_share_database[absolute]
+FAILED tests/integration/test_owner_db_path_contract.py::test_runtime_migration_and_online_backup_share_database[relative]
+FAILED tests/integration/test_owner_db_path_contract.py::test_runtime_migration_and_online_backup_share_database[legacy_alias]
+FAILED tests/integration/test_owner_db_path_contract.py::test_runtime_migration_and_online_backup_share_database[primary_wins]
+FAILED tests/integration/test_owner_db_path_contract.py::test_no_argument_schema_creation_uses_configured_path
+5 failed, 3 passed in 0.74s

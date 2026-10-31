@@ -1,0 +1,1137 @@
+[
+  {
+    "branch": "arena/01a0d2e0-nexus-ai-agent",
+    "sha": "9c3a34f107b4b5f3c878a0ec2a7d82e8c24614d3",
+    "claim": {
+      "task": "task-177-creative-runtime-s3",
+      "title": "Session 3: creative runtime completion — artifact truth, multi-segment, OTIO interop",
+      "title_fa": "نشست ۳: تکمیل ران‌تایم خلاقیت — حقیقت آرتیفکت، چندسگمنتی، تعامل OTIO",
+      "zone": "creative-runtime-s3",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "Session 3 creative runtime completion on main-line: port PR#64 value without duplicate architecture (execution semantics, plan bridge, assembly, availability, canonical OTIO, vision packs); artifact truth (logical vs spec vs physical sha + probe); NAG-003 classification; E1 segment isolation; 3-segment RGB proof; integer-µs time algebra; real-parser OTIO interop incl. markers/ExternalReference; 4-state capability lifecycle; required-pack fail-closed enforcement; LUT + burn-in real-or-honest; anti-vacuity mutations. Locked files untouched: delivery/{models,operations}.py (PR#33), api/app.py (PR#58), queue/runtime (PR#60/PR#63).",
+      "scope_fa": "تکمیل ران‌تایم خلاقیت روی main-line با شواهد واقعی آرتیفکت و پارسر.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "single canonical renderer: Project -> ExecutionPlan -> LaneIR -> compiler -> executor -> verified artifact (no second renderer; architecture ratchet)",
+        "artifact truth: sha256 from real bytes, ffprobe-or-documented-fallback probe, size>0, failure cannot COMPLETE",
+        "E1: per-segment compilation referentially isolated (title A/B + caption C test, re-compile stable)",
+        "3-segment deterministic RGB render: order preserved, exact duration, single process",
+        "OTIO: real-parser round-trip (Timeline/Stack/Track/Clip/Gap/ExternalReference/source_range/markers/metadata/duration); include_markers honored",
+        "capability lifecycle REGISTERED/INSTALLED/AVAILABLE/RUNNABLE separated; required packs fail closed at dispatch",
+        "LUT + burn-in real-executable with typed unavailable paths (no fake render)",
+        "execution truth table machine-enforced (RENDERED_ARTIFACT contract: bytes+sha+size verified)",
+        "anti-vacuity: 7 mutations each RED then restored GREEN",
+        "deterministic tests; ruff+mypy clean; CI test/lint/lint-fast/migrate-postgres green; docs+board reflect measured state"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_execution_semantics.py tests/unit/test_artifact_truth.py tests/unit/test_plan_effect_twins.py tests/unit/test_assembly_render_proof.py tests/unit/test_time_algebra.py tests/unit/test_otio_interop.py tests/unit/test_capability_lifecycle.py tests/unit/test_lane_lut_subtitle.py tests/unit/test_lut_library.py tests/unit/test_antivacity_mutations.py tests/unit/test_creative_render_jobs.py tests/unit/test_creative_surface.py",
+        "ruff check + ruff format --check + mypy on touched modules",
+        "CI run green (test, lint, lint-fast, migrate-postgres) on the session PR"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/",
+        "src/nexus_ai_agent/continuum/",
+        "tests/unit/",
+        "tests/architecture/",
+        "docs/ops/",
+        "docs/README.md",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "CHANGELOG.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0d2e0-nexus-ai-agent",
+      "claimed_at": "2026-09-24T10:11:01Z",
+      "ttl_hours": 48,
+      "gates_owner": true,
+      "note": "Session 3 claim; gates_owner=true (no other active gates owner on the board). Evidence paths updated to the built test files (E1 lives in test_plan_effect_twins.py; RGB proof in test_assembly_render_proof.py; OTIO in test_otio_interop.py; required-packs gate in test_capability_lifecycle.py; LUT/burn-in execution in test_assembly_render_proof.py + test_creative_render_jobs.py). Non-exclusive touches outside the zone (no active contender, verified): src/nexus_ai_agent/bot/creative_surface.py (honest surface matrix), pyproject.toml (otio extra). Locked files verified untouched. PR#67 opened 2026-09-24 (base main 035a896). CI green on PR#67 (run 35993537741: lint, lint-fast, migrate-postgres, test all pass; title/drawtext proof runs on CI's full FFmpeg). Also deflaked pre-existing reminder race (test-only, tests/unit/ in-zone; product untouched). Final head f292f11 CI green both events (pr 36000760452, push 36000754891). PR#66 triaged: 26 pre-existing conflicts vs main, +1 from #67 (docs row); semantic reconciliation table in the session record; merge order #67 first."
+    }
+  },
+  {
+    "branch": "arena/01a0d3af-nexus-ai-agent",
+    "sha": "749807486709f08810ae801395004cf1c7945938",
+    "claim": {
+      "task": "task-178-gate4-cross-layer",
+      "title": "Gate 4: cross-layer vertical slice verification (T01-T02-T22-T31-T64)",
+      "title_fa": "گیت ۴: اثبات اسلایس عمودی بین‌لایه‌ای (T01-T02-T22-T31-T64)",
+      "zone": "gate4-integration",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Deterministic integration harness proving Intent → TypedCommand → Capability → Validation → Authorization → Job → Runtime → Artifact → Verification → Result on a merged baseline (main + PR#67 runtime + PR#68 command boundary); per-step truth (CONTRACT/DOMAIN/JOB/REAL_RUNTIME/ARTIFACT/E2E), full failure matrix, persist→restart→reopen proof, PASS/FAIL/MISSING/NOT_VERIFIED Truth Matrix. Owns no runtime/command/job implementation — consumes and verifies only.",
+      "scope_fa": "هارنس انتگریشن قطعی برای اثبات زنجیرهٔ کامل Intent تا Result روی خط پایهٔ ادغام‌شده (main + PR#67 + PR#68)، با ماتریس حقیقت و ماتریس شکست. فقط مصرف و راستی‌آزمایی — نه بازپیاده‌سازی.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "one real journey: a TypedCommand chain executes end-to-end through queue + bus + FFmpeg lane to a verified non-empty artifact with matching sha256 (provenance: command_id → operation_id → job_id → revision → artifact)",
+        "reopen proof: after execution, a fresh queue instance in a new context re-reads job status/result/artifact facts from SQLite; any unsupported restart semantics recorded verbatim as NOT_VERIFIED",
+        "failure matrix: unknown operation / invalid schema / capability unavailable / authorization failure / runtime failure / artifact verification failure / duplicate command / revision conflict each pinned cross-layer with side-effect-free rejections",
+        "Truth Matrix report: every cell exactly PASS | FAIL | MISSING | NOT_VERIFIED; distinctions kept: runtime completed ≠ artifact verified ≠ job succeeded",
+        "no layer rebuilt: zero new executor/compiler/LaneIR/LUT/burn-in/OTIO/hash/ffprobe/capability/rendering implementation"
+      ],
+      "evidence_required": [
+        "pytest -q tests/integration/test_gate4_vertical_slice.py output (commands + observed result)",
+        "docs/audits/GATE4_TRUTH_MATRIX.json regenerated by the harness itself",
+        "docs/audits/GATE4_CROSS_LAYER_SLICE_2026-09-24.md report citing exact commands",
+        "agent_board check --files … → no overlap before push"
+      ],
+      "exclusive_paths": [
+        "tests/integration/test_gate4_vertical_slice.py",
+        "tests/integration/gate4_slice.py",
+        "docs/audits/GATE4_CROSS_LAYER_SLICE_2026-09-24.md",
+        "docs/audits/GATE4_TRUTH_MATRIX.json"
+      ],
+      "agent_branch": "arena/01a0d3af-nexus-ai-agent",
+      "claimed_at": "2026-09-24T17:05:00Z",
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "Agent 4 (Gate 4). Baseline = main + PR#67 + PR#68 merged per owner directive; only integration composition resolved, no foreign-layer semantics patched. EVIDENCE 2026-09-24: pytest tests/integration/test_gate4_vertical_slice.py → 14 passed (~3s, writes GATE4_TRUTH_MATRIX.json, byte-deterministic across reruns); full local diagnostic sweep unit+arch 2045 passed/6 skipped, integration 96 passed/21 skipped; ruff check . clean, ruff format --check . clean (502 files). check --files on my four exclusive paths → exit 0 'no overlap'; full-diff check exit 1 = 84 paths all task-177 (owner-directed merge composition, disclosed in takeover_log + PR body). Report: docs/audits/GATE4_CROSS_LAYER_SLICE_2026-09-24.md. Gates deferred to gates owner."
+    }
+  },
+  {
+    "branch": "arena/01a0d4b6-nexus-ai-agent",
+    "sha": "5f273f08f543ae7916ccdf1eeee8544a44cbf81b",
+    "claim": {
+      "task": "task-181-gate5-closure",
+      "title": "Gate 5 closure/reconciliation: failure semantics + 6-state taxonomy + notifier truth + trace job_id + staging leak (Agent E)",
+      "title_fa": "بستن و سازش‌دهی Gate 5: معناشناسی خطا + طبقه‌بندی شش‌حالته + حقیقت نوتیفایر + job_id در ردیابی + نشت استیجینگ",
+      "zone": "job-lifecycle-gate5-closure",
+      "priority": "P0",
+      "status": "active",
+      "gates_owner": false,
+      "prerequisites": [
+        "task-178-job-lifecycle",
+        "task-180-verification-gap-closure"
+      ],
+      "scope": "Reconcile Gate-5-local claims (LOCAL-ONLY commits 38e605f/0c532af/8110110) against the GitHub truth (main 035a896; PR#71=9e9c753; PR#74=05d647e) and close only the real remaining gaps on the task-178/180 contract: (A) typed user failure success=False must NEVER map to COMPLETED — failure status + notifier never emits success; (B) failure taxonomy FAILED_RETRYABLE/FAILED_TERMINAL + explicit classification table with per-failure reasons, illegal transitions fail closed; scheduler explicitly NOT IMPLEMENTED; (C) canonical verification kept as delivered by task-180 (zero re-implementation); legacy lane stays recorded+owned by task-165; (D) stage->verify->publish->re-probe ordering for externally published artifacts (pdf sidecar): reproduced staging leak + old-artifact destruction, smallest fix + regression; (E) trace: job_id bound at every lifecycle point (queue/worker/result/trace/notifier/audit); (F) notifier source of truth = durable lifecycle state (result.success can never turn a failure into a success); (G) mutation harness (remove verification / force COMPLETED on typed failure / skip atomic publish / drop job_id / notifier trusts result.success / bypass failure_status) GREEN->RED->restore.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/application/ports/job_queue.py",
+        "src/nexus_ai_agent/jobs/",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/worker.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/slideshow_notify.py",
+        "tests/unit/test_job_lifecycle.py",
+        "tests/unit/test_failure_semantics.py",
+        "tests/unit/test_job_verification_gaps.py",
+        "tests/unit/test_creative_notify.py",
+        "tests/unit/test_bot_slideshow_notify.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "tests/integration/test_gate5_closure.py",
+        "tests/integration/test_verification_gap_closure.py",
+        "tests/integration/test_in_process_job_queue.py",
+        "scripts/gate5_mutation_probes.py",
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "docs/DECISION_LOG.md",
+        "docs/README.md",
+        "docs/audits/GATE5_CLOSURE_2026-09-24.md",
+        "docs/audits/GATE5_TRUTH_MATRIX.json",
+        "src/nexus_ai_agent/cli.py",
+        "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+      ],
+      "note": "AMENDED 2026-09-24: adr/0007 + adr/README.md dropped from exclusive paths (ADR dir is docs-layer-only per adr/README rule 3; failure semantics lives in DECISION_LOG D-0015 — no ADR file created); cli.py added (JobResult/job_id type ripple) and VERIFICATION_TRUTH_MATRIX.json (task-181 revision). | DELIVERED via PR#78 (head b030442, CI green on push run 36056456707 + PR run 36057676037; one flaky PR run 36056491410 on the same head — push run green, retriggered PR run green). Gate 5 closure claims audited + reproduced + fixed: typed failure -> COMPLETED (reproduced), one-state failures, pdf staging leak (old artifact destroyed, reproduced), trace job_id absent (reproduced). Mutation harness 6/6 (scripts/gate5_mutation_probes.py). Evidence: docs/audits/GATE5_CLOSURE_2026-09-24.md + GATE5_TRUTH_MATRIX.json. Supersedes PR#71/#74.",
+      "acceptance_criteria": [
+        "typed render failure (success=False) reaches a failure status, NEVER COMPLETED; notifier must not emit success (regression test)",
+        "JobStatus = pending/processing/verifying/completed/failed_retryable/failed_terminal with unit-enforced transition matrix; every illegal transition fails closed",
+        "classification table for temporary IO / dependency unavailable / worker crash / invalid input / unsupported operation / artifact verification failure / permission error / corrupt output — each row tested; scheduler explicitly NOT IMPLEMENTED",
+        "verification refusal scenario: job != COMPLETED, final artifact not published, staging + temp cleaned, previous valid artifact preserved, failure reason persisted (reproduced before fix)",
+        "job_id non-null on every persisted lifecycle event and trace/audit log line of its job (reproduced before fix)",
+        "notification matrix: COMPLETED->success, FAILED_RETRYABLE->failure, FAILED_TERMINAL->terminal failure, VERIFYING->never success, verification failure->never success (lifecycle state is the source of truth)",
+        "mutation probes (6 listed invariants) each turn the suite RED and restore to GREEN with SHAs recorded",
+        "full regression green (no test deleted/skipped/weakened), collect-only before/after diff clean, ruff+mypy clean, Gate 5 audit + truth matrix published, CI green on the exact pushed head"
+      ],
+      "evidence_required": [
+        "pytest output for contract / integration / failure-injection / notification suites",
+        "mutation probe log: baseline GREEN -> mutant RED -> restore -> SHA restored -> GREEN",
+        "pytest --collect-only before/after diff (added/removed/renamed/skipped)",
+        "ruff check + mypy output",
+        "CI run URL green on the exact final head"
+      ],
+      "agent_branch": "arena/01a0d4b6-nexus-ai-agent",
+      "claimed_at": "2026-09-24T19:04:01Z",
+      "ttl_hours": 48
+    }
+  },
+  {
+    "branch": "arena/01a0d5a1-nexus-ai-agent",
+    "sha": "cef7045ca630cfe459a0541fbc891de27b4efa41",
+    "claim": {
+      "task": "task-181-gate5-closure",
+      "title": "Gate 5 closure/reconciliation: failure semantics + 6-state taxonomy + notifier truth + trace job_id + staging leak (Agent E)",
+      "title_fa": "بستن و سازش‌دهی Gate 5: معناشناسی خطا + طبقه‌بندی شش‌حالته + حقیقت نوتیفایر + job_id در ردیابی + نشت استیجینگ",
+      "zone": "job-lifecycle-gate5-closure",
+      "priority": "P0",
+      "status": "active",
+      "gates_owner": false,
+      "prerequisites": [
+        "task-178-job-lifecycle",
+        "task-180-verification-gap-closure"
+      ],
+      "scope": "Reconcile Gate-5-local claims (LOCAL-ONLY commits 38e605f/0c532af/8110110) against the GitHub truth (main 035a896; PR#71=9e9c753; PR#74=05d647e) and close only the real remaining gaps on the task-178/180 contract: (A) typed user failure success=False must NEVER map to COMPLETED — failure status + notifier never emits success; (B) failure taxonomy FAILED_RETRYABLE/FAILED_TERMINAL + explicit classification table with per-failure reasons, illegal transitions fail closed; scheduler explicitly NOT IMPLEMENTED; (C) canonical verification kept as delivered by task-180 (zero re-implementation); legacy lane stays recorded+owned by task-165; (D) stage->verify->publish->re-probe ordering for externally published artifacts (pdf sidecar): reproduced staging leak + old-artifact destruction, smallest fix + regression; (E) trace: job_id bound at every lifecycle point (queue/worker/result/trace/notifier/audit); (F) notifier source of truth = durable lifecycle state (result.success can never turn a failure into a success); (G) mutation harness (remove verification / force COMPLETED on typed failure / skip atomic publish / drop job_id / notifier trusts result.success / bypass failure_status) GREEN->RED->restore.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/application/ports/job_queue.py",
+        "src/nexus_ai_agent/jobs/",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/worker.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/slideshow_notify.py",
+        "tests/unit/test_job_lifecycle.py",
+        "tests/unit/test_failure_semantics.py",
+        "tests/unit/test_job_verification_gaps.py",
+        "tests/unit/test_creative_notify.py",
+        "tests/unit/test_bot_slideshow_notify.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "tests/integration/test_gate5_closure.py",
+        "tests/integration/test_verification_gap_closure.py",
+        "tests/integration/test_in_process_job_queue.py",
+        "scripts/gate5_mutation_probes.py",
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "docs/DECISION_LOG.md",
+        "docs/README.md",
+        "docs/audits/GATE5_CLOSURE_2026-09-24.md",
+        "docs/audits/GATE5_TRUTH_MATRIX.json",
+        "src/nexus_ai_agent/cli.py",
+        "docs/audits/VERIFICATION_TRUTH_MATRIX.json"
+      ],
+      "note": "AMENDED 2026-09-24: adr/0007 + adr/README.md dropped from exclusive paths (ADR dir is docs-layer-only per adr/README rule 3; failure semantics lives in DECISION_LOG D-0019 — no ADR file created); cli.py added (JobResult/job_id type ripple) and VERIFICATION_TRUTH_MATRIX.json (task-181 revision). | DELIVERED via PR#78 (head b030442, CI green on push run 36056456707 + PR run 36057676037; one flaky PR run 36056491410 on the same head — push run green, retriggered PR run green). Gate 5 closure claims audited + reproduced + fixed: typed failure -> COMPLETED (reproduced), one-state failures, pdf staging leak (old artifact destroyed, reproduced), trace job_id absent (reproduced). Mutation harness 6/6 (scripts/gate5_mutation_probes.py). Evidence: docs/audits/GATE5_CLOSURE_2026-09-24.md + GATE5_TRUTH_MATRIX.json. Supersedes PR#71/#74. | CONTINUATION 2026-09-24T23:06:38Z on arena/01a0d5a1-nexus-ai-agent (owner directive: GATE 5 FINAL REPAIR — execution fencing + artifact publication correctness + durable state truth + re-gate). PR#78 head 5f273f08 is CONFLICTING with main 16daebc (after PR#72/#77 merged); this branch merges 5f273f08 into main commit-for-commit (no rebase/force-push of arena/01a0d4b6) and continues the repair on top. Successor PR supersedes PR#78.",
+      "acceptance_criteria": [
+        "typed render failure (success=False) reaches a failure status, NEVER COMPLETED; notifier must not emit success (regression test)",
+        "JobStatus = pending/processing/verifying/completed/failed_retryable/failed_terminal with unit-enforced transition matrix; every illegal transition fails closed",
+        "classification table for temporary IO / dependency unavailable / worker crash / invalid input / unsupported operation / artifact verification failure / permission error / corrupt output — each row tested; scheduler explicitly NOT IMPLEMENTED",
+        "verification refusal scenario: job != COMPLETED, final artifact not published, staging + temp cleaned, previous valid artifact preserved, failure reason persisted (reproduced before fix)",
+        "job_id non-null on every persisted lifecycle event and trace/audit log line of its job (reproduced before fix)",
+        "notification matrix: COMPLETED->success, FAILED_RETRYABLE->failure, FAILED_TERMINAL->terminal failure, VERIFYING->never success, verification failure->never success (lifecycle state is the source of truth)",
+        "mutation probes (6 listed invariants) each turn the suite RED and restore to GREEN with SHAs recorded",
+        "full regression green (no test deleted/skipped/weakened), collect-only before/after diff clean, ruff+mypy clean, Gate 5 audit + truth matrix published, CI green on the exact pushed head"
+      ],
+      "evidence_required": [
+        "pytest output for contract / integration / failure-injection / notification suites",
+        "mutation probe log: baseline GREEN -> mutant RED -> restore -> SHA restored -> GREEN",
+        "pytest --collect-only before/after diff (added/removed/renamed/skipped)",
+        "ruff check + mypy output",
+        "CI run URL green on the exact final head"
+      ],
+      "agent_branch": "arena/01a0d5a1-nexus-ai-agent",
+      "claimed_at": "2026-09-24T23:06:38Z",
+      "ttl_hours": 48,
+      "prev_agent_branch": "arena/01a0d4b6-nexus-ai-agent"
+    }
+  },
+  {
+    "branch": "arena/01a0d6d7-nexus-ai-agent",
+    "sha": "c2a47562b7e2ab4b8d1504ad87cb2ec71dbcdb90",
+    "claim": {
+      "task": "task-164",
+      "title": "Nightly DB backup has never succeeded (3/3 red) — make the production backup pipeline actually work",
+      "title_fa": "بکاپ شبانهٔ دیتابیس هرگز موفق نشده (۳ از ۳ سرخ) — مسیر بکاپ Production واقعاً کار کند",
+      "zone": "ci-quality",
+      "priority": "P1",
+      "status": "active",
+      "scope": "maintenance.yml backup-db fails 3/3 scheduled runs (35580701817, 35705502209, 35838057275 — the 'Run nexus maintenance backup' step exits 1; the 2026-09-21 'success' 35586584833 was housekeeping-only with backup-db skipped, verified via the job API). backup.py/r2.py unchanged across those runs, so the failure is environmental (R2 secrets missing => by-design red, or R2+Neon misconfiguration). Read the job log, record the exact root cause, fix configuration (owner secrets per docs/ops/r2-storage.md §4) and/or the workflow preflight, then prove a real upload under backups/db/<stamp>/ via workflow_dispatch.",
+      "scope_fa": "backup-db در سه اجرا پیاپی سرخ است؛ کد backup.py/r2.py در بازهٔ آن اجراها دست‌نخورده مانده، پس شکست محیطی است (R2 secrets / پیکربندی Neon). لوق جاب باید خوانده، ریشه ثبت و با یک اجرای دستی موفق (آپلود واقع‌زیر backups/db/<stamp>/) اثبات شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "a manual workflow_dispatch run of maintenance/backup-db completes SUCCESS with a visible upload under backups/db/<UTC-stamp>/",
+        "the failing step's error from the three recorded runs is read and its root cause recorded on the board",
+        "if the root cause is missing/misconfigured secrets: the repo secrets per docs/ops/r2-storage.md §4 are set by the owner and the next scheduled run is green"
+      ],
+      "evidence_required": [
+        "job log excerpt of one failed run naming the exact error",
+        "green workflow_dispatch run id + the uploaded R2 key"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/maintenance.yml"
+      ],
+      "owner_hint": "owner action for the secrets; any free agent for the forensics/preflight",
+      "agent_branch": "arena/01a0d6d7-nexus-ai-agent",
+      "claimed_at": "2026-09-25T05:10:59Z",
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": ""
+    }
+  },
+  {
+    "branch": "arena/01a0d23e-nexus-ai-agent",
+    "sha": "d437e9bd46b6292e33ae25d86f94949ad89b3002",
+    "claim": {
+      "priority": "P0",
+      "status": "active",
+      "prerequisites": [],
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "",
+      "task": "task-165-legacy-creative-hardening",
+      "title": "P0-A: auth for GET /creative/jobs/{id} + upload size cap + legacy deprecation ratchet (ADR)",
+      "title_fa": "P0-A: احراز هویت GET /creative/jobs + سقف حجم آپلود + ترکمن‌های رسمی deprecation پایپ‌لاین legacy",
+      "zone": "p0-stabilization",
+      "scope": "Deploy-verified on main: GET /creative/jobs/{job_id} answers 200 with full input_data to any unsigned caller (reproduced 2026-09-24). SSRF on POST video_url is fixed by open PR#58 (lease on its branch) and is NOT duplicated here. This task: add the fail-closed HMAC gate to the GET (same signature scheme as POST — no new auth stack), cap upload body size, declare the HTTP media pipeline legacy in an ADR with a removal path after PR#58 resolves, and pin the route set with an architecture ratchet test.",
+      "scope_fa": "بستن نشت دادهٔ GET jobs بدون auth (بازتولیدشده روی main)، بدون تکرار کار PR#58 (SSRF). اعمال همان گیت HMAC fail-closed روی GET، سقف حجم آپلود، ADR با مسیر حذف و تست معماری ratchet روی مجموعهٔ مسیرهای legacy.",
+      "acceptance_criteria": [
+        "unsigned GET /creative/jobs/{id} -> 401 (key configured) / 503 (no key); signed caller unchanged",
+        "upload larger than cap -> 413 before any job row is created",
+        "tests prove auth matrix + legacy-route ratchet; no new importers of job_registry/video_director/ffmpeg_executor",
+        "ADR 0006 records KEEP+HARDEN (bounded) with removal sequenced after PR#58"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_security_hardening.py tests/architecture/test_legacy_creative_boundary.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/api/app.py",
+        "src/nexus_ai_agent/creative/legacy_boundary.py",
+        "tests/unit/test_security_hardening.py",
+        "tests/architecture/test_legacy_creative_boundary.py",
+        "docs/architecture/adr/0006-legacy-creative-pipeline.md",
+        "docs/architecture/adr/README.md"
+      ],
+      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:36:43Z"
+    }
+  },
+  {
+    "branch": "arena/01a0d23e-nexus-ai-agent",
+    "sha": "d437e9bd46b6292e33ae25d86f94949ad89b3002",
+    "claim": {
+      "priority": "P0",
+      "status": "active",
+      "prerequisites": [],
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "",
+      "task": "task-166-creative-surface-wiring",
+      "title": "P0-B: wire creative surface end-to-end — registration, creative_render worker, idempotency, i18n",
+      "title_fa": "P0-B: سیم‌کشی انتها به انتهای سطح خلاقیت — رجیستر، worker، idempotency، بومی‌سازی",
+      "zone": "p0-stabilization",
+      "scope": "Absorbs task-106 scope (superseded: broader than bot/creative_surface.py alone). Reproduced on main 2026-09-24: build_creative_handlers never called in build_application; default_job_handlers lacks creative_render; handler dict leaks a bogus 'mapper' key; idempotency key is uuid4-per-call (same Telegram message -> duplicate jobs); replies show raw i18n keys (0 creative.* keys in 15 locales). Fix: register exactly {edit,caption,grade} in bot/app.py on the shared job_queue; add creative/render_jobs.py worker adapter routing through packs runtime registry + render lane; message-id anchored idempotency key; full i18n incl. completion/failure notices in bot/app completion hook.",
+      "scope_fa": "جذب دامنهٔ task-106. اثبات‌شده: ثبت‌نشدن سطح در build_application، نبود هندلر creative_render، کلید اشتباه mapper، کلید idempotency تصادفی، نمایش کلید خام i18n. رفع: ثبت دقیق سه فرمان، worker واقعی از رجیستری پک‌ها و لاین رندر، کلید مبتنی بر message_id، i18n کامل.",
+      "acceptance_criteria": [
+        "Telegram /edit|/caption|/grade registered exactly once; no 'mapper' command exists (ratchet test)",
+        "creative_render executes through packs runtime registry + render lane; deterministic artifact (probe+sha256) in a dev-environment test",
+        "same Telegram message retried -> one job; two distinct messages -> two jobs",
+        "no raw i18n key reaches a user (unit test asserts locale text, not key); parity ratchet stays green",
+        "handlers.py untouched"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_creative_surface.py tests/unit/test_creative_render_jobs.py tests/unit/test_i18n_parity.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/worker.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/i18n/locales/",
+        "tests/unit/test_creative_surface.py",
+        "tests/unit/test_creative_render_jobs.py",
+        "docs/architecture/CREATIVE_STUDIO.md"
+      ],
+      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:36:43Z"
+    }
+  },
+  {
+    "branch": "arena/01a0d23e-nexus-ai-agent",
+    "sha": "d437e9bd46b6292e33ae25d86f94949ad89b3002",
+    "claim": {
+      "priority": "P0",
+      "status": "active",
+      "prerequisites": [],
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "",
+      "task": "task-167-backup-verifiability",
+      "title": "P0-C: backup success criteria = uploaded + integrity-verified + restore-proven; precise failure diagnosis",
+      "title_fa": "P0-C: موفقیت بکاپ = آپلود + راستی‌آزمایی یکپارچگی + اثبات restore؛ تشخیص دقیق خرابی",
+      "zone": "p0-stabilization",
+      "scope": "Repo-side half of queued task-164 (owner-secrets part stays in task-164). Evidence: backup-db red 3/3 (job API); the 09-21 'success' was housekeeping-only; log-archive + secret list endpoints unreachable from this sandbox (UNVERIFIED exact runner error). Code gaps measured on main: create_backup declares success right after upload() with no integrity/restore verification, no status/timestamp in summary and zero direct tests. Fix: sha256 + post-upload download-verify + restore into isolated temp DB (PRAGMA integrity_check + schema sanity) for SQLite and marker check for pg_dump output; summary carries status/timestamp; failure cannot print success; preflight names exactly which config is missing.",
+      "scope_fa": "نیمهٔ داخلِ ریپوی task-164. شکاف‌های اندازه‌گیری‌شده: موفقیت بلافاصله پس از upload اعلام می‌شود؛ نه یکپارچگی، نه restore، نه status/timestamp، نه تست مستقیم. رفع: sha256، دانلود-تأییدی، restore در DB موقت ایزوله، خلاصه با status ،پیام دقیق پیکربندی گمشده.",
+      "acceptance_criteria": [
+        "success is reported only after artifact exists, is non-empty, integrity-verified and restore-proven (sqlite) or marker-verified (pg dump)",
+        "each failure mode exits non-zero and names its cause (missing R2 vars listed individually; DB not found; upload error)",
+        "housekeeping maintenance NEVER reports backup success (unchanged: separate jobs) and backup failure cannot be green",
+        "unit tests with injected fake client cover: full round-trip, integrity mismatch, unconfigured R2, missing DB, dry-run"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_maintenance_backup.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "tests/unit/test_maintenance_backup.py",
+        ".github/workflows/maintenance.yml",
+        "docs/ops/r2-storage.md"
+      ],
+      "agent_branch": "arena/01a0d23e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T07:36:43Z"
+    }
+  },
+  {
+    "branch": "arena/01a0d43c-nexus-ai-agent",
+    "sha": "f450df273d944dc88e3a21337b915b40638ee4dd",
+    "claim": {
+      "task": "task-179-gate2-command-reconciliation",
+      "title": "Gate 2: canonical command + capability reconciliation (v1/v2 conflict -> one contract)",
+      "title_fa": "Gate 2: یکسان‌سازی قرارداد فرمان و قابلیت (حل اختلاف v1/v2)",
+      "zone": "nagar-contract-gate",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Reconcile the Agent 1 (schema_version=2, protocol nagar.command.v1, wired bus) vs Agent 2 (nagar.command.v2 parallel envelope, ADR 0005-0008, docs/contracts) conflict into ONE canonical contract on the contract boundary only: versioned TypedCommand (protocol v1 + schema 1|2), trusted actor/project authorization seam, capability authorization, execution policy, project-scoped reference validation, scoped payload-bound idempotency, revision preconditions, canonical dispatch order. No runtime/pack/rendering/slideshow/job-lifecycle changes; runtime needs recorded as RUNTIME GAP for Agent 1.",
+      "scope_fa": "حل اختلاف قرارداد فرمان/قابلیت فقط در مرز قرارداد، بدون دست‌زدن به runtime.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "v1/v2 conflict resolved with remote-verifiable evidence; one canonical contract",
+        "unknown protocol/schema/operation-schema versions rejected by negative tests",
+        "unauthorized actor/project denied by negative tests (fail-closed seam)",
+        "unavailable/unknown/mismatched capability denied by negative tests",
+        "same key + different payload -> deterministic IdempotencyConflictError (tested)",
+        "stale revision/hash rejected; old commands cannot apply silently (tested)",
+        "docs match code (contract doc + ADR 0005 + D-0013 + pipeline section)",
+        "architecture guard green; ruff + mypy + targeted pytest + full relevant pytest green",
+        "zero changes under creative/rendering, creative/packs, creative/slideshow, adapters"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_command_capability_contract.py tests/architecture/test_command_capability_boundary.py tests/unit/test_nagar_wave1_green_cockpit.py",
+        "ruff check . && ruff format --check . && mypy src",
+        "pytest -q -m 'not slow' (full suite, zero regression vs base)",
+        "CI green on the PR"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/models.py",
+        "src/nexus_ai_agent/creative/studio/authorization.py",
+        "src/nexus_ai_agent/creative/studio/bus.py",
+        "src/nexus_ai_agent/creative/studio/capabilities.py",
+        "src/nexus_ai_agent/creative/studio/references.py",
+        "src/nexus_ai_agent/creative/studio/__init__.py",
+        "tests/unit/test_command_capability_contract.py",
+        "tests/architecture/test_command_capability_boundary.py",
+        "tests/unit/test_pack_manifest_verify.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/adr/0005-canonical-command-capability-contract.md",
+        "docs/architecture/adr/README.md",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/architecture/MODULE_MAP.md",
+        "docs/architecture/TESTING.md",
+        "docs/README.md",
+        "docs/DECISION_LOG.md"
+      ],
+      "agent_branch": "arena/01a0d43c-nexus-ai-agent",
+      "claimed_at": "2026-09-24T16:32:01Z",
+      "ttl_hours": 48,
+      "gates_owner": true,
+      "note": "PR#72 https://github.com/bot523h/nexus-ai-agent/pull/72 (commit 5f955ce) — awaiting merge; merge-order disclosures in PR body (PR#68 supersede, PR#67/PR#70/PR#71 collisions).",
+      "evidence": [
+        "contract 80 + boundary 16 + wave1 22: all pass (local)",
+        "ruff check + format clean; mypy src clean (233 files)",
+        "pytest -m 'not slow': unit+arch 1901 passed/1 skipped, integration 81 passed/19 skipped (local)",
+        "PR#72 CI green: lint pass, test pass, lint-fast pass, migrate-postgres pass (run 36033245557)"
+      ]
+    }
+  },
+  {
+    "branch": "arena/01a0d43e-nexus-ai-agent",
+    "sha": "9e9c753082c572d1164148be7da50c061ed53311",
+    "claim": {
+      "priority": "P0",
+      "status": "active",
+      "prerequisites": [],
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "DELIVERED on arena/01a0d43e: JobStatus.VERIFYING + guarded transition matrix (owner+invariant per edge), queue-owned independent artifact verification for creative_render (exists/size>0/expected-path/containment/sha256-recompute/probe; verifier crash fails closed), first-payload-wins idempotency with conflict log, attempt counter, get_result_chain (three identities + probe + failure reason), render_jobs destination-safety (no delete-then-fail; atomic document writes; spec_ir_hash in result). Runtime fence zero-diff (rendering/packs/studio/slideshow-ffmpeg untouched). Evidence: tests/unit/test_job_lifecycle.py (20) + tests/integration/test_job_lifecycle_queue.py (17, M1-M10+A/B+17) green; full pytest 1932 passed/20 skipped; make lint+types green; docs integrity green. Known GAPs recorded in PR body (slideshow verifier wiring, legacy lane).",
+      "task": "task-178-job-lifecycle",
+      "title": "Canonical job lifecycle: VERIFYING state, independent artifact verification, retry/failure contracts, M1-M10",
+      "title_fa": "چرخهٔ عمر کانونی Job: حالت VERIFYING، راستی‌آزمایی مستقل آرتیفکت، قراردادهای retry و شکست، M1-M10",
+      "zone": "job-lifecycle",
+      "scope": "Execution success != Job success: add VERIFYING to JobStatus, queue-owned independent artifact verification (exists, size>0, sha256 recompute, expected-path containment, ffprobe-equivalent evidence for media, identity binding), guarded transitions with owner+invariant per edge, typed failure semantics, deterministic retry/idempotency matrix, atomic document-artifact writes in render_jobs, M1-M10 negative tests + regression proof that SUCCEEDED implies valid+stable+traceable artifact. Runtime (creative/rendering/*, packs/*, studio/*, slideshow/ffmpeg.py) untouched.",
+      "scope_fa": "موفقیت اجرا != موفقیت Job: افزودن VERIFYING، راستی‌آزمایی مستقل آرتیفکت در صف، ترنزیشن‌های گاردشده با owner و invariant، معناشناسی شکست تایپ‌شده، ماتریس retry/idempotency قطعی، نوشتن اتمیک آرتیفکت‌های document، تست‌های منفی M1-M10 و اثبات رگرسیونی SUCCEEDED ⇒ آرتیفکت معتبر+پایدار+قابل‌ردیابی. Runtime دست‌نخورده.",
+      "acceptance_criteria": [
+        "JobStatus gains VERIFYING; canonical aliases documented (RUNNING≡PROCESSING, SUCCEEDED≡COMPLETED) with no reasonless persisted rename",
+        "creative_render jobs reach COMPLETED only after independent verification (re-hash + probe + containment); verification failure or crash ⇒ FAILED with typed reason, never COMPLETED",
+        "handler success without a valid artifact cannot be COMPLETED (probe test); zero-byte and ffprobe-failed artifacts cannot be COMPLETED",
+        "same idempotency key + different payload ⇒ typed conflict; equal payload ⇒ same job id, no second effect; terminal jobs never re-execute on re-enqueue",
+        "M1-M10 negative tests green; A/B evidence that a lying/stale artifact claim cannot produce SUCCEEDED",
+        "full creative regression + architecture guards green; runtime-owned files untouched (ratchet: creative/rendering/**, creative/packs/**, creative/studio/**, creative/slideshow/ffmpeg.py zero-diff)"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_job_lifecycle.py tests/integration/test_job_lifecycle_queue.py tests/integration/test_creative_chain_e2e.py tests/integration/test_in_process_job_queue.py tests/architecture"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/jobs/",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/application/ports/job_queue.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "tests/unit/test_job_lifecycle.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "docs/DECISION_LOG.md",
+        "docs/README.md"
+      ],
+      "agent_branch": "arena/01a0d43e-nexus-ai-agent",
+      "claimed_at": "2026-09-24T16:45:20Z"
+    }
+  },
+  {
+    "branch": "arena/01a0d317-nexus-ai-agent",
+    "sha": "fa43fa16651b7597c5e56ddda6ccb04aa84b6407",
+    "claim": {
+      "task": "task-177-creative-runtime-s3",
+      "title": "Session 3B canonical creative runtime: plan compiler, real OTIO, lifecycle gate, real LUT/burn-in lanes",
+      "title_fa": "ران‌تایم متعارف نگار (نشست ۳): کامپایلر پلن، OTIO واقعی، دروازه چرخه‌حیات، لین‌های واقعی LUT و زیرنویس",
+      "zone": "creative-runtime-s3",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Freeze one production graph Project→ExecutionPlan→LaneIR/assembly→compiler→render_lane→verified artifact; integer-µs time algebra; E1 segment isolation; 3-segment RGB proof; canonical Nagar↔OTIO converter proven by the real OpenTimelineIO 0.18.1 parser/writer (zero skips); REGISTERED/INSTALLED/AVAILABLE/RUNNABLE lifecycle with fail-closed required-pack gate; honest execution truth table; real lut3d + ASS burn-in lane instruments with shipped .cube fixture; single-renderer + single-converter ratchets.",
+      "scope_fa": "انجماد یک گراف اجرایی متعارف با شواهد بایتی واقعی، مبدل متعارف OTIO با کتابخانه واقعی، دروازه چرخه‌حیات چهارحالته و لین‌های واقعی LUT و burn-in.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "E1: compile A/B/C + recompile A identical (referential isolation, no shared compiler state)",
+        "3-segment RGB proof: one process, exact duration, physical SHA, probe duration, order-sensitive",
+        "time algebra frozen on integer µs with 0/1µs/frame/half-frame/24/30/29.97 tests + documented quantization",
+        "real OTIO 0.18.1 round trip executes (parser+writer), zero skips; matrix incl. gaps/markers/colors/include_markers",
+        "lifecycle denies missing/inactive/unprobed packs with typed errors before mutation (anti-vacuity RED proofs)",
+        "LUT + burn-in render real bytes with observable pixel difference, or typed unavailable (no fake green)",
+        "ruff + format + mypy + targeted + full non-slow + architecture + docs + board gates green; CI 4/4 on the PR head"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_runtime_*.py tests/architecture/test_runtime_single_path.py",
+        "CI run: test + lint + lint-fast + migrate-postgres SUCCESS on the session PR head"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/timebase.py",
+        "src/nexus_ai_agent/creative/execution.py",
+        "src/nexus_ai_agent/creative/lifecycle.py",
+        "src/nexus_ai_agent/creative/artifacts.py",
+        "src/nexus_ai_agent/creative/otio/",
+        "src/nexus_ai_agent/creative/rendering/plan.py",
+        "src/nexus_ai_agent/creative/rendering/ir.py",
+        "src/nexus_ai_agent/creative/rendering/compiler.py",
+        "src/nexus_ai_agent/creative/rendering/executor.py",
+        "src/nexus_ai_agent/creative/rendering/__init__.py",
+        "tests/unit/test_runtime_timebase.py",
+        "tests/unit/test_runtime_plan.py",
+        "tests/unit/test_runtime_assembly.py",
+        "tests/unit/test_runtime_execution.py",
+        "tests/unit/test_runtime_lifecycle.py",
+        "tests/unit/test_runtime_otio.py",
+        "tests/unit/test_runtime_otio_real.py",
+        "tests/unit/test_runtime_lut.py",
+        "tests/unit/test_runtime_burnin.py",
+        "tests/unit/test_runtime_artifacts.py",
+        "tests/unit/test_runtime_packaging.py",
+        "tests/architecture/test_runtime_single_path.py",
+        "tests/fixtures/lut/",
+        "assets/luts/",
+        "docs/ops/CREATIVE_RUNTIME.md",
+        "docs/architecture/CREATIVE_STUDIO.md",
+        "docs/README.md",
+        "CHANGELOG.md",
+        "pyproject.toml"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0d317-nexus-ai-agent",
+      "claimed_at": "2026-09-24T11:19:42Z",
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "Session 3B zero-state: base origin/main 035a896 (PR#65 merged); stale P0 leases 165/166/167 reconciled to done with merge evidence in this same revision; PR#64/#66 used as evidence only (no wholesale port); delivery models/operations + production integration files explicitly out of scope."
+    }
+  },
+  {
+    "branch": "arena/01a0d458-nexus-ai-agent",
+    "sha": "38e605f157cc3a967549e0950f088b611e204d38",
+    "claim": {
+      "task": "task-179-gate5-job-lifecycle",
+      "title": "Gate 5: golden job lifecycle closure (verification gate, retry safety, artifact finalization)",
+      "title_fa": "گیت ۵: بستن چرخهٔ عمر Job (دروازهٔ راستی‌آزمایی، ایمنی retry، نهایی‌سازی اتمیک آرتیفکت)",
+      "zone": "gate5-job-lifecycle",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Job lifecycle authority: explicit state machine (PENDING→PROCESSING/RUNNING→VERIFYING→COMPLETED/SUCCEEDED | FAILED_RETRYABLE | TERMINAL_FAILED), fail-closed success rule (execution success != job success; success requires canonical artifact verification), retry/idempotency/revision safety, and atomic destination finalization at the job/adapter boundary. Consumes the Runtime (PR#67) artifact verifier as the sole authority; rebuilds no runtime, compiler, executor, capability registry or command envelope.",
+      "scope_fa": "مالکیت چرخهٔ عمر Job: ماشین حالت صریح، قانون موفقیت fail-closed (موفقیت اجرا ≠ موفقیت Job؛ موفقیت نیازمند راستی‌آزمایی کانونیک آرتیفکت)، ایمنی retry/idempotency/revision و نهایی‌سازی اتمیک مقصد در مرز Job/adapter. Runtime و verify_artifact فقط مصرف می‌شوند و بازسازی نمی‌شوند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Job state machine explicit with entry/exit/allowed transitions/side effects/retry semantics/terminality, and a test that pins the transition table",
+        "SUCCEEDED eligibility requires canonical artifact verification (exists ∧ size>0 ∧ sha256(bytes) ∧ probe ∧ expected identity); a handler cannot reach success before verification",
+        "fail-closed: runtime failure, ffprobe failure, zero-byte output and verification failure can never yield a success status or a success payload",
+        "retry safety: the same idempotency key + same payload replays deterministically, a different payload conflicts, a changed revision is rejected, and a retry never overwrites, truncates or unlinks an already-valid artifact",
+        "artifact traceability: command_id → job_id → project_id → operation_id → revision → logical/spec/physical identity → sha256 → verification evidence is reconstructible from the persisted result",
+        "fresh-process reopen: a new interpreter re-reads the terminal status, payload/result and artifact bytes identically",
+        "Gate 4 vertical slice remains green (updated only where its assertions encoded the superseded render_failed-as-COMPLETED semantics, with A/B evidence)",
+        "no runtime rebuild: zero new compiler/LaneIR/executor/LUT/burn-in/OTIO/hashing implementation; creative.artifacts is consumed as the verification authority"
+      ],
+      "evidence_required": [
+        "pytest -q tests/integration/test_gate5_job_lifecycle.py tests/unit/test_job_lifecycle_contract.py tests/unit/test_gate5_mutations.py output (commands + observed result)",
+        "scripts/gate5_ab_probe.py A/B output: every mutation turns the guarding test RED, then reverts (byte-identical restore)",
+        "pytest -q tests/integration/test_gate4_vertical_slice.py and full-suite regression before/after numbers",
+        "docs/audits/GATE5_JOB_LIFECYCLE_2026-09-24.md report + docs/audits/GATE5_TRUTH_MATRIX.json generated by the harness",
+        "agent_board check --files … (own paths exit 0; foreign-fence hits disclosed in takeover_log + PR body)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/application/job_lifecycle.py",
+        "src/nexus_ai_agent/application/artifact_publication.py",
+        "src/nexus_ai_agent/application/ports/job_queue.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "tests/integration/test_gate5_job_lifecycle.py",
+        "tests/integration/test_gate5_lifecycle_contract.py",
+        "tests/integration/test_gate5_mutations.py",
+        "scripts/gate5_ab_probe.py",
+        "docs/architecture/JOB_LIFECYCLE_CONTRACT.md",
+        "docs/architecture/STATE_TRANSITION_MATRIX.md",
+        "docs/architecture/ARTIFACT_VERIFICATION_CONTRACT.md",
+        "docs/architecture/RETRY_IDEMPOTENCY_POLICY.md",
+        "docs/architecture/FAILURE_SEMANTICS.md",
+        "docs/architecture/adr/0005-job-lifecycle-verification-gate.md",
+        "docs/audits/GATE5_JOB_LIFECYCLE_2026-09-24.md",
+        "docs/audits/GATE5_TRUTH_MATRIX.json",
+        "docs/DECISION_LOG.md",
+        "docs/architecture/adr/README.md"
+      ],
+      "agent_branch": "arena/01a0d458-nexus-ai-agent",
+      "claimed_at": "2026-09-24T17:06:33Z",
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "note": "Design pivot (recorded): the lifecycle contract lives in src/nexus_ai_agent/application/ (job_lifecycle.py, artifact_publication.py) and the ports/adapter, not in creative/ — the original plan's creative/job_lifecycle.py, creative/artifact_destination.py and tests/unit/* collided with task-177's tests/unit/ + creative/ fences and were abandoned before creation. All Gate 5 test files live under tests/integration/ (outside every live fence). Scope extension (recorded): DECISION_LOG.md gains D-0014 and docs/architecture/adr/README.md gains the ADR-0005 index row — addenda to files no other claim owns; declared here before editing."
+    }
+  },
+  {
+    "branch": "arena/01a0d475-nexus-ai-agent",
+    "sha": "05d647e9ccc4e9c3c823020972e01d8cd14fc80a",
+    "claim": {
+      "task": "task-180-verification-gap-closure",
+      "title": "Verification closure: slideshow_render/story/pdf_extract artifact verifiers + cross-PR truth gate (Agent D)",
+      "title_fa": "بستن شکاف‌های راستی‌آزمایی: وریفایر آرتیفکت برای slideshow_render/story/pdf_extract + دروازهٔ حقیقت بین‌PRها",
+      "zone": "job-verification-gap-closure",
+      "priority": "P0",
+      "status": "active",
+      "agent_branch": "arena/01a0d475-nexus-ai-agent",
+      "claimed_at": "2026-09-24T17:45:24Z",
+      "ttl_hours": 48,
+      "gates_owner": false,
+      "prerequisites": [
+        "task-178-job-lifecycle"
+      ],
+      "scope": "Close the verification GAPs recorded in PR#71 without touching the lifecycle contract: GAP-A slideshow_render verifier wiring (default registry), GAP-B pdf_extract artifact dialect (persisted extracted-text artifact + verifier), GAP-C story image artifact dialect (PNG verifier), GAP-D legacy HTTP lane recorded as formal GAP (no code change; frozen by test_legacy_creative_boundary). Plus: cross-PR truth matrix (#67/#68/#70/#71), verification truth matrix (machine-readable), adversarial attacks A-H, 3 reverted mutations, registry ratchet architecture test.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/jobs/verification.py",
+        "src/nexus_ai_agent/jobs/creative_verification.py",
+        "src/nexus_ai_agent/jobs/feature_verification.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/worker.py",
+        "tests/unit/test_job_verification_gaps.py",
+        "tests/integration/test_verification_gap_closure.py",
+        "tests/architecture/test_verification_registry_ratchet.py",
+        "tests/architecture/test_legacy_lane_verification_gap.py",
+        "tests/integration/test_in_process_job_queue.py",
+        "tests/integration/test_bot_slideshow_flow.py",
+        "docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md",
+        "docs/audits/VERIFICATION_TRUTH_MATRIX.json",
+        "docs/audits/CROSS_PR_TRUTH_2026-09-24.md",
+        "docs/DECISION_LOG.md",
+        "docs/README.md",
+        "docs/architecture/JOB_LIFECYCLE.md"
+      ],
+      "note": "Continuation of task-178 per orchestrator mission (Agent D). Contract-frozen: jobs/lifecycle.py, render_jobs.py, transition naming, VERIFYING semantics, register_artifact_verifier protocol are NOT redesigned. Runtime fence untouched (creative/rendering/*, packs/*, slideshow/ffmpeg.py, api/app.py, bot/handlers.py). | Contract-ripple edits (assertion-strengthening only, no test weakened): test_in_process_job_queue pdf/story result-dialect assertions; test_bot_slideshow_flow opts its mocked-encoder UX suite out of verification (cross-referenced to the real-encode proof).",
+      "acceptance_criteria": [
+        "slideshow_render, story and pdf_extract are verified-by-default (queue registry) and proven end-to-end: real encode/PIL/pypdf artifacts, adversarial attacks A-H green",
+        "every default handler has a default verifier (architecture ratchet)",
+        "legacy /creative lane recorded as formal GAP with executable evidence, zero code change to the lane",
+        "cross-PR truth matrix + verification truth matrix published under docs/audits/",
+        "full regression + lint + types green; 3 reverted mutations each caught"
+      ]
+    }
+  },
+  {
+    "branch": "arena/01a0d567-nexus-ai-agent",
+    "sha": "4f1da989e58ee9039fd7890d36757c3387bd83a4",
+    "claim": {
+      "task": "task-181-gate5-closure",
+      "title": "Gate 5 closure/reconciliation: failure semantics + 6-state taxonomy + notifier truth + trace job_id + staging leak (Agent E)",
+      "title_fa": "بستن و سازش‌دهی Gate 5: معناشناسی خطا + طبقه‌بندی شش‌حالته + حقیقت نوتیفایر + job_id در ردیابی + نشت استیجینگ",
+      "zone": "job-lifecycle-gate5-closure",
+      "priority": "P0",
+      "status": "active_in_review",
+      "gates_owner": false,
+      "prerequisites": [
+        "task-178-job-lifecycle",
+        "task-180-verification-gap-closure"
+      ],
+      "scope": "Reconcile Gate-5-local claims (LOCAL-ONLY commits 38e605f/0c532af/8110110) against the GitHub truth (main 035a896; PR#71=9e9c753; PR#74=05d647e) and close only the real remaining gaps on the task-178/180 contract: (A) typed user failure success=False must NEVER map to COMPLETED — failure status + notifier never emits success; (B) failure taxonomy FAILED_RETRYABLE/FAILED_TERMINAL + explicit classification table with per-failure reasons, illegal transitions fail closed; scheduler explicitly NOT IMPLEMENTED; (C) canonical verification kept as delivered by task-180 (zero re-implementation); legacy lane stays recorded+owned by task-165; (D) stage->verify->publish->re-probe ordering for externally published artifacts (pdf sidecar): reproduced staging leak + old-artifact destruction, smallest fix + regression; (E) trace: job_id bound at every lifecycle point (queue/worker/result/trace/notifier/audit); (F) notifier source of truth = durable lifecycle state (result.success can never turn a failure into a success); (G) mutation harness (remove verification / force COMPLETED on typed failure / skip atomic publish / drop job_id / notifier trusts result.success / bypass failure_status) GREEN->RED->restore.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/application/ports/job_queue.py",
+        "src/nexus_ai_agent/jobs/",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/worker.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/slideshow_notify.py",
+        "tests/unit/test_job_lifecycle.py",
+        "tests/unit/test_failure_semantics.py",
+        "tests/unit/test_job_verification_gaps.py",
+        "tests/unit/test_creative_notify.py",
+        "tests/unit/test_bot_slideshow_notify.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "tests/integration/test_gate5_closure.py",
+        "tests/integration/test_verification_gap_closure.py",
+        "tests/integration/test_in_process_job_queue.py",
+        "scripts/gate5_mutation_probes.py",
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "docs/DECISION_LOG.md",
+        "docs/README.md",
+        "docs/audits/GATE5_CLOSURE_2026-09-24.md",
+        "docs/audits/GATE5_TRUTH_MATRIX.json",
+        "src/nexus_ai_agent/cli.py",
+        "docs/audits/VERIFICATION_TRUTH_MATRIX.json",
+        "tests/unit/test_reminder_system.py"
+      ],
+      "note": "STEWARDSHIP-TAKEOVER 2026-09-25: real ownership of task-181-gate5-closure transferred to arena/01a0d567-nexus-ai-agent per the Gate-5 FINAL REPAIR mission (orchestrator reassignment). The prior claim by arena/01a0d4b6-nexus-ai-agent (PR#78 OPEN @ 5f273f08, CONFLICTING/DIRTY vs new main 16daebc) is superseded; its code (PR#78 lineage) is merged intact into arena/01a0d567 (commit-for-commit, no silent rebase/overwrite). Scope: repair+proof of execution fencing, artifact publication correctness, durable state truth, notification gating, T1-T15, M1-M10, GATE5_TRUTH_MATRIX rewrite, final re-gate. The also-mergeable red CI on 765d9f8 (ruff format of audit .md code block) is fixed on this branch.",
+      "acceptance_criteria": [
+        "typed render failure (success=False) reaches a failure status, NEVER COMPLETED; notifier must not emit success (regression test)",
+        "JobStatus = pending/processing/verifying/completed/failed_retryable/failed_terminal with unit-enforced transition matrix; every illegal transition fails closed",
+        "classification table for temporary IO / dependency unavailable / worker crash / invalid input / unsupported operation / artifact verification failure / permission error / corrupt output — each row tested; scheduler explicitly NOT IMPLEMENTED",
+        "verification refusal scenario: job != COMPLETED, final artifact not published, staging + temp cleaned, previous valid artifact preserved, failure reason persisted (reproduced before fix)",
+        "job_id non-null on every persisted lifecycle event and trace/audit log line of its job (reproduced before fix)",
+        "notification matrix: COMPLETED->success, FAILED_RETRYABLE->failure, FAILED_TERMINAL->terminal failure, VERIFYING->never success, verification failure->never success (lifecycle state is the source of truth)",
+        "mutation probes (6 listed invariants) each turn the suite RED and restore to GREEN with SHAs recorded",
+        "full regression green (no test deleted/skipped/weakened), collect-only before/after diff clean, ruff+mypy clean, Gate 5 audit + truth matrix published, CI green on the exact pushed head"
+      ],
+      "evidence_required": [
+        "pytest output for contract / integration / failure-injection / notification suites",
+        "mutation probe log: baseline GREEN -> mutant RED -> restore -> SHA restored -> GREEN",
+        "pytest --collect-only before/after diff (added/removed/renamed/skipped)",
+        "ruff check + mypy output",
+        "CI run URL green on the exact final head"
+      ],
+      "agent_branch": "arena/01a0d567-nexus-ai-agent",
+      "claimed_at": "2026-09-24T23:41:09Z",
+      "ttl_hours": 48,
+      "released_at": null,
+      "evidence": " | TAKEOVER 2026-09-25: merged origin/arena/01a0d4b6@5f273f08 (PR#78 lineage) + origin/main@16daebcede5f into arena/01a0d567; claim heartbeat re-armed on the session branch. | GATE-5 FINAL REPAIR DELIVERED at a2108a73 (docs/board follow-up above): R1-R5 OLD-RED@6b86633 -> NEW-GREEN; T1-T15 green; M1-M10 + legacy #1-#6 16/16 killed (exit 1 each); regression 2173 passed/20 skipped; ruff check+format clean (490 files); mypy src clean (241); CI run 36073258516 SUCCESS on a2108a73 (gh run view 36073258516 --json conclusion). Evidence record: docs/audits/GATE5_FINAL_REPAIR_2026-09-25.md + GATE5_TRUTH_MATRIX.json (v2, F7 fixed)."
+    }
+  },
+  {
+    "branch": "arena/01a0d703-nexus-ai-agent",
+    "sha": "ddb37f20aa9ce3c09207b99a5a2e73d746e6d56d",
+    "claim": {
+      "task": "task-201-creative-gate-verification",
+      "title": "Creative Gate: evidence-locked verification of the creative layer + durable adversarial batteries",
+      "title_fa": "گیت دائمی خلاقیت: ماتریس حقیقت عملیات، باتری‌های رسانه/RTL adversarial، سازگاری FFmpeg، صداقت preview/master",
+      "zone": "creative-gate",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Verify the creative layer at the live HEAD with executed evidence only: 70-op truth matrix (TDD vs registry vs tests), creative keep-green chain baseline, FFmpeg/media inventory + adversarial media battery, Persian/RTL gate, command-bus refusal vocabulary, pack lifecycle/missing-capability behavior, preview/master honesty, mutation-informed coverage pins, CI parity. Add durable gate tests under tests/unit/test_creative_gate_* and the dated audit doc. No changes to Gate-2 contract files (leased by task-179) or other zones.",
+      "scope_fa": "راستی‌آزمایی لایه خلاقانه با شواهد اجراشده + افزودن تست‌های دائمی گیت، بدون لمس فایل‌های لیز‌شده.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "operation matrix recomputed from build_runtime_registry() at HEAD (counts pinned)",
+        "creative keep-green chain executed and frozen (pass counts recorded)",
+        "adversarial media battery executes: corrupt/empty/zero-duration/no-audio/no-video/VFR/odd-res/unicode/Persian-name, each failure typed",
+        "RTL/Persian battery executes: mixed text, digits, URL, brackets, emoji, ZWNJ, multiline, karaoke; byte-deterministic output",
+        "mutation spot-checks: at least 3 mutants against the creative chain are caught by the suite or the new gates",
+        "every new/changed file passes the board check against live exclusive_paths",
+        "audit doc records evidence levels honestly (LOCAL/CI/E2E/ENVIRONMENTAL/PRE-EXISTING)"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_creative_gate_media_adversarial.py tests/unit/test_creative_gate_rtl.py",
+        "pytest -q -m 'not slow' (full suite green, zero regression vs 2042-pass baseline)",
+        "python scripts/agent_board.py check --files <changed> --branch arena/01a0d703-nexus-ai-agent",
+        "docs/audits/CREATIVE_GATE_2026-09-25.md"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "arena/01a0d703-nexus-ai-agent",
+      "agent_branch": "arena/01a0d703-nexus-ai-agent",
+      "claimed_at": "2026-09-25T05:47:42Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": false,
+      "note": ""
+    }
+  },
+  {
+    "branch": "arena/01a0d708-nexus-ai-agent",
+    "sha": "372643afaafd60f2ab79462b14520e46c6ac50f8",
+    "claim": {
+      "task": "task-190-operation-truth",
+      "title": "Operation Truth engine: live recompute + machine-verifiable evidence chain",
+      "title_fa": "موتور حقیقت عملیات: بازمحاسبه زنده + زنجیرهٔ evidence ماشین‌سنج",
+      "zone": "operation-truth",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "استخراج حقیقت اجرایی Nagar از منابع زنده (TDD catalog / runtime registry / executable surface / proof)، تولید OPERATION_TRUTH.json به‌صورت deterministic، projection مستنداتی صرفاً خروجی، گاردهای drift/anti-drift با mutation probe، ماتریس L0-L4 و wave planning گمشده‌ها.",
+      "scope_fa": "استخراج حقیقت اجرایی Nagar از منابع زنده، تولید deterministic OPERATION_TRUTH.json، projection مستنداتی فقط-خروجی، گاردهای drift با mutation probe، ماتریس L0-L4 و wave planning.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "python -m nexus_ai_agent.nagar regenerates OPERATION_TRUTH.json and the architecture gate proves stored == recomputed",
+        "no operation is L3/L4 without recorded executable evidence; runtime-only and missing sets are computed, never hard-coded",
+        "mutation probes: every anti-drift guard turns RED under a synthetic fault and GREEN after restore",
+        "docs projections (matrix/maturity/reconciliation) are marked generated and verified against the recomputation"
+      ],
+      "evidence_required": [
+        "pytest tests/architecture/test_operation_truth_gate.py tests/unit/test_operation_truth_mutations.py tests/unit/test_operation_truth_sources.py",
+        "mutation evidence log GREEN->MUTANT->RED->RESTORE->GREEN",
+        "CI green on the PR"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/",
+        "OPERATION_TRUTH.json",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "L0_L4_MATURITY.md",
+        "RECONCILIATION.md",
+        "OPERATION_WAVE_PLAN.md",
+        "OPERATION_TRUTH_AUDIT_2026-09-25.md",
+        "OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "docs/audits/OPERATION_PROOF_REGISTRY.json",
+        "tests/architecture/test_operation_truth_gate.py",
+        "tests/unit/test_operation_truth_mutations.py",
+        "tests/unit/test_operation_truth_sources.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0d708-nexus-ai-agent",
+      "claimed_at": "2026-09-25T06:39:14Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "generated pages live at the repo root because docs/README.md is leased by task-179-gate2-command-reconciliation (referee check exit 1); index rows deferred",
+      "pr": 83,
+      "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/83",
+      "heartbeat": "2026-09-25T17:45:51Z"
+    }
+  },
+  {
+    "branch": "arena/01a0da12-nexus-ai-agent",
+    "sha": "0199e58fce93d62b6db17ea945811235ec6bb2e9",
+    "claim": {
+      "task": "task-122",
+      "title": "PR#32 rebase + dedupe against merged #34",
+      "title_fa": "ریبیس و رفع دوگانگی PR#32",
+      "zone": "feature-wiring",
+      "priority": "P0",
+      "status": "active",
+      "scope": "۸ فایل مشترک با #34 کانفلیکت متنی و معنایی دارند؛ سیم‌کشی موازی باید یکی شود.",
+      "scope_fa": "۸ فایل مشترک با #34 کانفلیکت متنی و معنایی دارند؛ سیم‌کشی موازی باید یکی شود.",
+      "prerequisites": [
+        "task-131"
+      ],
+      "acceptance_criteria": [
+        "دیف نهایی فقط یکتای‌های #32 را دارد",
+        "تست‌های feature_* سبز",
+        "board.json به سود وضعیت جدید حل شود"
+      ],
+      "evidence_required": [
+        "CI سبز",
+        "گزارش dedupe فایل‌به‌فایل"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "عامل B",
+      "agent_branch": "arena/01a0da12-nexus-ai-agent",
+      "claimed_at": "2026-09-25T20:03:09Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Settled 12 fake/placeholder commands (/leaderboard, /newchat, /viral_stats, /viral_preview, /viral_post, /mod_config, /warn, /mute, /unmute, /reputation, /storage, /model) with real engines and typed refusals; wired ModerationEngine.check_message into bot ingress with boundary/normalization fixes and per-chat flood tracking."
+    }
+  },
+  {
+    "branch": "arena/01a0da15-nexus-ai-agent",
+    "sha": "493f4052e1f630dc94901f3f81b2ef98ba403170",
+    "claim": {
+      "task": "task-185-constitution-enforcement-audit",
+      "title": "Forensic audit + hardening of the Engineering Constitution enforcement (task-185)",
+      "title_fa": "ممیزی forensic و سخت‌سازی اجرای قانون اساسی مهندسی",
+      "zone": "governance-constitution-audit",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Owner-directed adversarial audit: prove with live evidence whether a real agent can claim, code, open a PR, merge, or declare done while bypassing the Engineering Constitution, and harden only the proven gaps. Deliverables: CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md (bypass matrix, 20-class mutation results, test-the-tester analysis, stale-evidence proof, final gate table), scripts/constitution_gate.py (stdlib gate wired into the fast CI rail), hardened tests/unit/test_engineering_constitution.py, cross-guards in test_docs_integrity.py and test_agent_board.py, ci.yml wiring, board evidence-SHA binding, constitution version bump. Plus a `make constitution-check` target that runs the same gate locally.",
+      "scope_fa": "ممیزی تهاجمی به دستور مالک: اثبات با شواهد زندهٔ این‌نکه که آیا یک عامل واقعی می‌تواند قانون اساسی را دور بزند (claim/کد/PR/merge/done)، و سخت‌سازی فقط gapهای اثبات‌شده. خروجی‌ها: سند ممیزی، اسکریپت گیت در ریل سریع CI، تست‌های سخت‌شده، گاردهای متقابل، سیم‌کشی ci.yml، و evidence_sha در تخته.",
+      "prerequisites": [
+        "task-184-engineering-constitution"
+      ],
+      "acceptance_criteria": [
+        "LIVE_TRUTH_SNAPSHOT با SHA/PR/CI/board/lease واقعی استخراج و ثبت شود",
+        "هر ۱۴ ماده با enforcement point / test / CI gate / bypass path / status ثبت شود",
+        "ماتریس bypass با نتیجهٔ BLOCKED/ALLOWED/PARTIALLY BLOCKED و شواهد تکمیل شود",
+        "حداقل ۲۰ کلاس mutation با expected vs actual اجرا و ثبت شود",
+        "test-the-tester برای هر تست constitution انجام شود",
+        "فقط gapهای اثبات‌شده harden شوند (before/after evidence)",
+        "گزارش نهایی با بخش‌های A..J و یک FINAL DECISION از چهار حالت",
+        "هیچ فایلی زیر src/ و هیچ فایل lease‌شدهٔ task-181 (docs/README.md) لمس نشود"
+      ],
+      "acceptance_criteria_en": [
+        "LIVE_TRUTH_SNAPSHOT captured from live GitHub (SHA, PRs, CI, board, leases)",
+        "all 14 articles audited with enforcement point / test / CI gate / bypass path / status",
+        "bypass matrix completed with BLOCKED/ALLOWED/PARTIALLY BLOCKED plus evidence",
+        "at least 20 mutation classes executed with expected vs actual recorded",
+        "test-the-tester analysis for every constitution test",
+        "only evidence-proven gaps hardened, each with before/after proof",
+        "final report with sections A..J and one FINAL DECISION of the four allowed values",
+        "no file under src/ and no file leased by task-181 (docs/README.md) touched"
+      ],
+      "evidence_required": [
+        "pytest -q --noconftest tests/unit/test_engineering_constitution.py tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py tests/unit/test_agent_board_pr_visibility.py tests/unit/test_ci_lint_parity.py",
+        "python scripts/constitution_gate.py (exit 0)",
+        "ruff check . && ruff format --check .",
+        "mutation transcripts (GREEN->RED->restore) recorded in the audit document",
+        "gh api check-runs on the final head SHA (12/12 success)"
+      ],
+      "exclusive_paths": [
+        "ENGINEERING_CONSTITUTION.md",
+        "CONSTITUTION_ENFORCEMENT_AUDIT_2026-09-25.md",
+        "scripts/constitution_gate.py",
+        "scripts/agent_board.py",
+        "tests/unit/test_engineering_constitution.py",
+        "tests/unit/test_docs_integrity.py",
+        "tests/unit/test_agent_board.py",
+        ".github/workflows/ci.yml",
+        ".agents/board.json",
+        "Makefile"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da15-nexus-ai-agent",
+      "claimed_at": "2026-09-25T20:40:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "LAW 3 (board before code) satisfied before the first edit. Ownership check: `agent_board.py check --files <owned files> --branch arena/01a0da15-nexus-ai-agent` must exit 0; docs/README.md and docs/audits/ are fenced by the live task-181-gate5-closure lease, so the audit record is written at the repository root (next to the constitution) instead of docs/audits/ — no leased file is modified (LAW 5). gates_owner stays false: the seat is vacant on the live board and this sandbox cannot run the full dependency gates; CI runs them on the PR head. evidence_sha 67e8ff3 = the last head of this branch with a completed, all-green CI run (run 36183886954/36183882546, 2026-09-25T20:07Z, 12/12 checks success) — the SHA this audit started from. It is refreshed in the commit that follows the CI verification of the hardening.",
+      "evidence_sha": "67e8ff3ff18f41ea97a0c6139a8165adf399f122"
+    }
+  },
+  {
+    "branch": "arena/01a0da15-nexus-ai-agent",
+    "sha": "493f4052e1f630dc94901f3f81b2ef98ba403170",
+    "claim": {
+      "task": "task-184-engineering-constitution",
+      "title": "Register the NEXUS Engineering Constitution as an enforced repository contract",
+      "title_fa": "ثبت قانون اساسی مهندسی نکسوس به‌عنوان قرارداد اجراشدنی مخزن",
+      "zone": "governance-constitution",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "Owner-directed: register the 14-article Engineering Constitution so every agent reads and follows it before working. Deliverables: ENGINEERING_CONSTITUTION.md (Persian original normative + English rendering + enforcement map + Final Gate checklist), AGENTS.md §0 entry gate and Article-5 wording in §2, CONTRIBUTING.md + README.md pointers, .agents/board.json protocol.constitution, agent_board.py show/next/claim reminder, .github/PULL_REQUEST_TEMPLATE.md Final Gate checklist, and tests/unit/test_engineering_constitution.py. No file under src/ is touched.",
+      "scope_fa": "دستور مالک: ثبت قانون اساسی مهندسی (۱۴ ماده) تا هر عامل پیش از کار آن را بخواند و رعایت کند. خروجی‌ها: ENGINEERING_CONSTITUTION.md (متن فارسی معتبر + ترجمهٔ انگلیسی + نقشهٔ اجرا + چک‌لیست Final Gate)، بخش ۰ در AGENTS.md، اشاره در CONTRIBUTING.md و README.md، protocol.constitution در تخته، یادآوری در خروجی show/next/claim ابزار تخته، قالب PR با چک‌لیست Final Gate، و تست اجرا. هیچ فایلی در src/ تغییر نمی‌کند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "متن اصلی ۱۴ ماده بدون تغییر ثبت شده باشد (Persian original verbatim) و ترجمهٔ انگلیسی همراه آن باشد",
+        "AGENTS.md §0 و CONTRIBUTING.md و README.md و protocol.constitution تخته همه به سند لینک کنند",
+        "خروجی scripts/agent_board.py show/next/claim یادآوری قانون را چاپ کند",
+        "tests/unit/test_engineering_constitution.py هر یک از این سنجه‌ها را تضمین کند و با pytest سبز باشد",
+        "docs gates (tests/unit/test_docs_integrity.py) و board schema tests سبز بمانند",
+        "هیچ فایلی در src/ لمس نشود"
+      ],
+      "acceptance_criteria_en": [
+        "the 14 articles are registered verbatim (Persian original) with an English rendering",
+        "AGENTS.md §0, CONTRIBUTING.md, README.md and the board's protocol.constitution all link the document",
+        "scripts/agent_board.py show/next/claim print the constitution reminder",
+        "tests/unit/test_engineering_constitution.py enforces every pin above and is green",
+        "the docs gates (tests/unit/test_docs_integrity.py) and the board schema tests stay green",
+        "no file under src/ is touched"
+      ],
+      "evidence_required": [
+        "pytest -q --noconftest tests/unit/test_engineering_constitution.py tests/unit/test_docs_integrity.py tests/unit/test_agent_board.py tests/unit/test_agent_board_active_in_review.py tests/unit/test_agent_board_pr_visibility.py",
+        "ruff check tests/unit/test_engineering_constitution.py scripts/agent_board.py && ruff format --check tests/unit/test_engineering_constitution.py scripts/agent_board.py",
+        "python scripts/agent_board.py show | grep -i constitution",
+        "python scripts/agent_board.py check --files <changed files> --branch arena/01a0da15-nexus-ai-agent (exit 0)"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da15-nexus-ai-agent",
+      "claimed_at": "2026-09-25T19:55:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Owner instruction (Persian): register the Engineering Constitution somewhere every agent reviews before working or coding, and keep it permanently saved. Placement at the repo root next to AGENTS.md (the agent front door) was chosen over docs/ so the law is read before work; docs/README.md is exclusively leased by task-181 until 2026-09-26T23:06:38Z, so no docs/ file was touched (Article 8 scope firewall; referee: agent_board.py check). gates_owner is false on purpose: no active claim on the live board holds gates_owner: true (seat vacant), and this session cannot run the full gates in its sandbox (dependencies not installed), so the gates are deferred to the gates owner / to CI on the PR rather than claimed without evidence. Pre-existing finding, state DEFERRED_WITH_REASON: `mypy --ignore-missing-imports scripts/agent_board.py` reports 4 errors in fetch_open_prs (object not iterable / unused type: ignore) — verified identical on HEAD~ of this branch (pre-existing, not introduced here) and outside CI's `mypy src` scope; fixing it needs its own claim plus a typing test, so it is recorded rather than silently mixed into this governance change. Delivered via PR#84 (https://github.com/bot523h/nexus-ai-agent/pull/84), head 09f3bae. Delivered in PR#84 and CI-verified on head 0152cdb: lint (ruff+mypy+lockstep) pass 7m24s, lint-fast pass 12s, test (pytest -m 'not slow') pass 8m33s, migrate-postgres pass 6m13s, release-lineage pass 7s, extras-matrix core/pdf/speech/translate pass, python-parity 3.10/3.11/3.12 pass. Claim moved to active_in_review with no exclusive paths, so the governance-constitution zone is free while the PR is under review. STALE-EVIDENCE correction (found by task-185): this note cited CI evidence at 0152cdb while PR#84's head had already moved to 67e8ff3; the green run for 67e8ff3 is 36183886954/36183882546 (2026-09-25T20:07Z, conclusion success, 12/12 checks). Nothing in the repository detected the drift — that is the gap task-185 hardens."
+    }
+  },
+  {
+    "branch": "arena/01a0da56-nexus-ai-agent",
+    "sha": "e2d9ab853d5778b7ae2d127dcb01aea648827adb",
+    "claim": {
+      "task": "task-195",
+      "title": "Operation Truth (PR#83) → canonical main, provenance kept + py3.10 parity fix",
+      "title_fa": "اورژانس ادغام Operation Truth روی main canonical با حفظ provenance و اصلاح parity پایتون ۳.۱۰",
+      "zone": "nagar-truth-mainline",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Problem: Operation Truth (PR#83 head 372643af) is CONFLICTING with main 2351f099 only on .agents/board.json (forensic merge-base 52ab7e8f); everything else is additive. Evidence: git merge-tree conflict set = {.agents/board.json}; PR#83 branch CI was green pre-#82 legs. Root cause of stale CI signal: PR#82 added python-parity legs after #83's last CI run; PR#83's truth.py:52 uses `from datetime import UTC` (3.11+) which would red the 3.10 leg. Scope: merge PR#83 head into arena/01a0da56 with board.json union, fix datetime.UTC parity, regenerate OPERATION_TRUTH.json + L0_L4_MATURITY.md from the recomputation, keep all provenance docs (audit/mutations/wave plan/reconciliation).",
+      "scope_fa": "Problem: Operation Truth (PR#83) فقط روی board.json با main تعارض دارد؛ بقیه additive است. Evidence: merge-base 52ab7e8f، conflict set فقط board.json. Root cause سیگنال قدیمی CI: گیت parity پس از CI شاخهٔ ۸۳ اضافه شده و truth.py از datetime.UTC (۳.۱۱+) استفاده می‌کند. Scope: merge با union روی board.json، اصلاح parity، بازتولید projection، حفظ provenance.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "PR#83 head present in tree with zero content drift except (a) board.json union, (b) datetime.UTC→timezone.utc parity fix",
+        "python -m nexus_ai_agent.nagar --check recomputes projections; OPERATION_TRUTH.json and L0_L4_MATURITY.md regenerate byte-identical to committed files",
+        "pytest of nagar truth tests green on py3.11; no 3.11-only constructs remain in nagar modules (static scan + CI parity legs)",
+        "L4 remains 0 and missing=23 until an artifact-proof source exists (no hand-edited maturity)"
+      ],
+      "evidence_required": [
+        "git diff of PR#83-head vs integrated tree limited to the two named deltas",
+        "python -m nexus_ai_agent.nagar --check output + regenerated projection sha256",
+        "exact-SHA CI legs (lint/test/parity/extras/release-lineage) green"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/",
+        "OPERATION_TRUTH.json",
+        "L0_L4_MATURITY.md",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "OPERATION_TRUTH_AUDIT_2026-09-25.md",
+        "OPERATION_TRUTH_MUTATIONS_2026-09-25.md",
+        "OPERATION_WAVE_PLAN.md",
+        "RECONCILIATION.md",
+        "docs/audits/OPERATION_PROOF_REGISTRY.json",
+        "docs/audits/L4_ARTIFACT_PROOF",
+        "tests/architecture/test_operation_truth_gate.py",
+        "tests/unit/test_operation_truth_mutations.py",
+        "tests/unit/test_operation_truth_sources.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da56-nexus-ai-agent",
+      "claimed_at": "2026-09-25T21:16:42Z",
+      "ttl_hours": 30,
+      "gates_owner": true,
+      "delivered": [],
+      "note": ""
+    }
+  },
+  {
+    "branch": "arena/01a0da56-nexus-ai-agent",
+    "sha": "e2d9ab853d5778b7ae2d127dcb01aea648827adb",
+    "claim": {
+      "task": "task-196",
+      "title": "Consume PR#87 Studio Core contracts + L4 artifact-proof vertical slice",
+      "title_fa": "مصرف قراردادهای Studio Core (PR#87) و برش عمودی اثبات artifact برای L4",
+      "zone": "studio-l4-vertical",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Problem: no studio-dispatchable operation on main produces a real artifact (edit/slideshow pack handlers are pure state transforms — edit/operations.py::_trim computes a derived sha from a seed string, no file I/O); L4 requires input→discover→intent→TypedCommand→CommandBus→real operation→preview/local paths→verifier→hash→reopen→undo/replay→Operation Truth. Evidence: edit/operations.py handler source; jobs/verification.py verify_artifact exists; creative/render_jobs.py::creative_render_job is the real binary-backed lane (allow-listed ffmpeg via NEXUS_FFMPEG_BIN→PATH→imageio-ffmpeg). Root cause: command surface and the artifact lane were never joined under proof discipline. Scope: integrate PR#87 head (discovery surface + preview/master stamps) unchanged unless a defect reproduces; implement the harness OUTSIDE the baseline contracts; adversarial tests for the three families (stale surface_identity, forged authoritative, preview→master escalation).",
+      "scope_fa": "Problem: هیچ عملیات studio روی main artifact واقعی نمی‌سازد (handlerهای edit/slideshow تبدیل وضعیت خالص‌اند). Evidence: سورس handlerها + وجود verify_artifact و مسیر واقعی render_jobs. Root cause: سطح فرمان و لاین artifact بدون انضباط اثبات به هم وصل نشده‌اند. Scope: ادغام دست‌نخوردهٔ PR#87 مگر با defect بازتولیدشده؛ harness بیرون از قراردادهای Baseline؛ تست‌های adversarial هر سه خانواده.",
+      "prerequisites": [
+        "task-195"
+      ],
+      "acceptance_criteria": [
+        "PR#87 contracts integrated verbatim; any deviation has a reproduction + failing test + minimal fix + mutation note",
+        "vertical slice: deterministic fixture → discovery advertisement → TypedCommand → CommandBus dispatch → REAL ffmpeg-backed execution → artifact on disk → independent verify_artifact (exists/non-empty/type/probe/duration) → canonical payload hash → reopen+reprobe → replay determinism → recorded provenance (operation id, command revision, execution mode, artifact hash, verifier result)",
+        "six Preview/Master invariants machine-tested (no unauthoritative preview as master; stamp-forgery rejected; no verifier evidence ⇒ no L4; preview artifact never promoted; master proof bound to real artifact+verification)",
+        "Operation Truth integration: artifact_evidence + production_like proofs recorded only via the harness gate; gate test re-verifies recorded proofs independently (recipe re-execution), fake/corrupt/stale entries fail the gate red"
+      ],
+      "evidence_required": [
+        "pytest of slice + adversarial + preview/master tests green; mutation: corrupt artifact / forged stamp / missing verifier each make the gate red",
+        "python -m nexus_ai_agent.nagar --check shows the sliced op at L4 with recorded proofs; removing the proof entries drops it back to L4=0",
+        "surface_identity stability: same registry+flag ⇒ byte-identical canonical JSON"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/studio/",
+        "tests/unit/test_studio_discovery.py",
+        "tests/unit/test_studio_integration_contracts.py",
+        "tests/unit/test_studio_preview_master_boundary.py",
+        "tests/unit/test_l4_artifact_proof.py",
+        "tests/architecture/test_l4_vertical_slice.py",
+        "docs/architecture/COMMAND_CAPABILITY_CONTRACT.md",
+        "docs/architecture/MODULE_MAP.md",
+        "CHANGELOG.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da56-nexus-ai-agent",
+      "claimed_at": "2026-09-25T21:16:42Z",
+      "ttl_hours": 30,
+      "gates_owner": false,
+      "delivered": [],
+      "note": ""
+    }
+  },
+  {
+    "branch": "arena/01a0da56-nexus-ai-agent",
+    "sha": "e2d9ab853d5778b7ae2d127dcb01aea648827adb",
+    "claim": {
+      "task": "task-197",
+      "title": "Supersede PR#86: fail-closed external activation with parity-correct types (CI red root-caused)",
+      "title_fa": "ابرسده PR#86: فیل-کلوز فعال‌سازی بستهٔ خارجی با نوع‌های سازگار با parity (ریشهٔ CI سرخ روشن)",
+      "zone": "pack-security-fail-closed",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Problem: PR#86 (head 2683d6d8) is red on lint + test + all parity legs. Evidence (local reproduction on the exact head): (1) mypy src → registry.py:157 comparison-overlap: Literal['placeholder','format_only_unverified'] != Literal['verified'] is non-overlapping; (2) its new test fails ValidationError — capability 'media.play' is outside package 'nexus.external.test' namespace before activate() is ever reached. Root cause: the guard's right-hand value is absent from the protocol Literal (type-level), and the test's fixture package id violates the manifest namespace rule (data-level). Scope: superseding change carrying #86's intent verbatim — fail-closed external activation — with two scoped fixes: widen the signature-state protocol Literal to include 'verified' (documented as never emitted by today's verifier) and fix the test fixture package id to a namespace-valid one. Also document-close PR#80 as superseded-by-main (forensic matrix in note).",
+      "scope_fa": "Problem: PR#86 روی lint+test+parity سرخ است. Evidence بازتولید محلی روی همان head: (۱) mypy comparison-overlap در registry.py:157؛ (۲) تست جدید با ValidationError namespace شکست می‌خورد پیش از رسیدن به activate. Root cause: مقدار 'verified' در Literal پروتکل نیست و fixture تست از قاعدهٔ namespace خارج است. Scope: حمل همان intent با دو اصلاح محدود + بستن مستند PR#80 به‌عنوان superseded.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "mypy src clean; ruff clean; full pytest files for packs green",
+        "external pack with unverified signature cannot activate (regression test green); builtin activation path unchanged (existing tests green)",
+        "PR#86 diff carried with provenance (its commit content + NAGAR_AGENT_03 report verbatim) plus the two named fixes only",
+        "PR#80 supersession documented with the forensic file/test matrix (posted to the PR + audit note)"
+      ],
+      "evidence_required": [
+        "exact reproduction strings (mypy error + ValidationError) captured in the audit note",
+        "targeted pytest: tests/unit/test_pack_manifest_verify.py, tests/architecture/test_pack_manifest_is_data_only.py",
+        "exact-SHA CI green on the integrating PR"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/packs/registry.py",
+        "src/nexus_ai_agent/creative/packs/verify.py",
+        "tests/unit/test_pack_manifest_verify.py",
+        "docs/architecture/SECURITY.md",
+        "NAGAR_AGENT_03_FINAL_2026-09-25.md",
+        "docs/audits/PR86_SUPERSEDED",
+        "docs/audits/PR80_SUPERSEDED"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/01a0da56-nexus-ai-agent",
+      "claimed_at": "2026-09-25T21:16:42Z",
+      "ttl_hours": 30,
+      "gates_owner": false,
+      "delivered": [],
+      "note": ""
+    }
+  },
+  {
+    "branch": "arena/01a0da85-nexus-ai-agent",
+    "sha": "2f0df4f11eada4307d6170cab9cffff027a5b1a3",
+    "claim": {
+      "task": "task-122",
+      "title": "PR#32 rebase + dedupe against merged #34",
+      "title_fa": "ریبیس و رفع دوگانگی PR#32",
+      "zone": "feature-wiring",
+      "priority": "P0",
+      "status": "active_in_review",
+      "scope": "۸ فایل مشترک با #34 کانفلیکت متنی و معنایی دارند؛ سیم‌کشی موازی باید یکی شود.",
+      "scope_fa": "۸ فایل مشترک با #34 کانفلیکت متنی و معنایی دارند؛ سیم‌کشی موازی باید یکی شود.",
+      "prerequisites": [
+        "task-131"
+      ],
+      "acceptance_criteria": [
+        "دیف نهایی فقط یکتای‌های #32 را دارد",
+        "تست‌های feature_* سبز",
+        "board.json به سود وضعیت جدید حل شود"
+      ],
+      "evidence_required": [
+        "CI سبز",
+        "گزارش dedupe فایل‌به‌فایل"
+      ],
+      "exclusive_paths": [],
+      "owner_hint": "عامل B",
+      "agent_branch": "arena/01a0da85-nexus-ai-agent",
+      "claimed_at": "2026-09-25T20:03:09Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Forensic closure of 0199e58 (baseline e405e07 NEEDS_FIX): ruff format fixed; 2 latent mypy errors fixed; mutation C killed by cross-chat/cross-user flood tests; mutation G killed by AST architecture gate (tests/architecture/test_async_db_offload_guard.py); typed-failure gaps (mod_config unknown-key/bad-bool, mute duration<=0) tested; full suite 2332 passed on CPython 3.11.2. Remaining: anon peer-moderation scope = NEEDS_PRODUCT_DECISION (engineering gates green).",
+      "prev_agent_branch": "arena/01a0da12-nexus-ai-agent",
+      "ci_evidence": "CI 36194369744 green 12/12 on closure commit 60188f2 (lint, lint-fast, test, extras×4, parity 3.10/3.11/3.12, migrate-postgres, release-lineage); forensic v2: FORENSIC_REPORT_task122.md"
+    }
+  },
+  {
+    "branch": "arena/01a0dc0c-nexus-ai-agent",
+    "sha": "07106c29f8ff0506ffb43b3b41a9c5de66b03a81",
+    "claim": {
+      "task": "constitution-housekeeping-dry-run",
+      "zone": "constitution-housekeeping-dry-run",
+      "status": "active_in_review",
+      "priority": "P0",
+      "scope": "Zero-assumption baseline evidence and a focused local/R2 housekeeping dry-run contract repair; no global engineering-grade claim.",
+      "exclusive_paths": [
+        "src/nexus_ai_agent/maintenance/housekeeping.py",
+        "tests/unit/test_housekeeping_contract.py",
+        ".agents/evidence/constitution-2026-09-26.json"
+      ],
+      "acceptance_criteria": [
+        "Reproduce local deletion in dry-run before fix",
+        "No local unlink or remote delete in dry-run; real cleanup and strict retention boundary preserved",
+        "Mutation of dry-run guard detected; failures propagate",
+        "Record exact-SHA CI separately from local diagnostics and unresolved audit domains"
+      ],
+      "evidence_required": [
+        "Before/after pytest output",
+        "Guard mutation failure and restored passing test",
+        "Baseline and exact-SHA CI metadata"
+      ],
+      "prerequisites": [],
+      "agent_branch": "arena/01a0dc0c-nexus-ai-agent",
+      "claimed_at": "2026-09-26T04:51:37Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Focused repair delivered at ef6956d1baf70e50cf99fa745090f765b40e4ed0; exact-SHA CI 36219164776 success, 12 jobs. Local diagnostics: 186 passed, 3 dry-run mutants killed. Evidence .agents/evidence/constitution-2026-09-26.json. Master mission remains NEEDS_HARDENING; filesystem/executor/LLM/pack defects remain. Full gates deferred to gates owner; no production release claim."
+    }
+  }
+]

@@ -1,0 +1,47 @@
+2026-09-26 05:13:33 [info     ] maintenance_housekeeping_no_r2
+{
+  "timestamp": "2026-09-26T05:13:33.377420+00:00",
+  "python": "3.11.2 (main, Apr  8 2026, 01:58:00) [GCC 12.2.0]",
+  "source": "/home/user/night-shift/main/src/nexus_ai_agent/storage/db.py",
+  "results": {
+    "public_cli_dry_run": {
+      "command": [
+        "/home/user/night-shift/.venv/bin/python",
+        "-m",
+        "nexus_ai_agent.cli",
+        "maintenance",
+        "housekeeping",
+        "--dry-run"
+      ],
+      "before": [],
+      "after": [
+        "data",
+        "data/cache",
+        "models"
+      ],
+      "stdout": "2026-09-26 05:13:33 [info     ] maintenance_housekeeping_no_r2\ntemp files removed: 0\nR2 backups deleted: 0\nnote: R2 not configured \u2014 local cleanup only\ndry-run: nothing was changed\n",
+      "stderr": "",
+      "exit_code": 0
+    },
+    "dry_run_deletion": {
+      "summary": {
+        "dry_run": true,
+        "temp_files_removed": [
+          "/tmp/tmpk2ag57da/creative/creative_jobs.sqlite3",
+          "/tmp/tmpk2ag57da/creative/creative_jobs.sqlite3-journal",
+          "/tmp/tmpk2ag57da/creative/creative_jobs.sqlite3-shm",
+          "/tmp/tmpk2ag57da/creative/creative_jobs.sqlite3-wal",
+          "/tmp/tmpk2ag57da/creative/old.mp4"
+        ],
+        "backups_deleted": [],
+        "r2_skipped_reason": "R2 not configured \u2014 local cleanup only"
+      },
+      "remaining": []
+    },
+    "tilde_path": {
+      "configured": "~/custom.sqlite",
+      "runtime": "/tmp/tmpk2ag57da/custom.sqlite",
+      "backup_error": "SQLite database not found at ~/custom.sqlite"
+    }
+  }
+}

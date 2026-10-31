@@ -352,8 +352,16 @@ async def _set_wal_mode(engine: Any) -> None:
     raise RuntimeError("unreachable: WAL retry loop exhausted")  # pragma: no cover
 
 
-async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
-    """Create all SQLModel tables for the selected database, exactly once per path."""
+async def create_all_tables(db_path: str | None = None) -> None:
+    """Create SQLite tables once per path, defaulting to Settings.db_path.
+
+    This SQLite primitive does not select the PostgreSQL backend; get_session
+    and the migration entry points own backend selection.
+    """
+    if db_path is None:
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
     await _dispose_replaced_engines()
     normalized_path = str(Path(db_path).expanduser())
     engine = _get_engine(normalized_path)
@@ -509,14 +517,7 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
     - ``db_path`` is ``None`` → the backend comes from the environment:
       ``NEXUS_DATABASE_URL`` set → PostgreSQL, prepared lazily via Alembic
       (D7: the ``create_all`` stopgap was retired); otherwise the configured
-      SQLite file (``NEXUS_DB_PATH``, default ``data/app.sqlite``).
-
-    The SQLite fallback used to hard-code ``"data/app.sqlite"`` and ignore
-    ``NEXUS_DB_PATH``, so an operator who pointed the bot at a persistent
-    volume still had the async paths (users, chats, files, dashboard) write
-    into an ephemeral file next to the code while the feature engines wrote
-    into the configured one — two databases for one deployment (audit
-    finding A-02b).
+      SQLite path (``NEXUS_DB_PATH`` / legacy ``DB_PATH``).
     """
     await _dispose_replaced_engines()
     if db_path is None:

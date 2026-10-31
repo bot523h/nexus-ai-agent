@@ -1,0 +1,20 @@
+{
+  "command": [
+    "/home/user/night-shift/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-q",
+    "tests/integration/test_owner_db_path_contract.py",
+    "--tb=short"
+  ],
+  "cwd": "/home/user/night-shift/main",
+  "environment": {
+    "PYTHONPATH": "/home/user/night-shift/main/src",
+    "python": "3.11.2"
+  },
+  "sha": "2351f099e2f789b80de05c6b382554b5cdcec0f3",
+  "started_at": "2026-09-26T05:09:57.306534+00:00",
+  "finished_at": "2026-09-26T05:09:58.536424+00:00",
+  "exit_code": 1,
+  "source": "pristine git archive; only new test added"
+}

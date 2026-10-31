@@ -1,0 +1,111 @@
+[
+  {
+    "name": "targeted",
+    "sha": "244a01ce8b2d751e2f35699c82a4c758321691f8",
+    "command": [
+      "/home/user/night-shift/.venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/integration/test_owner_db_path_contract.py",
+      "--tb=short"
+    ],
+    "cwd": "/home/user/night-shift/work",
+    "environment": {
+      "PYTHONPATH": "/home/user/night-shift/work/src",
+      "python": "3.11.2",
+      "dependencies": "environment.txt"
+    },
+    "started_at": "2026-09-26T05:11:32.540807+00:00",
+    "finished_at": "2026-09-26T05:11:34.277416+00:00",
+    "exit_code": 0
+  },
+  {
+    "name": "subsystem",
+    "sha": "244a01ce8b2d751e2f35699c82a4c758321691f8",
+    "command": [
+      "/home/user/night-shift/.venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "tests/unit/test_db.py",
+      "tests/unit/test_database_url.py",
+      "tests/unit/test_migrations.py",
+      "tests/unit/test_migration_metadata.py",
+      "tests/unit/test_migrate_postgres_guard.py",
+      "tests/unit/test_maintenance_backup.py",
+      "tests/unit/test_agent_board.py",
+      "--tb=short"
+    ],
+    "cwd": "/home/user/night-shift/work",
+    "environment": {
+      "PYTHONPATH": "/home/user/night-shift/work/src",
+      "python": "3.11.2",
+      "dependencies": "environment.txt"
+    },
+    "started_at": "2026-09-26T05:11:34.277438+00:00",
+    "finished_at": "2026-09-26T05:11:38.563406+00:00",
+    "exit_code": 0
+  },
+  {
+    "name": "lint",
+    "sha": "244a01ce8b2d751e2f35699c82a4c758321691f8",
+    "command": [
+      "/home/user/night-shift/.venv/bin/ruff",
+      "check",
+      "src/nexus_ai_agent/storage/db.py",
+      "tests/integration/test_owner_db_path_contract.py"
+    ],
+    "cwd": "/home/user/night-shift/work",
+    "environment": {
+      "PYTHONPATH": "/home/user/night-shift/work/src",
+      "python": "3.11.2",
+      "dependencies": "environment.txt"
+    },
+    "started_at": "2026-09-26T05:11:38.563426+00:00",
+    "finished_at": "2026-09-26T05:11:38.570790+00:00",
+    "exit_code": 0
+  },
+  {
+    "name": "format",
+    "sha": "244a01ce8b2d751e2f35699c82a4c758321691f8",
+    "command": [
+      "/home/user/night-shift/.venv/bin/ruff",
+      "format",
+      "--check",
+      "src/nexus_ai_agent/storage/db.py",
+      "tests/integration/test_owner_db_path_contract.py"
+    ],
+    "cwd": "/home/user/night-shift/work",
+    "environment": {
+      "PYTHONPATH": "/home/user/night-shift/work/src",
+      "python": "3.11.2",
+      "dependencies": "environment.txt"
+    },
+    "started_at": "2026-09-26T05:11:38.570805+00:00",
+    "finished_at": "2026-09-26T05:11:38.576910+00:00",
+    "exit_code": 0
+  },
+  {
+    "name": "board",
+    "sha": "244a01ce8b2d751e2f35699c82a4c758321691f8",
+    "command": [
+      "python",
+      "scripts/agent_board.py",
+      "check",
+      "--files",
+      "src/nexus_ai_agent/storage/db.py,tests/integration/test_owner_db_path_contract.py,docs/audits/OWNER_HARDENING_CLOSURE.md,docs/audits/OWNER_HARDENING_EVIDENCE/",
+      "--branch",
+      "arena/01a0da13-nexus-ai-agent"
+    ],
+    "cwd": "/home/user/night-shift/work",
+    "environment": {
+      "PYTHONPATH": "/home/user/night-shift/work/src",
+      "python": "3.11.2",
+      "dependencies": "environment.txt"
+    },
+    "started_at": "2026-09-26T05:11:38.576924+00:00",
+    "finished_at": "2026-09-26T05:11:38.634051+00:00",
+    "exit_code": 0
+  }
+]
