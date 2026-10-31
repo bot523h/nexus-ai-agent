@@ -35,11 +35,16 @@ Nothing here imports Telegram; the worker runs outside the bot process.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from nexus_ai_agent.adapters.in_process_job_queue import ArtifactPublication
+    from nexus_ai_agent.execution.staging import AttemptStaging
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -921,3 +926,253 @@ def cleanup_workspace(record: dict[str, Any]) -> None:
         shutil.rmtree(directory, ignore_errors=True)
     except OSError:  # pragma: no cover - foreground best effort
         pass
+
+
+# ---------------------------------------------------------------------------
+# AttemptStaging-based publication for creative_render (task-255)
+# ---------------------------------------------------------------------------
+#
+# The render handler writes the artifact into the job workspace (the build
+# directory).  Publication moves it from the workspace into an attempt-scoped
+# staging tree and then atomically publishes it to a final destination under
+# the artifact root.  The staging tree is isolated per (job_id, attempt_id),
+# so a stale execution with a different workspace cannot address another
+# attempt's staging directory.
+#
+# The attempt_id and job_id are derived from the workspace and artifact paths
+# because the queue does not yet pass the minted attempt identifier to the
+# publication callback (task-255 limitation — full attempt-token fencing at
+# the filesystem boundary requires the queue to thread claim.attempt through
+# the ArtifactPublication callback; until then the workspace path provides
+# per-execution uniqueness).
+
+CREATIVE_RENDER_PUBLICATION_JOB_TYPE = "creative_render"
+
+#: Sub-directories under the artifact root for staging and published output.
+_STAGING_SUBDIR = "staging"
+_PUBLISHED_SUBDIR = "published"
+
+
+def _derive_component(raw: str) -> str:
+    """Derive a safe path component from an arbitrary path string."""
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return digest
+
+
+def _creative_render_staging(
+    artifact_root: Path,
+    workspace: Path,
+    artifact_path: Path,
+    job_id: str | None = None,
+    attempt_id: str | None = None,
+) -> AttemptStaging:
+    """Create an AttemptStaging instance for a creative_render publication.
+
+    The staging root is ``<artifact_root>/staging`` and the final root is
+    ``<artifact_root>/published`` so the publish target is never inside the
+    staging namespace.
+    """
+    from nexus_ai_agent.execution.staging import AttemptStaging
+
+    if job_id is None:
+        job_id = _derive_component(str(workspace))
+    if attempt_id is None:
+        attempt_id = _derive_component(str(artifact_path))
+    return AttemptStaging(
+        artifact_root / _STAGING_SUBDIR,
+        job_id=job_id or _derive_component(str(workspace)),
+        attempt_id=attempt_id or _derive_component(str(artifact_path)),
+        final_root=artifact_root / _PUBLISHED_SUBDIR,
+    )
+
+
+def creative_render_publication_callback(
+    payload: dict[str, object], result: dict[str, object], artifact_root: Path
+) -> dict[str, object]:
+    """Publish a creative_render artifact via AttemptStaging.
+
+    Stages the artifact from the workspace into the attempt-scoped staging
+    tree, keeps the previous published artifact as ``.prev``, and atomically
+    publishes the staged bytes to the final destination.  Returns a patch
+    dict with the published ``artifact_path``.
+
+    Idempotent: a retry with the same workspace produces the same staging
+    directory and re-publishes the same bytes.
+    """
+    artifact_path_raw = result.get("artifact_path")
+    if not isinstance(artifact_path_raw, str) or not artifact_path_raw:
+        raise RuntimeError("publish: result has no artifact_path")
+    artifact_path = Path(artifact_path_raw)
+
+    workspace_raw = result.get("workspace_dir")
+    if not isinstance(workspace_raw, str) or not workspace_raw:
+        raise RuntimeError("publish: result has no workspace_dir")
+    workspace = Path(workspace_raw)
+
+    _qjid = payload.get("_queue_job_id") or result.get("_queue_job_id")
+    _qatt = payload.get("_queue_attempt") or result.get("_queue_attempt")
+    staging = _creative_render_staging(
+        artifact_root,
+        workspace,
+        artifact_path,
+        job_id=_qjid if isinstance(_qjid, str) else None,
+        attempt_id=str(_qatt) if isinstance(_qatt, (int, str)) else None,
+    )
+    assert staging.final_root is not None, "staging requires final_root"
+    staging.prepare()
+
+    # Stage the artifact into the staging tree.
+    staged_name = artifact_path.name
+    staged_path = staging.stage_path(staged_name)
+    data = artifact_path.read_bytes()
+    staging.write(staged_name, data)
+
+    target_rel = staged_name
+    published_path = staging.final_root / target_rel
+    backup_path = staging.final_root / f".{staged_name}.prev"
+
+    if published_path.exists():
+        # Atomic same-directory rename: previous bytes move to .prev.
+        published_path.rename(backup_path)
+
+    # Atomic publish: staging → final destination.
+    resolved = staging.publish(staged_path, target_rel)
+
+    # Write sidecar recording attempt ownership (queue-scoped only).
+    queue_attempt = payload.get("_queue_attempt") or result.get("_queue_attempt")
+    if isinstance(queue_attempt, (int, str)):
+        sidecar_path = resolved.parent / f".{resolved.name}.owner"
+        sidecar_path.write_text(json.dumps({"attempt": str(queue_attempt)}) + "\n")
+
+    return {
+        "artifact_path": str(resolved),
+        "artifact_backup": str(backup_path) if backup_path.exists() else None,
+    }
+
+
+def creative_render_retract_callback(
+    payload: dict[str, object], result: dict[str, object], artifact_root: Path
+) -> None:
+    """Retract a refused creative_render publication.
+
+    Removes the staged temp and restores the previous published artifact from
+    the ``.prev`` backup when present.  Never touches an artifact it cannot
+    prove to be this attempt's.
+    """
+    artifact_path_raw = result.get("artifact_path")
+    if not isinstance(artifact_path_raw, str) or not artifact_path_raw:
+        return
+    artifact_path = Path(artifact_path_raw)
+
+    workspace_raw = result.get("workspace_dir")
+    if not isinstance(workspace_raw, str) or not workspace_raw:
+        return
+    workspace = Path(workspace_raw)
+
+    _qjid = payload.get("_queue_job_id") or result.get("_queue_job_id")
+    _qatt = payload.get("_queue_attempt") or result.get("_queue_attempt")
+    staging = _creative_render_staging(
+        artifact_root,
+        workspace,
+        artifact_path,
+        job_id=_qjid if isinstance(_qjid, str) else None,
+        attempt_id=str(_qatt) if isinstance(_qatt, (int, str)) else None,
+    )
+    assert staging.final_root is not None, "staging requires final_root"
+    staged_name = artifact_path.name
+    staged_path = staging.staging_dir / staged_name
+    if staged_path.exists():
+        staged_path.unlink()
+
+    backup_path = staging.final_root / f".{staged_name}.prev"
+    published_path = staging.final_root / staged_name
+
+    # Verify sidecar: if a newer attempt owns this artifact, fail closed
+    # (queue-scoped only — direct callback calls skip this check).
+    queue_attempt = payload.get("_queue_attempt") or result.get("_queue_attempt")
+    if isinstance(queue_attempt, (int, str)):
+        sidecar_path = staging.final_root / f".{staged_name}.owner"
+        if sidecar_path.exists():
+            try:
+                sidecar = json.loads(sidecar_path.read_text())
+                sidecar_attempt = sidecar.get("attempt")
+            except (json.JSONDecodeError, KeyError):
+                sidecar_attempt = None
+            if sidecar_attempt is not None and sidecar_attempt != str(queue_attempt):
+                # Fail-closed: refuse to touch newer attempt's output.
+                return
+
+    # Distinguish pre-publish (artifact_path is under workspace) from
+    # post-publish (artifact_path is the published path).
+    is_post_publish = not str(artifact_path).startswith(str(workspace))
+    if is_post_publish:
+        # Post-publish refusal: restore previous from backup or remove
+        # the refused bytes when there was none.
+        if backup_path.exists():
+            if published_path.exists():
+                published_path.unlink()
+            backup_path.rename(published_path)
+        elif published_path.exists():
+            published_path.unlink()
+    # Pre-publish refusal: only the staged temp was removed; the published
+    # artifact (if any) is untouched.
+
+
+def creative_render_finalize_callback(
+    payload: dict[str, object], result: dict[str, object], artifact_root: Path
+) -> None:
+    """Clean up the staging directory after the durable COMPLETED commit.
+
+    Never raises — the published bytes are already durable and a stray
+    staging directory is cleaned by the next publication or an operator.
+    """
+    artifact_path_raw = result.get("artifact_path")
+    if not isinstance(artifact_path_raw, str) or not artifact_path_raw:
+        return
+    artifact_path = Path(artifact_path_raw)
+
+    workspace_raw = result.get("workspace_dir")
+    if not isinstance(workspace_raw, str) or not workspace_raw:
+        return
+    workspace = Path(workspace_raw)
+
+    try:
+        _qjid = payload.get("_queue_job_id") or result.get("_queue_job_id")
+        _qatt = payload.get("_queue_attempt") or result.get("_queue_attempt")
+        staging = _creative_render_staging(
+            artifact_root,
+            workspace,
+            artifact_path,
+            job_id=_qjid if isinstance(_qjid, str) else None,
+            attempt_id=str(_qatt) if isinstance(_qatt, (int, str)) else None,
+        )
+        assert staging.final_root is not None, "staging requires final_root"
+        staging.cleanup()
+    except Exception:  # noqa: BLE001 - finalize is best-effort
+        pass
+
+
+def build_creative_render_publication(artifact_root: Path) -> ArtifactPublication:
+    """Build an ArtifactPublication for creative_render jobs.
+
+    The ``artifact_root`` is the staging namespace root (typically the
+    queue's ``_artifact_root``).  The caller (composition root) wires this
+    into the queue's ``artifact_publications`` mapping alongside the default
+    pdf_extract publication.
+    """
+    from nexus_ai_agent.adapters.in_process_job_queue import ArtifactPublication
+
+    def _publish(payload: dict[str, object], result: dict[str, object]) -> dict[str, object]:
+        return creative_render_publication_callback(payload, result, artifact_root)
+
+    def _retract(payload: dict[str, object], result: dict[str, object]) -> None:
+        creative_render_retract_callback(payload, result, artifact_root)
+
+    def _finalize(payload: dict[str, object], result: dict[str, object]) -> None:
+        creative_render_finalize_callback(payload, result, artifact_root)
+
+    return ArtifactPublication(
+        publish=_publish,
+        retract=_retract,
+        finalize=_finalize,
+    )
