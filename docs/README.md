@@ -146,6 +146,13 @@ placeholder text.
 | [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
 | [audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md](audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md) | Dated Phase-1 stabilization handoff: live PR inventory, exact-SHA remediation evidence, Board fence correction, CI blockers, and backup/restore limits. |
 
+## Engineering (mission records)
+
+| Document | What it is |
+|---|---|
+| [engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md](engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md) | M0 live audit for mission NAGAR-IBPC-LIVE-EDITING-01: 21-component inventory with file evidence, real execution path, verifier calibration, forbidden paths, NOW/NEXT/LATER. |
+| [engineering/NAGAR_IBPC.md](engineering/NAGAR_IBPC.md) | The IBPC slice (intent-bound proof capsules for live editing): chain, red-line→test map, scope semantics, verifier calibration, fencing, privacy, package map — plus the security closure (threat model, audio-ingress policy, approval identity contract, 13/13 mutation evidence) and the honest in-process lifecycle table (Implemented…ProductionVerified labels). |
+
 ## History (archived — read-only, never a source of truth)
 
 | Document | What it is |

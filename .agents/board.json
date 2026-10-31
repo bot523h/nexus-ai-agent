@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-30T15:39:23Z",
+  "updated_at": "2026-10-31T08:03:37Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1017,6 +1017,37 @@
         "tests/unit/test_operation_matrix_reconciliation.py",
         "src/nexus_ai_agent/nagar/docs_projection.py"
       ]
+    },
+    {
+      "id": "nagar-ibpc-live-editing",
+      "description": "NAGAR-IBPC-LIVE-EDITING-01: proof-carrying live creative editing — Intent -> Typed AST -> Scope -> Preview -> Approval Binding -> fenced canonical execution -> independent footprint verification -> IBPC capsule evidence on the existing provenance/passport chain. New package src/nexus_ai_agent/nagar/ibpc/ plus its tests and docs/engineering records. No second bus/queue/registry/verifier/authority; execution only via the existing JobQueuePort + creative_render worker.",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "tests/unit/test_ibpc_",
+        "tests/architecture/test_ibpc_boundary.py",
+        "tests/integration/test_ibpc_e2e.py",
+        "docs/engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md",
+        "docs/engineering/NAGAR_IBPC.md",
+        "docs/README.md"
+      ],
+      "note": "Registered 2026-10-31 by arena/7622c61d-nexus-ai-agent (mission NAGAR-IBPC-LIVE-EDITING-01). Out of scope by mission order: PR #273 (feat/nagar-p0-nel-semantic-time-causal-memory), PR #283 queue/heartbeat/execution-core files, task-281 files (scripts/cognition_quality_eval.py, tests/unit/test_cognition_quality_eval.py)."
+    },
+    {
+      "id": "nagar-ibpc-security-closure",
+      "description": "NAGAR-IBPC-SECURITY-CLOSURE-01: harden PR #298's IBPC slice into an auditable security closure — audio temp-file path traversal fix (secure internal file id, O_EXCL, containment via resolve, cleanup in all outcomes), full approval identity binding (principal+tenant+project+session+turn+sequence+revision+asset+ast/plan/preview digests checked at approve AND consume), adversarial/concurrency/mutation tests, persistence-lifecycle truth table, trust-mutations CI disk fix (minimal exact install), main convergence, docs sync.",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "tests/unit/test_ibpc_",
+        "tests/architecture/test_ibpc_boundary.py",
+        "tests/integration/test_ibpc_e2e.py",
+        "scripts/ibpc_security_mutations.py",
+        "docs/engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md",
+        "docs/engineering/NAGAR_IBPC.md",
+        "docs/README.md",
+        ".github/workflows/ci.yml",
+        "OPERATION_TRUTH.json"
+      ],
+      "note": "Registered 2026-10-31 by arena/7622c61d-nexus-ai-agent (mission NAGAR-IBPC-SECURITY-CLOSURE-01) on top of active claim task-ibpc-live-editing-01 (same branch/PR #298). Out of scope: task-267 (diagnostics/truth.py), task-281 (cognition eval files), PR #273 files. The ci.yml edit is limited to the trust-mutations job install steps; the mutation script itself is not weakened."
     }
   ],
   "claims": [
@@ -7581,6 +7612,103 @@
       ],
       "note": "",
       "ttl_hours": 24
+    },
+    {
+      "task": "task-ibpc-live-editing-01",
+      "title": "NAGAR-IBPC-LIVE-EDITING-01: proof-carrying live creative editing (IBPC vertical slice through the canonical queue)",
+      "title_fa": "NAGAR-IBPC-LIVE-EDITING-01: ویرایش زندهٔ proof-carrying (کپسول IBPC) — از Intent تایپ‌شده تا artifact تأییدشدهٔ مستقل روی مسیر canonical صف",
+      "zone": "nagar-ibpc-live-editing",
+      "priority": "P0",
+      "status": "done",
+      "scope": "Milestone 0 live audit doc; Milestone 1 real text-to-artifact vertical slice (timeline.trim via existing CapabilityRegistry -> CommandBus -> JobQueuePort -> InProcessJobQueue -> creative_render worker -> FFmpeg artifact -> registered verifier -> passport); Milestone 2 independent footprint verifier (PASS/FAIL/INCONCLUSIVE, no fake PASS under lossy encoding); Milestone 3 IBPC capsule + AST readback + single-use approval binding; Milestone 4 live session + voice turn fencing; Milestone 5 adversarial/architecture tests, docs, PR. All new code under src/nexus_ai_agent/nagar/ibpc/; execution only through injected canonical ports.",
+      "scope_fa": "ممیزی زنده، اسلایس عمودی متن‌به-artifact واقعی (timeline.trim از مسیر canonical)، verifier مستقل footprint با PASS/FAIL/INCONCLUSIVE، کپسول IBPC + readback + approval binding تک‌مصرف، session زنده با fencing مربوط به turnهای صوتی، تست‌های خصمانه و PR.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A real text intent becomes a typed AST validated against the live CapabilityRegistry (operation exists, schema version, permission level), with clarification (never guessing) when the scope is ambiguous.",
+        "A preview/readback is derived from the same compiled plan and bound by digest; approval binds principal + source_revision + ast/plan/preview digests and is single-use (replay refused, stale revision refused, tampered preview refused).",
+        "Execution goes only through the existing JobQueuePort -> creative_render worker -> CommandBus -> FFmpeg lane; the ibpc package imports no queue implementation, worker, render_jobs, studio.bus or packs.runtime (architecture test).",
+        "A real artifact is produced and independently re-measured; the footprint verifier compares decoded frames of source vs artifact (intended change + preservation) and returns PASS only on bit-exact preservation, INCONCLUSIVE under lossy encoding, FAIL on provable out-of-scope change.",
+        "The IBPC capsule binds all mission digests (intent/ast/scope/capability/plan/preview/approval/principal/attempt/artifact/verifier/evidence) with canonical deterministic serialization, and references the existing causal journal + passport (no parallel ledger).",
+        "Voice/live turns are fenced: partial transcripts, stale/cancelled/interrupted turns, duplicate turns and out-of-order messages can never create an approval or reach execution.",
+        "Privacy modes LOCAL_VAULT/TRUSTED_CLOUD/EXPERIMENTAL_CLOUD exist with explicit consent; default is LOCAL_VAULT; no user data egresses and raw transcripts never enter logs.",
+        "pytest on all new test files green; make lint / make types / make test green; agent_board.py check exit 0 on the exact changed files before every push; PR opened as draft from this branch."
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_ibpc_*.py tests/architecture/test_ibpc_boundary.py tests/integration/test_ibpc_e2e.py (counts + SHA)",
+        "make lint && make types && make test on the final branch SHA",
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <changed> --branch arena/7622c61d-nexus-ai-agent -> exit 0 (recorded before each push)",
+        "e2e evidence: job COMPLETED, artifact sha256 re-measured, verifier report verdict + capsule digest printed in the PR body",
+        "adversarial results (replay/stale/tampered/cancelled) as test names + outcomes in the PR body"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "tests/unit/test_ibpc_canonical_models.py",
+        "tests/unit/test_ibpc_intent_compiler.py",
+        "tests/unit/test_ibpc_approval.py",
+        "tests/unit/test_ibpc_session.py",
+        "tests/unit/test_ibpc_privacy.py",
+        "tests/unit/test_ibpc_footprint.py",
+        "tests/architecture/test_ibpc_boundary.py",
+        "tests/integration/test_ibpc_e2e.py",
+        "docs/engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md",
+        "docs/engineering/NAGAR_IBPC.md",
+        "docs/README.md"
+      ],
+      "owner_hint": "arena/7622c61d-nexus-ai-agent (session-fixed branch; mission suggested arena/nagar-proof-carrying-live-editing-20261031 but the session branch name is fixed)",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 2
+    },
+    {
+      "task": "task-ibpc-security-closure-01",
+      "title": "NAGAR-IBPC-SECURITY-CLOSURE-01: security, identity & execution closure for PR #298 (IBPC)",
+      "title_fa": "NAGAR-IBPC-SECURITY-CLOSURE-01: cierre de seguridad de PR #298 — traversial de audio, identidad de aprobación, CI y convergencia con main",
+      "zone": "nagar-ibpc-security-closure",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Phase A threat model; Phase B audio temp-file path traversal fix (secure internal file identity, O_EXCL creation, resolve-based containment, 0600 perms, no overwrite, cleanup on success/exception/timeout/cancel); Phase C approval identity binding at approve+consume (full immutable identity incl. tenant/project/session/turn/sequence, fail-closed typed errors, race-safe atomic consume); Phase D adversarial + concurrency + mutation tests; Phase E persistence/lifecycle truth table (no durability claims, NEXT for durable store); Phase F trust-mutations CI disk root cause + minimal exact install (script unchanged, same detection power); Phase G merge main; Phase H full gates; Phase I docs sync; Phase J independent review request, PR stays draft.",
+      "scope_fa": "مدل تهدید، رفع path traversal fichiers audio، اتصال کامل هویت Approval، تست‌های خصمانه و همزمانی، جدولodo lifecycle، رفع دیسک CI job trust-mutations بدون تضعیف، merge با main، Gateهای کامل، docs، review.",
+      "prerequisites": [
+        "task-ibpc-live-editing-01"
+      ],
+      "acceptance_criteria": [
+        "No turn_id or caller-supplied id can place or overwrite a file outside the guarded audio dir (traversal, absolute, backslash, empty, overlong, symlink cases tested); audio temp file uses an internal random id created with O_EXCL, 0600, inside the resolved dir, and is deleted on success/exception/cancel; cleanup never touches another turn's file.",
+        "ApprovalBinding identity (principal+tenant+project+session+turn+sequence+revision+asset+ast/plan/preview digests) is fully re-checked at approve AND at consume against the live request context; cross-session/cross-turn/cross-project/cross-tenant use is refused with typed errors; concurrent double-consume is impossible (atomic consume under lock); unauthorized requests create no job, no artifact, no capsule, no state change.",
+        "Adversarial identity-isolation, execution-isolation, concurrency/replay and mutation tests exist and pass; each named control has a mutation that turns its test red (scripts/ibpc_security_mutations.py).",
+        "Lifecycle table documents Session/Turn/Approval/Context/Capsule as in-process only; restart behavior and multi-process safety stated honestly; no durability or production-ready claims.",
+        "trust-mutations CI job installs only the exact proven dependency set (no torch/chromadb/llama-cpp), runs the unmodified scripts/pack_trust_mutations.py with the same 12 mutations and criteria; runner does not run out of disk.",
+        "Branch merged with current main (no force-push); referee check exit 0 on all touched paths before each push; make lint && make types && make test green on the final SHA; docs (NAGAR_IBPC.md, audit, docs/README.md) match the code; PR #298 updated and left Draft."
+      ],
+      "evidence_required": [
+        "pytest -q on all ibpc tests incl. new security suites, with counts and final SHA",
+        "scripts/ibpc_security_mutations.py output (every mutation killed, baseline GREEN) and SHA",
+        "minimal-install proof: pip freeze of the trust-mutations env + 12/12 killed locally",
+        "make lint && make types && make test outputs on final SHA",
+        "agent_board.py check exit 0 before each push (recorded)",
+        "CI run URLs on the final PR SHA incl. trust-mutations green",
+        "lifecycle + threat-model tables in docs/engineering/NAGAR_IBPC.md and PR body"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "tests/unit/test_ibpc_",
+        "tests/architecture/test_ibpc_boundary.py",
+        "tests/integration/test_ibpc_e2e.py",
+        "scripts/ibpc_security_mutations.py",
+        "docs/engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md",
+        "docs/engineering/NAGAR_IBPC.md",
+        "docs/README.md",
+        ".github/workflows/ci.yml",
+        "OPERATION_TRUTH.json"
+      ],
+      "agent_branch": "arena/7622c61d-nexus-ai-agent",
+      "claimed_at": "2026-10-31T07:30:39Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
