@@ -9,6 +9,7 @@ exactly one FFmpeg process with staging + atomic publish and probed evidence.
 from nexus_ai_agent.creative.rendering.compiler import (
     CompiledLane,
     MeasuredLoudness,
+    compile_assembly,
     compile_lane,
     compile_measure,
 )
@@ -21,9 +22,11 @@ from nexus_ai_agent.creative.rendering.executor import (
 )
 from nexus_ai_agent.creative.rendering.ir import (
     LANE_PACKAGE_ID,
+    AssemblyGap,
     DuckOp,
     ExposureOp,
     FreezeOp,
+    LaneAssembly,
     LaneError,
     LaneIR,
     LaneOp,
@@ -42,11 +45,13 @@ from nexus_ai_agent.creative.rendering.ir import (
 
 __all__ = [
     "LANE_PACKAGE_ID",
+    "AssemblyGap",
     "CompiledLane",
     "DuckOp",
     "ExposureOp",
     "FreezeOp",
     "LaneArtifact",
+    "LaneAssembly",
     "LaneError",
     "LaneExecutionError",
     "LaneIR",
@@ -60,6 +65,7 @@ __all__ = [
     "TitleOp",
     "TrimOp",
     "XfadeOp",
+    "compile_assembly",
     "compile_lane",
     "compile_measure",
     "encode_lane",

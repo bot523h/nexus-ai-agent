@@ -77,6 +77,14 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         "tests/unit/test_motion_pack.py",
         "tests/architecture/test_motion_pack_boundary.py",
     ),
+    "portrait": (
+        "tests/unit/test_portrait_pack.py",
+        "tests/architecture/test_portrait_pack_boundary.py",
+    ),
+    "scene": (
+        "tests/unit/test_scene_pack.py",
+        "tests/architecture/test_scene_pack_boundary.py",
+    ),
     "slideshow": (
         "tests/unit/test_slideshow_pack.py",
         "tests/unit/test_slideshow_invariants.py",
@@ -112,6 +120,10 @@ SUBSTRATE_TEST_TARGETS: tuple[str, ...] = (
     # Wave 5 gap operations (the two op-gap waves)
     "tests/unit/test_opgap_audio_motion.py",
     "tests/unit/test_opgap_wave5.py",
+    # vision pack substrate (vision_common.py) and availability.py are exercised
+    # by these creative-runtime modules (portrait/scene packs, task-152/153/176)
+    "tests/unit/test_execution_semantics.py",
+    "tests/unit/test_pack_status_availability.py",
     # architecture gates that import and exercise every pack
     "tests/architecture/test_pack_activation_completeness.py",
     "tests/architecture/test_pack_manifest_is_data_only.py",
