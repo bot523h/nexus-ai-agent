@@ -100,6 +100,12 @@ HOST_LAYER_PACK_IMPORTERS: Mapping[str, str] = {
     "tests/unit/test_cognition_model_kill.py": (
         "Model Kill Test: deterministic path survives with no model (nagar.cognition, host layer)"
     ),
+    "tests/integration/test_ibpc_e2e.py": (
+        "IBPC live-editing host layer e2e (nagar.ibpc) over the canonical queue/lane"
+    ),
+    "tests/unit/test_ibpc_session.py": (
+        "IBPC voice-turn fencing (nagar.ibpc, host layer) with a declared caption-port double"
+    ),
 }
 
 #: The substrate (``core``) and cross-pack contracts that compose every pack.
