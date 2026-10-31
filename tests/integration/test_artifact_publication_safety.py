@@ -407,3 +407,214 @@ async def test_finalize_cleans_only_its_own_staging(tmp_path: Path) -> None:
     staging_root = artifact_root / "staging" / "job-fin"
     assert not (staging_root / "1").exists(), "finalize must clean only its own attempt"
     assert (staging_root / "2").exists(), "another attempt's staging must survive"
+
+
+# ── D2. the attempt must be a real, present, canonical identity ─────────────
+#
+# task-283 finding 3: the sidecar reader validated ``schema`` and ``job_id`` but
+# not ``attempt``, and the retract comparison ran on raw values.  A sidecar
+# whose attempt was missing/``null`` plus a caller with no attempt therefore
+# satisfied ``None == None`` — an ownership claim with no owner behind it.  The
+# matrix below pins every representation that must be refused.
+
+
+def _publish_v1_and_v2(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, object]:
+    """Publish bytes for attempt 1, then attempt 2 (so a ``.prev`` exists).
+
+    Returns ``(workspace, published_v2, backup, sidecar, artifact, publication)``.
+    """
+    artifact_root, publication = _publication(tmp_path)
+    workspace = _workspace(tmp_path, "ws")
+    artifact = workspace / "render.mp4"
+    identity = {"_queue_job_id": "job-d2", "_queue_attempt": 1}
+
+    artifact.write_bytes(b"v1 bytes")
+    publication.publish({}, {**_result(workspace, "render.mp4", "job-d2", 1), **identity})
+
+    artifact.write_bytes(b"v2 bytes")
+    patch = publication.publish({}, {**_result(workspace, "render.mp4", "job-d2", 2), **identity})
+    published = Path(patch["artifact_path"])
+    backup = published.parent / ".render.mp4.prev"
+    sidecar = published.parent / ".render.mp4.owner"
+    assert published.read_bytes() == b"v2 bytes"
+    assert backup.read_bytes() == b"v1 bytes"
+    return workspace, published, backup, sidecar, artifact, publication
+
+
+def _assert_untouched(published: Path, backup: Path) -> None:
+    assert published.exists() and published.read_bytes() == b"v2 bytes", (
+        "an unproven retract must never delete or replace published bytes"
+    )
+    assert backup.exists() and backup.read_bytes() == b"v1 bytes", (
+        "an unproven retract must never consume the backup"
+    )
+
+
+@pytest.mark.parametrize(
+    "recorded_attempt",
+    [
+        pytest.param(None, id="missing-null"),
+        pytest.param(True, id="bool-true"),
+        pytest.param(False, id="bool-false"),
+        pytest.param(0, id="zero"),
+        pytest.param(-1, id="negative"),
+        pytest.param("", id="empty-string"),
+        pytest.param("abc", id="non-numeric-string"),
+        pytest.param("1.5", id="float-string"),
+        pytest.param(1.0, id="float"),
+        pytest.param([1], id="list"),
+        pytest.param({"n": 1}, id="object"),
+    ],
+)
+async def test_retract_refuses_a_sidecar_without_a_canonical_attempt(
+    tmp_path: Path, recorded_attempt: object
+) -> None:
+    workspace, published, backup, sidecar, artifact, publication = _publish_v1_and_v2(tmp_path)
+    sidecar.write_text(
+        json.dumps({"schema": 1, "job_id": "job-d2", "attempt": recorded_attempt}),
+        encoding="utf-8",
+    )
+
+    publication.retract(
+        {},
+        {
+            "artifact_path": str(published),
+            "workspace_dir": str(workspace),
+            "_queue_job_id": "job-d2",
+            "_queue_attempt": 1,
+        },
+    )
+
+    _assert_untouched(published, backup)
+
+
+async def test_retract_refuses_a_sidecar_with_no_attempt_key(tmp_path: Path) -> None:
+    workspace, published, backup, sidecar, artifact, publication = _publish_v1_and_v2(tmp_path)
+    sidecar.write_text(json.dumps({"schema": 1, "job_id": "job-d2"}), encoding="utf-8")
+
+    publication.retract(
+        {},
+        {
+            "artifact_path": str(published),
+            "workspace_dir": str(workspace),
+            "_queue_job_id": "job-d2",
+            "_queue_attempt": 1,
+        },
+    )
+
+    _assert_untouched(published, backup)
+
+
+async def test_retract_refuses_a_caller_without_a_queue_minted_attempt(
+    tmp_path: Path,
+) -> None:
+    """The exact ``None == None`` bypass from the review.
+
+    No queue identity on either side: the publication derives its job component
+    from the workspace and records ``"attempt": null``; the retract carries no
+    attempt.  Before the fix the raw comparison saw ``null == None`` and happily
+    restored the backup — an ownership decision with no owner behind it.  A
+    caller with no queue-minted attempt holds no proof, so nothing may move.
+    """
+    artifact_root, publication = _publication(tmp_path)
+    workspace = _workspace(tmp_path, "ws")
+    artifact = workspace / "render.mp4"
+
+    artifact.write_bytes(b"v1 bytes")
+    publication.publish({}, {"artifact_path": str(artifact), "workspace_dir": str(workspace)})
+
+    artifact.write_bytes(b"v2 bytes")
+    patch = publication.publish(
+        {}, {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
+    )
+    published = Path(patch["artifact_path"])
+    backup = published.parent / ".render.mp4.prev"
+    sidecar = published.parent / ".render.mp4.owner"
+    assert published.read_bytes() == b"v2 bytes"
+    assert backup.read_bytes() == b"v1 bytes"
+    assert json.loads(sidecar.read_text(encoding="utf-8"))["attempt"] is None
+
+    publication.retract({}, {"artifact_path": str(published), "workspace_dir": str(workspace)})
+
+    _assert_untouched(published, backup)
+
+
+async def test_retract_refuses_an_unreadable_or_malformed_sidecar(tmp_path: Path) -> None:
+    workspace, published, backup, sidecar, artifact, publication = _publish_v1_and_v2(tmp_path)
+    caller = {
+        "artifact_path": str(published),
+        "workspace_dir": str(workspace),
+        "_queue_job_id": "job-d2",
+        "_queue_attempt": 1,
+    }
+
+    for malformed in ('{"schema": 1, "job_id": "job-d2", "attempt":', "not json at all", "[]"):
+        sidecar.write_text(malformed, encoding="utf-8")
+        publication.retract({}, caller)
+        _assert_untouched(published, backup)
+
+    sidecar.unlink()
+    publication.retract({}, caller)
+    _assert_untouched(published, backup)
+
+
+async def test_retract_refuses_another_jobs_sidecar(tmp_path: Path) -> None:
+    workspace, published, backup, sidecar, artifact, publication = _publish_v1_and_v2(tmp_path)
+    sidecar.write_text(
+        json.dumps({"schema": 1, "job_id": "some-other-job", "attempt": 1}), encoding="utf-8"
+    )
+
+    publication.retract(
+        {},
+        {
+            "artifact_path": str(published),
+            "workspace_dir": str(workspace),
+            "_queue_job_id": "job-d2",
+            "_queue_attempt": 1,
+        },
+    )
+
+    _assert_untouched(published, backup)
+
+
+async def test_retract_refuses_a_different_attempt_of_the_same_job(tmp_path: Path) -> None:
+    workspace, published, backup, sidecar, artifact, publication = _publish_v1_and_v2(tmp_path)
+    sidecar.write_text(
+        json.dumps({"schema": 1, "job_id": "job-d2", "attempt": 2}), encoding="utf-8"
+    )
+
+    # Attempt 1 tries to undo attempt 2's publication.
+    publication.retract(
+        {},
+        {
+            "artifact_path": str(published),
+            "workspace_dir": str(workspace),
+            "_queue_job_id": "job-d2",
+            "_queue_attempt": 1,
+        },
+    )
+
+    _assert_untouched(published, backup)
+
+
+async def test_retract_accepts_the_owning_attempt_in_either_spelling(
+    tmp_path: Path,
+) -> None:
+    """``"2"`` (sidecar spelling) and ``2`` (queue spelling) are one identity."""
+    workspace, published, backup, sidecar, artifact, publication = _publish_v1_and_v2(tmp_path)
+    sidecar.write_text(
+        json.dumps({"schema": 1, "job_id": "job-d2", "attempt": "2"}), encoding="utf-8"
+    )
+
+    publication.retract(
+        {},
+        {
+            "artifact_path": str(published),
+            "workspace_dir": str(workspace),
+            "_queue_job_id": "job-d2",
+            "_queue_attempt": 2,
+        },
+    )
+
+    assert not backup.exists(), "the owning attempt's retract consumes the backup"
+    assert published.read_bytes() == b"v1 bytes", "the previous artifact is restored"

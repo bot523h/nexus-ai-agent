@@ -342,22 +342,28 @@ async def test_creative_render_retract_restores_previous(tmp_path: Path) -> None
 
     publication = build_creative_render_publication(artifact_root)
 
-    # First publication
+    # First publication (queue-minted identity: job_id + attempt are the
+    # authoritative ownership evidence a real retract always carries).
     artifact.write_bytes(b"good version")
-    result = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
+    identity = {"_queue_job_id": "job-retract", "_queue_attempt": 1}
+    result = {"artifact_path": str(artifact), "workspace_dir": str(workspace), **identity}
     patch = publication.publish({}, result)
     published = Path(patch["artifact_path"])
     assert published.read_bytes() == b"good version"
 
     # Second publication (creates .prev backup)
     artifact.write_bytes(b"bad version")
-    result2 = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
+    result2 = {"artifact_path": str(artifact), "workspace_dir": str(workspace), **identity}
     patch2 = publication.publish({}, result2)
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"bad version"
 
     # Retract with post-publish result (artifact_path is the published path)
-    post_publish_result = {"artifact_path": str(published2), "workspace_dir": str(workspace)}
+    post_publish_result = {
+        "artifact_path": str(published2),
+        "workspace_dir": str(workspace),
+        **identity,
+    }
     publication.retract({}, post_publish_result)
     # After retract, the previous artifact is restored from .prev
     backup = published2.parent / ".output.mp4.prev"

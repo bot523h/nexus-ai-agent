@@ -1047,12 +1047,42 @@ def _write_sidecar(sidecar: Path, *, job_id: str, attempt: str | None) -> None:
     os.replace(tmp, sidecar)
 
 
+def _parse_attempt(value: object) -> int | None:
+    """Canonical attempt identity, or ``None`` when the value is not one.
+
+    An attempt is a positive integer minted by the queue's reservation CAS.
+    The sidecar writer stores it as ``str(attempt)`` for historical reasons, so
+    the decimal spelling of a positive integer is accepted as the *same*
+    identity — no other representation is.  In particular ``None``, ``True``
+    (a ``bool`` is an ``int`` subclass), ``0``, negatives, floats and
+    non-numeric strings are all unprovable.
+
+    task-283 finding 3: comparing raw sidecar values let a sidecar with no
+    attempt (``"attempt": null``) and a caller with no attempt satisfy
+    ``None == None``, authorising a retract whose ownership was never
+    established.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text.isdecimal():
+            return None
+        parsed = int(text)
+        return parsed if parsed >= 1 else None
+    return None
+
+
 def _read_sidecar(sidecar: Path) -> dict[str, object] | None:
     """Return the parsed sidecar, or ``None`` when it is absent or unprovable.
 
     Absent, unreadable, malformed, wrong-schema and truncated sidecars are all
     reported the same way on purpose: an unreadable ownership record is *not*
-    permission to act, it is the absence of proof.
+    permission to act, it is the absence of proof.  The same applies to a
+    sidecar whose ``job_id`` is not a string or whose ``attempt`` is not a
+    positive integer: it names no owner, so nothing may be retracted under it.
     """
     try:
         raw = sidecar.read_text(encoding="utf-8")
@@ -1067,6 +1097,8 @@ def _read_sidecar(sidecar: Path) -> dict[str, object] | None:
     if document.get("schema") != _OWNERSHIP_SIDECAR_SCHEMA:
         return None
     if not isinstance(document.get("job_id"), str):
+        return None
+    if _parse_attempt(document.get("attempt")) is None:
         return None
     return document
 
@@ -1197,13 +1229,16 @@ def creative_render_retract_callback(
         return  # missing/unreadable/malformed sidecar -> fail closed
     if document.get("job_id") != staging.job_id:
         return  # another job owns this destination
-    # Compare the *complete* identity.  ``None`` (no attempt supplied) only ever
-    # matches ``None``, so a job-scoped direct call can never retract an
-    # attempt-scoped publication, and an older attempt can never retract a
-    # newer attempt's artifact.
-    caller_attempt = str(_qatt) if isinstance(_qatt, (int, str)) else None
-    recorded_attempt = document.get("attempt")
-    if str(recorded_attempt) != str(caller_attempt):
+    # Compare the *complete* identity, both sides canonically.  A caller with
+    # no queue-minted attempt has no proof of ownership at all, so it may never
+    # retract published output — the previous ``None == None`` comparison let
+    # exactly that through.  Different, malformed or newer attempts are refused
+    # the same way.
+    caller_attempt = _parse_attempt(_qatt)
+    if caller_attempt is None:
+        return  # no queue-minted attempt -> no ownership proof -> fail closed
+    recorded_attempt = _parse_attempt(document.get("attempt"))
+    if recorded_attempt is None or recorded_attempt != caller_attempt:
         return  # a newer (or older) attempt owns it -> never retract it
 
     if backup_path.exists() and not published_path.exists():
