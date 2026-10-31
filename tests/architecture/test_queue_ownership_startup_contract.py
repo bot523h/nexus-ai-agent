@@ -100,18 +100,58 @@ def test_root_acquires_ownership_before_guarded_work(
         )
 
 
+def _queue_shutdown_lines(node: ast.AST) -> list[int]:
+    """Line numbers of calls that shut down the *job queue*.
+
+    Deliberately strict: ``application.shutdown()`` is PTB's teardown and says
+    nothing about queue ownership.  Before task-283 finding 2 this gate accepted
+    any attribute named ``shutdown``, so ``_cleanup_webhook_application`` passed
+    while never releasing the lock.  Accepted forms:
+
+    * ``<expr>.job_queue.shutdown()`` / ``queue.shutdown()`` — a direct queue
+      shutdown, where the receiver chain names the queue (``application``
+      does not);
+    * a call to a helper whose name mentions both the queue and shutdown
+      (``_shutdown_webhook_job_queue(...)``).
+    """
+    lines: list[int] = []
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Call):
+            continue
+        func = sub.func
+        if isinstance(func, ast.Attribute) and func.attr == "shutdown":
+            chain: list[str] = []
+            receiver: ast.AST = func.value
+            while isinstance(receiver, ast.Attribute):
+                chain.append(receiver.attr)
+                receiver = receiver.value
+            if isinstance(receiver, ast.Name):
+                chain.append(receiver.id)
+            if any(part == "queue" or "job_queue" in part for part in chain):
+                lines.append(sub.lineno)
+        elif isinstance(func, ast.Name):
+            name = func.id
+            if "shutdown" in name and "job_queue" in name:
+                lines.append(sub.lineno)
+    return sorted(lines)
+
+
 @pytest.mark.parametrize(("relpath", "acquirer", "stopper"), RELEASE_SITES)
 def test_root_stops_the_queue_and_releases(relpath: str, acquirer: str, stopper: str) -> None:
-    """Every root that acquires ownership must also reach a queue shutdown."""
+    """Every root that acquires ownership must also shut the *queue* down.
+
+    Ownership is only released inside ``job_queue.shutdown()``; a root that
+    tears its own framework down but never reaches the queue strands the lock.
+    """
     tree = _parse(relpath)
     owning = [node for node in _functions(tree, acquirer) if _call_lines(node, {_ACQUIRE})]
     assert owning, f"{relpath}::{acquirer} does not acquire ownership"
 
     stop_sites = _functions(tree, stopper)
     assert stop_sites, f"{relpath}::{stopper} not found"
-    assert any(_call_lines(node, {"shutdown"}) for node in stop_sites), (
-        f"{relpath}::{stopper} never calls shutdown(); workers keep running and the process "
-        "lock is never released"
+    assert any(_queue_shutdown_lines(node) for node in stop_sites), (
+        f"{relpath}::{stopper} never shuts the job queue down; workers keep running "
+        "and the exclusive process lock is never released"
     )
 
 
