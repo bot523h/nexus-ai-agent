@@ -7603,8 +7603,8 @@
         "M17 ledger + machine-readable registry (.agents/evidence/M17_*) with per-PR head/base SHAs, CI run URLs, unresolved threads and disposition."
       ],
       "exclusive_paths": [
-        ".agents/evidence/",
-        ".agents/board.json"
+        ".agents/evidence/M17_OPEN_PR_REPAIR_2026-10-31.md",
+        ".agents/evidence/M17_PR_REGISTRY_2026-10-31.json"
       ],
       "agent_branch": "arena/m17-open-pr-repair",
       "claimed_at": "2026-10-31T08:10:40Z",
