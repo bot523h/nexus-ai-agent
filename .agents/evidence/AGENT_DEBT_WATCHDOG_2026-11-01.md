@@ -22,7 +22,7 @@ Every number in this report is reproducible from the named command in the same s
 | Open PR heads | 43 (`gh api "repos/bot523h/nexus-ai-agent/pulls?state=open&per_page=100"`) |
 | Branch protection | **readable** (`protection_state: readable`, `required_approvals: 0`, `protection_error: ''`) |
 
-> Note on the checkout: the local clone is **shallow/grafted** at `48aae28a4ef4` (`git log` shows a single grafted commit). Branch/PR/CI facts below are therefore taken from live `git ls-remote` and the GitHub API, not from local commit ancestry. 292 of 293 local merge commits are not reachable from the grafted `main` — this is a clone artifact, not repository debt.
+> Note on the checkout: the local clone is **shallow/grafted** at `48aae28a4ef4` (`git log` on `main` shows a single grafted commit). Branch/PR/CI facts below are therefore taken from live `git ls-remote` and the GitHub API, not from local commit ancestry. This is a clone artifact, not repository debt.
 
 ---
 
