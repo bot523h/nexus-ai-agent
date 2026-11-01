@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -160,6 +161,22 @@ PROBES: tuple[Probe, ...] = (
         ),
         tests=(REDELIVERY, SURFACE_UNIT),
     ),
+    Probe(
+        name="M8-worker-workspace-containment-removed",
+        invariant="a staged input must not escape its own workspace",
+        edits=(
+            Edit(
+                WORKER,
+                "    try:\n"
+                "        candidate.relative_to(workspace)\n"
+                "    except ValueError as exc:\n"
+                '        raise CreativeRenderError("invalid_request", "input path escapes its '
+                'workspace") from exc',
+                "    _ = workspace  # MUTANT: containment check removed",
+            ),
+        ),
+        tests=(WORKER_UNIT,),
+    ),
 )
 
 
@@ -176,7 +193,45 @@ def _sha256(path: Path) -> str:
 HARNESS_ERRORS = frozenset({3, 4})
 
 
+#: A test selection is a repository-relative ``.py`` path, optionally followed by
+#: ``::node_id``. Nothing else is accepted: this is the *only* value that reaches
+#: ``subprocess.run``, and it is validated here rather than assumed safe.
+_TEST_TARGET = re.compile(r"^tests/[A-Za-z0-9_/]+(?:[A-Za-z0-9_]+)?\.py(?:::[A-Za-z0-9_\[\]]+)*$")
+
+
+def _validate_test_selection(tests: tuple[str, ...]) -> None:
+    """Refuse any test target that is not a plain repository-relative path.
+
+    The harness passes its argv to ``subprocess.run`` directly (no shell), and the
+    selection comes from the frozen ``PROBES`` table above -- no CLI argument, file,
+    environment variable or network response can reach it. This validator is the
+    belt to that braces: even if a future probe were built from external data, an
+    absolute path, a traversal, a leading option or a shell metacharacter would
+    abort the campaign as a HARNESS failure instead of being executed.
+    """
+    problems: list[str] = []
+    for target in tests:
+        if not isinstance(target, str) or not target:
+            problems.append(f"{target!r}: not a non-empty string")
+        elif target != target.strip():
+            problems.append(f"{target!r}: surrounding whitespace")
+        elif os.path.isabs(target) or ".." in Path(target).parts:
+            problems.append(f"{target!r}: absolute path or traversal")
+        elif target.startswith("-"):
+            problems.append(f"{target!r}: looks like a command-line option")
+        elif any(ch in target for ch in ";|&$`><\n\r\x00"):
+            problems.append(f"{target!r}: shell metacharacter")
+        elif not _TEST_TARGET.match(target):
+            problems.append(f"{target!r}: not a repository-relative test path")
+    if problems:
+        print("HARNESS ERROR: refusing an invalid test selection")
+        for problem in problems:
+            print(f"  {problem}")
+        raise SystemExit(2)
+
+
 def _run(tests: tuple[str, ...]) -> tuple[int, str]:
+    _validate_test_selection(tests)
     # No shell: an argv list with a fixed program (``sys.executable``) and a fixed
     # flag prefix. ``tests`` are module paths declared in ``PROBES`` above -- this
     # harness takes no CLI arguments, so no external input reaches this call.
@@ -190,6 +245,7 @@ def _run(tests: tuple[str, ...]) -> tuple[int, str]:
         env=environment,
         capture_output=True,
         text=True,
+        shell=False,  # explicit: argv list, never a shell string
     )
     lines = (completed.stdout or "").strip().splitlines()
     return completed.returncode, lines[-1] if lines else "(no output)"

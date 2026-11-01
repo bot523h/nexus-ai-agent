@@ -580,3 +580,53 @@ def test_guarded_workspace_still_rejects_names_without_the_reserved_prefix(tmp_p
 
 def _write_clip_bytes(path: Path, data: bytes) -> None:
     path.write_bytes(data)
+
+
+# ── path traversal (payload trust boundary: class #13) ────────────────────
+#
+# The containment check has existed since the payload trust boundary landed, but
+# no test named the traversal case, so it could be deleted without anything going
+# red. These two tests close that gap. They assert *refusal and no artifact*, not
+# one specific error code: the symlink case is deliberately caught by the
+# file-type guard before containment, and pinning the code would make the test
+# assert the wrong invariant.
+
+
+def test_a_traversing_input_path_is_refused_before_any_engine(workspace: Path) -> None:
+    """A row naming a real, playable clip *outside* its workspace is refused.
+
+    The clip is genuine FFmpeg media and the digest is correct, so nothing but the
+    containment check can refuse this row: with the check removed the render
+    SUCCEEDS and this test fails. An earlier version of this test used garbage
+    bytes and passed even with containment deleted -- it was proving "bad media
+    fails to render", not "traversal is refused".
+    """
+    outside = workspace.parent.parent / "outside.mp4"
+    _make_clip(outside)
+    payload = _payload(
+        workspace,
+        input_path=str(workspace / ".." / ".." / "outside.mp4"),
+        input_sha256=_digest(outside),
+    )
+    result = _run(payload)
+    assert result["success"] is False, "a path escaping the workspace must never render"
+    assert result["error_code"] == "invalid_request"
+    assert "escapes" in result["error_detail"]
+    assert not (workspace / "output.mp4").exists(), "a refused row must not produce an artifact"
+    assert list(outside.parent.glob("output*")) == [], "nothing may be written beside the target"
+
+
+def test_a_symlink_pointing_outside_the_workspace_is_refused(workspace: Path) -> None:
+    """A staged link redirected to a real file outside the workspace is refused.
+
+    Both defences may fire (the link is not a regular file, and its target escapes
+    containment); either is a correct refusal, which is why the code is not pinned.
+    """
+    secret = workspace.parent / "secret.mp4"
+    secret.write_bytes(b"outside the workspace")
+    (workspace / "input.mp4").symlink_to(secret)
+    payload = _payload(workspace, input_sha256=_digest(secret))
+    result = _run(payload)
+    assert result["success"] is False
+    assert result["error_code"] in {"input_integrity", "invalid_request", "media_missing"}
+    assert not (workspace / "output.mp4").exists()
