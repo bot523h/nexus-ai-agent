@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-28T17:32:21Z",
+  "updated_at": "2026-10-31T15:35:11Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -898,7 +898,9 @@
       "description": "Offline, deterministic Cognition quality evaluation harness; measures proposal validity, authorization-boundary resistance, refusal correctness, verification separation, and provider/model failure handling without changing execution authority.",
       "paths": [
         "scripts/cognition_quality_eval.py",
-        "tests/unit/test_cognition_quality_eval.py"
+        "tests/unit/test_cognition_quality_eval.py",
+        "tests/fixtures/cognition_quality_eval/v1_baseline.json",
+        "tests/fixtures/cognition_quality_eval/v2_baseline.json"
       ]
     },
     {
@@ -986,6 +988,77 @@
       "paths": [
         "src/nexus_ai_agent/storage/providers/rclone.py",
         "tests/unit/test_rclone_provider_list_errors.py"
+      ]
+    },
+    {
+      "id": "nagar-causal-memory-director",
+      "description": "Nagar causal-memory projection and bounded, non-executing Director consensus; NEL integration is explicitly deferred.",
+      "paths": [
+        "src/nexus_ai_agent/nagar/causal_memory/",
+        "src/nexus_ai_agent/nagar/director/",
+        "tests/unit/test_nagar_causal_memory.py",
+        "tests/unit/test_nagar_director.py",
+        "tests/unit/test_nagar_director_consensus.py",
+        "tests/integration/test_nagar_causal_memory_rebuild.py",
+        "tests/integration/test_nagar_director_provenance_projection.py",
+        "tests/architecture/test_nagar_director_boundary.py"
+      ]
+    },
+    {
+      "id": "operation-matrix-reconciliation",
+      "description": "Operation truth reconciliation: align OPERATION_MATRIX/RECONCILIATION truth files, the reconciliation guard test, and derived docs so implemented portrait/scene packs register legally (single owner for #64/#97 scope).",
+      "paths": [
+        "OPERATION_MATRIX.json",
+        "RECONCILIATION.json",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "RECONCILIATION.md",
+        "OPERATION_WAVE_PLAN.md",
+        "L0_L4_MATURITY.md",
+        "tests/unit/test_operation_matrix_reconciliation.py",
+        "src/nexus_ai_agent/nagar/docs_projection.py"
+      ]
+    },
+    {
+      "id": "execution-queue-ownership",
+      "description": "Single queue ownership: process lock primitive, startup recovery ordering, artifact publication safety",
+      "paths": [
+        ".github/workflows/queue-ownership-mutations.yml",
+        "docs/architecture/EXECUTION_CORE.md",
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "docs/architecture/MODULE_MAP.md",
+        "scripts/queue_ownership_mutations.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/webhook.py",
+        "src/nexus_ai_agent/cli.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/execution/staging.py",
+        "tests/architecture/test_queue_ownership_startup_contract.py",
+        "tests/integration/test_artifact_publication_safety.py",
+        "tests/integration/test_creative_chain_e2e.py",
+        "tests/integration/test_publication_crash_recovery.py",
+        "tests/integration/test_queue_ownership_lifecycle.py",
+        "tests/integration/test_queue_ownership_processes.py",
+        "tests/integration/test_queue_ownership_publication_barrier.py",
+        "tests/unit/test_queue_ownership_mutations_harness.py",
+        "tests/unit/test_webhook_mode.py"
+      ]
+    },
+    {
+      "id": "nagar-workspace-redelivery-01",
+      "description": "Telegram creative-surface immutable input redelivery isolation",
+      "paths": [
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "tests/unit/test_creative_surface.py",
+        "tests/integration/test_creative_surface_redelivery.py"
+      ]
+    },
+    {
+      "id": "nagar-circleci-pilot-01",
+      "description": "Budget-limited CircleCI cloud testing pilot only",
+      "paths": [
+        ".circleci/config.yml",
+        "docs/engineering/NAGAR_CIRCLECI_PILOT.md"
       ]
     }
   ],
@@ -3775,7 +3848,7 @@
       "title_fa": "کتابخانه دارایی ناگار نسخه ۱: دریافت امن، هویت تغییرناپذیر محتوا، اتصال پایدار پروژه و اثبات بازیابی پس از راه‌اندازی مجدد",
       "zone": "nagar-asset-library",
       "priority": "P1",
-      "status": "expired",
+      "status": "done",
       "scope": "First-party, framework-independent Asset Library capability under src/nexus_ai_agent/creative/assets/: a content-addressed local blob store that reuses WorkspaceFilesystem as the single filesystem security boundary; durable SQLModel metadata (asset identity, immutable versions, project links, ingest recovery state); scoped idempotency; and an explicit STAGING->READY/FAILED recovery state machine. Authorization reuses the existing ProjectAuthorizer seam. Adds NO second queue, graph, ledger, passport, verifier or authorization authority, and does not touch the Telegram surface.",
       "scope_fa": "",
       "prerequisites": [],
@@ -3814,12 +3887,12 @@
         "tests/integration/test_migrate_cli.py"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/nagar-asset-library-v1",
-      "claimed_at": "2026-10-11T17:55:20Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "Closure evidence v3 (PR #205, branch arena/nagar-asset-library-v1, head 906b0a2). 4 CodeRabbit findings closed: (1) replay digest check via BlobStore.hash_stream -> IdempotencyConflict; (2) UNIQUE(project_id, idempotency_key) on assetingest + migration e575469d90b9; (3) parent-fd fsync after os.replace; (4) de-vacuumed rglob assertions. Focused suites (exact, exit 0): tests/architecture/test_asset_library_boundary.py 6 passed; tests/unit/test_asset_library_service.py 10 passed; tests/unit/test_asset_library_models.py 10 passed; tests/unit/test_asset_library_blob_store.py 10 passed; tests/integration/test_asset_library_recovery.py 8 passed; tests/integration/test_asset_library_filesystem_security.py 12 passed; tests/integration/test_asset_library_persistence.py 10 passed; combined 66 passed. Mutation harness scripts/asset_library_mutations.py: 8/8 killed (containment, NUL, key-shape, dedup-verify, open-verify, bounded-read, unique-constraint, replay-digest). Full suite python -m pytest -q -m \"not slow\": 3966 passed, 31 skipped (local); CI test job on 906b0a2/e27e6f0: 3967 passed, 30 skipped, 0 failed. CI on 906b0a2: push run 38161719742 success (a1); PR run 38161723606 success (a2, after one pre-existing SQLite WAL-init-race rerun). ruff check+format clean; mypy src 299 files clean; truth doctor OK. agent_board.py check on changed files: exit 0 (no overlap). Known unrelated flake: SQLite WAL-init race (test_concurrent_first_use_sets_wal_without_error).",
-      "generation": 1,
+      "generation": 2,
       "release_reason": "auto-released by gc at 2026-10-13T15:08:09Z (stale active lease)"
     },
     {
@@ -4047,7 +4120,7 @@
       "title_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "zone": "ci-quality",
       "priority": "P1",
-      "status": "expired",
+      "status": "done",
       "scope": "Run scripts/execution_core_mutations.py as a CI mutation job",
       "scope_fa": "اجرای کمپین mutation هستهٔ اجرا به‌عنوان job رسمی CI",
       "prerequisites": [
@@ -4064,12 +4137,12 @@
         ".github/workflows/ci.yml"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/task-260-exec-mutations-ci",
-      "claimed_at": "2026-10-22T18:46:06Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "Execution-core mapping: the native execution core (Task-254) merged via PR #192 (merge commit a48326ded85bbe4e0972d645ee0ea6e877935362, 'supersedes #191'); PR #191 (arena/execution-core-v1-nexus-ai-agent) is CLOSED and superseded. PR #241 is the separate Task-260 mutation-CI follow-up, not the execution-core implementation. CI wiring lives in .github/workflows/ci.yml (zone ci-quality); the harness scripts/execution_core_mutations.py is the execution-core zone (task-254, done).",
-      "generation": 2,
+      "generation": 3,
       "previous_release_reason": "auto-released by gc at 2026-10-22T18:46:06Z (stale active lease)",
       "release_reason": "auto-released by gc at 2026-10-27T06:39:52Z (stale active lease)"
     },
@@ -4079,7 +4152,7 @@
       "title_fa": "",
       "zone": "execution-core",
       "priority": "P2",
-      "status": "expired",
+      "status": "done",
       "scope": "test_execution_native_backend.py::test_cancel_without_a_fencing_token_is_refused failed once in a full-suite run (1 failed,3878 passed) and passed on immediate rerun (3879 passed,31 skipped). submit() reads facts after a to_thread yield, so the worker can reserve (attempt=1) before the facts read, binding a fencing_token; the test assumes a fresh submit is unbound. Make the assertion robust or gate the reservation deterministically.",
       "scope_fa": "",
       "prerequisites": [],
@@ -4093,10 +4166,10 @@
         "src/nexus_ai_agent/adapters/native_local_backend.py"
       ],
       "note": "",
-      "agent_branch": "arena/nexus-night-task265-cancel-identity-flake",
-      "claimed_at": "2026-10-24T04:48:15Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "ttl_hours": 24,
       "release_reason": "auto-released by gc at 2026-10-27T06:39:52Z (stale active lease)"
     },
@@ -4106,7 +4179,7 @@
       "title_fa": "اتصال attempt_idهای گذرنامه اجرایی به چیدمان AttemptStaging",
       "zone": "durable-creative-queue-evidence",
       "priority": "P3",
-      "status": "expired",
+      "status": "done",
       "scope": "Align CreativeExecutionPassport attempt identity and evidence storage with the existing AttemptStaging attempt-scoped contract; change only the passport implementation and its unit tests.",
       "scope_fa": "شناسه‌های attempt در passport و staging از یک منبع باید بیایند تا ردیابی artifact یکتا بماند.",
       "prerequisites": [
@@ -4128,12 +4201,12 @@
         "tests/unit/test_creative_passport.py"
       ],
       "owner_hint": "Bootstrap from next_work after task-254 merge; claim only on the dedicated task-264 branch.",
-      "agent_branch": "arena/task-264-passport-attempt-id-alignment",
-      "claimed_at": "2026-10-24T04:47:52Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1,
+      "generation": 2,
       "release_reason": "auto-released by gc at 2026-10-27T06:39:52Z (stale active lease)"
     },
     {
@@ -4180,7 +4253,7 @@
       "title_fa": "هارنس ارزیابی کیفیت شناخت Nagar",
       "zone": "cognition-quality-evaluation",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Build only a local deterministic evaluation harness over existing Cognition contracts. Cover valid and malformed output, unauthorized operations, authority/prompt-injection attempts, explicit refusal, provider failure, no-model state, and proposal-vs-independent-verification separation. No router, provider, policy, CommandBus, verifier, CI, or blocked LLM file changes; no raw prompt/response logging.",
       "scope_fa": "فقط هارنس قطعی و محلی برای ارزیابی قراردادهای موجود Cognition؛ بدون Router، Provider، Policy، CommandBus، Verification، CI یا فایل‌های مسدودشدهٔ LLM.",
       "prerequisites": [],
@@ -4204,15 +4277,16 @@
       ],
       "exclusive_paths": [
         "scripts/cognition_quality_eval.py",
-        "tests/unit/test_cognition_quality_eval.py"
+        "tests/unit/test_cognition_quality_eval.py",
+        "tests/fixtures/cognition_quality_eval/v1_baseline.json"
       ],
       "owner_hint": "Independent cognition evaluation lane; claim through the official CLI only after canonical registration lands on main. gates_owner is optional and advisory.",
       "agent_branch": "",
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "Registered as a board-only coordination entry on top of PR#203 so PR#203 is not overwritten. Implementation must wait for this entry to land on main, then claim through the official CLI before coding.",
-      "generation": 0
+      "note": "",
+      "generation": 4
     },
     {
       "task": "pr-repair-33",
@@ -5605,7 +5679,7 @@
       "title": "Repair existing PR #139: fix(retention): a thread's destructive verdict must span all its lifecycle rows, not one arbitrary row",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "queued",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/139 on its existing branch arena/01a0fac1-nexus-ai-agent, preserving intent and published history. Snapshot head 76a43eb2c44e37445db0e97eecd78b8a5ba1dc6d; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -5633,9 +5707,9 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 4,
       "owner_hint": "Registered for a future authorized repair session on arena/01a0fac1-nexus-ai-agent; not assigned or claimed by this registration.",
-      "note": "Registration only. Existing records and leases remain unchanged. Overlapping queued entries must never be claimed concurrently."
+      "note": ""
     },
     {
       "task": "pr-repair-140",
@@ -5681,7 +5755,7 @@
       "title": "Repair existing PR #144: Master Engineering Audit Report for NEXUS AI Agent",
       "zone": "pr-repair-campaign",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/144 on its existing branch jules-940713209102888185-f8f59acc, preserving intent and published history. Snapshot head cc236d3b755cdb4f84aac54304d005ff2b7cd853; re-read live head, base, reviews, checks and all board sources before claiming. Resolve only evidenced defects, conflicts and required-check failures; no merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -5708,13 +5782,14 @@
         "tests/unit/test_temporal_algebra.py",
         "tests/unit/test_temporal_mutation.py"
       ],
-      "agent_branch": "jules-940713209102888185-f8f59acc",
-      "claimed_at": "2026-10-28T14:54:42Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 1,
       "owner_hint": "Registered for a future authorized repair session on jules-940713209102888185-f8f59acc; not assigned or claimed by this registration.",
-      "note": " | NEXUS-PRC-2026-10-28: narrowed exclusive_paths — the actual #144 diff never touches tests/architecture/test_pack_manifest_is_data_only.py (verified: git diff origin/main...HEAD). Dropping the unused reservation unblocks PR #100, which legitimately needs that allowlist line."
+      "note": " | NEXUS-PRC-2026-10-28: narrowed exclusive_paths — the actual #144 diff never touches tests/architecture/test_pack_manifest_is_data_only.py (verified: git diff origin/main...HEAD). Dropping the unused reservation unblocks PR #100, which legitimately needs that allowlist line.",
+      "release_reason": "auto-released by gc at 2026-10-29T18:58:33Z (stale active lease)"
     },
     {
       "task": "pr-repair-149",
@@ -7000,7 +7075,7 @@
       "title_fa": "",
       "zone": "runtime-truth-tooling",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "truth.py::check_board_truth flags `gates_owner and status != \"active\"` while scripts/agent_board.py ACTIVE_STATUSES treats active_in_review as a live lease and _active_gates_owners counts it as the one valid gate holder — two validators, one invariant, opposite verdicts. Direction 2 is also uncovered: a claim with status=active but an EXPIRED lease keeps gates_owner while the referee already treats the board as holding zero owners, and TRUTH041 stays silent. tests/architecture/test_repo_truth_consistency.py runs the doctor against the real tree in CI, so direction 1 is a red main for a state the referee accepts. NOT duplicated here: open PR#189 already implements LIVE_LEASE_STATUSES + test_live_lease_statuses_match_the_board_cli + the two negative tests.",
       "scope_fa": "",
       "prerequisites": [],
@@ -7020,7 +7095,13 @@
         "pytest -q on the board-level status-set lockstep test (doctor set == ACTIVE_STATUSES) green",
         "python -m nexus_ai_agent.diagnostics.truth on the final SHA (no findings)",
         "the PR#189 reconciliation diff, or a note why it was superseded"
-      ]
+      ],
+      "agent_branch": "arena/m14-truth041-lease-expiry",
+      "claimed_at": "2026-10-30T10:11:42Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "M15 carrier decision: arena/m14-truth041-lease-expiry (PR #292) is the authoritative carrier for the live-lease status set AND the TTL-expiry direction. PR #189 declares the same LIVE_LEASE_STATUSES but lacks the expiry predicate; when #189 is repaired it must drop its duplicate truth.py hunk so exactly one implementation of the shared status definition remains. No simultaneous ownership of the truth.py path: this claim holds it now.",
+      "generation": 1
     },
     {
       "task": "task-268-board-referee-mutation-campaign-in-ci",
@@ -7414,6 +7495,261 @@
       "gates_owner": false,
       "note": "",
       "generation": 2
+    },
+    {
+      "task": "task-278-nagar-causal-memory-director",
+      "title": "Nagar causal memory and bounded Director consensus",
+      "title_fa": "حافظهٔ علّی ناگار و اجماع محدود Director",
+      "zone": "nagar-causal-memory-director",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Implement a typed, rebuildable, read-only projection over canonical causal journal, execution/passport evidence, plus a bounded typed Director preview/consensus over existing contracts. Do not add another journal, graph database, queue, policy, CommandBus, verifier, or execution path. Do not edit NEL/semantic-time paths in PR #273, Cognition evaluation paths in PR #276, queue heartbeat paths, or docs files currently changed by PR #273. No NEL integration or real execution is included; it requires a separate registered follow-up after its dependency is canonical.",
+      "scope_fa": "فقط projection تایپ‌شده و بازسازی‌پذیر از journal و شواهد canonical موجود، به‌علاوهٔ preview و consensus محدود Director روی قراردادهای موجود. بدون journal/graph/queue/policy/CommandBus/verifier یا مسیر اجرای موازی. مسیرهای NEL و Semantic Time در PR #273، ارزیابی شناخت در PR #276، صف heartbeat و فایل‌های مستنداتی که PR #273 تغییر داده دست‌نخورده بمانند. اتصال NEL و اجرای واقعی خارج از scope است و فقط پس از canonical شدن وابستگی، در task جداگانه انجام شود.",
+      "prerequisites": [
+        "task-231-provenance-ledger",
+        "task-233-nagar-durable-cognition-handoff"
+      ],
+      "acceptance_criteria": [
+        "Causal memory is a typed, deterministic, read-only projection of canonical journal and existing execution/passport evidence; it creates no parallel persistence or authority.",
+        "Only recorded facts are asserted; unknown, incomplete, unverified, missing-artifact, or invalid-chain states remain explicit and fail closed.",
+        "Tenant/project scope is enforced on every query; foreign-scope reads are rejected by negative tests.",
+        "Projection rebuild after restart from canonical durable sources preserves stable identities and causal relationships; replay is idempotent.",
+        "Journal tampering, truncation, reorder, broken links, artifact digest mismatch, and missing independent verification cannot yield a verified success.",
+        "Director emits typed non-executable previews only, with at most five candidates and three review rounds; timeout/resource limits and deterministic tie-breaking are explicit.",
+        "Safety veto is absolute; malformed candidates, refusal, timeout, disagreement, and budget exhaustion yield typed rejection, clarification, or failure, never execution authority.",
+        "No direct access to shell, renderer, filesystem mutation, CommandBus, queue dispatch, policy authority, or verifier is introduced; no raw sensitive prompts/responses are persisted.",
+        "NEL/semantic-time integration and end-to-end creative execution remain explicitly deferred until their canonical dependency and a separate integration claim are approved."
+      ],
+      "evidence_required": [
+        "Focused unit tests for canonical source validation, typed projection queries, tenant/project isolation, consensus determinism, absolute veto, and typed failure outcomes.",
+        "Integration test proving projection rebuild/replay after restart from existing canonical journal and evidence, including tamper and incomplete-lineage fixtures.",
+        "Architecture test proving Director cannot dispatch to CommandBus, queue, renderer, shell, or verifier.",
+        "Adversarial/mutation evidence for tamper rejection, cross-scope denial, authority injection, safety veto under majority, malformed output, and bounded candidate/round budgets.",
+        "Exact commands, result counts, exit codes, and tested SHA for targeted tests and make lint, make types, make test.",
+        "Full multi-source agent_board.py check on actual changed paths with exit code 0 before each push; CI evidence bound to the exact tested SHA."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/causal_memory/",
+        "src/nexus_ai_agent/nagar/director/",
+        "tests/unit/test_nagar_causal_memory.py",
+        "tests/unit/test_nagar_director.py",
+        "tests/unit/test_nagar_director_consensus.py",
+        "tests/integration/test_nagar_causal_memory_rebuild.py",
+        "tests/integration/test_nagar_director_provenance_projection.py",
+        "tests/architecture/test_nagar_director_boundary.py"
+      ],
+      "owner_hint": "Registration only: remains unclaimed until this additive board entry is on canonical main. Then the implementation agent must claim it via scripts/agent_board.py before feature code.",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Queued by a governance-only registration PR. This is not a claim, takeover, or proof of implementation authorization; do not code until canonical main contains this task and the official claim succeeds.",
+      "generation": 0
+    },
+    {
+      "task": "task-280-operation-matrix-reconciliation",
+      "title": "Operation-matrix reconciliation: legalize implemented portrait/scene registrations",
+      "title_fa": "تطبیق ماتریس عملیات: قانونی‌سازی ثبت پک‌های پرتره/صحنه پیاده‌شده",
+      "zone": "operation-matrix-reconciliation",
+      "priority": "P1",
+      "status": "deferred",
+      "agent_branch": "arena/m13-operation-matrix",
+      "claimed_at": null,
+      "generation": 2,
+      "gates_owner": false,
+      "scope": "Single-owner reconciliation of the operation-truth contract that blocks PR #64 and PR #97. Reclassify the now-implemented portrait/scene operations in OPERATION_MATRIX.json, drop them from RECONCILIATION.json::missing_gaps, update tests/unit/test_operation_matrix_reconciliation.py invariants to the newly agreed numbers, and regenerate the derived .md docs via `python -m nexus_ai_agent.nagar --docs`. Do not add any new operation registry, journal, queue, or execution path. Do not edit PR #97's pack sources or PR #273/#276 exclusive paths.",
+      "exclusive_paths": [
+        "OPERATION_MATRIX.json",
+        "RECONCILIATION.json",
+        "OPERATION_CONTRACT_MATRIX.md",
+        "RECONCILIATION.md",
+        "OPERATION_WAVE_PLAN.md",
+        "L0_L4_MATURITY.md",
+        "tests/unit/test_operation_matrix_reconciliation.py",
+        "src/nexus_ai_agent/nagar/docs_projection.py"
+      ],
+      "acceptance_criteria": [
+        "The reconciliation is decided once, by one owner, and applied to both truth files, the guard test, and the derived docs together.",
+        "The guard test is not weakened: it is updated only because the underlying contract genuinely changed, and the change is recorded in the same PR.",
+        "After repair, `pytest -q tests/unit/test_operation_matrix_reconciliation.py` is green and `python -m nexus_ai_agent.nagar --check` prints TRUTH GATE: GREEN.",
+        "PRs #64 and #97 are re-evaluated only after the contract is reconciled; neither is merged while the blocker stands."
+      ],
+      "evidence_required": [
+        "Exact commands + exit codes for the reconciliation test, the truth gate, and the vision-pack tests on the final SHA.",
+        "The before/after registry count (57 -> 77) and the missing_gaps change (23 -> 3 color-only) with the governance decision recorded.",
+        "The regenerated derived docs diff."
+      ],
+      "prerequisites": [
+        "task-152-portrait-pack",
+        "task-153-scene-pack"
+      ],
+      "note": "",
+      "ttl_hours": 24
+    },
+    {
+      "task": "task-281-cognition-eval-live-registry-binding",
+      "title": "Cognition evaluation V2: bind the fixture schema to the live capability registry",
+      "title_fa": "ارزیابی شناخت نسخهٔ ۲: اتصال قرارداد fixture به رجیستری زندهٔ قابلیت‌ها",
+      "zone": "cognition-quality-evaluation",
+      "priority": "P2",
+      "status": "active",
+      "agent_branch": "arena/de4e797a-nexus-ai-agent",
+      "claimed_at": "2026-10-30T15:39:23Z",
+      "generation": 3,
+      "gates_owner": false,
+      "scope": "V1 delivers a deterministic boundary evaluator with a reviewed baseline, a --check regression guard and fixture-contract validation (merged in PR #276, task-269). It measures a FROZEN fixture schema (nagar.eval.proposal.v1: timeline.trim, creative.caption), not what the runtime actually offers, so a registry-side change cannot move the evaluation. V2 closes that gap in the same two files plus one new baseline: derive the offered set from the authoritative CapabilityRegistry via cognition.capabilities.offered_operations, add a registry-drift fixture that fails closed when the registry offers nothing usable, and raise the evaluation contract to nexus-cognition-quality-eval/v2 with a v2 baseline committed and reviewed. The check mode, exit-code contract, non-disclosure rules, no-network/no-model guarantees and proposal-vs-verification separation stay exactly as delivered. No change to the registry, parser, policy, CommandBus, queue, verifier or CI.",
+      "scope_fa": "اتصال مجموعهٔ عملیات مجاز در هارنس ارزیابی به رجیستری واقعی قابلیت‌ها، افزودن fixture دریفت رجیستری و ارتقای قرارداد به v2 با baseline بازبینی‌شده؛ بدون تغییر رجیستری، parser، Policy، CommandBus، صف، verifier یا CI.",
+      "exclusive_paths": [
+        "scripts/cognition_quality_eval.py",
+        "tests/unit/test_cognition_quality_eval.py",
+        "tests/fixtures/cognition_quality_eval/v2_baseline.json"
+      ],
+      "acceptance_criteria": [
+        "The offered operation set comes from the live CapabilityRegistry (never hand-written), and a documented fallback keeps the harness runnable when the registry is empty.",
+        "A registry-drift fixture fails closed and is visible in the report; an empty or unusable registry cannot produce a green evaluation.",
+        "The evaluation contract is bumped to nexus-cognition-quality-eval/v2 with a reviewed v2 baseline; the v1 baseline is either retired explicitly or kept with a documented compatibility rule.",
+        "Default execution stays local, deterministic, network-free and key-free, with verification_status=NOT_RUN and execution_dispatched=false unchanged.",
+        "The V1 guarantees still hold: fixture-contract validation, duplicate-id failure, --check exit 0/1/2 semantics, no self-rewriting baseline, non-disclosure of fixture text."
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_cognition_quality_eval.py and the new registry-binding cases on the final SHA, with counts and runtime.",
+        "python scripts/cognition_quality_eval.py --check and --json --repeats 5 output, including the registry-derived offered set and the new fingerprint.",
+        "The committed v2 baseline plus the reviewed diff against v1 explaining every changed case.",
+        "make lint, make types and make test results on the exact final SHA.",
+        "Mutation evidence that removing the registry binding or the drift fixture turns the suite red.",
+        "agent_board.py check on the exact changed files with exit code 0."
+      ],
+      "prerequisites": [
+        "task-269-cognition-quality-evaluation"
+      ],
+      "note": "",
+      "ttl_hours": 24
+    },
+    {
+      "task": "task-283-queue-ownership-publication-closure",
+      "title": "Queue ownership, startup recovery and artifact publication safety closure",
+      "title_fa": "بستن شکاف‌های مالکیت صف، بازیابی راه‌اندازی و امنیت انتشار مصنوعات",
+      "zone": "execution-queue-ownership",
+      "priority": "P0",
+      "status": "done",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 2,
+      "base_sha": "87744dda90c7b6ea38100317afbd1f4c797768e6",
+      "scope": "Close the queue ownership / startup recovery / artifact publication gaps exposed by PR #283 without regressing its heartbeat and attempt-fencing guarantees. (A) acquire_ownership() is absent from every composition root while resume_pending() runs; (B) the 'flock' primitive is actually an O_CREAT|O_EXCL PID file with TOCTOU stale reclamation and a leaked fd; (C) creative publication identifies ownership by attempt number only, fail-open on missing/malformed sidecar, prefix-based workspace containment and filename-shared .prev backups.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Every composition root that opens the queue SQLite sidecar (bot/app.py, bot/webhook.py, cli drain) acquires exclusive process ownership BEFORE any startup recovery, and an acquisition failure aborts startup instead of degrading to an unowned queue.",
+        "Ownership release happens only after workers and heartbeat children are stopped; release is idempotent and safe to call twice or after a failed acquisition.",
+        "The ownership primitive is an operating-system-managed exclusive lock (fcntl.flock) held on an open descriptor, so a crash releases it automatically; no PID-liveness test is treated as proof of ownership and the implementation is no longer described as a lock-file PID scheme.",
+        "Two concurrent processes cannot both hold ownership, and a crashed owner leaves no unrecoverable stale lock (proved by real subprocess tests, not mocks).",
+        "Artifact ownership evidence identifies the complete (job_id, attempt) identity; a missing, malformed or unreadable sidecar fails closed and the artifact is never retracted.",
+        "An older attempt can never retract a newer attempt's artifact, one job can never overwrite another job's artifact, and concurrent publications cannot overwrite each other's .prev backup.",
+        "Workspace/final membership is proved by resolved-path containment (is_relative_to on resolved paths), never by string prefix comparison.",
+        "Publication/backup/publish/durable-commit crash states are enumerated and each is tested, including recovery of a .prev backup without clobbering an unrelated publication.",
+        "PR #283 guarantees are preserved: heartbeat tests stay green, strict heartbeat cutoff intact, UNKNOWN fail-closed, recovery CAS binds the observed heartbeat, stale workers cannot complete or publish, terminal rows preserved.",
+        "Mutation probes prove the new invariants are load-bearing (removing the guard turns a test red).",
+        "docs/architecture/JOB_LIFECYCLE.md documents the ownership model, startup recovery sequence, crash/restart behavior, publication/rollback states and remaining limitations."
+      ],
+      "evidence_required": [
+        "tests/integration/test_queue_ownership_lifecycle.py",
+        "tests/integration/test_queue_ownership_processes.py",
+        "tests/integration/test_artifact_publication_safety.py",
+        "scripts/queue_ownership_mutations.py",
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "tests/integration/test_queue_ownership_publication_barrier.py",
+        "tests/integration/test_publication_crash_recovery.py",
+        "tests/unit/test_webhook_mode.py",
+        "tests/architecture/test_queue_ownership_startup_contract.py",
+        "tests/unit/test_queue_ownership_mutations_harness.py",
+        ".github/workflows/queue-ownership-mutations.yml"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/queue-ownership-mutations.yml",
+        "docs/architecture/EXECUTION_CORE.md",
+        "docs/architecture/JOB_LIFECYCLE.md",
+        "docs/architecture/MODULE_MAP.md",
+        "scripts/queue_ownership_mutations.py",
+        "src/nexus_ai_agent/adapters/in_process_job_queue.py",
+        "src/nexus_ai_agent/bot/app.py",
+        "src/nexus_ai_agent/bot/webhook.py",
+        "src/nexus_ai_agent/cli.py",
+        "src/nexus_ai_agent/creative/render_jobs.py",
+        "src/nexus_ai_agent/execution/staging.py",
+        "tests/architecture/test_queue_ownership_startup_contract.py",
+        "tests/integration/test_artifact_publication_safety.py",
+        "tests/integration/test_creative_chain_e2e.py",
+        "tests/integration/test_publication_crash_recovery.py",
+        "tests/integration/test_queue_ownership_lifecycle.py",
+        "tests/integration/test_queue_ownership_processes.py",
+        "tests/integration/test_queue_ownership_publication_barrier.py",
+        "tests/unit/test_queue_ownership_mutations_harness.py",
+        "tests/unit/test_webhook_mode.py"
+      ],
+      "note": "Closure pass on PR #299 (findings from the independent review at b11c902). F1 lock-vs-publication-thread race, F2 webhook root never released queue ownership, F3 sidecar attempt not validated (None == None retract), F4 crash after publish/before durable completion, F5 mutation campaign not CI-wired: all five addressed on this branch with barrier-controlled / real-process-death tests and a 10-probe campaign wired into CI. Registration discrepancy (disclosed, not repaired): this claim was committed to the PR branch together with the work rather than pushed to the canonical main board first, so during the closure window the claim existed on the branch only. PR #69 (arena/01a0d3af..., head 7498074) touches in_process_job_queue.py and render_jobs.py for enqueue idempotency semantics; its board claim pr-repair-69 is queued with no branch/claimed_at and generation 0 (no live lease), and this referee check reports no overlap — recorded as a future textual-merge risk, not an ownership conflict. Ownership correction: `.github/workflows/ci.yml` is claimed by another active claim (task-ibpc-security-closure-01, arena/7622c61d..., claimed 2026-10-31T07:30:39Z); my claim did not list it at claim time, so I withdrew that edit and the campaign now lives in `.github/workflows/queue-ownership-mutations.yml` — the referee check is clean at exit 0. CLOSEOUT (post-transition annotation; status/generation/claimed_at were changed only by `agent_board.py release --expected-generation 1`, not by hand): work delivered at branch head 46e23d22071c5e04b613eba1aad199d0717c237c — CI run 41205544140 22/22 pass, queue-ownership-mutations run 41205531329 1/1 pass (10/10 mutants killed, tree restored), referee exit 0 with 44 sources over all 20 changed paths, full-suite baseline compared against a detached checkout of main@e2080db (identical failing node-id set). This record stays on the PR #299 branch and is not committed to main: it becomes canonical only if the owner merges the PR."
+    },
+    {
+      "status": "queued",
+      "prerequisites": [],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0,
+      "task": "task-nagar-workspace-redelivery-01",
+      "title": "P0 Creative Surface durable input and duplicate delivery isolation",
+      "title_fa": "ایزوله‌سازی ورودی پایدار و تحویل تکراری سطح خلاق",
+      "zone": "nagar-workspace-redelivery-01",
+      "priority": "P0",
+      "scope": "Reproduce and fix Telegram creative surface pre-enqueue deletion and unsafe duplicate delivery using existing queue and real filesystem; preserve message identity and queue ownership guarantees. No second authority.",
+      "acceptance_criteria": [
+        "Baseline RED reproduces destructive redelivery with actual filesystem and queue; fix preserves previous input bytes, digest, and queued payload.",
+        "Concurrent same-key delivery produces one logical job and never overwrites input; identity/content conflicts fail closed; distinct messages remain distinct.",
+        "Partial downloads, enqueue errors, process death/restart and retries cannot delete or publish another active job input; traversal and symlink escape fail closed.",
+        "Preserve queue ownership, attempt fencing, publication, heartbeat, crash recovery and terminal states; no queue or passport duplication.",
+        "Independent read-only security review and relevant adversarial regression, with exact SHA and limitations."
+      ],
+      "evidence_required": [
+        "Baseline RED and fixed GREEN exact pytest commands, node IDs, exit codes, counts and tested SHA; real queue and filesystem integration.",
+        "Concurrency, crash/recovery, filesystem failure and path safety tests; mutation proof where practical.",
+        "make lint, make types, make test, queue ownership/publication regressions, CI exact head SHA and board referee over every changed path."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "tests/unit/test_creative_surface.py",
+        "tests/integration/test_creative_surface_redelivery.py"
+      ]
+    },
+    {
+      "status": "queued",
+      "prerequisites": [],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0,
+      "task": "task-nagar-circleci-pilot-01",
+      "title": "CircleCI bounded Linux VM pilot for Nagar verification",
+      "title_fa": "اجرای آزمایشی محدود CircleCI برای راستی‌آزمایی نگار",
+      "zone": "nagar-circleci-pilot-01",
+      "priority": "P1",
+      "scope": "Only if connected and authorized, configure a branch-limited no-deploy Linux VM medium pilot and document sanitized execution evidence; do not store credentials or bypass board governance.",
+      "acceptance_criteria": [
+        "Confirm project connection, runner support, plan permissions and budget before triggering any build; no production secrets or data.",
+        "Use Linux VM Gen1 medium, serial workflow and no deployment; pilot maximum 1000 credits, total mission maximum 10000.",
+        "Capture exact SHA, pipeline and job IDs, runner image, commands/results, resources and observed or estimated credits; missing access is BLOCKED, not success.",
+        "Documentation does not claim CircleCI has authority over execution or project state."
+      ],
+      "evidence_required": [
+        "Board referee and scoped configuration review.",
+        "Exact CircleCI pipeline/job URL, commit SHA, exit codes, test counts, resource and credit evidence, or explicit access blocker."
+      ],
+      "exclusive_paths": [
+        ".circleci/config.yml",
+        "docs/engineering/NAGAR_CIRCLECI_PILOT.md"
+      ]
     }
   ],
   "deferred_log": [
@@ -7485,6 +7821,22 @@
       "resolved": true,
       "resolved_at": "2026-10-27T14:00:00Z",
       "resolution": "zone freed (pr-repair-240 released) and task-258 delivered in PR #199 (merged 6ae7042a83)."
+    },
+    {
+      "task": "task-280-operation-matrix-reconciliation",
+      "deferred_by_branch": "arena/m13-operation-matrix",
+      "at": "2026-10-30T00:52:34Z",
+      "reason_fa": "چون عامل دیگری روی این محدوده کار می‌کرد متوقف شدم؛ این کار پس از آزاد شدن ناحیه انجام خواهد شد تا فراموش نشود.",
+      "reason_en": "Coupled to an owner product decision, not a mechanical fix. Closing the 20 portrait/scene ops requires (a) declaring them as source symbols (nagar/sources.py _PACK_MODULES + OPERATION_* constants) AND (b) reclassifying them from EvidenceClass.MISSING in OPERATION_MATRIX.json. PR #97's vision pack is a planning substrate (L1, no pixel/ML execution), so accepting it as a product_defined gap-closure is a product decision. Root cause + exact file set: .agents/evidence/OPERATION_MATRIX_ROOTCAUSE_M13.md",
+      "resume_when": "owner rules whether an L1 planning substrate closes a product_defined gap; then edit OPERATION_MATRIX.json + sources.py + pack declarations and regenerate (python -m nexus_ai_agent.nagar --docs)"
+    },
+    {
+      "task": "task-281-cognition-eval-live-registry-binding",
+      "deferred_by_branch": "arena/de4e797a-nexus-ai-agent",
+      "at": "2026-10-30T09:35:55Z",
+      "reason_fa": "ورود helper و factory رسمی رجیستری ناخواسته ماژول CommandBus را بارگذاری می‌کند؛ رفع آن خارج از مسیرهای مجاز است و به اصلاح معماری مستقل یا تصمیم صریح مالک نیاز دارد.",
+      "reason_en": "Blocked by incompatible import boundary: importing canonical cognition offered_operations or creative.packs.runtime build_runtime_registry eagerly imports creative.studio.bus via package initializers. Strict no-CommandBus-import requirement cannot be met without a protected architectural change or an explicit owner-approved contract adjustment. No implementation was changed.",
+      "resume_when": "Owner resolves protected import boundary or explicitly revises the no-import requirement without relaxing no-dispatch and no-authority guarantees."
     }
   ],
   "next_work": [

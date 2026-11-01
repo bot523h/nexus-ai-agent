@@ -281,7 +281,7 @@ def inspect_checkpoints(
 
     from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
     from nexus_ai_agent.config.settings import get_settings
-    from nexus_ai_agent.domain.policies.retention import RetentionRecord, deletable, pinned
+    from nexus_ai_agent.domain.policies.retention import RetentionRecord, thread_retention
     from nexus_ai_agent.storage.db import resolve_database_url
 
     settings = get_settings()
@@ -327,18 +327,23 @@ def inspect_checkpoints(
             last_accessed = max(
                 (item.last_accessed_at for item in metadata if item.last_accessed_at), default=None
             )
-            lifecycle_record = metadata[-1] if metadata else None
-            retention = (
-                RetentionRecord(
-                    lifecycle_record.created_at,
-                    lifecycle_record.last_accessed_at,
-                    lifecycle_record.active_until,
-                )
-                if lifecycle_record is not None
-                else None
+            # The retention verdict is a property of the THREAD, so it is
+            # quantified over every one of its lifecycle rows (protection
+            # existential, destruction universal, no rows = unknown).  It must
+            # never be read off a single row: ``records()`` has no ORDER BY and
+            # the SQLite index is a rowid table, so "the last row" is insertion
+            # order — a storage-engine artefact that made two logically
+            # identical threads report opposite ``would_delete`` verdicts.
+            verdict = thread_retention(
+                (
+                    RetentionRecord(item.created_at, item.last_accessed_at, item.active_until)
+                    for item in metadata
+                ),
+                now=now,
             )
-            pinned_value = pinned(retention, now=now) if retention is not None else "unknown"
-            deletable_value = deletable(retention, now=now) if retention is not None else False
+            # No lifecycle rows => the thread's retention state is unknown, and
+            # unknown stays visible as "unknown" (inspect-v1 contract, I10).
+            pinned_value: bool | str = verdict.pinned if verdict.known else "unknown"
             entry: dict[str, Any] = {
                 "schema": "inspect-v1",
                 "thread_id": thread_id,
@@ -347,13 +352,17 @@ def inspect_checkpoints(
                 "newest_created_at": newest.isoformat() if newest else "unknown",
                 "last_accessed_at": last_accessed.isoformat() if last_accessed else "unknown",
                 "pinned": pinned_value,
-                "active": bool(
-                    lifecycle_record
-                    and lifecycle_record.active_until
-                    and lifecycle_record.active_until > now
-                ),
-                "resumable_within_window": bool(retention and not deletable_value),
-                "would_delete": deletable_value,
+                "active": verdict.active,
+                "resumable_within_window": verdict.known and not verdict.deletable,
+                # Why the thread is being retained.  ``resumable_within_window``
+                # alone conflates three different situations — protected by an
+                # explicit pin, protected by ordinary recency, and retained
+                # because its age is unknown — and a destructive verdict with no
+                # reason is not actionable.  ``no_evidence`` is never a claim of
+                # safety.  This field is never the string "unknown", so the
+                # inspect-v1 ``unknown_fields`` list is unchanged.
+                "protection_reason": str(verdict.reason),
+                "would_delete": verdict.deletable,
                 "would_free_bytes_estimate": adapter.estimate_thread_bytes(thread_id),
                 "missing_lifecycle": not bool(metadata),
                 "orphan_candidate_count": max(0, len(metadata) - len(checkpoints)),
@@ -1256,7 +1265,10 @@ def jobs_resume(
     """
     import sqlite3
 
-    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.adapters.in_process_job_queue import (
+        InProcessJobQueue,
+        QueueOwnershipError,
+    )
     from nexus_ai_agent.application.ports.job_queue import JobStatus
     from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.provenance import (
@@ -1283,56 +1295,73 @@ def jobs_resume(
         queue = InProcessJobQueue(queue_db, causal_observer=observer)
         for job_type, handler in default_job_handlers().items():
             queue.register_handler(job_type, handler)
-        if journal is not None:
-            # task-231: recovery closes crash-window holes with labeled
-            # reconstructions before anything is drained (idempotent).
-            try:
-                report = backfill_journal(journal, queue, queue.job_ids())
-                typer.echo(
-                    f"Causal journal: +{report.appended} reconstructed, "
-                    f"{report.already_present} already present."
-                )
-            except CausalConflictError as exc:
-                # The ledger itself refuses a lying reconstruction: the job
-                # authority is untouched and the drain still proceeds — but
-                # the quarantined conflict stays on the ledger for audit.
-                typer.echo(
-                    f"⚠️  Causal backfill stopped on an evidence conflict"
-                    f" ({exc}); draining without backfill. Inspect the"
-                    f" EVENT_CONFLICT records before trusting this history."
-                )
-            except sqlite3.Error as exc:
-                typer.echo(f"⚠️  Causal backfill failed ({exc}); draining without it.")
-        job_ids = await queue.resume_pending_jobs()
-        if not job_ids:
-            typer.echo("No pending jobs to resume.")
-            return
-        typer.echo(f"Requeued {len(job_ids)} job(s): {', '.join(job_ids)}")
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        remaining = set(job_ids)
-        while remaining:
-            for job_id in sorted(remaining):
-                status = await queue.get_status(job_id)
-                if status in {
-                    JobStatus.COMPLETED,
-                    JobStatus.FAILED_RETRYABLE,
-                    JobStatus.FAILED_TERMINAL,
-                }:
-                    if status is JobStatus.COMPLETED:
-                        marker = "✅"
-                    elif status is JobStatus.FAILED_RETRYABLE:
-                        marker = "⚠️"
-                    else:
-                        marker = "❌"
-                    typer.echo(f"{marker} {job_id}: {status.value}")
-                    remaining.discard(job_id)
-            if remaining and loop.time() >= deadline:
+        # ── task-283: single-executor contract ───────────────────────────────
+        # ``nexus jobs drain`` shares the sidecar with the bot.  Without this
+        # guard an operator drain running beside a live bot is a *second*
+        # executor: it requeues and runs rows the bot is also running.  Acquire
+        # exclusive ownership BEFORE any recovery (backfill/resume) and fail
+        # closed — a drain that cannot prove sole ownership must do nothing.
+        try:
+            await queue.acquire_ownership()
+        except QueueOwnershipError as exc:
+            typer.echo(f"❌ Another live process owns this job queue — refusing to drain ({exc}).")
+            raise typer.Exit(2) from exc
+        try:
+            if journal is not None:
+                # task-231: recovery closes crash-window holes with labeled
+                # reconstructions before anything is drained (idempotent).
+                try:
+                    report = backfill_journal(journal, queue, queue.job_ids())
+                    typer.echo(
+                        f"Causal journal: +{report.appended} reconstructed, "
+                        f"{report.already_present} already present."
+                    )
+                except CausalConflictError as exc:
+                    # The ledger itself refuses a lying reconstruction: the job
+                    # authority is untouched and the drain still proceeds — but
+                    # the quarantined conflict stays on the ledger for audit.
+                    typer.echo(
+                        f"⚠️  Causal backfill stopped on an evidence conflict"
+                        f" ({exc}); draining without backfill. Inspect the"
+                        f" EVENT_CONFLICT records before trusting this history."
+                    )
+                except sqlite3.Error as exc:
+                    typer.echo(f"⚠️  Causal backfill failed ({exc}); draining without it.")
+            job_ids = await queue.resume_pending_jobs()
+            if not job_ids:
+                typer.echo("No pending jobs to resume.")
+                return
+            typer.echo(f"Requeued {len(job_ids)} job(s): {', '.join(job_ids)}")
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            remaining = set(job_ids)
+            while remaining:
                 for job_id in sorted(remaining):
-                    typer.echo(f"⏳ {job_id}: still unfinished after {timeout:g}s")
-                raise typer.Exit(1)
-            if remaining:
-                await asyncio.sleep(0.2)
+                    status = await queue.get_status(job_id)
+                    if status in {
+                        JobStatus.COMPLETED,
+                        JobStatus.FAILED_RETRYABLE,
+                        JobStatus.FAILED_TERMINAL,
+                    }:
+                        if status is JobStatus.COMPLETED:
+                            marker = "✅"
+                        elif status is JobStatus.FAILED_RETRYABLE:
+                            marker = "⚠️"
+                        else:
+                            marker = "❌"
+                        typer.echo(f"{marker} {job_id}: {status.value}")
+                        remaining.discard(job_id)
+                if remaining and loop.time() >= deadline:
+                    for job_id in sorted(remaining):
+                        typer.echo(f"⏳ {job_id}: still unfinished after {timeout:g}s")
+                    raise typer.Exit(1)
+                if remaining:
+                    await asyncio.sleep(0.2)
+        finally:
+            # Workers first, then ownership — ``shutdown`` guarantees that
+            # order and is idempotent, so every exit path (early return,
+            # timeout ``typer.Exit``, or an unexpected error) releases the lock.
+            await queue.shutdown()
 
     asyncio.run(_run())
 
@@ -1585,28 +1614,49 @@ def _run_durable_intent(
         # long-lived bot loop does), so the drain below actually runs it.  A
         # process restart mid-flight is recovered by ``resume_pending_jobs``,
         # which only ever touches still-pending rows.
-        outcome = await run_free_text_intent_durable(
-            text,
-            gateway=gateway,
-            queue=queue,
-            project=project,
-            source_path=source_path,
-            workspace_dir=workspace,
-            user_id=0,
-            chat_id=0,
-            clip_asset_id=clip_asset_id,
-            canonical=canonical,
-        )
-        if outcome.status != "enqueued" or outcome.job_id is None:
-            return outcome
-        terminal = {JobStatus.COMPLETED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
-        loop = _asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while loop.time() < deadline:
-            if await queue.get_status(outcome.job_id) in terminal:
+        #
+        # task-283: this one-shot runner is a real executor over the *shared*
+        # sidecar, so it must hold exclusive process ownership exactly like the
+        # bot does.  Acquire before the first enqueue/execute and fail closed.
+        from nexus_ai_agent.adapters.in_process_job_queue import QueueOwnershipError
+
+        try:
+            await queue.acquire_ownership()
+        except QueueOwnershipError as exc:
+            raise RuntimeError(
+                f"another live process owns this job queue; refusing to execute ({exc})"
+            ) from exc
+        try:
+            outcome = await run_free_text_intent_durable(
+                text,
+                gateway=gateway,
+                queue=queue,
+                project=project,
+                source_path=source_path,
+                workspace_dir=workspace,
+                user_id=0,
+                chat_id=0,
+                clip_asset_id=clip_asset_id,
+                canonical=canonical,
+            )
+            if outcome.status != "enqueued" or outcome.job_id is None:
                 return outcome
-            await _asyncio.sleep(0.1)
-        raise TimeoutError(f"job {outcome.job_id} did not reach a terminal state")
+            terminal = {
+                JobStatus.COMPLETED,
+                JobStatus.FAILED_RETRYABLE,
+                JobStatus.FAILED_TERMINAL,
+            }
+            loop = _asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            while loop.time() < deadline:
+                if await queue.get_status(outcome.job_id) in terminal:
+                    return outcome
+                await _asyncio.sleep(0.1)
+            raise TimeoutError(f"job {outcome.job_id} did not reach a terminal state")
+        finally:
+            # task-283: workers + heartbeat children stop first, then the lock is
+            # released.  Every path (success, timeout, unexpected error) releases.
+            await queue.shutdown()
 
     outcome = _asyncio.run(_run_all())
     return outcome, queue

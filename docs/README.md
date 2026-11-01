@@ -24,10 +24,13 @@ placeholder text.
 | [architecture/CREATIVE_STUDIO.md](architecture/CREATIVE_STUDIO.md) | Nagar: capability model, permission ladder, packs, activation gap, TDD coverage ledger, render lane. |
 | [architecture/CREATIVE_DIRECTION.md](architecture/CREATIVE_DIRECTION.md) | Nagar product direction: the intent-first backbone loop, the first vertical slice (single-project intent loop), deferred capabilities and their triggers. |
 | [architecture/COMMAND_CAPABILITY_CONTRACT.md](architecture/COMMAND_CAPABILITY_CONTRACT.md) | Nagar Gate 2: canonical command envelope, authorization/capability/policy/reference pipeline, idempotency, revision, and evidence limits. |
+| [architecture/CREATIVE_INTELLIGENCE.md](architecture/CREATIVE_INTELLIGENCE.md) | Creative Intelligence Plane: the Typed Creative IR, semantic roles and checkable constraints, Merkle content-addressed identity, and the boundary that keeps the plane from ever executing. |
 | [architecture/LIVING_INTELLIGENCE_ROADMAP.md](architecture/LIVING_INTELLIGENCE_ROADMAP.md) | Proposed direction (owner review pending): the Living Core — persistent self-ledger, measured self-model, vital signs, provenance-tagged memory, verifier-gated learning — with evidence table, ten phases, exit evidence, aliveness metrics and the honest-claims policy. |
 | [architecture/LIVING_INTELLIGENCE_ROADMAP.fa.md](architecture/LIVING_INTELLIGENCE_ROADMAP.fa.md) | خلاصهٔ فارسی نقشهٔ راه هوش زنده (English wins on conflict). |
 | [architecture/SELF_CHARTER.md](architecture/SELF_CHARTER.md) | Living Core Phase 1: the immutable charter, the append-only hash-chained Self-Ledger, fail-closed boot, the human-only amendment door, honest limits, acceptance evidence. |
 | [architecture/PROVENANCE_LEDGER.md](architecture/PROVENANCE_LEDGER.md) | The causal ledger (Project Graph journal): tamper-evident recording of every durable job transition, and the Artifact Passport — the read-only, fail-closed projection that reconciles chain vs. authority and re-measures artifacts. |
+
+
 | [architecture/JOB_LIFECYCLE.md](architecture/JOB_LIFECYCLE.md) | Canonical job lifecycle: chain, state machine with owners+invariants, side-effect boundary, artifact verification contract, retry/failure semantics, Result chain. |
 | [architecture/EXECUTION_CORE.md](architecture/EXECUTION_CORE.md) | NEXUS V1 execution core: the four-verb provider-neutral contract, authority laws, identity separation, staging/publication boundary, and the I1–I10 invariant matrix. |
 | [architecture/DATA_AND_STORAGE.md](architecture/DATA_AND_STORAGE.md) | Every store, application-owned identity, Alembic chain, retention, portability, and what never enters a store. |
@@ -81,6 +84,9 @@ placeholder text.
 | [RECONCILIATION.md](RECONCILIATION.md) | Reconciling Product Catalog (70) vs Runtime Registry (57) vs Executable Surface (9) and preserving 23 gaps. |
 | [L0_L4_MATURITY.md](L0_L4_MATURITY.md) | Nagar operation capability maturity model (L0 Not Implemented to L4 Surface Proven). |
 | [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) | End-user guide: bring any NEXUS database to the Alembic head. |
+| [MISSION1_EFFECT_FENNING_ARCHITECTURE.md](MISSION1_EFFECT_FENNING_ARCHITECTURE.md) | MISSION 1: External side-effect fencing (P0) — attempt identity, artifact collision sidecars, safe retry boundary. |
+| [MISSION3_QUEUE_OWNERSHIP_ARCHITECTURE.md](MISSION3_QUEUE_OWNERSHIP_ARCHITECTURE.md) | MISSION 3: Single queue owner enforcement (P1) — flock-based queue ownership, atomic lock files, stale lock reclamation. |
+| [TASK255_PUBLICATION_HARDENING.md](TASK255_PUBLICATION_HARDENING.md) | Task-255: AttemptStaging-based publication for creative_render — queue-minted attempt identity, artifact name collision sidecar. |
 
 ## Protocols
 

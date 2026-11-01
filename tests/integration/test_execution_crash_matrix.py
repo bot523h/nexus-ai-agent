@@ -61,10 +61,18 @@ def _row(db: Path, job_id: str) -> sqlite3.Row:
 
 
 def _backdate_started_at(db: Path, job_id: str) -> None:
+    """Make an in-flight row look long-orphaned.
+
+    Under the heartbeat contract a row is only provably stale when its
+    queue-owned heartbeat is strictly older than the staleness window, so a
+    genuinely expired worker's heartbeat stops refreshing at the same moment
+    its ``started_at`` does.  Backdating both facts keeps the fixture's claimed
+    premise (crashed long ago) matched to its data.
+    """
     with sqlite3.connect(db) as connection:
         connection.execute(
-            "UPDATE nexus_job_queue SET started_at = ? WHERE id = ?",
-            ("2000-01-01T00:00:00+00:00", job_id),
+            "UPDATE nexus_job_queue SET started_at = ?, heartbeat_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", "2000-01-01T00:00:00+00:00", job_id),
         )
 
 

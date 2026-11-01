@@ -30,6 +30,7 @@ REPO = Path(__file__).resolve().parents[2]
 REFEREE = REPO / "scripts" / "board_referee_mutations.py"
 GATE5 = REPO / "scripts" / "gate5_mutation_probes.py"
 EXECUTION_CORE = REPO / "scripts" / "execution_core_mutations.py"
+RETENTION = REPO / "scripts" / "retention_verdict_mutations.py"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
 
@@ -55,6 +56,11 @@ def gate5() -> dict[str, Any]:
 @pytest.fixture(scope="module")
 def execution_core() -> dict[str, Any]:
     return _load(EXECUTION_CORE)
+
+
+@pytest.fixture(scope="module")
+def retention() -> dict[str, Any]:
+    return _load(RETENTION)
 
 
 def test_referee_mutations_anchor_exactly_once_in_agent_board(referee: dict[str, Any]) -> None:
@@ -170,3 +176,37 @@ def test_ci_runs_execution_core_campaign_in_a_detached_worktree() -> None:
     assert "mutation-worktree" in step["working-directory"]
     assert any("git diff --exit-code" in run for run in runs)
     assert any("git worktree remove --force" in run for run in runs)
+
+
+def test_retention_mutations_anchor_exactly_once(retention: dict[str, Any]) -> None:
+    drift: dict[str, int] = {}
+    for probe in retention["PROBES"]:
+        count = Path(probe.target).read_text(encoding="utf-8").count(probe.anchor)
+        if count != 1:
+            drift[f"{probe.name}:{Path(probe.target).name}"] = count
+    assert drift == {}, f"retention anchors must occur exactly once: {drift}"
+    assert len(retention["PROBES"]) == 17
+
+
+def test_retention_pins_pythonpath_and_bounds_the_run(
+    retention: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GOV-1 shadowed-import guard + a bounded run: without the PYTHONPATH pin an
+    # isolated worktree imports the editable-installed package and every probe
+    # falsely survives; without the timeout a hung mutant stalls the campaign.
+    seen: dict[str, Any] = {}
+
+    class _Done:
+        returncode = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _Done:
+        seen["cmd"] = cmd
+        seen.update(kwargs)
+        return _Done()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert retention["_run_tests"](("tests/unit/test_nothing.py::test_x",)) == 0
+    assert seen["env"]["PYTHONPATH"] == str(Path(retention["REPO"]) / "src")
+    assert Path(seen["cwd"]) == Path(retention["REPO"])
+    assert "no:cacheprovider" in seen["cmd"]
+    assert seen["timeout"] == retention["TEST_TIMEOUT_S"]

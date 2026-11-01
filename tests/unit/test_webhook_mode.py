@@ -308,28 +308,46 @@ def test_run_webhook_requires_webhook_secret() -> None:
         run_webhook(StubApplication(), settings=settings)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("failure_phase", ["initialize", "resume", "start", "webhook", "serve"])
+@pytest.mark.parametrize(
+    "failure_phase", ["initialize", "ownership", "resume", "start", "webhook", "serve"]
+)
 def test_webhook_failure_cleans_acquired_resources(
     monkeypatch: pytest.MonkeyPatch, failure_phase: str
 ) -> None:
     """Every acquired PTB resource is released when any startup phase fails."""
     from nexus_ai_agent.bot import webhook as webhook_module
 
-    class FakeApp:
-        def __init__(self) -> None:
-            self.bot_data = {"job_queue": self}
-            self.bot = self
-            self.events: list[str] = []
+    class FakeQueue:
+        """Queue double: ownership is a *queue* responsibility, not the app's."""
 
-        async def initialize(self) -> None:
-            self.events.append("initialize")
-            if failure_phase == "initialize":
-                raise RuntimeError("initialize boom")
+        def __init__(self, events: list[str]) -> None:
+            self.events = events
+
+        async def acquire_ownership(self) -> None:
+            self.events.append("acquire_ownership")
+            if failure_phase == "ownership":
+                from nexus_ai_agent.adapters.in_process_job_queue import QueueOwnershipError
+
+                raise QueueOwnershipError("ownership boom")
 
         async def resume_pending(self) -> None:
             self.events.append("resume")
             if failure_phase == "resume":
                 raise RuntimeError("resume boom")
+
+        async def shutdown(self) -> None:
+            self.events.append("queue_shutdown")
+
+    class FakeApp:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+            self.bot_data = {"job_queue": FakeQueue(self.events)}
+            self.bot = self
+
+        async def initialize(self) -> None:
+            self.events.append("initialize")
+            if failure_phase == "initialize":
+                raise RuntimeError("initialize boom")
 
         async def start(self) -> None:
             self.events.append("start")
@@ -376,4 +394,242 @@ def test_webhook_failure_cleans_acquired_resources(
             )
         )
     assert application.events.count("shutdown") == 1
+    assert application.events.count("queue_shutdown") == 1, (
+        "every cleanup path must release queue ownership exactly once"
+    )
     assert application.events.count("stop") == (1 if failure_phase in {"webhook", "serve"} else 0)
+
+
+def test_webhook_acquires_ownership_before_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """task-283: recovery must never run before exclusive process ownership.
+
+    The webhook root is a second composition root over the *same* sidecar as
+    polling mode, so it obeys the same ordering contract: acquire, then
+    ``resume_pending``, and only then start serving.
+    """
+    from nexus_ai_agent.bot import webhook as webhook_module
+
+    class FakeConfig:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+    class FakeServer:
+        def __init__(self, _config: Any) -> None:
+            pass
+
+        async def serve(self) -> None:
+            return None
+
+    class RecorderQueue:
+        def __init__(self, events: list[str]) -> None:
+            self.events = events
+
+        async def acquire_ownership(self) -> None:
+            self.events.append("acquire_ownership")
+
+        async def resume_pending(self) -> None:
+            self.events.append("resume")
+
+        async def shutdown(self) -> None:
+            self.events.append("queue_shutdown")
+
+    class Recorder:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+            self.bot_data = {"job_queue": RecorderQueue(self.events)}
+            self.bot = self
+
+        async def initialize(self) -> None:
+            self.events.append("initialize")
+
+        async def start(self) -> None:
+            self.events.append("start")
+
+        async def set_webhook(self, **_: Any) -> None:
+            self.events.append("webhook")
+
+        async def stop(self) -> None:
+            self.events.append("stop")
+
+        async def shutdown(self) -> None:
+            self.events.append("shutdown")
+
+    monkeypatch.setitem(
+        sys.modules, "uvicorn", SimpleNamespace(Config=FakeConfig, Server=FakeServer)
+    )
+    recorder = Recorder()
+    asyncio.run(
+        webhook_module._serve_webhook(
+            application=recorder,
+            api_app=object(),
+            webhook_url="https://example.test/webhook",
+            webhook_secret=SECRET,
+            host="127.0.0.1",
+            port=8000,
+            log_level="info",
+        )
+    )
+    assert recorder.events.index("acquire_ownership") < recorder.events.index("resume"), (
+        f"ownership must precede recovery, saw {recorder.events}"
+    )
+    assert recorder.events.index("resume") < recorder.events.index("start")
+
+
+# ── task-283 finding 2: the webhook root releases queue ownership ────────────
+
+
+def _cleanup(app: Any) -> None:
+    from nexus_ai_agent.bot import webhook as webhook_module
+
+    asyncio.run(
+        webhook_module._cleanup_webhook_application(
+            app,
+            started=bool(getattr(app, "started", False)),
+            initialized=bool(getattr(app, "initialized", False)),
+        )
+    )
+
+
+class _CleanupQueue:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+        self.lock_held = True
+        self.fail: BaseException | None = None
+        self.workers = 1
+        self.heartbeats = 1
+
+    async def shutdown(self) -> None:
+        self.events.append("queue_shutdown")
+        if self.fail is not None:
+            raise self.fail
+        # The real queue stops workers/heartbeats before releasing the flock.
+        self.workers = 0
+        self.heartbeats = 0
+        self.lock_held = False
+
+
+class _CleanupApp:
+    def __init__(self, *, queue: _CleanupQueue | None) -> None:
+        self.events: list[str] = []
+        self.bot_data = {"job_queue": queue} if queue is not None else {}
+        self.started = False
+        self.initialized = False
+        self.stop_fails = False
+        self.shutdown_fails = False
+
+    async def stop(self) -> None:
+        self.events.append("stop")
+        if self.stop_fails:
+            raise RuntimeError("stop boom")
+
+    async def shutdown(self) -> None:
+        self.events.append("app_shutdown")
+        if self.shutdown_fails:
+            raise RuntimeError("shutdown boom")
+
+
+def test_cleanup_stops_the_queue_and_releases_ownership_on_normal_shutdown() -> None:
+    queue = _CleanupQueue([])
+    app = _CleanupApp(queue=queue)
+    app.started = app.initialized = True
+
+    _cleanup(app)
+
+    assert app.events == ["stop", "app_shutdown"]
+    assert app.events + ["queue_shutdown"]  # queue shutdown observed below
+    assert queue.events == ["queue_shutdown"]
+    assert queue.lock_held is False
+    assert (queue.workers, queue.heartbeats) == (0, 0)
+
+
+def test_cleanup_releases_queue_after_failure_before_ownership() -> None:
+    """initialize() failed: the queue never took the lock, cleanup is still safe."""
+    queue = _CleanupQueue([])
+    app = _CleanupApp(queue=queue)
+    app.initialized = False
+    app.started = False
+
+    _cleanup(app)
+
+    assert queue.events == ["queue_shutdown"], "a no-op shutdown must still be reached"
+    assert app.events == [], "no PTB teardown for resources that were never acquired"
+
+
+def test_cleanup_releases_queue_after_failure_after_ownership() -> None:
+    """Ownership was acquired, then start() failed: the lock must not survive."""
+    queue = _CleanupQueue([])
+    app = _CleanupApp(queue=queue)
+    app.initialized = True  # acquired + initialized + resume_pending already ran
+
+    _cleanup(app)
+
+    assert queue.events == ["queue_shutdown"]
+    assert queue.lock_held is False
+    assert app.events == ["app_shutdown"], "start() never completed, so stop() is skipped"
+
+
+def test_cleanup_releases_queue_after_workers_started() -> None:
+    queue = _CleanupQueue([])
+    app = _CleanupApp(queue=queue)
+    app.initialized = True
+    app.started = True
+    queue.events.append("worker_running")
+
+    _cleanup(app)
+
+    assert app.events == ["stop", "app_shutdown"]
+    assert queue.events == ["worker_running", "queue_shutdown"]
+    assert queue.lock_held is False
+
+
+def test_repeated_cleanup_is_idempotent() -> None:
+    queue = _CleanupQueue([])
+    app = _CleanupApp(queue=queue)
+    app.initialized = True
+    app.started = True
+
+    _cleanup(app)
+    _cleanup(app)
+
+    assert queue.events == ["queue_shutdown", "queue_shutdown"]
+    assert queue.lock_held is False
+
+
+def test_cleanup_still_releases_queue_when_stop_raises() -> None:
+    queue = _CleanupQueue([])
+    app = _CleanupApp(queue=queue)
+    app.initialized = True
+    app.started = True
+    app.stop_fails = True
+
+    with pytest.raises(RuntimeError, match="stop boom"):
+        _cleanup(app)
+
+    assert queue.events == ["queue_shutdown"], "a broken stop() must not strand the lock"
+    assert queue.lock_held is False
+    assert "app_shutdown" in app.events
+
+
+def test_cleanup_failure_is_attached_to_the_primary_error() -> None:
+    """A queue shutdown failure is reported, but PTB teardown still completes."""
+    queue = _CleanupQueue([])
+    queue.fail = RuntimeError("queue boom")
+    app = _CleanupApp(queue=queue)
+    app.initialized = True
+    app.started = True
+
+    with pytest.raises(RuntimeError, match="queue boom"):
+        _cleanup(app)
+
+    assert app.events == ["stop", "app_shutdown"]
+
+
+def test_cleanup_without_a_queue_is_a_no_op() -> None:
+    app = _CleanupApp(queue=None)
+    app.initialized = True
+
+    _cleanup(app)
+
+    assert app.events == ["app_shutdown"]
