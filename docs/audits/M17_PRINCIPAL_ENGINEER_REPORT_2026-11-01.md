@@ -80,6 +80,30 @@ affirmatively: **`LIVE_CONFIRMED`**.
 `queued`, `generation: 0`, `agent_branch: ""`, `claimed_at: null`, `prerequisites: []`. No active
 lease was fabricated. This matches the PR body's claim exactly.
 
+> **How to reproduce the remote claims in this section.** These are point-in-time observations of
+> GitHub/CircleCI state, so they are not derivable from the tree by construction — a forensic record
+> that deleted its own observables would be less verifiable, not more. Every claim below is instead
+> pinned to a run identifier and is re-checkable on demand with the exact commands shown. The
+> tree-reproducible claims in this report (file contents, board bytes, test node ids, commit SHAs)
+> need no network and are cited inline.
+>
+> ```bash
+> # 22 jobs, all success: prints conclusion, then each job
+> gh api repos/bot523h/nexus-ai-agent/actions/runs/41244937169 --jq .conclusion
+> gh api repos/bot523h/nexus-ai-agent/actions/runs/41244937169/jobs --jq '.jobs[]|"\(.conclusion)\t\(.name)"'
+> # combined commit status (the failing CircleCI entry)
+> gh api repos/bot523h/nexus-ai-agent/commits/1cbe723b8fc957689513d9da83ae6200f41c4381/status --jq '.state'
+> # non-success check-runs on that SHA
+> gh api "repos/bot523h/nexus-ai-agent/commits/1cbe723/check-runs?per_page=100" \
+>   --jq '.check_runs[]|select(.conclusion!="success")|"\(.status)\t\(.conclusion)\t\(.name)"'
+> # reviews and review decision
+> gh api repos/bot523h/nexus-ai-agent/pulls/300/reviews --jq '.[]|"\(.user.login)\t\(.state)"'
+> ```
+>
+> Caveat, stated because it matters: these outputs are not frozen. Re-running them after GitHub
+> garbage-collects a run, or after a reviewer acts, will legitimately differ. The commands are the
+> reproduction; the recorded numbers are what they returned at `2026-11-01T04:58:28Z`.
+
 **Checks on the exact PR head `1cbe723`:**
 
 - **GitHub Actions — run `41244937169`** (`.github/workflows/ci.yml`, event `pull_request`,

@@ -177,6 +177,9 @@ HARNESS_ERRORS = frozenset({3, 4})
 
 
 def _run(tests: tuple[str, ...]) -> tuple[int, str]:
+    # No shell: an argv list with a fixed program (``sys.executable``) and a fixed
+    # flag prefix. ``tests`` are module paths declared in ``PROBES`` above -- this
+    # harness takes no CLI arguments, so no external input reaches this call.
     environment = dict(os.environ)
     source = str(ROOT / "src")
     existing = environment.get("PYTHONPATH", "")
