@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "07ae4503b96caa426b82455fdf8541da985241b5",
-    "generated_at": "2026-10-29T09:33:24Z",
+    "source_revision": "a28479adf2fd774915c1a8454b9dd3fa5048de34",
+    "generated_at": "2026-10-30T19:34:44Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -849,6 +849,7 @@
           "tests/unit/test_cognition_boundary.py",
           "tests/unit/test_cognition_bus_integration.py",
           "tests/unit/test_cognition_model_kill.py",
+          "tests/unit/test_creative_graph.py",
           "tests/unit/test_creative_intent.py",
           "tests/unit/test_creative_passport.py",
           "tests/unit/test_creative_render_jobs.py",
@@ -5949,6 +5950,7 @@
           "tests/unit/test_cognition_boundary.py",
           "tests/unit/test_cognition_bus_integration.py",
           "tests/unit/test_cognition_model_kill.py",
+          "tests/unit/test_creative_graph.py",
           "tests/unit/test_creative_intent.py",
           "tests/unit/test_creative_passport.py",
           "tests/unit/test_creative_render_jobs.py",

@@ -11,6 +11,20 @@ state. It observes facts after they are durably committed and proves (or
 honestly refuses to prove) what happened.
 """
 
+from nexus_ai_agent.provenance.graph import (
+    LINEAGE_CHAIN,
+    NODE_KINDS,
+    RELATIONS,
+    STATUSES,
+    CreativeGraph,
+    GraphEdge,
+    GraphNode,
+    GraphStateError,
+    IntegrityReport,
+    WriteResult,
+    edge_identity,
+    node_identity,
+)
 from nexus_ai_agent.provenance.journal import (
     AppendResult,
     CausalConflictError,
@@ -39,6 +53,18 @@ from nexus_ai_agent.provenance.passport import (
 
 __all__ = [
     "GENESIS_HASH",
+    "LINEAGE_CHAIN",
+    "NODE_KINDS",
+    "RELATIONS",
+    "STATUSES",
+    "CreativeGraph",
+    "GraphEdge",
+    "GraphNode",
+    "GraphStateError",
+    "IntegrityReport",
+    "WriteResult",
+    "edge_identity",
+    "node_identity",
     "RECORD_DOMAIN",
     "AppendResult",
     "ArtifactPassport",

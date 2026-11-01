@@ -29,6 +29,7 @@ placeholder text.
 | [architecture/LIVING_INTELLIGENCE_ROADMAP.fa.md](architecture/LIVING_INTELLIGENCE_ROADMAP.fa.md) | خلاصهٔ فارسی نقشهٔ راه هوش زنده (English wins on conflict). |
 | [architecture/SELF_CHARTER.md](architecture/SELF_CHARTER.md) | Living Core Phase 1: the immutable charter, the append-only hash-chained Self-Ledger, fail-closed boot, the human-only amendment door, honest limits, acceptance evidence. |
 | [architecture/PROVENANCE_LEDGER.md](architecture/PROVENANCE_LEDGER.md) | The causal ledger (Project Graph journal): tamper-evident recording of every durable job transition, and the Artifact Passport — the read-only, fail-closed projection that reconciles chain vs. authority and re-measures artifacts. |
+| [architecture/CREATIVE_GRAPH.md](architecture/CREATIVE_GRAPH.md) | Durable creative graph and lineage (law R28): the indexed, rebuildable projection that answers "where did this artifact come from, and what else does an intent change affect" — twelve node kinds, eleven relations, no second authority. |
 
 
 | [architecture/JOB_LIFECYCLE.md](architecture/JOB_LIFECYCLE.md) | Canonical job lifecycle: chain, state machine with owners+invariants, side-effect boundary, artifact verification contract, retry/failure semantics, Result chain. |
