@@ -14,9 +14,40 @@ from typing import Any
 
 import httpx
 
+from nexus_ai_agent.llm.provider import SYSTEM_PRINCIPAL_ID
 from nexus_ai_agent.observability.logging import get_logger
 
 log = get_logger(__name__)
+
+
+class _ProviderFailureText(str):
+    """Marker for an error envelope produced by this client, never by the model.
+
+    Provider failures are surfaced as user-visible strings for backward
+    compatibility, but quota accounting must distinguish them from a successful
+    model answer that happens to begin with the same glyph.  This ``str``
+    subclass preserves equality/serialisation while carrying that distinction.
+    """
+
+    __slots__ = ()
+
+
+def _provider_failure(message: str) -> str:
+    return _ProviderFailureText(message)
+
+
+def _is_principal(user_id: object) -> bool:
+    """True only for a real positive user id or the explicit system principal.
+
+    ``0``, booleans, strings, and negative Telegram group ids are ambiguous and
+    must never be metered as a user identity.
+    """
+    return (
+        isinstance(user_id, int)
+        and not isinstance(user_id, bool)
+        and (user_id > 0 or user_id == SYSTEM_PRINCIPAL_ID)
+    )
+
 
 # System prompts for different modes
 _SYSTEM_PROMPTS: dict[str, str] = {
@@ -87,6 +118,10 @@ class _RateLimiter:
             "rpm_remaining": max(0, self._max_rpm - len(bucket)),
             "daily_remaining": max(0, self._max_daily - self._daily_counts[user_id]),
         }
+
+
+_ERROR_PREFIX = "❌"
+_INVALID_IDENTITY_MSG = _provider_failure("❌ هویت کاربر نامعتبر است؛ این درخواست انجام نشد.")
 
 
 class GeminiEngine:
@@ -183,13 +218,17 @@ class GeminiEngine:
             if resp.status_code != 200:
                 error_text = resp.text[:500]
                 log.error("gemini_api_error", status=resp.status_code, body=error_text)
-                return f"❌ خطای API ({resp.status_code}): لطفاً بعداً تلاش کنید."
+                return _provider_failure(
+                    f"{_ERROR_PREFIX} خطای API ({resp.status_code}): لطفاً بعداً تلاش کنید."
+                )
             data = resp.json()
             try:
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            except (KeyError, IndexError):
+                # A successful model answer remains a plain str even if its
+                # generated text starts with the same glyph.
+                return str(data["candidates"][0]["content"]["parts"][0]["text"])
+            except (KeyError, IndexError, TypeError):
                 log.error("gemini_unexpected_response", data=str(data)[:500])
-                return "❌ پاسخ نامعتبر از API."
+                return _provider_failure(f"{_ERROR_PREFIX} پاسخ نامعتبر از API.")
 
     async def chat(
         self,
@@ -200,6 +239,8 @@ class GeminiEngine:
         mode: str = "chat",
     ) -> str:
         """Send a chat message and get AI response."""
+        if not _is_principal(user_id):
+            return _INVALID_IDENTITY_MSG
         if not self._limiter.is_allowed(user_id):
             rem = self._limiter.remaining(user_id)
             return (
@@ -240,11 +281,16 @@ class GeminiEngine:
         self._append_to_history(conv_id, user_part)
         assistant_part = {"role": "model", "parts": [{"text": response}]}
         self._append_to_history(conv_id, assistant_part)
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
 
     async def ask(self, text: str, *, user_id: int) -> str:
         """One-shot question — no conversation memory."""
+        if not _is_principal(user_id):
+            raise ValueError(
+                "invalid identity; pass a real positive user id "
+                "(or SYSTEM_PRINCIPAL_ID for system work)"
+            )
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست. لطفاً کمی صبر کنید."
 
@@ -252,21 +298,30 @@ class GeminiEngine:
             from nexus_ai_agent.features.request_queue import Priority
 
             return await self._queue.submit(
-                lambda: self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"]),
+                lambda: self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"], user_id=user_id),
                 user_id=user_id,
                 priority=Priority.NORMAL,
             )
 
-        return await self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"])
+        return await self._do_one_shot(text, system=_SYSTEM_PROMPTS["chat"], user_id=user_id)
 
-    async def _do_one_shot(self, text: str, *, system: str) -> str:
-        """Internal: one-shot Gemini call."""
+    async def _do_one_shot(self, text: str, *, system: str, user_id: int) -> str:
+        """Internal: one-shot Gemini call; records quota on success (once).
+
+        Mirrors ``_do_chat``: the record lives inside the internal call so the
+        direct and queued paths share one accounting point — a provider error
+        raises before ``record()`` and is never counted, and a request blocked
+        by ``is_allowed`` never reaches this method at all.
+        """
         contents = [{"role": "user", "parts": [{"text": text}]}]
         response = await self._call_gemini(contents, system_instruction=system)
+        self._record_success(user_id, response)
         return response
 
     async def translate(self, text: str, *, target_lang: str, user_id: int) -> str:
         """Translate text to target language."""
+        if not _is_principal(user_id):
+            return _INVALID_IDENTITY_MSG
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست."
         prompt = f"Translate the following text to {target_lang}:\n\n{text}"
@@ -274,11 +329,13 @@ class GeminiEngine:
         response = await self._call_gemini(
             contents, system_instruction=_SYSTEM_PROMPTS["translate"]
         )
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
 
     async def summarize(self, text: str, *, user_id: int) -> str:
         """Summarize text."""
+        if not _is_principal(user_id):
+            return _INVALID_IDENTITY_MSG
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست."
         prompt = f"Summarize the following text:\n\n{text}"
@@ -286,27 +343,31 @@ class GeminiEngine:
         response = await self._call_gemini(
             contents, system_instruction=_SYSTEM_PROMPTS["summarize"]
         )
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
 
     async def code(self, prompt: str, *, user_id: int) -> str:
         """Generate code from prompt."""
+        if not _is_principal(user_id):
+            return _INVALID_IDENTITY_MSG
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست."
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
         response = await self._call_gemini(contents, system_instruction=_SYSTEM_PROMPTS["code"])
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
 
     async def vision(
         self,
         image_bytes: bytes,
         *,
+        user_id: int,
         question: str = "Describe this image in detail.",
-        user_id: int = 0,
         mime_type: str = "image/jpeg",
     ) -> str:
         """Analyze an image with Gemini Vision."""
+        if not _is_principal(user_id):
+            return _INVALID_IDENTITY_MSG
         if not self._limiter.is_allowed(user_id):
             return "⏳ محدودیت درخواست."
         import base64
@@ -327,8 +388,23 @@ class GeminiEngine:
             }
         ]
         response = await self._call_gemini(contents, system_instruction=_SYSTEM_PROMPTS["vision"])
-        self._limiter.record(user_id)
+        self._record_success(user_id, response)
         return response
+
+    def _record_success(self, user_id: int, response: str) -> None:
+        """Book quota for a successful user request — exactly once per call.
+
+        Local provider failures are marked with :class:`_ProviderFailureText`;
+        they are never booked.  A successful model answer is a plain string and
+        is always booked, even if the model chose to begin its text with "❌" —
+        quota enforcement must not depend on attacker-controlled content.
+        Blocked requests never reach a recording site, and a raised provider
+        exception propagates before it.  Direct and queued paths share this one
+        accounting point, so there is no double count.
+        """
+        if isinstance(response, _ProviderFailureText):
+            return
+        self._limiter.record(user_id)
 
     def get_status(self) -> str:
         """Get engine status info."""

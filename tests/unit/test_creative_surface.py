@@ -93,6 +93,13 @@ def test_mapper_rejects_lut_and_burnin_as_invalid() -> None:
     assert isinstance(m.map(CreativeRequest("caption", "burnin", (), "f", 5.0)), CreativeFailure)
 
 
+def _trace_id_for(user_id: int, chat_id: int, message_id: int | None) -> str:
+    """Mint the trace exactly the way the surface does (task-215)."""
+    from nexus_ai_agent.bot.creative_surface import execution_trace
+
+    return execution_trace(user_id=user_id, chat_id=chat_id, message_id=message_id).trace_id
+
+
 @pytest.mark.parametrize(
     ("command", "operation", "args"),
     [
@@ -120,6 +127,7 @@ def test_job_payload_carries_no_lifecycle_opt_in(
         idempotency_key="creative:1:2:3",
         workspace_dir="/tmp/creative_x",
         input_path="/tmp/creative_x/input.mp4",
+        trace_id=_trace_id_for(1, 2, 3),
     )
     assert "allow_experimental" not in payload
     CreativeRenderPayload.model_validate(payload)
@@ -136,6 +144,7 @@ def test_job_payload_contains_ids_and_workspace() -> None:
         idempotency_key="creative:123:456:7",
         workspace_dir="/tmp/creative_x",
         input_path="/tmp/creative_x/input.mp4",
+        trace_id=_trace_id_for(123, 456, 7),
     )
     assert payload["user_id"] == 123
     assert payload["chat_id"] == 456

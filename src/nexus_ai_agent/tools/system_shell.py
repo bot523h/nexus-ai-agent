@@ -102,6 +102,15 @@ class FlagKind(str, Enum):
     TUPLE = "tuple"
 
 
+#: Upper bound on the characters a single command may return.  ``cat`` on a
+#: large workspace file would otherwise hand the agent (and its context window)
+#: an unbounded blob, so output is truncated to this many characters plus the
+#: marker below.  The value leaves room for the marker inside the 200_000-char
+#: budget the tool documents to callers.
+_MAX_OUTPUT_CHARS = 200_000
+_OUTPUT_TRUNCATION_MARKER = "[output truncated]"
+
+
 # ---------------------------------------------------------------------------
 # The declared flag grammar — one table per allowlisted command
 # ---------------------------------------------------------------------------
@@ -237,10 +246,15 @@ _ECHO_FLAGS: dict[str, FlagKind] = {
     f: FlagKind.BOOL for f in ("-n", "-e", "-E", "--help", "--version")
 }
 
-#: ``date`` keeps only the read-only display flags.  ``-f``/``--file``,
-#: ``-r``/``--reference``, ``-d``/``--date``, ``-s``/``--set``, ``--debug`` and
-#: ``--resolution`` are absent on purpose: two of them open arbitrary files, one
-#: would set the system clock, and none is needed to read the clock.
+#: ``date`` keeps only the read-only flags.  ``-f``/``--file``,
+#: ``-r``/``--reference``, ``-s``/``--set``, ``--debug`` and ``--resolution``
+#: are absent on purpose: two of them open arbitrary files and one would set the
+#: system clock.  ``-d``/``--date`` *is* allowed — it parses the date string it
+#: is handed and opens no file — but only when the operand is a *safe* string:
+#: GNU ``date`` treats ``@EPOCH`` and ``+FORMAT`` as parse/format instructions,
+#: while an operand that is neither (a bare relative name such as
+#: ``date 092612302026``) is a *time-setting* operand that ``date`` tries to
+#: apply to the clock.  ``_validate_args`` enforces that rule.
 _DATE_FLAGS: dict[str, FlagKind] = {
     **{
         f: FlagKind.BOOL
@@ -256,6 +270,9 @@ _DATE_FLAGS: dict[str, FlagKind] = {
             "--version",
         )
     },
+    # ``-d``/``--date`` take one value: a parse instruction, never a path.
+    "-d": FlagKind.VALUE,
+    "--date": FlagKind.VALUE,
     # ``-I[timespec]`` / ``--iso-8601[=timespec]`` take an optional attached value.
     "-I": FlagKind.OPTIONAL_VALUE,
     "--iso-8601": FlagKind.OPTIONAL_VALUE,
@@ -468,8 +485,6 @@ _NAMED_REFUSALS: dict[str, dict[str, str]] = {
         "--file": "reads an arbitrary file and echoes its lines back",
         "-r": "reads an arbitrary file's metadata",
         "--reference": "reads an arbitrary file's metadata",
-        "-d": "parses an arbitrary date string",
-        "--date": "parses an arbitrary date string",
         "-s": "would set the system clock",
         "--set": "would set the system clock",
     },
@@ -657,6 +672,8 @@ class ShellTool(BaseTool):
         if command == "find":
             for path in find_paths:
                 self._validate_path(path, what="find path")
+        elif command == "date":
+            self._validate_date_operands(positionals)
         else:
             self._validate_positionals(command, positionals, pattern_supplied=grep_pattern_supplied)
 
@@ -755,6 +772,26 @@ class ShellTool(BaseTool):
             # M2: path-shaped values are contained whatever the table said.
             self._validate_path(value, what=f"value of {flag}")
 
+    def _validate_date_operands(self, positionals: list[str]) -> None:
+        """Refuse a ``date`` operand that would *set* the clock.
+
+        GNU ``date`` applies a bare operand as a new time when it is not a parse
+        or format instruction, so ``date 092612302026`` attempts
+        ``settimeofday``.  Only operands that are explicitly a parse instruction
+        (``@EPOCH``) or a format string (``+FORMAT``) are safe to hand through;
+        every other operand is refused before the subprocess starts, and the
+        refusal names ``+FORMAT`` so the caller knows the allowed shape.
+        """
+        for operand in positionals:
+            if operand.startswith("+"):
+                continue  # ``+FORMAT`` — display only, never a time set
+            if operand.startswith("@"):
+                continue  # ``@EPOCH`` — a parse instruction, opens nothing
+            raise ShellCommandError(
+                "date refuses this operand: it would set the system clock; "
+                "use a read-only form such as 'date -d @EPOCH' or 'date +FORMAT'"
+            )
+
     def _validate_positionals(
         self, command: str, positionals: list[str], *, pattern_supplied: bool = False
     ) -> None:
@@ -787,6 +824,12 @@ class ShellTool(BaseTool):
         command = str(inputs.get("command", "")).strip()
         if not command:
             return {"success": False, "output": "", "error": "Missing command"}
+        # ``subprocess`` refuses an argument containing a NUL byte by raising
+        # ``ValueError`` at call time.  That is a *typed* sandbox failure, not a
+        # crash the caller must catch, so it is refused here where every other
+        # policy violation is.
+        if "\x00" in command:
+            return {"success": False, "output": "", "error": "Invalid command (NUL byte)"}
 
         try:
             parts = shlex.split(command)
@@ -822,6 +865,8 @@ class ShellTool(BaseTool):
         try:
             proc = await asyncio.to_thread(_run)
             out = (proc.stdout or "") + (proc.stderr or "")
+            if len(out) > _MAX_OUTPUT_CHARS:
+                out = out[:_MAX_OUTPUT_CHARS] + _OUTPUT_TRUNCATION_MARKER
             if proc.returncode != 0:
                 return {"success": False, "output": out, "error": f"Exit {proc.returncode}"}
             return {"success": True, "output": out, "error": None}

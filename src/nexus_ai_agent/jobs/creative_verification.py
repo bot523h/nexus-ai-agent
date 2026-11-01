@@ -11,8 +11,9 @@ This is the Job layer's check of the canonical one-shot chain
 * the workspace itself is derived from the idempotency key and re-validated
   by the worker (``_guarded_workspace``), so ``payload["workspace_dir"]``
   is the expected root;
-* the logical identity is ``project_id = shot-<idempotency_key>`` plus the
-  operation's output asset id (``_build_project`` / dispatch output);
+* the logical identity is the worker's actual project ID plus the operation's
+  output asset id (legacy workers derive ``shot-<idempotency_key>``; schema-2
+  workers report their canonical project in the execution evidence);
 * the spec identity is the canonical operation id plus the compiled lane IR
   hash when the handler recorded one (``CompiledLane.ir_hash``);
 * media probe evidence comes from the runtime's own allow-listed-binary
@@ -124,10 +125,19 @@ def creative_render_verifier(
     if not outcome.ok:
         return outcome
     summary = dict(outcome.summary)
-    # Bind the logical identity the chain actually used: the render worker
-    # builds ``project_id = shot-<idempotency key>`` (``_build_project``).
+    # Bind the logical identity the chain actually used.  Schema 1 retains
+    # the historical derivation; schema 2 reports the real authorized project
+    # from the worker's CommandBus execution evidence.
+    project_id = f"shot-{payload.get('idempotency_key', '')}"
+    canonical = result.get("canonical_execution")
+    if isinstance(canonical, dict):
+        project = canonical.get("project")
+        if isinstance(project, dict) and isinstance(project.get("project_id"), str):
+            candidate = project["project_id"]
+            if candidate:
+                project_id = candidate
     summary["logical_identity"] = {
-        "project_id": f"shot-{payload.get('idempotency_key', '')}",
+        "project_id": project_id,
         "output_asset_id": claim.output_asset_id,
     }
     # Bind the spec identity: canonical operation + compiled lane IR hash

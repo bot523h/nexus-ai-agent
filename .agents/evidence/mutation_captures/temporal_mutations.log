@@ -1,0 +1,13 @@
+baseline ... GREEN
+float_rate_rationalised_approximately: killed
+string_rate_rationalised_approximately: killed
+rounding_guard_degraded_to_assert: killed
+ntsc_profile_table_bypassed: killed
+zero_rate_silently_accepted: killed
+zero_denominator_accepted: killed
+lossy_conversion_silently_rounded_under_exact: killed
+zero_duration_emitted_as_one_frame: killed
+deserialized_timebase_components_coerced: killed
+otio_export_reverts_to_float_truncation: killed
+restored baseline ... GREEN
+10/10 killed

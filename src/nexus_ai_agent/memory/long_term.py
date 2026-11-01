@@ -7,6 +7,36 @@ from pathlib import Path
 from nexus_ai_agent.llm.provider import LLMProvider
 
 
+def _is_real_user_id(user_id: object) -> bool:
+    """A personal principal is a positive, non-bool integer — never a group id."""
+    return isinstance(user_id, int) and not isinstance(user_id, bool) and user_id > 0
+
+
+def memory_scope_id(user_id: int | None) -> str | None:
+    """Return the deterministic personal-memory scope for a user.
+
+    The scope is stable across requests (``mem:u:<id>``) and belongs to exactly
+    one user — it is never a shared or group scope.  A missing or ambiguous
+    identity (``None``, ``0``, a boolean, a non-integer, or a negative group
+    id) returns ``None``, which callers must treat as *fail closed*: no personal
+    read, no personal write, no shared fallback.
+    """
+    if not _is_real_user_id(user_id):
+        return None
+    return f"mem:u:{user_id}"
+
+
+def is_private_audience(chat_id: int | None, user_id: int | None) -> bool:
+    """True only for a provable 1:1 chat (Telegram private chat_id == user_id).
+
+    Group and unknown audiences are not private: the prompt context is shared
+    by every member of a group, so personal memory must never be injected
+    there (most restrictive safe default).  A missing or ambiguous identity is
+    never a private audience.
+    """
+    return _is_real_user_id(chat_id) and _is_real_user_id(user_id) and chat_id == user_id
+
+
 class LongTermMemory:
     DIM = 384
 

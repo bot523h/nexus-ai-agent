@@ -26,23 +26,50 @@ class ExecutorAgent(BaseAgent):
         inputs = step.get("inputs", {}) if isinstance(step.get("inputs"), dict) else {}
 
         if tool_name and self.registry is not None:
-            result = await self.registry.run(tool_name, inputs, policy={})
+            # Explicit, one-shot confirmation attached by a trusted caller.
+            confirmed = step.pop("confirmed", None) is True
+            policy = {"confirmed": True} if confirmed else {}
+            result = await self.registry.run(tool_name, inputs, policy=policy)
             if result.get("needs_confirmation"):
-                state["response"] = (
-                    f"Confirmation required to run tool '{tool_name}'. "
-                    f"Reply 'confirm' to proceed.\nInputs: {inputs}"
+                # The registry refused a GUARDED tool pending confirmation: the
+                # tool did not run, so the step is a typed refusal — not a
+                # success and not an empty-output "executed" claim.
+                error_code = "confirmation_required"
+                message = (
+                    f"Confirmation required before tool '{tool_name}' can run. "
+                    f"The tool did not run. Inputs: {inputs}"
                 )
+                step["status"] = "failed"
+                state["current_task"] = task
+                state["tool_results"] = state.get("tool_results", []) + [
+                    {
+                        "success": False,
+                        "error_code": error_code,
+                        "output": message,
+                        "error": message,
+                    }
+                ]
+                state["error"] = f"{error_code}: {message}"
+                state["response"] = message
                 return state
 
-            if result.get("success"):
+            is_success = result.get("success") is True
+            if is_success:
                 step["status"] = "done"
-            else:
-                step["status"] = "failed"
-                state["error"] = result.get("error") or "Tool failed"
+                state["tool_results"] = state.get("tool_results", []) + [result]
+                state["response"] = result.get("output") or "Done."
+                state["current_task"] = task
+                return state
 
-            state["tool_results"] = state.get("tool_results", []) + [result]
+            step["status"] = "failed"
+            failure = result.get("error") or result.get("output") or "Tool did not complete."
+            state["error"] = f"tool_failure: {failure}"
+            state["tool_results"] = state.get("tool_results", []) + [
+                {**result, "success": False, "error_code": "tool_failure"}
+            ]
+            # Never retain a prior response or emit "Done." for a failed tool.
+            state["response"] = failure
             state["current_task"] = task
-            state["response"] = result.get("output") or state.get("response") or "Done."
             return state
 
         # No tool specified or registry not wired is a refusal, not an

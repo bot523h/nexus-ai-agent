@@ -11,6 +11,7 @@ Both formatters are pure mathematical functions:
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Sequence
 
 from nexus_ai_agent.creative.packs.caption.models import (
@@ -58,11 +59,24 @@ def _extract_segments(
     return source
 
 
+def _validate_serialized_order(segments: Sequence[TranscriptSegment], *, decimal_us: int) -> None:
+    previous_start = -1
+    for segment in segments:
+        start = segment.start_us // decimal_us
+        end = segment.end_us // decimal_us
+        if start < previous_start:
+            raise ValueError("subtitle cues must be ordered by nondecreasing start time")
+        if end <= start:
+            raise ValueError("subtitle cue duration is below the output format time resolution")
+        previous_start = start
+
+
 def format_srt(source: Sequence[TranscriptSegment] | TranscriptRef) -> str:
-    """Format a transcript as a strict SubRip (.srt) string."""
+    """Format a transcript as deterministic UTF-8 SubRip text."""
     segments = _extract_segments(source)
     if not segments:
         return ""
+    _validate_serialized_order(segments, decimal_us=1_000)
 
     blocks: list[str] = []
     for index, seg in enumerate(segments, start=1):
@@ -83,6 +97,7 @@ def format_vtt(
     segments = _extract_segments(source)
     if not segments:
         return "WEBVTT\n"
+    _validate_serialized_order(segments, decimal_us=1_000)
 
     blocks: list[str] = ["WEBVTT"]
     for index, seg in enumerate(segments, start=1):
@@ -117,37 +132,69 @@ def is_persian_or_arabic(text: str) -> bool:
     return bool(_PERSIAN_ARABIC_RE.search(text))
 
 
-def wrap_rtl_bidi(text: str) -> str:
-    """Ensure proper bidirectional display and newline normalization for ASS subtitles.
+_BIDI_OVERRIDE = {chr(code) for code in (*range(0x202A, 0x202F), *range(0x2066, 0x206A))}
 
-    Normalizes newlines to ASS ``\\N`` and wraps Persian/Arabic text with RLM
-    markers to preserve punctuation anchoring across heterogeneous renderers.
+
+def escape_ass_text(text: str) -> str:
+    """Escape untrusted cue text from ASS override-tag/newline injection."""
+    clean = unicodedata.normalize("NFC", text)
+    clean = clean.replace("\r\n", "\n").replace("\r", "\n")
+    clean = clean.replace("\u2028", "\n").replace("\u2029", "\n").replace("\t", " ")
+    clean = "".join(
+        char
+        for char in clean
+        if char not in _BIDI_OVERRIDE and (char == "\n" or unicodedata.category(char) != "Cc")
+    )
+    clean = clean.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
+    return clean.replace("\n", r"\N")
+
+
+def wrap_rtl_bidi(text: str) -> str:
+    """Normalize RTL cue text without visual reordering or manual Arabic shaping.
+
+    Unicode bidi resolution and Arabic shaping belong to the renderer (libass /
+    FriBidi / HarfBuzz). RLM anchors improve punctuation in older consumers;
+    user-supplied embedding/override controls are removed before serialization.
     """
-    clean = _normalize_cue_text(text)
-    lines = clean.split("\n")
+    lines = _normalize_cue_text(text).split("\n")
     processed_lines: list[str] = []
     for line in lines:
-        stripped = line.strip()
-        if is_persian_or_arabic(stripped):
-            # Anchor punctuation at boundaries using RLM
-            processed = f"{_RLM}{stripped}{_RLM}"
-        else:
-            processed = stripped
-        processed_lines.append(processed)
-    return "\\N".join(processed_lines)
+        stripped = escape_ass_text(line.strip())
+        processed_lines.append(
+            f"{_RLM}{stripped}{_RLM}" if is_persian_or_arabic(line.strip()) else stripped
+        )
+    return r"\N".join(processed_lines)
 
 
 def format_karaoke_dialogue(segment: TranscriptSegment) -> str:
-    """Format word-level karaoke timing tags (\\k<centiseconds>) for ASS."""
+    """Emit karaoke centiseconds with integer exact-cover allocation.
+
+    Word timing durations are clipped to the segment, quantized by largest
+    remainder, and sum exactly to the ASS dialogue duration. Gaps are assigned
+    to adjacent word intervals; no floating-point time drift accumulates.
+    """
     if not segment.words:
         return wrap_rtl_bidi(segment.text)
-
-    tokens: list[str] = []
-    for w in segment.words:
-        dur_cs = max(1, (w.end_us - w.start_us) // 10_000)
-        clean_word = w.word.strip()
-        tokens.append(f"{{\\k{dur_cs}}}{clean_word}")
-    return " ".join(tokens)
+    span_cs = (segment.end_us - segment.start_us) // 10_000
+    if span_cs < len(segment.words):
+        raise ValueError("karaoke words exceed available positive ASS centiseconds")
+    raw_weights = [
+        max(0, min(word.end_us, segment.end_us) - max(word.start_us, segment.start_us))
+        for word in segment.words
+    ]
+    weights = raw_weights if any(raw_weights) else [max(1, len(w.word)) for w in segment.words]
+    total = sum(weights)
+    durations = [(span_cs * weight) // total for weight in weights]
+    residues = [(span_cs * weight) % total for weight in weights]
+    leftover = span_cs - sum(durations)
+    for index in sorted(range(len(weights)), key=lambda i: (-residues[i], i))[:leftover]:
+        durations[index] += 1
+    tokens = [
+        f"{{\\k{duration}}}{escape_ass_text(word.word.strip())}"
+        for word, duration in zip(segment.words, durations, strict=True)
+    ]
+    rendered = " ".join(tokens)
+    return f"{_RLM}{rendered}{_RLM}" if is_persian_or_arabic(segment.text) else rendered
 
 
 def format_ass(
@@ -162,6 +209,8 @@ def format_ass(
     """Format a transcript into strict, deterministic Advanced SubStation Alpha (ASS v4.00+)."""
     cfg = style or AssStyleConfig()
     segments = _extract_segments(source)
+    if segments:
+        _validate_serialized_order(segments, decimal_us=10_000)
 
     bold_val = -1 if cfg.bold else 0
     italic_val = -1 if cfg.italic else 0
@@ -207,7 +256,7 @@ def format_ass(
         elif enable_rtl_wrap:
             dialogue_text = wrap_rtl_bidi(seg.text)
         else:
-            dialogue_text = _normalize_cue_text(seg.text).replace("\n", "\\N")
+            dialogue_text = escape_ass_text(seg.text)
 
         lines.append(f"Dialogue: 0,{start_ts},{end_ts},{cfg.name},,0,0,0,,{dialogue_text}")
 

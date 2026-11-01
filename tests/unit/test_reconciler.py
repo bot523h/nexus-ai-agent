@@ -323,7 +323,8 @@ def test_cli_reconcile_dry_run_default_and_json(cli_env: Path) -> None:
     result = CliRunner().invoke(app, ["checkpoints", "reconcile", "--json"])
 
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
+    # Click 8.2+ mixes stderr logs into ``output``; JSON is the stdout contract.
+    payload = json.loads(result.stdout)
     assert payload["applied"] is False
     assert payload["backfilled"] == 0
     assert payload["purged"] == 0
@@ -345,7 +346,7 @@ def test_cli_reconcile_apply_requires_flag(cli_env: Path) -> None:
     result = CliRunner().invoke(app, ["checkpoints", "reconcile", "--apply", "--json"])
 
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
     assert payload["applied"] is True
     assert payload["purged"] == 1
     assert len(store.records()) == 200

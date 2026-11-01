@@ -311,6 +311,9 @@ def _base_state(update: Update, text: str) -> NexusState:
         "error": None,
         "turn_count": 0,
         "moderation_passed": True,
+        # Fail-closed default: only ``on_message`` may raise this to True, and
+        # only from the live P0-7 decision (explicit grant + feature enabled).
+        "memory_consent": False,
     }
 
 
@@ -463,7 +466,10 @@ def build_handlers(
         if not text:
             await _reply(update, "❌ Usage: /ai <your message>")
             return
-        user_id = _user_id(update) or 0
+        user_id = _user_id(update)
+        if user_id is None:
+            await _reply(update, "❌ هویت کاربر در دسترس نیست؛ این درخواست انجام نشد.")
+            return
         conv_id = f"tg:{_chat_id(update)}"
         result = await gemini_engine.chat(text, conv_id=conv_id, user_id=user_id)
         await _reply(update, f"🤖 {result}")
@@ -476,7 +482,10 @@ def build_handlers(
             await _reply(update, "❌ Gemini AI not configured.")
             return
         text = " ".join(context.args) if context.args else ""
-        user_id = _user_id(update) or 0
+        user_id = _user_id(update)
+        if user_id is None:
+            await _reply(update, "❌ هویت کاربر در دسترس نیست؛ این درخواست انجام نشد.")
+            return
         result = await gemini_engine.code(text, user_id=user_id)
         await _reply(update, f"👨‍💻 Code:\n\n```python\n{result}\n```", parse_mode="Markdown")
 
@@ -485,7 +494,10 @@ def build_handlers(
             await _reply(update, "❌ Gemini AI not configured.")
             return
         text = " ".join(context.args) if context.args else ""
-        user_id = _user_id(update) or 0
+        user_id = _user_id(update)
+        if user_id is None:
+            await _reply(update, "❌ هویت کاربر در دسترس نیست؛ این درخواست انجام نشد.")
+            return
         result = await gemini_engine.translate(text, target_lang="Persian", user_id=user_id)
         await _reply(update, f"🌐 {result}")
 
@@ -523,12 +535,14 @@ def build_handlers(
             await _reply(update, "❌ عکس بزرگ‌تر از ۱۰ مگابایت است.")
             return
         question = _vision_question(update, context)
+        user_id = _user_id(update)
+        if user_id is None or user_id <= 0:
+            await _reply(update, "❌ هویت کاربر در دسترس نیست؛ این درخواست انجام نشد.")
+            return
         try:
             tg_file = await photo.get_file()
             payload = bytes(await tg_file.download_as_bytearray())
-            result = await gemini_engine.vision(
-                payload, question=question, user_id=_user_id(update) or 0
-            )
+            result = await gemini_engine.vision(payload, question=question, user_id=user_id)
         except Exception as exc:  # noqa: BLE001 — network/API failure is reported to the caller
             await _reply(update, f"❌ Vision error: {exc}")
             return
@@ -671,6 +685,7 @@ def build_handlers(
                 tmp_path,
                 lang="fa",
                 gemini_engine=gemini_engine,
+                user_id=user_id,
             )
             import os
 
@@ -1084,6 +1099,13 @@ def build_handlers(
             state = _base_state(update, update.message.text)
             state["correlation_id"] = correlation_id
             state["intent"] = "unknown"
+            # P1-E: carry the effective P0-7 decision into the graph.  Only an
+            # explicit grant with the feature enabled authorizes a personal
+            # long-term-memory write; unset/denied stays fail closed and the
+            # AI reply itself is unaffected.
+            state["memory_consent"] = bool(settings.ai_memory_enabled) and (
+                memory_consent == CONSENT_GRANTED
+            )
 
             result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
             await _reply(update, result.get("response") or "")

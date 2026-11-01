@@ -12,13 +12,22 @@ Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Coroutine[Any, Any, None
 ReplyFn = Callable[..., Awaitable[None]]
 
 # ── P0-7: one-time consent question for LLM egress ─────────────────────
+# Policy A (docs/DECISION_LOG.md 2026-09-21 P0-7): the consent gates the
+# AI-memory feature (extraction/storage of personal facts) only.  Explicitly
+# requested AI commands (/ai and chat answers) send message text to the cloud
+# model by product design and are NOT gated here — the copy below must say so,
+# never promise a global "nothing leaves this device" it cannot keep.
 AIMEMORY_CONSENT_PROMPT = (
     "🔐 **رضایت برای حافظه هوشمند**\n\n"
-    "برای اینکه پاسخ‌های من دقیق‌تر و شخصی‌سازی‌شده‌تر باشد، اطلاعات مهم را "
-    "از پیام‌های شما در حافظه بلندمدت ذخیره می‌کنم. برای این کار، متن پیام‌های "
-    "شما در صورت نیاز به یک مدل هوش مصنوعی ابری (Google Gemini) ارسال می‌شود.\n\n"
-    "آیا موافق هستید؟ تا زمانی که تأیید نکنید، هیچ اطلاعاتی به بیرون ارسال "
-    "نمی‌شود. هر زمان می‌توانید تصمیم خود را تغییر دهید."
+    "ویژگی «حافظه هوشمند» می‌تواند اطلاعات مهم را از پیام‌های شما استخراج و در "
+    "حافظهٔ بلندمدت شما ذخیره کند تا پاسخ‌ها دقیق‌تر شوند. فقط برای همین "
+    "استخراجِ حافظه، متن پیام‌های شما در صورت نیاز به یک مدل هوش مصنوعی ابری "
+    "(Google Gemini) ارسال می‌شود.\n\n"
+    "آیا موافق هستید؟ تا زمانی که تأیید نکنید، هیچ متنی برای استخراج حافظه به "
+    "بیرون ارسال نمی‌شود. توجه: فرمان‌های صریح هوش مصنوعی (مانند /ai) همچنان "
+    "پیام‌های شما را برای تولید پاسخ به مدل ابری می‌فرستند. حافظهٔ شخصی فقط در "
+    "گفتگوهای خصوصی به پاسخ‌ها اضافه می‌شود و هرگز بخشی از پاسخ‌های گروهی "
+    "نیست. هر زمان می‌توانید تصمیم خود را تغییر دهید."
 )
 AIMEMORY_CONSENT_KEYBOARD = InlineKeyboardMarkup(
     [
@@ -82,12 +91,15 @@ def build_memory_handlers(engine: AIMemoryEngine) -> tuple[Handler, Handler, Han
         await query.answer()
         try:
             await query.edit_message_text(
-                "✅ اجازه ثبت در حافظه بلندمدت داده شد. متن پیام‌های شما در صورت "
-                "نیاز به مدل هوش مصنوعی ابری (Gemini) ارسال می‌شود تا پاسخ‌ها "
-                "دقیق‌تر شوند. هر زمان می‌توانید با /forget_me همه‌چیز را پاک کنید."
+                "✅ اجازهٔ استخراج حافظه داده شد. متن پیام‌های شما در صورت نیاز "
+                "برای استخراج و ذخیره در حافظهٔ بلندمدت به مدل هوش مصنوعی ابری "
+                "(Gemini) ارسال می‌شود تا پاسخ‌ها دقیق‌تر شوند. هر زمان "
+                "می‌توانید با /forget_me همه‌چیز را پاک کنید."
                 if granted
-                else "🛑 درخواست رد شد. متن پیام‌های شما هرگز به مدل هوش مصنوعی "
-                "ابری ارسال نخواهد شد و حافظه بلندمدت فعال نیست."
+                else "🛑 درخواست رد شد. استخراج حافظهٔ هوشمند غیرفعال می‌ماند و "
+                "متن پیام‌های شما برای حافظه به مدل هوش مصنوعی ابری ارسال "
+                "نخواهد شد. پاسخ‌های درخواست‌شده با فرمان‌های هوش مصنوعی "
+                "(مانند /ai) طبق روال قبلی کار می‌کنند."
             )
         except Exception:
             # The message may already be uneditable (age/edits limit);

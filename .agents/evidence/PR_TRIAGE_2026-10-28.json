@@ -1,0 +1,527 @@
+{
+  "schema": 1,
+  "generated_at": "2026-10-28T09:18:13Z",
+  "main_sha": "394279da94f22e8043517a84e58fa25a831b8ab1",
+  "open_total": 50,
+  "totals": {
+    "WRONG_BASE_BRANCH": 0,
+    "DRAFT": 8,
+    "CONFLICT": 35,
+    "MERGEABILITY_UNKNOWN": 0,
+    "CI_RED": 3,
+    "CI_PENDING": 4,
+    "CHANGES_REQUESTED": 0,
+    "NEEDS_APPROVAL": 0,
+    "REBASE_FIRST": 0,
+    "READY": 0
+  },
+  "disposition_counts": {
+    "conflict-large": 13,
+    "conflict-sequenced": 22,
+    "draft-skipped": 8,
+    "repaired": 6,
+    "governance-pr": 1
+  },
+  "prs": [
+    {
+      "number": 33,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 40,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 57,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 14,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 58,
+      "tier": "DRAFT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 12,
+      "disposition": "draft-skipped",
+      "note": "Draft: not submitted for review; out of campaign authority to un-draft."
+    },
+    {
+      "number": 59,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 17,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 60,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 29,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 63,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 35,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 64,
+      "tier": "CI_PENDING",
+      "mergeable": "MERGEABLE",
+      "merge_state": "BLOCKED",
+      "ci_state": "PENDING",
+      "changed_files": 38,
+      "disposition": "repaired",
+      "note": "Rebased/repaired on current main; tests+guards green locally; awaiting CI + review."
+    },
+    {
+      "number": 66,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 37,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 69,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 99,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 70,
+      "tier": "CI_PENDING",
+      "mergeable": "MERGEABLE",
+      "merge_state": "BLOCKED",
+      "ci_state": "PENDING",
+      "changed_files": 9,
+      "disposition": "repaired",
+      "note": "Rebased/repaired on current main; tests+guards green locally; awaiting CI + review."
+    },
+    {
+      "number": 73,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 20,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 83,
+      "tier": "CI_PENDING",
+      "mergeable": "MERGEABLE",
+      "merge_state": "BLOCKED",
+      "ci_state": "PENDING",
+      "changed_files": 16,
+      "disposition": "repaired",
+      "note": "Rebased/repaired on current main; tests+guards green locally; awaiting CI + review."
+    },
+    {
+      "number": 84,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 15,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 87,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 10,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 88,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 10,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 89,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 7,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 92,
+      "tier": "DRAFT",
+      "mergeable": "MERGEABLE",
+      "merge_state": "BEHIND",
+      "ci_state": "SUCCESS",
+      "changed_files": 43,
+      "disposition": "draft-skipped",
+      "note": "Draft: not submitted for review; out of campaign authority to un-draft."
+    },
+    {
+      "number": 96,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 26,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 97,
+      "tier": "CI_RED",
+      "mergeable": "MERGEABLE",
+      "merge_state": "BEHIND",
+      "ci_state": "FAILURE",
+      "changed_files": 17,
+      "disposition": "repaired",
+      "note": "Rebased/repaired on current main; tests+guards green locally; awaiting CI + review."
+    },
+    {
+      "number": 99,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 34,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 100,
+      "tier": "CI_PENDING",
+      "mergeable": "MERGEABLE",
+      "merge_state": "BLOCKED",
+      "ci_state": "PENDING",
+      "changed_files": 17,
+      "disposition": "repaired",
+      "note": "Rebased/repaired on current main; tests+guards green locally; awaiting CI + review."
+    },
+    {
+      "number": 113,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 14,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 114,
+      "tier": "DRAFT",
+      "mergeable": "MERGEABLE",
+      "merge_state": "BEHIND",
+      "ci_state": "FAILURE",
+      "changed_files": 16,
+      "disposition": "draft-skipped",
+      "note": "Draft: not submitted for review; out of campaign authority to un-draft."
+    },
+    {
+      "number": 115,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 14,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 117,
+      "tier": "DRAFT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 41,
+      "disposition": "draft-skipped",
+      "note": "Draft: not submitted for review; out of campaign authority to un-draft."
+    },
+    {
+      "number": 118,
+      "tier": "DRAFT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 52,
+      "disposition": "draft-skipped",
+      "note": "Draft: not submitted for review; out of campaign authority to un-draft."
+    },
+    {
+      "number": 121,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 20,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 122,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 11,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 124,
+      "tier": "CI_RED",
+      "mergeable": "MERGEABLE",
+      "merge_state": "BLOCKED",
+      "ci_state": "FAILURE",
+      "changed_files": 7,
+      "disposition": "repaired",
+      "note": "Rebased/repaired on current main; tests+guards green locally; awaiting CI + review."
+    },
+    {
+      "number": 129,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 6,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 134,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 17,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 135,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 8,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 137,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 9,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 139,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 7,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 140,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 9,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 144,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 12,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 149,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 51,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 150,
+      "tier": "DRAFT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 29,
+      "disposition": "draft-skipped",
+      "note": "Draft: not submitted for review; out of campaign authority to un-draft."
+    },
+    {
+      "number": 157,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 24,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 189,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 25,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 193,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 15,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 204,
+      "tier": "DRAFT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 4,
+      "disposition": "draft-skipped",
+      "note": "Draft: not submitted for review; out of campaign authority to un-draft."
+    },
+    {
+      "number": 205,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "FAILURE",
+      "changed_files": 43,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 218,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 305,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 230,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 52,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 243,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 5,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 244,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 12,
+      "disposition": "conflict-sequenced",
+      "note": "Conflicting vs current main; repair requires sequencing behind overlapping zones."
+    },
+    {
+      "number": 247,
+      "tier": "CONFLICT",
+      "mergeable": "CONFLICTING",
+      "merge_state": "DIRTY",
+      "ci_state": "SUCCESS",
+      "changed_files": 26,
+      "disposition": "conflict-large",
+      "note": "Large conflicting branch; semantic rebase exceeds a bounded repair \u2014 sequenced for owner triage."
+    },
+    {
+      "number": 257,
+      "tier": "DRAFT",
+      "mergeable": "MERGEABLE",
+      "merge_state": "BEHIND",
+      "ci_state": "FAILURE",
+      "changed_files": 4,
+      "disposition": "draft-skipped",
+      "note": "Draft: not submitted for review; out of campaign authority to un-draft."
+    },
+    {
+      "number": 267,
+      "tier": "CI_RED",
+      "mergeable": "MERGEABLE",
+      "merge_state": "BLOCKED",
+      "ci_state": "FAILURE",
+      "changed_files": 1,
+      "disposition": "governance-pr",
+      "note": "Registered the Mission-6 claim records; independent review + merge."
+    }
+  ]
+}

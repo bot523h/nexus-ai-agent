@@ -70,8 +70,8 @@ def _backdate_started_at(db: Path, job_id: str) -> None:
     """Make an in-flight row look long-orphaned (expiry-gated takeover idiom)."""
     with sqlite3.connect(db) as connection:
         connection.execute(
-            "UPDATE nexus_job_queue SET started_at = ? WHERE id = ?",
-            ("2000-01-01T00:00:00+00:00", job_id),
+            "UPDATE nexus_job_queue SET started_at = ?, heartbeat_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", "2000-01-01T00:00:00+00:00", job_id),
         )
 
 
@@ -321,6 +321,42 @@ async def test_observe_unknown_job_is_unknown_not_failed(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_observe_corrupt_status_is_unknown_not_failed(tmp_path: Path) -> None:
+    """I7 (2): an unreadable/corrupt persisted status is UNKNOWN, never FAILED.
+
+    ``parse_job_status`` fail-closes on an unknown spelling; the backend must
+    surface that as an *unreadable* UNKNOWN observation, not launder it into a
+    canonical success or a terminal business failure.
+    """
+    db = tmp_path / "jobs.sqlite3"
+    gate = _Gate()
+    queue, _ = _queues(db, gate)
+    backend = NativeLocalBackend(queue)
+
+    submitted = await backend.submit(_request("corrupt-status"))
+    await _wait_status(queue, submitted.job_id, JobStatus.PROCESSING)
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "UPDATE nexus_job_queue SET status = 'not-a-real-status' WHERE id = ?",
+            (submitted.job_id,),
+        )
+
+    identity = ExecutionIdentity(
+        request_id=submitted.request_id,
+        idempotency_key=submitted.idempotency_key,
+        job_id=submitted.job_id,
+    )
+    observation = await backend.observe(identity)
+    assert observation.state is ObservationState.UNKNOWN
+    assert observation.failure is not None
+    assert observation.failure.disposition is FailureDisposition.UNKNOWN
+    assert not observation.failure.is_terminal_business_failure
+
+    gate.event(1).set()
+    await queue.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_observe_and_reconcile_bind_identity_to_durable_idempotency_key(
     tmp_path: Path,
 ) -> None:
@@ -373,6 +409,9 @@ async def test_provider_run_id_never_changes_observed_truth(tmp_path: Path) -> N
     )
     observation = await backend.observe(claimed)
     assert observation.state is ObservationState.PROCESSING, "a provider claim is not authority"
+    assert observation.identity.provider_run_id is None, (
+        "the observed identity never retains the caller's provider run id"
+    )
     gate.event(1).set()
     await _drain(queue, identity.job_id)
 
@@ -798,8 +837,8 @@ async def test_reconcile_of_one_job_never_touches_an_unrelated_job(tmp_path: Pat
 def _set_started_at(db: Path, job_id: str, value: str | None) -> None:
     with sqlite3.connect(db) as connection:
         connection.execute(
-            "UPDATE nexus_job_queue SET started_at = ? WHERE id = ?",
-            (value, job_id),
+            "UPDATE nexus_job_queue SET started_at = ?, heartbeat_at = ? WHERE id = ?",
+            (value, value, job_id),
         )
 
 

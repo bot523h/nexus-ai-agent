@@ -1,6 +1,7 @@
 # NEXUS AI — Architecture Decision Log
 
-**Status:** Canonical historical record; revision 14 effective 2026-10-17  
+**Status:** Canonical historical record; revision 15 effective 2026-10-26
+**r15 scope:** observability decision (D-0031; board `task-274`, branch `arena/task-274-langsmith-tracing`): opt-in LangSmith tracing behind a fail-closed, default-off switch — the switch, the never-fatal bootstrap, the visible-skip connectivity smoke, and the retirement of the orphan smoke workflow registration left by a deleted branch.  
 **r14 scope:** review closeout of the task-270 P1 layer (D-0028; session `arena/525960ca-nexus-ai-agent`, PR#219): the seven CodeRabbit findings closed as code — destructive PostgreSQL test data safety, one persistent referral identity, moderation coverage for commands and media captions, `/vision` caption dispatch, serialised `sync_engine` first use, UTC-anchored dashboard timestamps, and the `TelegramId` documentation — each with a failing-first regression test.  
 **r13 scope:** full-audit remediation (D-0026; session `arena/26f7d958-nexus-ai-agent`, board `task-270`): the sixteen findings of the 2026-10-15 full audit (PR#198 comments 6190228525/6190229601) closed as code, not prose — the `main` message-path crash, one database per deployment, the last ten canned commands, declared dependencies, the fail-closed dashboard, the non-blocking updater, CI hygiene, single table definitions, hashes/codes/timestamps, explicit imports — each with a regression test.  
 **r12 scope:** product-direction decision (D-0025): the Nagar creative backbone is an intent-first loop (Intent → Creative Graph → Capability Compiler → CommandBus → render lane → verification → artifact + lineage), not a feature. The first vertical slice — the in-memory, single-project intent loop over the existing operation matrix — is implemented in `creative/spine/` with its own boundary and mutation guards; reference reverse engineering ships as the first *capability* over it (heuristic port, low confidence, never a copy). Direction record: `docs/architecture/CREATIVE_DIRECTION.md`.  
@@ -24,6 +25,7 @@
 - **r6 (2026-09-20, v3.11.0 housekeeping PR):** moved the release baseline to `v3.11.0`; recorded two owner decisions — *image generation behind an adapter (Pollinations by default, Gemini opt-in)*, which resolves the open question left by Wave 2 item 7, and *Wave 2.5 (Telegram surface for the slideshow pack) precedes Wave 3*; corrected the Phase 6 status text to Waves 1–2c merged; updated the PR snapshot (PR#23 merged as `ebe995a`, PR#1/PR#2 closed); noted that the lifecycle PR1/PR2/PR3 line has been on `main` since PR#7 (`acdbcb7`, v3.6.0) — the roadmap file had still called it unmerged.
 - **r10 (2026-09-24, security-boundary truth salvage):** PR#58's S1–S5 claims re-verified against main `035a896` — real deltas fixed on a fresh branch (dispatcher-true access guard incl. sync `check_update` + `ApplicationHandlerStop`, force-join SQL predicate + fail-closed-unbound, boundary redaction in both pipelines, Gemini `x-goog-api-key` everywhere, SSRF-safe legacy `video_url` download + `SafeAsyncTransport` stream fix), 9/9 mutation-killed; PR#58 stays unmerged evidence (D-0015).
 - **r11 (2026-09-24, S3/S5 adversarial closure):** PR#76's own S3/S5 surfaces independently re-verified and 5 proven defects closed (stdlib traceback redaction, mapping/non-string arg redaction, Basic-scheme credentials, CGNAT 100.64.0.0/10, https-only scheme gate on redirect hops) — 12/12 mutation-killed; D-0016.
+- **r15 (2026-10-26, opt-in tracing):** recorded the observability decision (D-0031): LangSmith tracing is off by default and the SDK already ships with core, boots fail-closed and never fatally, proves connectivity with a visible-skip smoke, and retires the orphan smoke workflow registration. Branch `arena/task-274-langsmith-tracing`; board `task-274`.
 - **r14 (2026-10-17, review closeout of the P1 layer):** the seven findings of the PR#219 review closed with failing-first tests; a test that writes to `NEXUS_DATABASE_URL` needs an explicit second opt-in and may only ever delete rows it created. D-0028.  
 - **r13 (2026-10-15, full-audit remediation):** owner-mandated remediation of audit findings A-01…A-13 on one branch with a regression test per fix; the audit itself (244 modules, 23 verified) remains the published evidence on PR#198. D-0026.  
 - **r12 (2026-09-30, creative direction):** recorded the product frame (intent, not tools) and the backbone loop above the proven execution chain, then *built the first vertical slice* — the in-memory, single-project intent loop (typed intent → creative graph → capability compiler → CommandBus → artifact + evidence) in `creative/spine/`, with its own boundary and mutation guards. Reverse engineering, multiverse, social feedback, pack marketplace and style DNA stay deferred behind evidence-based triggers. Direction page: `docs/architecture/CREATIVE_DIRECTION.md`; D-0025.  
@@ -2144,4 +2146,436 @@ store-level corruption ⇒ `nexus knowledge rebuild --yes`.
 `tests/architecture/test_knowledge_retrieval_boundaries.py` (law R22). Living view:
 `docs/architecture/KNOWLEDGE_RETRIEVAL.md`; ADR 0012 records only the docs-enforcement
 decision and links back here (behaviour authority = this entry).
+
+
+### D-0031 — Opt-in LangSmith tracing: default-off, fail-closed, never fatal (task-274)
+
+**Date recorded:** 2026-10-26 · **Status:** implemented (agent-authored record; owner review on the PR) · **Scope:** `observability/tracing.py`, `config/settings.py` (`tracing_*`), `cli.py::run_bot`, `scripts/langsmith_smoke.py`, `.github/workflows/langsmith-smoke.yml`
+
+**Decision.** LangGraph/LangChain trace through the `LANGSMITH_*` environment variables,
+so the runtime needs exactly one place that decides whether those traces leave the
+process. That place is `observability/tracing.py`, and it ships with a set of
+non-negotiable semantics: (1) **default off** — nothing is exported unless
+`NEXUS_TRACING_ENABLED=true`, because enabling tracing exports user prompts to a
+third party and the default must never do that silently; (2) **fail closed, never
+fatal** — an enabled-but-incomplete configuration (no SDK, no key) degrades to a
+typed, logged `TracingState` no-op and `bootstrap_tracing` swallows any unexpected
+error, so a tracing failure can never break startup (the same rule
+`observability/logging.py` follows); (3) **explicit egress surface** — the SDK
+(`langsmith`) already ships with the core install (it is pulled in transitively by
+`langgraph` → `langchain-core`), so there is no extra to install and no core import to
+add; the bootstrap sets the `LANGSMITH_*` names on the active path only, so a partial
+configuration cannot leave a half-enabled state and the switch governs *egress*, not
+installation; (3a) **the switch is the sole authority** — `NEXUS_TRACING_ENABLED` is
+the only thing that can turn tracing on (it has no `TRACING_ENABLED` fallback, unlike
+the key/project/endpoint, so there is no accidental second switch), so every non-active
+outcome *clears* the
+SDK's enable flags (`LANGSMITH_TRACING`, `LANGCHAIN_TRACING_V2`, `LANGCHAIN_TRACING`,
+`LANGCHAIN_HANDLER`) *and* forces the SDK's process-global override
+(`langsmith._internal._context._GLOBAL_TRACING_ENABLED = False`), and the active path
+clears the legacy `LANGCHAIN_*` flags and forces the override *on*: because the SDK
+reads its env flags through a `lru_cache`, the override (checked before the env) is the
+cache-independent switch that makes the outcome authoritative in both directions —
+stopping a stale flag already in the process environment from smuggling egress past the
+switch, and stopping a primed SDK from ignoring an enable; the override helper reports
+whether it applied and the disabled path *warns* if the SDK attribute is gone (SDK
+drift), rather than silently losing the fail-closed guarantee; (4) **safe diagnostics** —
+the smoke reports an allow-listed
+`sanitize_exception()` (exception class + optional status code) and never `str(exc)`,
+because SDK/HTTP error text can embed the key, the URL and the payload; (5) **visible
+evidence** — `scripts/langsmith_smoke.py` proves the key can accept a real
+parent/child trace and fails *visible*: `RESULT=SKIPPED_NO_SECRET` (exit 0) when the
+secret is absent, `RESULT=FAILED` (non-zero) when the endpoint refuses it, never a
+fabricated pass; because `langsmith.Client` batches in the background, the smoke
+registers the SDK's `tracing_error_callback` and flushes before trusting the result,
+so an ingestion-time rejection fails the smoke instead of printing a false `RESULT=OK`.
+
+**Alternatives rejected.** *Always-on tracing* — rejected: silent egress of prompt
+text to a third party is the failure the switch exists to prevent. *Make tracing
+fatal on misconfiguration* — rejected: observability must never be able to break a
+request (the repository-wide rule). *Ship the SDK as a separate `tracing` extra* —
+rejected as a false premise: `langsmith` is already a core transitive dependency
+(`langgraph` → `langchain-core` requires `langsmith<1.0.0,>=0.14.9`), so a `tracing`
+extra could never make the SDK "absent" in core and the core-absence proof
+(`tests/unit/test_optional_extras.py`) correctly red-flagged it; the opt-in switch is
+what gates egress, and the extra/leg were removed rather than papering over the leak.
+*Keep the orphan `langsmith-connectivity-smoke-20261026.yml` registration*
+— rejected: its branch was deleted, leaving a workflow with no source file; the
+registration is retired (disabled) and replaced by a committed
+`.github/workflows/langsmith-smoke.yml`. *Mock the SDK in tests* — rejected: the
+enabled path asserts the real `langsmith` import and the real environment contract,
+which is present on every leg.
+
+**Consequences.** Tracing is observation only — `TracingState` must not gate business
+logic. The smoke proves ingest, not correctness. A tracing-only LangSmith key is the
+intended credential (such a key can write runs but not read projects/settings), so a
+leaked key cannot read other tenants' data. No CI leg needs the secret except the
+smoke job, which degrades to a visible skip without one.
+
+**Evidence.** `tests/unit/test_tracing_bootstrap.py` (the four outcomes + never-fatal),
+`tests/unit/test_optional_extras.py::test_tracing_bootstrap_exports_when_the_sdk_is_present`
+(the real SDK path, provable on every leg because the SDK ships with core),
+`scripts/langsmith_smoke.py` + the `langsmith-smoke` workflow run. Living view:
+`docs/architecture/TRACING.md`.
+### D-0035 — Storage has three products, capacity is a typed claim with a source, and a second storage seam is allowed only because neither existing one can carry a user asset (task-272, **PROPOSED**)
+
+**Status: PROPOSED — not accepted.** This entry records an implemented and tested *adapter and
+contract* plus the design direction behind them. The direction itself awaits owner review; per
+`AGENTS.md` §7 a proposal is not an accepted decision, and no later wave may cite it as authority
+until it is accepted.
+
+**Context.** A source audit of `main` @ `04469ed` found: the Asset Library's blob store is a local
+content-addressed directory with no cloud backend wired to it; Cloudflare R2 exists but is the
+*maintenance* tier (database backups, heavy RAG documents) and is deliberately outside the user-file
+path; `storage/unified_cloud.py` models Dropbox, pCloud and Internxt with **static environment
+tokens** and publishes a `TOTAL_FREE_GB` that sums advertised free plans; pCloud/Internxt `get_usage`
+return a hard-coded allocation with `used_bytes: 0`; Google Drive is reachable only through a
+pre-configured `rclone` remote; OneDrive is absent; and no Neon Object Storage code existed although
+Neon PostgreSQL is a supported database backend.
+
+**Decision (four parts).**
+
+1. **Three products, three boundaries.** (A) *Storage backends* for files Nagar owns; (B)
+   *user-authorized drive connectors* for accounts the user connects (per-user OAuth, durable
+   ownership, least-privilege scopes); (C) *user-installable capability extensions*. An OAuth
+   connection grants no right to execute third-party code, and no layer may be described using
+   another layer's evidence. Recorded in `architecture/DATA_AND_STORAGE.md` §7.
+2. **A new seam, justified rather than convenient.** `storage/object_store.py` is the typed contract
+   for immutable content-addressed blobs. The two existing seams cannot carry it:
+   `StorageProvider` is path-based with no checksum/idempotency/capacity semantics, and
+   `BlobStore` is a filesystem *staging* contract. Neither existing seam is replaced or rewired:
+   R2 keeps its backup/RAG routing, and the Asset Library keeps its staging path until an explicit
+   composition step exists (law R22 keeps that one-way).
+3. **Capacity is a typed claim.** `CapacityReport` requires a source and an aware timestamp, and
+   distinguishes `AUTHORITATIVE` / `ADVERTISED` / `UNKNOWN`; only authoritative quota+usage yields
+   `verified_remaining_bytes`; an `UNKNOWN` report cannot carry numbers; unique and replicated bytes
+   are separate fields; deletion is not reclamation where the provider soft-deletes (Neon does).
+   This supersedes the "sum of free tiers" model in `storage/unified_cloud.py` **for the user-asset
+   path only** — that module's legacy behaviour is left untouched in this wave so existing
+   deployments do not change silently.
+4. **Neon Object Storage is a backend, verified from its documentation before implementation.** The
+   adapter targets the documented branch endpoint (`https://br-….storage.c-<N>.<region>.aws.neon.tech`),
+   path-style + SigV4, lazy `boto3`, bounded retry, typed non-retry of authorization failures, and
+   soft-delete-aware accounting. It is **feature-gated**: an incomplete environment returns `None`
+   and the local backend remains the default.
+
+**Evidence.** `tests/unit/test_object_store_contract.py` (33 tests over two independent
+implementations), `tests/unit/test_neon_object_storage.py` (29 tests against an injected fake S3
+client), `tests/architecture/test_storage_backend_boundary.py` (10 laws). Live provider round-trip:
+**BLOCKED** — no Neon Object Storage credential exists in the implementation environment; mocks are
+not live evidence. `docs/architecture/DATA_AND_STORAGE.md` §7.3 is the operative policy text.
+
+**Rejected.** (a) Reusing `unified_cloud` as the user-asset path — its routing is round-robin over
+static tokens and its capacity numbers are advertised, not measured; (b) implementing the four drive
+connectors as S3 buckets — they are OAuth'd user accounts with per-provider quota and error
+semantics; (c) reporting a single "total available" across backends — that is the exact arithmetic
+that produced the previous fiction; (d) making Neon the default backend before a live round-trip —
+an unverified default is an outage waiting for a deploy; (e) replacing the Principal model with Neon
+Auth because storage is Neon-hosted — identity and storage are independent products.
+
+**Limits.** No per-user OAuth connector, no quota API integration, no placement/fallback engine, no
+R2 user-asset wiring, no UI, no installable extension runtime. Those are Waves 2–6 in
+`architecture/DATA_AND_STORAGE.md` §7.7, each with its own claim.
+
+**D-0032 amendment (2026-10-22, PR #244 independent review).** The review found the contract's
+*prefix* and *integrity* semantics were conventions rather than law, so two adapters disagreed and a
+documentation claim outran the code. The status stays **PROPOSED**; the following are corrections to
+the proposal, not new decisions:
+
+1. **`namespace` is contract.** Each store declares its root key prefix; `list_keys(prefix=...)`
+   filters the same absolute keys that `head`/`open_bytes` accept, defaults to `namespace`, and
+   refuses a prefix outside it. Neon previously prepended `nagar/assets` internally while the local
+   and in-memory stores filtered relative keys, so the *same call* meant different things per backend.
+2. **Integrity is claimed only where measured.** `head` reports recorded metadata and never verifies
+   bytes; `verify_bytes` re-reads and hashes; `PutResult.content_verified` is `True` only after a real
+   byte check, and `put_stream(verify_existing=True)` makes a dedupe safe. The earlier wording
+   ("post-upload verification") is narrowed in code, docs and the PR body.
+3. **Environment sourcing is explicit.** The region is never taken from `AWS_REGION`; the endpoint is
+   parsed by authority so look-alike hosts, embedded credentials, paths and non-443 ports are refused.
+
+**D-0032 amendment 2 (2026-10-22, PR #244 round-2 review).** Still **PROPOSED**. Three corrections:
+
+1. **Ownership is a segment boundary, not a string prefix.** `nagar/assets` does not own
+   `nagar/assets-other/…`. Every key operation now proves membership before any provider request (a
+   foreign key raises `InvalidObjectKey` instead of reading as "absent"), and `list_keys` /
+   `measure_namespace` exclude siblings *after* the provider returns them, because `list_objects_v2`
+   matches prefixes literally. One shared rule (`is_within_namespace`) serves both backends. A root
+   namespace (`""`) must be opted into explicitly; it is never inherited from a missing variable.
+2. **Local reads stream.** `iter_chunks` reads through the filesystem boundary chunk by chunk with an
+   incremental digest, and `open_bytes(max_bytes=…)` enforces its bound while reading. Previously both
+   materialized the whole object first, so the documented bound did not exist.
+3. **Two identities, not one.** `verify_bytes` compares against the digest encoded in the
+   content-addressed key *and* the recorded metadata, and raises `IntegrityMismatch` when they
+   disagree — so rewriting bytes and metadata together while keeping the key no longer passes. The
+   existing corruption tests (bytes changed, metadata untouched) are unchanged and still pass.
+
+Evidence: `tests/unit/test_object_store_contract.py` (47), `tests/unit/test_neon_object_storage.py`
+(48), `tests/architecture/test_storage_backend_boundary.py` (14). Still **no live provider round-trip**
+— BLOCKED on an operator-provisioned branch, bucket and scoped credential.
+### D-0032 — The Creative Intelligence Plane gets its own typed intermediate representation, content-addressed like a compiler IR, and is forbidden from executing
+
+*Problem.* Verified on `main` @ `e5b326b`: `creative/` has no `Strategy`
+abstraction (the only `strategy` hit in `src/` is provider routing in
+`llm/litellm_provider.py`), no `Recipe` type, no semantic diff, and no
+authoring-level creative IR. `creative/rendering/ir.py` is shaped like an FFmpeg
+lane (`LaneOp` → filtergraph); `creative/studio/models.py` `Project`/`Timeline`
+is execution state the bus mutates. Neither can express "a hook, a subject, a
+call to action, fast paced, premium". On the unmerged spine lineage (PR #126) a
+keyword table maps five phrases onto five registry operations, and nothing models
+the piece itself. The consequence is structural, not cosmetic: with no typed
+representation of a creative work there is nothing for a strategy to produce,
+nothing for a compiler to consume, nothing for a semantic revision to edit, and
+nothing for a diff to compare — so every one of those capabilities would have to
+be rebuilt from free text on every request.
+
+*Decision.*
+1. **A new package, `creative/intelligence/`, owns `INTENT → UNDERSTANDING →
+   STRATEGY → TYPED CREATIVE IR → COMPILATION → EXECUTABLE PLAN` and stops
+   there.** It never executes. No `subprocess`, no file or network I/O, no
+   database, no event loop, and no `CommandBus`/`PlanTransaction`/`undo` symbol
+   anywhere in the package. Each rule is an AST-level architecture test, not a
+   comment. This keeps execution authority with the Canonical Creative Execution
+   Substrate and makes a second transaction engine unbuildable here by accident.
+2. **`CreativeWork` is the one exchange type, and every concept in it is
+   justified by an existing capability operation** (52 operations across the six
+   pack manifests). Two concepts have no precedent and are the reason the slice
+   exists: `SemanticRole` (why an element is present, which is what makes "keep
+   the rhythm but change the feeling" addressable) and `Constraint` (a user
+   requirement that survives compilation and can be *checked*). All five
+   constraint kinds are decidable against the IR itself, so a constraint is a
+   predicate rather than a comment.
+3. **Identity is content-addressed.** Every id is the SHA-256 of the element's
+   semantic payload plus the identities it refers to, so a document is a Merkle
+   tree. This buys four properties at once: byte-identical ids for the same
+   input (no `uuid4` in the identity path, asserted at AST level), subtree-local
+   diffs, subtree-local revisions, and self-verification through
+   `verify_identity()`. Rejected: UUID identities (they churn on every rebuild,
+   so no diff or cache downstream survives a recompile) and whole-document
+   hashing (it would make "what changed" a text diff again).
+4. **No floats in the IR.** Time is integer microseconds; normalised quantities
+   are integer per-mille; signed continuous parameters are integer milli-units
+   (`+1.5` EV is `1500`). Rejected: floats, because IEEE-754 repr drift is the
+   easiest way to make a "deterministic" hash platform-dependent.
+5. **Tracks are layout, not authoring.** An authored document carries
+   `layout=()`; the normaliser allocates tracks and the result must then be
+   complete, single-assigned and non-overlapping. Rejected: authoring tracks
+   directly, which would bake one NLE's structure into creative intent and
+   freeze every future backend to it.
+6. **Two gates, deliberately different.** `assert_valid()` reports *every*
+   structural problem at once and runs on unsealed documents; `seal()` resolves
+   references while assigning identity and fails fast on a dangling one. The
+   method is not called `validate` because pydantic's `BaseModel.validate` is a
+   classmethod and shadowing it would break Liskov substitution — a defect mypy
+   caught during this slice and a test now pins.
+
+*Rejected alternatives.* Extending `creative/studio/models.py` `Project` into an
+authoring IR (it is the bus's mutable execution state, owned by another
+substrate; merging the two would couple creative intent to execution state and
+cross an exclusive zone). Reusing `creative/rendering/ir.py` as the authoring
+surface (it is FFmpeg-lane shaped; authoring against it would push filtergraph
+concerns upstream). Writing the IR on the spine lineage (that zone is
+exclusively claimed by the open PR #126 / #127 lineage; this slice is disjoint
+from it by construction and imports nothing from it). Shipping the compiler in
+the same slice (rejected as scope: an IR with no consumer is unproven, but a
+mega-PR that lands IR + compiler + semantics cannot be audited — an
+honest-scope architecture test records the compiler's absence so its arrival is
+a deliberate, visible change).
+
+*Evidence.* 101 new tests green (`tests/unit/test_creative_ir.py` 54,
+`tests/unit/test_creative_ir_determinism.py` 20,
+`tests/architecture/test_creative_intelligence_boundary.py` 27); full
+architecture suite 125 → 152 with zero regression; creative unit selection
+603 → 677 passed with the same 24 pre-existing environmental failures
+(`imageio_ffmpeg` / `ffmpeg` absent in the sandbox). `ruff check` and
+`ruff format --check` clean; `mypy src/nexus_ai_agent/creative/intelligence`
+clean under the repository's strict config. Determinism verified across three
+`PYTHONHASHSEED` values in fresh interpreters.
+
+*Honest limits.* Nothing outside the plane constructs a `CreativeWork` yet: this
+slice is a foundation and is **not reachable from any user command**. The
+semantic layer, the deterministic compiler, semantic revision, creative diff and
+reference → recipe are all unbuilt. `CreativeBrief.semantic_intents` is the
+declared input for the semantic layer; `unresolved_intents` exists so an
+instruction nothing could honour is a recorded gap rather than a silent
+disappearance.
+
+### D-0033 — Creative semantics turns phrases into bounds and refuses to resolve a collision; the compiler is deferred on a measured capability gap
+
+*Problem.* D-0032 gave the plane a typed IR whose `Constraint` values are
+checkable, but nothing produced them. `CreativeBrief.semantic_intents` held the
+words a user actually said — "cinematic", "fast paced", "premium", "dramatic
+reveal" — as strings, and a string requirement is unfalsifiable: a plan can
+ignore it and nothing notices. Separately, the obvious next slice (the
+deterministic compiler) had to be assessed before being started.
+
+*Decision.*
+1. **A recognised phrase becomes a typed constraint with a number in it.**
+   "Fast paced" becomes `PacingConstraint(max_scene_duration_us=3_000_000)`.
+   `PacingConstraint` is added to the IR as the sixth constraint kind because
+   pacing had no shape at all: `TimingConstraint` binds one named scene, and
+   "no scene longer than X" is a different statement. Like the other five kinds
+   it is decidable against the IR itself.
+2. **The lexicon is built through the normaliser, not written against it.**
+   `_SURFACE_FORMS` holds phrases as a person types them; `LEXICON` is produced
+   by running every key through `normalize_phrase` (NFKC, case fold, ZWNJ
+   removed, Persian and Arabic digits mapped, punctuation dropped, whitespace
+   collapsed). Two keys that normalise onto the same key with different meanings
+   raise at import time. This is not tidiness: two lexicon entries in this
+   package were written with a ZWNJ and with Persian digits, which the normaliser
+   strips, making both entries **silently unreachable** — invisible in review,
+   caught only by a test that asserts every key equals its own normalisation.
+3. **Collisions are arithmetic, not a catalogue of known bad pairs.** Duration
+   bands on one target whose strongest floor exceeds their weakest ceiling are
+   unsatisfiable; emphasis shares are permille of one total, so distinct roles
+   demanding more than 1000 permille between them are unsatisfiable whatever the
+   document looks like. Both are decided on the numbers, so a new phrase that
+   contradicts an old one is caught without being taught the pair. The resolver
+   reports and raises; it never picks a winner, because choosing silently is the
+   failure this plane exists to prevent.
+4. **Style targets are declared, not applied.** A directive states where the
+   style axes should move; the resolution returns them for the strategy layer to
+   place. `apply_semantics` never changes a layer identity, and a test asserts
+   that. A lexicon has no basis for deciding *which* layers a look lands on.
+5. **`apply_semantics` is idempotent by construction.** Derived constraints are
+   content-addressed, so re-deriving them from an unchanged brief reproduces the
+   same identities and de-duplication removes them. A revision loop calls this on
+   every pass, so doubling the requirements was not an acceptable risk.
+6. **The compiler is deferred on evidence, not caution.** Verified on `main` @
+   `e5b326b`: no capability assembles a general timeline. `slideshow.compose`
+   rejects non-image assets ("'assets' must contain image evidence only") and the
+   bus registry exposes exactly five operations — `media.play`, `media.pause`,
+   `timeline.mark`, `timeline.split_at_playhead`, `system.undo` — none of which
+   places a clip. Lowering an arbitrary `CreativeWork` today would require
+   inventing operation ids the registry does not expose, producing a plan the bus
+   could not run: a false green. Unblocked by a timeline-assembly capability, or
+   by scoping the first lowering to the image-only subset that really does
+   compile to `slideshow.compose`. Recorded as `deferred_by_this_wave` on the
+   `task-225` board claim.
+
+*Rejected alternatives.* A per-phrase conditional chain in the resolver (the
+vocabulary would stop being reviewable data). Silently preferring the stricter
+of two conflicting bands (the system would then do something other than what was
+asked and report success). Rewriting layer styles during resolution (creative
+placement is a strategy decision). Shipping the compiler against invented
+operations (a plan the bus cannot execute is worse than no plan).
+
+*Defects the gates caught in this slice, all fixed here.* Two unreachable lexicon
+entries (ZWNJ and Persian digits, decision 2). `TimingConstraint` could not
+express a floor alone — `max_us` was required — so "at least a minute" was
+inexpressible; both bounds are now optional with a validator requiring at least
+one, and `_evaluate_timing` and `detect_collisions` treat `0` as unbounded.
+`_evaluate_pacing` returned only its first violation, contradicting the plane's
+own "report every problem" contract. The public-surface gate excluded submodules
+by hardcoded list, which broke when `semantics` arrived; it now excludes them by
+rule. The board correctly refused two active claims on
+`src/nexus_ai_agent/creative/intelligence/`, so `task-224` was released to
+`task-225`, which now carries both PRs' scope.
+
+*Evidence.* 147 plane tests green (54 IR, 20 determinism, 41 semantics, 32
+architecture boundary). Full `tests/architecture` 152 → 157 with zero regression
+(the five parametrized boundary rules each gained the new module). `tests/unit/test_agent_board.py` 18 passed and
+`tests/unit/test_docs_integrity.py` 59 passed. `ruff check`,
+`ruff format --check` and `mypy src/nexus_ai_agent/creative/intelligence` clean.
+The falsifiability test asserts the reference document violates three of the four
+intents it declares, and a second test shows that fixing the named scene clears
+that specific violation.
+
+*Honest limits.* The lexicon covers 51 surface forms across 10 meanings; anything
+outside it is declared unresolved, which is the designed behaviour and not a
+silent failure. No LLM resolver exists — the port for one is the phrase list
+itself. Nothing outside the plane constructs a `CreativeWork`, so the plane
+remains unreachable from any user command.
+
+### D-0034 — Semantic diff and semantic revision are compiler-style transforms over sealed creative nodes, never free mutation
+
+*Problem.* After D-0032 and D-0033 the plane could model and constrain a
+`CreativeWork`, but it still could not answer two core questions deterministically:
+(1) *what changed, semantically, between version A and version B?* and (2) *how
+do we apply a requested edit without falling back to ad-hoc dict mutation,
+string replacement or array-position guessing?* Without a typed diff, review of a
+creative edit collapses back to changed fields. Without a typed revision
+contract, the first caller to "shorten the reveal" or "change the CTA text"
+would be forced to mutate opaque JSON and infer identity from positions — the
+opposite of the plane's Merkle design.
+
+*Decision.*
+1. **Diff and revision are first-class plane contracts, not helper utilities.**
+   `diff_works(before, after)` emits a `WorkDiff` containing an IR delta and a
+   semantic diff. `apply_revision(work, intent)` emits a `RevisionResult`
+   containing the new sealed work, affected nodes, the same IR delta structure
+   and the semantic diff between source and result.
+2. **Diff matches by explicit lineage and stable semantic signatures, never by
+   array position.** A caller may provide `DiffLineage` pairs when a node is
+   expected to keep meaning while receiving a new content-addressed id. Absent an
+   explicit pair, the diff matches by stable semantic signatures inside a node
+   kind and reports additions/removals/modifications explicitly. Unchanged
+   subtrees are pruned at the root-id or child-id level in O(1).
+3. **Revision targets are explicit addresses or explicit role contracts; if that
+   is not enough, fail closed.** `NodeTarget` addresses a live node id directly.
+   `SceneRoleTarget` may use a narrative role plus an optional label
+   disambiguator. If multiple scenes still match, `RevisionAmbiguityError` is
+   raised; the plane never guesses from ordering, string similarity or timing.
+4. **Revisions are typed transforms over typed nodes.** The accepted edits are
+   only those the IR can actually express: scene timing, scene metadata,
+   constraint timing/pacing/quality, layer text, transition intent, audio intent
+   and effect intent. Each transform rebuilds the containing structure, reseals
+   it and then re-runs the plane's own validators. Rejected: free dict mutation,
+   arbitrary JSON patches and textual replacement across canonical JSON.
+5. **Merkle locality is a hard invariant, not a hopeful property.** Sealing now
+   preserves authored order while excluding layout-only `track_id` assignment
+   from layer semantic identity. That keeps track allocation out of authored
+   meaning while still letting actual effect-order changes rewrite identity. The
+   result is the locality revision needs: unrelated subtrees keep byte-identical
+   ids after an edit.
+6. **Semantic reapplication must replace stale resolution, not accumulate it.**
+   `apply_semantics()` now overwrites `brief.unresolved_intents` with the current
+   resolution result. A revision pass therefore does not carry old unresolved
+   phrases forward after the brief changed.
+7. **Structural validation and quality requirements are separate gates.**
+   `QualityConstraint.max_duration_us` is treated as a checkable requirement, not
+   as a structural IR-shape error, so revision and diff can preserve and compare
+   the authored intent before constraint evaluation decides whether it is met.
+
+*Rejected alternatives.* String-replacing in canonical JSON (not typed, not
+local, impossible to authorise correctly). Editing free dicts in place (breaks
+validation, makes identity churn invisible and crosses the model boundary).
+Silently picking the first role match on ambiguity (creates hidden, unauditable
+scene swaps). Treating array index, timestamp or track number as semantic
+identity (breaks Merkle locality the moment layout changes). Emitting only field
+names from diff (reviewers need meaning, not implementation trivia).
+
+*Defects the gates caught in this slice, all fixed here.* `Layer.semantics`
+carried `track_id`, so layout reassignment rewrote authored identity; it is now
+excluded from the sealed semantic payload and a determinism test pins that.
+Scene/layer/track resealing originally sorted children, which weakens locality
+for authored order; sealing now preserves order and a regression pins effect
+stack order as semantic. `apply_semantics()` used to union unresolved phrases,
+which preserved stale failures after a later successful pass. `QualityConstraint`
+`max_duration_us` was being treated as a structural validation error instead of a
+constraint violation. The creative-intelligence boundary test also hardcoded its
+submodule allowlist and was updated to resolve fully-qualified imports by rule.
+
+*Evidence.* 177 plane tests green: `tests/unit/test_creative_ir.py` 55,
+`tests/unit/test_creative_ir_determinism.py` 21,
+`tests/unit/test_creative_semantics.py` 42,
+`tests/unit/test_creative_diff.py` 4,
+`tests/unit/test_creative_revision.py` 11,
+`tests/architecture/test_creative_intelligence_boundary.py` 44. Full
+`tests/architecture` 169 passed. `tests/unit/test_agent_board.py` 18 passed and
+`tests/unit/test_docs_integrity.py` 59 passed. `ruff check`,
+`ruff format --check` and `mypy src/nexus_ai_agent/creative/intelligence`
+clean. Determinism is proven in fresh interpreters under
+`PYTHONHASHSEED=0,1,12345,999` for resulting work id, revision id, canonical JSON
+and diff digest. Three temporary mutation probes were killed by the targeted
+regression tests and then reverted: removing transition lineage normalisation
+breaks `test_an_edited_scene_does_not_report_adjacent_transitions_as_modified`,
+silently resolving an ambiguous role target breaks
+`test_ambiguous_role_target_fails_closed`, and making layer retiming a no-op
+breaks `test_scene_duration_revision_is_typed_and_deterministic`.
+
+*Honest limits.* The plane can now diff and revise only the typed concepts it
+already models. It still does not compile to an executable plan, does not decide
+where a style target should land, does not infer ambiguous intent with an LLM,
+and remains unreachable from any user command because nothing outside the plane
+constructs a `CreativeWork` yet.
 

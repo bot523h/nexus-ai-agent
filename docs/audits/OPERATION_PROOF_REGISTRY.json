@@ -1,0 +1,9 @@
+{
+  "schema": "nagar.operation_proof_registry.v1",
+  "policy": "Append-only recorded execution/artifact evidence. Entries are recorded by an execution harness or a verified gate run (never by hand-editing a projection): each entry names the operation, the kind (runtime_execution | artifact_evidence | production_like), the method that produced the evidence, the recording time, and the source revision it was observed at. The truth engine CONSUMES this file and never rewrites it; absence of an entry is honest absence of proof, not a defect to hide.",
+  "recorded_by": [
+    "python -m nexus_ai_agent.nagar --check (verification only; does not append)",
+    "CI execution harnesses that run a real operation and verify its artifact"
+  ],
+  "proofs": []
+}

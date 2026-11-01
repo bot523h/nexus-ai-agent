@@ -51,7 +51,7 @@ services:
       - name: NEXUS_WEBHOOK_SECRET
         value: "{{ .Env.NEXUS_WEBHOOK_SECRET }}"
     health_check:
-      path: /healthz
+      path: /readyz
 """
 
 
@@ -80,9 +80,9 @@ def test_manifest_rejects_worker_type(tmp_path: Path) -> None:
 
 def test_manifest_rejects_wrong_health_path(tmp_path: Path) -> None:
     results = check_manifest(
-        _write_manifest(tmp_path, VALID_MANIFEST.replace("path: /healthz", "path: /"))
+        _write_manifest(tmp_path, VALID_MANIFEST.replace("path: /readyz", "path: /"))
     )
-    assert any(r.status == "FAIL" and "/healthz" in r.detail for r in results)
+    assert any(r.status == "FAIL" and "/readyz" in r.detail for r in results)
 
 
 def test_manifest_rejects_missing_required_env(tmp_path: Path) -> None:
@@ -150,6 +150,19 @@ class _StubHandler(BaseHTTPRequestHandler):
             self._send(200, {"status": "ok"})
         elif self.path == "/healthz":
             self._send(200, {"status": "broken"})
+        elif self.path == "/readyz" and _StubHandler.mode == "healthy":
+            self._send(
+                200,
+                {
+                    "status": "ready",
+                    "version": "3.13.0",
+                    "deploy_git_sha": None,
+                    "db": {"ok": True, "backend": "sqlite", "detail": None},
+                    "startup": {"ok": True, "state": "ready", "detail": None},
+                },
+            )
+        elif self.path == "/readyz":
+            self._send(503, {"status": "not_ready", "db": {"ok": False, "detail": "db down"}})
         else:
             self._send(404, {})
 

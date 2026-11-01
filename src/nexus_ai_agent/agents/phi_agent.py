@@ -24,12 +24,16 @@ class PhiAgent(BaseAgent):
             state.get("memory_context", ""),
         )
         conv = "\n".join(f"{m['role']}: {m['content']}" for m in msgs[-8:])
-        resp = await self.llm.generate(conv + "\nassistant:", system=system)
+        resp = await self.llm.generate(
+            conv + "\nassistant:", system=system, user_id=state.get("user_id") or None
+        )
         return {**state, "response": resp, "active_persona": "phi"}
 
-    async def moderate(self, text: str) -> dict:
+    async def moderate(self, text: str, *, user_id: int | None = None) -> dict:
         system = 'Reply ONLY with JSON: {"safe": true, "reason": "ok"}'
-        raw = await self.llm.generate(f"Is this content safe?\n{text}", system=system)
+        raw = await self.llm.generate(
+            f"Is this content safe?\n{text}", system=system, user_id=user_id or None
+        )
         try:
             verdict = json.loads(raw)
         except Exception:

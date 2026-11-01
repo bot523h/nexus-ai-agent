@@ -15,7 +15,7 @@ that guard turns the suite red.
 | B — pack trust | may this capability pack execute? | PROVEN (ADR 0006; PR #101 merged as `e6b06e0`; main CI run `36314653561` green) |
 | C — execution truth | were pixels really produced, or only planned? | NOT PROVEN (open PR #97) |
 | D — evidence truth | is the coverage/CI evidence measured, or asserted? | NOT PROVEN (open PRs #95, #98) |
-| E — replay truth | can the same command commit twice? | PARTIALLY PROVEN (process-local, documented) |
+| E — replay truth | can the same command commit twice? | PARTIALLY PROVEN — process-local reservations, honestly documented in `studio/bus.py`; restart and multi-worker semantics unproven |
 
 ## Domain B interfaces (the part that is proven)
 

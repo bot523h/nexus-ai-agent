@@ -26,6 +26,7 @@ converted into PTB ``Update`` objects by ``WebhookApplicationAdapter`` in
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Any
 
@@ -41,6 +42,8 @@ DEFAULT_WEBHOOK_PORT = 8000
 TELEGRAM_SECRET_TOKEN_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 
 _UVICORN_LOG_LEVELS = {"critical", "error", "warning", "info", "debug", "trace"}
+_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+log = logging.getLogger(__name__)
 
 
 class WebhookConfigError(RuntimeError):
@@ -150,14 +153,30 @@ async def _serve_webhook(
     """Serve webhook mode on a running event loop (see :func:`run_webhook`)."""
     import uvicorn
 
-    # 1) Bring the application up.  No Updater is started, so nothing polls:
-    #    Telegram POSTs updates to /webhook/telegram instead.
-    await application.initialize()
-    job_queue = getattr(application, "bot_data", {}).get("job_queue")
-    if job_queue is not None:
-        await job_queue.resume_pending()
-    await application.start()
+    initialization_attempted = False
+    initialized = False
+    started = False
     try:
+        # 1) Bring the application up.  No Updater is started, so nothing polls:
+        #    Telegram POSTs updates to /webhook/telegram instead.
+        # PTB may acquire bot/session resources before initialize() returns.
+        # A failed attempt therefore still owns the legal shutdown boundary.
+        initialization_attempted = True
+        await application.initialize()
+        initialized = True
+        job_queue = getattr(application, "bot_data", {}).get("job_queue")
+        if job_queue is not None:
+            # task-283: webhook mode must obey the same ownership contract as
+            # polling mode.  ``post_init`` normally already acquired the lock
+            # during ``initialize()`` above; re-asserting it here is an
+            # idempotent no-op for the owner and fails closed for a process that
+            # somehow reached this line without ownership.  Recovery must never
+            # run under uncertain ownership, so this precedes
+            # ``resume_pending`` — never the other way round.
+            await job_queue.acquire_ownership()
+            await job_queue.resume_pending()
+        await application.start()
+        started = True
         # 2) Register the webhook.  Telegram will echo `webhook_secret` back
         #    in TELEGRAM_SECRET_TOKEN_HEADER on every delivery.
         await application.bot.set_webhook(url=webhook_url, secret_token=webhook_secret)
@@ -174,9 +193,92 @@ async def _serve_webhook(
         )
         server = uvicorn.Server(config)
         await server.serve()
-    finally:
-        # 4) Graceful application shutdown: stop consuming updates and close
-        #    the bot's HTTP sessions.  Runs even if serving failed, so a
-        #    platform-issued SIGTERM never leaves half-open resources behind.
-        await application.stop()
-        await application.shutdown()
+    except BaseException as primary:
+        # Cleanup after a partial initialize is legal and required by PTB's
+        # lifecycle contract.  It is bounded and attempted once.  A cleanup
+        # failure is attached to (and never replaces) the primary failure.
+        if initialization_attempted:
+            try:
+                await _cleanup_webhook_application(application, started=started, initialized=True)
+            except BaseException as cleanup_error:
+                log.exception("webhook_cleanup_failed_after_primary_error")
+                primary.add_note(
+                    f"webhook cleanup also failed: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
+        raise
+    else:
+        # Normal serving and webhook-registration failures use the same
+        # idempotent boundary as failed startup.
+        await _cleanup_webhook_application(application, started=started, initialized=initialized)
+
+
+def _webhook_job_queue(application: Any) -> Any | None:
+    """Return the queue this application owns, if it exposes one.
+
+    ``bot_data`` is PTB's per-application dict; it is read defensively because
+    cleanup also runs for partially-initialized applications.
+    """
+    try:
+        bot_data = getattr(application, "bot_data", None)
+        if not isinstance(bot_data, dict):
+            return None
+        return bot_data.get("job_queue")
+    except Exception:  # noqa: BLE001 - cleanup must never fail on a probe
+        return None
+
+
+async def _shutdown_webhook_job_queue(application: Any) -> BaseException | None:
+    """Stop the queue and release its process lock from the webhook root.
+
+    task-283 finding 2: this root calls ``acquire_ownership()`` itself, so it
+    must release it itself instead of relying on ``post_shutdown`` firing.
+    That hook is skipped when the application object is built elsewhere, and
+    it is bypassed when PTB's ``shutdown()`` raises before reaching it — in
+    both cases the flock would outlive the process's useful life and every
+    successor would fail to start.
+
+    Ordering: call it *after* ``application.stop()`` (no new work is admitted)
+    and *before* ``application.shutdown()`` (PTB resources still exist while
+    workers finish).  ``InProcessJobQueue.shutdown`` is idempotent, so the
+    later ``post_shutdown`` call is a harmless second hit.
+
+    Returns the failure instead of raising so the caller can finish the rest of
+    the cleanup boundary and attach every error to the primary one.
+    """
+    job_queue = _webhook_job_queue(application)
+    shutdown = getattr(job_queue, "shutdown", None)
+    if not callable(shutdown):
+        return None
+    try:
+        await asyncio.wait_for(shutdown(), timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+    except BaseException as exc:  # cancellation still ends the cleanup
+        return exc
+    return None
+
+
+async def _cleanup_webhook_application(
+    application: Any, *, started: bool, initialized: bool
+) -> None:
+    """Release only acquired resources, with bounded, observable cleanup.
+
+    Every step runs even when an earlier one failed (each failure is captured
+    and re-raised at the end, in acquisition order), so a broken ``stop()``
+    can no longer leave queue workers, heartbeat children or the exclusive
+    process lock behind.
+    """
+    errors: list[BaseException] = []
+    if started:
+        try:
+            await asyncio.wait_for(application.stop(), timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+        except BaseException as exc:
+            errors.append(exc)
+    queue_error = await _shutdown_webhook_job_queue(application)
+    if queue_error is not None:
+        errors.append(queue_error)
+    if initialized:
+        try:
+            await asyncio.wait_for(application.shutdown(), timeout=_SHUTDOWN_TIMEOUT_SECONDS)
+        except BaseException as exc:
+            errors.append(exc)
+    if errors:
+        raise errors[0]

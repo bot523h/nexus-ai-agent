@@ -9,8 +9,9 @@ from nexus_ai_agent.llm.provider import LLMProvider
 class FakeLLMProvider(LLMProvider):
     """Offline/test provider whose synthetic embeddings make no semantic promise."""
 
-    async def generate(self, prompt: str, system: str = "") -> str:
+    async def generate(self, prompt: str, system: str = "", *, user_id: int | None = None) -> str:
         _ = system
+        _ = user_id  # no quota seam in the offline provider
         return f"[FAKE] Response to: {prompt[:60]}"
 
     async def embed(self, text: str) -> list[float]:

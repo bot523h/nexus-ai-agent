@@ -4,7 +4,7 @@ from .base import ProviderConfig, ProviderUnavailable, StorageError, StorageProv
 from .huggingface import HuggingFaceProvider
 from .local_cache import LocalCacheProvider
 from .r2 import R2Provider
-from .rclone import RcloneProvider
+from .rclone import RcloneOperationError, RcloneProvider
 
 __all__ = [
     "ProviderConfig",
@@ -15,4 +15,5 @@ __all__ = [
     "HuggingFaceProvider",
     "R2Provider",
     "RcloneProvider",
+    "RcloneOperationError",
 ]

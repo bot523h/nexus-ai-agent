@@ -64,6 +64,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sqlite3
 import threading
 from collections.abc import Awaitable, Callable, Iterator, Mapping
@@ -118,6 +119,105 @@ from nexus_ai_agent.provenance.observer import CausalObserver
 
 JobHandler = Callable[[dict[str, object]], Awaitable[dict[str, object]]]
 JobCompletionHook = Callable[["JobCompletion"], Awaitable[None]]
+
+
+try:  # pragma: no cover - import success, not a test, selects the backend
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    fcntl = None  # type: ignore[assignment]
+
+#: Whether ``fcntl`` is importable here.  ``bool(...)`` keeps this a plain
+#: ``bool`` so a static checker cannot fold the non-POSIX branch away and then
+#: report the guard itself as dead code.
+_HAS_FCNTL: bool = bool(fcntl)
+
+
+def _pid_alive(pid: int) -> bool:
+    """Check if a process is alive (best-effort, cross-platform).
+
+    **Diagnostics only.**  This is never treated as proof of lock ownership:
+    PIDs are recycled, so a live PID may name a different process than the
+    recorded owner and a dead PID may be the *new* owner of a recycled number.
+    Exclusive ownership is proved by :func:`_lock_descriptor`, never by this.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists but not ours
+    except OSError:  # pragma: no cover - platform-specific kill() failure
+        return False
+    return True
+
+
+class QueueOwnershipError(RuntimeError):
+    """Raised when another process already owns this queue.
+
+    Exclusive ownership is an **operating-system-managed advisory lock** on a
+    single rendezvous file (``fcntl.flock`` with ``LOCK_EX | LOCK_NB``).  A
+    platform without ``fcntl`` fails closed rather than degrading to a weaker
+    mechanism.  The lock lives on an open file
+    descriptor held by the owning process, so the kernel releases it when that
+    process dies — there is no stale-lock reclamation step, therefore no
+    stale-detection/deletion race and no PID-reuse hazard.
+
+    The ownership invariant, in one sentence: *at most one live process holds
+    the exclusive lock on the sidecar's rendezvous inode, and a process holds
+    it for exactly the interval between :meth:`acquire_ownership` and
+    :meth:`shutdown` (or its own death).*
+
+    A second process attempting to acquire the same lock receives this error
+    and must not start recovery or execute anything.
+    """
+
+
+#: Suffix of the rendezvous file that backs the queue's exclusive lock.
+_LOCK_FILE_SUFFIX = ".lock"
+
+
+def _require_posix_locking() -> None:
+    """Fail closed when this platform has no OS-managed advisory lock.
+
+    NEXUS targets Linux (Dockerfile, Koyeb, every CI job runs
+    ``ubuntu-latest``), where ``fcntl.flock`` gives the property the ownership
+    invariant needs: the lock belongs to the open file description and the
+    kernel drops it when the owner dies.
+
+    A platform without ``fcntl`` gets **no** queue ownership rather than a
+    weaker substitute.  Silently degrading to a lock-file/PID scheme is exactly
+    the failure this module was fixed to remove, and an untested Windows
+    ``msvcrt`` branch would be code nobody runs.  Ownership is mandatory, so
+    the honest outcome is a refusal to start.
+    """
+    if not _HAS_FCNTL:  # pragma: no cover - non-POSIX
+        raise QueueOwnershipError(
+            "this platform provides no fcntl.flock; exclusive queue ownership "
+            "is unsupported here (NEXUS targets POSIX/Linux)"
+        )
+
+
+def _lock_descriptor(fd: int, *, blocking: bool) -> None:
+    """Take an exclusive OS lock on ``fd`` or raise :class:`OSError`.
+
+    ``flock`` semantics are the important part: the lock belongs to the open
+    file description, not to a path and not to a PID.  A crashed or killed
+    owner's descriptor is closed by the kernel and the lock disappears with it.
+    """
+    _require_posix_locking()
+    flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+    fcntl.flock(fd, flags)
+
+
+def _unlock_descriptor(fd: int) -> None:
+    """Release the OS lock held on ``fd`` (idempotent, never raises)."""
+    if not _HAS_FCNTL:  # pragma: no cover - non-POSIX
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:  # pragma: no cover - already released/closed
+        pass
+
 
 #: A verifier re-measures a handler result against the filesystem. It must
 #: be sync (the queue runs it in a worker thread) and side-effect free.
@@ -188,6 +288,12 @@ logger = logging.getLogger(__name__)
 #: the result payload — the traceability link from Job Result back to the
 #: verified artifact identities.
 VERIFICATION_RESULT_KEY = "artifact_verification"
+
+#: Cadence for the queue-owned liveness witness. Recovery has no default stale
+#: window; callers that opt into expiry-gated takeover should choose a window
+#: comfortably larger than this cadence (>= 30s gives six refresh opportunities).
+#: The heartbeat is evidence only: it never grants or extends execution authority.
+HEARTBEAT_INTERVAL_SECONDS = 5.0
 
 
 class _AttemptTransitionError(RuntimeError):
@@ -300,12 +406,237 @@ class InProcessJobQueue:
         # fencing tokens before cancelling tasks, so it can never infer an
         # attempt from a job id and accidentally reset a peer's newer work.
         self._local_claims: dict[str, tuple[asyncio.Task[None], ExecutionClaim]] = {}
+        # Owner task -> its bounded heartbeat child. The owner done-callback
+        # cancels the child; shutdown also snapshots and awaits every child so
+        # cancellation cannot leave an orphan refresh loop behind.
+        self._heartbeat_tasks: dict[asyncio.Task[None], asyncio.Task[None]] = {}
         self._db_lock = threading.Lock()
+        # In-flight artifact publications.  ``asyncio.to_thread`` hands the
+        # work to a ThreadPoolExecutor thread; cancelling the awaiting task
+        # does NOT interrupt that thread, so shutdown must explicitly *drain*
+        # every registered future before it releases the exclusive process
+        # lock.  Otherwise a successor could acquire ownership while this
+        # process's old publication was still renaming files.
+        self._publication_threads: set[asyncio.Future[dict[str, object]]] = set()
+        # Set as soon as shutdown starts: no *new* publication may begin after
+        # that point (already-running ones are drained, never abandoned).
+        self._publishing_closed = False
+        self._shutdown_lock: asyncio.Lock | None = None
+        self._shutdown_complete = False
         self._memory_connection: sqlite3.Connection | None = None
         if self._sqlite_path == ":memory:":
             self._memory_connection = sqlite3.connect(":memory:", check_same_thread=False)
             self._memory_connection.row_factory = sqlite3.Row
         self._initialize_db()
+        # Phase 3 (hardened): OS-managed exclusive ownership.  Acquired
+        # explicitly via acquire_ownership() — never in __init__ or enqueue —
+        # so tests that create several instances for CAS-fencing coverage are
+        # not accidentally serialised.  The composition root must acquire the
+        # lock *before* startup recovery; see docs/architecture/JOB_LIFECYCLE.md.
+        self._lock_fd: int | None = None
+        self._lock_file: Path | None = None
+
+    def _lock_path(self) -> Path:
+        """Path of the rendezvous file backing this queue's exclusive lock."""
+        return self.db_path.parent / (self.db_path.name + _LOCK_FILE_SUFFIX)
+
+    def _acquire_flock(self) -> int:
+        """Acquire exclusive process ownership of this queue's sidecar.
+
+        Implements the :class:`QueueOwnershipError` invariant with an
+        operating-system-managed advisory lock::
+
+            fd = open(<sidecar>.lock, O_CREAT | O_RDWR)   # stable rendezvous
+            flock(fd, LOCK_EX | LOCK_NB)                  # held by this fd
+            write PID into fd                             # diagnostics only
+
+        Why this is crash-safe and race-free, and what the previous PID
+        lock-file implementation got wrong:
+
+        * **No stale-lock reclamation.**  The kernel owns the lock's lifetime.
+          If the owner crashes, ``SIGKILL``-dies or is ``os._exit``-ed, its
+          descriptors close and the lock vanishes.  There is no
+          "is the PID alive? → unlink → retry" window, which is the window in
+          which two processes could previously both delete a *live* lock file
+          and both create their own — two owners, one sidecar.
+        * **No PID-reuse hazard.**  A recycled PID cannot inherit or forge
+          ownership, because ownership is a descriptor property, not a number.
+        * **No crash between create and write.**  A lock file with no (or a
+          truncated) PID is still a perfectly good rendezvous inode: the lock
+          is decided by ``flock``, and the PID content is only a diagnostic
+          hint.  The old code parsed that content and treated a parse failure
+          as "stale", i.e. it *granted* ownership on the basis of unreadable
+          evidence.
+        * **The rendezvous file is never deleted.**  Unlinking a lock file on
+          release is the classic way to manufacture two lockers on two
+          different inodes: process A holds inode 1, A releases *and unlinks*,
+          B creates inode 2 and locks it, while C (which opened the path
+          before the unlink) locks the now-orphaned inode 1.  B and C both
+          believe they are the owner.  Keeping one inode forever removes that
+          class of bug; the file is a lock *anchor*, not a lease record.
+
+        Raises :class:`QueueOwnershipError` if another live process holds the
+        lock or the rendezvous file cannot be opened.
+        """
+        lock_path = self._lock_path()
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise QueueOwnershipError(f"queue lock directory unavailable: {exc}") from exc
+
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError as exc:
+            raise QueueOwnershipError(f"queue lock file unavailable: {exc}") from exc
+
+        try:
+            _lock_descriptor(fd, blocking=False)
+        except OSError:
+            # Another live process holds the lock.  Read its diagnostic PID
+            # only to make the error message useful — never to decide.
+            os.close(fd)
+            raise QueueOwnershipError(
+                f"queue already owned by another live process "
+                f"(lock: {lock_path}, recorded pid hint: {self._read_owner_hint(lock_path)})"
+            ) from None
+        except QueueOwnershipError:
+            os.close(fd)
+            raise
+
+        # Diagnostic annotation only.  A failure here must not drop a lock we
+        # legitimately hold, so it is best-effort by construction.
+        try:
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, str(os.getpid()).encode("ascii"))
+            os.fsync(fd)
+        except OSError:  # pragma: no cover - exotic filesystems
+            pass
+
+        self._lock_file = lock_path
+        return fd
+
+    @staticmethod
+    def _read_owner_hint(lock_path: Path) -> str:
+        """Best-effort recorded-PID hint for diagnostics (never a decision)."""
+        try:
+            raw = lock_path.read_text().strip()
+        except OSError:
+            return "unreadable"
+        return raw or "unwritten"
+
+    def mark_unknown(self, claim: ExecutionClaim) -> None:
+        """Record an UNKNOWN outcome for the current attempt.
+
+        Phase 4 safe retry boundary: when an external operation's outcome
+        is unknown (crash during execution, lost response), the handler
+        must call this to signal that automatic retry is unsafe.  The
+        job is not automatically retried until reconcile() is called
+        with the previous outcome evidence.
+
+        This prevents non-idempotent operations from being silently
+        re-executed when the previous execution's outcome is unknown.
+        """
+        row = self._fetch_row(claim.job_id)
+        if row is None:
+            return
+        self._record_unknown_marker(claim, str(row["job_type"]))
+
+    def _record_unknown_marker(self, claim: ExecutionClaim, job_type: str) -> None:
+        """Persist an UNKNOWN marker on the job row."""
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE nexus_job_queue SET unknown_outcome = 'unknown' WHERE id = ?",
+                (claim.job_id,),
+            )
+
+    def is_unknown(self, job_id: str) -> bool:
+        """Check if a job has an UNKNOWN outcome marker.
+
+        Returns True if the job row has unknown_outcome == 'unknown',
+        meaning the previous attempt's outcome is unknown and
+        automatic retry is unsafe until reconcile() is called.
+        """
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT unknown_outcome FROM nexus_job_queue WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            return row is not None and row["unknown_outcome"] == "unknown"
+
+    def reconcile(self, job_id: str, outcome: str, evidence: dict | None = None) -> bool:
+        """Reconcile a previous UNKNOWN outcome before retry.
+
+        Phase 4: the previous outcome must be reconciled before the next
+        attempt starts.  The caller provides the actual outcome ("succeeded"
+        or "failed") and optional evidence.  This updates the unknown_outcome
+        column to record the reconciliation.
+
+        Returns True if reconciliation succeeded.
+        """
+        marker = f"reconciled:{outcome}"
+        if evidence:
+            marker += f":{json.dumps(evidence)}"
+        with self._connection() as conn:
+            conn.execute(
+                "UPDATE nexus_job_queue SET unknown_outcome = ? WHERE id = ?",
+                (marker, job_id),
+            )
+        return True
+
+    async def acquire_ownership(self) -> None:
+        """Acquire exclusive queue ownership before any recovery or execution.
+
+        Phase 3 (hardened): the application calls this when starting the queue
+        to ensure exactly one live process owns the sidecar.  Raises
+        :class:`QueueOwnershipError` if another live process holds the lock —
+        callers must treat that as fatal and **not** proceed to
+        ``resume_pending`` (recovery under uncertain ownership is how two
+        processes recover and execute the same row).
+
+        Idempotent for the owning process: a second call is a no-op while the
+        lock is held.  Safe to call after a failed attempt.
+
+        Tests that create multiple queue instances for fencing tests should
+        NOT call this method — they test multi-process coexistence via CAS
+        fencing, not exclusive ownership.
+        """
+        if self._sqlite_path == ":memory:":
+            return
+        if self._lock_fd is None:
+            self._lock_fd = await asyncio.to_thread(self._acquire_flock)
+
+    @property
+    def owns_process_lock(self) -> bool:
+        """Whether this instance currently holds the exclusive process lock."""
+        return self._lock_fd is not None
+
+    def _release_flock(self) -> None:
+        """Release the exclusive process lock (idempotent, safe to double-call).
+
+        Releases the OS lock and closes the descriptor.  The rendezvous file
+        itself is deliberately preserved (see :meth:`_acquire_flock`): deleting
+        it would let a later opener lock a *different* inode while a
+        concurrent opener still holds the old one.
+
+        Every unexpected failure is swallowed: releasing ownership must never
+        turn a clean shutdown into a crash, and a descriptor we fail to unlock
+        is still released by the kernel when the process exits.
+        """
+        fd, lock_path = self._lock_fd, self._lock_file
+        # Clear the state first so a re-entrant call cannot act on a descriptor
+        # that is already being closed.
+        self._lock_fd = None
+        self._lock_file = None
+        if fd is None:
+            return
+        _unlock_descriptor(fd)
+        try:
+            os.close(fd)
+        except OSError:  # pragma: no cover - already closed
+            pass
+        if lock_path is not None:  # pragma: no cover - diagnostics only
+            logger.debug("queue_ownership_released lock_file=%s", lock_path)
 
     def register_handler(self, job_type: str, handler: JobHandler) -> None:
         """Register the explicit application handler for ``job_type``."""
@@ -714,17 +1045,17 @@ class InProcessJobQueue:
         rejected by every fenced CAS.
 
         ``stale_after=None`` (process-startup recovery — the bot's
-        ``post_init``/webhook startup) takes over every orphaned row: the
-        composition roots guarantee one queue-owning process per sidecar, so
-        at startup the previous owner is dead by construction.  With
-        ``stale_after`` set, only in-flight rows whose ``started_at`` is
-        strictly older than the window are taken over (expiry-gated takeover —
-        the safe form when a live peer might still own recent rows); a row
-        whose age cannot be proven (missing ``started_at``) is refused exactly
-        like a fresh one (ambiguity fails closed).  ``pending`` rows are always
-        re-scheduled.  Rows this very process is executing are never taken over
-        (that would strand its own live execution).  Terminal rows are never
-        touched.
+        ``post_init``/webhook startup) relies on the composition roots'
+        exclusive queue-owning process per sidecar: the previous owner is dead
+        by construction, so a row with a valid queue-owned heartbeat may be
+        reclaimed regardless of heartbeat age. Legacy in-flight rows whose
+        heartbeat is UNKNOWN are still refused: startup is not permission to
+        invent liveness or resurrect an unprovable attempt. With
+        ``stale_after`` set, only in-flight rows whose valid heartbeat is
+        strictly older than the window are taken over; fresh, equal-boundary
+        and UNKNOWN heartbeats are refused (ambiguity fails closed).
+        ``pending`` rows are always re-scheduled. Rows this very process is
+        executing are never taken over. Terminal rows are never touched.
         """
         live = {job_id for job_id, task in self._tasks.items() if not task.done()}
         reset = await asyncio.to_thread(self._reset_unfinished, stale_after, live)
@@ -770,6 +1101,18 @@ class InProcessJobQueue:
         return job_ids
 
     async def recover_job(self, job_id: str, *, stale_after: timedelta | None = None) -> list[str]:
+        """Recover a job for retry.
+
+        Phase 4: jobs with UNKNOWN outcomes are NOT automatically retried.
+        The previous outcome must be reconciled first via reconcile().
+        """
+        if await asyncio.to_thread(self.is_unknown, job_id):
+            logger.warning(
+                "job_recovery_skipped_unknown job_id=%s "
+                "reason=unknown_outcome_requires_reconciliation",
+                job_id,
+            )
+            return []
         """Recover **one** orphaned job (job-scoped, expiry-gated takeover).
 
         Unlike :meth:`resume_pending` (whole-sidecar startup recovery), this is
@@ -779,9 +1122,10 @@ class InProcessJobQueue:
         ``stale_after=None`` startup takeover: with ``stale_after=None`` the
         call observes only and takes nothing over (a runtime caller must pass
         an explicit stale window, otherwise a live peer could still own the
-        row).  When a window is supplied, only a row whose ``started_at`` is
-        strictly older than it is taken over; a row whose age cannot be proven
-        (missing ``started_at``) is refused exactly like a fresh one.
+        row). When a window is supplied, only a row whose valid queue-owned
+        heartbeat is strictly older than the cutoff is taken over. Fresh,
+        equal-boundary, missing, null, malformed and future heartbeats are
+        refused; ``started_at`` age is never a fallback liveness proof.
 
         Returns the list of job ids actually recovered (empty when nothing was
         eligible).  Terminal rows are never touched.
@@ -845,9 +1189,12 @@ class InProcessJobQueue:
             return False  # unknown durable spelling: never touch it (fail-closed)
         if status not in {JobStatus.PROCESSING, JobStatus.VERIFYING}:
             return False  # terminal rows are never reopened; pending was never owned
-        attempt = int(row["attempt"] or 0)
-        if attempt < 1:
+        raw_attempt = row["attempt"]
+        if not isinstance(raw_attempt, int) or isinstance(raw_attempt, bool) or raw_attempt < 1:
             return False  # an in-flight row always carries a minted token
+        attempt = raw_attempt
+        if isinstance(expected_attempt, bool) or expected_attempt < 1:
+            return False
         if attempt != expected_attempt:
             # A stale identity (or a lost race): the current owner is a newer
             # attempt.  Never mutate a newer execution on behalf of an older one.
@@ -876,16 +1223,35 @@ class InProcessJobQueue:
         return True
 
     async def shutdown(self) -> None:
-        """Cancel local tasks and leave their own attempts recoverable.
+        """Stop execution, reopen owned attempts, then release the lock.
 
-        Snapshot each live task's *reserved attempt* before cancellation.
-        The worker's ``CancelledError`` path normally reopens that same fenced
-        attempt; this fallback handles cancellation in the small pre-handler
-        window.  The reservation await is shielded too: if shutdown cancels it,
-        the minted claim is awaited and reopened under its own fence before the
-        cancellation propagates. Both paths use the original ``ExecutionClaim``
-        CAS, never a job-id-only sweep, so a peer's newer attempt remains untouched.
+        Ordering is the contract, not an implementation detail:
+
+        1. close publication (no *new* publish may begin),
+        2. cancel and await every local worker task,
+        3. cancel and await every heartbeat child,
+        4. **drain in-flight publication threads** — cancelling a task that
+           awaits ``run_in_executor`` does not stop the thread, so an
+           un-drained publication could rename files after the lock was
+           released and a successor owned the queue,
+        5. reopen this queue's reserved attempts under their own fencing
+           tokens (never a job-id-only sweep),
+        6. release the exclusive process lock.
+
+        Idempotent: repeated or concurrent calls run the body once.  A second
+        call is a no-op rather than a second reopen/release pass.
         """
+        if self._shutdown_lock is None:
+            self._shutdown_lock = asyncio.Lock()
+        async with self._shutdown_lock:
+            if self._shutdown_complete:
+                return
+            await self._shutdown_once()
+            self._shutdown_complete = True
+
+    async def _shutdown_once(self) -> None:
+        """Single-shot body of :meth:`shutdown`; see its ordering contract."""
+        self._publishing_closed = True
         tasks = list(self._tasks.values())
         task_set = set(tasks)
         local_claims = {
@@ -893,10 +1259,19 @@ class InProcessJobQueue:
             for job_id, (owner, claim) in self._local_claims.items()
             if owner in task_set
         }
+        heartbeats = list(self._heartbeat_tasks.values())
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        for heartbeat in heartbeats:
+            heartbeat.cancel()
+        if heartbeats:
+            await asyncio.gather(*heartbeats, return_exceptions=True)
+        # Workers are gone, but their executor threads are not: drain them
+        # before the row reopen below, so a drained publication cannot land
+        # after this attempt has been marked pending.
+        await self._drain_publications()
         for job_id, claim in local_claims.items():
             if not await asyncio.to_thread(self._mark_pending, claim):
                 continue  # already settled, terminal, or superseded by a peer
@@ -912,6 +1287,12 @@ class InProcessJobQueue:
                     occurred_at=_now(),
                 )
             )
+        # Phase 3: release the process lock only *after* the workers, their
+        # heartbeat children, and every in-flight publication thread above have
+        # stopped.  Releasing earlier would let a second process acquire
+        # ownership and start recovery while this one still had side effects
+        # in flight.
+        self._release_flock()
 
     def _schedule(self, job_id: str) -> None:
         existing = self._tasks.get(job_id)
@@ -926,8 +1307,106 @@ class InProcessJobQueue:
             local = self._local_claims.get(job_id)
             if local is not None and local[0] is completed:
                 self._local_claims.pop(job_id, None)
+            heartbeat = self._heartbeat_tasks.get(completed)
+            if heartbeat is not None:
+                heartbeat.cancel()
 
         task.add_done_callback(forget_task)
+
+    def _start_heartbeat(self, owner: asyncio.Task[None], claim: ExecutionClaim) -> None:
+        """Attach one attempt-scoped liveness witness to a reserved owner."""
+        heartbeat = asyncio.create_task(self._heartbeat_loop(owner, claim))
+        self._heartbeat_tasks[owner] = heartbeat
+
+        def forget_heartbeat(completed: asyncio.Task[None]) -> None:
+            if self._heartbeat_tasks.get(owner) is completed:
+                self._heartbeat_tasks.pop(owner, None)
+
+        heartbeat.add_done_callback(forget_heartbeat)
+
+    async def _wait_for_heartbeat(self) -> None:
+        """Bounded production cadence; tests may gate this private seam."""
+        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
+    async def _heartbeat_loop(self, owner: asyncio.Task[None], claim: ExecutionClaim) -> None:
+        """Refresh only while this exact owner/attempt is in flight.
+
+        A lost fence or unreadable/invalid heartbeat stops the witness. A DB
+        error is logged degradation: never synthesize a timestamp, never retry
+        the job, and never turn the witness into execution authority. The
+        in-flight UPDATE is shielded so cancellation cannot abandon a CAS that
+        already began in its worker thread.
+        """
+        while not owner.done():
+            await self._wait_for_heartbeat()
+            if owner.done():
+                return
+            update = asyncio.create_task(asyncio.to_thread(self._refresh_heartbeat, claim))
+            try:
+                refreshed = await asyncio.shield(update)
+            except asyncio.CancelledError:
+                try:
+                    await asyncio.shield(update)
+                except Exception:  # noqa: BLE001 - witness failure is degradation
+                    logger.warning(
+                        "job_heartbeat_refresh_failed_during_cancellation job_id=%s attempt=%s",
+                        claim.job_id,
+                        claim.attempt,
+                        exc_info=True,
+                    )
+                raise
+            except Exception:  # noqa: BLE001 - never fabricate liveness evidence
+                logger.warning(
+                    "job_heartbeat_refresh_failed job_id=%s attempt=%s",
+                    claim.job_id,
+                    claim.attempt,
+                    exc_info=True,
+                )
+                return
+            if not refreshed:
+                logger.info(
+                    "job_heartbeat_stopped job_id=%s attempt=%s (fence or evidence lost)",
+                    claim.job_id,
+                    claim.attempt,
+                )
+                return
+
+    def _refresh_heartbeat(self, claim: ExecutionClaim) -> bool:
+        """Attempt-scoped CAS for activity evidence, not a new operation."""
+        now = _utc_now()
+        with self._db_lock, self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT heartbeat_at FROM nexus_job_queue
+                WHERE id = ? AND status IN (?, ?) AND attempt = ?
+                """,
+                (
+                    claim.job_id,
+                    JobStatus.PROCESSING.value,
+                    JobStatus.VERIFYING.value,
+                    claim.attempt,
+                ),
+            ).fetchone()
+            if row is None:
+                return False
+            previous = _parse_heartbeat(row["heartbeat_at"], now)
+            if previous is None:
+                return False
+            cursor = connection.execute(
+                """
+                UPDATE nexus_job_queue SET heartbeat_at = ?
+                WHERE id = ? AND status IN (?, ?) AND attempt = ? AND heartbeat_at = ?
+                """,
+                (
+                    now.isoformat(),
+                    claim.job_id,
+                    JobStatus.PROCESSING.value,
+                    JobStatus.VERIFYING.value,
+                    claim.attempt,
+                    row["heartbeat_at"],
+                ),
+            )
+            return cursor.rowcount == 1
 
     @staticmethod
     def _is_typed_render_preflight_error(exc: BaseException) -> bool:
@@ -1072,6 +1551,7 @@ class InProcessJobQueue:
         if owner is None:  # private worker entry point must be task-owned
             raise RuntimeError("job processing requires an asyncio task")
         self._local_claims[job_id] = (owner, claim)
+        self._start_heartbeat(owner, claim)
         logger.info("job_processing job_id=%s type=%s attempt=%d", job_id, job_type, claim.attempt)
         await self._record(
             CausalEvent(
@@ -1423,14 +1903,17 @@ class InProcessJobQueue:
                     )
                 )
                 if publication is not None and publication.finalize is not None and published:
-                    await self._finalize_safely(publication, payload, result)
+                    await self._finalize_safely(publication, payload, result, claim)
             else:
                 if publication is not None and outcome.reason_code != "stale_execution":
                     # A refusal retracts this attempt (staged temp before
                     # publication; restore of the previous artifact after
                     # a refused re-probe).  A fenced-off execution retracts
                     # nothing: the destination is not its to touch.
-                    await asyncio.to_thread(publication.retract, payload, result)
+                    retract_context = dict(result)
+                    retract_context["_queue_job_id"] = claim.job_id
+                    retract_context["_queue_attempt"] = claim.attempt
+                    await asyncio.to_thread(publication.retract, payload, retract_context)
                 reason = str(outcome.reason_code)
                 status = failure_status(classify_verification_reason(reason))
                 await self._fail_owned(
@@ -1511,6 +1994,68 @@ class InProcessJobQueue:
             target.value,
         )
 
+    async def _publish_in_thread(
+        self,
+        publication: ArtifactPublication,
+        payload: dict[str, object],
+        publish_context: dict[str, object],
+    ) -> dict[str, object]:
+        """Run one ``publication.publish`` on a tracked executor thread.
+
+        Two details make cancellation safe:
+
+        * the future handed back by ``run_in_executor`` is the *asyncio*
+          wrapper.  Cancelling the awaiting task cancels that wrapper — it
+          becomes ``done`` while the thread is still running — so the await is
+          wrapped in :func:`asyncio.shield`, which cancels only the outer
+          await and leaves the wrapper (and therefore the drain handle) alive;
+        * the future is registered *before* the first await and unregistered by
+          its done-callback, i.e. when the thread has really finished.  A
+          cancelled awaiter therefore cannot drop a publication from
+          :meth:`_drain_publications`.
+        """
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[dict[str, object]] = loop.run_in_executor(
+            None, publication.publish, payload, publish_context
+        )
+        self._publication_threads.add(future)
+        future.add_done_callback(self._publication_settled)
+        return await asyncio.shield(future)
+
+    def _publication_settled(self, future: asyncio.Future[dict[str, object]]) -> None:
+        """Forget a finished publication and consume its outcome.
+
+        Retrieving the exception keeps a publication failure that nobody is
+        left to await from surfacing as an unhandled-future warning.
+        """
+        self._publication_threads.discard(future)
+        if future.cancelled():
+            return
+        try:
+            future.exception()
+        except Exception:  # noqa: BLE001 - the outcome is consumed, not re-raised
+            pass
+
+    async def _drain_publications(self) -> None:
+        """Wait for every in-flight publication thread to finish.
+
+        Called by :meth:`shutdown` *after* worker tasks are cancelled and
+        gathered but *before* the process lock is released.  A publication is
+        finite filesystem work (stage → rename → backup prune), so waiting on
+        it is bounded by that work; refusing to wait is what allowed an old
+        owner's rename to race a new owner.
+        """
+        while True:
+            pending = list(self._publication_threads)
+            if not pending:
+                return
+            await asyncio.gather(*pending, return_exceptions=True)
+            # Every publication is started by a worker task, and every worker
+            # task has already finished here; the set is normally empty now.
+            # The loop just guards against a done-callback racing this read.
+            if not self._publication_threads:
+                return
+
     async def _publish_and_reprobe(
         self,
         claim: ExecutionClaim,
@@ -1530,6 +2075,24 @@ class InProcessJobQueue:
         documented in JOB_LIFECYCLE.md §4 and bounded by the takeover rule
         (only startup recovery / expiry-gated reclaim can move a live row).
         """
+        if self._publishing_closed:
+            # Shutdown already started: publishing now could rename an
+            # artifact for this attempt *after* the process lock is released
+            # and a successor owns the queue.  Fail closed instead — the row
+            # is reopened by shutdown and recovery re-runs it.
+            return (
+                result,
+                VerificationOutcome(
+                    ok=False,
+                    reason_code="shutdown_in_progress",
+                    summary={
+                        "status": "failed",
+                        "reason_code": "shutdown_in_progress",
+                        "detail": "shutdown started before publication; nothing published",
+                    },
+                ),
+                False,
+            )
         if not await asyncio.to_thread(self._owns_execution, claim, JobStatus.VERIFYING):
             return (
                 result,
@@ -1544,8 +2107,18 @@ class InProcessJobQueue:
                 ),
                 False,
             )
+        # Inject the queue-minted execution identity into the publication
+        # context (task-255 Phase 2 Limitation A). The callback receives the
+        # authoritative job_id and attempt (fencing token) minted by the
+        # reservation CAS — never a derived hash or a payload-constructed
+        # identity.  The ``_queue_`` prefix marks these as queue-internal
+        # metadata; the callback reads them and the published result carries
+        # them as provenance.
+        publish_context = dict(result)
+        publish_context["_queue_job_id"] = claim.job_id
+        publish_context["_queue_attempt"] = claim.attempt
         try:
-            patch = await asyncio.to_thread(publication.publish, payload, result)
+            patch = await self._publish_in_thread(publication, payload, publish_context)
         except Exception as exc:  # noqa: BLE001 - publication failure is a refusal
             logger.warning("artifact publish failed; keeping staged temp retracted: %s", exc)
             return (
@@ -1585,11 +2158,21 @@ class InProcessJobQueue:
         publication: ArtifactPublication,
         payload: dict[str, object],
         result: dict[str, object],
+        claim: ExecutionClaim | None = None,
     ) -> None:
-        """Drop the publication backup after the durable commit (never fatal)."""
+        """Drop the publication backup after the durable commit (never fatal).
+
+        When ``claim`` is provided, the queue-minted execution identity is
+        injected into the finalize context so the callback can scope its
+        cleanup to the correct attempt (task-255 Phase 2 Limitation A).
+        """
         assert publication.finalize is not None
+        finalize_context = dict(result)
+        if claim is not None:
+            finalize_context["_queue_job_id"] = claim.job_id
+            finalize_context["_queue_attempt"] = claim.attempt
         try:
-            await asyncio.to_thread(publication.finalize, payload, result)
+            await asyncio.to_thread(publication.finalize, payload, finalize_context)
         except Exception:  # noqa: BLE001 - the job is already durably COMPLETED
             logger.warning("artifact publication finalize failed (backup left)", exc_info=True)
 
@@ -1663,6 +2246,11 @@ class InProcessJobQueue:
                 "transaction_id": "TEXT",
                 "artifact_passport_json": "TEXT",
                 "attempt_history_json": "TEXT NOT NULL DEFAULT '[]'",
+                # Liveness is never derived from started_at or migration time.
+                "heartbeat_at": "TEXT",
+                # Phase 4: UNKNOWN outcome marker (null=clean, 'unknown'=blocked,
+                # 'reconciled:<outcome>'=resolved with evidence)
+                "unknown_outcome": "TEXT",
             }
             for name, declaration in additions.items():
                 if name not in columns:
@@ -2134,15 +2722,19 @@ class InProcessJobQueue:
         job-scoped recovery primitive); ``None`` sweeps the whole sidecar.
         """
         in_flight = (JobStatus.PROCESSING.value, JobStatus.VERIFYING.value)
-        cutoff = (
-            (datetime.now(timezone.utc) - stale_after).isoformat()
-            if stale_after is not None
-            else None
-        )
+        now = _utc_now()
+        cutoff: datetime | None = None
+        if stale_after is not None:
+            if stale_after < timedelta(0):
+                raise ValueError("stale_after must not be negative")
+            try:
+                cutoff = now - stale_after
+            except OverflowError:
+                return []  # an unrepresentable window proves nothing
         with self._db_lock, self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT id, job_type, status, started_at, attempt, attempt_history_json
+                SELECT id, job_type, status, started_at, heartbeat_at, attempt, attempt_history_json
                 FROM nexus_job_queue
                 WHERE status IN (?, ?, ?)
                 ORDER BY created_at, id
@@ -2158,16 +2750,18 @@ class InProcessJobQueue:
                 if only is not None and job_id not in only:
                     continue  # job-scoped sweep: never touch unrelated rows
                 if str(row["status"]) in in_flight:
-                    started_at = row["started_at"]
-                    if cutoff is not None:
-                        # Expiry-gated mode: staleness must be *proven*.  A row
-                        # whose age cannot be established (missing ``started_at``)
-                        # is ambiguous, and ambiguity fails closed — only rows
-                        # strictly older than the window are eligible; a recent
-                        # (or unproven) row may still be owned by a live peer.
-                        if started_at is None or started_at >= cutoff:
-                            continue
-                    current_attempt = int(row["attempt"] or 0)
+                    heartbeat_raw = row["heartbeat_at"]
+                    heartbeat = _parse_heartbeat(heartbeat_raw, now)
+                    if heartbeat is None:
+                        continue  # UNKNOWN is neither proof of life nor death
+                    if cutoff is not None and heartbeat >= cutoff:
+                        continue  # strict boundary: equality is not stale
+                    raw_attempt = row["attempt"]
+                    if not isinstance(raw_attempt, int) or isinstance(raw_attempt, bool):
+                        continue
+                    current_attempt = raw_attempt
+                    if current_attempt < 1:
+                        continue  # no minted fencing token: no automatic takeover
                     raw_history = row["attempt_history_json"]
                     try:
                         history = self._decode_attempt_history(str(raw_history or "[]"))
@@ -2197,8 +2791,10 @@ class InProcessJobQueue:
                     cursor = connection.execute(
                         """
                         UPDATE nexus_job_queue
-                        SET status = ?, started_at = NULL, attempt_history_json = ?
+                        SET status = ?, started_at = NULL, heartbeat_at = NULL,
+                            attempt_history_json = ?
                         WHERE id = ? AND status IN (?, ?) AND attempt = ?
+                          AND heartbeat_at = ?
                         """,
                         (
                             JobStatus.PENDING.value,
@@ -2206,6 +2802,7 @@ class InProcessJobQueue:
                             job_id,
                             *in_flight,
                             current_attempt,
+                            heartbeat_raw,
                         ),
                     )
                     if cursor.rowcount != 1:
@@ -2250,14 +2847,15 @@ class InProcessJobQueue:
         the attempt value this reservation minted) or ``None`` if the CAS
         did not commit.
         """
+        now = _now()
         with self._db_lock, self._connection() as connection:
             cursor = connection.execute(
                 """
                 UPDATE nexus_job_queue
-                SET status = ?, started_at = ?, attempt = attempt + 1
+                SET status = ?, started_at = ?, heartbeat_at = ?, attempt = attempt + 1
                 WHERE id = ? AND status = ?
                 """,
-                (JobStatus.PROCESSING.value, _now(), job_id, JobStatus.PENDING.value),
+                (JobStatus.PROCESSING.value, now, now, job_id, JobStatus.PENDING.value),
             )
             if cursor.rowcount != 1:
                 return None
@@ -2273,7 +2871,7 @@ class InProcessJobQueue:
                     "attempt": attempt_number,
                     "attempt_id": identifier,
                     "status": "processing",
-                    "started_at": _now(),
+                    "started_at": now,
                     "verifying_at": None,
                     "verified_at": None,
                     "finished_at": None,
@@ -2319,11 +2917,12 @@ class InProcessJobQueue:
             with self._db_lock, self._connection() as connection:
                 cursor = connection.execute(
                     """
-                    UPDATE nexus_job_queue SET status = ?
+                    UPDATE nexus_job_queue SET status = ?, heartbeat_at = ?
                     WHERE id = ? AND status = ? AND attempt = ?
                     """,
                     (
                         JobStatus.VERIFYING.value,
+                        _now(),
                         claim.job_id,
                         JobStatus.PROCESSING.value,
                         claim.attempt,
@@ -2401,7 +3000,8 @@ class InProcessJobQueue:
                 cursor = connection.execute(
                     """
                     UPDATE nexus_job_queue
-                    SET status = ?, started_at = NULL, attempt_history_json = ?
+                    SET status = ?, started_at = NULL, heartbeat_at = NULL,
+                        attempt_history_json = ?
                     WHERE id = ? AND status IN (?, ?) AND attempt = ?
                     """,
                     (
@@ -2671,5 +3271,33 @@ class InProcessJobQueue:
             connection.close()
 
 
+def _utc_now() -> datetime:
+    """The single UTC clock used by reservations, heartbeats and recovery."""
+    return datetime.now(timezone.utc)
+
+
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return _utc_now().isoformat()
+
+
+def _parse_heartbeat(value: object, now: datetime) -> datetime | None:
+    """Return a trustworthy canonical UTC heartbeat, otherwise UNKNOWN.
+
+    Only the queue's own serialization is accepted. Naive, non-UTC,
+    noncanonical, corrupt and future values cannot prove liveness. Future
+    values fail closed rather than becoming an immortal freshness claim.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if (
+        parsed.tzinfo is None
+        or parsed.utcoffset() != timedelta(0)
+        or parsed.isoformat() != value
+        or parsed > now
+    ):
+        return None
+    return parsed

@@ -60,18 +60,24 @@ from dataclasses import dataclass
 from typing import Any
 
 # Optional Ed25519 backend — PyNaCl is the documented choice (BSD, wheel).
-# We probe at import time so the module remains importable without it.
+# We probe at import time so the module remains importable without it.  The
+# public names are deliberately ``Any``-typed: tests may inject a faithful
+# backend double, and the fallback assigns ``None``/``Exception``.
+_NaclBadSig: Any = Exception
+_NaclSigningKey: Any = None
+_NaclVerifyKey: Any = None
+_HAVE_NACL = False
 try:  # pragma: no cover — exercised when PyNaCl is installed
-    from nacl.exceptions import BadSignatureError as _NaclBadSig
-    from nacl.signing import SigningKey as _NaclSigningKey
-    from nacl.signing import VerifyKey as _NaclVerifyKey
-
-    _HAVE_NACL = True
+    from nacl.exceptions import BadSignatureError as _bad_sig
+    from nacl.signing import SigningKey as _signing_key
+    from nacl.signing import VerifyKey as _verify_key
 except Exception:  # pragma: no cover
-    _NaclBadSig = Exception
-    _NaclSigningKey = None
-    _NaclVerifyKey = None
-    _HAVE_NACL = False
+    pass
+else:
+    _NaclBadSig = _bad_sig
+    _NaclSigningKey = _signing_key
+    _NaclVerifyKey = _verify_key
+    _HAVE_NACL = True
 
 
 class SigningError(RuntimeError):
@@ -103,32 +109,63 @@ def _canonical_bytes(manifest: dict[str, Any] | bytes | str) -> bytes:
         return manifest
     if isinstance(manifest, str):
         return manifest.encode("utf-8")
-    # dict → canonical JSON
-    return json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
+    # dict → canonical JSON.  json.dumps can raise TypeError/ValueError on an
+    # unsupported value; the public contract is SigningError on every failure.
+    try:
+        return json.dumps(
+            manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+    except Exception as exc:
+        raise SigningError(f"manifest cannot be canonicalised: {exc}") from exc
+
+
+def _seed_key(seed: bytes) -> Any:
+    """Build the nacl signing key, mapping every failure to a typed error.
+
+    PyNaCl rejects a seed that is not exactly 32 bytes with a bare
+    ``ValueError``; the module contract is a :class:`SigningError` on *every*
+    failure, so the raw exception must not escape to the caller.
+    """
+    assert _NaclSigningKey is not None
+    try:
+        return _NaclSigningKey(seed)
+    except SigningError:
+        raise
+    except Exception as exc:
+        raise SigningError(
+            f"NEXUS_SIGNING_KEY is not usable by the Ed25519 backend: {exc}"
+        ) from exc
 
 
 def _sign_with_nacl(canonical: bytes, seed: bytes) -> str:
-    assert _NaclSigningKey is not None
-    sk = _NaclSigningKey(seed)
-    sig = sk.sign(canonical).signature
-    return base64.b64encode(sig).decode("ascii")
+    sk = _seed_key(seed)
+    try:
+        sig = sk.sign(canonical).signature
+        return base64.b64encode(sig).decode("ascii")
+    except SigningError:
+        raise
+    except Exception as exc:
+        raise SigningError(f"Ed25519 signing failed: {exc}") from exc
 
 
 def _verify_with_nacl(canonical: bytes, signature_b64: str, seed: bytes) -> None:
-    assert _NaclSigningKey is not None and _NaclVerifyKey is not None
+    assert _NaclVerifyKey is not None
     try:
         sig = base64.b64decode(signature_b64, validate=True)
     except Exception as exc:
         raise SigningError(f"signature is not valid base64: {exc}") from exc
-    sk = _NaclSigningKey(seed)
-    vk: Any = sk.verify_key
-    # nacl's VerifyKey.verify expects signature + message concatenated
+    # nacl's VerifyKey.verify expects signature + message concatenated.  Real
+    # PyNaCl raises a bare ValueError for malformed signature lengths and
+    # BadSignatureError for a 64-byte forgery; both are typed rejections.
     try:
+        vk: Any = _seed_key(seed).verify_key
         vk.verify(canonical, sig)
+    except SigningError:
+        raise
     except _NaclBadSig as exc:
         raise SigningError("signature verification failed — manifest was tampered") from exc
+    except Exception as exc:
+        raise SigningError(f"not a valid Ed25519 signature: {exc}") from exc
 
 
 def _sign_with_hmac(canonical: bytes, key: bytes) -> str:
@@ -158,9 +195,14 @@ def sign_manifest(manifest: dict[str, Any] | bytes | str) -> str:
     """
     key = _load_key_bytes()
     canonical = _canonical_bytes(manifest)
-    if _HAVE_NACL:
-        return _sign_with_nacl(canonical, key)
-    return _sign_with_hmac(canonical, key)
+    try:
+        if _HAVE_NACL:
+            return _sign_with_nacl(canonical, key)
+        return _sign_with_hmac(canonical, key)
+    except SigningError:
+        raise
+    except Exception as exc:  # pragma: no cover — last-resort contract fence
+        raise SigningError(f"signing backend failed: {exc}") from exc
 
 
 def verify_manifest(manifest: dict[str, Any] | bytes | str, signature: str) -> None:
@@ -172,10 +214,15 @@ def verify_manifest(manifest: dict[str, Any] | bytes | str, signature: str) -> N
     """
     key = _load_key_bytes()
     canonical = _canonical_bytes(manifest)
-    if _HAVE_NACL:
-        _verify_with_nacl(canonical, signature, key)
-        return
-    _verify_with_hmac(canonical, signature, key)
+    try:
+        if _HAVE_NACL:
+            _verify_with_nacl(canonical, signature, key)
+        else:
+            _verify_with_hmac(canonical, signature, key)
+    except SigningError:
+        raise
+    except Exception as exc:  # pragma: no cover — last-resort contract fence
+        raise SigningError(f"verification backend failed: {exc}") from exc
 
 
 @dataclass(frozen=True)

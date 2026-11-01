@@ -39,6 +39,7 @@ ALLOWED_TOP_LEVEL = {
     "pathlib",
     "re",
     "typing",
+    "unicodedata",
     "uuid",
     "pydantic",
     "nexus_ai_agent",

@@ -29,6 +29,7 @@ class StoreAgent:
         response = await self.gemini.generate(
             prompt=message,
             system=full_system_prompt,
+            user_id=user_id or None,
             # history=history  # If GeminiProvider supports history
         )
         return response

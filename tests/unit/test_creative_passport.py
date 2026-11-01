@@ -93,7 +93,7 @@ def test_archived_passport_evidence_uses_the_attempt_staging_layout(
     monkeypatch.setattr(
         passport_module,
         "runtime_evidence",
-        lambda: {
+        lambda *_: {
             "capability": {"operation_id": "timeline.trim"},
             "policy": {"allowed": True},
             "authorization": {"status": "not_recorded"},

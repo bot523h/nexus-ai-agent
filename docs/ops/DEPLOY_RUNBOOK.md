@@ -10,10 +10,31 @@ red, roll back first and debug second.
 ```bash
 python scripts/deploy_smoke.py --strict                       # offline: manifest + repo contract
 python scripts/deploy_smoke.py --strict --url https://<app>.koyeb.app   # + live probes
+python scripts/deploy_smoke.py --strict --url "$BASE" --expect-version "$(cat VERSION)"
 ```
 
 Exit status: `0` = ship it, `1` = a check failed, `2` = bad CLI usage.
-Unit coverage lives in `tests/unit/test_deploy_smoke.py` (21 tests).
+Unit coverage lives in `tests/unit/test_deploy_smoke.py` and
+`tests/unit/test_deploy_smoke_readyz.py`.
+
+### Probes: liveness vs readiness (not the same thing)
+
+| Endpoint | Means | Semantics |
+|---|---|---|
+| `GET /healthz` | the PROCESS is up, accepting requests | static `{"status": "ok"}` — no DB touch on purpose; Koyeb's own health gate uses this |
+| `GET /readyz` | the app can actually USE its database + identity report | `200 {"status": "ready", version, deploy_git_sha, db:{ok, backend}}` when usable; `503 {"status": "not_ready", db:{ok:false, detail}}` otherwise — always with the failure reason |
+
+Readiness semantics (pinned by `tests/unit/test_readyz_identity.py`):
+
+- the probe uses a fresh short-lived connection, **never** the app pool —
+  a probe must not be able to create/mutate anything;
+- sqlite leg checks the file's 16-byte header *and* the schema page: a
+  garbage file fails readiness even when an intact WAL would let queries
+  through (that case is corruption, not health);
+- `503` after a deploy = do not promote traffic; roll back and inspect logs;
+- `deploy_git_sha` is reported **only** when the platform bakes
+  `NEXUS_DEPLOY_GIT_SHA` into env (set it from the build revision); it is
+  reported as `null` otherwise, never invented.
 
 ---
 
@@ -61,12 +82,28 @@ few seconds (accepted trade-off — Telegram retries; see
 ## 4. Rollback
 
 Koyeb keeps previous revisions. Roll back from the console (**Service →
-Revisions → Rollback**) or the CLI, then re-run live smoke:
+Revisions → Rollback**) or the CLI, then re-run live smoke **with the
+identity check**, which is also the rollback-verification step:
 
 ```bash
 koyeb redeploy <app-name> --revision <previous>   # or console rollback
-python scripts/deploy_smoke.py --strict --url "$BASE"
+python scripts/deploy_smoke.py --strict --url "$BASE" --expect-version "<previous-version>"
 ```
+
+Rollback ⟺ the runtime reports the previous version at `/readyz` again.
+The rollback decision matrix:
+
+| Signal | Meaning | Action |
+|---|---|---|
+| `readyz` 503 after deploy | cannot serve data (env/migration/db) | roll back, read logs |
+| `readyz` 200 but version ≠ expected | stale or wrong build got promoted | roll back or redeploy; identity gate caught drift |
+| `webhook-gate` ≠ 403 for a bogus secret | secret gate dead or misconfigured | roll back; check `NEXUS_WEBHOOK_SECRET` rollout |
+
+Rollback semantics recorded (mission contract): the console/CLI rollback
+itself is platform-owned and cannot be live-rehearsed from this
+repository — status: IMPLEMENTED + documented, LIVE LEG NOT OWNER-PROVEN
+here. Everything repo-side (`--expect-version` gate, 503 handling) is
+regression-pinned in `tests/unit/test_deploy_smoke_readyz.py`.
 
 If the bad revision ran a migration, check the Neon runbook before rolling
 back: code rollback is safe only while the migration stays

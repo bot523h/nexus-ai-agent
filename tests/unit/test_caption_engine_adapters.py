@@ -8,6 +8,7 @@ pack side proves ``caption`` pending is 0 and the three new pure handlers.
 
 from __future__ import annotations
 
+import hashlib
 import sys
 import types
 from pathlib import Path
@@ -27,6 +28,7 @@ from nexus_ai_agent.application.ports.caption_engine import (
     CaptionEngineError,
     CaptionProfileUnavailableError,
 )
+from nexus_ai_agent.creative.caption.unavailable_adapter import UnavailableCaptionAdapter
 from nexus_ai_agent.creative.packs.caption.models import (
     TranscriptRef,
     TranscriptSegment,
@@ -92,6 +94,14 @@ class _StubModel:
 
 def _install_faster_whisper_stub(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     _StubModel.instances = 0
+    # Stubbed tests opt in explicitly; the adapter must never fetch model names
+    # by default. Clear the bounded process cache to isolate each test.
+    monkeypatch.setenv("NEXUS_SPEECH_ALLOW_DOWNLOAD", "1")
+    import nexus_ai_agent.adapters.whisper_local as adapter_mod
+
+    with adapter_mod._MODEL_CACHE_LOCK:
+        adapter_mod._MODEL_CACHE.clear()
+    monkeypatch.setattr(adapter_mod, "_probe_audio_duration_us", lambda _path: 1_000_000)
     module = types.ModuleType("faster_whisper")
     module.WhisperModel = _StubModel  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "faster_whisper", module)
@@ -113,6 +123,7 @@ def _transcript() -> TranscriptRef:
     return TranscriptRef(
         transcript_id="tr_01",
         source_asset_id="audio_1",
+        source_sha256="c" * 64,
         language="en",
         duration_us=4_000_000,
         segments=(
@@ -140,6 +151,13 @@ def _ctx(operation: str, payload: dict[str, Any]) -> OperationContext:
 # ---------------------------------------------------------------------------
 
 
+async def test_unavailable_adapter_never_returns_successful_transcript() -> None:
+    adapter = UnavailableCaptionAdapter()
+    assert adapter.is_available() is False
+    with pytest.raises(CaptionProfileUnavailableError):
+        await adapter.transcribe("audio.wav")
+
+
 async def test_unavailable_without_speech_extra_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -152,6 +170,24 @@ async def test_unavailable_without_speech_extra_fails_closed(
         await engine.transcribe(audio)
     assert exc_info.value.code == "caption_profile_unavailable"
     assert "nexus-ai-agent[speech]" in str(exc_info.value)
+
+
+def test_audio_resource_budget_is_enforced_before_model_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_faster_whisper_stub(monkeypatch)
+    import nexus_ai_agent.adapters.whisper_local as adapter_mod
+
+    monkeypatch.setattr(
+        adapter_mod,
+        "_probe_audio_duration_us",
+        lambda _path: adapter_mod._MAX_AUDIO_DURATION_US + 1,
+    )
+    audio = tmp_path / "long.wav"
+    audio.write_bytes(b"RIFF")
+    with pytest.raises(CaptionEngineError, match="2-minute in-memory resource budget"):
+        WhisperLocalCaptionEngine(model="tiny").transcribe_sync(audio)
+    assert _StubModel.instances == 0
 
 
 async def test_missing_audio_file_is_a_typed_error(
@@ -178,11 +214,18 @@ async def test_transcribe_maps_segments_words_and_scores(
     engine = WhisperLocalCaptionEngine(model="tiny")
     first = await engine.transcribe(audio)
     second = await engine.transcribe(audio, language="en")
-    assert first.transcript_id == second.transcript_id
+    repeated = await engine.transcribe(audio)
+    assert first.transcript_id == repeated.transcript_id
+    assert first.transcript_id != second.transcript_id
     assert first.transcript_id.startswith("whisper:tiny:")
     assert second.language == "en"  # explicit wins
     assert first.language == "fa"  # detected fallback
     assert first.duration_us == 4_000_000
+    assert first.engine == "faster-whisper/CTranslate2"
+    assert first.model_name == "tiny"
+    assert first.model_digest is None  # no digest claimed without hashing model weights
+    assert first.source_sha256 == hashlib.sha256(audio.read_bytes()).hexdigest()
+    assert first.parameters["compute_type"] == "int8"
     seg0, seg1 = first.segments
     assert (seg0.start_us, seg0.end_us) == (0, 1_000_000)
     assert (
@@ -196,16 +239,79 @@ async def test_transcribe_maps_segments_words_and_scores(
     assert seg1.words[-1].end_us == seg1.end_us
 
 
-def test_model_load_is_lazy_and_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_load_is_lazy_and_shared_between_engine_instances(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _install_faster_whisper_stub(monkeypatch)
     engine = WhisperLocalCaptionEngine()
+    second_engine = WhisperLocalCaptionEngine()
     assert engine.is_available() is True
     assert _StubModel.instances == 0  # no import-time / check-time load
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"RIFF")
     engine.transcribe_sync(audio)
-    engine.transcribe_sync(audio)
+    second_engine.transcribe_sync(audio)
     assert _StubModel.instances == 1
+
+
+async def test_invalid_language_rejected_before_model_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_faster_whisper_stub(monkeypatch)
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"RIFF")
+    engine = WhisperLocalCaptionEngine(model="tiny")
+    with pytest.raises(CaptionEngineError, match="invalid language tag"):
+        await engine.transcribe(audio, language="fa-IR-../path")
+    assert _StubModel.instances == 0
+
+
+async def test_missing_offline_model_fails_without_hub_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_faster_whisper_stub(monkeypatch)
+    monkeypatch.delenv("NEXUS_SPEECH_ALLOW_DOWNLOAD")
+    engine = WhisperLocalCaptionEngine(model="model-is-not-a-local-directory")
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"RIFF")
+    with pytest.raises(CaptionProfileUnavailableError, match="download is opt-in"):
+        await engine.transcribe(audio)
+    assert _StubModel.instances == 0
+
+
+async def test_inference_keeps_the_event_loop_responsive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import time
+
+    _install_faster_whisper_stub(monkeypatch)
+
+    def slow_transcribe(self: _StubModel, *_args: Any, **_kwargs: Any) -> Any:
+        time.sleep(0.08)
+        return [], _StubInfo()
+
+    monkeypatch.setattr(_StubModel, "transcribe", slow_transcribe)
+    audio = tmp_path / "slow.wav"
+    audio.write_bytes(b"RIFF")
+    engine = WhisperLocalCaptionEngine(model="tiny")
+    ticked = asyncio.Event()
+    asyncio.get_running_loop().call_later(0.005, ticked.set)
+    work = asyncio.create_task(engine.transcribe(audio))
+    await asyncio.wait_for(ticked.wait(), timeout=0.03)
+    assert (await work).segments == ()
+
+
+def test_decimal_microsecond_rounding_is_half_up_and_finite() -> None:
+    from nexus_ai_agent.adapters.whisper_local import _us
+
+    assert _us(0.0000005) == 1
+    assert _us(0.0000015) == 2
+    assert _us(1.2345674) == 1_234_567
+    with pytest.raises(CaptionEngineError, match="invalid engine timestamp"):
+        _us(float("nan"))
+    with pytest.raises(CaptionEngineError, match="invalid engine timestamp"):
+        _us(float("inf"))
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +365,9 @@ def test_adapter_diarize_stamps_merged_turns(
         assert seg.speaker is not None and seg.speaker.startswith("SPEAKER_")
         assert all(w.speaker == seg.speaker for w in seg.words)
     assert out.transcript_id.endswith(":diarized")
+    assert out.source_sha256 == hashlib.sha256(audio.read_bytes()).hexdigest()
+    assert out.parameters["diarization_backend"] == "energy-vad-gap-heuristic"
+    assert out.parameters["speaker_identity_claimed"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +393,7 @@ async def test_argos_stub_translates_and_reprojects_words(monkeypatch: pytest.Mo
     assert out.language == "fa-ir".split("-")[0]
     assert calls[0] == ("hello world", "en", "fa")
     assert out.segments[0].text == "[fa]hello world"
+    assert out.source_sha256 == _transcript().source_sha256
     # Timings preserved; words re-projected with exact cover.
     assert (out.segments[0].start_us, out.segments[0].end_us) == (0, 1_000_000)
     assert out.segments[0].words[0].start_us == 0
@@ -333,6 +443,40 @@ def test_align_words_handler_projects_exact_cover_and_clamps() -> None:
     assert (only["start_us"], only["end_us"]) == (1_000_000, 2_000_000)
 
 
+def test_alignment_rebuilds_a_monotone_exact_cover_from_bad_word_times() -> None:
+    registry = build_caption_registry()
+    project = _project()
+    transcript = TranscriptRef(
+        transcript_id="adversarial",
+        duration_us=2_000_000,
+        segments=(
+            TranscriptSegment(
+                start_us=500_000,
+                end_us=1_500_000,
+                text="one two three",
+                words=(
+                    WordTiming(word="one", start_us=900_000, end_us=1_200_000),
+                    WordTiming(word="two", start_us=700_000, end_us=1_300_000),
+                    WordTiming(word="three", start_us=9_000_000, end_us=9_100_000),
+                ),
+            ),
+            TranscriptSegment(start_us=1_500_000, end_us=1_500_000, text="zero span", words=()),
+            TranscriptSegment(start_us=1_500_000, end_us=1_500_000, text="", words=()),
+        ),
+    )
+    outcome = registry.get_spec("caption.align_words").handler(
+        project, _ctx("caption.align_words", {"transcript": transcript})
+    )
+    segments = outcome.output["transcript"]["segments"]
+    words = segments[0]["words"]
+    assert words[0]["start_us"] == 500_000
+    assert words[-1]["end_us"] == 1_500_000
+    assert all(a["end_us"] == b["start_us"] for a, b in zip(words, words[1:], strict=False))
+    assert all(500_000 <= w["start_us"] <= w["end_us"] <= 1_500_000 for w in words)
+    assert all(w["start_us"] == w["end_us"] == 1_500_000 for w in segments[1]["words"])
+    assert segments[2]["words"] == []
+
+
 def test_diarize_handler_merges_then_stamps_no_stale_labels() -> None:
     registry = build_caption_registry()
     project = _project()
@@ -350,6 +494,9 @@ def test_diarize_handler_merges_then_stamps_no_stale_labels() -> None:
     spec = registry.get_spec("caption.diarize")
     outcome = spec.handler(project, _ctx("caption.diarize", {"transcript": stale}))
     assert outcome.output["turn_count"] == 2
+    assert outcome.output["speaker_identity_claimed"] is False
+    assert outcome.output["diarization_backend"] == "deterministic-gap-grouping-heuristic"
+    assert outcome.output["transcript"]["parameters"]["speaker_identity_claimed"] is False
     segs = outcome.output["transcript"]["segments"]
     # First two merged into ONE turn: stale per-segment labels are gone.
     assert segs[0]["speaker"] == segs[1]["speaker"] == "SPEAKER_00"

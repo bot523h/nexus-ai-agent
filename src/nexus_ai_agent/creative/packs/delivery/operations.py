@@ -54,7 +54,11 @@ from nexus_ai_agent.creative.studio.models import (
     PermissionLevel,
     Project,
 )
-from nexus_ai_agent.creative.temporal.core import Duration, FrameRateResolver, RoundingPolicy
+from nexus_ai_agent.creative.temporal import (
+    Duration,
+    FrameRateResolver,
+    RoundingPolicy,
+)
 
 
 def _gcd(a: int, b: int) -> int:
@@ -306,41 +310,53 @@ def _export_otio(project: Project, context: OperationContext) -> OperationOutcom
     """
     payload = ExportOtioInput.model_validate(context.input_data)
 
-    target_tb = FrameRateResolver.resolve(payload.frame_rate)
-    num, den = target_tb.numerator, target_tb.denominator
-    otio_rate = float(target_tb.rate)
+    # Route frame rate strictly through canonical FrameRateResolver
+    timebase = FrameRateResolver.resolve(payload.frame_rate)
+    num, den = timebase.numerator, timebase.denominator
+    otio_rate = float(timebase.rate)
 
     video_clips: list[OtioClip] = []
     audio_clips: list[OtioClip] = []
 
     for asset in project.assets:
-        has_missing_dur = asset.duration_us is None
-        dur = (
-            Duration.from_seconds(1)
-            if has_missing_dur
-            else Duration.from_us(int(asset.duration_us))
-        )
-        raw_conv_frames = dur.to_ticks(target_tb, rounding=RoundingPolicy.NEAREST).value
-        emitted_frames = max(1, raw_conv_frames) if has_missing_dur else raw_conv_frames
+        duration_us = 1_000_000 if asset.duration_us is None else asset.duration_us
+        dur = Duration.from_us(duration_us)
+        conversion = dur.to_ticks(timebase, rounding=RoundingPolicy.NEAREST)
+
+        raw_conv_frames = conversion.value
+        emitted_frames = max(1, raw_conv_frames)
 
         time_range = TimeRange(
             start_time=RationalTime(value=0, rate=otio_rate),
             duration=RationalTime(value=emitted_frames, rate=otio_rate),
         )
 
-        emitted_sec = Fraction(emitted_frames * den, num)
-        res = dur.seconds - emitted_sec
-        abs_err = abs(res)
-        is_lossless = res == Fraction(0, 1)
+        # Compute exact residual_seconds using exact Fraction arithmetic
+        # Duration seconds is dur.seconds (Fraction),
+        # emitted_seconds is Fraction(emitted_frames * den, num)
+        emitted_seconds = Fraction(emitted_frames * den, num)
+        residual_seconds = dur.seconds - emitted_seconds
+        abs_error_seconds = abs(residual_seconds)
+
+        residual_str = (
+            "0"
+            if residual_seconds == 0
+            else f"{residual_seconds.numerator}/{residual_seconds.denominator}"
+        )
+        abs_err_str = (
+            "0"
+            if abs_error_seconds == 0
+            else f"{abs_error_seconds.numerator}/{abs_error_seconds.denominator}"
+        )
 
         meta = {
             "provenance": asset.provenance,
             "temporal_conversion": {
                 "raw_conv_frames": raw_conv_frames,
                 "emitted_frames": emitted_frames,
-                "lossless": is_lossless,
-                "residual_seconds": str(res),
-                "absolute_error_seconds": str(abs_err),
+                "lossless": (residual_seconds == 0),
+                "residual_seconds": residual_str,
+                "absolute_error_seconds": abs_err_str,
                 "target_timebase": {
                     "numerator": num,
                     "denominator": den,

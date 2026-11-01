@@ -1,0 +1,32 @@
+{
+  "schema": "nexus-merge-evidence/v1",
+  "captured_at": "2026-10-25T14:13:33Z",
+  "repo": "bot523h/nexus-ai-agent",
+  "merge": {
+    "pr": 190,
+    "title": "feat(integrations): thin Trigger.dev execution boundary (adapter, no domain logic)",
+    "head_sha": "4dd447e82855b7788aae738053c6815e88cccd27",
+    "merge_commit": "cf8b7f665d8dc3ec94d52b3ea337ef2491961f33",
+    "merged_at": "2026-10-25T14:13:21Z",
+    "merged_by": "bot523h",
+    "additions": 1487,
+    "deletions": 0,
+    "changed_files": 8,
+    "approval": "coderabbitai (APPROVED at 2026-10-08T11:16:46Z, re-used after the branch update)",
+    "content": "new directory integrations/trigger/ only — TypeScript adapter, zero Python files, no domain logic"
+  },
+  "branch_update": {
+    "command": "gh api --method PUT repos/bot523h/nexus-ai-agent/pulls/190/update-branch",
+    "from_head": "5f50f84a76386988675ca0de7968726f1e40ba39",
+    "to_head": "4dd447e82855b7788aae738053c6815e88cccd27",
+    "reason": "mergeStateStatus was BEHIND — CI had never run against the current main"
+  },
+  "pre_merge_gate": {
+    "command": "python scripts/pr_convergence.py guard 190 --expect-sha 4dd447e8",
+    "result": "PASS",
+    "checks_passing": 22,
+    "checks_total": 22,
+    "merge_state": "CLEAN"
+  },
+  "main_after_merge": "cf8b7f665d8dc3ec94d52b3ea337ef2491961f33"
+}

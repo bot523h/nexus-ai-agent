@@ -276,22 +276,40 @@ def inspect_checkpoints(
 ) -> None:
     """Read checkpoint lifecycle state without touching access timestamps."""
     import json
+    import logging
     from datetime import datetime, timezone
 
     from nexus_ai_agent.adapters.langgraph.lifecycle_recording import nexus_access_context
     from nexus_ai_agent.config.settings import get_settings
-    from nexus_ai_agent.domain.policies.retention import RetentionRecord, deletable, pinned
+    from nexus_ai_agent.domain.policies.retention import RetentionRecord, thread_retention
     from nexus_ai_agent.storage.db import resolve_database_url
 
     settings = get_settings()
+    logger = logging.getLogger(__name__)
     access_token = nexus_access_context.set("admin")
-    adapter, _ = _open_checkpoint_backend()
-    # Read-only by contract: inspect never creates or mutates the lifecycle
-    # index (on PostgreSQL the read-only connection is server-enforced).
-    # A missing local index file simply means "no metadata yet".
-    database_url = resolve_database_url()
-    lifecycle = _open_lifecycle_store(settings, database_url, strict=True, read_only=True)
+    adapter: Any = None
+    lifecycle: Any = None
+    primary_error: BaseException | None = None
+
+    def _close(resource: Any, name: str) -> BaseException | None:
+        """Close one resource without preventing the remaining cleanup."""
+        if resource is None or not hasattr(resource, "close"):
+            return None
+        try:
+            resource.close()
+        except BaseException as exc:  # noqa: BLE001 - cleanup must continue
+            logger.warning("checkpoint_inspect_cleanup_failed: %s: %s", name, exc)
+            return exc
+        return None
+
     try:
+        adapter, _ = _open_checkpoint_backend()
+        # Read-only by contract: inspect never creates or mutates the lifecycle
+        # index (on PostgreSQL the read-only connection is server-enforced).
+        # A missing local index file simply means "no metadata yet".
+        database_url = resolve_database_url()
+        lifecycle = _open_lifecycle_store(settings, database_url, strict=True, read_only=True)
+
         now = datetime.now(timezone.utc)
         records = lifecycle.records() if lifecycle is not None else []
         grouped: dict[str, list] = {}
@@ -309,18 +327,23 @@ def inspect_checkpoints(
             last_accessed = max(
                 (item.last_accessed_at for item in metadata if item.last_accessed_at), default=None
             )
-            lifecycle_record = metadata[-1] if metadata else None
-            retention = (
-                RetentionRecord(
-                    lifecycle_record.created_at,
-                    lifecycle_record.last_accessed_at,
-                    lifecycle_record.active_until,
-                )
-                if lifecycle_record is not None
-                else None
+            # The retention verdict is a property of the THREAD, so it is
+            # quantified over every one of its lifecycle rows (protection
+            # existential, destruction universal, no rows = unknown).  It must
+            # never be read off a single row: ``records()`` has no ORDER BY and
+            # the SQLite index is a rowid table, so "the last row" is insertion
+            # order — a storage-engine artefact that made two logically
+            # identical threads report opposite ``would_delete`` verdicts.
+            verdict = thread_retention(
+                (
+                    RetentionRecord(item.created_at, item.last_accessed_at, item.active_until)
+                    for item in metadata
+                ),
+                now=now,
             )
-            pinned_value = pinned(retention, now=now) if retention is not None else "unknown"
-            deletable_value = deletable(retention, now=now) if retention is not None else False
+            # No lifecycle rows => the thread's retention state is unknown, and
+            # unknown stays visible as "unknown" (inspect-v1 contract, I10).
+            pinned_value: bool | str = verdict.pinned if verdict.known else "unknown"
             entry: dict[str, Any] = {
                 "schema": "inspect-v1",
                 "thread_id": thread_id,
@@ -329,13 +352,17 @@ def inspect_checkpoints(
                 "newest_created_at": newest.isoformat() if newest else "unknown",
                 "last_accessed_at": last_accessed.isoformat() if last_accessed else "unknown",
                 "pinned": pinned_value,
-                "active": bool(
-                    lifecycle_record
-                    and lifecycle_record.active_until
-                    and lifecycle_record.active_until > now
-                ),
-                "resumable_within_window": bool(retention and not deletable_value),
-                "would_delete": deletable_value,
+                "active": verdict.active,
+                "resumable_within_window": verdict.known and not verdict.deletable,
+                # Why the thread is being retained.  ``resumable_within_window``
+                # alone conflates three different situations — protected by an
+                # explicit pin, protected by ordinary recency, and retained
+                # because its age is unknown — and a destructive verdict with no
+                # reason is not actionable.  ``no_evidence`` is never a claim of
+                # safety.  This field is never the string "unknown", so the
+                # inspect-v1 ``unknown_fields`` list is unchanged.
+                "protection_reason": str(verdict.reason),
+                "would_delete": verdict.deletable,
                 "would_free_bytes_estimate": adapter.estimate_thread_bytes(thread_id),
                 "missing_lifecycle": not bool(metadata),
                 "orphan_candidate_count": max(0, len(metadata) - len(checkpoints)),
@@ -351,11 +378,28 @@ def inspect_checkpoints(
         else:
             for item in output:
                 typer.echo(json.dumps(item, default=str, sort_keys=True))
+    except BaseException as exc:
+        # Preserve the setup/body exception even if cleanup also fails.
+        primary_error = exc
+        raise
     finally:
-        adapter.close()
-        if lifecycle is not None:
-            lifecycle.close()
-        nexus_access_context.reset(access_token)
+        # Close in reverse acquisition order; attempt BOTH closes and always
+        # reset the exact ContextVar token exactly once, on every path.
+        cleanup_errors = [
+            err
+            for err in (
+                _close(lifecycle, "lifecycle"),
+                _close(adapter, "checkpoint_adapter"),
+            )
+            if err is not None
+        ]
+        try:
+            nexus_access_context.reset(access_token)
+        except BaseException as exc:  # pragma: no cover - defensive reset fence
+            logger.warning("checkpoint_inspect_context_reset_failed: %s", exc)
+            cleanup_errors.append(exc)
+        if primary_error is None and cleanup_errors:
+            raise cleanup_errors[0]
 
 
 @checkpoints_app.command("reconcile")
@@ -1221,7 +1265,10 @@ def jobs_resume(
     """
     import sqlite3
 
-    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.adapters.in_process_job_queue import (
+        InProcessJobQueue,
+        QueueOwnershipError,
+    )
     from nexus_ai_agent.application.ports.job_queue import JobStatus
     from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.provenance import (
@@ -1248,56 +1295,73 @@ def jobs_resume(
         queue = InProcessJobQueue(queue_db, causal_observer=observer)
         for job_type, handler in default_job_handlers().items():
             queue.register_handler(job_type, handler)
-        if journal is not None:
-            # task-231: recovery closes crash-window holes with labeled
-            # reconstructions before anything is drained (idempotent).
-            try:
-                report = backfill_journal(journal, queue, queue.job_ids())
-                typer.echo(
-                    f"Causal journal: +{report.appended} reconstructed, "
-                    f"{report.already_present} already present."
-                )
-            except CausalConflictError as exc:
-                # The ledger itself refuses a lying reconstruction: the job
-                # authority is untouched and the drain still proceeds — but
-                # the quarantined conflict stays on the ledger for audit.
-                typer.echo(
-                    f"⚠️  Causal backfill stopped on an evidence conflict"
-                    f" ({exc}); draining without backfill. Inspect the"
-                    f" EVENT_CONFLICT records before trusting this history."
-                )
-            except sqlite3.Error as exc:
-                typer.echo(f"⚠️  Causal backfill failed ({exc}); draining without it.")
-        job_ids = await queue.resume_pending_jobs()
-        if not job_ids:
-            typer.echo("No pending jobs to resume.")
-            return
-        typer.echo(f"Requeued {len(job_ids)} job(s): {', '.join(job_ids)}")
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        remaining = set(job_ids)
-        while remaining:
-            for job_id in sorted(remaining):
-                status = await queue.get_status(job_id)
-                if status in {
-                    JobStatus.COMPLETED,
-                    JobStatus.FAILED_RETRYABLE,
-                    JobStatus.FAILED_TERMINAL,
-                }:
-                    if status is JobStatus.COMPLETED:
-                        marker = "✅"
-                    elif status is JobStatus.FAILED_RETRYABLE:
-                        marker = "⚠️"
-                    else:
-                        marker = "❌"
-                    typer.echo(f"{marker} {job_id}: {status.value}")
-                    remaining.discard(job_id)
-            if remaining and loop.time() >= deadline:
+        # ── task-283: single-executor contract ───────────────────────────────
+        # ``nexus jobs drain`` shares the sidecar with the bot.  Without this
+        # guard an operator drain running beside a live bot is a *second*
+        # executor: it requeues and runs rows the bot is also running.  Acquire
+        # exclusive ownership BEFORE any recovery (backfill/resume) and fail
+        # closed — a drain that cannot prove sole ownership must do nothing.
+        try:
+            await queue.acquire_ownership()
+        except QueueOwnershipError as exc:
+            typer.echo(f"❌ Another live process owns this job queue — refusing to drain ({exc}).")
+            raise typer.Exit(2) from exc
+        try:
+            if journal is not None:
+                # task-231: recovery closes crash-window holes with labeled
+                # reconstructions before anything is drained (idempotent).
+                try:
+                    report = backfill_journal(journal, queue, queue.job_ids())
+                    typer.echo(
+                        f"Causal journal: +{report.appended} reconstructed, "
+                        f"{report.already_present} already present."
+                    )
+                except CausalConflictError as exc:
+                    # The ledger itself refuses a lying reconstruction: the job
+                    # authority is untouched and the drain still proceeds — but
+                    # the quarantined conflict stays on the ledger for audit.
+                    typer.echo(
+                        f"⚠️  Causal backfill stopped on an evidence conflict"
+                        f" ({exc}); draining without backfill. Inspect the"
+                        f" EVENT_CONFLICT records before trusting this history."
+                    )
+                except sqlite3.Error as exc:
+                    typer.echo(f"⚠️  Causal backfill failed ({exc}); draining without it.")
+            job_ids = await queue.resume_pending_jobs()
+            if not job_ids:
+                typer.echo("No pending jobs to resume.")
+                return
+            typer.echo(f"Requeued {len(job_ids)} job(s): {', '.join(job_ids)}")
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            remaining = set(job_ids)
+            while remaining:
                 for job_id in sorted(remaining):
-                    typer.echo(f"⏳ {job_id}: still unfinished after {timeout:g}s")
-                raise typer.Exit(1)
-            if remaining:
-                await asyncio.sleep(0.2)
+                    status = await queue.get_status(job_id)
+                    if status in {
+                        JobStatus.COMPLETED,
+                        JobStatus.FAILED_RETRYABLE,
+                        JobStatus.FAILED_TERMINAL,
+                    }:
+                        if status is JobStatus.COMPLETED:
+                            marker = "✅"
+                        elif status is JobStatus.FAILED_RETRYABLE:
+                            marker = "⚠️"
+                        else:
+                            marker = "❌"
+                        typer.echo(f"{marker} {job_id}: {status.value}")
+                        remaining.discard(job_id)
+                if remaining and loop.time() >= deadline:
+                    for job_id in sorted(remaining):
+                        typer.echo(f"⏳ {job_id}: still unfinished after {timeout:g}s")
+                    raise typer.Exit(1)
+                if remaining:
+                    await asyncio.sleep(0.2)
+        finally:
+            # Workers first, then ownership — ``shutdown`` guarantees that
+            # order and is idempotent, so every exit path (early return,
+            # timeout ``typer.Exit``, or an unexpected error) releases the lock.
+            await queue.shutdown()
 
     asyncio.run(_run())
 
@@ -1369,6 +1433,10 @@ def backup(
         raise typer.Exit(code=1) from e
     typer.echo(f"source: {result['source']}")
     typer.echo(f"key:    {result['key']}")
+    if not result["dry_run"]:
+        typer.echo(f"sha256: {result.get('sha256', 'unavailable')}")
+        typer.echo(f"timestamp: {result.get('timestamp', 'unavailable')}")
+        typer.echo(f"verified: {result.get('verified', False)}")
     if result["dry_run"]:
         typer.echo("dry-run: nothing dumped or uploaded")
     else:
@@ -1404,15 +1472,23 @@ def housekeeping(
         temp_max_age_hours=temp_max_age_hours,
         backup_retention_days=backup_retention_days,
     )
-    typer.echo(f"temp files removed: {len(result['temp_files_removed'])}")
-    for path in result["temp_files_removed"]:
-        typer.echo(f"  - {path}")
-    if result["backups_deleted"]:
+    # A dry run is a PREVIEW: it must list the planned selections — printing
+    # only the (always empty) mutation results would show the operator an
+    # empty report and hide exactly what the real run would destroy.
+    if result["dry_run"]:
+        typer.echo(f"temp files planned for removal: {len(result['temp_files_planned'])}")
+        for path in result["temp_files_planned"]:
+            typer.echo(f"  - {path}")
+        typer.echo(f"R2 backups planned for deletion: {len(result['backups_planned'])}")
+        for key in result["backups_planned"]:
+            typer.echo(f"  - {key}")
+    else:
+        typer.echo(f"temp files removed: {len(result['temp_files_removed'])}")
+        for path in result["temp_files_removed"]:
+            typer.echo(f"  - {path}")
         typer.echo(f"R2 backups deleted: {len(result['backups_deleted'])}")
         for key in result["backups_deleted"]:
             typer.echo(f"  - {key}")
-    else:
-        typer.echo("R2 backups deleted: 0")
     if result["r2_skipped_reason"]:
         typer.echo(f"note: {result['r2_skipped_reason']}")
     if result["dry_run"]:
@@ -1456,12 +1532,15 @@ def _run_durable_intent(
     import asyncio as _asyncio
 
     from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.adapters.sql_application_directory import (
+        SQLApplicationDirectory,
+        channel_binding_id,
+    )
     from nexus_ai_agent.application.ports.job_queue import JobStatus
+    from nexus_ai_agent.application.principal import ChannelBinding
     from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.creative.render_jobs import build_job_bus
-    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
     from nexus_ai_agent.creative.studio.models import (
-        ActorIdentity,
         AssetRecord,
         Timeline,
         new_project,
@@ -1469,12 +1548,27 @@ def _run_durable_intent(
     from nexus_ai_agent.nagar.cognition import build_cognition_gateway
     from nexus_ai_agent.nagar.composition import ProviderStatus, build_cognition_provider
     from nexus_ai_agent.nagar.creative import (
+        CanonicalHandoffFacts,
         derive_intent_idempotency_key,
         run_free_text_intent_durable,
     )
+    from nexus_ai_agent.storage.migrations import ensure_startup_schema
     from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
-    actor = ActorIdentity(kind="user", actor_id=actor_id)
+    # The CLI is a channel, not the canonical identity.  First contact and
+    # project membership live in the configured application database; the
+    # worker will independently re-read both before it touches source media.
+    ensure_startup_schema()
+    directory = SQLApplicationDirectory()
+    binding = ChannelBinding("cli", actor_id)
+    principal = directory.resolve_or_create(binding)
+    access = directory.ensure_project(NEXUS_INTENT_PROJECT_ID, principal)
+    canonical = CanonicalHandoffFacts(
+        principal_id=str(principal),
+        channel_binding_id=channel_binding_id(binding),
+        project_id=NEXUS_INTENT_PROJECT_ID,
+    )
+    actor = access.actor
     source = AssetRecord(
         asset_id="src",
         media_kind="video",
@@ -1486,13 +1580,8 @@ def _run_durable_intent(
         "free-text-intent",
         Timeline(timeline_id="tl_intent", duration_us=duration_us),
     ).model_copy(update={"assets": [source]})
-    # The one canonical, server-policy bus factory.  ``ProjectAccess`` is the
-    # canonical authorizer for an ephemeral local project; no bespoke authorizer.
-    access = ProjectAccess(
-        actor=actor,
-        project_id=NEXUS_INTENT_PROJECT_ID,
-        permissions=frozenset({"project:read", "project:write"}),
-    )
+    # Planning uses the same persistent access grant; execution independently
+    # re-authorizes the canonical references in the worker's own bus.
     bus = build_job_bus(project, authorizer=access)
 
     provider, status = build_cognition_provider()
@@ -1525,27 +1614,49 @@ def _run_durable_intent(
         # long-lived bot loop does), so the drain below actually runs it.  A
         # process restart mid-flight is recovered by ``resume_pending_jobs``,
         # which only ever touches still-pending rows.
-        outcome = await run_free_text_intent_durable(
-            text,
-            gateway=gateway,
-            queue=queue,
-            project=project,
-            source_path=source_path,
-            workspace_dir=workspace,
-            user_id=0,
-            chat_id=0,
-            clip_asset_id=clip_asset_id,
-        )
-        if outcome.status != "enqueued" or outcome.job_id is None:
-            return outcome
-        terminal = {JobStatus.COMPLETED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
-        loop = _asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while loop.time() < deadline:
-            if await queue.get_status(outcome.job_id) in terminal:
+        #
+        # task-283: this one-shot runner is a real executor over the *shared*
+        # sidecar, so it must hold exclusive process ownership exactly like the
+        # bot does.  Acquire before the first enqueue/execute and fail closed.
+        from nexus_ai_agent.adapters.in_process_job_queue import QueueOwnershipError
+
+        try:
+            await queue.acquire_ownership()
+        except QueueOwnershipError as exc:
+            raise RuntimeError(
+                f"another live process owns this job queue; refusing to execute ({exc})"
+            ) from exc
+        try:
+            outcome = await run_free_text_intent_durable(
+                text,
+                gateway=gateway,
+                queue=queue,
+                project=project,
+                source_path=source_path,
+                workspace_dir=workspace,
+                user_id=0,
+                chat_id=0,
+                clip_asset_id=clip_asset_id,
+                canonical=canonical,
+            )
+            if outcome.status != "enqueued" or outcome.job_id is None:
                 return outcome
-            await _asyncio.sleep(0.1)
-        raise TimeoutError(f"job {outcome.job_id} did not reach a terminal state")
+            terminal = {
+                JobStatus.COMPLETED,
+                JobStatus.FAILED_RETRYABLE,
+                JobStatus.FAILED_TERMINAL,
+            }
+            loop = _asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            while loop.time() < deadline:
+                if await queue.get_status(outcome.job_id) in terminal:
+                    return outcome
+                await _asyncio.sleep(0.1)
+            raise TimeoutError(f"job {outcome.job_id} did not reach a terminal state")
+        finally:
+            # task-283: workers + heartbeat children stop first, then the lock is
+            # released.  Every path (success, timeout, unexpected error) releases.
+            await queue.shutdown()
 
     outcome = _asyncio.run(_run_all())
     return outcome, queue
@@ -1569,7 +1680,9 @@ def intent(
         help="Authoritative source duration (microseconds) the project commits.",
     ),
     actor_id: str = typer.Option(
-        "local-operator", "--actor", help="Actor identity for this intent (host-owned)."
+        "local-operator",
+        "--actor",
+        help="External CLI binding identity; a durable canonical principal is resolved from it.",
     ),
     workspace_root: str | None = typer.Option(
         None, "--workspace-root", help="Root for the guarded job workspace (default: settings)."
@@ -1635,6 +1748,15 @@ def intent(
             typer.echo(f"duration_us: {result.get('duration_us')}")
             verification = result.get("artifact_verification") or {}
             typer.echo(f"verified: {verification.get('status') == 'verified'}")
+            canonical_execution = result.get("canonical_execution")
+            if isinstance(canonical_execution, dict):
+                authorization = canonical_execution.get("authorization") or {}
+                command_result = canonical_execution.get("command_result") or {}
+                typer.echo(f"principal_id: {authorization.get('principal_id')}")
+                typer.echo(f"project_id: {authorization.get('project_id')}")
+                typer.echo(f"commandbus_transaction_id: {command_result.get('transaction_id')}")
+                typer.echo(f"project_revision: {command_result.get('state_revision')}")
+                typer.echo(f"project_state_hash: {command_result.get('state_hash')}")
         if journal is not None:
             typer.echo(f"journal: {journal_db}")
 
@@ -1676,6 +1798,11 @@ def run_bot(
 
     settings = get_settings()
     configure_logging(settings.log_level)
+    # task-274: opt-in tracing, after logging exists so the outcome is visible.
+    # Never fatal — a misconfigured tracing setup must not stop the bot.
+    from nexus_ai_agent.observability.tracing import bootstrap_tracing
+
+    bootstrap_tracing(settings)
 
     # Bring the schema up (Alembic-first, create_all fallback for legacy files)
     Path(settings.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -1733,8 +1860,10 @@ def smoke(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full state"),
 ) -> None:
     """Run the full AI graph without Telegram (for testing)."""
+    from nexus_ai_agent.config.settings import get_settings
     from nexus_ai_agent.llm.fake_llm import FakeLLMProvider
     from nexus_ai_agent.memory.long_term import LongTermMemory
+    from nexus_ai_agent.observability.tracing import bootstrap_tracing
     from nexus_ai_agent.orchestration.graph import compile_graph
     from nexus_ai_agent.orchestration.state import NexusState
     from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
@@ -1744,6 +1873,11 @@ def smoke(
         WriteFileTool,
     )
     from nexus_ai_agent.tools.registry import ToolRegistry
+
+    # task-274: this path also drives the graph, so it must enforce the same
+    # fail-closed tracing contract as ``run`` (a stale LANGSMITH_TRACING=true
+    # must not silently enable egress here).
+    bootstrap_tracing(get_settings())
 
     llm = FakeLLMProvider()
     os.environ["NEXUS_WORKSPACE_ROOT"] = "."

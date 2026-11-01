@@ -242,6 +242,16 @@ def _init_v2_engines(settings: Settings) -> dict[str, Any]:
     )
     for job_type, handler in default_job_handlers().items():
         job_queue.register_handler(job_type, handler)
+
+    # Wire AttemptStaging-based publication for creative_render (task-255).
+    from pathlib import Path as _Path
+
+    from nexus_ai_agent.creative.render_jobs import build_creative_render_publication
+
+    _artifact_root = _Path(f"{_queue_db}.artifacts")
+    job_queue.register_artifact_publication(
+        "creative_render", build_creative_render_publication(_artifact_root)
+    )
     engines["job_queue"] = job_queue
     engines["causal_journal"] = causal_journal
 
@@ -327,6 +337,31 @@ def build_application(
     feature_engines = engines["feature_engines"]
 
     async def _post_init(application: Any) -> None:
+        application.bot_data["startup_status"] = {"state": "starting", "degraded": False}
+        # ── Startup step 0 (task-283, P0): exclusive process ownership ───────
+        # Every startup action below — journal backfill, ``resume_pending``,
+        # and eventually job execution — mutates the *same* SQLite sidecar.
+        # If a second live process shares that sidecar, two processes would
+        # recover and execute the same rows; row-level CAS fencing alone cannot
+        # undo an external side effect that a duplicate handler already caused.
+        # So ownership is acquired FIRST and its failure is fatal: a process
+        # that cannot prove it is the sole owner must not touch recovery at all.
+        from nexus_ai_agent.adapters.in_process_job_queue import QueueOwnershipError
+
+        try:
+            await job_queue.acquire_ownership()
+        except QueueOwnershipError as exc:
+            application.bot_data["startup_status"] = {
+                "state": "failed",
+                "phase": "queue_ownership",
+                "degraded": False,
+                "detail": f"{type(exc).__name__}: {exc}"[:240],
+            }
+            logger.exception("queue_ownership_acquisition_failed")
+            raise RuntimeError(
+                "queue ownership could not be acquired; refusing to start a second executor"
+            ) from exc
+        application.bot_data["queue_ownership"] = {"acquired": True}
         # Bind the runtime bot to the bindable engines (reminders,
         # force-join, anonymous chat) and restore pending reminders so
         # a restart does not silently drop them.
@@ -335,8 +370,15 @@ def build_application(
             feature_engines.force_join.bind(application.bot)
             feature_engines.anon.bind(application.bot)
             await feature_engines.reminders.restore_pending()
-        except Exception:  # noqa: BLE001 — startup wiring must not kill the bot
+        except Exception as exc:  # noqa: BLE001 — mandatory recovery blocks startup
+            application.bot_data["startup_status"] = {
+                "state": "failed",
+                "phase": "feature_engines_and_reminders",
+                "degraded": False,
+                "detail": f"{type(exc).__name__}: {exc}"[:240],
+            }
             logger.exception("feature_engines_startup_failed")
+            raise RuntimeError("mandatory feature-engine/reminder recovery failed") from exc
         # task-231: close any crash-window holes in the causal journal with
         # explicitly labeled reconstructions (idempotent, fail-safe). A
         # degraded (None) journal simply has nothing to backfill into.
@@ -350,9 +392,27 @@ def build_application(
                     job_queue,
                     await asyncio.to_thread(job_queue.job_ids),
                 )
-            except Exception:  # noqa: BLE001 — ledger recovery must not kill the bot
+            except Exception:  # noqa: BLE001 — ledger is optional evidence
+                application.bot_data["startup_status"] = {
+                    "state": "degraded",
+                    "phase": "causal_journal_backfill",
+                    "degraded": True,
+                    "detail": (
+                        "causal journal backfill unavailable; pending work remains authoritative"
+                    ),
+                }
                 logger.exception("causal_journal_backfill_failed")
-        await job_queue.resume_pending()
+        try:
+            await job_queue.resume_pending()
+        except Exception as exc:  # noqa: BLE001 — mandatory queue recovery
+            application.bot_data["startup_status"] = {
+                "state": "failed",
+                "phase": "queue_recovery",
+                "degraded": False,
+                "detail": f"{type(exc).__name__}: {exc}"[:240],
+            }
+            logger.exception("queue_recovery_failed")
+            raise RuntimeError("mandatory queue recovery failed") from exc
         # Living Core phase 2b: opt-in vital signs (off unless
         # SELF_VITALS_ENABLED=true). Observation only — it never acts.
         try:
@@ -366,11 +426,24 @@ def build_application(
             )
         except Exception:  # noqa: BLE001 — observation must never kill the bot
             logger.exception("self_vitals_startup_failed")
+        else:
+            if application.bot_data["startup_status"].get("state") != "degraded":
+                application.bot_data["startup_status"] = {"state": "ready", "degraded": False}
 
     async def _post_shutdown(application: Any) -> None:
         vitals_handle = application.bot_data.get("self_vitals")
         if vitals_handle is not None:
             await vitals_handle.stop()
+        # task-283: ownership is released LAST, and only after the queue has
+        # stopped its workers and their heartbeat children.  Ordering matters:
+        # releasing while an attempt is still in flight lets a second process
+        # acquire ownership and start recovery over a row this process is
+        # actively executing.  ``shutdown`` itself releases the lock (it is
+        # idempotent), so a failure here cannot leave ambiguous ownership.
+        try:
+            await job_queue.shutdown()
+        except Exception:  # noqa: BLE001 - shutdown must not raise past the hook
+            logger.exception("queue_shutdown_failed")
         try:
             feature_engines.reminders.close()
         except Exception:  # noqa: BLE001
@@ -383,6 +456,15 @@ def build_application(
         .post_shutdown(_post_shutdown)
         .build()
     )
+    application.bot_data["startup_status"] = {"state": "not_started", "degraded": False}
+    # Readiness must observe the same lifecycle for polling and webhook mode;
+    # the latter also publishes this object under webhook_application.
+    try:
+        from nexus_ai_agent.api.app import app as api_app
+
+        api_app.state.runtime_application = application
+    except Exception:  # noqa: BLE001 - API is optional for CLI-only callers
+        logger.debug("api_runtime_state_unavailable", exc_info=True)
     application.bot_data["graph"] = graph
     application.bot_data["presence"] = presence_store
     application.bot_data["storage"] = storage_manager

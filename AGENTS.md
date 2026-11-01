@@ -8,6 +8,8 @@
 
 # AGENTS.md — Multi-Agent Coordination Contract (protocol v2)
 
+> **Product frame (read first).** NEXUS is an *application* (web/mobile) with a living core; the Telegram bot is **one channel adapter**, not the product. Zero `telegram` imports in the core is the F1 target (five legacy importers outside `bot/` are frozen, and `tests/architecture/test_import_boundaries.py` rejects only *new* ones); canonical identity becomes a `Principal` once F1 lands (target, not yet on `main`); and a new capability must be reachable without Telegram (review-enforced until a gate exists). Details, evidence and the migration ladder: [`docs/architecture/PRODUCT_FRAME.md`](docs/architecture/PRODUCT_FRAME.md).
+
 Several agents work on this repository **in parallel, from separate sandboxes**. The only shared
 medium between sandboxes is **this git repository**, so coordination is file-based: a claim board
 committed and pushed through git, backed by a zero-dependency CLI

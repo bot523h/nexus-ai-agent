@@ -48,13 +48,19 @@ async def test_long_term_memory_written_on_turn_end(settings_override) -> None:
         "error": None,
         "turn_count": 0,
         "moderation_passed": True,
+        # P1-E: the writer stores only with an explicit consent decision.
+        "memory_consent": True,
     }
 
     result = await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
     assert result["response"]
 
-    # Verify that the turn was written to long_term_memory
-    memories = await long_term.search(thread_id, "secret code", top_k=5)
+    # Verify that the turn was written to the user's PERSONAL long-term
+    # memory scope (memory_scope_id(999)) — since the P1-A isolation fix the
+    # write key is the per-user scope, not the shared conversation thread.
+    from nexus_ai_agent.memory.long_term import memory_scope_id
+
+    memories = await long_term.search(memory_scope_id(999), "secret code", top_k=5)
     assert len(memories) >= 1
     assert "ALPHA-42" in memories[0]
 

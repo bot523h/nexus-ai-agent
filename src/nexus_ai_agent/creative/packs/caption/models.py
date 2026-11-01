@@ -34,7 +34,7 @@ OPERATION_BURN_IN = "caption.burn_in"
 class WordTiming(BaseModel):
     """Word-level alignment timing in integer microseconds."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     word: str = Field(min_length=1)
     start_us: int = Field(ge=0)
@@ -64,7 +64,7 @@ class WordTiming(BaseModel):
 class TranscriptSegment(BaseModel):
     """Timed transcript segment (utterance/sentence/phrase)."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     start_us: int = Field(ge=0)
     end_us: int = Field(ge=0)
@@ -115,9 +115,9 @@ class SpeakerTurn(BaseModel):
 
 
 class TranscriptRef(BaseModel):
-    """Structured container for transcript segments, word alignments, and speaker turns."""
+    """Structured transcript plus truthful optional engine provenance."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     transcript_id: str = Field(min_length=1)
     source_asset_id: str = Field(default="")
@@ -125,6 +125,12 @@ class TranscriptRef(BaseModel):
     segments: tuple[TranscriptSegment, ...] = ()
     duration_us: int = Field(default=0, ge=0)
     speaker_turns: tuple[SpeakerTurn, ...] = ()
+    engine: str | None = None
+    engine_version: str | None = None
+    model_name: str | None = None
+    model_digest: str | None = None
+    source_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def text(self) -> str:
@@ -185,7 +191,7 @@ class TranscribeInput(BaseModel):
     language: str | None = None
     language_policy: str = "auto"
     transcript: TranscriptRef | None = None
-    model_name: str | None = None
+    model_name: str | None = Field(default=None, min_length=1)
 
 
 class AlignWordsInput(BaseModel):
@@ -225,7 +231,7 @@ class GenerateSrtInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     transcript: TranscriptRef
-    output_asset_id: str | None = None
+    output_asset_id: str | None = Field(default=None, min_length=1)
     include_vtt: bool = True
     line_policy: dict[str, Any] = Field(default_factory=dict)
 
@@ -235,13 +241,13 @@ class AssStyleConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: str = "Default"
-    font_name: str = "Vazirmatn"
+    name: str = Field(default="Default", pattern=r"^[\w .-]{1,80}$")
+    font_name: str = Field(default="Vazirmatn", pattern=r"^[\w .-]{1,80}$")
     font_size: int = Field(default=48, ge=8, le=144)
-    primary_colour: str = "&H00FFFFFF"  # White (&HAABBGGRR in ASS)
-    secondary_colour: str = "&H000000FF"
-    outline_colour: str = "&H00000000"  # Black outline
-    back_colour: str = "&H80000000"  # Semi-transparent shadow
+    primary_colour: str = Field(default="&H00FFFFFF", pattern=r"^&H[0-9A-Fa-f]{8}$")
+    secondary_colour: str = Field(default="&H000000FF", pattern=r"^&H[0-9A-Fa-f]{8}$")
+    outline_colour: str = Field(default="&H00000000", pattern=r"^&H[0-9A-Fa-f]{8}$")
+    back_colour: str = Field(default="&H80000000", pattern=r"^&H[0-9A-Fa-f]{8}$")
     bold: bool = True
     italic: bool = False
     underline: bool = False
@@ -266,7 +272,7 @@ class GenerateAssInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     transcript: TranscriptRef
-    output_asset_id: str | None = None
+    output_asset_id: str | None = Field(default=None, min_length=1)
     style: AssStyleConfig | None = None
     enable_rtl_wrap: bool = True
     enable_karaoke: bool = False
@@ -280,14 +286,16 @@ class StyleVazirmatnInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     caption_asset_id: str = Field(min_length=1)
+    transcript: TranscriptRef
+    output_asset_id: str | None = Field(default=None, min_length=1)
     font_size: int = Field(default=48, ge=8, le=144)
-    primary_colour: str = "&H00FFFFFF"
-    outline_colour: str = "&H00000000"
-    shadow_colour: str = "&H80000000"
+    primary_colour: str = Field(default="&H00FFFFFF", pattern=r"^&H[0-9A-Fa-f]{8}$")
+    outline_colour: str = Field(default="&H00000000", pattern=r"^&H[0-9A-Fa-f]{8}$")
+    shadow_colour: str = Field(default="&H80000000", pattern=r"^&H[0-9A-Fa-f]{8}$")
     alignment: int = Field(default=2, ge=1, le=9)
     bold: bool = True
-    play_res_x: int = Field(default=1280, ge=320)
-    play_res_y: int = Field(default=720, ge=240)
+    play_res_x: int = Field(default=1280, ge=320, le=7680)
+    play_res_y: int = Field(default=720, ge=240, le=4320)
 
 
 class HighlightWordsInput(BaseModel):
@@ -318,5 +326,5 @@ class BurnInInput(BaseModel):
 
     video_asset_id: str = Field(min_length=1)
     caption_asset_id: str = Field(min_length=1)
-    output_asset_id: str | None = None
+    output_asset_id: str | None = Field(default=None, min_length=1)
     confirmed: bool = False

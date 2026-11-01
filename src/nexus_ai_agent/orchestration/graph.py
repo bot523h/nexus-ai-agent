@@ -7,8 +7,9 @@ from langgraph.graph import END, START, StateGraph
 from nexus_ai_agent.agents.gemma_agent import GemmaAgent
 from nexus_ai_agent.agents.phi_agent import PhiAgent
 from nexus_ai_agent.agents.qwen_agent import QwenAgent
+from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.llm.provider import LLMProvider
-from nexus_ai_agent.memory.long_term import LongTermMemory
+from nexus_ai_agent.memory.long_term import LongTermMemory, is_private_audience, memory_scope_id
 from nexus_ai_agent.orchestration.router import classify_intent, select_persona
 from nexus_ai_agent.orchestration.state import NexusState
 from nexus_ai_agent.tools.registry import ToolRegistry
@@ -23,25 +24,48 @@ async def _router_node(state: NexusState) -> NexusState:
         "intent": intent,
         "active_persona": persona,
         "turn_count": int(state.get("turn_count", 0)) + 1,
+        # Every turn re-derives memory_context from scratch: values supplied by
+        # the caller, a checkpoint replay or a resume must never survive into a
+        # prompt.  The reader (when it runs) overwrites this explicitly; if it
+        # fails or is not authorized, the context stays empty — fail closed.
+        "memory_context": "",
     }
 
 
 async def _memory_reader(long_term_memory: LongTermMemory, state: NexusState) -> NexusState:
     last = state["messages"][-1]["content"] if state.get("messages") else ""
     try:
-        results = await long_term_memory.search(state["thread_id"], last, top_k=3)
+        # Personal long-term memory is scoped per user — never by the shared
+        # conversation key.  A missing identity fails closed (empty context).
+        # Disclosure additionally requires a provable private audience: in a
+        # group the prompt context is shared by every member, so personal
+        # memory is never injected there.
+        scope = memory_scope_id(state.get("user_id"))
+        if scope is None or not is_private_audience(state.get("chat_id"), state.get("user_id")):
+            state["memory_context"] = ""
+            return state
+        results = await long_term_memory.search(scope, last, top_k=3)
         state["memory_context"] = await long_term_memory.format_context(results)
     except Exception:
-        state.setdefault("memory_context", "")
+        # Store failure, bad identity data, format error — anything — leaves
+        # the context empty.  Every branch OVERWRITES the incoming value (never
+        # setdefault): a checkpoint-hydrated or caller-supplied context must not
+        # survive any failure (CodeRabbit 4236380409).
+        state["memory_context"] = ""
     return state
 
 
 async def _chat_agent(llm: LLMProvider, state: NexusState) -> NexusState:
+    # Legacy helper mirroring the deleted ``agents/chat_agent.py`` module.
+    # ``compile_graph`` wires the persona nodes instead, but any future caller
+    # of this helper must still carry the real principal into the quota seam.
     messages = state.get("messages", [])[-10:]
     memory_context = state.get("memory_context", "")
     prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
     system = f"You are NEXUS, a helpful AI assistant.\nContext from memory: {memory_context}"
-    state["response"] = await llm.generate(prompt=prompt, system=system)
+    state["response"] = await llm.generate(
+        prompt=prompt, system=system, user_id=state.get("user_id") or None
+    )
     return state
 
 
@@ -93,33 +117,75 @@ async def _executor_agent(
         state["tool_results"] = state.get("tool_results", [])
         return state
 
+    def _confirmation_refusal(tool_name: str) -> NexusState:
+        """Typed, truthful refusal for a tool that the registry did not run."""
+        error_code = "confirmation_required"
+        message = f"Confirmation required before tool '{tool_name}' can run. The tool did not run."
+        first_pending["status"] = "failed"
+        state["tool_results"] = state.get("tool_results", []) + [
+            {
+                "step_id": first_pending.get("id"),
+                "tool": tool_name,
+                "success": False,
+                "error_code": error_code,
+                "output": message,
+                "error": message,
+            }
+        ]
+        state["error"] = f"{error_code}: {message}"
+        state["response"] = message
+        state["current_task"] = task
+        return state
+
     tool_name = first_pending.get("tool")
     if tool_registry and tool_name:
         tool_inputs = first_pending.get("inputs", {})
+        # A confirmation is an explicit, one-shot boolean attached to THIS
+        # pending step by a trusted caller; it is never inferred from free text.
+        confirmed = first_pending.pop("confirmed", None) is True
+        policy = {"confirmed": True} if confirmed else None
         try:
-            res = await tool_registry.run(tool_name, tool_inputs)
-            is_success = res.get("success", False)
+            res = await tool_registry.run(tool_name, tool_inputs, policy=policy)
+            if res.get("needs_confirmation"):
+                # The registry's GUARDED refusal has no "success" key.  The
+                # tool body did not run, so never emit an "executed" claim.
+                return _confirmation_refusal(tool_name)
+
+            is_success = res.get("success") is True
             first_pending["status"] = "done" if is_success else "failed"
             output_text = res.get("output", "") or res.get("error", "")
-            state["tool_results"] = state.get("tool_results", []) + [
-                {
-                    "step_id": first_pending.get("id"),
-                    "tool": tool_name,
-                    "success": is_success,
-                    "output": output_text,
-                }
-            ]
-            state["response"] = output_text or f"Tool {tool_name} executed."
-        except Exception as e:
+            tool_result: dict[str, Any] = {
+                "step_id": first_pending.get("id"),
+                "tool": tool_name,
+                "success": is_success,
+                "output": output_text,
+            }
+            if not is_success:
+                tool_result["error_code"] = "tool_failure"
+            state["tool_results"] = state.get("tool_results", []) + [tool_result]
+            if is_success:
+                state["response"] = output_text or f"Tool {tool_name} executed."
+            else:
+                # A failed tool with empty output must not become "executed.".
+                state["response"] = (
+                    res.get("error")
+                    or output_text
+                    or f"Tool {tool_name} did not complete successfully."
+                )
+                state["error"] = f"tool_failure: {state['response']}"
+        except Exception as e:  # noqa: BLE001 - command boundary reports failures
             first_pending["status"] = "failed"
             state["tool_results"] = state.get("tool_results", []) + [
                 {
                     "step_id": first_pending.get("id"),
                     "tool": tool_name,
                     "success": False,
+                    "error_code": "tool_exception",
                     "output": str(e),
+                    "error": str(e),
                 }
             ]
+            state["error"] = f"tool_exception: {e}"
             state["response"] = f"Failed to execute {tool_name}: {e}"
     else:
         # A plan without a registered executable tool is not an execution.
@@ -135,6 +201,7 @@ async def _executor_agent(
                 "success": False,
                 "error_code": error_code,
                 "output": message,
+                "error": message,
             }
         ]
         state["error"] = f"{error_code}: {message}"
@@ -153,15 +220,30 @@ async def _memory_writer(
     if response:
         state["messages"] = state.get("messages", []) + [{"role": "assistant", "content": response}]
 
-    # Store turn into durable long-term memory for semantic recall across sessions
-    thread_id = state.get("thread_id")
+    # Store turn into durable long-term memory for semantic recall across
+    # sessions — scoped to the speaking user's personal memory.  The shared
+    # conversation key (thread_id) is never a memory scope: in a group chat it
+    # would hand one member's turns to every other member.  No valid identity
+    # ⇒ fail closed (no write, no shared fallback).
+    scope = memory_scope_id(state.get("user_id"))
     messages = state.get("messages", [])
-    if long_term_memory and thread_id and len(messages) >= 2:
+    # P1-E consent gate: the effective per-user decision travels in the state
+    # from the message handler (P0-7).  Only an explicit ``True`` with the live
+    # feature switch on may store; an absent, denied or malformed value fails
+    # closed, and a stale/checkpointed granted value cannot write while
+    # ``NEXUS_AI_MEMORY_ENABLED`` is false.
+    if (
+        long_term_memory
+        and scope
+        and state.get("memory_consent") is True
+        and get_settings().ai_memory_enabled
+        and len(messages) >= 2
+    ):
         last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         if last_user and response:
             try:
                 turn_text = f"User: {last_user}\nAssistant: {response}"
-                await long_term_memory.store(thread_id, turn_text)
+                await long_term_memory.store(scope, turn_text)
             except Exception:
                 pass  # Fail-safe: memory write failures never abort the conversation
     return state
@@ -204,7 +286,7 @@ def compile_graph(
         resp = state.get("response", "")
         if not resp:
             return {**state, "moderation_passed": True}
-        result = await phi.moderate(resp)
+        result = await phi.moderate(resp, user_id=state.get("user_id") or None)
         if not result.get("safe", True):
             return {**state, "response": "I cannot respond to that.", "moderation_passed": False}
         return {**state, "moderation_passed": True}

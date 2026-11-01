@@ -4,8 +4,8 @@ name: nexus-ai
 services:
   - name: bot
     # v3.8.0 (Phase 3): "web" instead of "worker" so the service can scale
-    # to zero. Telegram POSTs updates to POST /webhook/telegram; liveness
-    # is answered by GET /healthz (no database touch).
+    # to zero. Telegram POSTs updates to POST /webhook/telegram; promotion
+    # gates on /readyz while independent liveness remains /healthz.
     type: web
     docker:
       dockerfile: Dockerfile
@@ -21,4 +21,4 @@ services:
       - name: NEXUS_WEBHOOK_SECRET
         value: "{{ .Env.NEXUS_WEBHOOK_SECRET }}"
     health_check:
-      path: /healthz
+      path: /readyz

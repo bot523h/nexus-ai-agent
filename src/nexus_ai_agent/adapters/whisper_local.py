@@ -28,12 +28,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib
+import importlib.metadata
+import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import threading
 import wave
+from collections import OrderedDict
+from contextlib import nullcontext
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +66,13 @@ SPEECH_EXTRA_HINT = "pip install 'nexus-ai-agent[speech]'"
 TRANSLATE_EXTRA_HINT = "pip install 'nexus-ai-agent[translate]'"
 
 _MICROSECONDS_PER_SECOND = 1_000_000
+_MAX_AUDIO_DURATION_US = 2 * 60 * _MICROSECONDS_PER_SECOND
+_MODEL_CACHE_LOCK = threading.RLock()
+_MODEL_CACHE: OrderedDict[tuple[str, str, str, int, str | None], tuple[Any, threading.Lock]] = (
+    OrderedDict()
+)
+_MODEL_CACHE_SIZE = 2
+_CPU_INFERENCE_LOCK = threading.Lock()
 
 
 class TranslateProfileUnavailableError(CaptionEngineError):
@@ -68,7 +82,93 @@ class TranslateProfileUnavailableError(CaptionEngineError):
 
 
 def _us(seconds: float) -> int:
-    return int(round(seconds * _MICROSECONDS_PER_SECOND))
+    """Deterministic decimal half-up conversion; reject non-finite engine values."""
+    if not math.isfinite(seconds) or seconds < 0:
+        raise CaptionEngineError(f"invalid engine timestamp: {seconds!r}")
+    return int(
+        (Decimal(str(seconds)) * _MICROSECONDS_PER_SECOND).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    """Hash file bytes in bounded memory for content-addressed provenance."""
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise CaptionEngineError(f"could not hash audio source: {error}") from error
+    return digest.hexdigest()
+
+
+def _probe_audio_duration_us(audio_path: Path) -> int:
+    """Read container/stream metadata without decoding the audio payload."""
+    try:
+        av = importlib.import_module("av")
+        with av.open(str(audio_path)) as container:
+            duration = container.duration
+            if duration is not None:
+                return _us(float(duration) / float(av.time_base))
+            stream_durations = [
+                float(stream.duration * stream.time_base)
+                for stream in container.streams.audio
+                if stream.duration is not None and stream.time_base is not None
+            ]
+            if stream_durations:
+                return _us(max(stream_durations))
+    except CaptionEngineError:
+        raise
+    except Exception as error:
+        raise CaptionEngineError(f"could not probe audio duration: {error}") from error
+    raise CaptionEngineError("audio duration metadata is unavailable; refusing unbounded inference")
+
+
+def _language_code(value: str | None) -> str | None:
+    """Validate a practical BCP-47 language tag and return Whisper's ISO code."""
+    if value is None:
+        return None
+    if not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*", value):
+        raise CaptionEngineError(f"invalid language tag: {value!r}")
+    return value.split("-")[0].lower()
+
+
+def _confidence(value: float) -> float:
+    """Validate a backend word probability without manufacturing a fallback."""
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise CaptionEngineError(f"invalid engine confidence: {value!r}")
+    return value
+
+
+def _map_raw_segment(raw: Any, index: int) -> TranscriptSegment:
+    start_us = _us(raw.start)
+    end_us = _us(raw.end)
+    text = raw.text.strip()
+    words = tuple(
+        WordTiming(
+            word=word.word.strip() or word.word,
+            start_us=_us(word.start),
+            end_us=_us(word.end),
+            score=_confidence(float(word.probability)),
+        )
+        for word in (raw.words or ())
+        if word.word.strip()
+    )
+    avg_logprob = float(getattr(raw, "avg_logprob", -1.0))
+    if math.isnan(avg_logprob):
+        raise CaptionEngineError("faster-whisper returned NaN avg_logprob")
+    # This bounded transform is not a calibrated posterior confidence.
+    score = 0.0 if avg_logprob == float("-inf") else max(0.0, min(1.0, 1.0 + avg_logprob))
+    return TranscriptSegment(
+        start_us=start_us,
+        end_us=end_us,
+        text=text,
+        words=words or project_word_timings(text, start_us, end_us),
+        segment_id=f"seg_{index:04d}",
+        score=round(score, 4),
+    )
 
 
 def energy_anchors(
@@ -268,7 +368,10 @@ class WhisperLocalCaptionEngine(CaptionEnginePort):
         self._download_root = str(download_root) if download_root else None
         self._allow_download = allow_download
         self._vad_filter = vad_filter
+        if cpu_threads < 1:
+            raise ValueError("cpu_threads must be >= 1")
         self._model: Any | None = None
+        self._inference_lock = threading.Lock()
         self._lock = threading.Lock()
         self._available: bool | None = None
 
@@ -295,28 +398,52 @@ class WhisperLocalCaptionEngine(CaptionEnginePort):
         return module.WhisperModel
 
     def _load_model(self) -> Any:
-        # Single check under the lock: an uncontended lock is nanoseconds, and
-        # double-checked locking only confuses both readers and type checkers.
-        with self._lock:
+        """Load/cache a bounded number of models without implicit hub access."""
+        with self._lock, _MODEL_CACHE_LOCK:
             if self._model is not None:
                 return self._model
             model_cls = self._require_available()
-            if not self._allow_download and os.environ.get("NEXUS_SPEECH_ALLOW_DOWNLOAD") != "1":
-                # Fail fast on a missing model instead of hitting the network.
-                os.environ.setdefault("HF_HUB_OFFLINE", "1")
-                os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+            download_enabled = self._allow_download or (
+                os.environ.get("NEXUS_SPEECH_ALLOW_DOWNLOAD") == "1"
+            )
+            local_model = Path(self._model_name).expanduser()
+            if not download_enabled and not local_model.is_dir():
+                raise CaptionProfileUnavailableError(
+                    "caption_profile_unavailable: offline mode requires model to be a local "
+                    f"directory (missing: {self._model_name!r}); model download is opt-in"
+                )
+            cache_key = (
+                str(local_model.resolve()) if local_model.is_dir() else self._model_name,
+                self._device,
+                self._compute_type,
+                self._cpu_threads,
+                self._download_root,
+            )
+            cached = _MODEL_CACHE.get(cache_key)
+            if cached is not None:
+                self._model, self._inference_lock = cached
+                _MODEL_CACHE.move_to_end(cache_key)
+                return self._model
             try:
                 self._model = model_cls(
-                    self._model_name,
+                    str(local_model.resolve()) if local_model.is_dir() else self._model_name,
                     device=self._device,
                     compute_type=self._compute_type,
                     cpu_threads=self._cpu_threads,
                     download_root=self._download_root,
                 )
             except Exception as error:
+                if not download_enabled and not local_model.is_dir():
+                    raise CaptionProfileUnavailableError(
+                        f"caption_profile_unavailable: local model unavailable: {error}"
+                    ) from error
                 raise CaptionEngineError(
                     f"could not load faster-whisper model {self._model_name!r}: {error}"
                 ) from error
+            self._inference_lock = threading.Lock()
+            _MODEL_CACHE[cache_key] = (self._model, self._inference_lock)
+            while len(_MODEL_CACHE) > _MODEL_CACHE_SIZE:
+                _MODEL_CACHE.popitem(last=False)
             return self._model
 
     # -- port --------------------------------------------------------------
@@ -333,60 +460,86 @@ class WhisperLocalCaptionEngine(CaptionEnginePort):
         source = Path(audio_path)
         if not source.is_file():
             raise CaptionEngineError(f"audio file not found: {source}")
+        language = _language_code(language)
+        self._require_available()
+        duration_us = _probe_audio_duration_us(source)
+        if duration_us > _MAX_AUDIO_DURATION_US:
+            raise CaptionEngineError(
+                "audio exceeds the 2-minute in-memory resource budget; split it into shorter chunks"
+            )
+        source_stat = source.stat()
+        source_sha256 = _sha256_file(source)
         model = self._load_model()
         try:
-            segments_iter, info = model.transcribe(
-                str(source), language=language, word_timestamps=True, vad_filter=self._vad_filter
-            )
-            raw_segments = list(segments_iter)
+            cpu_lock = _CPU_INFERENCE_LOCK if self._device == "cpu" else nullcontext()
+            with cpu_lock, self._inference_lock:
+                segments_iter, info = model.transcribe(
+                    str(source),
+                    language=language,
+                    word_timestamps=True,
+                    vad_filter=self._vad_filter,
+                )
+                # Consume the lazy backend generator while the model lock is held;
+                # map directly to canonical segments instead of retaining a second
+                # full list of backend objects for long recordings.
+                segments = [_map_raw_segment(raw, i) for i, raw in enumerate(segments_iter)]
         except CaptionEngineError:
             raise
         except Exception as error:
             raise CaptionEngineError(f"faster-whisper transcribe failed: {error}") from error
 
-        segments: list[TranscriptSegment] = []
-        for index, raw in enumerate(raw_segments):
-            words = tuple(
-                WordTiming(
-                    word=w.word.strip() or w.word,
-                    start_us=_us(w.start),
-                    end_us=_us(w.end),
-                    score=float(w.probability),
-                )
-                for w in (raw.words or ())
-                if w.word.strip()
+        final_stat = source.stat()
+        if (final_stat.st_size, final_stat.st_mtime_ns) != (
+            source_stat.st_size,
+            source_stat.st_mtime_ns,
+        ):
+            raise CaptionEngineError(
+                "audio source changed during inference; refusing stale provenance"
             )
-            # faster-whisper exposes avg_logprob (-inf..0), not a 0..1 score;
-            # map it to a calibrated-ish confidence instead of inventing
-            # precision we do not have.
-            avg_logprob = float(getattr(raw, "avg_logprob", -1.0) or -1.0)
-            score = max(0.0, min(1.0, 1.0 + avg_logprob))
-            segments.append(
-                TranscriptSegment(
-                    start_us=_us(raw.start),
-                    end_us=_us(raw.end),
-                    text=raw.text.strip(),
-                    words=words
-                    or project_word_timings(raw.text.strip(), _us(raw.start), _us(raw.end)),
-                    segment_id=f"seg_{index:04d}",
-                    score=round(score, 4),
-                )
-            )
-        rescored = segments
-
-        stat = source.stat()
-        seed = f"{source.resolve()}|{stat.st_size}|{stat.st_mtime_ns}"
-        digest = hashlib.sha256(seed.encode()).hexdigest()
         detected = getattr(info, "language", None) or None
         duration_s = float(getattr(info, "duration", 0.0) or 0.0)
-        tail_us = max((s.end_us for s in rescored), default=0)
+        tail_us = max((s.end_us for s in segments), default=0)
+        try:
+            engine_version = importlib.metadata.version("faster-whisper")
+        except importlib.metadata.PackageNotFoundError:
+            engine_version = None
+        effective_language = language or detected or "fa"
+        identity = json.dumps(
+            [
+                source_sha256,
+                engine_version,
+                self._model_name,
+                effective_language,
+                self._device,
+                self._compute_type,
+                self._cpu_threads,
+                self._vad_filter,
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        identity_sha256 = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         return TranscriptRef(
-            transcript_id=f"whisper:{self._model_name}:{digest[:16]}",
+            transcript_id=f"whisper:{self._model_name}:{identity_sha256[:16]}",
             source_asset_id="",
-            language=language or detected or "fa",
-            segments=tuple(rescored),
+            language=effective_language,
+            segments=tuple(segments),
             duration_us=max(tail_us, _us(duration_s)),
             speaker_turns=(),
+            engine="faster-whisper/CTranslate2",
+            engine_version=engine_version,
+            model_name=self._model_name,
+            model_digest=None,
+            source_sha256=source_sha256,
+            parameters={
+                "device": self._device,
+                "compute_type": self._compute_type,
+                "cpu_threads": self._cpu_threads,
+                "word_timestamps": True,
+                "vad_filter": self._vad_filter,
+                "language_requested": language,
+                "language_resolved": effective_language,
+            },
         )
 
     async def diarize(
@@ -449,6 +602,16 @@ class WhisperLocalCaptionEngine(CaptionEnginePort):
             segments=tuple(stamped),
             duration_us=transcript.duration_us,
             speaker_turns=turns,
+            engine=transcript.engine,
+            engine_version=transcript.engine_version,
+            model_name=transcript.model_name,
+            model_digest=transcript.model_digest,
+            source_sha256=transcript.source_sha256,
+            parameters={
+                **transcript.parameters,
+                "diarization_backend": "energy-vad-gap-heuristic",
+                "speaker_identity_claimed": False,
+            },
         )
 
 
@@ -484,12 +647,18 @@ class ArgosLocalTranslator:
                 f"translate_profile_unavailable: argostranslate is not installed; "
                 f"{TRANSLATE_EXTRA_HINT} ({error})"
             ) from error
-        target = target_language.split("-")[0].lower()
-        source = (self._source_language or transcript.language).split("-")[0].lower()
+        target = _language_code(target_language)
+        source = _language_code(self._source_language or transcript.language)
+        assert target is not None and source is not None
         try:
             translated: list[TranscriptSegment] = []
             for seg in transcript.segments:
+                if not seg.text.strip():
+                    translated.append(seg.model_copy(update={"text": "", "words": ()}))
+                    continue
                 text = module.translate(seg.text, source, target)
+                if not isinstance(text, str):
+                    raise CaptionEngineError("Argos returned a non-text translation")
                 translated.append(
                     seg.model_copy(
                         update={
@@ -502,6 +671,10 @@ class ArgosLocalTranslator:
             raise CaptionEngineError(
                 f"argos translate failed ({source}->{target}): {error}"
             ) from error
+        try:
+            translator_version = importlib.metadata.version("argostranslate")
+        except importlib.metadata.PackageNotFoundError:
+            translator_version = None
         return TranscriptRef(
             transcript_id=f"{transcript.transcript_id}:t-{target}",
             source_asset_id=transcript.source_asset_id,
@@ -509,6 +682,12 @@ class ArgosLocalTranslator:
             segments=tuple(translated),
             duration_us=transcript.duration_us,
             speaker_turns=transcript.speaker_turns,
+            engine="Argos Translate",
+            engine_version=translator_version,
+            model_name=f"{source}->{target}",
+            model_digest=None,
+            source_sha256=transcript.source_sha256,
+            parameters={"source_language": source, "target_language": target},
         )
 
 

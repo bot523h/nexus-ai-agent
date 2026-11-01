@@ -1,7 +1,7 @@
 """knowledge_retrieval (task-273): canonical source registry table
 
 Revision ID: d4e1c0a79b21
-Revises: b5d8e2f4a917
+Revises: c3b7a91e2f46
 Create Date: 2026-10-23 19:40:00.000000
 
 Adds the authoritative registry of authorized knowledge sources — the rows
@@ -35,7 +35,7 @@ from sqlmodel.sql import sqltypes as sqlmodel_types
 
 # revision identifiers, used by Alembic.
 revision: str = "d4e1c0a79b21"
-down_revision: str | Sequence[str] | None = "b5d8e2f4a917"
+down_revision: str | Sequence[str] | None = "c3b7a91e2f46"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

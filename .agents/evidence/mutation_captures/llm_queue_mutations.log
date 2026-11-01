@@ -1,0 +1,21 @@
+baseline ... GREEN
+timed_out_queue_entry_is_removed: killed
+cancelled_queued_entry_is_removed: killed
+running_provider_receives_cancellation: killed
+per_user_pending_count_is_decremented_once: killed
+provider_attempt_is_accounted: killed
+user_round_robin_is_retained: killed
+strict_priority_is_preserved_across_tiers: killed
+close_settles_waiters_with_closed_error: killed
+typed_retry_limit_remains_bounded: killed
+retry_after_minimum_is_not_shortened: killed
+retry_classification_uses_structured_status: killed
+daily_quota_rollover_is_rechecked_while_waiting: killed
+external_worker_cancellation_is_propagated: killed
+provider_self_cancel_settles_as_typed_failure: killed
+wait_for_timeout_includes_py310_asyncio_timeout: killed
+rate_wait_timeout_is_not_a_processor_error: killed
+caller_wait_timeout_uses_version_correct_classifier: killed
+caller_timeout_is_builtin_timeout_error: killed
+restored baseline ... GREEN
+18/18 mutants killed

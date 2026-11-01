@@ -66,6 +66,7 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
     "delivery": (
         "tests/unit/test_delivery_pack.py",
         "tests/unit/test_delivery_signing.py",
+        "tests/unit/test_temporal_adversarial.py",
         "tests/architecture/test_delivery_pack_boundary.py",
     ),
     "edit": (

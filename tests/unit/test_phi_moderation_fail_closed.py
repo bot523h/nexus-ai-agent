@@ -8,6 +8,8 @@ response silently suppress moderation.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from nexus_ai_agent.agents.phi_agent import PhiAgent
@@ -19,7 +21,7 @@ class _ScriptedLLM:
     def __init__(self, reply: str) -> None:
         self._reply = reply
 
-    async def generate(self, prompt: str, system: str = "") -> str:  # noqa: ARG002
+    async def generate(self, prompt: str, system: str = "", **kwargs: Any) -> str:  # noqa: ARG002
         return self._reply
 
 

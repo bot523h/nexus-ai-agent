@@ -35,18 +35,33 @@ Nothing here imports Telegram; the worker runs outside the bot process.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+if TYPE_CHECKING:
+    from nexus_ai_agent.adapters.in_process_job_queue import ArtifactPublication
+    from nexus_ai_agent.execution.staging import AttemptStaging
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from nexus_ai_agent.application.creative_intent import CanonicalCreativeIntent
+from nexus_ai_agent.application.principal import PrincipalId
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
 CREATIVE_RENDER_JOB_TYPE = "creative_render"
+
+#: Surface identity for the proof-carrying execution spine (task-215).  Closed
+#: vocabulary: ``ExecutionTrace`` refuses an unknown surface rather than
+#: silently forking the trace namespace.
+CREATIVE_SURFACE = "telegram.creative"
 WORKSPACE_PREFIX = "creative_"
 SOURCE_ASSET_ID = "src"
 
@@ -124,9 +139,60 @@ class CreativeRenderPayload(BaseModel):
     chat_id: int
     lang: str = "en"
     idempotency_key: str = Field(min_length=1)
+    # Proof-carrying execution spine (task-215): the trace identity the surface
+    # minted for this request. ``None`` means the row predates the spine; the
+    # worker then derives the canonical identity from the row's own durable key
+    # instead of inventing one. A row that DOES carry one must carry the
+    # identity its own key implies -- see ``_bound_trace_id``.
+    trace_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    # Schema 1 is the complete legacy contract above.  Schema 2 adds canonical
+    # references only: every one is revalidated against server-owned state in
+    # the worker.  None of these fields is an authorization grant.
+    schema_version: Literal[1, 2] = 1
+    principal_id: str | None = None
+    project_id: str | None = None
+    channel_binding_id: str | None = None
+    intent: CanonicalCreativeIntent | None = None
+
+    @model_validator(mode="after")
+    def _canonical_schema_is_complete(self) -> CreativeRenderPayload:
+        references = (
+            self.principal_id,
+            self.project_id,
+            self.channel_binding_id,
+            self.intent,
+        )
+        if self.schema_version == 1:
+            if any(value is not None for value in references):
+                raise ValueError("legacy creative payload cannot carry canonical references")
+            return self
+        if any(value is None for value in references):
+            raise ValueError("schema 2 requires principal, project, binding and intent")
+        assert self.principal_id is not None
+        assert self.project_id is not None
+        assert self.channel_binding_id is not None
+        assert self.intent is not None
+        PrincipalId(self.principal_id)
+        if not re.fullmatch(r"cbn_[0-9a-f]{64}", self.channel_binding_id):
+            raise ValueError("invalid channel binding reference")
+        if self.intent.project_id != self.project_id:
+            raise ValueError("canonical intent and payload target different projects")
+        return self
+
     # Deliberately no lifecycle opt-in field: the EXPERIMENTAL-pack opt-in is
     # server policy (``EXPERIMENTAL_OPT_IN_OPERATIONS``), and ``extra="forbid"``
     # rejects a row that tries to carry one (task-183 trust boundary).
+
+
+@dataclass(frozen=True)
+class _CanonicalExecution:
+    directory: Any  # noqa: ANN401 - SQLApplicationDirectory
+    access: Any  # noqa: ANN401 - ProjectAccess
+    binding: Any  # noqa: ANN401 - ChannelBinding
+    binding_id: str
+    intent: CanonicalCreativeIntent
+    input_data: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +248,7 @@ def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: 
     )
 
     project = new_project(
-        project_id=f"shot-{payload.idempotency_key}",
+        project_id=payload.project_id or f"shot-{payload.idempotency_key}",
         name=f"/{payload.command} {payload.operation}",
         timeline=Timeline(
             timeline_id="main",
@@ -198,7 +264,11 @@ def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: 
         duration_us=duration_us,
         parent_asset_ids=(),
         provenance={
-            "origin": "telegram.one_shot",
+            "origin": (
+                "application.canonical_intent"
+                if payload.schema_version == 2
+                else "telegram.one_shot"
+            ),
             "idempotency_key": payload.idempotency_key,
             "command": payload.command,
             "operation": payload.operation,
@@ -240,50 +310,209 @@ def build_job_bus(
     )
 
 
+def _bound_trace_id(payload: CreativeRenderPayload) -> str:
+    """Return the trace identity for this row, refusing a forged one.
+
+    A queue row is an untrusted structure -- the same trust boundary this
+    module already documents for workspaces and lifecycle opt-ins. So a
+    ``trace_id`` arriving from a row is only trusted once it is proven to be
+    the identity ``CREATIVE_SURFACE`` derives from that row's own durable
+    ``idempotency_key``. A row written before the spine existed carries
+    ``None``; its identity is *derived*, never invented, so an old row stays
+    explainable without pretending it carried a link it never had.
+    """
+    from nexus_ai_agent.application.execution_trace import trace_id_for, verify_bound_trace_id
+
+    try:
+        if payload.trace_id is None:
+            return trace_id_for(CREATIVE_SURFACE, payload.idempotency_key)
+        return verify_bound_trace_id(
+            surface=CREATIVE_SURFACE,
+            idempotency_key=payload.idempotency_key,
+            trace_id=payload.trace_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - a forged identity is a typed refusal
+        raise CreativeRenderError(
+            "invalid_request", f"unbound execution trace: {type(exc).__name__}"
+        ) from exc
+
+
 def _dispatch(
     project: Any,  # noqa: ANN401
     *,
     operation: str,
     input_data: dict[str, Any],
     idempotency_key: str,
-) -> dict[str, Any]:
-    """Registry lookup → bus dispatch. Bad args become typed
-    ``invalid_request`` (a retry with the same payload fails identically).
+    trace_id: str | None = None,
+    canonical: _CanonicalExecution | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Registry lookup → bus dispatch; returns output plus schema-2 evidence.
 
-    The bus's EXPERIMENTAL opt-in is derived from the canonical operation via
-    the server-controlled ``EXPERIMENTAL_OPT_IN_OPERATIONS``; no caller (and no
-    queue row) can pass it in."""
+    Bad args become typed ``invalid_request`` (a retry with the same payload
+    fails identically).  The bus's EXPERIMENTAL opt-in is derived from the
+    canonical operation via the server-controlled
+    ``EXPERIMENTAL_OPT_IN_OPERATIONS``; no caller (and no queue row) can pass it
+    in.
+
+    ``trace_id`` rides along on the typed command (task-215).  It is excluded
+    from the bus's idempotency fingerprint by design, so attaching it cannot
+    change which logical command a redelivery collapses into; it is carried,
+    not authoritative.  For a canonical job the authoritative identity is the
+    intent's ``proposal_id`` instead, so the legacy surface-minted ``trace_id``
+    never overrides the canonical one.
+
+    Legacy jobs retain their trusted ephemeral service grant.  Canonical jobs
+    use the persistent directory both before media work and here inside the
+    bus; the returned evidence comes only from the resulting command, result
+    and transaction history.
+    """
     from nexus_ai_agent.creative.studio.authorization import ProjectAccess
     from nexus_ai_agent.creative.studio.models import (
         ActorIdentity,
+        CommandProvenance,
         InputRef,
+        InputRefMetadata,
+        Preconditions,
+        RequestContext,
         TargetRef,
         TypedCommand,
+        compute_state_hash,
     )
 
-    service_actor = ActorIdentity(kind="service", actor_id="creative-render-runtime")
-    service_access = ProjectAccess(
-        actor=service_actor,
-        project_id=project.project_id,
-        permissions=frozenset({"project:read", "project:write"}),
-    )
-    bus = build_job_bus(project, operation=operation, authorizer=service_access)
+    if canonical is None:
+        service_actor = ActorIdentity(kind="service", actor_id="creative-render-runtime")
+        service_access = ProjectAccess(
+            actor=service_actor,
+            project_id=project.project_id,
+            permissions=frozenset({"project:read", "project:write"}),
+        )
+        actor = service_actor
+        authorizer = service_access
+        provenance = None
+        # Legacy request context carries the surface-minted trace identity so the
+        # job row and the studio command that produced it share one inspectable
+        # identity (task-215).  Canonical jobs use the intent request context
+        # below instead.
+        request_context = RequestContext(channel="telegram", request_id=trace_id)
+        preconditions = Preconditions()
+        input_ref = InputRef(
+            ref_type="asset",
+            project_id=project.project_id,
+            ref_id=SOURCE_ASSET_ID,
+        )
+    else:
+        if input_data != canonical.input_data:
+            raise CreativeRenderError(
+                "invalid_request", "canonical intent input changed before dispatch"
+            )
+        actor = canonical.access.actor
+        authorizer = canonical.directory
+        provenance = CommandProvenance(
+            source="user",
+            source_id=actor.actor_id,
+            reason="validated canonical creative intent",
+        )
+        request_context = RequestContext(
+            channel="local",
+            request_id=canonical.intent.intent_id,
+        )
+        preconditions = Preconditions(
+            state_revision=project.state_revision,
+            # _build_project attaches the measured asset with model_copy; the
+            # bus revalidates and recomputes this same content hash.  Never use
+            # the stale cached value as an optimistic-concurrency precondition.
+            state_hash=compute_state_hash(project),
+        )
+        input_ref = InputRef(
+            ref_type="asset",
+            project_id=project.project_id,
+            ref_id=SOURCE_ASSET_ID,
+            metadata=InputRefMetadata(
+                media_kind="video",
+                content_sha256=project.assets[0].content_sha256,
+            ),
+        )
+
+    bus = build_job_bus(project, operation=operation, authorizer=authorizer)
+    schema_version: Literal[1, 2] = 2 if canonical is not None else 1
     command = TypedCommand(
+        schema_version=schema_version,
         command_id=f"cmd-{idempotency_key}-{operation}",
         operation=operation,
         input=input_data,
         target=TargetRef(project_id=project.project_id, track_id="main"),
-        actor=service_actor,
-        input_refs=(
-            InputRef(ref_type="asset", project_id=project.project_id, ref_id=SOURCE_ASSET_ID),
-        ),
+        actor=actor,
+        input_refs=(input_ref,),
+        provenance=provenance,
+        request_context=request_context,
+        preconditions=preconditions,
+        trace_id=(canonical.intent.proposal_id if canonical is not None else trace_id),
         idempotency_key=idempotency_key,
     )
     try:
         result = bus.dispatch(command)
     except Exception as exc:
         raise CreativeRenderError("invalid_request", f"{type(exc).__name__}: {exc}") from exc
-    return dict(result.output or {})
+    output = dict(result.output or {})
+    if canonical is None:
+        return output, None
+
+    transactions = [item for item in bus.history if item.transaction_id == result.transaction_id]
+    project_state = bus.project
+    if (
+        len(transactions) != 1
+        or transactions[0].command_id != command.command_id
+        or project_state.state_revision != result.state_revision
+        or project_state.state_hash != result.state_hash
+    ):
+        raise CreativeRenderError(
+            "render_failed", "canonical CommandBus transaction evidence is inconsistent"
+        )
+    transaction = transactions[0]
+    description = bus.registry.describe(operation)
+    decision = bus.registry.check_permission(operation, confirmed=command.confirmed)
+    evidence = {
+        "schema_version": 2,
+        "intent": canonical.intent.model_dump(mode="json"),
+        "command": command.model_dump(mode="json"),
+        "command_result": result.model_dump(mode="json"),
+        "edit_transaction": {
+            "transaction_id": transaction.transaction_id,
+            "command_id": transaction.command_id,
+            "operation": transaction.operation,
+            "permission_level": transaction.permission_level.value,
+            "parent_revision": transaction.parent_revision,
+            "previous_state_hash": transaction.previous_state_hash,
+            "new_state_hash": transaction.new_state_hash,
+        },
+        "project": {
+            "project_id": project_state.project_id,
+            "state_revision": project_state.state_revision,
+            "state_hash": project_state.state_hash,
+            "state_storage": "attempt_scoped_in_memory",
+        },
+        "authorization": {
+            "status": "authorized",
+            "actor_id": actor.actor_id,
+            "principal_id": actor.actor_id,
+            "project_id": project.project_id,
+            "channel_binding_id": canonical.binding_id,
+            "channel": canonical.binding.channel,
+            "permissions": sorted(canonical.access.permissions),
+            "persistent": True,
+            "decision_source": "SQLApplicationDirectory.authorize",
+            "binding_decision_source": "SQLApplicationDirectory.require_binding",
+        },
+        "capability": description.model_dump(mode="json"),
+        "policy": {
+            "operation_id": decision.operation_id,
+            "permission_level": decision.level.value,
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "decision_source": "CapabilityRegistry.check_permission",
+        },
+    }
+    return output, evidence
 
 
 def _seconds_args(payload: CreativeRenderPayload, index: int, default: float) -> float:
@@ -319,6 +548,61 @@ def _operation_inputs(payload: CreativeRenderPayload, duration_us: int) -> dict[
     if payload.operation == "otio":
         return {"frame_rate": 24.0}
     raise CreativeRenderError("unsupported_operation", payload.operation)
+
+
+def _canonical_execution(
+    payload: CreativeRenderPayload,
+    canonical_id: str,
+) -> _CanonicalExecution | None:
+    """Authorize schema 2 from persistent server state before any media work."""
+
+    if payload.schema_version == 1:
+        return None
+    if canonical_id != "timeline.trim":
+        raise CreativeRenderError(
+            "unsupported_operation", "schema 2 currently supports timeline.trim only"
+        )
+    assert payload.principal_id is not None
+    assert payload.project_id is not None
+    assert payload.channel_binding_id is not None
+    assert payload.intent is not None
+    if payload.media_duration_us is None or payload.media_duration_us <= 0:
+        raise CreativeRenderError(
+            "invalid_request", "schema 2 requires authoritative positive source duration"
+        )
+    expected_input = _operation_inputs(payload, payload.media_duration_us)
+    if payload.intent.input != expected_input:
+        raise CreativeRenderError(
+            "invalid_request", "canonical intent input does not match the durable render request"
+        )
+
+    from nexus_ai_agent.adapters.sql_application_directory import SQLApplicationDirectory
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.studio.models import (
+        ActorIdentity,
+        AuthorizationError,
+    )
+
+    principal = PrincipalId(payload.principal_id)
+    directory = SQLApplicationDirectory()
+    try:
+        access = directory.authorize(
+            ActorIdentity(kind="user", actor_id=str(principal)),
+            payload.project_id,
+        )
+        binding = directory.require_binding(payload.channel_binding_id, principal)
+        required = build_runtime_registry().get_spec(canonical_id).effective_permissions
+        access.require_permissions(required)
+    except AuthorizationError as exc:
+        raise CreativeRenderError("invalid_request", f"AuthorizationError: {exc}") from exc
+    return _CanonicalExecution(
+        directory=directory,
+        access=access,
+        binding=binding,
+        binding_id=payload.channel_binding_id,
+        intent=payload.intent,
+        input_data=dict(payload.intent.input),
+    )
 
 
 def _lane_ops(
@@ -394,6 +678,7 @@ async def _run_render_branch(
     payload: CreativeRenderPayload,
     workspace: Path,
     canonical_id: str,
+    canonical: _CanonicalExecution | None = None,
 ) -> dict[str, Any]:
     from nexus_ai_agent.creative.rendering.executor import render_lane
     from nexus_ai_agent.creative.rendering.ir import lane_ir_from_project
@@ -420,11 +705,17 @@ async def _run_render_branch(
     project = _build_project(payload=payload, duration_us=duration_us, sha256=sha256)
 
     # 1) canonical operation (state mutation + history + measured record)
-    output = _dispatch(
+    output, execution_evidence = _dispatch(
         project,
         operation=canonical_id,
-        input_data=_operation_inputs(payload, duration_us),
+        input_data=(
+            canonical.input_data
+            if canonical is not None
+            else _operation_inputs(payload, duration_us)
+        ),
         idempotency_key=payload.idempotency_key,
+        trace_id=_bound_trace_id(payload),
+        canonical=canonical,
     )
     render_project = project  # lane instrumentation below mirrors the SAME op
 
@@ -449,7 +740,7 @@ async def _run_render_branch(
         raise CreativeRenderError("render_failed", f"{type(exc).__name__}: {exc}") from exc
 
     measured = probe_video(out_path, binary=binary)
-    return {
+    result = {
         "success": True,
         "artifact_path": str(out_path),
         "artifact_kind": "video",
@@ -462,6 +753,9 @@ async def _run_render_branch(
         "workspace_dir": str(workspace),
         "spec_ir_hash": artifact.lane_ir_hash,
     }
+    if execution_evidence is not None:
+        result["canonical_execution"] = execution_evidence
+    return result
 
 
 async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> dict[str, Any]:
@@ -474,11 +768,12 @@ async def _run_otio_branch(payload: CreativeRenderPayload, workspace: Path) -> d
     else:
         sha256 = _sha256_text("")
     project = _build_project(payload=payload, duration_us=duration_us, sha256=sha256)
-    output = _dispatch(
+    output, _ = _dispatch(
         project,
         operation="delivery.export_otio",
         input_data=_operation_inputs(payload, duration_us),
         idempotency_key=payload.idempotency_key,
+        trace_id=_bound_trace_id(payload),
     )
     otio_text = output.get("otio_json")
     if not isinstance(otio_text, str) or not otio_text.strip():
@@ -531,6 +826,7 @@ async def _run_caption_branch(
             "transcript": transcript.model_dump(mode="json"),
         },
         idempotency_key=payload.idempotency_key,
+        trace_id=_bound_trace_id(payload),
     )
 
     out_path = workspace / "captions.srt"
@@ -577,13 +873,6 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
             "error_code": "unsupported_operation",
             "error_detail": f"/{data.command} {data.operation}",
         }
-    if not workspace.exists():
-        return {
-            "success": False,
-            "error_code": "media_missing",
-            "error_detail": "staged workspace missing",
-        }
-
     logger.info(
         "creative_render_start",
         command=data.command,
@@ -591,17 +880,41 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
         idempotency_key=data.idempotency_key,
     )
     try:
+        # Proof-carrying execution spine (task-215): the trace identity is
+        # resolved BEFORE any engine is touched, so a row that cannot prove its
+        # own causal identity never reaches a provider.
+        trace_id = _bound_trace_id(data)
+        canonical_execution = _canonical_execution(data, canonical_id)
+        if not workspace.exists():
+            return {
+                "success": False,
+                "error_code": "media_missing",
+                "error_detail": "staged workspace missing",
+            }
         if canonical_id == "delivery.export_otio":
             result = await _run_otio_branch(data, workspace)
         elif canonical_id == "caption.transcribe":
             result = await _run_caption_branch(data, workspace, canonical_id)
         else:
-            result = await _run_render_branch(data, workspace, canonical_id)
+            result = await _run_render_branch(
+                data,
+                workspace,
+                canonical_id,
+                canonical_execution,
+            )
     except CreativeRenderError as exc:
         logger.warning("creative_render_typed_failure", code=exc.code, detail=exc.detail)
         return {"success": False, "error_code": exc.code, "error_detail": exc.detail}
-    logger.info("creative_render_done", operation=data.operation, sha256=result["sha256"][:26])
+    logger.info(
+        "creative_render_done",
+        operation=data.operation,
+        sha256=result["sha256"][:26],
+        trace_id=trace_id,
+    )
     result.pop("_artifact_probe", None)
+    # The trace identity rides in the durable result so the job row and the
+    # studio command that produced it share one inspectable identity.
+    result["trace_id"] = trace_id
     return result
 
 
@@ -614,3 +927,389 @@ def cleanup_workspace(record: dict[str, Any]) -> None:
         shutil.rmtree(directory, ignore_errors=True)
     except OSError:  # pragma: no cover - foreground best effort
         pass
+
+
+# ---------------------------------------------------------------------------
+# AttemptStaging-based publication for creative_render (task-255)
+# ---------------------------------------------------------------------------
+#
+# The render handler writes the artifact into the job workspace (the build
+# directory).  Publication moves it from the workspace into an attempt-scoped
+# staging tree and then atomically publishes it to a final destination under
+# the artifact root.  The staging tree is isolated per (job_id, attempt_id),
+# so a stale execution with a different workspace cannot address another
+# attempt's staging directory.
+#
+# task-283: the queue now threads ``_queue_job_id`` / ``_queue_attempt`` into
+# every publication callback (``_publish_and_reprobe``), so artifact ownership
+# evidence names the *complete* identity — job **and** attempt — rather than an
+# attempt number on its own.  When that identity is absent (a direct callback
+# invocation, e.g. in tests) the staging layout falls back to a path-derived
+# component, and any operation that would mutate published output fails closed
+# because ownership cannot be proved.
+
+CREATIVE_RENDER_PUBLICATION_JOB_TYPE = "creative_render"
+
+#: Sub-directories under the artifact root for staging and published output.
+_STAGING_SUBDIR = "staging"
+_PUBLISHED_SUBDIR = "published"
+
+
+def _derive_component(raw: str) -> str:
+    """Derive a safe path component from an arbitrary path string."""
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    return digest
+
+
+def _creative_render_staging(
+    artifact_root: Path,
+    workspace: Path,
+    artifact_path: Path,
+    job_id: str | None = None,
+    attempt_id: str | None = None,
+) -> AttemptStaging:
+    """Create an AttemptStaging instance for a creative_render publication.
+
+    The staging root is ``<artifact_root>/staging`` and the final root is
+    ``<artifact_root>/published`` so the publish target is never inside the
+    staging namespace.
+    """
+    from nexus_ai_agent.execution.staging import AttemptStaging
+
+    if job_id is None:
+        job_id = _derive_component(str(workspace))
+    if attempt_id is None:
+        attempt_id = _derive_component(str(artifact_path))
+    return AttemptStaging(
+        artifact_root / _STAGING_SUBDIR,
+        job_id=job_id or _derive_component(str(workspace)),
+        attempt_id=attempt_id or _derive_component(str(artifact_path)),
+        final_root=artifact_root / _PUBLISHED_SUBDIR,
+    )
+
+
+_OWNERSHIP_SIDECAR_SCHEMA = 1
+
+
+def _resolved_within(child: Path, parent: Path) -> bool:
+    """True when ``child`` resolves inside ``parent``.
+
+    Containment must be decided on *resolved* paths.  The previous check used
+    ``str(child).startswith(str(parent))``, which treats ``/work/ws-evil`` as
+    being inside ``/work/ws`` and therefore misclassifies a pre-publication
+    refusal as a post-publication one (or vice versa) purely from a shared
+    string prefix.
+    """
+    try:
+        return child.resolve(strict=False).is_relative_to(parent.resolve(strict=False))
+    except (OSError, RuntimeError):  # pragma: no cover - unresolvable path
+        return False
+
+
+def _publication_layout(staging: AttemptStaging, staged_name: str) -> tuple[Path, Path, Path, Path]:
+    """Return ``(job_dir, published, backup, sidecar)`` for this publication.
+
+    The published namespace is **job-scoped** (``published/<job_id>/<name>``).
+    A flat namespace let two different jobs that produce the same file name
+    overwrite each other's artifact *and* share one ``.prev`` backup, so one
+    job's rollback could restore another job's bytes.
+    """
+    final_root = staging.final_root
+    if final_root is None:  # pragma: no cover - guarded by callers
+        raise RuntimeError("publication requires a declared final_root")
+    job_id = staging.job_id
+    job_dir = Path(final_root) / job_id
+    return (
+        job_dir,
+        job_dir / staged_name,
+        job_dir / f".{staged_name}.prev",
+        job_dir / f".{staged_name}.owner",
+    )
+
+
+def _write_sidecar(sidecar: Path, *, job_id: str, attempt: str | None) -> None:
+    """Atomically record who owns this destination — **before** mutating it.
+
+    Ownership evidence is written first so that a crash between "backup
+    created" and "bytes published" leaves a destination whose owner is still
+    provable.  A torn sidecar would be indistinguishable from a foreign one, so
+    the write goes through a temp file and ``os.replace``.
+    """
+    payload = json.dumps(
+        {
+            "schema": _OWNERSHIP_SIDECAR_SCHEMA,
+            "job_id": job_id,
+            "attempt": attempt,
+        }
+    )
+    tmp = sidecar.with_name(sidecar.name + f".tmp.{os.getpid()}")
+    tmp.write_text(payload + "\n", encoding="utf-8")
+    os.replace(tmp, sidecar)
+
+
+def _parse_attempt(value: object) -> int | None:
+    """Canonical attempt identity, or ``None`` when the value is not one.
+
+    An attempt is a positive integer minted by the queue's reservation CAS.
+    The sidecar writer stores it as ``str(attempt)`` for historical reasons, so
+    the decimal spelling of a positive integer is accepted as the *same*
+    identity — no other representation is.  In particular ``None``, ``True``
+    (a ``bool`` is an ``int`` subclass), ``0``, negatives, floats and
+    non-numeric strings are all unprovable.
+
+    task-283 finding 3: comparing raw sidecar values let a sidecar with no
+    attempt (``"attempt": null``) and a caller with no attempt satisfy
+    ``None == None``, authorising a retract whose ownership was never
+    established.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 1 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text.isdecimal():
+            return None
+        parsed = int(text)
+        return parsed if parsed >= 1 else None
+    return None
+
+
+def _read_sidecar(sidecar: Path) -> dict[str, object] | None:
+    """Return the parsed sidecar, or ``None`` when it is absent or unprovable.
+
+    Absent, unreadable, malformed, wrong-schema and truncated sidecars are all
+    reported the same way on purpose: an unreadable ownership record is *not*
+    permission to act, it is the absence of proof.  The same applies to a
+    sidecar whose ``job_id`` is not a string or whose ``attempt`` is not a
+    positive integer: it names no owner, so nothing may be retracted under it.
+    """
+    try:
+        raw = sidecar.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        document = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    if document.get("schema") != _OWNERSHIP_SIDECAR_SCHEMA:
+        return None
+    if not isinstance(document.get("job_id"), str):
+        return None
+    if _parse_attempt(document.get("attempt")) is None:
+        return None
+    return document
+
+
+def creative_render_publication_callback(
+    payload: dict[str, object], result: dict[str, object], artifact_root: Path
+) -> dict[str, object]:
+    """Publish a creative_render artifact via AttemptStaging.
+
+    Lifecycle (each intermediate state is a testable crash point)::
+
+        1. stage      artifact bytes copied into this attempt's staging tree
+        2. claim      ownership sidecar (job_id + attempt) written atomically
+        3. backup     existing published bytes renamed to ``.<name>.prev``
+        4. publish    staged bytes atomically renamed into the job's namespace
+        5. patch      caller durably commits COMPLETED; ``finalize`` then runs
+
+    Returns a patch dict with the published ``artifact_path``.
+
+    Idempotent: a retry with the same (job, attempt) identity re-publishes the
+    same bytes into the same job-namespaced destination.
+    """
+    artifact_path_raw = result.get("artifact_path")
+    if not isinstance(artifact_path_raw, str) or not artifact_path_raw:
+        raise RuntimeError("publish: result has no artifact_path")
+    artifact_path = Path(artifact_path_raw)
+
+    workspace_raw = result.get("workspace_dir")
+    if not isinstance(workspace_raw, str) or not workspace_raw:
+        raise RuntimeError("publish: result has no workspace_dir")
+    workspace = Path(workspace_raw)
+
+    _qjid = payload.get("_queue_job_id") or result.get("_queue_job_id")
+    _qatt = payload.get("_queue_attempt") or result.get("_queue_attempt")
+    staging = _creative_render_staging(
+        artifact_root,
+        workspace,
+        artifact_path,
+        job_id=_qjid if isinstance(_qjid, str) else None,
+        attempt_id=str(_qatt) if isinstance(_qatt, (int, str)) else None,
+    )
+    assert staging.final_root is not None, "staging requires final_root"
+    staging.prepare()
+
+    # 1) Stage the artifact into this attempt's tree.
+    staged_name = artifact_path.name
+    staged_path = staging.stage_path(staged_name)
+    data = artifact_path.read_bytes()
+    staging.write(staged_name, data)
+
+    job_dir, published_path, backup_path, sidecar_path = _publication_layout(staging, staged_name)
+    try:
+        job_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(f"publish: job namespace unavailable: {exc}") from exc
+
+    attempt_component = str(_qatt) if isinstance(_qatt, (int, str)) else None
+
+    # 2) Claim the destination before touching it.
+    _write_sidecar(sidecar_path, job_id=staging.job_id, attempt=attempt_component)
+
+    # 3) Keep the previous bytes recoverable.
+    if published_path.exists():
+        published_path.rename(backup_path)
+
+    # 4) Atomic publish: staging → final destination (inside the job namespace).
+    resolved = staging.publish(staged_path, f"{staging.job_id}/{staged_name}")
+
+    return {
+        "artifact_path": str(resolved),
+        "artifact_backup": str(backup_path) if backup_path.exists() else None,
+    }
+
+
+def creative_render_retract_callback(
+    payload: dict[str, object], result: dict[str, object], artifact_root: Path
+) -> None:
+    """Retract a refused creative_render publication — or nothing at all.
+
+    Fails **closed**: without a readable sidecar proving that this exact
+    ``(job_id, attempt)`` owns the destination, the published bytes and the
+    ``.prev`` backup are left untouched.  A missing, malformed or truncated
+    sidecar is the absence of proof, not permission to act.
+
+    Handled states:
+
+    * *pre-publish* (artifact still in the workspace) — remove only this
+      attempt's staged temp; never touch published output.
+    * *interrupted publication* (`.prev` exists, destination missing) — restore
+      the backup so a crash between backup and publish does not lose the
+      previous artifact.
+    * *post-publish* (destination replaced, re-probe refused) — restore the
+      backup, or remove the refused bytes when there was no previous artifact.
+    """
+    artifact_path_raw = result.get("artifact_path")
+    if not isinstance(artifact_path_raw, str) or not artifact_path_raw:
+        return
+    artifact_path = Path(artifact_path_raw)
+
+    workspace_raw = result.get("workspace_dir")
+    if not isinstance(workspace_raw, str) or not workspace_raw:
+        return
+    workspace = Path(workspace_raw)
+
+    _qjid = payload.get("_queue_job_id") or result.get("_queue_job_id")
+    _qatt = payload.get("_queue_attempt") or result.get("_queue_attempt")
+    staging = _creative_render_staging(
+        artifact_root,
+        workspace,
+        artifact_path,
+        job_id=_qjid if isinstance(_qjid, str) else None,
+        attempt_id=str(_qatt) if isinstance(_qatt, (int, str)) else None,
+    )
+    assert staging.final_root is not None, "staging requires final_root"
+    staged_name = artifact_path.name
+
+    # Always allowed: discard this attempt's own staged temp (it is addressed
+    # by this attempt's staging directory, so it cannot name another attempt's
+    # bytes).
+    staged_path = staging.staging_dir / staged_name
+    if staged_path.exists():
+        staged_path.unlink()
+
+    # Everything below mutates published output, so it requires proof.
+    _, published_path, backup_path, sidecar_path = _publication_layout(staging, staged_name)
+    document = _read_sidecar(sidecar_path)
+    if document is None:
+        return  # missing/unreadable/malformed sidecar -> fail closed
+    if document.get("job_id") != staging.job_id:
+        return  # another job owns this destination
+    # Compare the *complete* identity, both sides canonically.  A caller with
+    # no queue-minted attempt has no proof of ownership at all, so it may never
+    # retract published output — the previous ``None == None`` comparison let
+    # exactly that through.  Different, malformed or newer attempts are refused
+    # the same way.
+    caller_attempt = _parse_attempt(_qatt)
+    if caller_attempt is None:
+        return  # no queue-minted attempt -> no ownership proof -> fail closed
+    recorded_attempt = _parse_attempt(document.get("attempt"))
+    if recorded_attempt is None or recorded_attempt != caller_attempt:
+        return  # a newer (or older) attempt owns it -> never retract it
+
+    if backup_path.exists() and not published_path.exists():
+        # Crash between step 3 and step 4: the previous artifact is stranded in
+        # the backup and the destination is absent.  Roll the publication back.
+        backup_path.rename(published_path)
+        return
+
+    is_post_publish = not _resolved_within(artifact_path, workspace)
+    if is_post_publish:
+        if backup_path.exists():
+            if published_path.exists():
+                published_path.unlink()
+            backup_path.rename(published_path)
+        elif published_path.exists():
+            published_path.unlink()
+    # Pre-publish refusal: only the staged temp was removed above; the
+    # published artifact (if any) is untouched.
+
+
+def creative_render_finalize_callback(
+    payload: dict[str, object], result: dict[str, object], artifact_root: Path
+) -> None:
+    """Clean up after the durable COMPLETED commit (best-effort, never raises)."""
+    artifact_path_raw = result.get("artifact_path")
+    if not isinstance(artifact_path_raw, str) or not artifact_path_raw:
+        return
+    artifact_path = Path(artifact_path_raw)
+
+    workspace_raw = result.get("workspace_dir")
+    if not isinstance(workspace_raw, str) or not workspace_raw:
+        return
+    workspace = Path(workspace_raw)
+
+    try:
+        _qjid = payload.get("_queue_job_id") or result.get("_queue_job_id")
+        _qatt = payload.get("_queue_attempt") or result.get("_queue_attempt")
+        staging = _creative_render_staging(
+            artifact_root,
+            workspace,
+            artifact_path,
+            job_id=_qjid if isinstance(_qjid, str) else None,
+            attempt_id=str(_qatt) if isinstance(_qatt, (int, str)) else None,
+        )
+        assert staging.final_root is not None, "staging requires final_root"
+        staging.cleanup()
+    except Exception:  # noqa: BLE001 - finalize is best-effort
+        pass
+
+
+def build_creative_render_publication(artifact_root: Path) -> ArtifactPublication:
+    """Build an ArtifactPublication for creative_render jobs.
+
+    The ``artifact_root`` is the staging namespace root (typically the
+    queue's ``_artifact_root``).  The caller (composition root) wires this
+    into the queue's ``artifact_publications`` mapping alongside the default
+    pdf_extract publication.
+    """
+    from nexus_ai_agent.adapters.in_process_job_queue import ArtifactPublication
+
+    def _publish(payload: dict[str, object], result: dict[str, object]) -> dict[str, object]:
+        return creative_render_publication_callback(payload, result, artifact_root)
+
+    def _retract(payload: dict[str, object], result: dict[str, object]) -> None:
+        creative_render_retract_callback(payload, result, artifact_root)
+
+    def _finalize(payload: dict[str, object], result: dict[str, object]) -> None:
+        creative_render_finalize_callback(payload, result, artifact_root)
+
+    return ArtifactPublication(
+        publish=_publish,
+        retract=_retract,
+        finalize=_finalize,
+    )
