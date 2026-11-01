@@ -176,3 +176,140 @@ async def test_non_vector_fallback_search(tmp_path: Path) -> None:
 
     results = await mem.search("thread-1", "note", top_k=2)
     assert results == ["second note", "first note"]
+
+
+def test_vec_unavailable_classifier_only_matches_vec_function_errors() -> None:
+    """Only an unknown/no-such *vec_* function may degrade to recency search."""
+    from nexus_ai_agent.memory.long_term import _is_vec_function_unavailable
+
+    assert _is_vec_function_unavailable(
+        sqlite3.OperationalError("no such function: vec_distance_cosine")
+    )
+    assert _is_vec_function_unavailable(
+        sqlite3.OperationalError("unknown function: vec_distance_L2")
+    )
+    # A genuine SQL failure must never be masked.
+    assert not _is_vec_function_unavailable(sqlite3.OperationalError("no such table: memories"))
+    assert not _is_vec_function_unavailable(sqlite3.OperationalError("database is locked"))
+    assert not _is_vec_function_unavailable(sqlite3.OperationalError("disk I/O error"))
+
+
+def test_fallback_retries_pysqlite3_when_vec_load_fails_on_stdlib(tmp_path: Path) -> None:
+    """If the stdlib connection can load extensions but sqlite-vec fails to load,
+    the optional pysqlite3 driver is retried and wins when it loads the extension."""
+    db_file = str(tmp_path / "loadfail_retry.db")
+    std_conn = MagicMock()
+    std_conn.__class__.__module__ = "sqlite3"
+    py_conn = MagicMock()
+    py_conn.__class__.__module__ = "pysqlite3"
+
+    fake_pysqlite3 = MagicMock()
+    fake_pysqlite3.connect.return_value = py_conn
+
+    with (
+        patch(
+            "nexus_ai_agent.memory.long_term._open_sqlite_connection",
+            return_value=(std_conn, True),
+        ),
+        patch("nexus_ai_agent.memory.long_term._pysqlite3_module", return_value=fake_pysqlite3),
+        # first attempt (stdlib) fails, retry (pysqlite3) succeeds
+        patch("nexus_ai_agent.memory.long_term._enable_sqlite_vec", side_effect=[False, True]),
+    ):
+        memory = LongTermMemory(db_file, FakeLLMProvider())
+        memory._conn_()
+        assert memory._use_vec is True
+        assert memory._conn is py_conn
+        assert std_conn.close.called  # the stdlib connection is released on swap
+
+
+def test_fallback_keeps_stdlib_connection_when_pysqlite3_also_fails(tmp_path: Path) -> None:
+    """When neither driver can load sqlite-vec, the stdlib connection is kept open
+    (never left closed) and _use_vec stays False — honest degradation, no crash."""
+    db_file = str(tmp_path / "bothfail.db")
+    std_conn = MagicMock()
+    std_conn.__class__.__module__ = "sqlite3"
+    py_conn = MagicMock()
+    py_conn.__class__.__module__ = "pysqlite3"
+
+    fake_pysqlite3 = MagicMock()
+    fake_pysqlite3.connect.return_value = py_conn
+
+    with (
+        patch(
+            "nexus_ai_agent.memory.long_term._open_sqlite_connection",
+            return_value=(std_conn, True),
+        ),
+        patch("nexus_ai_agent.memory.long_term._pysqlite3_module", return_value=fake_pysqlite3),
+        patch("nexus_ai_agent.memory.long_term._enable_sqlite_vec", side_effect=[False, False]),
+    ):
+        memory = LongTermMemory(db_file, FakeLLMProvider())
+        memory._conn_()
+        assert memory._use_vec is False
+        assert memory._conn is std_conn
+        assert not std_conn.close.called  # the working stdlib connection is NOT closed
+        assert py_conn.close.called  # the unusable retry connection is cleaned up
+
+
+def test_enable_sqlite_vec_returns_false_on_load_failure_and_redisisables() -> None:
+    """_enable_sqlite_vec reports success honestly and always re-disables loading."""
+    from nexus_ai_agent.memory.long_term import _enable_sqlite_vec
+
+    calls: list[bool] = []
+    conn = MagicMock()
+    conn.enable_load_extension.side_effect = lambda state: calls.append(state)
+
+    with patch("sqlite_vec.load", side_effect=RuntimeError("boom")):
+        assert _enable_sqlite_vec(conn) is False
+    assert calls == [True, False], "extension loading must be disabled again after a failure"
+
+    calls.clear()
+    with patch("sqlite_vec.load", return_value=None):
+        assert _enable_sqlite_vec(conn) is True
+    assert calls == [True, False]
+
+
+def test_enable_sqlite_vec_false_when_extension_module_absent() -> None:
+    from nexus_ai_agent.memory.long_term import _enable_sqlite_vec
+
+    conn = MagicMock()
+    with patch.dict("sys.modules", {"sqlite_vec": None}):
+        assert _enable_sqlite_vec(conn) is False
+    assert not conn.enable_load_extension.called
+
+
+def test_open_sqlite_connection_degrades_when_pysqlite3_absent(tmp_path: Path) -> None:
+    """When the optional driver is absent and stdlib cannot load extensions,
+    the stdlib connection is still returned (never None) with capability False."""
+    from nexus_ai_agent.memory.long_term import _open_sqlite_connection
+
+    db_file = str(tmp_path / "absent_driver.db")
+    with (
+        patch("nexus_ai_agent.memory.long_term._test_extension_capability", return_value=False),
+        patch("nexus_ai_agent.memory.long_term._pysqlite3_module", return_value=None),
+    ):
+        conn, can_load_ext = _open_sqlite_connection(db_file)
+    try:
+        assert conn is not None
+        assert can_load_ext is False
+    finally:
+        conn.close()
+
+
+def test_open_sqlite_connection_keeps_stdlib_when_fallback_connect_raises(tmp_path: Path) -> None:
+    """A fallback driver that cannot open the database must not lose the working
+    stdlib connection: the stdlib connection is returned, still usable."""
+    from nexus_ai_agent.memory.long_term import _open_sqlite_connection
+
+    db_file = str(tmp_path / "fallback_connect_boom.db")
+    exploding = MagicMock()
+    exploding.connect.side_effect = RuntimeError("cannot open fallback db")
+    with (
+        patch("nexus_ai_agent.memory.long_term._test_extension_capability", return_value=False),
+        patch("nexus_ai_agent.memory.long_term._pysqlite3_module", return_value=exploding),
+    ):
+        conn, can_load_ext = _open_sqlite_connection(db_file)
+    try:
+        assert can_load_ext is False
+        conn.execute("SELECT 1")  # the returned connection is genuinely usable
+    finally:
+        conn.close()

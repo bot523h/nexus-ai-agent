@@ -25,35 +25,90 @@ def _test_extension_capability(conn: Any) -> bool:
         return False
 
 
+def _connect(module: Any, path: str) -> Any:
+    """Open one connection from a ``sqlite3``-compatible module."""
+    if path == ":memory:":
+        return module.connect(":memory:", check_same_thread=False)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    return module.connect(path, check_same_thread=False)
+
+
+def _pysqlite3_module() -> Any | None:
+    """The optional bundled-SQLite driver, or ``None`` when it is not installed."""
+    try:
+        import pysqlite3
+    except ImportError:
+        return None
+    return pysqlite3
+
+
 def _open_sqlite_connection(path: str) -> tuple[Any, bool]:
     """Open an SQLite connection, preferring standard library sqlite3.
 
-    Returns (connection, supports_extension_loading).
+    Returns ``(connection, supports_extension_loading)``. Standard ``sqlite3``
+    is preferred; the bundled ``pysqlite3`` build (which compiles SQLite with
+    extension loading enabled) is used only when the stdlib connection cannot
+    load extensions at all.
     """
-    if path == ":memory:":
-        conn = sqlite3.connect(":memory:", check_same_thread=False)
-    else:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path, check_same_thread=False)
-
+    conn = _connect(sqlite3, path)
     if _test_extension_capability(conn):
         return conn, True
 
     # Standard sqlite3 lacks or fails extension loading; attempt pysqlite3 fallback
-    try:
-        import pysqlite3
-
-        conn.close()
-        if path == ":memory:":
-            fallback_conn = pysqlite3.connect(":memory:", check_same_thread=False)
-        else:
-            fallback_conn = pysqlite3.connect(path, check_same_thread=False)
-
-        if _test_extension_capability(fallback_conn):
-            return fallback_conn, True
-        return fallback_conn, False
-    except ImportError:
+    module = _pysqlite3_module()
+    if module is None:
         return conn, False
+    try:
+        fallback_conn = _connect(module, path)
+    except Exception:
+        # The fallback driver exists but could not open the database; keep the
+        # working stdlib connection rather than losing it to a failed retry.
+        return conn, False
+    conn.close()
+    return fallback_conn, _test_extension_capability(fallback_conn)
+
+
+def _enable_sqlite_vec(conn: Any) -> bool:
+    """Best-effort load of the sqlite-vec extension on an extension-capable conn.
+
+    Returns ``True`` only when the extension actually loaded. An absent or
+    incompatible extension is a *degraded capability*, never a crash — but it
+    is also never reported as success.
+    """
+    try:
+        import sqlite_vec
+    except ImportError:
+        return False
+    try:
+        conn.enable_load_extension(True)
+        try:
+            sqlite_vec.load(conn)
+            return True
+        finally:
+            # Extension loading is disabled again even if ``load`` raised, so
+            # the connection is never left in an "extension loading" state.
+            conn.enable_load_extension(False)
+    except Exception:
+        return False
+
+
+def _is_pysqlite3_connection(conn: Any) -> bool:
+    return type(conn).__module__.split(".")[0] == "pysqlite3"
+
+
+def _is_vec_function_unavailable(exc: Exception) -> bool:
+    """True only when the failure is *the vec_* SQL functions are not loaded*.
+
+    A genuine SQL error (missing table, locked database, disk I/O) must never
+    be turned into a fake recency result: only the specific "unknown/no such
+    function ... vec_*" class may fall back. The check is anchored on the
+    ``vec_`` function prefix rather than a single exact phrase so it survives
+    SQLite message variations across versions.
+    """
+    message = str(exc).lower()
+    if "vec_" not in message:
+        return False
+    return "no such function" in message or "unknown function" in message
 
 
 def _is_real_user_id(user_id: object) -> bool:
@@ -106,26 +161,29 @@ class LongTermMemory:
 
         conn, can_load_ext = _open_sqlite_connection(self._path)
 
-        if can_load_ext:
-            try:
-                import sqlite_vec
-
-                conn.enable_load_extension(True)
-                try:
-                    sqlite_vec.load(conn)
-                    self._use_vec = True
-                finally:
-                    conn.enable_load_extension(False)
-            except (ImportError, sqlite3.OperationalError, AttributeError):
-                self._use_vec = False
-            except Exception as exc:
-                err_msg = str(exc).lower()
-                if "sqlite_vec" in err_msg or "extension" in err_msg or "symbol" in err_msg:
-                    self._use_vec = False
-                else:
-                    raise
+        if can_load_ext and _enable_sqlite_vec(conn):
+            self._use_vec = True
         else:
+            # The extension is unusable on this connection. If it is the
+            # stdlib connection (and the optional bundled driver is present),
+            # retry once on pysqlite3 — a compiled SQLite that commonly loads
+            # the extension where the stdlib build cannot. A successful retry
+            # replaces the connection; otherwise the stdlib connection stays.
             self._use_vec = False
+            if can_load_ext and not _is_pysqlite3_connection(conn):
+                module = _pysqlite3_module()
+                if module is not None:
+                    try:
+                        retry = _connect(module, self._path)
+                    except Exception:
+                        retry = None
+                    if retry is not None:
+                        if _enable_sqlite_vec(retry):
+                            conn.close()
+                            conn = retry
+                            self._use_vec = True
+                        else:
+                            retry.close()
 
         conn.execute(
             """
@@ -194,17 +252,16 @@ class LongTermMemory:
             ).fetchall()
             return [r[0] for r in rows]
         except Exception as exc:
-            err_msg = str(exc).lower()
-            if (
-                "no such function: vec_distance_cosine" in err_msg
-                or "unknown function: vec_distance_cosine" in err_msg
-            ):
-                rows = conn.execute(
-                    "SELECT content FROM memories WHERE thread_id=? ORDER BY id DESC LIMIT ?",
-                    (thread_id, top_k),
-                ).fetchall()
-                return [r[0] for r in rows]
-            raise
+            # Only a *vec function unavailable* failure may degrade to recency;
+            # a real SQL error (missing table, lock, I/O) must surface, never be
+            # silently turned into a plausible-looking empty/recency result.
+            if not _is_vec_function_unavailable(exc):
+                raise
+            rows = conn.execute(
+                "SELECT content FROM memories WHERE thread_id=? ORDER BY id DESC LIMIT ?",
+                (thread_id, top_k),
+            ).fetchall()
+            return [r[0] for r in rows]
 
     async def format_context(self, results: list[str]) -> str:
         if not results:
