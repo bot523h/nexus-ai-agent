@@ -318,8 +318,11 @@ async def test_creative_render_publication_keeps_previous_as_backup(tmp_path: Pa
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"version 2"
 
-    # Previous is kept as .prev
-    backup = artifact_root / "published" / ".output.mp4.prev"
+    # Previous is kept as .prev, inside the publishing job's namespace
+    # (task-283: the published namespace is job-scoped, so two jobs that emit
+    # the same file name can neither overwrite each other's artifact nor share
+    # one .prev backup).
+    backup = published2.parent / ".output.mp4.prev"
     assert backup.exists()
     assert backup.read_bytes() == b"version 1"
 
@@ -339,26 +342,32 @@ async def test_creative_render_retract_restores_previous(tmp_path: Path) -> None
 
     publication = build_creative_render_publication(artifact_root)
 
-    # First publication
+    # First publication (queue-minted identity: job_id + attempt are the
+    # authoritative ownership evidence a real retract always carries).
     artifact.write_bytes(b"good version")
-    result = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
+    identity = {"_queue_job_id": "job-retract", "_queue_attempt": 1}
+    result = {"artifact_path": str(artifact), "workspace_dir": str(workspace), **identity}
     patch = publication.publish({}, result)
     published = Path(patch["artifact_path"])
     assert published.read_bytes() == b"good version"
 
     # Second publication (creates .prev backup)
     artifact.write_bytes(b"bad version")
-    result2 = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
+    result2 = {"artifact_path": str(artifact), "workspace_dir": str(workspace), **identity}
     patch2 = publication.publish({}, result2)
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"bad version"
 
     # Retract with post-publish result (artifact_path is the published path)
-    post_publish_result = {"artifact_path": str(published2), "workspace_dir": str(workspace)}
+    post_publish_result = {
+        "artifact_path": str(published2),
+        "workspace_dir": str(workspace),
+        **identity,
+    }
     publication.retract({}, post_publish_result)
     # After retract, the previous artifact is restored from .prev
-    backup = artifact_root / "published" / ".output.mp4.prev"
-    published_path = artifact_root / "published" / "output.mp4"
+    backup = published2.parent / ".output.mp4.prev"
+    published_path = published2
     assert not backup.exists(), "backup should be consumed by retract"
     assert published_path.read_bytes() == b"good version"
 
@@ -901,18 +910,23 @@ async def test_integration_two_attempts_same_artifact_name(tmp_path: Path) -> No
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"attempt 2 bytes"
 
-    # The .prev backup has attempt 1's bytes
-    backup = artifact_root / "published" / ".output.mp4.prev"
+    # The .prev backup has attempt 1's bytes (same job namespace, so the two
+    # attempts of ONE job legitimately share the destination and its backup).
+    backup = published2.parent / ".output.mp4.prev"
     assert backup.exists()
     assert backup.read_bytes() == b"attempt 1 bytes"
 
-    # Sidecar records attempt 2 as the owner
-    sidecar = artifact_root / "published" / ".output.mp4.owner"
+    # Sidecar records the *complete* identity of the owner: job + attempt
+    # (task-283 — an attempt number alone cannot distinguish two different
+    # jobs that use the same file name).
+    sidecar = published2.parent / ".output.mp4.owner"
     assert sidecar.exists()
     import json
 
     sidecar_data = json.loads(sidecar.read_text())
+    assert sidecar_data["job_id"] == "job-collision"
     assert sidecar_data["attempt"] == "2"
+    assert sidecar_data["schema"] == 1
 
     # Attempt 1's retract cannot touch attempt 2's output (sidecar mismatch)
     post_publish_result1 = {
@@ -1066,7 +1080,7 @@ async def test_integration_backup_restoration_correctness(tmp_path: Path) -> Non
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"version 2"
 
-    backup = artifact_root / "published" / ".render.mp4.prev"
+    backup = published2.parent / ".render.mp4.prev"
     assert backup.exists()
     assert backup.read_bytes() == b"version 1", "backup must contain version 1"
 
@@ -1113,7 +1127,12 @@ async def test_flock_second_process_blocked(tmp_path: Path) -> None:
         "import InProcessJobQueue; "
         f"q = InProcessJobQueue('{db_path}'); "
         "asyncio.get_event_loop().run_until_complete(q.acquire_ownership()); "
-        "print('HOLDER_READY'); "
+        # flush is load-bearing: without it this line only reaches the pipe when
+        # the child *exits*, so the "second process" below would race a dead
+        # holder (an unreaped zombie still answers os.kill(pid, 0), which is how
+        # this test used to pass against a PID-liveness check that never
+        # actually excluded a live owner).  task-283 repaired it.
+        "print('HOLDER_READY', flush=True); "
         "asyncio.get_event_loop().run_until_complete(asyncio.sleep(30))"
     )
     holder = subprocess.Popen(
@@ -1137,6 +1156,10 @@ async def test_flock_second_process_blocked(tmp_path: Path) -> None:
         raise AssertionError("holder did not start")
 
     try:
+        # The holder must genuinely still be alive and holding the lock — a
+        # dead-but-unreaped holder would make the exclusion assertion vacuous.
+        assert holder.poll() is None, "holder exited before exclusion was tested"
+
         # Second process should fail to acquire flock on enqueue
         second_script = (
             "import asyncio; "
