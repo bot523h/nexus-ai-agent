@@ -27,6 +27,8 @@ from nexus_ai_agent.bot.creative_surface import (
     CreativeFailure,
     CreativeRequest,
     CreativeSurfaceMapper,
+    _ensure_private_directory,
+    _StagingError,
     build_creative_handlers,
 )
 from nexus_ai_agent.config import settings as settings_module
@@ -462,3 +464,32 @@ def _update_for_message(message_id: int) -> Any:
     message = _FakeMessage(message_id)
     message.reply_to_message = None
     return _make_update(message)
+
+
+# -- private directory creation ---------------------------------------------
+
+
+def test_private_directory_creates_a_missing_root(tmp_path: Path) -> None:
+    """The trusted root is created on demand; a missing root is not a refusal.
+
+    ``get_settings()`` is ``lru_cache``d and creates ``creative_temp_dir`` only once
+    per process, so after a temp reaper or an emptied volume nothing else would ever
+    re-create it. The pre-change surface relied on ``parents=True`` for exactly this.
+    """
+    root = tmp_path / "creative"
+    assert not root.exists()
+    workspace = _ensure_private_directory(root / "creative_abc", root, "workspace")
+    assert root.is_dir(), "the trusted root must be created on demand"
+    assert workspace.is_dir()
+    assert workspace.stat().st_mode & 0o777 == 0o700
+
+
+def test_private_directory_still_refuses_a_symlinked_root(tmp_path: Path) -> None:
+    """Creating a missing root must not become a way to accept a redirect."""
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    root = tmp_path / "creative"
+    root.symlink_to(real, target_is_directory=True)
+    with pytest.raises(_StagingError):
+        _ensure_private_directory(root / "creative_abc", root, "workspace")
+    assert list(real.iterdir()) == [], "nothing may be written through the symlink"

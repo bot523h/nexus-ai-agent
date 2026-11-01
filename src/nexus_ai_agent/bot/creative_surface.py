@@ -318,7 +318,26 @@ def _refuse_symlinked_directory(path: Path, label: str) -> None:
 
 
 def _ensure_private_directory(path: Path, root: Path, label: str) -> Path:
-    """Create a directory under *root* with owner-only permissions, atomically."""
+    """Create a directory under *root* with owner-only permissions, atomically.
+
+    The trusted root is created on demand (``parents=True``) before the child, and
+    that ordering is load-bearing in both directions:
+
+    * the child is created with ``parents=False`` so it can never silently
+      materialise a missing ancestor chain — every component between it and the
+      trusted root has already been proved to be a real, non-symlink directory;
+    * the root itself MUST be created, because ``get_settings()`` is ``lru_cache``d
+      and creates it only once per process. A temp reaper, an emptied volume, or an
+      operator clearing scratch space would otherwise make every later creative
+      request fail for the life of the process. The pre-change code got this
+      resilience from ``workspace.mkdir(parents=True, exist_ok=True)``.
+    """
+    _refuse_symlinked_directory(root, f"{label} root")
+    try:
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise _StagingError("media_missing", f"{label} root cannot be created: {root}") from exc
+    _refuse_symlinked_directory(root, f"{label} root")
     _refuse_symlinked_directory(path.parent, f"{label} parent")
     try:
         path.mkdir(mode=0o700, parents=False, exist_ok=True)

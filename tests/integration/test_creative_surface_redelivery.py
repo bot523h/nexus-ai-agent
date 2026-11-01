@@ -33,6 +33,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -211,6 +212,47 @@ def assert_unchanged(path: Path, expected_bytes: bytes, label: str) -> None:
         f"  path     : {path}\n"
         f"  expected : {sha256_hex(expected_bytes)}\n"
         f"  actual   : {sha256_hex(actual)}"
+    )
+
+
+# ===========================================================================
+# A0. A missing creative root must be created, never fail every request
+# ===========================================================================
+
+
+async def test_missing_creative_root_is_recreated_on_a_warm_process(
+    handlers: dict[str, Any], db_path: Path, temp_root: Path
+) -> None:
+    """A wiped temp root must not permanently refuse every creative request.
+
+    ``get_settings()`` creates ``creative_temp_dir`` — but it is ``lru_cache``d, so
+    that happens **once per process**. In production the cache is warm, so if the
+    directory disappears afterwards (tmp reaper, empty volume on redeploy, an
+    operator clearing scratch space) nothing re-creates it and every later media
+    request would fail for the life of the process.
+
+    The pre-change code survived this because it used
+    ``workspace.mkdir(parents=True, exist_ok=True)``. This fix replaced that with a
+    strict, no-traversal creation that (correctly) refuses to create parents — and
+    thereby lost the resilience property without any test noticing, because this
+    module's autouse fixture always pre-creates the root.
+
+    The scenario is modelled exactly: warm the settings cache, delete the root,
+    then deliver a normal request.
+    """
+    settings_module.get_settings()  # warm the cache exactly as a running bot would
+    shutil.rmtree(temp_root)
+    assert not temp_root.exists()
+
+    message = await deliver(handlers, content=MEDIA_A)
+
+    assert temp_root.is_dir(), "the trusted creative root must be recreated on demand"
+    row = only_row(db_path)
+    payload = payload_of(row)
+    assert payload["input_sha256"] == sha256_hex(MEDIA_A)
+    assert_unchanged(Path(payload["input_path"]), MEDIA_A, "warm-process delivery")
+    assert any(str(row["id"]) in reply for reply in message.replies), (
+        f"a recreated root must still admit the job, got replies: {message.replies}"
     )
 
 

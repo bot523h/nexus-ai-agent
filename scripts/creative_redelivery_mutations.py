@@ -148,6 +148,18 @@ PROBES: tuple[Probe, ...] = (
         ),
         tests=(REDELIVERY, WORKER_UNIT),
     ),
+    Probe(
+        name="M7-missing-creative-root-not-recreated",
+        invariant="a wiped creative root must be recreated, not refused forever",
+        edits=(
+            Edit(
+                SURFACE,
+                "        root.mkdir(mode=0o700, parents=True, exist_ok=True)",
+                "        pass  # MUTANT: a missing trusted root is never recreated",
+            ),
+        ),
+        tests=(REDELIVERY, SURFACE_UNIT),
+    ),
 )
 
 
