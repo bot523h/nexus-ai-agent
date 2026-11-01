@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -116,19 +117,17 @@ PROBES: tuple[Probe, ...] = (
     ),
     Probe(
         name="M5-surface-workspace-symlink-guard-disabled",
-        invariant="a pre-planted workspace symlink must not redirect",
+        invariant="a pre-planted workspace symlink must not redirect the download",
         edits=(
             Edit(
                 SURFACE,
-                "    if stat.S_ISLNK(stat_result.st_mode):\n"
-                '        raise _StagingError("media_missing", f"{label} is a symlink: {path}")\n'
-                "    if not stat.S_ISDIR(stat_result.st_mode):\n"
-                '        raise _StagingError("media_missing", '
-                'f"{label} is not a directory: {path}")',
-                "    return  # MUTANT: the directory-symlink guard is gone entirely",
+                "def _refuse_symlinked_directory(path: Path, label: str) -> None:\n"
+                '    """Refuse a directory component that is a symlink (pre-planted redirect)."""',
+                "def _refuse_symlinked_directory(path: Path, label: str) -> None:\n"
+                "    return  # MUTANT: a symlinked directory component is accepted",
             ),
         ),
-        tests=(REDELIVERY,),
+        tests=(REDELIVERY, SURFACE_UNIT),
     ),
     Probe(
         name="M6-worker-lstat-file-type-guard-disabled",
@@ -141,9 +140,9 @@ PROBES: tuple[Probe, ...] = (
                 '"input_integrity", '
                 'f"staged input is a symlink: {path}")\n'
                 "    if not stat.S_ISREG(stat_result.st_mode):\n"
-                "        raise CreativeRenderError(\n"
-                '            "input_integrity", f"staged input is not a regular file: {path}"\n'
-                "        )",
+                "        raise CreativeRenderError("
+                '"input_integrity", '
+                'f"staged input is not a regular file: {path}")',
                 "    # MUTANT: the file-type guard is gone entirely",
             ),
         ),
@@ -156,15 +155,44 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+#: pytest exits 4 on a *usage* error (bad plugin, un-importable conftest, bad
+#: option) and 3 on an internal error. Neither says anything about a mutant, so
+#: both are hard failures of the campaign itself rather than "kills". A previous
+#: revision of this script omitted ``src`` from ``PYTHONPATH``, so every probe
+#: died in ``tests/conftest.py`` with exit 4 and the campaign reported a
+#: vacuous 6/6 pass.
+HARNESS_ERRORS = frozenset({3, 4})
+
+
 def _run(tests: tuple[str, ...]) -> tuple[int, str]:
+    environment = dict(os.environ)
+    source = str(ROOT / "src")
+    existing = environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = source + (os.pathsep + existing if existing else "")
     completed = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "--tb=no", "-p", "no:cacheprovider", *tests],
         cwd=ROOT,
+        env=environment,
         capture_output=True,
         text=True,
     )
     lines = (completed.stdout or "").strip().splitlines()
     return completed.returncode, lines[-1] if lines else "(no output)"
+
+
+def _preflight(tests: tuple[str, ...]) -> None:
+    """Prove the unmutated tree is GREEN, so a later RED means the mutation.
+
+    Without this the campaign cannot tell "the mutant was killed" from "the
+    suite never ran". Exits 2 if the baseline selection is not clean.
+    """
+    code, summary = _run(tests)
+    if code != 0:
+        print(
+            "PREFLIGHT FAILED: the unmutated tree is not green for this selection, "
+            f"so any mutant verdict would be meaningless.\n  exit={code} {summary}"
+        )
+        raise SystemExit(2)
 
 
 def main() -> int:
@@ -176,6 +204,8 @@ def main() -> int:
         for probe in PROBES:
             print(f"{probe.name}: {probe.invariant}")
         return 0
+
+    _preflight(tuple(dict.fromkeys(t for probe in PROBES for t in probe.tests)))
 
     failures: list[str] = []
     for probe in PROBES:
@@ -204,10 +234,15 @@ def main() -> int:
                 target.write_bytes(original)
 
         restored = all(_sha256(target) == digest for target, digest in digests.items())
-        verdict = "RED (killed)" if code != 0 else "GREEN (SURVIVED — vacuous test)"
+        if code in HARNESS_ERRORS:
+            verdict = "HARNESS ERROR (pytest could not run)"
+        elif code == 0:
+            verdict = "GREEN (SURVIVED — vacuous test)"
+        else:
+            verdict = "RED (killed)"
         print(f"{probe.name:46s} exit={code:<3d} {verdict:28s} {summary}")
         print(f"{'':46s} tree restored byte-identical: {restored}")
-        if code == 0 or not restored:
+        if code == 0 or code in HARNESS_ERRORS or not restored:
             failures.append(probe.name)
 
     print()
