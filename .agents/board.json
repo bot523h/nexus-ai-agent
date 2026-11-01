@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-10-31T15:35:11Z",
+  "updated_at": "2026-11-01T20:04:10Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -949,7 +949,8 @@
         "setup.py",
         "src/",
         "tests/",
-        "uv.lock"
+        "uv.lock",
+        ".dockerignore"
       ]
     },
     {
@@ -7075,7 +7076,7 @@
       "title_fa": "",
       "zone": "runtime-truth-tooling",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "truth.py::check_board_truth flags `gates_owner and status != \"active\"` while scripts/agent_board.py ACTIVE_STATUSES treats active_in_review as a live lease and _active_gates_owners counts it as the one valid gate holder — two validators, one invariant, opposite verdicts. Direction 2 is also uncovered: a claim with status=active but an EXPIRED lease keeps gates_owner while the referee already treats the board as holding zero owners, and TRUTH041 stays silent. tests/architecture/test_repo_truth_consistency.py runs the doctor against the real tree in CI, so direction 1 is a red main for a state the referee accepts. NOT duplicated here: open PR#189 already implements LIVE_LEASE_STATUSES + test_live_lease_statuses_match_the_board_cli + the two negative tests.",
       "scope_fa": "",
       "prerequisites": [],
@@ -7101,7 +7102,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "M15 carrier decision: arena/m14-truth041-lease-expiry (PR #292) is the authoritative carrier for the live-lease status set AND the TTL-expiry direction. PR #189 declares the same LIVE_LEASE_STATUSES but lacks the expiry predicate; when #189 is repaired it must drop its duplicate truth.py hunk so exactly one implementation of the shared status definition remains. No simultaneous ownership of the truth.py path: this claim holds it now.",
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-11-01T20:04:10Z (stale active lease)"
     },
     {
       "task": "task-268-board-referee-mutation-campaign-in-ci",
@@ -7592,7 +7594,7 @@
       "title_fa": "ارزیابی شناخت نسخهٔ ۲: اتصال قرارداد fixture به رجیستری زندهٔ قابلیت‌ها",
       "zone": "cognition-quality-evaluation",
       "priority": "P2",
-      "status": "active",
+      "status": "expired",
       "agent_branch": "arena/de4e797a-nexus-ai-agent",
       "claimed_at": "2026-10-30T15:39:23Z",
       "generation": 3,
@@ -7623,7 +7625,8 @@
         "task-269-cognition-quality-evaluation"
       ],
       "note": "",
-      "ttl_hours": 24
+      "ttl_hours": 24,
+      "release_reason": "auto-released by gc at 2026-11-01T20:04:10Z (stale active lease)"
     },
     {
       "task": "task-283-queue-ownership-publication-closure",
@@ -7750,6 +7753,112 @@
         ".circleci/config.yml",
         "docs/engineering/NAGAR_CIRCLECI_PILOT.md"
       ]
+    },
+    {
+      "task": "pr-repair-204",
+      "title": "Repair existing PR #204: fix(memory): resolve sqlite-vec extension fallback and add forensic checkup audit",
+      "zone": "pr-repair-campaign",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/204 on its existing branch jules-9365954277398354280-a037ccfb, preserving intent. Snapshot head 50bc3e3ef7498e90f86d269961153186be3e84db; re-read live head/base/reviews/checks and all board sources before claiming. Narrow the silent/misleading memory fallback: typed sqlite-vec detection, pysqlite3 fallback after load failure, no fabricated empty results on real DB errors, and an optional (not unconditional) dependency. No merge, force-push, protection changes, or approval fabrication.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Registration is present on canonical main before work; acquire and publish a valid claim, and pass the full ownership referee before every push. A queued record grants no execution authority.",
+        "Respect all live foreign leases and serialize overlapping repairs. Refresh the exact path scope through governance before changing an unlisted file.",
+        "Preserve authorization, project isolation, the authoritative CommandBus/policy path, transaction rollback, concurrency, idempotency, fail-closed behavior and auditability; do not weaken guards or tests.",
+        "Resolve actionable findings against original contracts; preserve both sides of conflict intent and add meaningful regression coverage where needed.",
+        "Record exact latest-head CI and unresolved reviews; leave the PR open for independent approval and never claim merge readiness while blockers remain."
+      ],
+      "evidence_required": [
+        "agent_board.py check --repo bot523h/nexus-ai-agent --files <actual-changed-files> --branch <repair-branch>: exit 0, supplemented by every open PR branch because the current CLI fetch cap is 25.",
+        "Relevant regression and architecture tests; make lint, make types and make test (or the canonical policy's justified targeted equivalent), with exact commands, results and input SHA.",
+        "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/memory/",
+        "tests/unit/test_long_term_memory_sqlite_vec.py",
+        "tests/unit/test_spine_mutations.py",
+        "pyproject.toml"
+      ],
+      "agent_branch": "arena/stabilization-20261031",
+      "claimed_at": "2026-11-01T20:04:10Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "owner_hint": "",
+      "note": ""
+    },
+    {
+      "task": "pr-repair-298",
+      "title": "Repair existing PR #298: feat(nagar-ibpc): proof-carrying live editing (NAGAR-IBPC-LIVE-EDITING-01)",
+      "zone": "pr-repair-campaign",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/298 on its existing branch arena/7622c61d-nexus-ai-agent, preserving intent. Snapshot head 698131b8817b9bba5e022c9909ce5a1dd7ee3b7d; re-read live head/base/reviews/checks and all board sources before claiming. Close the independent-audit findings: typed SessionError instead of raw KeyError for unknown turn ids, offload blocking ffmpeg/probe calls via asyncio.to_thread, reconcile .agents/board.json with main, and silence the subprocess false-positive. No merge, force-push, protection changes, or approval fabrication.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Registration is present on canonical main before work; acquire and publish a valid claim, and pass the full ownership referee before every push. A queued record grants no execution authority.",
+        "Respect all live foreign leases and serialize overlapping repairs. Refresh the exact path scope through governance before changing an unlisted file.",
+        "Preserve authorization, project isolation, the authoritative CommandBus/policy path, transaction rollback, concurrency, idempotency, fail-closed behavior and auditability; do not weaken guards or tests.",
+        "Resolve actionable findings against original contracts; preserve both sides of conflict intent and add meaningful regression coverage where needed.",
+        "Record exact latest-head CI and unresolved reviews; leave the PR open for independent approval and never claim merge readiness while blockers remain."
+      ],
+      "evidence_required": [
+        "agent_board.py check --repo bot523h/nexus-ai-agent --files <actual-changed-files> --branch <repair-branch>: exit 0, supplemented by every open PR branch because the current CLI fetch cap is 25.",
+        "Relevant regression and architecture tests; make lint, make types and make test (or the canonical policy's justified targeted equivalent), with exact commands, results and input SHA.",
+        "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "scripts/ibpc_security_mutations.py",
+        "src/nexus_ai_agent/continuum/pack_coverage.py",
+        "tests/unit/test_ibpc_intent_compiler.py",
+        "tests/unit/test_ibpc_security.py",
+        "tests/unit/test_ibpc_session.py",
+        "tests/integration/test_ibpc_e2e.py",
+        "tests/architecture/test_ibpc_boundary.py"
+      ],
+      "agent_branch": "arena/stabilization-20261031",
+      "claimed_at": "2026-11-01T20:04:10Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "owner_hint": "",
+      "note": ""
+    },
+    {
+      "task": "pr-repair-92",
+      "title": "Repair existing PR #92: fix(storage): honor SQLite defaults; preserve inherited release audit scope",
+      "zone": "pr-repair-campaign",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/92 on its existing branch arena/01a0da13-nexus-ai-agent, preserving intent. Snapshot head 4ea68b3784012a038234ad3bc66e5332b5901a80; re-read live head/base/reviews/checks and all board sources before claiming. The A-02b path bug is already on main; deliver the residual value as a minimal, reviewable change: create_all_tables defaulting to Settings.db_path + the SQLite-path contract tests + .dockerignore secret protection. No merge, force-push, protection changes, or approval fabrication.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Registration is present on canonical main before work; acquire and publish a valid claim, and pass the full ownership referee before every push. A queued record grants no execution authority.",
+        "Respect all live foreign leases and serialize overlapping repairs. Refresh the exact path scope through governance before changing an unlisted file.",
+        "Preserve authorization, project isolation, the authoritative CommandBus/policy path, transaction rollback, concurrency, idempotency, fail-closed behavior and auditability; do not weaken guards or tests.",
+        "Resolve actionable findings against original contracts; preserve both sides of conflict intent and add meaningful regression coverage where needed.",
+        "Record exact latest-head CI and unresolved reviews; leave the PR open for independent approval and never claim merge readiness while blockers remain."
+      ],
+      "evidence_required": [
+        "agent_board.py check --repo bot523h/nexus-ai-agent --files <actual-changed-files> --branch <repair-branch>: exit 0, supplemented by every open PR branch because the current CLI fetch cap is 25.",
+        "Relevant regression and architecture tests; make lint, make types and make test (or the canonical policy's justified targeted equivalent), with exact commands, results and input SHA.",
+        "Latest PR head/base SHAs, CI run/job URLs and conclusions, unresolved review threads, overlap/dependency evidence, and a final no-merge handoff."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/db.py",
+        ".dockerignore",
+        "tests/integration/test_owner_db_path_contract.py",
+        "tests/unit/test_container_context.py"
+      ],
+      "agent_branch": "arena/stabilization-20261031",
+      "claimed_at": "2026-11-01T20:04:10Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "owner_hint": "",
+      "note": ""
     }
   ],
   "deferred_log": [
