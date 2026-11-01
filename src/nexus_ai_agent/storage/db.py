@@ -517,7 +517,14 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
     - ``db_path`` is ``None`` → the backend comes from the environment:
       ``NEXUS_DATABASE_URL`` set → PostgreSQL, prepared lazily via Alembic
       (D7: the ``create_all`` stopgap was retired); otherwise the configured
-      SQLite path (``NEXUS_DB_PATH`` / legacy ``DB_PATH``).
+      SQLite file (``NEXUS_DB_PATH``, default ``data/app.sqlite``).
+
+    The SQLite fallback used to hard-code ``"data/app.sqlite"`` and ignore
+    ``NEXUS_DB_PATH``, so an operator who pointed the bot at a persistent
+    volume still had the async paths (users, chats, files, dashboard) write
+    into an ephemeral file next to the code while the feature engines wrote
+    into the configured one — two databases for one deployment (audit
+    finding A-02b).
     """
     await _dispose_replaced_engines()
     if db_path is None:
