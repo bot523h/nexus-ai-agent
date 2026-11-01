@@ -20,6 +20,7 @@ Exit code 0 means "N/N mutants killed"; anything else means a guard is fake.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -207,6 +208,11 @@ MUTATIONS: tuple[Mutation, ...] = (
 
 
 def run_tests() -> bool:
+    env = dict(os.environ)
+    # Pin the in-tree package ahead of any editable install so the mutated file
+    # is the one under test (an installed copy would silently false-green).
+    src = str(ROOT / "src")
+    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
     result = subprocess.run(
         [
             sys.executable,
@@ -221,6 +227,8 @@ def run_tests() -> bool:
         cwd=ROOT,
         capture_output=True,
         text=True,
+        env=env,
+        shell=False,
     )
     return result.returncode == 0
 

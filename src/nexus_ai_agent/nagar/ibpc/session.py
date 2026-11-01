@@ -108,6 +108,7 @@ ALLOWED_TRANSITIONS: dict[TurnState, frozenset[TurnState]] = {
             TurnState.CANCELLED,
             TurnState.INTERRUPTED,
             TurnState.STALE,
+            TurnState.FAILED,
         }
     ),
     TurnState.TRANSCRIBING: frozenset(
@@ -323,6 +324,14 @@ class LiveSessionManager:
                 return self._sessions[session_id]
             except KeyError:
                 raise SessionError("unknown_session", session_id) from None
+
+    def _require_turn(self, session: LiveSession, turn_id: str) -> VoiceTurn:
+        """A turn id that is not part of *this* session fails closed with a typed
+        error; a raw ``KeyError`` would leak an untyped failure to callers."""
+        turn = session.turns.get(turn_id)
+        if turn is None:
+            raise SessionError("unknown_turn", turn_id)
+        return turn
 
     def set_privacy_mode(
         self, session_id: str, mode: PrivacyMode, *, principal_id: str, consent_scope: str
@@ -564,7 +573,7 @@ class LiveSessionManager:
             # success, exception, timeout AND cancellation all land here
             self._cleanup_audio(root, staged)
         with self._lock:
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             self._guard_not_stale(session, turn)
             turn._transcript = text
             turn.transcript_sha256 = digest_of({"transcript": text})
@@ -577,7 +586,7 @@ class LiveSessionManager:
         """A streaming interim transcript: PARTIAL — it can never parse or approve."""
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             self._guard_not_stale(session, turn)
             if turn.turn_state is not TurnState.TRANSCRIBING:
                 self._transition(session, turn, TurnState.TRANSCRIBING)
@@ -590,7 +599,7 @@ class LiveSessionManager:
     def finalize_transcript(self, session_id: str, turn_id: str, text: str) -> VoiceTurn:
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             self._guard_not_stale(session, turn)
             turn._transcript = text
             turn.transcript_sha256 = digest_of({"transcript": text})
@@ -603,7 +612,7 @@ class LiveSessionManager:
         it is parse input, never authority."""
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             self._guard_not_stale(session, turn)
             if turn.transcript_state is not TranscriptState.FINAL:
                 raise SessionError(
@@ -616,7 +625,7 @@ class LiveSessionManager:
     def mark_intent_parsed(self, session_id: str, turn_id: str, *, intent_digest: str) -> VoiceTurn:
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             self._guard_not_stale(session, turn)
             # voice turns must have a FINAL transcript before parsing
             if turn.turn_state in (TurnState.TRANSCRIBING, TurnState.TRANSCRIPT_PARTIAL):
@@ -630,7 +639,7 @@ class LiveSessionManager:
     def mark_plan_preview(self, session_id: str, turn_id: str) -> VoiceTurn:
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             self._guard_not_stale(session, turn)
             self._transition(session, turn, TurnState.PLAN_PREVIEW_READY)
             return turn
@@ -640,7 +649,7 @@ class LiveSessionManager:
     ) -> VoiceTurn:
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             self._guard_not_stale(session, turn)
             self._transition(session, turn, TurnState.AWAITING_APPROVAL)
             turn.approval_id = approval_id
@@ -649,7 +658,7 @@ class LiveSessionManager:
     def mark_approved(self, session_id: str, turn_id: str) -> VoiceTurn:
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             self._guard_not_stale(session, turn)
             self._transition(session, turn, TurnState.APPROVED)
             return turn
@@ -657,7 +666,7 @@ class LiveSessionManager:
     def mark_executing(self, session_id: str, turn_id: str) -> VoiceTurn:
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             self._guard_not_stale(session, turn)
             self._transition(session, turn, TurnState.EXECUTING)
             return turn
@@ -665,7 +674,7 @@ class LiveSessionManager:
     def mark_executed(self, session_id: str, turn_id: str) -> VoiceTurn:
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             self._transition(session, turn, TurnState.EXECUTED)
             return turn
 
@@ -683,7 +692,7 @@ class LiveSessionManager:
         """Interruption invalidates the pending preview/approval of the turn."""
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             if turn.turn_state in TERMINAL_TURN_STATES:
                 raise TransitionError("terminal_turn", f"turn is {turn.turn_state.value}")
             if turn.turn_state is TurnState.EXECUTING:
@@ -696,7 +705,7 @@ class LiveSessionManager:
         """Cancellation: the turn can never execute later."""
         with self._lock:
             session = self.get_session(session_id)
-            turn = session.turns[turn_id]
+            turn = self._require_turn(session, turn_id)
             if turn.turn_state in TERMINAL_TURN_STATES:
                 raise TransitionError("terminal_turn", f"turn is {turn.turn_state.value}")
             if turn.turn_state is TurnState.EXECUTING:

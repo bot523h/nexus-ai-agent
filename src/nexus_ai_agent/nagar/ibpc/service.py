@@ -33,11 +33,11 @@ from typing import Any, Protocol
 
 from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort, JobStatus
-from nexus_ai_agent.creative.slideshow.ffmpeg import sha256_file
+from nexus_ai_agent.creative.slideshow.ffmpeg import RenderError, sha256_file
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError, ApprovalIdentity, ApprovalLedger
 from nexus_ai_agent.nagar.ibpc.compiler import CompilationRefused, compile_ast
-from nexus_ai_agent.nagar.ibpc.footprint import probe_media, verify_keep
+from nexus_ai_agent.nagar.ibpc.footprint import FootprintVerifyError, probe_media, verify_keep
 from nexus_ai_agent.nagar.ibpc.intent import (
     Clarification,
     IntentAST,
@@ -211,7 +211,12 @@ class IBPCService:
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal("missing_source", f"source media not found: {source_path!r}")
-        info, fps = probe_media(src, binary=self._deps.verifier_binary)
+        try:
+            info, fps = probe_media(src, binary=self._deps.verifier_binary)
+        except (RenderError, FootprintVerifyError) as exc:
+            # an unreadable/corrupt source is a typed refusal, never a crash
+            self._sessions.mark_failed(session_id, turn_id)
+            return Refusal("unreadable_source", str(exc))
         duration_us = info.duration_us
         source_asset_digest = sha256_file(src)
 
@@ -314,8 +319,15 @@ class IBPCService:
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal("transcription_failed", str(exc))
         transcript = self._sessions.transcript_text(session_id, turn.turn_id)
-        return self._continue_with_text(
-            session_id, turn.turn_id, transcript, asset_id=asset_id, source_path=source_path
+        # The parse/preview/approval body probes the media and hashes it with
+        # synchronous ffmpeg calls; run it off the event loop.
+        return await asyncio.to_thread(
+            self._continue_with_text,
+            session_id,
+            turn.turn_id,
+            transcript,
+            asset_id=asset_id,
+            source_path=source_path,
         )
 
     def _continue_with_text(
@@ -333,7 +345,12 @@ class IBPCService:
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal("missing_source", f"source media not found: {source_path!r}")
-        info, fps = probe_media(src, binary=self._deps.verifier_binary)
+        try:
+            info, fps = probe_media(src, binary=self._deps.verifier_binary)
+        except (RenderError, FootprintVerifyError) as exc:
+            # an unreadable/corrupt source is a typed refusal, never a crash
+            self._sessions.mark_failed(session_id, turn_id)
+            return Refusal("unreadable_source", str(exc))
         parsed = parse_intent(
             text,
             project_id=session.project_id,
@@ -521,6 +538,18 @@ class IBPCService:
             shutil.copy2(source, destination)
         return destination
 
+    def _verify_artifact(self, ctx: _TurnContext, artifact_path: Path) -> tuple[str, Any]:
+        """Hash the artifact and run the independent verifier. Synchronous and
+        ffmpeg-backed, so callers run it via ``asyncio.to_thread``."""
+        artifact_digest = sha256_file(artifact_path)
+        report = verify_keep(
+            ctx.source_path,
+            artifact_path,
+            scope=ctx.ast.scope,
+            binary=self._deps.verifier_binary,
+        )
+        return artifact_digest, report
+
     @staticmethod
     def _seconds_str(microseconds: int) -> str:
         return f"{microseconds / 1_000_000:.6f}".rstrip("0").rstrip(".") or "0"
@@ -538,8 +567,15 @@ class IBPCService:
         # yields exactly one winner, the rest are typed replay refusals).
         async with self._execute_lock:
             try:
-                session, turn, ctx, identity = self._resolve_identity(
-                    session_id, turn_id, approval_id, principal_id=principal_id
+                # _resolve_identity re-hashes the source asset (synchronous I/O)
+                # and the ledger/context stores use threading locks, so it runs
+                # off the event loop.
+                session, turn, ctx, identity = await asyncio.to_thread(
+                    self._resolve_identity,
+                    session_id,
+                    turn_id,
+                    approval_id,
+                    principal_id=principal_id,
                 )
             except (ApprovalError, SessionError) as exc:
                 return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
@@ -555,7 +591,8 @@ class IBPCService:
                 )
             self._sessions.mark_executing(session_id, turn_id)
         workspace = self._guarded_workspace(approval_id)
-        input_path = self._stage_source(ctx.source_path, workspace)
+        # staging copies the source file (synchronous I/O) — keep it off the loop
+        input_path = await asyncio.to_thread(self._stage_source, ctx.source_path, workspace)
         in_us = int(ctx.ast.params["in_point_us"])
         out_us = int(ctx.ast.params["out_point_us"])
         idempotency_key = f"ibpc:{approval_id}"
@@ -590,16 +627,11 @@ class IBPCService:
             )
 
         artifact_path = Path(str(result["artifact_path"]))
-        # re-measure the artifact independently of the renderer's claim
-        artifact_digest = sha256_file(artifact_path)
-        report = verify_keep(
-            ctx.source_path,
-            artifact_path,
-            scope=ctx.ast.scope,
-            binary=self._deps.verifier_binary,
-        )
+        # Re-measure the artifact and run the independent verifier off the event
+        # loop: both are synchronous and shell out to ffmpeg.
+        artifact_digest, report = await asyncio.to_thread(self._verify_artifact, ctx, artifact_path)
         attempt_identity = await self._attempt_identity(job_id)
-        provenance_reference = self._provenance_reference(job_id)
+        provenance_reference = await asyncio.to_thread(self._provenance_reference, job_id)
         capsule = IBPCCapsule(
             tenant_id=session.tenant_id,
             project_id=session.project_id,

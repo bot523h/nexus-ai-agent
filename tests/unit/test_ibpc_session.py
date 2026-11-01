@@ -236,3 +236,88 @@ class TestVoiceTurns:
         assert mgr.transcript_text(sid, "t1") == "trim from 0.5 to 1.5 seconds"
         # the staged audio file is always cleaned up after transcription
         assert list((tmp_path / "audio").iterdir()) == []
+
+
+class TestUnknownTurnFailsClosed:
+    """Every turn accessor must raise a typed SessionError for an unknown turn
+    id, never a raw KeyError (which would leak an untyped failure to callers)."""
+
+    _SID = "s1"
+
+    @staticmethod
+    def _fresh(mgr: LiveSessionManager) -> str:
+        return _open(mgr)
+
+    def test_mark_plan_preview_unknown_turn_is_typed(self) -> None:
+        mgr = _manager()
+        sid = self._fresh(mgr)
+        mgr.begin_turn(sid, "t1", sequence_number=1, project_revision=7)
+        with pytest.raises(SessionError) as exc:
+            mgr.mark_plan_preview(sid, "does-not-exist")
+        assert exc.value.reason == "unknown_turn"
+
+    def test_mark_approved_unknown_turn_is_typed(self) -> None:
+        mgr = _manager()
+        sid = self._fresh(mgr)
+        mgr.begin_turn(sid, "t1", sequence_number=1, project_revision=7)
+        with pytest.raises(SessionError) as exc:
+            mgr.mark_approved(sid, "nope")
+        assert exc.value.reason == "unknown_turn"
+
+    def test_cancel_unknown_turn_is_typed(self) -> None:
+        mgr = _manager()
+        sid = self._fresh(mgr)
+        mgr.begin_turn(sid, "t1", sequence_number=1, project_revision=7)
+        with pytest.raises(SessionError) as exc:
+            mgr.cancel(sid, "nope")
+        assert exc.value.reason == "unknown_turn"
+
+    def test_interrupt_unknown_turn_is_typed(self) -> None:
+        mgr = _manager()
+        sid = self._fresh(mgr)
+        mgr.begin_turn(sid, "t1", sequence_number=1, project_revision=7)
+        with pytest.raises(SessionError) as exc:
+            mgr.interrupt(sid, "nope")
+        assert exc.value.reason == "unknown_turn"
+
+    def test_transcript_text_unknown_turn_is_typed(self) -> None:
+        mgr = _manager()
+        sid = self._fresh(mgr)
+        mgr.begin_turn(sid, "t1", sequence_number=1, project_revision=7)
+        with pytest.raises(SessionError) as exc:
+            mgr.transcript_text(sid, "nope")
+        assert exc.value.reason == "unknown_turn"
+
+    def test_mark_executed_unknown_turn_is_typed(self) -> None:
+        mgr = _manager()
+        sid = self._fresh(mgr)
+        mgr.begin_turn(sid, "t1", sequence_number=1, project_revision=7)
+        with pytest.raises(SessionError) as exc:
+            mgr.mark_executed(sid, "nope")
+        assert exc.value.reason == "unknown_turn"
+
+    def test_unknown_turn_is_not_a_raw_keyerror(self) -> None:
+        """SessionError subclasses ValueError, not KeyError — prove the leak is closed."""
+        mgr = _manager()
+        sid = self._fresh(mgr)
+        mgr.begin_turn(sid, "t1", sequence_number=1, project_revision=7)
+        try:
+            mgr.mark_plan_preview(sid, "nope")
+        except KeyError:  # pragma: no cover - would be the defect
+            pytest.fail("a raw KeyError leaked instead of a typed SessionError")
+        except SessionError:
+            pass
+
+
+def test_received_turn_can_fail_closed_before_any_stage() -> None:
+    """A turn refused at validation (before transcription/parsing) must be able
+    to reach FAILED from RECEIVED; otherwise mark_failed raises TransitionError
+    and the caller leaks an untyped failure instead of a typed refusal."""
+    mgr = _manager()
+    sid = _open(mgr)
+    mgr.begin_turn(sid, "t1", sequence_number=1, project_revision=7)
+    assert mgr.get_session(sid).turns["t1"].turn_state is TurnState.RECEIVED
+    turn = mgr.mark_failed(sid, "t1")
+    assert turn.turn_state is TurnState.FAILED
+    # FAILED is terminal: it can never advance to execution
+    assert ALLOWED_TRANSITIONS[TurnState.FAILED] == frozenset()

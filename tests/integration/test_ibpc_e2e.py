@@ -454,3 +454,151 @@ async def test_concurrent_double_execute_has_exactly_one_winner(harness, tmp_pat
     refused = next(o for o in outcomes if o.status == "refused")
     assert "replay" in refused.detail or "invalid_state" in refused.detail
     assert len(queue.job_ids()) == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_blocking_media_work_off_the_event_loop(harness, tmp_path: Path) -> None:
+    """``_resolve_identity`` / ``_stage_source`` / ``_verify_artifact`` /
+    ``_provenance_reference`` are synchronous and file/ffmpeg-backed.  ``execute``
+    must dispatch each to a worker thread so a long render never blocks the loop."""
+    import threading
+
+    service, queue, creative_root, journal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id="user-1")
+
+    loop_ident = threading.get_ident()
+    idents: dict[str, int] = {}
+
+    def _wrap(name: str, fn):
+        def inner(*args: Any, **kwargs: Any) -> Any:
+            idents[name] = threading.get_ident()
+            return fn(*args, **kwargs)
+
+        return inner
+
+    service._resolve_identity = _wrap("_resolve_identity", service._resolve_identity)
+    service._stage_source = _wrap("_stage_source", service._stage_source)
+    service._verify_artifact = _wrap("_verify_artifact", service._verify_artifact)
+    service._provenance_reference = _wrap("_provenance_reference", service._provenance_reference)
+
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id="user-1")
+    assert outcome.status == "executed", outcome.detail
+    for name in (
+        "_resolve_identity",
+        "_stage_source",
+        "_verify_artifact",
+        "_provenance_reference",
+    ):
+        assert name in idents, f"{name} was never called"
+        assert idents[name] != loop_ident, f"{name} ran on the event-loop thread"
+
+
+@pytest.mark.asyncio
+async def test_voice_intent_runs_parse_body_off_the_event_loop(harness, tmp_path: Path) -> None:
+    """The voice parse/preview/approval body probes media with sync ffmpeg; it
+    must run on a worker thread, not on the loop."""
+    import threading
+
+    service, queue, _, _ = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    service._deps = IBPCServiceDeps(
+        queue=service._deps.queue,
+        registry=service._deps.registry,
+        workspace_root=service._deps.workspace_root,
+        revision_provider=service._deps.revision_provider,
+        journal=service._deps.journal,
+        facts_provider=service._deps.facts_provider,
+        attempt_provider=service._deps.attempt_provider,
+        caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
+    )
+    sid = _open_session(service)
+
+    loop_ident = threading.get_ident()
+    seen: dict[str, int] = {}
+    original = service._continue_with_text
+
+    def inner(*args: Any, **kwargs: Any) -> Any:
+        seen["ident"] = threading.get_ident()
+        return original(*args, **kwargs)
+
+    service._continue_with_text = inner
+    result = await service.submit_voice_intent(
+        sid,
+        "voice-1",
+        sequence_number=1,
+        audio=b"\x00" * 64,
+        asset_id="src",
+        source_path=str(source),
+        audio_dir=tmp_path / "audio",
+    )
+    assert isinstance(result, PipelineResult)
+    assert "ident" in seen, "_continue_with_text was never called"
+    assert seen["ident"] != loop_ident, "the voice parse body ran on the event-loop thread"
+
+
+def test_corrupt_source_is_a_typed_refusal_not_a_crash(harness, tmp_path: Path) -> None:
+    """A present-but-unreadable source must fail closed with a typed Refusal
+    (``unreadable_source``) and mark the turn failed, never raise a raw
+    RenderError/FootprintVerifyError out of ``submit_text_intent``."""
+    service, queue, _, _ = harness
+    bad = tmp_path / "corrupt.mp4"
+    bad.write_bytes(b"not a video at all" * 32)
+    sid = _open_session(service)
+    result = service.submit_text_intent(
+        sid,
+        "turn-bad",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(bad),
+    )
+    assert isinstance(result, Refusal), f"expected a Refusal, got {type(result).__name__}"
+    assert result.reason == "unreadable_source"
+    # the turn is failed, not left live, and nothing was enqueued
+    assert service.sessions.get_session(sid).turns["turn-bad"].turn_state.name == "FAILED"
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_corrupt_source_voice_is_a_typed_refusal_not_a_crash(harness, tmp_path: Path) -> None:
+    """Same guarantee on the voice path: a corrupt source becomes a typed
+    Refusal, not an untyped exception escaping the async method."""
+    service, queue, _, _ = harness
+    bad = tmp_path / "corrupt.mp4"
+    bad.write_bytes(b"not a video at all" * 32)
+    service._deps = IBPCServiceDeps(
+        queue=service._deps.queue,
+        registry=service._deps.registry,
+        workspace_root=service._deps.workspace_root,
+        revision_provider=service._deps.revision_provider,
+        journal=service._deps.journal,
+        facts_provider=service._deps.facts_provider,
+        attempt_provider=service._deps.attempt_provider,
+        caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
+    )
+    sid = _open_session(service)
+    result = await service.submit_voice_intent(
+        sid,
+        "voice-bad",
+        sequence_number=1,
+        audio=b"\x00" * 64,
+        asset_id="src",
+        source_path=str(bad),
+        audio_dir=tmp_path / "audio",
+    )
+    assert isinstance(result, Refusal), f"expected a Refusal, got {type(result).__name__}"
+    assert result.reason == "unreadable_source"
+    assert queue.job_ids() == []

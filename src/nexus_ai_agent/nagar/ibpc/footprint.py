@@ -83,7 +83,7 @@ class DecodedVideo:
 
 def _run_capture(args: list[str], *, timeout: int) -> subprocess.CompletedProcess[bytes]:
     # argv list, shell=False, allow-listed binary — same discipline as the lane.
-    return subprocess.run(args, capture_output=True, timeout=timeout, check=False)
+    return subprocess.run(args, capture_output=True, timeout=timeout, check=False, shell=False)
 
 
 def _probe_fps(path: Path, binary: str) -> float:
