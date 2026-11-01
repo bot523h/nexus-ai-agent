@@ -1043,6 +1043,23 @@
         "tests/unit/test_queue_ownership_mutations_harness.py",
         "tests/unit/test_webhook_mode.py"
       ]
+    },
+    {
+      "id": "nagar-workspace-redelivery-01",
+      "description": "Telegram creative-surface immutable input redelivery isolation",
+      "paths": [
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "tests/unit/test_creative_surface.py",
+        "tests/integration/test_creative_surface_redelivery.py"
+      ]
+    },
+    {
+      "id": "nagar-circleci-pilot-01",
+      "description": "Budget-limited CircleCI cloud testing pilot only",
+      "paths": [
+        ".circleci/config.yml",
+        "docs/engineering/NAGAR_CIRCLECI_PILOT.md"
+      ]
     }
   ],
   "claims": [
@@ -7672,6 +7689,67 @@
         "tests/unit/test_webhook_mode.py"
       ],
       "note": "Closure pass on PR #299 (findings from the independent review at b11c902). F1 lock-vs-publication-thread race, F2 webhook root never released queue ownership, F3 sidecar attempt not validated (None == None retract), F4 crash after publish/before durable completion, F5 mutation campaign not CI-wired: all five addressed on this branch with barrier-controlled / real-process-death tests and a 10-probe campaign wired into CI. Registration discrepancy (disclosed, not repaired): this claim was committed to the PR branch together with the work rather than pushed to the canonical main board first, so during the closure window the claim existed on the branch only. PR #69 (arena/01a0d3af..., head 7498074) touches in_process_job_queue.py and render_jobs.py for enqueue idempotency semantics; its board claim pr-repair-69 is queued with no branch/claimed_at and generation 0 (no live lease), and this referee check reports no overlap — recorded as a future textual-merge risk, not an ownership conflict. Ownership correction: `.github/workflows/ci.yml` is claimed by another active claim (task-ibpc-security-closure-01, arena/7622c61d..., claimed 2026-10-31T07:30:39Z); my claim did not list it at claim time, so I withdrew that edit and the campaign now lives in `.github/workflows/queue-ownership-mutations.yml` — the referee check is clean at exit 0. CLOSEOUT (post-transition annotation; status/generation/claimed_at were changed only by `agent_board.py release --expected-generation 1`, not by hand): work delivered at branch head 46e23d22071c5e04b613eba1aad199d0717c237c — CI run 41205544140 22/22 pass, queue-ownership-mutations run 41205531329 1/1 pass (10/10 mutants killed, tree restored), referee exit 0 with 44 sources over all 20 changed paths, full-suite baseline compared against a detached checkout of main@e2080db (identical failing node-id set). This record stays on the PR #299 branch and is not committed to main: it becomes canonical only if the owner merges the PR."
+    },
+    {
+      "status": "queued",
+      "prerequisites": [],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0,
+      "task": "task-nagar-workspace-redelivery-01",
+      "title": "P0 Creative Surface durable input and duplicate delivery isolation",
+      "title_fa": "ایزوله‌سازی ورودی پایدار و تحویل تکراری سطح خلاق",
+      "zone": "nagar-workspace-redelivery-01",
+      "priority": "P0",
+      "scope": "Reproduce and fix Telegram creative surface pre-enqueue deletion and unsafe duplicate delivery using existing queue and real filesystem; preserve message identity and queue ownership guarantees. No second authority.",
+      "acceptance_criteria": [
+        "Baseline RED reproduces destructive redelivery with actual filesystem and queue; fix preserves previous input bytes, digest, and queued payload.",
+        "Concurrent same-key delivery produces one logical job and never overwrites input; identity/content conflicts fail closed; distinct messages remain distinct.",
+        "Partial downloads, enqueue errors, process death/restart and retries cannot delete or publish another active job input; traversal and symlink escape fail closed.",
+        "Preserve queue ownership, attempt fencing, publication, heartbeat, crash recovery and terminal states; no queue or passport duplication.",
+        "Independent read-only security review and relevant adversarial regression, with exact SHA and limitations."
+      ],
+      "evidence_required": [
+        "Baseline RED and fixed GREEN exact pytest commands, node IDs, exit codes, counts and tested SHA; real queue and filesystem integration.",
+        "Concurrency, crash/recovery, filesystem failure and path safety tests; mutation proof where practical.",
+        "make lint, make types, make test, queue ownership/publication regressions, CI exact head SHA and board referee over every changed path."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/bot/creative_surface.py",
+        "tests/unit/test_creative_surface.py",
+        "tests/integration/test_creative_surface_redelivery.py"
+      ]
+    },
+    {
+      "status": "queued",
+      "prerequisites": [],
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0,
+      "task": "task-nagar-circleci-pilot-01",
+      "title": "CircleCI bounded Linux VM pilot for Nagar verification",
+      "title_fa": "اجرای آزمایشی محدود CircleCI برای راستی‌آزمایی نگار",
+      "zone": "nagar-circleci-pilot-01",
+      "priority": "P1",
+      "scope": "Only if connected and authorized, configure a branch-limited no-deploy Linux VM medium pilot and document sanitized execution evidence; do not store credentials or bypass board governance.",
+      "acceptance_criteria": [
+        "Confirm project connection, runner support, plan permissions and budget before triggering any build; no production secrets or data.",
+        "Use Linux VM Gen1 medium, serial workflow and no deployment; pilot maximum 1000 credits, total mission maximum 10000.",
+        "Capture exact SHA, pipeline and job IDs, runner image, commands/results, resources and observed or estimated credits; missing access is BLOCKED, not success.",
+        "Documentation does not claim CircleCI has authority over execution or project state."
+      ],
+      "evidence_required": [
+        "Board referee and scoped configuration review.",
+        "Exact CircleCI pipeline/job URL, commit SHA, exit codes, test counts, resource and credit evidence, or explicit access blocker."
+      ],
+      "exclusive_paths": [
+        ".circleci/config.yml",
+        "docs/engineering/NAGAR_CIRCLECI_PILOT.md"
+      ]
     }
   ],
   "deferred_log": [
