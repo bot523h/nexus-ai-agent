@@ -62,6 +62,17 @@ def _clip(path: Path, seconds: float = 2.0) -> None:
     )
 
 
+def _digest(path: Path) -> str:
+    """Bare lowercase SHA-256 of the real staged clip.
+
+    task-nagar-workspace-redelivery-01 made ``input_sha256`` part of the creative
+    payload contract: the worker re-measures the staged bytes and refuses a
+    mismatch (or an absent digest) before any engine runs. These suites build
+    payloads by hand, so they must name the bytes they point at.
+    """
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _trim_payload(workspace: Path, key: str) -> dict[str, Any]:
     return {
         "command": "edit",
@@ -69,6 +80,9 @@ def _trim_payload(workspace: Path, key: str) -> dict[str, Any]:
         "args": ["0", "1"],
         "workspace_dir": str(workspace),
         "input_path": str(workspace / "input.mp4"),
+        "input_sha256": (
+            _digest(workspace / "input.mp4") if (workspace / "input.mp4").is_file() else "0" * 64
+        ),
         "media_duration_us": 2_000_000,
         "user_id": 7,
         "chat_id": 8,
@@ -470,6 +484,7 @@ import asyncio, os
 from pathlib import Path
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
 from nexus_ai_agent.worker import default_job_handlers
+
 
 class CrashAfterCheckpointQueue(InProcessJobQueue):
     def _mark_completed(

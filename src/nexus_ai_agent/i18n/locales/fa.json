@@ -77,5 +77,6 @@
   "creative.failed.caption_profile_unavailable": "❌ زیرنویس روی این نصب در دسترس نیست (موتور گفتار نصب نشده).",
   "creative.failed.render_failed": "❌ رندر ناموفق بود؛ رسانهٔ کوتاه‌تر یا پارامترهای دیگر را امتحان کن.",
   "creative.failed.ffmpeg_unavailable": "❌ موتور رندر روی این استقرار نصب نیست.",
-  "creative.failed.internal": "❌ خطای داخلی رخ داد؛ جزئیات برای تیم فنی قابل مشاهده است."
+  "creative.failed.internal": "❌ خطای داخلی رخ داد؛ جزئیات برای تیم فنی قابل مشاهده است.",
+  "creative.request_conflict": "♻️ این پیام قبلاً با رسانهٔ دیگری در صف قرار گرفته است. رسانهٔ جدید را در پیامی تازه بفرست."
 }

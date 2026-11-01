@@ -77,5 +77,6 @@
   "creative.failed.caption_profile_unavailable": "❌ الترجمة غير متاحة في هذا التثبيت (لا يوجد محرك كلام).",
   "creative.failed.render_failed": "❌ فشل العرض؛ جرّب وسائط أقصر أو معطيات أخرى.",
   "creative.failed.ffmpeg_unavailable": "❌ محرك العرض غير مثبَّت في هذا النشر.",
-  "creative.failed.internal": "❌ حدث خطأ داخلي؛ التفاصيل متاحة للفريق."
+  "creative.failed.internal": "❌ حدث خطأ داخلي؛ التفاصيل متاحة للفريق.",
+  "creative.request_conflict": "♻️ سبق إدراج هذه الرسالة بوسائط مختلفة. أرسل الوسائط الجديدة في رسالة جديدة."
 }

@@ -41,6 +41,17 @@ from nexus_ai_agent.provenance.backfill import backfill_journal
 from nexus_ai_agent.worker import default_job_handlers
 
 
+def _digest(path: Path) -> str:
+    """Bare lowercase SHA-256 of the real staged clip.
+
+    task-nagar-workspace-redelivery-01 made ``input_sha256`` part of the creative
+    payload contract: the worker re-measures the staged bytes and refuses a
+    mismatch (or an absent digest) before any engine runs. These suites build
+    payloads by hand, so they must name the bytes they point at.
+    """
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _clip(path: Path, seconds: int = 2) -> None:
     binary = resolve_ffmpeg_bin()
     subprocess.run(
@@ -75,6 +86,7 @@ def _payload(workspace: Path, key: str) -> dict[str, Any]:
         "args": ["0", "1"],
         "workspace_dir": str(workspace),
         "input_path": str(workspace / "input.mp4"),
+        "input_sha256": _digest(workspace / "input.mp4"),
         "media_duration_us": 2_000_000,
         "user_id": 42,
         "chat_id": 4242,

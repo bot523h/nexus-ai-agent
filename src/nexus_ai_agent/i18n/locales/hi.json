@@ -77,5 +77,6 @@
   "creative.failed.caption_profile_unavailable": "❌ इस इंस्टॉलेशन पर कैप्शन उपलब्ध नहीं है (कोई स्पीच इंजन नहीं)।",
   "creative.failed.render_failed": "❌ रेंडर विफल; छोटा मीडिया या अन्य पैरामीटर आज़माएँ।",
   "creative.failed.ffmpeg_unavailable": "❌ इस डिप्लॉयमेंट पर रेंडर इंजन इंस्टॉल नहीं है।",
-  "creative.failed.internal": "❌ आंतरिक त्रुटि हुई; विवरण टीम को दिखाई देता है।"
+  "creative.failed.internal": "❌ आंतरिक त्रुटि हुई; विवरण टीम को दिखाई देता है।",
+  "creative.request_conflict": "♻️ यह संदेश पहले ही भिन्न मीडिया के साथ कतार में जुड़ चुका है। नया मीडिया नए संदेश में भेजें।"
 }

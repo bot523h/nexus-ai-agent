@@ -146,6 +146,7 @@ placeholder text.
 | [audits/2026-09-28-master-forensic-evolution.md](audits/2026-09-28-master-forensic-evolution.md) | Storage/R2 forensic evolution report: live truth, governance, four unified-cloud fixes, two R2 fail-closed fixes, mutation evidence, and residual handoffs. |
 | [audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md](audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md) | Dated Phase-1 stabilization handoff: live PR inventory, exact-SHA remediation evidence, Board fence correction, CI blockers, and backup/restore limits. |
 
+| [audits/M17_PRINCIPAL_ENGINEER_REPORT_2026-11-01.md](audits/M17_PRINCIPAL_ENGINEER_REPORT_2026-11-01.md) | M17 forensic baseline before the P0 correction: PR #300 was already merged, the tasks are canonical on `main`, `.circleci/` never existed in any commit, CircleCI was never a required check, and the creative surface deleted an admitted job's input before enqueue — with three real-queue reproductions. |
 ## History (archived — read-only, never a source of truth)
 
 | Document | What it is |

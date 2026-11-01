@@ -1046,13 +1046,22 @@
     },
     {
       "id": "nagar-workspace-redelivery-01",
-      "description": "Telegram creative-surface immutable input redelivery isolation (widened 2026-11-01: adds the worker trust boundary src/nexus_ai_agent/creative/render_jobs.py and its unit tests tests/unit/test_creative_render_jobs.py so the typed input-integrity contract can be enforced and regression-tested without an out-of-scope edit)",
+      "description": "Telegram creative-surface immutable input redelivery isolation (widened 2026-11-01: adds the worker trust boundary src/nexus_ai_agent/creative/render_jobs.py and its unit tests tests/unit/test_creative_render_jobs.py so the typed input-integrity contract can be enforced and regression-tested without an out-of-scope edit; widened 2026-11-01 (second pass, before editing) to add the CANONICAL free-text producer src/nexus_ai_agent/nagar/creative/handoff.py and its unit tests tests/unit/test_nagar_cognition_queue_handoff.py, which emits media-bearing creative_render payloads and must carry the digest or the documented fail-closed policy would break a live production path) ; widened 2026-11-01 (third pass, before editing) to add tests/integration/test_job_lifecycle_queue.py, whose fixtures build media-bearing creative_render payloads by hand and therefore must carry the digest to keep exercising the queue lifecycle. ; widened 2026-11-01 (fourth pass, before editing) to add docs/README.md (the docs index) so the decision record and the M17 forensic report can be indexed as AGENTS.md §7 requires. ; widened 2026-11-01 (fifth pass, before editing) to add the three remaining integration suites whose hand-built media-bearing payload fixtures must carry input_sha256: test_creative_chain_e2e.py, test_provenance_passport_e2e.py and test_creative_execution_recovery.py. ; widened 2026-11-01 (sixth pass, before creating the file) to add scripts/creative_redelivery_mutations.py: the focused six-probe mutation campaign that proves the new regression tests are load-bearing rather than vacuous. ; widened 2026-11-01 (seventh pass) to add docs/DECISION_LOG.md for decision record D-0036, which AGENTS.md section 7 requires for any behaviour change.",
       "paths": [
         "src/nexus_ai_agent/bot/creative_surface.py",
         "tests/unit/test_creative_surface.py",
         "tests/integration/test_creative_surface_redelivery.py",
         "src/nexus_ai_agent/creative/render_jobs.py",
-        "tests/unit/test_creative_render_jobs.py"
+        "tests/unit/test_creative_render_jobs.py",
+        "src/nexus_ai_agent/nagar/creative/handoff.py",
+        "tests/unit/test_nagar_cognition_queue_handoff.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "docs/README.md",
+        "tests/integration/test_creative_chain_e2e.py",
+        "tests/integration/test_provenance_passport_e2e.py",
+        "tests/integration/test_creative_execution_recovery.py",
+        "scripts/creative_redelivery_mutations.py",
+        "docs/DECISION_LOG.md"
       ]
     },
     {
@@ -7725,7 +7734,16 @@
         "tests/unit/test_creative_surface.py",
         "tests/integration/test_creative_surface_redelivery.py",
         "src/nexus_ai_agent/creative/render_jobs.py",
-        "tests/unit/test_creative_render_jobs.py"
+        "tests/unit/test_creative_render_jobs.py",
+        "src/nexus_ai_agent/nagar/creative/handoff.py",
+        "tests/unit/test_nagar_cognition_queue_handoff.py",
+        "tests/integration/test_job_lifecycle_queue.py",
+        "docs/README.md",
+        "tests/integration/test_creative_chain_e2e.py",
+        "tests/integration/test_provenance_passport_e2e.py",
+        "tests/integration/test_creative_execution_recovery.py",
+        "scripts/creative_redelivery_mutations.py",
+        "docs/DECISION_LOG.md"
       ],
       "note": ""
     },

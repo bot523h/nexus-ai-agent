@@ -77,5 +77,6 @@
   "creative.failed.caption_profile_unavailable": "❌ Los subtítulos no están disponibles en esta instalación (sin motor de voz).",
   "creative.failed.render_failed": "❌ El renderizado falló; prueba con un archivo más corto u otros parámetros.",
   "creative.failed.ffmpeg_unavailable": "❌ El motor de renderizado no está instalado en este despliegue.",
-  "creative.failed.internal": "❌ Ocurrió un error interno; los detalles son visibles para el equipo."
+  "creative.failed.internal": "❌ Ocurrió un error interno; los detalles son visibles para el equipo.",
+  "creative.request_conflict": "♻️ Este mensaje ya se encoló con otros medios. Envía los nuevos medios en un mensaje nuevo."
 }

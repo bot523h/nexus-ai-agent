@@ -77,5 +77,6 @@
   "creative.failed.caption_profile_unavailable": "❌ この環境では字幕を利用できません（音声エンジン未導入）。",
   "creative.failed.render_failed": "❌ レンダリングに失敗しました。短いメディアや別のパラメータをお試しください。",
   "creative.failed.ffmpeg_unavailable": "❌ このデプロイにはレンダーエンジンがインストールされていません。",
-  "creative.failed.internal": "❌ 内部エラーが発生しました。詳細はチームが確認できます。"
+  "creative.failed.internal": "❌ 内部エラーが発生しました。詳細はチームが確認できます。",
+  "creative.request_conflict": "♻️ このメッセージは別のメディアですでに登録済みです。新しいメディアは新しいメッセージで送ってください。"
 }

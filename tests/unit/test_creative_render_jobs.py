@@ -32,13 +32,27 @@ from nexus_ai_agent.creative.render_jobs import (
 from nexus_ai_agent.creative.slideshow.ffmpeg import resolve_ffmpeg_bin
 
 
+def _digest(path: Path) -> str:
+    """Bare lowercase SHA-256 of a real file (the payload's canonical spelling)."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _payload(workspace: Path, **overrides: Any) -> dict[str, Any]:
+    """A media-bearing payload that satisfies the content-identity contract.
+
+    Since task-nagar-workspace-redelivery-01 a media-bearing row MUST carry
+    ``input_sha256`` measured over the real staged bytes: the worker recomputes it
+    and refuses a mismatch (or an absent digest) before any engine runs. Every
+    payload built here therefore names the bytes of the file it points at.
+    """
+    input_file = workspace / "input.mp4"
     base: dict[str, Any] = {
         "command": "edit",
         "operation": "trim",
         "args": ["0", "1"],
         "workspace_dir": str(workspace),
-        "input_path": str(workspace / "input.mp4"),
+        "input_path": str(input_file),
+        "input_sha256": _digest(input_file) if input_file.is_file() else "0" * 64,
         "media_duration_us": 2_000_000,
         "user_id": 42,
         "chat_id": 4242,
@@ -458,3 +472,111 @@ def test_the_surface_mints_the_identity_the_worker_verifies() -> None:
     assert trace.trace_id == _surface_trace_id({"idempotency_key": "creative:42:4242:111"})
     assert trace.surface == "telegram.creative"
     assert trace.actor_ref == "tg:42"
+
+
+# ---------------------------------------------------------------------------
+# P0 redelivery — the typed input-integrity contract (task-nagar-workspace-…)
+# ---------------------------------------------------------------------------
+# The worker never trusts the surface's digest: it re-measures the staged bytes
+# and refuses a mismatch, a symlink, a non-regular file or an absent digest BEFORE
+# any engine is constructed. These unit tests pin that contract; the end-to-end
+# proofs live in tests/integration/test_creative_surface_redelivery.py.
+
+
+def test_payload_accepts_a_lowercase_sha256(workspace: Path) -> None:
+    _write_clip_bytes(workspace / "input.mp4", b"payload")
+    payload = CreativeRenderPayload.model_validate(_payload(workspace))
+    assert payload.input_sha256 == hashlib.sha256(b"payload").hexdigest()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "ABC",  # too short
+        "A" * 64,  # uppercase is not the canonical spelling
+        "g" * 64,  # not hexadecimal
+        "sha256:" + "a" * 63,  # prefixed but truncated
+        "",
+    ],
+)
+def test_payload_rejects_a_malformed_digest(workspace: Path, bad: str) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CreativeRenderPayload.model_validate(_payload(workspace, input_sha256=bad))
+
+
+def test_payload_normalizes_the_prefixed_form(workspace: Path) -> None:
+    """``sha256:``-prefixed is the shape of the repo's own ``sha256_file`` helper."""
+    _write_clip_bytes(workspace / "input.mp4", b"payload")
+    bare = hashlib.sha256(b"payload").hexdigest()
+    payload = CreativeRenderPayload.model_validate(
+        _payload(workspace, input_sha256=f"sha256:{bare}")
+    )
+    assert payload.input_sha256 == bare
+
+
+def test_payload_refuses_a_digest_without_an_input(workspace: Path) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CreativeRenderPayload.model_validate(
+            _payload(workspace, input_path=None, input_sha256="a" * 64)
+        )
+
+
+def test_payload_still_forbids_unknown_fields(workspace: Path) -> None:
+    """``extra="forbid"`` is a trust boundary and must survive this change."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CreativeRenderPayload.model_validate(_payload(workspace, allow_experimental=True))
+
+
+@pytest.mark.asyncio
+async def test_worker_refuses_a_media_payload_without_a_digest(workspace: Path) -> None:
+    _write_clip_bytes(workspace / "input.mp4", b"payload")
+    result = await creative_render_job(_payload(workspace, input_sha256=None))
+    assert result["success"] is False
+    assert result["error_code"] == "input_integrity"
+    assert "input_sha256" in result["error_detail"]
+
+
+@pytest.mark.asyncio
+async def test_worker_refuses_when_the_bytes_do_not_match_the_digest(workspace: Path) -> None:
+    _write_clip_bytes(workspace / "input.mp4", b"payload")
+    result = await creative_render_job(_payload(workspace, input_sha256="a" * 64))
+    assert result["success"] is False
+    assert result["error_code"] == "input_integrity"
+    assert "digest mismatch" in result["error_detail"]
+
+
+@pytest.mark.asyncio
+async def test_worker_refuses_a_symlinked_input(workspace: Path, tmp_path: Path) -> None:
+    real = tmp_path / "elsewhere.bin"
+    _write_clip_bytes(real, b"payload")
+    link = workspace / "input.mp4"
+    link.symlink_to(real)
+
+    result = await creative_render_job(_payload(workspace, input_sha256=_digest(real)))
+    assert result["success"] is False
+    assert result["error_code"] in {"input_integrity", "invalid_request", "media_missing"}
+
+
+@pytest.mark.asyncio
+async def test_worker_refuses_a_non_regular_input(workspace: Path) -> None:
+    (workspace / "input.mp4").mkdir()
+    result = await creative_render_job(_payload(workspace, input_sha256="a" * 64))
+    assert result["success"] is False
+    assert result["error_code"] in {"input_integrity", "media_missing"}
+
+
+def test_guarded_workspace_still_rejects_names_without_the_reserved_prefix(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.render_jobs import CreativeRenderError, _guarded_workspace
+
+    with pytest.raises(CreativeRenderError):
+        _guarded_workspace(str(tmp_path / "not_a_workspace"))
+
+
+def _write_clip_bytes(path: Path, data: bytes) -> None:
+    path.write_bytes(data)

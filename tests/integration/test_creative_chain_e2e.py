@@ -35,6 +35,18 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import resolve_ffmpeg_bin
 from nexus_ai_agent.i18n import i18n
 from nexus_ai_agent.worker import default_job_handlers
 
+
+def _digest(path: Path) -> str:
+    """Bare lowercase SHA-256 of the real staged clip.
+
+    task-nagar-workspace-redelivery-01 made ``input_sha256`` part of the creative
+    payload contract: the worker re-measures the staged bytes and refuses a
+    mismatch (or an absent digest) before any engine runs. These suites build
+    payloads by hand, so they must name the bytes they point at.
+    """
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 # Repo root computed from this file's location (tests/integration/…) so
 # subprocess calls work regardless of where the repo is checked out (CI
 # runners use /home/runner/work/…, not /home/user/nexus-ai-agent).
@@ -91,6 +103,7 @@ def _payload(workspace: Path, key: str, **over: Any) -> dict[str, Any]:
         "args": ["0", "1"],
         "workspace_dir": str(workspace),
         "input_path": str(workspace / "input.mp4"),
+        "input_sha256": _digest(workspace / "input.mp4"),
         "media_duration_us": 2_000_000,
         "user_id": 42,
         "chat_id": 4242,
@@ -142,13 +155,17 @@ async def test_enqueue_to_artifact_to_translated_delivery(harness) -> None:  # n
     workspace = Path(str(queue.db_path)).parent / "creative_tmp" / "creative_e2e777"
     workspace.mkdir(parents=True)
     _clip(workspace / "input.mp4")
+    # The payload is snapshotted once: it carries the measured input digest, and the
+    # notifier deletes the workspace at the end of a successful delivery. Rebuilding
+    # it after the cleanup would describe a file that no longer exists.
+    payload = _payload(workspace, key)
 
     # ── enqueue: same key twice → same job id, exactly one effect (§6) ──
     job_id = await queue.enqueue(
-        job_type="creative_render", idempotency_key=key, payload=_payload(workspace, key)
+        job_type="creative_render", idempotency_key=key, payload=dict(payload)
     )
     job_id_again = await queue.enqueue(
-        job_type="creative_render", idempotency_key=key, payload=_payload(workspace, key)
+        job_type="creative_render", idempotency_key=key, payload=dict(payload)
     )
     assert job_id_again == job_id, "re-enqueue must collapse onto the durable key"
 
@@ -177,7 +194,7 @@ async def test_enqueue_to_artifact_to_translated_delivery(harness) -> None:  # n
     # ── workspace cleaned by notifier; idempotent re-enqueue does not replay ──
     assert not workspace.exists()
     job_id_third = await queue.enqueue(
-        job_type="creative_render", idempotency_key=key, payload=_payload(workspace, key)
+        job_type="creative_render", idempotency_key=key, payload=dict(payload)
     )
     assert job_id_third == job_id
     await asyncio.sleep(0.3)

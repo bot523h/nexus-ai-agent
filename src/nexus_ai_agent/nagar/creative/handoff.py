@@ -158,6 +158,29 @@ def source_asset_facts(project: Any, clip_asset_id: str | None) -> dict[str, Any
     return {"clip_asset_id": asset.asset_id, "duration_us": int(asset.duration_us)}
 
 
+def _measure(input_path: str) -> str | None:
+    """Bare lowercase SHA-256 of the staged source, or ``None`` if it is gone.
+
+    Measuring here keeps this producer honest: the digest in the payload describes
+    the bytes that were actually staged, which is exactly what the worker will
+    re-measure before any engine runs.
+    """
+    import hashlib
+    from pathlib import Path
+
+    path = Path(input_path)
+    try:
+        if not path.is_file():
+            return None
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
 def stage_source_media(source_path: str, workspace_dir: str) -> str:
     """Copy a real source file into the job's guarded workspace as ``input.mp4``.
 
@@ -196,6 +219,7 @@ def build_creative_payload(
     chat_id: int,
     lang: str,
     idempotency_key: str,
+    input_sha256: str | None = None,
     canonical: CanonicalHandoffFacts | None = None,
     source_text: str | None = None,
 ) -> dict[str, Any]:
@@ -240,6 +264,10 @@ def build_creative_payload(
         "chat_id": int(chat_id),
         "lang": str(lang),
         "idempotency_key": idempotency_key,
+        # P0 redelivery (task-nagar-workspace-redelivery-01): the worker refuses a
+        # media-bearing row without a content digest, so the canonical free-text
+        # producer must supply one measured over the bytes it actually staged.
+        "input_sha256": input_sha256 if input_sha256 is not None else _measure(input_path),
     }
     if canonical is None:
         return payload
