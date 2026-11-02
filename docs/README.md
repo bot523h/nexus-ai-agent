@@ -147,6 +147,14 @@ placeholder text.
 | [audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md](audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md) | Dated Phase-1 stabilization handoff: live PR inventory, exact-SHA remediation evidence, Board fence correction, CI blockers, and backup/restore limits. |
 
 | [audits/M17_PRINCIPAL_ENGINEER_REPORT_2026-11-01.md](audits/M17_PRINCIPAL_ENGINEER_REPORT_2026-11-01.md) | M17 forensic baseline before the P0 correction: PR #300 was already merged, the tasks are canonical on `main`, `.circleci/` never existed in any commit, CircleCI was never a required check, and the creative surface deleted an admitted job's input before enqueue — with three real-queue reproductions. |
+
+## Engineering (mission records)
+
+| Document | What it is |
+|---|---|
+| [engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md](engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md) | M0 live audit for mission NAGAR-IBPC-LIVE-EDITING-01: 21-component inventory with file evidence, real execution path, verifier calibration, forbidden paths, NOW/NEXT/LATER. |
+| [engineering/NAGAR_IBPC.md](engineering/NAGAR_IBPC.md) | The IBPC slice (intent-bound proof capsules for live editing): chain, red-line→test map, scope semantics, verifier calibration, fencing, privacy, package map — plus the security closure (threat model, audio-ingress policy, approval identity contract, 13/13 mutation evidence) and the honest in-process lifecycle table (Implemented…ProductionVerified labels). |
+
 ## History (archived — read-only, never a source of truth)
 
 | Document | What it is |
