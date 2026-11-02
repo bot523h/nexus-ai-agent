@@ -749,6 +749,34 @@ async def test_worker_refuses_a_workspace_outside_the_creative_root(
     assert result["error_code"] == "invalid_request"
 
 
+async def test_worker_refuses_a_workspace_that_is_a_symlink_inside_the_root(
+    handlers: dict[str, Any], db_path: Path, temp_root: Path
+) -> None:
+    """The residual NEW-1 gap: a workspace symlink to ANOTHER ``creative_*`` dir.
+
+    The link target sits inside the trusted root and carries the reserved prefix, so
+    containment and the name check both pass; only an ``lstat`` on the raw node can
+    refuse it. Without that guard the worker resolves the link and writes the render
+    output into the *victim* directory — a cross-job workspace substitution. The
+    input bytes are correct here, so this test fails if and only if the workspace
+    node check is removed.
+    """
+    await deliver(handlers, content=MEDIA_A)
+    payload = payload_of(only_row(db_path))
+    real_workspace = Path(payload["workspace_dir"])
+    victim = temp_root / "creative_victim"
+    victim.mkdir()
+    # Repoint the job's workspace at a symlink to the victim directory.
+    shutil.rmtree(real_workspace)
+    real_workspace.symlink_to(victim, target_is_directory=True)
+
+    result = await creative_render_job(payload)
+    assert result["success"] is False, "a symlinked workspace must never render"
+    assert result["error_code"] == "invalid_request", f"expected typed refusal, got {result}"
+    assert "symlink" in result["error_detail"]
+    assert not (victim / "output.mp4").exists(), "nothing may be written into the victim"
+
+
 async def test_a_corrupt_immutable_destination_is_refused_not_reused(
     handlers: dict[str, Any], db_path: Path
 ) -> None:

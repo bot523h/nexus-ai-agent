@@ -218,6 +218,45 @@ PROBES: tuple[Probe, ...] = (
         ),
         tests=(WORKER_UNIT,),
     ),
+    Probe(
+        name="M11-worker-workspace-node-symlink-guard-removed",
+        invariant=(
+            "the worker must lstat the workspace node before resolving it, so a workspace "
+            "symlink to another creative_* directory inside the root is refused instead of "
+            "being laundered into the victim directory (NEW-1)"
+        ),
+        edits=(
+            Edit(
+                WORKER,
+                "    if raw_stat is not None and stat.S_ISLNK(raw_stat.st_mode):\n"
+                '        raise CreativeRenderError("invalid_request", '
+                'f"workspace is a symlink: {raw}")',
+                "    # MUTANT: a symlinked workspace node is resolved and accepted",
+            ),
+        ),
+        tests=(REDELIVERY,),
+    ),
+    Probe(
+        name="M12-private-directory-permission-repair-removed",
+        invariant=(
+            "an existing private directory that is not 0o700 must be repaired, because "
+            "mkdir(mode=0o700, exist_ok=True) never changes the mode of a directory that "
+            "already exists (NEW-3)"
+        ),
+        edits=(
+            Edit(
+                SURFACE,
+                '    _harden_private_directory(root, label="root")',
+                "    pass  # MUTANT: an existing loose root is reused unrepaired",
+            ),
+            Edit(
+                SURFACE,
+                "    _harden_private_directory(path, label=label)",
+                "    pass  # MUTANT: an existing loose workspace is reused unrepaired",
+            ),
+        ),
+        tests=(SURFACE_UNIT,),
+    ),
 )
 
 

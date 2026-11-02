@@ -368,16 +368,55 @@ def _ensure_private_directory(path: Path, root: Path, label: str) -> Path:
     except OSError as exc:
         raise _StagingError("media_missing", f"{label} root cannot be created: {root}") from exc
     _refuse_symlinked_directory(root, f"{label} root")
+    _harden_private_directory(root, label="root")
     _refuse_symlinked_directory(path.parent, f"{label} parent")
     try:
         path.mkdir(mode=0o700, parents=False, exist_ok=True)
     except OSError as exc:
         raise _StagingError("media_missing", f"{label} cannot be created: {path}") from exc
     _refuse_symlinked_directory(path, label)
+    _harden_private_directory(path, label=label)
     resolved = path.resolve(strict=False)
     if not _is_within(resolved, root):
         raise _StagingError("media_missing", f"{label} escapes the creative root: {resolved}")
     return resolved
+
+
+def _harden_private_directory(path: Path, *, label: str) -> None:
+    """Enforce owner-only ``0o700`` on a private app-owned directory we just created.
+
+    ``mkdir(mode=0o700, exist_ok=True)`` applies ``0o700`` (minus umask) only when
+    it *creates* the directory: a directory that already exists — a leftover from an
+    older deployment, a wider umask at first creation, a volume restored from a
+    backup, or a deliberately loosened scratch root — keeps whatever mode it has.
+    The private staging/workspace contract would then be silently unenforced, and
+    another local principal could read or tamper with in-flight media.
+
+    We repair the mode only when the node is a real directory we own; a node that is
+    not ours, or a symlink, is refused rather than chmod'd (never follow a link while
+    repairing). The result is re-``stat``ed so we act on the mode actually applied,
+    not the mode we requested. This mirrors the sibling write path, which already
+    uses ``os.fchmod`` to force permissions regardless of umask (IBPC ``session.py``).
+    """
+    try:
+        stat_result = os.lstat(path)
+    except OSError as exc:
+        raise _StagingError("media_missing", f"{label} is unreadable: {path}") from exc
+    if stat.S_ISLNK(stat_result.st_mode):
+        raise _StagingError("media_missing", f"{label} is a symlink: {path}")
+    if not stat.S_ISDIR(stat_result.st_mode):
+        raise _StagingError("media_missing", f"{label} is not a directory: {path}")
+    if stat_result.st_uid != os.geteuid():
+        raise _StagingError("media_missing", f"{label} is not owned by this process: {path}")
+    if stat.S_IMODE(stat_result.st_mode) != 0o700:
+        try:
+            os.chmod(path, 0o700)
+        except OSError as exc:
+            raise _StagingError(
+                "media_missing", f"{label} permissions cannot be tightened: {path}"
+            ) from exc
+        if stat.S_IMODE(os.lstat(path).st_mode) != 0o700:
+            raise _StagingError("media_missing", f"{label} permissions not enforceable: {path}")
 
 
 def _is_within(child: Path, parent: Path) -> bool:
