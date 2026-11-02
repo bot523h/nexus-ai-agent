@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-02T20:01:41Z",
+  "updated_at": "2026-11-02T22:17:49Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1120,6 +1120,14 @@
         "OPERATION_TRUTH.json"
       ],
       "note": "Registered 2026-10-31 by arena/7622c61d-nexus-ai-agent (mission NAGAR-IBPC-SECURITY-CLOSURE-01) on top of active claim task-ibpc-live-editing-01 (same branch/PR #298). Out of scope: task-267 (diagnostics/truth.py), task-281 (cognition eval files), PR #273 files. The ci.yml edit is limited to the trust-mutations job install steps; the mutation script itself is not weakened."
+    },
+    {
+      "id": "ci-quality-omni",
+      "description": "NEXUS-OMNI forensic campaign: CI/CD disk-budget + supply-chain repairs",
+      "paths": [
+        ".github/",
+        "scripts/queue_ownership_mutations.py"
+      ]
     }
   ],
   "claims": [
@@ -7952,6 +7960,37 @@
         "P1 TOCTOU: _stage_source opens source O_RDONLY|O_NOFOLLOW and destination O_NOFOLLOW; staged copy re-hashed against the admitted asset digest before enqueue; verifier reads the staged immutable copy",
         "Independent verification (Jules session 9431742613443431271) VERIFIED all four with file:line evidence; mutation harness extended with staging_no_follow_removed (23/23 killed)"
       ]
+    },
+    {
+      "task": "task-omni-ci-disk-budget-01",
+      "title": "Queue-ownership mutation campaign disk-budget repair",
+      "title_fa": "تعمیر بودجهٔ دیسک کمپین موتاسیون مالکیت صف",
+      "zone": "ci-quality-omni",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Run 41532014621 failed before the campaign ran: `.[dev]` resolved the full runtime closure (sentence-transformers -> torch 539MB + CUDA wheels) and exhausted the runner (Errno 28). Install only the dependency set the four targeted suites import, then the package with --no-deps. Probes and kill criteria unchanged.",
+      "scope_fa": "اجرای ۴۱۵۳۲۰۱۴۶۲۱ پیش از اجرای کمپین شکست خورد: `.[dev]` کل خوشهٔ زمان اجرا را حل کرد (sentence-transformers → torch ۵۳۹MB + چرخ‌های CUDA) و فضای رانر را تمام کرد (Errno 28). فقط مجموعهٔ وابستگی‌های چهار سوئیت هدف نصب شود، سپس پکیج با --no-deps. پروب‌ها و معیارهای kill بدون تغییر.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "the queue-ownership-mutations job installs only its dependency set and produces a valid report (planned=10, killed=10, worktree_clean=true)",
+        "no test is skipped, xfailed, or weakened to obtain a green run",
+        "56/56 targeted tests green and 10/10 mutants killed locally from a detached worktree"
+      ],
+      "evidence_required": [
+        "pytest tests/integration/test_queue_ownership_lifecycle.py tests/integration/test_queue_ownership_processes.py tests/integration/test_artifact_publication_safety.py tests/integration/test_queue_ownership_publication_barrier.py",
+        "python scripts/queue_ownership_mutations.py --report <path>"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/queue-ownership-mutations.yml",
+        "scripts/queue_ownership_mutations.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-ci-disk-budget-20261103",
+      "claimed_at": "2026-11-02T22:17:49Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming."
     }
   ],
   "deferred_log": [
