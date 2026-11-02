@@ -300,6 +300,22 @@ def _guarded_workspace(raw: str) -> Path:
     # (reproduced: the worker rendered and wrote output.mp4 into an unrelated
     # directory before this ordering was corrected).
     root = trusted_creative_root()
+    # Inspect the workspace NODE ITSELF before resolving it, exactly as the input
+    # guard does: ``resolve()`` launders a workspace symlink into its target, so a
+    # link planted after admission (reproduced: ``creative_job`` -> ``creative_victim``,
+    # both inside the root) would otherwise be accepted and every write would land
+    # in another job's directory. The surface refuses a symlinked workspace too; the
+    # queue row is durable and the two ends run in different processes, so the worker
+    # must enforce it independently rather than trust the surface's check.
+    raw_path = Path(raw)
+    try:
+        raw_stat: os.stat_result | None = os.lstat(raw_path)
+    except FileNotFoundError:
+        raw_stat = None
+    except OSError as exc:
+        raise CreativeRenderError("invalid_request", f"workspace unreadable: {raw}") from exc
+    if raw_stat is not None and stat.S_ISLNK(raw_stat.st_mode):
+        raise CreativeRenderError("invalid_request", f"workspace is a symlink: {raw}")
     try:
         workspace = Path(raw).resolve(strict=False)
     except (OSError, RuntimeError) as exc:

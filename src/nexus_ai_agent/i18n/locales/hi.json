@@ -74,6 +74,7 @@
   "creative.failed.invalid_request": "❌ अनुरोध अमान्य है ({detail})।",
   "creative.failed.unsupported_operation": "❌ यह कार्रवाई वन-शॉट रेंडर के लिए उपलब्ध नहीं है।",
   "creative.failed.media_missing": "❌ तैयार की गई मीडिया फ़ाइल नहीं मिली; कमांड दोबारा भेजें।",
+  "creative.failed.input_integrity": "❌ तैयार की गई मीडिया सत्यापित नहीं हो सकी; रेंडर अस्वीकृत। मीडिया दोबारा भेजें।",
   "creative.failed.caption_profile_unavailable": "❌ इस इंस्टॉलेशन पर कैप्शन उपलब्ध नहीं है (कोई स्पीच इंजन नहीं)।",
   "creative.failed.render_failed": "❌ रेंडर विफल; छोटा मीडिया या अन्य पैरामीटर आज़माएँ।",
   "creative.failed.ffmpeg_unavailable": "❌ इस डिप्लॉयमेंट पर रेंडर इंजन इंस्टॉल नहीं है।",

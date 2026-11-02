@@ -343,6 +343,7 @@ jobs:
           "pydantic>=2.7,<3" "pydantic-settings>=2.0"
           structlog httpx numpy pillow
           "sqlalchemy==2.0.54" "sqlmodel==0.0.42" "aiosqlite==0.22.1"
+          "imageio-ffmpeg>=0.5"
       - run: pip install --no-cache-dir --no-deps -e .
       - name: disk after install
         run: df -h /
@@ -353,6 +354,14 @@ jobs:
       # audio staging + approval identity guards re-attacked thirteen ways.
       - run: python scripts/ibpc_security_mutations.py
       - name: the working tree must be unchanged after IBPC security mutation testing
+        run: git diff --exit-code
+      # Same evidence rule for the P0 creative redelivery boundary
+      # (task-nagar-workspace-redelivery-01): the surface/worker content-identity,
+      # symlink, containment and private-permission invariants re-attacked. The
+      # campaign removes one invariant at a time and requires the focused tests to
+      # go RED, restoring every file byte-identically (12 probes).
+      - run: python scripts/creative_redelivery_mutations.py
+      - name: the working tree must be unchanged after creative redelivery mutation testing
         run: git diff --exit-code
 
   # Same evidence rule for the temporal authority (MODULE_MAP law R15).  The

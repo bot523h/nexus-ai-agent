@@ -176,3 +176,53 @@ async def test_failed_job_status_maps_to_internal_typed_message(
     assert text.endswith(i18n.t("creative.failed.internal", lang="fa", detail="boom"))
     assert "boom" not in text  # details go to logs, not the user stub
     assert "✅" not in text
+
+
+def test_every_worker_error_code_has_a_translated_message_in_every_language() -> None:
+    """No error code may reach the user as a raw i18n key (FINDING-2).
+
+    ``_notify_creative_completion`` builds ``creative.failed.{code}`` for any code
+    in ``ERROR_CODES``. When ``input_integrity`` was added the key was not, so
+    ``i18n.t`` returned the literal string ``creative.failed.input_integrity`` and
+    that is what the user saw. Pin the lockstep here: every code resolves to a real
+    message (never the key) in every supported language.
+    """
+    from nexus_ai_agent.creative.render_jobs import ERROR_CODES
+    from nexus_ai_agent.i18n import SUPPORTED_LANGUAGES
+
+    for code in sorted(ERROR_CODES):
+        key = f"creative.failed.{code}"
+        for lang in SUPPORTED_LANGUAGES:
+            text = i18n.t(key, lang=lang, detail="x")
+            assert text != key, f"{lang}: {key} has no translation (raw key leaked)"
+            assert "creative.failed." not in text, f"{lang}:{key} leaked a raw key"
+
+
+@pytest.mark.asyncio
+async def test_input_integrity_failure_is_translated_not_a_raw_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The P0-redelivery failure code must reach the user as a translated message."""
+    workspace = tmp_path / "creative_deadbeef0001"
+    workspace.mkdir()
+    fake = _FakeBot()
+    monkeypatch.setattr("telegram.Bot", lambda token: fake)
+    await _notify_creative_completion(
+        _completion(
+            result={
+                "success": False,
+                "error_code": "input_integrity",
+                "error_detail": (
+                    "digest mismatch for /tmp/creative_x/input-abc.mp4: expected a, measured b"
+                ),
+                "workspace_dir": str(workspace),
+            },
+            payload={"command": "edit", "operation": "trim", "chat_id": 7, "lang": "fa"},
+        ),
+        token="dummy",
+    )
+    text = fake.sent_messages[0][1]
+    assert "creative.failed." not in text and "input_integrity" not in text
+    assert "/tmp/" not in text and "input-abc.mp4" not in text, "no path may leak to the chat"
+    assert text.endswith(i18n.t("creative.failed.input_integrity", lang="fa"))
+    assert not workspace.exists()

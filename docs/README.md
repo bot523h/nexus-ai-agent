@@ -147,6 +147,7 @@ placeholder text.
 | [audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md](audits/NEXUS_STABILIZATION_HANDOFF_2026-10-09.md) | Dated Phase-1 stabilization handoff: live PR inventory, exact-SHA remediation evidence, Board fence correction, CI blockers, and backup/restore limits. |
 
 | [audits/M17_PRINCIPAL_ENGINEER_REPORT_2026-11-01.md](audits/M17_PRINCIPAL_ENGINEER_REPORT_2026-11-01.md) | M17 forensic baseline before the P0 correction: PR #300 was already merged, the tasks are canonical on `main`, `.circleci/` never existed in any commit, CircleCI was never a required check, and the creative surface deleted an admitted job's input before enqueue — with three real-queue reproductions. |
+| [audits/NEXUS_MASTER_FORENSIC_REPAIR_REPORT_2026-11-03.md](audits/NEXUS_MASTER_FORENSIC_REPAIR_REPORT_2026-11-03.md) | Master closure re-validation of the D-0036 redelivery boundary and the IBPC closure: three defects closed as code (workspace-node symlink substitution, unrepaired private-directory mode, a raw i18n key leaked to the user), with exact-SHA evidence, mutation results, and the recorded limitations (LangSmith/Jules connectivity included). |
 
 ## Engineering (mission records)
 

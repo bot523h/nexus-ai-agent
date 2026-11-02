@@ -74,6 +74,7 @@
   "creative.failed.invalid_request": "❌ リクエストが無効です（{detail}）。",
   "creative.failed.unsupported_operation": "❌ この操作はワンショットレンダーではサポートされていません。",
   "creative.failed.media_missing": "❌ 準備されたメディアが見つかりません。コマンドを再送してください。",
+  "creative.failed.input_integrity": "❌ 準備されたメディアを検証できなかったため、レンダリングを拒否しました。メディアを再送してください。",
   "creative.failed.caption_profile_unavailable": "❌ この環境では字幕を利用できません（音声エンジン未導入）。",
   "creative.failed.render_failed": "❌ レンダリングに失敗しました。短いメディアや別のパラメータをお試しください。",
   "creative.failed.ffmpeg_unavailable": "❌ このデプロイにはレンダーエンジンがインストールされていません。",

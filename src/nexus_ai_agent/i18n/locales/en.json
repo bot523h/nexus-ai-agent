@@ -74,6 +74,7 @@
   "creative.failed.invalid_request": "❌ The request was invalid ({detail}).",
   "creative.failed.unsupported_operation": "❌ This operation isn't supported for one-shot renders.",
   "creative.failed.media_missing": "❌ The staged media file is missing. Send the command again.",
+  "creative.failed.input_integrity": "❌ The staged media could not be verified, so rendering was refused. Send the media again.",
   "creative.failed.caption_profile_unavailable": "❌ Captions are unavailable on this installation (no speech engine).",
   "creative.failed.render_failed": "❌ Rendering failed. Try shorter media or different parameters.",
   "creative.failed.ffmpeg_unavailable": "❌ The render engine isn't installed on this deployment.",

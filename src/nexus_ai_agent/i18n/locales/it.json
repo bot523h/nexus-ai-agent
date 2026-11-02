@@ -74,6 +74,7 @@
   "creative.failed.invalid_request": "❌ Richiesta non valida ({detail}).",
   "creative.failed.unsupported_operation": "❌ Questa operazione non è disponibile per i rendering immediati.",
   "creative.failed.media_missing": "❌ Il file multimediale preparato è mancante; invia di nuovo il comando.",
+  "creative.failed.input_integrity": "❌ Impossibile verificare il media preparato; rendering rifiutato. Invia di nuovo il media.",
   "creative.failed.caption_profile_unavailable": "❌ I sottotitoli non sono disponibili in questa installazione (nessun motore vocale).",
   "creative.failed.render_failed": "❌ Rendering non riuscito; prova un media più breve o parametri diversi.",
   "creative.failed.ffmpeg_unavailable": "❌ Il motore di rendering non è installato in questo deployment.",

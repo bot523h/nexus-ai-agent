@@ -16,6 +16,7 @@ Covers the task-166 (P0-B) regression battery:
 
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -494,6 +495,49 @@ def test_private_directory_still_refuses_a_symlinked_root(tmp_path: Path) -> Non
     with pytest.raises(_StagingError):
         _ensure_private_directory(root / "creative_abc", root, "workspace")
     assert list(real.iterdir()) == [], "nothing may be written through the symlink"
+
+
+def test_private_directory_repairs_an_existing_world_readable_root(tmp_path: Path) -> None:
+    """An existing root that is not ``0o700`` must be repaired, not silently reused.
+
+    ``mkdir(mode=0o700, exist_ok=True)`` applies the mode only on *creation*; a root
+    left at ``0o755`` (older deployment, wider umask, restored volume) would otherwise
+    stay world-readable while the code believed it had asked for ``0o700``. Remove the
+    repair and the first assertion below fails.
+    """
+    root = tmp_path / "creative"
+    root.mkdir()
+    root.chmod(0o755)
+    workspace = _ensure_private_directory(root / "creative_abc", root, "workspace")
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700, "the root must be repaired"
+    assert stat.S_IMODE(workspace.stat().st_mode) == 0o700
+
+
+def test_private_directory_repairs_an_existing_loose_workspace(tmp_path: Path) -> None:
+    """A pre-created workspace at ``0o775`` must be tightened before it is used."""
+    root = tmp_path / "creative"
+    root.mkdir()
+    root.chmod(0o700)
+    workspace = root / "creative_abc"
+    workspace.mkdir()
+    workspace.chmod(0o775)
+    resolved = _ensure_private_directory(workspace, root, "workspace")
+    assert resolved == workspace.resolve()
+    assert stat.S_IMODE(workspace.stat().st_mode) == 0o700
+
+
+def test_private_directory_refuses_a_symlinked_workspace_node(tmp_path: Path) -> None:
+    """A workspace node that is a symlink is refused, never chmod'd through."""
+    root = tmp_path / "creative"
+    root.mkdir()
+    victim = root / "creative_victim"
+    victim.mkdir()
+    victim.chmod(0o755)
+    link = root / "creative_attacker"
+    link.symlink_to(victim, target_is_directory=True)
+    with pytest.raises(_StagingError):
+        _ensure_private_directory(link, root, "workspace")
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o755, "the victim is untouched"
 
 
 def test_trusted_root_refuses_the_configured_node_but_allows_a_symlinked_ancestor(

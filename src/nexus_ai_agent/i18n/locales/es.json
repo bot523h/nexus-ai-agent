@@ -74,6 +74,7 @@
   "creative.failed.invalid_request": "❌ La solicitud no es válida ({detail}).",
   "creative.failed.unsupported_operation": "❌ Esta operación no está disponible para renderizados instantáneos.",
   "creative.failed.media_missing": "❌ No se encuentra el archivo preparado; envía el comando otra vez.",
+  "creative.failed.input_integrity": "❌ No se pudo verificar el medio preparado; se rechazó el renderizado. Envía el medio de nuevo.",
   "creative.failed.caption_profile_unavailable": "❌ Los subtítulos no están disponibles en esta instalación (sin motor de voz).",
   "creative.failed.render_failed": "❌ El renderizado falló; prueba con un archivo más corto u otros parámetros.",
   "creative.failed.ffmpeg_unavailable": "❌ El motor de renderizado no está instalado en este despliegue.",
