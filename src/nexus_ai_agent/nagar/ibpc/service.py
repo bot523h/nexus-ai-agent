@@ -841,6 +841,12 @@ class IBPCService:
             "args": [self._seconds_str(in_us), self._seconds_str(out_us)],
             "workspace_dir": str(workspace),
             "input_path": str(input_path),
+            # Bind the *staged* bytes' content identity to the enqueued job. The
+            # worker (task-nagar-workspace-redelivery-01) re-measures the staged
+            # input and refuses a media-bearing payload that carries no digest, so
+            # the digest staged_digest (already checked == ctx.source_asset_digest
+            # above) is the admitted identity the worker must reproduce.
+            "input_sha256": staged_digest,
             "media_duration_us": int(ctx.duration_us),
             "user_id": session.user_id,
             "chat_id": session.chat_id,
