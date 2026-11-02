@@ -320,7 +320,7 @@ jobs:
   # pack trust boundary twelve ways and require the suite to go red each time
   # (scripts/pack_trust_mutations.py restores every file it touches).
   trust-mutations:
-    name: trust-mutations (pack trust plane)
+    name: trust-mutations (pack trust plane + IBPC security closure)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -330,9 +330,29 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      # Disk-budget fix (run 41174187587, job 124458465961, Errno 28): install
+      # ONLY the exact dependency set the mutation suites import (proven in a
+      # scratch venv: 28 small packages instead of the full .[dev] closure),
+      # then the package itself without deps. The mutation scripts and their
+      # kill criteria are unchanged.
+      - name: disk before install
+        run: df -h /
+      - run: >-
+          pip install --no-cache-dir
+          "pytest>=8.0" "pytest-asyncio>=0.23"
+          "pydantic>=2.7,<3" "pydantic-settings>=2.0"
+          structlog httpx numpy pillow
+          "sqlalchemy==2.0.54" "sqlmodel==0.0.42" "aiosqlite==0.22.1"
+      - run: pip install --no-cache-dir --no-deps -e .
+      - name: disk after install
+        run: df -h /
       - run: python scripts/pack_trust_mutations.py
       - name: the working tree must be unchanged after mutation testing
+        run: git diff --exit-code
+      # Same evidence rule for the IBPC security closure (Phases B/C/D):
+      # audio staging + approval identity guards re-attacked thirteen ways.
+      - run: python scripts/ibpc_security_mutations.py
+      - name: the working tree must be unchanged after IBPC security mutation testing
         run: git diff --exit-code
 
   # Same evidence rule for the temporal authority (MODULE_MAP law R15).  The
