@@ -31,6 +31,8 @@ IBPC = ROOT / "src" / "nexus_ai_agent" / "nagar" / "ibpc"
 TESTS = (
     "tests/unit/test_ibpc_security.py",
     "tests/unit/test_ibpc_approval.py",
+    "tests/unit/test_ibpc_authority.py",
+    "tests/unit/test_ibpc_proof_gate.py",
 )
 
 
@@ -204,10 +206,125 @@ MUTATIONS: tuple[Mutation, ...] = (
         ),
         "a tampered preview context must never execute",
     ),
+    # -- Phase 1: canonical authority continuity --------------------------------
+    Mutation(
+        "authority_revocation_ignored_at_execute",
+        IBPC / "service.py",
+        (
+            (
+                "        try:\n"
+                "            verified = self._resolve_authority(session.principal_id, session.project_id)\n"
+                "        except CanonicalAuthorityError as exc:\n"
+                '            raise ApprovalError("authority_unverified", f"{exc.reason}: {exc.detail}") from exc\n',
+                "        verified = ctx.verified_identity  # mutation: trust the cached identity\n",
+            ),
+        ),
+        "authority must be re-verified at execute time (revocation fails closed)",
+    ),
+    Mutation(
+        "binding_ownership_not_checked",
+        IBPC / "authority.py",
+        (
+            (
+                "            self._directory.require_binding(binding_ref, principal)  # type: ignore[attr-defined]",
+                "            pass  # mutation: binding ownership not checked",
+            ),
+        ),
+        "a channel binding must belong to the acting principal",
+    ),
+    Mutation(
+        "unconfigured_authority_allows",
+        IBPC / "service.py",
+        (
+            (
+                "        if authority is None:\n"
+                "            raise CanonicalAuthorityError(\n"
+                '                "authority_unconfigured",\n'
+                '                "no trusted canonical authority is configured; refusing to execute",\n'
+                "            )",
+                "        if authority is None and False:  # mutation\n"
+                "            raise CanonicalAuthorityError(\n"
+                '                "authority_unconfigured",\n'
+                '                "no trusted canonical authority is configured; refusing to execute",\n'
+                "            )",
+            ),
+        ),
+        "a service without a trusted authority must refuse, never run on a cached grant",
+    ),
+    # -- Phase 2: proof-completeness gate ---------------------------------------
+    Mutation(
+        "proof_gate_ignores_verdict",
+        IBPC / "proof.py",
+        (
+            (
+                "    if verdict is not CheckVerdict.PASS:\n"
+                '        reasons.append(f"verdict_not_pass:{verdict.value}")',
+                "    if False:  # mutation\n"
+                '        reasons.append(f"verdict_not_pass:{verdict.value}")',
+            ),
+        ),
+        "a non-PASS verdict must never be reported as verified proof",
+    ),
+    Mutation(
+        "proof_gate_ignores_journal",
+        IBPC / "proof.py",
+        (
+            (
+                '    elif journal.get("chain_verified") is not True:\n'
+                '        reasons.append("journal_chain_unverified")',
+                '    elif False:  # mutation\n        reasons.append("journal_chain_unverified")',
+            ),
+        ),
+        "an unverified provenance chain must withhold a proof-bearing capsule",
+    ),
+    Mutation(
+        "proof_gate_ignores_attempt",
+        IBPC / "proof.py",
+        (
+            (
+                "    if not attempt_identity or attempt_identity.endswith(UNKNOWN_ATTEMPT_SUFFIX):\n"
+                '        reasons.append("attempt_identity_missing")',
+                '    if False:  # mutation\n        reasons.append("attempt_identity_missing")',
+            ),
+        ),
+        "a missing/placeholder attempt identity must be a proof gap",
+    ),
+    Mutation(
+        "proof_gate_ignores_passport_digest",
+        IBPC / "proof.py",
+        (
+            (
+                '        digest = passport.get("passport_digest")\n'
+                '        if not isinstance(digest, str) or not digest.startswith("sha256:"):\n'
+                '            reasons.append("passport_digest_missing")',
+                "        pass  # mutation: passport digest not checked",
+            ),
+        ),
+        "a passport without a digest must be a proof gap",
+    ),
+    Mutation(
+        "proof_gate_outcome_always_verified",
+        IBPC / "proof.py",
+        (
+            (
+                "        return EXECUTED_VERIFIED if self.proof_complete else EXECUTED_UNVERIFIED",
+                "        return EXECUTED_VERIFIED  # mutation",
+            ),
+        ),
+        "an incomplete proof must never be reported as verified success",
+    ),
 )
 
 
-def run_tests() -> bool:
+def run_tests() -> int:
+    """Run the security suites and return pytest's exit code (0 == GREEN).
+
+    The raw return code is returned, never collapsed to a bool: the caller must
+    be able to tell a *genuine* test failure (exit 1, a real kill) from a
+    harness/infra failure (exit 2 interrupted, 3 internal, 4 usage, 5 no tests
+    collected).  Only exit 1 proves a mutation was caught by an assertion; an
+    infrastructure error must never be mistaken for a kill.
+    """
     env = dict(os.environ)
     # Pin the in-tree package ahead of any editable install so the mutated file
     # is the one under test (an installed copy would silently false-green).
@@ -230,7 +347,13 @@ def run_tests() -> bool:
         env=env,
         shell=False,
     )
-    return result.returncode == 0
+    return result.returncode
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def main() -> int:
@@ -243,15 +366,18 @@ def main() -> int:
         return 0
 
     print("baseline ... ", end="", flush=True)
-    if not run_tests():
+    if run_tests() != 0:
         print("RED — refusing to mutate a suite that is already failing")
         return 2
     print("GREEN")
 
+    results: list[tuple[str, str, str, str, str]] = []  # name, file, invariant, result, evidence
     killed = 0
-    survivors: list[str] = []
+    blocked = 0
     for mutation in MUTATIONS:
+        rel = mutation.path.relative_to(ROOT)
         original = mutation.path.read_text(encoding="utf-8")
+        before_sha = _sha256(mutation.path)
         mutated = original
         applicable = True
         for old, new in mutation.edits:
@@ -261,26 +387,52 @@ def main() -> int:
                 break
             mutated = mutated.replace(old, new, 1)
         if not applicable:
-            survivors.append(mutation.name)
+            # A dead anchor is a harness-integrity failure, not a caught guard.
+            results.append((mutation.name, str(rel), mutation.why, "ANCHOR_DRIFT", "n/a"))
+            blocked += 1
             continue
         mutation.path.write_text(mutated, encoding="utf-8")
         try:
-            green = run_tests()
+            code = run_tests()
         finally:
             mutation.path.write_text(original, encoding="utf-8")
-        if green:
-            print(f"{mutation.name}: SURVIVED — {mutation.why}")
-            survivors.append(mutation.name)
-        else:
+        # The source must be byte-identical after every mutation, even on crash.
+        restored = _sha256(mutation.path) == before_sha
+        if not restored:
+            results.append(
+                (mutation.name, str(rel), mutation.why, "RESTORE_FAILED", "sha mismatch")
+            )
+            blocked += 1
+            continue
+        if code == 1:
             killed += 1
             print(f"{mutation.name}: killed")
+            results.append((mutation.name, str(rel), mutation.why, "KILLED", "pytest exit 1"))
+        elif code == 0:
+            print(f"{mutation.name}: SURVIVED — {mutation.why}")
+            results.append((mutation.name, str(rel), mutation.why, "SURVIVED", "pytest exit 0"))
+        else:
+            # Exit 2/3/4/5 is an infrastructure/usage error, NOT a kill.
+            print(f"{mutation.name}: HARNESS ERROR (pytest exit {code}) — not counted as a kill")
+            results.append(
+                (mutation.name, str(rel), mutation.why, "HARNESS_ERROR", f"pytest exit {code}")
+            )
+            blocked += 1
 
     print("restored baseline ... ", end="", flush=True)
-    if not run_tests():
+    if run_tests() != 0:
         print("RED — restore failed")
         return 3
     print("GREEN")
-    print(f"{killed}/{len(MUTATIONS)} killed")
+
+    print()
+    print("mutation evidence (name | file | invariant | result | evidence)")
+    for name, rel, why, result, evidence in results:
+        print(f"- {name} | {rel} | {why} | {result} | {evidence}")
+    print()
+    print(f"{killed}/{len(MUTATIONS)} killed, {blocked} blocked (anchor drift / harness error)")
+    if blocked:
+        return 4
     return 0 if killed == len(MUTATIONS) else 1
 
 
