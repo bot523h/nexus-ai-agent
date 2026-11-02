@@ -177,6 +177,25 @@ PROBES: tuple[Probe, ...] = (
         ),
         tests=(WORKER_UNIT,),
     ),
+    Probe(
+        name="M9-symlinked-creative-root-followed",
+        invariant=(
+            "the configured creative root must be lstat'ed before any resolve(), so a "
+            "symlinked root is refused instead of silently canonicalized away"
+        ),
+        edits=(
+            Edit(
+                SURFACE,
+                "                temp_root = _trusted_root(get_settings().creative_temp_dir)",
+                "                # MUTANT: resolve() first, so the symlink is already\n"
+                "                # canonicalized away before the guard runs\n"
+                "                temp_root = Path(\n"
+                "                    get_settings().creative_temp_dir\n"
+                "                ).resolve(strict=False)",
+            ),
+        ),
+        tests=(REDELIVERY, SURFACE_UNIT),
+    ),
 )
 
 

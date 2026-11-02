@@ -29,6 +29,7 @@ from nexus_ai_agent.bot.creative_surface import (
     CreativeSurfaceMapper,
     _ensure_private_directory,
     _StagingError,
+    _trusted_root,
     build_creative_handlers,
 )
 from nexus_ai_agent.config import settings as settings_module
@@ -493,3 +494,44 @@ def test_private_directory_still_refuses_a_symlinked_root(tmp_path: Path) -> Non
     with pytest.raises(_StagingError):
         _ensure_private_directory(root / "creative_abc", root, "workspace")
     assert list(real.iterdir()) == [], "nothing may be written through the symlink"
+
+
+def test_trusted_root_refuses_the_configured_node_but_allows_a_symlinked_ancestor(
+    tmp_path: Path,
+) -> None:
+    """The trust boundary is the configured node, and it must not creep upwards.
+
+    Two failure modes are tested together because they pull in opposite directions:
+
+    * the *attack* — ``creative_temp_dir`` itself is a symlink, which is the only
+      thing an operator can be talked into configuring. It must be refused, and it
+      must be refused *before* ``resolve()`` can canonicalize the evidence away.
+    * the *regression* — the configured node sits under a symlinked ancestor. That
+      is ordinary deployment plumbing (macOS ``/tmp`` -> ``/private/tmp``, container
+      volume mounts). Refusing it would break real installs while buying no safety:
+      whoever can swap an ancestor of the trusted root owns the host outright.
+    """
+    real = tmp_path / "real"
+    (real / "creative").mkdir(parents=True)
+
+    # Attack: the configured node is a link to somewhere unrelated.
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    evil = tmp_path / "evil"
+    evil.symlink_to(unrelated, target_is_directory=True)
+    with pytest.raises(_StagingError):
+        _trusted_root(evil)
+
+    # Regression: only an ancestor is a link; the node itself is a real directory.
+    ancestor = tmp_path / "link" / "creative"
+    (tmp_path / "link").symlink_to(real, target_is_directory=True)
+    assert _trusted_root(ancestor) == (real / "creative").resolve()
+
+    # Same, but the node does not exist yet — creation is the caller's job.
+    assert _trusted_root(tmp_path / "link" / "not-yet") == (real / "not-yet").resolve()
+
+    # A plain file where a directory is required is a refusal, not a crash later.
+    a_file = tmp_path / "afile"
+    a_file.write_text("x")
+    with pytest.raises(_StagingError):
+        _trusted_root(a_file)

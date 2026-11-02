@@ -317,6 +317,32 @@ def _refuse_symlinked_directory(path: Path, label: str) -> None:
         raise _StagingError("media_missing", f"{label} is not a directory: {path}")
 
 
+def _trusted_root(configured: str | os.PathLike[str]) -> Path:
+    """Return the canonical trusted root, refusing a symlinked *configured* path.
+
+    ``Path.resolve()`` is the wrong first step. It follows the link and returns the
+    target, so every later containment check compares resolved-against-resolved and
+    reports success while the bytes go somewhere else entirely. The configured path
+    is therefore inspected **as written, before any resolution**.
+
+    The trust boundary is deliberately drawn at the configured node itself, matching
+    ``_refuse_symlinked_directory``: an ancestor is admin-owned path prefix, and
+    refusing ancestors would break legitimate deployments whose root sits under a
+    symlinked mount (macOS ``/tmp`` -> ``/private/tmp`` is the everyday case). An
+    attacker able to swap an *ancestor* of the configured root already owns the
+    host, and the resolved-to-resolved containment stays internally consistent for
+    that case anyway.
+
+    A missing root is *not* an error: the caller creates it (see
+    ``_ensure_private_directory``, which keeps ``parents=True`` for exactly this
+    reason, because ``get_settings()`` is ``lru_cache``d and only creates the
+    directory once per process).
+    """
+    raw = Path(configured)
+    _refuse_symlinked_directory(raw, "creative root")
+    return raw.resolve(strict=False)
+
+
 def _ensure_private_directory(path: Path, root: Path, label: str) -> Path:
     """Create a directory under *root* with owner-only permissions, atomically.
 
@@ -513,14 +539,27 @@ def build_creative_handlers(
 
         from nexus_ai_agent.config.settings import get_settings
 
-        temp_root = Path(get_settings().creative_temp_dir).resolve(strict=False)
-        workspace = _workspace_for(key, str(temp_root))
-        input_path: str | None = None
-        input_sha256: str | None = None
+        # Trusted root resolution (P0 closeout 2026-11-02). The ORDER matters and
+        # is load-bearing: the CONFIGURED path is inspected for symlinks *before*
+        # resolve(), because resolve() canonicalizes a symlink away and the guard
+        # downstream could then only ever see the real target. Reproduced before
+        # this fix: a symlinked creative_temp_dir silently redirected every
+        # creative download into an unrelated directory.
         #: Private staging owned EXCLUSIVELY by this delivery. Nothing outside this
         #: directory is ever deleted here — see the cleanup contract below.
         staging: Path | None = None
         try:
+            try:
+                temp_root = _trusted_root(get_settings().creative_temp_dir)
+            except _StagingError as exc:
+                # A refused trusted root is a typed, user-visible refusal: no job
+                # row, no reply that claims a queued job, and no byte written.
+                logger.warning("creative_root_refused", command=command, detail=exc.detail)
+                await _reply(update, i18n.t("creative.media_download_failed", lang=lang))
+                return
+            workspace = _workspace_for(key, str(temp_root))
+            input_path: str | None = None
+            input_sha256: str | None = None
             try:
                 workspace = _ensure_private_directory(workspace, temp_root, "workspace")
             except _StagingError as exc:

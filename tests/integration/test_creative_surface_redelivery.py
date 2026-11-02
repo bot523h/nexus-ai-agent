@@ -509,6 +509,45 @@ async def test_preplanted_workspace_symlink_cannot_redirect_the_download(
     )
 
 
+async def test_a_symlinked_creative_temp_dir_is_refused_by_the_real_dispatch_path(
+    handlers: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db_path: Path
+) -> None:
+    """The CONFIGURED root being a symlink must be refused before any write.
+
+    This test deliberately goes through the real handler, not
+    ``_ensure_private_directory``. The helper-level test
+    (``tests/unit/test_creative_surface.py::test_private_directory_still_refuses_a_symlinked_root``)
+    passes while the production path is unsafe, because ``_dispatch`` calls
+    ``Path(settings.creative_temp_dir).resolve(strict=False)`` FIRST: resolve()
+    canonicalizes the symlink away, so ``_refuse_symlinked_directory`` only ever
+    sees the real target and can never observe that the configured root was a link.
+
+    Consequence without this test: an operator or an attacker who can replace the
+    configured creative directory with a symlink silently redirects every creative
+    download into an unrelated directory. Reproduced before the fix: the job was
+    queued and bytes landed in the unrelated directory.
+    """
+    unrelated = tmp_path / "unrelated_secret_dir"
+    unrelated.mkdir()
+    configured = tmp_path / "creative_link"
+    configured.symlink_to(unrelated, target_is_directory=True)
+
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(configured))
+    settings_module.get_settings.cache_clear()
+
+    message = await deliver(handlers, content=MEDIA_A)
+
+    assert list(unrelated.iterdir()) == [], (
+        "a symlinked creative root must never redirect creative writes into "
+        f"another directory; found: {[p.name for p in unrelated.iterdir()]}"
+    )
+    assert rows(db_path) == [], "a refused delivery must not enqueue a job"
+    assert message.replies, "the user must be told the request was refused"
+    assert not any("⏳" in reply for reply in message.replies), (
+        f"a refused delivery must never report a queued job: {message.replies}"
+    )
+
+
 async def test_a_workspace_symlink_inside_the_root_is_still_refused(
     handlers: dict[str, Any], temp_root: Path, db_path: Path
 ) -> None:
