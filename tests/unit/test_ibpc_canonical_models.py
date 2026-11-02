@@ -176,6 +176,7 @@ class TestModels:
             approval_id="appr_1",
             approval_binding=digest_of({"b": 1}),
             principal_identity="u",
+            channel_binding_id="cbn_" + "a" * 64,
             session_id="s",
             turn_id="t",
             execution_attempt_identity="job:attempt1",

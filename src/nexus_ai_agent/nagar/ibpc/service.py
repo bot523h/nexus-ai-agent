@@ -25,17 +25,24 @@ Pipeline per turn:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
+from nexus_ai_agent.application.creative_intent import CanonicalCreativeIntent
 from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort, JobStatus
 from nexus_ai_agent.creative.slideshow.ffmpeg import RenderError, sha256_file
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError, ApprovalIdentity, ApprovalLedger
+from nexus_ai_agent.nagar.ibpc.authority import (
+    CanonicalAuthorityError,
+    CanonicalAuthorityPort,
+)
 from nexus_ai_agent.nagar.ibpc.compiler import CompilationRefused, compile_ast
 from nexus_ai_agent.nagar.ibpc.footprint import FootprintVerifyError, probe_media, verify_keep
 from nexus_ai_agent.nagar.ibpc.intent import (
@@ -56,6 +63,7 @@ from nexus_ai_agent.nagar.ibpc.models import (
 )
 from nexus_ai_agent.nagar.ibpc.preview import build_preview, render_readback
 from nexus_ai_agent.nagar.ibpc.privacy import PrivacyPolicy
+from nexus_ai_agent.nagar.ibpc.proof import evaluate_proof_gate
 from nexus_ai_agent.nagar.ibpc.session import (
     LiveSessionManager,
     SessionError,
@@ -70,7 +78,7 @@ from nexus_ai_agent.nagar.ibpc.session import (
 JOB_TYPE = "creative_render"
 COMMAND = "edit"
 SURFACE_OPERATION = "trim"
-CANONICAL_OPERATION = "timeline.trim"
+CANONICAL_OPERATION: Literal["timeline.trim"] = "timeline.trim"
 WORKSPACE_PREFIX = "creative_"
 DRAIN_TIMEOUT_S = 300.0
 
@@ -97,6 +105,18 @@ class IBPCServiceDeps:
     attempt_provider: Any | None = None  # Callable[[str], list[dict]] | None
     now: Any = utc_now  # Callable[[], str]
     verifier_binary: str | None = None
+    #: Trusted, server-side canonical authority. When supplied, the service
+    #: resolves + verifies the acting principal/project/binding from persistent
+    #: state before any job admission (Phase 1). When absent the slice is
+    #: experimental-only: execution is refused (never a silent schema-1 fallback).
+    authority: CanonicalAuthorityPort | None = None
+    #: The canonical channel binding reference for the composition root's
+    #: session (e.g. ``cbn_<64hex>``). Trusted input, never a model/user value.
+    channel_binding_ref: str | None = None
+    #: Test/composition seam: the canonical intent builder. Defaults to the real
+    #: ``CanonicalCreativeIntent.create`` (pinned against the worker's own
+    #: builder by tests/architecture/test_ibpc_boundary.py).
+    intent_builder: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -137,6 +157,10 @@ class _TurnContext:
     tenant_id: str
     project_id: str
     principal_id: str
+    #: canonical binding reference the intent was compiled under
+    binding_ref: str = ""
+    #: verified principal/project/binding resolved from server state (Phase 1)
+    verified_identity: Any = None
 
 
 class IBPCService:
@@ -207,6 +231,13 @@ class IBPCService:
         self._sessions.begin_turn(
             session_id, turn_id, sequence_number=sequence_number, project_revision=revision
         )
+        try:
+            verified = self._resolve_authority(session.principal_id, session.project_id)
+        except CanonicalAuthorityError as exc:
+            # No trusted identity → typed refusal before job admission. Never a
+            # synthetic binding, never broad service permissions (Phase 1).
+            self._sessions.mark_failed(session_id, turn_id)
+            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
         src = Path(source_path)
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
@@ -226,6 +257,7 @@ class IBPCService:
             asset_id=asset_id,
             source_revision=revision,
             duration_us=duration_us,
+            channel_binding_id=verified.channel_binding_id,
         )
         if not isinstance(parsed, IntentAST):
             # clarification / refusal: no approval, no execution, turn stays live
@@ -268,6 +300,8 @@ class IBPCService:
             tenant_id=session.tenant_id,
             project_id=session.project_id,
             principal_id=session.principal_id,
+            binding_ref=verified.channel_binding_id,
+            verified_identity=verified,
         )
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
         self._sessions.mark_plan_preview(session_id, turn_id)
@@ -341,6 +375,11 @@ class IBPCService:
     ) -> PipelineResult | Clarification | Refusal:
         session = self._sessions.get_session(session_id)
         turn = self._sessions.get_turn(session_id, turn_id)
+        try:
+            verified = self._resolve_authority(session.principal_id, session.project_id)
+        except CanonicalAuthorityError as exc:
+            self._sessions.mark_failed(session_id, turn_id)
+            return Refusal("unauthorized_principal", f"{exc.reason}: {exc.detail}")
         src = Path(source_path)
         if not src.is_file():
             self._sessions.mark_failed(session_id, turn_id)
@@ -357,6 +396,7 @@ class IBPCService:
             asset_id=asset_id,
             source_revision=turn.project_revision,
             duration_us=info.duration_us,
+            channel_binding_id=verified.channel_binding_id,
         )
         if not isinstance(parsed, IntentAST):
             return parsed
@@ -397,6 +437,8 @@ class IBPCService:
             tenant_id=session.tenant_id,
             project_id=session.project_id,
             principal_id=session.principal_id,
+            binding_ref=verified.channel_binding_id,
+            verified_identity=verified,
         )
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
         self._sessions.mark_plan_preview(session_id, turn_id)
@@ -409,6 +451,35 @@ class IBPCService:
             plan=plan,
             preview=preview,
             readback=readback,
+        )
+
+    # -- canonical authority --------------------------------------------------
+
+    def _resolve_authority(self, principal_id: str, project_id: str) -> Any:
+        """Resolve + verify the acting principal from server state (Phase 1).
+
+        The identity comes from the composition root (an injected
+        :class:`CanonicalAuthorityPort`), never from a model proposal or an
+        arbitrary user value.  Raises a typed
+        :class:`CanonicalAuthorityError` — never a crash, never a synthetic
+        grant — when the principal is unknown, is not a project member, or the
+        binding does not belong to it.
+        """
+        authority = self._deps.authority
+        if authority is None:
+            raise CanonicalAuthorityError(
+                "authority_unconfigured",
+                "no trusted canonical authority is configured; refusing to execute",
+            )
+        binding_ref = self._deps.channel_binding_ref
+        if not binding_ref:
+            raise CanonicalAuthorityError(
+                "missing_binding", "no canonical channel binding was configured for this service"
+            )
+        return authority.resolve_principal(
+            principal_id=principal_id,
+            project_id=project_id,
+            binding_ref=binding_ref,
         )
 
     # -- approval -------------------------------------------------------------
@@ -461,6 +532,17 @@ class IBPCService:
         if ctx.session_id != session.session_id or ctx.turn_id != turn.turn_id:
             raise ApprovalError(
                 "context_mismatch", "execution context does not match this session/turn"
+            )
+        # 5b) the trusted canonical authority must still verify at execution
+        #     time (Phase 1): the principal is a member of the project and the
+        #     binding belongs to it.  Authority revocation fails closed.
+        try:
+            verified = self._resolve_authority(session.principal_id, session.project_id)
+        except CanonicalAuthorityError as exc:
+            raise ApprovalError("authority_unverified", f"{exc.reason}: {exc.detail}") from exc
+        if ctx.binding_ref != verified.channel_binding_id:
+            raise ApprovalError(
+                "binding_mismatch", "binding differs from the context the approval was issued in"
             )
         # 6) revision must still be current
         revision = int(self._deps.revision_provider())
@@ -554,6 +636,35 @@ class IBPCService:
     def _seconds_str(microseconds: int) -> str:
         return f"{microseconds / 1_000_000:.6f}".rstrip("0").rstrip(".") or "0"
 
+    def _canonical_intent(self, ctx: _TurnContext) -> CanonicalCreativeIntent:
+        """Build the schema-2 canonical intent with the SAME builder the worker
+        uses (``application.creative_intent``), over the exact trim input the
+        worker re-derives from ``args``.  The worker's divergence check then
+        compares two independently constructed records; a mismatch fails closed
+        before any media work."""
+        builder = self._deps.intent_builder or CanonicalCreativeIntent.create
+        in_us = int(ctx.ast.params["in_point_us"])
+        out_us = int(ctx.ast.params["out_point_us"])
+        input_data = {
+            "clip_asset_id": ctx.ast.asset_id,
+            "in_point_us": in_us,
+            "out_point_us": out_us,
+        }
+        proposal_json = json.dumps(
+            input_data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        proposal_id = "proposal_" + hashlib.sha256(proposal_json.encode("utf-8")).hexdigest()
+        source_text_sha256 = (
+            "sha256:" + hashlib.sha256(ctx.intent_digest.encode("utf-8")).hexdigest()
+        )
+        return builder(
+            project_id=ctx.project_id,
+            proposal_id=proposal_id,
+            source_text_sha256=source_text_sha256,
+            operation=CANONICAL_OPERATION,
+            input_data=input_data,
+        )
+
     async def execute(
         self, session_id: str, turn_id: str, approval_id: str, *, principal_id: str
     ) -> ExecutionOutcome:
@@ -607,6 +718,16 @@ class IBPCService:
             "chat_id": session.chat_id,
             "lang": "en",
             "idempotency_key": idempotency_key,
+            # Phase 1: emit the canonical schema-2 identity so the existing
+            # worker independently re-authorizes (SQLApplicationDirectory) and
+            # records real authorization evidence. The intent is built with the
+            # SAME canonical builder the worker's own code path uses, so a
+            # worker-side divergence check compares like with like.
+            "schema_version": 2,
+            "principal_id": ctx.verified_identity.principal_id,
+            "project_id": ctx.verified_identity.project_id,
+            "channel_binding_id": ctx.verified_identity.channel_binding_id,
+            "intent": self._canonical_intent(ctx).model_dump(mode="json"),
         }
         try:
             job_id = await self._deps.queue.enqueue(
@@ -632,6 +753,13 @@ class IBPCService:
         artifact_digest, report = await asyncio.to_thread(self._verify_artifact, ctx, artifact_path)
         attempt_identity = await self._attempt_identity(job_id)
         provenance_reference = await asyncio.to_thread(self._provenance_reference, job_id)
+        # Phase 2: rendering completion is not proof. The proof gate decides
+        # whether the evidence is complete enough to *claim* verified success.
+        gate = evaluate_proof_gate(
+            verdict=report.verdict,
+            attempt_identity=attempt_identity,
+            provenance_reference=provenance_reference,
+        )
         capsule = IBPCCapsule(
             tenant_id=session.tenant_id,
             project_id=session.project_id,
@@ -648,12 +776,15 @@ class IBPCService:
             approval_id=approval_id,
             approval_binding=self._approvals.get(approval_id).identity_digest,
             principal_identity=session.principal_id,
+            channel_binding_id=ctx.binding_ref,
             session_id=session_id,
             turn_id=turn_id,
             execution_attempt_identity=attempt_identity,
             output_artifact_digest=artifact_digest,
             verifier_report_digest=report.report_digest,
             verifier_verdict=report.verdict,
+            proof_status="verified" if gate.proof_complete else "unverified",
+            proof_gaps=gate.reasons,
             evidence_references=(
                 f"artifact:{artifact_digest}",
                 f"verifier_report:{report.report_digest}",
@@ -663,8 +794,13 @@ class IBPCService:
             created_at=self._deps.now(),
         )
         self._sessions.mark_executed(session_id, turn_id)
+        detail = "" if gate.proof_complete else "proof_incomplete: " + ",".join(gate.reasons)
         return ExecutionOutcome(
-            status="executed", job_id=job_id, capsule=capsule, report=report, detail=""
+            status=gate.outcome_status,
+            job_id=job_id,
+            capsule=capsule,
+            report=report,
+            detail=detail,
         )
 
     async def _drain(self, job_id: str, timeout: float = DRAIN_TIMEOUT_S) -> JobStatus:

@@ -144,3 +144,28 @@ def test_no_second_provenance_schema() -> None:
         assert "class CausalJournal" not in text
         assert "class EventKind" not in text
         assert "class Passport" not in text
+
+
+def test_canonical_intent_builder_is_the_workers_own() -> None:
+    """Phase 1 continuity: the schema-2 intent the slice enqueues is built with
+    the SAME canonical builder the worker's own code path uses, so the worker's
+    divergence check compares like with like (no slice-local re-implementation)."""
+    from nexus_ai_agent.application.creative_intent import CanonicalCreativeIntent
+    from nexus_ai_agent.nagar.ibpc.service import IBPCServiceDeps
+
+    assert IBPCServiceDeps.__dataclass_fields__["intent_builder"].default is None
+    # the service falls back to the canonical builder
+    src = (IBPC / "service.py").read_text(encoding="utf-8")
+    assert "CanonicalCreativeIntent.create" in src
+    assert CanonicalCreativeIntent.__module__ == "nexus_ai_agent.application.creative_intent"
+
+
+def test_authority_and_proof_are_injected_not_imported_from_execution() -> None:
+    """Phase 1/2 red line: authority is an injected port and the proof gate is a
+    pure local module — neither may reach into the execution/adapters layer."""
+    for path in (IBPC / "authority.py", IBPC / "proof.py"):
+        for module in _imported_modules(path):
+            for forbidden in FORBIDDEN_MODULE_IMPORTS:
+                assert not (module == forbidden or module.startswith(forbidden + ".")), (
+                    f"{path.name}: imports {module}"
+                )

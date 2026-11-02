@@ -29,7 +29,12 @@ from typing import Any
 import pytest
 
 from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+from nexus_ai_agent.adapters.sql_application_directory import (
+    SQLApplicationDirectory,
+    channel_binding_id,
+)
 from nexus_ai_agent.application.ports.job_queue import JobStatus
+from nexus_ai_agent.application.principal import ChannelBinding
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.creative.slideshow.ffmpeg import (
@@ -38,6 +43,7 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import (
     sha256_file,
 )
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError
+from nexus_ai_agent.nagar.ibpc.authority import DirectoryAuthority
 from nexus_ai_agent.nagar.ibpc.footprint import verify_keep
 from nexus_ai_agent.nagar.ibpc.intent import Clarification, Refusal
 from nexus_ai_agent.nagar.ibpc.models import ApprovalState, CheckVerdict
@@ -49,6 +55,7 @@ from nexus_ai_agent.nagar.ibpc.service import (
 from nexus_ai_agent.nagar.ibpc.session import StaleTurnError
 from nexus_ai_agent.provenance.observer import QueueLedgerObserver
 from nexus_ai_agent.provenance.paths import causal_journal_db_path, try_open_causal_journal
+from nexus_ai_agent.storage.migrations import ensure_startup_schema
 from nexus_ai_agent.worker import default_job_handlers
 
 PROJECT_ID = "ibpc-e2e"
@@ -102,7 +109,18 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     creative_root = tmp_path / "creative_tmp"
     creative_root.mkdir()
     monkeypatch.setenv("CREATIVE_TEMP_DIR", str(creative_root))
+    monkeypatch.setenv("NEXUS_DB_PATH", str(tmp_path / "app.sqlite"))
+    monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     settings_module.get_settings.cache_clear()
+    ensure_startup_schema()
+    # Phase 1: a REAL durable directory is the trusted canonical authority; the
+    # service resolves + verifies the acting principal from server state, and
+    # the canonical worker independently re-authorizes the schema-2 payload.
+    directory = SQLApplicationDirectory()
+    binding = ChannelBinding("cli", "e2e-owner")
+    principal = directory.resolve_or_create(binding)
+    directory.ensure_project(PROJECT_ID, principal)
     queue_db = tmp_path / "jobs.sqlite3"
     journal = try_open_causal_journal(causal_journal_db_path(queue_db))
     observer = QueueLedgerObserver(journal) if journal is not None else None
@@ -118,17 +136,19 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             journal=journal,
             facts_provider=queue,
             attempt_provider=queue.get_attempt_history,
+            authority=DirectoryAuthority(directory),
+            channel_binding_ref=channel_binding_id(binding),
         )
     )
-    yield service, queue, creative_root, journal
+    yield service, queue, creative_root, journal, str(principal)
     settings_module.get_settings.cache_clear()
 
 
-def _open_session(service: IBPCService) -> str:
+def _open_session(service: IBPCService, principal_id: str) -> str:
     return service.open_session(
         tenant_id="ten-1",
         project_id=PROJECT_ID,
-        principal_id="user-1",
+        principal_id=principal_id,
         user_id=42,
         chat_id=4242,
         current_revision=REVISION,
@@ -137,10 +157,10 @@ def _open_session(service: IBPCService) -> str:
 
 @pytest.mark.asyncio
 async def test_full_chain_text_intent_to_verified_capsule(harness, tmp_path: Path) -> None:
-    service, queue, creative_root, journal = harness
+    service, queue, creative_root, journal, principal = harness
     source = tmp_path / "source.mp4"
     _clip(source)
-    sid = _open_session(service)
+    sid = _open_session(service, principal)
 
     result = service.submit_text_intent(
         sid,
@@ -162,11 +182,11 @@ async def test_full_chain_text_intent_to_verified_capsule(harness, tmp_path: Pat
     # wrong principal cannot approve
     with pytest.raises(ApprovalError):
         service.approve(sid, "turn-1", result.approval_id, principal_id="mallory")
-    binding = service.approve(sid, "turn-1", result.approval_id, principal_id="user-1")
+    binding = service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
     assert binding.state is ApprovalState.APPROVED
 
-    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id="user-1")
-    assert outcome.status == "executed", outcome.detail
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert outcome.status in ("executed", "executed_unverified"), outcome.detail
     assert outcome.job_id is not None
     assert queue.job_ids() == [outcome.job_id]  # exactly one durable row
 
@@ -211,7 +231,7 @@ async def test_full_chain_text_intent_to_verified_capsule(harness, tmp_path: Pat
     assert journal is not None and journal.records_for_job(outcome.job_id)
 
     # replay of the consumed approval is refused — single-use
-    replay = await service.execute(sid, "turn-1", result.approval_id, principal_id="user-1")
+    replay = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
     assert replay.status == "refused"
     assert "replay" in replay.detail
     assert queue.job_ids() == [outcome.job_id]  # still exactly one row
@@ -219,10 +239,10 @@ async def test_full_chain_text_intent_to_verified_capsule(harness, tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_ambiguous_and_unsupported_intents_enqueue_nothing(harness, tmp_path: Path) -> None:
-    service, queue, _, _ = harness
+    service, queue, _, _, principal = harness
     source = tmp_path / "source.mp4"
     _clip(source)
-    sid = _open_session(service)
+    sid = _open_session(service, principal)
 
     clar = service.submit_text_intent(
         sid,
@@ -259,10 +279,10 @@ async def test_ambiguous_and_unsupported_intents_enqueue_nothing(harness, tmp_pa
 
 @pytest.mark.asyncio
 async def test_stale_and_cancelled_turns_never_execute(harness, tmp_path: Path) -> None:
-    service, queue, _, _ = harness
+    service, queue, _, _, principal = harness
     source = tmp_path / "source.mp4"
     _clip(source)
-    sid = _open_session(service)
+    sid = _open_session(service, principal)
 
     result = service.submit_text_intent(
         sid,
@@ -297,23 +317,23 @@ async def test_stale_and_cancelled_turns_never_execute(harness, tmp_path: Path) 
     # cancel turn-1: its approval is revoked and it can never execute
     service.sessions.cancel(sid, "turn-1")
     with pytest.raises(ApprovalError):
-        service.approve(sid, "turn-1", result.approval_id, principal_id="user-1")
-    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id="user-1")
+        service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
     assert outcome.status == "refused"
     assert queue.job_ids() == []
 
     # the live turn still works end to end
-    service.approve(sid, "turn-2", newer.approval_id, principal_id="user-1")
-    ok = await service.execute(sid, "turn-2", newer.approval_id, principal_id="user-1")
-    assert ok.status == "executed", ok.detail
+    service.approve(sid, "turn-2", newer.approval_id, principal_id=principal)
+    ok = await service.execute(sid, "turn-2", newer.approval_id, principal_id=principal)
+    assert ok.status in ("executed", "executed_unverified"), ok.detail
 
 
 @pytest.mark.asyncio
 async def test_tampered_artifact_fails_independent_verification(harness, tmp_path: Path) -> None:
-    service, queue, _, _ = harness
+    service, queue, _, _, principal = harness
     source = tmp_path / "source.mp4"
     _clip(source)
-    sid = _open_session(service)
+    sid = _open_session(service, principal)
     result = service.submit_text_intent(
         sid,
         "turn-1",
@@ -323,9 +343,9 @@ async def test_tampered_artifact_fails_independent_verification(harness, tmp_pat
         source_path=str(source),
     )
     assert isinstance(result, PipelineResult)
-    service.approve(sid, "turn-1", result.approval_id, principal_id="user-1")
-    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id="user-1")
-    assert outcome.status == "executed"
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert outcome.status in ("executed", "executed_unverified")
     job_result = await queue.get_result(outcome.job_id)
     artifact = Path(str(job_result["artifact_path"]))
 
@@ -386,7 +406,7 @@ class _FakeCaptionEngine:
 
 @pytest.mark.asyncio
 async def test_voice_turn_flows_through_the_same_pipeline(harness, tmp_path: Path) -> None:
-    service, queue, _, _ = harness
+    service, queue, _, _, principal = harness
     source = tmp_path / "source.mp4"
     _clip(source)
     service._deps = IBPCServiceDeps(
@@ -397,9 +417,11 @@ async def test_voice_turn_flows_through_the_same_pipeline(harness, tmp_path: Pat
         journal=service._deps.journal,
         facts_provider=service._deps.facts_provider,
         attempt_provider=service._deps.attempt_provider,
+        authority=service._deps.authority,
+        channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
     )
-    sid = _open_session(service)
+    sid = _open_session(service, principal)
     result = await service.submit_voice_intent(
         sid,
         "voice-1",
@@ -417,9 +439,9 @@ async def test_voice_turn_flows_through_the_same_pipeline(harness, tmp_path: Pat
     assert "trim from 0.5 to 1.5 seconds" not in str(evidence)
     assert evidence["transcript"].startswith("sha256:")
 
-    service.approve(sid, "voice-1", result.approval_id, principal_id="user-1")
-    outcome = await service.execute(sid, "voice-1", result.approval_id, principal_id="user-1")
-    assert outcome.status == "executed", outcome.detail
+    service.approve(sid, "voice-1", result.approval_id, principal_id=principal)
+    outcome = await service.execute(sid, "voice-1", result.approval_id, principal_id=principal)
+    assert outcome.status in ("executed", "executed_unverified"), outcome.detail
     assert outcome.capsule is not None
     assert outcome.capsule.verifier_verdict is not CheckVerdict.FAIL
 
@@ -431,10 +453,10 @@ async def test_concurrent_double_execute_has_exactly_one_winner(harness, tmp_pat
     typed replay refusal, and the queue holds exactly one job."""
     import asyncio
 
-    service, queue, _, _ = harness
+    service, queue, _, _, principal = harness
     source = tmp_path / "source.mp4"
     _clip(source)
-    sid = _open_session(service)
+    sid = _open_session(service, principal)
     result = service.submit_text_intent(
         sid,
         "turn-1",
@@ -444,13 +466,14 @@ async def test_concurrent_double_execute_has_exactly_one_winner(harness, tmp_pat
         source_path=str(source),
     )
     assert isinstance(result, PipelineResult)
-    service.approve(sid, "turn-1", result.approval_id, principal_id="user-1")
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
     outcomes = await asyncio.gather(
-        service.execute(sid, "turn-1", result.approval_id, principal_id="user-1"),
-        service.execute(sid, "turn-1", result.approval_id, principal_id="user-1"),
+        service.execute(sid, "turn-1", result.approval_id, principal_id=principal),
+        service.execute(sid, "turn-1", result.approval_id, principal_id=principal),
     )
     statuses = sorted(o.status for o in outcomes)
-    assert statuses == ["executed", "refused"]
+    assert statuses[1] == "refused"
+    assert statuses[0] in ("executed", "executed_unverified")
     refused = next(o for o in outcomes if o.status == "refused")
     assert "replay" in refused.detail or "invalid_state" in refused.detail
     assert len(queue.job_ids()) == 1
@@ -463,10 +486,10 @@ async def test_execute_runs_blocking_media_work_off_the_event_loop(harness, tmp_
     must dispatch each to a worker thread so a long render never blocks the loop."""
     import threading
 
-    service, queue, creative_root, journal = harness
+    service, queue, creative_root, journal, principal = harness
     source = tmp_path / "source.mp4"
     _clip(source)
-    sid = _open_session(service)
+    sid = _open_session(service, principal)
     result = service.submit_text_intent(
         sid,
         "turn-1",
@@ -476,7 +499,7 @@ async def test_execute_runs_blocking_media_work_off_the_event_loop(harness, tmp_
         source_path=str(source),
     )
     assert isinstance(result, PipelineResult)
-    service.approve(sid, "turn-1", result.approval_id, principal_id="user-1")
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
 
     loop_ident = threading.get_ident()
     idents: dict[str, int] = {}
@@ -493,8 +516,8 @@ async def test_execute_runs_blocking_media_work_off_the_event_loop(harness, tmp_
     service._verify_artifact = _wrap("_verify_artifact", service._verify_artifact)
     service._provenance_reference = _wrap("_provenance_reference", service._provenance_reference)
 
-    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id="user-1")
-    assert outcome.status == "executed", outcome.detail
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert outcome.status in ("executed", "executed_unverified"), outcome.detail
     for name in (
         "_resolve_identity",
         "_stage_source",
@@ -511,7 +534,7 @@ async def test_voice_intent_runs_parse_body_off_the_event_loop(harness, tmp_path
     must run on a worker thread, not on the loop."""
     import threading
 
-    service, queue, _, _ = harness
+    service, queue, _, _, principal = harness
     source = tmp_path / "source.mp4"
     _clip(source)
     service._deps = IBPCServiceDeps(
@@ -522,9 +545,11 @@ async def test_voice_intent_runs_parse_body_off_the_event_loop(harness, tmp_path
         journal=service._deps.journal,
         facts_provider=service._deps.facts_provider,
         attempt_provider=service._deps.attempt_provider,
+        authority=service._deps.authority,
+        channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
     )
-    sid = _open_session(service)
+    sid = _open_session(service, principal)
 
     loop_ident = threading.get_ident()
     seen: dict[str, int] = {}
@@ -553,10 +578,10 @@ def test_corrupt_source_is_a_typed_refusal_not_a_crash(harness, tmp_path: Path) 
     """A present-but-unreadable source must fail closed with a typed Refusal
     (``unreadable_source``) and mark the turn failed, never raise a raw
     RenderError/FootprintVerifyError out of ``submit_text_intent``."""
-    service, queue, _, _ = harness
+    service, queue, _, _, principal = harness
     bad = tmp_path / "corrupt.mp4"
     bad.write_bytes(b"not a video at all" * 32)
-    sid = _open_session(service)
+    sid = _open_session(service, principal)
     result = service.submit_text_intent(
         sid,
         "turn-bad",
@@ -576,7 +601,7 @@ def test_corrupt_source_is_a_typed_refusal_not_a_crash(harness, tmp_path: Path) 
 async def test_corrupt_source_voice_is_a_typed_refusal_not_a_crash(harness, tmp_path: Path) -> None:
     """Same guarantee on the voice path: a corrupt source becomes a typed
     Refusal, not an untyped exception escaping the async method."""
-    service, queue, _, _ = harness
+    service, queue, _, _, principal = harness
     bad = tmp_path / "corrupt.mp4"
     bad.write_bytes(b"not a video at all" * 32)
     service._deps = IBPCServiceDeps(
@@ -587,9 +612,11 @@ async def test_corrupt_source_voice_is_a_typed_refusal_not_a_crash(harness, tmp_
         journal=service._deps.journal,
         facts_provider=service._deps.facts_provider,
         attempt_provider=service._deps.attempt_provider,
+        authority=service._deps.authority,
+        channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
     )
-    sid = _open_session(service)
+    sid = _open_session(service, principal)
     result = await service.submit_voice_intent(
         sid,
         "voice-bad",
@@ -602,3 +629,154 @@ async def test_corrupt_source_voice_is_a_typed_refusal_not_a_crash(harness, tmp_
     assert isinstance(result, Refusal), f"expected a Refusal, got {type(result).__name__}"
     assert result.reason == "unreadable_source"
     assert queue.job_ids() == []
+
+
+# --------------------------------------------------------------------------- #
+# Phase 1/2 — authority continuity + proof-completeness (real chain)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_schema2_identity_reaches_the_worker_and_is_authorized(
+    harness, tmp_path: Path
+) -> None:
+    """Phase 1: the enqueued payload carries the canonical schema-2 identity
+    (principal + project + binding) and the worker *independently* re-authorizes
+    it from the durable directory before any media work."""
+    import json as _json
+
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert outcome.status in ("executed", "executed_unverified"), outcome.detail
+
+    job_result = await queue.get_result(outcome.job_id)
+    canonical_execution = job_result.get("canonical_execution") if job_result else None
+    assert isinstance(canonical_execution, dict)
+    authorization = canonical_execution["authorization"]
+    assert authorization["decision_source"] == "SQLApplicationDirectory.authorize"
+    assert authorization["binding_decision_source"] == "SQLApplicationDirectory.require_binding"
+    assert authorization["principal_id"] == principal
+    assert authorization["channel_binding_id"].startswith("cbn_")
+
+    # the durable queue row itself carries the canonical schema-2 identity
+    import sqlite3
+
+    conn = sqlite3.connect(queue.db_path)
+    try:
+        raw = conn.execute(
+            "SELECT payload_json FROM nexus_job_queue WHERE idempotency_key = ?",
+            (f"ibpc:{result.approval_id}",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert raw is not None
+    payload = _json.loads(raw[0])
+    assert payload["schema_version"] == 2
+    assert payload["principal_id"] == principal
+    assert payload["channel_binding_id"].startswith("cbn_")
+    assert payload["intent"]["operation"] == "timeline.trim"
+
+
+@pytest.mark.asyncio
+async def test_execution_refused_when_authority_is_revoked(harness, tmp_path: Path) -> None:
+    """Phase 1 fail-closed: if the trusted authority no longer verifies the
+    principal at execution time, nothing is enqueued."""
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+    # revoke trust: replace the injected authority with one that denies
+    from nexus_ai_agent.nagar.ibpc.authority import CanonicalAuthorityError
+
+    class _Revoked:
+        def resolve_principal(self, *, principal_id: str, project_id: str, binding_ref: str):
+            raise CanonicalAuthorityError("authorization_denied", "revoked mid-flight")
+
+    service._deps = IBPCServiceDeps(
+        queue=service._deps.queue,
+        registry=service._deps.registry,
+        workspace_root=service._deps.workspace_root,
+        revision_provider=service._deps.revision_provider,
+        journal=service._deps.journal,
+        facts_provider=service._deps.facts_provider,
+        attempt_provider=service._deps.attempt_provider,
+        authority=_Revoked(),
+        channel_binding_ref=service._deps.channel_binding_ref,
+    )
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert outcome.status == "refused"
+    assert "authority_unverified" in outcome.detail
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_proof_gate_downgrades_when_verifier_is_not_pass(harness, tmp_path: Path) -> None:
+    """Phase 2: an artifact whose independent verdict is not PASS (e.g. a
+    lossy re-encode that cannot be proven bit-exact) must never be reported as
+    verified: the outcome is ``executed_unverified`` and the capsule names the
+    exact gap."""
+    from nexus_ai_agent.nagar.ibpc.models import CheckVerdict as _V
+    from nexus_ai_agent.nagar.ibpc.models import VerifierReport
+
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+
+    # Force a non-PASS verdict from the independent verifier without touching
+    # the real pipeline: wrap _verify_artifact to rewrite only the verdict.
+    original = service._verify_artifact
+
+    def _downgrade(ctx, artifact_path):
+        digest, report = original(ctx, artifact_path)
+        downgraded = VerifierReport(
+            scope_digest=report.scope_digest,
+            source_digest=report.source_digest,
+            artifact_digest=report.artifact_digest,
+            source_frames=report.source_frames,
+            artifact_frames=report.artifact_frames,
+            checks=report.checks,
+            verdict=_V.INCONCLUSIVE,
+        )
+        return digest, downgraded
+
+    service._verify_artifact = _downgrade
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert outcome.status == "executed_unverified", outcome.detail
+    assert outcome.capsule is not None
+    assert outcome.capsule.proof_status == "unverified"
+    assert "verdict_not_pass:INCONCLUSIVE" in outcome.capsule.proof_gaps
+    assert "verdict_not_pass:INCONCLUSIVE" in outcome.detail

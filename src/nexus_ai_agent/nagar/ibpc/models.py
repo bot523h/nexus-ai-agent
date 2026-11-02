@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of
 
 CAPSULE_VERSION: Literal["1"] = "1"
-AST_SCHEMA_ID: Literal["nexus.ibpc.ast.v1"] = "nexus.ibpc.ast.v1"
+AST_SCHEMA_ID: Literal["nexus.ibpc.ast.v2"] = "nexus.ibpc.ast.v2"
 PLAN_SCHEMA_ID: Literal["nexus.ibpc.plan.v1"] = "nexus.ibpc.plan.v1"
 PREVIEW_SCHEMA_ID: Literal["nexus.ibpc.preview.v1"] = "nexus.ibpc.preview.v1"
 APPROVAL_SCHEMA_ID: Literal["nexus.ibpc.approval.v1"] = "nexus.ibpc.approval.v1"
@@ -174,10 +174,15 @@ class TypedCreativeAST(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_id: Literal["nexus.ibpc.ast.v1"] = AST_SCHEMA_ID
+    schema_id: Literal["nexus.ibpc.ast.v2"] = AST_SCHEMA_ID
     ast_id: str = Field(default_factory=lambda: _new_id("ast"))
     project_id: str = Field(min_length=1, max_length=128)
     asset_id: str = Field(min_length=1, max_length=128)
+    #: The canonical channel binding this intent is executed under.  Bound into
+    #: the AST digest so the exact approval covers the *identity context*, not
+    #: just the media range (Phase 1: the approved artifact must describe the
+    #: same principal/binding the canonical worker authorizes).
+    channel_binding_id: str = Field(pattern=r"^cbn_[0-9a-f]{64}$")
     source_revision: int = Field(ge=0)
     operation: str = Field(min_length=1, max_length=128)
     params: dict[str, Any] = Field(default_factory=dict)
@@ -451,12 +456,20 @@ class IBPCCapsule(BaseModel):
     approval_id: str = Field(min_length=1)
     approval_binding: str = Field(pattern=_HEX64)
     principal_identity: str = Field(min_length=1, max_length=128)
+    #: Canonical channel binding the principal acted through (identity context).
+    channel_binding_id: str = Field(pattern=r"^cbn_[0-9a-f]{64}$")
     session_id: str = Field(min_length=1)
     turn_id: str = Field(min_length=1)
     execution_attempt_identity: str = Field(min_length=1, max_length=256)
     output_artifact_digest: str = Field(pattern=_HEX64)
     verifier_report_digest: str = Field(pattern=_HEX64)
     verifier_verdict: CheckVerdict
+    #: Proof-completeness verdict (Phase 2).  A capsule only reaches
+    #: ``verified`` when the verifier PASSed *and* attempt/journal/passport
+    #: evidence is complete; otherwise it is ``unverified`` and ``proof_gaps``
+    #: names exactly what was missing.  There is no silent degradation.
+    proof_status: Literal["verified", "unverified"] = "unverified"
+    proof_gaps: tuple[str, ...] = ()
     evidence_references: tuple[str, ...] = ()
     provenance_reference: dict[str, Any] = Field(default_factory=dict)
     created_at: str = ""

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from nexus_ai_agent.nagar.ibpc import (  # noqa: F401 — reachability (law R20)
     approval,
+    authority,
     canonical,
     compiler,
     footprint,
@@ -34,10 +35,17 @@ from nexus_ai_agent.nagar.ibpc import (  # noqa: F401 — reachability (law R20)
     models,
     preview,
     privacy,
+    proof,
     service,
     session,
 )
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError, ApprovalLedger
+from nexus_ai_agent.nagar.ibpc.authority import (
+    CanonicalAuthorityError,
+    CanonicalAuthorityPort,
+    DirectoryAuthority,
+    PrincipalFacts,
+)
 from nexus_ai_agent.nagar.ibpc.compiler import CompilationRefused, compile_ast
 from nexus_ai_agent.nagar.ibpc.intent import (
     Clarification,
@@ -60,6 +68,12 @@ from nexus_ai_agent.nagar.ibpc.models import (
 )
 from nexus_ai_agent.nagar.ibpc.preview import build_preview, render_readback
 from nexus_ai_agent.nagar.ibpc.privacy import PrivacyPolicy, PrivacyViolation, redact_mapping
+from nexus_ai_agent.nagar.ibpc.proof import (
+    EXECUTED_UNVERIFIED,
+    EXECUTED_VERIFIED,
+    ProofGate,
+    evaluate_proof_gate,
+)
 from nexus_ai_agent.nagar.ibpc.service import (
     ExecutionOutcome,
     IBPCService,
@@ -74,14 +88,19 @@ from nexus_ai_agent.nagar.ibpc.session import (
 )
 
 __all__ = [
+    "EXECUTED_UNVERIFIED",
+    "EXECUTED_VERIFIED",
     "ApprovalBinding",
     "ApprovalError",
     "ApprovalLedger",
     "ApprovalState",
+    "CanonicalAuthorityError",
+    "CanonicalAuthorityPort",
     "CheckVerdict",
     "Clarification",
     "CompilationRefused",
     "CompiledPlan",
+    "DirectoryAuthority",
     "ExecutionOutcome",
     "IBPCCapsule",
     "IBPCService",
@@ -90,9 +109,11 @@ __all__ = [
     "LiveSessionManager",
     "PipelineResult",
     "PreviewManifest",
+    "PrincipalFacts",
     "PrivacyMode",
     "PrivacyPolicy",
     "PrivacyViolation",
+    "ProofGate",
     "Readback",
     "Refusal",
     "StaleTurnError",
@@ -102,16 +123,19 @@ __all__ = [
     "VideoTimeScope",
     "VoiceTurn",
     "approval",
+    "authority",
     "build_preview",
     "canonical",
     "compile_ast",
     "compiler",
+    "evaluate_proof_gate",
     "footprint",
     "intent",
     "models",
     "parse_intent",
     "preview",
     "privacy",
+    "proof",
     "redact_mapping",
     "render_readback",
     "service",

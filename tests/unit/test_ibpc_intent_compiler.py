@@ -30,6 +30,7 @@ def _parse(text: str, revision: int = 3):
         asset_id="src",
         source_revision=revision,
         duration_us=DURATION_US,
+        channel_binding_id="cbn_" + "a" * 64,
     )
 
 
@@ -139,6 +140,7 @@ class TestCompiler:
         ast = TypedCreativeAST(
             project_id="p",
             asset_id="src",
+            channel_binding_id="cbn_" + "a" * 64,
             source_revision=1,
             operation="timeline.teleport",
             params={},

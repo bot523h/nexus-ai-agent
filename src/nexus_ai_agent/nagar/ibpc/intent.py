@@ -149,6 +149,7 @@ def parse_intent(
     asset_id: str,
     source_revision: int,
     duration_us: int,
+    channel_binding_id: str,
 ) -> ParseResult:
     """Parse one bounded free-text intent into a typed AST or a typed question.
 
@@ -226,6 +227,7 @@ def parse_intent(
     ast = TypedCreativeAST(
         project_id=project_id,
         asset_id=asset_id,
+        channel_binding_id=channel_binding_id,
         source_revision=source_revision,
         operation=SUPPORTED_OPERATION,
         params={

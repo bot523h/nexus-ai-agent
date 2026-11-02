@@ -338,6 +338,35 @@ def _fake_asset(path: Path) -> None:
     path.write_bytes(b"fake-media-bytes-for-security-tests")
 
 
+BINDING_REF = "cbn_" + "a" * 64
+
+
+class _RecordingAuthority:
+    """Declared test double for the injected canonical authority PORT.
+
+    It records the (principal, project, binding) it was asked to verify and
+    returns server-shaped facts.  ``revoked`` models authority revocation so a
+    test can prove execution fails closed when trust is withdrawn.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+        self.revoked = False
+
+    def resolve_principal(self, *, principal_id: str, project_id: str, binding_ref: str):
+        from nexus_ai_agent.nagar.ibpc.authority import (
+            CanonicalAuthorityError,
+            PrincipalFacts,
+        )
+
+        self.calls.append((principal_id, project_id, binding_ref))
+        if self.revoked:
+            raise CanonicalAuthorityError("authorization_denied", "authority revoked")
+        return PrincipalFacts(
+            principal_id=principal_id, project_id=project_id, channel_binding_id=binding_ref
+        )
+
+
 @pytest.fixture()
 def service_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import types
@@ -353,15 +382,18 @@ def service_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _fake_asset(clip)
     queue = _RecordingQueue()
     revision = {"current": 7}
+    authority = _RecordingAuthority()
     service = IBPCService(
         IBPCServiceDeps(
             queue=queue,  # type: ignore[arg-type]
             registry=build_runtime_registry(),
             workspace_root=tmp_path,
             revision_provider=lambda: revision["current"],
+            authority=authority,
+            channel_binding_ref=BINDING_REF,
         )
     )
-    return service, queue, clip, revision
+    return service, queue, clip, revision, authority
 
 
 def _submit(service: IBPCService, sid: str, turn: str, seq: int, source: Path) -> PipelineResult:
@@ -379,7 +411,7 @@ def _submit(service: IBPCService, sid: str, turn: str, seq: int, source: Path) -
 
 class TestServiceIdentityIsolation:
     def test_cross_session_consume_refused_no_job(self, service_env) -> None:
-        service, queue, clip, _ = service_env
+        service, queue, clip, _, _authority = service_env
         sid_a = service.open_session(
             tenant_id="ten-a",
             project_id="p-a",
@@ -417,7 +449,7 @@ class TestServiceIdentityIsolation:
     def test_cross_turn_consume_refused_no_job(self, service_env) -> None:
         import asyncio
 
-        service, queue, clip, _ = service_env
+        service, queue, clip, _, _authority = service_env
         sid = service.open_session(
             tenant_id="ten",
             project_id="p",
@@ -442,7 +474,7 @@ class TestServiceIdentityIsolation:
     def test_wrong_principal_refused_no_job(self, service_env) -> None:
         import asyncio
 
-        service, queue, clip, _ = service_env
+        service, queue, clip, _, _authority = service_env
         sid = service.open_session(
             tenant_id="ten",
             project_id="p",
@@ -464,7 +496,7 @@ class TestServiceIdentityIsolation:
     def test_stale_revision_refused_no_job(self, service_env) -> None:
         import asyncio
 
-        service, queue, clip, revision = service_env
+        service, queue, clip, revision, _authority = service_env
         sid = service.open_session(
             tenant_id="ten",
             project_id="p",
@@ -487,7 +519,7 @@ class TestServiceIdentityIsolation:
     def test_asset_changed_after_preview_refused_no_job(self, service_env) -> None:
         import asyncio
 
-        service, queue, clip, _ = service_env
+        service, queue, clip, _, _authority = service_env
         sid = service.open_session(
             tenant_id="ten",
             project_id="p",
@@ -508,7 +540,7 @@ class TestServiceIdentityIsolation:
     def test_deleted_context_fails_closed_no_job(self, service_env) -> None:
         import asyncio
 
-        service, queue, clip, _ = service_env
+        service, queue, clip, _, _authority = service_env
         sid = service.open_session(
             tenant_id="ten",
             project_id="p",
@@ -530,7 +562,7 @@ class TestServiceIdentityIsolation:
         import asyncio
         from dataclasses import replace
 
-        service, queue, clip, _ = service_env
+        service, queue, clip, _, _authority = service_env
         sid = service.open_session(
             tenant_id="ten",
             project_id="p",
@@ -555,7 +587,7 @@ class TestServiceIdentityIsolation:
     def test_unknown_approval_and_session_are_typed(self, service_env) -> None:
         import asyncio
 
-        service, queue, clip, _ = service_env
+        service, queue, clip, _, _authority = service_env
         sid = service.open_session(
             tenant_id="ten",
             project_id="p",
@@ -579,11 +611,85 @@ class TestServiceIdentityIsolation:
         assert queue.enqueued == []
 
 
+class TestCanonicalAuthorityContinuity:
+    """Phase 1: identity is verified from server state, and trust withdrawn
+    mid-flight fails closed before any job is admitted."""
+
+    def test_authority_revoked_before_execute_refuses_no_job(self, service_env) -> None:
+        import asyncio
+
+        service, queue, clip, _, authority = service_env
+        sid = service.open_session(
+            tenant_id="ten",
+            project_id="p",
+            principal_id="user-1",
+            user_id=1,
+            chat_id=1,
+            current_revision=7,
+        )
+        res = _submit(service, sid, "turn-1", 1, clip)
+        service.approve(sid, "turn-1", res.approval_id, principal_id="user-1")
+        authority.revoked = True
+        outcome = asyncio.run(
+            service.execute(sid, "turn-1", res.approval_id, principal_id="user-1")
+        )
+        assert outcome.status == "refused"
+        assert "authority_unverified" in outcome.detail
+        assert queue.enqueued == []
+
+    def test_unconfigured_authority_refuses_before_admission(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import types
+
+        import nexus_ai_agent.nagar.ibpc.service as service_mod
+
+        monkeypatch.setattr(
+            service_mod,
+            "probe_media",
+            lambda path, *, binary=None: (types.SimpleNamespace(duration_us=2_000_000), 30.0),
+        )
+        clip = tmp_path / "src.mp4"
+        _fake_asset(clip)
+        queue = _RecordingQueue()
+        service = IBPCService(
+            IBPCServiceDeps(
+                queue=queue,  # type: ignore[arg-type]
+                registry=build_runtime_registry(),
+                workspace_root=tmp_path,
+                revision_provider=lambda: 7,
+                authority=None,
+                channel_binding_ref=BINDING_REF,
+            )
+        )
+        sid = service.open_session(
+            tenant_id="ten",
+            project_id="p",
+            principal_id="user-1",
+            user_id=1,
+            chat_id=1,
+            current_revision=7,
+        )
+        result = service.submit_text_intent(
+            sid,
+            "turn-1",
+            sequence_number=1,
+            text="trim from 0.2 to 0.6 seconds",
+            asset_id="src",
+            source_path=str(clip),
+        )
+        from nexus_ai_agent.nagar.ibpc.intent import Refusal
+
+        assert isinstance(result, Refusal), result
+        assert result.reason == "unauthorized_principal"
+        assert queue.enqueued == []
+
+
 class TestPersistenceTruth:
     def test_sessions_and_approvals_are_in_process_only(self, service_env) -> None:
         """Restart semantics: a NEW service instance over the same deps sees no
         sessions, turns, approvals or contexts — nothing durable is claimed."""
-        service, _queue, clip, _ = service_env
+        service, _queue, clip, _, _authority = service_env
         sid = service.open_session(
             tenant_id="ten",
             project_id="p",
