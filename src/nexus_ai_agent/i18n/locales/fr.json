@@ -77,5 +77,6 @@
   "creative.failed.caption_profile_unavailable": "❌ Les sous-titres ne sont pas disponibles sur cette installation (aucun moteur vocal).",
   "creative.failed.render_failed": "❌ Échec du rendu ; essayez un média plus court ou d'autres paramètres.",
   "creative.failed.ffmpeg_unavailable": "❌ Le moteur de rendu n'est pas installé sur ce déploiement.",
-  "creative.failed.internal": "❌ Une erreur interne est survenue ; les détails sont visibles par l'équipe."
+  "creative.failed.internal": "❌ Une erreur interne est survenue ; les détails sont visibles par l'équipe.",
+  "creative.request_conflict": "♻️ Ce message a déjà été mis en file avec d'autres médias. Envoyez les nouveaux médias dans un nouveau message."
 }

@@ -77,5 +77,6 @@
   "creative.failed.caption_profile_unavailable": "❌ Captions are unavailable on this installation (no speech engine).",
   "creative.failed.render_failed": "❌ Rendering failed. Try shorter media or different parameters.",
   "creative.failed.ffmpeg_unavailable": "❌ The render engine isn't installed on this deployment.",
-  "creative.failed.internal": "❌ An internal error occurred. The details are visible to the team."
+  "creative.failed.internal": "❌ An internal error occurred. The details are visible to the team.",
+  "creative.request_conflict": "♻️ This message was already queued with different media. Send the new media as a fresh message."
 }

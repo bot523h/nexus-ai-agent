@@ -63,6 +63,17 @@ from nexus_ai_agent.jobs.lifecycle import is_failure
 from nexus_ai_agent.jobs.verification import VerificationOutcome
 
 
+def _digest(path: Path) -> str:
+    """Bare lowercase SHA-256 of a real clip.
+
+    task-nagar-workspace-redelivery-01 made ``input_sha256`` mandatory for every
+    media-bearing creative payload: the worker re-measures the staged bytes and
+    refuses a mismatch (or an absent digest) before any engine runs. These fixtures
+    build payloads by hand, so they must name the bytes they point at.
+    """
+    return sha256_file(path).removeprefix("sha256:")
+
+
 def _clip(path: Path, seconds: float = 1.0) -> None:
     subprocess.run(
         [
@@ -290,6 +301,7 @@ async def test_m5_failed_retry_never_deletes_the_existing_destination(
         args=["0", "0.5"],
         workspace_dir=str(workspace),
         input_path=str(input_clip),
+        input_sha256=_digest(input_clip),
         user_id=1,
         chat_id=2,
         idempotency_key="m5",
@@ -309,6 +321,7 @@ async def test_m5_failed_retry_never_deletes_the_existing_destination(
             "args": ["0", "0.5"],
             "workspace_dir": str(workspace),
             "input_path": str(input_clip),
+            "input_sha256": _digest(input_clip),
             "media_duration_us": 1_000_000,
             "user_id": 1,
             "chat_id": 2,
@@ -548,6 +561,7 @@ async def test_m10b_runtime_fail_closed_after_publish_is_never_success(
             "args": ["0", "0.5"],
             "workspace_dir": str(workspace),
             "input_path": str(input_clip),
+            "input_sha256": _digest(input_clip),
             "media_duration_us": 1_000_000,
             "user_id": 1,
             "chat_id": 2,
@@ -789,6 +803,7 @@ async def test_succeeded_implies_valid_stable_traceable_artifact(creative_env: P
             "args": ["0", "1"],
             "workspace_dir": str(workspace),
             "input_path": str(input_clip),
+            "input_sha256": _digest(input_clip),
             "media_duration_us": 2_000_000,
             "user_id": 7,
             "chat_id": 8,

@@ -39,6 +39,7 @@ import json
 import os
 import re
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -47,7 +48,7 @@ if TYPE_CHECKING:
     from nexus_ai_agent.adapters.in_process_job_queue import ArtifactPublication
     from nexus_ai_agent.execution.staging import AttemptStaging
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nexus_ai_agent.application.creative_intent import CanonicalCreativeIntent
 from nexus_ai_agent.application.principal import PrincipalId
@@ -108,8 +109,18 @@ ERROR_CODES: frozenset[str] = frozenset(
         "caption_profile_unavailable",
         "render_failed",
         "ffmpeg_unavailable",
+        # P0 redelivery (task-nagar-workspace-redelivery-01): the worker measured the
+        # staged bytes and they are not the bytes the accepted payload named. This is
+        # a fail-closed refusal raised BEFORE any engine is touched.
+        "input_integrity",
     }
 )
+
+#: The one digest spelling this repository produces (``slideshow.ffmpeg.sha256_file``).
+#: Accepted payloads carry the bare lowercase hex; the prefixed form is tolerated on
+#: read so a caller that reuses the existing helper verbatim is not silently rejected.
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+_SHA256_PREFIXED_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
 
 
 class CreativeRenderError(ValueError):
@@ -145,6 +156,37 @@ class CreativeRenderPayload(BaseModel):
     # instead of inventing one. A row that DOES carry one must carry the
     # identity its own key implies -- see ``_bound_trace_id``.
     trace_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    # P0 redelivery (task-nagar-workspace-redelivery-01): the content identity of the
+    # staged input, measured by the surface from the ACTUAL downloaded bytes. It is
+    # evidence of *which bytes* this request admitted -- never permission, authority
+    # or a lifecycle opt-in. The worker re-measures and refuses a mismatch before any
+    # engine runs, so a supplied value is never trusted on its own.
+    input_sha256: str | None = Field(default=None, min_length=64, max_length=71)
+
+    @field_validator("input_sha256")
+    @classmethod
+    def _digest_is_a_lowercase_sha256(cls, value: str | None) -> str | None:
+        """Normalize to bare lowercase hex; refuse anything that is not a SHA-256.
+
+        ``sha256:``-prefixed input is accepted because that is the spelling of the
+        repository's own ``sha256_file`` helper; the canonical stored form is bare.
+        """
+        if value is None:
+            return None
+        prefixed = _SHA256_PREFIXED_RE.match(value)
+        if prefixed is not None:
+            return prefixed.group(1)
+        if _SHA256_HEX_RE.match(value):
+            return value
+        raise ValueError("input_sha256 must be 64 lowercase hexadecimal characters")
+
+    @model_validator(mode="after")
+    def _digest_covers_media_bearing_requests(self) -> CreativeRenderPayload:
+        """A digest is meaningless without an input, and forbidden on a media-less row."""
+        if self.input_path is None and self.input_sha256 is not None:
+            raise ValueError("input_sha256 is only valid when input_path is present")
+        return self
 
     # Schema 1 is the complete legacy contract above.  Schema 2 adds canonical
     # references only: every one is revalidated against server-owned state in
@@ -200,10 +242,66 @@ class _CanonicalExecution:
 # ---------------------------------------------------------------------------
 
 
+def refuse_symlinked_node(path: Path, label: str) -> None:
+    """Refuse a path that is itself a symlink. The single trust-boundary rule.
+
+    Shared by the worker (``trusted_creative_root``) and the surface
+    (``creative_surface._trusted_root``) so that the two ends of the queue cannot
+    drift into two different definitions of "which root is trusted". It is
+    deliberately scoped to the node named, never its ancestors: an ancestor is
+    admin-owned path prefix, and refusing ancestors would break ordinary installs
+    (macOS ``/tmp`` -> ``/private/tmp``, container volume mounts) while buying
+    nothing, since an attacker who can swap an ancestor of the root already owns
+    the host.
+
+    ``lstat`` — not ``stat`` — because following the link is precisely the failure
+    mode this function exists to prevent.
+    """
+    try:
+        stat_result = os.lstat(path)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise CreativeRenderError("invalid_request", f"{label} unreadable: {path}") from exc
+    if stat.S_ISLNK(stat_result.st_mode):
+        raise CreativeRenderError("invalid_request", f"{label} is a symlink: {path}")
+    if not stat.S_ISDIR(stat_result.st_mode):
+        raise CreativeRenderError("invalid_request", f"{label} is not a directory: {path}")
+
+
+def trusted_creative_root() -> Path:
+    """The trusted root, validated **before** it is canonicalized.
+
+    Ordering is load-bearing and is the whole point of this function. ``resolve()``
+    follows a symlink and returns the target, so a caller that resolves first can
+    only ever compare resolved-against-resolved afterwards: the check succeeds and
+    the bytes go to the attacker's directory. The configured value is therefore
+    inspected exactly as written, and only then resolved.
+
+    This is enforced at the worker too, not merely inherited from the surface. The
+    queue row is durable and the two ends run in different processes, so a root
+    that was legitimate at admission can be swapped before execution — the surface
+    check cannot be treated as a permanent guarantee about the filesystem.
+    """
+    configured = Path(get_settings().creative_temp_dir)
+    refuse_symlinked_node(configured, "creative root")
+    try:
+        return configured.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise CreativeRenderError(
+            "invalid_request", f"creative root resolution failed: {exc}"
+        ) from exc
+
+
 def _guarded_workspace(raw: str) -> Path:
+    # The root is validated BEFORE the workspace is canonicalized. Resolving the
+    # workspace first would let a symlinked configured root canonicalize both sides
+    # into agreement and pass containment while the bytes live elsewhere
+    # (reproduced: the worker rendered and wrote output.mp4 into an unrelated
+    # directory before this ordering was corrected).
+    root = trusted_creative_root()
     try:
         workspace = Path(raw).resolve(strict=False)
-        root = Path(get_settings().creative_temp_dir).resolve(strict=False)
     except (OSError, RuntimeError) as exc:
         raise CreativeRenderError("invalid_request", f"workspace resolution failed: {exc}") from exc
     try:
@@ -215,11 +313,98 @@ def _guarded_workspace(raw: str) -> Path:
     return workspace
 
 
+def _guard_input_stat(path: Path) -> os.stat_result:
+    """``lstat`` the staged input and refuse anything that is not a regular file.
+
+    ``Path.is_file()`` follows symlinks, so it answers "is there a regular file at
+    the end of this chain" — which is exactly the wrong question here. A symlink
+    planted after admission would pass ``is_file()`` while pointing at bytes no
+    request ever admitted. The worker therefore inspects the *link itself*.
+    """
+    try:
+        stat_result = os.lstat(path)
+    except OSError as exc:
+        raise CreativeRenderError("media_missing", f"staged input is not readable: {path}") from exc
+    if stat.S_ISLNK(stat_result.st_mode):
+        raise CreativeRenderError("input_integrity", f"staged input is a symlink: {path}")
+    if not stat.S_ISREG(stat_result.st_mode):
+        raise CreativeRenderError("input_integrity", f"staged input is not a regular file: {path}")
+    return stat_result
+
+
+def _verify_input_digest(path: Path, expected: str | None) -> str:
+    """Re-measure the staged bytes and refuse unless they are the admitted bytes.
+
+    The surface's digest is *evidence*, never authority: the worker hashes the file
+    it is about to hand to FFmpeg and compares. Measured over an ``O_NOFOLLOW``
+    descriptor so a symlink swapped in between ``lstat`` and ``open`` cannot
+    redirect the measurement either.
+    """
+    if expected is None:
+        raise CreativeRenderError(
+            "input_integrity",
+            "media-bearing payload carries no input_sha256; refusing to execute an "
+            "unverified input (legacy row requires operator reconciliation)",
+        )
+    digest = hashlib.sha256()
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise CreativeRenderError(
+            "input_integrity", f"staged input cannot be opened safely: {path}"
+        ) from exc
+    try:
+        with os.fdopen(descriptor, "rb") as handle:
+            before = os.fstat(handle.fileno())
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+            after = os.fstat(handle.fileno())
+    except OSError as exc:
+        raise CreativeRenderError(
+            "input_integrity", f"staged input cannot be read: {path}"
+        ) from exc
+    if (before.st_size, before.st_mtime_ns, before.st_ino) != (
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ino,
+    ):
+        raise CreativeRenderError(
+            "input_integrity", f"staged input changed while being measured: {path}"
+        )
+    measured = digest.hexdigest()
+    if measured != expected:
+        raise CreativeRenderError(
+            "input_integrity",
+            f"digest mismatch for {path}: expected {expected}, measured {measured}",
+        )
+    return measured
+
+
+def verify_staged_input(payload: CreativeRenderPayload, workspace: Path) -> str | None:
+    """Preflight: prove the staged bytes are the admitted bytes BEFORE any engine.
+
+    The per-branch ``_guarded_input`` remains the enforcing guard at the point of
+    use; this preflight exists so that a mismatch is refused *before* a branch is
+    selected, i.e. before FFmpeg, a transcriber or an OTIO writer is even
+    constructed. Media-less requests return ``None`` and keep their old semantics.
+    """
+    if payload.input_path is None:
+        return None
+    candidate = _guarded_input(payload, workspace)
+    return _verify_input_digest(candidate, payload.input_sha256)
+
+
 def _guarded_input(payload: CreativeRenderPayload, workspace: Path) -> Path:
     if payload.input_path is None:
         raise CreativeRenderError("media_missing", "operation requires staged media")
+    raw = Path(payload.input_path)
+    # P0 redelivery (task-nagar-workspace-redelivery-01): inspect the LINK ITSELF
+    # before resolving, otherwise a symlink whose target is a regular file inside
+    # the workspace is laundered into an ordinary path by ``resolve()`` and the
+    # file-type check below would examine the target, not the staged object.
+    _guard_input_stat(raw)
     try:
-        candidate = Path(payload.input_path).resolve(strict=False)
+        candidate = raw.resolve(strict=False)
     except OSError as exc:
         raise CreativeRenderError("invalid_request", f"bad input path: {exc}") from exc
     try:
@@ -228,6 +413,9 @@ def _guarded_input(payload: CreativeRenderPayload, workspace: Path) -> Path:
         raise CreativeRenderError("invalid_request", "input path escapes its workspace") from exc
     if not candidate.is_file():
         raise CreativeRenderError("media_missing", str(candidate))
+    # The bytes are the authority: re-measure and compare with the admitted digest,
+    # refusing BEFORE any engine, probe or transcode is reached.
+    _verify_input_digest(candidate, payload.input_sha256)
     return candidate
 
 
@@ -891,6 +1079,11 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
                 "error_code": "media_missing",
                 "error_detail": "staged workspace missing",
             }
+        # P0 redelivery (task-nagar-workspace-redelivery-01): prove the staged bytes
+        # are the admitted bytes before a branch (or any engine) is reached. The
+        # branch-level guard still re-checks at the point of use; this is the
+        # fail-fast boundary that keeps a mismatch away from FFmpeg entirely.
+        verify_staged_input(data, workspace)
         if canonical_id == "delivery.export_otio":
             result = await _run_otio_branch(data, workspace)
         elif canonical_id == "caption.transcribe":

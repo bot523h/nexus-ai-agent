@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 from nexus_ai_agent.config import settings as settings_module
+from nexus_ai_agent.creative import render_jobs
 from nexus_ai_agent.creative.render_jobs import (
     CREATIVE_RENDER_JOB_TYPE,
     CreativeRenderPayload,
@@ -32,13 +33,27 @@ from nexus_ai_agent.creative.render_jobs import (
 from nexus_ai_agent.creative.slideshow.ffmpeg import resolve_ffmpeg_bin
 
 
+def _digest(path: Path) -> str:
+    """Bare lowercase SHA-256 of a real file (the payload's canonical spelling)."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _payload(workspace: Path, **overrides: Any) -> dict[str, Any]:
+    """A media-bearing payload that satisfies the content-identity contract.
+
+    Since task-nagar-workspace-redelivery-01 a media-bearing row MUST carry
+    ``input_sha256`` measured over the real staged bytes: the worker recomputes it
+    and refuses a mismatch (or an absent digest) before any engine runs. Every
+    payload built here therefore names the bytes of the file it points at.
+    """
+    input_file = workspace / "input.mp4"
     base: dict[str, Any] = {
         "command": "edit",
         "operation": "trim",
         "args": ["0", "1"],
         "workspace_dir": str(workspace),
-        "input_path": str(workspace / "input.mp4"),
+        "input_path": str(input_file),
+        "input_sha256": _digest(input_file) if input_file.is_file() else "0" * 64,
         "media_duration_us": 2_000_000,
         "user_id": 42,
         "chat_id": 4242,
@@ -109,6 +124,128 @@ def test_workspace_must_stay_under_creative_temp(workspace: Path, tmp_path: Path
     result = _run(data)
     assert result["success"] is False
     assert result["error_code"] == "invalid_request"
+
+
+def test_worker_refuses_a_workspace_reached_through_a_symlinked_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker must enforce the root boundary itself, not inherit it.
+
+    Threat: admission happens while ``creative_temp_dir`` is a real directory.
+    Between admission and execution the configured root is replaced by a symlink
+    to an unrelated directory, and a workspace with matching name AND matching
+    bytes is planted under that target. A worker that canonicalizes the root
+    before inspecting it compares resolved-against-resolved, agrees, and executes
+    against attacker-chosen bytes — writing its output into the unrelated tree.
+
+    The handler's own ``_trusted_root`` guard (commit 49d639c) does not help here:
+    the queue row is durable, the handler runs in a different process, and the
+    swap happens after admission. This is why the boundary is checked at BOTH
+    ends rather than assumed to propagate from the surface.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    unrelated = tmp_path / "unrelated_secret_dir"
+    unrelated.mkdir()
+
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(root))
+    settings_module.get_settings.cache_clear()
+
+    # 1. admitted legitimately, while the root was a real directory
+    legit_ws = root / "creative_ab12cd34ef56"
+    legit_ws.mkdir()
+    _make_clip(legit_ws / "input.mp4")
+    admitted_bytes = (legit_ws / "input.mp4").read_bytes()
+
+    # 2. the attack: identical name, identical bytes, unrelated location
+    evil_ws = unrelated / "creative_ab12cd34ef56"
+    evil_ws.mkdir()
+    (evil_ws / "input.mp4").write_bytes(admitted_bytes)
+    root.rename(tmp_path / "root_moved")
+    root.symlink_to(unrelated, target_is_directory=True)
+
+    payload = _payload(evil_ws)
+    assert payload["input_sha256"] == hashlib.sha256(admitted_bytes).hexdigest()
+
+    # 3. no engine may be constructed, and nothing may be written outside the root
+    engine_calls: list[str] = []
+
+    async def _forbidden(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        engine_calls.append("render")
+        raise AssertionError("engine branch reached through a symlinked root")
+
+    monkeypatch.setattr(render_jobs, "_run_render_branch", _forbidden)
+    before = sorted(p.name for p in evil_ws.iterdir())
+
+    result = _run(payload)
+
+    after = sorted(p.name for p in evil_ws.iterdir())
+    assert result["success"] is False, "an attacker-planted workspace must not render"
+    assert result["error_code"] == "invalid_request"
+    assert engine_calls == [], "no engine may be constructed on a refused root"
+    assert after == before, f"nothing may be written outside the trusted root: {after}"
+    assert not (evil_ws / "output.mp4").exists()
+    # the originally admitted input is neither moved nor rewritten
+    assert (tmp_path / "root_moved" / "creative_ab12cd34ef56" / "input.mp4").is_file()
+    settings_module.get_settings.cache_clear()
+
+
+def test_worker_still_accepts_a_root_under_a_symlinked_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control that stops the fix from becoming a deployment outage.
+
+    Refusing an ancestor that happens to be a symlink would break ordinary
+    installs (macOS ``/tmp`` -> ``/private/tmp``, container volume mounts). The
+    trust boundary is the configured node, not its whole path prefix.
+    """
+    real = tmp_path / "real"
+    (real / "creative").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(real, target_is_directory=True)
+    configured = tmp_path / "link" / "creative"
+
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(configured))
+    settings_module.get_settings.cache_clear()
+
+    ws = configured / "creative_ab12cd34ef56"
+    ws.mkdir()
+    _make_clip(ws / "input.mp4")
+    result = _run(_payload(ws))
+    assert result["success"] is True, result
+    assert (real / "creative" / "creative_ab12cd34ef56" / "output.mp4").is_file()
+    settings_module.get_settings.cache_clear()
+
+
+def test_worker_accepts_an_ordinary_root(workspace: Path) -> None:
+    """Normal-root control: the guard must not refuse a plain, real directory."""
+    (workspace / "input.mp4").unlink(missing_ok=True)
+    _make_clip(workspace / "input.mp4")
+    result = _run(_payload(workspace))
+    assert result["success"] is True, result
+
+
+def test_worker_refuses_when_the_configured_root_is_a_symlink_even_if_nothing_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No workspace planted at all: the refusal must still be the root, not a 404.
+
+    Distinguishing the two matters — "workspace missing" is a transient condition
+    that retries forever, while "root is a symlink" is a security refusal that must
+    be terminal and typed.
+    """
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    root = tmp_path / "root"
+    root.symlink_to(unrelated, target_is_directory=True)
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(root))
+    settings_module.get_settings.cache_clear()
+
+    ghost = root / "creative_ab12cd34ef56"
+    result = _run(_payload(ghost))
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_request"
+    assert "symlink" in result["error_detail"]
+    settings_module.get_settings.cache_clear()
 
 
 def test_unknown_operation_is_a_typed_failure(workspace: Path) -> None:
@@ -458,3 +595,161 @@ def test_the_surface_mints_the_identity_the_worker_verifies() -> None:
     assert trace.trace_id == _surface_trace_id({"idempotency_key": "creative:42:4242:111"})
     assert trace.surface == "telegram.creative"
     assert trace.actor_ref == "tg:42"
+
+
+# ---------------------------------------------------------------------------
+# P0 redelivery — the typed input-integrity contract (task-nagar-workspace-…)
+# ---------------------------------------------------------------------------
+# The worker never trusts the surface's digest: it re-measures the staged bytes
+# and refuses a mismatch, a symlink, a non-regular file or an absent digest BEFORE
+# any engine is constructed. These unit tests pin that contract; the end-to-end
+# proofs live in tests/integration/test_creative_surface_redelivery.py.
+
+
+def test_payload_accepts_a_lowercase_sha256(workspace: Path) -> None:
+    _write_clip_bytes(workspace / "input.mp4", b"payload")
+    payload = CreativeRenderPayload.model_validate(_payload(workspace))
+    assert payload.input_sha256 == hashlib.sha256(b"payload").hexdigest()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "ABC",  # too short
+        "A" * 64,  # uppercase is not the canonical spelling
+        "g" * 64,  # not hexadecimal
+        "sha256:" + "a" * 63,  # prefixed but truncated
+        "",
+    ],
+)
+def test_payload_rejects_a_malformed_digest(workspace: Path, bad: str) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CreativeRenderPayload.model_validate(_payload(workspace, input_sha256=bad))
+
+
+def test_payload_normalizes_the_prefixed_form(workspace: Path) -> None:
+    """``sha256:``-prefixed is the shape of the repo's own ``sha256_file`` helper."""
+    _write_clip_bytes(workspace / "input.mp4", b"payload")
+    bare = hashlib.sha256(b"payload").hexdigest()
+    payload = CreativeRenderPayload.model_validate(
+        _payload(workspace, input_sha256=f"sha256:{bare}")
+    )
+    assert payload.input_sha256 == bare
+
+
+def test_payload_refuses_a_digest_without_an_input(workspace: Path) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CreativeRenderPayload.model_validate(
+            _payload(workspace, input_path=None, input_sha256="a" * 64)
+        )
+
+
+def test_payload_still_forbids_unknown_fields(workspace: Path) -> None:
+    """``extra="forbid"`` is a trust boundary and must survive this change."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CreativeRenderPayload.model_validate(_payload(workspace, allow_experimental=True))
+
+
+@pytest.mark.asyncio
+async def test_worker_refuses_a_media_payload_without_a_digest(workspace: Path) -> None:
+    _write_clip_bytes(workspace / "input.mp4", b"payload")
+    result = await creative_render_job(_payload(workspace, input_sha256=None))
+    assert result["success"] is False
+    assert result["error_code"] == "input_integrity"
+    assert "input_sha256" in result["error_detail"]
+
+
+@pytest.mark.asyncio
+async def test_worker_refuses_when_the_bytes_do_not_match_the_digest(workspace: Path) -> None:
+    _write_clip_bytes(workspace / "input.mp4", b"payload")
+    result = await creative_render_job(_payload(workspace, input_sha256="a" * 64))
+    assert result["success"] is False
+    assert result["error_code"] == "input_integrity"
+    assert "digest mismatch" in result["error_detail"]
+
+
+@pytest.mark.asyncio
+async def test_worker_refuses_a_symlinked_input(workspace: Path, tmp_path: Path) -> None:
+    real = tmp_path / "elsewhere.bin"
+    _write_clip_bytes(real, b"payload")
+    link = workspace / "input.mp4"
+    link.symlink_to(real)
+
+    result = await creative_render_job(_payload(workspace, input_sha256=_digest(real)))
+    assert result["success"] is False
+    assert result["error_code"] in {"input_integrity", "invalid_request", "media_missing"}
+
+
+@pytest.mark.asyncio
+async def test_worker_refuses_a_non_regular_input(workspace: Path) -> None:
+    (workspace / "input.mp4").mkdir()
+    result = await creative_render_job(_payload(workspace, input_sha256="a" * 64))
+    assert result["success"] is False
+    assert result["error_code"] in {"input_integrity", "media_missing"}
+
+
+def test_guarded_workspace_still_rejects_names_without_the_reserved_prefix(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.render_jobs import CreativeRenderError, _guarded_workspace
+
+    with pytest.raises(CreativeRenderError):
+        _guarded_workspace(str(tmp_path / "not_a_workspace"))
+
+
+def _write_clip_bytes(path: Path, data: bytes) -> None:
+    path.write_bytes(data)
+
+
+# ── path traversal (payload trust boundary: class #13) ────────────────────
+#
+# The containment check has existed since the payload trust boundary landed, but
+# no test named the traversal case, so it could be deleted without anything going
+# red. These two tests close that gap. They assert *refusal and no artifact*, not
+# one specific error code: the symlink case is deliberately caught by the
+# file-type guard before containment, and pinning the code would make the test
+# assert the wrong invariant.
+
+
+def test_a_traversing_input_path_is_refused_before_any_engine(workspace: Path) -> None:
+    """A row naming a real, playable clip *outside* its workspace is refused.
+
+    The clip is genuine FFmpeg media and the digest is correct, so nothing but the
+    containment check can refuse this row: with the check removed the render
+    SUCCEEDS and this test fails. An earlier version of this test used garbage
+    bytes and passed even with containment deleted -- it was proving "bad media
+    fails to render", not "traversal is refused".
+    """
+    outside = workspace.parent.parent / "outside.mp4"
+    _make_clip(outside)
+    payload = _payload(
+        workspace,
+        input_path=str(workspace / ".." / ".." / "outside.mp4"),
+        input_sha256=_digest(outside),
+    )
+    result = _run(payload)
+    assert result["success"] is False, "a path escaping the workspace must never render"
+    assert result["error_code"] == "invalid_request"
+    assert "escapes" in result["error_detail"]
+    assert not (workspace / "output.mp4").exists(), "a refused row must not produce an artifact"
+    assert list(outside.parent.glob("output*")) == [], "nothing may be written beside the target"
+
+
+def test_a_symlink_pointing_outside_the_workspace_is_refused(workspace: Path) -> None:
+    """A staged link redirected to a real file outside the workspace is refused.
+
+    Both defences may fire (the link is not a regular file, and its target escapes
+    containment); either is a correct refusal, which is why the code is not pinned.
+    """
+    secret = workspace.parent / "secret.mp4"
+    secret.write_bytes(b"outside the workspace")
+    (workspace / "input.mp4").symlink_to(secret)
+    payload = _payload(workspace, input_sha256=_digest(secret))
+    result = _run(payload)
+    assert result["success"] is False
+    assert result["error_code"] in {"input_integrity", "invalid_request", "media_missing"}
+    assert not (workspace / "output.mp4").exists()

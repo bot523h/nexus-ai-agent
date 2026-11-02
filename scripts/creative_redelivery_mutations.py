@@ -1,0 +1,401 @@
+#!/usr/bin/env python3
+"""Focused mutation probes for the P0 redelivery fix (task-nagar-workspace-redelivery-01).
+
+Why this exists: a regression suite that stays GREEN after its security invariant
+is removed proves nothing. Each probe below removes exactly ONE invariant — and
+where that invariant is defended in more than one place, it removes *all* of the
+defences, because a probe that only disables half a guard measures nothing. The
+probe then runs the focused tests that are supposed to catch it and requires a RED
+result. The tree is restored byte-identically (verified by sha256) after every
+probe.
+
+The probes are deliberately narrow and textual: this repository already ships
+focused mutation campaigns (``scripts/*_mutations.py``) and a broad framework is
+not needed for six anchors.
+
+Usage:
+    python scripts/creative_redelivery_mutations.py            # run every probe
+    python scripts/creative_redelivery_mutations.py --list     # list probes
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import hashlib
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+SURFACE = "src/nexus_ai_agent/bot/creative_surface.py"
+WORKER = "src/nexus_ai_agent/creative/render_jobs.py"
+
+REDELIVERY = "tests/integration/test_creative_surface_redelivery.py"
+SURFACE_UNIT = "tests/unit/test_creative_surface.py"
+WORKER_UNIT = "tests/unit/test_creative_render_jobs.py"
+
+
+@dataclass(frozen=True)
+class Edit:
+    """One textual replacement inside one file."""
+
+    path: str
+    old: str
+    new: str
+
+
+@dataclass(frozen=True)
+class Probe:
+    """One invariant, its mutation(s), and the test selection that must go RED."""
+
+    name: str
+    invariant: str
+    edits: tuple[Edit, ...]
+    tests: tuple[str, ...] = field(default=())
+
+
+PROBES: tuple[Probe, ...] = (
+    Probe(
+        name="M1-surface-drops-input_sha256",
+        invariant="the surface must persist the measured digest in the payload",
+        edits=(
+            Edit(
+                SURFACE,
+                '            "input_sha256": input_sha256,',
+                '            "input_sha256": None,  # MUTANT: digest dropped from the payload',
+            ),
+        ),
+        tests=(REDELIVERY, SURFACE_UNIT, WORKER_UNIT),
+    ),
+    Probe(
+        name="M2-worker-digest-verification-removed",
+        invariant="the worker must re-measure the bytes before any engine runs",
+        edits=(
+            Edit(
+                WORKER,
+                "        verify_staged_input(data, workspace)",
+                "        # MUTANT: preflight digest verification disabled",
+            ),
+            Edit(
+                WORKER,
+                "    _verify_input_digest(candidate, payload.input_sha256)\n    return candidate",
+                "    # MUTANT: per-branch digest verification disabled\n    return candidate",
+            ),
+        ),
+        tests=(REDELIVERY, WORKER_UNIT),
+    ),
+    Probe(
+        name="M3-destructive-shared-rmtree-reintroduced",
+        invariant="the surface must never recursively delete a job workspace",
+        edits=(
+            Edit(
+                SURFACE,
+                "            try:\n                workspace = _ensure_private_directory("
+                'workspace, temp_root, "workspace")',
+                "            try:\n"
+                "                shutil.rmtree(workspace, ignore_errors=True)  # MUTANT\n"
+                "                workspace = _ensure_private_directory("
+                'workspace, temp_root, "workspace")',
+            ),
+        ),
+        tests=(REDELIVERY,),
+    ),
+    Probe(
+        name="M4-corrupt-destination-trusted",
+        invariant="reusing an immutable input must verify its bytes",
+        edits=(
+            Edit(
+                SURFACE,
+                "    if _sha256_of_file(destination) != digest:",
+                "    if False:  # MUTANT: an existing destination is trusted unverified",
+            ),
+        ),
+        tests=(REDELIVERY,),
+    ),
+    Probe(
+        name="M5-surface-workspace-symlink-guard-disabled",
+        invariant="a pre-planted workspace symlink must not redirect the download",
+        edits=(
+            Edit(
+                SURFACE,
+                "    try:\n"
+                "        refuse_symlinked_node(path, label)\n"
+                "    except CreativeRenderError as exc:\n"
+                '        raise _StagingError("media_missing", exc.detail) from exc',
+                "    return  # MUTANT: a symlinked directory component is accepted\n"
+                "    try:\n"
+                "        refuse_symlinked_node(path, label)\n"
+                "    except CreativeRenderError as exc:\n"
+                '        raise _StagingError("media_missing", exc.detail) from exc',
+            ),
+        ),
+        tests=(REDELIVERY, SURFACE_UNIT),
+    ),
+    Probe(
+        name="M6-worker-lstat-file-type-guard-disabled",
+        invariant="the worker must reject a symlinked/non-regular input",
+        edits=(
+            Edit(
+                WORKER,
+                "    if stat.S_ISLNK(stat_result.st_mode):\n"
+                "        raise CreativeRenderError("
+                '"input_integrity", '
+                'f"staged input is a symlink: {path}")\n'
+                "    if not stat.S_ISREG(stat_result.st_mode):\n"
+                "        raise CreativeRenderError("
+                '"input_integrity", '
+                'f"staged input is not a regular file: {path}")',
+                "    # MUTANT: the file-type guard is gone entirely",
+            ),
+        ),
+        tests=(REDELIVERY, WORKER_UNIT),
+    ),
+    Probe(
+        name="M7-missing-creative-root-not-recreated",
+        invariant="a wiped creative root must be recreated, not refused forever",
+        edits=(
+            Edit(
+                SURFACE,
+                "        root.mkdir(mode=0o700, parents=True, exist_ok=True)",
+                "        pass  # MUTANT: a missing trusted root is never recreated",
+            ),
+        ),
+        tests=(REDELIVERY, SURFACE_UNIT),
+    ),
+    Probe(
+        name="M8-worker-workspace-containment-removed",
+        invariant="a staged input must not escape its own workspace",
+        edits=(
+            Edit(
+                WORKER,
+                "    try:\n"
+                "        candidate.relative_to(workspace)\n"
+                "    except ValueError as exc:\n"
+                '        raise CreativeRenderError("invalid_request", "input path escapes its '
+                'workspace") from exc',
+                "    _ = workspace  # MUTANT: containment check removed",
+            ),
+        ),
+        tests=(WORKER_UNIT,),
+    ),
+    Probe(
+        name="M9-symlinked-creative-root-followed",
+        invariant=(
+            "the configured creative root must be lstat'ed before any resolve(), so a "
+            "symlinked root is refused instead of silently canonicalized away"
+        ),
+        edits=(
+            Edit(
+                SURFACE,
+                "                temp_root = _trusted_root(get_settings().creative_temp_dir)",
+                "                # MUTANT: resolve() first, so the symlink is already\n"
+                "                # canonicalized away before the guard runs\n"
+                "                temp_root = Path(\n"
+                "                    get_settings().creative_temp_dir\n"
+                "                ).resolve(strict=False)",
+            ),
+        ),
+        tests=(REDELIVERY, SURFACE_UNIT),
+    ),
+    Probe(
+        name="M10-worker-root-symlink-guard-removed",
+        invariant=(
+            "the worker must reject a configured root that is itself a symlink, and must "
+            "do so before canonicalization — the surface check cannot be inherited, "
+            "because the queue row is durable and the root can be swapped after admission"
+        ),
+        edits=(
+            Edit(
+                WORKER,
+                '    refuse_symlinked_node(configured, "creative root")',
+                "    # MUTANT: worker trusts whatever root it was configured with",
+            ),
+        ),
+        tests=(WORKER_UNIT,),
+    ),
+)
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+#: pytest exits 4 on a *usage* error (bad plugin, un-importable conftest, bad
+#: option) and 3 on an internal error. Neither says anything about a mutant, so
+#: both are hard failures of the campaign itself rather than "kills". A previous
+#: revision of this script omitted ``src`` from ``PYTHONPATH``, so every probe
+#: died in ``tests/conftest.py`` with exit 4 and the campaign reported a
+#: vacuous 6/6 pass.
+HARNESS_ERRORS = frozenset({3, 4})
+
+#: A kill is only *evidence* when the mutant failed an assertion in a test that ran.
+#: pytest reports collection/import failures as ``errors`` and exits 2 -- which is
+#: indistinguishable from "the mutation broke the module" unless it is checked. A
+#: mutant that cannot even be parsed kills nothing: it proves the probe is wrong,
+#: not that the invariant is defended. ``M5`` was reported as a kill for exactly
+#: this reason (an unterminated docstring produced a SyntaxError), so the campaign
+#: now refuses that class of non-verdict outright.
+INVALID_PROBE = "INVALID PROBE (mutant does not parse / collection error, not a kill)"
+
+
+def _parses(paths: tuple[Path, ...]) -> bool:
+    """Every mutated module must still be importable Python."""
+    for path in paths:
+        try:
+            ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            return False
+    return True
+
+
+#: A test selection is a repository-relative ``.py`` path, optionally followed by
+#: ``::node_id``. Nothing else is accepted: this is the *only* value that reaches
+#: ``subprocess.run``, and it is validated here rather than assumed safe.
+_TEST_TARGET = re.compile(r"^tests/[A-Za-z0-9_/]+(?:[A-Za-z0-9_]+)?\.py(?:::[A-Za-z0-9_\[\]]+)*$")
+
+
+def _validate_test_selection(tests: tuple[str, ...]) -> None:
+    """Refuse any test target that is not a plain repository-relative path.
+
+    The harness passes its argv to ``subprocess.run`` directly (no shell), and the
+    selection comes from the frozen ``PROBES`` table above -- no CLI argument, file,
+    environment variable or network response can reach it. This validator is the
+    belt to that braces: even if a future probe were built from external data, an
+    absolute path, a traversal, a leading option or a shell metacharacter would
+    abort the campaign as a HARNESS failure instead of being executed.
+    """
+    problems: list[str] = []
+    for target in tests:
+        if not isinstance(target, str) or not target:
+            problems.append(f"{target!r}: not a non-empty string")
+        elif target != target.strip():
+            problems.append(f"{target!r}: surrounding whitespace")
+        elif os.path.isabs(target) or ".." in Path(target).parts:
+            problems.append(f"{target!r}: absolute path or traversal")
+        elif target.startswith("-"):
+            problems.append(f"{target!r}: looks like a command-line option")
+        elif any(ch in target for ch in ";|&$`><\n\r\x00"):
+            problems.append(f"{target!r}: shell metacharacter")
+        elif not _TEST_TARGET.match(target):
+            problems.append(f"{target!r}: not a repository-relative test path")
+    if problems:
+        print("HARNESS ERROR: refusing an invalid test selection")
+        for problem in problems:
+            print(f"  {problem}")
+        raise SystemExit(2)
+
+
+def _run(tests: tuple[str, ...]) -> tuple[int, str]:
+    _validate_test_selection(tests)
+    # No shell: an argv list with a fixed program (``sys.executable``) and a fixed
+    # flag prefix. ``tests`` are module paths declared in ``PROBES`` above -- this
+    # harness takes no CLI arguments, so no external input reaches this call.
+    environment = dict(os.environ)
+    source = str(ROOT / "src")
+    existing = environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = source + (os.pathsep + existing if existing else "")
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--tb=no", "-p", "no:cacheprovider", *tests],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        shell=False,  # explicit: argv list, never a shell string
+    )
+    lines = (completed.stdout or "").strip().splitlines()
+    return completed.returncode, lines[-1] if lines else "(no output)"
+
+
+def _preflight(tests: tuple[str, ...]) -> None:
+    """Prove the unmutated tree is GREEN, so a later RED means the mutation.
+
+    Without this the campaign cannot tell "the mutant was killed" from "the
+    suite never ran". Exits 2 if the baseline selection is not clean.
+    """
+    code, summary = _run(tests)
+    if code != 0:
+        print(
+            "PREFLIGHT FAILED: the unmutated tree is not green for this selection, "
+            f"so any mutant verdict would be meaningless.\n  exit={code} {summary}"
+        )
+        raise SystemExit(2)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="P0 redelivery mutation campaign")
+    parser.add_argument("--list", action="store_true", help="list probes and exit")
+    args = parser.parse_args()
+
+    if args.list:
+        for probe in PROBES:
+            print(f"{probe.name}: {probe.invariant}")
+        return 0
+
+    _preflight(tuple(dict.fromkeys(t for probe in PROBES for t in probe.tests)))
+
+    failures: list[str] = []
+    for probe in PROBES:
+        touched: dict[Path, bytes] = {}
+        digests: dict[Path, str] = {}
+        applied = True
+        for edit in probe.edits:
+            target = ROOT / edit.path
+            if target not in touched:
+                touched[target] = target.read_bytes()
+                digests[target] = _sha256(target)
+            text = target.read_text(encoding="utf-8")
+            if edit.old not in text:
+                print(f"SKIP {probe.name}: anchor not found in {edit.path}")
+                applied = False
+                break
+            target.write_text(text.replace(edit.old, edit.new, 1), encoding="utf-8")
+
+        try:
+            if not applied:
+                failures.append(f"{probe.name} (anchor missing)")
+                continue
+            # Parse gate BEFORE pytest: a mutant that is not valid Python cannot
+            # produce a meaningful verdict, and must never be counted as a kill.
+            parses_clean = _parses(tuple(touched))
+            if not parses_clean:
+                code, summary = -1, "mutant does not parse"
+            else:
+                code, summary = _run(probe.tests)
+        finally:
+            for target, original in touched.items():
+                target.write_bytes(original)
+
+        restored = all(_sha256(target) == digest for target, digest in digests.items())
+        # A kill counts only when the tests RAN and an assertion failed. An
+        # unparsable mutant, a collection error (pytest exit 2 with ``errors``),
+        # or an internal/usage error are all non-verdicts.
+        collection_error = code == 2 and " error" in summary
+        invalid = (not parses_clean) or code in HARNESS_ERRORS or collection_error
+        if invalid:
+            verdict = INVALID_PROBE
+        elif code == 0:
+            verdict = "GREEN (SURVIVED — vacuous test)"
+        elif "failed" in summary:
+            verdict = "RED (killed by assertion)"
+        else:
+            verdict = INVALID_PROBE
+        print(f"{probe.name:46s} exit={code:<3d} {verdict:34s} {summary}")
+        print(f"{'':46s} tree restored byte-identical: {restored}")
+        if invalid or code == 0 or not restored:
+            failures.append(probe.name)
+
+    print()
+    if failures:
+        print(f"MUTATION CAMPAIGN FAILED: {len(failures)}/{len(PROBES)} survived: {failures}")
+        return 1
+    print(f"MUTATION CAMPAIGN PASSED: {len(PROBES)}/{len(PROBES)} mutants killed, tree restored")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

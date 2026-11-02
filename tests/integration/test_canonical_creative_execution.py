@@ -26,7 +26,11 @@ from nexus_ai_agent.application.principal import ChannelBinding, PrincipalId
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.creative.render_jobs import CREATIVE_RENDER_JOB_TYPE, creative_render_job
-from nexus_ai_agent.creative.slideshow.ffmpeg import FfmpegUnavailableError, resolve_ffmpeg_bin
+from nexus_ai_agent.creative.slideshow.ffmpeg import (
+    FfmpegUnavailableError,
+    resolve_ffmpeg_bin,
+    sha256_file,
+)
 from nexus_ai_agent.jobs.creative_passport import CreativePassportError
 from nexus_ai_agent.storage.migrations import ensure_startup_schema
 from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
@@ -70,6 +74,11 @@ def _payload(
         "args": args or ["0", "1"],
         "workspace_dir": str(workspace),
         "input_path": str(workspace / "input.mp4"),
+        # P0 redelivery (task-nagar-workspace-redelivery-01): the worker refuses a
+        # media-bearing payload that carries no content digest, so this hand-built
+        # payload measures its own bytes exactly as the surface does. Omitting it is
+        # no longer a way to reach execution.
+        "input_sha256": sha256_file(workspace / "input.mp4"),
         "media_duration_us": 2_000_000,
         "user_id": 0,
         "chat_id": 0,

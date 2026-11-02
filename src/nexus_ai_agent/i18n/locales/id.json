@@ -77,5 +77,6 @@
   "creative.failed.caption_profile_unavailable": "❌ Teks tidak tersedia di instalasi ini (tanpa mesin suara).",
   "creative.failed.render_failed": "❌ Render gagal; coba media lebih pendek atau parameter lain.",
   "creative.failed.ffmpeg_unavailable": "❌ Mesin render tidak terpasang pada deployment ini.",
-  "creative.failed.internal": "❌ Terjadi kesalahan internal; detailnya dapat dilihat tim."
+  "creative.failed.internal": "❌ Terjadi kesalahan internal; detailnya dapat dilihat tim.",
+  "creative.request_conflict": "♻️ Pesan ini sudah masuk antrean dengan media berbeda. Kirim media baru sebagai pesan baru."
 }

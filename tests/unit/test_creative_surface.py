@@ -27,6 +27,9 @@ from nexus_ai_agent.bot.creative_surface import (
     CreativeFailure,
     CreativeRequest,
     CreativeSurfaceMapper,
+    _ensure_private_directory,
+    _StagingError,
+    _trusted_root,
     build_creative_handlers,
 )
 from nexus_ai_agent.config import settings as settings_module
@@ -358,3 +361,177 @@ def test_build_returns_only_command_handlers() -> None:
     q = _FakeQueue()
     handlers = build_creative_handlers(q)  # type: ignore[arg-type]
     assert sorted(handlers) == ["caption", "edit", "grade"]
+
+
+# -- P0 redelivery: content identity in the typed payload --------------------
+#
+# task-nagar-workspace-redelivery-01. These are the fast, pure assertions that
+# back the integration suite: the payload MUST name the bytes it was admitted
+# with, the digest MUST participate in the canonical request fingerprint, and the
+# workspace name MUST stay compatible with the worker's guard. The real-queue
+# proofs live in tests/integration/test_creative_surface_redelivery.py.
+
+
+def _digest_of(payload: dict[str, Any]) -> str:
+    import hashlib
+
+    return hashlib.sha256(Path(str(payload["input_path"])).read_bytes()).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_payload_carries_the_digest_of_the_staged_bytes(tmp_path: Path) -> None:
+    q = _FakeQueue()
+    handlers = build_creative_handlers(q)  # type: ignore[arg-type]
+    msg = _FakeMessage(31)
+    await handlers["edit"](_video_update(msg), _make_context(["trim", "0", "5"]))
+
+    payload = q.calls[0][2]
+    digest = payload["input_sha256"]
+    assert isinstance(digest, str)
+    assert len(digest) == 64 and digest == digest.lower()
+    assert digest == _digest_of(payload), "the digest must describe the actual staged file"
+
+
+@pytest.mark.asyncio
+async def test_the_input_file_is_content_addressed_not_fixed_name(tmp_path: Path) -> None:
+    """A predictable ``input.mp4`` is exactly what a redelivery used to clobber."""
+    q = _FakeQueue()
+    handlers = build_creative_handlers(q)  # type: ignore[arg-type]
+    await handlers["edit"](_video_update(_FakeMessage(32)), _make_context(["trim", "0", "5"]))
+
+    payload = q.calls[0][2]
+    staged_name = Path(str(payload["input_path"])).name
+    assert staged_name.startswith("input-")
+    assert payload["input_sha256"] in staged_name, (
+        "the immutable input's name must contain its content digest"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_different_digest_changes_the_payload_fingerprint(tmp_path: Path) -> None:
+    """The digest must be *inside* the canonical fingerprint the queue compares.
+
+    This is the mechanical reason the fix works: ``request_identity()`` hashes the
+    whole canonical payload, so two deliveries that differ only by media content
+    are two different requests and the creative conflict guard fires.
+    """
+    from nexus_ai_agent.jobs.creative_passport import request_identity
+
+    q = _FakeQueue()
+    handlers = build_creative_handlers(q)  # type: ignore[arg-type]
+    await handlers["edit"](_video_update(_FakeMessage(33)), _make_context(["trim", "0", "5"]))
+    payload = q.calls[0][2]
+
+    same = request_identity("creative_render", "k", dict(payload))
+    assert (
+        same.request_fingerprint
+        == request_identity("creative_render", "k", dict(payload)).request_fingerprint
+    )
+
+    tampered = dict(payload)
+    tampered["input_sha256"] = "b" * 64
+    assert (
+        request_identity("creative_render", "k", tampered).request_fingerprint
+        != same.request_fingerprint
+    ), "changing only the media digest MUST change the request fingerprint"
+
+
+@pytest.mark.asyncio
+async def test_media_less_payload_has_no_digest(tmp_path: Path) -> None:
+    q = _FakeQueue()
+    handlers = build_creative_handlers(q)  # type: ignore[arg-type]
+    await handlers["grade"](_update_for_message(34), _make_context(["otio"]))
+
+    payload = q.calls[0][2]
+    assert payload["input_path"] is None
+    assert payload["input_sha256"] is None
+
+
+@pytest.mark.asyncio
+async def test_identical_redelivery_reuses_the_same_input_file(tmp_path: Path) -> None:
+    q = _FakeQueue()
+    handlers = build_creative_handlers(q)  # type: ignore[arg-type]
+    context = _make_context(["trim", "0", "5"])
+    for _ in range(2):
+        await handlers["edit"](_video_update(_FakeMessage(35)), context)
+
+    first, second = q.calls[0][2], q.calls[1][2]
+    assert first["input_path"] == second["input_path"]
+    assert first["input_sha256"] == second["input_sha256"]
+    assert Path(str(first["input_path"])).exists()
+
+
+def _update_for_message(message_id: int) -> Any:
+    message = _FakeMessage(message_id)
+    message.reply_to_message = None
+    return _make_update(message)
+
+
+# -- private directory creation ---------------------------------------------
+
+
+def test_private_directory_creates_a_missing_root(tmp_path: Path) -> None:
+    """The trusted root is created on demand; a missing root is not a refusal.
+
+    ``get_settings()`` is ``lru_cache``d and creates ``creative_temp_dir`` only once
+    per process, so after a temp reaper or an emptied volume nothing else would ever
+    re-create it. The pre-change surface relied on ``parents=True`` for exactly this.
+    """
+    root = tmp_path / "creative"
+    assert not root.exists()
+    workspace = _ensure_private_directory(root / "creative_abc", root, "workspace")
+    assert root.is_dir(), "the trusted root must be created on demand"
+    assert workspace.is_dir()
+    assert workspace.stat().st_mode & 0o777 == 0o700
+
+
+def test_private_directory_still_refuses_a_symlinked_root(tmp_path: Path) -> None:
+    """Creating a missing root must not become a way to accept a redirect."""
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    root = tmp_path / "creative"
+    root.symlink_to(real, target_is_directory=True)
+    with pytest.raises(_StagingError):
+        _ensure_private_directory(root / "creative_abc", root, "workspace")
+    assert list(real.iterdir()) == [], "nothing may be written through the symlink"
+
+
+def test_trusted_root_refuses_the_configured_node_but_allows_a_symlinked_ancestor(
+    tmp_path: Path,
+) -> None:
+    """The trust boundary is the configured node, and it must not creep upwards.
+
+    Two failure modes are tested together because they pull in opposite directions:
+
+    * the *attack* — ``creative_temp_dir`` itself is a symlink, which is the only
+      thing an operator can be talked into configuring. It must be refused, and it
+      must be refused *before* ``resolve()`` can canonicalize the evidence away.
+    * the *regression* — the configured node sits under a symlinked ancestor. That
+      is ordinary deployment plumbing (macOS ``/tmp`` -> ``/private/tmp``, container
+      volume mounts). Refusing it would break real installs while buying no safety:
+      whoever can swap an ancestor of the trusted root owns the host outright.
+    """
+    real = tmp_path / "real"
+    (real / "creative").mkdir(parents=True)
+
+    # Attack: the configured node is a link to somewhere unrelated.
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    evil = tmp_path / "evil"
+    evil.symlink_to(unrelated, target_is_directory=True)
+    with pytest.raises(_StagingError):
+        _trusted_root(evil)
+
+    # Regression: only an ancestor is a link; the node itself is a real directory.
+    ancestor = tmp_path / "link" / "creative"
+    (tmp_path / "link").symlink_to(real, target_is_directory=True)
+    assert _trusted_root(ancestor) == (real / "creative").resolve()
+
+    # Same, but the node does not exist yet — creation is the caller's job.
+    assert _trusted_root(tmp_path / "link" / "not-yet") == (real / "not-yet").resolve()
+
+    # A plain file where a directory is required is a refusal, not a crash later.
+    a_file = tmp_path / "afile"
+    a_file.write_text("x")
+    with pytest.raises(_StagingError):
+        _trusted_root(a_file)

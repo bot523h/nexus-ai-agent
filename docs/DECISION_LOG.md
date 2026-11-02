@@ -2579,3 +2579,73 @@ where a style target should land, does not infer ambiguous intent with an LLM,
 and remains unreachable from any user command because nothing outside the plane
 constructs a `CreativeWork` yet.
 
+
+### D-0036 — A creative request's media is immutable once admitted: the digest joins the payload, the surface stages privately, and the worker re-measures before any engine (task-nagar-workspace-redelivery-01)
+
+*Status:* ACCEPTED · *Date:* 2026-11-01
+
+**Context.** The Telegram creative surface
+(`src/nexus_ai_agent/bot/creative_surface.py`) derived one workspace *directory*
+from the logical idempotency key (`creative:{user}:{chat}:{message}`) and, on
+every delivery, ran `shutil.rmtree(workspace)` **before** calling
+`JobQueuePort.enqueue`. The queue's `UNIQUE(idempotency_key)` and its
+`CreativeRequestConflictError` guard therefore could not help: the surface had
+already replaced (or deleted) the bytes behind a payload that a *pending* durable
+row still pointed at. `CreativeRenderPayload` carried no content identity, so two
+deliveries that differed only by media produced a byte-identical payload and the
+queue reported a harmless duplicate. Three failure modes were reproduced against
+the real queue, real SQLite and a real filesystem before any change was written:
+silent substitution under the original job id, total loss of an admitted job's
+input after an interrupted redelivery, and a write through a pre-planted symlink
+outside `creative_temp_dir`.
+
+**Decision.** The *logical request* stays the Telegram message identity; the
+*bytes* become a separate, verified attribute.
+
+1. `CreativeRenderPayload.input_sha256` carries the digest of the staged input,
+   normalized to bare lowercase hex, valid only when `input_path` is set. It is
+   evidence of content identity — never permission, authority or a lifecycle
+   opt-in — and `extra="forbid"` is preserved.
+2. Because `request_identity()` hashes the whole canonical payload, the digest
+   joins the request fingerprint: the same key with different media is a
+   *changed request* and the existing creative conflict guard refuses it. No new
+   queue, no second authority, no change to queue semantics.
+3. The surface downloads into a private per-delivery `staging_*` directory
+   (owner-only, and deliberately outside the `creative_` workspace prefix so it
+   can never masquerade as a job workspace), measures the **actual** bytes,
+   enforces the size limit against that measurement, and publishes with
+   `os.link` — an atomic **no-clobber** primitive — to a content-addressed name
+   `input-<sha256>.<ext>`. `os.replace` is never used on an input. An existing
+   destination is reused only after `lstat` proves it is a regular non-symlink
+   file whose bytes hash to the same digest.
+4. The surface never recursively deletes a workspace. Cleanup ownership is the
+   staging directory this delivery created; after publication the hard link keeps
+   the admitted input alive even if staging is removed. The post-publication
+   workspace reaper in `bot/app.py` keeps its existing, single role.
+5. The worker re-measures: `_guarded_input` inspects the **link itself** with
+   `lstat` before resolving (a symlink pointing at a regular file inside the
+   workspace would otherwise be laundered by `resolve()`), opens with
+   `O_NOFOLLOW`, and refuses any digest mismatch as typed
+   `input_integrity` **before** FFmpeg, a transcriber or an OTIO writer is
+   constructed.
+
+**Legacy rows.** `nagar/creative/handoff.py` is a second producer of
+media-bearing payloads and is the canonical free-text path, so it now measures
+and supplies the digest rather than being left to fail. Any payload that still
+has no digest — a row durably written before this change — is refused with
+`input_integrity` and requires operator reconciliation. It is never executed as
+if it had been verified, and no claim is made that existing rows were migrated.
+
+**Rejected.** A delivery-scoped workspace name (destroys duplicate collapsing);
+content-addressed *identity* (conflates "which request" with "which bytes"); an
+atomic reservation on `JobQueuePort` (a second durable authority); `os.replace`
+publication (overwrites a live input); a new global garbage collector (out of
+scope, and an unreferenced immutable directory is strictly preferable to deleting
+another job's input).
+
+**Consequence.** A repeated Telegram message can no longer overwrite, delete,
+substitute or redirect the input of an already-admitted creative job. Two
+limitations are recorded rather than hidden: a crash between publication and
+enqueue leaves at worst one orphaned `staging_*` / immutable input directory (no
+reaper is added here), and the digest is a content *witness*, not encryption — it
+proves the bytes are the admitted bytes, not that they are safe to decode.

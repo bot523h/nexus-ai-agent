@@ -77,5 +77,6 @@
   "creative.failed.caption_profile_unavailable": "❌ 이 설치에서는 자막을 사용할 수 없습니다(음성 엔진 없음).",
   "creative.failed.render_failed": "❌ 렌더링에 실패했습니다. 더 짧은 미디어나 다른 매개변수를 시도하세요.",
   "creative.failed.ffmpeg_unavailable": "❌ 이 배포에는 렌더 엔진이 설치되어 있지 않습니다.",
-  "creative.failed.internal": "❌ 내부 오류가 발생했습니다. 세부 정보는 팀에서 확인할 수 있습니다."
+  "creative.failed.internal": "❌ 내부 오류가 발생했습니다. 세부 정보는 팀에서 확인할 수 있습니다.",
+  "creative.request_conflict": "♻️ 이 메시지는 다른 미디어로 이미 대기열에 등록되었습니다. 새 미디어는 새 메시지로 보내세요."
 }
