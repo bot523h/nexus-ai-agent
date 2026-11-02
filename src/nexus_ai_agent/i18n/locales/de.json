@@ -74,6 +74,7 @@
   "creative.failed.invalid_request": "❌ Ungültige Anfrage ({detail}).",
   "creative.failed.unsupported_operation": "❌ Dieser Vorgang wird für Ein-Schritt-Renders nicht unterstützt.",
   "creative.failed.media_missing": "❌ Die bereitgestellte Datei fehlt. Sende den Befehl erneut.",
+  "creative.failed.input_integrity": "❌ Das bereitgestellte Medium konnte nicht verifiziert werden; das Rendern wurde abgelehnt. Sende das Medium erneut.",
   "creative.failed.caption_profile_unavailable": "❌ Untertitel sind in dieser Installation nicht verfügbar (keine Sprach-Engine).",
   "creative.failed.render_failed": "❌ Das Rendern ist fehlgeschlagen. Versuche kürzeres Material oder andere Parameter.",
   "creative.failed.ffmpeg_unavailable": "❌ Die Render-Engine ist in dieser Bereitstellung nicht installiert.",

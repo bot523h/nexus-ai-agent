@@ -74,6 +74,7 @@
   "creative.failed.invalid_request": "❌ Некорректный запрос ({detail}).",
   "creative.failed.unsupported_operation": "❌ Эта операция не поддерживается для быстрого рендера.",
   "creative.failed.media_missing": "❌ Подготовленный файл не найден; отправьте команду снова.",
+  "creative.failed.input_integrity": "❌ Не удалось проверить подготовленный файл; рендер отклонён. Отправьте медиа снова.",
   "creative.failed.caption_profile_unavailable": "❌ Субтитры недоступны в этой установке (нет речевого движка).",
   "creative.failed.render_failed": "❌ Рендер не удался; попробуйте более короткое медиа или другие параметры.",
   "creative.failed.ffmpeg_unavailable": "❌ Движок рендера не установлен в этом развёртывании.",

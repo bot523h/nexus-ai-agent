@@ -74,6 +74,7 @@
   "creative.failed.invalid_request": "❌ درخواست نامعتبر است ({detail}).",
   "creative.failed.unsupported_operation": "❌ این عملیات برای رندر یک‌مرحله‌ای پشتیبانی نمی‌شود.",
   "creative.failed.media_missing": "❌ فایل رسانهٔ آماده‌شده پیدا نشد؛ فرمان را دوباره بفرست.",
+  "creative.failed.input_integrity": "❌ رسانهٔ آماده‌شده تأیید نشد؛ رندر انجام نشد. رسانه را دوباره بفرست.",
   "creative.failed.caption_profile_unavailable": "❌ زیرنویس روی این نصب در دسترس نیست (موتور گفتار نصب نشده).",
   "creative.failed.render_failed": "❌ رندر ناموفق بود؛ رسانهٔ کوتاه‌تر یا پارامترهای دیگر را امتحان کن.",
   "creative.failed.ffmpeg_unavailable": "❌ موتور رندر روی این استقرار نصب نیست.",
