@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-01T20:04:10Z",
+  "updated_at": "2026-11-02T07:31:38Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -7793,7 +7793,7 @@
       "title": "Repair existing PR #298: feat(nagar-ibpc): proof-carrying live editing (NAGAR-IBPC-LIVE-EDITING-01)",
       "zone": "pr-repair-campaign",
       "priority": "P0",
-      "status": "active",
+      "status": "done",
       "scope": "Repair https://github.com/bot523h/nexus-ai-agent/pull/298 on its existing branch arena/7622c61d-nexus-ai-agent, preserving intent. Snapshot head 698131b8817b9bba5e022c9909ce5a1dd7ee3b7d; re-read live head/base/reviews/checks and all board sources before claiming. Close the independent-audit findings: typed SessionError instead of raw KeyError for unknown turn ids, offload blocking ffmpeg/probe calls via asyncio.to_thread, reconcile .agents/board.json with main, and silence the subprocess false-positive. No merge, force-push, protection changes, or approval fabrication.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -7818,11 +7818,11 @@
         "tests/integration/test_ibpc_e2e.py",
         "tests/architecture/test_ibpc_boundary.py"
       ],
-      "agent_branch": "arena/stabilization-20261031",
-      "claimed_at": "2026-11-01T20:04:10Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
+      "generation": 2,
       "owner_hint": "",
       "note": ""
     },
