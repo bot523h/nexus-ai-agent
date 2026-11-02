@@ -6,7 +6,9 @@ IBPC capsule may be created only when **all** required evidence is present:
 * the independent verifier verdict is exactly ``PASS``;
 * an immutable execution attempt identity exists (a real ``attemptN``, never a
   placeholder ``attempt?``);
-* the provenance journal is present and its hash chain verifies;
+* the provenance journal is present, its hash chain verifies, and it carries
+  **strictly positive, well-typed** record evidence for the exact job (an empty
+  record set verifies trivially, so ``chain_verified`` alone is not proof);
 * the passport is present and carries a digest.
 
 Any missing/failed element is a typed reason, and the outcome degrades to
@@ -28,6 +30,15 @@ EXECUTED_UNVERIFIED = "executed_unverified"
 #: The honest unknown-attempt spelling the service uses when no attempt provider
 #: can name the immutable attempt.  A proof gate treats it as "missing".
 UNKNOWN_ATTEMPT_SUFFIX = ":attempt?"
+
+#: A boolean is an ``int`` subclass in Python, so ``isinstance(True, int)`` holds.
+#: A record count must be a *real* integer, never a truthy non-integer.
+_INT_TYPES = (int,)
+
+
+def _positive_int(value: object) -> bool:
+    """True only for a genuine integer ``>= 1`` (a ``bool`` is not a count)."""
+    return isinstance(value, _INT_TYPES) and not isinstance(value, bool) and value >= 1
 
 
 @dataclass(frozen=True)
@@ -68,6 +79,15 @@ def evaluate_proof_gate(
         reasons.append("journal_missing")
     elif journal.get("chain_verified") is not True:
         reasons.append("journal_chain_unverified")
+    elif not _positive_int(journal.get("record_count")):
+        # An empty record set verifies trivially (``verify_chain([])`` is ok), so
+        # a verified chain without positive, well-typed record evidence is NOT
+        # proof.  A missing, null, boolean, or non-positive count fails closed.
+        reasons.append("journal_empty")
+    elif not (
+        isinstance(journal.get("head_hash"), str) and journal["head_hash"].startswith("sha256:")
+    ):
+        reasons.append("journal_head_missing")
 
     passport = provenance_reference.get("passport")
     if not isinstance(passport, dict):

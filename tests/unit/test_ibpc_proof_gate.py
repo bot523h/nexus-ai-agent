@@ -15,7 +15,11 @@ from nexus_ai_agent.nagar.ibpc.proof import (
 )
 
 _COMPLETE_PROVENANCE = {
-    "journal": {"chain_verified": True, "head_hash": "sha256:" + "a" * 64},
+    "journal": {
+        "record_count": 3,
+        "chain_verified": True,
+        "head_hash": "sha256:" + "a" * 64,
+    },
     "passport": {"passport_digest": "sha256:" + "b" * 64},
 }
 
@@ -91,11 +95,114 @@ def test_missing_passport_digest_is_a_gap() -> None:
         verdict=CheckVerdict.PASS,
         attempt_identity="job-1:attempt1",
         provenance_reference={
-            "journal": {"chain_verified": True},
+            "journal": _journal(),
             "passport": {"error": "boom"},
         },
     )
     assert "passport_digest_missing" in gate.reasons
+
+
+# -- empty-journal / record-count boundary (independent-review P0) -------------
+
+
+def _journal(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "record_count": 1,
+        "chain_verified": True,
+        "head_hash": "sha256:" + "a" * 64,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_zero_record_count_fails_closed() -> None:
+    gate = evaluate_proof_gate(
+        verdict=CheckVerdict.PASS,
+        attempt_identity="job-1:attempt1",
+        provenance_reference={
+            "journal": _journal(record_count=0, head_hash=None),
+            "passport": {"passport_digest": "sha256:" + "b" * 64},
+        },
+    )
+    assert gate.proof_complete is False
+    assert "journal_empty" in gate.reasons
+    assert gate.outcome_status == EXECUTED_UNVERIFIED
+
+
+def test_missing_record_count_fails_closed() -> None:
+    gate = evaluate_proof_gate(
+        verdict=CheckVerdict.PASS,
+        attempt_identity="job-1:attempt1",
+        provenance_reference={
+            "journal": {"chain_verified": True, "head_hash": "sha256:" + "a" * 64},
+            "passport": {"passport_digest": "sha256:" + "b" * 64},
+        },
+    )
+    assert gate.proof_complete is False
+    assert "journal_empty" in gate.reasons
+
+
+def test_null_record_count_fails_closed() -> None:
+    gate = evaluate_proof_gate(
+        verdict=CheckVerdict.PASS,
+        attempt_identity="job-1:attempt1",
+        provenance_reference={
+            "journal": _journal(record_count=None),
+            "passport": {"passport_digest": "sha256:" + "b" * 64},
+        },
+    )
+    assert "journal_empty" in gate.reasons
+
+
+def test_boolean_true_record_count_fails_closed() -> None:
+    # ``True`` is an ``int`` subclass; it must never masquerade as a positive count.
+    gate = evaluate_proof_gate(
+        verdict=CheckVerdict.PASS,
+        attempt_identity="job-1:attempt1",
+        provenance_reference={
+            "journal": _journal(record_count=True),
+            "passport": {"passport_digest": "sha256:" + "b" * 64},
+        },
+    )
+    assert "journal_empty" in gate.reasons
+
+
+def test_negative_record_count_fails_closed() -> None:
+    gate = evaluate_proof_gate(
+        verdict=CheckVerdict.PASS,
+        attempt_identity="job-1:attempt1",
+        provenance_reference={
+            "journal": _journal(record_count=-1),
+            "passport": {"passport_digest": "sha256:" + "b" * 64},
+        },
+    )
+    assert "journal_empty" in gate.reasons
+
+
+def test_positive_count_without_chain_head_fails_closed() -> None:
+    gate = evaluate_proof_gate(
+        verdict=CheckVerdict.PASS,
+        attempt_identity="job-1:attempt1",
+        provenance_reference={
+            "journal": _journal(record_count=2, head_hash=None),
+            "passport": {"passport_digest": "sha256:" + "b" * 64},
+        },
+    )
+    assert gate.proof_complete is False
+    assert "journal_head_missing" in gate.reasons
+
+
+def test_valid_non_empty_journal_passes() -> None:
+    gate = evaluate_proof_gate(
+        verdict=CheckVerdict.PASS,
+        attempt_identity="job-1:attempt1",
+        provenance_reference={
+            "journal": _journal(record_count=4),
+            "passport": {"passport_digest": "sha256:" + "b" * 64},
+        },
+    )
+    assert gate.proof_complete is True
+    assert gate.reasons == ()
 
 
 def test_all_gaps_are_reported_together() -> None:

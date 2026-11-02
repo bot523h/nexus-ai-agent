@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -53,6 +54,7 @@ from nexus_ai_agent.nagar.ibpc.intent import (
 )
 from nexus_ai_agent.nagar.ibpc.models import (
     ApprovalBinding,
+    ApprovalState,
     CompiledPlan,
     IBPCCapsule,
     PreviewManifest,
@@ -117,6 +119,11 @@ class IBPCServiceDeps:
     #: ``CanonicalCreativeIntent.create`` (pinned against the worker's own
     #: builder by tests/architecture/test_ibpc_boundary.py).
     intent_builder: Any | None = None
+    #: Bounded retention for the in-process execution-context store. Only
+    #: *terminal* contexts (approval CONSUMED/REVOKED) are ever evicted, oldest
+    #: first, so an active/pending approval can never lose its context. Set to
+    #: ``None`` to keep every context (unbounded, the legacy behaviour).
+    max_contexts: int | None = 1024
 
 
 @dataclass(frozen=True)
@@ -161,6 +168,9 @@ class _TurnContext:
     binding_ref: str = ""
     #: verified principal/project/binding resolved from server state (Phase 1)
     verified_identity: Any = None
+    #: insertion order in the context store — the eviction recency key. Only
+    #: terminal contexts are evicted, oldest first.
+    created_order: int = 0
 
 
 class IBPCService:
@@ -174,6 +184,7 @@ class IBPCService:
             now=deps.now, privacy=self._privacy, on_revoke_turn=self._approvals.revoke_turn
         )
         self._contexts: dict[str, _TurnContext] = {}
+        self._context_order = 0
         # serializes the sensitive section of execute() (identity validation ->
         # atomic consume -> turn-state transition) across concurrent requests
         self._execute_lock = asyncio.Lock()
@@ -285,23 +296,26 @@ class IBPCService:
             preview_digest=preview.preview_digest,
         )
         stored = self._approvals.create(binding)
-        self._contexts[stored.approval_id] = _TurnContext(
-            ast=ast,
-            plan=plan,
-            preview=preview,
-            readback=readback,
-            intent_digest=parsed.intent_digest,
-            source_path=src,
-            source_asset_digest=source_asset_digest,
-            duration_us=duration_us,
-            fps=fps,
-            session_id=session_id,
-            turn_id=turn_id,
-            tenant_id=session.tenant_id,
-            project_id=session.project_id,
-            principal_id=session.principal_id,
-            binding_ref=verified.channel_binding_id,
-            verified_identity=verified,
+        self._store_context(
+            stored.approval_id,
+            _TurnContext(
+                ast=ast,
+                plan=plan,
+                preview=preview,
+                readback=readback,
+                intent_digest=parsed.intent_digest,
+                source_path=src,
+                source_asset_digest=source_asset_digest,
+                duration_us=duration_us,
+                fps=fps,
+                session_id=session_id,
+                turn_id=turn_id,
+                tenant_id=session.tenant_id,
+                project_id=session.project_id,
+                principal_id=session.principal_id,
+                binding_ref=verified.channel_binding_id,
+                verified_identity=verified,
+            ),
         )
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
         self._sessions.mark_plan_preview(session_id, turn_id)
@@ -422,23 +436,26 @@ class IBPCService:
             preview_digest=preview.preview_digest,
         )
         stored = self._approvals.create(binding)
-        self._contexts[stored.approval_id] = _TurnContext(
-            ast=ast,
-            plan=plan,
-            preview=preview,
-            readback=readback,
-            intent_digest=parsed.intent_digest,
-            source_path=src,
-            source_asset_digest=sha256_file(src),
-            duration_us=info.duration_us,
-            fps=fps,
-            session_id=session_id,
-            turn_id=turn_id,
-            tenant_id=session.tenant_id,
-            project_id=session.project_id,
-            principal_id=session.principal_id,
-            binding_ref=verified.channel_binding_id,
-            verified_identity=verified,
+        self._store_context(
+            stored.approval_id,
+            _TurnContext(
+                ast=ast,
+                plan=plan,
+                preview=preview,
+                readback=readback,
+                intent_digest=parsed.intent_digest,
+                source_path=src,
+                source_asset_digest=sha256_file(src),
+                duration_us=info.duration_us,
+                fps=fps,
+                session_id=session_id,
+                turn_id=turn_id,
+                tenant_id=session.tenant_id,
+                project_id=session.project_id,
+                principal_id=session.principal_id,
+                binding_ref=verified.channel_binding_id,
+                verified_identity=verified,
+            ),
         )
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
         self._sessions.mark_plan_preview(session_id, turn_id)
@@ -614,18 +631,103 @@ class IBPCService:
         return workspace
 
     def _stage_source(self, source: Path, workspace: Path) -> Path:
+        """Copy the admitted source into a private, no-follow workspace file.
+
+        The source is opened with ``O_RDONLY | O_NOFOLLOW`` (a symlinked/replaced
+        source is refused) and the workspace directory is opened with
+        ``O_DIRECTORY | O_NOFOLLOW`` so the *destination* cannot be a symlink
+        redirect. The bytes are read from that already-validated descriptor, so a
+        rename/symlink swap of the path *after* the open cannot change what is
+        copied — the descriptor pins the exact admitted inode."""
         workspace.mkdir(parents=True, exist_ok=True)
         destination = workspace / "input.mp4"
-        if source.resolve() != destination.resolve():
-            shutil.copy2(source, destination)
+        src_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            src_fd = os.open(source, src_flags)
+        except OSError as exc:
+            raise SessionError("source_unreadable", f"{source}: {exc}") from exc
+        try:
+            dst_fd = os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            try:
+                with os.fdopen(src_fd, "rb", closefd=True) as src_file:
+                    src_fd = -1  # ownership transferred to src_file
+                    with os.fdopen(dst_fd, "wb", closefd=True) as dst_file:
+                        dst_fd = -1
+                        shutil.copyfileobj(src_file, dst_file)
+                        dst_file.flush()
+                        os.fsync(dst_file.fileno())
+            finally:
+                for fd in (src_fd, dst_fd):
+                    if fd >= 0:
+                        os.close(fd)
+        except OSError as exc:
+            raise SessionError("staging_failed", f"{destination}: {exc}") from exc
         return destination
 
-    def _verify_artifact(self, ctx: _TurnContext, artifact_path: Path) -> tuple[str, Any]:
+    def _sha256_fd(self, path: Path) -> str:
+        """Stream a file's digest without following a final symlink."""
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        try:
+            digest = hashlib.sha256()
+            with os.fdopen(fd, "rb", closefd=True) as handle:
+                fd = -1
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return "sha256:" + digest.hexdigest()
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+    def _store_context(self, approval_id: str, ctx: _TurnContext) -> None:
+        """Insert a context and, when the store is bounded, evict the oldest
+        *terminal* contexts so the in-process store cannot grow without bound.
+
+        A context is evictable only when its approval is CONSUMED (execution
+        finished) or REVOKED (cancel/interrupt/stale). PENDING/APPROVED contexts
+        are never evicted, so an active or awaiting execution can always resolve
+        its context; a replay of a consumed approval is refused by the ledger
+        before any context lookup, so eviction cannot re-enable replay."""
+        ctx.created_order = self._context_order
+        self._context_order += 1
+        self._contexts[approval_id] = ctx
+        limit = self._deps.max_contexts
+        if limit is None or len(self._contexts) <= limit:
+            return
+        evictable = sorted(
+            (
+                (c.created_order, aid)
+                for aid, c in self._contexts.items()
+                if self._is_terminal_context(aid)
+            ),
+        )
+        overflow = len(self._contexts) - limit
+        for _, aid in evictable[:overflow]:
+            del self._contexts[aid]
+
+    def _is_terminal_context(self, approval_id: str) -> bool:
+        try:
+            binding = self._approvals.get(approval_id)
+        except ApprovalError:
+            return True  # no live binding → nothing can resolve it → evictable
+        return binding.state in (ApprovalState.CONSUMED, ApprovalState.REVOKED)
+
+    def _verify_artifact(
+        self, ctx: _TurnContext, artifact_path: Path, input_path: Path
+    ) -> tuple[str, Any]:
         """Hash the artifact and run the independent verifier. Synchronous and
-        ffmpeg-backed, so callers run it via ``asyncio.to_thread``."""
+        ffmpeg-backed, so callers run it via ``asyncio.to_thread``.
+
+        Verification reads the **staged, immutable input copy** (never the
+        mutable origin path), so a filesystem swap of the source after admission
+        cannot change the evidence the verifier is derived from."""
         artifact_digest = sha256_file(artifact_path)
         report = verify_keep(
-            ctx.source_path,
+            input_path,
             artifact_path,
             scope=ctx.ast.scope,
             binary=self._deps.verifier_binary,
@@ -700,10 +802,36 @@ class IBPCService:
                     detail=f"turn state {turn.turn_state.value} cannot execute "
                     "(cancelled/interrupted/partial/stale turns never execute)",
                 )
+            # Reservation is inside the lock: cancel()/interrupt() refuse while a
+            # turn is EXECUTING, so no cancel can land between this transition and
+            # the state read-back below.  Without that, a cancel racing the
+            # (lock-free) staging/enqueue window could terminalise the turn and a
+            # later mark_failed would raise an uncaught TransitionError.
             self._sessions.mark_executing(session_id, turn_id)
+            # Pure read-back under the lock: the authoritative state at reservation.
+            reserved = self._sessions.get_session(session_id).turns.get(turn_id)
+            if reserved is None or reserved.turn_state is not TurnState.EXECUTING:
+                return ExecutionOutcome(
+                    status="refused", detail="turn is no longer in an executing state"
+                )
         workspace = self._guarded_workspace(approval_id)
         # staging copies the source file (synchronous I/O) — keep it off the loop
-        input_path = await asyncio.to_thread(self._stage_source, ctx.source_path, workspace)
+        try:
+            input_path = await asyncio.to_thread(self._stage_source, ctx.source_path, workspace)
+        except SessionError as exc:
+            self._sessions.mark_failed(session_id, turn_id)
+            return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
+        # The staged copy must equal the admitted content identity. A concurrent
+        # rename/symlink swap of the source between admission and staging would
+        # otherwise let the worker render bytes the approval never covered.
+        staged_digest = await asyncio.to_thread(self._sha256_fd, input_path)
+        if staged_digest != ctx.source_asset_digest:
+            self._sessions.mark_failed(session_id, turn_id)
+            return ExecutionOutcome(
+                status="refused",
+                detail="source_changed_during_staging: staged content does not match the "
+                "admitted asset digest",
+            )
         in_us = int(ctx.ast.params["in_point_us"])
         out_us = int(ctx.ast.params["out_point_us"])
         idempotency_key = f"ibpc:{approval_id}"
@@ -750,7 +878,9 @@ class IBPCService:
         artifact_path = Path(str(result["artifact_path"]))
         # Re-measure the artifact and run the independent verifier off the event
         # loop: both are synchronous and shell out to ffmpeg.
-        artifact_digest, report = await asyncio.to_thread(self._verify_artifact, ctx, artifact_path)
+        artifact_digest, report = await asyncio.to_thread(
+            self._verify_artifact, ctx, artifact_path, input_path
+        )
         attempt_identity = await self._attempt_identity(job_id)
         provenance_reference = await asyncio.to_thread(self._provenance_reference, job_id)
         # Phase 2: rendering completion is not proof. The proof gate decides
@@ -841,13 +971,20 @@ class IBPCService:
         journal = self._deps.journal
         if journal is not None:
             try:
+                # Per-job records are the evidence; integrity is verified against
+                # the WHOLE chain.  A per-job subset is not itself a gapless chain
+                # (its seqs interleave with other jobs), so verifying the subset
+                # with ``verify_chain`` would falsely report "unverified" for any
+                # job that is not first in the journal.  The empty set, by
+                # contrast, verifies trivially — hence record_count is carried
+                # explicitly and the proof gate requires it to be positive.
                 records = journal.records_for_job(job_id)
-                chain = verify_chain(records)
+                global_chain = verify_chain(journal.all_records())
                 reference["journal"] = {
                     "record_count": len(records),
-                    "head_hash": chain.head_hash,
-                    "chain_verified": chain.ok,
-                    "first_broken_seq": chain.first_broken_seq,
+                    "head_hash": records[-1].record_hash if records else None,
+                    "chain_verified": global_chain.ok,
+                    "first_broken_seq": global_chain.first_broken_seq,
                 }
             except Exception as exc:  # noqa: BLE001 — evidence degrades honestly
                 reference["journal"] = {"error": f"{type(exc).__name__}: {exc}"}

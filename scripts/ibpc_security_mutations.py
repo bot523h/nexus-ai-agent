@@ -278,6 +278,22 @@ MUTATIONS: tuple[Mutation, ...] = (
         "an unverified provenance chain must withhold a proof-bearing capsule",
     ),
     Mutation(
+        "proof_gate_ignores_empty_journal",
+        IBPC / "proof.py",
+        (
+            (
+                '    elif not _positive_int(journal.get("record_count")):\n'
+                "        # An empty record set verifies trivially (``verify_chain([])`` is ok), so\n"
+                "        # a verified chain without positive, well-typed record evidence is NOT\n"
+                "        # proof.  A missing, null, boolean, or non-positive count fails closed.\n"
+                '        reasons.append("journal_empty")',
+                "    elif False:  # mutation: empty journal treated as proof\n"
+                '        reasons.append("journal_empty")',
+            ),
+        ),
+        "an empty provenance journal must never be treated as complete proof",
+    ),
+    Mutation(
         "proof_gate_ignores_attempt",
         IBPC / "proof.py",
         (
@@ -312,6 +328,21 @@ MUTATIONS: tuple[Mutation, ...] = (
             ),
         ),
         "an incomplete proof must never be reported as verified success",
+    ),
+    Mutation(
+        "staging_no_follow_removed",
+        IBPC / "service.py",
+        (
+            (
+                '        src_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)',
+                "        src_flags = os.O_RDONLY",
+            ),
+            (
+                '                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),',
+                "                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,",
+            ),
+        ),
+        "staging must open source and destination with O_NOFOLLOW (no symlink redirect)",
     ),
 )
 

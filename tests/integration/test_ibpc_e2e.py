@@ -67,7 +67,8 @@ RATE = 30
 SECONDS = 2.0
 
 
-def _clip(path: Path) -> None:
+def _clip(path: Path, *, seconds: float | None = None) -> None:
+    duration = SECONDS if seconds is None else seconds
     try:
         binary = resolve_ffmpeg_bin()
     except FfmpegUnavailableError as exc:
@@ -82,11 +83,11 @@ def _clip(path: Path) -> None:
             "-f",
             "lavfi",
             "-i",
-            f"testsrc=duration={SECONDS}:size={SIZE}:rate={RATE}",
+            f"testsrc=duration={duration}:size={SIZE}:rate={RATE}",
             "-f",
             "lavfi",
             "-i",
-            f"sine=frequency=440:duration={SECONDS}",
+            f"sine=frequency=440:duration={duration}",
             "-c:v",
             "libx264",
             "-preset",
@@ -480,6 +481,113 @@ async def test_concurrent_double_execute_has_exactly_one_winner(harness, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_cancel_racing_the_staging_window_is_clean(harness, tmp_path: Path) -> None:
+    """P1 (independent review): a cancel/interrupt that lands after the turn is
+    reserved must not corrupt the execution.
+
+    ``cancel``/``interrupt`` refuse while a turn is EXECUTING, so once the
+    reservation transition commits no cancel can terminalise the turn in the
+    lock-free staging window. We drive the race deterministically by attempting
+    the cancel from inside the staging hook (the exact window) and assert it is
+    refused, the execution completes, and exactly one job is enqueued — no
+    unhandled ``TransitionError`` and no contradictory state."""
+    from nexus_ai_agent.nagar.ibpc.session import TransitionError
+
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+
+    seen: dict[str, object] = {}
+    original_stage = service._stage_source
+
+    def _stage_then_cancel(src, workspace):
+        # The exact window: after reserve/consume, before enqueue.
+        try:
+            service.sessions.cancel(sid, "turn-1")
+            seen["cancel"] = "allowed"
+        except TransitionError as exc:
+            seen["cancel"] = exc.reason
+        return original_stage(src, workspace)
+
+    service._stage_source = _stage_then_cancel
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+
+    assert seen["cancel"] == "executing"  # the cancel was refused, not applied
+    assert outcome.status in ("executed", "executed_unverified"), outcome.detail
+    assert len(queue.job_ids()) == 1
+    assert service.sessions.get_turn(sid, "turn-1").turn_state.value == "EXECUTED"
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_execute_refuses_and_enqueues_nothing(harness, tmp_path: Path) -> None:
+    """A cancel committed before execute() must refuse the execution and leave
+    the queue empty (revocation is honoured; nothing is enqueued)."""
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+    service.sessions.cancel(sid, "turn-1")
+
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert outcome.status == "refused"
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_enqueue_failure_marks_failed_without_leaking(harness, tmp_path: Path) -> None:
+    """An enqueue failure must surface as a typed refusal, terminalise the turn
+    as FAILED, and never raise an unhandled state-transition exception."""
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+
+    async def _boom(*, job_type, idempotency_key, payload):
+        raise RuntimeError("queue unavailable")
+
+    service._deps.queue.enqueue = _boom  # type: ignore[assignment]
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+
+    assert outcome.status == "refused"
+    assert "enqueue_failed" in outcome.detail
+    assert queue.job_ids() == []
+    # read the raw turn (get_turn refuses terminal turns by design)
+    turn = service.sessions.get_session(sid).turns["turn-1"]
+    assert turn.turn_state.value == "FAILED"
+
+
+@pytest.mark.asyncio
 async def test_execute_runs_blocking_media_work_off_the_event_loop(harness, tmp_path: Path) -> None:
     """``_resolve_identity`` / ``_stage_source`` / ``_verify_artifact`` /
     ``_provenance_reference`` are synchronous and file/ffmpeg-backed.  ``execute``
@@ -760,8 +868,8 @@ async def test_proof_gate_downgrades_when_verifier_is_not_pass(harness, tmp_path
     # the real pipeline: wrap _verify_artifact to rewrite only the verdict.
     original = service._verify_artifact
 
-    def _downgrade(ctx, artifact_path):
-        digest, report = original(ctx, artifact_path)
+    def _downgrade(ctx, artifact_path, input_path):
+        digest, report = original(ctx, artifact_path, input_path)
         downgraded = VerifierReport(
             scope_digest=report.scope_digest,
             source_digest=report.source_digest,
@@ -780,3 +888,320 @@ async def test_proof_gate_downgrades_when_verifier_is_not_pass(harness, tmp_path
     assert outcome.capsule.proof_status == "unverified"
     assert "verdict_not_pass:INCONCLUSIVE" in outcome.capsule.proof_gaps
     assert "verdict_not_pass:INCONCLUSIVE" in outcome.detail
+
+
+@pytest.mark.asyncio
+async def test_empty_journal_never_mints_verified_capsule(harness, tmp_path: Path) -> None:
+    """P0 (independent review): a real execution whose provenance journal holds
+    ZERO records for the job must never be reported as verified proof.
+
+    ``verify_chain([])`` returns ``ok=True`` (a vacuous truth), so a gate that
+    trusts ``chain_verified`` alone would mint a proof-bearing capsule with no
+    evidence. We swap the service's journal for a real-but-empty one so the job
+    runs and the observer writes to the *old* journal only — the proof gate must
+    then see ``record_count == 0`` and withhold the verified claim."""
+    from nexus_ai_agent.provenance.journal import CausalJournal
+
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    # A real journal with no records for this job (separate file; the wired
+    # observer keeps writing to the original journal, which the service no
+    # longer references).
+    service._deps.journal = CausalJournal(tmp_path / "empty.causal.sqlite3")
+
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+
+    assert queue.job_ids() == [outcome.job_id]  # the job really ran
+    assert outcome.capsule is not None
+    assert outcome.capsule.provenance_reference["journal"]["record_count"] == 0
+    assert outcome.capsule.proof_status == "unverified"
+    assert "journal_empty" in outcome.capsule.proof_gaps
+    assert outcome.status == "executed_unverified"
+
+
+@pytest.mark.asyncio
+async def test_journal_records_must_match_job(harness, tmp_path: Path) -> None:
+    """P0 (independent review): the proof gate must accept a job whose records
+    are interleaved with other jobs' records in the shared chain.
+
+    ``records_for_job(job)`` is NOT itself a gapless chain (its seqs skip the
+    other jobs' rows), so verifying that subset with ``verify_chain`` reports a
+    false ``sequence gap`` for any job that is not first in the journal. The
+    reference must therefore verify the WHOLE chain and require the per-job
+    record count to be positive — a second execution must still reach verified
+    proof."""
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+
+    async def _run_one(turn: str) -> object:
+        sid = _open_session(service, principal)
+        result = service.submit_text_intent(
+            sid,
+            turn,
+            sequence_number=1,
+            text="trim from 0.5 to 1.5 seconds",
+            asset_id="src",
+            source_path=str(source),
+        )
+        assert isinstance(result, PipelineResult)
+        service.approve(sid, turn, result.approval_id, principal_id=principal)
+        return await service.execute(sid, turn, result.approval_id, principal_id=principal)
+
+    first = await _run_one("turn-1")
+    second = await _run_one("turn-2")
+    for outcome in (first, second):
+        assert outcome.capsule is not None
+        journal_ref = outcome.capsule.provenance_reference["journal"]
+        # interleaved chain still verifies globally, and the per-job evidence is
+        # positive — never a false "unverified" from a subset sequence gap.
+        assert journal_ref["chain_verified"] is True
+        assert journal_ref["record_count"] > 0
+        assert journal_ref["head_hash"].startswith("sha256:")
+        # the journal must contribute NO gap (the lossy lane's verdict may still
+        # be INCONCLUSIVE, but that is never confused with missing provenance).
+        assert "journal_chain_unverified" not in outcome.capsule.proof_gaps
+        assert "journal_empty" not in outcome.capsule.proof_gaps
+        assert "journal_missing" not in outcome.capsule.proof_gaps
+        assert "journal_head_missing" not in outcome.capsule.proof_gaps
+
+
+def _service_with_limit(service, limit):
+    import dataclasses
+
+    from nexus_ai_agent.nagar.ibpc.service import IBPCService
+
+    return IBPCService(dataclasses.replace(service._deps, max_contexts=limit))
+
+
+def test_context_store_retains_active_and_evicts_terminal(harness, tmp_path: Path) -> None:
+    """P2 (independent review): the in-process context store must be bounded,
+    but only *terminal* contexts may ever be evicted. An active (PENDING or
+    APPROVED) context is never evicted, and eviction never re-enables replay."""
+    from nexus_ai_agent.nagar.ibpc.models import ApprovalState
+
+    service, _, _, _, principal = harness
+    bounded = _service_with_limit(service, 2)
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(bounded, principal)
+
+    def _submit(turn: str, seq: int):
+        return bounded.submit_text_intent(
+            sid,
+            turn,
+            sequence_number=seq,
+            text="trim from 0.5 to 1.5 seconds",
+            asset_id="src",
+            source_path=str(source),
+        )
+
+    # three live approvals, limit 2 → nothing is evictable (all PENDING).
+    results = [_submit(f"turn-{i}", i) for i in (1, 2, 3)]
+    assert len(bounded._contexts) == 3  # active contexts are never evicted
+
+    # cancel the oldest → it becomes terminal (REVOKED) and evictable.
+    oldest = results[0].approval_id
+    bounded.sessions.cancel(sid, "turn-1")
+    assert bounded.approvals.get(oldest).state is ApprovalState.REVOKED
+
+    # a fourth submission over the limit evicts the oldest *terminal* context.
+    _submit("turn-4", 4)
+    assert oldest not in bounded._contexts  # terminal context reclaimed
+    for r in results[1:]:
+        assert r.approval_id in bounded._contexts  # active contexts retained
+
+
+@pytest.mark.asyncio
+async def test_context_eviction_does_not_re_enable_replay(harness, tmp_path: Path) -> None:
+    """Evicting a consumed context must never let a consumed approval execute
+    again: the ledger replay refusal fires before any context lookup."""
+    service, queue, _, _, principal = harness
+    bounded = _service_with_limit(service, 1)
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(bounded, principal)
+
+    first = bounded.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(first, PipelineResult)
+    bounded.approve(sid, "turn-1", first.approval_id, principal_id=principal)
+    outcome = await bounded.execute(sid, "turn-1", first.approval_id, principal_id=principal)
+    assert outcome.status in ("executed", "executed_unverified"), outcome.detail
+
+    # force eviction of the consumed context with a fresh live submission.
+    bounded.submit_text_intent(
+        sid,
+        "turn-2",
+        sequence_number=2,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert first.approval_id not in bounded._contexts  # consumed → reclaimed
+
+    replay = await bounded.execute(sid, "turn-1", first.approval_id, principal_id=principal)
+    assert replay.status == "refused"
+    # the consumed approval is never re-executable: the attempt is refused
+    # (unknown_context after eviction; the ledger replay refusal otherwise) and
+    # NO second job is ever enqueued.
+    assert replay.job_id is None
+    assert len(queue.job_ids()) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_swap_during_staging_is_refused(harness, tmp_path: Path) -> None:
+    """P1 (independent review): a filesystem swap of the source *before* the
+    staging copy is refused — the staged content identity is re-checked against
+    the admitted digest, so bytes the approval never covered are never rendered.
+
+    The swap is driven in the real TOCTOU window (after admission, before the
+    copy) via a staging hook, not by a sleep."""
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+
+    other = tmp_path / "other.mp4"
+    _clip(other, seconds=3.0)  # different content → different digest
+    original_stage = service._stage_source
+
+    def _swap_then_stage(src, workspace):
+        source.write_bytes(other.read_bytes())  # swap BEFORE the copy
+        return original_stage(src, workspace)
+
+    service._stage_source = _swap_then_stage
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert outcome.status == "refused"
+    assert "source_changed_during_staging" in outcome.detail
+    assert queue.job_ids() == []  # nothing rendered
+
+
+@pytest.mark.asyncio
+async def test_symlinked_source_is_refused(harness, tmp_path: Path) -> None:
+    """A symlinked source path is refused at staging (``O_NOFOLLOW``): the bytes
+    rendered are always the admitted inode, never a redirect."""
+    service, queue, _, _, principal = harness
+    real = tmp_path / "real.mp4"
+    _clip(real)
+    link = tmp_path / "link.mp4"
+    link.symlink_to(real)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(link),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert outcome.status == "refused"
+    assert "source_unreadable" in outcome.detail or "source_changed" in outcome.detail
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_staged_digest_mismatch_refuses_before_enqueue(harness, tmp_path: Path) -> None:
+    """If the staged copy's content identity ever diverges from the admitted
+    digest, execution must be refused BEFORE enqueue (nothing rendered)."""
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+
+    other = tmp_path / "other.mp4"
+    _clip(other, seconds=3.0)
+    original_stage = service._stage_source
+
+    def _stage_wrong_bytes(src, workspace):
+        staged = original_stage(src, workspace)
+        staged.write_bytes(other.read_bytes())  # simulate a substituted staged copy
+        return staged
+
+    service._stage_source = _stage_wrong_bytes
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert outcome.status == "refused"
+    assert "source_changed_during_staging" in outcome.detail
+    assert queue.job_ids() == []  # nothing was enqueued
+
+
+@pytest.mark.asyncio
+async def test_verifier_reads_the_staged_immutable_input(harness, tmp_path: Path) -> None:
+    """The independent verifier must be derived from the staged, immutable input
+    copy — a swap of the mutable origin path after staging must not change the
+    evidence."""
+    service, queue, _, _, principal = harness
+    source = tmp_path / "source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "turn-1",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "turn-1", result.approval_id, principal_id=principal)
+
+    other = tmp_path / "other.mp4"
+    _clip(other, seconds=3.0)
+    original_verify = service._verify_artifact
+    seen: dict[str, str] = {}
+
+    def _verify(ctx, artifact_path, input_path):
+        # the verifier's source argument must be the staged copy, not the origin
+        seen["input_path"] = str(input_path)
+        seen["origin"] = str(ctx.source_path)
+        # swap the mutable origin right before the verifier decodes: irrelevant,
+        # because it decodes the staged copy.
+        ctx.source_path.write_bytes(other.read_bytes())
+        return original_verify(ctx, artifact_path, input_path)
+
+    service._verify_artifact = _verify
+    outcome = await service.execute(sid, "turn-1", result.approval_id, principal_id=principal)
+    assert seen["input_path"] != seen["origin"]
+    assert seen["input_path"].endswith("input.mp4")
+    assert outcome.status in ("executed", "executed_unverified"), outcome.detail

@@ -715,3 +715,45 @@ class TestPersistenceTruth:
         with pytest.raises(ApprovalError):
             service2.approvals.get(res.approval_id)
         assert service2._contexts == {}
+
+
+# --------------------------------------------------------------------------- #
+# Phase E (P1): descriptor-pinned staging — no-follow + content binding
+# --------------------------------------------------------------------------- #
+
+
+def test_staging_refuses_a_symlinked_source(service_env, tmp_path: Path) -> None:
+    """The source is opened ``O_RDONLY | O_NOFOLLOW``: a symlinked source is
+    refused (never followed), so the bytes staged are the admitted inode."""
+    service, _queue, clip, _revision, _authority = service_env
+    link = tmp_path / "link.mp4"
+    link.symlink_to(clip)
+    workspace = tmp_path / "ws_abc"
+    with pytest.raises(SessionError) as exc:
+        service._stage_source(link, workspace)
+    assert exc.value.reason == "source_unreadable"
+
+
+def test_staging_refuses_a_symlinked_destination(service_env, tmp_path: Path) -> None:
+    """The destination is opened with ``O_NOFOLLOW`` too: a planted symlink at
+    the workspace's ``input.mp4`` cannot redirect the staged write."""
+    service, _queue, clip, _revision, _authority = service_env
+    outside = tmp_path / "outside_target"
+    outside.write_bytes(b"do-not-touch")
+    workspace = tmp_path / "ws_def"
+    workspace.mkdir()
+    (workspace / "input.mp4").symlink_to(outside)
+    with pytest.raises(SessionError) as exc:
+        service._stage_source(clip, workspace)
+    assert exc.value.reason == "staging_failed"
+    assert outside.read_bytes() == b"do-not-touch"  # the redirect target is untouched
+
+
+def test_staging_binds_content_identity(service_env, tmp_path: Path) -> None:
+    """A clean staging copy is byte-identical to the source, and ``_sha256_fd``
+    reads it without following a final symlink."""
+    service, _queue, clip, _revision, _authority = service_env
+    workspace = tmp_path / "ws_ghi"
+    staged = service._stage_source(clip, workspace)
+    assert staged.read_bytes() == clip.read_bytes()
+    assert service._sha256_fd(staged) == service._sha256_fd(clip)
