@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-02T20:01:41Z",
+  "updated_at": "2026-11-02T22:24:53Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1120,6 +1120,14 @@
         "OPERATION_TRUTH.json"
       ],
       "note": "Registered 2026-10-31 by arena/7622c61d-nexus-ai-agent (mission NAGAR-IBPC-SECURITY-CLOSURE-01) on top of active claim task-ibpc-live-editing-01 (same branch/PR #298). Out of scope: task-267 (diagnostics/truth.py), task-281 (cognition eval files), PR #273 files. The ci.yml edit is limited to the trust-mutations job install steps; the mutation script itself is not weakened."
+    },
+    {
+      "id": "storage-r2-validation",
+      "description": "NEXUS-OMNI: R2 bucket-name fail-closed validation",
+      "paths": [
+        "src/nexus_ai_agent/storage/providers/r2.py",
+        "tests/unit/test_r2_provider.py"
+      ]
     }
   ],
   "claims": [
@@ -7952,6 +7960,36 @@
         "P1 TOCTOU: _stage_source opens source O_RDONLY|O_NOFOLLOW and destination O_NOFOLLOW; staged copy re-hashed against the admitted asset digest before enqueue; verifier reads the staged immutable copy",
         "Independent verification (Jules session 9431742613443431271) VERIFIED all four with file:line evidence; mutation harness extended with staging_no_follow_removed (23/23 killed)"
       ]
+    },
+    {
+      "task": "task-omni-r2-bucket-validation-01",
+      "title": "R2 bucket name: fail closed with an actionable message",
+      "title_fa": "نام باکت R2: شکست بسته با پیام قابل‌اقدام",
+      "zone": "storage-r2-validation",
+      "priority": "P2",
+      "status": "active",
+      "scope": "maintenance housekeeping (2026-11-02) failed with an opaque boto3 ParamValidationError 'Invalid bucket name' because R2Provider.is_configured() accepts any non-empty R2_BUCKET. Validate the bucket (3-63 chars, lowercase alphanumeric/hyphen, alphanumeric ends) and refuse at the boundary with a ProviderUnavailable that names the setting.",
+      "scope_fa": "خانه‌تکانی نگهداری (۲۰۲۶-۱۱-۰۲) با خطای مبهم boto3 ParamValidationError «Invalid bucket name» شکست خورد، چون R2Provider.is_configured() هر R2_BUCKET ناتهی را می‌پذیرد. اعتبارسنجی باکت (۳ تا ۶۳ نویسه، حروف کوچک/عدد/خط تیره، شروع و پایان الفبایی‌عدد) و رد در مرز با ProviderUnavailable که نام تنظیم را می‌آورد.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "an invalid R2_BUCKET raises ProviderUnavailable naming R2_BUCKET before any boto3 client call",
+        "a valid bucket keeps every existing behaviour (all prior tests green)",
+        "no secret value or bucket value is written to logs or error messages beyond the operator-supplied name"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_r2_provider.py tests/unit/test_housekeeping_contract.py tests/unit/test_maintenance_backup.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/providers/r2.py",
+        "tests/unit/test_r2_provider.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-r2-bucket-validation",
+      "claimed_at": "2026-11-02T22:24:53Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check exit 0 (disjoint) before claiming."
     }
   ],
   "deferred_log": [
