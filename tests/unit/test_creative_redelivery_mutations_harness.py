@@ -107,3 +107,48 @@ def test_the_harness_takes_no_argument_that_can_select_tests() -> None:
     assert "add_argument" in source
     # Exactly one parser option, and it is the listing flag.
     assert source.count("add_argument") == 1
+
+
+# ── a kill must be an assertion failure, not a broken mutant ──
+
+
+def test_an_unparsable_mutant_is_not_a_kill() -> None:
+    """The campaign must refuse a SyntaxError-shaped "kill".
+
+    M5 was reported as a kill while the mutant was not valid Python at all: the
+    probe replaced an opening docstring quote, leaving an unterminated literal, so
+    pytest died in collection (exit 2, ``errors``) rather than failing an
+    assertion. That is evidence the probe is wrong, not that the invariant is
+    defended, and it must never be counted.
+    """
+    import tempfile
+    from pathlib import Path
+
+    harness = _harness()
+    with tempfile.TemporaryDirectory() as tmp:
+        broken = Path(tmp) / "mutant.py"
+        broken.write_text(
+            'def f():\n    """opening quote never closed\n    return 1\n', encoding="utf-8"
+        )
+        assert harness._parses((broken,)) is False
+
+        healthy = Path(tmp) / "healthy.py"
+        healthy.write_text("def f() -> int:\n    return 1\n", encoding="utf-8")
+        assert harness._parses((healthy,)) is True
+
+
+def test_the_m5_probe_removes_the_guard_call_and_stays_parsable() -> None:
+    """The surface probe must disable the *call*, not shred the docstring.
+
+    A probe that edits prose rather than behaviour measures the parser, not the
+    security invariant.
+    """
+    import ast
+
+    harness = _harness()
+    probe = next(p for p in harness.PROBES if p.name.startswith("M5-surface-workspace-symlink"))
+    source = (harness.ROOT / probe.edits[0].path).read_text(encoding="utf-8")
+    assert probe.edits[0].old in source, "anchor must exist"
+    mutated = source.replace(probe.edits[0].old, probe.edits[0].new, 1)
+    ast.parse(mutated)  # must not raise
+    assert "refuse_symlinked_node(path, label)" in mutated

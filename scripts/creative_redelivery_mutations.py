@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import os
 import re
@@ -122,10 +123,15 @@ PROBES: tuple[Probe, ...] = (
         edits=(
             Edit(
                 SURFACE,
-                "def _refuse_symlinked_directory(path: Path, label: str) -> None:\n"
-                '    """Refuse a directory component that is a symlink (pre-planted redirect).',
-                "def _refuse_symlinked_directory(path: Path, label: str) -> None:\n"
-                "    return  # MUTANT: a symlinked directory component is accepted",
+                "    try:\n"
+                "        refuse_symlinked_node(path, label)\n"
+                "    except CreativeRenderError as exc:\n"
+                '        raise _StagingError("media_missing", exc.detail) from exc',
+                "    return  # MUTANT: a symlinked directory component is accepted\n"
+                "    try:\n"
+                "        refuse_symlinked_node(path, label)\n"
+                "    except CreativeRenderError as exc:\n"
+                '        raise _StagingError("media_missing", exc.detail) from exc',
             ),
         ),
         tests=(REDELIVERY, SURFACE_UNIT),
@@ -226,6 +232,25 @@ def _sha256(path: Path) -> str:
 #: died in ``tests/conftest.py`` with exit 4 and the campaign reported a
 #: vacuous 6/6 pass.
 HARNESS_ERRORS = frozenset({3, 4})
+
+#: A kill is only *evidence* when the mutant failed an assertion in a test that ran.
+#: pytest reports collection/import failures as ``errors`` and exits 2 -- which is
+#: indistinguishable from "the mutation broke the module" unless it is checked. A
+#: mutant that cannot even be parsed kills nothing: it proves the probe is wrong,
+#: not that the invariant is defended. ``M5`` was reported as a kill for exactly
+#: this reason (an unterminated docstring produced a SyntaxError), so the campaign
+#: now refuses that class of non-verdict outright.
+INVALID_PROBE = "INVALID PROBE (mutant does not parse / collection error, not a kill)"
+
+
+def _parses(paths: tuple[Path, ...]) -> bool:
+    """Every mutated module must still be importable Python."""
+    for path in paths:
+        try:
+            ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            return False
+    return True
 
 
 #: A test selection is a repository-relative ``.py`` path, optionally followed by
@@ -334,21 +359,34 @@ def main() -> int:
             if not applied:
                 failures.append(f"{probe.name} (anchor missing)")
                 continue
-            code, summary = _run(probe.tests)
+            # Parse gate BEFORE pytest: a mutant that is not valid Python cannot
+            # produce a meaningful verdict, and must never be counted as a kill.
+            parses_clean = _parses(tuple(touched))
+            if not parses_clean:
+                code, summary = -1, "mutant does not parse"
+            else:
+                code, summary = _run(probe.tests)
         finally:
             for target, original in touched.items():
                 target.write_bytes(original)
 
         restored = all(_sha256(target) == digest for target, digest in digests.items())
-        if code in HARNESS_ERRORS:
-            verdict = "HARNESS ERROR (pytest could not run)"
+        # A kill counts only when the tests RAN and an assertion failed. An
+        # unparsable mutant, a collection error (pytest exit 2 with ``errors``),
+        # or an internal/usage error are all non-verdicts.
+        collection_error = code == 2 and " error" in summary
+        invalid = (not parses_clean) or code in HARNESS_ERRORS or collection_error
+        if invalid:
+            verdict = INVALID_PROBE
         elif code == 0:
             verdict = "GREEN (SURVIVED — vacuous test)"
+        elif "failed" in summary:
+            verdict = "RED (killed by assertion)"
         else:
-            verdict = "RED (killed)"
-        print(f"{probe.name:46s} exit={code:<3d} {verdict:28s} {summary}")
+            verdict = INVALID_PROBE
+        print(f"{probe.name:46s} exit={code:<3d} {verdict:34s} {summary}")
         print(f"{'':46s} tree restored byte-identical: {restored}")
-        if code == 0 or code in HARNESS_ERRORS or not restored:
+        if invalid or code == 0 or not restored:
             failures.append(probe.name)
 
     print()
