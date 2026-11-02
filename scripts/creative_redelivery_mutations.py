@@ -123,7 +123,7 @@ PROBES: tuple[Probe, ...] = (
             Edit(
                 SURFACE,
                 "def _refuse_symlinked_directory(path: Path, label: str) -> None:\n"
-                '    """Refuse a directory component that is a symlink (pre-planted redirect)."""',
+                '    """Refuse a directory component that is a symlink (pre-planted redirect).',
                 "def _refuse_symlinked_directory(path: Path, label: str) -> None:\n"
                 "    return  # MUTANT: a symlinked directory component is accepted",
             ),
@@ -195,6 +195,22 @@ PROBES: tuple[Probe, ...] = (
             ),
         ),
         tests=(REDELIVERY, SURFACE_UNIT),
+    ),
+    Probe(
+        name="M10-worker-root-symlink-guard-removed",
+        invariant=(
+            "the worker must reject a configured root that is itself a symlink, and must "
+            "do so before canonicalization — the surface check cannot be inherited, "
+            "because the queue row is durable and the root can be swapped after admission"
+        ),
+        edits=(
+            Edit(
+                WORKER,
+                '    refuse_symlinked_node(configured, "creative root")',
+                "    # MUTANT: worker trusts whatever root it was configured with",
+            ),
+        ),
+        tests=(WORKER_UNIT,),
     ),
 )
 

@@ -242,10 +242,66 @@ class _CanonicalExecution:
 # ---------------------------------------------------------------------------
 
 
+def refuse_symlinked_node(path: Path, label: str) -> None:
+    """Refuse a path that is itself a symlink. The single trust-boundary rule.
+
+    Shared by the worker (``trusted_creative_root``) and the surface
+    (``creative_surface._trusted_root``) so that the two ends of the queue cannot
+    drift into two different definitions of "which root is trusted". It is
+    deliberately scoped to the node named, never its ancestors: an ancestor is
+    admin-owned path prefix, and refusing ancestors would break ordinary installs
+    (macOS ``/tmp`` -> ``/private/tmp``, container volume mounts) while buying
+    nothing, since an attacker who can swap an ancestor of the root already owns
+    the host.
+
+    ``lstat`` — not ``stat`` — because following the link is precisely the failure
+    mode this function exists to prevent.
+    """
+    try:
+        stat_result = os.lstat(path)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise CreativeRenderError("invalid_request", f"{label} unreadable: {path}") from exc
+    if stat.S_ISLNK(stat_result.st_mode):
+        raise CreativeRenderError("invalid_request", f"{label} is a symlink: {path}")
+    if not stat.S_ISDIR(stat_result.st_mode):
+        raise CreativeRenderError("invalid_request", f"{label} is not a directory: {path}")
+
+
+def trusted_creative_root() -> Path:
+    """The trusted root, validated **before** it is canonicalized.
+
+    Ordering is load-bearing and is the whole point of this function. ``resolve()``
+    follows a symlink and returns the target, so a caller that resolves first can
+    only ever compare resolved-against-resolved afterwards: the check succeeds and
+    the bytes go to the attacker's directory. The configured value is therefore
+    inspected exactly as written, and only then resolved.
+
+    This is enforced at the worker too, not merely inherited from the surface. The
+    queue row is durable and the two ends run in different processes, so a root
+    that was legitimate at admission can be swapped before execution — the surface
+    check cannot be treated as a permanent guarantee about the filesystem.
+    """
+    configured = Path(get_settings().creative_temp_dir)
+    refuse_symlinked_node(configured, "creative root")
+    try:
+        return configured.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise CreativeRenderError(
+            "invalid_request", f"creative root resolution failed: {exc}"
+        ) from exc
+
+
 def _guarded_workspace(raw: str) -> Path:
+    # The root is validated BEFORE the workspace is canonicalized. Resolving the
+    # workspace first would let a symlinked configured root canonicalize both sides
+    # into agreement and pass containment while the bytes live elsewhere
+    # (reproduced: the worker rendered and wrote output.mp4 into an unrelated
+    # directory before this ordering was corrected).
+    root = trusted_creative_root()
     try:
         workspace = Path(raw).resolve(strict=False)
-        root = Path(get_settings().creative_temp_dir).resolve(strict=False)
     except (OSError, RuntimeError) as exc:
         raise CreativeRenderError("invalid_request", f"workspace resolution failed: {exc}") from exc
     try:

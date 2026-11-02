@@ -47,6 +47,10 @@ from typing import Any
 from nexus_ai_agent.application.execution_trace import ExecutionTrace, mint_trace
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort
 from nexus_ai_agent.bot.surface._ptb import bot_of, user_language_code
+from nexus_ai_agent.creative.render_jobs import (
+    CreativeRenderError,
+    refuse_symlinked_node,
+)
 from nexus_ai_agent.i18n import i18n
 from nexus_ai_agent.jobs.creative_passport import CreativeRequestConflictError
 from nexus_ai_agent.observability.logging import get_logger
@@ -304,17 +308,17 @@ def _sha256_of_file(path: Path) -> str:
 
 
 def _refuse_symlinked_directory(path: Path, label: str) -> None:
-    """Refuse a directory component that is a symlink (pre-planted redirect)."""
+    """Refuse a directory component that is a symlink (pre-planted redirect).
+
+    The rule itself now lives with the worker (``render_jobs.refuse_symlinked_node``)
+    so that the two ends of the queue cannot drift into two different definitions of
+    a trusted path. This wrapper only translates the refusal into the surface's own
+    typed error, keeping the user-facing behaviour unchanged.
+    """
     try:
-        stat_result = os.lstat(path)
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        raise _StagingError("media_missing", f"{label} unreadable: {path}") from exc
-    if stat.S_ISLNK(stat_result.st_mode):
-        raise _StagingError("media_missing", f"{label} is a symlink: {path}")
-    if not stat.S_ISDIR(stat_result.st_mode):
-        raise _StagingError("media_missing", f"{label} is not a directory: {path}")
+        refuse_symlinked_node(path, label)
+    except CreativeRenderError as exc:
+        raise _StagingError("media_missing", exc.detail) from exc
 
 
 def _trusted_root(configured: str | os.PathLike[str]) -> Path:

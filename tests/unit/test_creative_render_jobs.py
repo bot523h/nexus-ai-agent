@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 from nexus_ai_agent.config import settings as settings_module
+from nexus_ai_agent.creative import render_jobs
 from nexus_ai_agent.creative.render_jobs import (
     CREATIVE_RENDER_JOB_TYPE,
     CreativeRenderPayload,
@@ -123,6 +124,128 @@ def test_workspace_must_stay_under_creative_temp(workspace: Path, tmp_path: Path
     result = _run(data)
     assert result["success"] is False
     assert result["error_code"] == "invalid_request"
+
+
+def test_worker_refuses_a_workspace_reached_through_a_symlinked_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker must enforce the root boundary itself, not inherit it.
+
+    Threat: admission happens while ``creative_temp_dir`` is a real directory.
+    Between admission and execution the configured root is replaced by a symlink
+    to an unrelated directory, and a workspace with matching name AND matching
+    bytes is planted under that target. A worker that canonicalizes the root
+    before inspecting it compares resolved-against-resolved, agrees, and executes
+    against attacker-chosen bytes — writing its output into the unrelated tree.
+
+    The handler's own ``_trusted_root`` guard (commit 49d639c) does not help here:
+    the queue row is durable, the handler runs in a different process, and the
+    swap happens after admission. This is why the boundary is checked at BOTH
+    ends rather than assumed to propagate from the surface.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    unrelated = tmp_path / "unrelated_secret_dir"
+    unrelated.mkdir()
+
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(root))
+    settings_module.get_settings.cache_clear()
+
+    # 1. admitted legitimately, while the root was a real directory
+    legit_ws = root / "creative_ab12cd34ef56"
+    legit_ws.mkdir()
+    _make_clip(legit_ws / "input.mp4")
+    admitted_bytes = (legit_ws / "input.mp4").read_bytes()
+
+    # 2. the attack: identical name, identical bytes, unrelated location
+    evil_ws = unrelated / "creative_ab12cd34ef56"
+    evil_ws.mkdir()
+    (evil_ws / "input.mp4").write_bytes(admitted_bytes)
+    root.rename(tmp_path / "root_moved")
+    root.symlink_to(unrelated, target_is_directory=True)
+
+    payload = _payload(evil_ws)
+    assert payload["input_sha256"] == hashlib.sha256(admitted_bytes).hexdigest()
+
+    # 3. no engine may be constructed, and nothing may be written outside the root
+    engine_calls: list[str] = []
+
+    async def _forbidden(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        engine_calls.append("render")
+        raise AssertionError("engine branch reached through a symlinked root")
+
+    monkeypatch.setattr(render_jobs, "_run_render_branch", _forbidden)
+    before = sorted(p.name for p in evil_ws.iterdir())
+
+    result = _run(payload)
+
+    after = sorted(p.name for p in evil_ws.iterdir())
+    assert result["success"] is False, "an attacker-planted workspace must not render"
+    assert result["error_code"] == "invalid_request"
+    assert engine_calls == [], "no engine may be constructed on a refused root"
+    assert after == before, f"nothing may be written outside the trusted root: {after}"
+    assert not (evil_ws / "output.mp4").exists()
+    # the originally admitted input is neither moved nor rewritten
+    assert (tmp_path / "root_moved" / "creative_ab12cd34ef56" / "input.mp4").is_file()
+    settings_module.get_settings.cache_clear()
+
+
+def test_worker_still_accepts_a_root_under_a_symlinked_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control that stops the fix from becoming a deployment outage.
+
+    Refusing an ancestor that happens to be a symlink would break ordinary
+    installs (macOS ``/tmp`` -> ``/private/tmp``, container volume mounts). The
+    trust boundary is the configured node, not its whole path prefix.
+    """
+    real = tmp_path / "real"
+    (real / "creative").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(real, target_is_directory=True)
+    configured = tmp_path / "link" / "creative"
+
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(configured))
+    settings_module.get_settings.cache_clear()
+
+    ws = configured / "creative_ab12cd34ef56"
+    ws.mkdir()
+    _make_clip(ws / "input.mp4")
+    result = _run(_payload(ws))
+    assert result["success"] is True, result
+    assert (real / "creative" / "creative_ab12cd34ef56" / "output.mp4").is_file()
+    settings_module.get_settings.cache_clear()
+
+
+def test_worker_accepts_an_ordinary_root(workspace: Path) -> None:
+    """Normal-root control: the guard must not refuse a plain, real directory."""
+    (workspace / "input.mp4").unlink(missing_ok=True)
+    _make_clip(workspace / "input.mp4")
+    result = _run(_payload(workspace))
+    assert result["success"] is True, result
+
+
+def test_worker_refuses_when_the_configured_root_is_a_symlink_even_if_nothing_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No workspace planted at all: the refusal must still be the root, not a 404.
+
+    Distinguishing the two matters — "workspace missing" is a transient condition
+    that retries forever, while "root is a symlink" is a security refusal that must
+    be terminal and typed.
+    """
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    root = tmp_path / "root"
+    root.symlink_to(unrelated, target_is_directory=True)
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(root))
+    settings_module.get_settings.cache_clear()
+
+    ghost = root / "creative_ab12cd34ef56"
+    result = _run(_payload(ghost))
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_request"
+    assert "symlink" in result["error_detail"]
+    settings_module.get_settings.cache_clear()
 
 
 def test_unknown_operation_is_a_typed_failure(workspace: Path) -> None:
