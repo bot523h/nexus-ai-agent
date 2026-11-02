@@ -25,7 +25,7 @@ dropped a mutation job, and a scheduled job that had been red for a day).
 | `main` SHA | `5ce9f7d3f558ab903ece5f19018b28a5e2ff9a04` (PR #303 merge) |
 | CI on `main` | `CI` workflow green; `queue-ownership-mutations` **red** (fixed by #304) |
 | `maintenance` workflow | red every schedule (fixed by #305, code side) |
-| Open PRs | 43 + 2 new (#304, #305) |
+| Open PRs | 43 + 3 new (#304, #305, #307) |
 
 ## Fixes delivered (this campaign)
 
@@ -57,6 +57,31 @@ dropped a mutation job, and a scheduled job that had been red for a day).
   client is ever called.
 - **Owner action still required:** correct the malformed `R2_BUCKET` repository
   secret. The code fix only makes the failure explicit and actionable.
+
+### PR #307 — LangGraph checkpoint CVE pins (P1) — `arena/omni-dep-audit`
+- **Symptom:** `pip-audit` flagged both LangGraph checkpoint pins under
+  **GHSA-6hmw-9432-67qq** (`langgraph-checkpoint-sqlite` 3.1.1,
+  `langgraph-checkpoint-postgres` 3.1.2).
+- **Root cause:** the advisory affects the LangGraph `*Store` (namespace memory)
+  classes; the pinned versions predate the patched releases.
+- **Reachability:** **not directly reachable** — NEXUS imports only
+  `SqliteSaver` / `AsyncPostgresSaver` (`langgraph.checkpoint.*`) and never
+  `langgraph.store.*`. The bump is defence-in-depth on the state path.
+- **Fix:** raise to `langgraph-checkpoint-sqlite==3.1.2` /
+  `langgraph-checkpoint-postgres==3.1.3`; regenerate the committed sqlite schema
+  golden through the sanctioned `nexus checkpoints golden update` CLI; remove the
+  now-redundant empty-`checkpoint_id` workaround in `AsyncCompatibleSqliteSaver`;
+  sync `docs/architecture/DATA_LIFECYCLE.md`.
+- **Evidence:** full suite `python -m pytest -q -m "not slow"` → **6169 passed,
+  39 skipped, 0 failed** (identical to the `main` baseline → no regression);
+  checkpoint + docs + architecture suites green; `ruff` + `mypy` clean.
+
+### Deferral recorded (not a second fix)
+The `queue-ownership-mutations` disk fix was **already delivered by #304**. An
+independent attempt on `arena/omni-dep-audit` produced the *identical* minimal
+install set; that duplicate edit was discarded and the overlap recorded in the
+board `deferred_log` (`.github/workflows/queue-ownership-mutations.yml` is **not**
+touched by #307). No duplicate PR was opened.
 
 ## Audit reports produced
 
@@ -92,7 +117,7 @@ dropped a mutation job, and a scheduled job that had been red for a day).
 ## Now / Next / Later
 
 **Now (blocks safe development):**
-- Merge #304 (CI) and #305 (R2) after required checks.
+- Merge #304 (CI), #305 (R2) and #307 (dep CVE) after required checks.
 - Owner corrects the `R2_BUCKET` secret.
 - Decide SEC-4 (legacy privacy boundary).
 
