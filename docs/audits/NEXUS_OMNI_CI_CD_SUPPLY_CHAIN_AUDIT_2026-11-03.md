@@ -117,12 +117,46 @@ their own legs — which `extras-matrix` already does for three of them.
   `ParamValidationError: Invalid bucket name` (see the runtime/data report and
   PR #305) — a separate P2 defect.
 
-## 9. Disposition
+## 9. Dependency vulnerability audit (pip-audit + deptry, 2026-11-03)
+
+Tools available in the dev env and already gated by CI: `deptry`, `bandit`,
+`pip-audit`. `deptry src` on a **full** `.[dev]` install is clean (the 55
+`DEP001` hits reported earlier come from running it against a *minimal* env
+without `python-telegram-bot` — an environment artifact, not a finding).
+
+`pip-audit` (full install) surfaced 21 advisories across 5 distributions. Only
+two are **directly pinned**; the rest are transitive. Reachability was assessed
+against the real call graph, not the advisory text alone.
+
+| Package | Installed | Advisory | Directly pinned? | Reachability in NEXUS | Disposition |
+|---|---|---|---|---|---|
+| `langgraph-checkpoint-postgres` | 3.1.2 | GHSA-6hmw-9432-67qq | **yes** | affected classes are `PostgresStore`/`SqliteStore` (namespace memory); NEXUS uses `AsyncPostgresSaver`/`SqliteSaver` only → **not reachable** | **FIXED** → 3.1.3 (PR #307) |
+| `langgraph-checkpoint-sqlite` | 3.1.1 | GHSA-6hmw-9432-67qq | **yes** | same as above → **not reachable** | **FIXED** → 3.1.2 (PR #307) |
+| `filelock` | 3.32.7 | CVE-2026-1129xx (13) | no (transitive) | not imported anywhere in `src/`/`tests/`; the advisories concern `ReadWriteLock`/soft-lock APIs NEXUS never calls | tracked, not bumped (closure risk) |
+| `diskcache` | 5.6.3 | PYSEC-2026-2447 | no (transitive) | pickle-based; NEXUS never imports `diskcache` | tracked, not bumped |
+| `chromadb` | 1.5.9 | PYSEC-2026-311/3813/3814/3815 | no (transitive) | NEXUS uses the embedded `PersistentClient` (local), never the HTTP server the advisories target (`trust_remote_code` on the REST API) | tracked, not bumped |
+
+**GHSA-6hmw-9432-67qq** (CVSS 4.0 `AV:N/AC:L/AT:P/PR:L/UI:N/VC:H/VI:L/VA:N`): a
+namespace label containing `.` reaches another namespace in the Postgres/SQLite
+`*Store` classes. Patched in `langgraph-checkpoint-postgres 3.1.3` /
+`langgraph-checkpoint-sqlite 3.1.2`. NEXUS does not import `langgraph.store.*`,
+so the CVE is **not directly reachable**; the pin bump is defence-in-depth on
+the state-persistence path and is delivered in PR #307.
+
+Bumping `filelock`/`diskcache`/`chromadb` would force a re-resolution of the
+torch/sentence-transformers/llama-index closure with no reachable benefit, so
+they are recorded as **tracked, not actioned** (P3) rather than blindly
+upgraded — per the mission rule that a dependency change needs a
+compatibility/regression argument, not "latest is better".
+
+## 10. Disposition
 
 | Item | Severity | Status |
 |---|---|---|
 | `queue-ownership-mutations` disk exhaustion | P1 | **FIXED** — PR #304 (evidence above) |
 | `housekeeping` malformed `R2_BUCKET` | P2 | **FIXED (code)** — PR #305; owner must correct the secret |
+| `langgraph-checkpoint-*` GHSA-6hmw-9432-67qq pins | P1 | **FIXED** — PR #307 (not reachable; defence-in-depth) |
+| `filelock`/`diskcache`/`chromadb` transitive advisories | P3 | **tracked, not actioned** (unreachable; closure risk) |
 | Split heavy extras out of default CI installs | P3 | deferred (owner decision; `extras-matrix` already covers 3 legs) |
 
 No test was weakened, skipped, or deleted in this audit.
