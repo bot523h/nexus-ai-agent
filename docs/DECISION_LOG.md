@@ -15,7 +15,7 @@
 **Current release baseline:** `v3.13.0` (cut by the repo-hygiene housekeeping PR that carries this revision).
 
 **Revision history**
-
+- **r16 (2026-11-03, creative-boundary hardening):** adversarial re-audit of the D-0036 redelivery boundary closed two residual gaps as code — the worker now `lstat`s the workspace node before resolving it (a workspace symlink to another `creative_*` directory inside the root was laundered into the victim), and `_ensure_private_directory` repairs an existing private directory it owns to `0o700` (`mkdir(mode=0o700, exist_ok=True)` never re-modes an existing directory). Failing-first regressions + mutation probes (campaign 12/12); the redelivery campaign is now wired into the `trust-mutations` CI lane.
 - **r1 (2026-09-20, PR#14):** initial canonical log — phase history, core rejections, Nagar acceptance, numbering families.
 - **r2 (2026-09-20):** added the Cognee and manual-Neon-keep-alive rejections, sharpened the "Nexus World" rejection (3-D world model + alleged quantum decision algorithms), converted the zombie-branch list into a per-branch disposition table with the required manual-deletion note, added the old-continuum `Phase D/E` numbering row, mapped every numbering family onto the final seven-phase roadmap, and recorded an open-PR snapshot.
 - **r3 (2026-09-20, PR#19 + the v3.10.0 release commit):** recorded the implemented Nagar Wave 1 core as an accepted decision, moved the release baseline to `v3.10.0`, corrected the Phase 6 “implementation has not started” status, added the PR#18/PR#19 rows to the PR snapshot, marked the D1–D4 bundle as merged (`d9f5cf9`), and locked the Celery/Redis scan result into the record.
@@ -2649,3 +2649,28 @@ limitations are recorded rather than hidden: a crash between publication and
 enqueue leaves at worst one orphaned `staging_*` / immutable input directory (no
 reaper is added here), and the digest is a content *witness*, not encryption — it
 proves the bytes are the admitted bytes, not that they are safe to decode.
+
+**Post-acceptance hardening (2026-11-03, mission `NEXUS-MASTER-CLOSURE-2026-11-03`).**
+An adversarial re-audit of this boundary found two residual gaps and closed them as
+code, each with a failing-first regression and a mutation probe (campaign now 12/12):
+
+- **Workspace-node substitution.** `_guarded_workspace` resolved the workspace path
+  before inspecting it, so a symlink planted *after* admission (`creative_job` →
+  `creative_victim`, both inside the trusted root and both carrying the reserved
+  prefix) was laundered by `resolve()` into the victim directory and the render wrote
+  `output.mp4` there — the same cross-job redirection class as point 5, but on the
+  *workspace* rather than the input. The worker now `lstat`s the raw workspace node
+  and refuses a symlink before resolving, mirroring `_guarded_input`; the surface's
+  own check cannot be inherited because the queue row is durable and the two ends run
+  in different processes.
+- **Unrepaired private-directory mode.** `mkdir(mode=0o700, exist_ok=True)` applies
+  the mode only when it *creates* the directory, so a root or workspace that already
+  existed at a looser mode (older deployment, wider umask, restored volume) stayed
+  world-readable while the code believed it had asked for `0o700`. `_ensure_private_directory`
+  now repairs an existing node it owns to `0o700` and re-`stat`s to confirm the applied
+  mode; a node that is not a directory, is a symlink, or is owned by another principal
+  is refused rather than `chmod`'d.
+
+The documented limitation stands: the digest is a content witness, and a TOCTOU window
+between the worker's re-measure and FFmpeg opening the path is accepted because the
+workspace is owner-only and the path is never redirected through a link.
