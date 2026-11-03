@@ -1123,12 +1123,16 @@
     },
     {
       "id": "ci-disk-budget-omni",
-      "description": "CI disk budget: pin the CPU torch wheel index so `pip install -e` never pulls the CUDA stack (Errno 28 on the required test job)",
+      "description": "CI disk budget + supply chain: package-scoped CPU torch install (scripts/ci_install.sh + constraints/ci-cpu-torch.txt); no global extra index",
       "paths": [
         ".github/workflows/ci.yml",
         ".github/workflows/maintenance.yml",
         ".github/workflows/langsmith-smoke.yml",
-        "tests/unit/test_ci_torch_disk_budget.py"
+        "tests/unit/test_ci_torch_disk_budget.py",
+        "constraints/ci-cpu-torch.txt",
+        "scripts/ci_install.sh",
+        "tests/unit/test_api_gate_mutations.py",
+        "tests/unit/test_maintenance_workflow_contract.py"
       ]
     }
   ],
@@ -7965,27 +7969,34 @@
     },
     {
       "task": "task-omni-ci-cpu-torch-01",
-      "title": "NEXUS-OMNI-POST-AUDIT: required CI `test` job disk flake (Errno 28) — CPU torch index",
+      "title": "NEXUS-OMNI-REMAINDER: package-scoped CPU torch (replace global extra index) — P1",
       "zone": "ci-disk-budget-omni",
       "priority": "P1",
       "status": "active",
-      "scope": "Root-cause the REQUIRED `test` job Errno 28 (default PyPI torch wheel pulls the ~2.3GB CUDA stack). Pin PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu at workflow scope in ci.yml + maintenance.yml + langsmith-smoke.yml; add an anti-regression test; prove full suite green on CPU torch and the guard non-vacuous.",
+      "scope": "REVISION of the first CPU-torch fix: a workflow-scope PIP_EXTRA_INDEX_URL is a dependency-confusion surface (pip consults an extra index for every distribution). Replace it with a package-scoped install: scripts/ci_install.sh installs torch from the PyTorch CPU index EXCLUSIVELY, then the editable project from PyPI ONLY under constraints/ci-cpu-torch.txt (torch==2.15.0+cpu), then fails closed if any nvidia-*/triton package is present or torch is not the +cpu build. Route all bare `pip install -e` in ci.yml/maintenance.yml/langsmith-smoke.yml through the script; rewrite the anti-regression test to the stricter invariants.",
       "prerequisites": [],
       "acceptance_criteria": [
-        "All workflows running `pip install -e` declare PIP_EXTRA_INDEX_URL=CPU torch index at workflow scope (before jobs:)",
-        "Full suite `pytest -q -m 'not slow'` is green in an env installed with the CPU index (no nvidia-* wheels present)",
-        "tests/unit/test_ci_torch_disk_budget.py fails if the env line is removed (non-vacuous)"
+        "No workflow sets PIP_EXTRA_INDEX_URL or --extra-index-url (global extra index removed)",
+        "ci.yml/maintenance.yml/langsmith-smoke.yml run no bare `pip install -e`; all go through scripts/ci_install.sh",
+        "constraints/ci-cpu-torch.txt pins an exact torch==x.y.z+cpu",
+        "ci_install.sh installs torch from the CPU index only, the editable project from PyPI only, and exits non-zero if nvidia-*/triton is present or torch is not +cpu",
+        "tests/unit/test_ci_torch_disk_budget.py goes RED when the global extra index returns or the constraint loses its +cpu pin"
       ],
       "evidence_required": [
-        "pytest -q -m 'not slow' counts on the CPU-torch env + SHA",
-        "pip list | grep -c nvidia == 0 in that env",
-        "mutation: revert the env line -> the guard test goes RED"
+        "fresh-venv run of scripts/ci_install.sh '.[dev]' -> prints 'torch==2.15.0+cpu, no CUDA packages', exit 0",
+        "pytest -q -m 'not slow' counts on that env + SHA",
+        "pip list has zero nvidia-*/triton packages",
+        "mutation: reintroduce PIP_EXTRA_INDEX_URL -> guard RED; weaken constraint to torch>=2 -> guard RED"
       ],
       "exclusive_paths": [
         ".github/workflows/ci.yml",
         ".github/workflows/maintenance.yml",
         ".github/workflows/langsmith-smoke.yml",
-        "tests/unit/test_ci_torch_disk_budget.py"
+        "tests/unit/test_ci_torch_disk_budget.py",
+        "constraints/ci-cpu-torch.txt",
+        "scripts/ci_install.sh",
+        "tests/unit/test_api_gate_mutations.py",
+        "tests/unit/test_maintenance_workflow_contract.py"
       ],
       "owner_hint": "",
       "agent_branch": "arena/omni-ci-cpu-torch-20261103",

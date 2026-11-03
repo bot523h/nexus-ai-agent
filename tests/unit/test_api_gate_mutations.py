@@ -464,7 +464,10 @@ def test_ci_job_is_least_privilege_repeatable_and_uploads_evidence_on_failure(
     assert workflow["permissions"] == {"contents": "read"}
     assert job["timeout-minutes"] <= 30
     assert any(step.get("with", {}).get("python-version") == "3.12" for step in steps)
-    assert any('pip install -e ".[dev]"' in command for command in commands)
+    # The job installs the project via the shared CPU-torch installer (see
+    # tests/unit/test_ci_torch_disk_budget.py); the assertion is the same promise:
+    # this job really installs the package, not just its own test deps.
+    assert any("scripts/ci_install.sh" in command and ".[dev]" in command for command in commands)
     assert any("scripts/api_gate_mutations.py" in command for command in commands)
     assert any("cmp ci-artifacts/api-gate-mutations.json" in command for command in commands)
     assert any('"worktree_clean"' in command for command in commands)

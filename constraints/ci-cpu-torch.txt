@@ -1,0 +1,12 @@
+# CPU-only PyTorch for CI. `torch` is a transitive of sentence-transformers
+# (core dependency), and the default PyPI wheel ships the CUDA stack
+# (~539 MB torch + ~1.8 GB of nvidia-*/triton wheels) that CI never uses. On a
+# standard runner that exhausts the disk mid-install (OSError Errno 28) and
+# reds the REQUIRED `test` job intermittently.
+#
+# This pin is applied with `pip install -c` in scripts/ci_install.sh. The CPU
+# wheel is installed FIRST from the PyTorch CPU index only; the editable
+# install then runs against PyPI only under this constraint, so pip cannot
+# silently pull a CUDA-enabled torch. A "+cpu" local version is only served by
+# the CPU index, so an accidental CUDA fallback fails loudly instead of passing.
+torch==2.15.0+cpu

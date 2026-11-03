@@ -16,15 +16,10 @@ on:
 permissions:
   contents: read
 
-# `pip install -e ".[dev]"` resolves the full runtime closure. sentence-transformers
-# (and llama-cpp-python) pull `torch`, and the default PyPI `torch` wheel ships the
-# CUDA stack: ~539 MB torch + ~1.8 GB of `nvidia-*`/`triton` wheels. On a standard
-# runner that exhausts the disk mid-install (`OSError: [Errno 28] No space left on
-# device`), red-ing the REQUIRED `test` job intermittently — a flaky merge gate.
-# The official CPU wheel index serves `torch==...+cpu` with no CUDA dependencies;
-# it is consulted only for torch, every other package still resolves from PyPI.
-env:
-  PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+# CPU-only torch + PyPI-only remainder: see scripts/ci_install.sh and
+# constraints/ci-cpu-torch.txt. The install is package-scoped (the CPU index is
+# used for torch alone), NOT a global extra index, so it cannot serve another
+# dependency from the wrong source.
 
 # A superseded push's matrix run is wasted minutes: cancel it so the queue
 # always reflects the newest SHA (the maintenance workflow deliberately does
@@ -48,7 +43,7 @@ jobs:
       # Coordination-board integrity (PR #207 shipped a base64/truncated board).
       # Stdlib-only and fail-fast: runs before any install so corruption is red in seconds.
       - run: python scripts/check_board_integrity.py
-      - run: pip install -e ".[dev]"
+      - run: bash scripts/ci_install.sh ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
@@ -75,7 +70,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - run: bash scripts/ci_install.sh ".[dev]"
       - run: |
           set -o pipefail
           # -rs: skip REASONS are part of the contract — an optional-dependency
@@ -133,9 +128,9 @@ jobs:
           if [ "${{ matrix.leg }}" = "core" ]; then
             # NOT the dev extra: it ships pypdf + imageio-ffmpeg, which would
             # contaminate the core-only absence proof.  Test tooling only.
-            pip install -e . pytest pytest-asyncio
+            bash scripts/ci_install.sh "." pytest pytest-asyncio
           else
-            pip install -e ".[${{ matrix.leg }}]" pytest pytest-asyncio
+            bash scripts/ci_install.sh ".[${{ matrix.leg }}]" pytest pytest-asyncio
           fi
       - name: Extras-matrix declarations agree (pyproject ↔ CI ↔ tests ↔ committed doc)
         run: python scripts/extras_matrix.py check
@@ -205,7 +200,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev]"
+      - run: bash scripts/ci_install.sh ".[dev]"
       - run: |
           set -o pipefail
           pytest -q -rfEs -m "not slow" --tb=short 2>&1 | tee parity.log
@@ -259,7 +254,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev]"
+      - run: bash scripts/ci_install.sh ".[dev]"
       - name: Evidence is for the commit under test
         run: |
           echo "HEAD=$(git rev-parse HEAD) GITHUB_SHA=$GITHUB_SHA event=$GITHUB_EVENT_NAME"
@@ -389,7 +384,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - run: bash scripts/ci_install.sh ".[dev]"
       - run: python scripts/temporal_mutations.py
       - name: the working tree must be unchanged after mutation testing
         run: git diff --exit-code
@@ -412,7 +407,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - run: bash scripts/ci_install.sh ".[dev]"
       - name: isolated worktree for the campaigns
         run: git worktree add --detach "$RUNNER_TEMP/mutation-worktree" HEAD
       - name: board referee mutations (28/28 must be killed)
@@ -449,7 +444,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - run: bash scripts/ci_install.sh ".[dev]"
       - name: isolated worktree for the campaign
         run: git worktree add --detach "$RUNNER_TEMP/mutation-worktree" HEAD
       - name: execution-core mutations (25/25 must be killed)
@@ -476,7 +471,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - run: bash scripts/ci_install.sh ".[dev]"
       - run: python scripts/security_mutations_remote_key.py
       - name: the working tree must be unchanged after mutation testing
         run: git diff --exit-code
@@ -501,7 +496,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - run: bash scripts/ci_install.sh ".[dev]"
       - name: Bind evidence to the tested commit and PR head
         run: |
           HEAD_SHA="$(git rev-parse HEAD)"
@@ -637,7 +632,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - run: bash scripts/ci_install.sh ".[dev]"
       - run: nexus migrate
       - run: pytest -q tests/integration/test_postgres_create_all_race.py
       # Audit A-02/A-17 (2026-10-15): async + sync engines share this one

@@ -17,11 +17,7 @@ on:
 permissions:
   contents: read
 
-# Same disk budget as the other workflows: `pip install -e .` would otherwise
-# pull the CUDA torch stack (~2.3 GB) and risk `Errno 28` on a standard runner.
-env:
-  PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
-
+# CPU-only torch + PyPI-only remainder: see scripts/ci_install.sh.
 jobs:
   smoke:
     name: langsmith-smoke
@@ -35,7 +31,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install the package (langsmith ships with the core install)
-        run: pip install -e .
+        run: bash scripts/ci_install.sh "."
       - name: Create and verify a synthetic trace
         env:
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
