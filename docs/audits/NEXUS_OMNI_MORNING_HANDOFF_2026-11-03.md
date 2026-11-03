@@ -320,3 +320,16 @@ Convergence Ledger; it is owner work, not something to force-rewrite.
 2. Fix the `R2_BUCKET` repository secret (malformed → `Invalid bucket name ""`).
 3. Decide SEC-4: unified egress gate vs. accept the documented boundary.
 4. Decide whether CircleCI is meant to be active; adjust required checks only if so.
+
+### CI proof for #308 (not just local)
+
+The required `test` job on PR #308 head `e2f7df3c` (job `125747400962`) shows:
+
+```
+Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
+Downloading torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl (209.5 MB)
+Successfully installed ... torch-2.15.0+cpu ...   # zero nvidia-*/triton packages
+```
+
+Install finished in ~5 min with no `Errno 28`; `test`, `lint`, `merge-base-guard`
+all **success**. This is the same job that failed with `Errno 28` on PR #307.
