@@ -35,6 +35,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -164,17 +165,36 @@ def _fake_site(tmp_path: Path, packages: tuple[tuple[str, str], ...]) -> Path:
 
 
 def _run_postcondition(
-    tmp_path: Path, packages: tuple[tuple[str, str], ...]
+    tmp_path: Path, packages: tuple[tuple[str, str], ...], python: str
 ) -> subprocess.CompletedProcess[str]:
     site = _fake_site(tmp_path, packages)
     env = {**os.environ, "PYTHONPATH": str(site)}
     return subprocess.run(
-        [sys.executable, "-c", _postcondition_body()],
+        [python, "-c", _postcondition_body()],
         env=env,
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+#: The postcondition reads the interpreter's OWN metadata and runs
+#: ``sys.executable -m pip check`` against it, so a test that runs it in the
+#: ambient environment is not hermetic: the real ``torch`` (or a real broken
+#: dependency closure) leaks in and the synthetic fixture is ignored. Every
+#: postcondition assertion runs on this throwaway venv instead, whose only
+#: distribution is ``pip``.
+_HERMETIC: list[str] = []
+
+
+def _hermetic_python() -> str:
+    if not _HERMETIC:
+        root = Path(tempfile.mkdtemp(prefix="ci-torch-hermetic-"))
+        subprocess.run([sys.executable, "-m", "venv", str(root)], check=True)
+        candidate = root / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        assert candidate.exists(), f"venv created no interpreter at {candidate}"
+        _HERMETIC.append(str(candidate))
+    return _HERMETIC[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -334,46 +354,54 @@ def test_pyproject_still_pulls_torch() -> None:
 # behavioral postcondition tests (H1)
 # --------------------------------------------------------------------------- #
 def test_postcondition_accepts_cpu_torch_only(tmp_path: Path) -> None:
-    proc = _run_postcondition(tmp_path, (("torch", "2.14.1+cpu"),))
+    proc = _run_postcondition(tmp_path, (("torch", "2.14.1+cpu"),), _hermetic_python())
     assert proc.returncode == 0, proc.stderr
     assert "no CUDA packages" in proc.stdout
 
 
 def test_postcondition_rejects_nvidia_dash_name(tmp_path: Path) -> None:
-    proc = _run_postcondition(tmp_path, (("torch", "2.14.1+cpu"), ("nvidia-cublas-cu12", "12.0.0")))
+    proc = _run_postcondition(
+        tmp_path, (("torch", "2.14.1+cpu"), ("nvidia-cublas-cu12", "12.0.0")), _hermetic_python()
+    )
     assert proc.returncode != 0, "an nvidia-* package must fail the install closed"
     assert "CUDA/NVIDIA" in proc.stderr
 
 
 def test_postcondition_rejects_nvidia_underscore_name(tmp_path: Path) -> None:
     """L1: an equivalent spelling (underscores) must not slip past detection."""
-    proc = _run_postcondition(tmp_path, (("torch", "2.14.1+cpu"), ("nvidia_nccl_cu12", "2.0.0")))
+    proc = _run_postcondition(
+        tmp_path, (("torch", "2.14.1+cpu"), ("nvidia_nccl_cu12", "2.0.0")), _hermetic_python()
+    )
     assert proc.returncode != 0, "`nvidia_nccl_cu12` is packaging-equivalent to `nvidia-nccl-cu12`"
     assert "CUDA/NVIDIA" in proc.stderr
 
 
 def test_postcondition_rejects_nvidia_dot_name(tmp_path: Path) -> None:
     """L1: dot-separated spelling must not slip past detection either."""
-    proc = _run_postcondition(tmp_path, (("torch", "2.14.1+cpu"), ("nvidia.cublas.cu12", "12.0.0")))
+    proc = _run_postcondition(
+        tmp_path, (("torch", "2.14.1+cpu"), ("nvidia.cublas.cu12", "12.0.0")), _hermetic_python()
+    )
     assert proc.returncode != 0, "`nvidia.cublas.cu12` normalizes to `nvidia-cublas-cu12`"
     assert "CUDA/NVIDIA" in proc.stderr
 
 
 def test_postcondition_rejects_triton(tmp_path: Path) -> None:
-    proc = _run_postcondition(tmp_path, (("torch", "2.14.1+cpu"), ("triton", "3.0.0")))
+    proc = _run_postcondition(
+        tmp_path, (("torch", "2.14.1+cpu"), ("triton", "3.0.0")), _hermetic_python()
+    )
     assert proc.returncode != 0, "triton must fail the install closed"
     assert "CUDA/NVIDIA" in proc.stderr
 
 
 def test_postcondition_rejects_non_cpu_torch(tmp_path: Path) -> None:
-    proc = _run_postcondition(tmp_path, (("torch", "2.14.1"),))
+    proc = _run_postcondition(tmp_path, (("torch", "2.14.1"),), _hermetic_python())
     assert proc.returncode != 0, "a torch build without the +cpu suffix must fail closed"
     assert "not the CPU build" in proc.stderr
 
 
 def test_postcondition_fails_closed_on_missing_torch(tmp_path: Path) -> None:
     """No torch at all (e.g. unreadable metadata) must fail closed, not pass."""
-    proc = _run_postcondition(tmp_path, ())
+    proc = _run_postcondition(tmp_path, (), _hermetic_python())
     assert proc.returncode != 0, "an unreadable/absent torch must fail the install closed"
     assert "could not be evaluated" in proc.stderr
 
@@ -385,7 +413,7 @@ def test_postcondition_fails_closed_on_broken_metadata(tmp_path: Path) -> None:
     (site / "nvidia-broken-1.0.dist-info").mkdir(parents=True)
     env = {**os.environ, "PYTHONPATH": str(site)}
     proc = subprocess.run(
-        [sys.executable, "-c", _postcondition_body()],
+        [_hermetic_python(), "-c", _postcondition_body()],
         env=env,
         capture_output=True,
         text=True,
