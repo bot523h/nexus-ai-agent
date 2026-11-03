@@ -1140,6 +1140,20 @@
         "tests/unit/test_sqlite_checkpointer_empty_checkpoint_id.py",
         "docs/architecture/DATA_LIFECYCLE.md"
       ]
+    },
+    {
+      "id": "ci-disk-budget-omni",
+      "description": "CI disk budget + supply chain: package-scoped CPU torch install (scripts/ci_install.sh + constraints/ci-cpu-torch.txt); no global extra index",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/langsmith-smoke.yml",
+        "tests/unit/test_ci_torch_disk_budget.py",
+        "constraints/ci-cpu-torch.txt",
+        "scripts/ci_install.sh",
+        "tests/unit/test_api_gate_mutations.py",
+        "tests/unit/test_maintenance_workflow_contract.py"
+      ]
     }
   ],
   "claims": [
@@ -8041,6 +8055,43 @@
         "PR #307"
       ],
       "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming. DECISION_LOG.md is intentionally NOT touched (drift with many open PR heads); the decision record lives in the PR body + audit report."
+    },
+    {
+      "task": "task-omni-ci-cpu-torch-01",
+      "title": "NEXUS-OMNI-REMAINDER: package-scoped CPU torch (replace global extra index) \u2014 P1",
+      "zone": "ci-disk-budget-omni",
+      "priority": "P1",
+      "status": "active",
+      "scope": "REVISION of the first CPU-torch fix: a workflow-scope PIP_EXTRA_INDEX_URL is a dependency-confusion surface (pip consults an extra index for every distribution). Replace it with a package-scoped install: scripts/ci_install.sh installs torch from the PyTorch CPU index EXCLUSIVELY, then the editable project from PyPI ONLY under constraints/ci-cpu-torch.txt (torch==2.15.0+cpu), then fails closed if any nvidia-*/triton package is present or torch is not the +cpu build. Route all bare `pip install -e` in ci.yml/maintenance.yml/langsmith-smoke.yml through the script; rewrite the anti-regression test to the stricter invariants.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "No workflow sets PIP_EXTRA_INDEX_URL or --extra-index-url (global extra index removed)",
+        "ci.yml/maintenance.yml/langsmith-smoke.yml run no bare `pip install -e`; all go through scripts/ci_install.sh",
+        "constraints/ci-cpu-torch.txt pins an exact torch==x.y.z+cpu",
+        "ci_install.sh installs torch from the CPU index only, the editable project from PyPI only, and exits non-zero if nvidia-*/triton is present or torch is not +cpu",
+        "tests/unit/test_ci_torch_disk_budget.py goes RED when the global extra index returns or the constraint loses its +cpu pin"
+      ],
+      "evidence_required": [
+        "fresh-venv run of scripts/ci_install.sh '.[dev]' -> prints 'torch==2.15.0+cpu, no CUDA packages', exit 0",
+        "pytest -q -m 'not slow' counts on that env + SHA",
+        "pip list has zero nvidia-*/triton packages",
+        "mutation: reintroduce PIP_EXTRA_INDEX_URL -> guard RED; weaken constraint to torch>=2 -> guard RED"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/langsmith-smoke.yml",
+        "tests/unit/test_ci_torch_disk_budget.py",
+        "constraints/ci-cpu-torch.txt",
+        "scripts/ci_install.sh",
+        "tests/unit/test_api_gate_mutations.py",
+        "tests/unit/test_maintenance_workflow_contract.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-ci-cpu-torch-20261103",
+      "claimed_at": "2026-11-03T05:32:32Z",
+      "ttl_hours": 24,
+      "gates_owner": false
     }
   ],
   "deferred_log": [

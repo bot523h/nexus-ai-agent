@@ -1,0 +1,18 @@
+# CPU-only PyTorch for CI. `torch` is a transitive of sentence-transformers
+# (core dependency), and the default PyPI wheel ships the CUDA stack
+# (~539 MB torch + ~1.8 GB nvidia-*/triton wheels) that CI never uses. On a
+# standard runner that exhausts the disk mid-install (OSError Errno 28) and
+# reds the REQUIRED `test` job intermittently.
+#
+# This pin is applied with `pip install -c` in scripts/ci_install.sh. The CPU
+# wheel is installed FIRST from the PyTorch CPU index only; the editable
+# install then runs against PyPI only under this constraint, so pip cannot
+# silently pull a CUDA-enabled torch. A "+cpu" local version is only served by
+# the CPU index, so an accidental CUDA fallback fails loudly instead of passing.
+#
+# Why 2.14.1 and not 2.15.0: PyTorch 2.15 dropped CPython 3.10 wheels, and the
+# repository's requires-python is ">=3.10" (CI runs the 3.10/3.11/3.12 parity
+# matrix). 2.14.1 is the newest release whose CPU index publishes cp310, cp311
+# and cp312 wheels, so a single pin covers the whole supported matrix.
+# See docs/audits/NEXUS_OMNI_CI_CD_SUPPLY_CHAIN_AUDIT_2026-11-03.md.
+torch==2.14.1+cpu
