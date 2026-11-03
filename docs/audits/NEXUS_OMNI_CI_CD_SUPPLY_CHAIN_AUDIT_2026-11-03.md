@@ -337,3 +337,105 @@ bypasses the script) and restores the tree byte-identically.
 
 The `filelock` / `chromadb` / `diskcache` advisories remain `TRACKED` /
 `NOT_REACHABLE_WITH_PROOF` (see above) — this mission does not touch them.
+
+---
+
+## §12 POST-AUDIT ADDENDUM — CLOSURE-04: behavioral hardening (P1)
+
+Mission `NEXUS-OMNI-PYTHON-MATRIX-CLOSURE-04`, continuation of PR #308. Head
+`574da675` (base == `main` `5ce9f7d3`). The independent audit of PR #308 reported
+ten findings; the two that actually threaten the install contract (H1, M3) were
+reproduced first, then fixed and re-proven behaviorally.
+
+### H1 — the guard was textual, not behavioral (HIGH, reproduced)
+
+The pre-revision `tests/unit/test_ci_torch_disk_budget.py` grepped the script
+text. Reproduced three behavioral mutants that all left the asserted strings in
+place and therefore **survived**:
+
+| mutant | change | old guard | new guard |
+|---|---|---|---|
+| A | `problems.append("CUDA…")` → `pass` | **SURVIVED** (1 passed) | KILLED |
+| B | drop the PEP 503 name normalization | **SURVIVED** (1 passed) | KILLED |
+| C | add `--find-links https://evil.invalid/wheels` | **SURVIVED** (8 passed) | KILLED |
+
+The guard now **executes the real postcondition** (extracted from the
+`python - <<'PY'` heredoc) against synthetic `*.dist-info` metadata, and runs the
+**real installer through a `python` shim** on `PATH`:
+
+* clean CPU torch → exit 0;
+* `nvidia-cublas-cu12`, `nvidia_nccl_cu12`, `nvidia.cublas.cu12`, `triton`,
+  non-`+cpu` torch, absent/unreadable metadata → all exit non-zero;
+* installer argv: step 1 is `--isolated --index-url <cpu> --only-binary=:all:
+  --no-deps -c … torch`; step 2 is `--isolated --index-url https://pypi.org/simple
+  -c … -e ".[dev]"`; a hostile `PIP_*` environment never reaches the argv; a
+  failing postcondition propagates a non-zero exit.
+
+### M3 — pip environment isolation (MEDIUM, reproduced)
+
+Reproduced on pip 26.3: with `PIP_EXTRA_INDEX_URL` set, an explicit
+`--index-url https://pypi.org/simple` still resolves against **both** indexes
+(`Looking in indexes: https://pypi.org/simple, https://example.invalid/extra`).
+Fix: both install steps now pass `--isolated`, which makes pip ignore
+`PIP_INDEX_URL` / `PIP_EXTRA_INDEX_URL` / `PIP_FIND_LINKS` / `pip.conf`
+(`pip config list` → empty under `--isolated`).
+
+### L1 — package-name normalization (LOW, fixed)
+
+Detection now normalizes names (PEP 503: lowercase, `-`/`_`/`.` collapsed to `-`),
+so `nvidia_nccl_cu12` and `nvidia.cublas.cu12` are caught. An unreadable/absent
+torch distribution fails closed with a clear message.
+
+### M4 / L3 — dynamic discovery and a single matrix contract
+
+Workflow coverage is discovered via `.github/workflows/*.yml|yaml` (never a fixed
+list). A workflow that resolves the full closure without `scripts/ci_install.sh`
+is flagged unless it is in a bounded exception registry carrying a reason and an
+owning PR. `queue-ownership-mutations.yml` is the one exception, **owned by PR
+#304** (its fix is not duplicated here). `python-parity` and
+`continuum-evidence` matrices are asserted equal to the interpreters the pin was
+proven for (3.10/3.11/3.12).
+
+### Mutation evidence
+
+`scripts/ci_torch_mutations.py` now carries the ten behavioral mutants X1–X10 plus
+four contract probes C1–C4:
+
+```
+claude-x-summary: planned=10 killed=10 survived=0 invalid=0
+summary: planned=14 killed=14 survived=0 invalid=0
+```
+
+The tree is restored byte-identically (`git diff --exit-code` in the
+`trust-mutations` job).
+
+### M2 / M1 / M6 — board, PR description, integration branch
+
+* **M2**: the board claim `task-omni-ci-cpu-torch-01` was rewritten through the
+  official serializer; the superseded criteria are kept as
+  `superseded_acceptance_criteria` / `superseded_evidence_required`, so the record
+  states the `2.15.0+cpu` failure, why `2.14.1+cpu` was chosen, and what proves it.
+* **M1**: the PR #308 description was corrected (exact pin, `--isolated` policy,
+  behavioral/mutation evidence, accurate test counts, links to the run + SHA).
+* **M6**: the integration branch `arena/omni-integration-304-307-308` board is
+  **non-canonical** — it is not re-serialized by the board serializer (it uses
+  `\uXXXX` escaping). Recorded here; the branch is provenance-only and was not
+  regenerated.
+
+### M5 — maintenance workflow
+
+`maintenance.yml` is schedule/`workflow_dispatch`-only (not on `push`/`pull_request`),
+so it does not run on a PR by design. Its **local restore-drill leg** was proven
+end-to-end in an isolated scratch directory: build a real app-schema SQLite DB →
+`_dump_sqlite` → `nexus_ai_agent.maintenance.restore --apply --expect-app-schema`
+→ `ok: true`. The production `backup-db` leg needs owner R2/Neon secrets and is
+**NOT_PROVEN** from here (it is not dispatched, to avoid any production side
+effect).
+
+### Remaining
+
+* L2 (hash-pinning the torch wheel) — proposed as NEXT, not done (needs
+  per-interpreter constraints and a compatibility review).
+* L4 — the claim "2.14.1 is the newest release with a cp310 wheel" is only
+  asserted as "the pinned build installs for cp310/cp311/cp312 in CI"; no
+  upstream-dated source is cited.
