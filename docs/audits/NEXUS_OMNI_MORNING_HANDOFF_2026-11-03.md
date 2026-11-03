@@ -333,3 +333,114 @@ Successfully installed ... torch-2.15.0+cpu ...   # zero nvidia-*/triton package
 
 Install finished in ~5 min with no `Errno 28`; `test`, `lint`, `merge-base-guard`
 all **success**. This is the same job that failed with `Errno 28` on PR #307.
+
+---
+
+# NEXUS-OMNI-REMAINDER-CLOSURE-02 (2026-11-03)
+
+Controlled continuation of POST-AUDIT-CLOSURE-01. Only remaining verified gaps
+were touched; nothing already proven was re-run for its own sake. No `main`
+writes, no merges, no force-push, no secret values read.
+
+## A. Live repository truth
+
+| Item | Value |
+|---|---|
+| `main` | `5ce9f7d3f558ab903ece5f19018b28a5e2ff9a04` (unchanged since #303) |
+| Required checks | `lint (ruff + mypy + version lockstep)`, `test (pytest -m "not slow")`, `merge-base-guard (base == main)` |
+| Branch protection | `strict: true`; **no** required reviews; conversation-resolution disabled |
+| Open PRs | 47 (11 draft) |
+| Board | schema 2; 180 claims after the #304/#307/#308 union; integrity OK |
+| Active leases blocking shared files | `task-nagar-workspace-redelivery-01` owns `docs/README.md` + `docs/DECISION_LOG.md` |
+
+## B. PR #308 final closure (package-scoped CPU torch)
+
+The first fix set `PIP_EXTRA_INDEX_URL` at workflow scope. Correctly rejected:
+pip consults an **extra** index for **every** distribution, so a package present
+on both PyPI and the extra index can be served from the extra one — a
+dependency-confusion surface. Replaced with a package-scoped install.
+
+* `constraints/ci-cpu-torch.txt` — `torch==2.15.0+cpu`.
+* `scripts/ci_install.sh` — (1) `pip install --index-url https://download.pytorch.org/whl/cpu --only-binary=:all: -c constraints/ci-cpu-torch.txt torch`; (2) `pip install --index-url https://pypi.org/simple -c constraints/ci-cpu-torch.txt -e "<spec>" "$@"`; (3) fails closed if any `nvidia-*`/`triton` is present or `torch` is not `+cpu`.
+* `ci.yml` (13 sites), `maintenance.yml` (3), `langsmith-smoke.yml` (1) route every install through the script; **zero** `PIP_EXTRA_INDEX_URL` / `--extra-index-url` remain.
+* Guard `tests/unit/test_ci_torch_disk_budget.py` rewritten to the stricter invariants.
+
+Evidence (head `b94b155f`):
+* fresh venv `bash scripts/ci_install.sh ".[dev]"` → `ci_install: torch==2.15.0+cpu, no CUDA packages`, exit 0;
+* `pytest -q -m "not slow"` → **6173 passed, 39 skipped, 0 failed** (11m31s);
+* `pip list` → zero `nvidia-*` / `triton`;
+* mutation: reintroduce `PIP_EXTRA_INDEX_URL` → RED; weaken constraint to `torch>=2` → RED;
+* two workflow-contract tests updated to the new mechanism (same promises, not weakened).
+
+## C. Combined integration proof (#304 + #307 + #308)
+
+Merged the three heads into a throwaway branch `arena/omni-integration-304-307-308`
+(from `main`, deleted after use — not pushed).
+
+* Only conflict: `.agents/board.json` → resolved as a **union** (dedupe by claim id / zone id / deferred-log key), 180 claims, 84 zones, 11 deferred entries, integrity OK.
+* `#304` present: `queue-ownership-mutations.yml` installs a minimal set (`--no-cache-dir`, `--no-deps -e .`).
+* `#307` present: `langgraph-checkpoint-sqlite==3.1.2`, `langgraph-checkpoint-postgres==3.1.3`.
+* `#308` present: `constraints/ci-cpu-torch.txt` + `scripts/ci_install.sh` + 13 `ci.yml` sites.
+* Combined `pytest -q -m "not slow"` on `c89b89a8` → **6174 passed, 39 skipped, 0 failed** (11m33s).
+* All 4 workflow YAMLs parse.
+
+No PR implementation lost, no duplicate claim, no pin reverted, CPU torch preserved.
+
+## D. Supply-chain closure
+
+`filelock 3.32.7` is pulled by **`litellm>=1.106`** which pins `filelock>=3.16.1,<4.0`
+(root cause; `huggingface-hub`/`torch` only require `filelock`). The 13 advisories
+(all fixed in `4.2.1`, one in `4.0.9`) are enumerated individually in
+`NEXUS_OMNI_CI_CD_SUPPLY_CHAIN_AUDIT_2026-11-03.md`. Because `litellm` forbids
+`filelock>=4`, a floor of `>=4.2.1` forces `litellm` down to `1.103.7` — a real
+compatibility trade-off, so the disposition is **TRACKED** (blocked upstream), not
+silently patched. Reachability: the vulnerable classes are `*ReadWriteLock` /
+`StrictSoftFileLock`; NEXUS uses no such lock (only `soft=False` flock-style).
+`chromadb` CVEs remain NOT_REACHABLE_WITH_PROOF (local `PersistentClient` only).
+
+## E. SEC-4 decision package
+
+Full ADR-style comparison (Option A unified provider-egress boundary vs Option B
+route through the existing LLM gateway) is in
+`NEXUS_OMNI_SECURITY_PRIVACY_AUDIT_2026-11-03.md` §SEC-4. Recommendation: **Option B**.
+Status remains **BLOCKED_OWNER_DECISION** — not fixed, not implemented.
+`docs/DECISION_LOG.md` is under the active `task-nagar-workspace-redelivery-01`
+lease, so the ADR is recorded inside the (indexed) security report.
+
+## F. Recovery evidence
+
+* `LOCAL_RESTORE_TESTED` — `restore-drill` job + `tests/unit/test_restore_drill.py` (73 R2/restore/backup tests green).
+* `R2_RESTORE_TESTED` — **NOT_PROVEN** (needs the corrected `R2_BUCKET` secret).
+* `PRODUCTION_RESTORE_TESTED` — **NOT_PROVEN**.
+
+## G. Governance
+
+* `docs/README.md` remains owned by the active lease → the six reports stay indexed; no new unindexed files.
+* PR ledger updated with the REMAINDER-CLOSURE-02 delta.
+
+## H. Owner actions
+
+1. Merge #304 / #305 / #306 / #307 / #308 (all required checks green, base == `main`).
+2. Fix the `R2_BUCKET` repository secret (currently malformed → `Invalid bucket name ""`).
+3. Decide SEC-4 (unified egress gate; Option B recommended).
+4. Resolve the `docs/README.md` lease, then index any new audit files.
+5. Confirm whether the external CircleCI project is intended to be active.
+
+## I. Final verification matrix
+
+| Item | Status | SHA | Evidence | Remaining |
+|---|---|---|---|---|
+| CI disk (required test job) | VERIFIED | `b94b155f` | fresh-venv install + 6173 passed | merge |
+| Package-source isolation | VERIFIED | `b94b155f` | guard + mutation RED | — |
+| #304+#307+#308 integration | VERIFIED | `c89b89a8` | 6174 passed | merge |
+| filelock advisories | TRACKED | — | 13 enumerated; litellm<4 cap | upstream fix |
+| chromadb advisories | NOT_REACHABLE_WITH_PROOF | — | local client only | — |
+| SEC-4 privacy boundary | BLOCKED_OWNER_DECISION | — | ADR in security report | owner |
+| R2 restore | NOT_PROVEN | — | needs secret | owner |
+| CircleCI | NOT_VERIFIED_OWNER_ACCESS | — | no `.circleci/`, not required | owner |
+
+## J. Final status
+
+**HARDENED_BUT_NOT_COMPLETE** — the CI supply chain is hardened and the combined
+tree is proven, but SEC-4, R2/production recovery, the `R2_BUCKET` secret, and the
+merges remain open by design (owner-gated).

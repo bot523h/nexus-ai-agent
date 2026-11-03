@@ -151,3 +151,26 @@ from the GitHub API this session; base for every PR is still `main` @ `5ce9f7d3`
 Note: no PR was **incorrectly** labelled as needing rebase — the `C` set above is
 `mergeable=true` with a stale base (a real rebase need), while the `D` set is
 `dirty` (real conflict).
+
+---
+
+# REMAINDER-CLOSURE-02 delta (2026-11-03)
+
+Base for every PR is `main @ 5ce9f7d3`; required checks = lint / test /
+merge-base-guard; `strict: true`. Primary disposition per PR (one each).
+
+| PR | Title | Head | Primary | Notes |
+|---|---|---|---|---|
+| #304 | queue mutation campaign disk budget | `0cc22adf` | READY | advisory mutation job; required checks green |
+| #305 | R2 bucket validation | `e55d8bf8` | READY | covers all 5 R2 methods; needs secret fix to unblock housekeeping |
+| #306 | forensic campaign reports | `41a564e7` | READY | + REMAINDER sections; docs-integrity green |
+| #307 | langgraph checkpoint pins | `0becd39e` | READY | patched GHSA-6hmw-9432-67qq |
+| #308 | required CI CPU-only torch | `b94b155f` | READY | package-scoped; integration-proven with #304/#307 |
+
+Integration proof (#304 + #307 + #308) on `c89b89a8` (throwaway, deleted):
+**6174 passed, 39 skipped, 0 failed**; only `.agents/board.json` conflicted →
+union, 180 claims, integrity OK.
+
+Remaining 42 PRs: unchanged primary dispositions from the first pass
+(READY / BEHIND / DIRTY / DRAFT / CODE_FIX_REQUIRED / SECURITY_REVIEW_REQUIRED /
+DUPLICATE_CANDIDATE / BLOCKED); no new mass-merge, no dedupe performed.

@@ -180,3 +180,50 @@ So a required merge gate flips green/red on identical input. **Fixed by PR #308*
 (`PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu` at workflow scope in
 `ci.yml`/`maintenance.yml`/`langsmith-smoke.yml`, plus a non-vacuous guard test).
 This is distinct from #304 (advisory job only) and does not duplicate it.
+
+---
+
+# REMAINDER-CLOSURE-02 — exact advisory inventory (2026-11-03)
+
+`pip-audit` output plus per-advisory reachability. Abbreviated IDs are never
+used: each advisory is listed separately.
+
+## filelock 3.32.7 (transitive: `litellm>=1.106` → `filelock>=3.16.1,<4.0`)
+
+All 13 are fixed by `4.2.1` (one by `4.0.9`). Vulnerable classes are the
+`*ReadWriteLock` / `StrictSoftFileLock` families and `SoftFileLock` marker
+handling; NEXUS instantiates no such lock.
+
+| # | Advisory | Fixed | Affected class | Reachable in NEXUS? |
+|---|---|---|---|---|
+| 1 | CVE-2026-112907 | 4.2.1 | Windows oplock on a soft-lock marker | No (Linux, no SoftFileLock) |
+| 2 | CVE-2026-112908 | 4.2.1 | `StrictSoftFileLock` claim dirs | No |
+| 3 | CVE-2026-112909 | 4.2.1 | `UnixFileLock` truncates/chmods a renamed file | No (no UnixFileLock) |
+| 4 | CVE-2026-112910 | 4.2.1 | `WindowsFileLock` ignores mode | No (Windows) |
+| 5 | CVE-2026-112911 | 4.2.1 | `StrictSoftFileLock`/`SoftReadWriteLock` protocol dir | No |
+| 6 | CVE-2026-112912 | 4.2.1 | symlink swap in `SoftFileLock` writability check | No |
+| 7 | CVE-2026-112913 | 4.2.1 | `ReadWriteLock` on Windows SQLite side files | No |
+| 8 | CVE-2026-112915 | 4.2.1 | `ReadWriteLock` crafted lock DB stalls | No |
+| 9 | CVE-2026-112935 | 4.2.1 | `SoftFileLock` stale-lock break on reused inode | No |
+| 10 | CVE-2026-112936 | 4.0.9 | `ReadWriteLock` symlink at lock path | No |
+| 11 | CVE-2026-112938 | 4.2.1 | `StrictSoftFileLock` symlink swap | No |
+| 12 | CVE-2026-112939 | 4.2.1 | `SoftFileLock` forged marker removal | No |
+| 13 | CVE-2026-112940 | 4.2.1 | `ReadWriteLock` SQLite reopen by name | No |
+
+**Disposition: TRACKED (upstream-blocked).** A `filelock>=4.2.1` floor is not a
+free win: `litellm` pins `filelock<4.0`, so the floor downgrades `litellm`
+1.106.2 → 1.103.7. That is a real compatibility trade-off and is not made
+silently; the reachable classes are not used, so the residual risk is low.
+
+## chromadb 1.5.9
+
+`CVE-2026-45829`, `CVE-2026-45830`, `CVE-2026-45831`, `CVE-2026-45833` — all
+server-side (HTTP server / RBAC). NEXUS uses `chromadb.PersistentClient(path=...)`
+only (local, in-process, no `HttpClient`, no server, no listener). **NOT_REACHABLE_WITH_PROOF.**
+
+## diskcache 5.6.3
+
+`CVE-2025-69872` (pickle deserialization). `diskcache` enters via
+`llama-cpp-python`; no first-party import and no `Cache(...)` instantiation in
+`src/`. **NOT_REACHABLE_WITH_PROOF** (no untrusted cache directory, no
+deserialization path reached).

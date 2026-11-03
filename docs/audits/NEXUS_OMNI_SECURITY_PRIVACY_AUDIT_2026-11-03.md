@@ -237,3 +237,78 @@ No P0 (exploitable / data-loss / authority-breach / cross-tenant) finding was
 proven. The security architecture is strong: the interesting risks are at the
 *integration seams* (legacy paths, composition-root wiring), not in the
 reviewed primitives.
+
+---
+
+# SEC-4 — unified LLM-egress authorization boundary (decision package)
+
+Status: **BLOCKED_OWNER_DECISION**. Nothing here is implemented; this is the
+contract the owner must approve before any runtime policy authority is added.
+(`docs/DECISION_LOG.md` is under the active `task-nagar-workspace-redelivery-01`
+lease, so the package is recorded here rather than there.)
+
+## Problem
+
+The legacy Telegram `/ai` path egresses user text to Google with no privacy gate:
+`bot/handlers.py::ai_cmd` → `features/ai_chat.py::GeminiEngine.chat` →
+`httpx POST generativelanguage.googleapis.com`. The existing IBPC `PrivacyPolicy`
+is imported only by `continuum/pack_coverage.py`; the AI-memory consent gate
+(`ai_memory_consent`) is a **different scope** (memory storage, not provider
+egress). Patching the handler directly would create a **third partial policy
+authority**, which the architecture forbids.
+
+## Egress inventory (provider-facing routes)
+
+| Route | Entry | Data category | Provider | Consent today | Privacy mode |
+|---|---|---|---|---|---|
+| `/ai` | `bot/handlers.py::ai_cmd` | free text + optional image | Google Gemini | none | none |
+| `/ask` | handlers → ai_chat | free text | Google Gemini | none | none |
+| `/code` | handlers → ai_chat | free text | Google Gemini | none | none |
+| `/translate` | handlers → translate extra | free text | local Argos (offline) | n/a | LOCAL_VAULT |
+| `/vision` | handlers → ai_chat | image + text | Google Gemini | none | none |
+| summarizer | `features/*` → ai_chat | free text | Google Gemini | none | none |
+| AI Memory | `memory/*` | text/embeddings | local + optional cloud | `ai_memory_consent` | memory scope only |
+| RAG | `features/rag.py` | corpus text | local chroma / embeddings | none | LOCAL_VAULT |
+
+## Option A — unified provider-egress boundary
+
+One `LLMEgressAuthorizer` at the composition root; every provider call passes
+through `authorize(principal, tenant, project, data_category, provider,
+purpose)`. Default-deny under LOCAL_VAULT.
+
+* Pros: single authority; scope-specific consent; easy to reason about.
+* Cons: a new interface touching every call site; migration cost; risk of
+  becoming a second policy engine beside IBPC if not carefully delegated to.
+
+## Option B — route legacy paths through the existing LLM gateway (recommended)
+
+The repository already has a provider gateway (`litellm` provider / model
+routing). Route `/ai`, `/ask`, `/code`, `/vision`, summarization, AI Memory and
+RAG through it, and integrate **one** authorization check at the gateway's
+provider-call boundary. Legacy Gemini becomes one provider behind the gateway.
+
+* Pros: no new authority (reuses the gateway that already owns provider selection);
+  one place to enforce; IBPC stays the policy source, not duplicated.
+* Cons: gateway must expose a pre-call hook; needs a migration of the legacy
+  Gemini engine to a gateway provider; must preserve streaming behaviour.
+
+## Shared invariants (both options)
+
+`Intent ≠ Authority`; LOCAL_VAULT default-deny; consent is scope-specific
+(`ai_memory_consent` never implies chat/image egress); principal + tenant +
+project binding; explicit provider and data-purpose identification; expiration +
+revocation; re-check before retry; typed refusals; redaction before logging; no
+cloud provider activation without explicit approval.
+
+## Recommendation
+
+**Option B.** It satisfies "one egress authority" without inventing a second
+policy engine, and the gateway already exists.
+
+## Owner decisions required
+
+1. All external LLM egress default-deny under LOCAL_VAULT? (recommended: yes)
+2. Which consent scope permits ordinary chat egress? (new `provider_egress` scope)
+3. Does existing `ai_memory_consent` remain memory-only? (recommended: yes)
+4. How are consent records persisted and revoked?
+5. Which composition root owns the unified gate?
