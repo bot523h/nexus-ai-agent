@@ -823,3 +823,15 @@ Only red check = the #234 flake (task-264, issue #237).
 - Gotchas: `gh api .../jobs/<id>/logs` returns 0 bytes — use
   `curl -sL -H "Authorization: Bearer $TOKEN"`. `agent_board.py check --files` = one
   comma-separated arg. Full detail: `.openhands/memory/2026-11-03.md`.
+
+## CPU-torch CI pin (durable, 2026-11-03)
+- `constraints/ci-cpu-torch.txt` = `torch==2.14.1+cpu`. **2.15.0+cpu has NO cp310
+  wheel** (PyTorch 2.15 dropped 3.10); 2.14.1 is the newest with cp310/311/312, so
+  one pin covers the whole `requires-python=">=3.10"` parity matrix.
+- `scripts/ci_install.sh`: step1 = CPU index + `--no-deps` (torch only, exact
+  provenance); step2 = PyPI only for the editable project + everything else;
+  step3 = fail closed on `pip check` + no nvidia-*/triton + `+cpu` torch.
+- Guard `tests/unit/test_ci_torch_disk_budget.py` asserts on COMMENT-STRIPPED code
+  (a comment mentioning `--no-deps` must not satisfy the test) and ties the parity
+  matrix to the interpreter set the pin was verified against.
+- `scripts/ci_torch_mutations.py` (10/10 killed) runs in the `trust-mutations` job.
