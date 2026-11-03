@@ -227,3 +227,113 @@ only (local, in-process, no `HttpClient`, no server, no listener). **NOT_REACHAB
 `llama-cpp-python`; no first-party import and no `Cache(...)` instantiation in
 `src/`. **NOT_REACHABLE_WITH_PROOF** (no untrusted cache directory, no
 deserialization path reached).
+
+---
+
+# PYTHON-MATRIX-CLOSURE-03 — CPU torch pin covers the supported matrix (2026-11-03)
+
+The #308 package-scoped install removed the global `PIP_EXTRA_INDEX_URL`, but it
+pinned `torch==2.15.0+cpu`, which has **no CPython 3.10 wheel**. Live check-runs
+on head `b94b155f` red exactly the two 3.10 legs, both at
+`bash scripts/ci_install.sh ".[dev]"`:
+
+| Failing check | Head | Failing command |
+|---|---|---|
+| `python-parity (3.10)` | `b94b155f` | `bash scripts/ci_install.sh ".[dev]"` |
+| `continuum-evidence (3.10)` | `b94b155f` | `bash scripts/ci_install.sh ".[dev]"` |
+
+## Root cause (not a disk problem)
+
+PyTorch **2.15 dropped CPython 3.10 wheels**; the repository's
+`requires-python = ">=3.10"` and CI run a 3.10/3.11/3.12 parity matrix. Verified
+against the official index (`GET https://download.pytorch.org/whl/cpu/torch/`,
+2026-11-03):
+
+| torch | cp310 wheels | cp311 wheels | cp312 wheels |
+|---|---|---|---|
+| `2.15.0+cpu` | **0** | yes | yes |
+| `2.14.1+cpu` | yes | yes | yes |
+| `2.14.0+cpu` | yes | yes | yes |
+
+Reproduction (baseline RED, CPython 3.10.22):
+
+```
+$ pip install --index-url https://download.pytorch.org/whl/cpu --only-binary=:all: torch==2.15.0+cpu
+ERROR: Could not find a version that satisfies the requirement torch==2.15.0+cpu
+       (from versions: ... 2.13.0+cpu, 2.14.0+cpu, 2.14.1+cpu)
+ERROR: No matching distribution found for torch==2.15.0+cpu
+```
+
+## Decision (option B — one pin for the whole supported matrix)
+
+`torch==2.14.1+cpu` — the newest release whose CPU index publishes `cp310`,
+`cp311` **and** `cp312` wheels, so a single constraint covers every interpreter
+`requires-python` supports. Option A (per-interpreter pins) was rejected: two
+pins, two provenance paths, no benefit, and it invites silent drift.
+
+## Source-provenance boundary (exact, not approximate)
+
+The #308 comment claimed "the CPU index is used ONLY for torch", but the first
+install step did **not** pass `--no-deps`, so the CPU index also resolved
+torch's transitive requirements (`filelock`, `typing-extensions`, `setuptools`,
+`sympy`, `networkx`, `jinja2`, `fsspec`) — a wider provenance surface than
+stated. Corrected in `scripts/ci_install.sh`:
+
+1. **step 1** — `--index-url <CPU>` + `--only-binary=:all:` + `--no-deps` +
+   `-c constraints/ci-cpu-torch.txt`, requirement `torch` **only**;
+2. **step 2** — `--index-url https://pypi.org/simple` + `-c <constraint>` for the
+   editable project and every other distribution;
+3. **step 3** — fail closed unless `pip check` is clean, no `nvidia-*`/`triton`
+   is installed, and `torch` is still the `+cpu` build.
+
+### Provenance proof (CPython 3.10.22 run of `ci_install.sh ".[dev]"`)
+
+```
+Looking in indexes: https://download.pytorch.org/whl/cpu
+Collecting torch
+  Using cached torch-2.14.1%2Bcpu-cp310-cp310-manylinux_2_28_x86_64.whl (196.2 MB)
+Installing collected packages: torch
+...
+Collecting llama-index-core==0.14.25 (from nexus-ai-agent==3.13.0)   # step 2, PyPI
+...
+ci_install: torch==2.14.1+cpu, pip check clean, no CUDA packages
+```
+
+Only one `Looking in indexes` line appears (the CPU index), and every
+`download.pytorch.org` reference in the log is the `torch` wheel — zero non-torch
+downloads from the CPU index.
+
+## Matrix verification (all three supported interpreters)
+
+Each environment was created clean, ran `scripts/ci_install.sh ".[dev]"`, and
+reported `ci_install: torch==2.14.1+cpu, pip check clean, no CUDA packages`:
+
+| Interpreter | torch | nvidia/triton | pip check |
+|---|---|---|---|
+| CPython 3.10.22 | `2.14.1+cpu` | none | clean |
+| CPython 3.11.17 | `2.14.1+cpu` | none | clean |
+| CPython 3.12.15 | `2.14.1+cpu` | none | clean |
+
+Full suite (`pytest -q -m "not slow"`): CPython 3.10.22 → **6173 passed, 39
+skipped, 1 failed** (16m00s). The single failure,
+`tests/integration/test_execution_native_backend.py::test_stale_attempt_cannot_complete_after_takeover`,
+is a known timing flake unrelated to torch: it passed 4/4 on immediate reruns on
+the same interpreter. 3.11/3.12 full suites run in CI (`python-parity`,
+`continuum-evidence`).
+
+## Guard + mutation evidence
+
+`tests/unit/test_ci_torch_disk_budget.py` now asserts on the **comment-stripped
+code** (a comment that says `--no-deps` no longer satisfies the test) and pins:
+the exact `+cpu` pin, that the parity matrix equals the interpreter set the pin
+was verified against, no global extra index, `--no-deps` on the torch step,
+PyPI-only remainder, and the fail-closed postcondition. A new CI step runs
+`scripts/ci_torch_mutations.py`, which kills **10/10** mutants (source isolation,
+exact pin, interpreter coverage, parity drift, `--no-deps` removed, constraint
+removed, CUDA check removed, `+cpu` check removed, `pip check` removed, workflow
+bypasses the script) and restores the tree byte-identically.
+
+## Residual advisory defects (unchanged)
+
+The `filelock` / `chromadb` / `diskcache` advisories remain `TRACKED` /
+`NOT_REACHABLE_WITH_PROOF` (see above) — this mission does not touch them.
