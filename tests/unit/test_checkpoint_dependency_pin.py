@@ -6,6 +6,11 @@ disabled, and six reconciler/lifecycle tests went red on ``main`` and every PR
 without any code change.  Drift must stay a *failure, not a repair* (see
 docs/DECISION_LOG.md), so the fix is determinism: the dependency that defines the
 checkpoint schema has to be pinned exactly, as its postgres sibling already is.
+
+The 2026-11-03 NEXUS-OMNI supply-chain pass raised both pins to their patched
+releases (``sqlite 3.1.2`` / ``postgres 3.1.3``, GHSA-6hmw-9432-67qq) and
+regenerated the committed sqlite golden with ``nexus checkpoints golden update``;
+these tests keep the exact-pin invariant and the golden-matches-installed guard.
 """
 
 from __future__ import annotations
