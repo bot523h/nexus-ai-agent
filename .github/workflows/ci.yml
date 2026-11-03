@@ -368,6 +368,14 @@ jobs:
       - run: python scripts/creative_redelivery_mutations.py
       - name: the working tree must be unchanged after creative redelivery mutation testing
         run: git diff --exit-code
+      # Same evidence rule for the CI CPU-torch install contract
+      # (task-omni-ci-cpu-torch-01): the package-source isolation, the
+      # interpreter-covering pin and the fail-closed postcondition are re-attacked
+      # ten ways. Each mutant must flip the guard RED and be restored byte for
+      # byte (scripts/ci_torch_mutations.py).
+      - run: python scripts/ci_torch_mutations.py
+      - name: the working tree must be unchanged after CPU-torch mutation testing
+        run: git diff --exit-code
 
   # Same evidence rule for the temporal authority (MODULE_MAP law R15).  The
   # invariants are pinned by tests/unit/test_temporal_exactness.py,
