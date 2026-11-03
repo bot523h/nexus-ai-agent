@@ -174,3 +174,19 @@ union, 180 claims, integrity OK.
 Remaining 42 PRs: unchanged primary dispositions from the first pass
 (READY / BEHIND / DIRTY / DRAFT / CODE_FIX_REQUIRED / SECURITY_REVIEW_REQUIRED /
 DUPLICATE_CANDIDATE / BLOCKED); no new mass-merge, no dedupe performed.
+
+## Live census reconciliation (API, 2026-11-03)
+
+Re-collected all 47 open PRs from the API (not the earlier A–G pass). Primary
+disposition by `mergeable_state`, one per PR:
+
+| Primary | Count | Meaning |
+|---|---|---|
+| READY | 5 | `unstable` — mergeable, base == main; the five mission PRs #304–#308 |
+| DIRTY | 27 | conflicts with `main` (need rebase/convergence, not blind merge) |
+| DRAFT | 11 | explicitly draft |
+| BEHIND | 4 | behind `main` (strict branch protection) |
+
+The 27 DIRTY are the architectural-conflict / stale branches; they stay isolated
+until their responsibilities are sliced. No mass merge, no force push, no
+deduplication performed in this pass.
