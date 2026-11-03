@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-02T20:01:41Z",
+  "updated_at": "2026-11-03T05:32:32Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1120,6 +1120,16 @@
         "OPERATION_TRUTH.json"
       ],
       "note": "Registered 2026-10-31 by arena/7622c61d-nexus-ai-agent (mission NAGAR-IBPC-SECURITY-CLOSURE-01) on top of active claim task-ibpc-live-editing-01 (same branch/PR #298). Out of scope: task-267 (diagnostics/truth.py), task-281 (cognition eval files), PR #273 files. The ci.yml edit is limited to the trust-mutations job install steps; the mutation script itself is not weakened."
+    },
+    {
+      "id": "ci-disk-budget-omni",
+      "description": "CI disk budget: pin the CPU torch wheel index so `pip install -e` never pulls the CUDA stack (Errno 28 on the required test job)",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/langsmith-smoke.yml",
+        "tests/unit/test_ci_torch_disk_budget.py"
+      ]
     }
   ],
   "claims": [
@@ -7952,6 +7962,36 @@
         "P1 TOCTOU: _stage_source opens source O_RDONLY|O_NOFOLLOW and destination O_NOFOLLOW; staged copy re-hashed against the admitted asset digest before enqueue; verifier reads the staged immutable copy",
         "Independent verification (Jules session 9431742613443431271) VERIFIED all four with file:line evidence; mutation harness extended with staging_no_follow_removed (23/23 killed)"
       ]
+    },
+    {
+      "task": "task-omni-ci-cpu-torch-01",
+      "title": "NEXUS-OMNI-POST-AUDIT: required CI `test` job disk flake (Errno 28) — CPU torch index",
+      "zone": "ci-disk-budget-omni",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Root-cause the REQUIRED `test` job Errno 28 (default PyPI torch wheel pulls the ~2.3GB CUDA stack). Pin PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu at workflow scope in ci.yml + maintenance.yml + langsmith-smoke.yml; add an anti-regression test; prove full suite green on CPU torch and the guard non-vacuous.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "All workflows running `pip install -e` declare PIP_EXTRA_INDEX_URL=CPU torch index at workflow scope (before jobs:)",
+        "Full suite `pytest -q -m 'not slow'` is green in an env installed with the CPU index (no nvidia-* wheels present)",
+        "tests/unit/test_ci_torch_disk_budget.py fails if the env line is removed (non-vacuous)"
+      ],
+      "evidence_required": [
+        "pytest -q -m 'not slow' counts on the CPU-torch env + SHA",
+        "pip list | grep -c nvidia == 0 in that env",
+        "mutation: revert the env line -> the guard test goes RED"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/langsmith-smoke.yml",
+        "tests/unit/test_ci_torch_disk_budget.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-ci-cpu-torch-20261103",
+      "claimed_at": "2026-11-03T05:32:32Z",
+      "ttl_hours": 24,
+      "gates_owner": false
     }
   ],
   "deferred_log": [

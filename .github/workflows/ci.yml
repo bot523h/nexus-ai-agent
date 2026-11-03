@@ -16,6 +16,16 @@ on:
 permissions:
   contents: read
 
+# `pip install -e ".[dev]"` resolves the full runtime closure. sentence-transformers
+# (and llama-cpp-python) pull `torch`, and the default PyPI `torch` wheel ships the
+# CUDA stack: ~539 MB torch + ~1.8 GB of `nvidia-*`/`triton` wheels. On a standard
+# runner that exhausts the disk mid-install (`OSError: [Errno 28] No space left on
+# device`), red-ing the REQUIRED `test` job intermittently — a flaky merge gate.
+# The official CPU wheel index serves `torch==...+cpu` with no CUDA dependencies;
+# it is consulted only for torch, every other package still resolves from PyPI.
+env:
+  PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+
 # A superseded push's matrix run is wasted minutes: cancel it so the queue
 # always reflects the newest SHA (the maintenance workflow deliberately does
 # NOT do this — scheduled backup runs must never be cancelled).

@@ -19,6 +19,15 @@ on:
 permissions:
   contents: read
 
+# `pip install -e .` resolves the full runtime closure: sentence-transformers /
+# llama-cpp-python pull `torch`, whose default PyPI wheel ships the CUDA stack
+# (~2.3 GB of torch + nvidia-*/triton wheels). That can exhaust the runner disk
+# (`Errno 28`) before any maintenance step runs. The official CPU wheel index
+# serves `torch==...+cpu` with no CUDA dependencies; every other package still
+# resolves from PyPI.
+env:
+  PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+
 # One shared group: a scheduled backup never overlaps a running one, and a
 # manual run queues behind an in-progress schedule instead of cancelling it.
 concurrency:

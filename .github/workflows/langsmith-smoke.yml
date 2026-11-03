@@ -17,6 +17,11 @@ on:
 permissions:
   contents: read
 
+# Same disk budget as the other workflows: `pip install -e .` would otherwise
+# pull the CUDA torch stack (~2.3 GB) and risk `Errno 28` on a standard runner.
+env:
+  PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+
 jobs:
   smoke:
     name: langsmith-smoke
