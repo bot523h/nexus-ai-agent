@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-02T22:35:06Z",
+  "updated_at": "2026-11-03T05:42:24Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1131,6 +1131,16 @@
         "docs/audits/NEXUS_OMNI_PR_CONVERGENCE_LEDGER_2026-11-03.md",
         "docs/audits/NEXUS_OMNI_RUNTIME_DATA_RECOVERY_AUDIT_2026-11-03.md",
         "docs/audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md"
+      ]
+    },
+    {
+      "id": "privacy-omni",
+      "description": "Unified LLM-egress privacy gate (legacy Telegram chat + AI-memory consent) — owner decision",
+      "paths": [
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/ai_memory.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "docs/architecture/DATA_LIFECYCLE.md"
       ]
     }
   ],
@@ -8004,6 +8014,34 @@
         "docs/audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md"
       ],
       "note": "docs/README.md index line deferred: path is under task-nagar-workspace-redelivery-01's live lease."
+    },
+    {
+      "task": "task-omni-sec4-legacy-privacy-01",
+      "title": "SEC-4: legacy Telegram chat bypasses PrivacyPolicy — unified egress gate (owner decision)",
+      "zone": "privacy-omni",
+      "priority": "P2",
+      "status": "deferred",
+      "scope": "The legacy /ai chat path (bot/handlers.py::ai_cmd -> features/ai_chat.py::GeminiEngine.chat) egresses user text to Google with no privacy-mode gate; the IBPC PrivacyPolicy is not on any message path. A correct fix is a UNIFIED egress gate at the composition root (also fed by the P0-7 AI-memory consent gate), not a handler patch — building a third partial policy would violate the single-authority rule.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "One egress gate at the composition root covers chat, ai_memory, RAG and summarizer; no per-handler partial gate.",
+        "LOCAL_VAULT default refuses egress with a typed error; cloud modes require per-principal consent.",
+        "Adversarial tests: no consent, expired/revoked consent, cross-user/cross-tenant, retry-after-revocation, async path."
+      ],
+      "evidence_required": [
+        "design record + tests proving every path shares the gate"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/features/ai_chat.py",
+        "src/nexus_ai_agent/features/ai_memory.py",
+        "src/nexus_ai_agent/bot/handlers.py",
+        "docs/architecture/DATA_LIFECYCLE.md"
+      ],
+      "owner_hint": "owner decision required (architecture change)",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false
     }
   ],
   "deferred_log": [
@@ -8112,6 +8150,15 @@
       "subtask": "task-omni-audit-index-01",
       "resolved_on_branch": "arena/omni-audit-reports",
       "resolution": "Index rows appended to docs/README.md (append-only table rows, one per report) so the required docs-integrity gate stays green. docs/README.md is under another agent's live lease; this is a transparent, additive overlap — at merge the board/README conflict resolution is a trivial append-union (newest state wins, schema 2 must pass test_agent_board.py)."
+    },
+    {
+      "task": "task-omni-sec4-legacy-privacy-01",
+      "title": "SEC-4 unified LLM-egress privacy gate (owner decision)",
+      "title_fa": "دروازهٔ یکپارچهٔ حریم خصوصی برای خروج داده به LLM (نیازمند تصمیم مالک)",
+      "deferred_at": "2026-11-03T05:42:24Z",
+      "agent_branch": "arena/omni-audit-reports",
+      "reason": "Wiring the IBPC PrivacyPolicy into the legacy handler would create a third partial policy authority (IBPC + AI-memory already exist), violating the single-authority rule. The correct fix is an architecture-level unified egress gate at the composition root — an owner decision, not a handler patch.",
+      "next_step": "Owner decides the unified gate design; then implement at build_feature_engines/GeminiEngine with adversarial tests."
     }
   ],
   "next_work": [

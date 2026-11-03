@@ -143,3 +143,180 @@ ruff check . && ruff format --check .
 # CI fix (campaign, minimal install)
 python scripts/queue_ownership_mutations.py     # EXIT=0, 10/10 mutants killed
 ```
+
+---
+
+# POST-AUDIT CLOSURE — `NEXUS-OMNI-POST-Audit-CLOSURE-01` (2026-11-03)
+
+Second pass. Every prior claim was re-checked against live GitHub, git and the
+installed environment; nothing below is copied from the first report.
+
+> **Document consolidation note.** The mission asks for six new `..._CLOSURE_2026-11-03.md`
+> files. New files in `docs/audits/` must be indexed in `docs/README.md`
+> (`tests/unit/test_docs_integrity.py::test_every_document_is_indexed_in_docs_readme`), but
+> `docs/README.md` is under an **active claim** (`task-nagar-workspace-redelivery-01`,
+> board `2026-11-02T20:01Z`) and `agent_board.py check` refuses it. To respect ownership and
+> keep CI green, the closure is delivered as clearly-labelled sections inside the six
+> already-indexed NEXUS_OMNI reports instead of unindexed duplicates. The section headers use
+> the exact requested deliverable names so each is traceable.
+
+## Phase Zero — live truth (re-derived, not assumed)
+
+| Fact | Live value |
+|---|---|
+| `main` SHA | `5ce9f7d3f558ab903ece5f19018b28a5e2ff9a04` — **unchanged** since PR #303 |
+| OMNI PRs merged | **none** (#304–#307 all still open) |
+| Open PRs | **47** (11 draft) |
+| Required checks | `lint (ruff + mypy + version lockstep)`, `test (pytest -m "not slow")`, `merge-base-guard (base == main)`; `strict: true`; no required reviews; conversation-resolution disabled |
+| Board | 178 claims, 10 `next_work`, 82 zones; active: `task-nagar-workspace-redelivery-01`, `task-omni-dep-supply-chain-01` |
+| `docs/README.md` | **actively claimed** (locked) |
+
+## NEW P1 finding — the REQUIRED `test` job is disk-flaky (not just the mutation job)
+
+The first report scoped `Errno 28` to the advisory `queue-ownership-mutations`
+job (#304). Live check-runs show the **required** `test` job also fails:
+
+- PR #307 test job `125610099588` (run `41542383947`) → **failure** at step
+  `pip install -e ".[dev]"`, ending `OSError: [Errno 28] No space left on device`
+  after downloading `torch-2.15.0` (539.2 MB) + `nvidia_cudnn_cu13` (519.2 MB) +
+  `nvidia_cublas` (404.9 MB) + `nvidia_cusolver` (227.9 MB) + `nvidia_cufft`
+  (218.3 MB) + `nvidia_nccl_cu13` (216.0 MB) + `triton` + `cusparse`/`cusparselt`.
+- A later rerun of the **same SHA** (`125616961754`, run `41544451340`) → **success**.
+
+A required gate that flips green/red on the same SHA is a flaky merge gate.
+
+**Root cause.** `pip install -e ".[dev]"` resolves the full runtime closure;
+`sentence-transformers` (and `llama-cpp-python`) pull `torch`, and the *default*
+PyPI `torch` wheel ships the CUDA stack (~2.3 GB) that CI never uses.
+
+**Fix — PR #308** (`arena/omni-ci-cpu-torch-20261103`, claim `task-omni-ci-cpu-torch-01`):
+`env: PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu` at workflow scope in
+`ci.yml`, `maintenance.yml`, `langsmith-smoke.yml`; a new
+`tests/unit/test_ci_torch_disk_budget.py` keeps it from being reverted.
+
+**Evidence (this session, exact SHA `e2f7df3c`).**
+
+```
+# CPU-torch env, `pip install -e ".[dev]"`
+pip list | grep -icE '^nvidia|triton'   → 0
+python -m pytest -q -m "not slow"        → 6169 passed, 39 skipped, 0 failed (10m15s)
+# non-vacuity
+remove env line → test_ci_torch_disk_budget.py: 2 failed; restore → 3 passed
+```
+
+This complements #304 (advisory job) rather than duplicating it — #304 does not
+touch the required `test` job.
+
+## NEXUS_OMNI_PRIVACY_CLOSURE_2026-11-03 — SEC-4 (legacy Telegram privacy boundary)
+
+**Trace (call graph, not class names).** The IBPC `PrivacyPolicy`
+(`src/nexus_ai_agent/nagar/ibpc/privacy.py`) is imported only by
+`continuum/pack_coverage.py` — i.e. **not** on any message path. The legacy chat
+egress is:
+
+```
+Telegram Update → bot/handlers.py::ai_cmd (line ~461)
+  → features/ai_chat.py::GeminiEngine.chat(text, conv_id, user_id)
+    → httpx POST https://generativelanguage.googleapis.com/v1beta/...:generateContent
+```
+
+No `PrivacyPolicy`, `PrivacyMode` or consent check appears anywhere in
+`features/ai_chat.py` or `handlers.py`. So the legacy `/ai` path egresses user
+text to Google with no privacy-mode gate.
+
+**Why no fix was made.** The IBPC `PrivacyPolicy` is the *live-editing* authority,
+not a general LLM-egress policy. Two privacy authorities already exist and serve
+different subsystems: IBPC (session vault) and the AI-Memory consent gate
+(`features/ai_memory.py`, P0-7, default-deny per user). The mission's own rule is
+*do not build a second policy authority*; wiring IBPC's policy into `handlers.py`
+would create exactly that (a third, partial gate covering one handler while
+`ai_memory`, RAG and the summarizer stay on their own paths).
+
+**Correct disposition: `BLOCKED` on an owner decision.** The real fix is a
+*unified* egress gate at the composition root
+(`build_feature_engines`/`GeminiEngine`) that the AI-Memory gate also feeds — an
+architecture change, not a handler patch. Deferred to owner; recorded in the
+board. This is a **P2 documented boundary**, not a silent hole: the operator
+chooses the provider and the data-flow is in the README/data-lifecycle docs.
+
+## NEXUS_OMNI_SUPPLY_CHAIN_CLOSURE_2026-11-03 — advisories, with reachability proof
+
+`pip-audit` (env with the full closure) findings and dispositions:
+
+| Package | Ver | IDs | Fix | Disposition | Proof |
+|---|---|---|---|---|---|
+| `langgraph-checkpoint-sqlite` | 3.1.1→**3.1.2** | GHSA-6hmw-9432-67qq | 3.1.2 | **PATCHED** (PR #307) | `grep langgraph.store src/` → 0 hits (vuln is the `*Store` classes; NEXUS uses only `SqliteSaver`) |
+| `langgraph-checkpoint-postgres` | 3.1.2→**3.1.3** | GHSA-6hmw-9432-67qq | 3.1.3 | **PATCHED** (PR #307) | same |
+| `chromadb` | 1.5.9 | CVE-2026-45829/45830/45831/45833 (+PYSEC-2026-311/3813/3814/3815) | none | **NOT_REACHABLE_WITH_PROOF** | only use is `chromadb.PersistentClient(path=…)` (local, `features/rag.py:184`); no `HttpClient`/server; all four CVEs are server-side (pre-auth code injection, RBAC tenant check, authenticated R/W) |
+| `diskcache` | 5.6.3 | CVE-2025-69872 (PYSEC-2026-2447) | none | **NOT_REACHABLE_WITH_PROOF** | transitive of `llama_cpp_python`; `grep -rn diskcache src/` → 0 hits |
+| `filelock` | 3.32.7 | CVE-2026-112907…112940 (13) | 4.0.9/4.2.1 | **TRACKED** | transitive of `huggingface_hub`/`litellm`/`torch`; local-symlink/race issues only matter in a shared-writable-dir threat model NEXUS does not have |
+
+**Honesty correction.** The first report called the chromadb IDs "low reachability"
+from the *absence of an HTTP import*. That is weaker than proof; the strengthened
+claim above names the exact reachable client (`PersistentClient`, local path only)
+and the server-side nature of each CVE. The incomplete ID `CVE-2026-1129xx` is
+resolved to the concrete `CVE-2026-112907…112940` set.
+
+**Why not force-bump filelock.** The closure already resolves with `filelock>=4.2.1`,
+but `pip install -e .` cannot pin a transitive; a project-wide bump requires a
+constraints file. Decision: **TRACKED** with the concrete upgrade path
+(`constraints.txt` + `pip install -c`), deferred — the affected API is not invoked
+with attacker-controlled paths.
+
+## NEXUS_OMNI_CI_RUNTIME_RECOVERY_CLOSURE_2026-11-03
+
+- **CI:** the required `test` job disk fix is #308 (above). `maintenance.yml`
+  failures are **not** disk: the latest run (`41446266076`) failed in
+  `housekeeping` on `R2 list failed (prefix='backups/db/'): ParamValidationError:
+  Invalid bucket name ""` — the malformed `R2_BUCKET` secret, i.e. SEC-1/PR #305.
+  Status split kept honest: **CODE_FIXED** (#305) ≠ **CONFIG_CORRECTED**
+  (owner must fix the secret) ≠ **SCHEDULED_OPERATION_VERIFIED** (not yet).
+- **Restore drill:** `maintenance.yml::restore-drill` (Sunday cron) builds a real
+  artifact and restores it; it has **never run green** because the R2 secret is
+  bad and scheduled runs only fire on `main`. **NOT_PROVEN** in this environment.
+- **CircleCI:** `CircleCI Pipeline` = `error` on every SHA, but it is **not** in
+  `required_status_checks`. Whether it is intentionally inactive needs owner
+  access to CircleCI settings → **NOT_VERIFIED** (do not change required checks).
+
+## NEXUS_OMNI_PR_CONVERGENCE_CURRENT_TRUTH_2026-11-03
+
+47 open PRs, live state (`mergeable`/`mergeable_state` read this session):
+
+- **A — READY (required checks green, base == main):** #304, #305, #306, #307,
+  and #308. Owner merge required (no unauthorized merges).
+- **C — BEHIND (mergeable but stale base):** #64, #92, #97, #114, #204, #257,
+  #295, #301.
+- **D — ARCHITECTURAL_CONFLICT (`dirty`):** #33, #60, #66, #69, #89, #99, #117,
+  #205, #247, #113, #115, #135, #140, #150, #58, #73, #84, #118, #121, #122,
+  #129, #137, #149, #157, #193, #230, #273, #284, #285, #290, #294, #297, #57,
+  #63. These must be **extracted into slices**, never mass-merged.
+- **E — DUPLICATE candidates (compare real diffs first):** #113/#115 (W1 runtime
+  closure), #135/#140 (Studio PlanTransaction), #284/#285 (causal memory).
+- **G — SECURITY_REVIEW_REQUIRED:** #58 (Security Boundary hardening S1–S5) — a
+  security PR that predates the current authz seam; needs a real review, not a
+  blind merge.
+
+The `D`-class extraction contract (responsibility → shared files → smallest
+reviewable slice → acceptance criteria → integration gate) is defined in the PR
+Convergence Ledger; it is owner work, not something to force-rewrite.
+
+## NEXUS_OMNI_FINAL_VERIFICATION_MATRIX_2026-11-03
+
+| Item | State | Evidence | Remaining |
+|---|---|---|---|
+| Required `test` disk flake | **FIXED** | PR #308; 6169/39/0 on CPU torch; guard non-vacuous | CI green on #308 |
+| `queue-ownership-mutations` disk | **FIXED (other agent)** | PR #304 | CI green on #304 |
+| R2 bucket validation | **CODE_FIXED** | PR #305 | owner fixes `R2_BUCKET` secret |
+| LangGraph checkpoint CVE | **PATCHED** | PR #307; 6169/39/0 | CI green on #307 |
+| SEC-4 legacy privacy | **BLOCKED (owner)** | call-graph trace above | unified egress gate (architecture) |
+| chromadb/diskcache advisories | **NOT_REACHABLE_WITH_PROOF** | local-only client; no diskcache import | — |
+| filelock advisories | **TRACKED** | transitive; path not attacker-controlled | constraints file (deferred) |
+| Restore drill | **NOT_PROVEN** | blocked on R2 secret | owner secret + a run |
+| CircleCI | **NOT_VERIFIED** | not a required check | owner settings access |
+
+## Owner actions (only the owner can do these)
+
+1. Merge #304, #305, #307, #308 (and #306 for the reports) after required checks.
+2. Fix the `R2_BUCKET` repository secret (malformed → `Invalid bucket name ""`).
+3. Decide SEC-4: unified egress gate vs. accept the documented boundary.
+4. Decide whether CircleCI is meant to be active; adjust required checks only if so.

@@ -130,3 +130,24 @@ PR now has a classification and a disposition; the owner decides the merge
 order. The single highest-leverage action is to **extract the large `D`-class
 PRs**, because they are the ones that make the board and the two choke-point
 files (`cli.py`, `bot/handlers.py`) conflict for everyone else.
+
+---
+
+## DELTA — 2026-11-03 post-audit re-classification (live truth)
+
+This snapshot supersedes the first-pass counts. Live `mergeable_state` was read
+from the GitHub API this session; base for every PR is still `main` @ `5ce9f7d3`.
+
+| Change | Detail |
+|---|---|
+| Open PR count | 46 → **47** (added #308, my CI disk fix) |
+| New READY | **#308** (required checks green, base == main) |
+| Re-confirmed READY | #304, #305, #306, #307 — all required checks **success** on their exact head SHA |
+| Newly `BEHIND` | #295, #301, #97, #64, #92, #114, #204, #257 (mergeable but stale base) |
+| `DIRTY` (D-class) | #33, #57, #58, #60, #63, #66, #69, #73, #84, #89, #99, #113, #115, #117, #118, #121, #122, #129, #135, #137, #140, #149, #150, #157, #193, #205, #230, #247, #273, #284, #285, #290, #294, #297 |
+| Duplicate candidates | #113/#115, #135/#140, #284/#285 (compare real diffs, do not close on title) |
+| Security review | #58 (S1–S5 boundary hardening) |
+
+Note: no PR was **incorrectly** labelled as needing rebase — the `C` set above is
+`mergeable=true` with a stale base (a real rebase need), while the `D` set is
+`dirty` (real conflict).

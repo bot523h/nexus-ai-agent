@@ -160,3 +160,23 @@ compatibility/regression argument, not "latest is better".
 | Split heavy extras out of default CI installs | P3 | deferred (owner decision; `extras-matrix` already covers 3 legs) |
 
 No test was weakened, skipped, or deleted in this audit.
+
+---
+
+## §11 POST-AUDIT ADDENDUM — the REQUIRED `test` job was disk-flaky (P1)
+
+The first pass scoped `Errno 28` to the advisory `queue-ownership-mutations` job.
+That was incomplete. Live check-runs prove the **required** `test (pytest -m
+"not slow")` job also fails on the same root cause:
+
+- run `41542383947` job `125610099588` (PR #307 head `0becd39e`) → **failure** at
+  `pip install -e ".[dev]"` after pulling `torch-2.15.0` (539.2 MB) +
+  `nvidia_cudnn_cu13` (519.2 MB) + `nvidia_cublas` (404.9 MB) + `nvidia_cusolver`
+  (227.9 MB) + `nvidia_cufft` (218.3 MB) + `nvidia_nccl_cu13` (216.0 MB) + triton
+  → `OSError: [Errno 28] No space left on device`;
+- rerun `41544451340` job `125616961754`, **same SHA** → success.
+
+So a required merge gate flips green/red on identical input. **Fixed by PR #308**
+(`PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu` at workflow scope in
+`ci.yml`/`maintenance.yml`/`langsmith-smoke.yml`, plus a non-vacuous guard test).
+This is distinct from #304 (advisory job only) and does not duplicate it.
