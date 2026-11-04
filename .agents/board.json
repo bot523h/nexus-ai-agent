@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-04T20:14:46Z",
+  "updated_at": "2026-11-04T20:29:29Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1226,7 +1226,8 @@
         "tests/integration/test_durable_project_concurrency.py",
         "tests/architecture/test_durable_project_state_boundary.py",
         "docs/architecture/DURABLE_PROJECT_STATE.md",
-        "docs/README.md"
+        "docs/README.md",
+        "scripts/durable_project_state_mutations.py"
       ]
     }
   ],
@@ -8479,7 +8480,8 @@
         "tests/integration/test_durable_project_concurrency.py",
         "tests/architecture/test_durable_project_state_boundary.py",
         "docs/architecture/DURABLE_PROJECT_STATE.md",
-        "docs/README.md"
+        "docs/README.md",
+        "scripts/durable_project_state_mutations.py"
       ],
       "owner_hint": "Supersedes the stale PR #290 registration on an independent branch.",
       "agent_branch": "arena/omni-durable-project-state-20261104",

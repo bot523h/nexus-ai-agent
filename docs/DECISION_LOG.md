@@ -2674,3 +2674,49 @@ code, each with a failing-first regression and a mutation probe (campaign now 12
 The documented limitation stands: the digest is a content witness, and a TOCTOU window
 between the worker's re-measure and FFmpeg opening the path is accepted because the
 workspace is owner-only and the path is never redirected through a link.
+
+## D-0037 — A project revision is an immutable, content-addressed snapshot and the head is a compare-and-swap pointer; durability records what the CommandBus already accepted (task-282)
+
+**Date:** 2026-11-04 · **Status:** accepted · **Task:** `task-282-durable-project-state-lifecycle`
+
+**Context.** The Studio `Project` state (`creative/studio/models.py`) carries a
+derived `state_hash` and a monotonic `state_revision` owned by the `CommandBus`,
+but Wave 1 kept it **in memory only**: a process restart lost the project and its
+revision history, so no creative lineage could be rebuilt across a restart. The
+gap was real, not cosmetic — the CommandBus applied commands atomically yet
+nothing durable recorded the accepted state.
+
+**Decision.** Add one durable record for the Studio project/revision lifecycle,
+reusing the repository's **single** storage schema (`storage/models.py`) and
+engine (`storage/db.py`):
+
+- A **revision** is the canonical serialization of the `Project`
+  (`creative/studio/persistence.py::canonical_state_bytes`) and its identity is
+  the content address `sha256:<hex>` of those bytes. The revision row is
+  **immutable** (the content hash is the primary key), so identical state cannot
+  be stored twice and history cannot be rewritten.
+- The per-project **head** row is the single mutable pointer, advanced with an
+  optimistic **compare-and-swap** on `revision_id`. Two concurrent writers race
+  one conditional `UPDATE`; exactly one wins and the loser gets a typed
+  `RevisionConflict` with the head untouched. A benign race committing the *same*
+  state is idempotent success.
+- `AppProject` stays the canonical project identity; the durable store builds no
+  second engine, queue, renderer, verifier or provenance/passport ledger. The
+  `CommandBus` stays the single write authority — durability only records what
+  the bus already accepted (`creative/project_state/lifecycle.py`).
+
+**Rejected alternatives.** (a) Reusing the `AppProject` row to hold the whole
+state — rejected: it would make a content-addressed snapshot mutable and lose the
+CAS. (b) A filesystem/JSON sidecar per project — rejected: a second store with no
+transactional CAS and no cross-process arbiter. (c) Last-writer-wins commits —
+rejected: they silently discard a concurrent writer's accepted revision.
+
+**Evidence.** `tests/unit/test_durable_project_state.py` (content addressing,
+immutability, CAS conflict, idempotent replay, cross-project refusal),
+`tests/integration/test_durable_project_restart.py` (a real OS process commits; a
+fresh store rebuilds the identical id/hash/state),
+`tests/integration/test_durable_project_concurrency.py` (real interleaving +
+atomic rollback), `tests/architecture/test_durable_project_state_boundary.py`
+(no parallel authority, single schema site), and the mutation campaign
+`scripts/durable_project_state_mutations.py`. Migration `20261104dpstate`;
+architecture page `docs/architecture/DURABLE_PROJECT_STATE.md`.
