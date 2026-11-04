@@ -12,6 +12,7 @@ These pin the source-of-truth rules directly against a real SQLite database:
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -68,6 +69,8 @@ def test_content_address_is_canonical_and_deterministic() -> None:
     a = canonical_state_bytes(project)
     b = canonical_state_bytes(project.model_copy(deep=True))
     assert a == b
+    # The address is independently pinned: sha256 of the bytes, "sha256:" tagged.
+    assert content_address(a) == "sha256:" + hashlib.sha256(a).hexdigest()
     assert content_address(a) == content_address(b)
     assert content_address(a).startswith("sha256:")
     # A different state is a different address.

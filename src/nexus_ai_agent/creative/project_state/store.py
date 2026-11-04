@@ -103,13 +103,19 @@ class SqlProjectRevisionStore:
         await self._ensure_project_identity(project.project_id)
 
         async with self._session_factory() as session:
-            head = await session.get(orm.ProjectRevisionHead, project.project_id)
-            if head is not None and head.revision_id == revision_id:
+            # Read only the head id (a scalar, not an ORM instance) so the
+            # genesis branch below can insert without an identity-map clash.
+            head_id = (
+                await session.execute(
+                    select(orm.ProjectRevisionHead.revision_id).where(
+                        orm.ProjectRevisionHead.project_id == project.project_id  # type: ignore[arg-type]
+                    )
+                )
+            ).scalar_one_or_none()
+            if head_id is not None and head_id == revision_id:
                 # Idempotent replay: the exact state is already the accepted
                 # head, so this is a no-op success — never a conflict.
                 return await self._read_revision(session, project.project_id, revision_id)
-            if expected_parent_revision_id is None and head is not None:
-                raise RevisionConflict("project already has a head; genesis refused")
             await self._insert_revision(
                 session,
                 project_id=project.project_id,

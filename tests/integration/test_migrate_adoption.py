@@ -17,7 +17,7 @@ from nexus_ai_agent.cli import app
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.storage import db as db_module
 
-_HEAD = "d4e1c0a79b21"
+_HEAD = "20261104dpstate"
 
 
 def _legacy_pendingapproval() -> list[tuple[str, str]]:

@@ -61,12 +61,17 @@ MUTATIONS: tuple[Mutation, ...] = (
         "removing the check leaks another project's state",
     ),
     Mutation(
-        "genesis_reentry_guard_removed",
+        "genesis_arbiter_defanged",
         STORE,
-        "            if expected_parent_revision_id is None and head is not None:",
-        "            if False:",
-        "a second genesis must be refused; without the guard a new head can be "
-        "forced over an existing project's history",
+        """            try:
+                await session.flush()
+            except IntegrityError as exc:
+                raise RevisionConflict("project already has a head; genesis refused") from exc
+            return""",
+        """            await session.flush()
+            return""",
+        "a second genesis must be refused as a typed RevisionConflict; defanging "
+        "the primary-key arbiter lets a duplicate head overwrite the project",
     ),
     Mutation(
         "unset_cas_token_accepted",
