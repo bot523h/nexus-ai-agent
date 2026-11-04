@@ -62,11 +62,6 @@ from nexus_ai_agent.config.settings import Settings
 
 from .base import ProviderUnavailable, StorageError
 
-#: Backblaze endpoint host suffix. A host that does not end in this is not B2,
-#: and pointing the credentials at an arbitrary host is the misconfiguration
-#: this provider refuses (also an SSRF/credential-exfiltration boundary).
-B2_HOST_SUFFIX = ".backblazeb2.com"
-
 #: Every remote operation is confined to the database-backup namespace. The
 #: Asset Library and the RAG document tier are NOT served by this provider, so
 #: a key outside the prefix is a bug, not a feature.
@@ -374,4 +369,4 @@ class B2Provider:
         return deleted
 
 
-__all__ = ["B2Provider", "BACKUP_PREFIX", "B2_HOST_SUFFIX", "endpoint_region", "validate_endpoint"]
+__all__ = ["B2Provider", "BACKUP_PREFIX", "endpoint_region", "validate_endpoint"]
