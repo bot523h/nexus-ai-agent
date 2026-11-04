@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-02T22:24:53Z",
+  "updated_at": "2026-11-04T11:50:40Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1120,6 +1120,42 @@
         "OPERATION_TRUTH.json"
       ],
       "note": "Registered 2026-10-31 by arena/7622c61d-nexus-ai-agent (mission NAGAR-IBPC-SECURITY-CLOSURE-01) on top of active claim task-ibpc-live-editing-01 (same branch/PR #298). Out of scope: task-267 (diagnostics/truth.py), task-281 (cognition eval files), PR #273 files. The ci.yml edit is limited to the trust-mutations job install steps; the mutation script itself is not weakened."
+    },
+    {
+      "id": "ci-quality-omni",
+      "description": "NEXUS-OMNI forensic campaign: CI/CD disk-budget + supply-chain repairs",
+      "paths": [
+        ".github/",
+        "scripts/queue_ownership_mutations.py"
+      ]
+    },
+    {
+      "id": "ci-disk-budget-omni",
+      "description": "CI disk budget + supply chain: package-scoped CPU torch install (scripts/ci_install.sh + constraints/ci-cpu-torch.txt); no global extra index",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/langsmith-smoke.yml",
+        "tests/unit/test_ci_torch_disk_budget.py",
+        "constraints/ci-cpu-torch.txt",
+        "scripts/ci_install.sh",
+        "tests/unit/test_api_gate_mutations.py",
+        "tests/unit/test_maintenance_workflow_contract.py",
+        "scripts/ci_torch_mutations.py"
+      ]
+    },
+    {
+      "id": "provenance-jcs-foundation-01",
+      "description": "Additive RFC 8785/JCS foundation in provenance with explicit legacy-hash isolation. No consumer migration, ledger/passport/IBPC hash change, parser, or historical backfill.",
+      "paths": [
+        "pyproject.toml",
+        "src/nexus_ai_agent/provenance/__init__.py",
+        "src/nexus_ai_agent/provenance/jcs.py",
+        "tests/unit/test_provenance_jcs.py",
+        "tests/unit/test_provenance_legacy_hash_compatibility.py",
+        "tests/architecture/test_jcs_legacy_isolation.py",
+        ".agents/handoffs/task-jcs-rfc8785-foundation-01.md"
+      ]
     },
     {
       "id": "storage-r2-validation",
@@ -7761,7 +7797,7 @@
       "note": "Closure pass on PR #299 (findings from the independent review at b11c902). F1 lock-vs-publication-thread race, F2 webhook root never released queue ownership, F3 sidecar attempt not validated (None == None retract), F4 crash after publish/before durable completion, F5 mutation campaign not CI-wired: all five addressed on this branch with barrier-controlled / real-process-death tests and a 10-probe campaign wired into CI. Registration discrepancy (disclosed, not repaired): this claim was committed to the PR branch together with the work rather than pushed to the canonical main board first, so during the closure window the claim existed on the branch only. PR #69 (arena/01a0d3af..., head 7498074) touches in_process_job_queue.py and render_jobs.py for enqueue idempotency semantics; its board claim pr-repair-69 is queued with no branch/claimed_at and generation 0 (no live lease), and this referee check reports no overlap — recorded as a future textual-merge risk, not an ownership conflict. Ownership correction: `.github/workflows/ci.yml` is claimed by another active claim (task-ibpc-security-closure-01, arena/7622c61d..., claimed 2026-10-31T07:30:39Z); my claim did not list it at claim time, so I withdrew that edit and the campaign now lives in `.github/workflows/queue-ownership-mutations.yml` — the referee check is clean at exit 0. CLOSEOUT (post-transition annotation; status/generation/claimed_at were changed only by `agent_board.py release --expected-generation 1`, not by hand): work delivered at branch head 46e23d22071c5e04b613eba1aad199d0717c237c — CI run 41205544140 22/22 pass, queue-ownership-mutations run 41205531329 1/1 pass (10/10 mutants killed, tree restored), referee exit 0 with 44 sources over all 20 changed paths, full-suite baseline compared against a detached checkout of main@e2080db (identical failing node-id set). This record stays on the PR #299 branch and is not committed to main: it becomes canonical only if the owner merges the PR."
     },
     {
-      "status": "active",
+      "status": "expired",
       "prerequisites": [],
       "agent_branch": "arena/nexus-master-closure-20261103",
       "claimed_at": "2026-11-02T20:01:41Z",
@@ -7822,7 +7858,8 @@
       ],
       "note": "NEXUS-MASTER-CLOSURE-2026-11-03 adversarial re-audit of the D-0036 boundary. Base main a2a847a6. Three findings closed as code, each failing-first + mutation-proven; branch arena/nexus-master-closure-20261103. (1) NEW-1: render_jobs._guarded_workspace resolved the workspace before inspecting it, so a workspace symlink planted after admission (creative_job -> creative_victim, both inside the root, both with the reserved prefix) was laundered into the victim and the render wrote output.mp4 there. Now lstat the raw node and refuse S_ISLNK before resolve(); mirrors _guarded_input. (2) NEW-3: creative_surface._ensure_private_directory relied on mkdir(mode=0o700, exist_ok=True), which never re-modes an existing directory, so a root/workspace left at a looser mode stayed world-readable. Added _harden_private_directory (lstat, refuse symlink/non-dir/other-uid, chmod 0o700, re-stat to confirm). (3) FINDING-2: input_integrity is in render_jobs.ERROR_CODES and _notify_creative_completion maps every code to creative.failed.{code}, but the key existed in no locale, so a P0-redelivery failure showed the literal string 'creative.failed.input_integrity'. Added the key to all 15 locales (path-free) + a lockstep test over ERROR_CODES x SUPPORTED_LANGUAGES. Evidence on HEAD: pytest tests/unit tests/architecture tests/integration -m 'not slow' = 6166 passed / 39 skipped; ruff check+format clean; mypy 355 files clean; deptry clean; board+docs+i18n 212 passed; creative redelivery mutations 12/12 killed tree byte-identical; IBPC 23/23; pack_trust 12/12 (PYTHONPATH=src). Board check over all changed paths: no overlap, exit 0. Limitation: TOCTOU between worker re-measure and FFmpeg open is accepted (owner-only dir, no link redirect); a crash between publication and enqueue leaves at most one orphaned staging_* dir. Jules independent review unavailable: the provided key's Google project returns 403 SERVICE_DISABLED (stitch.googleapis.com not enabled).",
       "description": " ; 2026-11-01 (ninth reconciliation, MISSION NEXUS-P0-CLOSURE-AND-IBPC-READINESS-01): `praudit --fail-on-invisible` reported PR#302 INVISIBLE with 17 changed files outside this claim's exclusive_paths — the i18n locales for the new creative.request_conflict string, the relocated M17 forensic report, and tests/integration/test_canonical_creative_execution.py (whose widening had been recorded in the zone but not in the claim). Honest record: those paths were edited BEFORE this coverage was declared, and the earlier 'referee exit 0' was `check`, which proves only non-overlap, not coverage. Referee over the 17 paths ran first here: 45 sources, no overlap, exit 0. ; 2026-11-02 (tenth reconciliation, MISSION NEXUS-PR302-FINAL-GOVERNANCE-AND-VERIFICATION-CLOSURE-01): added tests/unit/test_creative_redelivery_mutations_harness.py, and reported honestly as a repeat of the same error rather than a new one: the file was created in commit 53e7cd1 to prove the mutation harness's subprocess boundary, but the claim was not widened in the same commit, so `praudit --fail-on-invisible` exited 1 and PR#302 was INVISIBLE. Third occurrence of 'edit first, fence later' in this branch's history; the pattern, not just the instance, is the defect. Referee over the file ran first: 45 sources, no overlap, exit 0.",
-      "previous_release_reason": "auto-released by gc at 2026-11-02T20:01:41Z (stale active lease)"
+      "previous_release_reason": "auto-released by gc at 2026-11-02T20:01:41Z (stale active lease)",
+      "release_reason": "auto-released by gc at 2026-11-04T11:47:02Z (stale active lease)"
     },
     {
       "status": "queued",
@@ -7960,6 +7997,144 @@
         "P1 TOCTOU: _stage_source opens source O_RDONLY|O_NOFOLLOW and destination O_NOFOLLOW; staged copy re-hashed against the admitted asset digest before enqueue; verifier reads the staged immutable copy",
         "Independent verification (Jules session 9431742613443431271) VERIFIED all four with file:line evidence; mutation harness extended with staging_no_follow_removed (23/23 killed)"
       ]
+    },
+    {
+      "task": "task-omni-ci-disk-budget-01",
+      "title": "Queue-ownership mutation campaign disk-budget repair",
+      "title_fa": "تعمیر بودجهٔ دیسک کمپین موتاسیون مالکیت صف",
+      "zone": "ci-quality-omni",
+      "priority": "P1",
+      "status": "expired",
+      "scope": "Run 41532014621 failed before the campaign ran: `.[dev]` resolved the full runtime closure (sentence-transformers -> torch 539MB + CUDA wheels) and exhausted the runner (Errno 28). Install only the dependency set the four targeted suites import, then the package with --no-deps. Probes and kill criteria unchanged.",
+      "scope_fa": "اجرای ۴۱۵۳۲۰۱۴۶۲۱ پیش از اجرای کمپین شکست خورد: `.[dev]` کل خوشهٔ زمان اجرا را حل کرد (sentence-transformers → torch ۵۳۹MB + چرخ‌های CUDA) و فضای رانر را تمام کرد (Errno 28). فقط مجموعهٔ وابستگی‌های چهار سوئیت هدف نصب شود، سپس پکیج با --no-deps. پروب‌ها و معیارهای kill بدون تغییر.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "the queue-ownership-mutations job installs only its dependency set and produces a valid report (planned=10, killed=10, worktree_clean=true)",
+        "no test is skipped, xfailed, or weakened to obtain a green run",
+        "56/56 targeted tests green and 10/10 mutants killed locally from a detached worktree"
+      ],
+      "evidence_required": [
+        "pytest tests/integration/test_queue_ownership_lifecycle.py tests/integration/test_queue_ownership_processes.py tests/integration/test_artifact_publication_safety.py tests/integration/test_queue_ownership_publication_barrier.py",
+        "python scripts/queue_ownership_mutations.py --report <path>"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/queue-ownership-mutations.yml",
+        "scripts/queue_ownership_mutations.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-ci-disk-budget-20261103",
+      "claimed_at": "2026-11-02T22:17:49Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming.",
+      "release_reason": "auto-released by gc at 2026-11-04T11:47:02Z (stale active lease)"
+    },
+    {
+      "task": "task-omni-ci-cpu-torch-01",
+      "title": "NEXUS-OMNI-REMAINDER: package-scoped CPU torch (replace global extra index) — P1",
+      "zone": "ci-disk-budget-omni",
+      "priority": "P1",
+      "status": "expired",
+      "scope": "REVISION 2 (NEXUS-OMNI-PYTHON-MATRIX-CLOSURE-03/04). History: the first fix set a workflow-scope PIP_EXTRA_INDEX_URL (a dependency-confusion surface — pip consults an extra index for every distribution). The first package-scoped pin was torch==2.15.0+cpu, which has NO cp310 wheel (PyTorch 2.15 dropped CPython 3.10; repo floor >=3.10, CI runs 3.10/3.11/3.12), so the 3.10 parity legs went RED. The corrected pin is torch==2.14.1+cpu (newest release whose CPU index publishes cp310/cp311/cp312). scripts/ci_install.sh installs torch from the PyTorch CPU index EXCLUSIVELY with --isolated --no-deps --only-binary=:all:, then the editable project from PyPI ONLY (also --isolated) under constraints/ci-cpu-torch.txt, then fails closed if pip check is dirty, any nvidia-*/triton package is present (PEP 503 normalized names), or torch is not +cpu. Both install steps pass --isolated so a job-scoped PIP_INDEX_URL/PIP_EXTRA_INDEX_URL/PIP_FIND_LINKS/pip.conf cannot inject an index. Workflow coverage is discovered dynamically; queue-ownership-mutations.yml is a documented exception owned by PR #304.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "No workflow sets PIP_EXTRA_INDEX_URL or --extra-index-url (global extra index removed; dynamic discovery over .github/workflows/*.yml|yaml)",
+        "Every heavy install routes through scripts/ci_install.sh; the only non-shared editable install (queue-ownership-mutations.yml) is a documented, bounded exception owned by PR #304",
+        "constraints/ci-cpu-torch.txt pins exactly torch==2.14.1+cpu (the newest release with cp310/cp311/cp312 CPU wheels; 2.15.0+cpu has no cp310 wheel)",
+        "Both install steps pass --isolated, so PIP_INDEX_URL/PIP_EXTRA_INDEX_URL/PIP_FIND_LINKS/pip.conf cannot alter the index list or add find-links",
+        "ci_install.sh installs torch from the CPU index only, the editable project from PyPI only, and fails closed (non-zero) if pip check is dirty, any nvidia-*/triton package is present (names PEP 503 normalized), or torch is not +cpu; an unreadable/absent torch fails closed too",
+        "python-parity and continuum-evidence run exactly 3.10/3.11/3.12 (both matrices asserted equal)",
+        "tests/unit/test_ci_torch_disk_budget.py proves behavior, not text: it executes the real postcondition against synthetic metadata (clean passes; nvidia-dash/nvidia_underscore/nvidia.dot/triton/non-cpu/absent-torch all fail closed) and runs the real installer through a python shim (argv, order, exit codes, hostile-env isolation)",
+        "scripts/ci_torch_mutations.py kills all ten behavioral mutants X1-X10 plus the four contract probes (planned=14 killed=14 survived=0 invalid=0) and restores the tree byte-identically"
+      ],
+      "evidence_required": [
+        "fresh-venv run of scripts/ci_install.sh '.[dev]' -> prints 'torch==2.14.1+cpu, no CUDA packages', exit 0 (3.10/3.11/3.12)",
+        "pytest -q -m 'not slow' counts on that env + the exact SHA",
+        "pip list has zero nvidia-*/triton packages",
+        "python scripts/ci_torch_mutations.py -> claude-x-summary planned=10 killed=10 survived=0 invalid=0; summary planned=14 killed=14 survived=0 invalid=0",
+        "pytest tests/unit/test_ci_torch_disk_budget.py -> 29 passed (behavioral postcondition + installer shim + pip --isolated + dynamic discovery)",
+        "GitHub Actions CI green on the exact head SHA (python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, test, trust-mutations)"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/langsmith-smoke.yml",
+        "tests/unit/test_ci_torch_disk_budget.py",
+        "constraints/ci-cpu-torch.txt",
+        "scripts/ci_install.sh",
+        "tests/unit/test_api_gate_mutations.py",
+        "tests/unit/test_maintenance_workflow_contract.py",
+        "scripts/ci_torch_mutations.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-ci-cpu-torch-20261103",
+      "claimed_at": "2026-11-03T05:32:32Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "superseded_acceptance_criteria": [
+        "No workflow sets PIP_EXTRA_INDEX_URL or --extra-index-url (global extra index removed)",
+        "ci.yml/maintenance.yml/langsmith-smoke.yml run no bare `pip install -e`; all go through scripts/ci_install.sh",
+        "constraints/ci-cpu-torch.txt pins an exact torch==x.y.z+cpu",
+        "ci_install.sh installs torch from the CPU index only, the editable project from PyPI only, and exits non-zero if nvidia-*/triton is present or torch is not +cpu",
+        "tests/unit/test_ci_torch_disk_budget.py goes RED when the global extra index returns or the constraint loses its +cpu pin"
+      ],
+      "superseded_evidence_required": [
+        "fresh-venv run of scripts/ci_install.sh '.[dev]' -> prints 'torch==2.15.0+cpu, no CUDA packages', exit 0",
+        "pytest -q -m 'not slow' counts on that env + SHA",
+        "pip list has zero nvidia-*/triton packages",
+        "mutation: reintroduce PIP_EXTRA_INDEX_URL -> guard RED; weaken constraint to torch>=2 -> guard RED"
+      ],
+      "release_reason": "auto-released by gc at 2026-11-04T11:47:02Z (stale active lease)"
+    },
+    {
+      "task": "task-jcs-rfc8785-foundation-01",
+      "title": "RFC 8785 JCS foundation with legacy hash integrity proof",
+      "title_fa": "زیرساخت RFC 8785/JCS همراه با اثبات حفظ هش‌های تاریخی",
+      "zone": "provenance-jcs-foundation-01",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Add one explicit, public JCS canonicalization and digest API under provenance, backed by a vetted RFC 8785 implementation and a narrowly pinned direct dependency. Return canonical UTF-8 bytes and sha256:<hex> over those exact bytes. Enforce a fail-closed JSON-value boundary without implicit conversion. Preserve the existing provenance canonical_json/digest_of and IBPC re-export contract byte-for-byte; do not migrate callers, alter historical hashes, rebuild/reissue ledger or passports, add a parser, or introduce a lockfile absent from main. Record the pyproject.toml overlap with open PRs #193 and #307, but do not edit either branch. Maintain the durable handoff at .agents/handoffs/task-jcs-rfc8785-foundation-01.md. If blocked or stopping incomplete, commit/push recoverable work and use defer with the current generation; release only when every criterion and evidence item is complete.",
+      "why_fa": "برای استفاده‌های آینده یک مرجع JCS سازگار با RFC 8785 لازم است، اما هش‌های Provenance، Ledger، Passport و IBPC قرارداد تاریخی دارند و در این مأموریت نباید تغییر کنند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A single explicit public API returns RFC 8785 canonical UTF-8 bytes and a sha256:<hex> digest computed over exactly those bytes; the API is additive and no legacy consumer is migrated.",
+        "Normative examples and number vectors, UTF-16 key ordering including supplementary-plane keys, Unicode non-normalization, escapes, and valid UTF-8 behavior are covered by independent expected values.",
+        "Non-JSON values and ambiguous Python subclasses are rejected without implicit conversion; non-string keys, unsafe integers, non-finite floats, and lone surrogates fail closed with predictable errors.",
+        "Fixed pre-change legacy canonical bytes and digest goldens remain unchanged; existing IBPC exports and representative historical digests remain unchanged; an architecture guard prevents JCS from replacing or being wired into legacy call sites.",
+        "The selected dependency is directly declared and narrowly pinned with its RFC basis, License, maintenance, supported Python range, and supply-chain limitations recorded; no uv.lock is added unless main establishes that packaging contract.",
+        "The handoff file is versioned within the claimed paths and contains exact base/head SHAs, generation, completed milestones, files, commands/results, limitations, and the precise next step.",
+        "Focused tests, make lint, make types, and make test are reported honestly against exact SHAs; board referee passes for every changed path; the implementation PR is created but not merged."
+      ],
+      "evidence_required": [
+        "tests/unit/test_provenance_jcs.py",
+        "tests/unit/test_provenance_legacy_hash_compatibility.py",
+        "tests/architecture/test_jcs_legacy_isolation.py",
+        "tests/unit/test_ibpc_canonical_models.py",
+        "tests/architecture/test_canonical_identity_contract.py",
+        "python scripts/agent_board.py check --files <all-changed-paths> --branch <implementation-branch> --repo bot523h/nexus-ai-agent",
+        "make lint",
+        "make types",
+        "make test",
+        ".agents/handoffs/task-jcs-rfc8785-foundation-01.md"
+      ],
+      "exclusive_paths": [
+        "pyproject.toml",
+        "src/nexus_ai_agent/provenance/__init__.py",
+        "src/nexus_ai_agent/provenance/jcs.py",
+        "tests/unit/test_provenance_jcs.py",
+        "tests/unit/test_provenance_legacy_hash_compatibility.py",
+        "tests/architecture/test_jcs_legacy_isolation.py",
+        ".agents/handoffs/task-jcs-rfc8785-foundation-01.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0,
+      "delivered": [],
+      "note": "Mission NEXUS-JCS-RFC8785-FOUNDATION-01. Governance registration only; implementation must not start until this Task is visible on main and an official fenced claim is pushed. Open pyproject overlap with PR #193 (stale) and PR #307 (dependency update) is disclosed; neither PR branch is modified."
     },
     {
       "task": "task-omni-r2-bucket-validation-01",
