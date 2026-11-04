@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-04T16:09:42Z",
+  "updated_at": "2026-11-04T19:22:49Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8396,7 +8396,7 @@
       "title_fa": "گزارش بستنِ زندهٔ NEXUS-OMNI + آشتی تخته + طراحی SEC-4",
       "zone": "docs-architecture",
       "priority": "P1",
-      "status": "active",
+      "status": "done",
       "scope": "Add docs/audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md (Persian closeout), docs/architecture/SEC4_EGRESS_GATE_DESIGN.md (SEC-4 design ONLY, no runtime change), index both in docs/README.md, and reconcile the six task-omni-* claims to their GitHub-verified merged state. Docs + board only.",
       "scope_fa": "افزودن گزارش بستنِ زندهٔ فارسی، سند طراحی SEC-4 (فقط طراحی، بدون تغییر Runtime)، فهرست‌کردن هر دو، و آشتی شش ادعای task-omni-* با وضعیت ادغام‌شدهٔ تأییدشده از GitHub.",
       "prerequisites": [],
@@ -8418,13 +8418,13 @@
         ".agents/board.json"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/omni-live-closeout-20261104",
-      "claimed_at": "2026-11-04T16:20:00Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
       "note": "",
-      "generation": 0
+      "generation": 1
     }
   ],
   "deferred_log": [
