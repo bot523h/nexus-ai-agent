@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-04T19:22:49Z",
+  "updated_at": "2026-11-04T20:44:23Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1211,6 +1211,19 @@
         "tests/unit/test_checkpoint_dependency_pin.py",
         "tests/unit/test_sqlite_checkpointer_empty_checkpoint_id.py",
         "docs/architecture/DATA_LIFECYCLE.md"
+      ]
+    },
+    {
+      "id": "nagar-preservation-media-profiles",
+      "description": "Independent typed media preservation profiles for IBPC (video/audio/image), fail-closed proofs and bounded decoding",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/footprint.py",
+        "src/nexus_ai_agent/nagar/ibpc/preservation/",
+        "tests/unit/test_ibpc_footprint.py",
+        "tests/unit/test_ibpc_preservation_profiles.py",
+        "tests/integration/test_ibpc_preservation_media.py",
+        "tests/architecture/test_ibpc_preservation_boundary.py",
+        "docs/engineering/NAGAR_IBPC_PRESERVATION.md"
       ]
     }
   ],
@@ -8425,6 +8438,51 @@
       "delivered": [],
       "note": "",
       "generation": 1
+    },
+    {
+      "task": "task-nagar-preservation-media-profiles-01",
+      "title": "NAGAR-IBPC: typed video, audio and image preservation profiles",
+      "zone": "nagar-preservation-media-profiles",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Extend the existing IBPC decoded-content footprint verifier with typed, digest-bound media scopes and independently auditable PASS/FAIL/INCONCLUSIVE preservation proofs. Preserve existing VideoTimeScope/verify_keep behavior; add independently usable image and audio profiles; include audio streams in video-with-audio preservation; bound decoder resources; fail closed for unsupported or ambiguous cases. No new execution wiring, authority, renderer integration claims, provenance/Passport/CommandBus changes, or edits to approval.py, service.py, session.py, creative/project_state/, queue, Passport, or provenance.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Existing VideoTimeScope and verify_keep semantics remain compatible; adversarial tests prove outside-scope frame tampering is FAIL and exact preservation only is PASS.",
+        "Video mapping ambiguity, absent/partial streams, corrupt decode, lossy uncertainty and unsupported codecs never produce PASS; video-with-audio verification includes the audio stream.",
+        "A typed, digest-bound image scope supports validated allowed rectangles; decoded pixels outside them are compared exactly, and outside-scope pixel changes are FAIL; uncertain orientation/dimensions/metadata mappings are INCONCLUSIVE.",
+        "A typed, digest-bound audio time scope is sample-accurate and checks preserved samples, channel count/order, sample rate and timing; out-of-scope changes are FAIL and lossy/uncertain decoding is INCONCLUSIVE.",
+        "All decoders use safe argv execution without a shell and enforce bounded time, memory, decoded bytes, frames/samples and input limits; unsupported operations refuse or return INCONCLUSIVE.",
+        "Focused, integration, architecture, malformed-input, truncation, timeout/resource-limit and digest/scope-tamper tests pass; prior IBPC tests remain unweakened.",
+        "Mutation campaign demonstrates RED for removal of each critical preservation control and GREEN after restoration; results and exact tested SHA are recorded.",
+        "Documentation states a tested media support matrix and explicitly does not claim end-to-end image/audio operation wiring beyond registered timeline.trim.",
+        "Final implementation PR is independent, titled “PR عامل B — Multi-Media Preservation Verifier”, is not merged by the implementer, and records exact lint/types/test commands, results, SHA and CI status."
+      ],
+      "evidence_required": [
+        "tests/unit/test_ibpc_footprint.py and tests/unit/test_ibpc_preservation_profiles.py (focused results and SHA)",
+        "tests/integration/test_ibpc_preservation_media.py and tests/architecture/test_ibpc_preservation_boundary.py (results and SHA)",
+        "Mutation campaign output showing each preservation-control mutant killed and restored suite green",
+        "make lint, make types, and make test results on the same final implementation SHA",
+        "git diff --check and agent_board.py check over every changed implementation path with exit 0",
+        "GitHub CI run URL/status tied to exact final implementation SHA",
+        "docs/engineering/NAGAR_IBPC_PRESERVATION.md support matrix with PASS/FAIL/INCONCLUSIVE cases and explicit wiring limitations"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/footprint.py",
+        "src/nexus_ai_agent/nagar/ibpc/preservation/",
+        "tests/unit/test_ibpc_footprint.py",
+        "tests/unit/test_ibpc_preservation_profiles.py",
+        "tests/integration/test_ibpc_preservation_media.py",
+        "tests/architecture/test_ibpc_preservation_boundary.py",
+        "docs/engineering/NAGAR_IBPC_PRESERVATION.md"
+      ],
+      "owner_hint": "ARENA-B",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Governance bootstrap PR only; runtime implementation must not begin until this task and zone are merged to canonical main and an official claim is pushed from the implementation branch.",
+      "generation": 0
     }
   ],
   "deferred_log": [
