@@ -835,3 +835,16 @@ Only red check = the #234 flake (task-264, issue #237).
   (a comment mentioning `--no-deps` must not satisfy the test) and ties the parity
   matrix to the interpreter set the pin was verified against.
 - `scripts/ci_torch_mutations.py` (10/10 killed) runs in the `trust-mutations` job.
+
+## NEXUS-OMNI closeout (durable, 2026-11-04)
+- main @ `b63a22a8`; PR **#311** = `arena/omni-live-closeout-20261104` (docs+board).
+  Detail: `.openhands/memory/2026-11-04.md`.
+- **Manus audit artifacts ABSENT** (not in workspace or any of 230 branches) — record
+  honestly, never invent findings.
+- **backup-db red = missing `NEXUS_DATABASE_URL`** (R2 secrets ARE set); restore-drill
+  LOCAL leg green, REMOTE leg NOT_PROVEN. Fail-closed worked.
+- **SEC-4**: `/ai`→`GeminiEngine` egress is ungated (`bot/handlers.py::ai_cmd` ≈L461).
+  Design-only doc `docs/architecture/SEC4_EGRESS_GATE_DESIGN.md`; 5 owner decisions OPEN.
+- Only 4 workflow FILES on main; the API's 10-workflow list is stale/org-level.
+- Board: new claim paths must be under ONE existing zone and not collide with another
+  ACTIVE claim; `next_work` must stay exactly 10.
