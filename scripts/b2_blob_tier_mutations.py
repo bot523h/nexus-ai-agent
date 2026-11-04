@@ -173,6 +173,8 @@ MUTATIONS: tuple[Mutation, ...] = (
 
 def run_tests() -> bool:
     try:
+        # Fixed argv, no shell: sys.executable and the literal pytest flags are
+        # repo-controlled; no external input reaches this call (scanner FP).
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *TESTS],
             cwd=ROOT,
