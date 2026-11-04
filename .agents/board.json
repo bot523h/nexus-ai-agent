@@ -1156,6 +1156,14 @@
         "tests/architecture/test_jcs_legacy_isolation.py",
         ".agents/handoffs/task-jcs-rfc8785-foundation-01.md"
       ]
+    },
+    {
+      "id": "storage-r2-validation",
+      "description": "NEXUS-OMNI: R2 bucket-name fail-closed validation",
+      "paths": [
+        "src/nexus_ai_agent/storage/providers/r2.py",
+        "tests/unit/test_r2_provider.py"
+      ]
     }
   ],
   "claims": [
@@ -8127,6 +8135,36 @@
       "generation": 0,
       "delivered": [],
       "note": "Mission NEXUS-JCS-RFC8785-FOUNDATION-01. Governance registration only; implementation must not start until this Task is visible on main and an official fenced claim is pushed. Open pyproject overlap with PR #193 (stale) and PR #307 (dependency update) is disclosed; neither PR branch is modified."
+    },
+    {
+      "task": "task-omni-r2-bucket-validation-01",
+      "title": "R2 bucket name: fail closed with an actionable message",
+      "title_fa": "نام باکت R2: شکست بسته با پیام قابل‌اقدام",
+      "zone": "storage-r2-validation",
+      "priority": "P2",
+      "status": "active",
+      "scope": "maintenance housekeeping (2026-11-02) failed with an opaque boto3 ParamValidationError 'Invalid bucket name' because R2Provider.is_configured() accepts any non-empty R2_BUCKET. Validate the bucket (3-63 chars, lowercase alphanumeric/hyphen, alphanumeric ends) and refuse at the boundary with a ProviderUnavailable that names the setting.",
+      "scope_fa": "خانه‌تکانی نگهداری (۲۰۲۶-۱۱-۰۲) با خطای مبهم boto3 ParamValidationError «Invalid bucket name» شکست خورد، چون R2Provider.is_configured() هر R2_BUCKET ناتهی را می‌پذیرد. اعتبارسنجی باکت (۳ تا ۶۳ نویسه، حروف کوچک/عدد/خط تیره، شروع و پایان الفبایی‌عدد) و رد در مرز با ProviderUnavailable که نام تنظیم را می‌آورد.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "an invalid R2_BUCKET raises ProviderUnavailable naming R2_BUCKET before any boto3 client call",
+        "a valid bucket keeps every existing behaviour (all prior tests green)",
+        "no secret value or bucket value is written to logs or error messages beyond the operator-supplied name"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_r2_provider.py tests/unit/test_housekeeping_contract.py tests/unit/test_maintenance_backup.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/providers/r2.py",
+        "tests/unit/test_r2_provider.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-r2-bucket-validation",
+      "claimed_at": "2026-11-02T22:24:53Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check exit 0 (disjoint) before claiming."
     }
   ],
   "deferred_log": [
