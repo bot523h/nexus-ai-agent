@@ -14,6 +14,7 @@ operations. The client is therefore always built with
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,13 @@ from .base import ProviderUnavailable, StorageError
 
 # R2 caps presigned URL lifetime at 7 days (S3 allows more; R2 does not).
 PRESIGN_MAX_SECONDS = 7 * 24 * 60 * 60  # 604800
+
+# Cloudflare R2 bucket naming rule (docs: "Bucket names must be 3-63 chars,
+# lowercase alphanumeric and hyphens, start/end with alphanumeric").
+# A value that does not match makes boto3 raise an opaque ``ParamValidationError``
+# ("Invalid bucket name ...") from deep inside the SDK, so it is validated here
+# where the message can name the offending setting.
+_R2_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
 
 
 class R2Provider:
@@ -64,6 +72,32 @@ class R2Provider:
             self._account_id and self._access_key_id and self._secret_access_key and self._bucket
         )
 
+    def invalid_bucket_reason(self) -> str | None:
+        """Return a diagnostic when the bucket value cannot be used, else ``None``.
+
+        A syntactically invalid ``R2_BUCKET`` (whitespace, uppercase, too short)
+        is worse than an absent one: :meth:`is_configured` is True, so the caller
+        proceeds and boto3 fails deep inside with ``ParamValidationError: Invalid
+        bucket name`` — a message that names neither the setting nor the fix.
+        This turns that into a typed, actionable refusal at the boundary.
+        """
+        bucket = self._bucket
+        if not bucket:
+            return None
+        if bucket != bucket.strip():
+            return "R2_BUCKET has leading or trailing whitespace"
+        if not _R2_BUCKET_RE.match(bucket):
+            return (
+                f"R2_BUCKET={bucket!r} is not a valid bucket name "
+                "(3-63 chars, lowercase letters/digits/hyphens, must start and end alphanumeric)"
+            )
+        return None
+
+    def _require_bucket(self) -> None:
+        reason = self.invalid_bucket_reason()
+        if reason is not None:
+            raise ProviderUnavailable(reason)
+
     @property
     def client(self) -> Any:
         """Lazily constructed boto3 S3 client pointed at the R2 endpoint."""
@@ -88,6 +122,7 @@ class R2Provider:
     async def upload(self, *, local_path: Path, remote_key: str) -> None:
         if not self.is_configured():
             raise ProviderUnavailable("R2 is not configured")
+        self._require_bucket()
         client = self.client
         bucket = self._bucket
 
@@ -102,6 +137,7 @@ class R2Provider:
     async def download(self, *, remote_key: str, local_path: Path) -> None:
         if not self.is_configured():
             raise ProviderUnavailable("R2 is not configured")
+        self._require_bucket()
         client = self.client
         bucket = self._bucket
         local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,6 +153,7 @@ class R2Provider:
     async def list_files(self, *, prefix: str = "") -> list[str]:
         if not self.is_configured():
             raise ProviderUnavailable("R2 is not configured")
+        self._require_bucket()
         client = self.client
         bucket = self._bucket
         keys: list[str] = []
@@ -149,6 +186,7 @@ class R2Provider:
         """Delete objects in batches of up to 1000; return the deleted count."""
         if not self.is_configured():
             raise ProviderUnavailable("R2 is not configured")
+        self._require_bucket()
         if not keys:
             return 0
         client = self.client
@@ -195,6 +233,7 @@ class R2Provider:
                 f"R2 presigned URL TTL is capped at 7 days "
                 f"({PRESIGN_MAX_SECONDS}s); got {expires_in}s"
             )
+        self._require_bucket()
         client = self.client
         return str(
             client.generate_presigned_url(
