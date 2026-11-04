@@ -1,10 +1,12 @@
 """An empty ``checkpoint_id`` must mean "latest" for delta-channel history.
 
-``langgraph-checkpoint-sqlite`` 3.1.1 (the exact pin, see
-``test_checkpoint_dependency_pin.py``) only treats ``None`` as "latest", so an
+``langgraph-checkpoint-sqlite`` 3.1.1 only treated ``None`` as "latest", so an
 empty id silently returned no writes although ``get_tuple`` resolves it to the
-latest checkpoint.  Upgrading to 3.1.2 would fix that upstream but changes the
-checkpoint schema (``writes.task_path``), so the adapter normalises it instead.
+latest checkpoint; the adapter used to normalise the empty id.  The 2026-11-03
+supply-chain pass moved the pin to ``3.1.2`` (the exact pin, see
+``test_checkpoint_dependency_pin.py``), which fixes that upstream, so the
+adapter-level workaround was removed and these tests now pin the upstream
+behaviour directly.
 """
 
 from __future__ import annotations

@@ -66,7 +66,9 @@ Retries reuse the same idempotency key and cannot create a second effect.
 
 Empirically captured from `SqliteSaver.setup()` on
 `langgraph=1.2.11` / `langgraph-checkpoint=4.2.0` /
-`langgraph-checkpoint-sqlite=3.1.1` (2026-09-18).  This is the schema the
+`langgraph-checkpoint-sqlite=3.1.2` (2026-11-03; the 2026-09-18 capture was
+3.1.1, raised to the patched 3.1.2 by the NEXUS-OMNI supply-chain pass —
+GHSA-6hmw-9432-67qq).  This is the schema the
 read-only adapter inspects and the `schema-v1` golden fingerprints.  The
 lifecycle layer only ever **reads** these tables; all mutation stays behind
 the reconciler's `--apply` gate and touches the sidecar lifecycle index,
@@ -89,6 +91,7 @@ CREATE TABLE writes (
     checkpoint_ns TEXT NOT NULL DEFAULT '',
     checkpoint_id TEXT NOT NULL,
     task_id TEXT NOT NULL,
+    task_path TEXT NOT NULL DEFAULT '',
     idx INTEGER NOT NULL,
     channel TEXT NOT NULL,
     type TEXT,
