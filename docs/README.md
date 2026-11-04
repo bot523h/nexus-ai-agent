@@ -104,6 +104,7 @@ placeholder text.
 | [ops/deployment-koyeb.md](ops/deployment-koyeb.md) | Koyeb scale-to-zero deployment guide. |
 | [ops/NEON_LIFECYCLE_RUNBOOK.md](ops/NEON_LIFECYCLE_RUNBOOK.md) | Neon/PostgreSQL lifecycle runbook. |
 | [ops/r2-storage.md](ops/r2-storage.md) | Cloudflare R2 blob tier: setup + maintenance secrets. |
+| [ops/b2-storage.md](ops/b2-storage.md) | Backblaze B2 blob tier (preferred for DB backups): setup, scoped key, fail-closed rules, rotation. |
 | [ops/COLOR_LANE.md](ops/COLOR_LANE.md) | Color/exposure lane runbook: EV→filter mapping, hard contracts, FFmpeg-free validation, troubleshooting. |
 | [ops/PACK_RUNTIME.md](ops/PACK_RUNTIME.md) | Unified pack runtime (wave 5): composition, activation gate, op-gap ledger, composition checklist for new packs. |
 | [ops/RUNBOOK_HARDENING.md](ops/RUNBOOK_HARDENING.md) | Runbook hardening pass (wave-4 step 8): boundary conditions, failure modes, operator knobs. |

@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-02T22:17:49Z",
+  "updated_at": "2026-11-04T10:34:08Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1126,7 +1126,21 @@
       "description": "NEXUS-OMNI forensic campaign: CI/CD disk-budget + supply-chain repairs",
       "paths": [
         ".github/",
-        "scripts/queue_ownership_mutations.py"
+        "scripts/queue_ownership_mutations.py",
+        "src/nexus_ai_agent/storage/providers/b2.py",
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "src/nexus_ai_agent/maintenance/housekeeping.py",
+        "src/nexus_ai_agent/maintenance/restore.py",
+        "src/nexus_ai_agent/config/settings.py",
+        "tests/unit/test_b2_provider.py",
+        "tests/unit/test_maintenance_workflow_contract.py",
+        "tests/unit/test_housekeeping_contract.py",
+        "scripts/b2_blob_tier_mutations.py",
+        "docs/ops/b2-storage.md",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/ci.yml",
+        "docs/README.md",
+        ".env.example"
       ]
     }
   ],
@@ -7761,7 +7775,7 @@
       "note": "Closure pass on PR #299 (findings from the independent review at b11c902). F1 lock-vs-publication-thread race, F2 webhook root never released queue ownership, F3 sidecar attempt not validated (None == None retract), F4 crash after publish/before durable completion, F5 mutation campaign not CI-wired: all five addressed on this branch with barrier-controlled / real-process-death tests and a 10-probe campaign wired into CI. Registration discrepancy (disclosed, not repaired): this claim was committed to the PR branch together with the work rather than pushed to the canonical main board first, so during the closure window the claim existed on the branch only. PR #69 (arena/01a0d3af..., head 7498074) touches in_process_job_queue.py and render_jobs.py for enqueue idempotency semantics; its board claim pr-repair-69 is queued with no branch/claimed_at and generation 0 (no live lease), and this referee check reports no overlap — recorded as a future textual-merge risk, not an ownership conflict. Ownership correction: `.github/workflows/ci.yml` is claimed by another active claim (task-ibpc-security-closure-01, arena/7622c61d..., claimed 2026-10-31T07:30:39Z); my claim did not list it at claim time, so I withdrew that edit and the campaign now lives in `.github/workflows/queue-ownership-mutations.yml` — the referee check is clean at exit 0. CLOSEOUT (post-transition annotation; status/generation/claimed_at were changed only by `agent_board.py release --expected-generation 1`, not by hand): work delivered at branch head 46e23d22071c5e04b613eba1aad199d0717c237c — CI run 41205544140 22/22 pass, queue-ownership-mutations run 41205531329 1/1 pass (10/10 mutants killed, tree restored), referee exit 0 with 44 sources over all 20 changed paths, full-suite baseline compared against a detached checkout of main@e2080db (identical failing node-id set). This record stays on the PR #299 branch and is not committed to main: it becomes canonical only if the owner merges the PR."
     },
     {
-      "status": "active",
+      "status": "expired",
       "prerequisites": [],
       "agent_branch": "arena/nexus-master-closure-20261103",
       "claimed_at": "2026-11-02T20:01:41Z",
@@ -7822,7 +7836,8 @@
       ],
       "note": "NEXUS-MASTER-CLOSURE-2026-11-03 adversarial re-audit of the D-0036 boundary. Base main a2a847a6. Three findings closed as code, each failing-first + mutation-proven; branch arena/nexus-master-closure-20261103. (1) NEW-1: render_jobs._guarded_workspace resolved the workspace before inspecting it, so a workspace symlink planted after admission (creative_job -> creative_victim, both inside the root, both with the reserved prefix) was laundered into the victim and the render wrote output.mp4 there. Now lstat the raw node and refuse S_ISLNK before resolve(); mirrors _guarded_input. (2) NEW-3: creative_surface._ensure_private_directory relied on mkdir(mode=0o700, exist_ok=True), which never re-modes an existing directory, so a root/workspace left at a looser mode stayed world-readable. Added _harden_private_directory (lstat, refuse symlink/non-dir/other-uid, chmod 0o700, re-stat to confirm). (3) FINDING-2: input_integrity is in render_jobs.ERROR_CODES and _notify_creative_completion maps every code to creative.failed.{code}, but the key existed in no locale, so a P0-redelivery failure showed the literal string 'creative.failed.input_integrity'. Added the key to all 15 locales (path-free) + a lockstep test over ERROR_CODES x SUPPORTED_LANGUAGES. Evidence on HEAD: pytest tests/unit tests/architecture tests/integration -m 'not slow' = 6166 passed / 39 skipped; ruff check+format clean; mypy 355 files clean; deptry clean; board+docs+i18n 212 passed; creative redelivery mutations 12/12 killed tree byte-identical; IBPC 23/23; pack_trust 12/12 (PYTHONPATH=src). Board check over all changed paths: no overlap, exit 0. Limitation: TOCTOU between worker re-measure and FFmpeg open is accepted (owner-only dir, no link redirect); a crash between publication and enqueue leaves at most one orphaned staging_* dir. Jules independent review unavailable: the provided key's Google project returns 403 SERVICE_DISABLED (stitch.googleapis.com not enabled).",
       "description": " ; 2026-11-01 (ninth reconciliation, MISSION NEXUS-P0-CLOSURE-AND-IBPC-READINESS-01): `praudit --fail-on-invisible` reported PR#302 INVISIBLE with 17 changed files outside this claim's exclusive_paths — the i18n locales for the new creative.request_conflict string, the relocated M17 forensic report, and tests/integration/test_canonical_creative_execution.py (whose widening had been recorded in the zone but not in the claim). Honest record: those paths were edited BEFORE this coverage was declared, and the earlier 'referee exit 0' was `check`, which proves only non-overlap, not coverage. Referee over the 17 paths ran first here: 45 sources, no overlap, exit 0. ; 2026-11-02 (tenth reconciliation, MISSION NEXUS-PR302-FINAL-GOVERNANCE-AND-VERIFICATION-CLOSURE-01): added tests/unit/test_creative_redelivery_mutations_harness.py, and reported honestly as a repeat of the same error rather than a new one: the file was created in commit 53e7cd1 to prove the mutation harness's subprocess boundary, but the claim was not widened in the same commit, so `praudit --fail-on-invisible` exited 1 and PR#302 was INVISIBLE. Third occurrence of 'edit first, fence later' in this branch's history; the pattern, not just the instance, is the defect. Referee over the file ran first: 45 sources, no overlap, exit 0.",
-      "previous_release_reason": "auto-released by gc at 2026-11-02T20:01:41Z (stale active lease)"
+      "previous_release_reason": "auto-released by gc at 2026-11-02T20:01:41Z (stale active lease)",
+      "release_reason": "auto-released by gc at 2026-11-04T10:19:50Z (stale active lease)"
     },
     {
       "status": "queued",
@@ -7967,7 +7982,7 @@
       "title_fa": "تعمیر بودجهٔ دیسک کمپین موتاسیون مالکیت صف",
       "zone": "ci-quality-omni",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Run 41532014621 failed before the campaign ran: `.[dev]` resolved the full runtime closure (sentence-transformers -> torch 539MB + CUDA wheels) and exhausted the runner (Errno 28). Install only the dependency set the four targeted suites import, then the package with --no-deps. Probes and kill criteria unchanged.",
       "scope_fa": "اجرای ۴۱۵۳۲۰۱۴۶۲۱ پیش از اجرای کمپین شکست خورد: `.[dev]` کل خوشهٔ زمان اجرا را حل کرد (sentence-transformers → torch ۵۳۹MB + چرخ‌های CUDA) و فضای رانر را تمام کرد (Errno 28). فقط مجموعهٔ وابستگی‌های چهار سوئیت هدف نصب شود، سپس پکیج با --no-deps. پروب‌ها و معیارهای kill بدون تغییر.",
       "prerequisites": [],
@@ -7990,7 +8005,54 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
-      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming."
+      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming.",
+      "release_reason": "auto-released by gc at 2026-11-04T10:19:50Z (stale active lease)"
+    },
+    {
+      "task": "task-omni-b2-maintenance-tier-01",
+      "title": "Backblaze B2 maintenance blob tier (dual-tier with R2, fail-closed)",
+      "title_fa": "لایهٔ B2 بک‌بلِیز برای بکاپ نگهداری (دوگانه با R2، بسته در خطا)",
+      "zone": "ci-quality-omni",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Add Backblaze B2 as the preferred S3-compatible tier for the SAME narrow maintenance lane (nightly DB dump under backups/db/ + housekeeping), with R2 retained as the fallback. A complete+valid B2 wins; a partial B2 with no complete R2 raises ProviderUnavailable (never a silent write to the wrong bucket); a partial B2 beside a complete R2 falls back to R2, matching the workflow preflight. All guards (https-only endpoint, non-B2 host refusal, endpoint/region agreement, bucket-name validation, backups/db/ key confinement, pagination fail-closed, checksum relaxation, partial-delete error) validated before any network call. Offline-testable; 13-probe mutation campaign wired into CI.",
+      "scope_fa": "افزودن B2 به‌عنوان لایهٔ S3-compatible ترجیحی برای همان لِین باریک نگهداری (دامپ شبانهٔ DB زیر backups/db/ + housekeeping)، با نگه‌داشتن R2 به‌عنوان فالبک. B2 کامل و معتبر برنده است؛ B2 ناقص بدون R2 کامل ProviderUnavailable می‌دهد؛ B2 ناقص در کنار R2 کامل به R2 برمی‌گردد و با preflight ورک‌فلو هم‌خوان است.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "build_blob_provider selects a complete B2 tier, falls back to a complete R2 tier, and refuses a partial B2 when no complete R2 exists",
+        "every B2 guard is validated before any network call and names the setting, never its value",
+        "the b2-blob-tier-mutations CI job installs only its dependency set and kills 13/13 mutants with the tree byte-identical",
+        "the full unit suite stays green on the canonical editable install and no test is skipped or weakened"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_b2_provider.py tests/unit/test_maintenance_workflow_contract.py tests/unit/test_housekeeping_contract.py tests/unit/test_maintenance_backup.py tests/unit/test_restore_drill.py",
+        "python scripts/b2_blob_tier_mutations.py",
+        "pytest -q -m 'not slow' (full unit suite on the canonical install)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/providers/b2.py",
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "src/nexus_ai_agent/maintenance/housekeeping.py",
+        "src/nexus_ai_agent/maintenance/restore.py",
+        "src/nexus_ai_agent/config/settings.py",
+        "tests/unit/test_b2_provider.py",
+        "tests/unit/test_maintenance_workflow_contract.py",
+        "tests/unit/test_housekeeping_contract.py",
+        "scripts/b2_blob_tier_mutations.py",
+        "docs/ops/b2-storage.md",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/ci.yml",
+        "docs/README.md",
+        ".env.example"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-b2-backup-20261104",
+      "claimed_at": "2026-11-04T10:34:08Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [

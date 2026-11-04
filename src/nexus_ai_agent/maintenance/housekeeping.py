@@ -16,10 +16,9 @@ from typing import Any
 
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.observability.logging import get_logger
-from nexus_ai_agent.storage.providers.r2 import R2Provider
 from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
 
-from .backup import BLOB_BACKUP_PREFIX, STAMP_FORMAT
+from .backup import BLOB_BACKUP_PREFIX, STAMP_FORMAT, build_blob_provider
 
 log = get_logger(__name__)
 
@@ -119,10 +118,10 @@ def run_housekeeping(
     if not dry_run:
         summary["temp_files_removed"] = temp_files
 
-    provider = R2Provider.from_settings(settings)
+    provider = build_blob_provider(settings)
     if not provider.is_configured():
-        summary["r2_skipped_reason"] = "R2 not configured — local cleanup only"
-        log.info("maintenance_housekeeping_no_r2", dry_run=dry_run)
+        summary["r2_skipped_reason"] = "blob tier not configured — local cleanup only"
+        log.info("maintenance_housekeeping_no_blob_tier", dry_run=dry_run)
         return summary
 
     cutoff = now - dt.timedelta(days=backup_retention_days)

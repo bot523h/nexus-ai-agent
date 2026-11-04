@@ -33,14 +33,30 @@ WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "maintenance.yml"
 WORKFLOW = WORKFLOW_PATH.read_text(encoding="utf-8")
 
 PREFLIGHT_STEP_NAME = "Preflight — required production backup configuration"
-REQUIRED_NAMES = (
-    "NEXUS_DATABASE_URL",
+B2_NAMES = (
+    "NEXUS_B2_KEY_ID",
+    "NEXUS_B2_APPLICATION_KEY",
+    "NEXUS_B2_BUCKET",
+    "NEXUS_B2_ENDPOINT",
+    "NEXUS_B2_REGION",
+)
+R2_NAMES = (
     "R2_ACCOUNT_ID",
     "R2_ACCESS_KEY_ID",
     "R2_SECRET_ACCESS_KEY",
     "R2_BUCKET",
 )
+#: The canonical tier is Backblaze B2; these are the names the preflight
+#: reports when NO blob tier is configured at all.
+REQUIRED_NAMES = ("NEXUS_DATABASE_URL", *B2_NAMES)
 POSTGRES_URL = "postgresql://nexus:canary-db-password@db.example.invalid:5432/nexus"
+B2_CANARIES = {
+    "NEXUS_B2_KEY_ID": "canary-b2-key-id",
+    "NEXUS_B2_APPLICATION_KEY": "canary-b2-app-key",
+    "NEXUS_B2_BUCKET": "canary-b2-bucket",
+    "NEXUS_B2_ENDPOINT": "https://s3.us-east-005.backblazeb2.com",
+    "NEXUS_B2_REGION": "us-east-005",
+}
 R2_CANARIES = {
     "R2_ACCOUNT_ID": "canary-account-id",
     "R2_ACCESS_KEY_ID": "canary-access-key",
@@ -168,13 +184,17 @@ def _preflight_script() -> str:
 
 
 def _run_preflight(**overrides: str) -> subprocess.CompletedProcess[str]:
+    # Both blob tiers are cleared so an ambient R2_*/NEXUS_B2_* value in the
+    # developer/CI environment can never make an "unconfigured" case look
+    # configured. The database URL is cleared for the same reason.
+    cleared = ("NEXUS_DATABASE_URL", *B2_NAMES, *R2_NAMES)
     env = {
         key: value
         for key, value in os.environ.items()
-        if key not in REQUIRED_NAMES and key != "GITHUB_REPOSITORY"
+        if key not in cleared and key != "GITHUB_REPOSITORY"
     }
     env["GITHUB_REPOSITORY"] = "bot523h/nexus-ai-agent"
-    env.update({name: "" for name in REQUIRED_NAMES})
+    env.update({name: "" for name in cleared})
     env.update(overrides)
     return subprocess.run(
         ["bash", "-c", _preflight_script()],
@@ -194,21 +214,41 @@ def test_missing_configuration_fails_fast_and_names_every_required_secret() -> N
     for name in REQUIRED_NAMES:
         assert name in output, f"the failure must name the missing secret {name}"
     assert "::error" in output
-    assert "docs/ops/r2-storage.md" in output
+    assert "docs/ops/b2-storage.md" in output
     assert "preflight ok" not in output
 
 
+def test_a_complete_r2_tier_is_accepted_as_the_fallback() -> None:
+    """R2 stays a first-class tier: a full R2 set alone passes the blob check."""
+    result = _run_preflight(NEXUS_DATABASE_URL=POSTGRES_URL, **R2_CANARIES)
+    output = result.stdout + result.stderr
+    # pg_dump is absent on this runner only in some environments; the blob-tier
+    # decision is what this test pins, so accept either the ok line or a
+    # downstream pg_dump refusal — never a "missing secret" refusal.
+    assert "missing repository secrets" not in output, output
+    if result.returncode == 0:
+        assert "preflight ok" in output
+
+
+def test_a_complete_b2_tier_is_accepted() -> None:
+    result = _run_preflight(NEXUS_DATABASE_URL=POSTGRES_URL, **B2_CANARIES)
+    output = result.stdout + result.stderr
+    assert "missing repository secrets" not in output, output
+    if result.returncode == 0:
+        assert "preflight ok" in output
+
+
 def test_partial_configuration_reports_only_what_is_missing() -> None:
-    result = _run_preflight(**R2_CANARIES)
+    result = _run_preflight(**B2_CANARIES)
     output = result.stdout + result.stderr
     assert result.returncode != 0
     assert "NEXUS_DATABASE_URL" in output
-    for name in R2_CANARIES:
+    for name in B2_CANARIES:
         assert name not in output, f"{name} is configured and must not be reported missing"
 
 
 def test_a_non_postgres_database_url_is_refused_without_echoing_it() -> None:
-    result = _run_preflight(NEXUS_DATABASE_URL="sqlite:///canary-local.sqlite3", **R2_CANARIES)
+    result = _run_preflight(NEXUS_DATABASE_URL="sqlite:///canary-local.sqlite3", **B2_CANARIES)
     output = result.stdout + result.stderr
     assert result.returncode != 0, "a CI-local SQLite fallback must never be accepted"
     assert "not a PostgreSQL URL" in output
@@ -216,11 +256,36 @@ def test_a_non_postgres_database_url_is_refused_without_echoing_it() -> None:
 
 
 def test_secret_values_are_never_printed_on_failure() -> None:
-    result = _run_preflight(**R2_CANARIES)  # the database URL stays missing
+    result = _run_preflight(**B2_CANARIES)  # the database URL stays missing
     output = result.stdout + result.stderr
     assert result.returncode != 0
-    for canary in R2_CANARIES.values():
+    for canary in B2_CANARIES.values():
         assert canary not in output, f"secret value leaked into the log: {canary}"
+
+
+def test_a_partial_b2_tier_with_a_complete_r2_tier_is_accepted() -> None:
+    """A half-migrated B2 must not block a valid R2 tier."""
+    partial_b2 = {"NEXUS_B2_KEY_ID": "half", "NEXUS_B2_BUCKET": "half"}
+    result = _run_preflight(NEXUS_DATABASE_URL=POSTGRES_URL, **partial_b2, **R2_CANARIES)
+    output = result.stdout + result.stderr
+    assert "missing repository secrets" not in output, output
+
+
+def test_a_partial_b2_tier_without_r2_is_refused() -> None:
+    partial_b2 = {"NEXUS_B2_KEY_ID": "half", "NEXUS_B2_BUCKET": "half"}
+    result = _run_preflight(NEXUS_DATABASE_URL=POSTGRES_URL, **partial_b2)
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, "an incomplete blob tier must never pass"
+    assert "missing repository secrets" in output
+
+
+def test_the_backup_job_maps_every_b2_and_r2_secret_into_env() -> None:
+    """A dropped secret mapping would make the preflight see an empty value."""
+    body = _commands("backup-db")
+    for name in (*B2_NAMES, *R2_NAMES):
+        assert f"{name}: ${{{{ secrets.{name} }}}}" in body, (
+            f"{name} is not wired from repository secrets into the job env"
+        )
 
 
 @pytest.mark.skipif(
@@ -228,7 +293,7 @@ def test_secret_values_are_never_printed_on_failure() -> None:
     reason="pg_dump is required by the PostgreSQL backup leg (present on the CI runner image)",
 )
 def test_a_fully_configured_preflight_passes() -> None:
-    result = _run_preflight(NEXUS_DATABASE_URL=POSTGRES_URL, **R2_CANARIES)
+    result = _run_preflight(NEXUS_DATABASE_URL=POSTGRES_URL, **B2_CANARIES)
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
     assert "preflight ok" in output
