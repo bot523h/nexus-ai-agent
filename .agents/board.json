@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-04T10:34:08Z",
+  "updated_at": "2026-11-04T11:29:07Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1141,6 +1141,21 @@
         ".github/workflows/ci.yml",
         "docs/README.md",
         ".env.example"
+      ]
+    },
+    {
+      "id": "ci-disk-budget-omni",
+      "description": "CI disk budget + supply chain: package-scoped CPU torch install (scripts/ci_install.sh + constraints/ci-cpu-torch.txt); no global extra index",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/langsmith-smoke.yml",
+        "tests/unit/test_ci_torch_disk_budget.py",
+        "constraints/ci-cpu-torch.txt",
+        "scripts/ci_install.sh",
+        "tests/unit/test_api_gate_mutations.py",
+        "tests/unit/test_maintenance_workflow_contract.py",
+        "scripts/ci_torch_mutations.py"
       ]
     }
   ],
@@ -7837,7 +7852,7 @@
       "note": "NEXUS-MASTER-CLOSURE-2026-11-03 adversarial re-audit of the D-0036 boundary. Base main a2a847a6. Three findings closed as code, each failing-first + mutation-proven; branch arena/nexus-master-closure-20261103. (1) NEW-1: render_jobs._guarded_workspace resolved the workspace before inspecting it, so a workspace symlink planted after admission (creative_job -> creative_victim, both inside the root, both with the reserved prefix) was laundered into the victim and the render wrote output.mp4 there. Now lstat the raw node and refuse S_ISLNK before resolve(); mirrors _guarded_input. (2) NEW-3: creative_surface._ensure_private_directory relied on mkdir(mode=0o700, exist_ok=True), which never re-modes an existing directory, so a root/workspace left at a looser mode stayed world-readable. Added _harden_private_directory (lstat, refuse symlink/non-dir/other-uid, chmod 0o700, re-stat to confirm). (3) FINDING-2: input_integrity is in render_jobs.ERROR_CODES and _notify_creative_completion maps every code to creative.failed.{code}, but the key existed in no locale, so a P0-redelivery failure showed the literal string 'creative.failed.input_integrity'. Added the key to all 15 locales (path-free) + a lockstep test over ERROR_CODES x SUPPORTED_LANGUAGES. Evidence on HEAD: pytest tests/unit tests/architecture tests/integration -m 'not slow' = 6166 passed / 39 skipped; ruff check+format clean; mypy 355 files clean; deptry clean; board+docs+i18n 212 passed; creative redelivery mutations 12/12 killed tree byte-identical; IBPC 23/23; pack_trust 12/12 (PYTHONPATH=src). Board check over all changed paths: no overlap, exit 0. Limitation: TOCTOU between worker re-measure and FFmpeg open is accepted (owner-only dir, no link redirect); a crash between publication and enqueue leaves at most one orphaned staging_* dir. Jules independent review unavailable: the provided key's Google project returns 403 SERVICE_DISABLED (stitch.googleapis.com not enabled).",
       "description": " ; 2026-11-01 (ninth reconciliation, MISSION NEXUS-P0-CLOSURE-AND-IBPC-READINESS-01): `praudit --fail-on-invisible` reported PR#302 INVISIBLE with 17 changed files outside this claim's exclusive_paths — the i18n locales for the new creative.request_conflict string, the relocated M17 forensic report, and tests/integration/test_canonical_creative_execution.py (whose widening had been recorded in the zone but not in the claim). Honest record: those paths were edited BEFORE this coverage was declared, and the earlier 'referee exit 0' was `check`, which proves only non-overlap, not coverage. Referee over the 17 paths ran first here: 45 sources, no overlap, exit 0. ; 2026-11-02 (tenth reconciliation, MISSION NEXUS-PR302-FINAL-GOVERNANCE-AND-VERIFICATION-CLOSURE-01): added tests/unit/test_creative_redelivery_mutations_harness.py, and reported honestly as a repeat of the same error rather than a new one: the file was created in commit 53e7cd1 to prove the mutation harness's subprocess boundary, but the claim was not widened in the same commit, so `praudit --fail-on-invisible` exited 1 and PR#302 was INVISIBLE. Third occurrence of 'edit first, fence later' in this branch's history; the pattern, not just the instance, is the defect. Referee over the file ran first: 45 sources, no overlap, exit 0.",
       "previous_release_reason": "auto-released by gc at 2026-11-02T20:01:41Z (stale active lease)",
-      "release_reason": "auto-released by gc at 2026-11-04T10:19:50Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-11-04T11:28:18Z (stale active lease)"
     },
     {
       "status": "queued",
@@ -8006,7 +8021,64 @@
       "gates_owner": false,
       "delivered": [],
       "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming.",
-      "release_reason": "auto-released by gc at 2026-11-04T10:19:50Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-11-04T11:28:18Z (stale active lease)"
+    },
+    {
+      "task": "task-omni-ci-cpu-torch-01",
+      "title": "NEXUS-OMNI-REMAINDER: package-scoped CPU torch (replace global extra index) — P1",
+      "zone": "ci-disk-budget-omni",
+      "priority": "P1",
+      "status": "done",
+      "scope": "REVISION 2 (NEXUS-OMNI-PYTHON-MATRIX-CLOSURE-03/04). History: the first fix set a workflow-scope PIP_EXTRA_INDEX_URL (a dependency-confusion surface — pip consults an extra index for every distribution). The first package-scoped pin was torch==2.15.0+cpu, which has NO cp310 wheel (PyTorch 2.15 dropped CPython 3.10; repo floor >=3.10, CI runs 3.10/3.11/3.12), so the 3.10 parity legs went RED. The corrected pin is torch==2.14.1+cpu (newest release whose CPU index publishes cp310/cp311/cp312). scripts/ci_install.sh installs torch from the PyTorch CPU index EXCLUSIVELY with --isolated --no-deps --only-binary=:all:, then the editable project from PyPI ONLY (also --isolated) under constraints/ci-cpu-torch.txt, then fails closed if pip check is dirty, any nvidia-*/triton package is present (PEP 503 normalized names), or torch is not +cpu. Both install steps pass --isolated so a job-scoped PIP_INDEX_URL/PIP_EXTRA_INDEX_URL/PIP_FIND_LINKS/pip.conf cannot inject an index. Workflow coverage is discovered dynamically; queue-ownership-mutations.yml is a documented exception owned by PR #304.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "No workflow sets PIP_EXTRA_INDEX_URL or --extra-index-url (global extra index removed; dynamic discovery over .github/workflows/*.yml|yaml)",
+        "Every heavy install routes through scripts/ci_install.sh; the only non-shared editable install (queue-ownership-mutations.yml) is a documented, bounded exception owned by PR #304",
+        "constraints/ci-cpu-torch.txt pins exactly torch==2.14.1+cpu (the newest release with cp310/cp311/cp312 CPU wheels; 2.15.0+cpu has no cp310 wheel)",
+        "Both install steps pass --isolated, so PIP_INDEX_URL/PIP_EXTRA_INDEX_URL/PIP_FIND_LINKS/pip.conf cannot alter the index list or add find-links",
+        "ci_install.sh installs torch from the CPU index only, the editable project from PyPI only, and fails closed (non-zero) if pip check is dirty, any nvidia-*/triton package is present (names PEP 503 normalized), or torch is not +cpu; an unreadable/absent torch fails closed too",
+        "python-parity and continuum-evidence run exactly 3.10/3.11/3.12 (both matrices asserted equal)",
+        "tests/unit/test_ci_torch_disk_budget.py proves behavior, not text: it executes the real postcondition against synthetic metadata (clean passes; nvidia-dash/nvidia_underscore/nvidia.dot/triton/non-cpu/absent-torch all fail closed) and runs the real installer through a python shim (argv, order, exit codes, hostile-env isolation)",
+        "scripts/ci_torch_mutations.py kills all ten behavioral mutants X1-X10 plus the four contract probes (planned=14 killed=14 survived=0 invalid=0) and restores the tree byte-identically"
+      ],
+      "evidence_required": [
+        "fresh-venv run of scripts/ci_install.sh '.[dev]' -> prints 'torch==2.14.1+cpu, no CUDA packages', exit 0 (3.10/3.11/3.12)",
+        "pytest -q -m 'not slow' counts on that env + the exact SHA",
+        "pip list has zero nvidia-*/triton packages",
+        "python scripts/ci_torch_mutations.py -> claude-x-summary planned=10 killed=10 survived=0 invalid=0; summary planned=14 killed=14 survived=0 invalid=0",
+        "pytest tests/unit/test_ci_torch_disk_budget.py -> 29 passed (behavioral postcondition + installer shim + pip --isolated + dynamic discovery)",
+        "GitHub Actions CI green on the exact head SHA (python-parity 3.10/3.11/3.12, continuum-evidence 3.10/3.11/3.12, test, trust-mutations)"
+      ],
+      "exclusive_paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/langsmith-smoke.yml",
+        "tests/unit/test_ci_torch_disk_budget.py",
+        "constraints/ci-cpu-torch.txt",
+        "scripts/ci_install.sh",
+        "tests/unit/test_api_gate_mutations.py",
+        "tests/unit/test_maintenance_workflow_contract.py",
+        "scripts/ci_torch_mutations.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "superseded_acceptance_criteria": [
+        "No workflow sets PIP_EXTRA_INDEX_URL or --extra-index-url (global extra index removed)",
+        "ci.yml/maintenance.yml/langsmith-smoke.yml run no bare `pip install -e`; all go through scripts/ci_install.sh",
+        "constraints/ci-cpu-torch.txt pins an exact torch==x.y.z+cpu",
+        "ci_install.sh installs torch from the CPU index only, the editable project from PyPI only, and exits non-zero if nvidia-*/triton is present or torch is not +cpu",
+        "tests/unit/test_ci_torch_disk_budget.py goes RED when the global extra index returns or the constraint loses its +cpu pin"
+      ],
+      "superseded_evidence_required": [
+        "fresh-venv run of scripts/ci_install.sh '.[dev]' -> prints 'torch==2.15.0+cpu, no CUDA packages', exit 0",
+        "pytest -q -m 'not slow' counts on that env + SHA",
+        "pip list has zero nvidia-*/triton packages",
+        "mutation: reintroduce PIP_EXTRA_INDEX_URL -> guard RED; weaken constraint to torch>=2 -> guard RED"
+      ],
+      "release_reason": "auto-released by gc at 2026-11-04T11:28:18Z (stale active lease)"
     },
     {
       "task": "task-omni-b2-maintenance-tier-01",

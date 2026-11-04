@@ -313,7 +313,7 @@ def _step_index(job: str, needle: str) -> int:
 
 def test_the_preflight_runs_before_the_install_and_the_backup() -> None:
     preflight = _step_index("backup-db", PREFLIGHT_STEP_NAME)
-    install = _step_index("backup-db", "pip install -e .")
+    install = _step_index("backup-db", "scripts/ci_install.sh")
     backup = _step_index("backup-db", "nexus maintenance backup")
     assert preflight < install < backup, (
         "the preflight must run before the dependency install and the backup itself"
