@@ -19,6 +19,8 @@ on:
 permissions:
   contents: read
 
+# CPU-only torch + PyPI-only remainder: see scripts/ci_install.sh.
+
 # One shared group: a scheduled backup never overlaps a running one, and a
 # manual run queues behind an in-progress schedule instead of cancelling it.
 concurrency:
@@ -72,7 +74,7 @@ jobs:
           fi
           echo "preflight ok — production PostgreSQL + R2 backup is configured"
           echo "See docs/ops/r2-storage.md for secret ownership and rotation."
-      - run: pip install -e .
+      - run: bash scripts/ci_install.sh "."
       # Stateless + idempotent: safe to re-run. Exits non-zero when R2 is
       # not configured so a silently-skipped backup is visible, not hidden
       # (deliberate design: an unmonitored missing backup is worse than a
@@ -106,7 +108,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e .
+      - run: bash scripts/ci_install.sh "."
       # The LOCAL drill leg: build a database with the REAL application
       # schema, dump it through the SAME online-backup function the nightly
       # job uses, then restore-drill it into an isolated target and require
@@ -169,7 +171,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: pip install -e .
+      - run: bash scripts/ci_install.sh "."
       # Idempotent: a second run finds nothing to do. Stays green when R2
       # is not configured (local temp cleanup only).
       - run: nexus maintenance housekeeping
