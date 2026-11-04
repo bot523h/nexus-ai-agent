@@ -376,6 +376,15 @@ jobs:
       - run: python scripts/ci_torch_mutations.py
       - name: the working tree must be unchanged after CPU-torch mutation testing
         run: git diff --exit-code
+      # Same evidence rule for the durable Studio project/revision lifecycle
+      # (task-282): content addressing, the compare-and-swap head, the
+      # cross-project read guard, the unset-token guard and the genesis
+      # primary-key arbiter are re-attacked five ways. Each mutant must flip the
+      # lifecycle suites RED and be restored byte for byte
+      # (scripts/durable_project_state_mutations.py).
+      - run: python scripts/durable_project_state_mutations.py
+      - name: the working tree must be unchanged after durable project-state mutation testing
+        run: git diff --exit-code
 
   # A backup tier guard that has never been attacked is not evidence: mutate the
   # Backblaze B2 maintenance blob boundary thirteen ways and require the suite to
