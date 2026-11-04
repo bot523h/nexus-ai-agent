@@ -104,6 +104,22 @@ def _nexus_imports(path: Path) -> list[str]:
     return modules
 
 
+def test_no_dynamic_imports() -> None:
+    # A dynamic import (__import__("torch") / importlib.import_module("httpx"))
+    # would load a forbidden dependency while the static allowlist check passes.
+    # The package has no legitimate reason to import dynamically, so refuse it.
+    for path in _files():
+        for node in ast.walk(_tree(path)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                assert node.func.id != "__import__", (
+                    f"{path.name} uses __import__ (dynamic imports evade the boundary check)"
+                )
+            if isinstance(node, ast.Attribute) and node.attr == "import_module":
+                assert not (isinstance(node.value, ast.Name) and node.value.id == "importlib"), (
+                    f"{path.name} uses importlib.import_module (dynamic import)"
+                )
+
+
 def test_package_exists() -> None:
     assert _files(), "expected the durable project_state package to exist"
 

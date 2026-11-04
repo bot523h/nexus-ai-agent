@@ -96,7 +96,7 @@ TEST_TIMEOUT_SECONDS = 600
 
 def run_tests() -> bool:
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603 - fixed argv, shell=False, TESTS are repo-local literals
             [sys.executable, "-m", "pytest", "-q", "-x", *TESTS],
             cwd=ROOT,
             capture_output=True,
