@@ -48,7 +48,7 @@ def test_dry_run_does_not_delete_local_files_or_remote_backups(
     _make_stale(stale)
     fake = _FakeR2(["backups/db/20000101-000000/old.sqlite3"])
     monkeypatch.setattr(
-        "nexus_ai_agent.maintenance.housekeeping.R2Provider.from_settings",
+        "nexus_ai_agent.maintenance.housekeeping.build_blob_provider",
         lambda settings: fake,
     )
 
@@ -76,7 +76,7 @@ def test_apply_deletes_only_selected_local_and_remote_entries(
     fresh.write_text("new", encoding="utf-8")
     fake = _FakeR2(["backups/db/20000101-000000/old.sqlite3"])
     monkeypatch.setattr(
-        "nexus_ai_agent.maintenance.housekeeping.R2Provider.from_settings",
+        "nexus_ai_agent.maintenance.housekeeping.build_blob_provider",
         lambda settings: fake,
     )
 

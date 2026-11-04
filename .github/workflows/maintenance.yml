@@ -33,9 +33,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # Production pg_dump target. The preflight refuses SQLite and incomplete
-      # R2 configuration; this job never backs up CI-local state.
+      # Production pg_dump target. The preflight refuses SQLite and an
+      # incomplete blob tier; this job never backs up CI-local state.
       NEXUS_DATABASE_URL: ${{ secrets.NEXUS_DATABASE_URL }}
+      # Backblaze B2 (preferred maintenance tier). Only these five names.
+      NEXUS_B2_KEY_ID: ${{ secrets.NEXUS_B2_KEY_ID }}
+      NEXUS_B2_APPLICATION_KEY: ${{ secrets.NEXUS_B2_APPLICATION_KEY }}
+      NEXUS_B2_BUCKET: ${{ secrets.NEXUS_B2_BUCKET }}
+      NEXUS_B2_ENDPOINT: ${{ secrets.NEXUS_B2_ENDPOINT }}
+      NEXUS_B2_REGION: ${{ secrets.NEXUS_B2_REGION }}
+      # Cloudflare R2 (legacy fallback tier, kept intact).
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -51,13 +58,24 @@ jobs:
         run: |
           set -uo pipefail
           missing=()
-          for name in NEXUS_DATABASE_URL R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET; do
-            if [ -z "${!name:-}" ]; then missing+=("$name"); fi
-          done
+          if [ -z "${NEXUS_DATABASE_URL:-}" ]; then missing+=("NEXUS_DATABASE_URL"); fi
+          # A backup needs ONE complete blob tier. B2 is canonical; R2 stays a
+          # valid alternative. A partial set of either is a mistake, so the
+          # canonical (B2) names are reported when neither tier is complete.
+          b2_names=(NEXUS_B2_KEY_ID NEXUS_B2_APPLICATION_KEY NEXUS_B2_BUCKET NEXUS_B2_ENDPOINT NEXUS_B2_REGION)
+          r2_names=(R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET)
+          b2_complete=true
+          for name in "${b2_names[@]}"; do [ -n "${!name:-}" ] || b2_complete=false; done
+          r2_complete=true
+          for name in "${r2_names[@]}"; do [ -n "${!name:-}" ] || r2_complete=false; done
+          if ! $b2_complete && ! $r2_complete; then
+            missing+=("${b2_names[@]}")
+          fi
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "::error title=backup-db preflight failed::missing repository secrets: ${missing[*]}"
             echo "Refusing production backup; no artifact was produced or uploaded."
-            echo "Configure the secrets using docs/ops/r2-storage.md."
+            echo "Configure a complete Backblaze B2 tier (NEXUS_B2_*) using docs/ops/b2-storage.md,"
+            echo "or a complete Cloudflare R2 tier (R2_*) using docs/ops/r2-storage.md."
             exit 1
           fi
           case "${NEXUS_DATABASE_URL}" in
@@ -72,15 +90,14 @@ jobs:
             echo "::error title=backup-db preflight failed::pg_dump is unavailable"
             exit 1
           fi
-          echo "preflight ok — production PostgreSQL + R2 backup is configured"
-          echo "See docs/ops/r2-storage.md for secret ownership and rotation."
+          echo "preflight ok — production PostgreSQL + a blob tier (B2 preferred, R2 fallback) is configured"
+          echo "See docs/ops/b2-storage.md (B2) or docs/ops/r2-storage.md (R2) for secret ownership and rotation."
       - run: bash scripts/ci_install.sh "."
-      # Stateless + idempotent: safe to re-run. Exits non-zero when R2 is
-      # not configured so a silently-skipped backup is visible, not hidden
-      # (deliberate design: an unmonitored missing backup is worse than a
-      # red job — owner configures R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/
-      # R2_SECRET_ACCESS_KEY/R2_BUCKET once; see
-      # docs/ops/DISASTER_RECOVERY_RUNBOOK.md).
+      # Stateless + idempotent: safe to re-run. Exits non-zero when no blob
+      # tier is configured so a silently-skipped backup is visible, not hidden
+      # (deliberate design: an unmonitored missing backup is worse than a red
+      # job — owner configures the five NEXUS_B2_* secrets once; see
+      # docs/ops/b2-storage.md and docs/ops/DISASTER_RECOVERY_RUNBOOK.md).
       # This runs the exact production entry point `create_backup()`. The
       # step writes the machine-verifiable evidence (key, sha256, size,
       # timestamp) to the job log AND the step summary (task-164 AC).
@@ -158,8 +175,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # Housekeeping needs no database access — R2 secrets only.
-      # No bot token here on purpose.
+      # Housekeeping needs no database access — blob-tier secrets only.
+      # No bot token here on purpose. B2 is preferred; R2 stays a fallback.
+      NEXUS_B2_KEY_ID: ${{ secrets.NEXUS_B2_KEY_ID }}
+      NEXUS_B2_APPLICATION_KEY: ${{ secrets.NEXUS_B2_APPLICATION_KEY }}
+      NEXUS_B2_BUCKET: ${{ secrets.NEXUS_B2_BUCKET }}
+      NEXUS_B2_ENDPOINT: ${{ secrets.NEXUS_B2_ENDPOINT }}
+      NEXUS_B2_REGION: ${{ secrets.NEXUS_B2_REGION }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -172,6 +194,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: bash scripts/ci_install.sh "."
-      # Idempotent: a second run finds nothing to do. Stays green when R2
-      # is not configured (local temp cleanup only).
+      # Idempotent: a second run finds nothing to do. Stays green when no blob
+      # tier is configured (local temp cleanup only).
       - run: nexus maintenance housekeeping

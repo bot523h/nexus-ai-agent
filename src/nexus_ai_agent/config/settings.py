@@ -494,6 +494,34 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("R2_BUCKET", "NEXUS_R2_BUCKET"),
     )
 
+    # ── Backblaze B2 — maintenance blob tier (DB backups) ─────────────
+    # An S3-compatible alternative to R2 for the *same* narrow job: the nightly
+    # database dump under ``backups/db/``. Not part of the user-file round-robin.
+    # The canonical names are the five ``NEXUS_B2_*`` secrets; the bare ``B2_*``
+    # names are accepted as legacy aliases (mirroring the R2 dual-name pattern).
+    # Use an application key scoped to the single bucket (never the master key);
+    # see docs/ops/b2-storage.md.
+    b2_key_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_B2_KEY_ID", "B2_KEY_ID"),
+    )
+    b2_application_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_B2_APPLICATION_KEY", "B2_APPLICATION_KEY"),
+    )
+    b2_bucket: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_B2_BUCKET", "B2_BUCKET"),
+    )
+    b2_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_B2_ENDPOINT", "B2_ENDPOINT"),
+    )
+    b2_region: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("NEXUS_B2_REGION", "B2_REGION"),
+    )
+
     # ── task-274: opt-in LangSmith tracing ────────────────────────────
     # Default OFF: enabling tracing exports prompts to a third party, so it is
     # never on unless an operator explicitly asks for it.  When on but

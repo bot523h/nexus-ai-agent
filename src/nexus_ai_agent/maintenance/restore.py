@@ -56,6 +56,7 @@ from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.maintenance.backup import (
     SIDECAR_SUFFIX,
     STAMP_FORMAT,
+    BlobProvider,
     _build_provider,
     _sha256,
     _verify_postgres_dump,
@@ -68,7 +69,6 @@ from nexus_ai_agent.maintenance.failures import (
 from nexus_ai_agent.maintenance.housekeeping import _parse_backup_stamp
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
-from nexus_ai_agent.storage.providers.r2 import R2Provider
 
 log = get_logger(__name__)
 
@@ -118,7 +118,7 @@ def _fail(report: DrillReport, state: str, exc: Exception) -> None:
 # ── discovery & fetch ───────────────────────────────────────────────────
 
 
-def resolve_latest_r2_key(provider: R2Provider) -> str:
+def resolve_latest_r2_key(provider: BlobProvider) -> str:
     """Discover the newest well-formed backup object in the bucket."""
     try:
         keys = asyncio.run(provider.list_files(prefix="backups/db/"))
@@ -174,7 +174,7 @@ def _detect_engine(artifact: Path, filename_hint: str) -> str:
 
 
 def _fetch_r2_artifact(
-    provider: R2Provider, key: str, report: DrillReport
+    provider: BlobProvider, key: str, report: DrillReport
 ) -> tuple[Path, Path | None]:
     """Download the artifact (+sidecar when present) with a bounded timeout."""
     temp_dir = Path(tempfile.mkdtemp(prefix="nexus_restore_fetch_"))
@@ -487,7 +487,9 @@ def restore_drill(
         if not provider.is_configured():
             raise ProviderUnavailable(
                 "R2 is not configured (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, "
-                "R2_SECRET_ACCESS_KEY, R2_BUCKET) — the remote drill cannot "
+                "R2_SECRET_ACCESS_KEY, R2_BUCKET) and no valid Backblaze B2 tier is "
+                "configured (NEXUS_B2_KEY_ID, NEXUS_B2_APPLICATION_KEY, NEXUS_B2_BUCKET, "
+                "NEXUS_B2_ENDPOINT, NEXUS_B2_REGION) — the remote drill cannot "
                 "fetch anything; run the local leg with --from-local instead"
             )
         key = from_r2_key

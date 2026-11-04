@@ -41,10 +41,15 @@ from nexus_ai_agent.maintenance.failures import (
 )
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.db import resolve_database_url
+from nexus_ai_agent.storage.providers.b2 import B2Provider
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
 from nexus_ai_agent.storage.providers.r2 import R2Provider
 
 log = get_logger(__name__)
+
+#: The two interchangeable S3-compatible maintenance tiers. Both implement the
+#: same ``StorageProvider`` surface, so the maintenance lane is provider-neutral.
+BlobProvider = R2Provider | B2Provider
 
 # Blob-tier prefix — recognized by AIStorageManager.is_blob_key.
 BLOB_BACKUP_PREFIX = "backups/db"
@@ -157,7 +162,7 @@ def _verify_postgres_dump(dump_path: Path) -> dict[str, Any]:
 
 
 def _verify_round_trip(
-    provider: R2Provider, *, key: str, local_path: Path, expected_sha256: str
+    provider: BlobProvider, *, key: str, local_path: Path, expected_sha256: str
 ) -> dict[str, Any]:
     """Re-download the uploaded object and prove byte-identical identity.
 
@@ -176,12 +181,47 @@ def _verify_round_trip(
     return {"roundtrip": "byte-identical"}
 
 
-def _build_provider(settings: Settings) -> R2Provider:
+def build_blob_provider(settings: Settings) -> BlobProvider:
+    """Select the maintenance blob tier: Backblaze B2 when configured, else R2.
+
+    B2 wins when its five ``NEXUS_B2_*`` settings are present *and valid*, so an
+    operator can migrate by setting the B2 secrets. R2 remains the fallback and
+    is left fully intact — the two are interchangeable for the backup lane and
+    nothing else in the application is affected.
+
+    A partially configured B2 (some but not all five names) is a mistake, not a
+    silent R2 fallback: when no complete R2 tier is present it raises
+    :class:`ProviderUnavailable` naming the missing setting, so a half-finished
+    migration is loud rather than silently writing backups to the wrong bucket.
+    When a *complete* R2 tier is present the fallback is explicit and is used —
+    this mirrors the workflow preflight, which accepts either complete tier.
+    """
+    b2 = B2Provider.from_settings(settings)
+    if b2.is_configured():
+        return b2
+    b2_present = any(
+        getattr(settings, name, None)
+        for name in ("b2_key_id", "b2_application_key", "b2_bucket", "b2_endpoint", "b2_region")
+    )
+    if b2_present:
+        # Some B2 fields are set: surface the exact configuration problem rather
+        # than silently ignoring the operator's intent and using R2 — unless a
+        # complete R2 tier is present, in which case the fallback is explicit and
+        # matches the workflow preflight (both tiers are accepted when complete).
+        r2 = R2Provider.from_settings(settings)
+        if not r2.is_configured():
+            raise ProviderUnavailable(b2.configuration_error() or "B2 configuration is incomplete")
+        return r2
     return R2Provider.from_settings(settings)
 
 
+#: Backwards-compatible alias — the maintenance lane has always called this
+#: ``_build_provider``; the rename documents that it now selects between tiers.
+_build_provider = build_blob_provider
+
+
 def _upload_actionable(
-    provider: R2Provider, *, local_path: Path, key: str, bucket: str | None = None
+    provider: BlobProvider, *, local_path: Path, key: str, bucket: str | None = None
 ) -> None:
     """Upload with the operator-actionable failure taxonomy — never a bare raise."""
     try:

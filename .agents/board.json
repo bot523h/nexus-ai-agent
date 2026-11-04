@@ -1126,7 +1126,21 @@
       "description": "NEXUS-OMNI forensic campaign: CI/CD disk-budget + supply-chain repairs",
       "paths": [
         ".github/",
-        "scripts/queue_ownership_mutations.py"
+        "scripts/queue_ownership_mutations.py",
+        "src/nexus_ai_agent/storage/providers/b2.py",
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "src/nexus_ai_agent/maintenance/housekeeping.py",
+        "src/nexus_ai_agent/maintenance/restore.py",
+        "src/nexus_ai_agent/config/settings.py",
+        "tests/unit/test_b2_provider.py",
+        "tests/unit/test_maintenance_workflow_contract.py",
+        "tests/unit/test_housekeeping_contract.py",
+        "scripts/b2_blob_tier_mutations.py",
+        "docs/ops/b2-storage.md",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/ci.yml",
+        "docs/README.md",
+        ".env.example"
       ]
     },
     {
@@ -8305,6 +8319,52 @@
         "PR #307"
       ],
       "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming. DECISION_LOG.md is intentionally NOT touched (drift with many open PR heads); the decision record lives in the PR body + audit report."
+    },
+    {
+      "task": "task-omni-b2-maintenance-tier-01",
+      "title": "Backblaze B2 maintenance blob tier (dual-tier with R2, fail-closed)",
+      "title_fa": "لایهٔ B2 بک‌بلِیز برای بکاپ نگهداری (دوگانه با R2، بسته در خطا)",
+      "zone": "ci-quality-omni",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Add Backblaze B2 as the preferred S3-compatible tier for the SAME narrow maintenance lane (nightly DB dump under backups/db/ + housekeeping), with R2 retained as the fallback. A complete+valid B2 wins; a partial B2 with no complete R2 raises ProviderUnavailable (never a silent write to the wrong bucket); a partial B2 beside a complete R2 falls back to R2, matching the workflow preflight. All guards (https-only endpoint, non-B2 host refusal, endpoint/region agreement, bucket-name validation, backups/db/ key confinement, pagination fail-closed, checksum relaxation, partial-delete error) validated before any network call. Offline-testable; 13-probe mutation campaign wired into CI.",
+      "scope_fa": "افزودن B2 به‌عنوان لایهٔ S3-compatible ترجیحی برای همان لِین باریک نگهداری (دامپ شبانهٔ DB زیر backups/db/ + housekeeping)، با نگه‌داشتن R2 به‌عنوان فالبک. B2 کامل و معتبر برنده است؛ B2 ناقص بدون R2 کامل ProviderUnavailable می‌دهد؛ B2 ناقص در کنار R2 کامل به R2 برمی‌گردد و با preflight ورک‌فلو هم‌خوان است.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "build_blob_provider selects a complete B2 tier, falls back to a complete R2 tier, and refuses a partial B2 when no complete R2 exists",
+        "every B2 guard is validated before any network call and names the setting, never its value",
+        "the b2-blob-tier-mutations CI job installs only its dependency set and kills 13/13 mutants with the tree byte-identical",
+        "the full unit suite stays green on the canonical editable install and no test is skipped or weakened"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_b2_provider.py tests/unit/test_maintenance_workflow_contract.py tests/unit/test_housekeeping_contract.py tests/unit/test_maintenance_backup.py tests/unit/test_restore_drill.py",
+        "python scripts/b2_blob_tier_mutations.py",
+        "pytest -q -m 'not slow' (full unit suite on the canonical install)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/providers/b2.py",
+        "src/nexus_ai_agent/maintenance/backup.py",
+        "src/nexus_ai_agent/maintenance/housekeeping.py",
+        "src/nexus_ai_agent/maintenance/restore.py",
+        "src/nexus_ai_agent/config/settings.py",
+        "tests/unit/test_b2_provider.py",
+        "tests/unit/test_maintenance_workflow_contract.py",
+        "tests/unit/test_housekeeping_contract.py",
+        "scripts/b2_blob_tier_mutations.py",
+        "docs/ops/b2-storage.md",
+        ".github/workflows/maintenance.yml",
+        ".github/workflows/ci.yml",
+        "docs/README.md",
+        ".env.example"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-b2-backup-20261104",
+      "claimed_at": "2026-11-04T10:34:08Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
