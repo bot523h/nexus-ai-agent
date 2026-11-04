@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-04T11:29:07Z",
+  "updated_at": "2026-11-04T11:50:40Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1156,6 +1156,27 @@
         "tests/unit/test_api_gate_mutations.py",
         "tests/unit/test_maintenance_workflow_contract.py",
         "scripts/ci_torch_mutations.py"
+      ]
+    },
+    {
+      "id": "provenance-jcs-foundation-01",
+      "description": "Additive RFC 8785/JCS foundation in provenance with explicit legacy-hash isolation. No consumer migration, ledger/passport/IBPC hash change, parser, or historical backfill.",
+      "paths": [
+        "pyproject.toml",
+        "src/nexus_ai_agent/provenance/__init__.py",
+        "src/nexus_ai_agent/provenance/jcs.py",
+        "tests/unit/test_provenance_jcs.py",
+        "tests/unit/test_provenance_legacy_hash_compatibility.py",
+        "tests/architecture/test_jcs_legacy_isolation.py",
+        ".agents/handoffs/task-jcs-rfc8785-foundation-01.md"
+      ]
+    },
+    {
+      "id": "storage-r2-validation",
+      "description": "NEXUS-OMNI: R2 bucket-name fail-closed validation",
+      "paths": [
+        "src/nexus_ai_agent/storage/providers/r2.py",
+        "tests/unit/test_r2_provider.py"
       ]
     }
   ],
@@ -7852,7 +7873,7 @@
       "note": "NEXUS-MASTER-CLOSURE-2026-11-03 adversarial re-audit of the D-0036 boundary. Base main a2a847a6. Three findings closed as code, each failing-first + mutation-proven; branch arena/nexus-master-closure-20261103. (1) NEW-1: render_jobs._guarded_workspace resolved the workspace before inspecting it, so a workspace symlink planted after admission (creative_job -> creative_victim, both inside the root, both with the reserved prefix) was laundered into the victim and the render wrote output.mp4 there. Now lstat the raw node and refuse S_ISLNK before resolve(); mirrors _guarded_input. (2) NEW-3: creative_surface._ensure_private_directory relied on mkdir(mode=0o700, exist_ok=True), which never re-modes an existing directory, so a root/workspace left at a looser mode stayed world-readable. Added _harden_private_directory (lstat, refuse symlink/non-dir/other-uid, chmod 0o700, re-stat to confirm). (3) FINDING-2: input_integrity is in render_jobs.ERROR_CODES and _notify_creative_completion maps every code to creative.failed.{code}, but the key existed in no locale, so a P0-redelivery failure showed the literal string 'creative.failed.input_integrity'. Added the key to all 15 locales (path-free) + a lockstep test over ERROR_CODES x SUPPORTED_LANGUAGES. Evidence on HEAD: pytest tests/unit tests/architecture tests/integration -m 'not slow' = 6166 passed / 39 skipped; ruff check+format clean; mypy 355 files clean; deptry clean; board+docs+i18n 212 passed; creative redelivery mutations 12/12 killed tree byte-identical; IBPC 23/23; pack_trust 12/12 (PYTHONPATH=src). Board check over all changed paths: no overlap, exit 0. Limitation: TOCTOU between worker re-measure and FFmpeg open is accepted (owner-only dir, no link redirect); a crash between publication and enqueue leaves at most one orphaned staging_* dir. Jules independent review unavailable: the provided key's Google project returns 403 SERVICE_DISABLED (stitch.googleapis.com not enabled).",
       "description": " ; 2026-11-01 (ninth reconciliation, MISSION NEXUS-P0-CLOSURE-AND-IBPC-READINESS-01): `praudit --fail-on-invisible` reported PR#302 INVISIBLE with 17 changed files outside this claim's exclusive_paths — the i18n locales for the new creative.request_conflict string, the relocated M17 forensic report, and tests/integration/test_canonical_creative_execution.py (whose widening had been recorded in the zone but not in the claim). Honest record: those paths were edited BEFORE this coverage was declared, and the earlier 'referee exit 0' was `check`, which proves only non-overlap, not coverage. Referee over the 17 paths ran first here: 45 sources, no overlap, exit 0. ; 2026-11-02 (tenth reconciliation, MISSION NEXUS-PR302-FINAL-GOVERNANCE-AND-VERIFICATION-CLOSURE-01): added tests/unit/test_creative_redelivery_mutations_harness.py, and reported honestly as a repeat of the same error rather than a new one: the file was created in commit 53e7cd1 to prove the mutation harness's subprocess boundary, but the claim was not widened in the same commit, so `praudit --fail-on-invisible` exited 1 and PR#302 was INVISIBLE. Third occurrence of 'edit first, fence later' in this branch's history; the pattern, not just the instance, is the defect. Referee over the file ran first: 45 sources, no overlap, exit 0.",
       "previous_release_reason": "auto-released by gc at 2026-11-02T20:01:41Z (stale active lease)",
-      "release_reason": "auto-released by gc at 2026-11-04T11:28:18Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-11-04T11:47:02Z (stale active lease)"
     },
     {
       "status": "queued",
@@ -8021,14 +8042,14 @@
       "gates_owner": false,
       "delivered": [],
       "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming.",
-      "release_reason": "auto-released by gc at 2026-11-04T11:28:18Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-11-04T11:47:02Z (stale active lease)"
     },
     {
       "task": "task-omni-ci-cpu-torch-01",
       "title": "NEXUS-OMNI-REMAINDER: package-scoped CPU torch (replace global extra index) — P1",
       "zone": "ci-disk-budget-omni",
       "priority": "P1",
-      "status": "done",
+      "status": "expired",
       "scope": "REVISION 2 (NEXUS-OMNI-PYTHON-MATRIX-CLOSURE-03/04). History: the first fix set a workflow-scope PIP_EXTRA_INDEX_URL (a dependency-confusion surface — pip consults an extra index for every distribution). The first package-scoped pin was torch==2.15.0+cpu, which has NO cp310 wheel (PyTorch 2.15 dropped CPython 3.10; repo floor >=3.10, CI runs 3.10/3.11/3.12), so the 3.10 parity legs went RED. The corrected pin is torch==2.14.1+cpu (newest release whose CPU index publishes cp310/cp311/cp312). scripts/ci_install.sh installs torch from the PyTorch CPU index EXCLUSIVELY with --isolated --no-deps --only-binary=:all:, then the editable project from PyPI ONLY (also --isolated) under constraints/ci-cpu-torch.txt, then fails closed if pip check is dirty, any nvidia-*/triton package is present (PEP 503 normalized names), or torch is not +cpu. Both install steps pass --isolated so a job-scoped PIP_INDEX_URL/PIP_EXTRA_INDEX_URL/PIP_FIND_LINKS/pip.conf cannot inject an index. Workflow coverage is discovered dynamically; queue-ownership-mutations.yml is a documented exception owned by PR #304.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -8061,8 +8082,8 @@
         "scripts/ci_torch_mutations.py"
       ],
       "owner_hint": "",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "arena/omni-ci-cpu-torch-20261103",
+      "claimed_at": "2026-11-03T05:32:32Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "superseded_acceptance_criteria": [
@@ -8078,7 +8099,86 @@
         "pip list has zero nvidia-*/triton packages",
         "mutation: reintroduce PIP_EXTRA_INDEX_URL -> guard RED; weaken constraint to torch>=2 -> guard RED"
       ],
-      "release_reason": "auto-released by gc at 2026-11-04T11:28:18Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-11-04T11:47:02Z (stale active lease)"
+    },
+    {
+      "task": "task-jcs-rfc8785-foundation-01",
+      "title": "RFC 8785 JCS foundation with legacy hash integrity proof",
+      "title_fa": "زیرساخت RFC 8785/JCS همراه با اثبات حفظ هش‌های تاریخی",
+      "zone": "provenance-jcs-foundation-01",
+      "priority": "P1",
+      "status": "queued",
+      "scope": "Add one explicit, public JCS canonicalization and digest API under provenance, backed by a vetted RFC 8785 implementation and a narrowly pinned direct dependency. Return canonical UTF-8 bytes and sha256:<hex> over those exact bytes. Enforce a fail-closed JSON-value boundary without implicit conversion. Preserve the existing provenance canonical_json/digest_of and IBPC re-export contract byte-for-byte; do not migrate callers, alter historical hashes, rebuild/reissue ledger or passports, add a parser, or introduce a lockfile absent from main. Record the pyproject.toml overlap with open PRs #193 and #307, but do not edit either branch. Maintain the durable handoff at .agents/handoffs/task-jcs-rfc8785-foundation-01.md. If blocked or stopping incomplete, commit/push recoverable work and use defer with the current generation; release only when every criterion and evidence item is complete.",
+      "why_fa": "برای استفاده‌های آینده یک مرجع JCS سازگار با RFC 8785 لازم است، اما هش‌های Provenance، Ledger، Passport و IBPC قرارداد تاریخی دارند و در این مأموریت نباید تغییر کنند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A single explicit public API returns RFC 8785 canonical UTF-8 bytes and a sha256:<hex> digest computed over exactly those bytes; the API is additive and no legacy consumer is migrated.",
+        "Normative examples and number vectors, UTF-16 key ordering including supplementary-plane keys, Unicode non-normalization, escapes, and valid UTF-8 behavior are covered by independent expected values.",
+        "Non-JSON values and ambiguous Python subclasses are rejected without implicit conversion; non-string keys, unsafe integers, non-finite floats, and lone surrogates fail closed with predictable errors.",
+        "Fixed pre-change legacy canonical bytes and digest goldens remain unchanged; existing IBPC exports and representative historical digests remain unchanged; an architecture guard prevents JCS from replacing or being wired into legacy call sites.",
+        "The selected dependency is directly declared and narrowly pinned with its RFC basis, License, maintenance, supported Python range, and supply-chain limitations recorded; no uv.lock is added unless main establishes that packaging contract.",
+        "The handoff file is versioned within the claimed paths and contains exact base/head SHAs, generation, completed milestones, files, commands/results, limitations, and the precise next step.",
+        "Focused tests, make lint, make types, and make test are reported honestly against exact SHAs; board referee passes for every changed path; the implementation PR is created but not merged."
+      ],
+      "evidence_required": [
+        "tests/unit/test_provenance_jcs.py",
+        "tests/unit/test_provenance_legacy_hash_compatibility.py",
+        "tests/architecture/test_jcs_legacy_isolation.py",
+        "tests/unit/test_ibpc_canonical_models.py",
+        "tests/architecture/test_canonical_identity_contract.py",
+        "python scripts/agent_board.py check --files <all-changed-paths> --branch <implementation-branch> --repo bot523h/nexus-ai-agent",
+        "make lint",
+        "make types",
+        "make test",
+        ".agents/handoffs/task-jcs-rfc8785-foundation-01.md"
+      ],
+      "exclusive_paths": [
+        "pyproject.toml",
+        "src/nexus_ai_agent/provenance/__init__.py",
+        "src/nexus_ai_agent/provenance/jcs.py",
+        "tests/unit/test_provenance_jcs.py",
+        "tests/unit/test_provenance_legacy_hash_compatibility.py",
+        "tests/architecture/test_jcs_legacy_isolation.py",
+        ".agents/handoffs/task-jcs-rfc8785-foundation-01.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 0,
+      "delivered": [],
+      "note": "Mission NEXUS-JCS-RFC8785-FOUNDATION-01. Governance registration only; implementation must not start until this Task is visible on main and an official fenced claim is pushed. Open pyproject overlap with PR #193 (stale) and PR #307 (dependency update) is disclosed; neither PR branch is modified."
+    },
+    {
+      "task": "task-omni-r2-bucket-validation-01",
+      "title": "R2 bucket name: fail closed with an actionable message",
+      "title_fa": "نام باکت R2: شکست بسته با پیام قابل‌اقدام",
+      "zone": "storage-r2-validation",
+      "priority": "P2",
+      "status": "active",
+      "scope": "maintenance housekeeping (2026-11-02) failed with an opaque boto3 ParamValidationError 'Invalid bucket name' because R2Provider.is_configured() accepts any non-empty R2_BUCKET. Validate the bucket (3-63 chars, lowercase alphanumeric/hyphen, alphanumeric ends) and refuse at the boundary with a ProviderUnavailable that names the setting.",
+      "scope_fa": "خانه‌تکانی نگهداری (۲۰۲۶-۱۱-۰۲) با خطای مبهم boto3 ParamValidationError «Invalid bucket name» شکست خورد، چون R2Provider.is_configured() هر R2_BUCKET ناتهی را می‌پذیرد. اعتبارسنجی باکت (۳ تا ۶۳ نویسه، حروف کوچک/عدد/خط تیره، شروع و پایان الفبایی‌عدد) و رد در مرز با ProviderUnavailable که نام تنظیم را می‌آورد.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "an invalid R2_BUCKET raises ProviderUnavailable naming R2_BUCKET before any boto3 client call",
+        "a valid bucket keeps every existing behaviour (all prior tests green)",
+        "no secret value or bucket value is written to logs or error messages beyond the operator-supplied name"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_r2_provider.py tests/unit/test_housekeeping_contract.py tests/unit/test_maintenance_backup.py"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/providers/r2.py",
+        "tests/unit/test_r2_provider.py"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-r2-bucket-validation",
+      "claimed_at": "2026-11-02T22:24:53Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check exit 0 (disjoint) before claiming."
     },
     {
       "task": "task-omni-b2-maintenance-tier-01",

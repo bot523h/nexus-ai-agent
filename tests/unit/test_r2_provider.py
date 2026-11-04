@@ -121,6 +121,51 @@ def test_is_configured_false_when_a_field_is_missing(missing: str) -> None:
     assert provider.is_configured() is False
 
 
+# ── bucket-name validation (fail closed, actionable) ──────────────────
+# The production maintenance run (2026-11-02) failed with an opaque boto3
+# ``ParamValidationError: Invalid bucket name`` because is_configured() accepted
+# any non-empty bucket. A malformed R2_BUCKET must be refused at the boundary
+# with a message that names the setting and the rule.
+
+
+def test_valid_bucket_reports_no_reason() -> None:
+    provider, _ = make_provider(bucket="nexus-blobs")
+    assert provider.invalid_bucket_reason() is None
+
+
+@pytest.mark.parametrize(
+    "bucket",
+    ["BAD", "nexus_blobs", "a", "ab", "nexus-blobs ", " nexus-blobs", "-lead", "trail-"],
+)
+def test_invalid_bucket_is_reported(bucket: str) -> None:
+    provider, _ = make_provider(bucket=bucket)
+    reason = provider.invalid_bucket_reason()
+    assert reason is not None and "R2_BUCKET" in reason
+
+
+@pytest.mark.parametrize("bucket", ["BAD", "nexus_blobs", "a", "nexus-blobs "])
+def test_operations_refuse_an_invalid_bucket_before_the_client(bucket: str) -> None:
+    """The client is never asked: a typed, actionable refusal comes first."""
+    client = FakeR2Client()
+    provider = R2Provider(
+        account_id="acc",
+        access_key_id="ak",
+        secret_access_key="sk",
+        bucket=bucket,
+        client=client,
+    )
+    assert provider.is_configured() is True  # non-empty, so the old guard passed
+    for op in (
+        lambda: asyncio.run(provider.list_files(prefix="backups/db/")),
+        lambda: asyncio.run(provider.upload(local_path=Path("/tmp/x"), remote_key="k")),
+        lambda: asyncio.run(provider.download(remote_key="k", local_path=Path("/tmp/x"))),
+        lambda: provider.generate_presigned_url("k"),
+    ):
+        with pytest.raises(ProviderUnavailable, match="R2_BUCKET"):
+            op()
+    assert client.objects == {} and client.presign_calls == []
+
+
 def test_unconfigured_provider_raises_on_all_ops() -> None:
     provider, _ = make_provider(account_id="")
     assert provider.is_configured() is False
