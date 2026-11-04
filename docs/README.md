@@ -59,6 +59,7 @@ placeholder text.
 | [architecture/adr/0011-restricted-shell-flag-grammar.md](architecture/adr/0011-restricted-shell-flag-grammar.md) | The restricted shell validates a declared argument grammar, not a forbidden-option list. |
 | [architecture/adr/0012-local-first-llamaindex-retrieval.md](architecture/adr/0012-local-first-llamaindex-retrieval.md) | Knowledge-retrieval docs: living view + law R22 fitness test (behaviour record lives in DECISION_LOG D-0030). |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
+| [architecture/SEC4_EGRESS_GATE_DESIGN.md](architecture/SEC4_EGRESS_GATE_DESIGN.md) | SEC-4 unified provider-egress gate — DESIGN ONLY: the ungated `/ai`→Gemini path (evidence), the full first-party egress inventory, the single-authority `EgressGate` architecture, a staged migration plan, adversarial test definitions, and the five OPEN owner decisions. No runtime change. |
 | [architecture/TRUTH_DOCTOR.md](architecture/TRUTH_DOCTOR.md) | The repo-truth authority (law R16): one pure-stdlib scanner for version lock-step, docs index/link integrity, boundary-law→test resolution, documentation claim witnesses, and truthy-default verdict reads — with its finding codes and honest limits. |
 
 ## Overnight (dated engineering record — one-night session)
@@ -155,6 +156,7 @@ placeholder text.
 | [audits/NEXUS_OMNI_PR_CONVERGENCE_LEDGER_2026-11-03.md](audits/NEXUS_OMNI_PR_CONVERGENCE_LEDGER_2026-11-03.md) | NEXUS-OMNI PR convergence ledger: all 43 open PRs classified A–G with shared-file overlap, an integration matrix, and a dependency-safe merge order. |
 | [audits/NEXUS_OMNI_RUNTIME_DATA_RECOVERY_AUDIT_2026-11-03.md](audits/NEXUS_OMNI_RUNTIME_DATA_RECOVERY_AUDIT_2026-11-03.md) | NEXUS-OMNI runtime/data/recovery audit: queue ownership/fencing/passport, effect outbox, DB and migrations, asset library, and the backup/restore findings (housekeeping red). |
 | [audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md](audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md) | NEXUS-OMNI morning handoff: executive summary, delivered fixes (PR #304/#305), open risks with owners, what is NOT proven, and the Now/Next/Later plan. |
+| [audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md](audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md) | NEXUS-OMNI live closeout (Persian): post-merge ground truth on `main` @ `b63a22a8`, the seven merged PRs, the Manus-artifact absence record, precise CI state, B2/R2 changes, backup/restore truth, SEC-4 status, the 42-PR classification, board-drift reconciliation, and the owned remediation plan. |
 
 ## Engineering (mission records)
 

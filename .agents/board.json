@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-04T11:50:40Z",
+  "updated_at": "2026-11-04T16:09:42Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8052,7 +8052,7 @@
       "title_fa": "تعمیر بودجهٔ دیسک کمپین موتاسیون مالکیت صف",
       "zone": "ci-quality-omni",
       "priority": "P1",
-      "status": "expired",
+      "status": "completed_merged",
       "scope": "Run 41532014621 failed before the campaign ran: `.[dev]` resolved the full runtime closure (sentence-transformers -> torch 539MB + CUDA wheels) and exhausted the runner (Errno 28). Install only the dependency set the four targeted suites import, then the package with --no-deps. Probes and kill criteria unchanged.",
       "scope_fa": "اجرای ۴۱۵۳۲۰۱۴۶۲۱ پیش از اجرای کمپین شکست خورد: `.[dev]` کل خوشهٔ زمان اجرا را حل کرد (sentence-transformers → torch ۵۳۹MB + چرخ‌های CUDA) و فضای رانر را تمام کرد (Errno 28). فقط مجموعهٔ وابستگی‌های چهار سوئیت هدف نصب شود، سپس پکیج با --no-deps. پروب‌ها و معیارهای kill بدون تغییر.",
       "prerequisites": [],
@@ -8070,20 +8070,24 @@
         "scripts/queue_ownership_mutations.py"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/omni-ci-disk-budget-20261103",
-      "claimed_at": "2026-11-02T22:17:49Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
-      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming.",
-      "release_reason": "auto-released by gc at 2026-11-04T11:47:02Z (stale active lease)"
+      "note": "PR #304 merged to main as 6b62e391 (GitHub-verified 2026-11-04). Reconciled from status='expired' by arena/omni-live-closeout-20261104. NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming.",
+      "release_reason": "auto-released by gc at 2026-11-04T11:47:02Z (stale active lease)",
+      "generation": 1,
+      "merge_commit_sha": "6b62e391",
+      "delivered_pr": 304,
+      "reconciled_at": "2026-11-04T00:00:00Z"
     },
     {
       "task": "task-omni-ci-cpu-torch-01",
       "title": "NEXUS-OMNI-REMAINDER: package-scoped CPU torch (replace global extra index) — P1",
       "zone": "ci-disk-budget-omni",
       "priority": "P1",
-      "status": "expired",
+      "status": "completed_merged",
       "scope": "REVISION 2 (NEXUS-OMNI-PYTHON-MATRIX-CLOSURE-03/04). History: the first fix set a workflow-scope PIP_EXTRA_INDEX_URL (a dependency-confusion surface — pip consults an extra index for every distribution). The first package-scoped pin was torch==2.15.0+cpu, which has NO cp310 wheel (PyTorch 2.15 dropped CPython 3.10; repo floor >=3.10, CI runs 3.10/3.11/3.12), so the 3.10 parity legs went RED. The corrected pin is torch==2.14.1+cpu (newest release whose CPU index publishes cp310/cp311/cp312). scripts/ci_install.sh installs torch from the PyTorch CPU index EXCLUSIVELY with --isolated --no-deps --only-binary=:all:, then the editable project from PyPI ONLY (also --isolated) under constraints/ci-cpu-torch.txt, then fails closed if pip check is dirty, any nvidia-*/triton package is present (PEP 503 normalized names), or torch is not +cpu. Both install steps pass --isolated so a job-scoped PIP_INDEX_URL/PIP_EXTRA_INDEX_URL/PIP_FIND_LINKS/pip.conf cannot inject an index. Workflow coverage is discovered dynamically; queue-ownership-mutations.yml is a documented exception owned by PR #304.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -8116,8 +8120,8 @@
         "scripts/ci_torch_mutations.py"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/omni-ci-cpu-torch-20261103",
-      "claimed_at": "2026-11-03T05:32:32Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "superseded_acceptance_criteria": [
@@ -8133,7 +8137,12 @@
         "pip list has zero nvidia-*/triton packages",
         "mutation: reintroduce PIP_EXTRA_INDEX_URL -> guard RED; weaken constraint to torch>=2 -> guard RED"
       ],
-      "release_reason": "auto-released by gc at 2026-11-04T11:47:02Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-11-04T11:47:02Z (stale active lease)",
+      "generation": 1,
+      "merge_commit_sha": "7180cd35",
+      "delivered_pr": 308,
+      "reconciled_at": "2026-11-04T00:00:00Z",
+      "note": "PR #308 merged to main as 7180cd35 (GitHub-verified 2026-11-04). Reconciled from status='expired' by arena/omni-live-closeout-20261104."
     },
     {
       "task": "task-jcs-rfc8785-foundation-01",
@@ -8190,7 +8199,7 @@
       "title_fa": "نام باکت R2: شکست بسته با پیام قابل‌اقدام",
       "zone": "storage-r2-validation",
       "priority": "P2",
-      "status": "active",
+      "status": "completed_merged",
       "scope": "maintenance housekeeping (2026-11-02) failed with an opaque boto3 ParamValidationError 'Invalid bucket name' because R2Provider.is_configured() accepts any non-empty R2_BUCKET. Validate the bucket (3-63 chars, lowercase alphanumeric/hyphen, alphanumeric ends) and refuse at the boundary with a ProviderUnavailable that names the setting.",
       "scope_fa": "خانه‌تکانی نگهداری (۲۰۲۶-۱۱-۰۲) با خطای مبهم boto3 ParamValidationError «Invalid bucket name» شکست خورد، چون R2Provider.is_configured() هر R2_BUCKET ناتهی را می‌پذیرد. اعتبارسنجی باکت (۳ تا ۶۳ نویسه، حروف کوچک/عدد/خط تیره، شروع و پایان الفبایی‌عدد) و رد در مرز با ProviderUnavailable که نام تنظیم را می‌آورد.",
       "prerequisites": [],
@@ -8207,12 +8216,16 @@
         "tests/unit/test_r2_provider.py"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/omni-r2-bucket-validation",
-      "claimed_at": "2026-11-02T22:24:53Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
-      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check exit 0 (disjoint) before claiming."
+      "note": "PR #305 merged to main as 6883f038 (GitHub-verified 2026-11-04). Reconciled from status='active' by arena/omni-live-closeout-20261104. NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check exit 0 (disjoint) before claiming.",
+      "generation": 1,
+      "merge_commit_sha": "6883f038",
+      "delivered_pr": 305,
+      "reconciled_at": "2026-11-04T00:00:00Z"
     },
     {
       "task": "task-omni-audit-reports-01",
@@ -8220,7 +8233,7 @@
       "title_fa": "گزارش‌های ممیزی قانونی NEXUS-OMNI (۶ سند تاریخ‌دار)",
       "zone": "omni-audit-reports",
       "priority": "P1",
-      "status": "active",
+      "status": "completed_merged",
       "scope": "Produce the six mandatory NEXUS-OMNI campaign reports under docs/audits/. New files only; docs/README.md index update is deferred (see deferred_log) because docs/README.md is under another agent's live lease.",
       "scope_fa": "تولید شش گزارش الزامی کمپین NEXUS-OMNI در docs/audits/. فقط فایل‌های جدید؛ به‌روزرسانی فهرست docs/README.md به تعویق افتاد چون آن فایل در اجارهٔ فعال عامل دیگری است.",
       "prerequisites": [],
@@ -8240,8 +8253,8 @@
         "docs/audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/omni-audit-reports",
-      "claimed_at": "2026-11-02T22:35:06Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
@@ -8252,7 +8265,11 @@
         "docs/audits/NEXUS_OMNI_RUNTIME_DATA_RECOVERY_AUDIT_2026-11-03.md",
         "docs/audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md"
       ],
-      "note": "docs/README.md index line deferred: path is under task-nagar-workspace-redelivery-01's live lease."
+      "note": "PR #306 merged to main as c474f574 (GitHub-verified 2026-11-04). Reconciled from status='active' by arena/omni-live-closeout-20261104. docs/README.md index line deferred: path is under task-nagar-workspace-redelivery-01's live lease.",
+      "generation": 1,
+      "merge_commit_sha": "c474f574",
+      "delivered_pr": 306,
+      "reconciled_at": "2026-11-04T00:00:00Z"
     },
     {
       "task": "task-omni-sec4-legacy-privacy-01",
@@ -8288,7 +8305,7 @@
       "title_fa": "رفع CVE قفل‌های checkpoint لنگ‌گراف",
       "zone": "supply-chain-omni",
       "priority": "P1",
-      "status": "active",
+      "status": "completed_merged",
       "scope": "pip-audit flagged both LangGraph checkpoint pins under GHSA-6hmw-9432-67qq. Raise langgraph-checkpoint-sqlite 3.1.1->3.1.2 and langgraph-checkpoint-postgres 3.1.2->3.1.3 (the patched releases); regenerate the committed sqlite schema golden via the sanctioned human-in-the-loop CLI (`nexus checkpoints golden update --backend sqlite`); drop the now-redundant empty-checkpoint_id workaround in AsyncCompatibleSqliteSaver; sync docs/architecture/DATA_LIFECYCLE.md. CVE is not directly reachable (NEXUS uses the savers, not the affected namespace *Store* classes); the bump is defence-in-depth.",
       "scope_fa": "pip-audit هر دو قفل checkpoint را زیر GHSA-6hmw-9432-67qq نشان داد. ارتقای sqlite 3.1.1→3.1.2 و postgres 3.1.2→3.1.3؛ بازتولید golden اسکیمای sqlite با مسیر مجاز CLI؛ حذف workaround بی‌نیازِ checkpoint_id خالی؛ همگرایی DATA_LIFECYCLE.md.",
       "prerequisites": [],
@@ -8311,14 +8328,18 @@
         "docs/architecture/DATA_LIFECYCLE.md"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/omni-dep-audit",
-      "claimed_at": "2026-11-02T23:03:04Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
         "PR #307"
       ],
-      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming. DECISION_LOG.md is intentionally NOT touched (drift with many open PR heads); the decision record lives in the PR body + audit report."
+      "note": "PR #307 merged to main as 408e9599 (GitHub-verified 2026-11-04). Reconciled from status='active' by arena/omni-live-closeout-20261104. NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming. DECISION_LOG.md is intentionally NOT touched (drift with many open PR heads); the decision record lives in the PR body + audit report.",
+      "generation": 1,
+      "merge_commit_sha": "408e9599",
+      "delivered_pr": 307,
+      "reconciled_at": "2026-11-04T00:00:00Z"
     },
     {
       "task": "task-omni-b2-maintenance-tier-01",
@@ -8326,7 +8347,7 @@
       "title_fa": "لایهٔ B2 بک‌بلِیز برای بکاپ نگهداری (دوگانه با R2، بسته در خطا)",
       "zone": "ci-quality-omni",
       "priority": "P1",
-      "status": "active",
+      "status": "completed_merged",
       "scope": "Add Backblaze B2 as the preferred S3-compatible tier for the SAME narrow maintenance lane (nightly DB dump under backups/db/ + housekeeping), with R2 retained as the fallback. A complete+valid B2 wins; a partial B2 with no complete R2 raises ProviderUnavailable (never a silent write to the wrong bucket); a partial B2 beside a complete R2 falls back to R2, matching the workflow preflight. All guards (https-only endpoint, non-B2 host refusal, endpoint/region agreement, bucket-name validation, backups/db/ key confinement, pagination fail-closed, checksum relaxation, partial-delete error) validated before any network call. Offline-testable; 13-probe mutation campaign wired into CI.",
       "scope_fa": "افزودن B2 به‌عنوان لایهٔ S3-compatible ترجیحی برای همان لِین باریک نگهداری (دامپ شبانهٔ DB زیر backups/db/ + housekeeping)، با نگه‌داشتن R2 به‌عنوان فالبک. B2 کامل و معتبر برنده است؛ B2 ناقص بدون R2 کامل ProviderUnavailable می‌دهد؛ B2 ناقص در کنار R2 کامل به R2 برمی‌گردد و با preflight ورک‌فلو هم‌خوان است.",
       "prerequisites": [],
@@ -8358,13 +8379,52 @@
         ".env.example"
       ],
       "owner_hint": "",
-      "agent_branch": "arena/omni-b2-backup-20261104",
-      "claimed_at": "2026-11-04T10:34:08Z",
+      "agent_branch": "",
+      "claimed_at": null,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "PR #309 merged to main as b63a22a8 (GitHub-verified 2026-11-04). Reconciled from status='active' by arena/omni-live-closeout-20261104.",
+      "generation": 2,
+      "merge_commit_sha": "b63a22a8",
+      "delivered_pr": 309,
+      "reconciled_at": "2026-11-04T00:00:00Z"
+    },
+    {
+      "task": "task-omni-live-closeout-01",
+      "title": "NEXUS-OMNI live closeout report + board reconciliation + SEC-4 design",
+      "title_fa": "گزارش بستنِ زندهٔ NEXUS-OMNI + آشتی تخته + طراحی SEC-4",
+      "zone": "docs-architecture",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Add docs/audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md (Persian closeout), docs/architecture/SEC4_EGRESS_GATE_DESIGN.md (SEC-4 design ONLY, no runtime change), index both in docs/README.md, and reconcile the six task-omni-* claims to their GitHub-verified merged state. Docs + board only.",
+      "scope_fa": "افزودن گزارش بستنِ زندهٔ فارسی، سند طراحی SEC-4 (فقط طراحی، بدون تغییر Runtime)، فهرست‌کردن هر دو، و آشتی شش ادعای task-omni-* با وضعیت ادغام‌شدهٔ تأییدشده از GitHub.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "the closeout report exists and is indexed in docs/README.md",
+        "the SEC-4 design doc names every LLM egress path with file+line evidence and states the five owner decisions as OPEN",
+        "six task-omni-* claims read completed_merged with a GitHub-verified merge_commit_sha",
+        "SEC-4 stays deferred and JCS stays queued",
+        "no runtime file is modified and no secret value appears in any report"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_agent_board.py",
+        "pytest tests/unit/test_docs_integrity.py"
+      ],
+      "exclusive_paths": [
+        "docs/audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md",
+        "docs/architecture/SEC4_EGRESS_GATE_DESIGN.md",
+        "docs/README.md",
+        ".agents/board.json"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-live-closeout-20261104",
+      "claimed_at": "2026-11-04T16:20:00Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
       "note": "",
-      "generation": 1
+      "generation": 0
     }
   ],
   "deferred_log": [
