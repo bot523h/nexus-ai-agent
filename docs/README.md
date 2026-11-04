@@ -155,6 +155,7 @@ placeholder text.
 | [audits/NEXUS_OMNI_PR_CONVERGENCE_LEDGER_2026-11-03.md](audits/NEXUS_OMNI_PR_CONVERGENCE_LEDGER_2026-11-03.md) | NEXUS-OMNI PR convergence ledger: all 43 open PRs classified A–G with shared-file overlap, an integration matrix, and a dependency-safe merge order. |
 | [audits/NEXUS_OMNI_RUNTIME_DATA_RECOVERY_AUDIT_2026-11-03.md](audits/NEXUS_OMNI_RUNTIME_DATA_RECOVERY_AUDIT_2026-11-03.md) | NEXUS-OMNI runtime/data/recovery audit: queue ownership/fencing/passport, effect outbox, DB and migrations, asset library, and the backup/restore findings (housekeeping red). |
 | [audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md](audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md) | NEXUS-OMNI morning handoff: executive summary, delivered fixes (PR #304/#305), open risks with owners, what is NOT proven, and the Now/Next/Later plan. |
+| [audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md](audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md) | NEXUS-OMNI live closeout (Persian): post-merge ground truth on `main` @ `b63a22a8`, the seven merged PRs, the Manus-artifact absence record, precise CI state, B2/R2 changes, backup/restore truth, SEC-4 status, the 42-PR classification, board-drift reconciliation, and the owned remediation plan. |
 
 ## Engineering (mission records)
 
