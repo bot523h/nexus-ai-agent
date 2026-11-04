@@ -837,7 +837,8 @@ Only red check = the #234 flake (task-264, issue #237).
 - `scripts/ci_torch_mutations.py` (10/10 killed) runs in the `trust-mutations` job.
 
 ## NEXUS-OMNI closeout (durable, 2026-11-04)
-- main @ `b63a22a8`; PR **#311** = `arena/omni-live-closeout-20261104` (docs+board).
+- main @ `cf427874` (PR #311 -> `6e6f7e11`; then PR #312 board-release -> `cf427874`).
+  PR #311 = `arena/omni-live-closeout-20261104` (docs+board); #312 released the claim.
   Detail: `.openhands/memory/2026-11-04.md`.
 - **Manus audit artifacts ABSENT** (not in workspace or any of 230 branches) — record
   honestly, never invent findings.
