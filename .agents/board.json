@@ -1186,6 +1186,18 @@
         "src/nexus_ai_agent/bot/handlers.py",
         "docs/architecture/DATA_LIFECYCLE.md"
       ]
+    },
+    {
+      "id": "supply-chain-omni",
+      "description": "NEXUS-OMNI forensic campaign: dependency / supply-chain repairs",
+      "paths": [
+        "pyproject.toml",
+        "src/nexus_ai_agent/storage/golden/sqlite.langgraph.json",
+        "src/nexus_ai_agent/storage/langgraph_checkpoint.py",
+        "tests/unit/test_checkpoint_dependency_pin.py",
+        "tests/unit/test_sqlite_checkpointer_empty_checkpoint_id.py",
+        "docs/architecture/DATA_LIFECYCLE.md"
+      ]
     }
   ],
   "claims": [
@@ -8255,6 +8267,44 @@
       "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false
+    },
+    {
+      "task": "task-omni-dep-supply-chain-01",
+      "title": "LangGraph checkpoint pin CVE remediation (GHSA-6hmw-9432-67qq)",
+      "title_fa": "رفع CVE قفل‌های checkpoint لنگ‌گراف",
+      "zone": "supply-chain-omni",
+      "priority": "P1",
+      "status": "active",
+      "scope": "pip-audit flagged both LangGraph checkpoint pins under GHSA-6hmw-9432-67qq. Raise langgraph-checkpoint-sqlite 3.1.1->3.1.2 and langgraph-checkpoint-postgres 3.1.2->3.1.3 (the patched releases); regenerate the committed sqlite schema golden via the sanctioned human-in-the-loop CLI (`nexus checkpoints golden update --backend sqlite`); drop the now-redundant empty-checkpoint_id workaround in AsyncCompatibleSqliteSaver; sync docs/architecture/DATA_LIFECYCLE.md. CVE is not directly reachable (NEXUS uses the savers, not the affected namespace *Store* classes); the bump is defence-in-depth.",
+      "scope_fa": "pip-audit هر دو قفل checkpoint را زیر GHSA-6hmw-9432-67qq نشان داد. ارتقای sqlite 3.1.1→3.1.2 و postgres 3.1.2→3.1.3؛ بازتولید golden اسکیمای sqlite با مسیر مجاز CLI؛ حذف workaround بی‌نیازِ checkpoint_id خالی؛ همگرایی DATA_LIFECYCLE.md.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "both checkpoint pins equal their patched releases (sqlite 3.1.2 / postgres 3.1.3)",
+        "the committed sqlite golden matches the installed 3.1.2 schema (reconcile fail-closed)",
+        "checkpoint + docs/architecture suites green; ruff + mypy clean; no test weakened"
+      ],
+      "evidence_required": [
+        "pip-audit -f json (before: GHSA-6hmw-9432-67qq on both; after: cleared)",
+        "pytest tests/unit/test_checkpoint_dependency_pin.py tests/unit/test_sqlite_checkpointer_empty_checkpoint_id.py tests/unit/test_golden_management.py tests/unit/test_checkpoint_lifecycle_store.py tests/integration/test_checkpoint_adapter_contract.py tests/integration/test_checkpoint_adapter.py tests/integration/test_checkpoint_composition.py",
+        "python -m nexus_ai_agent.cli checkpoints golden update --backend sqlite --path <seeded>"
+      ],
+      "exclusive_paths": [
+        "pyproject.toml",
+        "src/nexus_ai_agent/storage/golden/sqlite.langgraph.json",
+        "src/nexus_ai_agent/storage/langgraph_checkpoint.py",
+        "tests/unit/test_checkpoint_dependency_pin.py",
+        "tests/unit/test_sqlite_checkpointer_empty_checkpoint_id.py",
+        "docs/architecture/DATA_LIFECYCLE.md"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-dep-audit",
+      "claimed_at": "2026-11-02T23:03:04Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [
+        "PR #307"
+      ],
+      "note": "NEXUS-OMNI-FORENSIC-RECONSTRUCTION-2026-11-03. Board check on these files was exit 0 (disjoint) before claiming. DECISION_LOG.md is intentionally NOT touched (drift with many open PR heads); the decision record lives in the PR body + audit report."
     }
   ],
   "deferred_log": [
