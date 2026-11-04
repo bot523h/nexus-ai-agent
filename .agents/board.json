@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-04T16:05:16Z",
+  "updated_at": "2026-11-04T16:09:42Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8389,6 +8389,42 @@
       "merge_commit_sha": "b63a22a8",
       "delivered_pr": 309,
       "reconciled_at": "2026-11-04T00:00:00Z"
+    },
+    {
+      "task": "task-omni-live-closeout-01",
+      "title": "NEXUS-OMNI live closeout report + board reconciliation + SEC-4 design",
+      "title_fa": "گزارش بستنِ زندهٔ NEXUS-OMNI + آشتی تخته + طراحی SEC-4",
+      "zone": "docs-architecture",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Add docs/audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md (Persian closeout), docs/architecture/SEC4_EGRESS_GATE_DESIGN.md (SEC-4 design ONLY, no runtime change), index both in docs/README.md, and reconcile the six task-omni-* claims to their GitHub-verified merged state. Docs + board only.",
+      "scope_fa": "افزودن گزارش بستنِ زندهٔ فارسی، سند طراحی SEC-4 (فقط طراحی، بدون تغییر Runtime)، فهرست‌کردن هر دو، و آشتی شش ادعای task-omni-* با وضعیت ادغام‌شدهٔ تأییدشده از GitHub.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "the closeout report exists and is indexed in docs/README.md",
+        "the SEC-4 design doc names every LLM egress path with file+line evidence and states the five owner decisions as OPEN",
+        "six task-omni-* claims read completed_merged with a GitHub-verified merge_commit_sha",
+        "SEC-4 stays deferred and JCS stays queued",
+        "no runtime file is modified and no secret value appears in any report"
+      ],
+      "evidence_required": [
+        "pytest tests/unit/test_agent_board.py",
+        "pytest tests/unit/test_docs_integrity.py"
+      ],
+      "exclusive_paths": [
+        "docs/audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md",
+        "docs/architecture/SEC4_EGRESS_GATE_DESIGN.md",
+        "docs/README.md",
+        ".agents/board.json"
+      ],
+      "owner_hint": "",
+      "agent_branch": "arena/omni-live-closeout-20261104",
+      "claimed_at": "2026-11-04T16:20:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "",
+      "generation": 0
     }
   ],
   "deferred_log": [

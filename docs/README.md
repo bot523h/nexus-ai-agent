@@ -59,6 +59,7 @@ placeholder text.
 | [architecture/adr/0011-restricted-shell-flag-grammar.md](architecture/adr/0011-restricted-shell-flag-grammar.md) | The restricted shell validates a declared argument grammar, not a forbidden-option list. |
 | [architecture/adr/0012-local-first-llamaindex-retrieval.md](architecture/adr/0012-local-first-llamaindex-retrieval.md) | Knowledge-retrieval docs: living view + law R22 fitness test (behaviour record lives in DECISION_LOG D-0030). |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
+| [architecture/SEC4_EGRESS_GATE_DESIGN.md](architecture/SEC4_EGRESS_GATE_DESIGN.md) | SEC-4 unified provider-egress gate — DESIGN ONLY: the ungated `/ai`→Gemini path (evidence), the full first-party egress inventory, the single-authority `EgressGate` architecture, a staged migration plan, adversarial test definitions, and the five OPEN owner decisions. No runtime change. |
 | [architecture/TRUTH_DOCTOR.md](architecture/TRUTH_DOCTOR.md) | The repo-truth authority (law R16): one pure-stdlib scanner for version lock-step, docs index/link integrity, boundary-law→test resolution, documentation claim witnesses, and truthy-default verdict reads — with its finding codes and honest limits. |
 
 ## Overnight (dated engineering record — one-night session)
