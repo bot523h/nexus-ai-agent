@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-04T21:03:53Z",
+  "updated_at": "2026-11-04T22:22:18Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8450,7 +8450,7 @@
       "title_fa": "وضعیت پایدار پروژهٔ استودیو، بازبینی‌ها و زنجیرهٔ شواهد دارایی",
       "zone": "durable-project-state-lifecycle",
       "priority": "P0",
-      "status": "active",
+      "status": "deferred",
       "scope": "Lock the canonical Project/Revision source-of-truth contract, then implement one real, restartable Project->Revision lifecycle using the existing single storage schema, the Studio CommandBus, the Asset Library and Provenance/Passport. A revision is an immutable, content-addressed (CAS) snapshot of the CommandBus Project state; the head row is the single mutable pointer with optimistic concurrency. No parallel store, queue, authority, renderer, or provenance ledger.",
       "scope_fa": "قرارداد منبع‌حقیقت Project/Revision را قفل کنید؛ سپس یک مسیر واقعی و قابل‌بازیابی Project→Revision بسازید که از همان اسکیمای واحد، CommandBus، Asset Library و Provenance/Passport استفاده می‌کند. هر Revision یک اسنپ‌شات تغییرناپذیر و محتوا-آدرس‌دار (CAS) از حالت Project است؛ رکورد head تنها اشاره‌گر تغییرپذیر با کنترل هم‌زمانی خوش‌بینانه است. هیچ ذخیره‌گاه/صف/مرجع/Renderer/دفتر موازی ساخته نمی‌شود.",
       "prerequisites": [],
@@ -8487,12 +8487,17 @@
       ],
       "owner_hint": "Supersedes the stale PR #290 registration on an independent branch.",
       "agent_branch": "arena/omni-durable-project-state-20261104",
-      "claimed_at": "2026-11-04T20:14:46Z",
-      "generation": 1,
+      "claimed_at": null,
+      "generation": 2,
       "ttl_hours": 24,
       "gates_owner": false,
-      "delivered": [],
-      "note": ""
+      "delivered": [
+        "PR #314 head 9ff6c1cf47fa7cfb7759de3b8f459ac6a59598b5 (base main cf427874e5c6487243ba1371b1c47dd920fc73a3), 8 commits, 26 files; all 25 check runs green incl. the 3 required (lint, test, merge-base-guard).",
+        "Foundation delivered: immutable content-addressed revisions (revision_id = sha256 of canonical state bytes), single CAS head pointer, atomic commit (revision insert + head advance in one transaction), cross-project read guard, genesis primary-key arbiter.",
+        "Evidence: scripts/durable_project_state_mutations.py 5/5 mutants killed (baseline GREEN, restored GREEN); 23 new tests (unit + integration restart via real SIGKILL + concurrency + architecture boundary); full local suite 6291 passed / 39 skipped; ruff + mypy (361 files) + deptry clean.",
+        "Alembic head re-pinned d4e1c0a79b21 -> 20261104dpstate; PostgreSQL LangGraph golden re-derived on a real pgvector:pg16 (only migration_head changed)."
+      ],
+      "note": "Deferred (NOT done): PR #314 delivers the durable revision persistence foundation only. Remaining vertical slice (ARENA-C): pin the SAME revision_id/hash into the existing JobQueue payload, load that exact revision (not a newer head) in the worker, attach to the same CommandBus transaction and attempt lifecycle, fence stale attempts, publish the artifact into the Asset Library with an AssetVersion bound to that revision, re-verify the same bytes, and connect Revision<->Job<->Attempt<->Verification<->CausalJournal<->Passport. No parallel queue/store/passport/verifier/ledger may be introduced."
     }
   ],
   "deferred_log": [
@@ -8585,6 +8590,14 @@
       "task": "task-282-durable-project-state-lifecycle",
       "reason": "Registered (P0). Supersedes stale PR #290; will be claimed on arena/omni-durable-project-state-20261104 after the official board check exits 0.",
       "at": "2026-11-04T20:14:09Z"
+    },
+    {
+      "task": "task-282-durable-project-state-lifecycle",
+      "deferred_by_branch": "arena/omni-durable-project-state-20261104",
+      "at": "2026-11-04T22:22:02Z",
+      "reason_fa": "زیرساخت ذخیره‌سازی پایدار Revision در PR #314 تحویل شده است؛ اما اتصال کامل مسیر واقعی Intent تا Job، Attempt، Artifact، Verification و Passport باقی مانده است. ادامه نیازمند بازبینی مالکیت مسیرها و واگذاری رسمی به Arena است.",
+      "reason_en": "PR #314 delivered the durable revision persistence foundation. End-to-end revision pinning across the canonical handoff, existing JobQueue, fenced Attempt, AssetVersion, Verification and Passport remains incomplete and requires a fresh path-ownership review.",
+      "resume_when": "PR #314 is integrated with this deferred board state, the complete path-ownership review is exit 0, and ARENA-C claims Task-282 on a fresh branch."
     }
   ],
   "next_work": [
