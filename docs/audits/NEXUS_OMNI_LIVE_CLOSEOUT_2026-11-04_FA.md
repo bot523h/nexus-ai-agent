@@ -181,7 +181,51 @@ bot/handlers.py::ai_cmd  →  GeminiEngine.chat  →  httpx.AsyncClient  →  ge
 - **مسدود:** SEC-4 (منتظر تصمیم مالک).
 - **به تعویق افتاده:** PRهای بزرگ، جفت‌های تکراری، استقرار Production.
 
-## ۱۲. بازتولید
+## ۱۲. پیوست — شواهد دقیق فازهای C/E/F
+
+### C. شواهد دقیق بکاپ (از لاگ CI)
+- run `41817663855` (روی `6b62e391`) → شغل `backup-db` = `failure`؛
+  `housekeeping`/`restore-drill` = `skipped`.
+- خط خطای واقعی preflight: `::error missing repository secrets: NEXUS_DATABASE_URL`
+  → سپس `Refusing production backup; no artifact was produced or uploaded.`
+- **استنباط قطعی:** چهار Secret مربوط به R2 (`R2_ACCOUNT_ID`، `R2_ACCESS_KEY_ID`،
+  `R2_SECRET_ACCESS_KEY`، `R2_BUCKET`) تنظیم شده‌اند (چون پیام «missing» آن‌ها را
+  نام نمی‌برد)، اما `NEXUS_DATABASE_URL` تنظیم نشده است.
+- `restore-drill` (پای محلی) در run `41304383416` = `success` — اثبات بازیابی از
+  آرتیفکت SQLite ساخته‌شده با همان تابع بکاپ، **نه** بازیابی از B2/R2.
+- **وضعیت:** `OWNER_ACTION_REQUIRED` برای تنظیم `NEXUS_DATABASE_URL` (و در صورت
+  تمایل، لایهٔ B2 کامل)؛ مسیر remote `NOT_PROVEN`.
+
+### F. شواهد دقیق CI/Supply-Chain
+- **همهٔ چهار workflow فایل روی `main`** (`ci.yml`، `langsmith-smoke.yml`،
+  `maintenance.yml`، `queue-ownership-mutations.yml`) دارای بلوک `permissions:` هستند
+  و همهٔ `uses:` با SHA پین شده‌اند (بدون `@vN`/`@main`)؛ هیچ `pull_request_target`
+  وجود ندارد.
+- **صحت ادعای Torch:** بررسی مستقیم ایندکس
+  `https://download.pytorch.org/whl/cpu/torch/` نشان می‌دهد `torch==2.15.0` برای
+  cp310 **وجود ندارد** ولی `2.14.1` برای cp310/cp311/cp312 **وجود دارد** — یعنی
+  توضیح `constraints/ci-cpu-torch.txt` («2.15.0 cp310 را حذف کرد») **صحیح** است.
+- **`extras_matrix.py check`** = `ok` (legs: core/pdf/speech/translate؛ parity:
+  3.10/3.11/3.12) — هم‌خوانی pyproject ↔ CI ↔ تست.
+- **دکتر مستندات:** `docs/ops/b2-storage.md` و `docs/ops/r2-storage.md` که
+  workflow به آن‌ها ارجاع می‌دهد موجودند.
+- **مشاهدهٔ P3:** `queue-ownership-mutations.yml` به‌جای `scripts/ci_install.sh` از
+  یک `pip install` دستی بدون `--isolated` استفاده می‌کند؛ چون Torch نصب نمی‌کند
+  خطر dependency-confusion ندارد، اما برای یکنواختی می‌تواند به `ci_install.sh`
+  منتقل شود. وضعیت: `به تعویق` (بدون تأثیر بر امنیت فعلی).
+
+### E. سه کار کوچک، مستقل و دارای مالکیت روشن (برای شروع)
+1. **#285** — `chore(board): synchronize task-278 deferred status` (فقط
+   `.agents/board.json`، +14/−6). مالک: `arena/nagar-causal-memory-director-board-sync-20261030-0042`.
+2. **#290** — `chore(board): register task-282 durable project state lifecycle`
+   (فقط `.agents/board.json`، +63/−1). مالک: `arena/nexus-durable-project-state-board-20261030-1028`.
+3. **#301** — `chore(automation): engineering-debt watchdog` (چهار فایل
+   `.agents/evidence/AGENT_DEBT_WATCHDOG_*.md`). مالک: `automation/debt-watchdog`.
+
+هر سه کوچک و قابل‌بررسی‌اند، اما همه `dirty`/`behind` هستند و **نیازمند
+به‌روزرسانی روی `main` و تأیید مالک** پیش از ادغام‌اند؛ هیچ‌یک بدون بررسی ادغام نشد.
+
+## ۱۳. بازتولید
 
 ```bash
 # حقیقت زنده
