@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-04T19:22:49Z",
+  "updated_at": "2026-11-04T20:37:21Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -36,6 +36,22 @@
   "gates_rule": "Policy 2026-10-22 (no mandatory global gates owner): there is no global gates_owner. Every agent runs its own gates (make lint / make types / make test, or a targeted equivalent) on its own branch and records the exact command, observed result and tested SHA as evidence. A gates_owner claim is optional and advisory, at most one at a time, and never locks another agent's work, CI, or a PR review. Its absence is verifiable state, not an unverifiable verdict; the referee still fails closed (exit 2) only when a required shared source cannot be read.",
   "merge_order_note": "۱) task-101 (lint restore) → ۲) PR#32 rebase+merge → ۳) task-102 (security) و task-104/105/107/108/109/110 موازی روی مسیرهای گسسته → ۴) task-106 بعد از ادغام الگوی surface. تداخل .agents/board.json بین PR#32 و این واگذاری با قاعده «آخرین وضعیت واگذاری برنده است» حل می‌شود.",
   "zones": [
+    {
+      "id": "nagar-ibpc-durable-approval",
+      "description": "ARENA-A: durable, restart-safe, single-use IBPC approval ledger + digest-only execution context/session state on the EXISTING storage substrate (no parallel ledger/DB/queue/journal/passport), plus the Voice-uses-the-same-contract proof.",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "tests/unit/test_ibpc_",
+        "tests/architecture/test_ibpc_boundary.py",
+        "tests/integration/test_ibpc_e2e.py",
+        "tests/integration/test_ibpc_durable_approval.py",
+        "scripts/ibpc_security_mutations.py",
+        "scripts/ibpc_durable_mutations.py",
+        "docs/engineering/NAGAR_IBPC.md",
+        "docs/README.md"
+      ],
+      "note": "Registered 2026-11-04 by arena/a7525e89-nexus-ai-agent (ARENA-A)."
+    },
     {
       "id": "audit-remainder",
       "description": "P0-8 single-wiring + P0-9 graph memory write path",
@@ -1215,6 +1231,55 @@
     }
   ],
   "claims": [
+    {
+      "task": "task-ibpc-durable-approval-01",
+      "title": "ARENA-A — Durable Approval & Voice Continuity for IBPC (restart-safe single-use ledger on the existing storage substrate)",
+      "title_fa": "ARENA-A: ماندگاری Approval و پیوستگی Voice در IBPC — دفتر تأیید تک‌مصرف مقاوم به restart روی زیرساخت ذخیره‌سازی موجود",
+      "zone": "nagar-ibpc-durable-approval",
+      "priority": "P0",
+      "status": "queued",
+      "scope": "Close the IBPC approval-persistence gap without any parallel storage. (1) Persist the approval ledger (binding identity + state transitions) durably; (2) persist the execution context needed for a safe restart (digest-only: AST/plan/preview/readback + source path + digests, never transcript text or audio bytes); (3) persist the session/turn fencing state (sequence head, revision, transcript/turn state, digests only) so restart cannot resurrect a stale or partial turn; (4) atomic PENDING->APPROVED->CONSUMED / REVOKED with compare-and-set in the durable store so concurrent consumers have exactly one winner across processes; (5) fail-closed recovery: a digest/context that cannot be re-validated after restart refuses execution; (6) crash safety at the approval->enqueue boundary (no duplicate execution, no fabricated success); (7) Voice continues through the SAME submit_voice_intent path and the SAME approval binding contract — no VoiceAdapter, no second ledger, no new DB/queue/journal/passport.",
+      "scope_fa": "بستن شکاف ماندگاری Approval در IBPC بدون هیچ storage موازی: دفتر تأیید و context اجرا و وضعیت session/turn به‌صورت digest-only ماندگار می‌شوند؛ گذارهای اتمیک CAS؛ بازیابی fail-closed پس از restart؛ امنیت مرز approval/enqueue؛ و عبور Voice از همان مسیر Text و همان binding.",
+      "prerequisites": [
+        "task-ibpc-security-closure-01"
+      ],
+      "acceptance_criteria": [
+        "Restart between create, approve and consume is exercised: an approval created before a simulated restart can be approved and consumed after it, with the same identity, and every restored field is re-validated against durable state (no cache trust).",
+        "An approval issued in Project A is refused in Project B (and cross-tenant/cross-session/cross-turn/cross-principal/cross-sequence) after restart as well as before it.",
+        "Changing any of source digest, revision, AST digest, plan digest or preview digest makes approve/consume refuse with a typed error and enqueue no job.",
+        "Two concurrent consumes (threads and processes) have exactly one winner; every other attempt is a typed replay/conflict refusal and no second job is enqueued.",
+        "A consumed, revoked or expired approval can never be resurrected (including across restart and including a manually corrupted store row).",
+        "A partial transcript, a stale turn (older sequence), a cancelled or an interrupted turn can never reach approval or execution — after restart too.",
+        "Text input and Voice input reach exactly one contract and one approval binding: same ledger, same identity fields, same execution path (proved by a test that runs both and compares the bindings).",
+        "A crash between approval consume and enqueue never yields a duplicate execution or a fabricated success: the recovered state is a typed, honest refusal/unknown, never COMPLETED.",
+        "`make lint`, `make types` and `make test` pass on the final SHA, and the mutation harness kills every new persistence/replay guard (RED per mutant, GREEN restored)."
+      ],
+      "evidence_required": [
+        "pytest counts for the new durable-approval unit + integration suites and the full ibpc set, on the final SHA",
+        "restart, cross-project, digest-tamper, concurrency (thread+process) and crash-boundary test output",
+        "Text-vs-Voice binding equality evidence from the single-contract test",
+        "mutation run output for the new persistence/replay/identity guards (N/N killed, baseline GREEN) and the SHA",
+        "make lint / make types / make test output on the final SHA",
+        "CI run URL/status on the same SHA"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/",
+        "tests/unit/test_ibpc_",
+        "tests/architecture/test_ibpc_boundary.py",
+        "tests/integration/test_ibpc_e2e.py",
+        "tests/integration/test_ibpc_durable_approval.py",
+        "scripts/ibpc_security_mutations.py",
+        "scripts/ibpc_durable_mutations.py",
+        "docs/engineering/NAGAR_IBPC.md",
+        "docs/README.md"
+      ],
+      "ttl_hours": 24,
+      "note": "Registered and claimed 2026-11-04 by arena/a7525e89-nexus-ai-agent (identity ARENA-A, mission PR عامل A — Durable Approval & Voice Continuity). Storage stays the existing substrate only: the IBPC lease/state rows live in the application's own SQLite/PostgreSQL database (same engine/ports already used by storage/db.py); no new database, queue, journal or passport. Explicitly NOT touched (other agents): src/nexus_ai_agent/nagar/ibpc/footprint.py, Project/Revision implementations, PR #273 files.",
+      "generation": 0,
+      "agent_branch": "arena/a7525e89-nexus-ai-agent",
+      "claimed_at": "2026-11-04T20:30:00Z",
+      "gates_owner": false
+    },
     {
       "task": "task-131",
       "title": "Architecture & documentation suite + board rewrite",
