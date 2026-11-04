@@ -143,11 +143,26 @@ def test_validate_endpoint_accepts_https_b2_host() -> None:
         "https://s3.us-east-005.backblazeb2.com/some/path",  # path
         "https://s3.us-east-005.backblazeb2.com?x=1",  # query
         "not-a-url",
+        "https://foo.backblazeb2.com",  # B2 suffix but no region to verify
+        "https://backblazeb2.com",  # bare apex, no region
+        "https://s3.backblazeb2.com",  # no region label
     ],
 )
 def test_validate_endpoint_rejects_unsafe_endpoints(bad: str) -> None:
     with pytest.raises(ProviderUnavailable):
         validate_endpoint(bad)
+
+
+def test_a_b2_suffix_host_without_a_region_is_refused() -> None:
+    """A ``*.backblazeb2.com`` host with no ``s3.<region>`` shape must fail closed.
+
+    Otherwise the endpoint and region could disagree with no way to notice, and
+    boto3 would be handed the application key at a host whose region is unknown.
+    """
+    provider, _ = make_provider(endpoint="https://foo.backblazeb2.com")
+    assert provider.is_configured() is False
+    reason = provider.configuration_error()
+    assert reason is not None and "NEXUS_B2_ENDPOINT" in reason
 
 
 # ── is_configured / configuration_error ───────────────────────────────
@@ -309,6 +324,24 @@ def test_list_prefix_outside_the_backup_namespace_is_refused() -> None:
     provider, _ = make_provider()
     with pytest.raises(StorageError):
         asyncio.run(provider.list_files(prefix="rag-docs/"))
+
+
+@pytest.mark.parametrize("prefix", ["", "backups/db", "backups/db/"])
+def test_list_files_normalizes_the_prefix_to_the_backup_namespace(prefix: str) -> None:
+    """A bare/empty prefix must not leak sibling namespaces into the listing.
+
+    ``backups/db`` must be sent as ``backups/db/`` (so ``backups/db-old`` is
+    excluded) and an empty prefix must resolve to the backup namespace rather
+    than listing the whole bucket.
+    """
+    provider, client = make_provider()
+    client.objects = {
+        f"{BACKUP_PREFIX}20260101.sql": b"",
+        "backups/db-old/stale.sql": b"",  # sibling namespace, must be excluded
+        "rag-docs/secret.pdf": b"",
+    }
+    keys = asyncio.run(provider.list_files(prefix=prefix))
+    assert keys == [f"{BACKUP_PREFIX}20260101.sql"]
 
 
 # ── the lazily-built boto3 client is configured for B2 ────────────────

@@ -71,11 +71,16 @@ Every one of these is validated *before* any network call and raises a typed
 * all five fields are present;
 * `NEXUS_B2_ENDPOINT` is `https://` and its host ends in `.backblazeb2.com`
   (pointing the key at a non-B2 host is refused — it would leak the key);
+* the endpoint host has the canonical `s3.<region>.backblazeb2.com` shape, so
+  its region is always readable and can be checked against `NEXUS_B2_REGION`;
 * the endpoint host and `NEXUS_B2_REGION` agree (`s3.<region>.backblazeb2.com`);
 * the bucket name is valid (6–63 chars, lowercase letters/digits/hyphens,
   starts and ends alphanumeric);
 * every remote key is confined to the `backups/db/` prefix, so a caller bug can
-  never read or delete the RAG or user-file namespaces.
+  never read or delete the RAG or user-file namespaces;
+* a listing prefix is normalized to `backups/db/` (a bare `backups/db` or an
+  empty prefix cannot widen the listing to a sibling namespace or the whole
+  bucket).
 
 ## 5) Rotation
 

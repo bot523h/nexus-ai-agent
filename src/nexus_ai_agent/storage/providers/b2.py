@@ -78,6 +78,22 @@ BACKUP_PREFIX = "backups/db/"
 #: hyphens) so a name that passes here also works with virtual-hosted addressing.
 _B2_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{4,61}[a-z0-9]$")
 
+
+def _normalize_backup_prefix(prefix: str) -> str:
+    """Return a slash-terminated prefix confined to ``backups/db/``.
+
+    An empty prefix means "the whole backup namespace" for this provider, so it
+    is mapped to ``backups/db/``; a bare ``backups/db`` is given its trailing
+    slash so a listing cannot also match a sibling like ``backups/db-old``. A
+    prefix outside the namespace is slash-terminated but still fails
+    ``_guard_key``, which rejects it with a clear error rather than silently
+    widening the listing.
+    """
+    if not prefix:
+        return BACKUP_PREFIX
+    return prefix if prefix.endswith("/") else f"{prefix}/"
+
+
 #: ``s3.<region>.backblazeb2.com`` — the region is the second host label.
 _ENDPOINT_REGION_RE = re.compile(r"^s3\.([a-z0-9-]+)\.backblazeb2\.com$")
 
@@ -99,10 +115,18 @@ def validate_endpoint(endpoint: str) -> str:
             "NEXUS_B2_ENDPOINT must be a bare host (no path, query or fragment)"
         )
     host = (parts.hostname or "").lower()
-    if not host.endswith(B2_HOST_SUFFIX):
+    # A single guard covers both boundaries: the host must be a canonical
+    # ``s3.<region>.backblazeb2.com``. A non-B2 host would send the application
+    # key elsewhere (SSRF / credential exfiltration), and a B2-suffixed host
+    # without the ``s3.<region>`` shape has no readable region, so an endpoint
+    # and region could disagree unnoticed. Requiring the canonical shape means
+    # the region is always verifiable.
+    if not _ENDPOINT_REGION_RE.match(host):
         raise ProviderUnavailable(
-            f"NEXUS_B2_ENDPOINT host must end with {B2_HOST_SUFFIX!r} "
-            "(a non-B2 endpoint would send the application key elsewhere)"
+            "NEXUS_B2_ENDPOINT must be the canonical B2 endpoint "
+            "'s3.<region>.backblazeb2.com' (a non-B2 host would send the "
+            "application key elsewhere, and the region must be verifiable "
+            "against NEXUS_B2_REGION)"
         )
     return host
 
@@ -179,8 +203,10 @@ class B2Provider:
             host = validate_endpoint(self._endpoint)
         except ProviderUnavailable as exc:
             return str(exc)
+        # ``validate_endpoint`` guarantees the canonical shape, so the encoded
+        # region is always present here.
         encoded = endpoint_region(self._endpoint)
-        if encoded is not None and encoded != self._region.strip().lower():
+        if encoded != self._region.strip().lower():
             return (
                 "NEXUS_B2_ENDPOINT and NEXUS_B2_REGION disagree — "
                 f"the endpoint names region {encoded!r}"
@@ -271,16 +297,19 @@ class B2Provider:
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
         self._require_configured()
-        # A caller may pass the bare prefix or a sub-path; both must stay inside
-        # the backup namespace.
-        self._guard_key(prefix if prefix.endswith("/") else f"{prefix}/")
+        # The remote request must use the *normalized, slash-terminated* prefix.
+        # Sending the bare ``backups/db`` would also match a sibling namespace
+        # such as ``backups/db-old``, and an empty prefix would list the whole
+        # bucket — both hand the caller keys outside the protected namespace.
+        effective_prefix = _normalize_backup_prefix(prefix)
+        self._guard_key(effective_prefix)
         client = self.client
         bucket = self._bucket
         keys: list[str] = []
         token: str | None = None
         try:
             while True:
-                kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": prefix}
+                kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": effective_prefix}
                 if token:
                     kwargs["ContinuationToken"] = token
                 response = await asyncio.to_thread(client.list_objects_v2, **kwargs)

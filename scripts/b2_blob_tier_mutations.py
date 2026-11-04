@@ -11,11 +11,15 @@ The guards attacked:
 
 * the endpoint must be ``https`` (a downgrade would leak the SigV4 request);
 * the endpoint must not embed credentials;
-* the endpoint host must be a B2 host (credential-exfiltration / SSRF boundary);
+* the endpoint host must be the canonical ``s3.<region>.backblazeb2.com`` — a
+  non-B2 host would send the key elsewhere (SSRF / credential exfiltration) and
+  a B2-suffixed host without the ``s3.<region>`` shape has no verifiable region;
 * the required fields must be present (fail closed before any network call);
 * the endpoint host and region must agree;
 * the bucket name must be a valid B2 name;
 * every remote key must stay inside the ``backups/db/`` namespace;
+* a listing prefix must be normalized to the backup namespace (a bare
+  ``backups/db`` or empty prefix must not widen the listing);
 * list pagination must fail closed on a truncated page without a token;
 * the boto3 client must relax the default checksum headers (B2 compatibility);
 * the tier factory must prefer a complete B2 tier;
@@ -78,13 +82,6 @@ MUTATIONS: tuple[Mutation, ...] = (
         why="an endpoint with embedded credentials must be refused",
     ),
     Mutation(
-        name="endpoint_host_allowlist",
-        path=B2,
-        old="    if not host.endswith(B2_HOST_SUFFIX):",
-        new="    if False:",
-        why="a non-B2 endpoint host must be refused (credential exfiltration / SSRF)",
-    ),
-    Mutation(
         name="required_fields_present",
         path=B2,
         old="        if not (self._key_id and self._application_key and self._bucket):",
@@ -92,9 +89,19 @@ MUTATIONS: tuple[Mutation, ...] = (
         why="a missing credential/bucket must fail closed before any network call",
     ),
     Mutation(
+        name="endpoint_host_is_canonical_b2",
+        path=B2,
+        old="    if not _ENDPOINT_REGION_RE.match(host):",
+        new="    if False:",
+        why=(
+            "a non-B2 host (SSRF/key-exfiltration) or a B2-suffixed host without "
+            "a readable region must be refused"
+        ),
+    ),
+    Mutation(
         name="endpoint_region_consistency",
         path=B2,
-        old="        if encoded is not None and encoded != self._region.strip().lower():",
+        old="        if encoded != self._region.strip().lower():",
         new="        if False:",
         why="an endpoint that disagrees with the configured region must be refused",
     ),
@@ -118,6 +125,13 @@ MUTATIONS: tuple[Mutation, ...] = (
         old='                if not response.get("IsTruncated"):',
         new="                if True:",
         why="a truncated page without a continuation token must fail closed",
+    ),
+    Mutation(
+        name="list_prefix_is_normalized",
+        path=B2,
+        old="    effective_prefix = _normalize_backup_prefix(prefix)",
+        new="    effective_prefix = prefix",
+        why="a bare/empty listing prefix must not widen to a sibling or the whole bucket",
     ),
     Mutation(
         name="checksum_relaxation",
