@@ -214,6 +214,15 @@ bot/handlers.py::ai_cmd  →  GeminiEngine.chat  →  httpx.AsyncClient  →  ge
   خطر dependency-confusion ندارد، اما برای یکنواختی می‌تواند به `ci_install.sh`
   منتقل شود. وضعیت: `به تعویق` (بدون تأثیر بر امنیت فعلی).
 
+### F2. شواهد داورِ تخته (Referee) برای خودِ PR #311
+- اجرای `agent_board.py check` برای فایل‌های این PR یک `OVERLAP` روی `docs/README.md`
+  گزارش می‌کند که به `task-omni-b2-maintenance-tier-01` نسبت داده شده است.
+- **این تداخل واقعی نیست:** آن وظیفه **خودِ** PR #309 است که ادغام شده و تنها
+  Lease کهنهٔ آن روی `origin/main` مانده است؛ این PR همان آشتی‌کنندهٔ آن است.
+- با بازخوانی بردِ `origin/main` تأیید شد که **تنها ادعای `active`** روی
+  `docs/README.md` همین `task-omni-b2-maintenance-tier-01` است؛ هیچ عامل زندهٔ
+  دیگری آسیب نمی‌بیند. پس از ادغام #311، Lease آن آزاد می‌شود.
+
 ### E. سه کار کوچک، مستقل و دارای مالکیت روشن (برای شروع)
 1. **#285** — `chore(board): synchronize task-278 deferred status` (فقط
    `.agents/board.json`، +14/−6). مالک: `arena/nagar-causal-memory-director-board-sync-20261030-0042`.
