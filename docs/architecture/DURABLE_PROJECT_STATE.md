@@ -52,6 +52,30 @@ The lifecycle composes the existing `CommandBus` write path with the store
 (`creative/project_state/lifecycle.py::DurableProject`): the bus stays the single
 write authority, and durability only records what the bus already accepted.
 
+## Revision pinning contract (admission → execution)
+
+A durable intent is admitted against **one** revision, chosen at `commit()`
+time, and every downstream step carries that exact revision — the head is never
+re-read:
+
+```
+commit(project) → RevisionRecord(R1) → handoff(R1) → queue(payload pin R1) → worker(load R1)
+```
+
+- the composition root (`cli.py`) captures the `RevisionRecord` `commit()`
+  returned and passes it to the handoff as `admitted_revision`;
+- the handoff re-validates **that** revision through
+  `SqlProjectRevisionStore.load_revision` (never `load_head`) and refuses with a
+  typed `revision_unavailable` before any enqueue if it is missing, tampered, or
+  re-homed;
+- the worker loads the pinned `revision_id` and refuses if it is gone, even
+  though the project head still exists.
+
+There is **no fallback to "latest"**: a canonical admission with no admitted
+revision is a refusal, not a head read. This closes a TOCTOU where a concurrent
+commit between admission and handoff would otherwise silently re-target the job
+at a newer revision.
+
 ## Boundaries
 
 `tests/architecture/test_durable_project_state_boundary.py` enforces that the
@@ -67,6 +91,10 @@ exposes no combined `execute`-style method that would bypass the bus.
 - `tests/integration/test_durable_project_restart.py` — a real OS process commits
   a revision; a brand-new store over the same file rebuilds the identical id,
   hash and state.
+- `tests/integration/test_durable_project_revision_pinning.py` — the worker loads
+  the exact pinned revision (never a moved head) and refuses a vanished or
+  tampered pin; the handoff pins the **admitted** revision even after a
+  concurrent head move (deterministic ordering, no sleeps).
 - `tests/integration/test_durable_project_concurrency.py` — real interleaving
   (exactly one winner) and atomic rollback on an injected crash.
 - `tests/architecture/test_durable_project_state_boundary.py` — no parallel

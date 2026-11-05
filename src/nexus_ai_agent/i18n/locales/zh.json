@@ -75,6 +75,7 @@
   "creative.failed.unsupported_operation": "❌ 此操作暂不支持一键渲染。",
   "creative.failed.media_missing": "❌ 暂存的媒体文件缺失，请重新发送命令。",
   "creative.failed.input_integrity": "❌ 无法验证暂存的媒体，已拒绝渲染。请重新发送媒体。",
+  "creative.failed.revision_unavailable": "❌ 项目状态已更改或无法验证，因此已拒绝渲染。请重新发送命令。",
   "creative.failed.caption_profile_unavailable": "❌ 此安装未提供字幕功能（无语音引擎）。",
   "creative.failed.render_failed": "❌ 渲染失败，请尝试更短的媒体或其他参数。",
   "creative.failed.ffmpeg_unavailable": "❌ 此部署未安装渲染引擎。",

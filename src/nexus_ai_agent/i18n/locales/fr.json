@@ -75,6 +75,7 @@
   "creative.failed.unsupported_operation": "❌ Cette opération n'est pas disponible en rendu immédiat.",
   "creative.failed.media_missing": "❌ Le média préparé est introuvable ; renvoyez la commande.",
   "creative.failed.input_integrity": "❌ Le média préparé n'a pas pu être vérifié ; le rendu a été refusé. Renvoyez le média.",
+  "creative.failed.revision_unavailable": "❌ L'état du projet a changé ou n'a pas pu être vérifié ; le rendu a été refusé. Renvoyez la commande.",
   "creative.failed.caption_profile_unavailable": "❌ Les sous-titres ne sont pas disponibles sur cette installation (aucun moteur vocal).",
   "creative.failed.render_failed": "❌ Échec du rendu ; essayez un média plus court ou d'autres paramètres.",
   "creative.failed.ffmpeg_unavailable": "❌ Le moteur de rendu n'est pas installé sur ce déploiement.",

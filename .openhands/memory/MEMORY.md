@@ -1,6 +1,26 @@
-# Project memory ŌĆö nexus-ai-agent
+# Project memory — nexus-ai-agent
 
 Index of durable, expensive-to-learn facts. Detail goes to daily logs.
+
+## task-282 / PR #315 (durable project-state pinning) — 2026-11-05
+- **Pin contract (owner-mandated):** the handoff must pin the **admitted** revision
+  (`RevisionRecord` returned by `commit()`), NOT re-read the live head. `cli.py` captures
+  `admitted_revision = await revision_store.commit(...)` and threads it into
+  `run_free_text_intent_durable(admitted_revision=...)`; `handoff.py` re-validates that
+  specific revision via `load_revision` (never `load_head`), with **no fallback to "latest"**.
+  A canonical admission with no admitted revision is a typed `revision_unavailable` refusal
+  before any enqueue. Mutant `handoff_rereads_head_instead_of_admitted_revision` guards it.
+- **Honest board status:** task-282 is `active_in_review` (gen 5), NOT `done` — PR #315 is
+  open and Slices 2/3 are still open (`task-282-slice-2-artifact-assetversion-binding`,
+  `task-282-slice-3-provenance-passport-link`).
+- **Dependency reconciliation (important):** the **Asset Library V1 package is already on
+  `main`** via PR **#210** (`da78666c`, "supersedes #205/#209"); PR #205 is open/dirty and
+  superseded. So Slice 2 is NOT blocked on #205 landing. Slice 3 still waits on PR #294
+  (durable creative-graph, open/not merged). Verify with
+  `git log origin/main -- <path>` rather than trusting a stale "blocked on #N" note.
+- Evidence on head `35845b5f`: mutations 15/15 killed; full suite `-m "not slow"` 6318 passed
+  39 skipped; CI run **42011697585 success**; board referee exit 0 (44 sources). A sibling CI
+  run showing `cancelled` is the concurrency-group supersede, not a failure.
 
 ## Mission 10 (2026-10-29) - base reconciliation + safe-merge + #134 audit
 - **Live `main` was `9145c5f2`** (M9 mislabeled it; local main worktree HEAD `8844516f` is
@@ -836,6 +856,59 @@ Only red check = the #234 flake (task-264, issue #237).
   matrix to the interpreter set the pin was verified against.
 - `scripts/ci_torch_mutations.py` (10/10 killed) runs in the `trust-mutations` job.
 
+## task-282 durable project state (durable, 2026-11-04)
+- PR **#314** = `arena/omni-durable-project-state-20261104` (head `ab62ae9a`, base main
+  `cf427874`): durable, restartable Studio project revisions. All 25 checks green.
+  **Board claim is `deferred`, NOT done** (gen 1→2, claimed_at=null, gates_owner=false):
+  #314 is the persistence FOUNDATION only; the intent→job→artifact→passport slice is
+  handed to ARENA-C. Grounded gap: the worker still reports
+  `project_state_storage="attempt_scoped_in_memory"` (`creative/render_jobs.py` ~L693,
+  `jobs/creative_passport.py` ~L717) and nothing outside `creative/project_state/` imports
+  the durable store.
+- **FORENSIC FINDING (P2, storage-layer tamper resistance), reproduced:** the read path
+  (`store._read_revision`/`load_head`) does NOT re-validate `state_json` against
+  `revision_id`/`state_hash`. A direct `UPDATE projectrevision.state_json` is silently
+  accepted (tested: tampered name "EVIL" came back, recomputed `compute_state_hash` ≠
+  stored `state_hash`, no error). Immutability holds at the API/insert layer (content-
+  addressed PK, no UPDATE path) but NOT against out-of-band DB writes. Fix = recompute
+  `content_address(canonical_state_bytes(project)) == revision_id` at read time, fail
+  closed. ARENA-C step (3) depends on this.
+- **SIGKILL claim was WRONG** (corrected in board + PR body): the restart test is a real
+  OS-process restart (child exits normally after commit; parent rebuilds with a new store),
+  NOT a SIGKILL. A true SIGKILL-after-commit test is proposed, not implemented.
+- Correct counts: **24 new tests** (13 unit + 1 restart + 3 concurrency + 7 arch); CI test
+  job on the head = **6293 passed / 38 skipped / 0 failed** (the old "6291/39" was a local
+  run on an earlier SHA). Required checks = lint, test, merge-base-guard.
+- **Review status `PENDING_HUMAN_REVIEW`**: the repo's only collaborator is the Owner
+  (`bot523h`); Sourcery ×2 (3/3 threads resolved) + CodeRabbit (skipped) are bots. Resolved
+  bot threads ≠ independent human review. No self-approval.
+- **`agent_board.py check` fences on LIVE LEASES only**, not on unclaimed PR diffs. It reads
+  every open-PR head board and returns 0 even when a candidate PR edits the same files
+  (those PRs hold no claim). So exit 0 = "no live lease overlaps", NOT "no file conflict";
+  must be combined with a manual PR-diff overlap review (owner decision).
+- **PR #290** (old task-282 board-only registration) is OPEN, `mergeable=False`/`dirty`
+  (3 commits, 1 file) — close it as "SUPERSEDED BY PR #314" only AFTER #314 merges.
+- **`default_create_pr` / integration `GITHUB_TOKEN` cannot PATCH/POST on this repo (403)**;
+  use `GITHUB_PERSONAL_ACCESS_TOKEN` for PR body updates and creation.
+- Adding ANY Alembic revision re-pins, repo-wide: the 7 tests asserting the head, `ci.yml`'s
+  `migrate-postgres` stamp grep, `RUNTIME_FLOWS.md` chain, `DATA_AND_STORAGE.md`, and
+  **`src/nexus_ai_agent/storage/golden/postgres.langgraph.json`**. `alembic upgrade head` /
+  `alembic check` need `NEXUS_DB_PATH` (SQLite); `DATABASE_URL` only accepts postgres.
+- **PG golden is head-sensitive**: `checkpoint_pg_adapter._schema_payload` hashes the four
+  LangGraph tables **plus `migration_head`**. Reproduce on a real `pgvector/pgvector:pg16`
+  (docker), call `PostgresSaver.setup()` first (tables must exist), then
+  `sha256(json.dumps(payload,sort_keys=True,separators=(',',':')))`. Running
+  `nexus checkpoints golden update` *without* the LangGraph tables set up writes a WRONG
+  (empty-tables) fingerprint — do not trust it blindly.
+- **`mypy src` passes locally but CI `lint` is stricter**: `select(orm.X.column)` trips
+  SQLModel stubs (`No overload variant of "select" matches "str"`) + an `unused-ignore`.
+  Use `session.get(Model, pk)` instead; for a genesis insert over an existing head,
+  `session.expunge(head)` to dodge the identity-map clash, let the PK arbitrate.
+- **Mutation harness**: SQLModel `@dataclass` models need their module in `sys.path`;
+  a self-referential content-address test is a vacuous mutant — pin the digest
+  independently (`hashlib.sha256`). Harness wired into `trust-mutations` (5/5 killed).
+- `Sourcery review` is a real gate: flag it green only after it re-runs on the new head.
+
 ## NEXUS-OMNI closeout (durable, 2026-11-04)
 - main @ `b63a22a8`; PR **#311** = `arena/omni-live-closeout-20261104` (docs+board).
   Detail: `.openhands/memory/2026-11-04.md`.
@@ -848,3 +921,31 @@ Only red check = the #234 flake (task-264, issue #237).
 - Only 4 workflow FILES on main; the API's 10-workflow list is stale/org-level.
 - Board: new claim paths must be under ONE existing zone and not collide with another
   ACTIVE claim; `next_work` must stay exactly 10.
+
+## task-282 durable project state (2026-11-05, Mission 3)
+- **PR #315** `openhands/task-282-durable-project-state-20261105` (base ca4c2f6c = main),
+  final head **`cc84b7e7`** (Sourcery findings closed); CI run **41988991393 = success**
+  (all jobs green) + `queue-ownership-mutations` run 41988936327 success. Mergeable.
+  NOT merged (HARD RULE: never write to main).
+- **Sourcery findings on #315, all closed in cc84b7e7**: F1 High cross-project leak
+  (`_verify_revision_integrity` also rejects a row whose deserialized project_id != owner);
+  F2 Medium unreadable head (`commit()` preflights `compute_state_hash` before the write);
+  F3 canonical admission now REQUIRES the revision store (refuses `revision_unavailable`).
+  All 3 threads replied + resolved. Full suite 6315 passed / 39 skipped; mutations 14/14.
+- Delivered: **F1** read-time integrity (re-derive content address + state_hash from
+  state_json; typed `RevisionIntegrityError`, fail closed) + **Slice 1** revision pinning
+  handoff → existing JobQueue payload → worker (`_resolve_pinned_project` loads the EXACT
+  revision, refuses `revision_unavailable` before any engine). 3 new pin mutations +
+  8 F1/CAS = 11/11 killed. New suite `tests/integration/test_durable_project_revision_pinning.py`.
+- **CI gotcha**: `trust-mutations` installs a hand-picked minimal dep set with NO alembic.
+  A mutation-harness suite must NOT import `storage.migrations` (→ alembic) or the harness
+  baseline goes RED ("refusing to mutate a suite that is already failing", exit 2).
+  Bootstrap with `asyncio.run(create_all_tables(path))`. Reproduce by building a venv from
+  the job's exact pip line — the main .venv masks it.
+- Remaining (honest): Slice 2 (artifact→AssetVersion) blocked on #205; Slice 3
+  (Revision↔Job↔Attempt↔Verification↔Journal↔Passport) blocked on #294. Board lease
+  released gen 3→4, status `done`, evidence note recorded. Verdict: HARDENED_BUT_NOT_COMPLETE.
+- Durable-state rules: a new creative ERROR_CODE needs a `creative.failed.<code>` key in
+  ALL 15 locales (`tests/unit/test_creative_notify.py`); adding a suite that imports a
+  creative op drifts `OPERATION_TRUTH.json` → `python -m nexus_ai_agent.nagar --docs`;
+  `model_copy` bypasses the `state_hash` validator → recompute `compute_state_hash`.

@@ -222,6 +222,7 @@ def build_creative_payload(
     input_sha256: str | None = None,
     canonical: CanonicalHandoffFacts | None = None,
     source_text: str | None = None,
+    revision_pin: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Turn a validated proposal into a typed canonical ``creative_render`` payload.
 
@@ -314,6 +315,10 @@ def build_creative_payload(
             "intent": typed_intent.model_dump(mode="json"),
         }
     )
+    if revision_pin is not None:
+        revision_id, revision_hash = revision_pin
+        payload["revision_id"] = revision_id
+        payload["revision_hash"] = revision_hash
     return payload
 
 
@@ -380,6 +385,8 @@ async def run_free_text_intent_durable(
     clip_asset_id: str | None = None,
     journal: Any | None = None,
     canonical: CanonicalHandoffFacts | None = None,
+    revision_store: Any | None = None,
+    admitted_revision: Any | None = None,
 ) -> CognitionJobOutcome:
     """Turn free text into at most one durable ``creative_render`` job — or refuse.
 
@@ -420,6 +427,75 @@ async def run_free_text_intent_durable(
 
     idempotency_key = derive_intent_idempotency_key(gateway.project_id, gateway.actor, intent)
     intent_job_id = durable_job_identity(idempotency_key)
+
+    # Revision pin (task-282 Slice 1): when the host wires the durable revision
+    # store, the job is admitted against ONE immutable revision. A failure to
+    # pin is a typed refusal BEFORE any enqueue -- never a silent fall back to
+    # "latest state", so a later head change can never alter this job.
+    #
+    # Finding 3 (production wiring): a canonical (durable) admission MUST be
+    # pinned. If the composition root did not wire the store, refuse before any
+    # enqueue rather than admitting an unpinned job the worker would run against
+    # a rebuilt baseline. Legacy callers (``canonical is None``) keep their own
+    # backward-compatible policy and are unaffected.
+    if canonical is not None and revision_store is None:
+        _record(
+            journal,
+            decision=CognitionDecision.REFUSED,
+            gateway=gateway,
+            job_id=intent_job_id,
+            idempotency_key=idempotency_key,
+            refusal_reason="revision_unavailable",
+        )
+        return CognitionJobOutcome(
+            status="refused",
+            refusal_reason="revision_unavailable",
+            detail="durable admission requires the revision store (not wired)",
+        )
+    revision_pin: tuple[str, str] | None = None
+    if canonical is not None and revision_store is not None:
+        # task-282: the job is admitted against ONE immutable revision, chosen by
+        # the composition root at commit() time. The handoff must NOT re-read the
+        # live head: a concurrent commit landing between admission and handoff
+        # would otherwise silently re-target the job at a newer revision (a TOCTOU
+        # on the head). There is no fallback to "latest" -- an unadmitted call is a
+        # typed refusal, never a head read.
+        if admitted_revision is None:
+            _record(
+                journal,
+                decision=CognitionDecision.REFUSED,
+                gateway=gateway,
+                job_id=intent_job_id,
+                idempotency_key=idempotency_key,
+                refusal_reason="revision_unavailable",
+            )
+            return CognitionJobOutcome(
+                status="refused",
+                refusal_reason="revision_unavailable",
+                detail="durable admission requires the admitted revision (no head re-read)",
+            )
+        # Re-validate the SPECIFIC admitted revision through the store's own
+        # integrity contract (never the head): a re-homed or tampered row, or one
+        # that vanished, is a typed refusal rather than a pin.
+        try:
+            admitted = await revision_store.load_revision(
+                canonical.project_id, admitted_revision.revision_id
+            )
+        except Exception as exc:  # noqa: BLE001 - a corrupt revision must refuse, never fall back
+            _record(
+                journal,
+                decision=CognitionDecision.REFUSED,
+                gateway=gateway,
+                job_id=intent_job_id,
+                idempotency_key=idempotency_key,
+                refusal_reason="revision_unavailable",
+            )
+            return CognitionJobOutcome(
+                status="refused",
+                refusal_reason="revision_unavailable",
+                detail=f"admitted revision unavailable: {type(exc).__name__}",
+            )
+        revision_pin = (admitted.revision_id, admitted.state_hash)
 
     request = _routing_request(gateway)
     decision = gateway.route(request)
@@ -509,6 +585,7 @@ async def run_free_text_intent_durable(
             idempotency_key=idempotency_key,
             canonical=canonical,
             source_text=intent if canonical is not None else None,
+            revision_pin=revision_pin,
         )
     except HandoffRefusal as exc:
         _record(

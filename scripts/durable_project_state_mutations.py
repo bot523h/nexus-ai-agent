@@ -27,10 +27,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STORE = ROOT / "src" / "nexus_ai_agent" / "creative" / "project_state" / "store.py"
 PERSISTENCE = ROOT / "src" / "nexus_ai_agent" / "creative" / "studio" / "persistence.py"
+RENDER_JOBS = ROOT / "src" / "nexus_ai_agent" / "creative" / "render_jobs.py"
+HANDOFF = ROOT / "src" / "nexus_ai_agent" / "nagar" / "creative" / "handoff.py"
 TESTS = (
     "tests/unit/test_durable_project_state.py",
     "tests/integration/test_durable_project_concurrency.py",
     "tests/integration/test_durable_project_restart.py",
+    "tests/integration/test_durable_project_revision_pinning.py",
+    "tests/unit/test_nagar_cognition_queue_handoff.py",
 )
 
 
@@ -88,6 +92,88 @@ MUTATIONS: tuple[Mutation, ...] = (
         '    return "sha256:" + state_bytes.decode("utf-8")',
         "the revision id must be the content hash of the state bytes; returning "
         "the raw bytes breaks content addressing and immutability",
+    ),
+    Mutation(
+        "read_integrity_revalidation_removed",
+        STORE,
+        "        _verify_revision_integrity(row)",
+        "        pass  # mutated: read-time integrity re-validation removed",
+        "F1: a read must re-derive the revision's identity from its stored bytes; "
+        "dropping the check lets a directly-tampered row pass the read path",
+    ),
+    Mutation(
+        "content_address_revalidation_removed",
+        STORE,
+        "    if content_address(canonical) != row.revision_id:",
+        "    if False:  # mutated: content-address re-validation removed",
+        "F1: the stored bytes must hash back to the stored revision id; a forged "
+        "revision id would otherwise be accepted",
+    ),
+    Mutation(
+        "state_hash_revalidation_removed",
+        STORE,
+        "    if compute_state_hash(project) != row.state_hash:",
+        "    if False:  # mutated: state-hash re-validation removed",
+        "F1: the stored state_hash must match the stored content; a tampered hash "
+        "column would otherwise be accepted",
+    ),
+    Mutation(
+        "project_identity_guard_removed",
+        STORE,
+        "    if project.project_id != row.project_id:",
+        "    if False:  # mutated: embedded project identity no longer checked",
+        "Finding 1: a re-homed row (embedded state belongs to another project) "
+        "must be refused; dropping the guard leaks one project's state to another",
+    ),
+    Mutation(
+        "commit_preflight_state_hash_removed",
+        STORE,
+        "        if compute_state_hash(project) != project.state_hash:",
+        "        if False:  # mutated: stale state_hash no longer detected pre-write",
+        "Finding 2: a stale state_hash must be refused BEFORE the insert/head "
+        "advance; dropping the preflight advances the head to an unreadable revision",
+    ),
+    Mutation(
+        "revision_pin_ignored_by_worker",
+        RENDER_JOBS,
+        "    if data.revision_id is None:\n        return None",
+        "    if True:  # mutated: pinned job falls back to the current head\n        return None",
+        "Slice 1: a pinned job must load its exact revision, never the live head; "
+        "ignoring the pin lets a moved head silently change what a job executes",
+    ),
+    Mutation(
+        "revision_pin_hash_check_removed",
+        RENDER_JOBS,
+        "    if record.state_hash != data.revision_hash:",
+        "    if False:  # mutated: pinned hash check removed",
+        "Slice 1: the loaded revision's canonical hash must equal the job's pin; "
+        "dropping the check accepts a revision the job was never admitted against",
+    ),
+    Mutation(
+        "handoff_pin_not_recorded",
+        HANDOFF,
+        "    if revision_pin is not None:\n        revision_id, revision_hash = revision_pin",
+        "    if False:  # mutated: handoff stops pinning the revision\n        revision_id, revision_hash = revision_pin",
+        "Slice 1: the handoff must record the pinned revision in the durable payload; "
+        "omitting it makes the job fall back to the current head",
+    ),
+    Mutation(
+        "canonical_admission_without_store_allowed",
+        HANDOFF,
+        "    if canonical is not None and revision_store is None:",
+        "    if False:  # mutated: canonical admission no longer requires the store",
+        "Finding 3: a canonical admission must be pinned; dropping the guard lets a "
+        "durable intent enqueue an unpinned job the worker runs from a rebuilt baseline",
+    ),
+    Mutation(
+        "handoff_rereads_head_instead_of_admitted_revision",
+        HANDOFF,
+        """            admitted = await revision_store.load_revision(
+                canonical.project_id, admitted_revision.revision_id
+            )""",
+        "            admitted = await revision_store.load_head(canonical.project_id)",
+        "task-282: the handoff must pin the ADMITTED revision and never re-read the "
+        "live head; re-reading re-targets the job at a concurrent head move (TOCTOU)",
     ),
 )
 

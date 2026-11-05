@@ -113,6 +113,11 @@ ERROR_CODES: frozenset[str] = frozenset(
         # staged bytes and they are not the bytes the accepted payload named. This is
         # a fail-closed refusal raised BEFORE any engine is touched.
         "input_integrity",
+        # Revision pin (task-282 Slice 1): the job was admitted against an immutable
+        # project revision, but that revision can no longer be loaded and validated
+        # (missing, tampered, cross-project, or hash mismatch). Fail closed BEFORE any
+        # engine: never fall back to the current head or any other state.
+        "revision_unavailable",
     }
 )
 
@@ -163,6 +168,23 @@ class CreativeRenderPayload(BaseModel):
     # or a lifecycle opt-in. The worker re-measures and refuses a mismatch before any
     # engine runs, so a supplied value is never trusted on its own.
     input_sha256: str | None = Field(default=None, min_length=64, max_length=71)
+
+    # Revision pin (task-282 Slice 1): the immutable project revision this job was
+    # admitted against. When present the worker loads EXACTLY this revision (never
+    # the current head) and refuses a missing/tampered/hash-mismatched revision, so
+    # a later head change can never alter what an already-enqueued job executes.
+    # Absent on rows written before the pin existed; those stay unpinned.
+    revision_id: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    revision_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _revision_pin_is_complete(self) -> CreativeRenderPayload:
+        """A revision pin requires the project it belongs to and its hash."""
+        if self.revision_id is not None and (self.project_id is None or self.revision_hash is None):
+            raise ValueError(
+                "revision_id requires both project_id and revision_hash (a complete pin)"
+            )
+        return self
 
     @field_validator("input_sha256")
     @classmethod
@@ -883,6 +905,8 @@ async def _run_render_branch(
     workspace: Path,
     canonical_id: str,
     canonical: _CanonicalExecution | None = None,
+    *,
+    pinned_project: Any = None,  # noqa: ANN401
 ) -> dict[str, Any]:
     from nexus_ai_agent.creative.rendering.executor import render_lane
     from nexus_ai_agent.creative.rendering.ir import lane_ir_from_project
@@ -906,7 +930,21 @@ async def _run_render_branch(
     duration_us = payload.media_duration_us or probed.duration_us
 
     sha256 = sha256_file(input_path)
-    project = _build_project(payload=payload, duration_us=duration_us, sha256=sha256)
+    # A pinned job (task-282 Slice 1) executes the EXACT revision it was admitted
+    # against; the rebuilt baseline is only for legacy, unpinned rows. The
+    # revision's own assets are authoritative, so the measured staged bytes are
+    # reconciled onto them rather than replacing the admitted state.
+    if pinned_project is not None:
+        project = pinned_project.model_copy(
+            update={
+                "assets": [
+                    asset.model_copy(update={"content_sha256": sha256})
+                    for asset in pinned_project.assets
+                ]
+            }
+        )
+    else:
+        project = _build_project(payload=payload, duration_us=duration_us, sha256=sha256)
 
     # 1) canonical operation (state mutation + history + measured record)
     output, execution_evidence = _dispatch(
@@ -1058,12 +1096,55 @@ async def _run_caption_branch(
 # ---------------------------------------------------------------------------
 
 
+async def _resolve_pinned_project(data: CreativeRenderPayload) -> Any | None:  # noqa: ANN401
+    """Load the EXACT revision this job was admitted against, or refuse.
+
+    A job that carries a revision pin must execute that immutable revision, not
+    the project's current head: the head can move after enqueue, and a job must
+    never silently run a different state than the one it was admitted against.
+    The store re-validates the revision's bytes (F1), and the pin's ``revision_hash``
+    must match the revision's canonical ``state_hash``. Every failure is a typed
+    ``CreativeRenderError`` (``revision_unavailable``); there is no fallback.
+    """
+    if data.revision_id is None:
+        return None
+    if data.project_id is None or data.revision_hash is None:  # pragma: no cover - model guard
+        raise CreativeRenderError("revision_unavailable", "incomplete revision pin")
+    from nexus_ai_agent.creative.project_state.models import (
+        CrossProjectAccess,
+        RevisionIntegrityError,
+        RevisionNotFound,
+    )
+    from nexus_ai_agent.creative.project_state.store import SqlProjectRevisionStore
+
+    store = SqlProjectRevisionStore()
+    try:
+        record = await store.load_revision(data.project_id, data.revision_id)
+    except (RevisionNotFound, RevisionIntegrityError, CrossProjectAccess) as exc:
+        raise CreativeRenderError(
+            "revision_unavailable", f"pinned revision cannot be loaded: {type(exc).__name__}"
+        ) from exc
+    if record.state_hash != data.revision_hash:
+        raise CreativeRenderError(
+            "revision_unavailable", "pinned revision hash does not match the job's pin"
+        )
+    return record.to_project()
+
+
 async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute one staged creative request through the canonical chain."""
     try:
         data = CreativeRenderPayload.model_validate(payload)
     except Exception as exc:
         return {"success": False, "error_code": "invalid_request", "error_detail": str(exc)}
+
+    # Revision pin (task-282 Slice 1): a pinned job executes its immutable
+    # revision, fail-closed on any mismatch. This runs BEFORE any engine is
+    # touched, so a job can never run a state it was not admitted against.
+    try:
+        pinned_project = await _resolve_pinned_project(data)
+    except CreativeRenderError as exc:
+        return {"success": False, "error_code": exc.code, "error_detail": exc.detail}
 
     try:
         workspace = _guarded_workspace(data.workspace_dir)
@@ -1110,6 +1191,7 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
                 workspace,
                 canonical_id,
                 canonical_execution,
+                pinned_project=pinned_project,
             )
     except CreativeRenderError as exc:
         logger.warning("creative_render_typed_failure", code=exc.code, detail=exc.detail)

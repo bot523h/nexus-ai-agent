@@ -75,6 +75,7 @@
   "creative.failed.unsupported_operation": "❌ Bu işlem tek adımlı render için desteklenmiyor.",
   "creative.failed.media_missing": "❌ Hazırlanan medya dosyası bulunamadı; komutu tekrar gönderin.",
   "creative.failed.input_integrity": "❌ Hazırlanan medya doğrulanamadı; render reddedildi. Medyayı tekrar gönderin.",
+  "creative.failed.revision_unavailable": "❌ Proje durumu değişti veya doğrulanamadı, bu yüzden render reddedildi. Komutu tekrar gönderin.",
   "creative.failed.caption_profile_unavailable": "❌ Bu kurulumda altyazı kullanılamıyor (konuşma motoru yok).",
   "creative.failed.render_failed": "❌ Render başarısız oldu; daha kısa medya veya farklı parametreler deneyin.",
   "creative.failed.ffmpeg_unavailable": "❌ Render motoru bu dağıtımda kurulu değil.",

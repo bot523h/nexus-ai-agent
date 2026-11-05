@@ -75,6 +75,7 @@
   "creative.failed.unsupported_operation": "❌ Esta operação não está disponível para renderizações instantâneas.",
   "creative.failed.media_missing": "❌ O arquivo preparado está ausente; envie o comando novamente.",
   "creative.failed.input_integrity": "❌ Não foi possível verificar a mídia preparada; a renderização foi recusada. Envie a mídia novamente.",
+  "creative.failed.revision_unavailable": "❌ O estado do projeto mudou ou não pôde ser verificado, então a renderização foi recusada. Envie o comando novamente.",
   "creative.failed.caption_profile_unavailable": "❌ As legendas não estão disponíveis nesta instalação (sem motor de fala).",
   "creative.failed.render_failed": "❌ A renderização falhou; tente uma mídia mais curta ou outros parâmetros.",
   "creative.failed.ffmpeg_unavailable": "❌ O motor de renderização não está instalado nesta implantação.",
