@@ -2454,10 +2454,30 @@ def _fake_pr(
     }
 
 
-def _origin_main_sha(module: ModuleType) -> str:
-    result = module._git(["rev-parse", "origin/main"], module.ROOT)
+def _head_sha(module: ModuleType) -> str:
+    result = module._git(["rev-parse", "HEAD"], module.ROOT)
     assert result is not None and result.returncode == 0
     return result.stdout.strip()
+
+
+def _stub_git(module: ModuleType, monkeypatch: pytest.MonkeyPatch, *, ancestry_rc: int = 0) -> None:
+    """Stub the git boundary so record-pr-merge tests need no real ``origin/main``.
+
+    A CI checkout has no ``origin/main`` ref, so a test that shells out to real git
+    for the ancestry proof fails there for purely environmental reasons. The real
+    git boundary is still exercised end-to-end by
+    ``test_record_pr_merge_records_a_verified_ancestor_through_real_git``.
+    """
+    import subprocess as _sp
+
+    def _stub(args: list[str], cwd: object) -> object:
+        if args[:2] == ["rev-parse", "--verify"]:
+            return _sp.CompletedProcess(args, 0, "0" * 40 + "\n", "")
+        if args[:2] == ["merge-base", "--is-ancestor"]:
+            return _sp.CompletedProcess(args, ancestry_rc, "", "")
+        return module._git(args, cwd)
+
+    monkeypatch.setattr(module, "_git", _stub)
 
 
 def _record_args(number: int, **extra: object) -> list[str]:
@@ -2484,16 +2504,17 @@ def test_record_pr_merge_verifies_merged_state_base_and_sha_via_the_api(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     board_module.BOARD.write_text(json.dumps(_prereq_board("done")), encoding="utf-8")
-    real = _origin_main_sha(board_module)
+    _stub_git(board_module, monkeypatch, ancestry_rc=0)
+    api_sha = "b" * 40
 
     # PR still open -> refuse
     monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(False, state="open"))
     assert board_module.main(_record_args(294)) == 2
 
-    # not merged, but the SHA happens to be a real ancestor of main -> still refuse
+    # not merged, but the SHA is a valid ancestor -> still refuse
     # (isolates the merged-state guard from the ancestry guard)
     monkeypatch.setattr(
-        board_module, "_gh_get", lambda url, token: _fake_pr(False, state="open", sha=real)
+        board_module, "_gh_get", lambda url, token: _fake_pr(False, state="open", sha=api_sha)
     )
     assert board_module.main(_record_args(294)) == 2
 
@@ -2504,18 +2525,45 @@ def test_record_pr_merge_verifies_merged_state_base_and_sha_via_the_api(
     assert board_module.main(_record_args(294)) == 2
 
     # the operator's --merge-sha disagrees with the API -> refuse
-    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha="b" * 40))
-    assert board_module.main(_record_args(294, merge_sha=real)) == 2
+    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha=api_sha))
+    assert board_module.main(_record_args(294, merge_sha="c" * 40)) == 2
 
-    # the API SHA is not an ancestor of origin/main -> refuse (forged/foreign commit)
+    # merged into main, API SHA == --merge-sha, ancestry proven -> recorded
+    assert board_module.main(_record_args(294, merge_sha=api_sha)) == 0
+    records = json.loads(board_module.BOARD.read_text(encoding="utf-8"))["completion_records"]
+    assert records[0]["evidence"]["merge_commit_sha"] == api_sha
+    assert records[0]["evidence"]["source"] == "github_api"
+
+
+def test_record_pr_merge_refuses_a_sha_that_is_not_an_ancestor(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_module.BOARD.write_text(json.dumps(_prereq_board("done")), encoding="utf-8")
+    _stub_git(board_module, monkeypatch, ancestry_rc=1)  # merge-base --is-ancestor fails
+    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha="b" * 40))
     assert board_module.main(_record_args(294)) == 2
 
-    # merged into main, API SHA == an ancestor of origin/main -> recorded
-    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha=real))
+
+def test_record_pr_merge_records_a_verified_ancestor_through_real_git(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real git boundary (no stub): a genuine ancestor records, a bogus SHA refuses."""
+    board_module.BOARD.write_text(json.dumps(_prereq_board("done")), encoding="utf-8")
+    head = _head_sha(board_module)
+    real_verify = board_module._verify_pr_merge
+    monkeypatch.setattr(
+        board_module,
+        "_verify_pr_merge",
+        lambda repo, number, expected, token: real_verify(
+            repo, number, expected, token, main_ref="HEAD"
+        ),
+    )
+    # HEAD is an ancestor of HEAD -> recorded
+    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha=head))
     assert board_module.main(_record_args(294)) == 0
-    records = json.loads(board_module.BOARD.read_text(encoding="utf-8"))["completion_records"]
-    assert records[0]["evidence"]["merge_commit_sha"] == real
-    assert records[0]["evidence"]["source"] == "github_api"
+    # a SHA that is not a real commit -> refused by the real merge-base check
+    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha="b" * 40))
+    assert board_module.main(_record_args(294)) == 2
 
 
 def test_record_pr_merge_fails_closed_when_the_api_is_unreachable(

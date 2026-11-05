@@ -447,7 +447,7 @@ jobs:
   # Budget: referee ≈20 s, Gate-5 ≈2 min on the hosted runner (17 probes × 3
   # targeted pytest runs); the 25-minute cap is the same as the other campaigns.
   governance-mutations:
-    name: governance-mutations (board referee 33 + Gate-5 fencing 17)
+    name: governance-mutations (board referee 37 + Gate-5 fencing 17)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
