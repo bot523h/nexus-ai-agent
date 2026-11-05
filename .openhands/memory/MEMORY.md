@@ -2,6 +2,25 @@
 
 Index of durable, expensive-to-learn facts. Detail goes to daily logs.
 
+## NEXUS-OMNI continuation (2026-11-05) — live main + board fix
+- **Live `main` = `aadaf53157670b64af6978fcf41b592e108ac9ae`** (PR #315 merged
+  2026-11-05T13:13:23Z). ci push `42033855955` + `queue-ownership-mutations`
+  `42033855945` = success. The old `41532014621` disk exhaustion (Errno 28) is
+  already fixed on main. **`maintenance` red is fail-closed by design** (backup-db
+  preflight needs `NEXUS_DATABASE_URL` + B2/R2 secrets; NOT_PROVEN, owner config).
+- **Board CLI now machine-enforces `prerequisites`** (PR #316, branch
+  `openhands/omni-recovery-integration-20261105`): `_unmet_prerequisites()` =
+  satisfied only when the task exists AND status ∈ {done, completed_merged};
+  `cmd_claim` refuses exit 2 (board untouched), `--ignore-prerequisites` override;
+  `cmd_next` prints `BLOCKED`. Was advisory-only before.
+- **Create PRs via `POST /repos/bot523h/nexus-ai-agent/pulls` with
+  `GITHUB_PERSONAL_ACCESS_TOKEN`** — `default_create_pr` 403s on this repo.
+- Only 4 workflows exist (ci.yml, langsmith-smoke.yml, maintenance.yml,
+  queue-ownership-mutations.yml). Security tools present: ruff/mypy/pytest/deptry/
+  pip-audit/bandit; MISSING: semgrep/gitleaks/trivy.
+- The 6 mandatory NEXUS-OMNI audit docs already live on main; the 2026-11-05 delta
+  is `docs/audits/NEXUS_OMNI_DELTA_2026-11-05.md`.
+
 ## task-282 / PR #315 (durable project-state pinning) — 2026-11-05
 - **Pin contract (owner-mandated):** the handoff must pin the **admitted** revision
   (`RevisionRecord` returned by `commit()`), NOT re-read the live head. `cli.py` captures
