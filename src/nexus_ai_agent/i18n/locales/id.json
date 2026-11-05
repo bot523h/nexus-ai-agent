@@ -75,6 +75,7 @@
   "creative.failed.unsupported_operation": "❌ Operasi ini tidak tersedia untuk render satu langkah.",
   "creative.failed.media_missing": "❌ Berkas media yang disiapkan hilang; kirim ulang perintahnya.",
   "creative.failed.input_integrity": "❌ Media yang disiapkan tidak dapat diverifikasi; render ditolak. Kirim ulang medianya.",
+  "creative.failed.revision_unavailable": "❌ Status proyek berubah atau tidak dapat diverifikasi, sehingga render ditolak. Kirim ulang perintah.",
   "creative.failed.caption_profile_unavailable": "❌ Teks tidak tersedia di instalasi ini (tanpa mesin suara).",
   "creative.failed.render_failed": "❌ Render gagal; coba media lebih pendek atau parameter lain.",
   "creative.failed.ffmpeg_unavailable": "❌ Mesin render tidak terpasang pada deployment ini.",
