@@ -74,6 +74,26 @@ $ echo $?   # 2; board.json unchanged
   override flag; `next` never proposes blocked work; helper unit).
 - `make lint` → All checks passed. `make types` → no issues in 361 source files.
 
+## 2b. New finding — a merged task kept fencing its zone
+
+**Severity P1 (governance / false conflict).** `task-282-durable-project-state-lifecycle`
+held an `active_in_review` lease (generation 5) whose `exclusive_paths` included
+`docs/README.md` plus 18 other paths. Its PR #315 was **merged** into `main`
+(`aadaf53157`) and the task branch head `c62adbe6` is an **ancestor of `main`** —
+every deliverable is already on `main`. The lease was therefore stale drift: it kept
+fencing paths nobody was editing and made a legitimate `docs/README.md` change (this
+report's own index entry) fail `agent_board.py check` with a **false overlap**.
+
+### Fix (PR #317, branch `board-reconcile-282-stale-lease`)
+
+`agent_board.py release task-282-durable-project-state-lifecycle` (generation 5 → 6,
+status → `done`) frees the zone. Board-only diff (6 insertions / 6 deletions); 75
+board tests pass. Reconciliation via the CLI's own `release` path, not a rule change.
+
+Note: `agent_board.py check` consults `origin/main`'s committed board as a source, so
+a stale *committed* fence keeps flagging until the release is merged; releasing only
+clears the local/worktree sources.
+
 ## 3. Security / supply-chain re-check
 
 - `pip-audit` on the runtime closure → 20 advisories in 3 packages:
@@ -97,7 +117,8 @@ only ones that can conflict with `.agents/board.json`; the rest are large
 feature branches from the historical `arena/*` fleet, all diverged far behind
 `main`. Full per-PR classification A–G and the dependency-safe merge order are in
 `NEXUS_OMNI_PR_CONVERGENCE_LEDGER_2026-11-03.md`. No PR was merged, rebased, or
-closed by this session (owner-gated). #316 is the only PR opened.
+closed by this session (owner-gated). #316 (board prerequisites) and #317 (stale
+lease release) are the only PRs opened.
 
 ## 5. Honest limits
 
