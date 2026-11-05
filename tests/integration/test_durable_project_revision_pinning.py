@@ -56,7 +56,7 @@ from nexus_ai_agent.creative.studio.models import (
 )
 from nexus_ai_agent.nagar.cognition import build_cognition_gateway
 from nexus_ai_agent.nagar.creative import CanonicalHandoffFacts, run_free_text_intent_durable
-from nexus_ai_agent.storage.migrations import ensure_startup_schema
+from nexus_ai_agent.storage.db import create_all_tables
 from nexus_ai_agent.worker import default_job_handlers
 
 PROJECT_ID = "pinning-project"
@@ -89,7 +89,7 @@ def pin_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     (tmp_path / "creative").mkdir()
     settings_module.get_settings.cache_clear()
-    ensure_startup_schema()
+    asyncio.run(create_all_tables(str(tmp_path / "app.sqlite")))
     yield tmp_path
     settings_module.get_settings.cache_clear()
 
