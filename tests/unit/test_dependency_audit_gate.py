@@ -91,6 +91,34 @@ def test_collect_ids_indexes_every_advisory() -> None:
     assert found["PYSEC-9"]["package"] == "chromadb"
 
 
+def test_an_allowlist_entry_for_a_different_package_is_rejected() -> None:
+    # Advisory ids are reused across packages; an entry must name the package it
+    # covers, or a same-id advisory in another package would pass silently.
+    allowlist = {"CVE-X": {"package": "otherpkg", "reason": "no-fix-released"}}
+    ok, message = gate._decide_advisory(
+        "CVE-X", {"package": "chromadb", "version": "1.5.9"}, allowlist, {"chromadb": "1.5.9"}, {}
+    )
+    assert ok is False
+    assert "MISMATCH" in message
+
+
+def test_a_matching_entry_is_accepted() -> None:
+    allowlist = {"CVE-X": {"package": "chromadb", "reason": "no-fix-released"}}
+    ok, message = gate._decide_advisory(
+        "CVE-X", {"package": "chromadb", "version": "1.5.9"}, allowlist, {"chromadb": "1.5.9"}, {}
+    )
+    assert ok is True
+    assert "ACCEPTED" in message
+
+
+def test_an_unknown_advisory_is_rejected() -> None:
+    ok, message = gate._decide_advisory(
+        "CVE-NEW", {"package": "chromadb", "version": "1.5.9"}, {}, {"chromadb": "1.5.9"}, {}
+    )
+    assert ok is False
+    assert "UNACCEPTED" in message
+
+
 def test_the_shipped_allowlist_is_well_formed() -> None:
     data = json.loads(ALLOWLIST.read_text(encoding="utf-8"))
     accepted = data["accepted"]

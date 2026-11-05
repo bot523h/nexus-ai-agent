@@ -143,6 +143,33 @@ def _pin_still_holds(
     return False, f"unknown acceptance reason {reason!r}"
 
 
+def _decide_advisory(
+    advisory_id: str,
+    meta: dict[str, Any],
+    allowlist: dict[str, dict[str, Any]],
+    versions: dict[str, str],
+    reqs: dict[str, list[str]],
+) -> tuple[bool, str]:
+    """Decide one advisory: ``(accepted, message)``.
+
+    An advisory id is a namespace that can be reused across packages, so an
+    acceptance applies only to the package it names; a package mismatch is a
+    failure, never a silent pass.
+    """
+    entry = allowlist.get(advisory_id)
+    if entry is None:
+        return False, f"UNACCEPTED {advisory_id} in {meta['package']} {meta['version']}"
+    if entry.get("package", "").lower() != meta["package"].lower():
+        return False, (
+            f"MISMATCH   {advisory_id} is reported for {meta['package']}, "
+            f"but the allow-list names {entry.get('package')!r}"
+        )
+    holds, why = _pin_still_holds({**entry, "id": advisory_id}, versions, reqs)
+    if holds:
+        return True, f"ACCEPTED  {advisory_id} ({meta['package']}) — {why}"
+    return False, f"STALE     {advisory_id} ({meta['package']}) — {why}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--allowlist", type=Path, default=DEFAULT_ALLOWLIST)
@@ -162,15 +189,8 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[str] = []
     accepted: list[str] = []
     for advisory_id, meta in sorted(found.items()):
-        entry = allowlist.get(advisory_id)
-        if entry is None:
-            failures.append(f"UNACCEPTED {advisory_id} in {meta['package']} {meta['version']}")
-            continue
-        holds, why = _pin_still_holds({**entry, "id": advisory_id}, versions, reqs)
-        if holds:
-            accepted.append(f"ACCEPTED  {advisory_id} ({meta['package']}) — {why}")
-        else:
-            failures.append(f"STALE     {advisory_id} ({meta['package']}) — {why}")
+        ok, message = _decide_advisory(advisory_id, meta, allowlist, versions, reqs)
+        (accepted if ok else failures).append(message)
 
     for line in accepted:
         print(line)
