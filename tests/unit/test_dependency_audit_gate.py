@@ -82,13 +82,45 @@ def test_unknown_reason_is_never_accepted() -> None:
 def test_collect_ids_indexes_every_advisory() -> None:
     report = {
         "dependencies": [
-            {"name": "filelock", "version": "3.32.7", "vulns": [{"id": "CVE-1"}, {"id": "CVE-2"}]},
+            {
+                "name": "filelock",
+                "version": "3.32.7",
+                "vulns": [{"id": "CVE-1"}, {"id": "CVE-2"}],
+            },
             {"name": "chromadb", "version": "1.5.9", "vulns": [{"id": "PYSEC-9"}]},
         ]
     }
     found = gate._collect_ids(report)
-    assert set(found) == {"CVE-1", "CVE-2", "PYSEC-9"}
-    assert found["PYSEC-9"]["package"] == "chromadb"
+    assert set(found) == {("filelock", "CVE-1"), ("filelock", "CVE-2"), ("chromadb", "PYSEC-9")}
+    assert found[("chromadb", "PYSEC-9")]["package"] == "chromadb"
+
+
+def test_collect_ids_keeps_a_shared_advisory_id_for_each_package() -> None:
+    # A single advisory id reported against two packages must produce TWO entries;
+    # keying by id alone would drop one and let it ship unexamined.
+    report = {
+        "dependencies": [
+            {"name": "package-a", "version": "1.0", "vulns": [{"id": "CVE-X"}]},
+            {"name": "package-b", "version": "2.0", "vulns": [{"id": "CVE-X"}]},
+        ]
+    }
+    found = gate._collect_ids(report)
+    assert set(found) == {("package-a", "CVE-X"), ("package-b", "CVE-X")}
+
+
+def test_no_fix_released_expires_when_pip_audit_reports_a_fix() -> None:
+    # The whole point of a `no-fix-released` acceptance is that it stops being true
+    # the moment a fix ships; pip-audit's own `fix_versions` is the signal.
+    entry = {"package": "chromadb", "reason": "no-fix-released", "id": "PYSEC-9"}
+    holds, why = gate._pin_still_holds(entry, {"chromadb": "1.5.9"}, {}, ["1.6.0"])
+    assert holds is False
+    assert "fix is now released" in why
+
+
+def test_no_fix_released_holds_while_no_fix_is_reported() -> None:
+    entry = {"package": "chromadb", "reason": "no-fix-released", "id": "PYSEC-9"}
+    holds, _ = gate._pin_still_holds(entry, {"chromadb": "1.5.9"}, {}, [])
+    assert holds is True
 
 
 def test_an_allowlist_entry_for_a_different_package_is_rejected() -> None:
@@ -96,7 +128,11 @@ def test_an_allowlist_entry_for_a_different_package_is_rejected() -> None:
     # covers, or a same-id advisory in another package would pass silently.
     allowlist = {"CVE-X": {"package": "otherpkg", "reason": "no-fix-released"}}
     ok, message = gate._decide_advisory(
-        "CVE-X", {"package": "chromadb", "version": "1.5.9"}, allowlist, {"chromadb": "1.5.9"}, {}
+        ("chromadb", "CVE-X"),
+        {"package": "chromadb", "version": "1.5.9", "fix_versions": []},
+        allowlist,
+        {"chromadb": "1.5.9"},
+        {},
     )
     assert ok is False
     assert "MISMATCH" in message
@@ -105,15 +141,36 @@ def test_an_allowlist_entry_for_a_different_package_is_rejected() -> None:
 def test_a_matching_entry_is_accepted() -> None:
     allowlist = {"CVE-X": {"package": "chromadb", "reason": "no-fix-released"}}
     ok, message = gate._decide_advisory(
-        "CVE-X", {"package": "chromadb", "version": "1.5.9"}, allowlist, {"chromadb": "1.5.9"}, {}
+        ("chromadb", "CVE-X"),
+        {"package": "chromadb", "version": "1.5.9", "fix_versions": []},
+        allowlist,
+        {"chromadb": "1.5.9"},
+        {},
     )
     assert ok is True
     assert "ACCEPTED" in message
 
 
+def test_a_matching_entry_goes_stale_when_a_fix_appears() -> None:
+    allowlist = {"CVE-X": {"package": "chromadb", "reason": "no-fix-released"}}
+    ok, message = gate._decide_advisory(
+        ("chromadb", "CVE-X"),
+        {"package": "chromadb", "version": "1.5.9", "fix_versions": ["1.6.0"]},
+        allowlist,
+        {"chromadb": "1.5.9"},
+        {},
+    )
+    assert ok is False
+    assert "STALE" in message
+
+
 def test_an_unknown_advisory_is_rejected() -> None:
     ok, message = gate._decide_advisory(
-        "CVE-NEW", {"package": "chromadb", "version": "1.5.9"}, {}, {"chromadb": "1.5.9"}, {}
+        ("chromadb", "CVE-NEW"),
+        {"package": "chromadb", "version": "1.5.9", "fix_versions": []},
+        {},
+        {"chromadb": "1.5.9"},
+        {},
     )
     assert ok is False
     assert "UNACCEPTED" in message

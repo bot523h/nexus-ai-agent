@@ -1,4 +1,4 @@
-# NEXUS-OMNI morning handoff — 2026-11-06
+# NEXUS-OMNI morning handoff — 2026-11-05
 
 Dated record. Every number below is reproducible from the tree and the GitHub
 API with the commands shown; where something is not proven it says so.
@@ -20,14 +20,14 @@ ground truth by running commands, not by trusting earlier reports.
   unmerged** (`ahead_by` 6 and 1); neither is "already in main".
 - **Verified main is healthy:** push CI on `main @ aadaf531` = **success**.
 
-## Live state (verified 2026-11-06)
+## Live state (verified 2026-11-05)
 
 | Fact | Value | How verified |
 |---|---|---|
 | `main` HEAD | `aadaf53157670b64af6978fcf41b592e108ac9ae` | `git rev-parse origin/main` |
 | `main` push CI | **success** | Actions API, latest run on `main` |
-| PR #318 head | `e71742ed` (after the Sourcery review fix) | Actions API |
-| PR #318 CI | **24/24 jobs success, 0 failures** (run `42066266409`; re-run on `e71742ed` also clean) | Actions API; `dependency-audit` job green, incl. its anti-vacuity step |
+| PR #318 head | `16ec17ee` (after the Sourcery review fix) | Actions API |
+| PR #318 CI | **24/24 jobs success, 0 failures** (run `42076117097` on `16ec17ee`) | Actions API; `dependency-audit` job green, incl. its anti-vacuity step |
 | PR #316 | open, `ahead_by=6`, `mergeable=true`, `behind_by=0` | compare API `main...938de001` |
 | PR #317 | open, `ahead_by=1`, `mergeable=true`, `behind_by=0` | compare API `main...977390e1` |
 
@@ -69,7 +69,7 @@ and the "must fail closed" step).
 ## Corrections to prior records
 
 1. **`filelock` bump is impossible now** (see above); recorded in
-   `NEXUS_OMNI_DELTA_2026-11-06.md`.
+   `NEXUS_OMNI_DELTA_2026-11-05.md`.
 2. **#316/#317 are not "already contained in main"** — a `main-ahead=0,
    branch-ahead=N` reading means the *branch* is N commits ahead (unmerged), the
    opposite of containment. Verified via `git merge-base --is-ancestor` (NO) and

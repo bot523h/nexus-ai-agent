@@ -71,6 +71,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: bash scripts/ci_install.sh ".[dev]"
+      # The dependency-vulnerability gate runs inside this REQUIRED job so a
+      # blocking advisory genuinely cannot be merged: a failure here reds `test`,
+      # which branch protection requires. The standalone `dependency-audit` job
+      # below keeps the audit visible by name and proves the gate fails closed.
+      - name: dependency audit (a blocking advisory reds this required job)
+        run: python scripts/dependency_audit.py
       - run: |
           set -o pipefail
           # -rs: skip REASONS are part of the contract — an optional-dependency
@@ -821,7 +827,19 @@ jobs:
       - name: the gate must fail closed on an unaccepted advisory
         run: |
           python -c "import json; json.dump({'accepted': {}}, open('/tmp/empty-allowlist.json', 'w'))"
-          if python scripts/dependency_audit.py --allowlist /tmp/empty-allowlist.json; then
+          set +e
+          python scripts/dependency_audit.py --allowlist /tmp/empty-allowlist.json >/tmp/audit.out 2>/tmp/audit.err
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
             echo "::error::the dependency-audit gate passed with an empty allow-list (vacuously green)"
             exit 1
+          fi
+          # A bare non-zero exit is not proof: pip-audit itself erroring would also
+          # exit non-zero. Require the gate's OWN verdict — every finding reported
+          # UNACCEPTED, and no STALE/MISMATCH (which would mean a different path).
+          grep -q 'UNACCEPTED' /tmp/audit.err || {
+            echo "::error::empty-allow-list run did not report UNACCEPTED; it failed for another reason"; cat /tmp/audit.err; exit 1; }
+          if grep -qE 'STALE|MISMATCH' /tmp/audit.err; then
+            echo "::error::empty-allow-list run reported STALE/MISMATCH instead of UNACCEPTED"; cat /tmp/audit.err; exit 1
           fi

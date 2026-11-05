@@ -89,19 +89,33 @@ def _run_pip_audit() -> dict[str, Any]:
     return json.loads(proc.stdout)
 
 
-def _collect_ids(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Return ``{advisory_id: {"package", "version"}}`` for every finding."""
-    found: dict[str, dict[str, Any]] = {}
+def _collect_ids(report: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Return ``{(package, advisory_id): {"package", "version", "fix_versions"}}``.
+
+    The key is the *pair*: an advisory id is a namespace that can be reported for
+    more than one package, so keying by id alone would let one finding silently
+    overwrite another and drop an advisory from the gate entirely.  The
+    ``fix_versions`` list pip-audit already resolved is carried through so a
+    ``no-fix-released`` acceptance can expire the moment a fix is published.
+    """
+    found: dict[tuple[str, str], dict[str, Any]] = {}
     for dep in report.get("dependencies", []):
         pkg = dep.get("name", "")
         ver = dep.get("version", "")
         for vuln in dep.get("vulns", []):
-            found[vuln.get("id", "")] = {"package": pkg, "version": ver}
+            found[(pkg.lower(), vuln.get("id", ""))] = {
+                "package": pkg,
+                "version": ver,
+                "fix_versions": list(vuln.get("fix_versions") or []),
+            }
     return found
 
 
 def _pin_still_holds(
-    entry: dict[str, Any], versions: dict[str, str], reqs: dict[str, list[str]]
+    entry: dict[str, Any],
+    versions: dict[str, str],
+    reqs: dict[str, list[str]],
+    fix_versions: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Decide whether an allow-list entry is still genuinely blocked.
 
@@ -138,33 +152,44 @@ def _pin_still_holds(
 
     if reason == "no-fix-released":
         which = entry.get("id", "the advisory")
+        # Self-expiry: pip-audit resolved the fixed versions from the advisory
+        # database.  A non-empty list means a fix exists, so "no fix released" is
+        # no longer true — the acceptance is stale and the package must be bumped.
+        if fix_versions:
+            return False, (
+                f"a fix is now released for {which} ({pkg} {', '.join(fix_versions)}) — "
+                f"bump {pkg} and drop this entry"
+            )
         return True, f"no released version of {pkg} fixes {which} (installed {installed})"
 
     return False, f"unknown acceptance reason {reason!r}"
 
 
 def _decide_advisory(
-    advisory_id: str,
+    key: tuple[str, str],
     meta: dict[str, Any],
     allowlist: dict[str, dict[str, Any]],
     versions: dict[str, str],
     reqs: dict[str, list[str]],
 ) -> tuple[bool, str]:
-    """Decide one advisory: ``(accepted, message)``.
+    """Decide one finding, keyed by ``(package, advisory_id)``: ``(accepted, message)``.
 
-    An advisory id is a namespace that can be reused across packages, so an
-    acceptance applies only to the package it names; a package mismatch is a
-    failure, never a silent pass.
+    An advisory id is a namespace that can be reported for more than one package,
+    so the key is the pair and an acceptance applies only to the package it names;
+    a package mismatch is a failure, never a silent pass.
     """
+    pkg_key, advisory_id = key
     entry = allowlist.get(advisory_id)
     if entry is None:
         return False, f"UNACCEPTED {advisory_id} in {meta['package']} {meta['version']}"
-    if entry.get("package", "").lower() != meta["package"].lower():
+    if entry.get("package", "").lower() != pkg_key:
         return False, (
             f"MISMATCH   {advisory_id} is reported for {meta['package']}, "
             f"but the allow-list names {entry.get('package')!r}"
         )
-    holds, why = _pin_still_holds({**entry, "id": advisory_id}, versions, reqs)
+    holds, why = _pin_still_holds(
+        {**entry, "id": advisory_id}, versions, reqs, meta.get("fix_versions")
+    )
     if holds:
         return True, f"ACCEPTED  {advisory_id} ({meta['package']}) — {why}"
     return False, f"STALE     {advisory_id} ({meta['package']}) — {why}"
@@ -188,8 +213,8 @@ def main(argv: list[str] | None = None) -> int:
 
     failures: list[str] = []
     accepted: list[str] = []
-    for advisory_id, meta in sorted(found.items()):
-        ok, message = _decide_advisory(advisory_id, meta, allowlist, versions, reqs)
+    for key, meta in sorted(found.items()):
+        ok, message = _decide_advisory(key, meta, allowlist, versions, reqs)
         (accepted if ok else failures).append(message)
 
     for line in accepted:

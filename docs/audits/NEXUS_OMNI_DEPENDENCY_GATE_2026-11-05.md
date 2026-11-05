@@ -1,4 +1,4 @@
-# NEXUS-OMNI delta — dependency-vulnerability gate (2026-11-06)
+# NEXUS-OMNI delta — dependency-vulnerability gate (2026-11-05)
 
 Dated record (never a source of truth). Extends
 `NEXUS_OMNI_SECURITY_PRIVACY_AUDIT_2026-11-03.md` and
@@ -59,7 +59,7 @@ $ pytest tests/unit/test_dependency_audit_gate.py -q
 gate now proves why**: `litellm` — a declared runtime dependency
 (`litellm>=1.74,<2`) — requires `filelock<4.0,>=3.16.1` on every released
 version including the latest (`1.108.0`, verified via the PyPI JSON API on
-2026-11-06). So `filelock>=4.2.1` is unresolvable while `litellm` is installed;
+2026-11-05). So `filelock>=4.2.1` is unresolvable while `litellm` is installed;
 the 13 `filelock` CVEs (fixed in 4.0.9 / 4.2.1) cannot be cleared without either
 a `litellm` upgrade that relaxes the cap or a documented, deliberate downgrade
 of `litellm`. The gate encodes this as a `transitive-cap` acceptance that will
@@ -67,7 +67,7 @@ turn STALE — and red the build — the moment `litellm` relaxes the pin.
 
 The earlier `chromadb` / `diskcache` dispositions are unchanged but now
 machine-enforced: both are `no-fix-released` (1.5.9 and 5.6.3 respectively are
-the latest releases and still affected, verified via the OSV API on 2026-11-06),
+the latest releases and still affected, verified via the OSV API on 2026-11-05),
 and both are optional/transitive, not on a default path.
 
 ## 4. Now / Next / Later
