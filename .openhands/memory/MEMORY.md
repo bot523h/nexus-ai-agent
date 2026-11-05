@@ -901,3 +901,31 @@ Only red check = the #234 flake (task-264, issue #237).
 - Only 4 workflow FILES on main; the API's 10-workflow list is stale/org-level.
 - Board: new claim paths must be under ONE existing zone and not collide with another
   ACTIVE claim; `next_work` must stay exactly 10.
+
+## task-282 durable project state (2026-11-05, Mission 3)
+- **PR #315** `openhands/task-282-durable-project-state-20261105` (base ca4c2f6c = main),
+  final head **`cc84b7e7`** (Sourcery findings closed); CI run **41988991393 = success**
+  (all jobs green) + `queue-ownership-mutations` run 41988936327 success. Mergeable.
+  NOT merged (HARD RULE: never write to main).
+- **Sourcery findings on #315, all closed in cc84b7e7**: F1 High cross-project leak
+  (`_verify_revision_integrity` also rejects a row whose deserialized project_id != owner);
+  F2 Medium unreadable head (`commit()` preflights `compute_state_hash` before the write);
+  F3 canonical admission now REQUIRES the revision store (refuses `revision_unavailable`).
+  All 3 threads replied + resolved. Full suite 6315 passed / 39 skipped; mutations 14/14.
+- Delivered: **F1** read-time integrity (re-derive content address + state_hash from
+  state_json; typed `RevisionIntegrityError`, fail closed) + **Slice 1** revision pinning
+  handoff → existing JobQueue payload → worker (`_resolve_pinned_project` loads the EXACT
+  revision, refuses `revision_unavailable` before any engine). 3 new pin mutations +
+  8 F1/CAS = 11/11 killed. New suite `tests/integration/test_durable_project_revision_pinning.py`.
+- **CI gotcha**: `trust-mutations` installs a hand-picked minimal dep set with NO alembic.
+  A mutation-harness suite must NOT import `storage.migrations` (→ alembic) or the harness
+  baseline goes RED ("refusing to mutate a suite that is already failing", exit 2).
+  Bootstrap with `asyncio.run(create_all_tables(path))`. Reproduce by building a venv from
+  the job's exact pip line — the main .venv masks it.
+- Remaining (honest): Slice 2 (artifact→AssetVersion) blocked on #205; Slice 3
+  (Revision↔Job↔Attempt↔Verification↔Journal↔Passport) blocked on #294. Board lease
+  released gen 3→4, status `done`, evidence note recorded. Verdict: HARDENED_BUT_NOT_COMPLETE.
+- Durable-state rules: a new creative ERROR_CODE needs a `creative.failed.<code>` key in
+  ALL 15 locales (`tests/unit/test_creative_notify.py`); adding a suite that imports a
+  creative op drifts `OPERATION_TRUTH.json` → `python -m nexus_ai_agent.nagar --docs`;
+  `model_copy` bypasses the `state_hash` validator → recompute `compute_state_hash`.
