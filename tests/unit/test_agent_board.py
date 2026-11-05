@@ -2174,3 +2174,126 @@ def test_takeover_retires_the_gc_release_reason(board_module: ModuleType) -> Non
     assert live["status"] == "active" and live["agent_branch"] == "arena/new-owner"
     assert "release_reason" not in live, "a live lease must not carry a stale release reason"
     assert "stale active lease" in live["previous_release_reason"]
+
+
+# --------------------------------------------------------------------------- #
+# machine-enforced prerequisites (task-7/10: a dependency is a precondition,
+# not a note). These prove `claim` and `next` refuse blocked work, and that an
+# expired dependency is NOT satisfaction.
+# --------------------------------------------------------------------------- #
+def _prereq_board(dep_status: str) -> dict:
+    """A board where a queued task depends on a dependency in *dep_status*."""
+    return {
+        "schema": 2,
+        "protocol": {"protocol_version": 2},
+        "claims": [
+            {
+                "task": "dep",
+                "status": dep_status,
+                "zone": "synthetic",
+                "agent_branch": "" if dep_status != "active" else "arena/111-someone-else",
+                "claimed_at": "2026-01-01T00:00:00Z" if dep_status == "active" else None,
+                "ttl_hours": 24,
+                "gates_owner": False,
+                "exclusive_paths": [],
+            },
+            {
+                "task": "dependent",
+                "status": "queued",
+                "zone": "synthetic",
+                "agent_branch": "",
+                "claimed_at": None,
+                "ttl_hours": 24,
+                "gates_owner": False,
+                "exclusive_paths": [],
+                "prerequisites": ["dep"],
+            },
+        ],
+        "zones": [{"id": "synthetic", "paths": ["src/synthetic/"]}],
+        "deferred_log": [],
+        "next_work": [],
+        "history": {"waves_closed": [], "pull_requests": [], "incidents": []},
+    }
+
+
+def _claim_args(task: str, branch: str, **extra: object) -> object:
+    base = {"task": task, "branch": branch, "ttl": 24, "gates": False, "expected_generation": None}
+    base.update(extra)
+    return type("A", (), base)()
+
+
+@pytest.mark.parametrize("dep_status", ["queued", "active", "expired", "deferred"])
+def test_claim_refuses_an_unmet_prerequisite(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, dep_status: str
+) -> None:
+    """Every non-`done` dependency state blocks the claim — expired is not done."""
+    board = _prereq_board(dep_status)
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    if dep_status == "active":
+        _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    code = board_module.cmd_claim(_claim_args("dependent", "arena/999-me"))
+    assert code == 2, f"a {dep_status} prerequisite must refuse the claim"
+    reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    dependent = next(c for c in reloaded["claims"] if c["task"] == "dependent")
+    assert dependent["status"] == "queued", "a refused claim must not write the board"
+    assert dependent["agent_branch"] == ""
+
+
+def test_claim_allows_a_satisfied_prerequisite(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = _prereq_board("done")
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    code = board_module.cmd_claim(_claim_args("dependent", "arena/999-me"))
+    assert code == 0, "a done prerequisite must allow the claim"
+
+
+def test_claim_refuses_a_prerequisite_that_is_not_registered(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dependency on work nobody registered is unverifiable, not free to skip."""
+    board = _prereq_board("done")
+    board["claims"][1]["prerequisites"] = ["ghost-task"]
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    code = board_module.cmd_claim(_claim_args("dependent", "arena/999-me"))
+    assert code == 2
+
+
+def test_claim_ignore_prerequisites_flag_is_an_explicit_owner_override(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = _prereq_board("queued")
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    code = board_module.cmd_claim(
+        _claim_args("dependent", "arena/999-me", ignore_prerequisites=True)
+    )
+    assert code == 0, "the explicit override must be the only way past a blocker"
+
+
+def test_next_never_proposes_prerequisite_blocked_work(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`next` must not hand out a task that `claim` will refuse."""
+    # ``dep`` is active (so it is not itself a ``next`` candidate), leaving the
+    # blocked ``dependent`` as the only queued work: `next` must report it as
+    # BLOCKED rather than propose it.
+    board = _prereq_board("active")
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    _pin_clock_inside_lease(monkeypatch, board_module, board["claims"][0])
+    code = board_module.cmd_next(type("A", (), {"branch": "arena/999-me"})())
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "BLOCKED dependent" in out
+    assert "NEXT: dependent" not in out
+
+
+def test_unmet_prerequisites_helper_flags_ghost_and_nonterminal(
+    board_module: ModuleType,
+) -> None:
+    board = _prereq_board("expired")
+    claim = next(c for c in board["claims"] if c["task"] == "dependent")
+    assert board_module._unmet_prerequisites(board, claim) == ["dep"]
+    claim["prerequisites"] = ["ghost"]
+    assert board_module._unmet_prerequisites(board, claim) == ["ghost"]
+    claim["prerequisites"] = []
+    assert board_module._unmet_prerequisites(board, claim) == []

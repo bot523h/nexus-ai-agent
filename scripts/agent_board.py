@@ -102,6 +102,12 @@ _DEFAULT_FA = (
 
 ACTIVE_STATUSES = frozenset({"active", "active_in_review"})
 
+#: A claim is *satisfied* (its dependents may proceed) only in a terminal
+#: ``done`` state. ``completed_merged`` is the historical spelling some records
+#: carry for the same fact. Anything else — including ``expired`` and ``deferred``
+#: — leaves the dependency unmet: an expired lease is not completion.
+SATISFIED_STATUSES = frozenset({"done", "completed_merged"})
+
 
 def _is_active_claim(claim: dict) -> bool:
     """True when a claim owns its zone and exclusive paths right now.
@@ -210,6 +216,33 @@ def gc_expired(board: dict) -> list[str]:
 
 def _find(board: dict, task: str) -> dict | None:
     return next((c for c in board.get("claims", []) if c["task"] == task), None)
+
+
+def _unmet_prerequisites(board: dict, claim: dict) -> list[str]:
+    """Return the prerequisites of *claim* that are not yet satisfied.
+
+    A prerequisite is *satisfied* only when its task exists and its status is in
+    :data:`SATISFIED_STATUSES`. Three cases are all unmet, and none of them is a
+    pass:
+
+    * the prerequisite names a task that has no claim record — a dependency on
+      work nobody registered is unverifiable, not free to skip;
+    * the prerequisite task exists but is still queued/active/deferred/expired
+      (``expired`` is explicitly *not* completion);
+    * a historical ``completed_merged`` record counts as satisfied (see
+      :data:`SATISFIED_STATUSES`).
+
+    This turns a ``prerequisites`` list from a text note into a hard precondition
+    for taking the lease, so ``claim``/``next`` cannot hand out blocked work.
+    """
+    unmet: list[str] = []
+    for prereq in claim.get("prerequisites") or []:
+        if not prereq:
+            continue
+        other = _find(board, prereq)
+        if other is None or other.get("status") not in SATISFIED_STATUSES:
+            unmet.append(prereq)
+    return unmet
 
 
 def _path_matches(excl: str, fp: str) -> bool:
@@ -427,6 +460,24 @@ def _claim_locked(args: argparse.Namespace) -> int:
         if refusal:
             print(refusal)
             return 2
+    # Machine-enforced prerequisites (task-7/10): a lease on blocked work is
+    # never granted. This is a hard precondition, not a note — an unmet (or
+    # unregistered) prerequisite refuses the claim, so a dependent slice cannot
+    # start before its dependency is genuinely ``done``. The bypass flag exists
+    # for the dependency owner's own maintenance, never for skipping a real
+    # blocker silently.
+    if not getattr(args, "ignore_prerequisites", False):
+        unmet = _unmet_prerequisites(board, claim)
+        if unmet:
+            print(
+                f"REFUSED: {args.task} is blocked by unmet prerequisite(s): "
+                f"{', '.join(unmet)} — finish them (status 'done') first."
+            )
+            print(
+                "A prerequisite is satisfied only when its task exists and is 'done'; "
+                "an expired/queued/active dependency is not completion."
+            )
+            return 2
     # gc stamps ``release_reason`` on the record it frees. A takeover reuses that
     # record, and an ACTIVE lease must not still claim to have been released
     # (PR #211 review). Retire the reason into history instead of dropping it.
@@ -546,6 +597,13 @@ def cmd_next(args: argparse.Namespace) -> int:
                 print(
                     f"BLOCKED {claim['task']} — waiting on active claim(s): {', '.join(blockers)}"
                 )
+                continue
+            # Prerequisites are a hard precondition, exactly as in ``claim``:
+            # ``next`` must never propose work whose dependency is not ``done``,
+            # or an agent would be handed a task that ``claim`` will refuse.
+            unmet = _unmet_prerequisites(board, claim)
+            if unmet:
+                print(f"BLOCKED {claim['task']} — unmet prerequisite(s): {', '.join(unmet)}")
                 continue
             print(f"NEXT: {claim['task']} (zone {claim.get('zone')}) — {claim.get('scope', '')}")
             print(
@@ -1266,6 +1324,13 @@ def main() -> int:
     p.add_argument("--branch", required=True)
     p.add_argument("--ttl", type=int, default=24)
     p.add_argument("--gates", action="store_true", help="this agent owns CI gates while active")
+    p.add_argument(
+        "--ignore-prerequisites",
+        dest="ignore_prerequisites",
+        action="store_true",
+        help="take a lease even when a prerequisite is unmet (owner maintenance only; "
+        "never for silently skipping a real blocker)",
+    )
     p.add_argument(
         "--expected-generation",
         dest="expected_generation",
