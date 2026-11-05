@@ -836,6 +836,59 @@ Only red check = the #234 flake (task-264, issue #237).
   matrix to the interpreter set the pin was verified against.
 - `scripts/ci_torch_mutations.py` (10/10 killed) runs in the `trust-mutations` job.
 
+## task-282 durable project state (durable, 2026-11-04)
+- PR **#314** = `arena/omni-durable-project-state-20261104` (head `ab62ae9a`, base main
+  `cf427874`): durable, restartable Studio project revisions. All 25 checks green.
+  **Board claim is `deferred`, NOT done** (gen 1→2, claimed_at=null, gates_owner=false):
+  #314 is the persistence FOUNDATION only; the intent→job→artifact→passport slice is
+  handed to ARENA-C. Grounded gap: the worker still reports
+  `project_state_storage="attempt_scoped_in_memory"` (`creative/render_jobs.py` ~L693,
+  `jobs/creative_passport.py` ~L717) and nothing outside `creative/project_state/` imports
+  the durable store.
+- **FORENSIC FINDING (P2, storage-layer tamper resistance), reproduced:** the read path
+  (`store._read_revision`/`load_head`) does NOT re-validate `state_json` against
+  `revision_id`/`state_hash`. A direct `UPDATE projectrevision.state_json` is silently
+  accepted (tested: tampered name "EVIL" came back, recomputed `compute_state_hash` ≠
+  stored `state_hash`, no error). Immutability holds at the API/insert layer (content-
+  addressed PK, no UPDATE path) but NOT against out-of-band DB writes. Fix = recompute
+  `content_address(canonical_state_bytes(project)) == revision_id` at read time, fail
+  closed. ARENA-C step (3) depends on this.
+- **SIGKILL claim was WRONG** (corrected in board + PR body): the restart test is a real
+  OS-process restart (child exits normally after commit; parent rebuilds with a new store),
+  NOT a SIGKILL. A true SIGKILL-after-commit test is proposed, not implemented.
+- Correct counts: **24 new tests** (13 unit + 1 restart + 3 concurrency + 7 arch); CI test
+  job on the head = **6293 passed / 38 skipped / 0 failed** (the old "6291/39" was a local
+  run on an earlier SHA). Required checks = lint, test, merge-base-guard.
+- **Review status `PENDING_HUMAN_REVIEW`**: the repo's only collaborator is the Owner
+  (`bot523h`); Sourcery ×2 (3/3 threads resolved) + CodeRabbit (skipped) are bots. Resolved
+  bot threads ≠ independent human review. No self-approval.
+- **`agent_board.py check` fences on LIVE LEASES only**, not on unclaimed PR diffs. It reads
+  every open-PR head board and returns 0 even when a candidate PR edits the same files
+  (those PRs hold no claim). So exit 0 = "no live lease overlaps", NOT "no file conflict";
+  must be combined with a manual PR-diff overlap review (owner decision).
+- **PR #290** (old task-282 board-only registration) is OPEN, `mergeable=False`/`dirty`
+  (3 commits, 1 file) — close it as "SUPERSEDED BY PR #314" only AFTER #314 merges.
+- **`default_create_pr` / integration `GITHUB_TOKEN` cannot PATCH/POST on this repo (403)**;
+  use `GITHUB_PERSONAL_ACCESS_TOKEN` for PR body updates and creation.
+- Adding ANY Alembic revision re-pins, repo-wide: the 7 tests asserting the head, `ci.yml`'s
+  `migrate-postgres` stamp grep, `RUNTIME_FLOWS.md` chain, `DATA_AND_STORAGE.md`, and
+  **`src/nexus_ai_agent/storage/golden/postgres.langgraph.json`**. `alembic upgrade head` /
+  `alembic check` need `NEXUS_DB_PATH` (SQLite); `DATABASE_URL` only accepts postgres.
+- **PG golden is head-sensitive**: `checkpoint_pg_adapter._schema_payload` hashes the four
+  LangGraph tables **plus `migration_head`**. Reproduce on a real `pgvector/pgvector:pg16`
+  (docker), call `PostgresSaver.setup()` first (tables must exist), then
+  `sha256(json.dumps(payload,sort_keys=True,separators=(',',':')))`. Running
+  `nexus checkpoints golden update` *without* the LangGraph tables set up writes a WRONG
+  (empty-tables) fingerprint — do not trust it blindly.
+- **`mypy src` passes locally but CI `lint` is stricter**: `select(orm.X.column)` trips
+  SQLModel stubs (`No overload variant of "select" matches "str"`) + an `unused-ignore`.
+  Use `session.get(Model, pk)` instead; for a genesis insert over an existing head,
+  `session.expunge(head)` to dodge the identity-map clash, let the PK arbitrate.
+- **Mutation harness**: SQLModel `@dataclass` models need their module in `sys.path`;
+  a self-referential content-address test is a vacuous mutant — pin the digest
+  independently (`hashlib.sha256`). Harness wired into `trust-mutations` (5/5 killed).
+- `Sourcery review` is a real gate: flag it green only after it re-runs on the new head.
+
 ## NEXUS-OMNI closeout (durable, 2026-11-04)
 - main @ `b63a22a8`; PR **#311** = `arena/omni-live-closeout-20261104` (docs+board).
   Detail: `.openhands/memory/2026-11-04.md`.

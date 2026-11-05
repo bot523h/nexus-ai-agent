@@ -14,6 +14,7 @@ from nexus_ai_agent.creative.project_state.models import (
     CrossProjectAccess,
     DurableProjectStateError,
     RevisionConflict,
+    RevisionIntegrityError,
     RevisionNotFound,
     RevisionRecord,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "DurableProject",
     "DurableProjectStateError",
     "RevisionConflict",
+    "RevisionIntegrityError",
     "RevisionNotFound",
     "RevisionRecord",
     "SqlProjectRevisionStore",

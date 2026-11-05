@@ -33,13 +33,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexus_ai_agent.creative.project_state.models import (
     CrossProjectAccess,
     RevisionConflict,
+    RevisionIntegrityError,
     RevisionNotFound,
     RevisionRecord,
 )
-from nexus_ai_agent.creative.studio.models import Project
+from nexus_ai_agent.creative.studio.models import Project, compute_state_hash
 from nexus_ai_agent.creative.studio.persistence import (
     canonical_state_bytes,
     content_address,
+    deserialize_project,
 )
 from nexus_ai_agent.storage import models as orm
 from nexus_ai_agent.storage.db import get_session
@@ -59,6 +61,30 @@ def _as_revision(row: orm.ProjectRevision) -> RevisionRecord:
         state_json=row.state_json,
         created_at=row.created_at,
     )
+
+
+def _verify_revision_integrity(row: orm.ProjectRevision) -> None:
+    """Fail closed unless a stored row still hashes to its own identity.
+
+    The durable bytes are the authority for a revision's identity. A direct
+    database edit (or corruption) can leave ``state_json`` no longer hashing to
+    ``revision_id``, or ``state_hash`` no longer matching the content, while the
+    row still deserializes. This re-derives both from the stored bytes using the
+    project's one canonical serialization/hashing contract and refuses any
+    mismatch. It never repairs, never falls back to another revision, and never
+    echoes the row's content in the error.
+    """
+    try:
+        project = deserialize_project(row.state_json)
+        canonical = canonical_state_bytes(project)
+    except Exception as exc:  # noqa: BLE001 - malformed bytes are an integrity failure
+        raise RevisionIntegrityError(
+            f"revision {row.revision_id!r} failed integrity validation"
+        ) from exc
+    if content_address(canonical) != row.revision_id:
+        raise RevisionIntegrityError(f"revision {row.revision_id!r} failed integrity validation")
+    if compute_state_hash(project) != row.state_hash:
+        raise RevisionIntegrityError(f"revision {row.revision_id!r} failed integrity validation")
 
 
 class SqlProjectRevisionStore:
@@ -264,6 +290,7 @@ class SqlProjectRevisionStore:
             raise RevisionNotFound(f"revision {revision_id!r} not found")
         if row.project_id != project_id:
             raise CrossProjectAccess("revision does not belong to the requested project")
+        _verify_revision_integrity(row)
         return _as_revision(row)
 
 

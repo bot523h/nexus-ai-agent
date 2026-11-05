@@ -89,6 +89,30 @@ MUTATIONS: tuple[Mutation, ...] = (
         "the revision id must be the content hash of the state bytes; returning "
         "the raw bytes breaks content addressing and immutability",
     ),
+    Mutation(
+        "read_integrity_revalidation_removed",
+        STORE,
+        "        _verify_revision_integrity(row)",
+        "        pass  # mutated: read-time integrity re-validation removed",
+        "F1: a read must re-derive the revision's identity from its stored bytes; "
+        "dropping the check lets a directly-tampered row pass the read path",
+    ),
+    Mutation(
+        "content_address_revalidation_removed",
+        STORE,
+        "    if content_address(canonical) != row.revision_id:",
+        "    if False:  # mutated: content-address re-validation removed",
+        "F1: the stored bytes must hash back to the stored revision id; a forged "
+        "revision id would otherwise be accepted",
+    ),
+    Mutation(
+        "state_hash_revalidation_removed",
+        STORE,
+        "    if compute_state_hash(project) != row.state_hash:",
+        "    if False:  # mutated: state-hash re-validation removed",
+        "F1: the stored state_hash must match the stored content; a tampered hash "
+        "column would otherwise be accepted",
+    ),
 )
 
 TEST_TIMEOUT_SECONDS = 600

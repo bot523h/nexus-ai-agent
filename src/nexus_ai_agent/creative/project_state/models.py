@@ -33,6 +33,18 @@ class CrossProjectAccess(DurableProjectStateError):
     """A revision was requested through a project it does not belong to."""
 
 
+class RevisionIntegrityError(DurableProjectStateError):
+    """A stored revision failed content-address/hash re-validation on read.
+
+    The durable bytes are the authority for a revision's identity, so a row
+    whose ``state_json`` no longer hashes to its ``revision_id`` (or whose
+    ``state_hash`` no longer matches its content) is refused rather than handed
+    to a caller.  This is the storage-layer tamper check: a direct database edit
+    cannot smuggle a different state through the read path.  The message is
+    deliberately opaque (a revision id only) so no storage internals leak.
+    """
+
+
 @dataclass(frozen=True)
 class RevisionRecord:
     """One durable, immutable project revision as read back from storage."""
