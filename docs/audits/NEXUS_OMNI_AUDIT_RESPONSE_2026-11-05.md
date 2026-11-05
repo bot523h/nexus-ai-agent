@@ -100,3 +100,23 @@ handoff corrected to `16ec17ee` / run `42076117097`.
 
 **#318 → #316 → #317** (#317's board uses the #316 engine and depends on it).
 Every head must re-run the required checks green immediately before merge.
+
+## CI evidence (final heads)
+
+| PR | head | workflow run | result |
+|---|---|---|---|
+| #318 | `539220e5` | `42089132176` | 24/24 jobs success, 0 failures |
+| #316 | `0fb3a321` | (latest on branch) | 23/23 jobs success, 0 failures |
+| #317 | `47e0a80e` | `42092599369` | 23/23 jobs success, 0 failures |
+
+## One more environmental lesson (fixed)
+
+The first #316 head (`4c6c63f5`) was **RED** on `test`, `python-parity` (3.11/3.12)
+and `governance-mutations` — not a logic error, but because the GitHub Actions
+checkout has **no `origin/main` ref**, so the test's `git rev-parse origin/main`
+helper exited 128. The refusal tests now stub the git boundary (`_stub_git`) and a
+dedicated test proves the real ancestry check end-to-end against `HEAD` (which
+always exists): a genuine ancestor records, a non-commit SHA is refused. The
+`governance-mutations` job name also still advertised "28"/"33" and was corrected
+to "37".
+
