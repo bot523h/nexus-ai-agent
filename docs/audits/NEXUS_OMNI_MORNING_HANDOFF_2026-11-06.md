@@ -26,8 +26,8 @@ ground truth by running commands, not by trusting earlier reports.
 |---|---|---|
 | `main` HEAD | `aadaf53157670b64af6978fcf41b592e108ac9ae` | `git rev-parse origin/main` |
 | `main` push CI | **success** | Actions API, latest run on `main` |
-| PR #318 head | `b7fcd524` | Actions API |
-| PR #318 CI | 17+ success, **0 failures** | Actions API; `dependency-audit` job green, incl. its anti-vacuity step |
+| PR #318 head | `e71742ed` (after the Sourcery review fix) | Actions API |
+| PR #318 CI | **24/24 jobs success, 0 failures** (run `42066266409`; re-run on `e71742ed` also clean) | Actions API; `dependency-audit` job green, incl. its anti-vacuity step |
 | PR #316 | open, `ahead_by=6`, `mergeable=true`, `behind_by=0` | compare API `main...938de001` |
 | PR #317 | open, `ahead_by=1`, `mergeable=true`, `behind_by=0` | compare API `main...977390e1` |
 
@@ -74,12 +74,18 @@ and the "must fail closed" step).
    branch-ahead=N` reading means the *branch* is N commits ahead (unmerged), the
    opposite of containment. Verified via `git merge-base --is-ancestor` (NO) and
    the compare API (`ahead_by` 6/1).
+3. **`task-282-durable-project-state-lifecycle` is stale on the board** — its
+   implementation branch `openhands/task-282-durable-project-state-20261105`
+   (`c62adbe6`) **is** contained in `main`, so the board's `active_in_review`
+   status overstates open work. PR #317 already remodels `task-282` as an epic
+   (release, not done) with a typed gate; that is the correct disposition.
+4. **Review fix on #318 (Sourcery):** the gate now fails a package `MISMATCH`
+   (an advisory id is a namespace reused across packages, so an entry must name
+   the package it covers). Added `_decide_advisory` + three tests; head moved
+   `b7fcd524` → `2b67b4e7` → `e71742ed`.
 
 ## What is NOT proven
 
-- The `test` (full pytest), `continuum-evidence`, and `python-parity` jobs on
-  #318 were still **pending** at the time of writing (long jobs). No failure was
-  observed; the dependency-audit job and 17 others were green.
 - Production deploy / restore is out of scope here (no production access);
   recorded as **NOT_PROVEN**.
 - The 42 other unmerged PRs were **not** re-triaged in this session; the
