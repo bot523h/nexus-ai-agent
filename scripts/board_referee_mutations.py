@@ -98,8 +98,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     ),
     Mutation(
         "release_does_not_advance_generation",
-        '    claim["generation"] = _generation(claim) + 1\n    save_board(board)\n    print(\n        f"RELEASED',
-        '    claim["generation"] = _generation(claim)  # mutation: release must advance the epoch\n    save_board(board)\n    print(\n        f"RELEASED',
+        '    claim["generation"] = _generation(claim) + 1\n    save_board(board)\n    if complete:',
+        '    claim["generation"] = _generation(claim)  # mutation: release must advance the epoch\n    save_board(board)\n    if complete:',
         "releasing a lease must advance its fencing epoch",
     ),
     Mutation(
@@ -223,6 +223,37 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        return 2  # mutation: reintroduce the mandatory gates_owner (fail-closed on absence)",
         "policy 2026-10-19: a missing gates_owner must not fail the check "
         "(zero owners is verifiable, never unverifiable)",
+    ),
+    # --- PR #316 hardening: prerequisite gate, schema validation, typed PR deps ---
+    Mutation(
+        "prerequisite_check_disabled",
+        "    unmet = _unmet_prerequisites(board, claim)\n    if unmet:",
+        "    unmet = []\n    if unmet:",
+        "a claim on blocked work must be refused, never granted",
+    ),
+    Mutation(
+        "malformed_prerequisite_not_validated",
+        "    if not isinstance(entry, dict):\n        got = type(entry).__name__",
+        "    if False:\n        got = type(entry).__name__",
+        "a non-string/non-object prerequisite must be a schema error, not a crash",
+    ),
+    Mutation(
+        "ghost_prerequisite_accepted",
+        "            if isinstance(entry, str) and entry not in ids:",
+        "            if False and isinstance(entry, str) and entry not in ids:",
+        "a dependency on an unregistered task must be refused at the load boundary",
+    ),
+    Mutation(
+        "release_marks_done_by_default",
+        '    complete = bool(getattr(args, "complete", False))',
+        "    complete = True  # mutation: release always marks the task terminal",
+        "a plain release must not mark a still-sliced task terminal 'done'",
+    ),
+    Mutation(
+        "typed_pr_evidence_source_not_checked",
+        '        if evidence.get("source") not in PR_MERGE_EVIDENCE_SOURCES:\n            continue',
+        "        if False:\n            continue",
+        "a typed PR dependency must reject a merge record from an untrusted source",
     ),
 )
 

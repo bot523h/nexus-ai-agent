@@ -29,6 +29,7 @@ lease pins ``agent_board._now`` inside that lease
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import subprocess
@@ -329,6 +330,7 @@ def _first_claimable(board_path: Path) -> str:
         claim["task"]
         for claim in data["claims"]
         if claim["status"] in {"queued", "available", "expired", "deferred"}
+        and not claim.get("prerequisites")
     )
 
 
@@ -1849,8 +1851,18 @@ def test_claim_takes_a_free_task_and_check_enforces_the_new_lease(board_module: 
     claimed = next(c for c in board["claims"] if c["task"] == task)
     assert claimed["status"] == "active" and claimed["agent_branch"] == "arena/999-new"
     assert claimed["exclusive_paths"], "a claimed task must own at least one path"
-    # and it can be released again by the same branch, carrying its fencing token
+    # and it can be released again by the same branch, carrying its fencing token.
+    # A plain release frees the zone but does NOT mark the task terminal (a task
+    # may still have open slices); ``--complete`` is the explicit done transition.
     args.expected_generation = _generation_of(board_module, task)
+    assert board_module.cmd_release(args) == 0
+    board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    assert next(c for c in board["claims"] if c["task"] == task)["status"] == "completed_released"
+    # re-claim (a released-but-unfinished task is claimable again), then complete it
+    args.expected_generation = _generation_of(board_module, task)
+    assert board_module.cmd_claim(args) == 0
+    args.expected_generation = _generation_of(board_module, task)
+    args.complete = True
     assert board_module.cmd_release(args) == 0
     board = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
     assert next(c for c in board["claims"] if c["task"] == task)["status"] == "done"
@@ -2251,23 +2263,241 @@ def test_claim_allows_a_satisfied_prerequisite(
 def test_claim_refuses_a_prerequisite_that_is_not_registered(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A dependency on work nobody registered is unverifiable, not free to skip."""
+    """A dependency on work nobody registered is unverifiable, not free to skip.
+
+    The refusal happens at the *load* boundary (schema validation) rather than
+    only at claim time, so a ghost dependency can never be silently claimed
+    against (PR #316 review finding 1).
+    """
     board = _prereq_board("done")
     board["claims"][1]["prerequisites"] = ["ghost-task"]
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    code = board_module.cmd_claim(_claim_args("dependent", "arena/999-me"))
+    with pytest.raises(board_module.BoardValidationError, match="ghost-task"):
+        board_module.load_board()
+    # and the real CLI refuses the claim with exit 2 and an actionable message
+    code = board_module.main(["claim", "dependent", "--branch", "arena/999-me"])
     assert code == 2
 
 
-def test_claim_ignore_prerequisites_flag_is_an_explicit_owner_override(
+def test_claim_has_no_prerequisite_bypass_flag(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """There is no unverifiable escape hatch: the flag is gone (finding 3).
+
+    A bypass that any CLI caller can pass is not an owner-only control, and the
+    board has no verifiable principal to gate it, so the correct fix is removal.
+    """
     board = _prereq_board("queued")
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    code = board_module.cmd_claim(
-        _claim_args("dependent", "arena/999-me", ignore_prerequisites=True)
+    with pytest.raises(SystemExit):
+        board_module.main(
+            ["claim", "dependent", "--branch", "arena/999-me", "--ignore-prerequisites"]
+        )
+    # the parser never grew the option back
+    claim_parser = board_module.build_parser()
+    sub = next(a for a in claim_parser._actions if isinstance(a, argparse._SubParsersAction))
+    assert "--ignore-prerequisites" not in sub.choices["claim"].format_help()
+
+
+def test_claim_override_is_refused_through_the_real_cli(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blocked claim stays refused even when driven through the real parser.
+
+    This exercises the whole path — ``main(argv)`` -> ``ArgumentParser`` ->
+    ``cmd_claim`` -> board — rather than calling ``cmd_claim`` with a handcrafted
+    namespace, so a parser that stopped enforcing (or a destination rename) would
+    turn this RED (PR #316 review finding 2).
+    """
+    board = _prereq_board("queued")
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    code = board_module.main(["claim", "dependent", "--branch", "arena/999-me"])
+    assert code == 2
+    reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    dependent = next(c for c in reloaded["claims"] if c["task"] == "dependent")
+    assert dependent["status"] == "queued" and dependent["agent_branch"] == ""
+
+
+def test_claim_succeeds_through_the_real_cli_when_dependency_is_done(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The positive control for the parser path: a met dependency claims via CLI."""
+    board = _prereq_board("done")
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    code = board_module.main(["claim", "dependent", "--branch", "arena/999-me"])
+    assert code == 0
+    reloaded = json.loads(board_module.BOARD.read_text(encoding="utf-8"))
+    dependent = next(c for c in reloaded["claims"] if c["task"] == "dependent")
+    assert dependent["status"] == "active"
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        7,
+        {"not": "a dependency"},
+        [["nested"]],
+        {
+            "kind": "pull_request",
+            "repository": "no-slash",
+            "number": 1,
+            "required_state": "merged_into_main",
+        },
+        {
+            "kind": "pull_request",
+            "repository": "o/r",
+            "number": 0,
+            "required_state": "merged_into_main",
+        },
+        {"kind": "pull_request", "repository": "o/r", "number": 1, "required_state": "closed"},
+        {"kind": "unknown", "id": "x"},
+    ],
+)
+def test_load_rejects_malformed_prerequisites(board_module: ModuleType, malformed: object) -> None:
+    """Every non-(str|typed-object) prerequisite is a schema error, not a crash."""
+    board = _prereq_board("done")
+    board["claims"][1]["prerequisites"] = [malformed]
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    with pytest.raises(board_module.BoardValidationError):
+        board_module.load_board()
+
+
+def test_load_rejects_prerequisites_that_is_not_a_list(board_module: ModuleType) -> None:
+    board = _prereq_board("done")
+    board["claims"][1]["prerequisites"] = "dep"  # a string, not a list
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    with pytest.raises(board_module.BoardValidationError, match="must be a list"):
+        board_module.load_board()
+
+
+def test_load_rejects_invalid_json(board_module: ModuleType) -> None:
+    board_module.BOARD.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(board_module.BoardValidationError, match="not valid JSON"):
+        board_module.load_board()
+
+
+def test_load_accepts_valid_and_empty_prerequisite_lists(board_module: ModuleType) -> None:
+    board = _prereq_board("done")
+    board["claims"][1]["prerequisites"] = []  # empty list is legal
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert board_module.load_board()["claims"][1]["prerequisites"] == []
+
+
+def test_load_rejects_a_prerequisite_cycle(board_module: ModuleType) -> None:
+    board = _prereq_board("done")
+    board["claims"][0]["prerequisites"] = ["dependent"]  # dep <-> dependent
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    with pytest.raises(board_module.BoardValidationError, match="cycle"):
+        board_module.load_board()
+
+
+def test_cli_refusal_reports_an_invalid_board_without_a_traceback(
+    board_module: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    board = _prereq_board("done")
+    board["claims"][1]["prerequisites"] = [123]
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    code = board_module.main(["claim", "dependent", "--branch", "arena/999-me"])
+    out = capsys.readouterr().out
+    assert code == 2
+    assert "INVALID BOARD" in out
+
+
+def test_typed_pull_request_dependency_blocks_until_merge_evidence(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typed PR dependency is unmet until a merge record with a SHA exists."""
+    board = _prereq_board("done")
+    board["claims"][1]["prerequisites"] = [
+        {
+            "kind": "pull_request",
+            "repository": "bot523h/nexus-ai-agent",
+            "number": 294,
+            "required_state": "merged_into_main",
+        }
+    ]
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    # no completion record yet -> refused, and the message names the PR
+    code = board_module.main(["claim", "dependent", "--branch", "arena/999-me"])
+    assert code == 2
+    # a record without valid evidence does not satisfy it either
+    board["completion_records"] = [
+        {
+            "kind": "pull_request",
+            "repository": "bot523h/nexus-ai-agent",
+            "number": 294,
+            "state": "merged_into_main",
+            "evidence": {"source": "github_api", "merge_commit_sha": "not-a-sha"},
+        }
+    ]
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert board_module.main(["claim", "dependent", "--branch", "arena/999-me"]) == 2
+    # a forged source is rejected too
+    board["completion_records"][0]["evidence"]["merge_commit_sha"] = "a" * 40
+    board["completion_records"][0]["evidence"]["source"] = "a-text-note"
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert board_module.main(["claim", "dependent", "--branch", "arena/999-me"]) == 2
+    # with a real merge SHA from github_api it is met
+    board["completion_records"][0]["evidence"]["source"] = "github_api"
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert board_module.main(["claim", "dependent", "--branch", "arena/999-me"]) == 0
+
+
+def test_record_pr_merge_requires_a_40_hex_sha(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = _prereq_board("done")
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    bad = board_module.main(
+        [
+            "record-pr-merge",
+            "--repo",
+            "bot523h/nexus-ai-agent",
+            "--number",
+            "294",
+            "--merge-sha",
+            "deadbeef",
+            "--branch",
+            "arena/999-me",
+        ]
     )
-    assert code == 0, "the explicit override must be the only way past a blocker"
+    assert bad == 2
+    ok = board_module.main(
+        [
+            "record-pr-merge",
+            "--repo",
+            "bot523h/nexus-ai-agent",
+            "--number",
+            "294",
+            "--merge-sha",
+            "a" * 40,
+            "--branch",
+            "arena/999-me",
+        ]
+    )
+    assert ok == 0
+    records = json.loads(board_module.BOARD.read_text(encoding="utf-8"))["completion_records"]
+    assert records[0]["evidence"]["merge_commit_sha"] == "a" * 40
+
+
+def test_next_never_proposes_a_pr_dependency_blocked_task(
+    board_module: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    board = _prereq_board("done")
+    board["claims"][1]["prerequisites"] = [
+        {
+            "kind": "pull_request",
+            "repository": "bot523h/nexus-ai-agent",
+            "number": 294,
+            "required_state": "merged_into_main",
+        }
+    ]
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    code = board_module.main(["next", "--branch", "arena/999-me"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "BLOCKED dependent" in out and "pull_request" in out
+    assert "NEXT: dependent" not in out
 
 
 def test_next_never_proposes_prerequisite_blocked_work(

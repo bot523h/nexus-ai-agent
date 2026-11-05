@@ -102,11 +102,47 @@ _DEFAULT_FA = (
 
 ACTIVE_STATUSES = frozenset({"active", "active_in_review"})
 
-#: A claim is *satisfied* (its dependents may proceed) only in a terminal
-#: ``done`` state. ``completed_merged`` is the historical spelling some records
-#: carry for the same fact. Anything else — including ``expired`` and ``deferred``
-#: — leaves the dependency unmet: an expired lease is not completion.
-SATISFIED_STATUSES = frozenset({"done", "completed_merged"})
+#: A prerequisite is *satisfied* (its dependents may proceed) only when its task
+#: has genuinely completed. ``done`` is terminal; ``completed_released`` is the
+#: "slice/parent finished its own deliverable and the zone was released" state.
+#: ``expired``/``deferred``/``queued``/``active`` all leave the dependency unmet:
+#: an expired lease is not completion, and an *epic* that released its lease while
+#: its slices are still open must keep blocking them. ``completed_merged`` is the
+#: historical spelling some records carry for the same fact as ``done``.
+SATISFIED_STATUSES = frozenset({"done", "completed_released", "completed_merged"})
+
+#: Statuses that end a lease without the task being finished (a slice/epic handed
+#: back to the queue). ``release`` sets one of these unless ``--complete`` is given.
+RELEASED_STATUSES = frozenset({"completed_released", "available"})
+
+#: Statuses from which a task is claimable. A released-but-unfinished task is
+#: claimable again (that is the point of releasing it); a ``done`` task is not.
+CLAIMABLE_STATUSES = frozenset(
+    {"queued", "available", "expired", "deferred", "completed_released"}
+    | {
+        "available_sequenced_post_33",
+        "available_sequenced_post_32",
+        "available_sequenced_post_32_33",
+    }
+)
+
+#: A typed prerequisite may be either a plain task id (a string) or a structured
+#: external dependency. Today the only structured kind is a pull request that must
+#: be provably merged into ``main``; a bare note ("waits for PR #294") is *not* a
+#: dependency and never gates anything.
+PREREQUISITE_KINDS = frozenset({"pull_request"})
+PULL_REQUEST_REQUIRED_STATES = frozenset({"merged_into_main"})
+PR_MERGE_EVIDENCE_SOURCES = frozenset({"github_api"})
+_SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+class BoardValidationError(ValueError):
+    """The board file is structurally invalid.
+
+    Raised at the load boundary (before any mutation) so a malformed board can
+    never be silently claimed against, and so the CLI can report one actionable
+    line instead of a raw traceback (PR #316 review finding 1).
+    """
 
 
 def _is_active_claim(claim: dict) -> bool:
@@ -138,13 +174,131 @@ def _parse(ts: str | None) -> datetime | None:
         return None
 
 
+def _validate_prerequisite_entry(task: str, index: int, entry: object) -> str | None:
+    """Return a human-readable problem string, or ``None`` when *entry* is valid.
+
+    A prerequisite is either a plain task id (non-empty ``str``) or a typed
+    dependency object. Anything else — an int, a nested list, a dict without a
+    recognised ``kind`` — is a schema error, because the alternative is a
+    ``TypeError`` deep inside ``claim`` (PR #316 review finding 1).
+    """
+    where = f"{task}.prerequisites[{index}]"
+    if isinstance(entry, str):
+        return None if entry.strip() else f"{where} is an empty task id"
+    if not isinstance(entry, dict):
+        got = type(entry).__name__
+        return f"{where} must be a task id string or a typed dependency object, got {got}"
+    kind = entry.get("kind")
+    if kind not in PREREQUISITE_KINDS:
+        kinds = sorted(PREREQUISITE_KINDS)
+        return f"{where}.kind {kind!r} is not a supported dependency kind ({kinds})"
+    if kind == "pull_request":
+        repo = entry.get("repository")
+        if not isinstance(repo, str) or repo.count("/") != 1 or not repo.strip():
+            return f"{where}.repository must be 'owner/name'"
+        if not isinstance(entry.get("number"), int) or entry["number"] <= 0:
+            return f"{where}.number must be a positive integer"
+        if entry.get("required_state") not in PULL_REQUEST_REQUIRED_STATES:
+            return f"{where}.required_state must be one of {sorted(PULL_REQUEST_REQUIRED_STATES)}"
+    return None
+
+
+def _iter_task_prereqs(board: dict) -> Iterator[tuple[str, str]]:
+    """Yield ``(dependent_task, prerequisite_task_id)`` for every plain task edge."""
+    for claim in board.get("claims", []):
+        task = claim.get("task")
+        if not isinstance(task, str):
+            continue
+        for entry in claim.get("prerequisites") or []:
+            if isinstance(entry, str) and entry.strip():
+                yield task, entry
+
+
+def _find_dependency_cycles(board: dict) -> list[str]:
+    """Return a readable cycle description per cyclic group, or ``[]`` when acyclic."""
+    ids = {c["task"] for c in board.get("claims", []) if isinstance(c.get("task"), str)}
+    edges: dict[str, list[str]] = {i: [] for i in ids}
+    for dependent, prereq in _iter_task_prereqs(board):
+        if prereq in ids:
+            edges[dependent].append(prereq)
+    WHITE, GRAY, BLACK = 0, 1, 2
+    colour = dict.fromkeys(ids, WHITE)
+    cycles: list[str] = []
+
+    def visit(node: str, path: list[str]) -> None:
+        colour[node] = GRAY
+        for nxt in edges.get(node, []):
+            if colour[nxt] == GRAY:
+                cycles.append(" -> ".join(path[path.index(nxt) :] + [nxt]))
+            elif colour[nxt] == WHITE:
+                visit(nxt, path + [nxt])
+        colour[node] = BLACK
+
+    for start in ids:
+        if colour[start] == WHITE:
+            visit(start, [start])
+    return cycles
+
+
+def validate_board_schema(board: object) -> None:
+    """Reject a structurally invalid board before any read or mutation.
+
+    Covers the ``prerequisites`` contract specifically (a dependency is either a
+    task-id string or a typed object), plus the graph-level facts that make the
+    prerequisite gate meaningful: no ghost task ids and no dependency cycles. A
+    bad board raises :class:`BoardValidationError` with one actionable message.
+    """
+    if not isinstance(board, dict):
+        raise BoardValidationError("board root must be a JSON object")
+    claims = board.get("claims")
+    if not isinstance(claims, list):
+        raise BoardValidationError("board.claims must be a list")
+    ids: set[str] = set()
+    for pos, claim in enumerate(claims):
+        if not isinstance(claim, dict):
+            raise BoardValidationError(f"claims[{pos}] must be an object")
+        task = claim.get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise BoardValidationError(f"claims[{pos}] has no valid 'task' id")
+        ids.add(task)
+    for claim in claims:
+        prereqs = claim.get("prerequisites")
+        if prereqs is None:
+            continue
+        if not isinstance(prereqs, list):
+            raise BoardValidationError(
+                f"{claim['task']}.prerequisites must be a list, got {type(prereqs).__name__}"
+            )
+        for index, entry in enumerate(prereqs):
+            problem = _validate_prerequisite_entry(claim["task"], index, entry)
+            if problem:
+                raise BoardValidationError(problem)
+            if isinstance(entry, str) and entry not in ids:
+                raise BoardValidationError(
+                    f"{claim['task']} depends on unregistered task {entry!r} "
+                    "(a dependency on work nobody registered is unverifiable)"
+                )
+    cycles = _find_dependency_cycles(board)
+    if cycles:
+        raise BoardValidationError("prerequisite cycle(s) detected: " + "; ".join(sorted(cycles)))
+
+
 def load_board() -> dict:
     if not BOARD.exists():
         sys.exit(f"board not found: {BOARD}")
-    return json.loads(BOARD.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(BOARD.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BoardValidationError(f"board is not valid JSON: {exc}") from exc
+    validate_board_schema(data)
+    return data
 
 
 def save_board(board: dict) -> None:
+    # Validate on the way out too: a bug that wrote a malformed prerequisite
+    # (or a ghost/cyclic edge) would otherwise persist an unloadable board and
+    # break every other agent's next command.
+    validate_board_schema(board)
     board["updated_at"] = _iso(_now())
     BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -218,30 +372,86 @@ def _find(board: dict, task: str) -> dict | None:
     return next((c for c in board.get("claims", []) if c["task"] == task), None)
 
 
+def _completion_records(board: dict) -> list[dict]:
+    records = board.get("completion_records")
+    return records if isinstance(records, list) else []
+
+
+def _pr_satisfied(board: dict, entry: dict) -> bool:
+    """True when a matching, well-evidenced PR-merge completion record exists.
+
+    A typed ``pull_request`` prerequisite is satisfied only by a completion record
+    whose repository, number and required state match **and** whose evidence names
+    a 40-hex merge SHA attributed to the trusted ``github_api`` source. A record
+    missing that evidence is *unverifiable* and therefore does not satisfy the
+    dependency — the gate fails closed (mission §3.3).
+    """
+    repo = entry.get("repository")
+    number = entry.get("number")
+    required = entry.get("required_state")
+    for record in _completion_records(board):
+        if not isinstance(record, dict):
+            continue
+        if record.get("kind") != "pull_request":
+            continue
+        if record.get("repository") != repo or record.get("number") != number:
+            continue
+        if record.get("state") != required:
+            continue
+        evidence = record.get("evidence")
+        if not isinstance(evidence, dict):
+            continue
+        if evidence.get("source") not in PR_MERGE_EVIDENCE_SOURCES:
+            continue
+        if not isinstance(evidence.get("merge_commit_sha"), str):
+            continue
+        if _SHA40.match(evidence["merge_commit_sha"]):
+            return True
+    return False
+
+
+def _describe_prereq(entry: object) -> str:
+    if isinstance(entry, dict) and entry.get("kind") == "pull_request":
+        return (
+            f"pull_request {entry.get('repository')}#{entry.get('number')} "
+            f"({entry.get('required_state')})"
+        )
+    return str(entry)
+
+
+def _prereq_is_satisfied(board: dict, entry: object) -> bool:
+    if isinstance(entry, str):
+        other = _find(board, entry)
+        return other is not None and other.get("status") in SATISFIED_STATUSES
+    if isinstance(entry, dict) and entry.get("kind") == "pull_request":
+        return _pr_satisfied(board, entry)
+    return False
+
+
 def _unmet_prerequisites(board: dict, claim: dict) -> list[str]:
-    """Return the prerequisites of *claim* that are not yet satisfied.
+    """Return readable descriptions of the prerequisites of *claim* still unmet.
 
-    A prerequisite is *satisfied* only when its task exists and its status is in
-    :data:`SATISFIED_STATUSES`. Three cases are all unmet, and none of them is a
-    pass:
+    A prerequisite is satisfied only when it genuinely completed:
 
-    * the prerequisite names a task that has no claim record — a dependency on
-      work nobody registered is unverifiable, not free to skip;
-    * the prerequisite task exists but is still queued/active/deferred/expired
-      (``expired`` is explicitly *not* completion);
-    * a historical ``completed_merged`` record counts as satisfied (see
-      :data:`SATISFIED_STATUSES`).
+    * a plain task id — its claim exists and its status is in
+      :data:`SATISFIED_STATUSES`. A task that is queued/active/deferred/expired
+      (``expired`` is explicitly *not* completion), or that has no record at all
+      (a dependency on work nobody registered is unverifiable, not free to skip),
+      is unmet;
+    * a typed ``pull_request`` dependency — a matching completion record with a
+      40-hex merge SHA from the trusted ``github_api`` source exists
+      (see :func:`_pr_satisfied`); a note, a flag, or a record without evidence
+      never satisfies it.
 
-    This turns a ``prerequisites`` list from a text note into a hard precondition
+    This is what turns ``prerequisites`` from a text note into a hard precondition
     for taking the lease, so ``claim``/``next`` cannot hand out blocked work.
     """
     unmet: list[str] = []
-    for prereq in claim.get("prerequisites") or []:
-        if not prereq:
+    for entry in claim.get("prerequisites") or []:
+        if isinstance(entry, str) and not entry:
             continue
-        other = _find(board, prereq)
-        if other is None or other.get("status") not in SATISFIED_STATUSES:
-            unmet.append(prereq)
+        if not _prereq_is_satisfied(board, entry):
+            unmet.append(_describe_prereq(entry))
     return unmet
 
 
@@ -462,22 +672,24 @@ def _claim_locked(args: argparse.Namespace) -> int:
             return 2
     # Machine-enforced prerequisites (task-7/10): a lease on blocked work is
     # never granted. This is a hard precondition, not a note — an unmet (or
-    # unregistered) prerequisite refuses the claim, so a dependent slice cannot
-    # start before its dependency is genuinely ``done``. The bypass flag exists
-    # for the dependency owner's own maintenance, never for skipping a real
-    # blocker silently.
-    if not getattr(args, "ignore_prerequisites", False):
-        unmet = _unmet_prerequisites(board, claim)
-        if unmet:
-            print(
-                f"REFUSED: {args.task} is blocked by unmet prerequisite(s): "
-                f"{', '.join(unmet)} — finish them (status 'done') first."
-            )
-            print(
-                "A prerequisite is satisfied only when its task exists and is 'done'; "
-                "an expired/queued/active dependency is not completion."
-            )
-            return 2
+    # unregistered, or PR-merge-unproven) prerequisite refuses the claim, so a
+    # dependent slice cannot start before its dependency is genuinely done.
+    # There is intentionally NO bypass flag: the board CLI has no verifiable
+    # principal, so "owner-only" could not be enforced, and an unenforceable
+    # escape hatch is worse than none (PR #316 review finding 3). To unblock,
+    # finish the dependency or record the PR-merge evidence.
+    unmet = _unmet_prerequisites(board, claim)
+    if unmet:
+        print(
+            f"REFUSED: {args.task} is blocked by unmet prerequisite(s): "
+            f"{', '.join(unmet)} — finish them (status 'done') first."
+        )
+        print(
+            "A prerequisite is satisfied only when its task exists and is 'done' "
+            "(or a PR dependency has a recorded merge with a valid SHA); an "
+            "expired/queued/active dependency is not completion."
+        )
+        return 2
     # gc stamps ``release_reason`` on the record it frees. A takeover reuses that
     # record, and an ACTIVE lease must not still claim to have been released
     # (PR #211 review). Retire the reason into history instead of dropping it.
@@ -535,16 +747,81 @@ def _release_locked(args: argparse.Namespace) -> int:
     if refusal:
         print(refusal)
         return 2
-    claim.update(status="done", agent_branch="", claimed_at=None, gates_owner=False)
+    # Releasing a lease and *completing* a task are different facts. The default
+    # release frees the zone but records the task as ``completed_released`` — its
+    # own deliverable is finished, yet any still-open slices/epic children keep it
+    # from being terminal. ``--complete`` is the explicit "this task is genuinely
+    # done" transition. Conflating them is how a parent epic got marked ``done``
+    # while its slices were still queued (mission §4).
+    complete = bool(getattr(args, "complete", False))
+    claim.update(
+        status="done" if complete else "completed_released",
+        agent_branch="",
+        claimed_at=None,
+        gates_owner=False,
+    )
     # Releasing transfers the zone: advance the epoch so a stale holder cannot
     # act as if it still owns the lease.
     claim["generation"] = _generation(claim) + 1
     save_board(board)
-    print(
-        f"RELEASED {args.task} (generation {claim['generation']}). "
-        "Zone free — next agent can claim."
-    )
+    if complete:
+        print(
+            f"COMPLETED {args.task} (generation {claim['generation']}, status 'done'). "
+            "Zone free — dependents may proceed."
+        )
+    else:
+        print(
+            f"RELEASED {args.task} (generation {claim['generation']}, status "
+            "'completed_released'). Zone free — dependents may proceed; the task "
+            "itself is NOT marked done."
+        )
     return 0
+
+
+def cmd_record_pr_merge(args: argparse.Namespace) -> int:
+    """Record an evidenced PR-merge completion so a typed dependency can be met.
+
+    Owner-gated in practice by the pull request that carries the board change: the
+    evidence is a real 40-hex merge SHA, and a claim/next gate refuses a typed
+    ``pull_request`` prerequisite until a matching record exists (mission §3.3).
+    """
+    with board_lock():
+        board = load_board()
+        sha = (args.merge_sha or "").strip().lower()
+        if not _SHA40.match(sha):
+            print(f"refusing: --merge-sha must be a 40-hex commit SHA, got {args.merge_sha!r}")
+            return 2
+        records = board.setdefault("completion_records", [])
+        records[:] = [
+            r
+            for r in records
+            if not (
+                isinstance(r, dict)
+                and r.get("kind") == "pull_request"
+                and r.get("repository") == args.repo
+                and r.get("number") == args.number
+            )
+        ]
+        records.append(
+            {
+                "kind": "pull_request",
+                "repository": args.repo,
+                "number": args.number,
+                "state": args.required_state,
+                "evidence": {
+                    "source": "github_api",
+                    "merge_commit_sha": sha,
+                    "recorded_by": args.branch,
+                    "recorded_at": _iso(_now()),
+                },
+            }
+        )
+        save_board(board)
+        print(
+            f"RECORDED pull_request {args.repo}#{args.number} {args.required_state} "
+            f"@ {sha} (source github_api). Dependent typed prerequisites are now met."
+        )
+        return 0
 
 
 def cmd_defer(args: argparse.Namespace) -> int:
@@ -585,7 +862,7 @@ def cmd_next(args: argparse.Namespace) -> int:
         gc_expired(board)
         save_board(board)
     for claim in board.get("claims", []):
-        if claim["status"] in ("queued", "expired", "deferred"):
+        if claim["status"] in CLAIMABLE_STATUSES:
             blockers = []
             for entry in board.get("deferred_log", []):
                 if entry["task"] != claim["task"]:
@@ -1313,7 +1590,7 @@ def cmd_praudit(args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="NEXUS multi-agent claim board")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -1324,13 +1601,6 @@ def main() -> int:
     p.add_argument("--branch", required=True)
     p.add_argument("--ttl", type=int, default=24)
     p.add_argument("--gates", action="store_true", help="this agent owns CI gates while active")
-    p.add_argument(
-        "--ignore-prerequisites",
-        dest="ignore_prerequisites",
-        action="store_true",
-        help="take a lease even when a prerequisite is unmet (owner maintenance only; "
-        "never for silently skipping a real blocker)",
-    )
     p.add_argument(
         "--expected-generation",
         dest="expected_generation",
@@ -1344,6 +1614,12 @@ def main() -> int:
     p.add_argument("task")
     p.add_argument("--branch", required=True)
     p.add_argument(
+        "--complete",
+        action="store_true",
+        help="mark the task terminal 'done' (default: free the zone as "
+        "'completed_released' — a non-terminal release that still blocks dependents)",
+    )
+    p.add_argument(
         "--expected-generation",
         dest="expected_generation",
         type=int,
@@ -1351,6 +1627,24 @@ def main() -> int:
         help="fencing guard: refuse unless the lease's generation matches (task-219)",
     )
     p.set_defaults(func=cmd_release)
+
+    p = sub.add_parser("record-pr-merge")
+    p.add_argument("--repo", required=True, help="pull request repository, owner/name")
+    p.add_argument("--number", type=int, required=True, help="pull request number")
+    p.add_argument(
+        "--merge-sha",
+        dest="merge_sha",
+        required=True,
+        help="the 40-hex merge commit SHA on main (the completion evidence)",
+    )
+    p.add_argument(
+        "--required-state",
+        dest="required_state",
+        default="merged_into_main",
+        choices=sorted(PULL_REQUEST_REQUIRED_STATES),
+    )
+    p.add_argument("--branch", required=True, help="the branch recording this evidence")
+    p.set_defaults(func=cmd_record_pr_merge)
 
     p = sub.add_parser("defer")
     p.add_argument("task")
@@ -1405,9 +1699,17 @@ def main() -> int:
     p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_praudit)
 
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point. ``argv`` is injectable so tests exercise the real parser path."""
+    args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
+    except BoardValidationError as exc:
+        print(f"INVALID BOARD: {exc}")
+        return 2
     except BoardLockedError as exc:
         print(f"UNVERIFIABLE: {exc}")
         return 2
