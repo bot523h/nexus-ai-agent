@@ -8457,7 +8457,7 @@
       "title_fa": "وضعیت پایدار پروژهٔ استودیو، بازبینی‌ها و زنجیرهٔ شواهد دارایی",
       "zone": "durable-project-state-lifecycle",
       "priority": "P0",
-      "status": "active_in_review",
+      "status": "completed_released",
       "scope": "Lock the canonical Project/Revision source-of-truth contract, then implement one real, restartable Project->Revision lifecycle using the existing single storage schema, the Studio CommandBus, the Asset Library and Provenance/Passport. A revision is an immutable, content-addressed (CAS) snapshot of the CommandBus Project state; the head row is the single mutable pointer with optimistic concurrency. No parallel store, queue, authority, renderer, or provenance ledger.",
       "scope_fa": "قرارداد منبع‌حقیقت Project/Revision را قفل کنید؛ سپس یک مسیر واقعی و قابل‌بازیابی Project→Revision بسازید که از همان اسکیمای واحد، CommandBus، Asset Library و Provenance/Passport استفاده می‌کند. هر Revision یک اسنپ‌شات تغییرناپذیر و محتوا-آدرس‌دار (CAS) از حالت Project است؛ رکورد head تنها اشاره‌گر تغییرپذیر با کنترل هم‌زمانی خوش‌بینانه است. هیچ ذخیره‌گاه/صف/مرجع/Renderer/دفتر موازی ساخته نمی‌شود.",
       "prerequisites": [],
@@ -8499,9 +8499,9 @@
         "OPERATION_TRUTH.json"
       ],
       "owner_hint": "Supersedes the stale PR #290 registration on an independent branch.",
-      "agent_branch": "openhands/task-282-durable-project-state-20261105",
-      "claimed_at": "2026-11-05T10:30:34Z",
-      "generation": 5,
+      "agent_branch": "",
+      "claimed_at": null,
+      "generation": 6,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
@@ -8509,9 +8509,11 @@
         "The handoff pins the ADMITTED revision and never re-reads the live head; there is no fallback to 'latest'. A canonical admission with no admitted revision is a typed revision_unavailable refusal before any enqueue. Proven by a deterministic race test (head moves to R2 before the handoff; the job still pins R1).",
         "Evidence (head 595f1abf): scripts/durable_project_state_mutations.py 15/15 mutants killed (baseline GREEN, restored GREEN); new deterministic race + refusal tests in tests/integration/test_durable_project_revision_pinning.py and tests/unit/test_nagar_cognition_queue_handoff.py; ruff/format/mypy clean.",
         "Foundation (PR #314, base cf427874): revisions + CAS head + atomic commit + genesis arbiter; Alembic head re-pinned d4e1c0a79b21 -> 20261104dpstate; PostgreSQL LangGraph golden re-derived on real pgvector:pg16.",
-        "REVIEW STATUS: only bot reviews exist (Sourcery threads resolved). No human reviewer is available -> PENDING_HUMAN_REVIEW. Bot threads resolved is NOT independent human review."
+        "REVIEW STATUS: only bot reviews exist (Sourcery threads resolved). No human reviewer is available -> PENDING_HUMAN_REVIEW. Bot threads resolved is NOT independent human review.",
+        "Slice 1 MERGED as PR #315 into main @ aadaf53157670b64af6978fcf41b592e108ac9ae (recorded as a completion_record below)."
       ],
-      "note": "SLICE 1 DONE; SLICES 2 AND 3 ARE NON-TERMINAL (this claim stays active_in_review, not done). PR #315 (base ca4c2f6c) delivers the F1 read-time integrity check, the commit preflight (Finding 2), and Slice 1 revision pinning through the canonical handoff -> existing JobQueue payload -> worker: the worker loads the EXACT revision it was admitted against (never a newer head) and refuses a missing/tampered/re-homed/hash-mismatched pin with a typed revision_unavailable BEFORE any engine. The composition root captures the RevisionRecord commit() returned and passes it to the handoff as admitted_revision; the handoff re-validates that SPECIFIC revision via load_revision (never load_head). No parallel store/queue/authority. REMAINING (open, non-terminal): Slice 2 (artifact -> AssetVersion bound to the revision) is now only partially blocked -- the Asset Library V1 package (src/nexus_ai_agent/creative/assets/) IS on main via PR #210 (da78666c, which supersedes the stale PR #205/#209), so the blocker is the binding work itself, not the library landing; PR #205 remains open/dirty and is superseded. Slice 3 (Revision<->Job<->Attempt<->Verification<->CausalJournal<->Passport link) still waits on the durable creative-graph package in PR #294 (open, not merged). The worker still reports project_state_storage=\"attempt_scoped_in_memory\" for unpinned jobs; the pin is reachable only via the free-text handoff -> timeline.trim -> render branch. A closure passport for the durable path is not yet wired (Slice 3)."
+      "note": "SLICE 1 DONE; SLICES 2 AND 3 ARE NON-TERMINAL (this claim stays active_in_review, not done). PR #315 (base ca4c2f6c) delivers the F1 read-time integrity check, the commit preflight (Finding 2), and Slice 1 revision pinning through the canonical handoff -> existing JobQueue payload -> worker: the worker loads the EXACT revision it was admitted against (never a newer head) and refuses a missing/tampered/re-homed/hash-mismatched pin with a typed revision_unavailable BEFORE any engine. The composition root captures the RevisionRecord commit() returned and passes it to the handoff as admitted_revision; the handoff re-validates that SPECIFIC revision via load_revision (never load_head). No parallel store/queue/authority. REMAINING (open, non-terminal): Slice 2 (artifact -> AssetVersion bound to the revision) is now only partially blocked -- the Asset Library V1 package (src/nexus_ai_agent/creative/assets/) IS on main via PR #210 (da78666c, which supersedes the stale PR #205/#209), so the blocker is the binding work itself, not the library landing; PR #205 remains open/dirty and is superseded. Slice 3 (Revision<->Job<->Attempt<->Verification<->CausalJournal<->Passport link) still waits on the durable creative-graph package in PR #294 (open, not merged). The worker still reports project_state_storage=\"attempt_scoped_in_memory\" for unpinned jobs; the pin is reachable only via the free-text handoff -> timeline.trim -> render branch. A closure passport for the durable path is not yet wired (Slice 3).",
+      "release_reason": "released 2026-11-05: Slice 1 delivered via PR #315 (merged into main aadaf53157670b64af6978fcf41b592e108ac9ae); slices 2 and 3 remain open, so the epic is completed_released (non-terminal), never done."
     },
     {
       "task": "task-282-slice-2-artifact-assetversion-binding",
@@ -8556,7 +8558,13 @@
       "status": "queued",
       "scope": "Link Revision<->Job<->Attempt<->Verification<->CausalJournal<->Passport and wire a closure passport for the durable path, reusing the provenance/passport owners. No parallel ledger.",
       "prerequisites": [
-        "task-282-durable-project-state-lifecycle"
+        "task-282-slice-2-artifact-assetversion-binding",
+        {
+          "kind": "pull_request",
+          "repository": "bot523h/nexus-ai-agent",
+          "number": 294,
+          "required_state": "merged_into_main"
+        }
       ],
       "acceptance_criteria": [
         "The passport for a pinned job references the exact revision and the verified AssetVersion.",
@@ -9422,5 +9430,19 @@
     }
   ],
   "identity_map_note": "INCIDENT 2026-09-21: three sessions self-declared عامل E (branches 3a0/3aa/460) because AGENTS.md only defined A–D. Canonical until AGENTS.md is amended (blocked: PR#33 edits it): A=01a0c316, B=01a0c34d, C=01a0c36f, D=01a0c3ca, E_pr34=01a0c3a0 (merged), E_pr33=01a0c3aa (in review), F=01a0c460 (active). RULE PROPOSAL: newcomers MUST pick the first free letter after checking `git ls-remote origin \"arena/*\"` + open PRs + this map; never reuse A–F blindly. RESOLVED by owner-directed PR#37 (merged c25f7fe): BRANCH NAME IS THE CANONICAL IDENTITY (AGENTS.md identity rule); letters are convenience labels. 460=عامل E, 484=F-hygiene, 3aa=سشن PR#33 (unlabeled). This session (arena/01a0c460-nexus-ai-agent) re-labels F→E per that rule; history (commits/PR#38 title) may still say agent-f — branch wins.",
-  "merge_resolution_note": "2026-10-27: arena/b561a2be-nexus-ai-agent merged origin/main (64db67f, post-PR#195) into its task-266 branch. Only .agents/board.json, scripts/board_referee_mutations.py and tests/unit/test_agent_board.py conflicted. Resolution is a UNION: main's board is the base (newest state wins for shared records), then the three task-266 records (task-266-gate-bootstrap-integrity, task-267-truth041-live-lease-alignment, task-268-board-referee-mutation-campaign-in-ci) are re-applied on top. No main claim, note or deferral was dropped."
+  "merge_resolution_note": "2026-10-27: arena/b561a2be-nexus-ai-agent merged origin/main (64db67f, post-PR#195) into its task-266 branch. Only .agents/board.json, scripts/board_referee_mutations.py and tests/unit/test_agent_board.py conflicted. Resolution is a UNION: main's board is the base (newest state wins for shared records), then the three task-266 records (task-266-gate-bootstrap-integrity, task-267-truth041-live-lease-alignment, task-268-board-referee-mutation-campaign-in-ci) are re-applied on top. No main claim, note or deferral was dropped.",
+  "completion_records": [
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 315,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "aadaf53157670b64af6978fcf41b592e108ac9ae",
+        "recorded_by": "openhands/omni-recovery-integration-20261105",
+        "recorded_at": "2026-11-05T00:00:00Z"
+      }
+    }
+  ]
 }

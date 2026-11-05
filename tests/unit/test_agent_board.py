@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -271,10 +272,48 @@ def test_prerequisites_reference_existing_tasks(board: dict) -> None:
         prereq
         for claim in board["claims"]
         for prereq in (claim.get("prerequisites") or [])
-        if prereq and prereq != "PR#33"
+        if isinstance(prereq, str) and prereq and prereq != "PR#33"
     }
     missing = sorted(referenced - ids)
     assert not missing, f"prerequisites reference unknown tasks: {missing}"
+
+
+def test_typed_prerequisites_are_well_formed(board: dict) -> None:
+    """A typed dependency must be a known kind with the required evidence fields."""
+    for claim in board["claims"]:
+        for prereq in claim.get("prerequisites") or []:
+            if isinstance(prereq, str):
+                continue
+            assert isinstance(prereq, dict), f"{claim['task']} has a non-str, non-dict prereq"
+            assert prereq.get("kind") == "pull_request", f"{claim['task']} unknown prereq kind"
+            assert prereq["repository"].count("/") == 1
+            assert isinstance(prereq["number"], int) and prereq["number"] > 0
+            assert prereq["required_state"] == "merged_into_main"
+
+
+def test_task_282_epic_is_not_done_while_slices_are_open(board: dict) -> None:
+    """The epic/slice model: a released epic must not be terminal 'done'.
+
+    Task-282 is an epic. Its Slice 1 is merged (PR #315) and recorded as a
+    completion record, but Slices 2 and 3 are still queued, so the epic must be
+    ``completed_released`` (non-terminal) — never ``done`` — and the slices must
+    be gated on it (and Slice 3 on Slice 2 plus the external PR #294).
+    """
+    by = {c["task"]: c for c in board["claims"]}
+    epic = by["task-282-durable-project-state-lifecycle"]
+    assert epic["status"] == "completed_released", "the epic must not be marked done"
+    s2 = by["task-282-slice-2-artifact-assetversion-binding"]
+    s3 = by["task-282-slice-3-provenance-passport-link"]
+    assert "task-282-durable-project-state-lifecycle" in s2["prerequisites"]
+    assert "task-282-slice-2-artifact-assetversion-binding" in s3["prerequisites"]
+    pr294 = [p for p in s3["prerequisites"] if isinstance(p, dict) and p.get("number") == 294]
+    assert pr294, "Slice 3 must carry the machine-enforced PR #294 dependency"
+    rec = next(
+        r
+        for r in board.get("completion_records", [])
+        if isinstance(r, dict) and r.get("number") == 315
+    )
+    assert re.match(r"^[0-9a-f]{40}$", rec["evidence"]["merge_commit_sha"])
 
 
 def test_open_work_declares_acceptance_criteria(board: dict) -> None:
