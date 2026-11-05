@@ -968,3 +968,18 @@ Only red check = the #234 flake (task-264, issue #237).
   ALL 15 locales (`tests/unit/test_creative_notify.py`); adding a suite that imports a
   creative op drifts `OPERATION_TRUTH.json` → `python -m nexus_ai_agent.nagar --docs`;
   `model_copy` bypasses the `state_hash` validator → recompute `compute_state_hash`.
+
+## Dependency-vulnerability gate (durable, 2026-11-06)
+- `pip-audit` is now an ENFORCED CI gate (PR #318): `scripts/dependency_audit.py` +
+  `.github/dependency-audit.json` (reviewed allow-list) + a `dependency-audit` job whose
+  final step proves the gate FAILS CLOSED on an empty allow-list. Run it: `make audit`.
+- The gate is **self-expiring**: `transitive-cap` re-derives the cap from the INSTALLED env
+  (`importlib.metadata`) and REDs if `fixed` becomes resolvable; `no-fix-released` REDs when a
+  fix ships. An entry must name its `package` (advisory ids are reused across packages →
+  package `MISMATCH` is a failure, not a silent pass).
+- **filelock cannot be bumped**: `litellm` requires `filelock<4.0,>=3.16.1` on every release
+  (verified via the PyPI JSON API) → 4.2.1 is unresolvable. chromadb 1.5.9 / diskcache 5.6.3
+  are latest + still affected. Total: 18 advisories, all accepted/re-derived, 0 blocking.
+- `ci_install.sh` is the canonical install (CPU-only torch + PyPI-only remainder); the P1
+  disk-exhaustion fix (run 41532014621) is live in `queue-ownership-mutations.yml` as a
+  minimal `--no-deps` install. Never use raw `pip install -e ".[dev]"` in a workflow.
