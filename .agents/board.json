@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-04T19:22:49Z",
+  "updated_at": "2026-11-05T03:04:58Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1211,6 +1211,24 @@
         "tests/unit/test_checkpoint_dependency_pin.py",
         "tests/unit/test_sqlite_checkpointer_empty_checkpoint_id.py",
         "docs/architecture/DATA_LIFECYCLE.md"
+      ]
+    },
+    {
+      "id": "durable-project-state-lifecycle",
+      "description": "Durable, restartable Studio Project revisions with CAS and verified lineage. Reuses the single storage schema, CommandBus, Asset Library and Provenance/Passport; no parallel store, queue, or ledger.",
+      "paths": [
+        "src/nexus_ai_agent/creative/project_state/",
+        "src/nexus_ai_agent/creative/studio/persistence.py",
+        "src/nexus_ai_agent/storage/models.py",
+        "migrations/versions/20261104_durable_project_state.py",
+        "tests/unit/test_durable_project_state.py",
+        "tests/integration/test_durable_project_restart.py",
+        "tests/integration/test_durable_project_concurrency.py",
+        "tests/architecture/test_durable_project_state_boundary.py",
+        "docs/architecture/DURABLE_PROJECT_STATE.md",
+        "docs/README.md",
+        "scripts/durable_project_state_mutations.py",
+        ".github/workflows/ci.yml"
       ]
     }
   ],
@@ -8425,6 +8443,64 @@
       "delivered": [],
       "note": "",
       "generation": 1
+    },
+    {
+      "task": "task-282-durable-project-state-lifecycle",
+      "title": "Durable Studio Project state, revisions, and verified artifact lineage",
+      "title_fa": "وضعیت پایدار پروژهٔ استودیو، بازبینی‌ها و زنجیرهٔ شواهد دارایی",
+      "zone": "durable-project-state-lifecycle",
+      "priority": "P0",
+      "status": "deferred",
+      "scope": "Lock the canonical Project/Revision source-of-truth contract, then implement one real, restartable Project->Revision lifecycle using the existing single storage schema, the Studio CommandBus, the Asset Library and Provenance/Passport. A revision is an immutable, content-addressed (CAS) snapshot of the CommandBus Project state; the head row is the single mutable pointer with optimistic concurrency. No parallel store, queue, authority, renderer, or provenance ledger.",
+      "scope_fa": "قرارداد منبع‌حقیقت Project/Revision را قفل کنید؛ سپس یک مسیر واقعی و قابل‌بازیابی Project→Revision بسازید که از همان اسکیمای واحد، CommandBus، Asset Library و Provenance/Passport استفاده می‌کند. هر Revision یک اسنپ‌شات تغییرناپذیر و محتوا-آدرس‌دار (CAS) از حالت Project است؛ رکورد head تنها اشاره‌گر تغییرپذیر با کنترل هم‌زمانی خوش‌بینانه است. هیچ ذخیره‌گاه/صف/مرجع/Renderer/دفتر موازی ساخته نمی‌شود.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "A revision is immutable and content-addressed: revision_id and state_hash are derived from the canonical Project state, never caller-supplied; committing an identical state twice is idempotent and never rewrites history.",
+        "The head row is the single mutable pointer per project; commit() is a compare-and-swap (expected parent revision_id/hash) that fails closed with a typed conflict when a concurrent writer wins, leaving state untouched.",
+        "A fresh process/composition rebuilds the same Project revision and state_hash from canonical persistent storage; in-memory-only state and disconnected repositories do not satisfy this.",
+        "Fault-injection at the commit boundary proves crash recovery: no lost committed revision and no half-written head; replay is idempotent.",
+        "Cross-project access is refused with a typed error; a project's revisions are never readable or writable through another project.",
+        "A job/attempt can never publish an artifact against a revision other than the one it was leased for; an old revision cannot overwrite a newer accepted one.",
+        "No parallel queue, artifact authority, verification system, or provenance/passport store is introduced; existing owners remain authoritative.",
+        "Run make lint, make types, and make test on the exact final SHA; obtain the official board check at exit 0 and independent review of CAS, isolation, restart and mutation evidence."
+      ],
+      "evidence_required": [
+        "Canonical Project/Revision contract matrix (authoritative owner, durable record, identity/hash rule, transaction boundary, idempotency key, recovery behavior).",
+        "Focused unit + integration + architecture tests for immutable revisions, CAS conflict, idempotency, cross-project isolation and no parallel authority.",
+        "Real-database restart proof: a brand-new store/session over the same SQLite file returns the identical revision_id and state_hash.",
+        "Mutation results for the CAS predicate, the isolation predicate and the persistence path (a removed guard turns the matching test RED).",
+        "Exact agent_board.py check command, exit code and consulted-source count immediately before push; exact make lint/types/test commands, exit codes and final SHA; CI run/job conclusions for that SHA."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/project_state/",
+        "src/nexus_ai_agent/creative/studio/persistence.py",
+        "src/nexus_ai_agent/storage/models.py",
+        "migrations/versions/20261104_durable_project_state.py",
+        "tests/unit/test_durable_project_state.py",
+        "tests/integration/test_durable_project_restart.py",
+        "tests/integration/test_durable_project_concurrency.py",
+        "tests/architecture/test_durable_project_state_boundary.py",
+        "docs/architecture/DURABLE_PROJECT_STATE.md",
+        "docs/README.md",
+        "scripts/durable_project_state_mutations.py",
+        ".github/workflows/ci.yml"
+      ],
+      "owner_hint": "Supersedes the stale PR #290 registration on an independent branch.",
+      "agent_branch": "arena/omni-durable-project-state-20261104",
+      "claimed_at": null,
+      "generation": 2,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [
+        "PR #314 head 55dd1f7584a85e18c415d9aa43dd2320580353f8 (base main cf427874e5c6487243ba1371b1c47dd920fc73a3), 10 commits, 26 files; all 25 check runs green incl. the 3 required (lint, test, merge-base-guard).",
+        "Foundation delivered: immutable content-addressed revisions (revision_id = sha256 of canonical state bytes), single CAS head pointer, atomic commit (revision insert + head advance in one transaction), cross-project read guard, genesis primary-key arbiter.",
+        "Evidence (head 55dd1f75): scripts/durable_project_state_mutations.py 5/5 mutants killed (baseline GREEN, restored GREEN); 24 new tests (13 unit + 1 process-restart integration + 3 concurrency + 7 architecture boundary); CI test job 6293 passed / 38 skipped / 0 failed.",
+        "Alembic head re-pinned d4e1c0a79b21 -> 20261104dpstate; PostgreSQL LangGraph golden re-derived on a real pgvector:pg16 (only migration_head changed).",
+        "FORENSIC CORRECTION (2026-11-04): the restart test is a REAL process restart (child exits normally after commit; parent rebuilds with a new store) - NOT a SIGKILL. The earlier 'real SIGKILL' wording here was wrong and is corrected. A true SIGKILL-after-commit test is proposed, not implemented.",
+        "FORENSIC FINDING (P2, storage-layer tamper resistance): the read path does not re-validate state_json against revision_id/state_hash, so a DIRECT database write to projectrevision.state_json is silently accepted (reproduced). Immutability holds at the API/insert layer (content-addressed PK, no UPDATE path); it is NOT enforced against out-of-band DB edits. Read-time re-derivation is recommended before the worker consumes revisions.",
+        "REVIEW STATUS: only bot reviews exist (Sourcery x2, 3/3 threads resolved; CodeRabbit skipped). No human reviewer is available -> PENDING_HUMAN_REVIEW. Bot threads resolved is NOT independent human review."
+      ],
+      "note": "DEFERRED, NOT DONE. PR #314 delivers the durable revision persistence FOUNDATION only. Live gap (grounded in code): the creative worker still reports project_state_storage=\"attempt_scoped_in_memory\" (creative/render_jobs.py ~L693, jobs/creative_passport.py ~L717) and nothing outside creative/project_state/ imports the durable store. ARENA-C contract (fresh branch, AFTER #314 merges + path-ownership review exit 0; expected-generation=2 -> generation 3): (1) bind the canonical handoff (nagar/creative/handoff.py: CanonicalHandoffFacts/CreativeRenderPayload) to a durable revision_id+state_hash; (2) persist project_id, revision_id, revision_hash in the EXISTING JobQueuePort payload (application/ports/job_queue.py + adapters/in_process_job_queue.py); (3) worker loads the EXACT revision it was leased for, never a newer head; (4) keep the same CommandBus transaction + attempt lifecycle (jobs/lifecycle.py); (5) fence stale attempts so an old revision cannot overwrite a newer accepted one; (6) publish the artifact into the existing Asset Library (creative/assets/, PR #205 zone) with an AssetVersion bound to the revision; (7) re-verify the SAME bytes/AssetVersion; (8) connect Revision<->Job<->Attempt<->Verification<->CausalJournal<->Passport (provenance/, PR #294 zone). REQUIRED BEFORE (3): add a read-time integrity check (recompute content_address(canonical_state_bytes(project)) == revision_id; fail closed) because the read path currently trusts state_json (P2 tamper gap, reproduced). HARD RULE: no parallel queue, project store, passport, verifier or ledger. Path overlaps to coordinate (unclaimed PRs, no live lease today): #205 creative/assets/+storage, #294 provenance/, #129/#149/#69 studio/bus+models, #150 jobs/lifecycle+cli, #33/#60/#63/#247 cli.py. Recommended split: Slice 1 (intent->job pinning) owns handoff+job_queue+render_jobs; Slice 2 (artifact->AssetVersion) waits on #205; Slice 3 (passport/causal link) waits on #294. cli.py out of scope."
     }
   ],
   "deferred_log": [
@@ -8512,6 +8588,19 @@
       "reason_fa": "ورود helper و factory رسمی رجیستری ناخواسته ماژول CommandBus را بارگذاری می‌کند؛ رفع آن خارج از مسیرهای مجاز است و به اصلاح معماری مستقل یا تصمیم صریح مالک نیاز دارد.",
       "reason_en": "Blocked by incompatible import boundary: importing canonical cognition offered_operations or creative.packs.runtime build_runtime_registry eagerly imports creative.studio.bus via package initializers. Strict no-CommandBus-import requirement cannot be met without a protected architectural change or an explicit owner-approved contract adjustment. No implementation was changed.",
       "resume_when": "Owner resolves protected import boundary or explicitly revises the no-import requirement without relaxing no-dispatch and no-authority guarantees."
+    },
+    {
+      "task": "task-282-durable-project-state-lifecycle",
+      "reason": "Registered (P0). Supersedes stale PR #290; will be claimed on arena/omni-durable-project-state-20261104 after the official board check exits 0.",
+      "at": "2026-11-04T20:14:09Z"
+    },
+    {
+      "task": "task-282-durable-project-state-lifecycle",
+      "deferred_by_branch": "arena/omni-durable-project-state-20261104",
+      "at": "2026-11-04T22:22:02Z",
+      "reason_fa": "زیرساخت ذخیره‌سازی پایدار Revision در PR #314 تحویل شده است؛ اما اتصال کامل مسیر واقعی Intent تا Job، Attempt، Artifact، Verification و Passport باقی مانده است. ادامه نیازمند بازبینی مالکیت مسیرها و واگذاری رسمی به Arena است.",
+      "reason_en": "PR #314 delivered the durable revision persistence foundation. End-to-end revision pinning across the canonical handoff, existing JobQueue, fenced Attempt, AssetVersion, Verification and Passport remains incomplete and requires a fresh path-ownership review.",
+      "resume_when": "PR #314 is integrated with this deferred board state, the complete path-ownership review is exit 0, and ARENA-C claims Task-282 on a fresh branch."
     }
   ],
   "next_work": [

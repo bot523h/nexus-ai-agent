@@ -45,6 +45,7 @@ placeholder text.
 | [architecture/RETENTION_DECISION.md](architecture/RETENTION_DECISION.md) | Retention policy decision record (30-day resumability window, circuit breaker). |
 | [architecture/LLM_PROVIDERS.md](architecture/LLM_PROVIDERS.md) | Provider chain, cooldowns, anti-retry-storm rule, strict-privacy flag. |
 | [architecture/KNOWLEDGE_RETRIEVAL.md](architecture/KNOWLEDGE_RETRIEVAL.md) | Local-first LlamaIndex knowledge retrieval: adapter-only confinement, verified-evidence search semantics, derived rebuildable store, failure taxonomy, honest limitations. |
+| [architecture/DURABLE_PROJECT_STATE.md](architecture/DURABLE_PROJECT_STATE.md) | Durable Studio project/revision lifecycle (task-282): immutable content-addressed revisions, the compare-and-swap head pointer, the reuse of the single storage schema + CommandBus, and the restart/CAS evidence. |
 | [architecture/adr/README.md](architecture/adr/README.md) | Doc-layer decision index + rules. |
 | [architecture/adr/template.md](architecture/adr/template.md) | MADR 4.0-lite template (Confirmation section mandatory). |
 | [architecture/adr/0001-docs-as-code-layout.md](architecture/adr/0001-docs-as-code-layout.md) | Documentation layout: living views + one index + language policy. |

@@ -498,6 +498,50 @@ class AppProjectMembership(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+# ── Durable Studio project revisions (task-282) ─────────────────────────────
+# The Studio ``Project`` state (creative/studio/models.py) is a derived,
+# content-addressed value.  These two tables are its authoritative durable
+# record and introduce no second project authority: ``AppProject`` stays the
+# project identity, and a revision's bytes are the canonical serialization of
+# the CommandBus project state.  A revision row is IMMUTABLE (its primary key
+# is the content hash, so a re-commit of identical state cannot fork history);
+# the single mutable pointer is the per-project head row, updated with an
+# optimistic compare-and-swap on ``revision_id``.
+
+
+class ProjectRevision(SQLModel, table=True):
+    """One immutable, content-addressed snapshot of a Studio project state.
+
+    ``revision_id`` is the canonical state hash, so it is the primary key and
+    an identical state can never be stored twice.  ``parent_revision_id`` is
+    the revision this one superseded (NULL for the genesis revision), which is
+    the durable lineage link the artifact/provenance layer reads.
+    """
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "revision_id", name="uq_projectrevision_project_revision"),
+    )
+
+    revision_id: str = Field(primary_key=True)
+    project_id: str = Field(index=True)
+    parent_revision_id: str | None = Field(default=None, index=True)
+    state_revision: int = Field(ge=0)
+    state_hash: str = Field(index=True)
+    #: Canonical JSON of the Studio ``Project`` (UTF-8). The bytes, not this
+    #: row, are what a fresh process deserializes to rebuild the state.
+    state_json: str
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class ProjectRevisionHead(SQLModel, table=True):
+    """The single mutable pointer to a project's accepted (current) revision."""
+
+    project_id: str = Field(foreign_key="appproject.project_id", primary_key=True)
+    revision_id: str = Field(index=True)
+    state_revision: int = Field(ge=0)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
 # ── Knowledge retrieval (task-273) ──────────────────────────────────────────
 # Canonical registry of *authorized knowledge sources* — the authoritative
 # record of what the local-first knowledge index was built from.  The index
