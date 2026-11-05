@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-05T03:04:58Z",
+  "updated_at": "2026-11-05T04:39:46Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8450,7 +8450,7 @@
       "title_fa": "وضعیت پایدار پروژهٔ استودیو، بازبینی‌ها و زنجیرهٔ شواهد دارایی",
       "zone": "durable-project-state-lifecycle",
       "priority": "P0",
-      "status": "deferred",
+      "status": "active",
       "scope": "Lock the canonical Project/Revision source-of-truth contract, then implement one real, restartable Project->Revision lifecycle using the existing single storage schema, the Studio CommandBus, the Asset Library and Provenance/Passport. A revision is an immutable, content-addressed (CAS) snapshot of the CommandBus Project state; the head row is the single mutable pointer with optimistic concurrency. No parallel store, queue, authority, renderer, or provenance ledger.",
       "scope_fa": "قرارداد منبع‌حقیقت Project/Revision را قفل کنید؛ سپس یک مسیر واقعی و قابل‌بازیابی Project→Revision بسازید که از همان اسکیمای واحد، CommandBus، Asset Library و Provenance/Passport استفاده می‌کند. هر Revision یک اسنپ‌شات تغییرناپذیر و محتوا-آدرس‌دار (CAS) از حالت Project است؛ رکورد head تنها اشاره‌گر تغییرپذیر با کنترل هم‌زمانی خوش‌بینانه است. هیچ ذخیره‌گاه/صف/مرجع/Renderer/دفتر موازی ساخته نمی‌شود.",
       "prerequisites": [],
@@ -8486,9 +8486,9 @@
         ".github/workflows/ci.yml"
       ],
       "owner_hint": "Supersedes the stale PR #290 registration on an independent branch.",
-      "agent_branch": "arena/omni-durable-project-state-20261104",
-      "claimed_at": null,
-      "generation": 2,
+      "agent_branch": "openhands/task-282-durable-project-state-20261105",
+      "claimed_at": "2026-11-05T04:39:46Z",
+      "generation": 3,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
@@ -8500,7 +8500,7 @@
         "FORENSIC FINDING (P2, storage-layer tamper resistance): the read path does not re-validate state_json against revision_id/state_hash, so a DIRECT database write to projectrevision.state_json is silently accepted (reproduced). Immutability holds at the API/insert layer (content-addressed PK, no UPDATE path); it is NOT enforced against out-of-band DB edits. Read-time re-derivation is recommended before the worker consumes revisions.",
         "REVIEW STATUS: only bot reviews exist (Sourcery x2, 3/3 threads resolved; CodeRabbit skipped). No human reviewer is available -> PENDING_HUMAN_REVIEW. Bot threads resolved is NOT independent human review."
       ],
-      "note": "DEFERRED, NOT DONE. PR #314 delivers the durable revision persistence FOUNDATION only. Live gap (grounded in code): the creative worker still reports project_state_storage=\"attempt_scoped_in_memory\" (creative/render_jobs.py ~L693, jobs/creative_passport.py ~L717) and nothing outside creative/project_state/ imports the durable store. ARENA-C contract (fresh branch, AFTER #314 merges + path-ownership review exit 0; expected-generation=2 -> generation 3): (1) bind the canonical handoff (nagar/creative/handoff.py: CanonicalHandoffFacts/CreativeRenderPayload) to a durable revision_id+state_hash; (2) persist project_id, revision_id, revision_hash in the EXISTING JobQueuePort payload (application/ports/job_queue.py + adapters/in_process_job_queue.py); (3) worker loads the EXACT revision it was leased for, never a newer head; (4) keep the same CommandBus transaction + attempt lifecycle (jobs/lifecycle.py); (5) fence stale attempts so an old revision cannot overwrite a newer accepted one; (6) publish the artifact into the existing Asset Library (creative/assets/, PR #205 zone) with an AssetVersion bound to the revision; (7) re-verify the SAME bytes/AssetVersion; (8) connect Revision<->Job<->Attempt<->Verification<->CausalJournal<->Passport (provenance/, PR #294 zone). REQUIRED BEFORE (3): add a read-time integrity check (recompute content_address(canonical_state_bytes(project)) == revision_id; fail closed) because the read path currently trusts state_json (P2 tamper gap, reproduced). HARD RULE: no parallel queue, project store, passport, verifier or ledger. Path overlaps to coordinate (unclaimed PRs, no live lease today): #205 creative/assets/+storage, #294 provenance/, #129/#149/#69 studio/bus+models, #150 jobs/lifecycle+cli, #33/#60/#63/#247 cli.py. Recommended split: Slice 1 (intent->job pinning) owns handoff+job_queue+render_jobs; Slice 2 (artifact->AssetVersion) waits on #205; Slice 3 (passport/causal link) waits on #294. cli.py out of scope."
+      "note": ""
     }
   ],
   "deferred_log": [
