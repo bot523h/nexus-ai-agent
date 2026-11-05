@@ -27,10 +27,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STORE = ROOT / "src" / "nexus_ai_agent" / "creative" / "project_state" / "store.py"
 PERSISTENCE = ROOT / "src" / "nexus_ai_agent" / "creative" / "studio" / "persistence.py"
+RENDER_JOBS = ROOT / "src" / "nexus_ai_agent" / "creative" / "render_jobs.py"
+HANDOFF = ROOT / "src" / "nexus_ai_agent" / "nagar" / "creative" / "handoff.py"
 TESTS = (
     "tests/unit/test_durable_project_state.py",
     "tests/integration/test_durable_project_concurrency.py",
     "tests/integration/test_durable_project_restart.py",
+    "tests/integration/test_durable_project_revision_pinning.py",
 )
 
 
@@ -112,6 +115,30 @@ MUTATIONS: tuple[Mutation, ...] = (
         "    if False:  # mutated: state-hash re-validation removed",
         "F1: the stored state_hash must match the stored content; a tampered hash "
         "column would otherwise be accepted",
+    ),
+    Mutation(
+        "revision_pin_ignored_by_worker",
+        RENDER_JOBS,
+        "    if data.revision_id is None:\n        return None",
+        "    if True:  # mutated: pinned job falls back to the current head\n        return None",
+        "Slice 1: a pinned job must load its exact revision, never the live head; "
+        "ignoring the pin lets a moved head silently change what a job executes",
+    ),
+    Mutation(
+        "revision_pin_hash_check_removed",
+        RENDER_JOBS,
+        "    if record.state_hash != data.revision_hash:",
+        "    if False:  # mutated: pinned hash check removed",
+        "Slice 1: the loaded revision's canonical hash must equal the job's pin; "
+        "dropping the check accepts a revision the job was never admitted against",
+    ),
+    Mutation(
+        "handoff_pin_not_recorded",
+        HANDOFF,
+        "    if revision_pin is not None:\n        revision_id, revision_hash = revision_pin",
+        "    if False:  # mutated: handoff stops pinning the revision\n        revision_id, revision_hash = revision_pin",
+        "Slice 1: the handoff must record the pinned revision in the durable payload; "
+        "omitting it makes the job fall back to the current head",
     ),
 )
 

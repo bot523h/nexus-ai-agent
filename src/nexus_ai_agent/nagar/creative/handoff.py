@@ -222,6 +222,7 @@ def build_creative_payload(
     input_sha256: str | None = None,
     canonical: CanonicalHandoffFacts | None = None,
     source_text: str | None = None,
+    revision_pin: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Turn a validated proposal into a typed canonical ``creative_render`` payload.
 
@@ -314,6 +315,10 @@ def build_creative_payload(
             "intent": typed_intent.model_dump(mode="json"),
         }
     )
+    if revision_pin is not None:
+        revision_id, revision_hash = revision_pin
+        payload["revision_id"] = revision_id
+        payload["revision_hash"] = revision_hash
     return payload
 
 
@@ -380,6 +385,7 @@ async def run_free_text_intent_durable(
     clip_asset_id: str | None = None,
     journal: Any | None = None,
     canonical: CanonicalHandoffFacts | None = None,
+    revision_store: Any | None = None,
 ) -> CognitionJobOutcome:
     """Turn free text into at most one durable ``creative_render`` job — or refuse.
 
@@ -420,6 +426,44 @@ async def run_free_text_intent_durable(
 
     idempotency_key = derive_intent_idempotency_key(gateway.project_id, gateway.actor, intent)
     intent_job_id = durable_job_identity(idempotency_key)
+
+    # Revision pin (task-282 Slice 1): when the host wires the durable revision
+    # store, the job is admitted against ONE immutable revision. A failure to
+    # pin is a typed refusal BEFORE any enqueue -- never a silent fall back to
+    # "latest state", so a later head change can never alter this job.
+    revision_pin: tuple[str, str] | None = None
+    if revision_store is not None and canonical is not None:
+        try:
+            head = await revision_store.load_head(canonical.project_id)
+        except Exception as exc:  # noqa: BLE001 - a corrupt head must refuse, never fall back
+            _record(
+                journal,
+                decision=CognitionDecision.REFUSED,
+                gateway=gateway,
+                job_id=intent_job_id,
+                idempotency_key=idempotency_key,
+                refusal_reason="revision_unavailable",
+            )
+            return CognitionJobOutcome(
+                status="refused",
+                refusal_reason="revision_unavailable",
+                detail=f"revision head unavailable: {type(exc).__name__}",
+            )
+        if head is None:
+            _record(
+                journal,
+                decision=CognitionDecision.REFUSED,
+                gateway=gateway,
+                job_id=intent_job_id,
+                idempotency_key=idempotency_key,
+                refusal_reason="revision_unavailable",
+            )
+            return CognitionJobOutcome(
+                status="refused",
+                refusal_reason="revision_unavailable",
+                detail="project has no durable revision to pin",
+            )
+        revision_pin = (head.revision_id, head.state_hash)
 
     request = _routing_request(gateway)
     decision = gateway.route(request)
@@ -509,6 +553,7 @@ async def run_free_text_intent_durable(
             idempotency_key=idempotency_key,
             canonical=canonical,
             source_text=intent if canonical is not None else None,
+            revision_pin=revision_pin,
         )
     except HandoffRefusal as exc:
         _record(

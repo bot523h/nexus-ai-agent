@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "9b4739065203fcb8c088b0e94b88e2980561e1b7",
-    "generated_at": "2026-10-31T07:51:10Z",
+    "source_revision": "d386e4da5623fca7deeda672f4ebccf97ee224fa",
+    "generated_at": "2026-11-05T05:10:49Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -841,6 +841,7 @@
         "files": [
           "tests/integration/test_canonical_creative_execution.py",
           "tests/integration/test_creative_chain_e2e.py",
+          "tests/integration/test_durable_project_revision_pinning.py",
           "tests/integration/test_gate5_closure.py",
           "tests/integration/test_ibpc_e2e.py",
           "tests/integration/test_job_lifecycle_queue.py",
@@ -5944,6 +5945,7 @@
         "suite_reference_files": [
           "tests/integration/test_canonical_creative_execution.py",
           "tests/integration/test_creative_chain_e2e.py",
+          "tests/integration/test_durable_project_revision_pinning.py",
           "tests/integration/test_gate5_closure.py",
           "tests/integration/test_ibpc_e2e.py",
           "tests/integration/test_job_lifecycle_queue.py",
