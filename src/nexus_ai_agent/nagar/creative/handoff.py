@@ -431,6 +431,26 @@ async def run_free_text_intent_durable(
     # store, the job is admitted against ONE immutable revision. A failure to
     # pin is a typed refusal BEFORE any enqueue -- never a silent fall back to
     # "latest state", so a later head change can never alter this job.
+    #
+    # Finding 3 (production wiring): a canonical (durable) admission MUST be
+    # pinned. If the composition root did not wire the store, refuse before any
+    # enqueue rather than admitting an unpinned job the worker would run against
+    # a rebuilt baseline. Legacy callers (``canonical is None``) keep their own
+    # backward-compatible policy and are unaffected.
+    if canonical is not None and revision_store is None:
+        _record(
+            journal,
+            decision=CognitionDecision.REFUSED,
+            gateway=gateway,
+            job_id=intent_job_id,
+            idempotency_key=idempotency_key,
+            refusal_reason="revision_unavailable",
+        )
+        return CognitionJobOutcome(
+            status="refused",
+            refusal_reason="revision_unavailable",
+            detail="durable admission requires the revision store (not wired)",
+        )
     revision_pin: tuple[str, str] | None = None
     if revision_store is not None and canonical is not None:
         try:

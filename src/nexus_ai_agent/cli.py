@@ -1539,10 +1539,12 @@ def _run_durable_intent(
     from nexus_ai_agent.application.ports.job_queue import JobStatus
     from nexus_ai_agent.application.principal import ChannelBinding
     from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.creative.project_state.store import SqlProjectRevisionStore
     from nexus_ai_agent.creative.render_jobs import build_job_bus
     from nexus_ai_agent.creative.studio.models import (
         AssetRecord,
         Timeline,
+        compute_state_hash,
         new_project,
     )
     from nexus_ai_agent.nagar.cognition import build_cognition_gateway
@@ -1580,9 +1582,19 @@ def _run_durable_intent(
         "free-text-intent",
         Timeline(timeline_id="tl_intent", duration_us=duration_us),
     ).model_copy(update={"assets": [source]})
+    # ``model_copy`` bypasses the Project state-hash validator; recompute so the
+    # state the revision store commits is internally consistent (task-282
+    # Finding 2 refuses a stale hash before it writes anything).
+    project.state_hash = compute_state_hash(project)
     # Planning uses the same persistent access grant; execution independently
     # re-authorizes the canonical references in the worker's own bus.
     bus = build_job_bus(project, authorizer=access)
+
+    # Canonical composition root for the durable revision store (task-282
+    # Finding 3): the intent path commits/pins a real revision so the job is
+    # admitted against ONE immutable revision -- never the live head.  The
+    # commit happens on the run loop below (the store is async).
+    revision_store = SqlProjectRevisionStore()
 
     provider, status = build_cognition_provider()
     if status is not ProviderStatus.AVAILABLE:
@@ -1627,6 +1639,25 @@ def _run_durable_intent(
                 f"another live process owns this job queue; refusing to execute ({exc})"
             ) from exc
         try:
+            # Commit the admitted revision so the handoff can pin it. Idempotent
+            # by content address, so a repeat intent does not fork history.
+            from nexus_ai_agent.creative.project_state.models import (
+                DurableProjectStateError,
+            )
+
+            current_head = await revision_store.load_head(project.project_id)
+            try:
+                await revision_store.commit(
+                    project,
+                    authorized_project_id=project.project_id,
+                    expected_parent_revision_id=(
+                        current_head.revision_id if current_head is not None else None
+                    ),
+                )
+            except DurableProjectStateError as exc:
+                raise RuntimeError(
+                    f"refusing to admit intent without a durable revision: {exc}"
+                ) from exc
             outcome = await run_free_text_intent_durable(
                 text,
                 gateway=gateway,
@@ -1638,6 +1669,7 @@ def _run_durable_intent(
                 chat_id=0,
                 clip_asset_id=clip_asset_id,
                 canonical=canonical,
+                revision_store=revision_store,
             )
             if outcome.status != "enqueued" or outcome.job_id is None:
                 return outcome

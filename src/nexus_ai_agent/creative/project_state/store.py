@@ -68,9 +68,10 @@ def _verify_revision_integrity(row: orm.ProjectRevision) -> None:
 
     The durable bytes are the authority for a revision's identity. A direct
     database edit (or corruption) can leave ``state_json`` no longer hashing to
-    ``revision_id``, or ``state_hash`` no longer matching the content, while the
-    row still deserializes. This re-derives both from the stored bytes using the
-    project's one canonical serialization/hashing contract and refuses any
+    ``revision_id``, ``state_hash`` no longer matching the content, or the
+    embedded project identity no longer matching the owning row, while the row
+    still deserializes. This re-derives all of them from the stored bytes using
+    the project's one canonical serialization/hashing contract and refuses any
     mismatch. It never repairs, never falls back to another revision, and never
     echoes the row's content in the error.
     """
@@ -84,6 +85,11 @@ def _verify_revision_integrity(row: orm.ProjectRevision) -> None:
     if content_address(canonical) != row.revision_id:
         raise RevisionIntegrityError(f"revision {row.revision_id!r} failed integrity validation")
     if compute_state_hash(project) != row.state_hash:
+        raise RevisionIntegrityError(f"revision {row.revision_id!r} failed integrity validation")
+    # The embedded project identity must match the owning row: a state written
+    # for one project must never be reachable through another project's row
+    # (a direct ``project_id`` edit would otherwise re-home the state).
+    if project.project_id != row.project_id:
         raise RevisionIntegrityError(f"revision {row.revision_id!r} failed integrity validation")
 
 
@@ -123,6 +129,15 @@ class SqlProjectRevisionStore:
         state_bytes = canonical_state_bytes(project)
         revision_id = content_address(state_bytes)
         state_json = state_bytes.decode("utf-8")
+
+        # Preflight (task-282 Finding 2): the state the caller handed us must be
+        # internally consistent BEFORE we write anything. ``model_copy(update=...)``
+        # and any other mutation that bypasses the Project validator can leave
+        # ``state_hash`` stale; storing it would advance the head to a revision
+        # the read path then refuses (an unreadable head). Detect the drift here,
+        # before the insert or the head advance, and refuse the whole commit.
+        if compute_state_hash(project) != project.state_hash:
+            raise RevisionIntegrityError("project state_hash does not match its content")
 
         # Establish the canonical project identity in its own short transaction,
         # so a benign first-use race here can never poison the revision commit.

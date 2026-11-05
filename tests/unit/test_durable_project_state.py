@@ -338,6 +338,107 @@ async def test_tampered_project_identity_is_refused_on_read(tmp_path: Path) -> N
         await store.load_revision(PROJECT_A, record.revision_id)
 
 
+# ---------------------------------------------------------------------------
+# Finding 1 — a revision may never be re-homed across projects (identity leak)
+# ---------------------------------------------------------------------------
+#
+# An out-of-band edit that re-points a revision row at another project must not
+# hand one project's state to another project's caller.  The row can be made
+# internally consistent (bytes hash to the id, hash matches the content), so
+# ONLY the embedded-vs-owning project identity discriminates it -- exactly what
+# the identity guard must catch.  These tests mutate the database directly.
+
+
+async def test_rehomed_revision_is_refused_on_read(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    # Project B owns a self-consistent revision.
+    b = await store.commit(
+        new_project(PROJECT_B, "Beta", Timeline(timeline_id="tl", duration_us=0)),
+        authorized_project_id=PROJECT_B,
+        expected_parent_revision_id=None,
+    )
+    db = tmp_path / "revisions.sqlite"
+    # Re-home B's row to project A. The bytes still hash to the id and the hash
+    # still matches the content, so the content-address/hash checks pass; only
+    # the embedded identity (B) vs the owning row (A) reveals the re-homing.
+    await _sqlite_update(
+        db,
+        "UPDATE projectrevision SET project_id=? WHERE revision_id=?",
+        (PROJECT_A, b.revision_id),
+    )
+    # Without the identity guard this returns B's state through A's path.
+    with pytest.raises(RevisionIntegrityError):
+        await store.load_revision(PROJECT_A, b.revision_id)
+
+
+async def test_state_for_other_project_cannot_be_read_as_a(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    a = await store.commit(
+        new_project(PROJECT_A, "Alpha", Timeline(timeline_id="tl", duration_us=0)),
+        authorized_project_id=PROJECT_A,
+        expected_parent_revision_id=None,
+    )
+    db = tmp_path / "revisions.sqlite"
+    # Overwrite A's row with B's genuine state (consistent bytes/hash) but keep
+    # A's revision id: the identity no longer matches and the bytes no longer
+    # hash to the id, so the read fails closed rather than returning B's state.
+    b_state = new_project(PROJECT_B, "Beta", Timeline(timeline_id="tl", duration_us=0))
+    b_state.state_hash = compute_state_hash(b_state)
+    await _sqlite_update(
+        db,
+        "UPDATE projectrevision SET state_hash=?, state_json=? WHERE revision_id=?",
+        (b_state.state_hash, canonical_state_bytes(b_state).decode("utf-8"), a.revision_id),
+    )
+    with pytest.raises(RevisionIntegrityError):
+        await store.load_revision(PROJECT_A, a.revision_id)
+    with pytest.raises(RevisionIntegrityError):
+        await store.load_head(PROJECT_A)
+
+
+# ---------------------------------------------------------------------------
+# Finding 2 — commit must refuse a stale ``state_hash`` before it writes
+# ---------------------------------------------------------------------------
+
+
+async def test_commit_refuses_stale_state_hash_without_writing(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    genesis = await store.commit(
+        _genesis(), authorized_project_id=PROJECT_A, expected_parent_revision_id=None
+    )
+    # ``model_copy(update=...)`` bypasses the Project validator, leaving the
+    # cached ``state_hash`` stale relative to the new content.
+    stale = _genesis().model_copy(update={"name": "Renamed"})
+    assert stale.state_hash != compute_state_hash(stale)
+    with pytest.raises(RevisionIntegrityError):
+        await store.commit(
+            stale,
+            authorized_project_id=PROJECT_A,
+            expected_parent_revision_id=genesis.revision_id,
+        )
+    # Nothing was written and the head did not move.
+    head = await store.load_head(PROJECT_A)
+    assert head is not None and head.revision_id == genesis.revision_id
+    with pytest.raises(RevisionNotFound):
+        await store.load_revision(PROJECT_A, content_address(canonical_state_bytes(stale)))
+
+
+async def test_commit_of_a_consistent_project_still_succeeds(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    genesis = await store.commit(
+        _genesis(), authorized_project_id=PROJECT_A, expected_parent_revision_id=None
+    )
+    healthy = _advance(_genesis(), revision=1, name="Alpha2")
+    record = await store.commit(
+        healthy,
+        authorized_project_id=PROJECT_A,
+        expected_parent_revision_id=genesis.revision_id,
+    )
+    assert record.revision_id == content_address(canonical_state_bytes(healthy))
+    assert record.state_hash == compute_state_hash(healthy)
+    head = await store.load_head(PROJECT_A)
+    assert head is not None and head.revision_id == record.revision_id
+
+
 async def test_malformed_state_json_is_refused_not_raised(tmp_path: Path) -> None:
     store = _store(tmp_path)
     record = await store.commit(

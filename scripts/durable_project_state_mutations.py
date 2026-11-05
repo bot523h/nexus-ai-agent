@@ -34,6 +34,7 @@ TESTS = (
     "tests/integration/test_durable_project_concurrency.py",
     "tests/integration/test_durable_project_restart.py",
     "tests/integration/test_durable_project_revision_pinning.py",
+    "tests/unit/test_nagar_cognition_queue_handoff.py",
 )
 
 
@@ -117,6 +118,22 @@ MUTATIONS: tuple[Mutation, ...] = (
         "column would otherwise be accepted",
     ),
     Mutation(
+        "project_identity_guard_removed",
+        STORE,
+        "    if project.project_id != row.project_id:",
+        "    if False:  # mutated: embedded project identity no longer checked",
+        "Finding 1: a re-homed row (embedded state belongs to another project) "
+        "must be refused; dropping the guard leaks one project's state to another",
+    ),
+    Mutation(
+        "commit_preflight_state_hash_removed",
+        STORE,
+        "        if compute_state_hash(project) != project.state_hash:",
+        "        if False:  # mutated: stale state_hash no longer detected pre-write",
+        "Finding 2: a stale state_hash must be refused BEFORE the insert/head "
+        "advance; dropping the preflight advances the head to an unreadable revision",
+    ),
+    Mutation(
         "revision_pin_ignored_by_worker",
         RENDER_JOBS,
         "    if data.revision_id is None:\n        return None",
@@ -139,6 +156,14 @@ MUTATIONS: tuple[Mutation, ...] = (
         "    if False:  # mutated: handoff stops pinning the revision\n        revision_id, revision_hash = revision_pin",
         "Slice 1: the handoff must record the pinned revision in the durable payload; "
         "omitting it makes the job fall back to the current head",
+    ),
+    Mutation(
+        "canonical_admission_without_store_allowed",
+        HANDOFF,
+        "    if canonical is not None and revision_store is None:",
+        "    if False:  # mutated: canonical admission no longer requires the store",
+        "Finding 3: a canonical admission must be pinned; dropping the guard lets a "
+        "durable intent enqueue an unpinned job the worker runs from a rebuilt baseline",
     ),
 )
 
