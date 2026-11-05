@@ -460,7 +460,7 @@ jobs:
       - run: bash scripts/ci_install.sh ".[dev]"
       - name: isolated worktree for the campaigns
         run: git worktree add --detach "$RUNNER_TEMP/mutation-worktree" HEAD
-      - name: board referee mutations (33/33 must be killed)
+      - name: board referee mutations (37/37 must be killed)
         working-directory: ${{ runner.temp }}/mutation-worktree
         run: python scripts/board_referee_mutations.py
       - name: Gate-5 execution-fencing probes (17/17 must be caught)

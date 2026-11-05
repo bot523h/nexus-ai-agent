@@ -2443,41 +2443,99 @@ def test_typed_pull_request_dependency_blocks_until_merge_evidence(
     assert board_module.main(["claim", "dependent", "--branch", "arena/999-me"]) == 0
 
 
-def test_record_pr_merge_requires_a_40_hex_sha(
+def _fake_pr(
+    merged: bool, base_ref: str = "main", sha: str = "b" * 40, state: str = "closed"
+) -> dict:
+    return {
+        "merged": merged,
+        "state": state,
+        "base": {"ref": base_ref},
+        "merge_commit_sha": sha,
+    }
+
+
+def _origin_main_sha(module: ModuleType) -> str:
+    result = module._git(["rev-parse", "origin/main"], module.ROOT)
+    assert result is not None and result.returncode == 0
+    return result.stdout.strip()
+
+
+def _record_args(number: int, **extra: object) -> list[str]:
+    args = ["record-pr-merge", "--repo", "bot523h/nexus-ai-agent", "--number", str(number)]
+    for key, value in extra.items():
+        args += [f"--{key.replace('_', '-')}", str(value)]
+    args += ["--branch", "arena/999-me"]
+    return args
+
+
+def test_record_pr_merge_refuses_a_non_sha_before_any_api_call(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    board = _prereq_board("done")
-    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    bad = board_module.main(
-        [
-            "record-pr-merge",
-            "--repo",
-            "bot523h/nexus-ai-agent",
-            "--number",
-            "294",
-            "--merge-sha",
-            "deadbeef",
-            "--branch",
-            "arena/999-me",
-        ]
+    board_module.BOARD.write_text(json.dumps(_prereq_board("done")), encoding="utf-8")
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("the API must not be consulted for a malformed SHA")
+
+    monkeypatch.setattr(board_module, "_gh_get", _boom)
+    assert board_module.main(_record_args(294, merge_sha="deadbeef")) == 2
+
+
+def test_record_pr_merge_verifies_merged_state_base_and_sha_via_the_api(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_module.BOARD.write_text(json.dumps(_prereq_board("done")), encoding="utf-8")
+    real = _origin_main_sha(board_module)
+
+    # PR still open -> refuse
+    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(False, state="open"))
+    assert board_module.main(_record_args(294)) == 2
+
+    # not merged, but the SHA happens to be a real ancestor of main -> still refuse
+    # (isolates the merged-state guard from the ancestry guard)
+    monkeypatch.setattr(
+        board_module, "_gh_get", lambda url, token: _fake_pr(False, state="open", sha=real)
     )
-    assert bad == 2
-    ok = board_module.main(
-        [
-            "record-pr-merge",
-            "--repo",
-            "bot523h/nexus-ai-agent",
-            "--number",
-            "294",
-            "--merge-sha",
-            "a" * 40,
-            "--branch",
-            "arena/999-me",
-        ]
+    assert board_module.main(_record_args(294)) == 2
+
+    # merged into a non-main base -> refuse
+    monkeypatch.setattr(
+        board_module, "_gh_get", lambda url, token: _fake_pr(True, base_ref="release")
     )
-    assert ok == 0
+    assert board_module.main(_record_args(294)) == 2
+
+    # the operator's --merge-sha disagrees with the API -> refuse
+    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha="b" * 40))
+    assert board_module.main(_record_args(294, merge_sha=real)) == 2
+
+    # the API SHA is not an ancestor of origin/main -> refuse (forged/foreign commit)
+    assert board_module.main(_record_args(294)) == 2
+
+    # merged into main, API SHA == an ancestor of origin/main -> recorded
+    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha=real))
+    assert board_module.main(_record_args(294)) == 0
     records = json.loads(board_module.BOARD.read_text(encoding="utf-8"))["completion_records"]
-    assert records[0]["evidence"]["merge_commit_sha"] == "a" * 40
+    assert records[0]["evidence"]["merge_commit_sha"] == real
+    assert records[0]["evidence"]["source"] == "github_api"
+
+
+def test_record_pr_merge_fails_closed_when_the_api_is_unreachable(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_module.BOARD.write_text(json.dumps(_prereq_board("done")), encoding="utf-8")
+
+    def _down(*_a: object, **_k: object) -> object:
+        raise board_module.urllib.error.URLError("network is down")
+
+    monkeypatch.setattr(board_module, "_gh_get", _down)
+    assert board_module.main(_record_args(294)) == 2
+
+
+def test_a_completed_released_dependency_does_not_satisfy_a_prerequisite(
+    board_module: ModuleType,
+) -> None:
+    """A released epic/slice still blocks: only ``done`` satisfies a plain-id prereq."""
+    board_module.BOARD.write_text(json.dumps(_prereq_board("completed_released")), encoding="utf-8")
+    assert board_module.main(["claim", "dependent", "--branch", "arena/999-me"]) == 2
 
 
 def test_next_never_proposes_a_pr_dependency_blocked_task(

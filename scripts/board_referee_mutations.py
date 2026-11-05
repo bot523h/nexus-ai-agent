@@ -255,6 +255,30 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        if False:\n            continue",
         "a typed PR dependency must reject a merge record from an untrusted source",
     ),
+    Mutation(
+        "released_status_satisfies_a_prerequisite",
+        'SATISFIED_STATUSES = frozenset({"done", "completed_merged"})',
+        'SATISFIED_STATUSES = frozenset({"done", "completed_merged", "completed_released"})',
+        "a released epic/slice must keep blocking its dependents, not satisfy them",
+    ),
+    Mutation(
+        "record_pr_merge_skips_api_verification",
+        "        merge_sha, why = _verify_pr_merge(args.repo, args.number, recorded, token)",
+        "        merge_sha, why = (recorded or 'a' * 40), None  # mutation: trust the operator",
+        "record-pr-merge must verify the merge against GitHub, never take the operator's word",
+    ),
+    Mutation(
+        "record_pr_merge_accepts_a_non_merged_pr",
+        '    if detail.get("merged") is not True:',
+        "    if False:  # mutation: accept an unmerged PR",
+        "record-pr-merge must refuse a PR that was not actually merged",
+    ),
+    Mutation(
+        "record_pr_merge_skips_ancestry_proof",
+        '    if ancestor.returncode != 0:\n        return None, f"{api_sha} is not an ancestor of {main_ref}"',
+        '    if False:\n        return None, f"{api_sha} is not an ancestor of {main_ref}"',
+        "record-pr-merge must prove the merge commit is an ancestor of origin/main",
+    ),
 )
 
 

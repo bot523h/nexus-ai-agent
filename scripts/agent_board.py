@@ -103,13 +103,15 @@ _DEFAULT_FA = (
 ACTIVE_STATUSES = frozenset({"active", "active_in_review"})
 
 #: A prerequisite is *satisfied* (its dependents may proceed) only when its task
-#: has genuinely completed. ``done`` is terminal; ``completed_released`` is the
-#: "slice/parent finished its own deliverable and the zone was released" state.
-#: ``expired``/``deferred``/``queued``/``active`` all leave the dependency unmet:
-#: an expired lease is not completion, and an *epic* that released its lease while
-#: its slices are still open must keep blocking them. ``completed_merged`` is the
+#: has genuinely completed. ``done`` is terminal; ``completed_merged`` is the
 #: historical spelling some records carry for the same fact as ``done``.
-SATISFIED_STATUSES = frozenset({"done", "completed_released", "completed_merged"})
+#: ``completed_released`` is explicitly NOT completion: ``release`` (without
+#: ``--complete``) frees the zone but leaves the task's own slices/children open,
+#: so a released epic must keep blocking its dependents, and a released slice is
+#: claimable again rather than done. ``expired``/``deferred``/``queued``/
+#: ``active`` are likewise unmet, and a dependency on a task with no record at
+#: all is unverifiable, never free to skip.
+SATISFIED_STATUSES = frozenset({"done", "completed_merged"})
 
 #: Statuses that end a lease without the task being finished (a slice/epic handed
 #: back to the queue). ``release`` sets one of these unless ``--complete`` is given.
@@ -772,24 +774,80 @@ def _release_locked(args: argparse.Namespace) -> int:
     else:
         print(
             f"RELEASED {args.task} (generation {claim['generation']}, status "
-            "'completed_released'). Zone free — dependents may proceed; the task "
-            "itself is NOT marked done."
+            "'completed_released'). Zone free, but the task is NOT done: any task "
+            "that lists it as a prerequisite stays blocked until it is completed "
+            "with --complete."
         )
     return 0
 
 
-def cmd_record_pr_merge(args: argparse.Namespace) -> int:
-    """Record an evidenced PR-merge completion so a typed dependency can be met.
+def _verify_pr_merge(
+    repo: str,
+    number: int,
+    expected_sha: str | None,
+    token: str | None,
+    *,
+    main_ref: str = "origin/main",
+) -> tuple[str | None, str | None]:
+    """Verify a PR was really merged into ``main``; ``(merge_sha, None)`` or ``(None, why)``.
 
-    Owner-gated in practice by the pull request that carries the board change: the
-    evidence is a real 40-hex merge SHA, and a claim/next gate refuses a typed
-    ``pull_request`` prerequisite until a matching record exists (mission §3.3).
+    A completion record's whole value is that it is *evidence*, not a claim: the
+    merge SHA must come from GitHub, be the PR's real ``merge_commit_sha``, name
+    ``main`` as the base, and be a genuine ancestor of the local ``origin/main``.
+    Every failure — network, a non-merged PR, a wrong base, a SHA mismatch, an
+    unreadable ``origin/main`` — returns a reason so the caller refuses. The gate
+    fails closed: an unverifiable merge is never recorded (mission §3.3).
+    """
+    try:
+        detail = _gh_get(f"https://api.github.com/repos/{repo}/pulls/{number}", token)
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return None, f"cannot reach the GitHub API to verify {repo}#{number}: {exc}"
+    if not isinstance(detail, dict):
+        return None, f"GitHub PR response for {repo}#{number} is not an object"
+    if detail.get("merged") is not True:
+        return None, f"{repo}#{number} is not merged (state={detail.get('state')!r})"
+    base = detail.get("base") if isinstance(detail.get("base"), dict) else {}
+    if base.get("ref") != "main":
+        return None, f"{repo}#{number} was merged into {base.get('ref')!r}, not main"
+    api_sha = detail.get("merge_commit_sha")
+    if not isinstance(api_sha, str) or not _SHA40.match(api_sha.lower()):
+        return None, f"{repo}#{number} has no 40-hex merge_commit_sha"
+    api_sha = api_sha.lower()
+    if expected_sha and expected_sha.lower() != api_sha:
+        return None, (
+            f"{repo}#{number} merge commit is {api_sha}, not the recorded {expected_sha.lower()}"
+        )
+    head = _git(["rev-parse", "--verify", main_ref], ROOT)
+    if head is None or head.returncode != 0:
+        return None, f"{main_ref} is not readable; cannot prove ancestry (fail closed)"
+    ancestor = _git(["merge-base", "--is-ancestor", api_sha, main_ref], ROOT)
+    if ancestor is None:
+        return None, "git is unavailable; cannot prove ancestry (fail closed)"
+    if ancestor.returncode != 0:
+        return None, f"{api_sha} is not an ancestor of {main_ref}"
+    return api_sha, None
+
+
+def cmd_record_pr_merge(args: argparse.Namespace) -> int:
+    """Record a *verified* PR-merge completion so a typed dependency can be met.
+
+    The merge is not taken on the operator's word: :func:`_verify_pr_merge` asks
+    GitHub whether the PR is really merged into ``main``, requires the recorded
+    ``--merge-sha`` (when given) to equal the API's ``merge_commit_sha``, and
+    proves that commit is an ancestor of ``origin/main``. Any doubt is a refusal,
+    so a typed ``pull_request`` prerequisite can never be opened by a forged or
+    mistyped SHA (mission §3.3).
     """
     with board_lock():
         board = load_board()
-        sha = (args.merge_sha or "").strip().lower()
-        if not _SHA40.match(sha):
+        token = args.token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None
+        recorded = (args.merge_sha or "").strip().lower() or None
+        if recorded is not None and not _SHA40.match(recorded):
             print(f"refusing: --merge-sha must be a 40-hex commit SHA, got {args.merge_sha!r}")
+            return 2
+        merge_sha, why = _verify_pr_merge(args.repo, args.number, recorded, token)
+        if merge_sha is None:
+            print(f"refusing to record {args.repo}#{args.number}: {why}")
             return 2
         records = board.setdefault("completion_records", [])
         records[:] = [
@@ -810,7 +868,7 @@ def cmd_record_pr_merge(args: argparse.Namespace) -> int:
                 "state": args.required_state,
                 "evidence": {
                     "source": "github_api",
-                    "merge_commit_sha": sha,
+                    "merge_commit_sha": merge_sha,
                     "recorded_by": args.branch,
                     "recorded_at": _iso(_now()),
                 },
@@ -819,7 +877,8 @@ def cmd_record_pr_merge(args: argparse.Namespace) -> int:
         save_board(board)
         print(
             f"RECORDED pull_request {args.repo}#{args.number} {args.required_state} "
-            f"@ {sha} (source github_api). Dependent typed prerequisites are now met."
+            f"@ {merge_sha} (verified via GitHub API + origin/main ancestry). "
+            "Dependent typed prerequisites are now met."
         )
         return 0
 
@@ -1634,8 +1693,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--merge-sha",
         dest="merge_sha",
-        required=True,
-        help="the 40-hex merge commit SHA on main (the completion evidence)",
+        default=None,
+        help="optional cross-check: refuse unless it equals the API's merge_commit_sha "
+        "(the recorded SHA always comes from the GitHub API, never from this flag)",
     )
     p.add_argument(
         "--required-state",
@@ -1644,6 +1704,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(PULL_REQUEST_REQUIRED_STATES),
     )
     p.add_argument("--branch", required=True, help="the branch recording this evidence")
+    p.add_argument("--token", default="", help="GitHub token (else GITHUB_TOKEN env)")
     p.set_defaults(func=cmd_record_pr_merge)
 
     p = sub.add_parser("defer")
