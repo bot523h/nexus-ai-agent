@@ -105,7 +105,7 @@ Every head must re-run the required checks green immediately before merge.
 
 | PR | head | workflow run | result |
 |---|---|---|---|
-| #318 | `539220e5` | `42089132176` | 24/24 jobs success, 0 failures |
+| #318 | `c7275935` (docs) on `539220e5` (code) | `42089132176` | 24/24 jobs success, 0 failures |
 | #316 | `0fb3a321` | (latest on branch) | 23/23 jobs success, 0 failures |
 | #317 | `47e0a80e` | `42092599369` | 23/23 jobs success, 0 failures |
 
