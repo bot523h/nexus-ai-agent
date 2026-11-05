@@ -983,3 +983,13 @@ Only red check = the #234 flake (task-264, issue #237).
 - `ci_install.sh` is the canonical install (CPU-only torch + PyPI-only remainder); the P1
   disk-exhaustion fix (run 41532014621) is live in `queue-ownership-mutations.yml` as a
   minimal `--no-deps` install. Never use raw `pip install -e ".[dev]"` in a workflow.
+- **`scripts/agent_board.py` `record-pr-merge` now VERIFIES merges (P0 fix, #316).** It calls
+  `_verify_pr_merge` → `_gh_get` on `pulls/{n}`: requires `merged is True`, base `main`,
+  `merge_commit_sha == --merge-sha` (now optional), and `merge-base --is-ancestor <sha> origin/main`.
+  Any network/parse/ancestry failure refuses (exit 2). `SATISFIED_STATUSES = {"done","completed_merged"}`
+  only — `completed_released` does NOT satisfy a prerequisite (a released epic/slice still blocks;
+  released tasks are claimable again but not complete). Referee mutation campaign is **37** (was 33);
+  keep the pin in `tests/unit/test_mutation_harness_anchors.py` and the `ci.yml` job name in sync.
+- **CI checkouts have NO `origin/main` ref** (shallow single-branch checkout). Any test that shells
+  out to real git for `origin/main` fails in CI for purely environmental reasons — stub the git
+  boundary (`_stub_git`) or use `HEAD`. This cost a red `test`/`python-parity` on #316.
