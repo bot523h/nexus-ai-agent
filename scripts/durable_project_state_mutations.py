@@ -165,6 +165,16 @@ MUTATIONS: tuple[Mutation, ...] = (
         "Finding 3: a canonical admission must be pinned; dropping the guard lets a "
         "durable intent enqueue an unpinned job the worker runs from a rebuilt baseline",
     ),
+    Mutation(
+        "handoff_rereads_head_instead_of_admitted_revision",
+        HANDOFF,
+        """            admitted = await revision_store.load_revision(
+                canonical.project_id, admitted_revision.revision_id
+            )""",
+        "            admitted = await revision_store.load_head(canonical.project_id)",
+        "task-282: the handoff must pin the ADMITTED revision and never re-read the "
+        "live head; re-reading re-targets the job at a concurrent head move (TOCTOU)",
+    ),
 )
 
 TEST_TIMEOUT_SECONDS = 600

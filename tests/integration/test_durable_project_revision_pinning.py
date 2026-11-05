@@ -367,6 +367,7 @@ async def test_handoff_payload_pins_the_revision_before_any_media_work(
         chat_id=0,
         canonical=canonical,
         revision_store=store,
+        admitted_revision=revision,
     )
     assert outcome.status == "enqueued", outcome
     stored = json.loads(str(queue._fetch_row_full(outcome.job_id)["payload_json"]))
@@ -378,10 +379,10 @@ async def test_handoff_payload_pins_the_revision_before_any_media_work(
 
 
 @pytest.mark.asyncio
-async def test_handoff_refuses_when_the_project_has_no_durable_revision(
+async def test_handoff_refuses_when_no_admitted_revision_is_supplied(
     pin_env: Path,
 ) -> None:
-    """A wired store with no head refuses BEFORE enqueue -- never 'latest state'."""
+    """A wired store with no admitted revision refuses BEFORE enqueue -- never 'latest state'."""
     owner, binding_id = _wire_directory()
     store = SqlProjectRevisionStore()  # empty: no head for PROJECT_ID
     project = _project("uncommitted")
@@ -463,6 +464,7 @@ async def test_handoff_pins_the_durable_revision_and_the_worker_executes_it(
         chat_id=0,
         canonical=canonical,
         revision_store=store,
+        admitted_revision=revision,
     )
     assert outcome.status == "enqueued", outcome
     assert outcome.job_id
@@ -486,6 +488,66 @@ async def test_handoff_pins_the_durable_revision_and_the_worker_executes_it(
     assert status is JobStatus.COMPLETED
     result = await queue.get_result(outcome.job_id)
     assert result is not None and result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_handoff_pins_the_admitted_revision_even_after_a_concurrent_head_move(
+    pin_env: Path,
+) -> None:
+    """The admitted revision is pinned deterministically -- never the moved head.
+
+    task-282: the handoff must pin the revision the composition root committed,
+    not re-read the live head. The ordering is fully deterministic (no sleeps):
+    commit R1 (the admitted revision), then commit R2 so the durable head is R2
+    *before* the handoff runs. A handoff that re-read the head would pin R2; the
+    contract requires R1.
+    """
+    owner, binding_id = _wire_directory()
+    store = SqlProjectRevisionStore()
+    project = _project("admitted")
+    admitted = await _commit(store, project, parent=None)
+    # A concurrent writer wins the head BEFORE the handoff is called.
+    newer = await _commit(store, _project("concurrent-winner"), parent=admitted.revision_id)
+    assert newer.revision_id != admitted.revision_id
+    head = await store.load_head(PROJECT_ID)
+    assert head is not None and head.revision_id == newer.revision_id  # the head really moved
+
+    workspace = pin_env / "creative" / "creative_pin_race"
+    workspace.mkdir()
+    _clip(workspace / "real_source.mp4")
+
+    actor = ActorIdentity(kind="user", actor_id=str(owner))
+    access = ProjectAccess(
+        actor=actor, project_id=PROJECT_ID, permissions=DEFAULT_PROJECT_PERMISSIONS
+    )
+    bus = build_job_bus(project, authorizer=access)
+    gateway = build_cognition_gateway(
+        bus=bus, actor=actor, project_id=PROJECT_ID, enabled=True, completion=_ScriptedProducer()
+    )
+    canonical = CanonicalHandoffFacts(
+        principal_id=str(owner), channel_binding_id=binding_id, project_id=PROJECT_ID
+    )
+    queue = InProcessJobQueue(pin_env / "jobs.sqlite3")
+
+    outcome = await run_free_text_intent_durable(
+        "trim the first second",
+        gateway=gateway,
+        queue=queue,
+        project=project,
+        source_path=str(workspace / "real_source.mp4"),
+        workspace_dir=str(workspace),
+        user_id=0,
+        chat_id=0,
+        canonical=canonical,
+        revision_store=store,
+        admitted_revision=admitted,
+    )
+    assert outcome.status == "enqueued", outcome
+    stored = json.loads(str(queue._fetch_row_full(outcome.job_id)["payload_json"]))
+    # The pin is the ADMITTED revision R1 -- not the newer head R2.
+    assert stored["revision_id"] == admitted.revision_id
+    assert stored["revision_hash"] == admitted.state_hash
+    assert stored["revision_id"] != newer.revision_id
 
 
 def test_worker_refuses_when_the_pinned_revision_is_gone_though_head_exists(

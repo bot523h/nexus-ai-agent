@@ -386,6 +386,7 @@ async def run_free_text_intent_durable(
     journal: Any | None = None,
     canonical: CanonicalHandoffFacts | None = None,
     revision_store: Any | None = None,
+    admitted_revision: Any | None = None,
 ) -> CognitionJobOutcome:
     """Turn free text into at most one durable ``creative_render`` job — or refuse.
 
@@ -452,10 +453,35 @@ async def run_free_text_intent_durable(
             detail="durable admission requires the revision store (not wired)",
         )
     revision_pin: tuple[str, str] | None = None
-    if revision_store is not None and canonical is not None:
+    if canonical is not None and revision_store is not None:
+        # task-282: the job is admitted against ONE immutable revision, chosen by
+        # the composition root at commit() time. The handoff must NOT re-read the
+        # live head: a concurrent commit landing between admission and handoff
+        # would otherwise silently re-target the job at a newer revision (a TOCTOU
+        # on the head). There is no fallback to "latest" -- an unadmitted call is a
+        # typed refusal, never a head read.
+        if admitted_revision is None:
+            _record(
+                journal,
+                decision=CognitionDecision.REFUSED,
+                gateway=gateway,
+                job_id=intent_job_id,
+                idempotency_key=idempotency_key,
+                refusal_reason="revision_unavailable",
+            )
+            return CognitionJobOutcome(
+                status="refused",
+                refusal_reason="revision_unavailable",
+                detail="durable admission requires the admitted revision (no head re-read)",
+            )
+        # Re-validate the SPECIFIC admitted revision through the store's own
+        # integrity contract (never the head): a re-homed or tampered row, or one
+        # that vanished, is a typed refusal rather than a pin.
         try:
-            head = await revision_store.load_head(canonical.project_id)
-        except Exception as exc:  # noqa: BLE001 - a corrupt head must refuse, never fall back
+            admitted = await revision_store.load_revision(
+                canonical.project_id, admitted_revision.revision_id
+            )
+        except Exception as exc:  # noqa: BLE001 - a corrupt revision must refuse, never fall back
             _record(
                 journal,
                 decision=CognitionDecision.REFUSED,
@@ -467,23 +493,9 @@ async def run_free_text_intent_durable(
             return CognitionJobOutcome(
                 status="refused",
                 refusal_reason="revision_unavailable",
-                detail=f"revision head unavailable: {type(exc).__name__}",
+                detail=f"admitted revision unavailable: {type(exc).__name__}",
             )
-        if head is None:
-            _record(
-                journal,
-                decision=CognitionDecision.REFUSED,
-                gateway=gateway,
-                job_id=intent_job_id,
-                idempotency_key=idempotency_key,
-                refusal_reason="revision_unavailable",
-            )
-            return CognitionJobOutcome(
-                status="refused",
-                refusal_reason="revision_unavailable",
-                detail="project has no durable revision to pin",
-            )
-        revision_pin = (head.revision_id, head.state_hash)
+        revision_pin = (admitted.revision_id, admitted.state_hash)
 
     request = _routing_request(gateway)
     decision = gateway.route(request)

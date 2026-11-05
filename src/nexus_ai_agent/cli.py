@@ -1647,7 +1647,7 @@ def _run_durable_intent(
 
             current_head = await revision_store.load_head(project.project_id)
             try:
-                await revision_store.commit(
+                admitted_revision = await revision_store.commit(
                     project,
                     authorized_project_id=project.project_id,
                     expected_parent_revision_id=(
@@ -1670,6 +1670,10 @@ def _run_durable_intent(
                 clip_asset_id=clip_asset_id,
                 canonical=canonical,
                 revision_store=revision_store,
+                # The job is pinned to the EXACT revision commit() returned -- the
+                # handoff must not re-read the head, so a concurrent commit cannot
+                # re-target this job between admission and enqueue.
+                admitted_revision=admitted_revision,
             )
             if outcome.status != "enqueued" or outcome.job_id is None:
                 return outcome

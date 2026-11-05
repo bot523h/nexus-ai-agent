@@ -64,8 +64,8 @@ class RecordingQueue:
         return f"job-{idempotency_key[-8:]}"
 
 
-class _StubHead:
-    """The two pin fields the handoff reads off a durable head."""
+class _StubRevision:
+    """The two pin fields the handoff reads off a durable revision record."""
 
     def __init__(self, revision_id: str, state_hash: str) -> None:
         self.revision_id = revision_id
@@ -75,15 +75,24 @@ class _StubHead:
 class StubRevisionStore:
     """A declared double for the durable revision-store seam.
 
-    The handoff only ever calls ``load_head``; a canonical admission requires a
-    head to pin (task-282 Finding 3), so the double returns one.
+    The handoff re-validates the SPECIFIC admitted revision through
+    ``load_revision`` -- never the live head -- so the double serves a revision
+    by id and records every load. A ``load_head`` call is a bug in this path and
+    raises, proving the handoff never re-reads the head.
     """
 
-    def __init__(self, head: _StubHead | None = None) -> None:
-        self._head = head or _StubHead("sha256:" + "a" * 64, "sha256:" + "b" * 64)
+    def __init__(self, revision: _StubRevision | None = None) -> None:
+        self.revision = revision or _StubRevision("sha256:" + "a" * 64, "sha256:" + "b" * 64)
+        self.loads: list[tuple[str, str]] = []
 
-    async def load_head(self, project_id: str) -> _StubHead:
-        return self._head
+    async def load_revision(self, project_id: str, revision_id: str) -> _StubRevision:
+        self.loads.append((project_id, revision_id))
+        if revision_id != self.revision.revision_id:
+            raise KeyError(f"unknown revision {revision_id!r}")
+        return self.revision
+
+    async def load_head(self, project_id: str) -> _StubRevision:
+        raise AssertionError("the handoff must not re-read the head (task-282)")
 
 
 def _proposal(**overrides: object) -> str:
@@ -218,6 +227,7 @@ def test_schema2_handoff_carries_validated_intent_but_no_raw_text_or_rationale(
         channel_binding_id="cbn_" + "a" * 64,
         project_id=PROJECT_ID,
     )
+    store = StubRevisionStore()
     outcome = asyncio.run(
         run_free_text_intent_durable(
             "trim from 1s to 8s",
@@ -229,7 +239,8 @@ def test_schema2_handoff_carries_validated_intent_but_no_raw_text_or_rationale(
             user_id=0,
             chat_id=0,
             canonical=canonical,
-            revision_store=StubRevisionStore(),
+            revision_store=store,
+            admitted_revision=store.revision,
         )
     )
     assert outcome.status == "enqueued"
@@ -312,9 +323,10 @@ def test_canonical_handoff_without_revision_store_is_refused(tmp_path, source) -
     assert queue.enqueues == []
 
 
-def test_canonical_handoff_pins_the_store_head(tmp_path, source) -> None:  # noqa: ANN001
-    # Finding 3: with the store wired, the admitted payload carries a complete
-    # revision pin taken from the durable head.
+def test_canonical_handoff_pins_the_admitted_revision(tmp_path, source) -> None:  # noqa: ANN001
+    # task-282: with the store wired, the admitted payload carries the pin of the
+    # EXACT revision the composition root committed -- the handoff re-validates
+    # that revision and never re-reads the live head.
     _, project = _project()
     principal = PrincipalId.new()
     actor = ActorIdentity(kind="user", actor_id=str(principal))
@@ -326,7 +338,7 @@ def test_canonical_handoff_pins_the_store_head(tmp_path, source) -> None:  # noq
         channel_binding_id="cbn_" + "a" * 64,
         project_id=PROJECT_ID,
     )
-    store = StubRevisionStore(_StubHead("sha256:" + "1" * 64, "sha256:" + "2" * 64))
+    store = StubRevisionStore(_StubRevision("sha256:" + "1" * 64, "sha256:" + "2" * 64))
     outcome = asyncio.run(
         run_free_text_intent_durable(
             "trim from 1s to 8s",
@@ -339,6 +351,7 @@ def test_canonical_handoff_pins_the_store_head(tmp_path, source) -> None:  # noq
             chat_id=0,
             canonical=canonical,
             revision_store=store,
+            admitted_revision=store.revision,
         )
     )
     assert outcome.status == "enqueued"
@@ -346,6 +359,77 @@ def test_canonical_handoff_pins_the_store_head(tmp_path, source) -> None:  # noq
     assert typed.revision_id == "sha256:" + "1" * 64
     assert typed.revision_hash == "sha256:" + "2" * 64
     assert typed.project_id == PROJECT_ID
+    # The exact admitted revision was validated, by id -- the head was never read.
+    assert store.loads == [(PROJECT_ID, "sha256:" + "1" * 64)]
+
+
+def test_canonical_handoff_without_an_admitted_revision_is_refused(tmp_path, source) -> None:  # noqa: ANN001
+    # task-282: there is no "fall back to latest" path. A store wired but no
+    # admitted revision is a typed refusal BEFORE any enqueue.
+    _, project = _project()
+    principal = PrincipalId.new()
+    actor = ActorIdentity(kind="user", actor_id=str(principal))
+    producer = ScriptedProducer(_proposal())
+    gateway = _gateway(actor, project, producer)
+    queue = RecordingQueue()
+    canonical = CanonicalHandoffFacts(
+        principal_id=str(principal),
+        channel_binding_id="cbn_" + "a" * 64,
+        project_id=PROJECT_ID,
+    )
+    outcome = asyncio.run(
+        run_free_text_intent_durable(
+            "trim from 1s to 8s",
+            gateway=gateway,
+            queue=queue,
+            project=project,
+            source_path=str(source),
+            workspace_dir=str(tmp_path / "creative_ws"),
+            user_id=0,
+            chat_id=0,
+            canonical=canonical,
+            revision_store=StubRevisionStore(),
+        )
+    )
+    assert outcome.status == "refused"
+    assert outcome.refusal_reason == "revision_unavailable"
+    assert producer.calls == 0
+    assert queue.enqueues == []
+
+
+def test_canonical_handoff_refuses_a_vanished_admitted_revision(tmp_path, source) -> None:  # noqa: ANN001
+    # If the admitted revision cannot be re-validated (it vanished / is corrupt),
+    # the handoff refuses -- it never falls back to the head or an unpinned job.
+    _, project = _project()
+    principal = PrincipalId.new()
+    actor = ActorIdentity(kind="user", actor_id=str(principal))
+    producer = ScriptedProducer(_proposal())
+    gateway = _gateway(actor, project, producer)
+    queue = RecordingQueue()
+    canonical = CanonicalHandoffFacts(
+        principal_id=str(principal),
+        channel_binding_id="cbn_" + "a" * 64,
+        project_id=PROJECT_ID,
+    )
+    store = StubRevisionStore(_StubRevision("sha256:" + "9" * 64, "sha256:" + "8" * 64))
+    outcome = asyncio.run(
+        run_free_text_intent_durable(
+            "trim from 1s to 8s",
+            gateway=gateway,
+            queue=queue,
+            project=project,
+            source_path=str(source),
+            workspace_dir=str(tmp_path / "creative_ws"),
+            user_id=0,
+            chat_id=0,
+            canonical=canonical,
+            revision_store=store,
+            admitted_revision=_StubRevision("sha256:" + "1" * 64, "sha256:" + "2" * 64),
+        )
+    )
+    assert outcome.status == "refused"
+    assert outcome.refusal_reason == "revision_unavailable"
+    assert queue.enqueues == []
 
 
 # ── refusals enqueue NOTHING ────────────────────────────────────────────────
