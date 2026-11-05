@@ -8512,7 +8512,7 @@
         "REVIEW STATUS: only bot reviews exist (Sourcery threads resolved). No human reviewer is available -> PENDING_HUMAN_REVIEW. Bot threads resolved is NOT independent human review.",
         "Slice 1 MERGED as PR #315 into main @ aadaf53157670b64af6978fcf41b592e108ac9ae (recorded as a completion_record below)."
       ],
-      "note": "SLICE 1 DONE; SLICES 2 AND 3 ARE NON-TERMINAL (this claim stays active_in_review, not done). PR #315 (base ca4c2f6c) delivers the F1 read-time integrity check, the commit preflight (Finding 2), and Slice 1 revision pinning through the canonical handoff -> existing JobQueue payload -> worker: the worker loads the EXACT revision it was admitted against (never a newer head) and refuses a missing/tampered/re-homed/hash-mismatched pin with a typed revision_unavailable BEFORE any engine. The composition root captures the RevisionRecord commit() returned and passes it to the handoff as admitted_revision; the handoff re-validates that SPECIFIC revision via load_revision (never load_head). No parallel store/queue/authority. REMAINING (open, non-terminal): Slice 2 (artifact -> AssetVersion bound to the revision) is now only partially blocked -- the Asset Library V1 package (src/nexus_ai_agent/creative/assets/) IS on main via PR #210 (da78666c, which supersedes the stale PR #205/#209), so the blocker is the binding work itself, not the library landing; PR #205 remains open/dirty and is superseded. Slice 3 (Revision<->Job<->Attempt<->Verification<->CausalJournal<->Passport link) still waits on the durable creative-graph package in PR #294 (open, not merged). The worker still reports project_state_storage=\"attempt_scoped_in_memory\" for unpinned jobs; the pin is reachable only via the free-text handoff -> timeline.trim -> render branch. A closure passport for the durable path is not yet wired (Slice 3).",
+      "note": "SLICE 1 DONE; SLICES 2 AND 3 ARE NON-TERMINAL (the epic is completed_released, not done). PR #315 (base ca4c2f6c) delivers the F1 read-time integrity check, the commit preflight (Finding 2), and Slice 1 revision pinning through the canonical handoff -> existing JobQueue payload -> worker: the worker loads the EXACT revision it was admitted against (never a newer head) and refuses a missing/tampered/re-homed/hash-mismatched pin with a typed revision_unavailable BEFORE any engine. The composition root captures the RevisionRecord commit() returned and passes it to the handoff as admitted_revision; the handoff re-validates that SPECIFIC revision via load_revision (never load_head). No parallel store/queue/authority. REMAINING (open, non-terminal): Slice 2 (artifact -> AssetVersion bound to the revision) is now only partially blocked -- the Asset Library V1 package (src/nexus_ai_agent/creative/assets/) IS on main via PR #210 (da78666c, which supersedes the stale PR #205/#209), so the blocker is the binding work itself, not the library landing; PR #205 remains open/dirty and is superseded. Slice 3 (Revision<->Job<->Attempt<->Verification<->CausalJournal<->Passport link) still waits on the durable creative-graph package in PR #294 (open, not merged). The worker still reports project_state_storage=\"attempt_scoped_in_memory\" for unpinned jobs; the pin is reachable only via the free-text handoff -> timeline.trim -> render branch. A closure passport for the durable path is not yet wired (Slice 3).",
       "release_reason": "released 2026-11-05: Slice 1 delivered via PR #315 (merged into main aadaf53157670b64af6978fcf41b592e108ac9ae); slices 2 and 3 remain open, so the epic is completed_released (non-terminal), never done."
     },
     {
@@ -8524,7 +8524,12 @@
       "status": "queued",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
-        "task-282-durable-project-state-lifecycle"
+        {
+          "kind": "pull_request",
+          "repository": "bot523h/nexus-ai-agent",
+          "number": 315,
+          "required_state": "merged_into_main"
+        }
       ],
       "acceptance_criteria": [
         "An artifact published for a job is bound to the exact revision the job was admitted against (revision_id + revision_hash), never a newer head.",
@@ -9441,7 +9446,7 @@
         "source": "github_api",
         "merge_commit_sha": "aadaf53157670b64af6978fcf41b592e108ac9ae",
         "recorded_by": "openhands/omni-recovery-integration-20261105",
-        "recorded_at": "2026-11-05T00:00:00Z"
+        "recorded_at": "2026-11-05T13:13:23Z"
       }
     }
   ]

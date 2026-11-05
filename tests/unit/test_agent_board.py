@@ -297,14 +297,18 @@ def test_task_282_epic_is_not_done_while_slices_are_open(board: dict) -> None:
     Task-282 is an epic. Its Slice 1 is merged (PR #315) and recorded as a
     completion record, but Slices 2 and 3 are still queued, so the epic must be
     ``completed_released`` (non-terminal) — never ``done`` — and the slices must
-    be gated on it (and Slice 3 on Slice 2 plus the external PR #294).
+    be gated on the merged Slice 1 (and Slice 3 on Slice 2 plus the external PR
+    #294).
     """
     by = {c["task"]: c for c in board["claims"]}
     epic = by["task-282-durable-project-state-lifecycle"]
     assert epic["status"] == "completed_released", "the epic must not be marked done"
     s2 = by["task-282-slice-2-artifact-assetversion-binding"]
     s3 = by["task-282-slice-3-provenance-passport-link"]
-    assert "task-282-durable-project-state-lifecycle" in s2["prerequisites"]
+    # Slice 2 depends on the MERGED Slice 1 (PR #315) as a typed dependency — not on
+    # the non-terminal epic status, which no longer satisfies a prerequisite.
+    pr315 = [p for p in s2["prerequisites"] if isinstance(p, dict) and p.get("number") == 315]
+    assert pr315, "Slice 2 must gate on the merged Slice 1 (PR #315)"
     assert "task-282-slice-2-artifact-assetversion-binding" in s3["prerequisites"]
     pr294 = [p for p in s3["prerequisites"] if isinstance(p, dict) and p.get("number") == 294]
     assert pr294, "Slice 3 must carry the machine-enforced PR #294 dependency"
