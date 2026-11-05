@@ -1,6 +1,26 @@
-# Project memory ŌĆö nexus-ai-agent
+# Project memory — nexus-ai-agent
 
 Index of durable, expensive-to-learn facts. Detail goes to daily logs.
+
+## task-282 / PR #315 (durable project-state pinning) — 2026-11-05
+- **Pin contract (owner-mandated):** the handoff must pin the **admitted** revision
+  (`RevisionRecord` returned by `commit()`), NOT re-read the live head. `cli.py` captures
+  `admitted_revision = await revision_store.commit(...)` and threads it into
+  `run_free_text_intent_durable(admitted_revision=...)`; `handoff.py` re-validates that
+  specific revision via `load_revision` (never `load_head`), with **no fallback to "latest"**.
+  A canonical admission with no admitted revision is a typed `revision_unavailable` refusal
+  before any enqueue. Mutant `handoff_rereads_head_instead_of_admitted_revision` guards it.
+- **Honest board status:** task-282 is `active_in_review` (gen 5), NOT `done` — PR #315 is
+  open and Slices 2/3 are still open (`task-282-slice-2-artifact-assetversion-binding`,
+  `task-282-slice-3-provenance-passport-link`).
+- **Dependency reconciliation (important):** the **Asset Library V1 package is already on
+  `main`** via PR **#210** (`da78666c`, "supersedes #205/#209"); PR #205 is open/dirty and
+  superseded. So Slice 2 is NOT blocked on #205 landing. Slice 3 still waits on PR #294
+  (durable creative-graph, open/not merged). Verify with
+  `git log origin/main -- <path>` rather than trusting a stale "blocked on #N" note.
+- Evidence on head `35845b5f`: mutations 15/15 killed; full suite `-m "not slow"` 6318 passed
+  39 skipped; CI run **42011697585 success**; board referee exit 0 (44 sources). A sibling CI
+  run showing `cancelled` is the concurrency-group supersede, not a failure.
 
 ## Mission 10 (2026-10-29) - base reconciliation + safe-merge + #134 audit
 - **Live `main` was `9145c5f2`** (M9 mislabeled it; local main worktree HEAD `8844516f` is
