@@ -1,4 +1,4 @@
-.PHONY: setup lint types deps test migrate smoke run dev-bootstrap hooks version-check board-check mutations
+.PHONY: setup lint types deps audit test migrate smoke run dev-bootstrap hooks version-check board-check mutations
 
 setup:
 	pip install -e ".[dev]"
@@ -26,6 +26,14 @@ types:
 # Allow-listed optional integrations live in [tool.deptry] of pyproject.toml.
 deps:
 	deptry src
+
+# Known-vulnerability truth (audit P1): `pip-audit` against the installed
+# environment, with every advisory either fixed or explicitly accepted in
+# `.github/dependency-audit.json`. An acceptance expires on its own — the gate
+# fails if a `transitive-cap` no longer holds or a `no-fix-released` package
+# starts shipping a fix — so a stale allow-list entry is a red build.
+audit:
+	python scripts/dependency_audit.py
 
 test:
 	pytest -q -m "not slow"
