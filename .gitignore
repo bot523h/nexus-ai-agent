@@ -19,3 +19,4 @@ ci-artifacts/
 
 # Board mutation lock (inter-process flock; transient, never committed)
 .agents/board.lock
+.agents/board.verify-cache.json

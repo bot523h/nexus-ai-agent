@@ -2,6 +2,59 @@
 
 Index of durable, expensive-to-learn facts. Detail goes to daily logs.
 
+## NEXUS final pre-merge hardening + integration proof (2026-11-06)
+- **Heads pushed:** #316 `020d8b11` (P0 board trust-boundary fix + live-main-cache fix),
+  #318 `3cfaed2f` (dependency-gate env-marker + fail-closed hardening), #317
+  `47e0a80e` (unchanged). `main` untouched @ `aadaf531…`; **no merges performed**.
+- **P0 (board), two layers:** (1) `_pr_satisfied()` trusted stored text → a hand-forged
+  `source=github_api` + `"a"*40` SHA opened a typed PR dependency; fixed by live
+  re-verify via `_merge_still_verified`, fail-closed on every path. (2) that first fix
+  proved ancestry against the LOCAL `origin/main` ref and keyed the 10-min cache by
+  `(repo, number, sha, sha256(token)[:16])` only — a stale/shallow clone could vouch for
+  a merge GitHub moved past. **Corrected fix:** `_live_main_sha` reads
+  `GET /git/ref/heads/main` on EVERY verification and binds that SHA into the cache key
+  (a moved main voids a warm cache); `_github_ancestry_proven` uses
+  `GET /compare/{merge}...{main}` with a single combined guard
+  (`status in {ahead,identical} AND behind_by == 0`); the fetched SHA is threaded so the
+  cache key and the proof cannot disagree (no TOCTOU). Cache file gitignored.
+- **P1 (dep gate):** `_pin_still_holds` ignored env markers → a `win32` cap blocked
+  on Linux. Added `_marker_applies`; `_load_allowlist`/`_parse_pip_audit` now fail
+  closed on malformed input. Findings keyed by `(package, id)`.
+- **Mutation campaign 38 → 42** (`cache_key_drops_the_live_main_sha`,
+  `consumer_warm_cache_masks_an_api_outage`, `ancestry_accepts_a_non_ancestor`,
+  `live_main_sha_is_not_validated`, re-anchored `record_pr_merge_skips_ancestry_proof`),
+  42/42 killed. The pinned count lives in BOTH `tests/unit/test_mutation_harness_anchors.py`
+  and the `ci.yml` job/step names — keep them in sync.
+- **Integration proof:** #318→#316→#317 merge with **zero conflicts**; combined
+  gates green (ruff/mypy/273 tests/38 mutations/full suite 6389 pass). Scratch
+  branch `integ-proof-316-317-318` @ `dad1dd9d` (deleted after proof). Post-fix
+  standalone: full non-slow suite **6375 passed / 39 skipped**, targeted 142 pass.
+- Required `main` checks: `lint (ruff + mypy + version lockstep)`,
+  `test (pytest -m "not slow")`, `merge-base-guard (base == main)`; `strict:true`,
+  no required reviews. GitHub check-runs API returns both the live and the
+  cancelled superseded run for one head → dedupe by name.
+- Deliverable: `docs/audits/NEXUS_OMNI_FINAL_PREMERGE_PROOF_2026-11-06.md`.
+- Detail: `.openhands/memory/2026-11-06.md`.
+
+## NEXUS-OMNI continuation (2026-11-05) — live main + board fix
+- **Live `main` = `aadaf53157670b64af6978fcf41b592e108ac9ae`** (PR #315 merged
+  2026-11-05T13:13:23Z). ci push `42033855955` + `queue-ownership-mutations`
+  `42033855945` = success. The old `41532014621` disk exhaustion (Errno 28) is
+  already fixed on main. **`maintenance` red is fail-closed by design** (backup-db
+  preflight needs `NEXUS_DATABASE_URL` + B2/R2 secrets; NOT_PROVEN, owner config).
+- **Board CLI now machine-enforces `prerequisites`** (PR #316, branch
+  `openhands/omni-recovery-integration-20261105`): `_unmet_prerequisites()` =
+  satisfied only when the task exists AND status ∈ {done, completed_merged};
+  `cmd_claim` refuses exit 2 (board untouched), `--ignore-prerequisites` override;
+  `cmd_next` prints `BLOCKED`. Was advisory-only before.
+- **Create PRs via `POST /repos/bot523h/nexus-ai-agent/pulls` with
+  `GITHUB_PERSONAL_ACCESS_TOKEN`** — `default_create_pr` 403s on this repo.
+- Only 4 workflows exist (ci.yml, langsmith-smoke.yml, maintenance.yml,
+  queue-ownership-mutations.yml). Security tools present: ruff/mypy/pytest/deptry/
+  pip-audit/bandit; MISSING: semgrep/gitleaks/trivy.
+- The 6 mandatory NEXUS-OMNI audit docs already live on main; the 2026-11-05 delta
+  is `docs/audits/NEXUS_OMNI_DELTA_2026-11-05.md`.
+
 ## task-282 / PR #315 (durable project-state pinning) — 2026-11-05
 - **Pin contract (owner-mandated):** the handoff must pin the **admitted** revision
   (`RevisionRecord` returned by `commit()`), NOT re-read the live head. `cli.py` captures
@@ -949,3 +1002,28 @@ Only red check = the #234 flake (task-264, issue #237).
   ALL 15 locales (`tests/unit/test_creative_notify.py`); adding a suite that imports a
   creative op drifts `OPERATION_TRUTH.json` → `python -m nexus_ai_agent.nagar --docs`;
   `model_copy` bypasses the `state_hash` validator → recompute `compute_state_hash`.
+
+## Dependency-vulnerability gate (durable, 2026-11-06)
+- `pip-audit` is now an ENFORCED CI gate (PR #318): `scripts/dependency_audit.py` +
+  `.github/dependency-audit.json` (reviewed allow-list) + a `dependency-audit` job whose
+  final step proves the gate FAILS CLOSED on an empty allow-list. Run it: `make audit`.
+- The gate is **self-expiring**: `transitive-cap` re-derives the cap from the INSTALLED env
+  (`importlib.metadata`) and REDs if `fixed` becomes resolvable; `no-fix-released` REDs when a
+  fix ships. An entry must name its `package` (advisory ids are reused across packages →
+  package `MISMATCH` is a failure, not a silent pass).
+- **filelock cannot be bumped**: `litellm` requires `filelock<4.0,>=3.16.1` on every release
+  (verified via the PyPI JSON API) → 4.2.1 is unresolvable. chromadb 1.5.9 / diskcache 5.6.3
+  are latest + still affected. Total: 18 advisories, all accepted/re-derived, 0 blocking.
+- `ci_install.sh` is the canonical install (CPU-only torch + PyPI-only remainder); the P1
+  disk-exhaustion fix (run 41532014621) is live in `queue-ownership-mutations.yml` as a
+  minimal `--no-deps` install. Never use raw `pip install -e ".[dev]"` in a workflow.
+- **`scripts/agent_board.py` `record-pr-merge` now VERIFIES merges (P0 fix, #316).** It calls
+  `_verify_pr_merge` → `_gh_get` on `pulls/{n}`: requires `merged is True`, base `main`,
+  `merge_commit_sha == --merge-sha` (now optional), and `merge-base --is-ancestor <sha> origin/main`.
+  Any network/parse/ancestry failure refuses (exit 2). `SATISFIED_STATUSES = {"done","completed_merged"}`
+  only — `completed_released` does NOT satisfy a prerequisite (a released epic/slice still blocks;
+  released tasks are claimable again but not complete). Referee mutation campaign is **37** (was 33);
+  keep the pin in `tests/unit/test_mutation_harness_anchors.py` and the `ci.yml` job name in sync.
+- **CI checkouts have NO `origin/main` ref** (shallow single-branch checkout). Any test that shells
+  out to real git for `origin/main` fails in CI for purely environmental reasons — stub the git
+  boundary (`_stub_git`) or use `HEAD`. This cost a red `test`/`python-parity` on #316.
