@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -136,6 +137,11 @@ PREREQUISITE_KINDS = frozenset({"pull_request"})
 PULL_REQUEST_REQUIRED_STATES = frozenset({"merged_into_main"})
 PR_MERGE_EVIDENCE_SOURCES = frozenset({"github_api"})
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+#: How long a verified merge is trusted before it is re-checked against GitHub.
+#: Short by design: the point is to stop a board edit from forging a merge, not
+#: to make a stale read permanent.
+PR_MERGE_CACHE_TTL = timedelta(minutes=10)
 
 
 class BoardValidationError(ValueError):
@@ -379,14 +385,18 @@ def _completion_records(board: dict) -> list[dict]:
     return records if isinstance(records, list) else []
 
 
-def _pr_satisfied(board: dict, entry: dict) -> bool:
-    """True when a matching, well-evidenced PR-merge completion record exists.
+def _pr_satisfied(board: dict, entry: dict, *, token: str | None = None) -> bool:
+    """True when a matching PR-merge completion record is *live-verified*.
 
     A typed ``pull_request`` prerequisite is satisfied only by a completion record
-    whose repository, number and required state match **and** whose evidence names
-    a 40-hex merge SHA attributed to the trusted ``github_api`` source. A record
-    missing that evidence is *unverifiable* and therefore does not satisfy the
-    dependency — the gate fails closed (mission §3.3).
+    whose repository, number and required state match **and** whose merge is
+    re-verified against GitHub (see :func:`_merge_still_verified`). Stored text —
+    ``source: github_api`` and a 40-hex SHA typed into the board — is a *claim*,
+    not evidence: anyone who can edit the board can forge both. The record only
+    counts when the API agrees the PR is merged into ``main`` with that exact
+    ``merge_commit_sha``, proven an ancestor of ``origin/main``. Any failure to
+    prove it (a forged SHA, a missing token, an unreachable API) leaves the
+    dependency unmet — the gate fails closed (mission §3.3).
     """
     repo = entry.get("repository")
     number = entry.get("number")
@@ -407,7 +417,10 @@ def _pr_satisfied(board: dict, entry: dict) -> bool:
             continue
         if not isinstance(evidence.get("merge_commit_sha"), str):
             continue
-        if _SHA40.match(evidence["merge_commit_sha"]):
+        if not _SHA40.match(evidence["merge_commit_sha"].lower()):
+            continue
+        verified, _why = _merge_still_verified(record, token=_token() if token is None else token)
+        if verified:
             return True
     return False
 
@@ -440,10 +453,13 @@ def _unmet_prerequisites(board: dict, claim: dict) -> list[str]:
       (``expired`` is explicitly *not* completion), or that has no record at all
       (a dependency on work nobody registered is unverifiable, not free to skip),
       is unmet;
-    * a typed ``pull_request`` dependency — a matching completion record with a
-      40-hex merge SHA from the trusted ``github_api`` source exists
-      (see :func:`_pr_satisfied`); a note, a flag, or a record without evidence
-      never satisfies it.
+    * a typed ``pull_request`` dependency — a matching completion record exists
+      **and** its merge is re-verified against GitHub (see :func:`_pr_satisfied`):
+      the PR is really merged into ``main`` with that exact ``merge_commit_sha``,
+      proven an ancestor of ``origin/main``. Stored text is a claim, not evidence;
+      a note, a flag, a record without evidence, or a record whose merge cannot be
+      re-proven (a forged SHA, a missing token, an unreachable API) never satisfies
+      it — the gate fails closed.
 
     This is what turns ``prerequisites`` from a text note into a hard precondition
     for taking the lease, so ``claim``/``next`` cannot hand out blocked work.
@@ -826,6 +842,82 @@ def _verify_pr_merge(
     if ancestor.returncode != 0:
         return None, f"{api_sha} is not an ancestor of {main_ref}"
     return api_sha, None
+
+
+def _cache_path() -> Path:
+    """Location of the gitignored merge-verification cache (never committed)."""
+    return BOARD.parent / "board.verify-cache.json"
+
+
+def _load_verify_cache() -> dict:
+    try:
+        data = json.loads(_cache_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_verify_cache(cache: dict) -> None:
+    with contextlib.suppress(OSError):
+        _cache_path().write_text(
+            json.dumps(cache, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+
+def _token() -> str | None:
+    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None
+
+
+def _token_fingerprint(token: str | None) -> str:
+    """Non-reversible token identity so a cache entry is not shared across accounts."""
+    if not token:
+        return "anonymous"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
+def _merge_still_verified(record: dict, *, token: str | None) -> tuple[bool, str]:
+    """Re-verify a stored merge record against GitHub (the evidence trust boundary).
+
+    A ``completion_records`` entry is *text on the board* and anyone who can edit
+    the board can type ``source: github_api`` and a 40-hex SHA. Trusting that text
+    is the P0 this closes: the consumer re-derives the fact from GitHub instead.
+
+    Returns ``(True, "verified...")`` only when the PR is really merged into
+    ``main``, the API's ``merge_commit_sha`` equals the recorded SHA, and that
+    commit is an ancestor of ``origin/main``. Every other outcome — a non-merged
+    PR, a foreign base, a SHA mismatch, a missing token, an unreachable API, an
+    unprovable ancestry — returns ``(False, reason)``: the gate fails **closed**,
+    because an unverifiable merge must never open a dependency. Verification is
+    cached for :data:`PR_MERGE_CACHE_TTL` (keyed by repo, number, SHA and token
+    identity) so the per-claim network cost is bounded.
+    """
+    repo = record.get("repository")
+    number = record.get("number")
+    raw_evidence = record.get("evidence")
+    evidence: dict = raw_evidence if isinstance(raw_evidence, dict) else {}
+    recorded_sha = evidence.get("merge_commit_sha")
+    if not isinstance(repo, str) or not isinstance(number, int):
+        return False, "the completion record names no repository/number"
+    if not isinstance(recorded_sha, str) or not _SHA40.match(recorded_sha.lower()):
+        return False, "the completion record carries no 40-hex merge SHA"
+    recorded_sha = recorded_sha.lower()
+
+    key = f"{repo}#{number}@{recorded_sha}:{_token_fingerprint(token)}"
+    cache = _load_verify_cache()
+    entry = cache.get(key)
+    now = _now()
+    if isinstance(entry, dict):
+        checked = _parse(entry.get("checked_at"))
+        if entry.get("ok") is True and checked is not None and now - checked < PR_MERGE_CACHE_TTL:
+            return True, f"verified {repo}#{number} (cached)"
+
+    sha, why = _verify_pr_merge(repo, number, recorded_sha, token)
+    ok = sha is not None and sha == recorded_sha
+    cache[key] = {"ok": ok, "checked_at": _iso(now), "reason": why or ""}
+    _save_verify_cache(cache)
+    if not ok:
+        return False, why or "the merge could not be verified"
+    return True, f"verified {repo}#{number} @ {recorded_sha}"
 
 
 def cmd_record_pr_merge(args: argparse.Namespace) -> int:

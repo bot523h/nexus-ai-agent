@@ -30,6 +30,7 @@ lease pins ``agent_board._now`` inside that lease
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -2403,10 +2404,8 @@ def test_cli_refusal_reports_an_invalid_board_without_a_traceback(
     assert "INVALID BOARD" in out
 
 
-def test_typed_pull_request_dependency_blocks_until_merge_evidence(
-    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A typed PR dependency is unmet until a merge record with a SHA exists."""
+def _prereq_board_typed() -> dict:
+    """A queued task whose prerequisite is a typed ``pull_request`` gate."""
     board = _prereq_board("done")
     board["claims"][1]["prerequisites"] = [
         {
@@ -2416,31 +2415,288 @@ def test_typed_pull_request_dependency_blocks_until_merge_evidence(
             "required_state": "merged_into_main",
         }
     ]
+    return board
+
+
+def _forged_record(sha: str = "a" * 40, source: str = "github_api", number: int = 294) -> dict:
+    """A completion record as an attacker would type it straight into the board."""
+    return {
+        "kind": "pull_request",
+        "repository": "bot523h/nexus-ai-agent",
+        "number": number,
+        "state": "merged_into_main",
+        "evidence": {
+            "source": source,
+            "merge_commit_sha": sha,
+            "recorded_by": "attacker",
+            "recorded_at": "2026-11-06T00:00:00Z",
+        },
+    }
+
+
+def _install_gh(module: ModuleType, monkeypatch: pytest.MonkeyPatch, handler: object) -> None:
+    """Point the GitHub read seam at *handler* (``_gh_get``'s single network edge)."""
+    monkeypatch.setattr(module, "_gh_get", handler)
+
+
+def _claim(board_module: ModuleType) -> int:
+    return board_module.main(["claim", "dependent", "--branch", "arena/999-me"])
+
+
+def test_forged_completion_record_does_not_open_a_typed_dependency(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P0: a hand-typed ``source: github_api`` + 40-hex SHA must NOT satisfy a PR dep.
+
+    Before this fix the consumer trusted that text, so anyone able to edit the
+    board (or open a PR against it) could unblock their own work by pasting a
+    fake merge. Here the record is a *perfect* forgery — the right repo, number,
+    state, source, and a well-formed SHA — but GitHub never reported that merge.
+    """
+    board = _prereq_board_typed()
+    board["completion_records"] = [_forged_record()]
+
+    def _never_merged(url: str, token: object) -> dict:
+        return {"merged": False, "state": "open", "base": {"ref": "main"}, "merge_commit_sha": None}
+
+    _install_gh(board_module, monkeypatch, _never_merged)
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    # no completion record yet -> refused, and the message names the PR
-    code = board_module.main(["claim", "dependent", "--branch", "arena/999-me"])
-    assert code == 2
-    # a record without valid evidence does not satisfy it either
-    board["completion_records"] = [
-        {
-            "kind": "pull_request",
-            "repository": "bot523h/nexus-ai-agent",
-            "number": 294,
-            "state": "merged_into_main",
-            "evidence": {"source": "github_api", "merge_commit_sha": "not-a-sha"},
+    assert _claim(board_module) == 2
+    # a refused claim leaves the lease queued (the board is not mutated)
+    assert board_module.load_board()["claims"][1]["status"] == "queued"
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        # PR really not merged
+        lambda url, token: {
+            "merged": False,
+            "state": "open",
+            "base": {"ref": "main"},
+            "merge_commit_sha": None,
+        },
+        # merged, but into a non-main branch
+        lambda url, token: {
+            "merged": True,
+            "state": "closed",
+            "base": {"ref": "release"},
+            "merge_commit_sha": "a" * 40,
+        },
+        # merged into main, but the API SHA disagrees with the recorded one
+        lambda url, token: {
+            "merged": True,
+            "state": "closed",
+            "base": {"ref": "main"},
+            "merge_commit_sha": "c" * 40,
+        },
+        # GitHub API unreachable
+        lambda url, token: (_ for _ in ()).throw(OSError("network down")),
+        # response is not even an object
+        lambda url, token: ["not", "a", "dict"],
+    ],
+)
+def test_typed_dependency_stays_blocked_on_every_unprovable_merge(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, handler: object
+) -> None:
+    """Every way of failing to *prove* the merge leaves the dependency unmet (fail-closed)."""
+    board = _prereq_board_typed()
+    board["completion_records"] = [_forged_record()]
+    _install_gh(board_module, monkeypatch, handler)
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert _claim(board_module) == 2
+
+
+def test_a_record_for_another_pr_does_not_satisfy_the_dependency(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verified merge of a *different* PR (#999) cannot open the #294 dependency."""
+    board = _prereq_board_typed()
+    board["completion_records"] = [_forged_record(number=999)]
+    _install_gh(
+        board_module,
+        monkeypatch,
+        lambda url, token: {
+            "merged": True,
+            "state": "closed",
+            "base": {"ref": "main"},
+            "merge_commit_sha": "a" * 40,
+        },
+    )
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert _claim(board_module) == 2
+
+
+def test_a_wrong_source_record_is_refused_even_if_the_merge_would_verify(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only ``github_api``-attributed records are candidates, even for a real merge.
+
+    Defense in depth: a record whose ``source`` is not ``github_api`` was not
+    written by ``record-pr-merge``, so it is not trusted — the live API check is
+    the authority, and the source string is a provenance gate in front of it.
+    """
+    board = _prereq_board_typed()
+    board["completion_records"] = [_forged_record(sha="a" * 40, source="a-text-note")]
+    _install_gh(
+        board_module,
+        monkeypatch,
+        lambda url, token: {
+            "merged": True,
+            "state": "closed",
+            "base": {"ref": "main"},
+            "merge_commit_sha": "a" * 40,
+        },
+    )
+    monkeypatch.setattr(
+        board_module,
+        "_git",
+        lambda args, cwd: subprocess.CompletedProcess(args, 0, "ok", ""),
+    )
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert _claim(board_module) == 2
+
+
+def test_typed_dependency_is_met_only_by_a_live_verified_merge(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A genuinely merged PR (API agrees, ancestor of main) DOES satisfy the dependency."""
+    board = _prereq_board_typed()
+    board["completion_records"] = [_forged_record(sha="a" * 40)]
+    _install_gh(
+        board_module,
+        monkeypatch,
+        lambda url, token: {
+            "merged": True,
+            "state": "closed",
+            "base": {"ref": "main"},
+            "merge_commit_sha": "a" * 40,
+        },
+    )
+    # stub the git boundary (CI checkouts have no ``origin/main`` ref; the real
+    # ancestry proof is exercised by the dedicated real-git test below)
+    monkeypatch.setattr(
+        board_module,
+        "_git",
+        lambda args, cwd: subprocess.CompletedProcess(args, 0, "ok", ""),
+    )
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert _claim(board_module) == 0
+
+
+def test_typed_dependency_is_unmet_when_ancestry_cannot_be_proven(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A merge the API reports but that is not an ancestor of origin/main is refused."""
+    board = _prereq_board_typed()
+    board["completion_records"] = [_forged_record(sha="a" * 40)]
+    _install_gh(
+        board_module,
+        monkeypatch,
+        lambda url, token: {
+            "merged": True,
+            "state": "closed",
+            "base": {"ref": "main"},
+            "merge_commit_sha": "a" * 40,
+        },
+    )
+    monkeypatch.setattr(
+        board_module,
+        "_git",
+        lambda args, cwd: subprocess.CompletedProcess(args, 1, "", ""),
+    )
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert _claim(board_module) == 2
+
+
+def test_typed_dependency_is_unmet_without_a_token(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No credential ⇒ cannot verify ⇒ fails closed (the hermetic env has no token)."""
+    board = _prereq_board_typed()
+    board["completion_records"] = [_forged_record(sha="a" * 40)]
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert _claim(board_module) == 2
+
+
+def test_verification_is_cached_within_ttl_and_forced_when_stale(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verified merge is cached (no repeat call); a stale entry forces a re-check."""
+    board = _prereq_board_typed()
+    record = _forged_record(sha="a" * 40)
+    board["completion_records"] = [record]
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    calls = {"n": 0}
+
+    def _handler(url: str, token: object) -> dict:
+        calls["n"] += 1
+        return {
+            "merged": True,
+            "state": "closed",
+            "base": {"ref": "main"},
+            "merge_commit_sha": "a" * 40,
         }
-    ]
+
+    _install_gh(board_module, monkeypatch, _handler)
+    monkeypatch.setattr(
+        board_module,
+        "_git",
+        lambda args, cwd: subprocess.CompletedProcess(args, 0, "ok", ""),
+    )
+    token = "tok"
+    ok1, _ = board_module._merge_still_verified(record, token=token)
+    ok2, why2 = board_module._merge_still_verified(record, token=token)
+    assert ok1 and ok2 and "cached" in why2
+    assert calls["n"] == 1  # second call served from cache
+
+    # expire the cache entry and prove the re-check actually happens
+    cache = board_module._load_verify_cache()
+    for entry in cache.values():
+        entry["checked_at"] = "2000-01-01T00:00:00Z"
+    board_module._save_verify_cache(cache)
+    ok3, _ = board_module._merge_still_verified(record, token=token)
+    assert ok3 and calls["n"] == 2
+
+    # a DIFFERENT token identity must not reuse the cached verification
+    ok4, _ = board_module._merge_still_verified(record, token="other")
+    assert ok4 and calls["n"] == 3
+
+
+def test_verification_cache_is_not_shared_across_tokens() -> None:
+    """The cache key embeds a non-reversible token fingerprint, never the token."""
+    board_module = _load_board_cli()
+    assert board_module._token_fingerprint(None) == "anonymous"
+    fp = board_module._token_fingerprint("secret-token")
+    assert fp == hashlib.sha256(b"secret-token").hexdigest()[:16]
+    assert "secret-token" not in fp
+    assert board_module._token_fingerprint("secret-token") != board_module._token_fingerprint(
+        "other"
+    )
+
+
+def test_next_does_not_propose_a_task_blocked_by_a_forged_pr_record(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``next`` must refuse to propose work whose PR dependency is only forged."""
+    board = _prereq_board_typed()
+    board["claims"][1]["status"] = "queued"
+    board["completion_records"] = [_forged_record()]
+    _install_gh(
+        board_module,
+        monkeypatch,
+        lambda url, token: {
+            "merged": False,
+            "state": "open",
+            "base": {"ref": "main"},
+            "merge_commit_sha": None,
+        },
+    )
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    assert board_module.main(["claim", "dependent", "--branch", "arena/999-me"]) == 2
-    # a forged source is rejected too
-    board["completion_records"][0]["evidence"]["merge_commit_sha"] = "a" * 40
-    board["completion_records"][0]["evidence"]["source"] = "a-text-note"
-    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    assert board_module.main(["claim", "dependent", "--branch", "arena/999-me"]) == 2
-    # with a real merge SHA from github_api it is met
-    board["completion_records"][0]["evidence"]["source"] = "github_api"
-    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    assert board_module.main(["claim", "dependent", "--branch", "arena/999-me"]) == 0
+    board_module.main(["next", "--branch", "arena/999-me"])
+    out = capsys.readouterr().out
+    assert "dependent" not in out.split("NEXT:")[-1] or "BLOCKED" in out
+    assert "NEXT: dependent" not in out
 
 
 def _fake_pr(

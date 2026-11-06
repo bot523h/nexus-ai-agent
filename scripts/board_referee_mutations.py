@@ -279,6 +279,12 @@ MUTATIONS: tuple[Mutation, ...] = (
         '    if False:\n        return None, f"{api_sha} is not an ancestor of {main_ref}"',
         "record-pr-merge must prove the merge commit is an ancestor of origin/main",
     ),
+    Mutation(
+        "consumer_trusts_stored_merge_text",
+        "        verified, _why = _merge_still_verified(record, token=_token() if token is None else token)\n        if verified:",
+        "        verified, _why = True, None  # mutation: trust the stored record text\n        if verified:",
+        "the consumer must re-verify a stored merge against GitHub, never trust the board text",
+    ),
 )
 
 
