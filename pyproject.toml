@@ -67,6 +67,7 @@ dev = [
   "pypdf>=5.1",  # keep the pdf-extraction test path real, not mocked
   "imageio-ffmpeg>=0.5",  # bundles a static FFmpeg: the render test runs a real encode
   "deptry>=0.20",  # declared-vs-imported dependency gate (`make deps`, CI lint job)
+  "pip-audit>=2.7",  # known-vulnerability gate (`make audit`, CI dependency-audit job)
 ]
 
 [tool.setuptools]
