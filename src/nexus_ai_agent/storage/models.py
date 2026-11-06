@@ -542,6 +542,43 @@ class ProjectRevisionHead(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
+# ── Durable artifact→revision binding (task-282 Slice 2) ─────────────────────
+# When a creative job publishes an artifact, the artifact's measured content
+# digest is bound here to the EXACT project revision the job was admitted
+# against (``ProjectRevision``), never to a project head that may have moved.
+# This is the durable link the artifact→revision contract needs; it introduces
+# no parallel artifact store, verifier, passport or provenance authority — it is
+# a single content-addressed binding row whose bytes are re-measured on read.
+
+
+class ProjectArtifactBinding(SQLModel, table=True):
+    """One immutable binding of a published artifact to the revision it served.
+
+    ``artifact_id`` is the content address (``sha256:<hex>``) of the artifact
+    bytes, so an identical artifact published twice is the same row (idempotent
+    replay) and can never be silently rewritten.  ``revision_id`` is a foreign
+    key to the immutable ``projectrevision`` row the job was admitted against;
+    the read path re-validates that the revision still hashes to its own
+    identity before the binding is trusted.  A binding is deliberately
+    append-only: the durable artifact bytes are the authority, so a divergence
+    is a hard failure, never an update.
+    """
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "artifact_id", name="uq_projectartifactbinding_project_artifact"
+        ),
+    )
+
+    artifact_id: str = Field(primary_key=True)
+    project_id: str = Field(foreign_key="appproject.project_id", index=True)
+    revision_id: str = Field(foreign_key="projectrevision.revision_id", index=True)
+    job_id: str = Field(default="", index=True)
+    artifact_kind: str = Field(default="binary")
+    size_bytes: int = Field(ge=0)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
 # ── Knowledge retrieval (task-273) ──────────────────────────────────────────
 # Canonical registry of *authorized knowledge sources* — the authoritative
 # record of what the local-first knowledge index was built from.  The index

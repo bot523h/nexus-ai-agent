@@ -175,6 +175,52 @@ MUTATIONS: tuple[Mutation, ...] = (
         "task-282: the handoff must pin the ADMITTED revision and never re-read the "
         "live head; re-reading re-targets the job at a concurrent head move (TOCTOU)",
     ),
+    Mutation(
+        "artifact_binding_conflict_ignored",
+        STORE,
+        """        if row.revision_id != revision_id:
+            raise ArtifactBindingConflict("artifact already bound to a different revision")""",
+        """        if False:  # mutated: repointing an artifact to another revision is allowed
+            raise ArtifactBindingConflict("artifact already bound to a different revision")""",
+        "Slice 2: an artifact's provenance is fixed at first bind; dropping the "
+        "conflict check silently re-points it at another revision",
+    ),
+    Mutation(
+        "artifact_binding_skips_revision_validation",
+        STORE,
+        """        record = await self._revision_store.load_revision(project_id, revision_id)
+        if record.project_id != project_id:  # pragma: no cover - load_revision enforces it
+            raise CrossProjectAccess("revision does not belong to the requested project")""",
+        "        pass  # mutated: binding no longer validates the revision exists",
+        "Slice 2: an artifact must only bind to a revision that exists and validates; "
+        "skipping the load lets an artifact bind to a vanished/tampered revision",
+    ),
+    Mutation(
+        "artifact_verify_remeasure_removed",
+        STORE,
+        """        if content_address_of_file(artifact_path) != binding.artifact_id:
+            raise ArtifactRevisionMismatch(
+                "artifact bytes no longer match the bound content address"
+            )""",
+        """        if False:  # mutated: re-verification no longer re-measures the artifact
+            raise ArtifactRevisionMismatch(
+                "artifact bytes no longer match the bound content address"
+            )""",
+        "Slice 2: re-verification must re-measure the artifact bytes; removing the "
+        "re-measure trusts a replaced/tampered artifact",
+    ),
+    Mutation(
+        "artifact_binding_failopen",
+        RENDER_JOBS,
+        """    except DurableProjectStateError as exc:
+        raise CreativeRenderError(
+            "artifact_binding_failed", f"{type(exc).__name__}: {exc}"
+        ) from exc""",
+        """    except DurableProjectStateError:  # mutated: binding failure is swallowed
+        return result""",
+        "Slice 2: a refused binding must fail the job closed, never succeed without "
+        "provenance; swallowing the error lets a pinned job publish unbound",
+    ),
 )
 
 TEST_TIMEOUT_SECONDS = 600

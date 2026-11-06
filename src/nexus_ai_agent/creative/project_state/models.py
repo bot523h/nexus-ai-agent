@@ -45,6 +45,32 @@ class RevisionIntegrityError(DurableProjectStateError):
     """
 
 
+class ArtifactBindingError(DurableProjectStateError):
+    """Base error for the durable artifact→revision binding (Slice 2)."""
+
+
+class ArtifactNotFound(ArtifactBindingError):
+    """The requested artifact is not durably bound to any revision."""
+
+
+class ArtifactBindingConflict(ArtifactBindingError):
+    """An artifact was re-bound to a *different* revision than its first binding.
+
+    A binding is append-only: an artifact's provenance is fixed the moment its
+    bytes are measured, so a later attempt to point the same content address at
+    another revision is refused rather than silently overwriting history.
+    """
+
+
+class ArtifactRevisionMismatch(ArtifactBindingError):
+    """The artifact's current bytes no longer match the bound content address.
+
+    Re-verification re-measures the artifact and refuses when it differs from
+    the digest recorded at bind time — the durable bytes, not a claim, are the
+    authority, so a replaced or corrupted artifact fails closed.
+    """
+
+
 @dataclass(frozen=True)
 class RevisionRecord:
     """One durable, immutable project revision as read back from storage."""
