@@ -159,6 +159,7 @@ placeholder text.
 | [audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md](audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md) | NEXUS-OMNI morning handoff: executive summary, delivered fixes (PR #304/#305), open risks with owners, what is NOT proven, and the Now/Next/Later plan. |
 | [audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md](audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md) | NEXUS-OMNI live closeout (Persian): post-merge ground truth on `main` @ `b63a22a8`, the seven merged PRs, the Manus-artifact absence record, precise CI state, B2/R2 changes, backup/restore truth, SEC-4 status, the 42-PR classification, board-drift reconciliation, and the owned remediation plan. |
 | [audits/NEXUS_OMNI_DELTA_2026-11-05.md](audits/NEXUS_OMNI_DELTA_2026-11-05.md) | NEXUS-OMNI 2026-11-05 delta: live-main re-verification (PR #315 merged, mutation job green), the board-prerequisite enforcement finding + fix (PR #316), the fail-closed `maintenance` backup analysis, supply-chain re-check, and the honest Now/Next/Later. |
+| [audits/NEXUS_OMNI_FINAL_PREMERGE_PROOF_2026-11-06.md](audits/NEXUS_OMNI_FINAL_PREMERGE_PROOF_2026-11-06.md) | Final pre-merge hardening & integration proof for #316/#317/#318: the two P0 board findings (forgeable PR-merge evidence; `completed_released` satisfying prerequisites) and the dependency-gate P1 hardening, each with its fix, test and killed mutation — plus the combined-tree integration proof (zero conflicts, all gates green) and the explicit proven / NOT_PROVEN boundary. |
 
 ## Engineering (mission records)
 
