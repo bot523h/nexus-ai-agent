@@ -3,23 +3,32 @@
 Index of durable, expensive-to-learn facts. Detail goes to daily logs.
 
 ## NEXUS final pre-merge hardening + integration proof (2026-11-06)
-- **Heads pushed:** #316 `617983fc` (P0 board trust-boundary fix + proof doc),
+- **Heads pushed:** #316 `020d8b11` (P0 board trust-boundary fix + live-main-cache fix),
   #318 `3cfaed2f` (dependency-gate env-marker + fail-closed hardening), #317
   `47e0a80e` (unchanged). `main` untouched @ `aadaf531…`; **no merges performed**.
-- **P0 (board):** `_pr_satisfied()` trusted stored text → a hand-forged
-  `source=github_api` + `"a"*40` SHA opened a typed PR dependency. Fixed: live
-  re-verify via `_merge_still_verified` (merged-into-main + API sha == recorded +
-  ancestor of `origin/main`), fail-closed on every path, 10-min cache keyed by
-  `(repo, number, sha, sha256(token)[:16])` (cache file gitignored).
+- **P0 (board), two layers:** (1) `_pr_satisfied()` trusted stored text → a hand-forged
+  `source=github_api` + `"a"*40` SHA opened a typed PR dependency; fixed by live
+  re-verify via `_merge_still_verified`, fail-closed on every path. (2) that first fix
+  proved ancestry against the LOCAL `origin/main` ref and keyed the 10-min cache by
+  `(repo, number, sha, sha256(token)[:16])` only — a stale/shallow clone could vouch for
+  a merge GitHub moved past. **Corrected fix:** `_live_main_sha` reads
+  `GET /git/ref/heads/main` on EVERY verification and binds that SHA into the cache key
+  (a moved main voids a warm cache); `_github_ancestry_proven` uses
+  `GET /compare/{merge}...{main}` with a single combined guard
+  (`status in {ahead,identical} AND behind_by == 0`); the fetched SHA is threaded so the
+  cache key and the proof cannot disagree (no TOCTOU). Cache file gitignored.
 - **P1 (dep gate):** `_pin_still_holds` ignored env markers → a `win32` cap blocked
   on Linux. Added `_marker_applies`; `_load_allowlist`/`_parse_pip_audit` now fail
   closed on malformed input. Findings keyed by `(package, id)`.
-- **Mutation campaign 37 → 38** (`consumer_trusts_stored_merge_text`), 38/38 killed.
-  The pinned count lives in BOTH `tests/unit/test_mutation_harness_anchors.py` and
-  the `ci.yml` job/step names — keep them in sync.
+- **Mutation campaign 38 → 42** (`cache_key_drops_the_live_main_sha`,
+  `consumer_warm_cache_masks_an_api_outage`, `ancestry_accepts_a_non_ancestor`,
+  `live_main_sha_is_not_validated`, re-anchored `record_pr_merge_skips_ancestry_proof`),
+  42/42 killed. The pinned count lives in BOTH `tests/unit/test_mutation_harness_anchors.py`
+  and the `ci.yml` job/step names — keep them in sync.
 - **Integration proof:** #318→#316→#317 merge with **zero conflicts**; combined
   gates green (ruff/mypy/273 tests/38 mutations/full suite 6389 pass). Scratch
-  branch `integ-proof-316-317-318` @ `dad1dd9d` (deleted after proof).
+  branch `integ-proof-316-317-318` @ `dad1dd9d` (deleted after proof). Post-fix
+  standalone: full non-slow suite **6375 passed / 39 skipped**, targeted 142 pass.
 - Required `main` checks: `lint (ruff + mypy + version lockstep)`,
   `test (pytest -m "not slow")`, `merge-base-guard (base == main)`; `strict:true`,
   no required reviews. GitHub check-runs API returns both the live and the
