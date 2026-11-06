@@ -63,6 +63,12 @@ placeholder text.
 | [architecture/SEC4_EGRESS_GATE_DESIGN.md](architecture/SEC4_EGRESS_GATE_DESIGN.md) | SEC-4 unified provider-egress gate — DESIGN ONLY: the ungated `/ai`→Gemini path (evidence), the full first-party egress inventory, the single-authority `EgressGate` architecture, a staged migration plan, adversarial test definitions, and the five OPEN owner decisions. No runtime change. |
 | [architecture/TRUTH_DOCTOR.md](architecture/TRUTH_DOCTOR.md) | The repo-truth authority (law R16): one pure-stdlib scanner for version lock-step, docs index/link integrity, boundary-law→test resolution, documentation claim witnesses, and truthy-default verdict reads — with its finding codes and honest limits. |
 
+## Product (living view — updated in place)
+
+| Document | What it is |
+|---|---|
+| [product/NAGAR_ONE_PRODUCT_CONTRACT.md](product/NAGAR_ONE_PRODUCT_CONTRACT.md) | The NAGAR-ONE product frame: what the product is (Studio, not Telegram), the two non-negotiable laws (Intent ≠ Authority; one authority per responsibility), the target architecture chain, the traceability requirement, and the Stage 0–3 scope. |
+
 ## Overnight (dated engineering record — one-night session)
 
 | Document | What it is |
@@ -170,6 +176,7 @@ placeholder text.
 |---|---|
 | [engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md](engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md) | M0 live audit for mission NAGAR-IBPC-LIVE-EDITING-01: 21-component inventory with file evidence, real execution path, verifier calibration, forbidden paths, NOW/NEXT/LATER. |
 | [engineering/NAGAR_IBPC.md](engineering/NAGAR_IBPC.md) | The IBPC slice (intent-bound proof capsules for live editing): chain, red-line→test map, scope semantics, verifier calibration, fencing, privacy, package map — plus the security closure (threat model, audio-ingress policy, approval identity contract, 13/13 mutation evidence) and the honest in-process lifecycle table (Implemented…ProductionVerified labels). |
+| [engineering/NAGAR_ONE_TRUTH_MATRIX.md](engineering/NAGAR_ONE_TRUTH_MATRIX.md) | The NAGAR-ONE technical truth matrix: every core capability labelled VERIFIED/PARTIAL/MISSING/BLOCKED/DEFERRED with its implementation site, test/evidence, and remaining gap — and the Stage 0–3 gate status. |
 
 ## History (archived — read-only, never a source of truth)
 
