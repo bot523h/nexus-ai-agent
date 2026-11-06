@@ -98,8 +98,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     ),
     Mutation(
         "release_does_not_advance_generation",
-        '    claim["generation"] = _generation(claim) + 1\n    save_board(board)\n    print(\n        f"RELEASED',
-        '    claim["generation"] = _generation(claim)  # mutation: release must advance the epoch\n    save_board(board)\n    print(\n        f"RELEASED',
+        '    claim["generation"] = _generation(claim) + 1\n    save_board(board)\n    if complete:',
+        '    claim["generation"] = _generation(claim)  # mutation: release must advance the epoch\n    save_board(board)\n    if complete:',
         "releasing a lease must advance its fencing epoch",
     ),
     Mutation(
@@ -223,6 +223,91 @@ MUTATIONS: tuple[Mutation, ...] = (
         "        return 2  # mutation: reintroduce the mandatory gates_owner (fail-closed on absence)",
         "policy 2026-10-19: a missing gates_owner must not fail the check "
         "(zero owners is verifiable, never unverifiable)",
+    ),
+    # --- PR #316 hardening: prerequisite gate, schema validation, typed PR deps ---
+    Mutation(
+        "prerequisite_check_disabled",
+        "    unmet = _unmet_prerequisites(board, claim)\n    if unmet:",
+        "    unmet = []\n    if unmet:",
+        "a claim on blocked work must be refused, never granted",
+    ),
+    Mutation(
+        "malformed_prerequisite_not_validated",
+        "    if not isinstance(entry, dict):\n        got = type(entry).__name__",
+        "    if False:\n        got = type(entry).__name__",
+        "a non-string/non-object prerequisite must be a schema error, not a crash",
+    ),
+    Mutation(
+        "ghost_prerequisite_accepted",
+        "            if isinstance(entry, str) and entry not in ids:",
+        "            if False and isinstance(entry, str) and entry not in ids:",
+        "a dependency on an unregistered task must be refused at the load boundary",
+    ),
+    Mutation(
+        "release_marks_done_by_default",
+        '    complete = bool(getattr(args, "complete", False))',
+        "    complete = True  # mutation: release always marks the task terminal",
+        "a plain release must not mark a still-sliced task terminal 'done'",
+    ),
+    Mutation(
+        "typed_pr_evidence_source_not_checked",
+        '        if evidence.get("source") not in PR_MERGE_EVIDENCE_SOURCES:\n            continue',
+        "        if False:\n            continue",
+        "a typed PR dependency must reject a merge record from an untrusted source",
+    ),
+    Mutation(
+        "released_status_satisfies_a_prerequisite",
+        'SATISFIED_STATUSES = frozenset({"done", "completed_merged"})',
+        'SATISFIED_STATUSES = frozenset({"done", "completed_merged", "completed_released"})',
+        "a released epic/slice must keep blocking its dependents, not satisfy them",
+    ),
+    Mutation(
+        "record_pr_merge_skips_api_verification",
+        "        merge_sha, why = _verify_pr_merge(args.repo, args.number, recorded, token)",
+        "        merge_sha, why = (recorded or 'a' * 40), None  # mutation: trust the operator",
+        "record-pr-merge must verify the merge against GitHub, never take the operator's word",
+    ),
+    Mutation(
+        "record_pr_merge_accepts_a_non_merged_pr",
+        '    if detail.get("merged") is not True:',
+        "    if False:  # mutation: accept an unmerged PR",
+        "record-pr-merge must refuse a PR that was not actually merged",
+    ),
+    Mutation(
+        "record_pr_merge_skips_ancestry_proof",
+        '    proven, why = _github_ancestry_proven(repo, api_sha, live_main, token)\n    if not proven:\n        return None, why or "ancestry could not be proven"',
+        '    proven, why = True, None  # mutation: skip the live ancestry proof\n    if not proven:\n        return None, why or "ancestry could not be proven"',
+        "record-pr-merge must prove the merge commit is contained by the live main",
+    ),
+    Mutation(
+        "consumer_trusts_stored_merge_text",
+        "        verified, _why = _merge_still_verified(record, token=_token() if token is None else token)\n        if verified:",
+        "        verified, _why = True, None  # mutation: trust the stored record text\n        if verified:",
+        "the consumer must re-verify a stored merge against GitHub, never trust the board text",
+    ),
+    Mutation(
+        "cache_key_drops_the_live_main_sha",
+        '    key = f"{repo}#{number}@{recorded_sha}:{live_main}:{_token_fingerprint(token)}"',
+        '    key = f"{repo}#{number}@{recorded_sha}:{_token_fingerprint(token)}"  # mutation: ignore the live main sha',
+        "the cache key must embed the live main sha so a moved main voids a warm cache",
+    ),
+    Mutation(
+        "consumer_warm_cache_masks_an_api_outage",
+        '    live_main, why = _live_main_sha(repo, token)\n    if live_main is None:\n        return False, why or "the live GitHub main ref could not be read (fail closed)"',
+        '    live_main, why = _live_main_sha(repo, token)\n    if live_main is None:\n        live_main = "0" * 40  # mutation: guess a main sha instead of failing closed',
+        "an unreadable live main ref must fail closed, never be guessed",
+    ),
+    Mutation(
+        "ancestry_accepts_a_non_ancestor",
+        '    if status not in ("ahead", "identical") or behind_by != 0:',
+        "    if False:  # mutation: accept any compare status as an ancestry proof",
+        "a diverged/behind compare result must never be accepted as an ancestry proof",
+    ),
+    Mutation(
+        "live_main_sha_is_not_validated",
+        '    if not isinstance(sha, str) or not _SHA40.match(sha.lower()):\n        return None, f"GitHub {PR_MERGE_MAIN_REF} ref for {repo} has no 40-hex sha"',
+        '    if False:  # mutation: accept an unvalidated live main sha\n        return None, f"GitHub {PR_MERGE_MAIN_REF} ref for {repo} has no 40-hex sha"',
+        "the live main ref must be a validated 40-hex sha, never a malformed value",
     ),
 )
 

@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -102,6 +103,62 @@ _DEFAULT_FA = (
 
 ACTIVE_STATUSES = frozenset({"active", "active_in_review"})
 
+#: A prerequisite is *satisfied* (its dependents may proceed) only when its task
+#: has genuinely completed. ``done`` is terminal; ``completed_merged`` is the
+#: historical spelling some records carry for the same fact as ``done``.
+#: ``completed_released`` is explicitly NOT completion: ``release`` (without
+#: ``--complete``) frees the zone but leaves the task's own slices/children open,
+#: so a released epic must keep blocking its dependents, and a released slice is
+#: claimable again rather than done. ``expired``/``deferred``/``queued``/
+#: ``active`` are likewise unmet, and a dependency on a task with no record at
+#: all is unverifiable, never free to skip.
+SATISFIED_STATUSES = frozenset({"done", "completed_merged"})
+
+#: Statuses that end a lease without the task being finished (a slice/epic handed
+#: back to the queue). ``release`` sets one of these unless ``--complete`` is given.
+RELEASED_STATUSES = frozenset({"completed_released", "available"})
+
+#: Statuses from which a task is claimable. A released-but-unfinished task is
+#: claimable again (that is the point of releasing it); a ``done`` task is not.
+CLAIMABLE_STATUSES = frozenset(
+    {"queued", "available", "expired", "deferred", "completed_released"}
+    | {
+        "available_sequenced_post_33",
+        "available_sequenced_post_32",
+        "available_sequenced_post_32_33",
+    }
+)
+
+#: A typed prerequisite may be either a plain task id (a string) or a structured
+#: external dependency. Today the only structured kind is a pull request that must
+#: be provably merged into ``main``; a bare note ("waits for PR #294") is *not* a
+#: dependency and never gates anything.
+PREREQUISITE_KINDS = frozenset({"pull_request"})
+PULL_REQUEST_REQUIRED_STATES = frozenset({"merged_into_main"})
+PR_MERGE_EVIDENCE_SOURCES = frozenset({"github_api"})
+_SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+#: How long a verified merge is trusted before it is re-checked against GitHub.
+#: Short by design: the point is to stop a board edit from forging a merge, not
+#: to make a stale read permanent.
+PR_MERGE_CACHE_TTL = timedelta(minutes=10)
+
+#: GitHub is the *authority* for what ``main`` is. The board never trusts the
+#: local ``origin/main`` ref for a merge verdict: a stale or shallow clone can
+#: report a ref GitHub has already moved past, so an ancestry check against it
+#: could vouch for a merge that is no longer contained by the live branch. The
+#: live ref is read on every verification and bound into the cache key.
+PR_MERGE_MAIN_REF = "main"
+
+
+class BoardValidationError(ValueError):
+    """The board file is structurally invalid.
+
+    Raised at the load boundary (before any mutation) so a malformed board can
+    never be silently claimed against, and so the CLI can report one actionable
+    line instead of a raw traceback (PR #316 review finding 1).
+    """
+
 
 def _is_active_claim(claim: dict) -> bool:
     """True when a claim owns its zone and exclusive paths right now.
@@ -132,13 +189,131 @@ def _parse(ts: str | None) -> datetime | None:
         return None
 
 
+def _validate_prerequisite_entry(task: str, index: int, entry: object) -> str | None:
+    """Return a human-readable problem string, or ``None`` when *entry* is valid.
+
+    A prerequisite is either a plain task id (non-empty ``str``) or a typed
+    dependency object. Anything else — an int, a nested list, a dict without a
+    recognised ``kind`` — is a schema error, because the alternative is a
+    ``TypeError`` deep inside ``claim`` (PR #316 review finding 1).
+    """
+    where = f"{task}.prerequisites[{index}]"
+    if isinstance(entry, str):
+        return None if entry.strip() else f"{where} is an empty task id"
+    if not isinstance(entry, dict):
+        got = type(entry).__name__
+        return f"{where} must be a task id string or a typed dependency object, got {got}"
+    kind = entry.get("kind")
+    if kind not in PREREQUISITE_KINDS:
+        kinds = sorted(PREREQUISITE_KINDS)
+        return f"{where}.kind {kind!r} is not a supported dependency kind ({kinds})"
+    if kind == "pull_request":
+        repo = entry.get("repository")
+        if not isinstance(repo, str) or repo.count("/") != 1 or not repo.strip():
+            return f"{where}.repository must be 'owner/name'"
+        if not isinstance(entry.get("number"), int) or entry["number"] <= 0:
+            return f"{where}.number must be a positive integer"
+        if entry.get("required_state") not in PULL_REQUEST_REQUIRED_STATES:
+            return f"{where}.required_state must be one of {sorted(PULL_REQUEST_REQUIRED_STATES)}"
+    return None
+
+
+def _iter_task_prereqs(board: dict) -> Iterator[tuple[str, str]]:
+    """Yield ``(dependent_task, prerequisite_task_id)`` for every plain task edge."""
+    for claim in board.get("claims", []):
+        task = claim.get("task")
+        if not isinstance(task, str):
+            continue
+        for entry in claim.get("prerequisites") or []:
+            if isinstance(entry, str) and entry.strip():
+                yield task, entry
+
+
+def _find_dependency_cycles(board: dict) -> list[str]:
+    """Return a readable cycle description per cyclic group, or ``[]`` when acyclic."""
+    ids = {c["task"] for c in board.get("claims", []) if isinstance(c.get("task"), str)}
+    edges: dict[str, list[str]] = {i: [] for i in ids}
+    for dependent, prereq in _iter_task_prereqs(board):
+        if prereq in ids:
+            edges[dependent].append(prereq)
+    WHITE, GRAY, BLACK = 0, 1, 2
+    colour = dict.fromkeys(ids, WHITE)
+    cycles: list[str] = []
+
+    def visit(node: str, path: list[str]) -> None:
+        colour[node] = GRAY
+        for nxt in edges.get(node, []):
+            if colour[nxt] == GRAY:
+                cycles.append(" -> ".join(path[path.index(nxt) :] + [nxt]))
+            elif colour[nxt] == WHITE:
+                visit(nxt, path + [nxt])
+        colour[node] = BLACK
+
+    for start in ids:
+        if colour[start] == WHITE:
+            visit(start, [start])
+    return cycles
+
+
+def validate_board_schema(board: object) -> None:
+    """Reject a structurally invalid board before any read or mutation.
+
+    Covers the ``prerequisites`` contract specifically (a dependency is either a
+    task-id string or a typed object), plus the graph-level facts that make the
+    prerequisite gate meaningful: no ghost task ids and no dependency cycles. A
+    bad board raises :class:`BoardValidationError` with one actionable message.
+    """
+    if not isinstance(board, dict):
+        raise BoardValidationError("board root must be a JSON object")
+    claims = board.get("claims")
+    if not isinstance(claims, list):
+        raise BoardValidationError("board.claims must be a list")
+    ids: set[str] = set()
+    for pos, claim in enumerate(claims):
+        if not isinstance(claim, dict):
+            raise BoardValidationError(f"claims[{pos}] must be an object")
+        task = claim.get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise BoardValidationError(f"claims[{pos}] has no valid 'task' id")
+        ids.add(task)
+    for claim in claims:
+        prereqs = claim.get("prerequisites")
+        if prereqs is None:
+            continue
+        if not isinstance(prereqs, list):
+            raise BoardValidationError(
+                f"{claim['task']}.prerequisites must be a list, got {type(prereqs).__name__}"
+            )
+        for index, entry in enumerate(prereqs):
+            problem = _validate_prerequisite_entry(claim["task"], index, entry)
+            if problem:
+                raise BoardValidationError(problem)
+            if isinstance(entry, str) and entry not in ids:
+                raise BoardValidationError(
+                    f"{claim['task']} depends on unregistered task {entry!r} "
+                    "(a dependency on work nobody registered is unverifiable)"
+                )
+    cycles = _find_dependency_cycles(board)
+    if cycles:
+        raise BoardValidationError("prerequisite cycle(s) detected: " + "; ".join(sorted(cycles)))
+
+
 def load_board() -> dict:
     if not BOARD.exists():
         sys.exit(f"board not found: {BOARD}")
-    return json.loads(BOARD.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(BOARD.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise BoardValidationError(f"board is not valid JSON: {exc}") from exc
+    validate_board_schema(data)
+    return data
 
 
 def save_board(board: dict) -> None:
+    # Validate on the way out too: a bug that wrote a malformed prerequisite
+    # (or a ghost/cyclic edge) would otherwise persist an unloadable board and
+    # break every other agent's next command.
+    validate_board_schema(board)
     board["updated_at"] = _iso(_now())
     BOARD.write_text(json.dumps(board, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -210,6 +385,100 @@ def gc_expired(board: dict) -> list[str]:
 
 def _find(board: dict, task: str) -> dict | None:
     return next((c for c in board.get("claims", []) if c["task"] == task), None)
+
+
+def _completion_records(board: dict) -> list[dict]:
+    records = board.get("completion_records")
+    return records if isinstance(records, list) else []
+
+
+def _pr_satisfied(board: dict, entry: dict, *, token: str | None = None) -> bool:
+    """True when a matching PR-merge completion record is *live-verified*.
+
+    A typed ``pull_request`` prerequisite is satisfied only by a completion record
+    whose repository, number and required state match **and** whose merge is
+    re-verified against GitHub (see :func:`_merge_still_verified`). Stored text —
+    ``source: github_api`` and a 40-hex SHA typed into the board — is a *claim*,
+    not evidence: anyone who can edit the board can forge both. The record only
+    counts when the API agrees the PR is merged into ``main`` with that exact
+    ``merge_commit_sha``, proven contained by the branch GitHub currently reports
+    as ``main``. Any failure to prove it (a forged SHA, a missing token, an
+    unreachable API) leaves the dependency unmet — the gate fails closed
+    (mission §3.3).
+    """
+    repo = entry.get("repository")
+    number = entry.get("number")
+    required = entry.get("required_state")
+    for record in _completion_records(board):
+        if not isinstance(record, dict):
+            continue
+        if record.get("kind") != "pull_request":
+            continue
+        if record.get("repository") != repo or record.get("number") != number:
+            continue
+        if record.get("state") != required:
+            continue
+        evidence = record.get("evidence")
+        if not isinstance(evidence, dict):
+            continue
+        if evidence.get("source") not in PR_MERGE_EVIDENCE_SOURCES:
+            continue
+        if not isinstance(evidence.get("merge_commit_sha"), str):
+            continue
+        if not _SHA40.match(evidence["merge_commit_sha"].lower()):
+            continue
+        verified, _why = _merge_still_verified(record, token=_token() if token is None else token)
+        if verified:
+            return True
+    return False
+
+
+def _describe_prereq(entry: object) -> str:
+    if isinstance(entry, dict) and entry.get("kind") == "pull_request":
+        return (
+            f"pull_request {entry.get('repository')}#{entry.get('number')} "
+            f"({entry.get('required_state')})"
+        )
+    return str(entry)
+
+
+def _prereq_is_satisfied(board: dict, entry: object) -> bool:
+    if isinstance(entry, str):
+        other = _find(board, entry)
+        return other is not None and other.get("status") in SATISFIED_STATUSES
+    if isinstance(entry, dict) and entry.get("kind") == "pull_request":
+        return _pr_satisfied(board, entry)
+    return False
+
+
+def _unmet_prerequisites(board: dict, claim: dict) -> list[str]:
+    """Return readable descriptions of the prerequisites of *claim* still unmet.
+
+    A prerequisite is satisfied only when it genuinely completed:
+
+    * a plain task id — its claim exists and its status is in
+      :data:`SATISFIED_STATUSES`. A task that is queued/active/deferred/expired
+      (``expired`` is explicitly *not* completion), or that has no record at all
+      (a dependency on work nobody registered is unverifiable, not free to skip),
+      is unmet;
+    * a typed ``pull_request`` dependency — a matching completion record exists
+      **and** its merge is re-verified against GitHub (see :func:`_pr_satisfied`):
+      the PR is really merged into ``main`` with that exact ``merge_commit_sha``,
+      proven contained by the live ``main`` GitHub reports. Stored text is a claim, not evidence;
+      a note, a flag, a record without evidence, or a record whose merge cannot be
+      re-proven (a forged SHA, a missing token, an unreachable API) never satisfies
+      it — the gate fails closed.
+
+    This is what turns ``prerequisites`` from a text note into a hard precondition
+    for taking the lease, so ``claim``/``next`` cannot hand out blocked work.
+    """
+    unmet: list[str] = []
+    for entry in claim.get("prerequisites") or []:
+        if isinstance(entry, str) and not entry:
+            continue
+        if not _prereq_is_satisfied(board, entry):
+            unmet.append(_describe_prereq(entry))
+    return unmet
 
 
 def _path_matches(excl: str, fp: str) -> bool:
@@ -427,6 +696,26 @@ def _claim_locked(args: argparse.Namespace) -> int:
         if refusal:
             print(refusal)
             return 2
+    # Machine-enforced prerequisites (task-7/10): a lease on blocked work is
+    # never granted. This is a hard precondition, not a note — an unmet (or
+    # unregistered, or PR-merge-unproven) prerequisite refuses the claim, so a
+    # dependent slice cannot start before its dependency is genuinely done.
+    # There is intentionally NO bypass flag: the board CLI has no verifiable
+    # principal, so "owner-only" could not be enforced, and an unenforceable
+    # escape hatch is worse than none (PR #316 review finding 3). To unblock,
+    # finish the dependency or record the PR-merge evidence.
+    unmet = _unmet_prerequisites(board, claim)
+    if unmet:
+        print(
+            f"REFUSED: {args.task} is blocked by unmet prerequisite(s): "
+            f"{', '.join(unmet)} — finish them (status 'done') first."
+        )
+        print(
+            "A prerequisite is satisfied only when its task exists and is 'done' "
+            "(or a PR dependency has a recorded merge with a valid SHA); an "
+            "expired/queued/active dependency is not completion."
+        )
+        return 2
     # gc stamps ``release_reason`` on the record it frees. A takeover reuses that
     # record, and an ACTIVE lease must not still claim to have been released
     # (PR #211 review). Retire the reason into history instead of dropping it.
@@ -484,16 +773,298 @@ def _release_locked(args: argparse.Namespace) -> int:
     if refusal:
         print(refusal)
         return 2
-    claim.update(status="done", agent_branch="", claimed_at=None, gates_owner=False)
+    # Releasing a lease and *completing* a task are different facts. The default
+    # release frees the zone but records the task as ``completed_released`` — its
+    # own deliverable is finished, yet any still-open slices/epic children keep it
+    # from being terminal. ``--complete`` is the explicit "this task is genuinely
+    # done" transition. Conflating them is how a parent epic got marked ``done``
+    # while its slices were still queued (mission §4).
+    complete = bool(getattr(args, "complete", False))
+    claim.update(
+        status="done" if complete else "completed_released",
+        agent_branch="",
+        claimed_at=None,
+        gates_owner=False,
+    )
     # Releasing transfers the zone: advance the epoch so a stale holder cannot
     # act as if it still owns the lease.
     claim["generation"] = _generation(claim) + 1
     save_board(board)
-    print(
-        f"RELEASED {args.task} (generation {claim['generation']}). "
-        "Zone free — next agent can claim."
-    )
+    if complete:
+        print(
+            f"COMPLETED {args.task} (generation {claim['generation']}, status 'done'). "
+            "Zone free — dependents may proceed."
+        )
+    else:
+        print(
+            f"RELEASED {args.task} (generation {claim['generation']}, status "
+            "'completed_released'). Zone free, but the task is NOT done: any task "
+            "that lists it as a prerequisite stays blocked until it is completed "
+            "with --complete."
+        )
     return 0
+
+
+def _live_main_sha(repo: str, token: str | None) -> tuple[str | None, str | None]:
+    """Return GitHub's *current* ``main`` SHA for *repo* — ``(sha, None)`` or ``(None, why)``.
+
+    This is the authority the merge proof hangs from. The board never treats the
+    local ``origin/main`` ref as that authority: a stale or shallow clone can
+    report a ref GitHub has already moved past, so a positive merge verdict must
+    be bound to the live branch, not a cached local ref. A missing token, an
+    unreachable API, or a malformed response returns a reason so every caller
+    refuses — the gate fails **closed** (mission §2).
+    """
+    url = f"https://api.github.com/repos/{repo}/git/ref/heads/{PR_MERGE_MAIN_REF}"
+    try:
+        ref = _gh_get(url, token)
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return None, f"cannot read the live GitHub {PR_MERGE_MAIN_REF} ref: {exc}"
+    if not isinstance(ref, dict):
+        return None, f"GitHub ref response for {repo} is not an object"
+    obj = ref.get("object")
+    if not isinstance(obj, dict):
+        return None, f"GitHub ref response for {repo} carries no object"
+    sha = obj.get("sha")
+    if not isinstance(sha, str) or not _SHA40.match(sha.lower()):
+        return None, f"GitHub {PR_MERGE_MAIN_REF} ref for {repo} has no 40-hex sha"
+    return sha.lower(), None
+
+
+def _github_ancestry_proven(
+    repo: str, ancestor_sha: str, descendant_sha: str, token: str | None
+) -> tuple[bool, str | None]:
+    """Prove *ancestor_sha* is contained by *descendant_sha* using GitHub's compare API.
+
+    ``GET /compare/{ancestor}...{descendant}`` returns ``behind_by`` = the number
+    of commits in *descendant* not in *ancestor*. ``behind_by == 0`` with a
+    status of ``ahead`` or ``identical`` is exactly "ancestor is contained by
+    descendant". This is the live proof, deliberately independent of any local
+    git state: the merge commit is contained by the branch GitHub currently
+    reports as ``main``, not by a ref this clone happens to hold.
+    """
+    url = f"https://api.github.com/repos/{repo}/compare/{ancestor_sha}...{descendant_sha}"
+    try:
+        data = _gh_get(url, token)
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return False, f"cannot prove ancestry via GitHub compare: {exc}"
+    if not isinstance(data, dict):
+        return False, "GitHub compare response is not an object"
+    status = data.get("status")
+    behind_by = data.get("behind_by")
+    ahead_by = data.get("ahead_by")
+    # ``behind_by == 0`` is the direct meaning of "ancestor is contained by
+    # descendant"; the status check rejects any non-linear relationship. Both are
+    # required and checked together: a "diverged"/"behind" response — or a missing
+    # field — must never be read as a proof.
+    if status not in ("ahead", "identical") or behind_by != 0:
+        return False, (
+            f"{ancestor_sha} is not a contained ancestor of the live {PR_MERGE_MAIN_REF} "
+            f"(compare status={status!r}, behind_by={behind_by!r})"
+        )
+    if not isinstance(ahead_by, int) or ahead_by < 0:
+        return False, "GitHub compare response has no coherent ahead_by (fail closed)"
+    return True, None
+
+
+def _verify_pr_merge(
+    repo: str,
+    number: int,
+    expected_sha: str | None,
+    token: str | None,
+    *,
+    live_main: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Verify a PR was really merged into ``main``; ``(merge_sha, None)`` or ``(None, why)``.
+
+    A completion record's whole value is that it is *evidence*, not a claim: the
+    merge SHA must come from GitHub, be the PR's real ``merge_commit_sha``, name
+    ``main`` as the base, and be a genuine ancestor of the branch GitHub
+    *currently* reports as ``main``. The ancestry is proven through GitHub's
+    compare API against the live main SHA — never against the local
+    ``origin/main`` ref, which a stale or shallow clone can hold past the truth.
+    Every failure — network, a non-merged PR, a wrong base, a SHA mismatch, an
+    unreadable live ref, an unprovable ancestry — returns a reason so the caller
+    refuses. The gate fails closed: an unverifiable merge is never recorded
+    (mission §3.3, §2).
+
+    *live_main* may be supplied by a caller that already read it (the consumer
+    keys its cache on that exact SHA), so the ancestry is proven against the same
+    SHA the verdict is bound to — no window for ``main`` to move between the
+    cache key and the proof.
+    """
+    if live_main is None:
+        live_main, why = _live_main_sha(repo, token)
+        if live_main is None:
+            return None, why
+    try:
+        detail = _gh_get(f"https://api.github.com/repos/{repo}/pulls/{number}", token)
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return None, f"cannot reach the GitHub API to verify {repo}#{number}: {exc}"
+    if not isinstance(detail, dict):
+        return None, f"GitHub PR response for {repo}#{number} is not an object"
+    if detail.get("merged") is not True:
+        return None, f"{repo}#{number} is not merged (state={detail.get('state')!r})"
+    base = detail.get("base") if isinstance(detail.get("base"), dict) else {}
+    if base.get("ref") != PR_MERGE_MAIN_REF:
+        return None, f"{repo}#{number} was merged into {base.get('ref')!r}, not {PR_MERGE_MAIN_REF}"
+    api_sha = detail.get("merge_commit_sha")
+    if not isinstance(api_sha, str) or not _SHA40.match(api_sha.lower()):
+        return None, f"{repo}#{number} has no 40-hex merge_commit_sha"
+    api_sha = api_sha.lower()
+    if expected_sha and expected_sha.lower() != api_sha:
+        return None, (
+            f"{repo}#{number} merge commit is {api_sha}, not the recorded {expected_sha.lower()}"
+        )
+    proven, why = _github_ancestry_proven(repo, api_sha, live_main, token)
+    if not proven:
+        return None, why or "ancestry could not be proven"
+    return api_sha, None
+
+
+def _cache_path() -> Path:
+    """Location of the gitignored merge-verification cache (never committed)."""
+    return BOARD.parent / "board.verify-cache.json"
+
+
+def _load_verify_cache() -> dict:
+    try:
+        data = json.loads(_cache_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_verify_cache(cache: dict) -> None:
+    with contextlib.suppress(OSError):
+        _cache_path().write_text(
+            json.dumps(cache, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+
+def _token() -> str | None:
+    return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None
+
+
+def _token_fingerprint(token: str | None) -> str:
+    """Non-reversible token identity so a cache entry is not shared across accounts."""
+    if not token:
+        return "anonymous"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
+def _merge_still_verified(record: dict, *, token: str | None) -> tuple[bool, str]:
+    """Re-verify a stored merge record against GitHub (the evidence trust boundary).
+
+    A ``completion_records`` entry is *text on the board* and anyone who can edit
+    the board can type ``source: github_api`` and a 40-hex SHA. Trusting that text
+    is the P0 this closes: the consumer re-derives the fact from GitHub instead.
+
+    Returns ``(True, "verified...")`` only when the PR is really merged into
+    ``main``, the API's ``merge_commit_sha`` equals the recorded SHA, and that
+    commit is contained by the branch GitHub **currently** reports as ``main``
+    (proven via the compare API, not the local ``origin/main`` ref). Every other
+    outcome — a non-merged PR, a foreign base, a SHA mismatch, a missing token,
+    an unreachable API, an unprovable ancestry — returns ``(False, reason)``: the
+    gate fails **closed**, because an unverifiable merge must never open a
+    dependency.
+
+    A positive verdict is cached for :data:`PR_MERGE_CACHE_TTL`. The cache key
+    embeds the *live* GitHub main SHA, which is re-read on every call, so a
+    verdict cannot survive ``main`` moving: if the branch advanced, the key
+    changes and the merge is re-proven from scratch. A warm cache never masks an
+    API outage either — the live SHA must be readable for any verdict to stand
+    (mission §2).
+    """
+    repo = record.get("repository")
+    number = record.get("number")
+    raw_evidence = record.get("evidence")
+    evidence: dict = raw_evidence if isinstance(raw_evidence, dict) else {}
+    recorded_sha = evidence.get("merge_commit_sha")
+    if not isinstance(repo, str) or not isinstance(number, int):
+        return False, "the completion record names no repository/number"
+    if not isinstance(recorded_sha, str) or not _SHA40.match(recorded_sha.lower()):
+        return False, "the completion record carries no 40-hex merge SHA"
+    recorded_sha = recorded_sha.lower()
+
+    # The live GitHub main SHA is the authority and is read on *every* call: it
+    # both keys the cache and bounds the ancestry proof, so a stale local ref
+    # (or a warm cache) can never vouch for a merge GitHub has moved past.
+    live_main, why = _live_main_sha(repo, token)
+    if live_main is None:
+        return False, why or "the live GitHub main ref could not be read (fail closed)"
+
+    key = f"{repo}#{number}@{recorded_sha}:{live_main}:{_token_fingerprint(token)}"
+    cache = _load_verify_cache()
+    entry = cache.get(key)
+    now = _now()
+    if isinstance(entry, dict):
+        checked = _parse(entry.get("checked_at"))
+        if entry.get("ok") is True and checked is not None and now - checked < PR_MERGE_CACHE_TTL:
+            return True, f"verified {repo}#{number} (cached)"
+
+    sha, why = _verify_pr_merge(repo, number, recorded_sha, token, live_main=live_main)
+    ok = sha is not None and sha == recorded_sha
+    cache[key] = {"ok": ok, "checked_at": _iso(now), "reason": why or ""}
+    _save_verify_cache(cache)
+    if not ok:
+        return False, why or "the merge could not be verified"
+    return True, f"verified {repo}#{number} @ {recorded_sha} (live main {live_main[:12]})"
+
+
+def cmd_record_pr_merge(args: argparse.Namespace) -> int:
+    """Record a *verified* PR-merge completion so a typed dependency can be met.
+
+    The merge is not taken on the operator's word: :func:`_verify_pr_merge` asks
+    GitHub whether the PR is really merged into ``main``, requires the recorded
+    ``--merge-sha`` (when given) to equal the API's ``merge_commit_sha``, and
+    proves that commit is contained by the live ``main`` GitHub reports. Any doubt is a refusal,
+    so a typed ``pull_request`` prerequisite can never be opened by a forged or
+    mistyped SHA (mission §3.3).
+    """
+    with board_lock():
+        board = load_board()
+        token = args.token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or None
+        recorded = (args.merge_sha or "").strip().lower() or None
+        if recorded is not None and not _SHA40.match(recorded):
+            print(f"refusing: --merge-sha must be a 40-hex commit SHA, got {args.merge_sha!r}")
+            return 2
+        merge_sha, why = _verify_pr_merge(args.repo, args.number, recorded, token)
+        if merge_sha is None:
+            print(f"refusing to record {args.repo}#{args.number}: {why}")
+            return 2
+        records = board.setdefault("completion_records", [])
+        records[:] = [
+            r
+            for r in records
+            if not (
+                isinstance(r, dict)
+                and r.get("kind") == "pull_request"
+                and r.get("repository") == args.repo
+                and r.get("number") == args.number
+            )
+        ]
+        records.append(
+            {
+                "kind": "pull_request",
+                "repository": args.repo,
+                "number": args.number,
+                "state": args.required_state,
+                "evidence": {
+                    "source": "github_api",
+                    "merge_commit_sha": merge_sha,
+                    "recorded_by": args.branch,
+                    "recorded_at": _iso(_now()),
+                },
+            }
+        )
+        save_board(board)
+        print(
+            f"RECORDED pull_request {args.repo}#{args.number} {args.required_state} "
+            f"@ {merge_sha} (verified via GitHub API against the live main ref). "
+            "Dependent typed prerequisites are now met."
+        )
+        return 0
 
 
 def cmd_defer(args: argparse.Namespace) -> int:
@@ -534,7 +1105,7 @@ def cmd_next(args: argparse.Namespace) -> int:
         gc_expired(board)
         save_board(board)
     for claim in board.get("claims", []):
-        if claim["status"] in ("queued", "expired", "deferred"):
+        if claim["status"] in CLAIMABLE_STATUSES:
             blockers = []
             for entry in board.get("deferred_log", []):
                 if entry["task"] != claim["task"]:
@@ -546,6 +1117,13 @@ def cmd_next(args: argparse.Namespace) -> int:
                 print(
                     f"BLOCKED {claim['task']} — waiting on active claim(s): {', '.join(blockers)}"
                 )
+                continue
+            # Prerequisites are a hard precondition, exactly as in ``claim``:
+            # ``next`` must never propose work whose dependency is not ``done``,
+            # or an agent would be handed a task that ``claim`` will refuse.
+            unmet = _unmet_prerequisites(board, claim)
+            if unmet:
+                print(f"BLOCKED {claim['task']} — unmet prerequisite(s): {', '.join(unmet)}")
                 continue
             print(f"NEXT: {claim['task']} (zone {claim.get('zone')}) — {claim.get('scope', '')}")
             print(
@@ -1255,7 +1833,7 @@ def cmd_praudit(args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="NEXUS multi-agent claim board")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -1279,6 +1857,12 @@ def main() -> int:
     p.add_argument("task")
     p.add_argument("--branch", required=True)
     p.add_argument(
+        "--complete",
+        action="store_true",
+        help="mark the task terminal 'done' (default: free the zone as "
+        "'completed_released' — a non-terminal release that still blocks dependents)",
+    )
+    p.add_argument(
         "--expected-generation",
         dest="expected_generation",
         type=int,
@@ -1286,6 +1870,26 @@ def main() -> int:
         help="fencing guard: refuse unless the lease's generation matches (task-219)",
     )
     p.set_defaults(func=cmd_release)
+
+    p = sub.add_parser("record-pr-merge")
+    p.add_argument("--repo", required=True, help="pull request repository, owner/name")
+    p.add_argument("--number", type=int, required=True, help="pull request number")
+    p.add_argument(
+        "--merge-sha",
+        dest="merge_sha",
+        default=None,
+        help="optional cross-check: refuse unless it equals the API's merge_commit_sha "
+        "(the recorded SHA always comes from the GitHub API, never from this flag)",
+    )
+    p.add_argument(
+        "--required-state",
+        dest="required_state",
+        default="merged_into_main",
+        choices=sorted(PULL_REQUEST_REQUIRED_STATES),
+    )
+    p.add_argument("--branch", required=True, help="the branch recording this evidence")
+    p.add_argument("--token", default="", help="GitHub token (else GITHUB_TOKEN env)")
+    p.set_defaults(func=cmd_record_pr_merge)
 
     p = sub.add_parser("defer")
     p.add_argument("task")
@@ -1340,9 +1944,17 @@ def main() -> int:
     p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_praudit)
 
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point. ``argv`` is injectable so tests exercise the real parser path."""
+    args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))
+    except BoardValidationError as exc:
+        print(f"INVALID BOARD: {exc}")
+        return 2
     except BoardLockedError as exc:
         print(f"UNVERIFIABLE: {exc}")
         return 2
