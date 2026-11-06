@@ -275,15 +275,39 @@ MUTATIONS: tuple[Mutation, ...] = (
     ),
     Mutation(
         "record_pr_merge_skips_ancestry_proof",
-        '    if ancestor.returncode != 0:\n        return None, f"{api_sha} is not an ancestor of {main_ref}"',
-        '    if False:\n        return None, f"{api_sha} is not an ancestor of {main_ref}"',
-        "record-pr-merge must prove the merge commit is an ancestor of origin/main",
+        '    proven, why = _github_ancestry_proven(repo, api_sha, live_main, token)\n    if not proven:\n        return None, why or "ancestry could not be proven"',
+        '    proven, why = True, None  # mutation: skip the live ancestry proof\n    if not proven:\n        return None, why or "ancestry could not be proven"',
+        "record-pr-merge must prove the merge commit is contained by the live main",
     ),
     Mutation(
         "consumer_trusts_stored_merge_text",
         "        verified, _why = _merge_still_verified(record, token=_token() if token is None else token)\n        if verified:",
         "        verified, _why = True, None  # mutation: trust the stored record text\n        if verified:",
         "the consumer must re-verify a stored merge against GitHub, never trust the board text",
+    ),
+    Mutation(
+        "cache_key_drops_the_live_main_sha",
+        '    key = f"{repo}#{number}@{recorded_sha}:{live_main}:{_token_fingerprint(token)}"',
+        '    key = f"{repo}#{number}@{recorded_sha}:{_token_fingerprint(token)}"  # mutation: ignore the live main sha',
+        "the cache key must embed the live main sha so a moved main voids a warm cache",
+    ),
+    Mutation(
+        "consumer_warm_cache_masks_an_api_outage",
+        '    live_main, why = _live_main_sha(repo, token)\n    if live_main is None:\n        return False, why or "the live GitHub main ref could not be read (fail closed)"',
+        '    live_main, why = _live_main_sha(repo, token)\n    if live_main is None:\n        live_main = "0" * 40  # mutation: guess a main sha instead of failing closed',
+        "an unreadable live main ref must fail closed, never be guessed",
+    ),
+    Mutation(
+        "ancestry_accepts_a_non_ancestor",
+        '    if status not in ("ahead", "identical") or behind_by != 0:',
+        "    if False:  # mutation: accept any compare status as an ancestry proof",
+        "a diverged/behind compare result must never be accepted as an ancestry proof",
+    ),
+    Mutation(
+        "live_main_sha_is_not_validated",
+        '    if not isinstance(sha, str) or not _SHA40.match(sha.lower()):\n        return None, f"GitHub {PR_MERGE_MAIN_REF} ref for {repo} has no 40-hex sha"',
+        '    if False:  # mutation: accept an unvalidated live main sha\n        return None, f"GitHub {PR_MERGE_MAIN_REF} ref for {repo} has no 40-hex sha"',
+        "the live main ref must be a validated 40-hex sha, never a malformed value",
     ),
 )
 

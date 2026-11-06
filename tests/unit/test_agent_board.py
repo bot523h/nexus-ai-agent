@@ -2439,6 +2439,66 @@ def _install_gh(module: ModuleType, monkeypatch: pytest.MonkeyPatch, handler: ob
     monkeypatch.setattr(module, "_gh_get", handler)
 
 
+#: The live ``main`` SHA and the recorded merge SHA used by the typed-PR stubs.
+LIVE_MAIN_SHA = "f" * 40
+MERGED_SHA = "a" * 40
+
+
+def _compare(status: str = "ahead", *, behind_by: int = 0, ahead_by: int = 1) -> dict:
+    return {"status": status, "behind_by": behind_by, "ahead_by": ahead_by}
+
+
+def _gh_router(
+    *,
+    main_sha: object = LIVE_MAIN_SHA,
+    main_raises: BaseException | None = None,
+    pr: object = None,
+    pr_raises: BaseException | None = None,
+    compare: object = None,
+    compare_raises: BaseException | None = None,
+    calls: dict | None = None,
+):
+    """A URL-routing ``_gh_get`` fake covering the *three* live reads of a proof.
+
+    A merge verdict now hangs from GitHub, not the local git ref, so a stub that
+    only answers the PR endpoint would leave the trust boundary untested. This
+    router answers the authoritative ``git/ref/heads/main`` read (wrapping the
+    resolved ``main_sha`` in the ref envelope), the PR detail, and the ancestry
+    ``compare`` — and counts each so a test can prove the live main ref is read
+    on every call. ``pr``/``compare`` may be a value or a callable
+    ``(url, token) -> value``; ``main_sha`` may be a 40-hex string or a callable
+    returning one; ``*_raises`` injects an API failure.
+    """
+
+    def _resolve(value: object, url: str, token: object) -> object:
+        return value(url, token) if callable(value) else value
+
+    def _handler(url: str, token: object) -> object:
+        if "/git/ref/heads/main" in url:
+            if calls is not None:
+                calls["main"] = calls.get("main", 0) + 1
+            if main_raises is not None:
+                raise main_raises
+            return {"object": {"sha": _resolve(main_sha, url, token)}}
+        if "/compare/" in url:
+            if calls is not None:
+                calls["compare"] = calls.get("compare", 0) + 1
+            if compare_raises is not None:
+                raise compare_raises
+            return _resolve(compare, url, token) if compare is not None else _compare()
+        if "/pulls/" in url:
+            if calls is not None:
+                calls["pr"] = calls.get("pr", 0) + 1
+            if pr_raises is not None:
+                raise pr_raises
+            if pr is None:
+                raise AssertionError(f"unexpected PR fetch: {url}")
+            return _resolve(pr, url, token)
+        raise AssertionError(f"unexpected GitHub URL: {url}")
+
+    return _handler
+
+
 def _claim(board_module: ModuleType) -> int:
     return board_module.main(["claim", "dependent", "--branch", "arena/999-me"])
 
@@ -2456,10 +2516,18 @@ def test_forged_completion_record_does_not_open_a_typed_dependency(
     board = _prereq_board_typed()
     board["completion_records"] = [_forged_record()]
 
-    def _never_merged(url: str, token: object) -> dict:
-        return {"merged": False, "state": "open", "base": {"ref": "main"}, "merge_commit_sha": None}
-
-    _install_gh(board_module, monkeypatch, _never_merged)
+    _install_gh(
+        board_module,
+        monkeypatch,
+        _gh_router(
+            pr={
+                "merged": False,
+                "state": "open",
+                "base": {"ref": "main"},
+                "merge_commit_sha": None,
+            }
+        ),
+    )
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     assert _claim(board_module) == 2
     # a refused claim leaves the lease queued (the board is not mutated)
@@ -2470,30 +2538,48 @@ def test_forged_completion_record_does_not_open_a_typed_dependency(
     "handler",
     [
         # PR really not merged
-        lambda url, token: {
-            "merged": False,
-            "state": "open",
-            "base": {"ref": "main"},
-            "merge_commit_sha": None,
-        },
+        _gh_router(
+            pr={
+                "merged": False,
+                "state": "open",
+                "base": {"ref": "main"},
+                "merge_commit_sha": None,
+            }
+        ),
         # merged, but into a non-main branch
-        lambda url, token: {
-            "merged": True,
-            "state": "closed",
-            "base": {"ref": "release"},
-            "merge_commit_sha": "a" * 40,
-        },
+        _gh_router(
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "release"},
+                "merge_commit_sha": MERGED_SHA,
+            }
+        ),
         # merged into main, but the API SHA disagrees with the recorded one
-        lambda url, token: {
-            "merged": True,
-            "state": "closed",
-            "base": {"ref": "main"},
-            "merge_commit_sha": "c" * 40,
-        },
-        # GitHub API unreachable
-        lambda url, token: (_ for _ in ()).throw(OSError("network down")),
+        _gh_router(
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": "c" * 40,
+            }
+        ),
+        # merged into main, SHA agrees, but the merge is NOT contained by live main
+        _gh_router(
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": MERGED_SHA,
+            },
+            compare=_compare("diverged", behind_by=3, ahead_by=2),
+        ),
+        # GitHub API unreachable at the PR endpoint
+        _gh_router(pr_raises=OSError("network down")),
+        # GitHub API unreachable at the live-main-ref endpoint
+        _gh_router(main_raises=OSError("network down")),
         # response is not even an object
-        lambda url, token: ["not", "a", "dict"],
+        _gh_router(pr=["not", "a", "dict"]),
     ],
 )
 def test_typed_dependency_stays_blocked_on_every_unprovable_merge(
@@ -2516,12 +2602,14 @@ def test_a_record_for_another_pr_does_not_satisfy_the_dependency(
     _install_gh(
         board_module,
         monkeypatch,
-        lambda url, token: {
-            "merged": True,
-            "state": "closed",
-            "base": {"ref": "main"},
-            "merge_commit_sha": "a" * 40,
-        },
+        _gh_router(
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": MERGED_SHA,
+            }
+        ),
     )
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     assert _claim(board_module) == 2
@@ -2537,21 +2625,18 @@ def test_a_wrong_source_record_is_refused_even_if_the_merge_would_verify(
     the authority, and the source string is a provenance gate in front of it.
     """
     board = _prereq_board_typed()
-    board["completion_records"] = [_forged_record(sha="a" * 40, source="a-text-note")]
+    board["completion_records"] = [_forged_record(sha=MERGED_SHA, source="a-text-note")]
     _install_gh(
         board_module,
         monkeypatch,
-        lambda url, token: {
-            "merged": True,
-            "state": "closed",
-            "base": {"ref": "main"},
-            "merge_commit_sha": "a" * 40,
-        },
-    )
-    monkeypatch.setattr(
-        board_module,
-        "_git",
-        lambda args, cwd: subprocess.CompletedProcess(args, 0, "ok", ""),
+        _gh_router(
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": MERGED_SHA,
+            }
+        ),
     )
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     assert _claim(board_module) == 2
@@ -2560,25 +2645,20 @@ def test_a_wrong_source_record_is_refused_even_if_the_merge_would_verify(
 def test_typed_dependency_is_met_only_by_a_live_verified_merge(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A genuinely merged PR (API agrees, ancestor of main) DOES satisfy the dependency."""
+    """A genuinely merged PR (API agrees, contained by live main) DOES satisfy the dependency."""
     board = _prereq_board_typed()
-    board["completion_records"] = [_forged_record(sha="a" * 40)]
+    board["completion_records"] = [_forged_record(sha=MERGED_SHA)]
     _install_gh(
         board_module,
         monkeypatch,
-        lambda url, token: {
-            "merged": True,
-            "state": "closed",
-            "base": {"ref": "main"},
-            "merge_commit_sha": "a" * 40,
-        },
-    )
-    # stub the git boundary (CI checkouts have no ``origin/main`` ref; the real
-    # ancestry proof is exercised by the dedicated real-git test below)
-    monkeypatch.setattr(
-        board_module,
-        "_git",
-        lambda args, cwd: subprocess.CompletedProcess(args, 0, "ok", ""),
+        _gh_router(
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": MERGED_SHA,
+            }
+        ),
     )
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     assert _claim(board_module) == 0
@@ -2587,23 +2667,21 @@ def test_typed_dependency_is_met_only_by_a_live_verified_merge(
 def test_typed_dependency_is_unmet_when_ancestry_cannot_be_proven(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A merge the API reports but that is not an ancestor of origin/main is refused."""
+    """A merge the API reports but that live main does not contain is refused."""
     board = _prereq_board_typed()
-    board["completion_records"] = [_forged_record(sha="a" * 40)]
+    board["completion_records"] = [_forged_record(sha=MERGED_SHA)]
     _install_gh(
         board_module,
         monkeypatch,
-        lambda url, token: {
-            "merged": True,
-            "state": "closed",
-            "base": {"ref": "main"},
-            "merge_commit_sha": "a" * 40,
-        },
-    )
-    monkeypatch.setattr(
-        board_module,
-        "_git",
-        lambda args, cwd: subprocess.CompletedProcess(args, 1, "", ""),
+        _gh_router(
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": MERGED_SHA,
+            },
+            compare=_compare("behind", behind_by=5, ahead_by=0),
+        ),
     )
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     assert _claim(board_module) == 2
@@ -2614,41 +2692,100 @@ def test_typed_dependency_is_unmet_without_a_token(
 ) -> None:
     """No credential ⇒ cannot verify ⇒ fails closed (the hermetic env has no token)."""
     board = _prereq_board_typed()
-    board["completion_records"] = [_forged_record(sha="a" * 40)]
+    board["completion_records"] = [_forged_record(sha=MERGED_SHA)]
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     assert _claim(board_module) == 2
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "not-a-sha",  # a non-hex string
+        "a" * 39,  # too short
+        None,  # absent sha
+        {"object": {}},  # envelope with no sha
+        {"object": "not-a-dict"},  # malformed envelope
+        ["not", "a", "dict"],  # not even an object
+    ],
+)
+def test_a_malformed_live_main_ref_fails_closed(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, ref: object
+) -> None:
+    """The authoritative ref must be a well-formed 40-hex sha; anything else refuses."""
+    board = _prereq_board_typed()
+    board["completion_records"] = [_forged_record(sha=MERGED_SHA)]
+
+    def _bad_ref(url: str, token: object) -> object:
+        if "/git/ref/heads/main" in url:
+            return ref
+        return {
+            "merged": True,
+            "state": "closed",
+            "base": {"ref": "main"},
+            "merge_commit_sha": MERGED_SHA,
+        }
+
+    _install_gh(board_module, monkeypatch, _bad_ref)
+    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
+    assert _claim(board_module) == 2
+
+
+def test_live_main_ref_is_read_on_every_verification_even_when_cached(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The live main SHA is re-read on *every* call; a cache hit never skips it.
+
+    This is the P0: if the cache were trusted without re-reading the live ref, a
+    merge verdict would survive ``main`` moving past it. The router counts the
+    ``git/ref/heads/main`` reads, and a warm cache must still produce a second
+    read.
+    """
+    record = _forged_record(sha=MERGED_SHA)
+    calls: dict = {}
+    _install_gh(
+        board_module,
+        monkeypatch,
+        _gh_router(
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": MERGED_SHA,
+            },
+            calls=calls,
+        ),
+    )
+    ok1, _ = board_module._merge_still_verified(record, token="tok")
+    ok2, why2 = board_module._merge_still_verified(record, token="tok")
+    assert ok1 and ok2 and "cached" in why2
+    assert calls["main"] == 2  # read twice, once per verification, despite the cache
+    assert calls["pr"] == 1  # the PR detail is the cached part
 
 
 def test_verification_is_cached_within_ttl_and_forced_when_stale(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A verified merge is cached (no repeat call); a stale entry forces a re-check."""
-    board = _prereq_board_typed()
-    record = _forged_record(sha="a" * 40)
-    board["completion_records"] = [record]
-    board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
-    calls = {"n": 0}
-
-    def _handler(url: str, token: object) -> dict:
-        calls["n"] += 1
-        return {
-            "merged": True,
-            "state": "closed",
-            "base": {"ref": "main"},
-            "merge_commit_sha": "a" * 40,
-        }
-
-    _install_gh(board_module, monkeypatch, _handler)
-    monkeypatch.setattr(
+    """A verified merge is cached (no repeat PR call); a stale entry forces a re-check."""
+    record = _forged_record(sha=MERGED_SHA)
+    calls: dict = {}
+    _install_gh(
         board_module,
-        "_git",
-        lambda args, cwd: subprocess.CompletedProcess(args, 0, "ok", ""),
+        monkeypatch,
+        _gh_router(
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": MERGED_SHA,
+            },
+            calls=calls,
+        ),
     )
     token = "tok"
     ok1, _ = board_module._merge_still_verified(record, token=token)
     ok2, why2 = board_module._merge_still_verified(record, token=token)
     assert ok1 and ok2 and "cached" in why2
-    assert calls["n"] == 1  # second call served from cache
+    assert calls["pr"] == 1  # second call served from cache
 
     # expire the cache entry and prove the re-check actually happens
     cache = board_module._load_verify_cache()
@@ -2656,11 +2793,124 @@ def test_verification_is_cached_within_ttl_and_forced_when_stale(
         entry["checked_at"] = "2000-01-01T00:00:00Z"
     board_module._save_verify_cache(cache)
     ok3, _ = board_module._merge_still_verified(record, token=token)
-    assert ok3 and calls["n"] == 2
+    assert ok3 and calls["pr"] == 2
 
     # a DIFFERENT token identity must not reuse the cached verification
     ok4, _ = board_module._merge_still_verified(record, token="other")
-    assert ok4 and calls["n"] == 3
+    assert ok4 and calls["pr"] == 3
+
+
+def test_main_moving_invalidates_a_warm_cache(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A warm positive cache is void the moment live ``main`` advances.
+
+    The cache key embeds the live main SHA, so when GitHub reports a new main the
+    old entry is not found and the merge is re-proven against the new branch —
+    where the recorded merge is no longer contained, so the verdict flips to a
+    refusal. A cache that ignored the live main SHA would keep returning ``True``.
+    """
+    record = _forged_record(sha=MERGED_SHA)
+    state = {"main": LIVE_MAIN_SHA}
+
+    def _main(url: str, token: object) -> str:
+        return state["main"]
+
+    def _pr(url: str, token: object) -> dict:
+        return {
+            "merged": True,
+            "state": "closed",
+            "base": {"ref": "main"},
+            "merge_commit_sha": MERGED_SHA,
+        }
+
+    def _cmp(url: str, token: object) -> dict:
+        # the recorded merge is contained only by the *old* main
+        if state["main"] == LIVE_MAIN_SHA:
+            return _compare("ahead", behind_by=0)
+        return _compare("diverged", behind_by=2, ahead_by=1)
+
+    _install_gh(board_module, monkeypatch, _gh_router(main_sha=_main, pr=_pr, compare=_cmp))
+    ok1, _ = board_module._merge_still_verified(record, token="tok")
+    assert ok1 is True
+    # GitHub reports main moved: the recorded merge is no longer an ancestor
+    state["main"] = "e" * 40
+    ok2, why2 = board_module._merge_still_verified(record, token="tok")
+    assert ok2 is False, why2
+
+
+def test_stale_local_origin_main_cannot_vouch_for_a_moved_github_main(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The local ``origin/main`` ref is not authority: a stale clone must not pass.
+
+    The clone's ``origin/main`` still points at the old main (which contains the
+    recorded merge), but GitHub's live ``main`` has moved past it. An ancestry
+    check against the local ref would wrongly succeed; the live compare says the
+    merge is no longer contained, so the verdict must be a refusal. The git
+    boundary is stubbed to *report the old ref*, proving the code does not consult
+    it for the verdict.
+    """
+
+    def _stale_git(args: list[str], cwd: object) -> object:
+        # a stale clone: origin/main resolves and merge-base says "ancestor"
+        return subprocess.CompletedProcess(args, 0, LIVE_MAIN_SHA + "\n", "")
+
+    monkeypatch.setattr(board_module, "_git", _stale_git)
+    record = _forged_record(sha=MERGED_SHA)
+    _install_gh(
+        board_module,
+        monkeypatch,
+        _gh_router(
+            main_sha="e" * 40,  # GitHub main moved past the recorded merge
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": MERGED_SHA,
+            },
+            compare=_compare("diverged", behind_by=4, ahead_by=2),
+        ),
+    )
+    ok, why = board_module._merge_still_verified(record, token="tok")
+    assert ok is False, why
+
+
+def test_unreachable_github_main_fails_closed_even_with_a_warm_cache(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A warm cache must not mask an API outage: an unreadable live main refuses.
+
+    The positive verdict is cached, then GitHub becomes unreachable. Because the
+    live main SHA is re-read before the cache is consulted, the outage produces a
+    refusal — never a stale ``True``.
+    """
+    record = _forged_record(sha=MERGED_SHA)
+    down = {"flag": False}
+
+    def _main(url: str, token: object) -> str:
+        if down["flag"]:
+            raise OSError("network down")
+        return LIVE_MAIN_SHA
+
+    _install_gh(
+        board_module,
+        monkeypatch,
+        _gh_router(
+            main_sha=_main,
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": MERGED_SHA,
+            },
+        ),
+    )
+    ok1, _ = board_module._merge_still_verified(record, token="tok")
+    assert ok1 is True  # cached now
+    down["flag"] = True
+    ok2, why2 = board_module._merge_still_verified(record, token="tok")
+    assert ok2 is False, why2
 
 
 def test_verification_cache_is_not_shared_across_tokens() -> None:
@@ -2675,6 +2925,30 @@ def test_verification_cache_is_not_shared_across_tokens() -> None:
     )
 
 
+def test_verification_cache_never_stores_the_token(
+    board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The on-disk cache must carry no raw token; it may only carry a fingerprint."""
+    record = _forged_record(sha=MERGED_SHA)
+    _install_gh(
+        board_module,
+        monkeypatch,
+        _gh_router(
+            pr={
+                "merged": True,
+                "state": "closed",
+                "base": {"ref": "main"},
+                "merge_commit_sha": MERGED_SHA,
+            }
+        ),
+    )
+    board_module._merge_still_verified(record, token="super-secret-token")
+    raw = board_module._cache_path().read_text(encoding="utf-8")
+    assert "super-secret-token" not in raw
+    fp = hashlib.sha256(b"super-secret-token").hexdigest()[:16]
+    assert fp in raw  # the non-reversible fingerprint is what is persisted
+
+
 def test_next_does_not_propose_a_task_blocked_by_a_forged_pr_record(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -2685,12 +2959,14 @@ def test_next_does_not_propose_a_task_blocked_by_a_forged_pr_record(
     _install_gh(
         board_module,
         monkeypatch,
-        lambda url, token: {
-            "merged": False,
-            "state": "open",
-            "base": {"ref": "main"},
-            "merge_commit_sha": None,
-        },
+        _gh_router(
+            pr={
+                "merged": False,
+                "state": "open",
+                "base": {"ref": "main"},
+                "merge_commit_sha": None,
+            }
+        ),
     )
     board_module.BOARD.write_text(json.dumps(board), encoding="utf-8")
     board_module.main(["next", "--branch", "arena/999-me"])
@@ -2708,32 +2984,6 @@ def _fake_pr(
         "base": {"ref": base_ref},
         "merge_commit_sha": sha,
     }
-
-
-def _head_sha(module: ModuleType) -> str:
-    result = module._git(["rev-parse", "HEAD"], module.ROOT)
-    assert result is not None and result.returncode == 0
-    return result.stdout.strip()
-
-
-def _stub_git(module: ModuleType, monkeypatch: pytest.MonkeyPatch, *, ancestry_rc: int = 0) -> None:
-    """Stub the git boundary so record-pr-merge tests need no real ``origin/main``.
-
-    A CI checkout has no ``origin/main`` ref, so a test that shells out to real git
-    for the ancestry proof fails there for purely environmental reasons. The real
-    git boundary is still exercised end-to-end by
-    ``test_record_pr_merge_records_a_verified_ancestor_through_real_git``.
-    """
-    import subprocess as _sp
-
-    def _stub(args: list[str], cwd: object) -> object:
-        if args[:2] == ["rev-parse", "--verify"]:
-            return _sp.CompletedProcess(args, 0, "0" * 40 + "\n", "")
-        if args[:2] == ["merge-base", "--is-ancestor"]:
-            return _sp.CompletedProcess(args, ancestry_rc, "", "")
-        return module._git(args, cwd)
-
-    monkeypatch.setattr(module, "_git", _stub)
 
 
 def _record_args(number: int, **extra: object) -> list[str]:
@@ -2760,28 +3010,25 @@ def test_record_pr_merge_verifies_merged_state_base_and_sha_via_the_api(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     board_module.BOARD.write_text(json.dumps(_prereq_board("done")), encoding="utf-8")
-    _stub_git(board_module, monkeypatch, ancestry_rc=0)
     api_sha = "b" * 40
 
     # PR still open -> refuse
-    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(False, state="open"))
+    _install_gh(board_module, monkeypatch, _gh_router(pr=_fake_pr(False, state="open")))
     assert board_module.main(_record_args(294)) == 2
 
     # not merged, but the SHA is a valid ancestor -> still refuse
     # (isolates the merged-state guard from the ancestry guard)
-    monkeypatch.setattr(
-        board_module, "_gh_get", lambda url, token: _fake_pr(False, state="open", sha=api_sha)
+    _install_gh(
+        board_module, monkeypatch, _gh_router(pr=_fake_pr(False, state="open", sha=api_sha))
     )
     assert board_module.main(_record_args(294)) == 2
 
     # merged into a non-main base -> refuse
-    monkeypatch.setattr(
-        board_module, "_gh_get", lambda url, token: _fake_pr(True, base_ref="release")
-    )
+    _install_gh(board_module, monkeypatch, _gh_router(pr=_fake_pr(True, base_ref="release")))
     assert board_module.main(_record_args(294)) == 2
 
     # the operator's --merge-sha disagrees with the API -> refuse
-    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha=api_sha))
+    _install_gh(board_module, monkeypatch, _gh_router(pr=_fake_pr(True, sha=api_sha)))
     assert board_module.main(_record_args(294, merge_sha="c" * 40)) == 2
 
     # merged into main, API SHA == --merge-sha, ancestry proven -> recorded
@@ -2791,34 +3038,34 @@ def test_record_pr_merge_verifies_merged_state_base_and_sha_via_the_api(
     assert records[0]["evidence"]["source"] == "github_api"
 
 
-def test_record_pr_merge_refuses_a_sha_that_is_not_an_ancestor(
+def test_record_pr_merge_refuses_a_sha_not_contained_by_live_main(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     board_module.BOARD.write_text(json.dumps(_prereq_board("done")), encoding="utf-8")
-    _stub_git(board_module, monkeypatch, ancestry_rc=1)  # merge-base --is-ancestor fails
-    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha="b" * 40))
+    _install_gh(
+        board_module,
+        monkeypatch,
+        _gh_router(
+            pr=_fake_pr(True, sha="b" * 40),
+            compare=_compare("behind", behind_by=3, ahead_by=0),
+        ),
+    )
     assert board_module.main(_record_args(294)) == 2
 
 
-def test_record_pr_merge_records_a_verified_ancestor_through_real_git(
+def test_record_pr_merge_refuses_when_the_live_main_ref_is_unreadable(
     board_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The real git boundary (no stub): a genuine ancestor records, a bogus SHA refuses."""
+    """The authoritative read is required: no live main SHA ⇒ no record (fail closed)."""
     board_module.BOARD.write_text(json.dumps(_prereq_board("done")), encoding="utf-8")
-    head = _head_sha(board_module)
-    real_verify = board_module._verify_pr_merge
-    monkeypatch.setattr(
+    _install_gh(
         board_module,
-        "_verify_pr_merge",
-        lambda repo, number, expected, token: real_verify(
-            repo, number, expected, token, main_ref="HEAD"
+        monkeypatch,
+        _gh_router(
+            main_raises=board_module.urllib.error.URLError("network is down"),
+            pr=_fake_pr(True, sha="b" * 40),
         ),
     )
-    # HEAD is an ancestor of HEAD -> recorded
-    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha=head))
-    assert board_module.main(_record_args(294)) == 0
-    # a SHA that is not a real commit -> refused by the real merge-base check
-    monkeypatch.setattr(board_module, "_gh_get", lambda url, token: _fake_pr(True, sha="b" * 40))
     assert board_module.main(_record_args(294)) == 2
 
 

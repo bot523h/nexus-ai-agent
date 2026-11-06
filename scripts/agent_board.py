@@ -143,6 +143,13 @@ _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 #: to make a stale read permanent.
 PR_MERGE_CACHE_TTL = timedelta(minutes=10)
 
+#: GitHub is the *authority* for what ``main`` is. The board never trusts the
+#: local ``origin/main`` ref for a merge verdict: a stale or shallow clone can
+#: report a ref GitHub has already moved past, so an ancestry check against it
+#: could vouch for a merge that is no longer contained by the live branch. The
+#: live ref is read on every verification and bound into the cache key.
+PR_MERGE_MAIN_REF = "main"
+
 
 class BoardValidationError(ValueError):
     """The board file is structurally invalid.
@@ -394,9 +401,10 @@ def _pr_satisfied(board: dict, entry: dict, *, token: str | None = None) -> bool
     ``source: github_api`` and a 40-hex SHA typed into the board — is a *claim*,
     not evidence: anyone who can edit the board can forge both. The record only
     counts when the API agrees the PR is merged into ``main`` with that exact
-    ``merge_commit_sha``, proven an ancestor of ``origin/main``. Any failure to
-    prove it (a forged SHA, a missing token, an unreachable API) leaves the
-    dependency unmet — the gate fails closed (mission §3.3).
+    ``merge_commit_sha``, proven contained by the branch GitHub currently reports
+    as ``main``. Any failure to prove it (a forged SHA, a missing token, an
+    unreachable API) leaves the dependency unmet — the gate fails closed
+    (mission §3.3).
     """
     repo = entry.get("repository")
     number = entry.get("number")
@@ -456,7 +464,7 @@ def _unmet_prerequisites(board: dict, claim: dict) -> list[str]:
     * a typed ``pull_request`` dependency — a matching completion record exists
       **and** its merge is re-verified against GitHub (see :func:`_pr_satisfied`):
       the PR is really merged into ``main`` with that exact ``merge_commit_sha``,
-      proven an ancestor of ``origin/main``. Stored text is a claim, not evidence;
+      proven contained by the live ``main`` GitHub reports. Stored text is a claim, not evidence;
       a note, a flag, a record without evidence, or a record whose merge cannot be
       re-proven (a forged SHA, a missing token, an unreachable API) never satisfies
       it — the gate fails closed.
@@ -797,23 +805,98 @@ def _release_locked(args: argparse.Namespace) -> int:
     return 0
 
 
+def _live_main_sha(repo: str, token: str | None) -> tuple[str | None, str | None]:
+    """Return GitHub's *current* ``main`` SHA for *repo* — ``(sha, None)`` or ``(None, why)``.
+
+    This is the authority the merge proof hangs from. The board never treats the
+    local ``origin/main`` ref as that authority: a stale or shallow clone can
+    report a ref GitHub has already moved past, so a positive merge verdict must
+    be bound to the live branch, not a cached local ref. A missing token, an
+    unreachable API, or a malformed response returns a reason so every caller
+    refuses — the gate fails **closed** (mission §2).
+    """
+    url = f"https://api.github.com/repos/{repo}/git/ref/heads/{PR_MERGE_MAIN_REF}"
+    try:
+        ref = _gh_get(url, token)
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return None, f"cannot read the live GitHub {PR_MERGE_MAIN_REF} ref: {exc}"
+    if not isinstance(ref, dict):
+        return None, f"GitHub ref response for {repo} is not an object"
+    obj = ref.get("object")
+    if not isinstance(obj, dict):
+        return None, f"GitHub ref response for {repo} carries no object"
+    sha = obj.get("sha")
+    if not isinstance(sha, str) or not _SHA40.match(sha.lower()):
+        return None, f"GitHub {PR_MERGE_MAIN_REF} ref for {repo} has no 40-hex sha"
+    return sha.lower(), None
+
+
+def _github_ancestry_proven(
+    repo: str, ancestor_sha: str, descendant_sha: str, token: str | None
+) -> tuple[bool, str | None]:
+    """Prove *ancestor_sha* is contained by *descendant_sha* using GitHub's compare API.
+
+    ``GET /compare/{ancestor}...{descendant}`` returns ``behind_by`` = the number
+    of commits in *descendant* not in *ancestor*. ``behind_by == 0`` with a
+    status of ``ahead`` or ``identical`` is exactly "ancestor is contained by
+    descendant". This is the live proof, deliberately independent of any local
+    git state: the merge commit is contained by the branch GitHub currently
+    reports as ``main``, not by a ref this clone happens to hold.
+    """
+    url = f"https://api.github.com/repos/{repo}/compare/{ancestor_sha}...{descendant_sha}"
+    try:
+        data = _gh_get(url, token)
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return False, f"cannot prove ancestry via GitHub compare: {exc}"
+    if not isinstance(data, dict):
+        return False, "GitHub compare response is not an object"
+    status = data.get("status")
+    behind_by = data.get("behind_by")
+    ahead_by = data.get("ahead_by")
+    # ``behind_by == 0`` is the direct meaning of "ancestor is contained by
+    # descendant"; the status check rejects any non-linear relationship. Both are
+    # required and checked together: a "diverged"/"behind" response — or a missing
+    # field — must never be read as a proof.
+    if status not in ("ahead", "identical") or behind_by != 0:
+        return False, (
+            f"{ancestor_sha} is not a contained ancestor of the live {PR_MERGE_MAIN_REF} "
+            f"(compare status={status!r}, behind_by={behind_by!r})"
+        )
+    if not isinstance(ahead_by, int) or ahead_by < 0:
+        return False, "GitHub compare response has no coherent ahead_by (fail closed)"
+    return True, None
+
+
 def _verify_pr_merge(
     repo: str,
     number: int,
     expected_sha: str | None,
     token: str | None,
     *,
-    main_ref: str = "origin/main",
+    live_main: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Verify a PR was really merged into ``main``; ``(merge_sha, None)`` or ``(None, why)``.
 
     A completion record's whole value is that it is *evidence*, not a claim: the
     merge SHA must come from GitHub, be the PR's real ``merge_commit_sha``, name
-    ``main`` as the base, and be a genuine ancestor of the local ``origin/main``.
+    ``main`` as the base, and be a genuine ancestor of the branch GitHub
+    *currently* reports as ``main``. The ancestry is proven through GitHub's
+    compare API against the live main SHA — never against the local
+    ``origin/main`` ref, which a stale or shallow clone can hold past the truth.
     Every failure — network, a non-merged PR, a wrong base, a SHA mismatch, an
-    unreadable ``origin/main`` — returns a reason so the caller refuses. The gate
-    fails closed: an unverifiable merge is never recorded (mission §3.3).
+    unreadable live ref, an unprovable ancestry — returns a reason so the caller
+    refuses. The gate fails closed: an unverifiable merge is never recorded
+    (mission §3.3, §2).
+
+    *live_main* may be supplied by a caller that already read it (the consumer
+    keys its cache on that exact SHA), so the ancestry is proven against the same
+    SHA the verdict is bound to — no window for ``main`` to move between the
+    cache key and the proof.
     """
+    if live_main is None:
+        live_main, why = _live_main_sha(repo, token)
+        if live_main is None:
+            return None, why
     try:
         detail = _gh_get(f"https://api.github.com/repos/{repo}/pulls/{number}", token)
     except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
@@ -823,8 +906,8 @@ def _verify_pr_merge(
     if detail.get("merged") is not True:
         return None, f"{repo}#{number} is not merged (state={detail.get('state')!r})"
     base = detail.get("base") if isinstance(detail.get("base"), dict) else {}
-    if base.get("ref") != "main":
-        return None, f"{repo}#{number} was merged into {base.get('ref')!r}, not main"
+    if base.get("ref") != PR_MERGE_MAIN_REF:
+        return None, f"{repo}#{number} was merged into {base.get('ref')!r}, not {PR_MERGE_MAIN_REF}"
     api_sha = detail.get("merge_commit_sha")
     if not isinstance(api_sha, str) or not _SHA40.match(api_sha.lower()):
         return None, f"{repo}#{number} has no 40-hex merge_commit_sha"
@@ -833,14 +916,9 @@ def _verify_pr_merge(
         return None, (
             f"{repo}#{number} merge commit is {api_sha}, not the recorded {expected_sha.lower()}"
         )
-    head = _git(["rev-parse", "--verify", main_ref], ROOT)
-    if head is None or head.returncode != 0:
-        return None, f"{main_ref} is not readable; cannot prove ancestry (fail closed)"
-    ancestor = _git(["merge-base", "--is-ancestor", api_sha, main_ref], ROOT)
-    if ancestor is None:
-        return None, "git is unavailable; cannot prove ancestry (fail closed)"
-    if ancestor.returncode != 0:
-        return None, f"{api_sha} is not an ancestor of {main_ref}"
+    proven, why = _github_ancestry_proven(repo, api_sha, live_main, token)
+    if not proven:
+        return None, why or "ancestry could not be proven"
     return api_sha, None
 
 
@@ -884,12 +962,19 @@ def _merge_still_verified(record: dict, *, token: str | None) -> tuple[bool, str
 
     Returns ``(True, "verified...")`` only when the PR is really merged into
     ``main``, the API's ``merge_commit_sha`` equals the recorded SHA, and that
-    commit is an ancestor of ``origin/main``. Every other outcome — a non-merged
-    PR, a foreign base, a SHA mismatch, a missing token, an unreachable API, an
-    unprovable ancestry — returns ``(False, reason)``: the gate fails **closed**,
-    because an unverifiable merge must never open a dependency. Verification is
-    cached for :data:`PR_MERGE_CACHE_TTL` (keyed by repo, number, SHA and token
-    identity) so the per-claim network cost is bounded.
+    commit is contained by the branch GitHub **currently** reports as ``main``
+    (proven via the compare API, not the local ``origin/main`` ref). Every other
+    outcome — a non-merged PR, a foreign base, a SHA mismatch, a missing token,
+    an unreachable API, an unprovable ancestry — returns ``(False, reason)``: the
+    gate fails **closed**, because an unverifiable merge must never open a
+    dependency.
+
+    A positive verdict is cached for :data:`PR_MERGE_CACHE_TTL`. The cache key
+    embeds the *live* GitHub main SHA, which is re-read on every call, so a
+    verdict cannot survive ``main`` moving: if the branch advanced, the key
+    changes and the merge is re-proven from scratch. A warm cache never masks an
+    API outage either — the live SHA must be readable for any verdict to stand
+    (mission §2).
     """
     repo = record.get("repository")
     number = record.get("number")
@@ -902,7 +987,14 @@ def _merge_still_verified(record: dict, *, token: str | None) -> tuple[bool, str
         return False, "the completion record carries no 40-hex merge SHA"
     recorded_sha = recorded_sha.lower()
 
-    key = f"{repo}#{number}@{recorded_sha}:{_token_fingerprint(token)}"
+    # The live GitHub main SHA is the authority and is read on *every* call: it
+    # both keys the cache and bounds the ancestry proof, so a stale local ref
+    # (or a warm cache) can never vouch for a merge GitHub has moved past.
+    live_main, why = _live_main_sha(repo, token)
+    if live_main is None:
+        return False, why or "the live GitHub main ref could not be read (fail closed)"
+
+    key = f"{repo}#{number}@{recorded_sha}:{live_main}:{_token_fingerprint(token)}"
     cache = _load_verify_cache()
     entry = cache.get(key)
     now = _now()
@@ -911,13 +1003,13 @@ def _merge_still_verified(record: dict, *, token: str | None) -> tuple[bool, str
         if entry.get("ok") is True and checked is not None and now - checked < PR_MERGE_CACHE_TTL:
             return True, f"verified {repo}#{number} (cached)"
 
-    sha, why = _verify_pr_merge(repo, number, recorded_sha, token)
+    sha, why = _verify_pr_merge(repo, number, recorded_sha, token, live_main=live_main)
     ok = sha is not None and sha == recorded_sha
     cache[key] = {"ok": ok, "checked_at": _iso(now), "reason": why or ""}
     _save_verify_cache(cache)
     if not ok:
         return False, why or "the merge could not be verified"
-    return True, f"verified {repo}#{number} @ {recorded_sha}"
+    return True, f"verified {repo}#{number} @ {recorded_sha} (live main {live_main[:12]})"
 
 
 def cmd_record_pr_merge(args: argparse.Namespace) -> int:
@@ -926,7 +1018,7 @@ def cmd_record_pr_merge(args: argparse.Namespace) -> int:
     The merge is not taken on the operator's word: :func:`_verify_pr_merge` asks
     GitHub whether the PR is really merged into ``main``, requires the recorded
     ``--merge-sha`` (when given) to equal the API's ``merge_commit_sha``, and
-    proves that commit is an ancestor of ``origin/main``. Any doubt is a refusal,
+    proves that commit is contained by the live ``main`` GitHub reports. Any doubt is a refusal,
     so a typed ``pull_request`` prerequisite can never be opened by a forged or
     mistyped SHA (mission §3.3).
     """
@@ -969,7 +1061,7 @@ def cmd_record_pr_merge(args: argparse.Namespace) -> int:
         save_board(board)
         print(
             f"RECORDED pull_request {args.repo}#{args.number} {args.required_state} "
-            f"@ {merge_sha} (verified via GitHub API + origin/main ancestry). "
+            f"@ {merge_sha} (verified via GitHub API against the live main ref). "
             "Dependent typed prerequisites are now met."
         )
         return 0
