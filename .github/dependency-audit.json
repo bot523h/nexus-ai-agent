@@ -1,0 +1,49 @@
+{
+  "_comment": "Reviewed acceptances for `scripts/dependency_audit.py`. Every key is a pip-audit advisory id; every entry names the package and an acceptance `reason`. `transitive-cap` means an installed dependency caps the package below the fixed version (`capped_by` names it) — the gate re-derives that cap from the installed environment and FAILS if it no longer holds. `no-fix-released` means no released version of the package fixes the advisory yet — the gate re-checks the same way. Nothing here is a permanent ignore: a relaxed upstream cap or a published fix turns the entry STALE and reds the gate. Evidence: docs/audits/NEXUS_OMNI_SECURITY_PRIVACY_AUDIT_2026-11-03.md (dependency section).",
+  "accepted": {
+    "PYSEC-2026-311": {
+      "package": "chromadb",
+      "reason": "no-fix-released",
+      "note": "Pre-auth code injection; fixed version not yet released (1.5.9 is the latest on PyPI and still affected). chromadb is an OPTIONAL RAG backend, imported lazily in features/rag.py; the project does not expose a chroma HTTP server. Re-check when chromadb > 1.5.9 ships."
+    },
+    "PYSEC-2026-3813": {
+      "package": "chromadb",
+      "reason": "no-fix-released",
+      "note": "Cross-tenant collection read/write; same unreleased fix as PYSEC-2026-311. Only reachable with a multi-tenant chroma server, which NEXUS does not run."
+    },
+    "PYSEC-2026-3814": {
+      "package": "chromadb",
+      "reason": "no-fix-released",
+      "note": "Code injection; same unreleased fix. See PYSEC-2026-311."
+    },
+    "PYSEC-2026-3815": {
+      "package": "chromadb",
+      "reason": "no-fix-released",
+      "note": "SimpleRBACAuthorizationProvider tenant/db/collection scope check; same unreleased fix."
+    },
+    "PYSEC-2026-2447": {
+      "package": "diskcache",
+      "reason": "no-fix-released",
+      "note": "Unsafe pickle deserialization. diskcache is a transitive of the optional llama_cpp_python (local-llm extra), not a first-party dependency, and no released version fixes it (5.6.3 is latest and still affected). Not on any default path."
+    },
+    "CVE-2026-112940": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": ["litellm"],
+      "note": "ReadWriteLock SQLite lock-db symlink overwrite. Fixed in 4.2.1, but litellm (declared `litellm>=1.74,<2`) requires `filelock<4.0,>=3.16.1` — still true on litellm 1.108.0 — so 4.2.1 is unresolvable. Local-privilege attack, not remote. Re-check when litellm relaxes the cap."
+    },
+    "CVE-2026-112913": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap as CVE-2026-112940."},
+    "CVE-2026-112907": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
+    "CVE-2026-112938": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
+    "CVE-2026-112936": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.0.9", "capped_by": ["litellm"], "note": "Fixed 4.0.9, still above the litellm <4.0 cap."},
+    "CVE-2026-112910": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
+    "CVE-2026-112909": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
+    "CVE-2026-112911": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
+    "CVE-2026-112939": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
+    "CVE-2026-112915": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
+    "CVE-2026-112935": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
+    "CVE-2026-112912": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
+    "CVE-2026-112908": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."}
+  }
+}
