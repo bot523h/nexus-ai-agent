@@ -160,6 +160,48 @@ def test_valid_law_reference_resolves(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# law numbering (unique + gap-free)
+# --------------------------------------------------------------------------- #
+def test_duplicate_law_number_is_reported(tmp_path: Path) -> None:
+    _clean_tree(tmp_path)
+    law = tmp_path / "docs" / "architecture" / "MODULE_MAP.md"
+    law.write_text(
+        "## 3 — laws\n\n| Law | Rule | Test |\n|---|---|---|\n"
+        "| R1 | first | `test_guard.py` |\n"
+        "| R1 | second | `test_guard.py` |\n\n**Legacy baseline.**\n",
+        encoding="utf-8",
+    )
+    report = truth.run_doctor(tmp_path, only=["law-numbering"])
+    assert "TRUTH023" in _codes(report.findings)
+
+
+def test_skipped_law_number_is_reported(tmp_path: Path) -> None:
+    _clean_tree(tmp_path)
+    law = tmp_path / "docs" / "architecture" / "MODULE_MAP.md"
+    law.write_text(
+        "## 3 — laws\n\n| Law | Rule | Test |\n|---|---|---|\n"
+        "| R1 | first | `test_guard.py` |\n"
+        "| R3 | third | `test_guard.py` |\n\n**Legacy baseline.**\n",
+        encoding="utf-8",
+    )
+    report = truth.run_doctor(tmp_path, only=["law-numbering"])
+    assert "TRUTH024" in _codes(report.findings)
+
+
+def test_sequential_law_numbers_are_clean(tmp_path: Path) -> None:
+    _clean_tree(tmp_path)
+    law = tmp_path / "docs" / "architecture" / "MODULE_MAP.md"
+    law.write_text(
+        "## 3 — laws\n\n| Law | Rule | Test |\n|---|---|---|\n"
+        "| R1 | first | `test_guard.py` |\n"
+        "| R2 | second | `test_guard.py` |\n\n**Legacy baseline.**\n",
+        encoding="utf-8",
+    )
+    report = truth.run_doctor(tmp_path, only=["law-numbering"])
+    assert report.findings == ()
+
+
+# --------------------------------------------------------------------------- #
 # machine-readable claim witnesses
 # --------------------------------------------------------------------------- #
 def test_truth_claim_resolves(tmp_path: Path) -> None:
