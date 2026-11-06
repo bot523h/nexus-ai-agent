@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "dependency_audit.py"
@@ -138,6 +141,29 @@ def test_an_allowlist_entry_for_a_different_package_is_rejected() -> None:
     assert "MISMATCH" in message
 
 
+def test_a_shared_advisory_id_is_examined_for_every_package() -> None:
+    # One advisory id reported for two packages must be decided twice: the accepted
+    # package passes, and the other package is a MISMATCH failure — never dropped,
+    # masked, or conflated with the first.
+    allowlist = {"CVE-X": {"package": "package-a", "reason": "no-fix-released"}}
+    ok_a, msg_a = gate._decide_advisory(
+        ("package-a", "CVE-X"),
+        {"package": "package-a", "version": "1.0", "fix_versions": []},
+        allowlist,
+        {"package-a": "1.0"},
+        {},
+    )
+    ok_b, msg_b = gate._decide_advisory(
+        ("package-b", "CVE-X"),
+        {"package": "package-b", "version": "2.0", "fix_versions": []},
+        allowlist,
+        {"package-b": "2.0"},
+        {},
+    )
+    assert ok_a is True and "ACCEPTED" in msg_a
+    assert ok_b is False and "MISMATCH" in msg_b
+
+
 def test_a_matching_entry_is_accepted() -> None:
     allowlist = {"CVE-X": {"package": "chromadb", "reason": "no-fix-released"}}
     ok, message = gate._decide_advisory(
@@ -185,3 +211,102 @@ def test_the_shipped_allowlist_is_well_formed() -> None:
         assert entry.get("reason") in {"transitive-cap", "no-fix-released"}, advisory_id
         if entry["reason"] == "transitive-cap":
             assert entry.get("fixed") and entry.get("capped_by"), advisory_id
+
+
+def test_a_marker_guarded_cap_does_not_block_a_platform_it_excludes() -> None:
+    # A cap that only applies on Windows must NOT be read as "still blocking" on
+    # Linux: the fixed version is genuinely reachable here, so the acceptance is
+    # stale and the gate must fail rather than hide the reachable upgrade.
+    holds, why = gate._pin_still_holds(
+        _filelock_entry(),
+        {"filelock": "3.32.7"},
+        _reqs("filelock<4.0,>=3.16.1; sys_platform == 'win32'"),
+    )
+    assert holds is False
+    assert "in this environment" in why
+
+
+def test_a_marker_guarded_cap_still_blocks_the_platform_it_selects() -> None:
+    # The same cap evaluated where the marker selects (Linux) really does block.
+    holds, why = gate._pin_still_holds(
+        _filelock_entry(),
+        {"filelock": "3.32.7"},
+        _reqs("filelock<4.0,>=3.16.1; sys_platform == 'linux'"),
+    )
+    assert holds is True
+    assert "blocked by" in why
+
+
+def test_an_unmarked_cap_is_unaffected_by_the_marker_check() -> None:
+    holds, _ = gate._pin_still_holds(
+        _filelock_entry(), {"filelock": "3.32.7"}, _reqs("filelock<4.0,>=3.16.1")
+    )
+    assert holds is True
+
+
+def test_a_cap_guarded_by_a_non_matching_extra_marker_is_dropped() -> None:
+    # A cap guarded by an extra that is not installed does not apply here, so the
+    # entry is stale — the gate must not accept on the strength of a cap that does
+    # not constrain this environment.
+    holds, _ = gate._pin_still_holds(
+        _filelock_entry(),
+        {"filelock": "3.32.7"},
+        _reqs("filelock<4.0; extra == 'not-installed-extra'"),
+    )
+    assert holds is False
+
+
+def test_load_allowlist_fails_closed_on_every_malformed_shape(tmp_path: Path) -> None:
+    bad = {
+        "missing": None,
+        "not-json": "{ nope",
+        "not-object": "[1, 2, 3]",
+        "no-accepted": '{"other": 1}',
+        "entry-not-object": '{"accepted": {"X": "string"}}',
+        "no-package": '{"accepted": {"X": {"reason": "no-fix-released"}}}',
+        "bad-reason": '{"accepted": {"X": {"package": "p", "reason": "trust-me"}}}',
+        "cap-missing-fields": '{"accepted": {"X": {"package": "p", "reason": "transitive-cap"}}}',
+    }
+    for name, payload in bad.items():
+        path = tmp_path / f"{name}.json"
+        if payload is not None:
+            path.write_text(payload, encoding="utf-8")
+        with pytest.raises(SystemExit):
+            gate._load_allowlist(path)
+
+
+def test_load_allowlist_accepts_a_valid_file(tmp_path: Path) -> None:
+    path = tmp_path / "ok.json"
+    path.write_text(
+        '{"accepted": {"CVE-X": {"package": "p", "reason": "no-fix-released"}}}',
+        encoding="utf-8",
+    )
+    assert gate._load_allowlist(path) == {"CVE-X": {"package": "p", "reason": "no-fix-released"}}
+
+
+def test_parse_pip_audit_refuses_empty_truncated_or_wrong_shape() -> None:
+    for payload in ("", "   ", "{ not json", "[]", '{"foo": 1}', '{"dependencies": "x"}'):
+        with pytest.raises(SystemExit):
+            gate._parse_pip_audit(payload)
+
+
+def test_parse_pip_audit_accepts_a_clean_report() -> None:
+    assert gate._parse_pip_audit('{"dependencies": []}') == {"dependencies": []}
+
+
+def test_pip_audit_uses_a_fixed_argv_with_no_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Prove the audit invocation cannot be turned into shell injection: argv is a
+    # constant list, ``shell`` is never enabled, and no input is interpolated.
+    seen: dict[str, object] = {}
+
+    def _fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen["argv"] = argv
+        seen["kwargs"] = kwargs
+        return subprocess.CompletedProcess(argv, 0, '{"dependencies": []}', "")
+
+    monkeypatch.setattr(gate.subprocess, "run", _fake_run)
+    gate._run_pip_audit_stdout()
+    assert isinstance(seen["argv"], list)
+    assert seen["argv"][0] == sys.executable
+    assert seen["argv"][1:3] == ["-m", "pip_audit"]
+    assert "shell" not in seen["kwargs"]  # shell is never enabled

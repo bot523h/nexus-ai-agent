@@ -76,7 +76,15 @@ def _installed_requirements() -> dict[str, list[str]]:
     return out
 
 
-def _run_pip_audit() -> dict[str, Any]:
+def _run_pip_audit_stdout() -> str:
+    """Run ``pip-audit`` and return its raw JSON text.
+
+    ``sys.executable -m pip_audit`` is a *fixed* argv: no shell, no interpolated
+    input, no user-controlled argument, so there is no command-injection surface.
+    Only the audit's exit codes 0 (clean) and 1 (vulnerabilities found) are
+    expected; anything else means the tool itself failed and is raised so the
+    gate can never mistake a broken run for a clean one.
+    """
     proc = subprocess.run(
         [sys.executable, "-m", "pip_audit", "--format=json", "--progress-spinner=off"],
         capture_output=True,
@@ -86,7 +94,7 @@ def _run_pip_audit() -> dict[str, Any]:
     if proc.returncode not in (0, 1):
         sys.stderr.write(proc.stderr)
         raise SystemExit(f"pip-audit failed to run (exit {proc.returncode})")
-    return json.loads(proc.stdout)
+    return proc.stdout
 
 
 def _collect_ids(report: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -109,6 +117,24 @@ def _collect_ids(report: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]
                 "fix_versions": list(vuln.get("fix_versions") or []),
             }
     return found
+
+
+def _marker_applies(req: Requirement) -> bool:
+    """Whether *req*'s environment marker is active for this interpreter.
+
+    A cap guarded by ``sys_platform == 'win32'`` (or any other environment marker)
+    does not constrain a Linux install, so it must not be read as "still blocking"
+    here — that would keep an acceptance alive for a platform the project does not
+    ship on, and hide a genuinely reachable upgrade. An absent marker always
+    applies; a marker that cannot be evaluated is treated as *applicable* (the
+    conservative choice: it keeps the cap and never silently drops a real blocker).
+    """
+    if req.marker is None:
+        return True
+    try:
+        return bool(req.marker.evaluate())
+    except Exception:
+        return True
 
 
 def _pin_still_holds(
@@ -140,13 +166,16 @@ def _pin_still_holds(
                     req = Requirement(line)
                 except Exception:
                     continue
-                if req.name.lower() == pkg and req.specifier:
+                # Only a cap that applies to *this* environment can block here; a
+                # marker-guarded cap for another platform must not keep the entry
+                # alive on a platform it does not constrain.
+                if req.name.lower() == pkg and req.specifier and _marker_applies(req):
                     if Version(fixed) not in req.specifier:
                         blockers.append(f"{cap_name} requires {req.specifier}")
         if blockers:
             return True, "blocked by " + "; ".join(blockers)
         return False, (
-            f"no installed dependency caps {pkg} below {fixed} any more — "
+            f"no installed dependency caps {pkg} below {fixed} in this environment — "
             f"bump to {fixed} and drop this entry"
         )
 
@@ -174,9 +203,14 @@ def _decide_advisory(
 ) -> tuple[bool, str]:
     """Decide one finding, keyed by ``(package, advisory_id)``: ``(accepted, message)``.
 
-    An advisory id is a namespace that can be reported for more than one package,
-    so the key is the pair and an acceptance applies only to the package it names;
-    a package mismatch is a failure, never a silent pass.
+    An advisory id is a namespace that can be reported for more than one package.
+    ``_collect_ids`` already keys findings by the *pair*, so a shared id yields two
+    independent findings that are each examined — neither can overwrite the other.
+    The allow-list is keyed by advisory id with the accepted ``package`` named
+    inside; an entry therefore accepts exactly one ``(package, id)`` pair, and a
+    finding for the same id in a *different* package is a MISMATCH failure, never a
+    silent pass. (A single JSON object cannot hold two identical keys, so this is
+    how a pair-keyed acceptance is expressed without losing the second package.)
     """
     pkg_key, advisory_id = key
     entry = allowlist.get(advisory_id)
@@ -195,18 +229,67 @@ def _decide_advisory(
     return False, f"STALE     {advisory_id} ({meta['package']}) — {why}"
 
 
+def _load_allowlist(path: Path) -> dict[str, dict[str, Any]]:
+    """Load the reviewed acceptances, failing closed on any structural surprise.
+
+    A missing, unreadable, non-object, or malformed allow-list is a hard error —
+    never "no acceptances", which would silently red the build for the wrong
+    reason and could hide a real advisory behind a confusing message.
+    """
+    if not path.is_file():
+        raise SystemExit(f"no allow-list at {path}; every advisory would be a failure")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"allow-list {path} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SystemExit(f"allow-list {path} must be a JSON object")
+    accepted = data.get("accepted")
+    if not isinstance(accepted, dict):
+        raise SystemExit(f"allow-list {path} has no 'accepted' object")
+    for advisory_id, entry in accepted.items():
+        if not isinstance(entry, dict):
+            raise SystemExit(f"allow-list entry {advisory_id!r} is not an object")
+        if not isinstance(entry.get("package"), str) or not entry["package"]:
+            raise SystemExit(f"allow-list entry {advisory_id!r} names no package")
+        if entry.get("reason") not in {"transitive-cap", "no-fix-released"}:
+            raise SystemExit(
+                f"allow-list entry {advisory_id!r} has unknown reason {entry.get('reason')!r}"
+            )
+        if entry["reason"] == "transitive-cap" and not (
+            entry.get("fixed") and entry.get("capped_by")
+        ):
+            raise SystemExit(
+                f"allow-list entry {advisory_id!r} (transitive-cap) needs `fixed` and `capped_by`"
+            )
+    return accepted
+
+
+def _parse_pip_audit(stdout: str) -> dict[str, Any]:
+    """Parse pip-audit's JSON, refusing anything that is not a well-formed report.
+
+    An empty, truncated, or unexpected payload must never be read as "no
+    vulnerabilities" — a gate that passes because it could not read its input is
+    worse than no gate.
+    """
+    if not stdout.strip():
+        raise SystemExit("pip-audit produced no output; refusing to pass vacuously")
+    try:
+        report = json.loads(stdout)
+    except ValueError as exc:
+        raise SystemExit(f"pip-audit output is not valid JSON: {exc}") from exc
+    if not isinstance(report, dict) or not isinstance(report.get("dependencies"), list):
+        raise SystemExit("pip-audit output has no 'dependencies' list; refusing to pass")
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--allowlist", type=Path, default=DEFAULT_ALLOWLIST)
     args = parser.parse_args(argv)
 
-    if not args.allowlist.is_file():
-        print(f"no allow-list at {args.allowlist}; every advisory is a failure", file=sys.stderr)
-        allowlist: dict[str, dict[str, Any]] = {}
-    else:
-        allowlist = json.loads(args.allowlist.read_text(encoding="utf-8")).get("accepted", {})
-
-    report = _run_pip_audit()
+    allowlist = _load_allowlist(args.allowlist)
+    report = _parse_pip_audit(_run_pip_audit_stdout())
     found = _collect_ids(report)
     versions = _installed_versions()
     reqs = _installed_requirements()
