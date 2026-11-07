@@ -352,8 +352,16 @@ async def _set_wal_mode(engine: Any) -> None:
     raise RuntimeError("unreachable: WAL retry loop exhausted")  # pragma: no cover
 
 
-async def create_all_tables(db_path: str = "data/app.sqlite") -> None:
-    """Create all SQLModel tables for the selected database, exactly once per path."""
+async def create_all_tables(db_path: str | None = None) -> None:
+    """Create SQLite tables once per path, defaulting to Settings.db_path.
+
+    This SQLite primitive does not select the PostgreSQL backend; get_session
+    and the migration entry points own backend selection.
+    """
+    if db_path is None:
+        from nexus_ai_agent.config.settings import get_settings
+
+        db_path = get_settings().db_path
     await _dispose_replaced_engines()
     normalized_path = str(Path(db_path).expanduser())
     engine = _get_engine(normalized_path)
