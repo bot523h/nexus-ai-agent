@@ -954,9 +954,7 @@ def test_bind_records_and_returns_the_asset_version_link(pin_env: Path) -> None:
         )
     )
     assert bound.artifact_version_id == "ver-123"
-    assert (
-        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).artifact_version_id == "ver-123"
-    )
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).artifact_version_id == "ver-123"
 
 
 def test_bind_replay_does_not_rewrite_stored_metadata(pin_env: Path) -> None:
