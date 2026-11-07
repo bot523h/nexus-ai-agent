@@ -118,6 +118,11 @@ ERROR_CODES: frozenset[str] = frozenset(
         # (missing, tampered, cross-project, or hash mismatch). Fail closed BEFORE any
         # engine: never fall back to the current head or any other state.
         "revision_unavailable",
+        # Artifact binding (task-282 Slice 2): the published artifact could not be
+        # durably bound to the exact revision the job served (unknown/tampered
+        # revision, an artifact already bound to a different revision, or an
+        # unwritable binding). Fail closed: never a success without provenance.
+        "artifact_binding_failed",
     }
 )
 
@@ -1131,6 +1136,81 @@ async def _resolve_pinned_project(data: CreativeRenderPayload) -> Any | None:  #
     return record.to_project()
 
 
+async def _bind_published_artifact(
+    data: CreativeRenderPayload, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Durably bind a published artifact to the exact revision the job served.
+
+    Task-282 Slice 2: a pinned job executes one immutable revision; when it
+    publishes an artifact, that artifact's *measured* content digest is recorded
+    against the pinned revision (never the project head, which may have moved).
+    The binding is content-addressed and idempotent, and it is fail-closed: a
+    conflict or an unwritable binding turns the job into a typed failure rather
+    than a success with no provenance.
+
+    The digest is **re-measured from the artifact bytes at bind time**, never
+    trusted from the result: if the artifact changed between render and publish,
+    the binding would otherwise identify bytes that no longer exist.
+
+    Unpinned (legacy) jobs publish no binding — there is no revision to bind to.
+    A pinned job whose artifact metadata is missing or malformed is refused
+    (``artifact_binding_failed``), never returned as an unbound success.
+    """
+    if data.revision_id is None or data.project_id is None:
+        return result
+    raw_path = result.get("artifact_path")
+    raw_sha = result.get("sha256")
+    if not isinstance(raw_path, str) or not isinstance(raw_sha, str) or not raw_path:
+        raise CreativeRenderError(
+            "artifact_binding_failed",
+            "pinned job produced no measurable artifact to bind",
+        )
+    from nexus_ai_agent.creative.project_state.store import (
+        SqlArtifactBindingStore,
+        content_address_of_file,
+        is_content_address,
+    )
+
+    # Re-measure the artifact bytes now; the binding must identify the bytes that
+    # are actually published, not an earlier digest that a later write replaced.
+    try:
+        measured = content_address_of_file(Path(raw_path))
+    except OSError as exc:
+        raise CreativeRenderError(
+            "artifact_binding_failed", f"artifact bytes unreadable: {type(exc).__name__}"
+        ) from exc
+    if not is_content_address(raw_sha) or raw_sha != measured:
+        raise CreativeRenderError(
+            "artifact_binding_failed",
+            "reported artifact digest does not match the artifact's measured bytes",
+        )
+
+    size = result.get("size_bytes")
+    version = result.get("asset_version_id")
+    store = SqlArtifactBindingStore()
+    try:
+        binding = await store.bind(
+            project_id=data.project_id,
+            revision_id=data.revision_id,
+            artifact_id=measured,
+            job_id=data.idempotency_key,
+            artifact_kind=str(result.get("artifact_kind") or "binary"),
+            size_bytes=int(size) if isinstance(size, int) and size >= 0 else 0,
+            artifact_version_id=version if isinstance(version, str) and version else None,
+        )
+    except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
+        raise CreativeRenderError(
+            "artifact_binding_failed", f"{type(exc).__name__}: {exc}"
+        ) from exc
+    result["artifact_binding"] = {
+        "artifact_id": binding.artifact_id,
+        "revision_id": binding.revision_id,
+        "project_id": binding.project_id,
+        "artifact_version_id": binding.artifact_version_id,
+    }
+    return result
+
+
 async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute one staged creative request through the canonical chain."""
     try:
@@ -1206,6 +1286,13 @@ async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
     # The trace identity rides in the durable result so the job row and the
     # studio command that produced it share one inspectable identity.
     result["trace_id"] = trace_id
+    # Task-282 Slice 2: durably bind the published artifact to the revision the
+    # job was admitted against (fail-closed; unpinned jobs are a no-op).
+    try:
+        result = await _bind_published_artifact(data, result)
+    except CreativeRenderError as exc:
+        logger.warning("creative_render_binding_failure", code=exc.code, detail=exc.detail)
+        return {"success": False, "error_code": exc.code, "error_detail": exc.detail}
     return result
 
 

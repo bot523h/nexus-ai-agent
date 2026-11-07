@@ -2720,3 +2720,72 @@ atomic rollback), `tests/architecture/test_durable_project_state_boundary.py`
 (no parallel authority, single schema site), and the mutation campaign
 `scripts/durable_project_state_mutations.py`. Migration `20261104dpstate`;
 architecture page `docs/architecture/DURABLE_PROJECT_STATE.md`.
+
+## D-0038 — A published creative artifact is bound to the exact admitted revision; the durable bytes are re-measured at bind and re-verified on read (task-282 Slice 2)
+
+**Date:** 2026-11-07 · **Status:** accepted · **Task:** `task-282-slice-2-artifact-assetversion-binding`
+
+**Context.** D-0037 made a project revision durable and pinned a job to it
+(Slice 1), but nothing durably linked a **published artifact** to the revision
+that produced it, and nothing proved on read that the artifact's bytes still
+matched. A caller following a render artifact could not resolve the advertised
+artifact→revision→asset-version chain, and a replaced artifact was
+indistinguishable from the original.
+
+**Decision.** Add one durable, content-addressed binding row over the **same**
+storage schema — no parallel artifact store, verifier, passport or provenance
+authority:
+
+- `projectartifactbinding.artifact_id` is the content address
+  (`sha256:<64 hex>`) of the artifact bytes (primary key), so an identical
+  artifact is the same row (idempotent replay) and its provenance can never be
+  silently re-pointed. The **digest characters are validated** (a same-length
+  non-hex value is refused), because such an id can never match a real file and
+  would persist a permanently unverifiable binding.
+- The binding records the **exact** `revision_id` the job was admitted against
+  (never the project head, which may move after enqueue), an optional immutable
+  `artifact_version_id` (Asset Library), and a 64-bit `size_bytes` (a published
+  media artifact routinely exceeds the 32-bit `INTEGER` range; SQLite is already
+  64-bit, so this only widens PostgreSQL — mirrors A-17).
+- **Fail-closed everywhere.** At bind time the digest is **re-measured** from the
+  artifact bytes (a stale reported digest is refused, closing the render→publish
+  TOCTOU); the revision's own bytes are re-validated before any row is written;
+  the read path (`verify_artifact`) re-measures the file and re-validates the
+  revision, translating a missing/unreadable file and any storage failure into
+  the typed `ArtifactBindingError` hierarchy (never a raw `OSError`). A pinned job
+  whose artifact metadata is missing or malformed is refused
+  (`artifact_binding_failed`), never returned as an unbound success.
+
+**Rejected alternatives.** (a) Trusting the render-time digest — rejected: the
+artifact can change between render and publish, so the binding would identify
+bytes that no longer exist. (b) Requiring every binding to carry an
+`AssetVersion` — rejected as a hard requirement: an artifact may legitimately not
+be in the Asset Library; the link is recorded when the caller has it.
+
+**Known residuals (honest).** (1) The binding is committed by the worker at the
+end of `creative_render_job`, i.e. *before* the queue's independent verification
+and publication (`_publish_and_reprobe`). A result the queue later rejects
+therefore leaves a durable, append-only binding. Closing this fully requires
+committing the binding from the queue's post-publication `finalize` hook (the
+only point after verification); the binding is idempotent and content-addressed,
+so a `finalize`-time commit is safe to add, but it is deferred to a follow-up
+slice because it needs an async-capable finalize seam. Until then the binding
+records what the worker measured and published; the queue's verification remains
+the authority for whether the job is successful. (2) A canonical (schema 2)
+render is not yet *required* to carry a complete revision pin — a canonical
+payload without a pin still executes and, because `_bind_published_artifact`
+no-ops without a pin, publishes without an artifact binding. Requiring the pin is
+a cross-slice change (the schema-2 admission path has no revision concept yet and
+14 canonical-execution tests currently enqueue unpinned schema-2 payloads), so it
+is recorded here as the follow-up that closes thread "Canonical jobs skip
+provenance binding" rather than enforced in this slice.
+
+**Evidence.** `tests/integration/test_durable_project_revision_pinning.py`
+(bind/verify/idempotency/repoint refusal, non-hex digest refusal, missing-file
+typed refusal, asset-version link, replay keeps stored metadata, binding follows
+the admitted revision after a head move, schema-2 requires a pin, stale-digest
+and missing-metadata refusals), `tests/architecture/test_durable_project_state_boundary.py`
+(single schema site, no parallel authority), and the mutation campaign
+`scripts/durable_project_state_mutations.py`. Migration `20261106artbind`;
+architecture page `docs/architecture/DURABLE_PROJECT_STATE.md`; boundary law R29
+in `docs/architecture/MODULE_MAP.md` §3.

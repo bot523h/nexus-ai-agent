@@ -23,7 +23,11 @@ revision row and no moved head.
 
 from __future__ import annotations
 
+import hashlib
+import re
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select, update
@@ -31,6 +35,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus_ai_agent.creative.project_state.models import (
+    ArtifactBindingConflict,
+    ArtifactBindingError,
+    ArtifactNotFound,
+    ArtifactRevisionMismatch,
     CrossProjectAccess,
     RevisionConflict,
     RevisionIntegrityError,
@@ -49,6 +57,64 @@ from nexus_ai_agent.storage.db import get_session
 #: Sentinel distinguishing "no expected parent given" from an explicit ``None``
 #: (which is the genesis token).  A bare ``None`` would conflate the two.
 _UNSET: Any = object()
+
+#: The canonical content-address prefix (identical to a revision id).
+_ADDRESS_PREFIX = "sha256:"
+
+#: A canonical content address is exactly ``sha256:`` + 64 lowercase hex.
+_CONTENT_ADDRESS_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def is_content_address(value: object) -> bool:
+    """True only for a well-formed ``sha256:<64 lowercase hex>`` identity.
+
+    A length/prefix check is not enough: ``sha256:`` + 64 non-hex characters is
+    the same length but can never match a real file digest, so it would persist
+    a permanently unverifiable binding. The digest characters are part of the
+    identity contract, not a formatting nicety.
+    """
+    return isinstance(value, str) and _CONTENT_ADDRESS_RE.match(value) is not None
+
+
+def content_address_of_bytes(data: bytes) -> str:
+    """``sha256:<hex>`` over *data* — the same spelling revisions use."""
+    return _ADDRESS_PREFIX + hashlib.sha256(data).hexdigest()
+
+
+def content_address_of_file(path: Path) -> str:
+    """``sha256:<hex>`` over the file's bytes, streamed (never fully loaded)."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return _ADDRESS_PREFIX + digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class ArtifactBinding:
+    """One durable artifact→revision binding as read back from storage."""
+
+    artifact_id: str
+    project_id: str
+    revision_id: str
+    job_id: str
+    artifact_kind: str
+    size_bytes: int
+    created_at: datetime
+    artifact_version_id: str | None = None
+
+
+def _as_binding(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
+    return ArtifactBinding(
+        artifact_id=row.artifact_id,
+        project_id=row.project_id,
+        revision_id=row.revision_id,
+        job_id=row.job_id,
+        artifact_kind=row.artifact_kind,
+        size_bytes=row.size_bytes,
+        created_at=row.created_at,
+        artifact_version_id=row.artifact_version_id,
+    )
 
 
 def _as_revision(row: orm.ProjectRevision) -> RevisionRecord:
@@ -309,4 +375,183 @@ class SqlProjectRevisionStore:
         return _as_revision(row)
 
 
-__all__ = ["SqlProjectRevisionStore"]
+class SqlArtifactBindingStore:
+    """Durable artifact→revision bindings (task-282 Slice 2).
+
+    When a creative job publishes an artifact, its *measured* content digest is
+    bound here to the EXACT immutable revision the job was admitted against —
+    never to a project head that can move after admission.  This is the durable
+    artifact→revision link, in the same module and over the same single storage
+    schema as the revision store: no parallel artifact store, verifier, passport
+    or provenance authority is introduced, and the artifact bytes remain the
+    authority (a divergence is a hard, fail-closed error, never an update).
+    """
+
+    def __init__(
+        self,
+        session_factory: Any | None = None,
+        revision_store: SqlProjectRevisionStore | None = None,
+    ) -> None:
+        self._session_factory = session_factory or (lambda: get_session())
+        self._revision_store = revision_store or SqlProjectRevisionStore()
+
+    async def bind(
+        self,
+        *,
+        project_id: str,
+        revision_id: str,
+        artifact_id: str,
+        job_id: str = "",
+        artifact_kind: str = "binary",
+        size_bytes: int,
+        artifact_version_id: str | None = None,
+    ) -> ArtifactBinding:
+        """Bind one measured artifact to the immutable revision it served.
+
+        The revision must exist for ``project_id`` and its stored bytes must
+        still hash to their own identity (``RevisionIntegrityError`` otherwise);
+        the project must match (``CrossProjectAccess``).  The binding is
+        content-addressed and idempotent: the same ``(project_id, artifact_id)``
+        re-bound to the *same* revision is a no-op success, while a differing
+        revision for the same artifact is a hard conflict — an artifact's
+        provenance can never be silently re-pointed.
+
+        ``artifact_id`` must be a well-formed ``sha256:<64 hex>`` content
+        address; a same-length non-hex value is refused rather than stored as an
+        identity no file digest could ever match.
+
+        ``artifact_version_id`` is the immutable Asset Library version this
+        artifact was registered as (when the caller has one).  It completes the
+        artifact→revision→asset-version chain; a binding without it is still
+        valid (the artifact may not be in the Asset Library), but a caller that
+        has a version should pass it so the chain is resolvable.
+        """
+        if not is_content_address(artifact_id):
+            raise ArtifactBindingError("artifact_id must be a sha256:<64-hex> content address")
+        if artifact_version_id is not None and not artifact_version_id.strip():
+            raise ArtifactBindingError("artifact_version_id must be non-empty when provided")
+        if size_bytes < 0:
+            raise ArtifactBindingError("size_bytes must be non-negative")
+
+        # The revision is the authority: load it (this re-validates its bytes,
+        # refusing tampered/re-homed rows) before any binding row is written.
+        await self._load_validated_revision(project_id, revision_id)
+
+        async with self._session_factory() as session:
+            existing = await session.get(orm.ProjectArtifactBinding, artifact_id)
+            if existing is not None:
+                return self._reconcile_existing(existing, project_id, revision_id)
+            session.add(
+                orm.ProjectArtifactBinding(
+                    artifact_id=artifact_id,
+                    project_id=project_id,
+                    revision_id=revision_id,
+                    job_id=job_id,
+                    artifact_kind=artifact_kind,
+                    size_bytes=size_bytes,
+                    artifact_version_id=artifact_version_id,
+                )
+            )
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                # A concurrent binder won the primary key; re-read and apply the
+                # same idempotency/conflict rule rather than trusting the race.
+                await session.rollback()
+                existing = await session.get(orm.ProjectArtifactBinding, artifact_id)
+                if existing is None:  # pragma: no cover - a real PK collision must resolve
+                    raise ArtifactBindingConflict(
+                        "artifact binding raced and could not be read"
+                    ) from exc
+                return self._reconcile_existing(existing, project_id, revision_id)
+            row = await session.get(orm.ProjectArtifactBinding, artifact_id)
+            assert row is not None  # just committed
+            return _as_binding(row)
+
+    @staticmethod
+    def _reconcile_existing(
+        row: orm.ProjectArtifactBinding, project_id: str, revision_id: str
+    ) -> ArtifactBinding:
+        if row.project_id != project_id:
+            raise CrossProjectAccess("artifact id already bound to a different project")
+        if row.revision_id != revision_id:
+            raise ArtifactBindingConflict("artifact already bound to a different revision")
+        return _as_binding(row)
+
+    async def resolve(self, project_id: str, artifact_id: str) -> ArtifactBinding:
+        """Return the binding for one artifact, or refuse with a typed error."""
+        async with self._session_factory() as session:
+            row = await session.get(orm.ProjectArtifactBinding, artifact_id)
+            if row is None:
+                raise ArtifactNotFound(f"artifact {artifact_id!r} is not bound")
+            if row.project_id != project_id:
+                raise CrossProjectAccess("artifact does not belong to the requested project")
+            return _as_binding(row)
+
+    async def _load_validated_revision(self, project_id: str, revision_id: str) -> RevisionRecord:
+        """Load the bound revision and re-validate its bytes, with a typed refusal.
+
+        Any storage-layer failure (a missing/tampered revision, a cross-project
+        row, or a raw database error) is translated into the durable-project-state
+        error hierarchy so callers never see a bare storage exception.
+        """
+        from nexus_ai_agent.creative.project_state.models import DurableProjectStateError
+
+        try:
+            record = await self._revision_store.load_revision(project_id, revision_id)
+        except DurableProjectStateError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - storage failure must be typed
+            raise ArtifactBindingError("revision could not be loaded for binding") from exc
+        if record.project_id != project_id:  # pragma: no cover - load_revision enforces it
+            raise CrossProjectAccess("revision does not belong to the requested project")
+        return record
+
+    async def verify_artifact(
+        self, *, project_id: str, artifact_id: str, artifact_path: Path
+    ) -> ArtifactBinding:
+        """Re-measure *artifact_path* against the binding, fail-closed.
+
+        Returns the binding only when (a) the artifact's *current* bytes still
+        hash to ``artifact_id`` and (b) the bound revision still validates.  Any
+        divergence — changed bytes, missing/unreadable file, missing revision,
+        tampered revision, cross project — is a typed refusal; the binding is
+        never "assumed valid" and a raw filesystem error never escapes.
+        """
+        binding = await self.resolve(project_id, artifact_id)
+        try:
+            measured = content_address_of_file(artifact_path)
+        except OSError as exc:
+            raise ArtifactRevisionMismatch(
+                "artifact bytes could not be read for re-verification"
+            ) from exc
+        if measured != binding.artifact_id:
+            raise ArtifactRevisionMismatch(
+                "artifact bytes no longer match the bound content address"
+            )
+        # Re-validate the revision the artifact was bound to (its own bytes must
+        # still hash to their identity); a tampered/vanished revision fails here.
+        await self._load_validated_revision(project_id, binding.revision_id)
+        return binding
+
+    async def list_for_revision(self, project_id: str, revision_id: str) -> list[ArtifactBinding]:
+        """All artifacts durably bound to one revision (for lineage/readback)."""
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(orm.ProjectArtifactBinding)
+                    .where(orm.ProjectArtifactBinding.project_id == project_id)  # type: ignore[arg-type]
+                    .where(orm.ProjectArtifactBinding.revision_id == revision_id)  # type: ignore[arg-type]
+                    .order_by(orm.ProjectArtifactBinding.created_at)  # type: ignore[arg-type]
+                )
+            ).scalars()
+            return [_as_binding(row) for row in rows]
+
+
+__all__ = [
+    "ArtifactBinding",
+    "SqlArtifactBindingStore",
+    "SqlProjectRevisionStore",
+    "content_address_of_bytes",
+    "content_address_of_file",
+]

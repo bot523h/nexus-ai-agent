@@ -29,6 +29,8 @@ ALLOWED_TOP_LEVEL = {
     "datetime",
     "hashlib",
     "json",
+    "pathlib",
+    "re",
     "typing",
     "pydantic",
     "sqlalchemy",

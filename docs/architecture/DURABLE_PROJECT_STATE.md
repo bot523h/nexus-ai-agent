@@ -76,6 +76,40 @@ revision is a refusal, not a head read. This closes a TOCTOU where a concurrent
 commit between admission and handoff would otherwise silently re-target the job
 at a newer revision.
 
+## Artifact → revision binding (Slice 2)
+
+A pinned job executes one immutable revision; when it publishes an artifact, the
+artifact's **measured** content digest must be durably bound to that exact
+revision — never to the project head, which may have moved after admission.
+
+```
+worker(load R1) → publish(output.mp4, sha256=D) → bind(project, R1, artifact=D) → result.artifact_binding
+                                                                                        │
+        re-verification: verify_artifact(project, D, path) ─ re-measure bytes == D ─────┘   and R1 still validates
+```
+
+The binding lives in the **same** `project_state` package and the **same** single
+storage schema (`store.py`, one module maps `storage.models`), as one
+content-addressed row:
+
+| Concept | Authoritative owner | Durable record | Identity / hash rule | Forbidden duplicate |
+|---|---|---|---|---|
+| Artifact | the worker's measured bytes | `projectartifactbinding` row | `artifact_id` = `sha256:<hex>` of the published bytes | a second artifact store |
+| Binding | `SqlArtifactBindingStore` | same row | append-only, idempotent per `(project_id, artifact_id)` | a second provenance ledger |
+
+- `bind()` records the digest against `(project_id, revision_id)`; the revision
+  must exist and its bytes must still hash to their own identity, so an artifact
+  can never bind to a tampered, vanished or re-homed revision;
+- the binding is **append-only**: re-binding the same artifact to a *different*
+  revision is a hard `ArtifactBindingConflict`, so an artifact's provenance can
+  never be silently re-pointed (idempotent for the same revision);
+- `verify_artifact()` **re-measures** the artifact's current bytes and confirms
+  the bound revision still validates — any divergence is a typed refusal
+  (`ArtifactRevisionMismatch` / `RevisionIntegrityError` / `CrossProjectAccess`);
+- the worker wires this fail-closed: a pinned job whose binding is refused
+  returns `{"success": False, "error_code": "artifact_binding_failed"}` — never a
+  success without provenance. Unpinned (legacy) jobs publish no binding.
+
 ## Boundaries
 
 `tests/architecture/test_durable_project_state_boundary.py` enforces that the
@@ -94,8 +128,16 @@ exposes no combined `execute`-style method that would bypass the bus.
 - `tests/integration/test_durable_project_revision_pinning.py` — the worker loads
   the exact pinned revision (never a moved head) and refuses a vanished or
   tampered pin; the handoff pins the **admitted** revision even after a
-  concurrent head move (deterministic ordering, no sleeps).
+  concurrent head move (deterministic ordering, no sleeps); and (Slice 2) the
+  artifact→revision binding: bind/re-verify, idempotent replay, repoint refusal,
+  artifact-byte re-measurement, tampered-revision refusal, cross-project refusal,
+  the end-to-end pinned binding, the unpinned no-op, and the fail-closed worker.
 - `tests/integration/test_durable_project_concurrency.py` — real interleaving
   (exactly one winner) and atomic rollback on an injected crash.
 - `tests/architecture/test_durable_project_state_boundary.py` — no parallel
   authority, single schema declaration site.
+- `tests/unit/test_migrations.py` — `alembic upgrade head` creates the exact
+  schema (including `projectartifactbinding`), no drift, downgrade empties it.
+- `scripts/durable_project_state_mutations.py` — 19/19 mutants killed (15 Slice 1
+  + 4 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
+  binding-fail-open).
