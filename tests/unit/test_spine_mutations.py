@@ -2,8 +2,8 @@
 
 A guard that has never been attacked is not evidence. Each mutation below
 weakens one spine invariant in place, runs the spine suite, and requires it to
-turn RED. Mutated files are restored from memory in a ``finally`` block and
-their sha256 is checked, so a crash can never leave the tree altered.
+turn RED. Mutated files are tested inside an isolated temporary copy of ``src/``
+so the working tree is never altered, guaranteeing zero cross-test pollution.
 
 The mutations are applied to files under ``src/nexus_ai_agent/creative/spine/``;
 the suite is run with ``--noconftest`` so it needs no optional dependencies.
@@ -13,8 +13,8 @@ the suite is run with ``--noconftest`` so it needs no optional dependencies.
 # match the shipped files byte-for-byte, so they cannot be re-wrapped.
 from __future__ import annotations
 
-import hashlib
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -101,51 +101,43 @@ MUTATIONS: tuple[Mutation, ...] = (
 )
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _run_spine_tests() -> bool:
+def _run_spine_tests(src_path: Path) -> bool:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(src_path)
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-x", "--noconftest", *TESTS],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        env={**_env(), "PYTHONPATH": str(REPO_ROOT / "src")},
+        env=env,
     )
     return result.returncode == 0
 
 
-def _env() -> dict[str, str]:
-    return dict(os.environ)
+def test_spine_mutations_are_all_killed(tmp_path: Path) -> None:
+    # Copy src into an isolated temporary directory so workspace files are never mutated in-place
+    tmp_src = tmp_path / "src"
+    shutil.copytree(REPO_ROOT / "src", tmp_src)
 
-
-def test_spine_mutations_are_all_killed() -> None:
-    originals = {m.target: m.target.read_text(encoding="utf-8") for m in MUTATIONS}
-    before = {path: _sha256(path) for path in originals}
-
-    assert _run_spine_tests(), "baseline spine suite must be green before mutating"
+    assert _run_spine_tests(tmp_src), "baseline spine suite must be green before mutating"
 
     survivors: list[str] = []
-    try:
-        for mutation in MUTATIONS:
-            original = originals[mutation.target]
-            if mutation.old not in original:
-                survivors.append(f"{mutation.name} (MUTATION DOES NOT APPLY — source drifted)")
-                continue
-            mutation.target.write_text(
-                original.replace(mutation.old, mutation.new, 1), encoding="utf-8"
-            )
-            try:
-                green = _run_spine_tests()
-            finally:
-                mutation.target.write_text(original, encoding="utf-8")
-            if green:
-                survivors.append(f"{mutation.name}: SURVIVED — {mutation.why}")
-    finally:
-        for path, text in originals.items():
-            path.write_text(text, encoding="utf-8")
+    for mutation in MUTATIONS:
+        rel_target = mutation.target.relative_to(REPO_ROOT / "src")
+        tmp_target = tmp_src / rel_target
 
-    for path in originals:
-        assert _sha256(path) == before[path], f"restore changed {path}"
+        original = tmp_target.read_text(encoding="utf-8")
+        if mutation.old not in original:
+            survivors.append(f"{mutation.name} (MUTATION DOES NOT APPLY — source drifted)")
+            continue
+
+        tmp_target.write_text(original.replace(mutation.old, mutation.new, 1), encoding="utf-8")
+        try:
+            green = _run_spine_tests(tmp_src)
+        finally:
+            tmp_target.write_text(original, encoding="utf-8")
+
+        if green:
+            survivors.append(f"{mutation.name}: SURVIVED — {mutation.why}")
+
     assert not survivors, "spine mutants survived (a guard is fake):\n" + "\n".join(survivors)
