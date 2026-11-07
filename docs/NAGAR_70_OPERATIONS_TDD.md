@@ -962,3 +962,15 @@ UI بر اساس State مرکزی، marker، split، caption layer و وضعیت
 6. سپس فعال‌سازی تدریجی ۷۰ Operation با contract test مستقل برای هر Operation.
 
 معیار موفقیت Nagar این نیست که همه‌ی قابلیت‌ها روی یک دستگاه ضعیف هم‌زمان اجرا شوند؛ معیار این است که هر قابلیت **قابل‌کشف، قابل‌اعتبارسنجی، قابل‌Undo، قابل‌تشخیص از نظر confidence، local-first و مستقل از مختصات UI** باشد.
+
+---
+
+# وضعیت پیاده‌سازی (Implementation status) — ۲۳ سپتامبر ۲۰۲۶
+
+> نمای زنده‌ی وضعیت در [`architecture/CREATIVE_STUDIO.md`](architecture/CREATIVE_STUDIO.md) و [`ops/PACK_RUNTIME.md`](ops/PACK_RUNTIME.md) نگهداری می‌شود؛ این پیوست فقط تصویر اندازه‌گیری‌شده در زمان تحویل است.
+
+- **ثبت‌شده و پیاده‌سازی‌شده: ۶۷ از ۷۰ شناسه‌ی این کاتالوگ** (به‌علاوه‌ی `system.undo`). Composition = **۷۷ عملیات در ۸ پک** (`packs/runtime.py::COMPOSITION`: slideshow, caption, edit, motion, audio, delivery, portrait, scene)؛ `composition_issues() == ()`، `stale_capabilities() == {}`.
+- **پک‌های `nexus.vision.portrait` و `nexus.vision.scene`** (شناسه‌های §۱.۳ و §۱.۴) پیاده‌سازی و ثبت شدند (task-152/153)؛ عملیاتِ دارای mask/track به primitives مشترک `creative/packs/vision_common.py` متصل‌اند.
+- **سه شناسه‌ی باقی‌مانده:** `color.white_balance`, `color.hdr_tonemap`, `color.deband_denoise` (§۱.۸) — محل فرود آن‌ها `packs/delivery/` است که توسط PR#33 قفل شده (BLOCKED_SHARED_CONTRACT).
+- **قرارداد زمان:** `timecode_us` صحیح (میکروثانیه) مرجع است؛ پل OTIO (`creative/otio/`) و پل render-plan (`creative/rendering/plan.py`) نیز همان واحد را نگه می‌دارند.
+- طبقه‌بندی صادقانه‌ی اجرا: عملیات پک‌ها **State-Only** هستند (AssetRecord/EffectLayerRef با hash قطعی)؛ تنها مسیر تولید رسانه‌ی واقعی، lane رندر (`creative/rendering/`) است.

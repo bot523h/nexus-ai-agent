@@ -303,6 +303,52 @@ class LaneIR:
         return {s.asset_id: s for s in (self.main, *self.extra_sources)}
 
 
+@dataclass(frozen=True)
+class AssemblyGap:
+    """Timeline silence/black between two assembly pieces (integer microseconds).
+
+    A gap is *editorial* time: the compiler renders it as generated black
+    video plus generated silence, so a track with ``Segment A, Gap, Segment B``
+    keeps its timeline positions without inventing media.
+    """
+
+    duration_us: int
+
+
+@dataclass(frozen=True)
+class LaneAssembly:
+    """Ordered pieces (lane segments and gaps) compiled into **one** process.
+
+    One :class:`LaneIR` compiles exactly one main source — the IR has no concat
+    op, so a K-clip track yields K segment IRs.  The assembly is the minimal
+    extension that closes that gap *without* a second pipeline: the pieces are
+    compiled by the same compiler (:func:`compile_assembly`) into one
+    filtergraph with one ``concat`` stage, and executed by the same executor
+    (:func:`encode_lane`) in exactly one FFmpeg process.
+
+    Rules (fail-closed, enforced by the compiler):
+
+    * at least one :class:`LaneIR` piece; pieces are timeline-ordered;
+    * no two adjacent gaps (merge them at plan level);
+    * all segment mains share one media kind (all video or all audio);
+    * every piece profile/container equals the assembly's own.
+    """
+
+    pieces: tuple[LaneIR | AssemblyGap, ...]
+    profile: LaneProfile = LaneProfile()
+    container: str = "mp4"
+
+    @property
+    def segments(self) -> tuple[LaneIR, ...]:
+        """The lane pieces in timeline order (gaps excluded)."""
+        return tuple(p for p in self.pieces if isinstance(p, LaneIR))
+
+    @property
+    def gaps(self) -> tuple[AssemblyGap, ...]:
+        """The gap pieces in timeline order (segments excluded)."""
+        return tuple(p for p in self.pieces if isinstance(p, AssemblyGap))
+
+
 def lane_ir_from_project(
     project: Any,
     media_paths: dict[str, str],
@@ -358,6 +404,7 @@ def lane_ir_from_project(
 
 
 __all__ = [
+    "AssemblyGap",
     "COLORBALANCE_LIMIT",
     "COLOR_TEMPERATURE_MAX_K",
     "COLOR_TEMPERATURE_MIN_K",
@@ -372,6 +419,7 @@ __all__ = [
     "DuckOp",
     "ExposureOp",
     "FreezeOp",
+    "LaneAssembly",
     "LaneError",
     "LaneIR",
     "LaneOp",
