@@ -28,6 +28,7 @@ from nexus_ai_agent.creative.project_state.store import (
     SqlProjectRevisionStore,
     content_address_of_bytes,
     content_address_of_file,
+    is_content_address,
 )
 
 __all__ = [
@@ -47,4 +48,5 @@ __all__ = [
     "SqlProjectRevisionStore",
     "content_address_of_bytes",
     "content_address_of_file",
+    "is_content_address",
 ]

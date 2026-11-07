@@ -575,7 +575,13 @@ class ProjectArtifactBinding(SQLModel, table=True):
     revision_id: str = Field(foreign_key="projectrevision.revision_id", index=True)
     job_id: str = Field(default="", index=True)
     artifact_kind: str = Field(default="binary")
-    size_bytes: int = Field(ge=0)
+    # 64-bit on PostgreSQL: a published media artifact routinely exceeds the
+    # 32-bit INTEGER range (2 GiB), and SQLite's INTEGER is already 64-bit, so
+    # this only widens PostgreSQL (mirrors the TelegramId rationale, A-17).
+    size_bytes: int = Field(ge=0, sa_type=BigInteger)
+    # Optional immutable Asset Library version this artifact was registered as;
+    # completes the artifact→revision→asset-version chain when the caller has it.
+    artifact_version_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 

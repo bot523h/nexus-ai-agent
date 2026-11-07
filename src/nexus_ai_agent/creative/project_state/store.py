@@ -24,6 +24,7 @@ revision row and no moved head.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -60,6 +61,20 @@ _UNSET: Any = object()
 #: The canonical content-address prefix (identical to a revision id).
 _ADDRESS_PREFIX = "sha256:"
 
+#: A canonical content address is exactly ``sha256:`` + 64 lowercase hex.
+_CONTENT_ADDRESS_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def is_content_address(value: object) -> bool:
+    """True only for a well-formed ``sha256:<64 lowercase hex>`` identity.
+
+    A length/prefix check is not enough: ``sha256:`` + 64 non-hex characters is
+    the same length but can never match a real file digest, so it would persist
+    a permanently unverifiable binding. The digest characters are part of the
+    identity contract, not a formatting nicety.
+    """
+    return isinstance(value, str) and _CONTENT_ADDRESS_RE.match(value) is not None
+
 
 def content_address_of_bytes(data: bytes) -> str:
     """``sha256:<hex>`` over *data* — the same spelling revisions use."""
@@ -86,6 +101,7 @@ class ArtifactBinding:
     artifact_kind: str
     size_bytes: int
     created_at: datetime
+    artifact_version_id: str | None = None
 
 
 def _as_binding(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
@@ -97,6 +113,7 @@ def _as_binding(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
         artifact_kind=row.artifact_kind,
         size_bytes=row.size_bytes,
         created_at=row.created_at,
+        artifact_version_id=row.artifact_version_id,
     )
 
 
@@ -387,6 +404,7 @@ class SqlArtifactBindingStore:
         job_id: str = "",
         artifact_kind: str = "binary",
         size_bytes: int,
+        artifact_version_id: str | None = None,
     ) -> ArtifactBinding:
         """Bind one measured artifact to the immutable revision it served.
 
@@ -397,17 +415,27 @@ class SqlArtifactBindingStore:
         re-bound to the *same* revision is a no-op success, while a differing
         revision for the same artifact is a hard conflict — an artifact's
         provenance can never be silently re-pointed.
+
+        ``artifact_id`` must be a well-formed ``sha256:<64 hex>`` content
+        address; a same-length non-hex value is refused rather than stored as an
+        identity no file digest could ever match.
+
+        ``artifact_version_id`` is the immutable Asset Library version this
+        artifact was registered as (when the caller has one).  It completes the
+        artifact→revision→asset-version chain; a binding without it is still
+        valid (the artifact may not be in the Asset Library), but a caller that
+        has a version should pass it so the chain is resolvable.
         """
-        if not artifact_id.startswith(_ADDRESS_PREFIX) or len(artifact_id) != 71:
+        if not is_content_address(artifact_id):
             raise ArtifactBindingError("artifact_id must be a sha256:<64-hex> content address")
+        if artifact_version_id is not None and not artifact_version_id.strip():
+            raise ArtifactBindingError("artifact_version_id must be non-empty when provided")
         if size_bytes < 0:
             raise ArtifactBindingError("size_bytes must be non-negative")
 
         # The revision is the authority: load it (this re-validates its bytes,
         # refusing tampered/re-homed rows) before any binding row is written.
-        record = await self._revision_store.load_revision(project_id, revision_id)
-        if record.project_id != project_id:  # pragma: no cover - load_revision enforces it
-            raise CrossProjectAccess("revision does not belong to the requested project")
+        await self._load_validated_revision(project_id, revision_id)
 
         async with self._session_factory() as session:
             existing = await session.get(orm.ProjectArtifactBinding, artifact_id)
@@ -421,6 +449,7 @@ class SqlArtifactBindingStore:
                     job_id=job_id,
                     artifact_kind=artifact_kind,
                     size_bytes=size_bytes,
+                    artifact_version_id=artifact_version_id,
                 )
             )
             try:
@@ -459,6 +488,25 @@ class SqlArtifactBindingStore:
                 raise CrossProjectAccess("artifact does not belong to the requested project")
             return _as_binding(row)
 
+    async def _load_validated_revision(self, project_id: str, revision_id: str) -> RevisionRecord:
+        """Load the bound revision and re-validate its bytes, with a typed refusal.
+
+        Any storage-layer failure (a missing/tampered revision, a cross-project
+        row, or a raw database error) is translated into the durable-project-state
+        error hierarchy so callers never see a bare storage exception.
+        """
+        from nexus_ai_agent.creative.project_state.models import DurableProjectStateError
+
+        try:
+            record = await self._revision_store.load_revision(project_id, revision_id)
+        except DurableProjectStateError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - storage failure must be typed
+            raise ArtifactBindingError("revision could not be loaded for binding") from exc
+        if record.project_id != project_id:  # pragma: no cover - load_revision enforces it
+            raise CrossProjectAccess("revision does not belong to the requested project")
+        return record
+
     async def verify_artifact(
         self, *, project_id: str, artifact_id: str, artifact_path: Path
     ) -> ArtifactBinding:
@@ -466,17 +514,24 @@ class SqlArtifactBindingStore:
 
         Returns the binding only when (a) the artifact's *current* bytes still
         hash to ``artifact_id`` and (b) the bound revision still validates.  Any
-        divergence — changed bytes, missing revision, tampered revision, cross
-        project — is a typed refusal; the binding is never "assumed valid".
+        divergence — changed bytes, missing/unreadable file, missing revision,
+        tampered revision, cross project — is a typed refusal; the binding is
+        never "assumed valid" and a raw filesystem error never escapes.
         """
         binding = await self.resolve(project_id, artifact_id)
-        if content_address_of_file(artifact_path) != binding.artifact_id:
+        try:
+            measured = content_address_of_file(artifact_path)
+        except OSError as exc:
+            raise ArtifactRevisionMismatch(
+                "artifact bytes could not be read for re-verification"
+            ) from exc
+        if measured != binding.artifact_id:
             raise ArtifactRevisionMismatch(
                 "artifact bytes no longer match the bound content address"
             )
         # Re-validate the revision the artifact was bound to (its own bytes must
         # still hash to their identity); a tampered/vanished revision fails here.
-        await self._revision_store.load_revision(project_id, binding.revision_id)
+        await self._load_validated_revision(project_id, binding.revision_id)
         return binding
 
     async def list_for_revision(self, project_id: str, revision_id: str) -> list[ArtifactBinding]:

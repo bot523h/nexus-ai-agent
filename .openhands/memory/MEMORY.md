@@ -2,6 +2,26 @@
 
 Index of durable, expensive-to-learn facts. Detail goes to daily logs.
 
+## NAGAR-ONE audit + skill + daily automation (2026-11-07)
+- **Live truth beats memory:** `main` = `6838c543`; **#318/#316/#317 all MERGED**
+  (memory said "not merged"); **46 open PRs** (not 42). Re-derive every session.
+- **A new campaign the memory never had:** **NAGAR-ONE #319–#322**.
+  - **#319** = task-282 **Slice 2** (durable artifact→revision binding): required
+    checks GREEN + `mergeable`, but **15 UNRESOLVED review threads** (2 High, 8 Med,
+    2 Low, 2 review-instructions) → the top stuck item. Fix → reply → resolve.
+  - **#320/#321/#322** = docs-only (Stage 0 contract, Stage 2 law-numbering, handoff),
+    green + 0 threads → ready for owner merge.
+  - **Stage 3 (durable IBPC) = DEFERRED by design** (in-memory, "no parallel ledger").
+- **Delivered:** engineering skill `.agents/skills/nexus-nagar-one-engineering/SKILL.md`
+  (hard rules + §7 "errors made and how to avoid" + §9 Jules API + §10 automation).
+- **Automation:** "NAGAR-ONE Daily Continuation", cron `0 12 * * *`, tz `Asia/Tehran`,
+  prompt-preset, `repos=[nexus-ai-agent@main]`; resumes live truth, never writes `main`.
+- **Jules** is connected (`sources/github/bot523h/nexus-ai-agent`, key `$jules`,
+  header `X-Goog-Api-Key`, base `https://jules.googleapis.com/v1alpha`).
+- Automation API host: `https://app.all-hands.dev` (`Bearer $OPENHANDS_API_KEY`);
+  `OPENHANDS_HOST` is unset; local agent canvas :8001 is down.
+- Detail: `.openhands/memory/2026-11-07.md`.
+
 ## NEXUS final pre-merge hardening + integration proof (2026-11-06)
 - **Heads pushed:** #316 `020d8b11` (P0 board trust-boundary fix + live-main-cache fix),
   #318 `3cfaed2f` (dependency-gate env-marker + fail-closed hardening), #317

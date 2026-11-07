@@ -50,7 +50,8 @@ def upgrade() -> None:
         sa.Column(
             "artifact_kind", sqlmodel_types.AutoString(), nullable=False, server_default="binary"
         ),
-        sa.Column("size_bytes", sa.Integer(), nullable=False),
+        sa.Column("size_bytes", sa.BigInteger(), nullable=False),
+        sa.Column("artifact_version_id", sqlmodel_types.AutoString(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["project_id"], ["appproject.project_id"]),
         sa.ForeignKeyConstraint(["revision_id"], ["projectrevision.revision_id"]),
@@ -72,6 +73,11 @@ def upgrade() -> None:
             batch_op.f("ix_projectartifactbinding_job_id"), ["job_id"], unique=False
         )
         batch_op.create_index(
+            batch_op.f("ix_projectartifactbinding_artifact_version_id"),
+            ["artifact_version_id"],
+            unique=False,
+        )
+        batch_op.create_index(
             batch_op.f("ix_projectartifactbinding_created_at"), ["created_at"], unique=False
         )
 
@@ -79,6 +85,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     with op.batch_alter_table("projectartifactbinding", schema=None) as batch_op:
         batch_op.drop_index(batch_op.f("ix_projectartifactbinding_created_at"))
+        batch_op.drop_index(batch_op.f("ix_projectartifactbinding_artifact_version_id"))
         batch_op.drop_index(batch_op.f("ix_projectartifactbinding_job_id"))
         batch_op.drop_index(batch_op.f("ix_projectartifactbinding_revision_id"))
         batch_op.drop_index(batch_op.f("ix_projectartifactbinding_project_id"))

@@ -884,3 +884,201 @@ async def test_pinned_job_fails_closed_when_binding_is_refused(
     result = await creative_render_job(payload)
     assert result["success"] is False
     assert result["error_code"] == "artifact_binding_failed"
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 hardening (PR #319 review threads): identity, re-measure, metadata
+# ---------------------------------------------------------------------------
+
+
+def test_bind_refuses_a_non_hex_content_address(pin_env: Path) -> None:
+    """A same-length non-hex digest can never match a file: refuse it up front."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingError
+
+    bindings = _binding_store()
+    with pytest.raises(ArtifactBindingError):
+        asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=r1.revision_id,
+                artifact_id="sha256:" + "z" * 64,  # right length, not hex
+                size_bytes=1,
+            )
+        )
+
+
+def test_verify_artifact_missing_file_is_a_typed_refusal(pin_env: Path) -> None:
+    """A vanished artifact is a typed mismatch, never a raw OSError."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"bytes")
+    from nexus_ai_agent.creative.project_state.models import ArtifactRevisionMismatch
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID, revision_id=r1.revision_id, artifact_id=artifact_id, size_bytes=5
+        )
+    )
+    artifact.unlink()
+    with pytest.raises(ArtifactRevisionMismatch):
+        asyncio.run(
+            bindings.verify_artifact(
+                project_id=PROJECT_ID, artifact_id=artifact_id, artifact_path=artifact
+            )
+        )
+
+
+def test_bind_records_and_returns_the_asset_version_link(pin_env: Path) -> None:
+    """The binding carries the immutable Asset Library version when supplied."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"bytes")
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    bound = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            size_bytes=5,
+            artifact_version_id="ver-123",
+        )
+    )
+    assert bound.artifact_version_id == "ver-123"
+    assert (
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).artifact_version_id == "ver-123"
+    )
+
+
+def test_bind_replay_does_not_rewrite_stored_metadata(pin_env: Path) -> None:
+    """A same-revision replay is a read-only no-op; the original row is kept."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"bytes")
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    first = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="first",
+            artifact_kind="video",
+            size_bytes=100,
+        )
+    )
+    # Replay with DIFFERENT metadata: the stored row must be unchanged.
+    replay = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="second",
+            artifact_kind="audio",
+            size_bytes=999,
+        )
+    )
+    assert replay.job_id == "first"
+    assert replay.artifact_kind == "video"
+    assert replay.size_bytes == 100
+    assert replay.created_at == first.created_at
+
+
+@pytest.mark.asyncio
+async def test_pinned_job_binds_to_the_admitted_revision_not_the_moved_head(
+    pin_env: Path,
+) -> None:
+    """The binding follows the pinned revision even when the head has moved on."""
+    owner, binding_id = _wire_directory()
+    store = SqlProjectRevisionStore()
+    admitted = await _commit(store, _project("admitted"), parent=None)
+    # The head moves to a newer revision BEFORE the pinned job publishes.
+    await _commit(store, _project("moved-head"), parent=admitted.revision_id)
+    workspace = pin_env / "creative" / "creative_bind_moved_head"
+    workspace.mkdir()
+    _clip(workspace / "input.mp4")
+    payload = _pinned_payload(
+        workspace,
+        revision_id=admitted.revision_id,
+        revision_hash=admitted.state_hash,
+        principal_id=str(owner),
+        channel_binding_id=binding_id,
+    )
+    result = await creative_render_job(payload)
+    assert result["success"] is True, result
+    assert result["artifact_binding"]["revision_id"] == admitted.revision_id
+
+
+def test_bind_published_artifact_refuses_when_the_reported_digest_is_stale(
+    pin_env: Path,
+) -> None:
+    """The digest is re-measured at bind time; a stale report is refused.
+
+    The pinned revision is real and valid, so the ONLY reason for refusal is the
+    digest re-measurement — removing that guard would bind successfully.
+    """
+    from nexus_ai_agent.creative.render_jobs import (
+        CreativeRenderError,
+        _bind_published_artifact,
+    )
+
+    store = SqlProjectRevisionStore()
+    revision = asyncio.run(_commit(store, _project("stale-digest"), parent=None))
+    workspace = pin_env / "creative" / "stale_digest"
+    workspace.mkdir()
+    artifact = workspace / "out.bin"
+    artifact.write_bytes(b"the-actual-published-bytes")
+    data = CreativeRenderPayload.model_construct(
+        command="edit",
+        operation="trim",
+        args=[],
+        workspace_dir=str(workspace),
+        idempotency_key="stale:1",
+        schema_version=2,
+        project_id=PROJECT_ID,
+        revision_id=revision.revision_id,
+        revision_hash=revision.state_hash,
+    )
+    result = {
+        "artifact_path": str(artifact),
+        "sha256": "sha256:" + "c" * 64,  # does NOT match the file's real bytes
+        "size_bytes": 26,
+    }
+    with pytest.raises(CreativeRenderError) as exc:
+        asyncio.run(_bind_published_artifact(data, result))
+    assert exc.value.code == "artifact_binding_failed"
+
+
+def test_bind_published_artifact_refuses_missing_artifact_metadata(pin_env: Path) -> None:
+    """A pinned success without measurable artifact metadata is refused."""
+    from nexus_ai_agent.creative.render_jobs import (
+        CreativeRenderError,
+        _bind_published_artifact,
+    )
+
+    data = CreativeRenderPayload.model_construct(
+        command="edit",
+        operation="trim",
+        args=[],
+        workspace_dir=str(pin_env),
+        idempotency_key="nometa:1",
+        schema_version=2,
+        project_id=PROJECT_ID,
+        revision_id="sha256:" + "a" * 64,
+        revision_hash="sha256:" + "b" * 64,
+    )
+    with pytest.raises(CreativeRenderError) as exc:
+        asyncio.run(_bind_published_artifact(data, {"success": True}))
+    assert exc.value.code == "artifact_binding_failed"

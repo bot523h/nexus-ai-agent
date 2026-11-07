@@ -188,9 +188,7 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "artifact_binding_skips_revision_validation",
         STORE,
-        """        record = await self._revision_store.load_revision(project_id, revision_id)
-        if record.project_id != project_id:  # pragma: no cover - load_revision enforces it
-            raise CrossProjectAccess("revision does not belong to the requested project")""",
+        "        await self._load_validated_revision(project_id, revision_id)",
         "        pass  # mutated: binding no longer validates the revision exists",
         "Slice 2: an artifact must only bind to a revision that exists and validates; "
         "skipping the load lets an artifact bind to a vanished/tampered revision",
@@ -198,7 +196,7 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "artifact_verify_remeasure_removed",
         STORE,
-        """        if content_address_of_file(artifact_path) != binding.artifact_id:
+        """        if measured != binding.artifact_id:
             raise ArtifactRevisionMismatch(
                 "artifact bytes no longer match the bound content address"
             )""",
@@ -212,14 +210,50 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "artifact_binding_failopen",
         RENDER_JOBS,
-        """    except DurableProjectStateError as exc:
+        """    except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
         raise CreativeRenderError(
             "artifact_binding_failed", f"{type(exc).__name__}: {exc}"
         ) from exc""",
-        """    except DurableProjectStateError:  # mutated: binding failure is swallowed
+        """    except Exception:  # mutated: binding failure is swallowed
         return result""",
         "Slice 2: a refused binding must fail the job closed, never succeed without "
         "provenance; swallowing the error lets a pinned job publish unbound",
+    ),
+    Mutation(
+        "artifact_binding_skips_digest_remeasure",
+        RENDER_JOBS,
+        """    if not is_content_address(raw_sha) or raw_sha != measured:
+        raise CreativeRenderError(
+            "artifact_binding_failed",
+            "reported artifact digest does not match the artifact's measured bytes",
+        )""",
+        """    if False:  # mutated: bind trusts the reported digest instead of re-measuring
+        raise CreativeRenderError(
+            "artifact_binding_failed",
+            "reported artifact digest does not match the artifact's measured bytes",
+        )""",
+        "Slice 2 review: the binding must re-measure the published bytes; trusting the "
+        "reported digest binds an artifact that a later write already replaced",
+    ),
+    Mutation(
+        "artifact_content_address_validation_removed",
+        STORE,
+        "        if not is_content_address(artifact_id):",
+        "        if False:  # mutated: a non-hex content address is accepted",
+        "Slice 2 review: a same-length non-hex id can never match a real file; "
+        "accepting it persists a permanently unverifiable binding",
+    ),
+    Mutation(
+        "artifact_verify_oserror_failopen",
+        STORE,
+        """        except OSError as exc:
+            raise ArtifactRevisionMismatch(
+                "artifact bytes could not be read for re-verification"
+            ) from exc""",
+        """        except OSError:  # mutated: a missing artifact is trusted as verified
+            return binding""",
+        "Slice 2 review: a missing/unreadable artifact must be a typed refusal, never "
+        "a silent 'verified' — fail-closed on the read path",
     ),
 )
 

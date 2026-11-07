@@ -30,6 +30,7 @@ ALLOWED_TOP_LEVEL = {
     "hashlib",
     "json",
     "pathlib",
+    "re",
     "typing",
     "pydantic",
     "sqlalchemy",
