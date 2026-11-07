@@ -1047,3 +1047,23 @@ Only red check = the #234 flake (task-264, issue #237).
 - **CI checkouts have NO `origin/main` ref** (shallow single-branch checkout). Any test that shells
   out to real git for `origin/main` fails in CI for purely environmental reasons — stub the git
   boundary (`_stub_git`) or use `HEAD`. This cost a red `test`/`python-parity` on #316.
+
+## PR #319 — task-282 Slice 2 hardening (durable, 2026-11-07)
+- Branch `nagar-one-slice2-artifact-revision-binding`, PR #319 (base main, OPEN). Hardened
+  head **`2e29c138`**; all **16 review threads resolved**; PR body updated with the
+  review-hardening + honest residuals. Campaign `scripts/durable_project_state_mutations.py`
+  is now **22** mutants (was 19) — 22/22 killed.
+- Slice-2 invariants now enforced: the artifact digest is **re-measured at bind** (stale
+  report refused); `is_content_address()` requires full `sha256:<64 lowercase hex>`;
+  `verify_artifact` turns a missing/unreadable artifact into typed `ArtifactRevisionMismatch`;
+  the worker turns EVERY binding failure into `CreativeRenderError("artifact_binding_failed")`;
+  `ArtifactBinding.artifact_version_id` links the Asset Library version; `size_bytes` = BIGINT.
+- **Documented residuals (D-0038, honest)**: binding commits before the queue verifies/publishes
+  (needs an async `finalize` hook); schema-2 renders are NOT yet required to pin a revision
+  (enforcing it reds 14 canonical-execution tests → cross-slice, deferred); concurrent-revision
+  window mitigated by re-load+re-validate (transaction-atomic lock = storage-boundary slice).
+- **Push auth**: `origin` has NO token; push via
+  `https://bot523h:${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/bot523h/nexus-ai-agent.git`
+  (PAT = owner; `OH_GIT_CREDENTIAL_ACCESS_TOKEN_GITHUB` fails for git here).
+- **`lint-fast` runs `ruff format --check`** (not just `ruff check`): always run
+  `ruff format --check .` before pushing — a plain `ruff check` misses over-wrapped lines.
