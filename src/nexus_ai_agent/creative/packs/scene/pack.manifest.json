@@ -1,0 +1,69 @@
+{
+  "manifest_schema": "nexus.capability-pack.v1",
+  "package_id": "nexus.vision.scene",
+  "version": "1.0.0",
+  "display_name": "Nagar scene semantic vision planning",
+  "download_size_mb": 0.1,
+  "capabilities": [
+    "scene.segment_subject",
+    "scene.remove_object",
+    "scene.replace_sky",
+    "scene.remove_background",
+    "scene.track_object",
+    "scene.track_face",
+    "scene.detect_shot_boundaries",
+    "scene.find_subject_moment",
+    "scene.remove_logo",
+    "scene.auto_reframe_subject"
+  ],
+  "runtime": {
+    "native": {
+      "adapter_id": "nagar.vision.plan.v1",
+      "sandbox": "in_process",
+      "network_required": false
+    },
+    "browser": {
+      "preferred": "none",
+      "fallback": "none",
+      "worker_required": false
+    }
+  },
+  "permissions": [
+    "read_project_video_frames",
+    "write_derived_video_assets"
+  ],
+  "network_policy": {
+    "upload_media": false,
+    "runtime_network": false,
+    "pack_update": "forbidden"
+  },
+  "hardware_requirements": {
+    "minimum_ram_mb": 256,
+    "recommended_ram_mb": 512,
+    "minimum_cpu_threads": 1,
+    "gpu": {
+      "optional": true,
+      "webgpu": false
+    },
+    "disk_free_mb": 10
+  },
+  "artifacts": [],
+  "resource_budget": {
+    "max_resident_model_mb": 0,
+    "max_audio_minutes_in_memory": 0.1,
+    "max_preview_resolution": "1920x1080"
+  },
+  "compatibility": {
+    "min_nagar_version": "3.10.0",
+    "protocol_version": "nagar.command.v1",
+    "state_schema": "nagar.state.v1"
+  },
+  "security": {
+    "signature_algorithm": "ed25519",
+    "signature": "base64:replace-with-signed-scene-manifest",
+    "trusted_publisher": "nagar-core",
+    "allow_arbitrary_native_code": false,
+    "allow_arbitrary_wasm_imports": false
+  },
+  "external_binaries": []
+}
