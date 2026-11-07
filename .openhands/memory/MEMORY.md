@@ -2,6 +2,26 @@
 
 Index of durable, expensive-to-learn facts. Detail goes to daily logs.
 
+## NAGAR-ONE P0 closeout + PR reconciliation (2026-11-07 continuation)
+- **#319 (task-282 Slice 2)** head now **`e52e30eb`**, **16/16 threads resolved**,
+  **CI 42412872578 = SUCCESS** (27/27). **P0 fix**: the artifact→revision binding is
+  now committed by the queue's **post-verification, pre-COMPLETED async `confirm` hook**
+  (`ArtifactPublication.confirm` + `_confirm_safely`), never by the worker (which now
+  records only a measured INTENT). Fail-closed: a refusal fails the job + retracts the
+  attempt → never COMPLETED without provenance. Campaign **24/24 killed**; suite
+  **6421 passed / 39 skipped**; committed `e52e30eb`.
+- **PR reconciliation (file-level):** **#323 is REDUNDANT** with #319 — the 3 process
+  files (`.agents/skills/nexus-nagar-one-engineering/SKILL.md`, `.openhands/memory/2026-11-07.md`,
+  `MEMORY.md`) are **byte-identical** in both. Merge-order coupling (textual, rebasable,
+  NOT a defect): `MODULE_MAP.md` (#319 R29 vs #321 R22→R25) and `docs/README.md` (#320 vs #322).
+  **Law numbering is sound**: main has a pre-existing dup R22; #321 fixes it → 1..28; #319
+  adds R29 → 1..29 (good in either order).
+- **Real defect:** **#294** is `dirty` + 1 unresolved thread + adds a **duplicate law R28**
+  (collides with main R28) → blocked, its own campaign.
+- **Merge order (owner):** #320 → #321 → #319 (rebase) → #322; close #323 as redundant.
+  Never write `main` (HARD RULE).
+- Detail: `.openhands/memory/2026-11-07-continuation.md`.
+
 ## NAGAR-ONE audit + skill + daily automation (2026-11-07)
 - **Live truth beats memory:** `main` = `6838c543`; **#318/#316/#317 all MERGED**
   (memory said "not merged"); **46 open PRs** (not 42). Re-derive every session.
