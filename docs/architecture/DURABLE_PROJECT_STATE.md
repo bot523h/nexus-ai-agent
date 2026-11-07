@@ -83,10 +83,23 @@ artifact's **measured** content digest must be durably bound to that exact
 revision — never to the project head, which may have moved after admission.
 
 ```
-worker(load R1) → publish(output.mp4, sha256=D) → bind(project, R1, artifact=D) → result.artifact_binding
+worker(load R1) → publish(output.mp4, sha256=D) → record INTENT {artifact=D, revision=R1} → result
+                                                                                        │
+queue: verify(result) ─ re-measure bytes == D ──▶ publish (atomic rename) ──▶ confirm: bind(project, R1, artifact=D) ──▶ COMPLETED
                                                                                         │
         re-verification: verify_artifact(project, D, path) ─ re-measure bytes == D ─────┘   and R1 still validates
 ```
+
+The worker does **not** commit the binding: it runs before the queue's
+independent verification and atomic publication, so a result the queue later
+rejects would otherwise leave a durable binding for an artifact that was never
+published. The worker records only the *measured* binding **intent**; the
+queue's post-publication `confirm` hook (`ArtifactPublication.confirm`, wired to
+`creative_render_binding_confirm`) commits the durable row, and only then may the
+job become `COMPLETED`. The hook is fail-closed: a refusal (or crash) fails the
+job and retracts this attempt, so a job is never `COMPLETED` without its binding
+and a rejected artifact never leaves one behind. The digest is re-measured from
+the published bytes in the hook as well.
 
 The binding lives in the **same** `project_state` package and the **same** single
 storage schema (`store.py`, one module maps `storage.models`), as one
@@ -106,9 +119,9 @@ content-addressed row:
 - `verify_artifact()` **re-measures** the artifact's current bytes and confirms
   the bound revision still validates — any divergence is a typed refusal
   (`ArtifactRevisionMismatch` / `RevisionIntegrityError` / `CrossProjectAccess`);
-- the worker wires this fail-closed: a pinned job whose binding is refused
-  returns `{"success": False, "error_code": "artifact_binding_failed"}` — never a
-  success without provenance. Unpinned (legacy) jobs publish no binding.
+- the confirm hook wires this fail-closed: a refused binding fails the job and
+  retracts the attempt — never a `COMPLETED` job without provenance. Unpinned
+  (legacy) jobs publish no binding.
 
 ## Boundaries
 
@@ -131,13 +144,17 @@ exposes no combined `execute`-style method that would bypass the bus.
   concurrent head move (deterministic ordering, no sleeps); and (Slice 2) the
   artifact→revision binding: bind/re-verify, idempotent replay, repoint refusal,
   artifact-byte re-measurement, tampered-revision refusal, cross-project refusal,
-  the end-to-end pinned binding, the unpinned no-op, and the fail-closed worker.
+  the unpinned no-op, the intent/confirm split, and two queue-level end-to-end
+  proofs (a verified+published job commits its binding then `COMPLETED`; a
+  refused confirmation fails the job closed with no binding row).
 - `tests/integration/test_durable_project_concurrency.py` — real interleaving
   (exactly one winner) and atomic rollback on an injected crash.
 - `tests/architecture/test_durable_project_state_boundary.py` — no parallel
   authority, single schema declaration site.
 - `tests/unit/test_migrations.py` — `alembic upgrade head` creates the exact
   schema (including `projectartifactbinding`), no drift, downgrade empties it.
-- `scripts/durable_project_state_mutations.py` — 19/19 mutants killed (15 Slice 1
-  + 4 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
-  binding-fail-open).
+- `scripts/durable_project_state_mutations.py` — 24/24 mutants killed (15 Slice 1
+  + 9 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
+  digest-remeasure-removed, content-address-validation-removed,
+  verify-oserror-fail-open, binding-fail-open, and the two queue confirm-seam
+  mutants — confirm-gate disabled and confirmation-refusal-ignored).

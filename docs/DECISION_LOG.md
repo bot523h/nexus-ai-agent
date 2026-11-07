@@ -2762,30 +2762,38 @@ bytes that no longer exist. (b) Requiring every binding to carry an
 `AssetVersion` — rejected as a hard requirement: an artifact may legitimately not
 be in the Asset Library; the link is recorded when the caller has it.
 
-**Known residuals (honest).** (1) The binding is committed by the worker at the
-end of `creative_render_job`, i.e. *before* the queue's independent verification
-and publication (`_publish_and_reprobe`). A result the queue later rejects
-therefore leaves a durable, append-only binding. Closing this fully requires
-committing the binding from the queue's post-publication `finalize` hook (the
-only point after verification); the binding is idempotent and content-addressed,
-so a `finalize`-time commit is safe to add, but it is deferred to a follow-up
-slice because it needs an async-capable finalize seam. Until then the binding
-records what the worker measured and published; the queue's verification remains
-the authority for whether the job is successful. (2) A canonical (schema 2)
-render is not yet *required* to carry a complete revision pin — a canonical
-payload without a pin still executes and, because `_bind_published_artifact`
-no-ops without a pin, publishes without an artifact binding. Requiring the pin is
-a cross-slice change (the schema-2 admission path has no revision concept yet and
-14 canonical-execution tests currently enqueue unpinned schema-2 payloads), so it
-is recorded here as the follow-up that closes thread "Canonical jobs skip
-provenance binding" rather than enforced in this slice.
+**Known residuals (honest).** (1) *Closed in this slice (P0, follow-up
+commit).* The binding is now committed by the queue's **post-publication
+`confirm` hook** — after the independent verification and the atomic
+publication, and before the durable `COMPLETED` commit — never inside the
+worker. `ArtifactPublication.confirm(payload, result)` is an optional async
+seam; `creative_render` wires it to `creative_render_binding_confirm`, and the
+worker's `_bind_published_artifact` now records only the *measured* binding
+**intent** (never a durable row). The hook is fail-closed: a refusal (or crash)
+fails the job retryably and retracts this attempt, so a rejected artifact can
+never leave a durable binding behind, and a job can never be `COMPLETED` without
+its binding. The digest is re-measured from the *published* bytes a second time
+in the hook. (2) A canonical (schema 2) render is not yet *required* to carry a
+complete revision pin — a canonical payload without a pin still executes and,
+because `_bind_published_artifact` no-ops without a pin, publishes without an
+artifact binding. Requiring the pin is a cross-slice change: the live IBPC
+vertical slice (`nagar/ibpc/service.py`) and the cognition bridge both emit
+schema-2 payloads without a revision concept, and 14 canonical-execution tests
+enqueue unpinned schema-2 payloads, so this remains the recorded follow-up that
+closes thread "Canonical jobs skip provenance binding" rather than an
+enforcement in this slice.
 
 **Evidence.** `tests/integration/test_durable_project_revision_pinning.py`
 (bind/verify/idempotency/repoint refusal, non-hex digest refusal, missing-file
 typed refusal, asset-version link, replay keeps stored metadata, binding follows
 the admitted revision after a head move, schema-2 requires a pin, stale-digest
-and missing-metadata refusals), `tests/architecture/test_durable_project_state_boundary.py`
+and missing-metadata refusals, and — for residual 1 — the worker records only an
+intent while `creative_render_binding_confirm` commits it, plus two queue-level
+end-to-end proofs: a verified+published pinned job commits its binding then
+`COMPLETED`, and a refused confirmation fails the job closed with no binding
+row), `tests/architecture/test_durable_project_state_boundary.py`
 (single schema site, no parallel authority), and the mutation campaign
-`scripts/durable_project_state_mutations.py`. Migration `20261106artbind`;
-architecture page `docs/architecture/DURABLE_PROJECT_STATE.md`; boundary law R29
-in `docs/architecture/MODULE_MAP.md` §3.
+`scripts/durable_project_state_mutations.py` (24 mutants, incl. the queue confirm
+gate and refusal-ignored mutants). Migration `20261106artbind`; architecture page
+`docs/architecture/DURABLE_PROJECT_STATE.md`; boundary law R29 in
+`docs/architecture/MODULE_MAP.md` §3.

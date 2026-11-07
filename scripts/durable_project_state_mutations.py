@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STORE = ROOT / "src" / "nexus_ai_agent" / "creative" / "project_state" / "store.py"
 PERSISTENCE = ROOT / "src" / "nexus_ai_agent" / "creative" / "studio" / "persistence.py"
 RENDER_JOBS = ROOT / "src" / "nexus_ai_agent" / "creative" / "render_jobs.py"
+QUEUE = ROOT / "src" / "nexus_ai_agent" / "adapters" / "in_process_job_queue.py"
 HANDOFF = ROOT / "src" / "nexus_ai_agent" / "nagar" / "creative" / "handoff.py"
 TESTS = (
     "tests/unit/test_durable_project_state.py",
@@ -254,6 +255,23 @@ MUTATIONS: tuple[Mutation, ...] = (
             return binding""",
         "Slice 2 review: a missing/unreadable artifact must be a typed refusal, never "
         "a silent 'verified' — fail-closed on the read path",
+    ),
+    Mutation(
+        "artifact_binding_confirmed_before_verification",
+        QUEUE,
+        "                if publication is not None and publication.confirm is not None:",
+        "                if False:  # mutated: the binding is never confirmed by the queue",
+        "D-0038 residual 1: the durable binding must be committed by the queue AFTER "
+        "verification+publication and BEFORE COMPLETED; disabling the confirm hook "
+        "means a job completes with no artifact→revision provenance",
+    ),
+    Mutation(
+        "artifact_confirmation_refusal_ignored",
+        QUEUE,
+        "                    if confirm_error is not None:",
+        "                    if False:  # mutated: a refused confirmation is ignored",
+        "D-0038 residual 1: a refused confirmation must fail the job closed; ignoring "
+        "it lets an unconfirmed job reach COMPLETED and publish without provenance",
     ),
 )
 

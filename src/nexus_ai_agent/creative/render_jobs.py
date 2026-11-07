@@ -1139,22 +1139,27 @@ async def _resolve_pinned_project(data: CreativeRenderPayload) -> Any | None:  #
 async def _bind_published_artifact(
     data: CreativeRenderPayload, result: dict[str, Any]
 ) -> dict[str, Any]:
-    """Durably bind a published artifact to the exact revision the job served.
+    """Record the *measured* artifact→revision binding intent for the queue.
 
     Task-282 Slice 2: a pinned job executes one immutable revision; when it
-    publishes an artifact, that artifact's *measured* content digest is recorded
-    against the pinned revision (never the project head, which may have moved).
-    The binding is content-addressed and idempotent, and it is fail-closed: a
-    conflict or an unwritable binding turns the job into a typed failure rather
-    than a success with no provenance.
+    publishes an artifact, that artifact's *measured* content digest must be
+    durably recorded against the pinned revision (never the project head, which
+    may have moved).
 
-    The digest is **re-measured from the artifact bytes at bind time**, never
-    trusted from the result: if the artifact changed between render and publish,
-    the binding would otherwise identify bytes that no longer exist.
+    This worker function does **not** commit the binding.  It runs inside the
+    handler, i.e. *before* the queue's independent verification and atomic
+    publication, so committing here would leave a durable binding for an
+    artifact the queue may later reject.  Instead it produces the binding
+    **intent** (the measured content address + the pinned revision + the
+    optional asset version) on the result; the queue's post-publication
+    ``confirm`` hook commits it, and only then is the job allowed to become
+    COMPLETED.  See ``creative_render_binding_confirm``.
 
-    Unpinned (legacy) jobs publish no binding — there is no revision to bind to.
-    A pinned job whose artifact metadata is missing or malformed is refused
-    (``artifact_binding_failed``), never returned as an unbound success.
+    The digest is **re-measured from the artifact bytes here**, never trusted
+    from the result: if the artifact changed between render and publish, the
+    binding would otherwise identify bytes that no longer exist.  Unpinned
+    (legacy) jobs record no intent; a pinned job whose artifact metadata is
+    missing or malformed is refused (``artifact_binding_failed``).
     """
     if data.revision_id is None or data.project_id is None:
         return result
@@ -1166,7 +1171,6 @@ async def _bind_published_artifact(
             "pinned job produced no measurable artifact to bind",
         )
     from nexus_ai_agent.creative.project_state.store import (
-        SqlArtifactBindingStore,
         content_address_of_file,
         is_content_address,
     )
@@ -1187,28 +1191,67 @@ async def _bind_published_artifact(
 
     size = result.get("size_bytes")
     version = result.get("asset_version_id")
+    result["artifact_binding"] = {
+        "artifact_id": measured,
+        "project_id": data.project_id,
+        "revision_id": data.revision_id,
+        "artifact_kind": str(result.get("artifact_kind") or "binary"),
+        "size_bytes": int(size) if isinstance(size, int) and size >= 0 else 0,
+        "artifact_version_id": version if isinstance(version, str) and version else None,
+    }
+    return result
+
+
+async def creative_render_binding_confirm(payload: dict[str, Any], result: dict[str, Any]) -> None:
+    """Queue confirm hook: durably commit the artifact→revision binding.
+
+    Runs after the queue independently verified and atomically published the
+    artifact and before the durable COMPLETED commit — the only point at which
+    a binding may be written, so a rejected artifact never leaves one behind.
+    The digest is re-measured from the *published* bytes a second time here
+    (the file has since been renamed into the job namespace), and every failure
+    is a typed ``CreativeRenderError`` so the queue fails the job closed.
+    Idempotent: the binding is content-addressed, so a retry is a no-op.
+    """
+    intent = result.get("artifact_binding")
+    if not isinstance(intent, dict):
+        return  # unpinned (legacy) job: nothing to confirm
+    raw_path = result.get("artifact_path")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise CreativeRenderError(
+            "artifact_binding_failed", "published result has no artifact_path"
+        )
+    from nexus_ai_agent.creative.project_state.store import (
+        SqlArtifactBindingStore,
+        content_address_of_file,
+    )
+
+    try:
+        measured = content_address_of_file(Path(raw_path))
+    except OSError as exc:
+        raise CreativeRenderError(
+            "artifact_binding_failed", f"published artifact unreadable: {type(exc).__name__}"
+        ) from exc
+    if measured != intent.get("artifact_id"):
+        raise CreativeRenderError(
+            "artifact_binding_failed",
+            "published artifact bytes do not match the measured binding digest",
+        )
     store = SqlArtifactBindingStore()
     try:
-        binding = await store.bind(
-            project_id=data.project_id,
-            revision_id=data.revision_id,
+        await store.bind(
+            project_id=str(intent["project_id"]),
+            revision_id=str(intent["revision_id"]),
             artifact_id=measured,
-            job_id=data.idempotency_key,
-            artifact_kind=str(result.get("artifact_kind") or "binary"),
-            size_bytes=int(size) if isinstance(size, int) and size >= 0 else 0,
-            artifact_version_id=version if isinstance(version, str) and version else None,
+            job_id=str(result.get("_queue_job_id") or ""),
+            artifact_kind=str(intent.get("artifact_kind") or "binary"),
+            size_bytes=int(intent.get("size_bytes") or 0),
+            artifact_version_id=intent.get("artifact_version_id") or None,
         )
     except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
         raise CreativeRenderError(
             "artifact_binding_failed", f"{type(exc).__name__}: {exc}"
         ) from exc
-    result["artifact_binding"] = {
-        "artifact_id": binding.artifact_id,
-        "revision_id": binding.revision_id,
-        "project_id": binding.project_id,
-        "artifact_version_id": binding.artifact_version_id,
-    }
-    return result
 
 
 async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1686,8 +1729,12 @@ def build_creative_render_publication(artifact_root: Path) -> ArtifactPublicatio
     def _finalize(payload: dict[str, object], result: dict[str, object]) -> None:
         creative_render_finalize_callback(payload, result, artifact_root)
 
+    async def _confirm(payload: dict[str, object], result: dict[str, object]) -> None:
+        await creative_render_binding_confirm(payload, result)
+
     return ArtifactPublication(
         publish=_publish,
         retract=_retract,
         finalize=_finalize,
+        confirm=_confirm,
     )
