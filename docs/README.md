@@ -46,6 +46,7 @@ placeholder text.
 | [architecture/LLM_PROVIDERS.md](architecture/LLM_PROVIDERS.md) | Provider chain, cooldowns, anti-retry-storm rule, strict-privacy flag. |
 | [architecture/KNOWLEDGE_RETRIEVAL.md](architecture/KNOWLEDGE_RETRIEVAL.md) | Local-first LlamaIndex knowledge retrieval: adapter-only confinement, verified-evidence search semantics, derived rebuildable store, failure taxonomy, honest limitations. |
 | [architecture/DURABLE_PROJECT_STATE.md](architecture/DURABLE_PROJECT_STATE.md) | Durable Studio project/revision lifecycle (task-282): immutable content-addressed revisions, the compare-and-swap head pointer, the reuse of the single storage schema + CommandBus, and the restart/CAS evidence. |
+| [architecture/DEFERRED_WIRING_AND_PIN.md](architecture/DEFERRED_WIRING_AND_PIN.md) | Two deferred items with evidence and owner decisions: the AssetVersion producer wiring (cross-zone, task-266) and the schema-2 canonical revision pin (D-0038 residual — the canonical lane is already pinned; the model-level fix breaks the IBPC lane). |
 | [architecture/adr/README.md](architecture/adr/README.md) | Doc-layer decision index + rules. |
 | [architecture/adr/template.md](architecture/adr/template.md) | MADR 4.0-lite template (Confirmation section mandatory). |
 | [architecture/adr/0001-docs-as-code-layout.md](architecture/adr/0001-docs-as-code-layout.md) | Documentation layout: living views + one index + language policy. |
