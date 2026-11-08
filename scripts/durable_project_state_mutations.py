@@ -19,6 +19,7 @@ Exit code 0 means "N/N mutants killed".
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -339,19 +340,59 @@ MUTATIONS: tuple[Mutation, ...] = (
 TEST_TIMEOUT_SECONDS = 600
 
 
-def run_tests() -> bool:
+def _test_env() -> dict[str, str]:
+    """Run the suites against the tree under mutation, never an installed copy.
+
+    GOV-1 shadowed-import guard: in an isolated worktree the package is also
+    editable-installed, so without pinning ``PYTHONPATH`` to ``ROOT/src`` the
+    mutated bytes are never imported and every probe falsely survives.
+    """
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src")
+    return env
+
+
+def _run_pytest(extra: tuple[str, ...]) -> subprocess.CompletedProcess[str] | None:
     try:
-        result = subprocess.run(  # noqa: S603 - fixed argv, shell=False, TESTS are repo-local literals
-            [sys.executable, "-m", "pytest", "-q", "-x", *TESTS],
+        return subprocess.run(  # noqa: S603 - fixed argv, shell=False, TESTS are repo-local literals
+            [sys.executable, "-m", "pytest", "-q", "-x", *extra],
             cwd=ROOT,
+            env=_test_env(),
             capture_output=True,
             text=True,
             timeout=TEST_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
+        return None
+
+
+def run_tests() -> bool:
+    result = _run_pytest(TESTS)
+    if result is None:
         print(f"(test run exceeded {TEST_TIMEOUT_SECONDS}s) ", end="", flush=True)
         return False
     return result.returncode == 0
+
+
+def preflight() -> int:
+    """Refuse to run when the target suites do not even COLLECT.
+
+    ``-x`` still collects every module before it runs, so an import-time error
+    (a missing optional dependency, a stale symbol) makes the baseline RED — but
+    with an opaque failure and only after the multi-minute campaign starts.  A
+    ``--collect-only`` pass fails fast with the real cause.  Any exception here
+    (a missing ``pytest``, a timeout) is a refusal, never a silent pass.
+    """
+    result = _run_pytest(("--collect-only", *TESTS))
+    if result is None:
+        print("collect-only timed out; refusing to start the campaign")
+        return 2
+    if result.returncode != 0:
+        print("collect-only FAILED; refusing to start the campaign:")
+        print(result.stdout[-4000:])
+        print(result.stderr[-2000:])
+        return 2
+    return 0
 
 
 def main() -> int:
@@ -362,6 +403,10 @@ def main() -> int:
         for mutation in MUTATIONS:
             print(f"{mutation.name}: {mutation.why}")
         return 0
+
+    preflight_exit = preflight()
+    if preflight_exit != 0:
+        return preflight_exit
 
     print("baseline ... ", end="", flush=True)
     if not run_tests():

@@ -1142,3 +1142,17 @@ Only red check = the #234 flake (task-264, issue #237).
 - PR #324 (`openhands/nagar-one-final-closeout-20261107`, other agent) is open on the SAME
   base `5ed6d4e1` and claims `.agents/board.json`; whichever PR merges second must
   union-merge the board (per `merge_resolution_note`).
+
+
+## F1 live-truth correction (durable, 2026-11-08)
+- **A board note LIED about a merge.** slice-2 claimed the F1 fence
+  (`20261107bindfence`) was merged via PR #319. FALSE: #319 = Stage-1 only (no
+  `attempt` col); main head = `20261106artbind`; main's lost-CAS does NOT retract
+  the binding (live-on-main orphan-provenance defect); fence on 0/247 remote
+  branches. Corrected in board.json. LESSON: re-derive "merged" claims from git +
+  GitHub before believing them. Detail: `.openhands/memory/2026-11-08.md`.
+- **Durable mutation harness had NO GOV-1 PYTHONPATH guard** (the other four do) →
+  added `_test_env()` + `--collect-only` `preflight()` + 4 anchor tests.
+- **Local PG for audits:** `sudo dockerd` + `docker run pgvector/pgvector:pg16`.
+- **Crash-consistency is honest by design** (binding = append-only; invariant is
+  "COMPLETED ⇒ has binding", not the converse).

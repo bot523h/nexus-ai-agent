@@ -230,3 +230,64 @@ def test_retention_pins_pythonpath_and_bounds_the_run(
     assert Path(seen["cwd"]) == Path(retention["REPO"])
     assert "no:cacheprovider" in seen["cmd"]
     assert seen["timeout"] == retention["TEST_TIMEOUT_S"]
+
+
+def test_durable_pins_pythonpath_to_the_tree_under_mutation(
+    durable: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GOV-1 shadowed-import guard (2026-11-08): the durable campaign ran WITHOUT
+    # the PYTHONPATH pin the other four harnesses have, so in an isolated
+    # worktree it could import the editable-installed package and every probe
+    # would falsely "survive" while the mutated bytes were never executed.
+    seen: dict[str, Any] = {}
+
+    class _Done:
+        returncode = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _Done:
+        seen["cmd"] = cmd
+        seen.update(kwargs)
+        return _Done()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert durable["run_tests"]() is True
+    assert seen["env"]["PYTHONPATH"] == str(Path(durable["ROOT"]) / "src")
+    assert Path(seen["cwd"]) == Path(durable["ROOT"])
+    assert seen["timeout"] == durable["TEST_TIMEOUT_SECONDS"]
+
+
+def test_durable_preflight_refuses_when_the_suites_do_not_collect(
+    durable: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A non-collecting target suite (a missing optional dependency, a stale
+    # symbol) makes the baseline RED after minutes; the preflight fails fast and
+    # closed instead of starting a doomed campaign.
+    class _Red:
+        returncode = 2
+        stdout = "ERROR: collection failed"
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Red())
+    assert durable["preflight"]() == 2
+
+
+def test_durable_preflight_treats_a_timeout_as_a_refusal(
+    durable: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _timeout(*args: Any, **kwargs: Any) -> Any:
+        raise subprocess.TimeoutExpired(cmd="pytest", timeout=1)
+
+    monkeypatch.setattr(subprocess, "run", _timeout)
+    assert durable["preflight"]() == 2
+
+
+def test_durable_preflight_passes_on_a_collecting_suite(
+    durable: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Green:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Green())
+    assert durable["preflight"]() == 0
