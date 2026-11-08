@@ -1831,6 +1831,18 @@ class InProcessJobQueue:
                 # (or crash) fails the job closed and retracts this attempt, so
                 # a rejected artifact can never leave a durable binding behind.
                 if publication is not None and publication.confirm is not None:
+                    # Fence re-check at the commit boundary.  The binding is a
+                    # durable side effect, so a superseded attempt must never
+                    # commit it: ownership was last read before the (irreversible)
+                    # publication, and the re-probe window between that check and
+                    # here is the classic plain-filesystem fencing limit.  Re-read
+                    # the fence now so an attempt that lost the row can commit no
+                    # provenance and can reach no COMPLETED (it owns nothing).
+                    if not await asyncio.to_thread(
+                        self._owns_execution, claim, JobStatus.VERIFYING
+                    ):
+                        self._log_rejected(job_id, claim, JobStatus.COMPLETED)
+                        return
                     confirm_error = await self._confirm_safely(publication, payload, result, claim)
                     if confirm_error is not None:
                         retract_context = dict(result)

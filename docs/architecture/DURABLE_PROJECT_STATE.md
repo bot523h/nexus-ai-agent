@@ -101,6 +101,23 @@ job and retracts this attempt, so a job is never `COMPLETED` without its binding
 and a rejected artifact never leaves one behind. The digest is re-measured from
 the published bytes in the hook as well.
 
+The queue **re-reads the fence** (`_owns_execution`) immediately before the
+confirmation, because the binding is a durable side effect: ownership was last
+read before the (irreversible) publication, and the re-probe window between that
+check and the confirmation is the classic plain-filesystem fencing limit. An
+attempt superseded in that window commits no provenance and reaches no
+`COMPLETED` — it owns nothing.
+
+**Crash-consistency model (honest, not claimed atomic).** If the process dies
+after the confirmation commits the binding but before the durable `COMPLETED`,
+the row stays `verifying` with a queue-owned heartbeat; startup recovery
+(`resume_pending`) supersedes its fencing token and re-runs the job. The binding
+is append-only history of bytes that *were* published and is **not** deleted by
+the later failure, and the job is never falsely `COMPLETED`. There is no
+cross-database atomic transaction between the artifact-binding store and the
+queue, so the guarantee is "no `COMPLETED` without a binding", **not** "the
+binding exists iff the job completed".
+
 The binding lives in the **same** `project_state` package and the **same** single
 storage schema (`store.py`, one module maps `storage.models`), as one
 content-addressed row:
@@ -144,17 +161,21 @@ exposes no combined `execute`-style method that would bypass the bus.
   concurrent head move (deterministic ordering, no sleeps); and (Slice 2) the
   artifact→revision binding: bind/re-verify, idempotent replay, repoint refusal,
   artifact-byte re-measurement, tampered-revision refusal, cross-project refusal,
-  the unpinned no-op, the intent/confirm split, and two queue-level end-to-end
+  the unpinned no-op, the intent/confirm split, and four queue-level end-to-end
   proofs (a verified+published job commits its binding then `COMPLETED`; a
-  refused confirmation fails the job closed with no binding row).
+  refused confirmation fails the job closed with no binding row and its published
+  bytes retracted; a superseded attempt commits no binding at the commit boundary
+  — fault-injected takeover in the re-probe window; and a crash after the
+  confirmation but before `COMPLETED` recovers honestly).
 - `tests/integration/test_durable_project_concurrency.py` — real interleaving
   (exactly one winner) and atomic rollback on an injected crash.
 - `tests/architecture/test_durable_project_state_boundary.py` — no parallel
   authority, single schema declaration site.
 - `tests/unit/test_migrations.py` — `alembic upgrade head` creates the exact
   schema (including `projectartifactbinding`), no drift, downgrade empties it.
-- `scripts/durable_project_state_mutations.py` — 24/24 mutants killed (15 Slice 1
-  + 9 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
+- `scripts/durable_project_state_mutations.py` — 25/25 mutants killed (15 Slice 1
+  + 10 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
   digest-remeasure-removed, content-address-validation-removed,
-  verify-oserror-fail-open, binding-fail-open, and the two queue confirm-seam
-  mutants — confirm-gate disabled and confirmation-refusal-ignored).
+  verify-oserror-fail-open, binding-fail-open, and the three queue confirm-seam
+  mutants — confirm-gate disabled, confirmation-refusal-ignored, and
+  confirmation-fence-recheck-removed).

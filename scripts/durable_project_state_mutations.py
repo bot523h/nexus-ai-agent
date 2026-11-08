@@ -273,6 +273,20 @@ MUTATIONS: tuple[Mutation, ...] = (
         "D-0038 residual 1: a refused confirmation must fail the job closed; ignoring "
         "it lets an unconfirmed job reach COMPLETED and publish without provenance",
     ),
+    Mutation(
+        "confirmation_fence_recheck_removed",
+        QUEUE,
+        """                    if not await asyncio.to_thread(
+                        self._owns_execution, claim, JobStatus.VERIFYING
+                    ):
+                        self._log_rejected(job_id, claim, JobStatus.COMPLETED)
+                        return
+                    confirm_error = await self._confirm_safely(publication, payload, result, claim)""",
+        "                    confirm_error = await self._confirm_safely(publication, payload, result, claim)",
+        "the durable binding is a side effect: ownership must be re-read at the "
+        "commit boundary, else an attempt superseded during the re-probe window "
+        "commits provenance for a row it no longer owns",
+    ),
 )
 
 TEST_TIMEOUT_SECONDS = 600

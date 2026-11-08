@@ -1027,6 +1027,189 @@ async def test_queue_confirm_refusal_fails_the_job_without_a_binding(
     assert not published.exists()
 
 
+@pytest.mark.asyncio
+async def test_queue_confirm_refuses_a_superseded_attempt_at_the_commit_boundary(
+    pin_env: Path,
+) -> None:
+    """A superseded attempt commits no binding: the fence is re-read before confirm.
+
+    Deterministic fault injection: the verifier bumps the row's fencing token
+    (simulating a takeover) during the *re-probe* window, i.e. after the
+    pre-publication fence read and before the confirmation commit.  The queue
+    must re-read ownership at the commit boundary and refuse to write any
+    durable binding, so a stale execution can never commit provenance.
+    """
+    import sqlite3 as _sqlite3
+
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.creative.project_state.store import (
+        ArtifactNotFound,
+        content_address_of_bytes,
+    )
+    from nexus_ai_agent.creative.render_jobs import build_creative_render_publication
+    from nexus_ai_agent.jobs.verification import VerificationOutcome
+
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("admitted"), parent=None)
+
+    artifact_root = pin_env / "artifacts"
+    artifact_root.mkdir()
+    queue_path = pin_env / "fence_queue.sqlite3"
+    queue = InProcessJobQueue(str(queue_path))
+
+    async def _handler(payload: dict) -> dict:
+        workspace = Path(str(payload["workspace_dir"]))
+        workspace.mkdir(parents=True, exist_ok=True)
+        artifact = workspace / "render.mp4"
+        artifact.write_bytes(b"queue-confirm-bytes")
+        digest = sha256_file(artifact)
+        return {
+            "success": True,
+            "artifact_path": str(artifact),
+            "workspace_dir": str(workspace),
+            "sha256": digest,
+            "size_bytes": artifact.stat().st_size,
+            "artifact_kind": "binary",
+            "artifact_binding": {
+                "artifact_id": digest,
+                "project_id": PROJECT_ID,
+                "revision_id": revision.revision_id,
+                "artifact_kind": "binary",
+                "size_bytes": artifact.stat().st_size,
+                "artifact_version_id": None,
+            },
+        }
+
+    def _supersede() -> None:
+        connection = _sqlite3.connect(str(queue_path), timeout=30)
+        try:
+            connection.execute(
+                "UPDATE nexus_job_queue SET attempt = attempt + 1 "
+                "WHERE job_type = 'creative_render'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    calls = {"n": 0}
+
+    def _verifier(payload: dict, result: dict) -> VerificationOutcome:
+        calls["n"] += 1
+        if calls["n"] == 2:  # the re-probe, after publication, before confirm
+            _supersede()
+        return VerificationOutcome(ok=True, reason_code=None, summary={})
+
+    queue.register_handler("creative_render", _handler)
+    queue.register_artifact_verifier("creative_render", _verifier)
+    queue.register_artifact_publication(
+        "creative_render", build_creative_render_publication(artifact_root)
+    )
+    job_id = await queue.enqueue(
+        job_type="creative_render",
+        idempotency_key="fence-supersede-1",
+        payload={"workspace_dir": str(pin_env / "ws_fence")},
+    )
+
+    # Publication is the step immediately before the confirmation boundary.
+    published = artifact_root / "published" / job_id / "render.mp4"
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 20.0
+    while loop.time() < deadline and not published.exists():
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.5)  # let the (refused) confirm boundary settle
+
+    # The superseded attempt owns nothing: it reached no COMPLETED and wrote no
+    # durable binding.  (The bytes it published are the successor's to reconcile.)
+    assert await queue.get_status(job_id) is not JobStatus.COMPLETED
+    artifact_id = content_address_of_bytes(b"queue-confirm-bytes")
+    with pytest.raises(ArtifactNotFound):
+        await _binding_store().resolve(PROJECT_ID, artifact_id)
+
+
+@pytest.mark.asyncio
+async def test_crash_after_confirm_before_completed_recovers_honestly(pin_env: Path) -> None:
+    """Crash after the binding commit but before COMPLETED: the documented model.
+
+    Deterministic fault injection: ``_mark_completed`` is made to crash (a
+    non-``Exception`` base so it is a genuine process death, not a handled
+    failure) exactly once, after the confirmation committed the binding.  The
+    row stays ``verifying`` with a queue-owned heartbeat, so startup recovery
+    (``resume_pending``) takes it over and re-runs the job.  The consistency
+    model is honest:
+
+    * the binding is a durable record of bytes that WERE published — it is
+      append-only history and is not deleted by the later failure;
+    * the job is NOT COMPLETED (no false success);
+    * recovery re-runs the attempt; here the re-run fails, and the final state
+      is a failure — the surviving binding never claims a completed job.
+    """
+
+    class _SimulatedCrash(BaseException):
+        """A process death: not an ``Exception``, so no handler swallows it."""
+
+    from nexus_ai_agent.creative.project_state.store import content_address_of_bytes
+
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("admitted"), parent=None)
+    queue = _queue_with_binding_publication(pin_env, revision)
+
+    orig_mark_completed = queue._mark_completed
+    crashed = {"done": False}
+
+    def _crash_once(*args: Any, **kwargs: Any) -> bool:
+        if not crashed["done"]:
+            crashed["done"] = True
+            raise _SimulatedCrash("simulated crash after confirm, before COMPLETED")
+        return orig_mark_completed(*args, **kwargs)
+
+    # Second run fails the job (the retry after the crash).
+    calls = {"n": 0}
+    base_handler = queue._handlers["creative_render"]
+
+    async def _flaky(payload: dict) -> dict:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise RuntimeError("retry after crash fails")
+        return await base_handler(payload)
+
+    queue.register_handler("creative_render", _flaky)
+    queue._mark_completed = _crash_once  # type: ignore[method-assign]
+
+    job_id = await queue.enqueue(
+        job_type="creative_render",
+        idempotency_key="crash-after-confirm-1",
+        payload={"workspace_dir": str(pin_env / "ws_crash")},
+    )
+    task = queue._tasks.get(job_id)
+    assert task is not None
+    try:
+        await asyncio.wait_for(task, timeout=30)
+    except _SimulatedCrash:
+        pass
+    assert crashed["done"] is True
+
+    # The confirmation committed the binding before the crash; the job is not
+    # COMPLETED and the published bytes remain.
+    artifact_id = content_address_of_bytes(b"queue-confirm-bytes")
+    binding = await _binding_store().resolve(PROJECT_ID, artifact_id)
+    assert binding.revision_id == revision.revision_id
+    assert await queue.get_status(job_id) is not JobStatus.COMPLETED
+    published = pin_env / "artifacts" / "published" / job_id / "render.mp4"
+    assert published.exists()
+
+    # Startup recovery takes the unfinished row over and re-runs it.
+    reclaimed = await queue.resume_pending()
+    assert job_id in reclaimed
+    assert await _await_terminal(queue, job_id) in (
+        JobStatus.FAILED_TERMINAL,
+        JobStatus.FAILED_RETRYABLE,
+    )
+    # The binding survives as honest history (append-only); it never claims a
+    # completed job, because the job is not completed.
+    still = await _binding_store().resolve(PROJECT_ID, artifact_id)
+    assert still.revision_id == revision.revision_id
+
+
 # ---------------------------------------------------------------------------
 # Slice 2 hardening (PR #319 review threads): identity, re-measure, metadata
 # ---------------------------------------------------------------------------
