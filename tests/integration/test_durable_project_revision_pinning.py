@@ -1022,6 +1022,9 @@ async def test_queue_confirm_refusal_fails_the_job_without_a_binding(
     artifact_id = content_address_of_bytes(b"queue-confirm-bytes")
     with pytest.raises(ArtifactNotFound):
         await _binding_store().resolve(PROJECT_ID, artifact_id)
+    # And the refused attempt's published bytes were retracted, not left behind.
+    published = pin_env / "artifacts" / "published" / job_id / "render.mp4"
+    assert not published.exists()
 
 
 # ---------------------------------------------------------------------------
