@@ -697,6 +697,11 @@ jobs:
       # Knowledge registry on the real backend: naive-UTC TIMESTAMP columns,
       # nonce-scoped writes, survival assertion (task-273, review finding).
       - run: pytest -q tests/integration/test_knowledge_retrieval_postgres.py
+      # Artifact-binding ownership fence on the real backend, across real OS
+      # processes: a cross-job bind never seizes the row, only the owner's exact
+      # (job_id, attempt) retracts, and two racing token advances never leave
+      # the lower token (task-282 slice-2 F1).
+      - run: pytest -q tests/integration/test_artifact_binding_postgres_concurrency.py
       # Shared read-only adapter contract, PG leg (incl. golden stability
       # and the f4a9c2e71b08 lifecycle table).
       - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py

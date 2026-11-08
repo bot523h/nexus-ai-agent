@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-06T21:25:39Z",
+  "updated_at": "2026-11-08T18:08:41Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8521,7 +8521,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "active",
+      "status": "completed_released",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8546,13 +8546,20 @@
         "docs/architecture/DURABLE_PROJECT_STATE.md"
       ],
       "owner_hint": "Slice of task-282; waits on its dependency. No parallel authority.",
-      "agent_branch": "nagar-one-slice2-artifact-revision-binding",
-      "claimed_at": "2026-11-06T21:25:39Z",
-      "generation": 1,
+      "agent_branch": "",
+      "claimed_at": null,
+      "generation": 2,
       "ttl_hours": 24,
       "gates_owner": false,
-      "delivered": [],
-      "note": ""
+      "delivered": [
+        "Slice 2 Stage 1 DELIVERED via PR #319 (merged into main @ 65c020cf29151198faf75564df5edb4e7c61215b; recorded as a completion_record).",
+        "Durable artifact→revision binding: ProjectArtifactBinding (content-addressed, append-only), migration 20261106artbind; SqlArtifactBindingStore.bind/verify/resolve; typed ArtifactBinding* errors; fail-closed producer intent + queue confirm/retract hooks.",
+        "F1 ownership fence: migration 20261107bindfence adds the queue (job_id, attempt) fencing token; token-scoped retraction of exactly the attempt's own row; monotonic, job-scoped, atomic token advance; authoritative re-read.",
+        "Evidence: harness 29/29 killed (15 Slice 1 + 14 Slice 2); test_durable_project_revision_pinning.py (incl. adversarial cross-job non-seizure); test_artifact_binding_postgres_concurrency.py (real OS processes on PostgreSQL); ruff/mypy clean."
+      ],
+      "note": "SLICE 2 STAGE 1 DONE (PR #319, merged 2026-11-08 @ 65c020cf29151198faf75564df5edb4e7c61215b). Durable, content-addressed artifact→revision binding over the SINGLE storage schema (ProjectArtifactBinding, migration 20261106artbind): the published artifact is bound to the EXACT admitted revision (never the head), the digest is re-measured from the published bytes at bind time and again on read, and the queue commits the binding via a confirm hook that runs after verification+publication and before the durable COMPLETED (a refusal fails the job closed with no row). F1 ownership fence (migration 20261107bindfence): the binding carries the queue-minted (job_id, attempt) token; a lost-CAS takeover retracts ONLY its own (artifact_id, job_id, attempt) row; a re-bind advances the token monotonically AND only for the owning job (single conditional UPDATE), so a different job sharing the bytes can never seize the row. REMAINING (honest, non-terminal): the 'as an AssetVersion' leg is NOT wired end-to-end — the producer (render_jobs) never registers the artifact in the Asset Library nor populates artifact_version_id (the column + link exist and are exercised by tests, but no live producer fills them). Recorded as Stage 1; the asset-version producer wiring is a follow-up slice. Evidence: harness scripts/durable_project_state_mutations.py 29/29 killed; tests/integration/test_durable_project_revision_pinning.py; tests/integration/test_artifact_binding_postgres_concurrency.py (real two-process/two-PostgreSQL race).",
+      "previous_release_reason": "auto-released by gc at 2026-11-08T17:32:55Z (stale active lease)",
+      "release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done."
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -9447,6 +9454,18 @@
         "merge_commit_sha": "aadaf53157670b64af6978fcf41b592e108ac9ae",
         "recorded_by": "openhands/omni-recovery-integration-20261105",
         "recorded_at": "2026-11-05T13:13:23Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 319,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "65c020cf29151198faf75564df5edb4e7c61215b",
+        "recorded_by": "fix/binding-ownership-fence-20261107",
+        "recorded_at": "2026-11-08T18:06:49Z"
       }
     }
   ]

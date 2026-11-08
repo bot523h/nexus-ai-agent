@@ -22,14 +22,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row, a pre-fence row (`attempt = 0`) or another job's row. A re-bind by a newer
   attempt advances the token monotonically (provenance is never rewritten), and a
   retraction without a real token (`attempt >= 1`) is a typed refusal.
+- **Ownership is the `(job_id, attempt)` pair, not the artifact alone.** Two
+  independent jobs can publish identical bytes (the same content address); the
+  token advance is therefore scoped to the *owning* job (a single conditional
+  `UPDATE ... WHERE job_id = :job AND attempt < :new`), so a different job can
+  never seize the canonical row by presenting a higher token and can never retract
+  another job's binding. Cross-job idempotency is defined on
+  `(project_id, artifact_id)`: the same artifact on the same revision is one
+  canonical row, and the returned binding is re-read from the database so it is
+  exactly what a fresh reader observes.
 - `SqlArtifactBindingStore.retract()` + `creative_render_binding_retract` queue
   hook; the `ArtifactPublication` seam gains an optional `retract_confirmation`.
   PostgreSQL checkpoint golden regenerated for the new head; the migration-head
   pins across tests, CI and living docs updated. Boundary law R29 and the
-  durable-state page document the fence; the mutation campaign is now 28/28
-  (three new F1 mutants: lost-CAS retraction removed, retraction not
-  token-scoped, re-bind token not monotonic) and the boundary test is pinned by a
+  durable-state page document the fence; the mutation campaign is now 29/29
+  (four F1 mutants: lost-CAS retraction removed, retraction not
+  token-scoped, re-bind token not monotonic, and the re-bind token advance no
+  longer job-scoped) and the boundary test is pinned by a
   binding-write counter so it can no longer be satisfied by a write-then-retract.
+  A new `tests/unit/test_mutation_harness_anchors.py` guard proves every durable
+  mutation anchor occurs exactly once (a duplicated anchor would silently mutate
+  only the first occurrence), and
+  `tests/integration/test_artifact_binding_postgres_concurrency.py` proves the
+  fence across real OS processes on PostgreSQL.
 
 ### Studio Core (task-186 — discovery surface, preview/master boundary, Agent 2/3 integration contracts, session `arena/01a0da2a-nexus-ai-agent`)
 

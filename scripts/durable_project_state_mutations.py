@@ -60,8 +60,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "cross_project_read_check_removed",
         STORE,
-        "        if row.project_id != project_id:",
-        "        if False:",
+        '        if row.project_id != project_id:\n            raise CrossProjectAccess("revision does not belong to the requested project")',
+        '        if False:  # mutated: cross-project read check removed\n            raise CrossProjectAccess("revision does not belong to the requested project")',
         "a revision must only be readable through the project that owns it; "
         "removing the check leaks another project's state",
     ),
@@ -259,8 +259,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "artifact_binding_confirmed_before_verification",
         QUEUE,
-        "                if publication is not None and publication.confirm is not None:",
-        "                if False:  # mutated: the binding is never confirmed by the queue",
+        "                if publication is not None and publication.confirm is not None:\n                    # Fence re-check at the commit boundary.",
+        "                if False:  # mutated: the binding is never confirmed by the queue\n                    # Fence re-check at the commit boundary.",
         "D-0038 residual 1: the durable binding must be committed by the queue AFTER "
         "verification+publication and BEFORE COMPLETED; disabling the confirm hook "
         "means a job completes with no artifact→revision provenance",
@@ -310,23 +310,29 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "rebind_fencing_token_not_monotonic",
         STORE,
-        """        result = await session.execute(
+        """        await session.execute(
             update(orm.ProjectArtifactBinding)
             .where(
                 _BINDING.c.artifact_id == row.artifact_id,
+                _BINDING.c.job_id == job_id,
                 _BINDING.c.attempt < attempt,
             )
             .values(attempt=attempt)
             .execution_options(synchronize_session="fetch")
         )
-        await session.commit()
-        # Reflect the committed post-state (the row kept its token when the
-        # conditional UPDATE matched nothing).
-        row.attempt = attempt if getattr(result, "rowcount", 0) > 0 else max(row.attempt, attempt)""",
+        await session.commit()""",
         """        await session.commit()  # mutated: the fencing token never advances on re-bind""",
-        "F1: a re-bind by a newer attempt must advance the fencing token monotonically; "
-        "otherwise a successor's row keeps the old token and a stale retraction can "
-        "delete it",
+        "F1: a re-bind by a newer attempt of the SAME job must advance the fencing token "
+        "monotonically; otherwise a successor's row keeps the old token and a stale "
+        "retraction can delete it",
+    ),
+    Mutation(
+        "rebind_advance_not_job_scoped",
+        STORE,
+        "                _BINDING.c.job_id == job_id,\n                _BINDING.c.attempt < attempt,",
+        "                _BINDING.c.attempt < attempt,  # mutated: job scope dropped from the advance",
+        "F1: the token advance must be scoped to the owning job; dropping the job guard lets "
+        "a different job seize ownership of the row and later retract another job's binding",
     ),
 )
 

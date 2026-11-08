@@ -2811,15 +2811,23 @@ binding-write counter, so the fence must refuse *before* the confirm hook runs,
 distinct from a write-then-retract); a takeover landing *inside* the confirm
 commit window retracts exactly its own row under the fencing token (F1);
 token-scoped retraction that never deletes a successor's binding; a token-less
-retraction is refused; the fencing token advances monotonically on re-bind; and a
-crash after the confirmation but before `COMPLETED` recovers honestly (binding
-survives as history, job is not `COMPLETED`, recovery re-runs and fails the
-job)), `tests/architecture/test_durable_project_state_boundary.py`
+retraction is refused; the fencing token advances monotonically on re-bind; a
+cross-job re-bind never seizes ownership (adversarial: two independent jobs, one
+artifact, one revision — the second's bind is a no-op and its retraction removes
+nothing); and a crash after the confirmation but before `COMPLETED` recovers
+honestly (binding survives as history, job is not `COMPLETED`, recovery re-runs
+and fails the job)), `tests/integration/test_artifact_binding_postgres_concurrency.py`
+(the same fence across **real OS processes** on **PostgreSQL**: a cross-job bind
+never seizes the row, only the owner's exact `(job_id, attempt)` retracts, and
+two racing token advances never leave the lower token),
+`tests/architecture/test_durable_project_state_boundary.py`
 (single schema site, no parallel authority), and the mutation campaign
-`scripts/durable_project_state_mutations.py` (28 mutants, incl. the queue confirm
-gate, refusal-ignored, confirmation-fence-recheck, and the three F1
+`scripts/durable_project_state_mutations.py` (29 mutants, incl. the queue confirm
+gate, refusal-ignored, confirmation-fence-recheck, and the four F1
 ownership-fence mutants: lost-CAS retraction removed, retraction not
-token-scoped, re-bind token not monotonic). Migrations
+token-scoped, re-bind token not monotonic, and the re-bind token advance not
+job-scoped). Ownership is the `(job_id, attempt)` pair and cross-job idempotency
+is defined on `(project_id, artifact_id)` — never the job. Migrations
 `20261106artbind` (binding table) and `20261107bindfence` (the ownership-fence
 `attempt` column, F1); architecture page
 `docs/architecture/DURABLE_PROJECT_STATE.md`; boundary law R29 in

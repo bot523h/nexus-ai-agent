@@ -457,7 +457,7 @@ class SqlArtifactBindingStore:
             existing = await session.get(orm.ProjectArtifactBinding, artifact_id)
             if existing is not None:
                 return await self._reconcile_existing(
-                    session, existing, project_id, revision_id, attempt
+                    session, existing, project_id, revision_id, job_id, attempt
                 )
             session.add(
                 orm.ProjectArtifactBinding(
@@ -483,7 +483,7 @@ class SqlArtifactBindingStore:
                         "artifact binding raced and could not be read"
                     ) from exc
                 return await self._reconcile_existing(
-                    session, existing, project_id, revision_id, attempt
+                    session, existing, project_id, revision_id, job_id, attempt
                 )
             row = await session.get(orm.ProjectArtifactBinding, artifact_id)
             assert row is not None  # just committed
@@ -495,35 +495,60 @@ class SqlArtifactBindingStore:
         row: orm.ProjectArtifactBinding,
         project_id: str,
         revision_id: str,
+        job_id: str,
         attempt: int,
     ) -> ArtifactBinding:
+        # Provenance is the artifact's, not the caller's: the SAME artifact bound
+        # to the SAME revision is idempotent *across jobs* (the owner and every
+        # later caller get the one canonical row), while a different project or
+        # revision is a hard conflict — an artifact can never be silently
+        # re-homed or re-pointed.  This is explicit: two different jobs that
+        # produced identical bytes share one binding row; idempotency is defined
+        # on ``(project_id, artifact_id)``, NOT on the job.
         if row.project_id != project_id:
             raise CrossProjectAccess("artifact id already bound to a different project")
         if row.revision_id != revision_id:
             raise ArtifactBindingConflict("artifact already bound to a different revision")
-        # Idempotent re-bind by the SAME or a NEWER execution: advance the fencing
-        # token monotonically so a superseded attempt's retraction (scoped to its
-        # own token) can never delete a binding a successor now owns.  A lower or
-        # equal token is a true no-op.  Only the token moves; the provenance
-        # (artifact → project → revision) is never rewritten.  The advance is a
+        # Ownership is the (job_id, attempt) pair, so the fencing token is
+        # advanced ONLY by the job that already owns the row — the conditional
+        # UPDATE is scoped to the owning job, and the *only* job guard is that
+        # predicate (a Python pre-check would be redundant and would hide a
+        # dropped predicate from the mutation campaign).  A different job sharing
+        # the artifact's bytes can never take ownership by presenting a higher
+        # token: its UPDATE matches nothing, so the bind is a pure idempotent
+        # no-op.  Otherwise that job's later retraction, scoped to its own
+        # (job_id, attempt), could delete a binding another job wrote.
+        #
+        # Same job: advance the token monotonically so a superseded attempt's
+        # retraction can never match a successor attempt's row.  The advance is a
         # single conditional UPDATE, not a read-modify-write: two concurrent
-        # re-binds (the new owner at a higher token, a superseded attempt at a
-        # lower one) would otherwise both read the old token and the *lower* one
+        # re-binds (a successor at a higher token racing a superseded attempt at a
+        # lower one) would otherwise both read the old token and the lower one
         # could commit last, regressing the token and reopening the F1 hole.
-        result = await session.execute(
+        await session.execute(
             update(orm.ProjectArtifactBinding)
             .where(
                 _BINDING.c.artifact_id == row.artifact_id,
+                _BINDING.c.job_id == job_id,
                 _BINDING.c.attempt < attempt,
             )
             .values(attempt=attempt)
             .execution_options(synchronize_session="fetch")
         )
         await session.commit()
-        # Reflect the committed post-state (the row kept its token when the
-        # conditional UPDATE matched nothing).
-        row.attempt = attempt if getattr(result, "rowcount", 0) > 0 else max(row.attempt, attempt)
-        return _as_binding(row)
+        # The stored row is the authority for what the binding *is*.  The
+        # conditional UPDATE bypasses the ORM identity map, and another process
+        # may have advanced the token since it was loaded, so re-read the row
+        # from the database rather than trusting any in-session state — the
+        # returned binding must be exactly what a fresh reader would observe.
+        authoritative = (
+            await session.execute(
+                select(orm.ProjectArtifactBinding)
+                .where(_BINDING.c.artifact_id == row.artifact_id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        return _as_binding(authoritative if authoritative is not None else row)
 
     async def resolve(self, project_id: str, artifact_id: str) -> ArtifactBinding:
         """Return the binding for one artifact, or refuse with a typed error."""

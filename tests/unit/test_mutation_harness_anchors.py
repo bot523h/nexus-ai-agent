@@ -31,6 +31,7 @@ REFEREE = REPO / "scripts" / "board_referee_mutations.py"
 GATE5 = REPO / "scripts" / "gate5_mutation_probes.py"
 EXECUTION_CORE = REPO / "scripts" / "execution_core_mutations.py"
 RETENTION = REPO / "scripts" / "retention_verdict_mutations.py"
+DURABLE = REPO / "scripts" / "durable_project_state_mutations.py"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
 
@@ -63,6 +64,11 @@ def retention() -> dict[str, Any]:
     return _load(RETENTION)
 
 
+@pytest.fixture(scope="module")
+def durable() -> dict[str, Any]:
+    return _load(DURABLE)
+
+
 def test_referee_mutations_anchor_exactly_once_in_agent_board(referee: dict[str, Any]) -> None:
     source = Path(referee["SCRIPT"]).read_text(encoding="utf-8")
     assert Path(referee["SCRIPT"]) == REPO / "scripts" / "agent_board.py"
@@ -71,6 +77,19 @@ def test_referee_mutations_anchor_exactly_once_in_agent_board(referee: dict[str,
     # 42 after the PR #316 prerequisite/typed-PR hardening, the P0 verified-merge
     # and released-status guards, and the live-main-cache binding (was 33 → 38 → 42).
     assert len(referee["MUTATIONS"]) == 42
+
+
+def test_durable_project_state_anchors_occur_exactly_once(durable: dict[str, Any]) -> None:
+    # A non-unique anchor silently mutates only the FIRST occurrence (str.replace
+    # count=1), so a duplicated guard would leave a second live copy and the
+    # campaign would "kill" the mutant while the real hole stayed open.
+    drift: dict[str, int] = {}
+    for mutation in durable["MUTATIONS"]:
+        count = mutation.path.read_text(encoding="utf-8").count(mutation.old)
+        if count != 1:
+            drift[mutation.name] = count
+    assert drift == {}, f"durable anchors must occur exactly once: {drift}"
+    assert len(durable["MUTATIONS"]) == 29
 
 
 def test_gate5_probe_anchors_occur_exactly_once_in_their_targets(gate5: dict[str, Any]) -> None:

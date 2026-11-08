@@ -1462,6 +1462,108 @@ def test_bind_advances_the_fencing_token_monotonically(pin_env: Path) -> None:
     )
 
 
+def test_two_independent_jobs_sharing_bytes_are_fenced_apart(pin_env: Path) -> None:
+    """Adversarial: two independent jobs, one artifact_id, one revision.
+
+    The fencing token in the current queue is PER-JOB, so a comparison on
+    ``artifact_id`` alone is not sufficient.  Job A binds the artifact (owning
+    the canonical row).  Job B — an independent execution that produced the
+    *same bytes* — must not be able to seize ownership by presenting a higher
+    token, and must never be able to retract job A's binding.  The second bind
+    is an explicit, cross-job idempotent no-op: the row keeps job A's identity.
+    """
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "5" * 64
+
+    # Job A owns the row at token 2.
+    owned = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-A",
+            size_bytes=1,
+            attempt=2,
+        )
+    )
+    assert (owned.job_id, owned.attempt) == ("job-A", 2)
+
+    # Job B, an independent job with the same bytes and a HIGHER token, must be a
+    # cross-job no-op — not a takeover.
+    second = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-B",
+            size_bytes=1,
+            attempt=7,
+        )
+    )
+    assert (second.job_id, second.attempt) == ("job-A", 2), (
+        "a different job must never seize ownership of another job's binding"
+    )
+
+    # The canonical row still belongs to job A.
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).job_id == "job-A"
+
+    # Job B's retraction (its own job_id AND attempt) is invalid — it must not
+    # delete the binding job A wrote.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-B", attempt=7)) is False
+    )
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).job_id == "job-A"
+
+    # Job B's retry at its own token is likewise a no-op (never its row).
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-B", attempt=2)) is False
+    )
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).job_id == "job-A"
+
+    # Only the owner's exact (job_id, attempt) retracts.
+    assert asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-A", attempt=2)) is True
+
+
+def test_bind_returns_the_authoritative_stored_row(pin_env: Path) -> None:
+    """The returned binding reflects the committed row, not stale ORM state.
+
+    A cross-job re-bind is a no-op and must report the *stored* owner/attempt;
+    the authoritative re-read makes the result exactly what a fresh reader sees.
+    """
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "6" * 64
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="owner",
+            artifact_kind="video",
+            size_bytes=100,
+            attempt=1,
+        )
+    )
+    replayed = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="other",
+            artifact_kind="audio",
+            size_bytes=999,
+            attempt=50,
+        )
+    )
+    resolved = asyncio.run(bindings.resolve(PROJECT_ID, artifact_id))
+    assert (replayed.job_id, replayed.attempt) == (resolved.job_id, resolved.attempt)
+    assert replayed.job_id == "owner"
+    assert replayed.attempt == 1
+
+
 def test_concurrent_rebinds_never_regress_the_fencing_token(pin_env: Path) -> None:
     """Two racing re-binds must leave the *higher* token, never the lower.
 
