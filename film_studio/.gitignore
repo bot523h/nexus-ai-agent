@@ -1,0 +1,8 @@
+# رسانه‌های سنگین پروژه فیلم در گوگل درایو نگهداری می‌شوند، نه در گیت
+series/**/*.mp4
+series/**/*.mp3
+series/**/*.m4a
+series/**/*.wav
+series/**/*.png
+series/**/*.jpg
+_work/
