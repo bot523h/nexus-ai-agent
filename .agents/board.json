@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-06T21:25:39Z",
+  "updated_at": "2026-11-08T06:11:56Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -9447,6 +9447,54 @@
         "merge_commit_sha": "aadaf53157670b64af6978fcf41b592e108ac9ae",
         "recorded_by": "openhands/omni-recovery-integration-20261105",
         "recorded_at": "2026-11-05T13:13:23Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 319,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "65c020cf29151198faf75564df5edb4e7c61215b",
+        "recorded_by": "main",
+        "recorded_at": "2026-11-08T06:11:52Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 320,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "a8ce54a4923a7ad23301aeaa602478185980a050",
+        "recorded_by": "main",
+        "recorded_at": "2026-11-08T06:11:54Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 321,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "1919dc3d2f52bd9fee1512f5b38fddb878562b40",
+        "recorded_by": "main",
+        "recorded_at": "2026-11-08T06:11:55Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 322,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "5ed6d4e10be55f5baf5e9f2a8aa99775577621db",
+        "recorded_by": "main",
+        "recorded_at": "2026-11-08T06:11:56Z"
       }
     }
   ]
