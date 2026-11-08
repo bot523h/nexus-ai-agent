@@ -2,6 +2,13 @@
 
 Index of durable, expensive-to-learn facts. Detail goes to daily logs.
 
+## Working-style note (owner preference)
+- The owner reads a `finish` call as "the agent disconnected/stopped" and finds it
+  disruptive. **Do not call `finish` after routine progress reports.** Keep working
+  and report in normal messages; only end a turn with `finish` when the whole task is
+  genuinely complete or the owner asks to stop. This supersedes the default habit of
+  closing every exchange.
+
 ## NAGAR-ONE P0 closeout + PR reconciliation (2026-11-07 continuation)
 - **#319 (task-282 Slice 2)** head now **`e52e30eb`**, **16/16 threads resolved**,
   **CI 42412872578 = SUCCESS** (27/27). **P0 fix**: the artifact→revision binding is
