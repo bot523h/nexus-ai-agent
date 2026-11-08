@@ -80,5 +80,6 @@
   "creative.failed.render_failed": "❌ 渲染失败，请尝试更短的媒体或其他参数。",
   "creative.failed.ffmpeg_unavailable": "❌ 此部署未安装渲染引擎。",
   "creative.failed.internal": "❌ 发生内部错误；团队可查看详情。",
-  "creative.request_conflict": "♻️ 该消息已使用其他媒体入队。请在新消息中发送新的媒体。"
+  "creative.request_conflict": "♻️ 该消息已使用其他媒体入队。请在新消息中发送新的媒体。",
+  "creative.failed.artifact_binding_failed": "❌ 无法将发布的产物绑定到项目的准确修订版，因此已拒绝渲染。请重新发送命令。"
 }

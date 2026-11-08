@@ -80,5 +80,6 @@
   "creative.failed.render_failed": "❌ Rendering failed. Try shorter media or different parameters.",
   "creative.failed.ffmpeg_unavailable": "❌ The render engine isn't installed on this deployment.",
   "creative.failed.internal": "❌ An internal error occurred. The details are visible to the team.",
-  "creative.request_conflict": "♻️ This message was already queued with different media. Send the new media as a fresh message."
+  "creative.request_conflict": "♻️ This message was already queued with different media. Send the new media as a fresh message.",
+  "creative.failed.artifact_binding_failed": "❌ The published artifact could not be bound to the exact project revision, so the render was refused. Resend the command."
 }

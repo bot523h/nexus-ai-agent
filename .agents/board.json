@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-05T10:30:34Z",
+  "updated_at": "2026-11-06T21:25:39Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8521,7 +8521,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8546,9 +8546,9 @@
         "docs/architecture/DURABLE_PROJECT_STATE.md"
       ],
       "owner_hint": "Slice of task-282; waits on its dependency. No parallel authority.",
-      "agent_branch": "",
-      "claimed_at": null,
-      "generation": 0,
+      "agent_branch": "nagar-one-slice2-artifact-revision-binding",
+      "claimed_at": "2026-11-06T21:25:39Z",
+      "generation": 1,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],

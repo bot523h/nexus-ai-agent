@@ -80,5 +80,6 @@
   "creative.failed.render_failed": "❌ Render gagal; coba media lebih pendek atau parameter lain.",
   "creative.failed.ffmpeg_unavailable": "❌ Mesin render tidak terpasang pada deployment ini.",
   "creative.failed.internal": "❌ Terjadi kesalahan internal; detailnya dapat dilihat tim.",
-  "creative.request_conflict": "♻️ Pesan ini sudah masuk antrean dengan media berbeda. Kirim media baru sebagai pesan baru."
+  "creative.request_conflict": "♻️ Pesan ini sudah masuk antrean dengan media berbeda. Kirim media baru sebagai pesan baru.",
+  "creative.failed.artifact_binding_failed": "❌ Artefak yang diterbitkan tidak dapat diikat ke revisi proyek yang tepat, sehingga render ditolak. Kirim ulang perintah."
 }

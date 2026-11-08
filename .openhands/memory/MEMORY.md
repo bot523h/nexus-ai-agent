@@ -2,6 +2,53 @@
 
 Index of durable, expensive-to-learn facts. Detail goes to daily logs.
 
+## Working-style note (owner preference)
+- The owner reads a `finish` call as "the agent disconnected/stopped" and finds it
+  disruptive. **Do not call `finish` after routine progress reports.** Keep working
+  and report in normal messages; only end a turn with `finish` when the whole task is
+  genuinely complete or the owner asks to stop. This supersedes the default habit of
+  closing every exchange.
+
+## NAGAR-ONE P0 closeout + PR reconciliation (2026-11-07 continuation)
+- **#319 (task-282 Slice 2)** head now **`e52e30eb`**, **16/16 threads resolved**,
+  **CI 42412872578 = SUCCESS** (27/27). **P0 fix**: the artifact→revision binding is
+  now committed by the queue's **post-verification, pre-COMPLETED async `confirm` hook**
+  (`ArtifactPublication.confirm` + `_confirm_safely`), never by the worker (which now
+  records only a measured INTENT). Fail-closed: a refusal fails the job + retracts the
+  attempt → never COMPLETED without provenance. Campaign **24/24 killed**; suite
+  **6421 passed / 39 skipped**; committed `e52e30eb`.
+- **PR reconciliation (file-level):** **#323 is REDUNDANT** with #319 — the 3 process
+  files (`.agents/skills/nexus-nagar-one-engineering/SKILL.md`, `.openhands/memory/2026-11-07.md`,
+  `MEMORY.md`) are **byte-identical** in both. Merge-order coupling (textual, rebasable,
+  NOT a defect): `MODULE_MAP.md` (#319 R29 vs #321 R22→R25) and `docs/README.md` (#320 vs #322).
+  **Law numbering is sound**: main has a pre-existing dup R22; #321 fixes it → 1..28; #319
+  adds R29 → 1..29 (good in either order).
+- **Real defect:** **#294** is `dirty` + 1 unresolved thread + adds a **duplicate law R28**
+  (collides with main R28) → blocked, its own campaign.
+- **Merge order (owner):** #320 → #321 → #319 (rebase) → #322; close #323 as redundant.
+  Never write `main` (HARD RULE).
+- Detail: `.openhands/memory/2026-11-07-continuation.md`.
+
+## NAGAR-ONE audit + skill + daily automation (2026-11-07)
+- **Live truth beats memory:** `main` = `6838c543`; **#318/#316/#317 all MERGED**
+  (memory said "not merged"); **46 open PRs** (not 42). Re-derive every session.
+- **A new campaign the memory never had:** **NAGAR-ONE #319–#322**.
+  - **#319** = task-282 **Slice 2** (durable artifact→revision binding): required
+    checks GREEN + `mergeable`, but **15 UNRESOLVED review threads** (2 High, 8 Med,
+    2 Low, 2 review-instructions) → the top stuck item. Fix → reply → resolve.
+  - **#320/#321/#322** = docs-only (Stage 0 contract, Stage 2 law-numbering, handoff),
+    green + 0 threads → ready for owner merge.
+  - **Stage 3 (durable IBPC) = DEFERRED by design** (in-memory, "no parallel ledger").
+- **Delivered:** engineering skill `.agents/skills/nexus-nagar-one-engineering/SKILL.md`
+  (hard rules + §7 "errors made and how to avoid" + §9 Jules API + §10 automation).
+- **Automation:** "NAGAR-ONE Daily Continuation", cron `0 12 * * *`, tz `Asia/Tehran`,
+  prompt-preset, `repos=[nexus-ai-agent@main]`; resumes live truth, never writes `main`.
+- **Jules** is connected (`sources/github/bot523h/nexus-ai-agent`, key `$jules`,
+  header `X-Goog-Api-Key`, base `https://jules.googleapis.com/v1alpha`).
+- Automation API host: `https://app.all-hands.dev` (`Bearer $OPENHANDS_API_KEY`);
+  `OPENHANDS_HOST` is unset; local agent canvas :8001 is down.
+- Detail: `.openhands/memory/2026-11-07.md`.
+
 ## NEXUS final pre-merge hardening + integration proof (2026-11-06)
 - **Heads pushed:** #316 `020d8b11` (P0 board trust-boundary fix + live-main-cache fix),
   #318 `3cfaed2f` (dependency-gate env-marker + fail-closed hardening), #317
@@ -1027,3 +1074,23 @@ Only red check = the #234 flake (task-264, issue #237).
 - **CI checkouts have NO `origin/main` ref** (shallow single-branch checkout). Any test that shells
   out to real git for `origin/main` fails in CI for purely environmental reasons — stub the git
   boundary (`_stub_git`) or use `HEAD`. This cost a red `test`/`python-parity` on #316.
+
+## PR #319 — task-282 Slice 2 hardening (durable, 2026-11-07)
+- Branch `nagar-one-slice2-artifact-revision-binding`, PR #319 (base main, OPEN). Hardened
+  head **`2e29c138`**; all **16 review threads resolved**; PR body updated with the
+  review-hardening + honest residuals. Campaign `scripts/durable_project_state_mutations.py`
+  is now **22** mutants (was 19) — 22/22 killed.
+- Slice-2 invariants now enforced: the artifact digest is **re-measured at bind** (stale
+  report refused); `is_content_address()` requires full `sha256:<64 lowercase hex>`;
+  `verify_artifact` turns a missing/unreadable artifact into typed `ArtifactRevisionMismatch`;
+  the worker turns EVERY binding failure into `CreativeRenderError("artifact_binding_failed")`;
+  `ArtifactBinding.artifact_version_id` links the Asset Library version; `size_bytes` = BIGINT.
+- **Documented residuals (D-0038, honest)**: binding commits before the queue verifies/publishes
+  (needs an async `finalize` hook); schema-2 renders are NOT yet required to pin a revision
+  (enforcing it reds 14 canonical-execution tests → cross-slice, deferred); concurrent-revision
+  window mitigated by re-load+re-validate (transaction-atomic lock = storage-boundary slice).
+- **Push auth**: `origin` has NO token; push via
+  `https://bot523h:${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/bot523h/nexus-ai-agent.git`
+  (PAT = owner; `OH_GIT_CREDENTIAL_ACCESS_TOKEN_GITHUB` fails for git here).
+- **`lint-fast` runs `ruff format --check`** (not just `ruff check`): always run
+  `ruff format --check .` before pushing — a plain `ruff check` misses over-wrapped lines.
