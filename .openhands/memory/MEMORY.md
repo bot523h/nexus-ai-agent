@@ -1094,3 +1094,18 @@ Only red check = the #234 flake (task-264, issue #237).
   (PAT = owner; `OH_GIT_CREDENTIAL_ACCESS_TOKEN_GITHUB` fails for git here).
 - **`lint-fast` runs `ruff format --check`** (not just `ruff check`): always run
   `ruff format --check .` before pushing — a plain `ruff check` misses over-wrapped lines.
+
+## task-282 Slice 2 F1 — binding ownership fence (2026-11-07, local `0435d2d4`)
+- Branch `fix/binding-ownership-fence-20261107` (base = main `5ed6d4e1`). NOT pushed.
+  New head migration **`20261107bindfence`** (adds `ProjectArtifactBinding.attempt`);
+  PostgreSQL golden **`d6457c71…`** (was `2fbfee72544a…`).
+- `SqlArtifactBindingStore.retract()` is token-scoped on `(artifact_id, job_id, attempt)`;
+  `bind()` advances `attempt` monotonically. Harness now **28/28 killed**.
+- **Typed-delete rule**: SQLModel `Model.attr == x` predicates type as `bool` → mypy red.
+  Do NOT `from sqlmodel import col` inside `creative/project_state` — the boundary test
+  `tests/architecture/test_durable_project_state_boundary.py` allowlists top-level imports
+  and excludes `sqlmodel`. Use a module-level `_BINDING: Table = cast(Table, Model.__table__)`
+  accessor (`# type: ignore[attr-defined]`) + `_BINDING.c.attr == x`; rowcount via
+  `getattr(result, "rowcount", 0)`. Same idiom as `creative/assets/repository.py`.
+- `tests/architecture/test_durable_project_state_boundary.py` also enforces a top-level
+  import allowlist — any new stdlib/3p import into that package must be added there.

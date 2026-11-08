@@ -505,10 +505,24 @@ class SqlArtifactBindingStore:
         # token monotonically so a superseded attempt's retraction (scoped to its
         # own token) can never delete a binding a successor now owns.  A lower or
         # equal token is a true no-op.  Only the token moves; the provenance
-        # (artifact → project → revision) is never rewritten.
-        if attempt > row.attempt:
-            row.attempt = attempt
-            await session.commit()
+        # (artifact → project → revision) is never rewritten.  The advance is a
+        # single conditional UPDATE, not a read-modify-write: two concurrent
+        # re-binds (the new owner at a higher token, a superseded attempt at a
+        # lower one) would otherwise both read the old token and the *lower* one
+        # could commit last, regressing the token and reopening the F1 hole.
+        result = await session.execute(
+            update(orm.ProjectArtifactBinding)
+            .where(
+                _BINDING.c.artifact_id == row.artifact_id,
+                _BINDING.c.attempt < attempt,
+            )
+            .values(attempt=attempt)
+            .execution_options(synchronize_session="fetch")
+        )
+        await session.commit()
+        # Reflect the committed post-state (the row kept its token when the
+        # conditional UPDATE matched nothing).
+        row.attempt = attempt if getattr(result, "rowcount", 0) > 0 else max(row.attempt, attempt)
         return _as_binding(row)
 
     async def resolve(self, project_id: str, artifact_id: str) -> ArtifactBinding:

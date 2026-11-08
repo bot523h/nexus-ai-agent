@@ -310,12 +310,20 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "rebind_fencing_token_not_monotonic",
         STORE,
-        """        if attempt > row.attempt:
-            row.attempt = attempt
-            await session.commit()""",
-        """        if False:  # mutated: the fencing token no longer advances on re-bind
-            row.attempt = attempt
-            await session.commit()""",
+        """        result = await session.execute(
+            update(orm.ProjectArtifactBinding)
+            .where(
+                _BINDING.c.artifact_id == row.artifact_id,
+                _BINDING.c.attempt < attempt,
+            )
+            .values(attempt=attempt)
+            .execution_options(synchronize_session="fetch")
+        )
+        await session.commit()
+        # Reflect the committed post-state (the row kept its token when the
+        # conditional UPDATE matched nothing).
+        row.attempt = attempt if getattr(result, "rowcount", 0) > 0 else max(row.attempt, attempt)""",
+        """        await session.commit()  # mutated: the fencing token never advances on re-bind""",
         "F1: a re-bind by a newer attempt must advance the fencing token monotonically; "
         "otherwise a successor's row keeps the old token and a stale retraction can "
         "delete it",

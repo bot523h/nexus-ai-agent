@@ -1444,9 +1444,66 @@ def test_bind_advances_the_fencing_token_monotonically(pin_env: Path) -> None:
     )
     assert newer.attempt == 9
     assert newer.revision_id == r1.revision_id  # provenance never rewritten
+    # A stale (older) re-bind must not regress the token a newer attempt owns.
+    stale = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-z",
+            size_bytes=1,
+            attempt=5,
+        )
+    )
+    assert stale.attempt == 9  # monotonic: the higher token is retained
     # A stale (older) retraction cannot remove the row the newer attempt owns.
     assert (
         asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-z", attempt=4)) is False
+    )
+
+
+def test_concurrent_rebinds_never_regress_the_fencing_token(pin_env: Path) -> None:
+    """Two racing re-binds must leave the *higher* token, never the lower.
+
+    The token advance is a single conditional UPDATE, not a read-modify-write:
+    a superseded attempt (lower token) racing a successor (higher token) must
+    never let the lower token commit last, which would reopen the F1 hole (a
+    later retract scoped to that lower token could delete a successor's row).
+    """
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "4" * 64
+
+    async def _race() -> None:
+        await asyncio.gather(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=r1.revision_id,
+                artifact_id=artifact_id,
+                job_id="job-race",
+                size_bytes=1,
+                attempt=5,
+            ),
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=r1.revision_id,
+                artifact_id=artifact_id,
+                job_id="job-race",
+                size_bytes=1,
+                attempt=3,
+            ),
+        )
+
+    asyncio.run(_race())
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).attempt == 5
+    # The winner's retraction still works; the loser's cannot.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-race", attempt=3))
+        is False
+    )
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-race", attempt=5)) is True
     )
 
 

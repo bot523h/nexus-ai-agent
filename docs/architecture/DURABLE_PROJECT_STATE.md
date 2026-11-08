@@ -117,8 +117,11 @@ attempt that never reached `COMPLETED`. The binding therefore carries the
 `20261107bindfence`), and the lost-CAS path retracts **exactly** the row this
 attempt wrote — the delete is scoped on `(artifact_id, job_id, attempt)`, never a
 successor's row, a pre-fence row (`attempt = 0`), or another job's row. A re-bind
-by a newer attempt advances the token **monotonically** (provenance is never
-rewritten), so a stale retraction can never match a successor's live binding; a
+by a newer attempt advances the token **monotonically** and **atomically** (a
+single conditional `UPDATE ... WHERE attempt < :new`, never a read-modify-write,
+so two racing re-binds can never let the lower token commit last and reopen the
+hole; provenance is never rewritten), so a stale retraction can never match a
+successor's live binding; a
 retraction without a real token (`attempt >= 1`) is a typed refusal. The
 confirm hook is the **last** durable side effect before the terminal CAS, so a
 lost terminal CAS is the only non-crash exit that can leave a committed binding,
