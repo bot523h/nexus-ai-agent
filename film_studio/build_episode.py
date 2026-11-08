@@ -94,12 +94,19 @@ def build_scene_clip(scene: dict, idx: int, W: int, H: int, FPS: int, tmp: Path)
     z, x, y = motion_expr(scene.get("motion", "zoom_in"), frames)
 
     # تصویر را ۲ برابر بزرگ می‌کنیم تا پن/زوم نرم و بدون لرزش باشد.
+    # از lanczos برای بزرگ‌نمایی و unsharp ملایم استفاده می‌کنیم تا فریم ۱۰۸۰p تیزتر شود.
+    sharpen = float(scene.get("sharpen", 0.55))
+    grain = float(scene.get("grain", 0.0))
     vf = (
-        f"scale={W*2}:{H*2}:force_original_aspect_ratio=increase,"
+        f"scale={W*2}:{H*2}:flags=lanczos:force_original_aspect_ratio=increase,"
         f"crop={W*2}:{H*2},setsar=1,"
-        f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={W}x{H}:fps={FPS},"
-        f"format=yuv420p"
+        f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={W}x{H}:fps={FPS}"
     )
+    if sharpen > 0:
+        vf += f",unsharp=5:5:{sharpen}:5:5:0.0"
+    if grain > 0:
+        vf += f",noise=alls={grain}:allf=t+u"
+    vf += ",format=yuv420p"
     out = tmp / f"scene_{idx:03d}.mp4"
     run(
         [
