@@ -1095,17 +1095,50 @@ Only red check = the #234 flake (task-264, issue #237).
 - **`lint-fast` runs `ruff format --check`** (not just `ruff check`): always run
   `ruff format --check .` before pushing — a plain `ruff check` misses over-wrapped lines.
 
-## task-282 Slice 2 F1 — binding ownership fence (2026-11-07, local `0435d2d4`)
-- Branch `fix/binding-ownership-fence-20261107` (base = main `5ed6d4e1`). NOT pushed.
-  New head migration **`20261107bindfence`** (adds `ProjectArtifactBinding.attempt`);
+## task-282 Slice 2 F1 — binding ownership fence (2026-11-07/08)
+- Branch `fix/binding-ownership-fence-20261107` (base = main `5ed6d4e1`). NOT pushed;
+  local head `7688bfcd` (3 commits). No PR opened (owner opens/merges; HARD RULE: never write main).
+  Migration **`20261107bindfence`** (adds `ProjectArtifactBinding.attempt`);
   PostgreSQL golden **`d6457c71…`** (was `2fbfee72544a…`).
-- `SqlArtifactBindingStore.retract()` is token-scoped on `(artifact_id, job_id, attempt)`;
-  `bind()` advances `attempt` monotonically. Harness now **28/28 killed**.
+- **Ownership is the `(job_id, attempt)` pair, not the artifact alone.** A DIFFERENT job
+  that publishes identical bytes (same content address) must never seize the canonical
+  row. The token advance is a single conditional `UPDATE ... WHERE artifact_id = :id
+  AND job_id = :job AND attempt < :new`; the redundant Python job guard was REMOVED so a
+  dropped SQL predicate cannot hide from the mutation campaign (the SQL guard is the sole
+  authority). Cross-job idempotency is on `(project_id, artifact_id)`; the returned binding
+  is RE-READ from the DB (the conditional UPDATE bypasses the ORM identity map).
+  `SqlArtifactBindingStore.retract()` is token-scoped on `(artifact_id, job_id, attempt)`.
+  Harness now **29/29 killed** (added `rebind_advance_not_job_scoped`).
+- **Mutation-anchor uniqueness trap (durable):** the harness applies with
+  `str.replace(old, new, 1)` — a NON-UNIQUE `old` silently mutates only the FIRST
+  occurrence, so a duplicated guard leaves a live copy and the mutant "kills" falsely.
+  Two durable anchors were non-unique (`cross_project_read_check_removed` 3x,
+  `artifact_binding_confirmed_before_verification` 2x) → widened both to unique
+  multi-line anchors. New guard `tests/unit/test_mutation_harness_anchors.py::
+  test_durable_project_state_anchors_occur_exactly_once` (mirrors the referee/gate5/
+  execution-core guards) turns this into an instant unit failure.
+- **New PG proof:** `tests/integration/test_artifact_binding_postgres_concurrency.py` —
+  real OS processes on PostgreSQL (cross-job non-seizure, owner-only retract, racing
+  advances never leave the lower token). Wired into `migrate-postgres`; a new
+  `test_pg_integration_safety.py` assertion proves every registered PG-writing module is
+  ACTUALLY run by CI (registered-but-uninvoked = silent hole). Runs locally only with
+  `NEXUS_DATABASE_URL` + `NEXUS_PG_TEST_DESTRUCTIVE=1`.
 - **Typed-delete rule**: SQLModel `Model.attr == x` predicates type as `bool` → mypy red.
   Do NOT `from sqlmodel import col` inside `creative/project_state` — the boundary test
   `tests/architecture/test_durable_project_state_boundary.py` allowlists top-level imports
   and excludes `sqlmodel`. Use a module-level `_BINDING: Table = cast(Table, Model.__table__)`
   accessor (`# type: ignore[attr-defined]`) + `_BINDING.c.attr == x`; rowcount via
   `getattr(result, "rowcount", 0)`. Same idiom as `creative/assets/repository.py`.
+- **Environment-leak gotcha (cost a red full-suite run):** exporting `NEXUS_DATABASE_URL`
+  into the persistent shell silently repoints the WHOLE suite at Postgres → ~50 failures
+  in SQLite-default modules (surface_*, gamification, readyz, sync_engine_resolution).
+  Always run the full suite with `env -u NEXUS_DATABASE_URL -u NEXUS_PG_TEST_DESTRUCTIVE`.
+  Clean run on `7688bfcd`: **6437 passed / 41 skipped / 0 failed**.
+- `OPERATION_TRUTH.json` `source_revision` stamps the PREVIOUS commit (self-referential);
+  `generated_at`/`source_revision` are in `non_deterministic_fields` so the byte-exact
+  truth gate ignores them — a committed stamp equal to the parent is expected, not a bug.
 - `tests/architecture/test_durable_project_state_boundary.py` also enforces a top-level
   import allowlist — any new stdlib/3p import into that package must be added there.
+- PR #324 (`openhands/nagar-one-final-closeout-20261107`, other agent) is open on the SAME
+  base `5ed6d4e1` and claims `.agents/board.json`; whichever PR merges second must
+  union-merge the board (per `merge_resolution_note`).
