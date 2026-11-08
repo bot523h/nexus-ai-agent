@@ -10,6 +10,11 @@ Index of durable, expensive-to-learn facts. Detail goes to daily logs.
   closing every exchange.
 
 ## NAGAR-ONE P0 closeout + PR reconciliation (2026-11-07 continuation)
+> **SUPERSEDED (2026-11-08).** This interim block records the mid-campaign state (#319 at
+> `e52e30eb`, 24/24 mutants, 6421 tests). The FINAL, durable state is in the
+> **"NAGAR-ONE P0 closeout + PR reconciliation (durable, 2026-11-07, mission -02)"** block
+> below: #319 merged as `65c020cf`, campaign **25/25**, suite **6423 passed / 39 skipped**,
+> live `main` `5ed6d4e1`. Read that block, not this one, for current facts.
 - **#319 (task-282 Slice 2)** head now **`e52e30eb`**, **16/16 threads resolved**,
   **CI 42412872578 = SUCCESS** (27/27). **P0 fix**: the artifact→revision binding is
   now committed by the queue's **post-verification, pre-COMPLETED async `confirm` hook**
