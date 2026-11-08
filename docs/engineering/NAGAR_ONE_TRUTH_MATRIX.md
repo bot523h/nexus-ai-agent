@@ -32,7 +32,7 @@ Stage 1 change on `nagar-one-slice2-artifact-revision-binding` (PR #319).
 | Privacy consent + cloud egress | PARTIAL | `nagar/ibpc/privacy.py` (LOCAL_VAULT default; typed refusal for non-local) | IBPC privacy tests | Durable consent store is **Stage 3** |
 | Studio API / Telegram adapter | PARTIAL | `bot/creative_surface.py`; `api/app.py` | surface tests | No approval/preview session API yet |
 | Recovery / restart behavior | VERIFIED (queue+revision) | queue recovery; `durable_project_restart.py` | restart suites | IBPC restart durability is **Stage 3** |
-| Migration schema (single head) | VERIFIED | `migrations/versions/*` (head `20261106artbind`) | `tests/unit/test_migrations.py` (upgrade=exact schema, no drift, downgrade empties) | — |
+| Migration schema (single head) | VERIFIED | `migrations/versions/*` (head `20261107bindfence`) | `tests/unit/test_migrations.py` (upgrade=exact schema, no drift, downgrade empties) | — |
 
 ## Stage gates (from the board)
 

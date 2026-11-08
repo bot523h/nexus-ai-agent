@@ -1247,11 +1247,43 @@ async def creative_render_binding_confirm(payload: dict[str, Any], result: dict[
             artifact_kind=str(intent.get("artifact_kind") or "binary"),
             size_bytes=int(intent.get("size_bytes") or 0),
             artifact_version_id=intent.get("artifact_version_id") or None,
+            attempt=int(result.get("_queue_attempt") or 0),
         )
     except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
         raise CreativeRenderError(
             "artifact_binding_failed", f"{type(exc).__name__}: {exc}"
         ) from exc
+
+
+async def creative_render_binding_retract(payload: dict[str, Any], result: dict[str, Any]) -> None:
+    """Queue retract hook: undo a committed binding after a lost terminal CAS.
+
+    A takeover can land *inside* the confirm window: ``creative_render_binding_confirm``
+    commits the binding, then the queue's ``COMPLETED`` CAS fails because the
+    attempt was superseded.  The committed binding must not outlive a
+    non-terminal attempt, so the queue calls this to delete exactly the row this
+    attempt wrote — scoped by the queue-minted ``(job_id, attempt)`` fencing
+    token, so it can never remove a successor's binding or a pre-fence row.
+
+    Unpinned jobs recorded no intent and nothing is retracted.  Idempotent: a
+    second call (or a binding a successor already owns) deletes nothing.
+    """
+    intent = result.get("artifact_binding")
+    if not isinstance(intent, dict):
+        return  # unpinned (legacy) job: nothing was committed
+    artifact_id = intent.get("artifact_id")
+    job_id = str(result.get("_queue_job_id") or "")
+    raw_attempt = result.get("_queue_attempt")
+    attempt = (
+        int(raw_attempt)
+        if isinstance(raw_attempt, int) and not isinstance(raw_attempt, bool)
+        else 0
+    )
+    if not isinstance(artifact_id, str) or not artifact_id or attempt < 1 or not job_id:
+        return  # no real fencing token: never retract an unscoped binding
+    from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
+
+    await SqlArtifactBindingStore().retract(artifact_id=artifact_id, job_id=job_id, attempt=attempt)
 
 
 async def creative_render_job(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1732,9 +1764,13 @@ def build_creative_render_publication(artifact_root: Path) -> ArtifactPublicatio
     async def _confirm(payload: dict[str, object], result: dict[str, object]) -> None:
         await creative_render_binding_confirm(payload, result)
 
+    async def _retract_confirmation(payload: dict[str, object], result: dict[str, object]) -> None:
+        await creative_render_binding_retract(payload, result)
+
     return ArtifactPublication(
         publish=_publish,
         retract=_retract,
         finalize=_finalize,
         confirm=_confirm,
+        retract_confirmation=_retract_confirmation,
     )

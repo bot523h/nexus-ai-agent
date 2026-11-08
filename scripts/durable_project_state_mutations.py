@@ -287,6 +287,39 @@ MUTATIONS: tuple[Mutation, ...] = (
         "commit boundary, else an attempt superseded during the re-probe window "
         "commits provenance for a row it no longer owns",
     ),
+    Mutation(
+        "lost_cas_binding_retraction_removed",
+        QUEUE,
+        """                    if publication is not None and publication.confirm is not None:
+                        await self._retract_confirmation_safely(publication, payload, result, claim)""",
+        """                    if False:  # mutated: the committed binding is never retracted
+                        await self._retract_confirmation_safely(publication, payload, result, claim)""",
+        "F1: a takeover landing *inside* the confirm commit window makes the terminal "
+        "CAS fail; the committed binding must be retracted, else a superseded attempt "
+        "leaves orphan durable provenance for a job that never reached COMPLETED",
+    ),
+    Mutation(
+        "retraction_not_token_scoped",
+        STORE,
+        "                    _BINDING.c.attempt == attempt,",
+        "                    _BINDING.c.artifact_id == artifact_id,  # mutated: fencing token dropped from the delete predicate",
+        "F1: retraction must be scoped to the exact (job_id, attempt) that wrote the "
+        "row; dropping the fencing token lets a superseded attempt delete a "
+        "successor's live binding",
+    ),
+    Mutation(
+        "rebind_fencing_token_not_monotonic",
+        STORE,
+        """        if attempt > row.attempt:
+            row.attempt = attempt
+            await session.commit()""",
+        """        if False:  # mutated: the fencing token no longer advances on re-bind
+            row.attempt = attempt
+            await session.commit()""",
+        "F1: a re-bind by a newer attempt must advance the fencing token monotonically; "
+        "otherwise a successor's row keeps the old token and a stale retraction can "
+        "delete it",
+    ),
 )
 
 TEST_TIMEOUT_SECONDS = 600

@@ -108,6 +108,22 @@ check and the confirmation is the classic plain-filesystem fencing limit. An
 attempt superseded in that window commits no provenance and reaches no
 `COMPLETED` — it owns nothing.
 
+**Ownership fence (F1).** That re-check cannot cover a takeover landing *inside*
+the confirm commit window itself (after the re-check, at/around the binding
+write): the attempt commits its binding and *then* loses the terminal
+`COMPLETED` CAS, which would leave an orphan durable binding from a superseded
+attempt that never reached `COMPLETED`. The binding therefore carries the
+**queue-minted fencing token** (`attempt`) in its own column (migration
+`20261107bindfence`), and the lost-CAS path retracts **exactly** the row this
+attempt wrote — the delete is scoped on `(artifact_id, job_id, attempt)`, never a
+successor's row, a pre-fence row (`attempt = 0`), or another job's row. A re-bind
+by a newer attempt advances the token **monotonically** (provenance is never
+rewritten), so a stale retraction can never match a successor's live binding; a
+retraction without a real token (`attempt >= 1`) is a typed refusal. The
+confirm hook is the **last** durable side effect before the terminal CAS, so a
+lost terminal CAS is the only non-crash exit that can leave a committed binding,
+and that exit retracts it.
+
 **Crash-consistency model (honest, not claimed atomic).** If the process dies
 after the confirmation commits the binding but before the durable `COMPLETED`,
 the row stays `verifying` with a queue-owned heartbeat; startup recovery
@@ -161,21 +177,27 @@ exposes no combined `execute`-style method that would bypass the bus.
   concurrent head move (deterministic ordering, no sleeps); and (Slice 2) the
   artifact→revision binding: bind/re-verify, idempotent replay, repoint refusal,
   artifact-byte re-measurement, tampered-revision refusal, cross-project refusal,
-  the unpinned no-op, the intent/confirm split, and four queue-level end-to-end
+  the unpinned no-op, the intent/confirm split, and the queue-level end-to-end
   proofs (a verified+published job commits its binding then `COMPLETED`; a
   refused confirmation fails the job closed with no binding row and its published
   bytes retracted; a superseded attempt commits no binding at the commit boundary
-  — fault-injected takeover in the re-probe window; and a crash after the
-  confirmation but before `COMPLETED` recovers honestly).
+  — fault-injected takeover in the re-probe window; a takeover landing *inside*
+  the confirm commit window retracts exactly its own row under the fencing token
+  (F1); token-scoped retraction that never deletes a successor's binding;
+  a token-less retraction is refused; the fencing token advances monotonically on
+  re-bind; and a crash after the confirmation but before `COMPLETED` recovers
+  honestly).
 - `tests/integration/test_durable_project_concurrency.py` — real interleaving
   (exactly one winner) and atomic rollback on an injected crash.
 - `tests/architecture/test_durable_project_state_boundary.py` — no parallel
   authority, single schema declaration site.
 - `tests/unit/test_migrations.py` — `alembic upgrade head` creates the exact
   schema (including `projectartifactbinding`), no drift, downgrade empties it.
-- `scripts/durable_project_state_mutations.py` — 25/25 mutants killed (15 Slice 1
-  + 10 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
+- `scripts/durable_project_state_mutations.py` — 28/28 mutants killed (15 Slice 1
+  + 13 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
   digest-remeasure-removed, content-address-validation-removed,
-  verify-oserror-fail-open, binding-fail-open, and the three queue confirm-seam
+  verify-oserror-fail-open, binding-fail-open, the three queue confirm-seam
   mutants — confirm-gate disabled, confirmation-refusal-ignored, and
-  confirmation-fence-recheck-removed).
+  confirmation-fence-recheck-removed — and the three F1 ownership-fence mutants:
+  lost-CAS retraction removed, retraction not token-scoped, and re-bind fencing
+  token no longer monotonic).

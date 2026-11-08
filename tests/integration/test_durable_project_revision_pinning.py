@@ -1104,20 +1104,41 @@ async def test_queue_confirm_refuses_a_superseded_attempt_at_the_commit_boundary
     queue.register_artifact_publication(
         "creative_render", build_creative_render_publication(artifact_root)
     )
-    job_id = await queue.enqueue(
-        job_type="creative_render",
-        idempotency_key="fence-supersede-1",
-        payload={"workspace_dir": str(pin_env / "ws_fence")},
-    )
 
-    # Publication is the step immediately before the confirmation boundary.
-    published = artifact_root / "published" / job_id / "render.mp4"
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + 20.0
-    while loop.time() < deadline and not published.exists():
-        await asyncio.sleep(0.05)
-    await asyncio.sleep(0.5)  # let the (refused) confirm boundary settle
+    # The fence re-check must refuse *before* the confirmation runs, so the
+    # confirm hook must never write a binding at all — a distinct observable
+    # from "the row was written and then retracted by the lost-CAS path".  Count
+    # the store writes to pin that distinction.
+    from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
 
+    binds = {"n": 0}
+    real_bind = SqlArtifactBindingStore.bind
+
+    async def _counting_bind(self: Any, **kwargs: Any) -> Any:
+        binds["n"] += 1
+        return await real_bind(self, **kwargs)
+
+    SqlArtifactBindingStore.bind = _counting_bind  # type: ignore[method-assign]
+    try:
+        job_id = await queue.enqueue(
+            job_type="creative_render",
+            idempotency_key="fence-supersede-1",
+            payload={"workspace_dir": str(pin_env / "ws_fence")},
+        )
+
+        # Publication is the step immediately before the confirmation boundary.
+        published = artifact_root / "published" / job_id / "render.mp4"
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 20.0
+        while loop.time() < deadline and not published.exists():
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.5)  # let the (refused) confirm boundary settle
+    finally:
+        SqlArtifactBindingStore.bind = real_bind  # type: ignore[method-assign]
+
+    # The fence was re-read and refused the superseded attempt before the
+    # confirmation: no binding write was ever attempted.
+    assert binds["n"] == 0, "the boundary fence must refuse before the confirm hook runs"
     # The superseded attempt owns nothing: it reached no COMPLETED and wrote no
     # durable binding.  (The bytes it published are the successor's to reconcile.)
     assert await queue.get_status(job_id) is not JobStatus.COMPLETED
@@ -1208,6 +1229,225 @@ async def test_crash_after_confirm_before_completed_recovers_honestly(pin_env: P
     # completed job, because the job is not completed.
     still = await _binding_store().resolve(PROJECT_ID, artifact_id)
     assert still.revision_id == revision.revision_id
+
+
+# ---------------------------------------------------------------------------
+# F1 ownership fence: a takeover landing *inside* the confirm commit window
+# (after the boundary fence re-check, at/around the binding write) must not
+# leave a durable binding from a superseded attempt.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_takeover_inside_the_confirm_window_retracts_the_binding(
+    pin_env: Path,
+) -> None:
+    """A takeover *inside* the confirm commit window leaves no binding behind.
+
+    This is the exact interleaving the earlier boundary re-check cannot cover:
+    the attempt passes the pre-confirm fence re-check, the confirm hook commits
+    the binding, and *then* a takeover bumps the fencing token so the terminal
+    ``COMPLETED`` CAS fails.  The queue must retract exactly the row this
+    attempt wrote (scoped by the queue-minted ``(job_id, attempt)`` token), so
+    no superseded execution leaves durable provenance and no job reaches
+    ``COMPLETED`` without a binding.
+    """
+    import sqlite3 as _sqlite3
+
+    from nexus_ai_agent.creative.project_state.store import (
+        ArtifactNotFound,
+        SqlArtifactBindingStore,
+        content_address_of_bytes,
+    )
+    from nexus_ai_agent.creative.render_jobs import build_creative_render_publication
+    from nexus_ai_agent.jobs.verification import VerificationOutcome
+
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("admitted"), parent=None)
+
+    artifact_root = pin_env / "artifacts"
+    artifact_root.mkdir()
+    queue_path = pin_env / "inside_window_queue.sqlite3"
+    queue = InProcessJobQueue(str(queue_path))
+
+    async def _handler(payload: dict) -> dict:
+        workspace = Path(str(payload["workspace_dir"]))
+        workspace.mkdir(parents=True, exist_ok=True)
+        artifact = workspace / "render.mp4"
+        artifact.write_bytes(b"queue-confirm-bytes")
+        digest = sha256_file(artifact)
+        return {
+            "success": True,
+            "artifact_path": str(artifact),
+            "workspace_dir": str(workspace),
+            "sha256": digest,
+            "size_bytes": artifact.stat().st_size,
+            "artifact_kind": "binary",
+            "artifact_binding": {
+                "artifact_id": digest,
+                "project_id": PROJECT_ID,
+                "revision_id": revision.revision_id,
+                "artifact_kind": "binary",
+                "size_bytes": artifact.stat().st_size,
+                "artifact_version_id": None,
+            },
+        }
+
+    def _takeover_inside_window() -> None:
+        connection = _sqlite3.connect(str(queue_path), timeout=30)
+        try:
+            connection.execute(
+                "UPDATE nexus_job_queue SET attempt = attempt + 1 "
+                "WHERE job_type = 'creative_render'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    real_bind = SqlArtifactBindingStore.bind
+    fired = {"n": 0}
+
+    async def _bind_then_takeover(self: Any, **kwargs: Any) -> Any:
+        # Fire the takeover exactly once, right before the real binding commit —
+        # i.e. after the queue's boundary fence re-check and inside the confirm
+        # commit window (the precise window Sourcery flagged).
+        if fired["n"] == 0:
+            fired["n"] = 1
+            _takeover_inside_window()
+        return await real_bind(self, **kwargs)
+
+    queue.register_handler("creative_render", _handler)
+    queue.register_artifact_verifier(
+        "creative_render",
+        lambda p, r: VerificationOutcome(ok=True, reason_code=None, summary={}),
+    )
+    queue.register_artifact_publication(
+        "creative_render", build_creative_render_publication(artifact_root)
+    )
+
+    SqlArtifactBindingStore.bind = _bind_then_takeover  # type: ignore[method-assign]
+    try:
+        job_id = await queue.enqueue(
+            job_type="creative_render",
+            idempotency_key="fence-inside-window-1",
+            payload={"workspace_dir": str(pin_env / "ws_inside_window")},
+        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 20.0
+        status = await queue.get_status(job_id)
+        terminal = {JobStatus.COMPLETED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
+        while loop.time() < deadline and status not in terminal:
+            await asyncio.sleep(0.05)
+            status = await queue.get_status(job_id)
+        await asyncio.sleep(0.5)
+    finally:
+        SqlArtifactBindingStore.bind = real_bind  # type: ignore[method-assign]
+
+    assert fired["n"] == 1, "the takeover must have fired inside the confirm window"
+    # The superseded attempt never reached COMPLETED and left NO binding: the
+    # confirmation it committed was retracted under its own fencing token.
+    assert status is not JobStatus.COMPLETED
+    artifact_id = content_address_of_bytes(b"queue-confirm-bytes")
+    with pytest.raises(ArtifactNotFound):
+        await _binding_store().resolve(PROJECT_ID, artifact_id)
+
+
+def test_retract_is_token_scoped_and_never_deletes_a_successor_binding(
+    pin_env: Path,
+) -> None:
+    """``retract`` deletes only the row an exact ``(job_id, attempt)`` wrote."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "1" * 64
+
+    # The successor (attempt 7) owns the binding.
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-x",
+            size_bytes=1,
+            attempt=7,
+        )
+    )
+    # A superseded attempt (6) retracting cannot remove the successor's row.
+    removed = asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-x", attempt=6))
+    assert removed is False
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).attempt == 7
+    # A different job cannot remove it either.
+    removed = asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-y", attempt=7))
+    assert removed is False
+    # The exact owner removes exactly its own row.
+    removed = asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-x", attempt=7))
+    assert removed is True
+    from nexus_ai_agent.creative.project_state.store import ArtifactNotFound
+
+    with pytest.raises(ArtifactNotFound):
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id))
+    # Idempotent: a second retract removes nothing.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-x", attempt=7)) is False
+    )
+
+
+def test_retract_requires_a_real_fencing_token(pin_env: Path) -> None:
+    """A token-less retraction is refused: it could remove a pre-fence row."""
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingError
+
+    bindings = _binding_store()
+    with pytest.raises(ArtifactBindingError):
+        asyncio.run(bindings.retract(artifact_id="sha256:" + "2" * 64, job_id="j", attempt=0))
+
+
+def test_bind_advances_the_fencing_token_monotonically(pin_env: Path) -> None:
+    """A re-bind by a newer attempt advances the token; provenance is unchanged."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "3" * 64
+
+    first = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-z",
+            size_bytes=1,
+            attempt=4,
+        )
+    )
+    assert first.attempt == 4
+    # Same attempt: no-op, token unchanged.
+    again = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-z",
+            size_bytes=1,
+            attempt=4,
+        )
+    )
+    assert again.attempt == 4
+    # Newer attempt: token advances so a stale retraction cannot match it.
+    newer = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-z",
+            size_bytes=1,
+            attempt=9,
+        )
+    )
+    assert newer.attempt == 9
+    assert newer.revision_id == r1.revision_id  # provenance never rewritten
+    # A stale (older) retraction cannot remove the row the newer attempt owns.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-z", attempt=4)) is False
+    )
 
 
 # ---------------------------------------------------------------------------

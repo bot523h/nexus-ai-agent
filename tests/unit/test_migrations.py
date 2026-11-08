@@ -98,8 +98,9 @@ def _actual(db_file: str) -> tuple[set[str], set[tuple[str, str, bool]]]:
 def test_revision_chain_is_single_line() -> None:
     script = ScriptDirectory.from_config(_make_config())
     heads = script.get_heads()
-    assert heads == ["20261106artbind"]
+    assert heads == ["20261107bindfence"]
     assert [r.revision for r in script.walk_revisions()] == [
+        "20261107bindfence",
         "20261106artbind",
         "20261104dpstate",
         "d4e1c0a79b21",

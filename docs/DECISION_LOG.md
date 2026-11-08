@@ -2802,17 +2802,25 @@ jobs skip provenance binding" rather than an enforcement in this slice.
 typed refusal, asset-version link, replay keeps stored metadata, binding follows
 the admitted revision after a head move, schema-2 requires a pin, stale-digest
 and missing-metadata refusals, and — for residual 1 — the worker records only an
-intent while `creative_render_binding_confirm` commits it, four queue-level
+intent while `creative_render_binding_confirm` commits it, the queue-level
 end-to-end proofs: a verified+published pinned job commits its binding then
 `COMPLETED`; a refused confirmation fails the job closed with no binding row and
 its published bytes retracted; a superseded attempt commits no binding at the
-commit boundary (fault-injected takeover in the re-probe window); and a crash
-after the confirmation but before `COMPLETED` recovers honestly (binding
+commit boundary (fault-injected takeover in the re-probe window — pinned by a
+binding-write counter, so the fence must refuse *before* the confirm hook runs,
+distinct from a write-then-retract); a takeover landing *inside* the confirm
+commit window retracts exactly its own row under the fencing token (F1);
+token-scoped retraction that never deletes a successor's binding; a token-less
+retraction is refused; the fencing token advances monotonically on re-bind; and a
+crash after the confirmation but before `COMPLETED` recovers honestly (binding
 survives as history, job is not `COMPLETED`, recovery re-runs and fails the
 job)), `tests/architecture/test_durable_project_state_boundary.py`
 (single schema site, no parallel authority), and the mutation campaign
-`scripts/durable_project_state_mutations.py` (25 mutants, incl. the queue confirm
-gate, refusal-ignored and confirmation-fence-recheck mutants). Migration
-`20261106artbind`; architecture page
+`scripts/durable_project_state_mutations.py` (28 mutants, incl. the queue confirm
+gate, refusal-ignored, confirmation-fence-recheck, and the three F1
+ownership-fence mutants: lost-CAS retraction removed, retraction not
+token-scoped, re-bind token not monotonic). Migrations
+`20261106artbind` (binding table) and `20261107bindfence` (the ownership-fence
+`attempt` column, F1); architecture page
 `docs/architecture/DURABLE_PROJECT_STATE.md`; boundary law R29 in
 `docs/architecture/MODULE_MAP.md` §3.

@@ -28,9 +28,9 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import Table, delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,6 +63,11 @@ _ADDRESS_PREFIX = "sha256:"
 
 #: A canonical content address is exactly ``sha256:`` + 64 lowercase hex.
 _CONTENT_ADDRESS_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+# Typed table accessor (SQLAlchemy 2.0 style) so the token-scoped delete predicate
+# stays typed without importing SQLModel into this package (the architecture
+# ratchet forbids new ``sqlmodel`` imports outside the frozen baseline).
+_BINDING: Table = cast(Table, orm.ProjectArtifactBinding.__table__)  # type: ignore[attr-defined]
 
 
 def is_content_address(value: object) -> bool:
@@ -102,6 +107,8 @@ class ArtifactBinding:
     size_bytes: int
     created_at: datetime
     artifact_version_id: str | None = None
+    #: Fencing token of the execution that committed the binding (0 = pre-fence).
+    attempt: int = 0
 
 
 def _as_binding(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
@@ -114,6 +121,7 @@ def _as_binding(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
         size_bytes=row.size_bytes,
         created_at=row.created_at,
         artifact_version_id=row.artifact_version_id,
+        attempt=row.attempt,
     )
 
 
@@ -405,6 +413,7 @@ class SqlArtifactBindingStore:
         artifact_kind: str = "binary",
         size_bytes: int,
         artifact_version_id: str | None = None,
+        attempt: int = 0,
     ) -> ArtifactBinding:
         """Bind one measured artifact to the immutable revision it served.
 
@@ -425,6 +434,11 @@ class SqlArtifactBindingStore:
         artifact→revision→asset-version chain; a binding without it is still
         valid (the artifact may not be in the Asset Library), but a caller that
         has a version should pass it so the chain is resolvable.
+
+        ``attempt`` is the queue fencing token of the committing execution.  It
+        is recorded so the queue can retract *exactly* the row this attempt
+        wrote if the execution is superseded before its terminal commit; 0 means
+        "no token" (a caller outside the queue, or a legacy row).
         """
         if not is_content_address(artifact_id):
             raise ArtifactBindingError("artifact_id must be a sha256:<64-hex> content address")
@@ -432,6 +446,8 @@ class SqlArtifactBindingStore:
             raise ArtifactBindingError("artifact_version_id must be non-empty when provided")
         if size_bytes < 0:
             raise ArtifactBindingError("size_bytes must be non-negative")
+        if isinstance(attempt, bool) or attempt < 0:
+            raise ArtifactBindingError("attempt must be a non-negative fencing token")
 
         # The revision is the authority: load it (this re-validates its bytes,
         # refusing tampered/re-homed rows) before any binding row is written.
@@ -440,13 +456,16 @@ class SqlArtifactBindingStore:
         async with self._session_factory() as session:
             existing = await session.get(orm.ProjectArtifactBinding, artifact_id)
             if existing is not None:
-                return self._reconcile_existing(existing, project_id, revision_id)
+                return await self._reconcile_existing(
+                    session, existing, project_id, revision_id, attempt
+                )
             session.add(
                 orm.ProjectArtifactBinding(
                     artifact_id=artifact_id,
                     project_id=project_id,
                     revision_id=revision_id,
                     job_id=job_id,
+                    attempt=attempt,
                     artifact_kind=artifact_kind,
                     size_bytes=size_bytes,
                     artifact_version_id=artifact_version_id,
@@ -463,19 +482,33 @@ class SqlArtifactBindingStore:
                     raise ArtifactBindingConflict(
                         "artifact binding raced and could not be read"
                     ) from exc
-                return self._reconcile_existing(existing, project_id, revision_id)
+                return await self._reconcile_existing(
+                    session, existing, project_id, revision_id, attempt
+                )
             row = await session.get(orm.ProjectArtifactBinding, artifact_id)
             assert row is not None  # just committed
             return _as_binding(row)
 
     @staticmethod
-    def _reconcile_existing(
-        row: orm.ProjectArtifactBinding, project_id: str, revision_id: str
+    async def _reconcile_existing(
+        session: AsyncSession,
+        row: orm.ProjectArtifactBinding,
+        project_id: str,
+        revision_id: str,
+        attempt: int,
     ) -> ArtifactBinding:
         if row.project_id != project_id:
             raise CrossProjectAccess("artifact id already bound to a different project")
         if row.revision_id != revision_id:
             raise ArtifactBindingConflict("artifact already bound to a different revision")
+        # Idempotent re-bind by the SAME or a NEWER execution: advance the fencing
+        # token monotonically so a superseded attempt's retraction (scoped to its
+        # own token) can never delete a binding a successor now owns.  A lower or
+        # equal token is a true no-op.  Only the token moves; the provenance
+        # (artifact → project → revision) is never rewritten.
+        if attempt > row.attempt:
+            row.attempt = attempt
+            await session.commit()
         return _as_binding(row)
 
     async def resolve(self, project_id: str, artifact_id: str) -> ArtifactBinding:
@@ -487,6 +520,38 @@ class SqlArtifactBindingStore:
             if row.project_id != project_id:
                 raise CrossProjectAccess("artifact does not belong to the requested project")
             return _as_binding(row)
+
+    async def retract(
+        self,
+        *,
+        artifact_id: str,
+        job_id: str,
+        attempt: int,
+    ) -> bool:
+        """Delete the binding written by *exactly* this execution, or nothing.
+
+        Used by the queue when the attempt that committed a binding is then
+        superseded: the terminal ``COMPLETED`` CAS fails, so the binding must not
+        survive — but only the row this attempt wrote may be removed.  The delete
+        is scoped on ``artifact_id`` **and** ``job_id`` **and** ``attempt`` (the
+        fencing token), so it can never remove a successor's binding, a
+        pre-fence row (``attempt = 0``), or a row another job wrote.
+
+        Returns ``True`` iff a row was deleted.  Idempotent: a second call
+        deletes nothing and returns ``False``.
+        """
+        if isinstance(attempt, bool) or attempt < 1:
+            raise ArtifactBindingError("retract requires a real fencing token (attempt >= 1)")
+        async with self._session_factory() as session:
+            result = await session.execute(
+                delete(orm.ProjectArtifactBinding).where(
+                    _BINDING.c.artifact_id == artifact_id,
+                    _BINDING.c.job_id == job_id,
+                    _BINDING.c.attempt == attempt,
+                )
+            )
+            await session.commit()
+            return bool(getattr(result, "rowcount", 0))
 
     async def _load_validated_revision(self, project_id: str, revision_id: str) -> RevisionRecord:
         """Load the bound revision and re-validate its bytes, with a typed refusal.

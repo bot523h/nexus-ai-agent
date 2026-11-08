@@ -267,6 +267,18 @@ class ArtifactPublication:
     #     confirmation, and a confirmation can never outlive a rejected
     #     attempt.  It must be idempotent (a retry re-runs it).
     confirm: Callable[[dict[str, object], dict[str, object]], Awaitable[None]] | None = None
+    # ``retract_confirmation(payload, result)`` (optional, async)
+    #     undoes a *committed* confirmation when the attempt is superseded before
+    #     its terminal commit.  The confirm hook can commit a durable side effect
+    #     and then lose the ``COMPLETED`` CAS to a takeover that landed inside
+    #     the confirm window; the queue calls this to remove exactly the row this
+    #     attempt wrote (scoped by the queue-minted identity in the context),
+    #     never a successor's.  It must be idempotent and must never raise (the
+    #     queue only logs a failure here: the row is already non-terminal and
+    #     recoverable, and the confirmation's own owner scope is the authority).
+    retract_confirmation: (
+        Callable[[dict[str, object], dict[str, object]], Awaitable[None]] | None
+    ) = None
 
 
 def default_artifact_publications() -> dict[str, ArtifactPublication]:
@@ -1824,41 +1836,6 @@ class InProcessJobQueue:
                 )
             if outcome.ok:
                 stored_passport: str | None = None
-                # Mandatory durable confirmation (task-282 Slice 2): the
-                # artifact→revision binding is committed HERE — after the
-                # independent verification and the atomic publication, before
-                # the COMPLETED commit — never inside the worker.  A refusal
-                # (or crash) fails the job closed and retracts this attempt, so
-                # a rejected artifact can never leave a durable binding behind.
-                if publication is not None and publication.confirm is not None:
-                    # Fence re-check at the commit boundary.  The binding is a
-                    # durable side effect, so a superseded attempt must never
-                    # commit it: ownership was last read before the (irreversible)
-                    # publication, and the re-probe window between that check and
-                    # here is the classic plain-filesystem fencing limit.  Re-read
-                    # the fence now so an attempt that lost the row can commit no
-                    # provenance and can reach no COMPLETED (it owns nothing).
-                    if not await asyncio.to_thread(
-                        self._owns_execution, claim, JobStatus.VERIFYING
-                    ):
-                        self._log_rejected(job_id, claim, JobStatus.COMPLETED)
-                        return
-                    confirm_error = await self._confirm_safely(publication, payload, result, claim)
-                    if confirm_error is not None:
-                        retract_context = dict(result)
-                        retract_context["_queue_job_id"] = claim.job_id
-                        retract_context["_queue_attempt"] = claim.attempt
-                        await asyncio.to_thread(publication.retract, payload, retract_context)
-                        status = failure_status(classify_verification_reason(confirm_error))
-                        await self._fail_owned(
-                            claim,
-                            job_type,
-                            payload,
-                            f"confirmation_failed:{confirm_error}",
-                            status,
-                            None,
-                        )
-                        return
                 final_result = {**result, VERIFICATION_RESULT_KEY: outcome.block}
                 if trim_request:
                     try:
@@ -1921,6 +1898,45 @@ class InProcessJobQueue:
                             None,
                         )
                         return
+                # Mandatory durable confirmation (task-282 Slice 2): the
+                # artifact→revision binding is committed HERE — after the
+                # independent verification, the atomic publication and the
+                # passport/attempt checkpoint, and immediately before the
+                # COMPLETED commit — never inside the worker.  It is the LAST
+                # durable side effect before the terminal CAS, so the only exit
+                # that can leave a committed binding behind is a lost terminal
+                # CAS, which is handled by the token-scoped retraction below.  A
+                # refusal (or crash) fails the job closed and retracts this
+                # attempt, so a rejected artifact can never leave a binding.
+                if publication is not None and publication.confirm is not None:
+                    # Fence re-check at the commit boundary.  The binding is a
+                    # durable side effect, so a superseded attempt must never
+                    # commit it: ownership was last read before the (irreversible)
+                    # publication, and the re-probe window between that check and
+                    # here is the classic plain-filesystem fencing limit.  Re-read
+                    # the fence now so an attempt that lost the row can commit no
+                    # provenance and can reach no COMPLETED (it owns nothing).
+                    if not await asyncio.to_thread(
+                        self._owns_execution, claim, JobStatus.VERIFYING
+                    ):
+                        self._log_rejected(job_id, claim, JobStatus.COMPLETED)
+                        return
+                    confirm_error = await self._confirm_safely(publication, payload, result, claim)
+                    if confirm_error is not None:
+                        retract_context = dict(result)
+                        retract_context["_queue_job_id"] = claim.job_id
+                        retract_context["_queue_attempt"] = claim.attempt
+                        await asyncio.to_thread(publication.retract, payload, retract_context)
+                        status = failure_status(classify_verification_reason(confirm_error))
+                        await self._fail_owned(
+                            claim,
+                            job_type,
+                            payload,
+                            f"confirmation_failed:{confirm_error}",
+                            status,
+                            None,
+                        )
+                        return
                 if stored_passport is None:
                     committed = await asyncio.to_thread(self._mark_completed, claim, final_result)
                 else:
@@ -1928,9 +1944,15 @@ class InProcessJobQueue:
                         self._mark_completed, claim, final_result, stored_passport
                     )
                 if not committed:
-                    # Durable commit refused: we are no longer the owner.  No
-                    # notification, no filesystem action — the current owner
-                    # decides the fate of the destination.
+                    # Durable commit refused: we are no longer the owner.  The
+                    # confirmation may already have committed a durable side
+                    # effect (a takeover that landed *inside* the confirm
+                    # window), so retract exactly the row THIS attempt wrote —
+                    # scoped by the queue-minted fencing token, never a
+                    # successor's.  Then: no notification, no filesystem action;
+                    # the current owner decides the fate of the destination.
+                    if publication is not None and publication.confirm is not None:
+                        await self._retract_confirmation_safely(publication, payload, result, claim)
                     self._log_rejected(job_id, claim, JobStatus.COMPLETED)
                     return
                 await self._record(
@@ -2251,6 +2273,38 @@ class InProcessJobQueue:
             code = getattr(exc, "code", None)
             return str(code) if isinstance(code, str) and code else "confirmation_failed"
         return None
+
+    async def _retract_confirmation_safely(
+        self,
+        publication: ArtifactPublication,
+        payload: dict[str, object],
+        result: dict[str, object],
+        claim: ExecutionClaim,
+    ) -> None:
+        """Undo a committed confirmation after a lost terminal CAS (best effort).
+
+        A takeover can land *inside* the confirm window: the attempt commits its
+        durable side effect (the artifact→revision binding) and then loses the
+        ``COMPLETED`` CAS.  The committed row must not survive a non-terminal
+        attempt, so the publication's ``retract_confirmation`` is called with the
+        queue-minted identity; the implementation scopes the removal to exactly
+        the row this attempt wrote (fencing token), never a successor's.  A
+        failure here is logged, never fatal: the row is already non-terminal and
+        recoverable, and the next attempt re-runs the confirmation idempotently.
+        """
+        if publication.retract_confirmation is None:
+            return
+        retract_context = dict(result)
+        retract_context["_queue_job_id"] = claim.job_id
+        retract_context["_queue_attempt"] = claim.attempt
+        try:
+            await publication.retract_confirmation(payload, retract_context)
+        except Exception:  # noqa: BLE001 - a failed retraction must not mask the refusal
+            logger.warning(
+                "artifact publication confirmation retraction failed; "
+                "the binding is scoped to a non-terminal attempt",
+                exc_info=True,
+            )
 
     async def _verify_safely(
         self,

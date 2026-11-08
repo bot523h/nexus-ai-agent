@@ -38,8 +38,8 @@ from sqlmodel import SQLModel
 
 import nexus_ai_agent.storage.db  # noqa: F401  (registers every SQLModel table)
 
-#: Chain head — migrations/versions/20261106_artifact_revision_binding.py.
-_HEAD = "20261106artbind"
+#: Chain head — migrations/versions/20261107_artifact_binding_ownership_fence.py.
+_HEAD = "20261107bindfence"
 
 _WORKERS = 4
 _TIMEOUT_SECONDS = 180

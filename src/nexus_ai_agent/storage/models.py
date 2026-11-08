@@ -574,6 +574,12 @@ class ProjectArtifactBinding(SQLModel, table=True):
     project_id: str = Field(foreign_key="appproject.project_id", index=True)
     revision_id: str = Field(foreign_key="projectrevision.revision_id", index=True)
     job_id: str = Field(default="", index=True)
+    #: The queue fencing token (``attempt``) of the execution that committed this
+    #: binding.  0 for rows written before the token was recorded.  It lets a
+    #: lost-CAS retraction delete *only* the row this exact attempt wrote — a
+    #: superseded attempt can never delete or leave a binding owned by a
+    #: successor (task-282 Slice 2, F1 ownership fence).
+    attempt: int = Field(default=0, ge=0)
     artifact_kind: str = Field(default="binary")
     # 64-bit on PostgreSQL: a published media artifact routinely exceeds the
     # 32-bit INTEGER range (2 GiB), and SQLite's INTEGER is already 64-bit, so
