@@ -80,5 +80,6 @@
   "creative.failed.render_failed": "❌ Render başarısız oldu; daha kısa medya veya farklı parametreler deneyin.",
   "creative.failed.ffmpeg_unavailable": "❌ Render motoru bu dağıtımda kurulu değil.",
   "creative.failed.internal": "❌ Dahili bir hata oluştu; ayrıntılar ekip tarafından görülebilir.",
-  "creative.request_conflict": "♻️ Bu mesaj farklı bir medyayla zaten kuyruğa alındı. Yeni medyayı yeni bir mesaj olarak gönder."
+  "creative.request_conflict": "♻️ Bu mesaj farklı bir medyayla zaten kuyruğa alındı. Yeni medyayı yeni bir mesaj olarak gönder.",
+  "creative.failed.artifact_binding_failed": "❌ Yayımlanan çıktı, projenin tam revizyonuna bağlanamadığı için render reddedildi. Komutu tekrar gönderin."
 }

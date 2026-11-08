@@ -126,3 +126,20 @@ def test_law_r16_names_this_gate() -> None:
     assert "test_repo_truth_consistency.py" in row, (
         "law R16 must name tests/architecture/test_repo_truth_consistency.py"
     )
+
+
+def test_law_numbering_check_is_registered_and_not_a_no_op(tmp_path: Path) -> None:
+    """The law-numbering check must be wired in and must catch a real duplicate.
+
+    Guards the vacuity failure where a uniqueness check silently matches nothing:
+    a duplicated law number must produce TRUTH023, not silence.
+    """
+    assert "law-numbering" in {name for name, _ in truth.CHECKS}
+    (tmp_path / "docs" / "architecture").mkdir(parents=True)
+    (tmp_path / "docs" / "architecture" / "MODULE_MAP.md").write_text(
+        "## 3 — laws\n\n| Law | Rule | Test |\n|---|---|---|\n"
+        "| R1 | a | `test_x.py` |\n| R1 | b | `test_x.py` |\n\n**Legacy baseline.**\n",
+        encoding="utf-8",
+    )
+    report = truth.run_doctor(tmp_path, only=["law-numbering"])
+    assert "TRUTH023" in {f.code for f in report.findings}

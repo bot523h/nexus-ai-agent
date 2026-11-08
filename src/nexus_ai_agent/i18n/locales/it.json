@@ -80,5 +80,6 @@
   "creative.failed.render_failed": "❌ Rendering non riuscito; prova un media più breve o parametri diversi.",
   "creative.failed.ffmpeg_unavailable": "❌ Il motore di rendering non è installato in questo deployment.",
   "creative.failed.internal": "❌ Si è verificato un errore interno; i dettagli sono visibili al team.",
-  "creative.request_conflict": "♻️ Questo messaggio è già stato accodato con contenuti diversi. Invia i nuovi contenuti in un nuovo messaggio."
+  "creative.request_conflict": "♻️ Questo messaggio è già stato accodato con contenuti diversi. Invia i nuovi contenuti in un nuovo messaggio.",
+  "creative.failed.artifact_binding_failed": "❌ Non è stato possibile collegare l’artefatto pubblicato alla revisione esatta del progetto, quindi il rendering è stato rifiutato. Reinvia il comando."
 }

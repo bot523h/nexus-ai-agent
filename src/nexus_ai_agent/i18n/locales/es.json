@@ -80,5 +80,6 @@
   "creative.failed.render_failed": "❌ El renderizado falló; prueba con un archivo más corto u otros parámetros.",
   "creative.failed.ffmpeg_unavailable": "❌ El motor de renderizado no está instalado en este despliegue.",
   "creative.failed.internal": "❌ Ocurrió un error interno; los detalles son visibles para el equipo.",
-  "creative.request_conflict": "♻️ Este mensaje ya se encoló con otros medios. Envía los nuevos medios en un mensaje nuevo."
+  "creative.request_conflict": "♻️ Este mensaje ya se encoló con otros medios. Envía los nuevos medios en un mensaje nuevo.",
+  "creative.failed.artifact_binding_failed": "❌ No se pudo vincular el artefacto publicado a la revisión exacta del proyecto, por lo que se rechazó el render. Vuelva a enviar el comando."
 }

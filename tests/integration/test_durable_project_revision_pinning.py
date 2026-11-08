@@ -117,7 +117,14 @@ def _project(name: str = "pinned") -> Any:
     return project
 
 
-def _pinned_payload(workspace: Path, *, revision_id: str, revision_hash: str) -> dict[str, Any]:
+def _pinned_payload(
+    workspace: Path,
+    *,
+    revision_id: str,
+    revision_hash: str,
+    principal_id: str | None = None,
+    channel_binding_id: str | None = None,
+) -> dict[str, Any]:
     staged = workspace / "input.mp4"
     if not staged.exists():
         staged.write_bytes(b"placeholder-bytes")
@@ -141,9 +148,9 @@ def _pinned_payload(workspace: Path, *, revision_id: str, revision_hash: str) ->
         "lang": "en",
         "idempotency_key": "pinned:trim:1",
         "schema_version": 2,
-        "principal_id": "prn_" + "0" * 32,
+        "principal_id": principal_id or "prn_" + "0" * 32,
         "project_id": PROJECT_ID,
-        "channel_binding_id": "cbn_" + "a" * 64,
+        "channel_binding_id": channel_binding_id or "cbn_" + "a" * 64,
         "intent": intent.model_dump(mode="json"),
         "revision_id": revision_id,
         "revision_hash": revision_hash,
@@ -579,3 +586,821 @@ def test_worker_refuses_when_the_pinned_revision_is_gone_though_head_exists(
     result = asyncio.run(creative_render_job(payload))
     assert result["success"] is False
     assert result["error_code"] == "revision_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 — durable artifact → revision binding (fail-closed re-verification)
+# ---------------------------------------------------------------------------
+
+
+def _binding_store() -> Any:
+    from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
+
+    return SqlArtifactBindingStore()
+
+
+def test_bind_records_artifact_against_the_exact_revision(pin_env: Path) -> None:
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"published-bytes")
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    bound = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-1",
+            artifact_kind="video",
+            size_bytes=artifact.stat().st_size,
+        )
+    )
+    assert bound.revision_id == r1.revision_id
+    assert bound.artifact_id == artifact_id
+    # Re-verification reads the SAME bytes and re-validates the revision.
+    verified = asyncio.run(
+        bindings.verify_artifact(
+            project_id=PROJECT_ID, artifact_id=artifact_id, artifact_path=artifact
+        )
+    )
+    assert verified.revision_id == r1.revision_id
+    assert asyncio.run(bindings.list_for_revision(PROJECT_ID, r1.revision_id))[0].artifact_id == (
+        artifact_id
+    )
+
+
+def test_bind_is_idempotent_for_the_same_revision(pin_env: Path) -> None:
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"same")
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    for _ in range(2):
+        bound = asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=r1.revision_id,
+                artifact_id=artifact_id,
+                size_bytes=3,
+            )
+        )
+        assert bound.revision_id == r1.revision_id
+
+
+def test_bind_refuses_repointing_an_artifact_to_another_revision(pin_env: Path) -> None:
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    r2 = asyncio.run(_commit(store, _project("rev2"), parent=r1.revision_id))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"bytes")
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingConflict
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID, revision_id=r1.revision_id, artifact_id=artifact_id, size_bytes=5
+        )
+    )
+    with pytest.raises(ArtifactBindingConflict):
+        asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=r2.revision_id,
+                artifact_id=artifact_id,
+                size_bytes=5,
+            )
+        )
+
+
+def test_bind_refuses_an_unknown_revision(pin_env: Path) -> None:
+    store = SqlProjectRevisionStore()
+    asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"bytes")
+    from nexus_ai_agent.creative.project_state.models import RevisionNotFound
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    with pytest.raises(RevisionNotFound):
+        asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id="sha256:" + "c" * 64,
+                artifact_id=artifact_id,
+                size_bytes=5,
+            )
+        )
+
+
+def test_verify_refuses_when_the_artifact_bytes_changed(pin_env: Path) -> None:
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"original")
+    from nexus_ai_agent.creative.project_state.models import ArtifactRevisionMismatch
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID, revision_id=r1.revision_id, artifact_id=artifact_id, size_bytes=8
+        )
+    )
+    # The artifact is replaced out of band: re-verification must fail closed.
+    artifact.write_bytes(b"tampered")
+    with pytest.raises(ArtifactRevisionMismatch):
+        asyncio.run(
+            bindings.verify_artifact(
+                project_id=PROJECT_ID, artifact_id=artifact_id, artifact_path=artifact
+            )
+        )
+
+
+def test_verify_refuses_when_the_bound_revision_was_tampered(pin_env: Path) -> None:
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("Alpha"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"bytes")
+    from nexus_ai_agent.creative.project_state.models import RevisionIntegrityError
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID, revision_id=r1.revision_id, artifact_id=artifact_id, size_bytes=5
+        )
+    )
+    db = pin_env / "app.sqlite"
+    con = sqlite3.connect(str(db))
+    try:
+        con.execute(
+            "UPDATE projectrevision SET state_json=? WHERE revision_id=?",
+            (r1.state_json.replace('"Alpha"', '"EVIL"'), r1.revision_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+    with pytest.raises(RevisionIntegrityError):
+        asyncio.run(
+            bindings.verify_artifact(
+                project_id=PROJECT_ID, artifact_id=artifact_id, artifact_path=artifact
+            )
+        )
+
+
+def test_bind_refuses_cross_project_artifact_reuse(pin_env: Path) -> None:
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    other = "other-project"
+    other_project = _project("other").model_copy(update={"project_id": other})
+    from nexus_ai_agent.creative.studio.models import compute_state_hash
+
+    other_project.state_hash = compute_state_hash(other_project)
+    r_other = asyncio.run(
+        store.commit(other_project, authorized_project_id=other, expected_parent_revision_id=None)
+    )
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"bytes")
+    from nexus_ai_agent.creative.project_state.models import CrossProjectAccess
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID, revision_id=r1.revision_id, artifact_id=artifact_id, size_bytes=5
+        )
+    )
+    # The same artifact cannot be re-bound through another project.
+    with pytest.raises(CrossProjectAccess):
+        asyncio.run(
+            bindings.bind(
+                project_id=other,
+                revision_id=r_other.revision_id,
+                artifact_id=artifact_id,
+                size_bytes=5,
+            )
+        )
+    # Nor resolved through another project.
+    with pytest.raises(CrossProjectAccess):
+        asyncio.run(bindings.resolve(other, artifact_id))
+
+
+@pytest.mark.asyncio
+async def test_pinned_job_records_intent_then_confirm_commits_the_binding(
+    pin_env: Path,
+) -> None:
+    """The worker records the binding intent; the queue confirm hook commits it.
+
+    P0 fix (task-282 Slice 2 residual 1): the worker must NOT commit the binding
+    itself (it runs before the queue's independent verification + publication).
+    It records a *measured* intent; only the post-publication confirm hook
+    commits the durable row.
+    """
+    from nexus_ai_agent.creative.render_jobs import creative_render_binding_confirm
+
+    owner, binding_id = _wire_directory()
+    store = SqlProjectRevisionStore()
+    project = _project("admitted")
+    revision = await _commit(store, project, parent=None)
+    workspace = pin_env / "creative" / "creative_bind_e2e"
+    workspace.mkdir()
+    _clip(workspace / "input.mp4")
+    payload = _pinned_payload(
+        workspace,
+        revision_id=revision.revision_id,
+        revision_hash=revision.state_hash,
+        principal_id=str(owner),
+        channel_binding_id=binding_id,
+    )
+    result = await creative_render_job(payload)
+    assert result["success"] is True, result
+    intent = result["artifact_binding"]
+    assert intent["revision_id"] == revision.revision_id
+    assert intent["artifact_id"] == result["sha256"]
+    # The worker recorded ONLY an intent — nothing durable yet.
+    bindings = _binding_store()
+    from nexus_ai_agent.creative.project_state.models import ArtifactNotFound
+
+    with pytest.raises(ArtifactNotFound):
+        await bindings.resolve(PROJECT_ID, result["sha256"])
+    # The queue's post-publication confirm hook commits the durable binding.
+    await creative_render_binding_confirm(payload, {**result, "_queue_job_id": "job-42"})
+    verified = await bindings.verify_artifact(
+        project_id=PROJECT_ID,
+        artifact_id=result["sha256"],
+        artifact_path=Path(result["artifact_path"]),
+    )
+    assert verified.revision_id == revision.revision_id
+    assert verified.job_id == "job-42"
+
+
+def test_unpinned_job_publishes_no_binding(pin_env: Path) -> None:
+    """A legacy (unpinned) job has no revision to bind to — a clean no-op."""
+    workspace = pin_env / "creative" / "creative_bind_unpinned"
+    workspace.mkdir()
+    _clip(workspace / "input.mp4")
+    payload = {
+        "command": "edit",
+        "operation": "trim",
+        "args": ["0", "1"],
+        "workspace_dir": str(workspace),
+        "input_path": str(workspace / "input.mp4"),
+        "input_sha256": sha256_file(workspace / "input.mp4"),
+        "media_duration_us": SOURCE_DURATION_US,
+        "user_id": 0,
+        "chat_id": 0,
+        "lang": "en",
+        "idempotency_key": "unpinned:trim:1",
+    }
+    result = asyncio.run(creative_render_job(payload))
+    assert result["success"] is True, result
+    assert "artifact_binding" not in result
+
+
+@pytest.mark.asyncio
+async def test_binding_confirm_refuses_a_conflict_fail_closed(
+    pin_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A binding conflict in the confirm hook is a typed, fail-closed refusal."""
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingConflict
+    from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
+    from nexus_ai_agent.creative.render_jobs import (
+        CreativeRenderError,
+        creative_render_binding_confirm,
+    )
+
+    owner, binding_id = _wire_directory()
+    store = SqlProjectRevisionStore()
+    project = _project("admitted")
+    revision = await _commit(store, project, parent=None)
+    workspace = pin_env / "creative" / "creative_bind_failclosed"
+    workspace.mkdir()
+    _clip(workspace / "input.mp4")
+    payload = _pinned_payload(
+        workspace,
+        revision_id=revision.revision_id,
+        revision_hash=revision.state_hash,
+        principal_id=str(owner),
+        channel_binding_id=binding_id,
+    )
+    result = await creative_render_job(payload)
+    assert result["success"] is True, result
+
+    async def _refuse(self: Any, **kwargs: Any) -> Any:
+        raise ArtifactBindingConflict("forced for test")
+
+    monkeypatch.setattr(SqlArtifactBindingStore, "bind", _refuse)
+    with pytest.raises(CreativeRenderError) as exc:
+        await creative_render_binding_confirm(payload, {**result, "_queue_job_id": "j"})
+    assert exc.value.code == "artifact_binding_failed"
+
+
+# ---------------------------------------------------------------------------
+# P0 (D-0038 residual 1): the binding is committed by the queue's confirm hook,
+# AFTER independent verification + publication, and only for a job that will
+# become COMPLETED. A refused confirmation fails the job and leaves no binding.
+# ---------------------------------------------------------------------------
+
+
+def _queue_with_binding_publication(tmp_path: Path, revision: Any) -> InProcessJobQueue:
+    """A real queue wired with the creative_render publication (incl. confirm)."""
+    from nexus_ai_agent.creative.render_jobs import build_creative_render_publication
+    from nexus_ai_agent.jobs.verification import VerificationOutcome
+
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    queue = InProcessJobQueue(str(tmp_path / "binding_queue.sqlite3"))
+
+    async def _handler(payload: dict) -> dict:
+        workspace = Path(str(payload["workspace_dir"]))
+        workspace.mkdir(parents=True, exist_ok=True)
+        artifact = workspace / "render.mp4"
+        artifact.write_bytes(b"queue-confirm-bytes")
+        digest = sha256_file(artifact)
+        return {
+            "success": True,
+            "artifact_path": str(artifact),
+            "workspace_dir": str(workspace),
+            "sha256": digest,
+            "size_bytes": artifact.stat().st_size,
+            "artifact_kind": "binary",
+            "artifact_binding": {
+                "artifact_id": digest,
+                "project_id": PROJECT_ID,
+                "revision_id": revision.revision_id,
+                "artifact_kind": "binary",
+                "size_bytes": artifact.stat().st_size,
+                "artifact_version_id": None,
+            },
+        }
+
+    queue.register_handler("creative_render", _handler)
+    queue.register_artifact_verifier(
+        "creative_render", lambda p, r: VerificationOutcome(ok=True, reason_code=None, summary={})
+    )
+    queue.register_artifact_publication(
+        "creative_render", build_creative_render_publication(artifact_root)
+    )
+    return queue
+
+
+async def _await_terminal(
+    queue: InProcessJobQueue, job_id: str, timeout: float = 30.0
+) -> JobStatus:
+    terminal = {JobStatus.COMPLETED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    status = await queue.get_status(job_id)
+    while loop.time() < deadline and status not in terminal:
+        await asyncio.sleep(0.05)
+        status = await queue.get_status(job_id)
+    return status
+
+
+@pytest.mark.asyncio
+async def test_queue_confirm_commits_binding_after_success(pin_env: Path) -> None:
+    """A verified + published pinned job commits its binding, then COMPLETES."""
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("admitted"), parent=None)
+    queue = _queue_with_binding_publication(pin_env, revision)
+
+    job_id = await queue.enqueue(
+        job_type="creative_render",
+        idempotency_key="confirm-ok-1",
+        payload={"workspace_dir": str(pin_env / "ws_confirm_ok")},
+    )
+    assert await _await_terminal(queue, job_id) is JobStatus.COMPLETED
+    result = await queue.get_result(job_id)
+    assert result is not None and result["success"] is True
+    artifact_id = result["artifact_binding"]["artifact_id"]
+    binding = await _binding_store().resolve(PROJECT_ID, artifact_id)
+    assert binding.revision_id == revision.revision_id
+    assert binding.job_id == job_id
+
+
+@pytest.mark.asyncio
+async def test_queue_confirm_refusal_fails_the_job_without_a_binding(
+    pin_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused confirmation fails the job closed and leaves NO durable binding."""
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingConflict
+    from nexus_ai_agent.creative.project_state.store import (
+        ArtifactNotFound,
+        SqlArtifactBindingStore,
+    )
+
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("admitted"), parent=None)
+    queue = _queue_with_binding_publication(pin_env, revision)
+
+    async def _refuse(self: Any, **kwargs: Any) -> Any:
+        raise ArtifactBindingConflict("forced for test")
+
+    monkeypatch.setattr(SqlArtifactBindingStore, "bind", _refuse)
+    job_id = await queue.enqueue(
+        job_type="creative_render",
+        idempotency_key="confirm-refuse-1",
+        payload={"workspace_dir": str(pin_env / "ws_confirm_refuse")},
+    )
+    status = await _await_terminal(queue, job_id)
+    assert status in (JobStatus.FAILED_TERMINAL, JobStatus.FAILED_RETRYABLE)
+    # No binding row exists for the artifact this attempt measured.
+    from nexus_ai_agent.creative.project_state.store import content_address_of_bytes
+
+    artifact_id = content_address_of_bytes(b"queue-confirm-bytes")
+    with pytest.raises(ArtifactNotFound):
+        await _binding_store().resolve(PROJECT_ID, artifact_id)
+    # And the refused attempt's published bytes were retracted, not left behind.
+    published = pin_env / "artifacts" / "published" / job_id / "render.mp4"
+    assert not published.exists()
+
+
+@pytest.mark.asyncio
+async def test_queue_confirm_refuses_a_superseded_attempt_at_the_commit_boundary(
+    pin_env: Path,
+) -> None:
+    """A superseded attempt commits no binding: the fence is re-read before confirm.
+
+    Deterministic fault injection: the verifier bumps the row's fencing token
+    (simulating a takeover) during the *re-probe* window, i.e. after the
+    pre-publication fence read and before the confirmation commit.  The queue
+    must re-read ownership at the commit boundary and refuse to write any
+    durable binding, so a stale execution can never commit provenance.
+    """
+    import sqlite3 as _sqlite3
+
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.creative.project_state.store import (
+        ArtifactNotFound,
+        content_address_of_bytes,
+    )
+    from nexus_ai_agent.creative.render_jobs import build_creative_render_publication
+    from nexus_ai_agent.jobs.verification import VerificationOutcome
+
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("admitted"), parent=None)
+
+    artifact_root = pin_env / "artifacts"
+    artifact_root.mkdir()
+    queue_path = pin_env / "fence_queue.sqlite3"
+    queue = InProcessJobQueue(str(queue_path))
+
+    async def _handler(payload: dict) -> dict:
+        workspace = Path(str(payload["workspace_dir"]))
+        workspace.mkdir(parents=True, exist_ok=True)
+        artifact = workspace / "render.mp4"
+        artifact.write_bytes(b"queue-confirm-bytes")
+        digest = sha256_file(artifact)
+        return {
+            "success": True,
+            "artifact_path": str(artifact),
+            "workspace_dir": str(workspace),
+            "sha256": digest,
+            "size_bytes": artifact.stat().st_size,
+            "artifact_kind": "binary",
+            "artifact_binding": {
+                "artifact_id": digest,
+                "project_id": PROJECT_ID,
+                "revision_id": revision.revision_id,
+                "artifact_kind": "binary",
+                "size_bytes": artifact.stat().st_size,
+                "artifact_version_id": None,
+            },
+        }
+
+    def _supersede() -> None:
+        connection = _sqlite3.connect(str(queue_path), timeout=30)
+        try:
+            connection.execute(
+                "UPDATE nexus_job_queue SET attempt = attempt + 1 "
+                "WHERE job_type = 'creative_render'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    calls = {"n": 0}
+
+    def _verifier(payload: dict, result: dict) -> VerificationOutcome:
+        calls["n"] += 1
+        if calls["n"] == 2:  # the re-probe, after publication, before confirm
+            _supersede()
+        return VerificationOutcome(ok=True, reason_code=None, summary={})
+
+    queue.register_handler("creative_render", _handler)
+    queue.register_artifact_verifier("creative_render", _verifier)
+    queue.register_artifact_publication(
+        "creative_render", build_creative_render_publication(artifact_root)
+    )
+    job_id = await queue.enqueue(
+        job_type="creative_render",
+        idempotency_key="fence-supersede-1",
+        payload={"workspace_dir": str(pin_env / "ws_fence")},
+    )
+
+    # Publication is the step immediately before the confirmation boundary.
+    published = artifact_root / "published" / job_id / "render.mp4"
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 20.0
+    while loop.time() < deadline and not published.exists():
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.5)  # let the (refused) confirm boundary settle
+
+    # The superseded attempt owns nothing: it reached no COMPLETED and wrote no
+    # durable binding.  (The bytes it published are the successor's to reconcile.)
+    assert await queue.get_status(job_id) is not JobStatus.COMPLETED
+    artifact_id = content_address_of_bytes(b"queue-confirm-bytes")
+    with pytest.raises(ArtifactNotFound):
+        await _binding_store().resolve(PROJECT_ID, artifact_id)
+
+
+@pytest.mark.asyncio
+async def test_crash_after_confirm_before_completed_recovers_honestly(pin_env: Path) -> None:
+    """Crash after the binding commit but before COMPLETED: the documented model.
+
+    Deterministic fault injection: ``_mark_completed`` is made to crash (a
+    non-``Exception`` base so it is a genuine process death, not a handled
+    failure) exactly once, after the confirmation committed the binding.  The
+    row stays ``verifying`` with a queue-owned heartbeat, so startup recovery
+    (``resume_pending``) takes it over and re-runs the job.  The consistency
+    model is honest:
+
+    * the binding is a durable record of bytes that WERE published — it is
+      append-only history and is not deleted by the later failure;
+    * the job is NOT COMPLETED (no false success);
+    * recovery re-runs the attempt; here the re-run fails, and the final state
+      is a failure — the surviving binding never claims a completed job.
+    """
+
+    class _SimulatedCrash(BaseException):
+        """A process death: not an ``Exception``, so no handler swallows it."""
+
+    from nexus_ai_agent.creative.project_state.store import content_address_of_bytes
+
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("admitted"), parent=None)
+    queue = _queue_with_binding_publication(pin_env, revision)
+
+    orig_mark_completed = queue._mark_completed
+    crashed = {"done": False}
+
+    def _crash_once(*args: Any, **kwargs: Any) -> bool:
+        if not crashed["done"]:
+            crashed["done"] = True
+            raise _SimulatedCrash("simulated crash after confirm, before COMPLETED")
+        return orig_mark_completed(*args, **kwargs)
+
+    # Second run fails the job (the retry after the crash).
+    calls = {"n": 0}
+    base_handler = queue._handlers["creative_render"]
+
+    async def _flaky(payload: dict) -> dict:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise RuntimeError("retry after crash fails")
+        return await base_handler(payload)
+
+    queue.register_handler("creative_render", _flaky)
+    queue._mark_completed = _crash_once  # type: ignore[method-assign]
+
+    job_id = await queue.enqueue(
+        job_type="creative_render",
+        idempotency_key="crash-after-confirm-1",
+        payload={"workspace_dir": str(pin_env / "ws_crash")},
+    )
+    task = queue._tasks.get(job_id)
+    assert task is not None
+    try:
+        await asyncio.wait_for(task, timeout=30)
+    except _SimulatedCrash:
+        pass
+    assert crashed["done"] is True
+
+    # The confirmation committed the binding before the crash; the job is not
+    # COMPLETED and the published bytes remain.
+    artifact_id = content_address_of_bytes(b"queue-confirm-bytes")
+    binding = await _binding_store().resolve(PROJECT_ID, artifact_id)
+    assert binding.revision_id == revision.revision_id
+    assert await queue.get_status(job_id) is not JobStatus.COMPLETED
+    published = pin_env / "artifacts" / "published" / job_id / "render.mp4"
+    assert published.exists()
+
+    # Startup recovery takes the unfinished row over and re-runs it.
+    reclaimed = await queue.resume_pending()
+    assert job_id in reclaimed
+    assert await _await_terminal(queue, job_id) in (
+        JobStatus.FAILED_TERMINAL,
+        JobStatus.FAILED_RETRYABLE,
+    )
+    # The binding survives as honest history (append-only); it never claims a
+    # completed job, because the job is not completed.
+    still = await _binding_store().resolve(PROJECT_ID, artifact_id)
+    assert still.revision_id == revision.revision_id
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 hardening (PR #319 review threads): identity, re-measure, metadata
+# ---------------------------------------------------------------------------
+
+
+def test_bind_refuses_a_non_hex_content_address(pin_env: Path) -> None:
+    """A same-length non-hex digest can never match a file: refuse it up front."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingError
+
+    bindings = _binding_store()
+    with pytest.raises(ArtifactBindingError):
+        asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=r1.revision_id,
+                artifact_id="sha256:" + "z" * 64,  # right length, not hex
+                size_bytes=1,
+            )
+        )
+
+
+def test_verify_artifact_missing_file_is_a_typed_refusal(pin_env: Path) -> None:
+    """A vanished artifact is a typed mismatch, never a raw OSError."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"bytes")
+    from nexus_ai_agent.creative.project_state.models import ArtifactRevisionMismatch
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID, revision_id=r1.revision_id, artifact_id=artifact_id, size_bytes=5
+        )
+    )
+    artifact.unlink()
+    with pytest.raises(ArtifactRevisionMismatch):
+        asyncio.run(
+            bindings.verify_artifact(
+                project_id=PROJECT_ID, artifact_id=artifact_id, artifact_path=artifact
+            )
+        )
+
+
+def test_bind_records_and_returns_the_asset_version_link(pin_env: Path) -> None:
+    """The binding carries the immutable Asset Library version when supplied."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"bytes")
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    bound = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            size_bytes=5,
+            artifact_version_id="ver-123",
+        )
+    )
+    assert bound.artifact_version_id == "ver-123"
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).artifact_version_id == "ver-123"
+
+
+def test_bind_replay_does_not_rewrite_stored_metadata(pin_env: Path) -> None:
+    """A same-revision replay is a read-only no-op; the original row is kept."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact = pin_env / "art.bin"
+    artifact.write_bytes(b"bytes")
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+    first = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="first",
+            artifact_kind="video",
+            size_bytes=100,
+        )
+    )
+    # Replay with DIFFERENT metadata: the stored row must be unchanged.
+    replay = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="second",
+            artifact_kind="audio",
+            size_bytes=999,
+        )
+    )
+    assert replay.job_id == "first"
+    assert replay.artifact_kind == "video"
+    assert replay.size_bytes == 100
+    assert replay.created_at == first.created_at
+
+
+@pytest.mark.asyncio
+async def test_pinned_job_binds_to_the_admitted_revision_not_the_moved_head(
+    pin_env: Path,
+) -> None:
+    """The binding follows the pinned revision even when the head has moved on."""
+    owner, binding_id = _wire_directory()
+    store = SqlProjectRevisionStore()
+    admitted = await _commit(store, _project("admitted"), parent=None)
+    # The head moves to a newer revision BEFORE the pinned job publishes.
+    await _commit(store, _project("moved-head"), parent=admitted.revision_id)
+    workspace = pin_env / "creative" / "creative_bind_moved_head"
+    workspace.mkdir()
+    _clip(workspace / "input.mp4")
+    payload = _pinned_payload(
+        workspace,
+        revision_id=admitted.revision_id,
+        revision_hash=admitted.state_hash,
+        principal_id=str(owner),
+        channel_binding_id=binding_id,
+    )
+    result = await creative_render_job(payload)
+    assert result["success"] is True, result
+    assert result["artifact_binding"]["revision_id"] == admitted.revision_id
+
+
+def test_bind_published_artifact_refuses_when_the_reported_digest_is_stale(
+    pin_env: Path,
+) -> None:
+    """The digest is re-measured at bind time; a stale report is refused.
+
+    The pinned revision is real and valid, so the ONLY reason for refusal is the
+    digest re-measurement — removing that guard would bind successfully.
+    """
+    from nexus_ai_agent.creative.render_jobs import (
+        CreativeRenderError,
+        _bind_published_artifact,
+    )
+
+    store = SqlProjectRevisionStore()
+    revision = asyncio.run(_commit(store, _project("stale-digest"), parent=None))
+    workspace = pin_env / "creative" / "stale_digest"
+    workspace.mkdir()
+    artifact = workspace / "out.bin"
+    artifact.write_bytes(b"the-actual-published-bytes")
+    data = CreativeRenderPayload.model_construct(
+        command="edit",
+        operation="trim",
+        args=[],
+        workspace_dir=str(workspace),
+        idempotency_key="stale:1",
+        schema_version=2,
+        project_id=PROJECT_ID,
+        revision_id=revision.revision_id,
+        revision_hash=revision.state_hash,
+    )
+    result = {
+        "artifact_path": str(artifact),
+        "sha256": "sha256:" + "c" * 64,  # does NOT match the file's real bytes
+        "size_bytes": 26,
+    }
+    with pytest.raises(CreativeRenderError) as exc:
+        asyncio.run(_bind_published_artifact(data, result))
+    assert exc.value.code == "artifact_binding_failed"
+
+
+def test_bind_published_artifact_refuses_missing_artifact_metadata(pin_env: Path) -> None:
+    """A pinned success without measurable artifact metadata is refused."""
+    from nexus_ai_agent.creative.render_jobs import (
+        CreativeRenderError,
+        _bind_published_artifact,
+    )
+
+    data = CreativeRenderPayload.model_construct(
+        command="edit",
+        operation="trim",
+        args=[],
+        workspace_dir=str(pin_env),
+        idempotency_key="nometa:1",
+        schema_version=2,
+        project_id=PROJECT_ID,
+        revision_id="sha256:" + "a" * 64,
+        revision_hash="sha256:" + "b" * 64,
+    )
+    with pytest.raises(CreativeRenderError) as exc:
+        asyncio.run(_bind_published_artifact(data, {"success": True}))
+    assert exc.value.code == "artifact_binding_failed"
