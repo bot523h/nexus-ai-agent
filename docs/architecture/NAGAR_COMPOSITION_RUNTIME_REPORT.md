@@ -405,7 +405,7 @@ unknown_categories         : model, model_weights, dataset, input_asset,
 
 | فایل | نتیجه |
 |---|---|
-| `tests/unit/test_composition_compiler.py` | **۲۶ passed** |
+| `tests/unit/test_composition_compiler.py` | **۲۷ passed** |
 | `tests/unit/test_composition_contracts.py` | **۲۸ passed** |
 | `tests/unit/test_composition_license.py` | **۲۱ passed** |
 | `tests/unit/test_composition_proof.py` | **۲۰ passed** |
@@ -418,7 +418,7 @@ unknown_categories         : model, model_weights, dataset, input_asset,
 | `tests/architecture/test_composition_boundary.py` | **۱۰ passed** |
 | `tests/integration/test_composition_canonical_e2e.py` | **۶ passed** |
 | `tests/integration/test_composition_durable_project.py` | **۱۰ passed** |
-| **جمع** | **۲۴۲ passed** |
+| **جمع** | **۲۴۳ passed** |
 
 ### ۹.۲ پوشش ۲۴ رفتار خواسته‌شده
 
@@ -470,8 +470,22 @@ unknown_categories         : model, model_weights, dataset, input_asset,
 | تغییر `plan_to_dict` از شکل wire به شکل `model_dump` | آزمون گردش‌ونگاشت **قرمز** شد | `tests/unit/test_composition_runtime.py` |
 | جایگزینی `subprocess.run` با `Popen` + گروه فرایند | گیت معماری «فقط یک جای اجرا» **قرمز** شد | گیت به‌جای دور زدن، به‌روزرسانی و **تقویت** شد (بررسی `start_new_session` و `killpg`) |
 
-مستندسازی جهش کامل (مانند `scripts/*_mutations.py` مخزن) برای این بسته **انجام نشده**
-⇒ `DEFERRED`، و به‌صراحت در §۱۱ فهرست شده است.
+جهش‌یابی سازمان‌یافته برای این بسته **انجام شد** و در CI اجرا می‌شود:
+`scripts/durable_project_state_mutations.py` سه جهشِ تازهٔ خط ترکیب را اضافه کرد
+(۲۵ ← **۲۸**)، هر سه **کشته** شدند، و دو گاردِ خودِ هارنس تقویت شد:
+
+| جهش تازه | هدف | نتیجه |
+|---|---|---|
+| `composition_pin_hash_check_removed` | حذف مقایسهٔ `revision_hash` با `state_hash` در `_resolve_pinned_project` | **کشته** — `test_a_hash_mismatched_pin_is_refused` قرمز می‌شود |
+| `composition_binding_intents_skipped` | حذف ثبت `artifact_bindings` برای سطر pin‌شده | **کشته** — `test_confirm_binds_each_artifact_to_the_pinned_revision` قرمز می‌شود |
+| `composition_published_bytes_not_remeasured` | حذف بازاندازه‌گیری بایت‌های منتشرشده در هوک تأیید | **کشته** — `test_confirm_refuses_when_the_published_bytes_changed` قرمز می‌شود |
+
+دو اصلاح در خودِ هارنس (که کمپین را صادق‌تر کرد):
+یک anchor **غیریکتا** (`cross_project_read_check_removed` سه بار رخ می‌داد) پیدا و
+یگانه شد — وگرنه `str.replace(old, new, 1)` فقط نخستین محل را می‌بست و جهش
+می‌توانست دروغین «کشته» شود؛ و `run_tests` اکنون `PYTHONPATH` را به درختِ
+زیرِ جهش pin می‌کند (GOV-1) و `no:cacheprovider` می‌دهد. سه گاردِ واحد در
+`tests/unit/test_mutation_harness_anchors.py` این‌ها را ماشینی نگه می‌دارند.
 
 ### ۹.۵ کل مجموعهٔ تست مخزن
 
@@ -592,7 +606,7 @@ flowchart TD
 | اثبات یکپارچگی در برابر معنایی | `VERIFIED` | ۲۰ + ۱۱ آزمون؛ نقص واقعی grayscale کشف و رفع شد |
 | E2E کانونی Image→Image و Image→Video | `VERIFIED` | ۶ آزمون با صف، کارگر ثبت‌شده و FFmpeg واقعی |
 | E2E Video→Video و Audio→Video | `DEFERRED` | هیچ قابلیت متناظری در رجیستری کانونی نیست؛ mock نشد |
-| جهش‌یابی سازمان‌یافته | `DEFERRED` | سه جهش دستی و اثبات‌شده اجرا شد؛ ابزار جهش مخزن برای این بسته ساخته نشد |
+| جهش‌یابی سازمان‌یافته | `VERIFIED` | کمپین `scripts/durable_project_state_mutations.py` اکنون **۲۸ جهش** دارد (۲۵ + ۳ جهش تازهٔ Slice-2 برای خط ترکیب)؛ **۲۸/۲۸ کشته** و در CI اجرا می‌شود. سه جهش دستی خط ترکیب هم در §۹.۴ ثبت شد |
 | اسناد | `VERIFIED` | گیت ۱۱۷ تستی سبز |
 
 ### ۱۱.۲ بازبینی خودکار بیرونی: هفت یافته، هفت رفع
@@ -619,9 +633,10 @@ flowchart TD
 
 بازبین همان PR را دوباره اسکن کرد و ۳۰ یافتهٔ محتوایی ثبت کرد؛ هفتِ آن‌ها **همان
 هفت یافتهٔ قبلی** بودند (جدول بالا) و ۲۳ یافته تازه بود. دو مورد هم مثل قبل
-مثبت‌کاذبِ opengrep روی نام کلاس‌های استثنا هستند. هر ۲۳ یافته بررسی شد؛ **۲۲ مورد
-رفع شد** و یک مورد (`Returned assets are not durable`) فقط **جزئی** رفع شده و در
-پایین صادقانه علامت‌گذاری شده است.
+مثبت‌کاذبِ opengrep روی نام کلاس‌های استثنا هستند. هر ۲۳ یافته بررسی شد؛ **۲۳ مورد
+رفع شد** (شامل مورد `Returned assets are not durable` که در ادامهٔ همین شاخه با
+زیرساخت Slice-2 بسته شد و سه آزمون جاودانگی آن را اثبات می‌کنند). یک **باقی‌ماندهٔ
+صادقانهٔ کوچک** (سطرهای بی‌pin و `artifact_version_id`) در پایین علامت‌گذاری شده است.
 
 | # | شدت | یافته | رفع (نماد دقیق) | آزمون اثبات‌کننده |
 |---|---|---|---|---|
@@ -633,7 +648,7 @@ flowchart TD
 | ۶ | 🟠 بالا | خروجی نامعتبر بعد از اجرا رد می‌شد | `compiler.py::_check_expected_outputs(plan, output_contracts)` در **زمان کامپایل** گره و **پورت خروجی** را الزام می‌کند (`unknown_binding`) | `test_an_expected_output_must_name_a_real_port` |
 | ۷ | 🟠 بالا | رسانهٔ نامعتبر تأیید می‌شد | `verifier.py::_semantic_pass` بدون `media_contract` حکم نمی‌دهد (`contract_missing`)؛ `proof.py::verify_video_semantics` اکنون duration ± بازه، codec و pixel format را هم می‌سنجد | `test_a_media_claim_without_a_contract_is_not_verified`، `test_a_claim_that_breaks_the_promised_codec_is_not_verified` |
 | ۸ | 🟠 بالا | کار رسانه‌ای صف را قفل می‌کرد | `job.py`: `await asyncio.to_thread(executor.execute, …, expected_digests=…)` | کل E2E روی `InProcessJobQueue` (heartbeat و وضعیت در طول اجرا خوانده می‌شود) |
-| ۹ | 🟠 بالا | دارایی‌های برگشتی پایدار نبودند | **جزئی**: `CompositionExecutor(project_id=…)` + `authorizer` → سطر می‌تواند زیر **هویت پروژهٔ پایدار** خودش اجرا شود و عضویت با `SQLApplicationDirectory` سنجیده شود؛ اما وضعیت پروژه هنوز در حافظه است (مخزن، repository پایدار پروژه ندارد) → **باقی‌مانده، علامت‌گذاری‌شده** | `test_a_row_naming_a_durable_project_is_authorized_by_the_directory` |
+| ۹ | 🟠 بالا | دارایی‌های برگشتی پایدار نبودند | **رفع‌شده برای سطرهای pin‌شده (Slice 2، همین شاخه)**: `CompositionJobPayload` اکنون `revision_id`/`revision_hash` دارد؛ `job.py::_resolve_pinned_project` دقیقاً همان revision جاودان را می‌خوانَد (هرگز head)، `job.py::_binding_intents` نشانی محتوایی **اندازه‌گیری‌شدهٔ** هر خروجی را ثبت می‌کند و هوک تأیید صف `composition_render_binding_confirm` (ثبت‌شده در `default_artifact_publications()` برای `creative_composition`) آن را در `SqlArtifactBindingStore` جاودان می‌کند. باقی‌ماندهٔ صادقانه: سطرهای **بی‌pin** هنوز روی پروژهٔ درون‌حافظه اجرا می‌شوند و جدول asset آن پروژه جاودان نمی‌شود (فقط خودِ artifact به revision گره می‌خورد) | `test_the_pin_selects_the_revision_not_the_head`، `test_confirm_binds_each_artifact_to_the_pinned_revision`، `test_the_binding_survives_a_process_restart` |
 | ۱۰ | 🟠 بالا | خروجی‌های درخواستی ناپدید می‌شدند | `job.py::_artifact_claims` برای **هر** خروجی مورد انتظار یک claim با شواهد خودش می‌سازد؛ نتیجه هم `outputs` را برمی‌گرداند | `test_every_expected_output_is_claimed_not_only_the_last` |
 | ۱۱ | 🟠 بالا | طرح‌ها منابع بی‌کران مصرف می‌کردند | `compiler.py`: `MAX_NODES_PER_PLAN=16`، `MAX_TOTAL_DISK_MB=8192`، `MAX_PEAK_RAM_MB=4096` در `_check_quota` | `test_a_plan_over_the_node_quota_is_refused`، `test_a_plan_over_the_disk_quota_is_refused` |
 | ۱۲ | 🟠 بالا | نسخهٔ پشتیبانی‌نشدهٔ طرح اجرا می‌شد | `compiler.py` نسخهٔ `plan_version` را می‌سنجد و رد می‌کند | `test_a_plan_authored_for_another_ir_version_is_refused` |
@@ -642,18 +657,24 @@ flowchart TD
 | ۱۵ | 🟠 بالا | encoder درخواستی نادیده گرفته می‌شد | `packs/media/operations.py`: `encoder: Literal["libx264"]` (جایگزینی خاموش ممکن نیست) | `test_the_video_input_refuses_another_encoder` |
 | ۱۶ | 🟡 متوسط | نوع ورودی خارجی اشتباه دسته‌بندی می‌شد | `contracts.py::ExternalInput`: `contract` از `media_kind` مشتق می‌شود (validator) | `test_an_external_input_contract_follows_its_declared_kind` |
 | ۱۷ | 🟡 متوسط | درخواست resize بعد از شروع فرایند شکست می‌خورد | `operations.py::_DerivedImageInput`: `ge=2, le=8192` + `model_validator` برای بودجهٔ ۳۳٬۱۷۷٬۶۰۰ پیکسل (۸K) | `test_the_resize_input_refuses_a_geometry_beyond_the_still_budget` |
-| ۱۸ | 🟡 متوسط | ورودی‌های رسانه‌ای اضافی نادیده گرفته می‌شدند | `compiler.py::_check_bindings` چند-ورودی‌بودن (fan-in) را رد می‌کند | کد مسیر `_check_bindings`؛ **آزمون ندارد** — رجیستری زندهٔ امروز عملیاتی با دو ورودی رسانه‌ای ندارد، پس این شاخه جز با spec ساختگی قابل اجرا نیست (صادقانه ثبت می‌شود) |
+| ۱۸ | 🟡 متوسط | ورودی‌های رسانه‌ای اضافی نادیده گرفته می‌شدند | `compiler.py::_check_bindings` چند-ورودی‌بودن (fan-in) را رد می‌کند | `test_an_operation_with_two_media_inputs_is_refused_before_any_execution` — یک OperationSpec **سنتزی** روی یک رجیستری خصوصی ثبت می‌شود، `subprocess` مسموم می‌شود و ثابت می‌کند رد **پیش از dispatch** رخ می‌دهد |
 | ۱۹ | 🟡 متوسط | دستورهای تکراری با هم تعارض داشتند | `executor.py::_run_id` (nonce) در `idempotency_key` هر گره | `test_a_second_run_on_the_same_bus_is_a_new_execution` |
 | ۲۰ | 🟡 متوسط | lineage ترتیب اشتباه گزارش می‌کرد | `executor.py::_collect_artifacts` از `compiled.order` پیروی می‌کند | `test_the_lineage_names_every_node_and_its_capability_version` + assert ترتیب در E2E |
 | ۲۱ | 🟡 متوسط | فیلدهای بدشکلِ طرح بی‌صدا دور ریخته می‌شدند | `job.py`: شکل سیم **بسته** (`PLAN_KEYS`/`NODE_KEYS`/`EXTERNAL_INPUT_KEYS`/`EXPECTED_OUTPUT_KEYS` + `_closed()`) | `test_a_wire_plan_with_an_unknown_key_is_refused` |
 | ۲۲ | 🟡 متوسط | آزمون grayscale رنگ‌دار را می‌پذیرفت | آزمون اکنون **پیکسل‌به‌پیکسل** برابری کانال‌ها را می‌سنجد (`channel.tobytes()`)، نه extrema را | `test_grayscale_produces_a_luma_only_png` (و همان ادعا در E2E) |
 | ۲۳ | 🟡 متوسط | گزارش Gate 0 در فهرست اسناد نبود | یک ردیف در `docs/README.md` به `../LIVE_TRUTH_REPORT.md` | `tests/unit/test_docs_integrity.py` (۱۱۷ سبز) |
 
-> **باقی‌ماندهٔ صادقانه (۱ مورد از ۲۳):** «دارایی‌های برگشتی پایدار نیستند».
-> سطر می‌تواند زیر هویت پروژهٔ پایدار اجرا شود و **عضویت** واقعاً سنجیده می‌شود،
-> اما وضعیت پروژه (دارایی‌ها، receiptها) هنوز در حافظه نگه داشته می‌شود، چون مخزن
-> repository پایدارِ پروژه ندارد. رفع کامل نیازمند یک لایهٔ persistence است که در
-> دامنهٔ این شاخه نیست. این مورد **رفع‌نشده** اعلام می‌شود، نه «رفع‌شده».
+> **وضعیت یافتهٔ ۹ (دارایی‌های برگشتی) — به‌روزشده در همین شاخه:** مورد اصلی
+> **رفع شد** برای سطرهای دارای pin: `project_id + revision_id + revision_hash`،
+> اجرای دقیقِ revision جاودان، و گره‌زدن جاودانِ هر خروجی به آن revision از طریق
+> هوک تأیید صف (پس از verification/publication و پیش از COMPLETED). سه آزمون این را
+> روی سه سطح اثبات می‌کنند: انتخاب (pin در برابر head)، گره‌زدن، و بقا پس از
+> **ری‌استارت فرایند** (تفسیرگر تازه binding را از DB می‌خواند).
+> **باقی‌ماندهٔ صادقانه:** سطرهای **بی‌pin** (سازگاری با گذشته) هنوز روی یک پروژهٔ
+> درون‌حافظه اجرا می‌شوند؛ خودِ artifact جاودان گره می‌خورد اما جدول asset آن پروژهٔ
+> موقت ذخیره نمی‌شود. و `artifact_version_id` (پیوند به نسخهٔ Asset Library) برای
+> این خط پر نمی‌شود، چون executor نسخهٔ asset را برنمی‌گرداند؛ این یک باقی‌ماندهٔ
+> **علامت‌گذاری‌شده** است، نه ادعای رفع‌شده.
 
 > نکتهٔ مهم دربارهٔ یافتهٔ ۲: نخستین رفع من دروازهٔ پک را داخل خودِ executor صدا زد.
 > گیت معماری `test_only_the_bus_invokes_the_pack_lifecycle_gate` (که با اسکن AST
@@ -670,8 +691,9 @@ flowchart TD
    *به‌عنوان کدِ غریبه* بررسی کرده‌اند و در طول کار چند ایراد واقعی گرفته‌اند؛
 2. **یک بازبین خودکار بیرونی (Sourcery)** روی PR #327 در دو موج **۳۰ یافتهٔ محتوایی
    متمایز** ثبت کرد (۷ در موج اول و ۳۰ در موج دوم که ۷ موردشان تکرار موج اول بود):
-   **۲۹ مورد رفع شد** و **۱ مورد** (`Returned assets are not durable`) جزئی باقی
-   مانده است.
+   **۲۹ مورد رفع شد** در آن زمان و مورد سی‌ام (`Returned assets are not durable`)
+   در ادامهٔ همین شاخه با زیرساخت Slice-2 بسته شد — تنها یک باقی‌ماندهٔ صادقانهٔ کوچک
+   (سطرهای بی‌pin و `artifact_version_id`) باز مانده است.
 
 هیچ‌کدام از این دو **بازبینی انسانی مستقل** نیست: اولی مالِ مخزن است و دومی یک ابزار
 خودکار. این سند مدعی «بازبینی مستقل» نیست. `DEFERRED` — نیازمند بازبینندهٔ انسانی که
