@@ -11,13 +11,14 @@ Stage 1 change on `nagar-one-slice2-artifact-revision-binding` (PR #319).
 | Project identity | VERIFIED | `storage/models.py::AppProject`; `creative/studio/models.py::Project` | `tests/unit/test_durable_project_state.py` | — |
 | ProjectRevision (durable) | VERIFIED | `creative/project_state/store.py::SqlProjectRevisionStore`; `storage/models.py::ProjectRevision` | `tests/integration/test_durable_project_restart.py` (new process rebuilds identical id/hash) | — |
 | WorkingRevision / AcceptedRevision | VERIFIED | `ProjectRevisionHead` (single CAS head) | `tests/integration/test_durable_project_concurrency.py` (one winner) | — |
-| Revision CAS + durable persistence | VERIFIED | `store.py::commit` (conditional UPDATE) | same + `durable_project_state_mutations.py` (19/19) | — |
+| Revision CAS + durable persistence | VERIFIED | `store.py::commit` (conditional UPDATE) | same + `durable_project_state_mutations.py` (28/28) | — |
 | Asset Library (ingest/blob/identity) | VERIFIED | `creative/assets/*` | `tests/…/test_asset_library_*`; `scripts/asset_library_mutations.py` | — |
 | AssetVersion (immutable, measured) | VERIFIED | `assets/models.py::AssetVersion`; `storage/models.py::AssetVersion` | asset-library suite | — |
 | Revision ↔ AssetVersion binding (published artifact) | VERIFIED (this mission) | `project_state/store.py::SqlArtifactBindingStore`; `storage/models.py::ProjectArtifactBinding` | `tests/integration/test_durable_project_revision_pinning.py` (bind/re-verify/repoint/cross-project/fail-closed); 4 new mutants killed | AssetVersion *row* binding is by measured `sha256`; a later slice may pin the `version_id` explicitly |
 | Creative Intent (typed) | VERIFIED (narrow) | `application/creative_intent.py::CanonicalCreativeIntent` | `tests/…/test_canonical_creative_execution.py` | Trim-only; broader op coverage is later |
 | Typed Creative IR / AST | VERIFIED (studio-local) | `creative/spine/models.py`; `creative/rendering/ir.py` | spine + render-lane tests | — |
-| Compiler / Command DAG | VERIFIED | `creative/spine/compiler.py`; `creative/rendering/compiler.py` | compiler tests | — |
+| Compiler / Command DAG | VERIFIED | `creative/spine/compiler.py`; `creative/rendering/compiler.py`; `creative/composition/compiler.py` (typed media DAG) | compiler tests; composition compiler suite (27) | Composition compiler owns DAG logic only; registry/queue/bus/authority stay canonical (ADR 0014) |
+| Composition lane (typed media DAG → canonical runtime) | VERIFIED | `creative/composition/{compiler,executor,verifier,job}.py`; `packs/media/operations.py` | `tests/integration/test_composition_canonical_e2e.py` (real queue + worker + FFmpeg); `test_composition_durable_project.py` (pin/binding/restart); 3 composition mutants killed | Media fan-in refused pre-dispatch; 8 OS-level controls `BLOCKED` by permissions |
 | Policy / Authority boundary | VERIFIED | `creative/studio/bus.py::CommandBus.dispatch` (9-stage fail-closed) | `tests/…/test_command_bus_*` | — |
 | CommandBus (single write path) | VERIFIED | `creative/studio/bus.py` | bus suite | — |
 | Job queue + attempt fencing | VERIFIED | `adapters/in_process_job_queue.py` | queue suite; `scripts/queue_ownership_mutations.py` | — |
