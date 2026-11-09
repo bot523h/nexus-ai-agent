@@ -4,32 +4,32 @@
   "failure_rate": 0.0,
   "node_count": 3,
   "compile": {
-    "mean_ms": 63.804,
-    "median_ms": 60.662,
-    "p95_ms": 80.507,
-    "min_ms": 56.786,
-    "max_ms": 80.507
+    "mean_ms": 76.106,
+    "median_ms": 69.468,
+    "p95_ms": 106.167,
+    "min_ms": 65.648,
+    "max_ms": 106.167
   },
   "execute": {
-    "mean_ms": 524.06,
-    "median_ms": 502.297,
-    "p95_ms": 711.427,
-    "min_ms": 492.219,
-    "max_ms": 711.427
+    "mean_ms": 597.672,
+    "median_ms": 574.774,
+    "p95_ms": 767.01,
+    "min_ms": 556.969,
+    "max_ms": 767.01
   },
   "verify": {
-    "mean_ms": 50.951,
-    "median_ms": 49.619,
-    "p95_ms": 68.441,
-    "min_ms": 46.525,
-    "max_ms": 68.441
+    "mean_ms": 56.003,
+    "median_ms": 52.97,
+    "p95_ms": 76.824,
+    "min_ms": 51.159,
+    "max_ms": 76.824
   },
   "total": {
-    "mean_ms": 638.822,
-    "median_ms": 617.335,
-    "p95_ms": 857.472,
-    "min_ms": 600.985,
-    "max_ms": 857.472
+    "mean_ms": 729.794,
+    "median_ms": 709.089,
+    "p95_ms": 911.401,
+    "min_ms": 673.783,
+    "max_ms": 911.401
   },
   "output_size_bytes": {
     "mean": 2990.0,
@@ -41,9 +41,9 @@
     "python": "3.11.2",
     "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
     "cpu_count": 2,
-    "ffmpeg_binary": "/home/user/toolenv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2"
+    "ffmpeg_binary": "/home/user/nexus-ai-agent/venv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2"
   },
-  "peak_rss_mb": 78.59,
-  "wall_clock_seconds": 6.515,
+  "peak_rss_mb": 78.72,
+  "wall_clock_seconds": 7.416,
   "mode": "executor"
 }

@@ -2,21 +2,21 @@
   "generated_by": "scripts/collect_composition_evidence.py",
   "git": {
     "branch": "arena/da6837a6-nexus-ai-agent",
-    "head_sha": "96f0a467614d0ba874e9560c2528c40f0b6b1621",
-    "base_sha": "96f0a467614d0ba874e9560c2528c40f0b6b1621",
+    "head_sha": "514a41a3961151edf6953eca4bb3f8f9bfbccf9d",
+    "base_sha": "514a41a3961151edf6953eca4bb3f8f9bfbccf9d",
     "origin_main": "5ed6d4e10be55f5baf5e9f2a8aa99775577621db",
     "status": "",
-    "commit_count_since_base": "10"
+    "commit_count_since_base": "13"
   },
   "environment": {
     "python": "3.11.2",
     "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
     "cpu_count": 2,
-    "ffmpeg_binary": "/home/user/toolenv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2",
+    "ffmpeg_binary": "/home/user/nexus-ai-agent/venv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2",
     "gpu": "none"
   },
   "ffmpeg": {
-    "binary": "/home/user/toolenv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2",
+    "binary": "/home/user/nexus-ai-agent/venv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2",
     "version": "n9.0.2-17-g2a571b6068-20260930",
     "version_line": "ffmpeg version n9.0.2-17-g2a571b6068-20260930 Copyright (c) 2000-2026 the FFmpeg developers",
     "configuration": "--prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-ffbuild-linux-gnu- --arch=x86_64 --target-os=linux --enable-gpl --enable-version3 --disable-debug --enable-iconv --enable-zlib --enable-libxml2 --enable-libsoxr --enable-openssl --enable-libvmaf --enable-libxcb --enable-xlib --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libdav1d --enable-libvorbis --enable-librav1e --enable-librsvg --enable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --enable-avisynth --enable-chromaprint --enable-libdavs2 --enable-libdvdread --enable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --enable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribb24 --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --enable-librubberband --disable-schannel --enable-sdl2 --enable-libsnappy --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --enable-libdrm --enable-vaapi --enable-libvidstab --enable-libvvenc --disable-whisper --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs='-lgomp -ldl' --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-ffbuild-linux-gnu-gcc --cxx=x86_64-ffbuild-linux-gnu-g++ --ar=x86_64-ffbuild-linux-gnu-gcc-ar --ranlib=x86_64-ffbuild-linux-gnu-gcc-ranlib --nm=x86_64-ffbuild-linux-gnu-gcc-nm --extra-version=20260930",
@@ -191,7 +191,7 @@
   "real_composition": {
     "plan_fingerprint": "sha256:6eceb42be923659971e40517fa1b124f0d9c7ae174004e085af7914f6abf18da",
     "registry_fingerprint": "sha256:b30075f938eb61600b8281bda34ea6c09a3422a01df681fdf51768678110fe41",
-    "artifact_path": "/tmp/nagar-evidence-9kstkim4/work/node_video/video.mp4",
+    "artifact_path": "/tmp/nagar-evidence-jqmhskje/work/node_video/video-a5519c6bb616.mp4",
     "artifact_sha256": "sha256:2f28cfc31bcc1d5003b269aaab9f0186b7b8211d183372fc4afd7fa83a4de327",
     "artifact_size_bytes": 2473,
     "integrity": {
@@ -212,6 +212,7 @@
         "width": 640,
         "height": 480,
         "codec": "h264",
+        "pixel_format": "yuv420p",
         "frame_rate": 25.0,
         "has_audio": false,
         "decoded_frames": 25,
@@ -237,13 +238,13 @@
         "input_hashes": {
           "source": "sha256:ee4167edf543dc95a5c5ed1322f1427cf8fb8d8907a44da2f450fb615b9f505f"
         },
-        "output_path": "/tmp/nagar-evidence-9kstkim4/work/node_resize/resize.png",
+        "output_path": "/tmp/nagar-evidence-jqmhskje/work/node_resize/resize-a5519c6bb616.png",
         "output_hash": "sha256:43a84539b3a5d434c5801ac7f1f56009cbf8fc7816c5f896a904e9ca6631e309",
         "output_size_bytes": 1972,
         "duration_seconds": 0.0,
         "state_revision": 2,
-        "state_hash": "sha256:ed314696c723a0a91947247cbb834d8a26ceba051781ae18c0e4edf5379c6baa",
-        "asset_id": "derived_29ca9c5d9e0b",
+        "state_hash": "sha256:7c79f08e6afb5b2503ade094c19f5b59af185a1d63e068b841751992bfc132e2",
+        "asset_id": "derived_18b767d18ca5",
         "semantic": {
           "verified": true,
           "method": "independent_image_decode",
@@ -266,13 +267,13 @@
         "input_hashes": {
           "source": "sha256:43a84539b3a5d434c5801ac7f1f56009cbf8fc7816c5f896a904e9ca6631e309"
         },
-        "output_path": "/tmp/nagar-evidence-9kstkim4/work/node_gray/gray.png",
+        "output_path": "/tmp/nagar-evidence-jqmhskje/work/node_gray/gray-a5519c6bb616.png",
         "output_hash": "sha256:6e1eb4594f2b29059a4bf6bd88d0c6e501cdf37f0e781200c84800b92f9a9356",
         "output_size_bytes": 1308,
         "duration_seconds": 0.0,
         "state_revision": 4,
-        "state_hash": "sha256:dd7f54469e26ba47825832635ca8ce6e57c04b0ed7654d67a3447aee4c26162f",
-        "asset_id": "derived_612f684ddbc1",
+        "state_hash": "sha256:a9c6368163bfec010e5d68cd41119c8b07bd4b41579f5969e16f5e434fd1060b",
+        "asset_id": "derived_282d823dac88",
         "semantic": {
           "verified": true,
           "method": "independent_image_decode",
@@ -316,13 +317,13 @@
         "input_hashes": {
           "source": "sha256:6e1eb4594f2b29059a4bf6bd88d0c6e501cdf37f0e781200c84800b92f9a9356"
         },
-        "output_path": "/tmp/nagar-evidence-9kstkim4/work/node_video/video.mp4",
+        "output_path": "/tmp/nagar-evidence-jqmhskje/work/node_video/video-a5519c6bb616.mp4",
         "output_hash": "sha256:2f28cfc31bcc1d5003b269aaab9f0186b7b8211d183372fc4afd7fa83a4de327",
         "output_size_bytes": 2473,
         "duration_seconds": 0.0,
         "state_revision": 6,
-        "state_hash": "sha256:0de145e461178abf163c0cb7b2e856c90f1f1cc5272ee23155fff0797f3c985d",
-        "asset_id": "derived_49874142975c",
+        "state_hash": "sha256:ad0c93600106c2e6deeab42fd0a1fa84c1eb0d384d70a5162f269722da0454f5",
+        "asset_id": "derived_2fa3b3674965",
         "semantic": {
           "verified": true,
           "method": "independent_video_decode",
@@ -332,6 +333,7 @@
             "width": 640,
             "height": 480,
             "codec": "h264",
+            "pixel_format": "yuv420p",
             "frame_rate": 25.0,
             "has_audio": false,
             "decoded_frames": 25,
@@ -343,12 +345,12 @@
     ],
     "tool_versions": {
       "ffmpeg": "n9.0.2-17-g2a571b6068-20260930",
-      "ffmpeg_binary": "/home/user/toolenv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2",
+      "ffmpeg_binary": "/home/user/nexus-ai-agent/venv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2",
       "ffmpeg_buildconf_sha256": "1473b6410dc4c9647899005fcf0b08edd0289f2677ce83c992d79d5d60ed433a"
     },
     "state_revision": 6,
-    "state_hash": "sha256:0de145e461178abf163c0cb7b2e856c90f1f1cc5272ee23155fff0797f3c985d",
-    "duration_seconds": 0.3293714589999581,
+    "state_hash": "sha256:ad0c93600106c2e6deeab42fd0a1fa84c1eb0d384d70a5162f269722da0454f5",
+    "duration_seconds": 0.34410524899999473,
     "resource_estimate": {
       "peak_ram_mb": 512,
       "total_ram_mb": 1024,
