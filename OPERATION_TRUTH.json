@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "eaa5bc3438816941b847e100c3f1a2eb8b1506dc",
-    "generated_at": "2026-11-09T19:00:09Z",
+    "source_revision": "49372ceb65c78a22c16251e736f1707d2c337488",
+    "generated_at": "2026-11-09T21:58:59Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -480,6 +480,7 @@
         "files": [
           "tests/architecture/test_composition_boundary.py",
           "tests/integration/test_composition_canonical_e2e.py",
+          "tests/integration/test_composition_durable_project.py",
           "tests/unit/test_composition_compiler.py",
           "tests/unit/test_composition_runtime.py",
           "tests/unit/test_media_transform_pack.py"
@@ -542,6 +543,7 @@
         "files": [
           "tests/architecture/test_composition_boundary.py",
           "tests/integration/test_composition_canonical_e2e.py",
+          "tests/integration/test_composition_durable_project.py",
           "tests/unit/test_composition_compiler.py",
           "tests/unit/test_composition_contracts.py",
           "tests/unit/test_composition_proof.py",
@@ -3355,6 +3357,7 @@
         "suite_reference_files": [
           "tests/architecture/test_composition_boundary.py",
           "tests/integration/test_composition_canonical_e2e.py",
+          "tests/integration/test_composition_durable_project.py",
           "tests/unit/test_composition_compiler.py",
           "tests/unit/test_composition_runtime.py",
           "tests/unit/test_media_transform_pack.py"
@@ -3601,6 +3604,7 @@
         "suite_reference_files": [
           "tests/architecture/test_composition_boundary.py",
           "tests/integration/test_composition_canonical_e2e.py",
+          "tests/integration/test_composition_durable_project.py",
           "tests/unit/test_composition_compiler.py",
           "tests/unit/test_composition_contracts.py",
           "tests/unit/test_composition_proof.py",
