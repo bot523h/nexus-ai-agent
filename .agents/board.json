@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-06T21:25:39Z",
+  "updated_at": "2026-11-09T10:09:40Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1237,6 +1237,17 @@
         "tests/unit/test_durable_project_state.py",
         "tests/unit/test_nagar_cognition_queue_handoff.py"
       ]
+    },
+    {
+      "id": "nagar-character-intelligence",
+      "description": "NAGAR Character Intelligence (ARENA-B): independent, versioned Character Capsule + Continuity Verification Engine prototype outside src/ and outside every Arena-1 zone",
+      "paths": [
+        "research/character-intelligence/",
+        "experiments/character_capsule/",
+        "tests/character_capsule/",
+        "scripts/character_capsule/"
+      ],
+      "note": "Isolated prototype island: no imports from creative/composition, no edits to src/nexus_ai_agent/**, no edits to pyproject/CI. Research docs, prototype code, tests and thin CLIs only."
     }
   ],
   "claims": [
@@ -8521,7 +8532,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8552,7 +8563,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
-      "note": ""
+      "note": "",
+      "release_reason": "auto-released by gc at 2026-11-09T10:07:49Z (stale active lease)"
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -8593,6 +8605,56 @@
       "gates_owner": false,
       "delivered": [],
       "note": ""
+    },
+    {
+      "task": "task-nagar-character-intelligence-01",
+      "title": "NAGAR Character Intelligence: versioned Character Capsule + Continuity Verification Engine (ARENA-B independent prototype)",
+      "title_fa": "هوش شخصیت نگار: کپسول نسخه‌بندی‌شدهٔ شخصیت و موتور راستی‌آزمایی پیوستگی (نمونهٔ مستقل ARENA-B)",
+      "zone": "nagar-character-intelligence",
+      "priority": "P1",
+      "status": "active",
+      "scope": [
+        "Build a self-contained Character Intelligence prototype: immutable character identity with mutable, independently versioned modules (face/body/hair/wardrobe/voice/motion/canon), content-addressed reference assets with integrity evidence, scene/shot overrides, wardrobe timeline rules, canon engine with conflict detection, consent + access-control + encryption-at-rest contract, a measured continuity verifier with calibrated per-dimension thresholds and explicit verdict vocabulary, a reproducible synthetic benchmark with FAR/FRR measured on a held-out split, automated tests, an evidence bundle and a versioned integration-contract proposal. Everything lives under research/character-intelligence/, experiments/character_capsule/, tests/character_capsule/ and scripts/character_capsule/. No edits to src/nexus_ai_agent/**, pyproject.toml, CI, .agents/board.json zones owned by others, or any Arena-1 composition/canonical-execution file; no second queue, bus, registry or ledger is introduced."
+      ],
+      "scope_fa": "ساخت نمونهٔ مستقل هوش شخصیت: هویت تغییرناپذیر با ماژول‌های نسخه‌بندی‌شدهٔ مستقل، دارایی‌های مرجع content-addressed با شواهد یکپارچگی، Override صحنه/شات، قواعد تایم‌لاین لباس، موتور Canon با تشخیص تعارض، قرارداد رضایت/کنترل دسترسی/رمزنگاری، راستی‌آزمای پیوستگی اندازه‌گیری‌شده با آستانه‌های کالیبره، بنچمارک بازتولیدپذیر با FAR/FRR روی split هلد‌اوت، تست‌ها، Evidence Bundle و پیشنهاد قرارداد یکپارچه‌سازی. تمام کد و مستندات فقط در چهار مسیر انحصاری این تسک؛ صفر تغییر در src، pyproject، CI یا محدودهٔ Arena 1.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Character Capsule is real and executable: identity version + capsule revision + per-module revision, sealed with a canonical digest that is stable across runs and detects tampering; immutable fields require a new identity version.",
+        "Reference assets are content-addressed with measured digests/sizes, reject unsupported or spoofed media, and integrity verification fails closed on any byte tamper.",
+        "Wardrobe has an explicit timeline: outfit change at a declared change event is allowed, an unplanned change inside one sequence yields WARDROBE_DRIFT (proved by test).",
+        "Scene/shot overrides are validated: forbidden dimensions, unknown scenes and unpinned/foreign shot references are refused with typed errors.",
+        "Canon engine separates immutable canon facts from story-mutable facts, records story events (e.g. injury persistence) and detects CANON_CONFLICT against shots.",
+        "Continuity verifier emits only the documented verdict vocabulary per dimension, distinguishes INSUFFICIENT_EVIDENCE from drift, and consumes thresholds from a calibration artifact instead of hardcoded guesses.",
+        "Benchmark covers the 10 required scenarios and reports per-dimension measurements that are actually computed, with FAR/FRR/EER measured on a held-out split; anything not measurable is reported NOT_MEASURED rather than estimated.",
+        "Consent/privacy contract refuses real-person capsules without explicit consent metadata and blocks export after revocation; access control enforces least privilege and writes audit events.",
+        "Encryption-at-rest round-trips real bytes with authenticated encryption, detects tamper/wrong key/AAD swap, and fails closed with a typed error when no crypto backend is available; no key material is ever stored in the tree.",
+        "All tests run green on the real code (no mocks of the code under test) and the exact commands, results and tested SHA are recorded in the evidence bundle.",
+        "Integration contract is versioned and explicitly non-normative (status DEFERRED) with a read-only compatibility report against Arena 1; no Arena-1 file is modified.",
+        "Zero changes outside the four exclusive paths; agent_board.py check over the changed file list exits 0."
+      ],
+      "evidence_required": [
+        "CHARACTER_CAPSULE_LIVE_TRUTH.md with verified paths/classes/signatures of existing NEXUS infrastructure and the measured environment inventory",
+        "pytest output for tests/character_capsule (full run) plus ruff output, on the recorded SHA",
+        "calibration and benchmark JSON artifacts produced by an actual run, including FAR/FRR/EER and the held-out split definition",
+        "continuity report for the synthetic character including at least one deliberate drift case and one canon conflict",
+        "encryption/consent/access-control test output (or an explicit BLOCKED record if no crypto backend is importable)",
+        "agent_board.py check --files <changed files> --branch arena/337c3bc1-nexus-ai-agent with exit 0",
+        "EVIDENCE_BUNDLE.md listing every artifact digest and the reproduction commands",
+        "ARENA1 compatibility report that cites the read-only PR/issue state it was derived from"
+      ],
+      "exclusive_paths": [
+        "research/character-intelligence/",
+        "experiments/character_capsule/",
+        "tests/character_capsule/",
+        "scripts/character_capsule/"
+      ],
+      "owner_hint": "ARENA-B",
+      "agent_branch": "arena/337c3bc1-nexus-ai-agent",
+      "claimed_at": "2026-11-09T10:09:40Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "",
+      "generation": 1
     }
   ],
   "deferred_log": [
