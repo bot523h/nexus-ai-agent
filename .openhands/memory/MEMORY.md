@@ -1156,3 +1156,17 @@ Only red check = the #234 flake (task-264, issue #237).
 - **Local PG for audits:** `sudo dockerd` + `docker run pgvector/pgvector:pg16`.
 - **Crash-consistency is honest by design** (binding = append-only; invariant is
   "COMPLETED ⇒ has binding", not the converse).
+
+## PR #325 F1-fence remediation (durable, 2026-11-09)
+- Branch `fix/binding-ownership-fence-20261107`, remediation commit **`e5c92d56`**
+  (PR #325, base main `5ed6d4e1`). F1–F4 + F6–F14 Sourcery findings closed; full
+  suite **6446 passed / 42 skipped**; durable harness **32/32 killed** (pin 29→32).
+- **F5 stays OPEN (R4)** — cross-job adoption: a `COMPLETED` job B can lose its
+  binding when the canonical row's owner (job A) later loses its CAS and
+  retracts. Two fixes (per-job rows / adopter registry) change the model and
+  contradict `test_two_independent_jobs_sharing_bytes_are_fenced_apart` → OWNER
+  DECISION. Audit doc §3a table + R4.
+- **Push gotcha**: `GITHUB_TOKEN` = 403 on this repo; no credential helper (git
+  prompts). Use `https://x-access-token:${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/...`.
+- **Never run the mutation campaign while the suite runs** — in-place source
+  mutation makes the anchor-integrity test read a mutated file (spurious `0`).
