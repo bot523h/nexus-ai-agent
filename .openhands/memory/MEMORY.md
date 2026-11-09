@@ -1157,10 +1157,19 @@ Only red check = the #234 flake (task-264, issue #237).
 - **Crash-consistency is honest by design** (binding = append-only; invariant is
   "COMPLETED ⇒ has binding", not the converse).
 
-## PR #325 F1-fence remediation (durable, 2026-11-09)
+## PR #325 F1-fence remediation + review close-out (durable, 2026-11-09)
 - Branch `fix/binding-ownership-fence-20261107`, remediation commit **`e5c92d56`**
   (PR #325, base main `5ed6d4e1`). F1–F4 + F6–F14 Sourcery findings closed; full
   suite **6446 passed / 42 skipped**; durable harness **32/32 killed** (pin 29→32).
+- **All 14 review threads replied + resolved** (was 0/14) — a CI-green PR with
+  open threads is NOT done (SKILL §7.8). New head **`2f1794a5`** (board
+  close-out evidence). Lesson: fix the *threads*, not only the code.
+- **Env without a writable system site-packages**: `bash scripts/ci_install.sh
+  ".[dev]"` (pip `--user` fallback, ~5 min); then run `python -m ruff` /
+  `python -m mypy` (console scripts not on PATH). The 2 `test_selfhood_ledger`
+  failures are environmental: the test spawns `sys.executable -I` children and
+  `-I` implies `-s`, stripping the user-site dir → `import nexus_ai_agent` fails
+  in the child (CI installs system-wide, so it passes).
 - **F5 stays OPEN (R4)** — cross-job adoption: a `COMPLETED` job B can lose its
   binding when the canonical row's owner (job A) later loses its CAS and
   retracts. Two fixes (per-job rows / adopter registry) change the model and
