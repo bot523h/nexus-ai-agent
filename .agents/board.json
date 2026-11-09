@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-09T09:06:39Z",
+  "updated_at": "2026-11-09T09:31:16Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -772,6 +772,20 @@
       ]
     },
     {
+      "id": "nagar-creative-composition",
+      "description": "NAGAR creative capability composition layer: typed CapabilitySpec, composition compiler, media workers over the canonical FFmpeg allow-list, composition runtime + proof-carrying artifacts.",
+      "paths": [
+        "src/nexus_ai_agent/creative/composition/",
+        "tests/unit/test_composition_runtime.py",
+        "tests/architecture/test_composition_boundary.py",
+        "scripts/bench_composition.py",
+        "docs/architecture/adr/0013-creative-capability-composition.md",
+        "docs/architecture/COMPOSITION_THREAT_MODEL.md",
+        "docs/architecture/NAGAR_COMPOSITION_RUNTIME_REPORT.md",
+        "docs/ops/COMPOSITION_RUNTIME.md"
+      ]
+    },
+    {
       "id": "nagar-spine-atomicity",
       "description": "Creative-execution spine plan atomicity (D-0025): a multi-step plan is all-or-nothing.",
       "paths": [
@@ -892,6 +906,46 @@
     }
   ],
   "claims": [
+    {
+      "task": "task-266-nagar-composition-hardening",
+      "title": "NAGAR composition runtime — evidence recovery, independent audit, canonical integration",
+      "title_fa": "هستهٔ ترکیب NAGAR — بازیابی شواهد، ممیزی مستقل، اتصال به مسیر canonical",
+      "zone": "nagar-creative-composition",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Audit of the composition layer (spec/compiler/workers/runtime/proof) against real git state; remove the parallel authority (independent registry dict + raw subprocess); validate every capability against the LIVE NEXUS registry; route FFmpeg through the canonical resolve_ffmpeg_bin allow-list; add process-boundary hardening (secret stripping, env allow-list, bounded output, size limits); split integrity vs semantic verification; real tests + 10-iteration benchmark. No new CommandBus/Queue/Authority. No merge.",
+      "scope_fa": "ممیزی لایهٔ ترکیب بر پایهٔ وضعیت واقعی git؛ حذف authority موازی (رجیستری مستقل + subprocess خام)؛ اعتبارسنجی هر قابلیت با registry زندهٔ NEXUS؛ هدایت FFmpeg از مسیر allow-list canonical؛ سخت‌سازی مرز پردازش؛ تفکیک integrity از semantic verification؛ تست واقعی + بنچمارک ۱۰ اجرا. بدون CommandBus/Queue/Authority جدید. بدون merge.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "هر قابلیت لایهٔ ترکیب با registry زندهٔ NEXUS (build_runtime_registry) اعتبارسنجی شود و قابلیت ناشناخته رد شود",
+        "FFmpeg فقط از مسیر resolve_ffmpeg_bin (allow-list موجود) اجرا شود؛ هیچ subprocess خام ffmpeg نماند",
+        "محیط worker پاک‌سازی شود (secret stripping) و output/input اندازه‌محدود داشته باشد",
+        "semantic verification جدا از integrity verification و با decode واقعی فایل انجام شود",
+        "تست‌های امنیتی و معماری جدید سبز باشند (tests/architecture/test_composition_boundary.py)",
+        "benchmark با ≥۱۰ اجرا و محیط ثبت‌شده گزارش شود"
+      ],
+      "evidence_required": [
+        "PYTHONPATH=src python3 -m unittest tests.unit.test_composition_runtime tests.architecture.test_composition_boundary",
+        "python scripts/bench_composition.py --iterations 10 --json",
+        "git rev-parse HEAD (SHA آزمایش‌شده)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/composition/",
+        "tests/unit/test_composition_runtime.py",
+        "tests/architecture/test_composition_boundary.py",
+        "scripts/bench_composition.py",
+        "docs/architecture/adr/0013-creative-capability-composition.md",
+        "docs/architecture/COMPOSITION_THREAT_MODEL.md",
+        "docs/architecture/NAGAR_COMPOSITION_RUNTIME_REPORT.md",
+        "docs/ops/COMPOSITION_RUNTIME.md"
+      ],
+      "owner_hint": "any free agent with the nagar-creative-composition zone",
+      "agent_branch": "trae/agent-CCO4Fr",
+      "claimed_at": "2026-11-09T10:00:00Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "note": "Governance deviation recorded honestly: the first composition commit (05db0c2) shipped WITHOUT a board claim — this claim retroactively establishes the zone and covers the hardening continuation. No merge; branch-only."
+    },
     {
       "task": "task-131",
       "title": "Architecture & documentation suite + board rewrite",
