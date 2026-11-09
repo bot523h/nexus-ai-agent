@@ -27,7 +27,7 @@ DAG و اعتبارسنجی تایپی** را مالک است؛ رجیستری �
 سیاست مجوز، اثر انگشت پاسپورت و مرجع تأیید نهایی همگی **کانونی و دست‌نخورده** باقی ماندند.
 
 * **۶۰** عملیات در رجیستری زنده (۵۷ پیش از این شاخه + ۳ عملیات پک جدید).
-* **۱۸۴** تست جدید در ۱۱ فایل، همگی سبز؛ به‌علاوهٔ کل مجموعهٔ تست مخزن.
+* **۱۹۴** تست جدید در ۱۱ فایل، همگی سبز؛ به‌علاوهٔ کل مجموعهٔ تست مخزن.
 * **۳** جریان کامل از صف تا گذرنامهٔ اثر انگشت روی صف canonical اجرا شد.
 * **۰** موارد `TODO`/`FIXME`/`TBD` در صفحات معماری (گیت دروازهٔ اسناد).
 * یک **دروازهٔ معماری** که می‌گوید «هیچ CommandBus دومی ساخته نمی‌شود» در ابتدا قرمز شد؛
@@ -358,33 +358,33 @@ unknown_categories         : model, model_weights, dataset, input_asset,
 
 | مرحله | میانگین | میانه | P95 | کمینه | بیشینه |
 |---|---|---|---|---|---|
-| `compile` | ۸۶٫۹۷۵ ms | ۷۵٫۶۵۵ ms | ۱۹۶٫۴۱۷ ms | ۶۹٫۵۲۴ ms | ۱۹۶٫۴۱۷ ms |
-| `queue` | ۲٫۷۱۱ ms | ۲٫۶۱۷ ms | ۳٫۶۹۰ ms | ۲٫۳۱۶ ms | ۳٫۶۹۰ ms |
-| `worker` (برداشت + اجرا) | ۷۴۲٫۷۷۴ ms | ۷۳۶٫۴۶۶ ms | ۸۳۳٫۹۷۲ ms | ۶۹۹٫۱۵۴ ms | ۸۳۳٫۹۷۲ ms |
-| `verify` (مستقل) | ۵۲٫۱۶۳ ms | ۵۰٫۲۲۳ ms | ۶۴٫۷۰۸ ms | ۴۸٫۰۹۵ ms | ۶۴٫۷۰۸ ms |
-| `total` | ۹۲۵٫۶۱۳ ms | ۸۹۰٫۸۸۰ ms | ۱۲۵۰٫۵۲۶ ms | ۸۳۸٫۹۳۰ ms | ۱۲۵۰٫۵۲۶ ms |
+| `compile` | ۷۱٫۷۴۱ ms | ۶۳٫۳۵۵ ms | ۱۵۰٫۳۰۰ ms | ۵۹٫۸۵۴ ms | ۱۵۰٫۳۰۰ ms |
+| `queue` | ۳٫۲۸۱ ms | ۳٫۱۰۳ ms | ۴٫۲۷۷ ms | ۲٫۸۸۱ ms | ۴٫۲۷۷ ms |
+| `worker` (برداشت + اجرا) | ۶۵۱٫۶۶۴ ms | ۶۴۸٫۴۰۸ ms | ۷۰۲٫۱۱۴ ms | ۶۱۷٫۶۷۳ ms | ۷۰۲٫۱۱۴ ms |
+| `verify` (مستقل) | ۴۹٫۰۷۵ ms | ۴۸٫۴۱۱ ms | ۵۸٫۱۴۲ ms | ۴۵٫۷۶۷ ms | ۵۸٫۱۴۲ ms |
+| `total` | ۸۱۷٫۰۸۱ ms | ۷۹۶٫۷۵۹ ms | ۱۰۳۱٫۹۸۵ ms | ۷۵۳٫۹۹۸ ms | ۱۰۳۱٫۹۸۵ ms |
 
 * نرخ خطا: **۰٫۰۰** (۰ از ۱۰)
 * اثر انگشت برنامه در هر ۱۰ اجرا **یکسان**: `sha256:f366e646e8f63843a9e9004069481328c5db6619dfa388690c7c7556bf7d356e` ⇒ بازتولید‌پذیری `true`
 * اندازهٔ خروجی: میانگین ۲۹۹۰ بایت، بیشینه ۲۹۹۰ بایت (۱۰۰٪ یکنواخت)
-* اوج RSS: ۹۱٫۳۲ MB · دیسک/سی‌پیو در گزارش ثبت نشده چون ابزار آن را اندازه نمی‌گیرد ⇒ `INFERRED` (بی‌طرفانه)
+* اوج RSS: ۹۱٫۴۱ MB · دیسک/سی‌پیو در گزارش ثبت نشده چون ابزار آن را اندازه نمی‌گیرد ⇒ `INFERRED` (بی‌طرفانه)
 
 ### ۸.۳ حالت اجراکننده — ۱۰ اجرای قابل‌مقایسه
 
 | مرحله | میانگین | میانه | P95 | کمینه | بیشینه |
 |---|---|---|---|---|---|
-| `compile` | ۷۰٫۳۳۹ ms | ۶۹٫۹۱۸ ms | ۷۶٫۷۴۳ ms | ۶۷٫۰۰۹ ms | ۷۶٫۷۴۳ ms |
-| `execute` | ۵۶۸٫۶۹۸ ms | ۵۵۸٫۴۲۲ ms | ۶۴۰٫۷۴۸ ms | ۵۳۷٫۰۷۳ ms | ۶۴۰٫۷۴۸ ms |
-| `verify` | ۵۰٫۵۰۲ ms | ۴۹٫۹۶۱ ms | ۵۶٫۹۶۸ ms | ۴۶٫۳۲۰ ms | ۵۶٫۹۶۸ ms |
-| `total` | ۶۸۹٫۵۴۶ ms | ۶۷۷٫۵۷۶ ms | ۷۵۹٫۹۰۲ ms | ۶۵۳٫۲۷۲ ms | ۷۵۹٫۹۰۲ ms |
+| `compile` | ۶۳٫۸۰۴ ms | ۶۰٫۶۶۲ ms | ۸۰٫۵۰۷ ms | ۵۷٫۶۳۷ ms | ۸۰٫۵۰۷ ms |
+| `execute` | ۵۲۴٫۰۶۰ ms | ۵۰۲٫۲۹۷ ms | ۷۱۱٫۴۲۷ ms | ۴۷۹٫۶۸۳ ms | ۷۱۱٫۴۲۷ ms |
+| `verify` | ۵۰٫۹۵۱ ms | ۴۹٫۶۱۹ ms | ۶۸٫۴۴۱ ms | ۴۶٫۶۴۶ ms | ۶۸٫۴۴۱ ms |
+| `total` | ۶۳۸٫۸۲۲ ms | ۶۱۷٫۳۳۵ ms | ۸۵۷٫۴۷۲ ms | ۵۸۴٫۱۸۲ ms | ۸۵۷٫۴۷۲ ms |
 
-نرخ خطا: **۰٫۰۰** · اثر انگشت بازتولیدپذیر: `true` · اوج RSS: ۷۱٫۳۵ MB
+نرخ خطا: **۰٫۰۰** · اثر انگشت بازتولیدپذیر: `true` · اوج RSS: ۷۸٫۵۹ MB
 
 ### ۸.۴ خوانش
 
-سهم غالب زمان **خود FFmpeg** است، نه لایهٔ ترکیب: `execute` ≈ ۵۶۹ ms از
-`total` ≈ ۶۹۰ ms. لایهٔ کامپایل ≈ ۷۰ ms (که عمدتاً ساخت رجیستری کانونی است، چون هر
-اجرا رجیستری زنده را می‌سازد). صف عملاً بی‌هزینه است (۲٫۷ ms). این توزیع دقیقاً
+سهم غالب زمان **خود FFmpeg** است، نه لایهٔ ترکیب: `execute` ≈ ۵۲۴ ms از
+`total` ≈ ۶۳۹ ms. لایهٔ کامپایل ≈ ۶۴ ms (که عمدتاً ساخت رجیستری کانونی است، چون هر
+اجرا رجیستری زنده را می‌سازد). صف عملاً بی‌هزینه است (۳٫۳ ms). این توزیع دقیقاً
 دلیل تصمیم «بدون زبان چندزبانی» در §۳٫۴ است.
 
 ---
@@ -399,14 +399,14 @@ unknown_categories         : model, model_weights, dataset, input_asset,
 | `tests/unit/test_composition_contracts.py` | **۲۵ passed** |
 | `tests/unit/test_composition_license.py` | **۲۱ passed** |
 | `tests/unit/test_composition_proof.py` | **۲۰ passed** |
-| `tests/unit/test_composition_runtime.py` | **۱۵ passed** |
-| `tests/unit/test_composition_security.py` | **۲۴ passed** |
+| `tests/unit/test_composition_runtime.py` | **۱۶ passed** |
+| `tests/unit/test_composition_security.py` | **۳۳ passed** |
 | `tests/unit/test_composition_verifier.py` | **۱۱ passed** |
 | `tests/unit/test_media_transform_pack.py` | **۱۹ passed** |
 | `tests/unit/test_media_still_primitives.py` | **۱۱ passed** |
 | `tests/architecture/test_composition_boundary.py` | **۱۰ passed** |
 | `tests/integration/test_composition_canonical_e2e.py` | **۶ passed** |
-| **جمع** | **۱۸۴ passed** |
+| **جمع** | **۱۹۴ passed** |
 
 ### ۹.۲ پوشش ۲۴ رفتار خواسته‌شده
 
@@ -464,8 +464,8 @@ unknown_categories         : model, model_weights, dataset, input_asset,
 ### ۹.۵ کل مجموعهٔ تست مخزن
 
 ```
-$ .venv/bin/python -m pytest -q -m "not slow"
-6621 passed, 39 skipped, 1163 warnings in 582.04s (0:09:42)
+$ python -m pytest -q -m "not slow"
+6631 passed, 39 skipped, 1164 warnings in 567.24s (0:09:27)
 ```
 
 **مبنای مقایسه** — همان مجموعه روی `origin/main` تمیز، در یک worktree جداگانه
@@ -476,7 +476,7 @@ $ .venv/bin/python -m pytest -q -m "not slow"
 ```
 
 یعنی **روی `main` هیچ خطایی وجود ندارد**؛ مبنا یک مبنای پاک است و هر خطایی در شاخهٔ
-حاضر قابل انتساب به همین شاخه خواهد بود. اختلاف: **‎+۱۹۴ تست** و **‎۰ خطا**.
+حاضر قابل انتساب به همین شاخه خواهد بود. اختلاف: **‎+۲۰۴ تست** و **‎۰ خطا**.
 
 > نکتهٔ روش‌شناختی که ثبت آن مهم است: نصب editable، مفسر را به این checkout اشاره
 > می‌دهد. در اولین اندازه‌گیری مبنا، فایل `.pth` موقتاً به `/tmp/main-baseline/src`
@@ -545,15 +545,15 @@ flowchart TD
 
 | گیت | فرمان | نتیجه | وضعیت |
 |---|---|---|---|
-| کل مجموعهٔ تست | `pytest -q -m "not slow"` | `6621 passed, 39 skipped, 1163 warnings in 582.04s` | `VERIFIED` |
+| کل مجموعهٔ تست | `python -m pytest -q -m "not slow"` | `6631 passed, 39 skipped, 1164 warnings in 567.24s` | `VERIFIED` |
 | مبنای `main` تمیز | همان فرمان در worktree جداگانه | `6427 passed, 39 skipped, 0 failed` | `VERIFIED` |
 | lint | `ruff check .` | `All checks passed!` | `VERIFIED` |
 | قالب | `ruff format --check .` | `993 files already formatted` | `VERIFIED` |
 | انواع | `mypy src` | `Success: no issues found in 373 source files` | `VERIFIED` |
-| گیت اسناد | `pytest tests/unit/test_docs_integrity.py -q` | `117 passed` | `VERIFIED` |
+| گیت اسناد | `python -m pytest tests/unit/test_docs_integrity.py -q` | `117 passed` | `VERIFIED` |
 | گیت حقیقت عملیات | `python -m nexus_ai_agent.nagar --check` | `TRUTH GATE: GREEN` | `VERIFIED` |
 | پوشش پک | `python scripts/pack_coverage.py` | `ACCEPTED` — `media` 227/227 (۱۰۰٪)، مجموع ۹۷٫۱۷٪، `pytest exit: 0`، `evidence: verified` | `VERIFIED` |
-| مجموعه‌های جدید ترکیب | ۱۱ فایل | `184 passed in 15.34s` | `VERIFIED` |
+| مجموعه‌های جدید ترکیب | ۱۱ فایل | `194 passed` (به‌تفکیک در §۹.۱) | `VERIFIED` |
 | E2E کانونی | `pytest tests/integration/test_composition_canonical_e2e.py -q` | `6 passed` | `VERIFIED` |
 | بنچمارک (صف) | `scripts/bench_composition.py --runs 10 --queue` | ۱۰ اجرا، نرخ خطا `0.0`، اثر انگشت تکرارپذیر | `VERIFIED` |
 | بنچمارک (اجراکننده) | `scripts/bench_composition.py --runs 10` | ۱۰ اجرا، نرخ خطا `0.0`، اثر انگشت تکرارپذیر | `VERIFIED` |
@@ -564,7 +564,9 @@ flowchart TD
 |---|---|---|
 | ادغام کانونی (Registry/Queue/Bus/Policy/Provenance/Verification) | `VERIFIED` | گیت معماری ماشینی + E2E واقعی |
 | قرارداد قابلیت و IR | `VERIFIED` | ۲۲ + ۲۵ آزمون کامپایلر/قرارداد |
-| مدل تهدید و سخت‌سازی در سطح فرایند | `VERIFIED` | ۲۴ آزمون امنیتی شامل timeout گروه فرایند |
+| اقتدار پیش از اجرا (pre-flight روی خود bus) | `VERIFIED` | `CommandBus.check_authorization` + گیت معماری «فقط bus» |
+| هفت یافتهٔ بازبینی بیرونی | `VERIFIED` | همه رفع شد، هر یک با آزمون ردّکننده |
+| مدل تهدید و سخت‌سازی در سطح فرایند | `VERIFIED` | ۳۳ آزمون امنیتی شامل timeout گروه فرایند |
 | مدل تهدید و سخت‌سازی در سطح سیستم‌عامل (namespace/cgroup/seccomp/user-separation/egress) | `BLOCKED` | مجوز سیستم‌عامل در این محیط موجود نیست؛ صریحاً علامت خورده |
 | سهمیهٔ منابع | `HARDENED_BUT_NOT_COMPLETE` | تخمین مدل‌شده + timeout/سقف اندازه؛ بدون cgroup |
 | دفتر مجوز ۱۲ دسته‌ای | `VERIFIED` | ۲۱ آزمون؛ `UNKNOWN` هرگز «تأیید تجاری» نمی‌شود |
@@ -574,13 +576,45 @@ flowchart TD
 | جهش‌یابی سازمان‌یافته | `DEFERRED` | سه جهش دستی و اثبات‌شده اجرا شد؛ ابزار جهش مخزن برای این بسته ساخته نشد |
 | اسناد | `VERIFIED` | گیت ۱۱۷ تستی سبز |
 
-### ۱۱.۲ دربارهٔ «بازبینی مستقل»
+### ۱۱.۲ بازبینی خودکار بیرونی: هفت یافته، هفت رفع
 
-در این بسته **هیچ بازبینی مستقلی انجام نشده است**. آنچه انجام شده، **بازبینی
-خودِ نویسنده** است: گیت‌های معماری کانونی (که مخزن‌دار آن‌ها دیگری است) این شاخه را
-*به‌عنوان کدِ غریبه* بررسی کرده‌اند و سه ایراد واقعی پیدا کرده‌اند که در §۹ و §۱۰
-گزارش شده‌اند. گزارش این بازبینی **نباید** «بازبینی مستقل» تلقی شود و در این سند
-هم چنین ادعایی نشده است. `DEFERRED` — نیازمند بازبیننده‌ای که نویسنده نیست.
+روی PR #327 یک بازبین خودکار بیرونی (**Sourcery**) هفت یافتهٔ محتوایی و دو
+مثبت‌کاذب ثبت کرد. یافته‌ها **معتبر** بودند و همه رفع شدند — هر کدام در لایه‌ای که
+آن ناوردا را مالک است، و هر کدام با آزمونی که بدون رفع، **قرمز** می‌شود.
+
+| # | شدت | یافته | رفع (نماد دقیق) | آزمون اثبات‌کننده |
+|---|---|---|---|---|
+| ۱ | 🔴 بحرانی | نوشتن از workspace فرار می‌کرد (شناسهٔ گره داخل مسیر درج می‌شد) | `contracts.py::NODE_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"` روی `PlanNode.node_id`؛ `executor.py::_node_directory()` الگو را دوباره اعتبارسنجی و **مسیر حل‌شده** را داخل workspace حل‌شده الزام می‌کند | `test_a_node_id_that_is_a_path_is_refused_by_the_model`، `test_the_node_directory_is_verified_to_stay_inside_the_workspace` |
+| ۲ | 🟠 بالا | کارِ ردشده **هم** اجرا می‌شد (مجوزدهی بعد از `_realize`) | `bus.py::CommandBus.check_authorization()` — همان helperهای dispatch (`_spec_locked`, `_authorize_locked`) را اجرا می‌کند و پیش از reservation/handler می‌ایستد؛ `executor.py::_authorize_node()` پیش از encode آن را صدا می‌زند | `test_a_denied_node_produces_no_media`، `test_the_bus_preflight_enforces_the_actor_grant_and_reserves_nothing`، و گیت معماری «فقط bus دروازهٔ پک را صدا می‌زند» بدون تغییر سبز ماند |
+| ۳ | 🟠 بالا | درخواست، اقتدار پروژه را دور می‌زد (کارگر خودش actor می‌ساخت و `confirmed=True` می‌گذاشت) | `job.py::ActorClaim` + فیلد **الزامی** `actor` و `confirmed: bool = False` در `CompositionJobPayload`؛ `composition_render_job` دیگر هیچ‌کدام را نمی‌سازد | `test_a_row_without_an_actor_is_refused`، `test_a_level_c_node_needs_the_requesters_confirmation` |
+| ۴ | 🟡 متوسط | شکل binding زیاد سهل‌گیر بود (کلید ناشناس دور ریخته می‌شد؛ هر دو منبع هم‌زمان پذیرفته می‌شد) | `job.py::_bindings_from()`: کلید ناشناس، هر دو منبع هم‌زمان، و `external` خالی رد می‌شوند؛ شکل مدل از `PortBinding.model_validate` می‌گذرد | `test_a_binding_that_names_two_sources_is_refused`، `test_a_binding_with_an_unknown_key_is_refused` |
+| ۵ | 🟡 متوسط | تخمین timeout کمتر از سقف واقعی موتور بود (۱۲۰ s در برابر ۳۰۰ s) | `CompiledPlan.requirements` (نگاشت گره→`ResourceRequirements`) + `executor.py::_node_timeout()` + `engine.py::MediaEngine.realize(timeout_seconds=…)` | `test_the_declared_timeout_is_the_enforced_timeout` (مقدار واقعاً به primitive می‌رسد) |
+| ۶ | 🟡 متوسط | آزمون drift رجیستری **توخالی** بود (فقط تکرارپذیری را می‌سنجید) | آزمون اکنون سطح را روی یک **deep copy** تغییر می‌دهد و می‌سنجد اثر انگشت **تغییر می‌کند**، و رجیستری زنده دست‌نخورده می‌ماند | `test_registry_fingerprint_changes_when_the_surface_changes` |
+| ۷ | 🟡 متوسط | آزمون E2E ورودی دست‌کاری‌شده یک کار **گیرکرده** را هم می‌پذیرفت | اکنون **شکست ترمینال** با کد `invalid_request` و پیام `digest mismatch` را الزام می‌کند | `test_a_changed_staged_input_is_refused_before_any_media_work` |
+
+**دو مثبت‌کاذب** که «رفع» نشدند و توضیح آن‌ها ثبت می‌شود: `creative/slideshow/ffmpeg.py`
+خطوط ۵۳۹–۵۴۰ که opengrep به‌عنوان «فراخوانی subprocess» علامت زد، در واقع **کلاس‌های
+استثنا** (`TimeoutExpired`, `CompletedProcess`) هستند و هیچ فرایندی اجرا نمی‌کنند.
+
+> نکتهٔ مهم دربارهٔ یافتهٔ ۲: نخستین رفع من دروازهٔ پک را داخل خودِ executor صدا زد.
+> گیت معماری `test_only_the_bus_invokes_the_pack_lifecycle_gate` (که با اسکن AST
+> می‌گوید دروازه فقط از `bus.py` صدا زده شود) **قرمز شد** — و درست بود. پاسخ صحیح
+> «تکرار دروازه» نبود، بلکه «دادن یک ورودی رسمی به همان bus» بود:
+> `CommandBus.check_authorization`. این دقیقاً همان الگویی است که اجازه نمی‌دهد یک
+> گیت امنیتی به دو گیت موازی تبدیل شود.
+
+### ۱۱.۳ دربارهٔ «بازبینی مستقل»
+
+در این بسته **هیچ بازبینی انسانی مستقلی انجام نشده است**. آنچه انجام شده:
+
+1. **گیت‌های معماری کانونی مخزن** (که مالکشان نویسندهٔ این شاخه نیست) این شاخه را
+   *به‌عنوان کدِ غریبه* بررسی کرده‌اند و در طول کار چند ایراد واقعی گرفته‌اند؛
+2. **یک بازبین خودکار بیرونی (Sourcery)** روی PR #327 هفت یافتهٔ محتوایی ثبت کرد که
+   همه در §۱۱.۲ فهرست و رفع شده‌اند.
+
+هیچ‌کدام از این دو **بازبینی انسانی مستقل** نیست: اولی مالِ مخزن است و دومی یک ابزار
+خودکار. این سند مدعی «بازبینی مستقل» نیست. `DEFERRED` — نیازمند بازبینندهٔ انسانی که
+نویسنده نباشد.
 
 ---
 
@@ -592,11 +626,11 @@ flowchart TD
 |---|---|
 | شاخه | `arena/da6837a6-nexus-ai-agent` |
 | SHA پایه (`origin/main`) | `5ed6d4e10be55f5baf5e9f2a8aa99775577621db` |
-| SHA سر (پیش از این commit گزارش) | `28a4914e9227dad2a529bdf7aceb1a6d86eb55ba` |
+| SHA سر پیش از commit این گزارش | `2298cd204c57f5ad6acf5163994ba10bcf2165ba` |
 | URL پریک pull request | `https://github.com/bot523h/nexus-ai-agent/pull/327` |
-| تعداد کامیت‌ها نسبت به `main` | ۴ |
-| تعداد فایل تغییرکرده | ۶۰ |
-| حجم تغییر | `+11271 / −40` خط |
+| تعداد کامیت‌ها نسبت به `main` | ۱۱ |
+| تعداد فایل تغییرکرده | ۶۳ |
+| حجم تغییر | `+12219 / −47` خط |
 
 ### ۱۲.۲ تاریخچهٔ کامیت‌ها
 
@@ -606,6 +640,13 @@ flowchart TD
 | `a9d08f2` | `feat(composition): integrate the NAGAR composition runtime into the canonical path` |
 | `17e28fa` | `test(cognition): regenerate the committed quality baseline for the new pack` |
 | `28a4914` | `docs(audit): record the uncontaminated baseline and the accepted coverage run` |
+| `48b917c` | `docs(report): fill the final verification run and the git delivery evidence` |
+| `4481e1b` | `evidence: ship the real media output alongside the machine-readable evidence` |
+| `681bc90` | `chore(board): extend the claim scope to every file this branch touches` |
+| `7ec8df0` | `fix(composition): close the external review findings with canonical guards` |
+| `420c76f` | `fix(bench): name the requester and confirm the level-C node in the queue mode` |
+| `96f0a46` | `evidence: regenerate the benchmark and the proof package on the new code path` |
+| `2298cd2` | `evidence: regenerate the proof package on a clean tree` |
 
 ### ۱۲.۳ فایل‌های تغییرکرده (گروه‌بندی‌شده)
 
@@ -660,7 +701,7 @@ flowchart TD
 | وضعیت | `active` |
 | نسل | ۱ |
 | زمان claim | `2026-11-09T10:00:22Z` |
-| مسیرهای انحصاری | ۳۶ |
+| مسیرهای انحصاری | ۵۰ |
 | فرمان بررسی هم‌پوشانی | `python scripts/agent_board.py check --branch arena/da6837a6-nexus-ai-agent --files <همهٔ مسیرهای تغییرکرده> --repo bot523h/nexus-ai-agent` |
 | خروجی بررسی هم‌پوشانی | `no overlap — safe to proceed (every consulted source was readable)` · **exit 0** · ۴۸ منبع خوانده‌شده |
 
@@ -715,7 +756,7 @@ python scripts/collect_composition_evidence.py --output evidence/composition_evi
 4. دفتر مجوز ۱۲ دسته‌ای با سنجش زندهٔ FFmpeg.
 5. تفکیک اثبات یکپارچگی/معنایی با اصلاح واقعیِ بررسی grayscale.
 6. مدل تهدید STRIDE با ۱۶ تهدید و برچسب `BLOCKED` برای کنترل‌های سیستم‌عاملی.
-7. ۱۸۴ آزمون جدید در ۱۱ فایل.
+7. ۱۹۴ آزمون جدید در ۱۱ فایل.
 8. بنچمارک ۱۰ اجرا در دو حالت + گزارش شواهد JSON.
 9. بازتولید پروژکشن حقیقت عملیات (`python -m nexus_ai_agent.nagar --docs`) پس از افزوده‌شدن پک.
 
@@ -760,7 +801,7 @@ python scripts/collect_composition_evidence.py --output evidence/composition_evi
 | ۱۲ | نقشهٔ راه NOW/NEXT/LATER | همین سند، §۱۳ |
 
 افزون بر این‌ها: کد مبدأ (`src/nexus_ai_agent/creative/composition/` و
-`src/nexus_ai_agent/creative/packs/media/`)، آزمون‌ها (۱۱ فایل، ۱۸۴ تست)، اسکریپت
+`src/nexus_ai_agent/creative/packs/media/`)، آزمون‌ها (۱۱ فایل، ۱۹۴ تست)، اسکریپت
 بنچمارک، JSON شواهد، و **یک خروجی رسانهٔ واقعی**
 (`evidence/media/composition_image_to_video.mp4` — ۲۴۷۳ بایت، ۶۴۰×۴۸۰، h264،
 yuv420p، ۲۵fps، ۱٫۰۰ ثانیه، ۲۵ فریم) به‌همراه تصویر ورودی آن

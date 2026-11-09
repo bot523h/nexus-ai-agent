@@ -267,7 +267,7 @@ No row is copied from a previous session, from CI, or from an expectation.
 | Media still primitives (real FFmpeg) | `pytest tests/unit/test_media_still_primitives.py -q` | **11 passed** |
 | Architecture boundary | `pytest tests/architecture/test_composition_boundary.py -q` | **10 passed** |
 | Canonical E2E (real queue + worker + passport) | `pytest tests/integration/test_composition_canonical_e2e.py -q` | **6 passed** |
-| **all of the above together** | `pytest -q <the eleven files>` | **184 passed in 15.34s** |
+| **all of the above together** | `python -m pytest -q <the eleven files>` | **194 passed** |
 
 ### 4.2 The canonical gates this branch had to satisfy
 
@@ -283,7 +283,7 @@ No row is copied from a previous session, from CI, or from an expectation.
 | Lifecycle gate boundary | `pytest tests/architecture/test_lifecycle_gate_boundary.py -q` | **7 passed** (the executor now builds its bus through `build_job_bus`) |
 | Slideshow adapter boundary | `pytest tests/architecture/test_slideshow_adapter_boundary.py -q` | **7 passed** (the gate was *strengthened*, not bypassed — it now also demands `start_new_session=True` and `killpg`) |
 | Pack coverage (media pack) | `python scripts/pack_coverage.py` | `media  2 modules  227/227 executed  100.00%` — **UNVERIFIED** on a dirty tree, `ACCEPTED` on the committed tree (§6) |
-| Whole repository suite | `pytest -q -m "not slow"` | **6621 passed, 39 skipped, 0 failed** (baseline on pristine `main`: 6427 passed, 39 skipped, 0 failed) |
+| Whole repository suite | `python -m pytest -q -m "not slow"` | **6631 passed, 39 skipped, 0 failed** (baseline on pristine `main`: 6427 passed, 39 skipped, 0 failed) |
 
 ### 4.3 The baseline on a pristine `origin/main`
 
@@ -355,10 +355,10 @@ The short form of the final state:
 
 | Gate | Result |
 |---|---|
-| Whole repository suite (`pytest -q -m "not slow"`) | **6621 passed, 39 skipped, 0 failed** (baseline on pristine `main`: **6427 passed, 39 skipped, 0 failed**) |
+| Whole repository suite (`python -m pytest -q -m "not slow"`) | **6631 passed, 39 skipped, 0 failed** (baseline on pristine `main`: **6427 passed, 39 skipped, 0 failed**) |
 | Lint + format + types | **green** (`ruff check .`, `ruff format --check .`, `mypy src` → 373 source files clean) |
 | Operation-truth projection | **regenerated** (`python -m nexus_ai_agent.nagar --docs`); the diff is committed so the gate is reproducible |
 | Docs gate | **117 passed** |
 | Pack coverage harness | **ACCEPTED** — `media` 227/227 executable lines (100.00 %), total 97.17 %, `pytest exit: 0`, `evidence: verified`, bound to the committed SHA |
-| New composition suites | **184 passed** |
+| New composition suites | **194 passed** |
 | Canonical E2E | **6 passed** (real queue, real worker, real FFmpeg, real passport) |
