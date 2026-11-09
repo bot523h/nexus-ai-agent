@@ -4,39 +4,39 @@
   "failure_rate": 0.0,
   "node_count": 3,
   "compile": {
-    "mean_ms": 86.975,
-    "median_ms": 75.655,
-    "p95_ms": 196.417,
-    "min_ms": 69.524,
-    "max_ms": 196.417
+    "mean_ms": 71.741,
+    "median_ms": 63.355,
+    "p95_ms": 150.3,
+    "min_ms": 59.54,
+    "max_ms": 150.3
   },
   "queue": {
-    "mean_ms": 2.711,
-    "median_ms": 2.617,
-    "p95_ms": 3.69,
-    "min_ms": 2.316,
-    "max_ms": 3.69
+    "mean_ms": 3.281,
+    "median_ms": 3.103,
+    "p95_ms": 4.277,
+    "min_ms": 2.717,
+    "max_ms": 4.277
   },
   "worker": {
-    "mean_ms": 742.774,
-    "median_ms": 736.466,
-    "p95_ms": 833.972,
-    "min_ms": 699.154,
-    "max_ms": 833.972
+    "mean_ms": 651.664,
+    "median_ms": 648.408,
+    "p95_ms": 702.114,
+    "min_ms": 627.436,
+    "max_ms": 702.114
   },
   "verify": {
-    "mean_ms": 52.163,
-    "median_ms": 50.223,
-    "p95_ms": 64.708,
-    "min_ms": 48.095,
-    "max_ms": 64.708
+    "mean_ms": 49.075,
+    "median_ms": 48.411,
+    "p95_ms": 58.142,
+    "min_ms": 45.996,
+    "max_ms": 58.142
   },
   "total": {
-    "mean_ms": 925.613,
-    "median_ms": 890.88,
-    "p95_ms": 1250.526,
-    "min_ms": 838.93,
-    "max_ms": 1250.526
+    "mean_ms": 817.081,
+    "median_ms": 796.759,
+    "p95_ms": 1031.985,
+    "min_ms": 761.828,
+    "max_ms": 1031.985
   },
   "output_size_bytes": {
     "mean": 2990.0,
@@ -48,9 +48,9 @@
     "python": "3.11.2",
     "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
     "cpu_count": 2,
-    "ffmpeg_binary": "/home/user/nexus-ai-agent/.venv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2"
+    "ffmpeg_binary": "/home/user/toolenv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2"
   },
-  "peak_rss_mb": 91.32,
-  "wall_clock_seconds": 9.342,
+  "peak_rss_mb": 91.41,
+  "wall_clock_seconds": 8.245,
   "mode": "queue"
 }
