@@ -26,6 +26,7 @@ before the module ran.
 from __future__ import annotations
 
 import os
+import selectors
 import subprocess
 import sys
 import time
@@ -53,7 +54,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 pytestmark = [
     pytest.mark.skipif(not os.getenv("NEXUS_DATABASE_URL"), reason="requires PostgreSQL"),
-    pytest.mark.skipif(not os.getenv(DESTRUCTIVE_OPT_IN), reason="requires destructive opt-in"),
+    # Strict equality, never `bool(os.getenv(...))`: a non-empty false-like value
+    # such as "0", "false" or "no" is truthy as a string and would silently arm
+    # this module against whatever NEXUS_DATABASE_URL names (D-0028).
+    pytest.mark.skipif(os.getenv(DESTRUCTIVE_OPT_IN) != "1", reason="requires destructive opt-in"),
     pytest.mark.asyncio(loop_scope="module"),
 ]
 
@@ -119,27 +123,55 @@ def _spawn_child(script: str) -> subprocess.Popen[str]:
     )
 
 
-def _reap(proc: subprocess.Popen[str]) -> None:
-    """Kill and join a child so a barrier-stalled process is never orphaned."""
+def _reap(proc: subprocess.Popen[str]) -> str:
+    """Kill and join a child so a barrier-stalled process is never orphaned.
+
+    Returns the child's stderr text (empty when already drained), so a caller can
+    surface *why* a child failed after it has been reaped.
+    """
     if proc.poll() is None:
         proc.kill()
     try:
-        proc.communicate(timeout=30)
+        _, err = proc.communicate(timeout=30)
     except subprocess.TimeoutExpired:  # pragma: no cover - defensive
         proc.wait(timeout=30)
+        err = ""
+    return err or ""
 
 
 def _wait_line(proc: subprocess.Popen[str], expected: str, timeout: float = 60.0) -> None:
-    deadline = time.time() + timeout
+    """Wait for *expected* on stdout, bounded by a real deadline.
+
+    ``proc.stdout.readline()`` blocks on a pipe with no timeout, so a child that
+    stays alive without ever printing the line would hang ``_wait_line`` past its
+    deadline and stall the whole CI job.  A selector-driven read wakes at the
+    deadline; on timeout the child is terminated and reaped (no orphan) and a
+    useful error is raised.
+    """
     assert proc.stdout is not None
-    while time.time() < deadline:
-        line = proc.stdout.readline()
-        if line.strip() == expected:
-            return
-        if proc.poll() is not None:
-            stderr = proc.stderr.read() if proc.stderr else ""
-            raise AssertionError(f"child exited before {expected!r}: {stderr}")
-    raise AssertionError(f"child never printed {expected!r}")
+    deadline = time.monotonic() + timeout
+    selector = selectors.DefaultSelector()
+    selector.register(proc.stdout, selectors.EVENT_READ)
+    buffered = ""
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if not selector.select(remaining):
+                break  # deadline expired with no output
+            chunk = os.read(proc.stdout.fileno(), 65536)
+            if not chunk:
+                break  # EOF: the child closed stdout (exited or crashed)
+            buffered += chunk.decode(errors="replace")
+            while "\n" in buffered:
+                line, buffered = buffered.split("\n", 1)
+                if line.strip() == expected:
+                    return
+    finally:
+        selector.close()
+    stderr = _reap(proc)
+    raise AssertionError(f"child never printed {expected!r} within {timeout}s: {stderr}")
 
 
 _BIND_CHILD = """
@@ -219,6 +251,23 @@ async def _bind(
         size_bytes=1,
         attempt=attempt,
     )
+
+
+def _binding_owner(artifact_id: str) -> tuple[str, int] | None:
+    """Read a binding's ``(job_id, attempt)`` directly from PostgreSQL.
+
+    Querying the database out-of-band — not the child's printed ``RETRACTED``
+    value — is what proves the DELETE *committed*: if ``retract()`` executed the
+    DELETE but omitted its ``commit()``, the child would roll it back on exit and
+    print ``True`` while the row survived.
+    """
+    engine = sync_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT job_id, attempt FROM projectartifactbinding WHERE artifact_id = :aid"),
+            {"aid": artifact_id},
+        ).fetchone()
+    return (str(row[0]), int(row[1])) if row is not None else None
 
 
 @pytest.fixture(scope="module")
@@ -311,7 +360,9 @@ async def test_cross_job_bind_never_seizes_and_only_the_owner_retracts(
     )
     assert b_retract.returncode == 0, b_retract.stderr
     assert "RETRACTED False" in b_retract.stdout
-    assert (await SqlArtifactBindingStore().resolve(project_id, artifact_id)).job_id == "job-A"
+    assert _binding_owner(artifact_id) == ("job-A", 2), (
+        "a cross-job retraction must leave the owner's committed row intact"
+    )
 
     # Only the owner's exact (job_id, attempt) retracts — in its own process.
     a_retract = _run_child(
@@ -319,6 +370,9 @@ async def test_cross_job_bind_never_seizes_and_only_the_owner_retracts(
     )
     assert a_retract.returncode == 0, a_retract.stderr
     assert "RETRACTED True" in a_retract.stdout
+    assert _binding_owner(artifact_id) is None, (
+        "the owner's retraction must COMMIT the DELETE: the row is gone from PostgreSQL"
+    )
 
 
 # ── same-job fencing across real processes ───────────────────────────────────
@@ -347,8 +401,12 @@ async def test_same_job_stale_attempt_cannot_retract_across_processes(
 
     stale = _run_child(_RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-X", attempt=1))
     assert "RETRACTED False" in stale.stdout
+    assert _binding_owner(artifact_id) == ("job-X", 5), (
+        "a stale attempt's retraction must not remove the live row"
+    )
     live = _run_child(_RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-X", attempt=5))
     assert "RETRACTED True" in live.stdout
+    assert _binding_owner(artifact_id) is None, "the live attempt's DELETE must commit"
 
 
 # ── the token advance is atomic under a real race ────────────────────────────
@@ -410,5 +468,9 @@ async def test_racing_advances_never_leave_the_lower_token(project_id: str, clea
 
     stale = _run_child(_RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-race", attempt=3))
     assert "RETRACTED False" in stale.stdout
+    assert _binding_owner(artifact_id) == ("job-race", 5), (
+        "the losing token's retraction must not remove the winner's committed row"
+    )
     live = _run_child(_RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-race", attempt=5))
     assert "RETRACTED True" in live.stdout
+    assert _binding_owner(artifact_id) is None, "the winner's DELETE must commit"

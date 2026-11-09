@@ -559,9 +559,18 @@ class ProjectArtifactBinding(SQLModel, table=True):
     replay) and can never be silently rewritten.  ``revision_id`` is a foreign
     key to the immutable ``projectrevision`` row the job was admitted against;
     the read path re-validates that the revision still hashes to its own
-    identity before the binding is trusted.  A binding is deliberately
-    append-only: the durable artifact bytes are the authority, so a divergence
-    is a hard failure, never an update.
+    identity before the binding is trusted.
+
+    A binding is immutable and can never be re-pointed: its ``(project_id,
+    artifact_id)`` identity and its ``revision_id`` are fixed, and a divergence
+    is a hard failure, never an update.  It is **not** append-only in the sense
+    that no row ever disappears: when the exact attempt that committed a
+    binding is superseded before its terminal ``COMPLETED`` CAS, the queue
+    retracts *that one row* — scoped to the writer's ``(job_id, attempt)``
+    fencing token — so a superseded attempt leaves no provenance behind.  A
+    consumer must therefore treat an absent binding as a legitimate state (the
+    artifact was produced by an attempt that did not complete), never as
+    impossible.
     """
 
     __table_args__ = (

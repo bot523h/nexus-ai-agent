@@ -78,14 +78,83 @@ def test_every_delete_in_the_integration_module_is_scoped_to_its_own_rows() -> N
         )
         offenders: list[str] = []
         for sql in deletes:
-            if not re.search(r"\bWHERE\b", sql, re.IGNORECASE):
-                offenders.append(f"no WHERE clause: {sql!r}")
-            elif not any(column in sql for column in SCOPED_COLUMNS):
-                offenders.append(f"WHERE does not name a per-run nonce column: {sql!r}")
+            reason = _unscoped_delete_reason(sql)
+            if reason:
+                offenders.append(f"{reason}: {sql!r}")
         assert not offenders, (
             f"an unscoped delete in {module.name} can destroy another row's data:\n"
             + "\n".join(offenders)
         )
+
+
+#: A scoped delete is a conjunction of equalities that each bind a per-run nonce
+#: column to a bound parameter.  Anything else (a top-level ``OR``, a tautology
+#: such as ``TRUE``/``1 = 1``, ``IS NOT NULL``, a constant instead of a bound
+#: nonce, a subquery) can widen the delete past this run's rows and is refused.
+_SCOPED_CONJUNCT = re.compile(r"^\s*(\w+)\s*=\s*:\w+\s*$")
+
+
+def _where_clause(sql: str) -> str | None:
+    match = re.search(r"\bWHERE\b(.*)$", sql, re.IGNORECASE | re.DOTALL)
+    return match.group(1).strip() if match else None
+
+
+def _unscoped_delete_reason(sql: str) -> str | None:
+    """Return why *sql* is not nonce-scoped, or ``None`` when it is safe.
+
+    A substring check for a scoped-column name is not enough: a predicate such
+    as ``WHERE project_id = :pid OR TRUE`` names a scoped column yet deletes
+    every row.  So each conjunct of the ``WHERE`` must be exactly
+    ``<scoped-column> = :<bound-param>`` — no ``OR``, no tautology, no constant
+    in place of the per-run nonce.
+    """
+    where = _where_clause(sql)
+    if where is None:
+        return "no WHERE clause"
+    if re.search(r"\bOR\b", where, re.IGNORECASE):
+        return "a top-level OR can widen the delete past this run's rows"
+    if re.search(r"\b(TRUE|FALSE|IS\s+NOT\s+NULL)\b", where, re.IGNORECASE):
+        return "a tautology in the WHERE can widen the delete"
+    conjuncts = re.split(r"\bAND\b", where, flags=re.IGNORECASE)
+    scoped = 0
+    for conjunct in conjuncts:
+        match = _SCOPED_CONJUNCT.match(conjunct)
+        if match is None:
+            return f"conjunct {conjunct.strip()!r} is not a scoped equality to a bound nonce"
+        if match.group(1) in SCOPED_COLUMNS:
+            scoped += 1
+    if scoped == 0:
+        return "no conjunct binds a per-run nonce column"
+    return None
+
+
+def test_the_delete_scope_guard_rejects_widening_predicates() -> None:
+    """The guard must reject the evasions it exists to catch, not just ``WHERE``.
+
+    A substring check would accept ``WHERE project_id = :pid OR TRUE`` (it names
+    a scoped column) while deleting every project's rows.  Pin the guard's own
+    behaviour so a future weakening is caught here.
+    """
+    unsafe = [
+        "DELETE FROM projectartifactbinding",  # no WHERE
+        "DELETE FROM t WHERE TRUE",
+        "DELETE FROM t WHERE project_id = :pid OR TRUE",
+        "DELETE FROM t WHERE project_id = :pid OR 1 = 1",
+        "DELETE FROM t WHERE project_id IS NOT NULL",
+        "DELETE FROM t WHERE project_id = 'literal'",  # constant, not a bound nonce
+        "DELETE FROM t WHERE other_id = :pid",  # not a per-run nonce column
+        "DELETE FROM t WHERE project_id IN (SELECT project_id FROM appproject)",
+    ]
+    for sql in unsafe:
+        assert _unscoped_delete_reason(sql) is not None, f"guard accepted an unsafe delete: {sql!r}"
+
+    safe = [
+        "DELETE FROM projectartifactbinding WHERE project_id = :pid",
+        'DELETE FROM "user" WHERE telegram_id = :id',
+        "DELETE FROM t WHERE project_id = :pid AND artifact_id = :aid",
+    ]
+    for sql in safe:
+        assert _unscoped_delete_reason(sql) is None, f"guard rejected a safe delete: {sql!r}"
 
 
 def test_the_integration_module_issues_no_ddl_or_table_wide_statements() -> None:
@@ -147,18 +216,35 @@ def test_the_integration_module_is_skipped_without_the_destructive_opt_in(
     """The guard is behavioural, not decorative: prove it disarms the module.
 
     ``NEXUS_DATABASE_URL`` alone points the *application* at a database; it
-    must not by itself arm a module that writes to it.
+    must not by itself arm a module that writes to it.  Every registered writer
+    is loaded under the environment and its skip guards must actually fire.
     """
-    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus")
-    monkeypatch.delenv("NEXUS_PG_TEST_DESTRUCTIVE", raising=False)
+    for module_path in PG_WRITING_MODULES:
+        monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus")
+        monkeypatch.delenv("NEXUS_PG_TEST_DESTRUCTIVE", raising=False)
+        module = _load_module(module_path)
+        assert _skip_fired(module), f"{module_path.name} is not skipped without the opt-in"
 
-    module = _load_module()
-    fired = [
-        bool(mark.args[0])
-        for mark in module.pytestmark
-        if getattr(mark, "name", "") == "skipif" and mark.args
-    ]
-    assert any(fired), "no skip guard fired with the destructive opt-in unset"
+
+def test_a_false_like_opt_in_value_does_not_arm_the_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``0``/``false``/``no``/``off`` are truthy strings — they must NOT arm.
+
+    ``os.getenv(...)`` returns the literal text, so ``bool(os.getenv(...))``
+    treats ``"0"`` as enabled and would write to whatever ``NEXUS_DATABASE_URL``
+    names.  Only the exact string ``"1"`` may arm a writing module.
+    """
+    for module_path in PG_WRITING_MODULES:
+        for value in ("0", "false", "False", "no", "off", "", "yes", "true", "2"):
+            monkeypatch.setenv(
+                "NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus"
+            )
+            monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", value)
+            module = _load_module(module_path)
+            assert _skip_fired(module), (
+                f"{module_path.name} armed for the destructive opt-in value {value!r}"
+            )
 
 
 def test_the_opt_in_armed_without_a_database_is_a_red_build(
@@ -172,29 +258,35 @@ def test_the_opt_in_armed_without_a_database_is_a_red_build(
     goes unverified. That is the exact failure mode the opt-in was added to
     prevent, so a misconfigured run has to be *red*.
     """
-    monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
-    monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", "1")
+    for module_path in PG_WRITING_MODULES:
+        monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
+        monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", "1")
 
-    # ``pytest.fail`` raises ``Failed``, which derives from BaseException.
-    with pytest.raises(BaseException) as excinfo:
-        _load_module()
-    assert "NEXUS_DATABASE_URL" in str(excinfo.value), (
-        "the module must say which variable is missing instead of skipping quietly"
-    )
+        # ``pytest.fail`` raises ``Failed``, which derives from BaseException.
+        with pytest.raises(BaseException) as excinfo:
+            _load_module(module_path)
+        assert "NEXUS_DATABASE_URL" in str(excinfo.value), (
+            "the module must say which variable is missing instead of skipping quietly"
+        )
 
 
 def test_the_module_runs_when_both_variables_are_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """… and the same guard must not have disabled it permanently."""
-    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus")
-    monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", "1")
+    for module_path in PG_WRITING_MODULES:
+        monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus")
+        monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", "1")
 
-    module = _load_module()
-    fired = [
+        module = _load_module(module_path)
+        assert not _skip_fired(module), f"{module_path.name} skips even with both variables set"
+
+
+def _skip_fired(module: ModuleType) -> bool:
+    """True iff at least one module-level ``skipif`` condition is currently true."""
+    return any(
         bool(mark.args[0])
         for mark in module.pytestmark
         if getattr(mark, "name", "") == "skipif" and mark.args
-    ]
-    assert not any(fired), "the module skips even with both variables set"
+    )
 
 
 def _migrate_postgres_job() -> dict[str, Any]:

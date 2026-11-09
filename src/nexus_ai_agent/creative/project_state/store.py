@@ -446,8 +446,8 @@ class SqlArtifactBindingStore:
             raise ArtifactBindingError("artifact_version_id must be non-empty when provided")
         if size_bytes < 0:
             raise ArtifactBindingError("size_bytes must be non-negative")
-        if isinstance(attempt, bool) or attempt < 0:
-            raise ArtifactBindingError("attempt must be a non-negative fencing token")
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 0:
+            raise ArtifactBindingError("attempt must be a non-negative integer fencing token")
 
         # The revision is the authority: load it (this re-validates its bytes,
         # refusing tampered/re-homed rows) before any binding row is written.
@@ -548,7 +548,18 @@ class SqlArtifactBindingStore:
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
-        return _as_binding(authoritative if authoritative is not None else row)
+        if authoritative is None:
+            # The authoritative re-read found no row: a concurrent owner
+            # retracted the row we just reconciled against (a lost-CAS
+            # retraction racing this successor's bind).  Confirming here would
+            # let the caller reach COMPLETED with no durable binding — the F1
+            # hole — so refuse closed.  A caller that still needs the artifact
+            # re-binds (the retractor is superseded, so this cannot ping-pong:
+            # only an attempt that already owned the row may retract it).
+            raise ArtifactBindingConflict(
+                "artifact binding vanished during reconciliation (retracted by its owner)"
+            )
+        return _as_binding(authoritative)
 
     async def resolve(self, project_id: str, artifact_id: str) -> ArtifactBinding:
         """Return the binding for one artifact, or refuse with a typed error."""
@@ -579,7 +590,7 @@ class SqlArtifactBindingStore:
         Returns ``True`` iff a row was deleted.  Idempotent: a second call
         deletes nothing and returns ``False``.
         """
-        if isinstance(attempt, bool) or attempt < 1:
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
             raise ArtifactBindingError("retract requires a real fencing token (attempt >= 1)")
         async with self._session_factory() as session:
             result = await session.execute(

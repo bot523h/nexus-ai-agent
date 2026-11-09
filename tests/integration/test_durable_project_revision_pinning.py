@@ -1401,6 +1401,39 @@ def test_retract_requires_a_real_fencing_token(pin_env: Path) -> None:
         asyncio.run(bindings.retract(artifact_id="sha256:" + "2" * 64, job_id="j", attempt=0))
 
 
+def test_bind_and_retract_reject_non_integer_fencing_tokens(pin_env: Path) -> None:
+    """The token is an integer identity: floats, strings and bools are refused.
+
+    ``(job_id, attempt)`` is the ownership identity, and the queue's attempt is
+    an integer.  A float (``1.5``), a numeric string (``"3"``) or a bool (which
+    inherits from ``int``) would persist a token an exact-token retract could
+    never match — so the store refuses every non-int up front.
+    """
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingError
+
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "b" * 64
+
+    for bad in (1.5, "3", True, False, -1):
+        with pytest.raises(ArtifactBindingError):
+            asyncio.run(
+                bindings.bind(
+                    project_id=PROJECT_ID,
+                    revision_id=r1.revision_id,
+                    artifact_id=artifact_id,
+                    job_id="job-t",
+                    size_bytes=1,
+                    attempt=bad,  # type: ignore[arg-type]
+                )
+            )
+        with pytest.raises(ArtifactBindingError):
+            asyncio.run(
+                bindings.retract(artifact_id=artifact_id, job_id="job-t", attempt=bad)  # type: ignore[arg-type]
+            )
+
+
 def test_bind_advances_the_fencing_token_monotonically(pin_env: Path) -> None:
     """A re-bind by a newer attempt advances the token; provenance is unchanged."""
     store = SqlProjectRevisionStore()
@@ -1564,48 +1597,134 @@ def test_bind_returns_the_authoritative_stored_row(pin_env: Path) -> None:
     assert replayed.attempt == 1
 
 
-def test_concurrent_rebinds_never_regress_the_fencing_token(pin_env: Path) -> None:
-    """Two racing re-binds must leave the *higher* token, never the lower.
+def test_bind_refuses_when_the_authoritative_reread_finds_no_row(pin_env: Path) -> None:
+    """F1: a successor must not confirm on a binding retracted mid-reconcile.
 
-    The token advance is a single conditional UPDATE, not a read-modify-write:
-    a superseded attempt (lower token) racing a successor (higher token) must
-    never let the lower token commit last, which would reopen the F1 hole (a
-    later retract scoped to that lower token could delete a successor's row).
+    ``_reconcile_existing`` re-reads the row from the database after the
+    conditional token advance and returns *that* as the authority.  If a
+    concurrent owner's retraction removes the row inside that window, the
+    re-read finds nothing; falling back to the stale ORM row would let the
+    caller reach COMPLETED with no durable binding (the F1 hole).  The window is
+    reproduced deterministically by wrapping the session factory so the
+    authoritative SELECT observes no row.
+    """
+    from sqlalchemy import Select
+
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingConflict
+    from nexus_ai_agent.storage.db import get_session
+
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact_id = "sha256:" + "9" * 64
+    asyncio.run(
+        _binding_store().bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="owner",
+            size_bytes=1,
+            attempt=1,
+        )
+    )
+
+    class _VanishingResult:
+        def scalar_one_or_none(self) -> None:
+            return None
+
+    class _VanishingSession:
+        def __init__(self, factory: Any) -> None:
+            self._factory = factory
+            self._ctx: Any = None
+            self._session: Any = None
+
+        async def __aenter__(self) -> _VanishingSession:
+            self._ctx = self._factory()
+            self._session = await self._ctx.__aenter__()
+            return self
+
+        async def __aexit__(self, *exc: object) -> Any:
+            return await self._ctx.__aexit__(*exc)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._session, name)
+
+        async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+            # Only the authoritative SELECT (a Select of the binding row) is made
+            # to observe "no row"; the conditional UPDATE and everything else run
+            # against the real session.
+            if isinstance(statement, Select):
+                return _VanishingResult()
+            return await self._session.execute(statement, *args, **kwargs)
+
+    from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
+
+    racing = SqlArtifactBindingStore(session_factory=lambda: _VanishingSession(get_session))
+    with pytest.raises(ArtifactBindingConflict):
+        asyncio.run(
+            racing.bind(
+                project_id=PROJECT_ID,
+                revision_id=r1.revision_id,
+                artifact_id=artifact_id,
+                job_id="successor",
+                size_bytes=1,
+                attempt=9,
+            )
+        )
+
+
+def test_concurrent_rebinds_never_regress_the_fencing_token(pin_env: Path) -> None:
+    """A superseded (lower-token) re-bind must never regress the stored token.
+
+    The token advance is a single conditional UPDATE, not a read-modify-write.
+    ``asyncio.gather`` alone does not prove this: if the two binds happen to run
+    serially the dangerous schedule — the *lower* token committing *last* — is
+    never exercised, and a broken read-modify-write would still leave the higher
+    token and pass.  So the dangerous schedule is forced deterministically: the
+    higher token advances first, then the superseded lower token is applied
+    after it and must be a no-op.  A concurrent leg then proves the same under
+    real contention (no deadlock, same winner).
     """
     store = SqlProjectRevisionStore()
     r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
     bindings = _binding_store()
     artifact_id = "sha256:" + "4" * 64
 
-    async def _race() -> None:
-        await asyncio.gather(
-            bindings.bind(
-                project_id=PROJECT_ID,
-                revision_id=r1.revision_id,
-                artifact_id=artifact_id,
-                job_id="job-race",
-                size_bytes=1,
-                attempt=5,
-            ),
-            bindings.bind(
-                project_id=PROJECT_ID,
-                revision_id=r1.revision_id,
-                artifact_id=artifact_id,
-                job_id="job-race",
-                size_bytes=1,
-                attempt=3,
-            ),
+    async def _bind(attempt: int, aid: str):
+        return await bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=aid,
+            job_id="job-race",
+            size_bytes=1,
+            attempt=attempt,
         )
 
-    asyncio.run(_race())
+    # Deterministic dangerous schedule: successor (5) commits, THEN the
+    # superseded attempt (3) commits last.  A read-modify-write advance would
+    # overwrite the row with 3 here; the conditional UPDATE leaves it at 5.
+    asyncio.run(_bind(5, artifact_id))
+    regressed = asyncio.run(_bind(3, artifact_id))
+    assert regressed.attempt == 5, "the lower token must never win when it commits last"
     assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).attempt == 5
+
+    # Concurrent leg on a FRESH artifact (no existing row): both tokens race the
+    # INSERT/PK conflict from a clean state, and real contention on one row must
+    # still leave the higher token.
+    race_artifact = "sha256:" + "7" * 64
+
+    async def _race() -> None:
+        await asyncio.gather(_bind(5, race_artifact), _bind(3, race_artifact))
+
+    asyncio.run(_race())
+    assert asyncio.run(bindings.resolve(PROJECT_ID, race_artifact)).attempt == 5
     # The winner's retraction still works; the loser's cannot.
     assert (
-        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-race", attempt=3))
+        asyncio.run(bindings.retract(artifact_id=race_artifact, job_id="job-race", attempt=3))
         is False
     )
     assert (
-        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-race", attempt=5)) is True
+        asyncio.run(bindings.retract(artifact_id=race_artifact, job_id="job-race", attempt=5))
+        is True
     )
 
 

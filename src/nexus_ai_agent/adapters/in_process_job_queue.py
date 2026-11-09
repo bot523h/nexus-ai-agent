@@ -1590,6 +1590,8 @@ class InProcessJobQueue:
         payload: dict[str, object] = {}
         trim_request = False
         source_snapshot: FileSnapshot | None = None
+        confirmation_committed = False
+        confirmation_publication: ArtifactPublication | None = None
         try:
             parsed = json.loads(str(row["payload_json"]))
             if not isinstance(parsed, dict):
@@ -1640,6 +1642,36 @@ class InProcessJobQueue:
                             None,
                         )
                         return
+                    # A verified attempt can be reused for recovery ONLY if its
+                    # binding is still durable.  A superseded attempt loses its
+                    # terminal CAS and its binding is retracted, but its
+                    # verified passport/attempt record stays in the history; if
+                    # this recovery path completed on that record without
+                    # re-confirming, the job would reach COMPLETED with no
+                    # binding (F1: recovery completes without bindings).  So
+                    # re-commit the binding for THIS attempt before completion —
+                    # idempotent when the canonical row still exists, and a fresh
+                    # bind (adopting the canonical row) when it was retracted.
+                    recovery_publication = self._artifact_publications.get(job_type)
+                    if (
+                        recovery_publication is not None
+                        and recovery_publication.confirm is not None
+                    ):
+                        recovery_confirm_error = await self._confirm_safely(
+                            recovery_publication, payload, prior_result, claim
+                        )
+                        if recovery_confirm_error is not None:
+                            await self._fail_owned(
+                                claim,
+                                job_type,
+                                payload,
+                                f"recovery_binding_failed:{recovery_confirm_error}",
+                                JobStatus.FAILED_TERMINAL,
+                                None,
+                            )
+                            return
+                        confirmation_committed = True
+                        confirmation_publication = recovery_publication
                     if not await asyncio.to_thread(
                         self._mark_completed,
                         claim,
@@ -1744,6 +1776,18 @@ class InProcessJobQueue:
             # failure. Keep the row recoverable for the next process — but
             # only OUR row: a newer owner's execution (or a terminal row)
             # must never be reopened by a cancelled predecessor.
+            if confirmation_committed and confirmation_publication is not None:
+                # Shutdown cancelled us AFTER the confirmation hook committed the
+                # durable binding but BEFORE the terminal CAS.  This attempt will
+                # be reopened and re-run, so its committed binding must not
+                # outlive it — otherwise the reopened job (and any recovery that
+                # reconciles the attempt) would reach COMPLETED with a binding
+                # from an execution that never completed.  Retract exactly this
+                # attempt's row, scoped to its (job_id, attempt) fencing token,
+                # before reopening the claim.
+                await self._retract_confirmation_safely(
+                    confirmation_publication, payload, result, claim
+                )
             if not await asyncio.to_thread(self._mark_pending, claim):
                 self._log_rejected(job_id, claim, JobStatus.PENDING)
             else:
@@ -1923,6 +1967,14 @@ class InProcessJobQueue:
                         return
                     confirm_error = await self._confirm_safely(publication, payload, result, claim)
                     if confirm_error is not None:
+                        # The confirmation may have COMMITTED the binding and
+                        # then raised (a partial failure: the row is durable but
+                        # the callback reported an error).  Retract exactly this
+                        # attempt's row before failing the job — scoped to the
+                        # (job_id, attempt) fencing token — so a failed execution
+                        # never leaves a committed binding behind.  This is a
+                        # no-op when nothing was committed (the common case).
+                        await self._retract_confirmation_safely(publication, payload, result, claim)
                         retract_context = dict(result)
                         retract_context["_queue_job_id"] = claim.job_id
                         retract_context["_queue_attempt"] = claim.attempt
@@ -1937,6 +1989,8 @@ class InProcessJobQueue:
                             None,
                         )
                         return
+                    confirmation_committed = True
+                    confirmation_publication = publication
                 if stored_passport is None:
                     committed = await asyncio.to_thread(self._mark_completed, claim, final_result)
                 else:

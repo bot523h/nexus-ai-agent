@@ -335,6 +335,41 @@ MUTATIONS: tuple[Mutation, ...] = (
         "F1: the token advance must be scoped to the owning job; dropping the job guard lets "
         "a different job seize ownership of the row and later retract another job's binding",
     ),
+    Mutation(
+        "non_integer_token_accepted",
+        STORE,
+        "        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 0:",
+        "        if attempt < 0:  # mutated: non-integer tokens accepted",
+        "F14: the fencing token is an integer identity; accepting a float/string/bool persists a "
+        "token an exact-token retract can never match (a float also survives the range check)",
+    ),
+    Mutation(
+        "stale_row_fallback_on_vanished_binding",
+        STORE,
+        "        if authoritative is None:\n"
+        "            # The authoritative re-read found no row: a concurrent owner\n"
+        "            # retracted the row we just reconciled against (a lost-CAS\n"
+        "            # retraction racing this successor's bind).  Confirming here would\n"
+        "            # let the caller reach COMPLETED with no durable binding — the F1\n"
+        "            # hole — so refuse closed.  A caller that still needs the artifact\n"
+        "            # re-binds (the retractor is superseded, so this cannot ping-pong:\n"
+        "            # only an attempt that already owned the row may retract it).\n"
+        "            raise ArtifactBindingConflict(\n"
+        '                "artifact binding vanished during reconciliation (retracted by its owner)"\n'
+        "            )\n"
+        "        return _as_binding(authoritative)",
+        "        return _as_binding(authoritative if authoritative is not None else row)  # mutated",
+        "F1: when the authoritative re-read finds no row the bind must fail closed; falling back "
+        "to the stale ORM row lets a successor confirm and reach COMPLETED with no binding",
+    ),
+    Mutation(
+        "retract_token_type_guard_removed",
+        STORE,
+        "        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:",
+        "        if attempt < 1:  # mutated: non-integer retract tokens accepted",
+        "F14: a non-integer retract token must be refused; accepting it can match a row an "
+        "exact-token retraction was never scoped to delete",
+    ),
 )
 
 TEST_TIMEOUT_SECONDS = 600
