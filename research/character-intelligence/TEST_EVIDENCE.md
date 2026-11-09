@@ -62,6 +62,23 @@ The one file is `research/character-intelligence/PRIVACY_AND_CONSENT.md`, a
 pre-existing markdown formatting difference that also exists on `main`; it is not
 touched by this branch (formatted-then-reverted to keep the diff honest).
 
+## 2b. GitHub Actions on this branch (measured, not assumed)
+
+Run `42638694699` on commit `8e09cf7` (the last code-bearing commit; everything after
+it is documentation): **all jobs green** — `completed success`.
+
+| job | before this work | now |
+|---|---|---|
+| `lint (ruff + mypy + version lockstep)` | failure (`ruff format --check .` red on a markdown code fence introduced on the branch) | **success** |
+| `test (pytest -m "not slow")` | failure (`ModuleNotFoundError: nacl` during collection of `tests/character_capsule`) | **success** (`120 passed, 7 skipped` for the island until DEP-001 lands) |
+| `lint-fast`, `merge-base-guard`, `release-lineage`, `migrate-postgres` | success | success |
+| `python-parity` (3.10/3.11/3.12) | cancelled after the failure | **success** ×3 |
+| `continuum-evidence` (3.10/3.11/3.12) | cancelled after the failure | **success** ×3 |
+| mutation campaigns (api-gate, trust, temporal, b2-blob, remote-key, execution-core, extras-matrix) | mixed / cancelled | **success** |
+
+CircleCI pipeline #474 is a separate system and stayed `ERROR` with logs unavailable
+from this environment (DEP-003); nothing here is claimed about it.
+
 ## 3. Repository guards
 
 ```bash
