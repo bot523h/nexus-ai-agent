@@ -30,11 +30,11 @@ import stat
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .compiler import CompositionCompiler, CompositionError
 from .contracts import CompositionPlan, ExpectedOutput, ExternalInput, PlanNode, PortBinding
-from .executor import CompositionExecutionError, CompositionExecutor
+from .executor import CompositionExecutionError, CompositionExecutor, ExecutionResult
 from .proof import ProofCarryingArtifact
 
 #: The job type the composition worker registers.
@@ -53,6 +53,7 @@ ERROR_CODES: frozenset[str] = frozenset(
         "policy_refused",
         "execution_failed",
         "verification_failed",
+        "revision_unavailable",
     }
 )
 
@@ -131,6 +132,32 @@ class CompositionJobPayload(BaseModel):
     #: project; when absent the row runs on an ephemeral project the worker
     #: creates, and the result says so (``authority``).
     project_id: str | None = Field(default=None, min_length=1, max_length=128)
+    #: The immutable project revision this row was admitted against.  When
+    #: present, the worker executes EXACTLY this revision (never the project
+    #: head, which can move after enqueue) and the row is only accepted with a
+    #: complete pin.  This mirrors ``CreativeRenderPayload``'s revision pin.
+    revision_id: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    #: The pinned revision's canonical ``state_hash``.  The pin is complete only
+    #: when both the id and its hash are present.
+    revision_hash: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _revision_pin_is_complete(self) -> CompositionJobPayload:
+        """A revision pin requires the project it belongs to and its hash."""
+        if self.revision_id is not None and (self.project_id is None or self.revision_hash is None):
+            raise ValueError(
+                "revision_id requires both project_id and revision_hash (a complete pin)"
+            )
+        return self
+
+    @property
+    def has_revision_pin(self) -> bool:
+        """Whether this row carries a complete revision pin."""
+        return (
+            self.revision_id is not None
+            and self.project_id is not None
+            and self.revision_hash is not None
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +493,41 @@ def plan_to_dict(plan: CompositionPlan) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+async def _resolve_pinned_project(data: CompositionJobPayload) -> Any | None:  # noqa: ANN401
+    """Load the EXACT revision this row was admitted against, or refuse.
+
+    A row that carries a revision pin must execute that immutable revision, not
+    the project's current head: the head can move after enqueue, and a job must
+    never silently run a different state than the one it was admitted against.
+    The store re-validates the revision's bytes, and the pin's
+    ``revision_hash`` must match the revision's canonical ``state_hash``.  Every
+    failure is a typed refusal (``revision_unavailable``); there is no fallback.
+    """
+    if data.revision_id is None:
+        return None
+    if data.project_id is None or data.revision_hash is None:  # pragma: no cover - model guard
+        raise CompositionJobError("revision_unavailable", "incomplete revision pin")
+    from nexus_ai_agent.creative.project_state.models import (
+        CrossProjectAccess,
+        RevisionIntegrityError,
+        RevisionNotFound,
+    )
+    from nexus_ai_agent.creative.project_state.store import SqlProjectRevisionStore
+
+    store = SqlProjectRevisionStore()
+    try:
+        record = await store.load_revision(data.project_id, data.revision_id)
+    except (RevisionNotFound, RevisionIntegrityError, CrossProjectAccess) as exc:
+        raise CompositionJobError(
+            "revision_unavailable", f"pinned revision cannot be loaded: {type(exc).__name__}"
+        ) from exc
+    if record.state_hash != data.revision_hash:
+        raise CompositionJobError(
+            "revision_unavailable", "pinned revision hash does not match the row's pin"
+        )
+    return record.to_project()
+
+
 async def composition_render_job(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute one composition through the canonical runtime (queue worker entry).
 
@@ -515,9 +577,18 @@ async def composition_render_job(payload: dict[str, Any]) -> dict[str, Any]:
         # refusal, never a grant minted here.
         from nexus_ai_agent.adapters.sql_application_directory import SQLApplicationDirectory
 
+        # When the row pins an immutable revision, execute EXACTLY that
+        # revision — never the live head — so the state the plan was compiled
+        # against is the state that runs.  An unloadable or mismatched pin is a
+        # typed refusal, never a silent fall back to the head.
+        try:
+            pinned_project = await _resolve_pinned_project(data)
+        except CompositionJobError as exc:
+            return {"success": False, "error_code": exc.code, "error_detail": exc.detail}
         try:
             executor = CompositionExecutor(
                 actor=actor,
+                project=pinned_project,
                 project_id=data.project_id,
                 authorizer=SQLApplicationDirectory(),
                 confirmed=data.confirmed,
@@ -606,7 +677,7 @@ async def composition_render_job(payload: dict[str, Any]) -> dict[str, Any]:
         }
     primary = claims[-1]
     primary_artifact: ProofCarryingArtifact = result.artifacts[primary["name"]]
-    return {
+    output = {
         "success": True,
         **primary,
         "outputs": claims,
@@ -620,6 +691,134 @@ async def composition_render_job(payload: dict[str, Any]) -> dict[str, Any]:
         "duration_seconds": result.duration_seconds,
         "resource_estimate": result.estimate.model_dump(mode="json"),
     }
+    if data.has_revision_pin:
+        # A pinned row executed one immutable revision and produced artifacts
+        # that must be durably bound to it (never to a head that can move).  The
+        # *measured* content address of every claimed output is recorded as an
+        # intent here; the queue's post-publication confirm hook commits the
+        # binding — committing inside the worker would bind an artifact the
+        # queue may still reject.
+        try:
+            output["artifact_bindings"] = _binding_intents(data, result)
+        except CompositionExecutionError as exc:
+            return {"success": False, "error_code": "execution_failed", "error_detail": str(exc)}
+    return output
+
+
+def _binding_intents(data: CompositionJobPayload, result: ExecutionResult) -> list[dict[str, Any]]:
+    """The measured artifact→revision binding intents for a pinned row.
+
+    One intent per claimed output, each carrying the *measured* content address
+    of the artifact bytes — never a digest copied from the producer's report.
+    An output whose bytes cannot be measured is a hard ``execution_failed``: a
+    pinned row must never claim an artifact it cannot bind.
+    """
+    from nexus_ai_agent.creative.project_state.store import (
+        content_address_of_file,
+        is_content_address,
+    )
+
+    assert data.project_id is not None and data.revision_id is not None
+    intents: list[dict[str, Any]] = []
+    for name, artifact in result.artifacts.items():
+        path = Path(artifact.output_path)
+        try:
+            measured = content_address_of_file(path)
+        except OSError as exc:
+            raise CompositionExecutionError(
+                f"artifact {name!r} is unreadable for binding: {type(exc).__name__}"
+            ) from exc
+        if not is_content_address(measured):
+            raise CompositionExecutionError(f"artifact {name!r} has no content address")
+        intents.append(
+            {
+                "artifact_id": measured,
+                "project_id": data.project_id,
+                "revision_id": data.revision_id,
+                "artifact_kind": "video" if path.suffix == ".mp4" else "image",
+                "size_bytes": int(artifact.output_size_bytes),
+            }
+        )
+    return intents
+
+
+async def composition_render_binding_confirm(
+    payload: dict[str, Any], result: dict[str, Any]
+) -> None:
+    """Queue confirm hook: durably commit the artifact→revision bindings.
+
+    Runs after the queue independently verified and published the artifact and
+    before the durable COMPLETED commit — the only point at which a binding may
+    be written, so a rejected artifact never leaves one behind.  Each digest is
+    re-measured from the *published* bytes, and every failure is a typed
+    ``CompositionJobError`` so the queue fails the job closed.  Idempotent: a
+    binding is content-addressed, so a retry is a no-op.
+    """
+    intents = result.get("artifact_bindings")
+    if not isinstance(intents, list) or not intents:
+        return  # unpinned (legacy) row: nothing to confirm
+    from nexus_ai_agent.creative.project_state.store import (
+        SqlArtifactBindingStore,
+        content_address_of_file,
+    )
+
+    published = result.get("outputs")
+    job_id = str(result.get("_queue_job_id") or "")
+    store = SqlArtifactBindingStore()
+    for intent in intents:
+        if not isinstance(intent, dict):
+            raise CompositionJobError("invalid_request", "malformed artifact binding intent")
+        artifact_path = _published_path_for(str(intent.get("artifact_id") or ""), published)
+        if artifact_path is None:
+            raise CompositionJobError(
+                "invalid_request", "a binding intent names an output that was not published"
+            )
+        try:
+            measured = content_address_of_file(artifact_path)
+        except OSError as exc:
+            raise CompositionJobError(
+                "invalid_request",
+                f"published artifact unreadable: {type(exc).__name__}",
+            ) from exc
+        if measured != intent.get("artifact_id"):
+            raise CompositionJobError(
+                "invalid_request",
+                "published artifact bytes do not match the measured binding digest",
+            )
+        try:
+            await store.bind(
+                project_id=str(intent["project_id"]),
+                revision_id=str(intent["revision_id"]),
+                artifact_id=measured,
+                job_id=job_id,
+                artifact_kind=str(intent.get("artifact_kind") or "binary"),
+                size_bytes=int(intent.get("size_bytes") or 0),
+            )
+        except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
+            raise CompositionJobError(
+                "invalid_request", f"artifact binding failed: {type(exc).__name__}: {exc}"
+            ) from exc
+
+
+def _published_path_for(artifact_id: str, outputs: Any) -> Path | None:
+    """Resolve the published path of the claim whose *published* digest matches."""
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    if not isinstance(outputs, list):
+        return None
+    for claim in outputs:
+        if not isinstance(claim, dict):
+            continue
+        raw = claim.get("artifact_path")
+        if not isinstance(raw, str) or not raw:
+            continue
+        path = Path(raw)
+        try:
+            if content_address_of_file(path) == artifact_id:
+                return path
+        except OSError:
+            continue
+    return None
 
 
 def _artifact_claims(artifacts: dict[str, ProofCarryingArtifact]) -> list[dict[str, Any]]:
@@ -659,6 +858,7 @@ __all__ = [
     "CompositionJobError",
     "CompositionJobPayload",
     "StagedInput",
+    "composition_render_binding_confirm",
     "composition_render_job",
     "guarded_input",
     "plan_from_dict",

@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -46,6 +47,12 @@ from nexus_ai_agent.creative.slideshow.ffmpeg import (
     encoder_env,
     resolve_ffmpeg_bin,
 )
+
+#: The interpreter that runs the tests is also the interpreter the child
+#: probes run under: a hard-coded absolute path (``/usr/bin/python3``) does not
+#: exist on every host, and a missing interpreter makes a security test fail for
+#: an environmental reason instead of a real control regression.
+PYTHON = sys.executable
 
 # ---------------------------------------------------------------------------
 # executable allow-list and absolute resolution
@@ -115,7 +122,7 @@ def test_the_encoder_subprocess_actually_receives_the_scrubbed_environment(
     )
     from nexus_ai_agent.creative.slideshow.ffmpeg import _run
 
-    result = _run(["/usr/bin/python3", "-c", script], timeout=30)
+    result = _run([PYTHON, "-c", script], timeout=30)
     assert result.returncode == 0
     assert "SECRET=" in result.stdout
     assert "SECRET=leaked-value" not in result.stdout
@@ -230,7 +237,7 @@ def test_a_timeout_kills_the_process_group(tmp_path: Path) -> None:
 
     started = time.monotonic()
     with pytest.raises(subprocess.TimeoutExpired):
-        _run(["/usr/bin/python3", "-c", script], timeout=2)
+        _run([PYTHON, "-c", script], timeout=2)
     elapsed = time.monotonic() - started
     assert elapsed < 30, f"the timeout did not bound the wait ({elapsed:.1f}s)"
     # The grandchild must be gone: give it a moment, then assert the marker
@@ -244,7 +251,7 @@ def test_the_encoder_child_runs_in_its_own_session(tmp_path: Path) -> None:
     script = "import os;print(os.getpid(), os.getpgid(0), os.getppid())"
     from nexus_ai_agent.creative.slideshow.ffmpeg import _run
 
-    result = _run(["/usr/bin/python3", "-c", script], timeout=30)
+    result = _run([PYTHON, "-c", script], timeout=30)
     assert result.returncode == 0
     pid, pgid, ppid = (int(part) for part in result.stdout.split())
     assert pgid == pid, "the child must lead its own process group"
@@ -257,7 +264,7 @@ def test_the_kill_helper_escalates_to_sigkill() -> None:
 
     process = subprocess.Popen(  # noqa: S603 - test-local, argv list
         [
-            "/usr/bin/python3",
+            PYTHON,
             "-c",
             "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(120)",
         ],
@@ -756,13 +763,43 @@ def test_a_timed_out_encoder_group_is_killed_even_when_its_leader_exits() -> Non
 
 
 def _process_group_alive(group: int) -> bool:
+    """Whether any *runnable* member of the process group survives.
+
+    A member that has exited but not yet been reaped (a zombie) still makes
+    ``killpg(group, 0)`` succeed, and on a host whose PID 1 does not reap
+    orphans a killed descendant lingers as a zombie indefinitely.  A zombie
+    runs no code, so it is not a survivor; counting it would fail this
+    assertion for a reason that has nothing to do with the kill.
+    """
     try:
         os.killpg(group, 0)
     except ProcessLookupError:
         return False
     except PermissionError:  # pragma: no cover
         return True
-    return True
+    return _group_has_a_live_member(group)
+
+
+def _group_has_a_live_member(group: int) -> bool:
+    """True only if a non-zombie process is still in *group* (``/proc`` scan)."""
+    proc = Path("/proc")
+    if not proc.is_dir():  # pragma: no cover - non-Linux fallback
+        return True
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text()
+        except OSError:  # the process vanished between listing and reading
+            continue
+        try:
+            rest = stat[stat.rindex(")") + 2 :].split()
+            state, pgid = rest[0], int(rest[2])
+        except (ValueError, IndexError):  # pragma: no cover - malformed /proc row
+            continue
+        if pgid == group and state != "Z":
+            return True
+    return False
 
 
 def _live_registry_fingerprint() -> str:

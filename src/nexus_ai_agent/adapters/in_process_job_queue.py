@@ -272,22 +272,49 @@ class ArtifactPublication:
 def default_artifact_publications() -> dict[str, ArtifactPublication]:
     """Built-in publications keyed by job type (task-181).
 
-    Only ``pdf_extract`` — the single lane whose artifact destination
+    ``pdf_extract`` — the single lane whose artifact destination
     (``<stem>.extracted.txt`` sidecar) lives *outside* the job workspace.
     Workspace-scoped lanes (creative_render / slideshow_render / story) are
     published at delivery, after verification, by the completion notifier.
+
+    ``creative_composition`` — its artifacts are workspace-scoped and referenced
+    by the plan itself, so it is published *in place* (no relocation); the
+    publication exists to attach the mandatory durable ``confirm`` that commits
+    each artifact's measured content address against the immutable revision the
+    row was admitted against (task-282 Slice 2, ADR 0014).  The no-op
+    ``publish``/``retract`` keep the queue's single confirm boundary while
+    leaving the plan-addressed artifact paths intact for the re-probe.
     """
+    from nexus_ai_agent.creative.composition.job import (
+        composition_render_binding_confirm,
+    )
     from nexus_ai_agent.jobs.feature_verification import (
         finalize_pdf_text_artifact,
         publish_pdf_text_artifact,
         retract_pdf_text_artifact,
     )
 
+    def _composition_publish(
+        payload: dict[str, object], result: dict[str, object]
+    ) -> dict[str, object]:
+        # In-place: the artifact already lives at the path the plan names, which
+        # the verifier re-probes.  No rename, no backup, no patch.
+        return {}
+
+    def _composition_retract(payload: dict[str, object], result: dict[str, object]) -> None:
+        # Nothing was relocated, so there is nothing to retract.
+        return None
+
     return {
         "pdf_extract": ArtifactPublication(
             publish=publish_pdf_text_artifact,
             retract=retract_pdf_text_artifact,
             finalize=finalize_pdf_text_artifact,
+        ),
+        "creative_composition": ArtifactPublication(
+            publish=_composition_publish,
+            retract=_composition_retract,
+            confirm=composition_render_binding_confirm,
         ),
     }
 
