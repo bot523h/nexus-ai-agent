@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-09T10:09:40Z",
+  "updated_at": "2026-11-09T12:23:49Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8612,7 +8612,7 @@
       "title_fa": "هوش شخصیت نگار: کپسول نسخه‌بندی‌شدهٔ شخصیت و موتور راستی‌آزمایی پیوستگی (نمونهٔ مستقل ARENA-B)",
       "zone": "nagar-character-intelligence",
       "priority": "P1",
-      "status": "active",
+      "status": "completed_released",
       "scope": [
         "Build a self-contained Character Intelligence prototype: immutable character identity with mutable, independently versioned modules (face/body/hair/wardrobe/voice/motion/canon), content-addressed reference assets with integrity evidence, scene/shot overrides, wardrobe timeline rules, canon engine with conflict detection, consent + access-control + encryption-at-rest contract, a measured continuity verifier with calibrated per-dimension thresholds and explicit verdict vocabulary, a reproducible synthetic benchmark with FAR/FRR measured on a held-out split, automated tests, an evidence bundle and a versioned integration-contract proposal. Everything lives under research/character-intelligence/, experiments/character_capsule/, tests/character_capsule/ and scripts/character_capsule/. No edits to src/nexus_ai_agent/**, pyproject.toml, CI, .agents/board.json zones owned by others, or any Arena-1 composition/canonical-execution file; no second queue, bus, registry or ledger is introduced."
       ],
@@ -8649,12 +8649,12 @@
         "scripts/character_capsule/"
       ],
       "owner_hint": "ARENA-B",
-      "agent_branch": "arena/337c3bc1-nexus-ai-agent",
-      "claimed_at": "2026-11-09T10:09:40Z",
+      "agent_branch": "",
+      "claimed_at": null,
       "ttl_hours": 24,
       "gates_owner": false,
       "note": "",
-      "generation": 1
+      "generation": 2
     }
   ],
   "deferred_log": [

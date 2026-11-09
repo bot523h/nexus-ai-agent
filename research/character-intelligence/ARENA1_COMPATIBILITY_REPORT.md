@@ -22,6 +22,30 @@ docs/architecture/adr/**                             changed=0
 pyproject.toml                                       changed=0
 ```
 
+The same check over the whole tree confirms the diff against the base commit
+`5ed6d4e` contains **zero rows** under `src/`, `docs/`, `pyproject.toml`,
+`tests/unit/` and `tests/architecture/`:
+
+```
+git diff --name-only 5ed6d4e..HEAD -- src docs pyproject.toml tests/unit tests/architecture
+→ 0 rows
+```
+
+Paths that the mission names but that are **absent** in this checkout are reported
+as absent, not as "unchanged" — nothing can be unchanged if it does not exist:
+
+| path | state in this checkout |
+|---|---|
+| `src/nexus_ai_agent/creative/composition/` | **absent** |
+| `tests/unit/test_composition_runtime.py` | **absent** |
+| `docs/ops/COMPOSITION_RUNTIME.md` | **absent** |
+| `docs/architecture/COMPOSITION_THREAT_MODEL.md` | **absent** |
+| `docs/architecture/NAGAR_COMPOSITION_RUNTIME_REPORT.md` | **absent** |
+| `src/nexus_ai_agent/creative/studio/`, `creative/rendering/`, `creative/packs/`, `creative/render_jobs.py` | present, **unchanged** (0 rows) |
+| `src/nexus_ai_agent/nagar/**` incl. `nagar/ibpc/` | present, **unchanged** (0 rows) |
+| `src/nexus_ai_agent/application/ports/job_queue.py` | present, **unchanged** (0 rows) |
+| `docs/architecture/adr/`, `pyproject.toml`, CI | present, **unchanged** (0 rows) |
+
 The complete change set of this mission is confined to four new paths plus the
 board claim:
 
