@@ -2,11 +2,11 @@
   "generated_by": "scripts/collect_composition_evidence.py",
   "git": {
     "branch": "arena/da6837a6-nexus-ai-agent",
-    "head_sha": "420c76f712c61cc9a57ab7be773c2f96947b298e",
-    "base_sha": "420c76f712c61cc9a57ab7be773c2f96947b298e",
+    "head_sha": "96f0a467614d0ba874e9560c2528c40f0b6b1621",
+    "base_sha": "96f0a467614d0ba874e9560c2528c40f0b6b1621",
     "origin_main": "5ed6d4e10be55f5baf5e9f2a8aa99775577621db",
-    "status": "M evidence/composition_benchmark.json\n M evidence/composition_benchmark_queue.json\n M evidence/composition_evidence.json",
-    "commit_count_since_base": "9"
+    "status": "",
+    "commit_count_since_base": "10"
   },
   "environment": {
     "python": "3.11.2",
@@ -191,7 +191,7 @@
   "real_composition": {
     "plan_fingerprint": "sha256:6eceb42be923659971e40517fa1b124f0d9c7ae174004e085af7914f6abf18da",
     "registry_fingerprint": "sha256:b30075f938eb61600b8281bda34ea6c09a3422a01df681fdf51768678110fe41",
-    "artifact_path": "/tmp/nagar-evidence-atuoh90t/work/node_video/video.mp4",
+    "artifact_path": "/tmp/nagar-evidence-9kstkim4/work/node_video/video.mp4",
     "artifact_sha256": "sha256:2f28cfc31bcc1d5003b269aaab9f0186b7b8211d183372fc4afd7fa83a4de327",
     "artifact_size_bytes": 2473,
     "integrity": {
@@ -237,13 +237,13 @@
         "input_hashes": {
           "source": "sha256:ee4167edf543dc95a5c5ed1322f1427cf8fb8d8907a44da2f450fb615b9f505f"
         },
-        "output_path": "/tmp/nagar-evidence-atuoh90t/work/node_resize/resize.png",
+        "output_path": "/tmp/nagar-evidence-9kstkim4/work/node_resize/resize.png",
         "output_hash": "sha256:43a84539b3a5d434c5801ac7f1f56009cbf8fc7816c5f896a904e9ca6631e309",
         "output_size_bytes": 1972,
         "duration_seconds": 0.0,
         "state_revision": 2,
-        "state_hash": "sha256:cf639838b071765a3e5ae4b747a49d501bbba258fe7256f01f7899a96f43a726",
-        "asset_id": "derived_593c2ef3dd2a",
+        "state_hash": "sha256:ed314696c723a0a91947247cbb834d8a26ceba051781ae18c0e4edf5379c6baa",
+        "asset_id": "derived_29ca9c5d9e0b",
         "semantic": {
           "verified": true,
           "method": "independent_image_decode",
@@ -266,13 +266,13 @@
         "input_hashes": {
           "source": "sha256:43a84539b3a5d434c5801ac7f1f56009cbf8fc7816c5f896a904e9ca6631e309"
         },
-        "output_path": "/tmp/nagar-evidence-atuoh90t/work/node_gray/gray.png",
+        "output_path": "/tmp/nagar-evidence-9kstkim4/work/node_gray/gray.png",
         "output_hash": "sha256:6e1eb4594f2b29059a4bf6bd88d0c6e501cdf37f0e781200c84800b92f9a9356",
         "output_size_bytes": 1308,
         "duration_seconds": 0.0,
         "state_revision": 4,
-        "state_hash": "sha256:be262bd90e9e2d842c1994ad1edcb3cdd88d6da58d4f48391e4170e55feaff8d",
-        "asset_id": "derived_4c8b4e03bd72",
+        "state_hash": "sha256:dd7f54469e26ba47825832635ca8ce6e57c04b0ed7654d67a3447aee4c26162f",
+        "asset_id": "derived_612f684ddbc1",
         "semantic": {
           "verified": true,
           "method": "independent_image_decode",
@@ -316,13 +316,13 @@
         "input_hashes": {
           "source": "sha256:6e1eb4594f2b29059a4bf6bd88d0c6e501cdf37f0e781200c84800b92f9a9356"
         },
-        "output_path": "/tmp/nagar-evidence-atuoh90t/work/node_video/video.mp4",
+        "output_path": "/tmp/nagar-evidence-9kstkim4/work/node_video/video.mp4",
         "output_hash": "sha256:2f28cfc31bcc1d5003b269aaab9f0186b7b8211d183372fc4afd7fa83a4de327",
         "output_size_bytes": 2473,
         "duration_seconds": 0.0,
         "state_revision": 6,
-        "state_hash": "sha256:186f13b844256d77c44835869f7f0c60632ce71fe5adba37eb2da515bb01a513",
-        "asset_id": "derived_041d9b5cd3cb",
+        "state_hash": "sha256:0de145e461178abf163c0cb7b2e856c90f1f1cc5272ee23155fff0797f3c985d",
+        "asset_id": "derived_49874142975c",
         "semantic": {
           "verified": true,
           "method": "independent_video_decode",
@@ -347,8 +347,8 @@
       "ffmpeg_buildconf_sha256": "1473b6410dc4c9647899005fcf0b08edd0289f2677ce83c992d79d5d60ed433a"
     },
     "state_revision": 6,
-    "state_hash": "sha256:186f13b844256d77c44835869f7f0c60632ce71fe5adba37eb2da515bb01a513",
-    "duration_seconds": 0.3173760049999146,
+    "state_hash": "sha256:0de145e461178abf163c0cb7b2e856c90f1f1cc5272ee23155fff0797f3c985d",
+    "duration_seconds": 0.3293714589999581,
     "resource_estimate": {
       "peak_ram_mb": 512,
       "total_ram_mb": 1024,
