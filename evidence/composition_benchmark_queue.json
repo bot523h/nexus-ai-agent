@@ -1,0 +1,56 @@
+{
+  "runs": 10,
+  "failures": 0,
+  "failure_rate": 0.0,
+  "node_count": 3,
+  "compile": {
+    "mean_ms": 86.975,
+    "median_ms": 75.655,
+    "p95_ms": 196.417,
+    "min_ms": 69.524,
+    "max_ms": 196.417
+  },
+  "queue": {
+    "mean_ms": 2.711,
+    "median_ms": 2.617,
+    "p95_ms": 3.69,
+    "min_ms": 2.316,
+    "max_ms": 3.69
+  },
+  "worker": {
+    "mean_ms": 742.774,
+    "median_ms": 736.466,
+    "p95_ms": 833.972,
+    "min_ms": 699.154,
+    "max_ms": 833.972
+  },
+  "verify": {
+    "mean_ms": 52.163,
+    "median_ms": 50.223,
+    "p95_ms": 64.708,
+    "min_ms": 48.095,
+    "max_ms": 64.708
+  },
+  "total": {
+    "mean_ms": 925.613,
+    "median_ms": 890.88,
+    "p95_ms": 1250.526,
+    "min_ms": 838.93,
+    "max_ms": 1250.526
+  },
+  "output_size_bytes": {
+    "mean": 2990.0,
+    "max": 2990
+  },
+  "reproducible_fingerprint": true,
+  "plan_fingerprint": "sha256:f366e646e8f63843a9e9004069481328c5db6619dfa388690c7c7556bf7d356e",
+  "environment": {
+    "python": "3.11.2",
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
+    "cpu_count": 2,
+    "ffmpeg_binary": "/home/user/nexus-ai-agent/.venv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2"
+  },
+  "peak_rss_mb": 91.32,
+  "wall_clock_seconds": 9.342,
+  "mode": "queue"
+}

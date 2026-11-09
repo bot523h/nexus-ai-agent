@@ -155,6 +155,13 @@ def test_only_the_render_lane_spawns_a_process() -> None:
     The pack plans, the adapter encodes.  Anything else spawning a process — or
     handing a string to a shell — would put an unauditable side effect inside
     the boundary the manifest describes.
+
+    The gate counts **spawn sites**, not one particular ``subprocess`` call:
+    the lane uses ``Popen`` so that a timeout can kill the encoder's whole
+    process group (an encoder that forked helpers must not outlive the
+    deadline).  ``subprocess.run``'s own timeout kills only the direct child.
+    The intent — one spawn site, argv only, never a shell — is unchanged and
+    is now additionally checked for the process group.
     """
     spawners = {
         path.relative_to(ADAPTER).as_posix()
@@ -166,17 +173,20 @@ def test_only_the_render_lane_spawns_a_process() -> None:
     )
     source = (ADAPTER / "ffmpeg.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    run_calls = [
+    spawn_calls = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "run"
+        and node.func.attr in {"run", "Popen"}
     ]
-    assert len(run_calls) == 1, "the render lane must run the encoder in one place"
-    assert not any(keyword.arg == "shell" for keyword in run_calls[0].keywords), (
+    assert len(spawn_calls) == 1, "the render lane must run the encoder in one place"
+    assert not any(keyword.arg == "shell" for keyword in spawn_calls[0].keywords), (
         "the encoder must never be handed to a shell"
     )
+    # The spawn is in its own session so the deadline can reach the group.
+    assert "start_new_session=True" in source
+    assert "killpg" in source, "the deadline must reach the encoder's whole process group"
     # The encoder always writes the staging file; publishing is a rename.
     assert "output_path=staging" in source
     assert "replace(destination)" in source

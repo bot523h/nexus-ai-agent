@@ -39,6 +39,8 @@ from nexus_ai_agent.creative.studio.models import (
     CommandValidationError,
     EditTransaction,
     Marker,
+    MediaContract,
+    MediaPort,
     PermissionLevel,
     Playhead,
     Project,
@@ -106,6 +108,50 @@ class OperationSpec:
     #: operations that do not advertise ``preview``; registration refuses both
     #: an undeclared preview advertisement and an orphaned declaration.
     preview_semantics: PreviewSemantics | None = None
+    #: The typed media ports this capability consumes and produces.
+    #:
+    #: This is the *canonical* place a capability says "I take an image and I
+    #: give back an image" — it lives on the operation spec next to the
+    #: permission level and the input schema, so a composition compiler can
+    #: type-check a dataflow against the **same** registry the command bus
+    #: authorizes against.  A capability with no media ports is a pure state
+    #: mutation (the majority of the catalog) and is not composable.
+    media_inputs: tuple[MediaPort, ...] = ()
+    media_outputs: tuple[MediaPort, ...] = ()
+    #: The input-model fields an **executor** fills from measured media facts.
+    #:
+    #: A composition node's ``params`` carry every *other* field of the
+    #: canonical input schema: the caller chooses the parameters, the executor
+    #: measures the bytes and supplies the facts (the source asset id, the
+    #: content digests, the produced geometry).  Declaring the split on the
+    #: canonical spec keeps one schema for both roles and lets the compiler
+    #: validate the caller's parameters against the *same* schema the bus
+    #: validates the whole command against.
+    media_derived_fields: tuple[str, ...] = ()
+
+    @property
+    def is_composable(self) -> bool:
+        """Can this capability take part in a typed media composition?"""
+        return bool(self.media_inputs) and bool(self.media_outputs)
+
+    def media_input(self, name: str) -> MediaPort:
+        for port in self.media_inputs:
+            if port.name == name:
+                return port
+        raise KeyError(f"unknown media input port: {name!r}")
+
+    def media_output(self, name: str) -> MediaPort:
+        for port in self.media_outputs:
+            if port.name == name:
+                return port
+        raise KeyError(f"unknown media output port: {name!r}")
+
+    @property
+    def media_contract(self) -> MediaContract | None:
+        """The single-output media contract, when the capability has one."""
+        if len(self.media_outputs) != 1:
+            return None
+        return self.media_outputs[0].contract
 
     @property
     def effective_permissions(self) -> tuple[str, ...]:
@@ -231,6 +277,15 @@ class CapabilityRegistry:
                 f"{spec.operation_id}: preview_semantics declared but preview mode "
                 "is not advertised"
             )
+        # Media ports are part of the capability contract: a duplicate port name
+        # would make a composition binding ambiguous, so registration refuses it
+        # instead of letting the first match win at bind time.
+        media_input_names = [port.name for port in spec.media_inputs]
+        if len(set(media_input_names)) != len(media_input_names):
+            raise ValueError(f"{spec.operation_id}: duplicate media input port name")
+        media_output_names = [port.name for port in spec.media_outputs]
+        if len(set(media_output_names)) != len(media_output_names):
+            raise ValueError(f"{spec.operation_id}: duplicate media output port name")
         _semver(capability_version)
         capability_id = f"{domain}.{capability}"
         dom = self._domains.setdefault(domain, Domain(name=domain))

@@ -573,3 +573,114 @@ class CommandResult(BaseModel):
     output: dict[str, Any] = Field(default_factory=dict)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
     undo_available: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Typed media contract (capability contract completion, ADR 0014)
+# ---------------------------------------------------------------------------
+
+
+class MediaContract(BaseModel):
+    """The typed shape of one media value.
+
+    A capability declares what it *consumes* and what it *produces* with this
+    model.  Every field is a **constraint**, not a description: ``None`` means
+    "unconstrained on this axis", and a concrete value means "a produced value
+    must match".  That makes compatibility a real predicate over the media
+    contract instead of a bare ``kind == kind`` check, and it is what lets a
+    composition compiler reject ``image -> video`` bindings that are really
+    ``image -> audio``.
+
+    The axis set is deliberately the media truth the runtime can actually
+    measure today: a verifier re-measures these properties from the produced
+    bytes, so a contract that cannot be measured must not be declared.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["image", "video", "audio", "data"]
+    container: str | None = Field(default=None, min_length=1, max_length=64)
+    codec: str | None = Field(default=None, min_length=1, max_length=64)
+    pixel_format: str | None = Field(default=None, min_length=1, max_length=64)
+    color_space: str | None = Field(default=None, min_length=1, max_length=64)
+    frame_rate: float | None = Field(default=None, gt=0, le=1000)
+    time_base: str | None = Field(default=None, min_length=1, max_length=32)
+    sample_rate: int | None = Field(default=None, gt=0, le=768_000)
+    channel_layout: str | None = Field(default=None, min_length=1, max_length=64)
+    bit_depth: int | None = Field(default=None, ge=1, le=64)
+    alpha: Literal["none", "opaque", "straight", "premultiplied"] | None = None
+    width: int | None = Field(default=None, ge=1, le=16384)
+    height: int | None = Field(default=None, ge=1, le=16384)
+    duration_us_min: int | None = Field(default=None, ge=0)
+    duration_us_max: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _validate(self) -> MediaContract:
+        if self.duration_us_min is not None and self.duration_us_max is not None:
+            if self.duration_us_min > self.duration_us_max:
+                raise ValueError("duration_us_min must not exceed duration_us_max")
+        if self.kind != "video" and self.frame_rate is not None:
+            raise ValueError("frame_rate is only meaningful for video")
+        if self.kind not in ("audio", "video") and self.sample_rate is not None:
+            raise ValueError("sample_rate is only meaningful for audio/video")
+        if self.kind not in ("audio", "video") and self.channel_layout is not None:
+            raise ValueError("channel_layout is only meaningful for audio/video")
+        if self.kind not in ("image", "video") and self.pixel_format is not None:
+            raise ValueError("pixel_format is only meaningful for image/video")
+        return self
+
+    def accepts(self, produced: MediaContract) -> bool:
+        """True when a value shaped like *produced* satisfies this contract.
+
+        Fail-closed: an unknown axis on the produced side never satisfies a
+        constrained axis on the required side.
+        """
+        if self.kind != produced.kind:
+            return False
+        for axis in (
+            "container",
+            "codec",
+            "pixel_format",
+            "color_space",
+            "time_base",
+            "channel_layout",
+        ):
+            required = getattr(self, axis)
+            if required is not None and getattr(produced, axis) != required:
+                return False
+        for axis in ("frame_rate", "sample_rate", "bit_depth", "width", "height"):
+            required = getattr(self, axis)
+            if required is not None and getattr(produced, axis) != required:
+                return False
+        if self.alpha is not None and produced.alpha != self.alpha:
+            return False
+        if (
+            self.duration_us_min is not None
+            and produced.duration_us_min is not None
+            and produced.duration_us_min < self.duration_us_min
+        ):
+            return False
+        if (
+            self.duration_us_max is not None
+            and produced.duration_us_max is not None
+            and produced.duration_us_max > self.duration_us_max
+        ):
+            return False
+        return True
+
+
+class MediaPort(BaseModel):
+    """One named media port of a capability.
+
+    ``name`` is the port's identifier inside the capability; ``contract`` is
+    the shape the port accepts (inputs) or guarantees (outputs).  ``required``
+    marks an input port that must be bound -- an unbound required port is a
+    compile error, never a default.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=64)
+    contract: MediaContract
+    required: bool = True
+    description: str = Field(default="", max_length=500)
