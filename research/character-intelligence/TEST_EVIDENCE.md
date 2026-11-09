@@ -22,6 +22,16 @@ PYTHONPATH=. pytest tests/character_capsule --noconftest -q
 127 passed, 2 warnings in 66.39s
 ```
 
+With PyNaCl absent (the CI install, until DEP-001 lands):
+
+```
+120 passed, 7 skipped, 2 warnings in 64.39s
+  SKIPPED PyNaCl is not a dependency of this repository  (×7)
+```
+
+The skips are mechanical (`pytest.importorskip`), carry the reason, and are visible
+with `-rs`, which the repository CI already passes. Nothing is silently "green".
+
 The 58 pre-existing tests are unchanged except where a *contract* changed on
 purpose (the three evidence tests that asserted a self-signed bundle was `INVALID`
 now assert the closed vocabulary; the two benchmark tests now address
@@ -140,7 +150,19 @@ The second row is F20 seen from the outside: before the fix this shot was scored
 `VERIFIED_WITH_LIMITATIONS`; now it is refused before any measurement, and the refusal
 names both digests.
 
-## 6. Pre-fix baseline (what these tests would have caught)
+## 6. Dependencies registered (protected paths I may not enter)
+
+| id | dependency | why it is not mine | consequence today |
+|---|---|---|---|
+| DEP-001 | `pynacl` must be added to the `dev` extra in `pyproject.toml` | `pyproject.toml` is a protected path for this task | the 7 crypto tests `importorskip("nacl")` with a printed reason in a CI install that lacks PyNaCl; locally (PyNaCl 1.6.2) all 127 pass. CI cannot exercise the envelope until the dependency lands. |
+| DEP-002 | the repository CI job must run `tests/character_capsule` with `numpy` present (it already is a core dependency) | CI configuration is a protected path | no action needed today; recorded so the requirement is not rediscovered later |
+| DEP-003 | independent reviewer for the mission's "INDEPENDENT REVIEW" phase | an agent may not review its own work | reported **BLOCKED**: Sourcery produced the findings (not a second reviewer), CodeRabbit was in `skipping`, CircleCI #474 was `ERROR` and its logs were not retrievable from this environment |
+| DEP-004 | signed calibration artifacts / countersigned timestamps | new cryptographic authority, outside the hardening scope | replay of a correctly signed old bundle remains possible; stated in `THREAT_MODEL.md` gaps 4–6 |
+
+Registering these is deliberate: a finding that needs a protected path is not
+"fixed elsewhere", it is *not fixed here*, and saying so is part of the result.
+
+## 7. Pre-fix baseline (what these tests would have caught)
 
 The findings were first reproduced on `5fa6470` before any fix was written; the
 table in `FINDINGS_TRIAGE.md` records, per finding, the observed pre-fix behaviour

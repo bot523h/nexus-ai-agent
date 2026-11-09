@@ -155,7 +155,17 @@ Stated explicitly, because a report that claims none is not credible:
    0.6 at the accept boundary. This is a measurement limitation, disclosed in the
    benchmark, not a control that is claimed to work.
 
-## 9. Non-goals (unchanged, per mission constraints)
+## 9. Dependencies on protected paths
+
+This task may not edit `pyproject.toml` or CI configuration. Two consequences are
+registered as dependencies rather than worked around (`TEST_EVIDENCE.md` §6):
+`pynacl` is not in the `dev` extra, so the seven envelope/signature tests skip with a
+printed reason in a CI install (they pass locally with PyNaCl 1.6.2); and the
+independent-review phase is **BLOCKED** because no second reviewer was available
+(Sourcery produced the findings; CodeRabbit was skipping; CircleCI #474 errored with
+logs unavailable here).
+
+## 10. Non-goals (unchanged, per mission constraints)
 
 No edits to `src/nexus_ai_agent/**`, `pyproject.toml`, CI configuration or
 `docs/architecture/**`; no new queue/ledger/CommandBus/parallel authority; no

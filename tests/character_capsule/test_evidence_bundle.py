@@ -89,7 +89,9 @@ def test_a_signature_alone_is_not_authenticity(tmp_path):
     key generated inside it, which any forger can do. Without a consumer-supplied
     anchor the strongest true statement is UNTRUSTED_SIGNER.
     """
-    from nacl import signing
+    signing = pytest.importorskip(
+        "nacl.signing", reason="PyNaCl is not a dependency of this repository"
+    )
 
     bundle, files = _bundle(tmp_path)
     key_file = tmp_path / "signing.hex"
@@ -102,7 +104,9 @@ def test_a_signature_alone_is_not_authenticity(tmp_path):
 
 
 def test_the_consumer_trust_anchor_makes_a_signature_valid(tmp_path):
-    from nacl import signing
+    signing = pytest.importorskip(
+        "nacl.signing", reason="PyNaCl is not a dependency of this repository"
+    )
 
     bundle, files = _bundle(tmp_path)
     key = signing.SigningKey.generate()
@@ -119,7 +123,9 @@ def test_the_consumer_trust_anchor_makes_a_signature_valid(tmp_path):
 
 
 def test_an_expected_key_id_mismatch_is_refused(tmp_path):
-    from nacl import signing
+    signing = pytest.importorskip(
+        "nacl.signing", reason="PyNaCl is not a dependency of this repository"
+    )
 
     bundle, files = _bundle(tmp_path)
     key = signing.SigningKey.generate()
@@ -133,7 +139,9 @@ def test_an_expected_key_id_mismatch_is_refused(tmp_path):
 
 
 def test_signature_does_not_survive_an_edit(tmp_path):
-    from nacl import signing
+    signing = pytest.importorskip(
+        "nacl.signing", reason="PyNaCl is not a dependency of this repository"
+    )
 
     bundle, _ = _bundle(tmp_path)
     key_file = tmp_path / "signing.hex"
@@ -148,7 +156,9 @@ def test_signature_does_not_survive_an_edit(tmp_path):
 
 
 def test_a_foreign_key_does_not_verify(tmp_path):
-    from nacl import signing
+    signing = pytest.importorskip(
+        "nacl.signing", reason="PyNaCl is not a dependency of this repository"
+    )
 
     bundle, _ = _bundle(tmp_path)
     signer = tmp_path / "signer.hex"
@@ -186,6 +196,8 @@ def test_a_reamed_key_is_reported_not_verified(tmp_path):
     bundle, files = _bundle(tmp_path)
     with pytest.raises(ValidationError):
         TrustAnchor(public_key_hex="zz" * 32)
+    # the forged-signature half of this test needs a backend; without one the
+    # bundle is NOT_VERIFIABLE, which is asserted in the branch below
     # A signed bundle with an unusable trusted key must not read as VALID.
     bundle_payload = bundle.to_dict()
     bundle_payload["signature"] = {

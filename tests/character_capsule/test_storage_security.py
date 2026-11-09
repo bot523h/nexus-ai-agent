@@ -175,6 +175,9 @@ def test_f02b_only_the_owner_role_carries_every_permission(tmp_path):
 
 def test_f04_a_cipher_actually_encrypts_the_stored_bytes(tmp_path):
     """F04: ``cipher=None`` stored the PNG in clear and nothing recorded it."""
+    pytest.importorskip(
+        "nacl", reason="PyNaCl is not a dependency of this repository; the crypto tests skip here"
+    )
     cache = tmp_path / "cache"
     cache.mkdir()
     cipher = EnvelopeCipher(random_key_material())
@@ -215,6 +218,7 @@ def test_f04b_plaintext_storage_requires_a_named_reason(tmp_path):
 
 
 def test_f05_an_encrypted_asset_reads_back_byte_identical(tmp_path):
+    pytest.importorskip("nacl", reason="PyNaCl is not a dependency of this repository")
     cipher = EnvelopeCipher(random_key_material())
     repo, character_id = _seed(tmp_path, cipher=cipher)
     assert repo.asset_bytes("AST-000001", character_id=character_id) == PNG
