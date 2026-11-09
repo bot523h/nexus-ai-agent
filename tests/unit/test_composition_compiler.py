@@ -495,3 +495,77 @@ def test_a_plan_over_the_disk_quota_is_refused(registry, monkeypatch) -> None:
         )
     assert excinfo.value.code == "capability_quota_exceeded"
     assert "at most 1 MB" in excinfo.value.detail
+
+
+def test_an_operation_with_two_media_inputs_is_refused_before_any_execution(
+    registry, monkeypatch
+) -> None:
+    """Fan-in is refused at compile time, before a single executor is reached.
+
+    The executor feeds exactly one media value into one canonical call, so a
+    node declaring two media inputs cannot be composed faithfully.  The live
+    catalog has no such operation, so this registers a **synthetic** one on a
+    private registry copy: the compiler contract is under test, not a fixture.
+    ``subprocess`` is poisoned to prove the refusal happens before dispatch.
+    """
+    from pydantic import BaseModel, ConfigDict
+
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+    from nexus_ai_agent.creative.studio.capabilities import OperationSpec
+    from nexus_ai_agent.creative.studio.models import (
+        MediaContract,
+        MediaPort,
+        PermissionLevel,
+    )
+
+    class _TwoInputProbeInput(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+    scratch = build_runtime_registry()
+    scratch.register_operation(
+        "media",
+        "two_input_probe",
+        OperationSpec(
+            operation_id="media.two_input_probe",
+            description="a synthetic operation that declares two media inputs",
+            permission_level=PermissionLevel.REVERSIBLE,
+            input_model=_TwoInputProbeInput,
+            handler=lambda project, context: None,  # the compiler never calls it
+            media_inputs=(
+                MediaPort(name="a", contract=MediaContract(kind="image")),
+                MediaPort(name="b", contract=MediaContract(kind="image")),
+            ),
+            media_outputs=(MediaPort(name="out", contract=MediaContract(kind="image")),),
+        ),
+        capability_version="1.0.0",
+    )
+    descriptor = scratch.describe("media.two_input_probe")
+    node = PlanNode(
+        node_id="fanin",
+        operation="media.two_input_probe",
+        capability_id=descriptor.capability_id,
+        capability_version=descriptor.version,
+        operation_schema_version=descriptor.operation_schema_version,
+        bindings=(
+            PortBinding(input_port="a", source="external", external="src"),
+            PortBinding(input_port="b", source="external", external="src2"),
+        ),
+    )
+    plan = CompositionPlan(
+        nodes=(node,),
+        external_inputs=(
+            ExternalInput(name="src", media_kind="image"),
+            ExternalInput(name="src2", media_kind="image"),
+        ),
+        expected_outputs=(ExpectedOutput(name="final", node_id="fanin", output_port="out"),),
+    )
+
+    def _no_subprocess(*args, **kwargs):  # pragma: no cover - must never run
+        raise AssertionError("fan-in was refused only after a subprocess was spawned")
+
+    monkeypatch.setattr("subprocess.Popen", _no_subprocess)
+    monkeypatch.setattr("subprocess.run", _no_subprocess)
+    with pytest.raises(CompositionError) as excinfo:
+        CompositionCompiler(scratch).compile(plan)
+    assert excinfo.value.code == "unsupported_media_fan_in"
+    assert "two_input_probe" in excinfo.value.detail

@@ -405,29 +405,31 @@ unknown_categories         : model, model_weights, dataset, input_asset,
 
 | فایل | نتیجه |
 |---|---|
-| `tests/unit/test_composition_compiler.py` | **۲۲ passed** |
-| `tests/unit/test_composition_contracts.py` | **۲۵ passed** |
+| `tests/unit/test_composition_compiler.py` | **۲۶ passed** |
+| `tests/unit/test_composition_contracts.py` | **۲۸ passed** |
 | `tests/unit/test_composition_license.py` | **۲۱ passed** |
 | `tests/unit/test_composition_proof.py` | **۲۰ passed** |
-| `tests/unit/test_composition_runtime.py` | **۱۶ passed** |
-| `tests/unit/test_composition_security.py` | **۳۳ passed** |
-| `tests/unit/test_composition_verifier.py` | **۱۱ passed** |
-| `tests/unit/test_media_transform_pack.py` | **۱۹ passed** |
+| `tests/unit/test_composition_runtime.py` | **۲۲ passed** |
+| `tests/unit/test_composition_security.py` | **۳۶ passed** |
+| `tests/unit/test_composition_verifier.py` | **۱۳ passed** |
+| `tests/unit/test_media_transform_pack.py` | **۲۱ passed** |
 | `tests/unit/test_media_still_primitives.py` | **۱۱ passed** |
+| `tests/unit/test_pack_runtime_composition.py` | **۱۸ passed** |
 | `tests/architecture/test_composition_boundary.py` | **۱۰ passed** |
 | `tests/integration/test_composition_canonical_e2e.py` | **۶ passed** |
-| **جمع** | **۱۹۴ passed** |
+| `tests/integration/test_composition_durable_project.py` | **۱۰ passed** |
+| **جمع** | **۲۴۲ passed** |
 
 ### ۹.۲ پوشش ۲۴ رفتار خواسته‌شده
 
 | # | رفتار | آزمون اثبات‌کننده | وضعیت |
 |---|---|---|---|
 | ۱ | ترکیب معتبر | `test_composition_compiler.py` (۲۲ تست) | `VERIFIED` |
-| ۲ | ناسازگاری نوع | `test_a_type_mismatch_is_refused` | `VERIFIED` |
-| ۳ | چرخه | `test_a_cycle_is_refused` | `VERIFIED` |
-| ۴ | binding گمشده | `test_a_missing_binding_is_refused` | `VERIFIED` |
+| ۲ | ناسازگاری نوع | `test_type_mismatch_is_refused` | `VERIFIED` |
+| ۳ | چرخه | `test_cycle_is_detected` | `VERIFIED` |
+| ۴ | binding گمشده | `test_missing_required_binding_is_refused` | `VERIFIED` |
 | ۵ | قابلیت ناشناس | `test_the_worker_refuses_an_unknown_capability` | `VERIFIED` |
-| ۶ | پارامتر نامعتبر | `test_invalid_parameters` / `test_unknown_parameter` | `VERIFIED` |
+| ۶ | پارامتر نامعتبر | `test_invalid_parameters_are_refused` / `test_unknown_parameter_is_refused` | `VERIFIED` |
 | ۷ | actor غیرمجاز | `test_composition_security.py` (گیت اتوریتی bus) | `VERIFIED` |
 | ۸ | مجوز ناکافی | `test_media_transform_pack.py` (نردبان B/B/C) | `VERIFIED` |
 | ۹ | پک بی‌اعتماد | `test_composition_boundary.py::test_the_pack_substrate_stays_data_only` | `VERIFIED` |
@@ -445,7 +447,7 @@ unknown_categories         : model, model_weights, dataset, input_asset,
 | ۲۱ | retry ایدمپوتنت | همان بالا | `VERIFIED` |
 | ۲۲ | دست‌کاری اثر | `test_a_tampered_artifact_flips_the_passport_to_compromised` | `VERIFIED` |
 | ۲۳ | ناسازگاری معنایی | `test_composition_verifier.py` (رنگی در برابر خاکستری) | `VERIFIED` |
-| ۲۴ | drift نسخهٔ رجیستری | `test_composition_compiler.py` (`registry_drift`) | `VERIFIED` |
+| ۲۴ | drift نسخهٔ رجیستری | `test_registry_drift_is_refused` | `VERIFIED` |
 
 ### ۹.۳ صادقانه‌دربارهٔ «mock-only»
 
