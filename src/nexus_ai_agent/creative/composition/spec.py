@@ -35,8 +35,15 @@ class MediaType(BaseModel):
     ``kind`` is the coarse domain. ``codec`` / ``container`` are optional
     refinement: when present they must match exactly at a binding; when absent
     the port accepts any codec/container of the right kind (the binding is
-    *compatible*, not *equal*). ``properties`` carries dimension/sample-rate
-    constraints expressed as simple predicates the compiler can check.
+    *compatible*, not *equal*). ``properties`` carries arbitrary
+    dimension/sample-rate constraints the compiler can check exactly.
+
+    The technical media descriptors (``pixel_format``, ``color_space``,
+    ``frame_rate``, ``sample_rate``, ``bit_depth``, ``has_alpha``) are
+    optional *constraints*: when a port sets one, a produced value must match
+    it; when a port leaves it ``None`` the descriptor is unconstrained. This
+    keeps compatibility a real predicate over the media contract rather than a
+    bare ``kind == kind`` check.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -44,6 +51,13 @@ class MediaType(BaseModel):
     kind: MediaKind
     codec: str | None = Field(default=None, max_length=64)
     container: str | None = Field(default=None, max_length=64)
+    pixel_format: str | None = Field(default=None, max_length=64)
+    color_space: str | None = Field(default=None, max_length=64)
+    frame_rate: float | None = Field(default=None, gt=0, le=1000)
+    sample_rate: int | None = Field(default=None, gt=0, le=768_000)
+    bit_depth: int | None = Field(default=None, ge=1, le=64)
+    has_alpha: bool | None = None
+    lossless: bool | None = None
     properties: dict[str, Any] = Field(default_factory=dict)
 
     def compatible_with(self, required: "MediaType") -> bool:
@@ -64,6 +78,18 @@ class MediaType(BaseModel):
             return False
         if required.container is not None and self.container != required.container:
             return False
+        for field in (
+            "pixel_format",
+            "color_space",
+            "frame_rate",
+            "sample_rate",
+            "bit_depth",
+            "has_alpha",
+            "lossless",
+        ):
+            want = getattr(required, field)
+            if want is not None and getattr(self, field) != want:
+                return False
         for key, value in required.properties.items():
             if key not in self.properties:
                 return False
@@ -123,16 +149,30 @@ class ResourceRequirements(BaseModel):
 
 
 class LicenseInfo(BaseModel):
-    """The software *and* model licence a capability carries.
+    """The licence ledger a capability carries.
 
-    ``copyleft`` is the property the composition compiler cares about: a
-    copyleft component propagates its licence to the whole composition.
-    ``allow_commercial`` is recorded so a policy engine can refuse commercial
-    use of a composition that contains a non-commercial component.
+    A single ``copyleft``/``allow_commercial`` pair is *not* enough to decide
+    compatibility: an adapter's code, the executable it drives, its linked
+    libraries, a model, its weights, a dataset and the input asset can each be
+    licensed differently, and obligations (attribution, copyleft, network-use,
+    distribution) differ per category. Each is recorded separately; a ``None``
+    means **unknown**, and unknown NEVER counts as "commercially approved"
+    (:attr:`effective_allow_commercial`).
 
-    Honesty rule: ``source_license`` and ``model_license`` are distinct. A
-    capability may ship MIT code that drives a CC-BY-NC model -- both are
-    recorded and the *stricter* governs the composition.
+    Categories (Gate 5 of the hardening mission):
+
+    1. ``source_license``    -- this adapter's own code.
+    2. ``runtime_license``   -- the executable it drives (e.g. an FFmpeg build).
+    3. ``library_licenses``  -- libraries it links.
+    4. ``model_license``     -- the model.
+    5. ``weights_license``   -- the model weights (may differ from the model).
+    6. ``dataset_license``   -- the training/eval dataset.
+    7. ``input_asset_license`` -- the user-supplied input asset.
+    8. ``distribution_scope``  -- where the output may be distributed.
+    9. ``allow_commercial``    -- commercial-use permission (explicit).
+    10. ``attribution_required`` / ``notice`` -- attribution and NOTICE text.
+    11. ``copyleft``           -- copyleft obligation (propagates).
+    12. ``network_use_obligations`` -- e.g. AGPL's network clause.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -140,14 +180,30 @@ class LicenseInfo(BaseModel):
     spdx_id: str = Field(min_length=1, max_length=64)
     source_license: str = Field(min_length=1, max_length=128)
     model_license: str | None = Field(default=None, max_length=128)
+    runtime_license: str | None = Field(default=None, max_length=128)
+    library_licenses: tuple[str, ...] = Field(default_factory=tuple)
+    weights_license: str | None = Field(default=None, max_length=128)
+    dataset_license: str | None = Field(default=None, max_length=128)
+    input_asset_license: str | None = Field(default=None, max_length=128)
+    distribution_scope: str = Field(default="unspecified", max_length=64)
+    network_use_obligations: str = Field(default="none", max_length=64)
     copyleft: bool = False
     allow_commercial: bool = True
+    #: True only when commercial compatibility has actually been established.
+    #: ``allow_commercial=True`` with ``commercial_use_verified=False`` is
+    #: *unproven*, and unproven is treated as not-approved.
+    commercial_use_verified: bool = True
     attribution_required: bool = False
     notice: str = Field(default="", max_length=1000)
 
     @property
     def effective_allow_commercial(self) -> bool:
-        return self.allow_commercial and (self.model_license is None or "nc" not in self.model_license.lower())
+        if not (self.allow_commercial and self.commercial_use_verified):
+            return False
+        for label in (self.model_license, self.weights_license):
+            if label is not None and ("nc" in label.lower() or "noncommercial" in label.lower()):
+                return False
+        return True
 
 
 class VerificationContract(BaseModel):
@@ -172,6 +228,26 @@ class VerificationContract(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+TrustLevel = Literal["builtin", "verified", "experimental", "untrusted"]
+
+
+class EvidenceContract(BaseModel):
+    """What evidence the runtime must record for an execution of this capability.
+
+    The composition layer's proof-carrying artifact always records hashes and a
+    manifest; this contract makes the *semantic* obligations explicit so a
+    verifier knows what to check (e.g. decode the output, assert dimensions).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    require_input_hash: bool = True
+    require_output_hash: bool = True
+    require_tool_versions: bool = True
+    require_decode: bool = False
+    required_properties: tuple[str, ...] = Field(default_factory=tuple)
+
+
 class CapabilitySpec(BaseModel):
     """A versioned, typed capability contract -- the unit of composition.
 
@@ -180,23 +256,42 @@ class CapabilitySpec(BaseModel):
     whether it is deterministic, and how to verify its output. The runtime
     binds a spec to a worker backend (FFmpeg, ImageMagick, a model adapter)
     that actually performs the work.
+
+    The canonical-integration fields are fail-closed:
+
+    * ``runtime_adapter_id`` names the worker backend; it must be a member of
+      the composition layer's frozen adapter allow-list
+      (:data:`nexus_ai_agent.creative.composition.canonical.BUILTIN_ADAPTERS`).
+    * ``canonical_operation`` -- when set, the id is cross-checked against the
+      **live NEXUS registry** (``build_runtime_registry()``); a capability that
+      claims to be a canonical operation the live registry does not provide is
+      refused at registration, never silently trusted.
+    * ``trust_level`` -- ``untrusted`` capabilities are refused by the runtime;
+      ``experimental`` ones require an explicit runtime opt-in.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     capability_id: str = Field(min_length=1, max_length=128)
     version: str = Field(min_length=1, max_length=64, pattern=r"^\d+\.\d+\.\d+$")
+    schema_version: int = Field(default=1, ge=1)
     description: str = Field(default="", max_length=1000)
     inputs: tuple[CapabilityInput, ...]
     outputs: tuple[CapabilityOutput, ...]
     resources: ResourceRequirements = Field(default_factory=ResourceRequirements)
     license: LicenseInfo
+    runtime_adapter_id: str = Field(default="unbound", max_length=64)
+    canonical_operation: str | None = Field(default=None, max_length=128)
+    required_permissions: tuple[str, ...] = Field(default_factory=tuple)
+    dependencies: tuple[str, ...] = Field(default_factory=tuple)
+    trust_level: TrustLevel = "builtin"
     deterministic: bool = True
     cancellable: bool = True
     idempotent: bool = True
     undoable: bool = True
     network_required: bool = False
     verification: VerificationContract = Field(default_factory=VerificationContract)
+    evidence: EvidenceContract = Field(default_factory=EvidenceContract)
     tags: tuple[str, ...] = Field(default_factory=tuple)
 
     @model_validator(mode="after")
@@ -209,10 +304,6 @@ class CapabilitySpec(BaseModel):
             raise ValueError("output names must be unique")
         if not self.outputs:
             raise ValueError("a capability must declare at least one output")
-        if self.network_required and self.license.effective_allow_commercial is False:
-            # not inherently forbidden, but a non-commercial network-required
-            # capability is almost certainly a paid API -- flag it.
-            pass
         return self
 
     def input(self, name: str) -> CapabilityInput:
@@ -232,6 +323,7 @@ __all__ = [
     "CapabilityInput",
     "CapabilityOutput",
     "CapabilitySpec",
+    "EvidenceContract",
     "LicenseInfo",
     "MediaType",
     "MediaKind",

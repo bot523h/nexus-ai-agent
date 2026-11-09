@@ -10,10 +10,20 @@ compositions can be reproduced byte-for-byte (modulo container metadata,
 which the proof layer strips by re-hashing only the elementary streams'
 structural properties).
 
-Security: every subprocess is launched with ``shell=False``, an explicit
-argument list, a working directory inside the composition's scratch dir, and
-a timeout. Input paths are resolved against the scratch dir and refused if
-they escape it (path-traversal guard).
+Security (process boundary, Gate 4 of the hardening mission):
+
+* **argv-only execution**, ``shell=False``, explicit argument list;
+* **binary allow-list** -- FFmpeg is resolved through the codebase's single
+  resolver (:func:`nexus_ai_agent.creative.composition.canonical.resolve_ffmpeg`)
+  and ImageMagick through a fixed candidate list, so a capability can never
+  name an arbitrary executable;
+* **controlled environment** -- workers spawn with a minimal, allow-listed
+  environment (:func:`_safe_env`); the parent's secrets (tokens, keys) are
+  never inherited;
+* **dedicated scratch dir** per node, per attempt;
+* **path containment** -- inputs are resolved under the node scratch dir and
+  refused if they escape (path-traversal + symlink guard);
+* **wall-clock timeout** and an **output-size limit**.
 """
 
 from __future__ import annotations
@@ -21,12 +31,28 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from .spec import CapabilitySpec
+#: Environment variables a worker subprocess may inherit. Anything else in the
+#: parent environment (API tokens, credentials, proxies) is stripped.
+_ENV_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "NEXUS_FFMPEG_BIN",
+        "MAGICK_TMPDIR",
+        "MAGICK_HOME",
+    }
+)
+
+#: Default cap on a single produced output file.
+_MAX_OUTPUT_BYTES = 512 * 1024 * 1024
 
 
 class WorkerError(RuntimeError):
@@ -53,17 +79,18 @@ class MediaWorker(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Path-traversal guard
+# Process-boundary guards
 # ---------------------------------------------------------------------------
 
 
 def _safe_resolve(base: Path, candidate: str) -> Path:
     """Resolve *candidate* under *base*, refusing anything that escapes.
 
-    Both absolute and relative candidates are resolved against *base*. The
-    result must be *base* or a child of it; otherwise :class:`WorkerError`
-    is raised. This is the composition layer's path-traversal guard: a
-    capability param can never name a file outside its scratch directory.
+    Both absolute and relative candidates are resolved against *base*; the
+    result must be *base* or a child of it. Symlinks are followed by
+    ``resolve()`` and the *final* target is checked, so a symlink pointing
+    outside the scratch dir is refused too. This is the composition layer's
+    path-traversal + symlink-escape guard.
     """
     base = base.resolve()
     candidate_path = Path(candidate)
@@ -80,7 +107,27 @@ def _safe_resolve(base: Path, candidate: str) -> Path:
     return resolved
 
 
-def _run(cmd: list[str], *, cwd: Path, timeout: int) -> subprocess.CompletedProcess[str]:
+def _safe_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Build a minimal, allow-listed environment for a worker subprocess.
+
+    Only variables in :data:`_ENV_ALLOWLIST` survive; everything else --
+    including any credential the host process carries -- is dropped. ``extra``
+    adds worker-specific entries (e.g. a tool's temp dir) on top.
+    """
+    env = {key: os.environ[key] for key in _ENV_ALLOWLIST if key in os.environ}
+    if extra:
+        env.update(extra)
+    return env
+
+
+def _run(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    timeout: int,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run one allow-listed binary with a bounded capture and the safe env."""
     return subprocess.run(
         cmd,
         shell=False,
@@ -89,7 +136,24 @@ def _run(cmd: list[str], *, cwd: Path, timeout: int) -> subprocess.CompletedProc
         check=False,
         capture_output=True,
         text=True,
+        env=env if env is not None else _safe_env(),
     )
+
+
+def _enforce_output_limit(path: Path, limit: int = _MAX_OUTPUT_BYTES) -> None:
+    size = path.stat().st_size
+    if size > limit:
+        path.unlink(missing_ok=True)
+        raise WorkerError(f"worker output exceeded the {limit}-byte limit ({size} bytes)")
+
+
+def _resolve_imagemagick() -> str:
+    """Resolve ImageMagick's ``convert`` from a fixed candidate list only."""
+    for name in ("convert", "magick"):
+        found = shutil.which(name)
+        if found:
+            return found
+    raise WorkerError("ImageMagick 'convert'/'magick' not found on PATH")
 
 
 # ---------------------------------------------------------------------------
@@ -109,13 +173,25 @@ class ToolVersions:
 def detect_tool_versions() -> ToolVersions:
     def _v(cmd: list[str]) -> str:
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
+            r = _run(cmd, cwd=Path.cwd(), timeout=10)
             first = (r.stdout or r.stderr).splitlines()[0] if (r.stdout or r.stderr) else "unknown"
             return first.strip()
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError, WorkerError):
             return "missing"
 
-    return ToolVersions(ffmpeg=_v(["ffmpeg", "-version"]), imagemagick=_v(["convert", "-version"]))
+    ffmpeg = "missing"
+    try:
+        from .canonical import resolve_ffmpeg
+
+        ffmpeg = _v([resolve_ffmpeg(), "-version"])
+    except Exception:  # pragma: no cover - env-level resolution failure
+        pass
+    imagemagick = "missing"
+    try:
+        imagemagick = _v([_resolve_imagemagick(), "-version"])
+    except WorkerError:  # pragma: no cover - env-level
+        pass
+    return ToolVersions(ffmpeg=ffmpeg, imagemagick=imagemagick)
 
 
 class BuiltinMediaWorker:
@@ -132,9 +208,30 @@ class BuiltinMediaWorker:
     * ``nagar.video.add_text``   -- FFmpeg ``drawtext`` burn-in
     """
 
-    def __init__(self, *, ffmpeg: str = "ffmpeg", convert: str = "convert") -> None:
-        self._ffmpeg = ffmpeg
-        self._convert = convert
+    def __init__(
+        self,
+        *,
+        ffmpeg: str | None = None,
+        convert: str | None = None,
+        max_output_bytes: int = _MAX_OUTPUT_BYTES,
+    ) -> None:
+        # FFmpeg always goes through the canonical allow-listed resolver.
+        if ffmpeg is not None:
+            self._ffmpeg = ffmpeg
+        else:
+            from .canonical import resolve_ffmpeg
+
+            self._ffmpeg = resolve_ffmpeg()
+        self._convert = convert or _resolve_imagemagick()
+        self._max_output_bytes = max_output_bytes
+
+    @property
+    def ffmpeg_binary(self) -> str:
+        return self._ffmpeg
+
+    @property
+    def imagemagick_binary(self) -> str:
+        return self._convert
 
     def run(
         self,
@@ -147,7 +244,10 @@ class BuiltinMediaWorker:
         handler = getattr(self, f"_op_{capability_id.replace('.', '_')}", None)
         if handler is None:
             raise WorkerError(f"no builtin worker for capability {capability_id!r}")
-        return handler(inputs, params, output_dir)
+        outputs = handler(inputs, params, output_dir)
+        for path in outputs.values():
+            _enforce_output_limit(Path(path), self._max_output_bytes)
+        return outputs
 
     # -- image ops (ImageMagick) -------------------------------------------
 

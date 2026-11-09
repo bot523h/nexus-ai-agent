@@ -33,13 +33,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .compiler import CompositionCompiler, CompositionError, CompositionGraph
+from . import canonical
+from .canonical import RegistrySnapshot
+from .compiler import CompositionCompiler, CompositionGraph, ResourceEstimate
 from .proof import (
     NodeReceipt,
     ProofCarryingArtifact,
     VerificationReport,
     sha256_file,
     verify_proof,
+    verify_semantic,
 )
 from .spec import CapabilitySpec, ResourceRequirements
 from .workers import BuiltinMediaWorker, MediaWorker, WorkerError, detect_tool_versions
@@ -57,13 +60,17 @@ class RuntimePolicy:
     ``network_required=True``. ``allow_commercial`` gates any composition
     whose derived licence is non-commercial. ``quota`` caps the summed
     resource requirements. ``max_nodes`` caps graph size as a guard against
-    runaway compositions.
+    runaway compositions. ``allow_experimental`` / ``allow_untrusted`` gate
+    non-``builtin``/``verified`` trust levels: an experimental capability is
+    refused unless the operator explicitly opts in, and an ``untrusted`` one is
+    refused in every case (its gate is deliberately not exposed).
     """
 
     allow_network: bool = False
     allow_commercial: bool = True
     quota: ResourceRequirements = field(default_factory=ResourceRequirements)
     max_nodes: int = 64
+    allow_experimental: bool = False
 
 
 @dataclass
@@ -76,6 +83,8 @@ class ExecutionResult:
     receipts: tuple[NodeReceipt, ...]
     duration_seconds: float
     scratch_dir: str
+    resource_estimate: ResourceEstimate | None = None
+    live_registry_fingerprint: str = ""
 
 
 class CompositionRuntime:
@@ -83,15 +92,25 @@ class CompositionRuntime:
 
     def __init__(
         self,
-        registry: dict[str, CapabilitySpec],
+        registry: dict[str, CapabilitySpec] | RegistrySnapshot,
         *,
         worker: MediaWorker | None = None,
         policy: RuntimePolicy | None = None,
     ) -> None:
-        if not registry:
-            raise RuntimeError("runtime requires a non-empty capability registry")
-        self._registry = dict(registry)
-        self._compiler = CompositionCompiler(self._registry)
+        if isinstance(registry, RegistrySnapshot):
+            snapshot = registry
+        else:
+            if not registry:
+                raise RuntimeError("runtime requires a non-empty capability registry")
+            try:
+                snapshot = canonical.build_snapshot(dict(registry))
+            except canonical.CanonicalRegistryError as exc:
+                raise RuntimeError(
+                    f"composition registry is not backed by the canonical NEXUS substrate: {exc}"
+                ) from exc
+        self._snapshot = snapshot
+        self._registry = dict(snapshot.capabilities)
+        self._compiler = CompositionCompiler(snapshot)
         self._worker: MediaWorker = worker or BuiltinMediaWorker()
         self._policy = policy or RuntimePolicy()
         self._tool_versions = detect_tool_versions()
@@ -101,6 +120,14 @@ class CompositionRuntime:
     @property
     def policy(self) -> RuntimePolicy:
         return self._policy
+
+    @property
+    def snapshot(self) -> RegistrySnapshot:
+        return self._snapshot
+
+    @property
+    def live_registry_fingerprint(self) -> str:
+        return self._snapshot.live_fingerprint
 
     @property
     def tool_versions(self) -> dict[str, str]:
@@ -136,6 +163,7 @@ class CompositionRuntime:
 
         # 2. Policy gate (before any execution)
         self._enforce_policy(derived, commercial_use)
+        self._enforce_trust(graph)
 
         # 3. Validate external inputs are present and exist
         for name in graph.external_inputs:
@@ -231,6 +259,7 @@ class CompositionRuntime:
             out_path = node_outputs[node_id][port_name]
             final_outputs[out_name] = out_path
             out_hash = sha256_file(out_path)
+            derived_output = derived.output(out_name)
             artifact = ProofCarryingArtifact(
                 artifact_id=f"art_{uuid.uuid4().hex[:12]}",
                 output_name=out_name,
@@ -253,16 +282,28 @@ class CompositionRuntime:
                     remeasured_hashes={out_name: out_hash},
                 ),
                 generated_at=generated_at,
+                live_registry_fingerprint=self._snapshot.live_fingerprint,
             )
-            # independently verify right now (fail-closed)
+            # 1) integrity: re-hash the live bytes (fail-closed)
             report = verify_proof(artifact)
             if not report.verified:
                 raise RuntimeError(
                     f"artifact {out_name!r} failed independent verification: "
                     + "; ".join(report.findings)
                 )
+            # 2) semantics: independently decode and check the promised properties
+            semantic = verify_semantic(
+                out_path,
+                media_type=derived_output.media_type,
+                expected_properties=derived.verification.expected_properties,
+            )
+            if not semantic.verified:
+                raise RuntimeError(
+                    f"artifact {out_name!r} failed semantic verification "
+                    f"({semantic.decoder}): " + "; ".join(semantic.findings)
+                )
             artifact = ProofCarryingArtifact(
-                **{**artifact.__dict__, "verification": report}
+                **{**artifact.__dict__, "verification": report, "semantic": semantic}
             )
             artifacts[out_name] = artifact
 
@@ -274,9 +315,31 @@ class CompositionRuntime:
             receipts=tuple(receipts),
             duration_seconds=total,
             scratch_dir=str(scratch),
+            resource_estimate=self._compiler.estimate_resources(graph),
+            live_registry_fingerprint=self._snapshot.live_fingerprint,
         )
 
     # -- internals ----------------------------------------------------------
+
+    def _enforce_trust(self, graph: CompositionGraph) -> None:
+        """Refuse a composition containing a capability whose trust level is
+        not permitted by policy -- before any worker runs.
+
+        * ``untrusted``    -- always refused (no policy can enable it);
+        * ``experimental`` -- refused unless ``policy.allow_experimental``;
+        * ``verified`` / ``builtin`` -- always permitted.
+        """
+        for node_id, node in graph.nodes.items():
+            spec = self._registry[node.capability_id]
+            if spec.trust_level == "untrusted":
+                raise RuntimeError(
+                    f"node {node_id!r} ({spec.capability_id}) is untrusted and is never executed"
+                )
+            if spec.trust_level == "experimental" and not self._policy.allow_experimental:
+                raise RuntimeError(
+                    f"node {node_id!r} ({spec.capability_id}) is experimental and the runtime "
+                    "has not opted in (allow_experimental=False)"
+                )
 
     def _enforce_policy(self, derived: CapabilitySpec, commercial_use: bool) -> None:
         if derived.network_required and not self._policy.allow_network:
@@ -320,6 +383,7 @@ class CompositionRuntime:
 __all__ = [
     "CompositionRuntime",
     "ExecutionResult",
+    "ResourceEstimate",
     "RuntimeError",
     "RuntimePolicy",
 ]

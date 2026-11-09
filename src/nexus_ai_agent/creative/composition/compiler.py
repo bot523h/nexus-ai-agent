@@ -30,6 +30,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from .canonical import RegistrySnapshot, build_snapshot
 from .spec import (
     CapabilityInput,
     CapabilityOutput,
@@ -37,12 +38,61 @@ from .spec import (
     LicenseInfo,
     MediaType,
     ResourceRequirements,
+    TrustLevel,
     VerificationContract,
 )
 
 
 class CompositionError(ValueError):
     """A composition graph failed validation. The message names the first fault."""
+
+
+#: Trust rank, most-trusted first. A composition is only as trustworthy as its
+#: least-trusted component (a ``builtin`` op composed with an ``untrusted`` one
+#: yields ``untrusted``).
+_TRUST_RANK: dict[str, int] = {"builtin": 3, "verified": 2, "experimental": 1, "untrusted": 0}
+
+
+def _least_trusted(levels: list[str]) -> TrustLevel:
+    lowest = min(levels, key=lambda lvl: _TRUST_RANK.get(lvl, 0))
+    return lowest  # type: ignore[return-value]
+
+
+@dataclass(frozen=True)
+class ResourceEstimate:
+    """A static resource *estimate* for a composition -- never an enforcement.
+
+    This environment has no cgroup/CPU pinning, so these numbers are guidance
+    for the caller's scheduler, not a guarantee the kernel enforces. Two things
+    are deliberately distinct:
+
+    * ``sum_ram_mb``        -- the naive sum (a conservative upper bound);
+    * ``peak_concurrent_ram_mb`` -- the sum over the largest set of nodes that
+      can overlap. In the current single-threaded runtime nodes run one at a
+      time, so peak == the maximum single node; a parallel scheduler would need
+      a real dependency model, which this is not.
+    """
+
+    sum_ram_mb: int
+    peak_concurrent_ram_mb: int
+    max_worker_cpu_threads: int
+    total_disk_mb: int
+    max_single_timeout_seconds: int
+    gpu: bool
+    network_required: bool
+    enforcement: str = "estimate-only (no cgroup/CPU pinning in this environment)"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sum_ram_mb": self.sum_ram_mb,
+            "peak_concurrent_ram_mb": self.peak_concurrent_ram_mb,
+            "max_worker_cpu_threads": self.max_worker_cpu_threads,
+            "total_disk_mb": self.total_disk_mb,
+            "max_single_timeout_seconds": self.max_single_timeout_seconds,
+            "gpu": self.gpu,
+            "network_required": self.network_required,
+            "enforcement": self.enforcement,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -117,17 +167,31 @@ class CompositionCompiler:
 
     The compiler is stateless and pure: given the same registry and graph it
     always returns the same derived spec (or raises the same error). It does
-    not execute anything -- execution is :class:`CompositionRuntime`'s job.
+    not execute anything -- execution is the runtime's job.
+
+    The registry is a :class:`RegistrySnapshot`: every capability in it has
+    been validated against the **live NEXUS registry** (its
+    ``canonical_operation``, if any, must exist there). Passing a bare
+    ``dict`` builds a validated snapshot through the canonical seam, so a
+    typo'd or unbacked capability is refused at construction, never silently
+    trusted.
     """
 
-    def __init__(self, registry: dict[str, CapabilitySpec]) -> None:
-        if not registry:
-            raise CompositionError("compiler requires a non-empty capability registry")
-        self._registry = dict(registry)
+    def __init__(self, registry: dict[str, CapabilitySpec] | RegistrySnapshot) -> None:
+        if isinstance(registry, RegistrySnapshot):
+            self._snapshot = registry
+        else:
+            if not registry:
+                raise CompositionError("compiler requires a non-empty capability registry")
+            self._snapshot = build_snapshot(registry)
+
+    @property
+    def snapshot(self) -> RegistrySnapshot:
+        return self._snapshot
 
     @property
     def registry(self) -> dict[str, CapabilitySpec]:
-        return dict(self._registry)
+        return dict(self._snapshot.capabilities)
 
     # -- public API ---------------------------------------------------------
 
@@ -142,7 +206,7 @@ class CompositionCompiler:
             raise CompositionError("composition graph has no nodes")
 
         specs = self._resolve_specs(graph)
-        order = self._topological_order(graph)
+        self._topological_order(graph)
         self._validate_bindings(graph, specs)
         self._validate_types(graph, specs)
         resource_total = self._sum_resources(specs)
@@ -162,6 +226,9 @@ class CompositionCompiler:
             outputs=tuple(derived_outputs),
             resources=resource_total,
             license=derived_license,
+            runtime_adapter_id="unbound",  # a composition is executed by its component adapters
+            dependencies=self._derive_dependencies(specs),
+            trust_level=_least_trusted([s.trust_level for s in specs.values()]),
             deterministic=deterministic,
             cancellable=all(s.cancellable for s in specs.values()),
             idempotent=all(s.idempotent for s in specs.values()),
@@ -171,13 +238,28 @@ class CompositionCompiler:
             tags=("composition",),
         )
 
+    def estimate_resources(self, graph: CompositionGraph) -> ResourceEstimate:
+        """Static resource estimate (never an enforcement -- see the class)."""
+        specs = self._resolve_specs(graph)
+        total = self._sum_resources(specs)
+        peak = max((s.resources.ram_mb for s in specs.values()), default=0)
+        return ResourceEstimate(
+            sum_ram_mb=total.ram_mb,
+            peak_concurrent_ram_mb=peak,
+            max_worker_cpu_threads=max((s.resources.cpu_threads for s in specs.values()), default=0),
+            total_disk_mb=total.disk_mb,
+            max_single_timeout_seconds=total.timeout_seconds,
+            gpu=total.gpu,
+            network_required=total.network,
+        )
+
     # -- validation steps ---------------------------------------------------
 
     def _resolve_specs(self, graph: CompositionGraph) -> dict[str, CapabilitySpec]:
         specs: dict[str, CapabilitySpec] = {}
         for node_id, node in graph.nodes.items():
             try:
-                specs[node_id] = self._registry[node.capability_id]
+                specs[node_id] = self._snapshot.capabilities[node.capability_id]
             except KeyError:
                 raise CompositionError(
                     f"node {node_id!r}: unknown capability {node.capability_id!r}"
@@ -297,20 +379,29 @@ class CompositionCompiler:
     def _derive_license(self, specs: dict[str, CapabilitySpec]) -> LicenseInfo:
         licences = [s.license for s in specs.values()]
         copyleft = any(l.copyleft for l in licences)
-        allow_commercial = all(l.effective_allow_commercial for l in licences)
+        # Unproven commercial compatibility (unknown licence) is NOT approval.
+        commercial_verified = all(l.commercial_use_verified for l in licences)
+        allow_commercial = commercial_verified and all(l.effective_allow_commercial for l in licences)
         attribution = any(l.attribution_required for l in licences)
         spdx = "GPL-3.0-only" if copyleft else ("Proprietary" if not allow_commercial else "MIT")
-        source_license = spdx
         notices = [l.notice for l in licences if l.notice]
         return LicenseInfo(
             spdx_id=spdx,
-            source_license=source_license,
-            model_license=None,
+            source_license=spdx,
             copyleft=copyleft,
             allow_commercial=allow_commercial,
+            commercial_use_verified=commercial_verified,
             attribution_required=attribution,
+            distribution_scope="composite",
+            network_use_obligations=(
+                "propagated" if any(l.network_use_obligations not in ("", "none") for l in licences) else "none"
+            ),
             notice=" | ".join(notices) if notices else "",
         )
+
+    def _derive_dependencies(self, specs: dict[str, CapabilitySpec]) -> tuple[str, ...]:
+        """Pin the derived capability to the exact component ids@versions."""
+        return tuple(sorted(f"{s.capability_id}@{s.version}" for s in specs.values()))
 
     def _derive_ports(
         self, graph: CompositionGraph, specs: dict[str, CapabilitySpec]
@@ -371,4 +462,5 @@ __all__ = [
     "CompositionGraph",
     "CompositionNode",
     "InputBinding",
+    "ResourceEstimate",
 ]
