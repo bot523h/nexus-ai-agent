@@ -2,11 +2,11 @@
   "generated_by": "scripts/collect_composition_evidence.py",
   "git": {
     "branch": "arena/da6837a6-nexus-ai-agent",
-    "head_sha": "5ed6d4e10be55f5baf5e9f2a8aa99775577621db",
-    "base_sha": "5ed6d4e10be55f5baf5e9f2a8aa99775577621db",
+    "head_sha": "48b917c2a349a9c637ac77c8d4bdacf6d697d90f",
+    "base_sha": "48b917c2a349a9c637ac77c8d4bdacf6d697d90f",
     "origin_main": "5ed6d4e10be55f5baf5e9f2a8aa99775577621db",
-    "status": "M .agents/board.json\n M docs/README.md\n M docs/architecture/adr/README.md\n M src/nexus_ai_agent/adapters/in_process_job_queue.py\n M src/nexus_ai_agent/creative/packs/runtime.py\n M src/nexus_ai_agent/creative/slideshow/ffmpeg.py\n M src/nexus_ai_agent/creative/studio/capabilities.py\n M src/nexus_ai_agent/creative/studio/lifecycle.py\n M src/nexus_ai_agent/creative/studio/models.py\n M src/nexus_ai_agent/worker.py\n M tests/architecture/test_pack_activation_completeness.py\n M tests/architecture/test_verification_registry_ratchet.py\n?? LIVE_TRUTH_REPORT.md\n?? docs/architecture/CANONICAL_INFRASTRUCTURE_AUDIT.md\n?? docs/architecture/COMPOSITION_RUNTIME.md\n?? docs/architecture/COMPOSITION_THREAT_MODEL.md\n?? docs/architecture/adr/0014-creative-capability-composition.md\n?? docs/ops/COMPOSITION_RUNTIME.md\n?? evidence/\n?? scripts/bench_composition.py\n?? scripts/collect_composition_evidence.py\n?? src/nexus_ai_agent/continuum/composition_bench.py\n?? src/nexus_ai_agent/creative/composition/\n?? src/nexus_ai_agent/creative/packs/media/\n?? tests/architecture/test_composition_boundary.py\n?? tests/integration/test_composition_canonical_e2e.py\n?? tests/unit/test_composition_compiler.py\n?? tests/unit/test_composition_contracts.py\n?? tests/unit/test_composition_license.py\n?? tests/unit/test_composition_proof.py\n?? tests/unit/test_composition_runtime.py\n?? tests/unit/test_composition_security.py\n?? tests/unit/test_composition_verifier.py\n?? tests/unit/test_media_still_primitives.py\n?? tests/unit/test_media_transform_pack.py",
-    "commit_count_since_base": "0"
+    "status": "M scripts/collect_composition_evidence.py",
+    "commit_count_since_base": "5"
   },
   "environment": {
     "python": "3.11.2",
@@ -191,7 +191,7 @@
   "real_composition": {
     "plan_fingerprint": "sha256:6eceb42be923659971e40517fa1b124f0d9c7ae174004e085af7914f6abf18da",
     "registry_fingerprint": "sha256:b30075f938eb61600b8281bda34ea6c09a3422a01df681fdf51768678110fe41",
-    "artifact_path": "/tmp/nagar-evidence-ya8ob2eq/work/node_video/video.mp4",
+    "artifact_path": "/tmp/nagar-evidence-bku1rt95/work/node_video/video.mp4",
     "artifact_sha256": "sha256:2f28cfc31bcc1d5003b269aaab9f0186b7b8211d183372fc4afd7fa83a4de327",
     "artifact_size_bytes": 2473,
     "integrity": {
@@ -237,13 +237,13 @@
         "input_hashes": {
           "source": "sha256:ee4167edf543dc95a5c5ed1322f1427cf8fb8d8907a44da2f450fb615b9f505f"
         },
-        "output_path": "/tmp/nagar-evidence-ya8ob2eq/work/node_resize/resize.png",
+        "output_path": "/tmp/nagar-evidence-bku1rt95/work/node_resize/resize.png",
         "output_hash": "sha256:43a84539b3a5d434c5801ac7f1f56009cbf8fc7816c5f896a904e9ca6631e309",
         "output_size_bytes": 1972,
         "duration_seconds": 0.0,
         "state_revision": 2,
-        "state_hash": "sha256:899058b6918468b842f5d152c7d284e90ab7adcc3964371c00622f8aced870ab",
-        "asset_id": "derived_7743f85cd831",
+        "state_hash": "sha256:30485a19bf020d0c32b5b13b47d8deb572249b3418b3d9a5470b0636ff460ecb",
+        "asset_id": "derived_8807e445b187",
         "semantic": {
           "verified": true,
           "method": "independent_image_decode",
@@ -266,13 +266,13 @@
         "input_hashes": {
           "source": "sha256:43a84539b3a5d434c5801ac7f1f56009cbf8fc7816c5f896a904e9ca6631e309"
         },
-        "output_path": "/tmp/nagar-evidence-ya8ob2eq/work/node_gray/gray.png",
+        "output_path": "/tmp/nagar-evidence-bku1rt95/work/node_gray/gray.png",
         "output_hash": "sha256:6e1eb4594f2b29059a4bf6bd88d0c6e501cdf37f0e781200c84800b92f9a9356",
         "output_size_bytes": 1308,
         "duration_seconds": 0.0,
         "state_revision": 4,
-        "state_hash": "sha256:3b4550a3e2f42fd2a309b418a031c5d9f4e070bf1891c73e80c3f41de740e383",
-        "asset_id": "derived_ce12fc6ff8db",
+        "state_hash": "sha256:45d275e2601f3112ccf8e24dbf4d53900dc12de800f9f4e06b55c552e7bf9ad3",
+        "asset_id": "derived_e2c05b72dd6b",
         "semantic": {
           "verified": true,
           "method": "independent_image_decode",
@@ -316,13 +316,13 @@
         "input_hashes": {
           "source": "sha256:6e1eb4594f2b29059a4bf6bd88d0c6e501cdf37f0e781200c84800b92f9a9356"
         },
-        "output_path": "/tmp/nagar-evidence-ya8ob2eq/work/node_video/video.mp4",
+        "output_path": "/tmp/nagar-evidence-bku1rt95/work/node_video/video.mp4",
         "output_hash": "sha256:2f28cfc31bcc1d5003b269aaab9f0186b7b8211d183372fc4afd7fa83a4de327",
         "output_size_bytes": 2473,
         "duration_seconds": 0.0,
         "state_revision": 6,
-        "state_hash": "sha256:3031a9c078132e18fef685a89d104f140a078c518de9059a5f56780b88bd3ab6",
-        "asset_id": "derived_98b90c150558",
+        "state_hash": "sha256:82c3cbbe093daecf082fed9c1306afb8191ae1099e5974c2a772fa0bd82415b0",
+        "asset_id": "derived_0dbd665dfb06",
         "semantic": {
           "verified": true,
           "method": "independent_video_decode",
@@ -347,8 +347,8 @@
       "ffmpeg_buildconf_sha256": "1473b6410dc4c9647899005fcf0b08edd0289f2677ce83c992d79d5d60ed433a"
     },
     "state_revision": 6,
-    "state_hash": "sha256:3031a9c078132e18fef685a89d104f140a078c518de9059a5f56780b88bd3ab6",
-    "duration_seconds": 0.3410647460000291,
+    "state_hash": "sha256:82c3cbbe093daecf082fed9c1306afb8191ae1099e5974c2a772fa0bd82415b0",
+    "duration_seconds": 0.3483974250002575,
     "resource_estimate": {
       "peak_ram_mb": 512,
       "total_ram_mb": 1024,

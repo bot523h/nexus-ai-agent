@@ -81,8 +81,13 @@ def _live_registry() -> dict[str, object]:
     }
 
 
-def _a_real_composition() -> dict[str, object]:
-    """Run one real composition and record what it produced."""
+def _a_real_composition(media_out: Path | None = None) -> dict[str, object]:
+    """Run one real composition and record what it produced.
+
+    When ``media_out`` is given, the **real** artefact and its source image
+    are copied next to the evidence, so the delivery contains an actual media
+    file and not only a description of one.
+    """
 
     from nexus_ai_agent.continuum.composition_bench import _plan, _source_image
     from nexus_ai_agent.creative.composition.compiler import CompositionCompiler
@@ -97,6 +102,12 @@ def _a_real_composition() -> dict[str, object]:
             compiled, external_inputs={"src": source}, workspace=root / "work"
         )
         artifact = result.artifacts["final"]
+        if media_out is not None:
+            media_out.mkdir(parents=True, exist_ok=True)
+            (media_out / "composition_image_to_video.mp4").write_bytes(
+                Path(artifact.output_path).read_bytes()
+            )
+            (media_out / "composition_source.png").write_bytes(source.read_bytes())
         return {
             "plan_fingerprint": compiled.fingerprint,
             "registry_fingerprint": compiled.registry_fingerprint,
@@ -124,6 +135,12 @@ def main() -> int:
         type=Path,
         default=REPO_ROOT / "evidence" / "composition_evidence.json",
     )
+    parser.add_argument(
+        "--media-out",
+        type=Path,
+        default=None,
+        help="also copy the real artefact and its source image into this directory",
+    )
     args = parser.parse_args()
 
     document = {
@@ -140,7 +157,7 @@ def main() -> int:
         "ffmpeg": _ffmpeg_facts(),
         "license_ledger": _license_ledger(),
         "live_registry": _live_registry(),
-        "real_composition": _a_real_composition(),
+        "real_composition": _a_real_composition(args.media_out),
     }
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

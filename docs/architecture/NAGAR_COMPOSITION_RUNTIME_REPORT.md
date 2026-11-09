@@ -737,7 +737,33 @@ python scripts/collect_composition_evidence.py --output evidence/composition_evi
 
 ---
 
-## ۱۴. پیوندها
+## ۱۴. نگاشت دوازده سند الزامی
+
+| # | سند الزامی | محل دقیق |
+|---|---|---|
+| ۱ | گزارش حقیقت زنده | `LIVE_TRUTH_REPORT.md` (ریشهٔ مخزن) |
+| ۲ | ممیزی زیرساخت کانونی | `docs/architecture/CANONICAL_INFRASTRUCTURE_AUDIT.md` |
+| ۳ | ADR | `docs/architecture/adr/0014-creative-capability-composition.md` |
+| ۴ | مدل تهدید به‌روزشده | `docs/architecture/COMPOSITION_THREAT_MODEL.md` |
+| ۵ | اسناد قرارداد قابلیت | `docs/architecture/COMPOSITION_RUNTIME.md` §۱–§۳ |
+| ۶ | اسناد IR ترکیب | `docs/architecture/COMPOSITION_RUNTIME.md` §۴ |
+| ۷ | راهنمای یکپارچه‌سازی کانونی | `docs/ops/COMPOSITION_RUNTIME.md` |
+| ۸ | دفتر مجوز | `docs/architecture/COMPOSITION_RUNTIME.md` §۵ (۱۲ دسته) + `src/nexus_ai_agent/creative/composition/license.py` |
+| ۹ | گزارش تأیید | همین سند، §۷ |
+| ۱۰ | گزارش بنچمارک | همین سند، §۸ (+ `evidence/composition_benchmark*.json`) |
+| ۱۱ | گزارش نهایی مهندسی | همین سند (کل سند) |
+| ۱۲ | نقشهٔ راه NOW/NEXT/LATER | همین سند، §۱۳ |
+
+افزون بر این‌ها: کد مبدأ (`src/nexus_ai_agent/creative/composition/` و
+`src/nexus_ai_agent/creative/packs/media/`)، آزمون‌ها (۱۱ فایل، ۱۸۴ تست)، اسکریپت
+بنچمارک، JSON شواهد، و **یک خروجی رسانهٔ واقعی**
+(`evidence/media/composition_image_to_video.mp4` — ۲۴۷۳ بایت، ۶۴۰×۴۸۰، h264،
+yuv420p، ۲۵fps، ۱٫۰۰ ثانیه، ۲۵ فریم) به‌همراه تصویر ورودی آن
+(`evidence/media/composition_source.png`).
+
+---
+
+## ۱۵. پیوندها
 
 * گزارش حقیقت زنده (Gate 0): `LIVE_TRUTH_REPORT.md`
 * ممیزی زیرساخت کانونی (Gate 1): [`docs/architecture/CANONICAL_INFRASTRUCTURE_AUDIT.md`](CANONICAL_INFRASTRUCTURE_AUDIT.md)
