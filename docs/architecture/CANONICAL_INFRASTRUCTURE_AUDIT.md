@@ -283,21 +283,52 @@ No row is copied from a previous session, from CI, or from an expectation.
 | Lifecycle gate boundary | `pytest tests/architecture/test_lifecycle_gate_boundary.py -q` | **7 passed** (the executor now builds its bus through `build_job_bus`) |
 | Slideshow adapter boundary | `pytest tests/architecture/test_slideshow_adapter_boundary.py -q` | **7 passed** (the gate was *strengthened*, not bypassed — it now also demands `start_new_session=True` and `killpg`) |
 | Pack coverage (media pack) | `python scripts/pack_coverage.py` | `media  2 modules  227/227 executed  100.00%` — **UNVERIFIED** on a dirty tree, `ACCEPTED` on the committed tree (§6) |
-| Whole repository suite | `pytest -q -m "not slow"` | see §6 |
+| Whole repository suite | `pytest -q -m "not slow"` | **6621 passed, 39 skipped, 0 failed** (baseline on pristine `main`: 6427 passed, 39 skipped, 0 failed) |
 
-### 4.3 The three pre-existing failures (baseline, not caused by this branch)
+### 4.3 The baseline on a pristine `origin/main`
 
-The same suite was run on a **pristine `origin/main` worktree** with the same interpreter
-(`PYTHONPATH=/tmp/main-baseline/src`) to establish the baseline:
+The same suite was run on a **pristine `origin/main` worktree** (`/tmp/main-baseline`,
+`git worktree add /tmp/main-baseline origin/main`) with the same interpreter and the
+same virtualenv:
 
 ```
-3 failed, 6424 passed, 39 skipped, 1163 warnings in 595.86s (0:09:55)
-FAILED tests/unit/test_cognition_quality_eval.py::test_the_fingerprint_is_stable_across_hash_seeds[0]
-FAILED tests/unit/test_cognition_quality_eval.py::test_the_fingerprint_is_stable_across_hash_seeds[1]
-FAILED tests/unit/test_cognition_quality_eval.py::test_the_fingerprint_is_stable_across_hash_seeds[12345]
+6427 passed, 39 skipped, 1163 warnings in 564.46s (0:09:24)
 ```
 
-These three fail on `main` itself and are therefore **not** attributable to this branch.
+**Zero failures on `main`.** The baseline is therefore a clean one, and every
+failure this branch could have introduced would be attributable to it.
+
+> The editable install points the interpreter at this checkout, so the baseline
+> worktree's `.pth` file was temporarily redirected at `/tmp/main-baseline/src`
+> for the measurement and restored immediately afterwards. Without that step the
+> baseline run silently measured *this* branch's source and reported three
+> spurious failures — which is exactly the kind of contaminated measurement this
+> audit exists to prevent.
+
+### 4.4 The one committed artifact this branch legitimately had to regenerate
+
+`tests/fixtures/cognition_quality_eval/v2_baseline.json` is a **reviewed
+regression baseline** that records the operations the live registry offers.
+Adding three operations changes it, so it was regenerated through the canonical
+review path (`python scripts/cognition_quality_eval.py --write-candidate …`,
+reviewed, then committed as the baseline):
+
+```diff
+   "evaluation_version": "nexus-cognition-quality-eval/v2",
+-  "fingerprint": "268adff247b9060a",
++  "fingerprint": "f4868122ed9e87af",
+   "refusal_reasons": {
+       "offered_operations": [
+           …
++          "media.grayscale_image",
++          "media.image_to_video",
+           "media.pause",
+           "media.play",
++          "media.resize_image",
+```
+
+Nothing else in that fixture changed; the two hard-coded fingerprint literals in
+`tests/unit/test_cognition_quality_eval.py` were moved to the new value.
 
 ---
 
@@ -324,9 +355,10 @@ The short form of the final state:
 
 | Gate | Result |
 |---|---|
-| Whole repository suite (`pytest -q -m "not slow"`) | **6614 passed, 3 failed** — the 3 failures are the pre-existing `main` failures listed in §4.3 |
-| Lint + format + types | **green** |
+| Whole repository suite (`pytest -q -m "not slow"`) | **6621 passed, 39 skipped, 0 failed** (baseline on pristine `main`: **6427 passed, 39 skipped, 0 failed**) |
+| Lint + format + types | **green** (`ruff check .`, `ruff format --check .`, `mypy src` → 373 source files clean) |
 | Operation-truth projection | **regenerated** (`python -m nexus_ai_agent.nagar --docs`); the diff is committed so the gate is reproducible |
 | Docs gate | **117 passed** |
+| Pack coverage harness | **ACCEPTED** — `media` 227/227 executable lines (100.00 %), total 97.17 %, `pytest exit: 0`, `evidence: verified`, bound to the committed SHA |
 | New composition suites | **184 passed** |
 | Canonical E2E | **6 passed** (real queue, real worker, real FFmpeg, real passport) |
