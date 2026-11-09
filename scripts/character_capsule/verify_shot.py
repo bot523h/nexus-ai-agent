@@ -35,7 +35,11 @@ from experiments.character_capsule.continuity import (  # noqa: E402
     load_calibration,
 )
 from experiments.character_capsule.media import load_rgb  # noqa: E402
-from experiments.character_capsule.scene import DeclaredShot, ShotReference  # noqa: E402
+from experiments.character_capsule.scene import (  # noqa: E402
+    DeclaredShot,
+    ShotReference,
+    shot_from_dict,
+)
 
 NEEDS_HUMAN = {
     VerificationState.REVIEW_REQUIRED,
@@ -61,6 +65,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--scene", default="SC-001")
     parser.add_argument("--sequence", default="SEQ-EP1-A")
     parser.add_argument("--shot-index", type=int, default=0)
+    parser.add_argument(
+        "--shot-json",
+        type=Path,
+        default=None,
+        help=(
+            "shot manifest to evaluate against. Pins come from this record, so a shot "
+            "authored against an older capsule is refused instead of silently re-pinned "
+            "to the capsule under test"
+        ),
+    )
     args = parser.parse_args(argv)
 
     references = _expand(args.reference)
@@ -76,18 +90,32 @@ def main(argv: list[str]) -> int:
 
     calibration = load_calibration(json.loads(args.calibration.read_text(encoding="utf-8")))
     capsule = _capsule(args.character)
-    shot = ShotReference(
-        shot_id=args.shot_id,
-        character_id=args.character,
-        capsule_revision=capsule.revision_no,
-        capsule_digest=capsule.digest,
-        module_digests={name: module.digest for name, module in sorted(capsule.modules.items())},
-        scene_id=args.scene,
-        sequence_id=args.sequence,
-        shot_index=args.shot_index,
-        image_asset_id=f"AST-{args.shot_id}",
-        declared=DeclaredShot(outfit_id=args.outfit, expression=args.expression),
-    )
+    pins_source = "derived"
+    if args.shot_json is not None:
+        shot = shot_from_dict(json.loads(args.shot_json.read_text(encoding="utf-8")))
+        pins_source = str(args.shot_json)
+        if shot.character_id != capsule.character_id:
+            parser.error(
+                f"shot pins character {shot.character_id}, capsule is {capsule.character_id}"
+            )
+    else:
+        # Pins are derived from the capsule in hand. That is self-consistent by
+        # construction, so the report records ``pins_source`` to make the weaker
+        # guarantee visible instead of implying the shot was authored independently.
+        shot = ShotReference(
+            shot_id=args.shot_id,
+            character_id=args.character,
+            capsule_revision=capsule.revision_no,
+            capsule_digest=capsule.digest,
+            module_digests={
+                name: module.digest for name, module in sorted(capsule.modules.items())
+            },
+            scene_id=args.scene,
+            sequence_id=args.sequence,
+            shot_index=args.shot_index,
+            image_asset_id=f"AST-{args.shot_id}",
+            declared=DeclaredShot(outfit_id=args.outfit, expression=args.expression),
+        )
     evaluator = ContinuityEvaluator(calibration)
     report = evaluator.evaluate(
         shot=shot,
@@ -96,6 +124,7 @@ def main(argv: list[str]) -> int:
         reference_images=[load_rgb(path) for path in references],
     )
     payload = report.to_dict()
+    payload["pins_source"] = pins_source
     print(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True))
     if report.verdict in DRIFTED:
         return 4

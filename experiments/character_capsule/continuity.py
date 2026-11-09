@@ -26,7 +26,7 @@ a report may carry.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -42,7 +42,7 @@ from .canon import CanonEngine
 from .canonical import SCOPE_CALIBRATION, canonical_json, digest_of, scoped_digest
 from .errors import ThresholdsMissing, ValidationError
 from .model import CharacterCapsule
-from .scene import ShotReference, Timeline
+from .scene import ShotReference, Timeline, validate_capsule_pins
 from .vision import Observation, distance, observe, score_from_distance
 from .wardrobe import WardrobeModule, check_wardrobe, validate_outfit_era
 
@@ -119,6 +119,11 @@ STATE_PRECEDENCE: tuple[VerificationState, ...] = (
 
 #: Declared measurement tolerance. A distance below this is treated as noise, so
 #: a band can never be narrower than this even when repeats measure exactly zero.
+#: When the declared p95/p05 bands cross, the equal-error point may be used as the
+#: boundary — but only when it is genuinely informative. Above this value the
+#: dimension is reported NOT_MEASURED instead of being given a fabricated band.
+MAX_FALLBACK_EER = 0.25
+
 MIN_ACCEPT = 0.10
 
 #: Declared minimum separation between the accept and reject boundaries.
@@ -160,6 +165,15 @@ class DimensionThreshold:
         return {"accept": self.accept, "reject": self.reject}
 
 
+#: Declared scope of ``CalibrationArtifact.digest``.
+CALIBRATION_DIGEST_SCOPE = {
+    "algorithm": "sha256",
+    "excluded": {
+        "created_at": "wall clock; the same corpus must yield the same calibration digest",
+    },
+}
+
+
 @dataclass(frozen=True)
 class CalibrationArtifact:
     """Measured, reproducible decision boundaries — not hand-tuned guesses."""
@@ -172,6 +186,12 @@ class CalibrationArtifact:
     created_at: str
     quality_floor: float = 0.02
     schema: str = CALIBRATION_SCHEMA
+    #: Which characters were fitted and which were held out, recorded inside the
+    #: artefact so the "no leakage" claim can be checked instead of trusted (F23).
+    split: Mapping[str, Any] = field(default_factory=dict)
+    #: Probes dropped before fitting, and why. Hiding a pruned probe would make the
+    #: fitted split unreproducible from the corpus.
+    pruning: Mapping[str, Any] = field(default_factory=dict)
 
     def threshold(self, dimension: str) -> DimensionThreshold:
         try:
@@ -186,8 +206,11 @@ class CalibrationArtifact:
             "schema": self.schema,
             "seed": self.seed,
             "created_at": self.created_at,
+            "digest_scope": dict(CALIBRATION_DIGEST_SCOPE),
             "dataset_digest": self.dataset_digest,
             "quality_floor": self.quality_floor,
+            "split": dict(self.split),
+            "pruning": dict(self.pruning),
             "thresholds": {key: value.to_dict() for key, value in sorted(self.thresholds.items())},
             "stats": {key: dict(value) for key, value in sorted(self.stats.items())},
             "metrics": {key: dict(value) for key, value in sorted(self.metrics.items())},
@@ -208,13 +231,30 @@ class CalibrationArtifact:
                 seed=payload["seed"],
                 created_at=payload["created_at"],
                 quality_floor=float(payload.get("quality_floor", 0.02)),
+                split=dict(payload.get("split", {})),
+                pruning=dict(payload.get("pruning", {})),
             )
         except KeyError as exc:
             raise ValidationError("calibration artifact is incomplete", missing=str(exc)) from exc
 
     @property
     def digest(self) -> str:
-        return scoped_digest(SCOPE_CALIBRATION, self.to_dict())
+        """Content digest of the calibration.
+
+        ``created_at`` is excluded: two runs over the same corpus must produce the
+        same calibration digest, otherwise every report that binds it (and every
+        evidence bundle that binds those reports) changes with the wall clock, and
+        reproducibility claims cannot be re-checked. The exclusion is published in
+        ``digest_scope`` so it is visible rather than implied.
+        """
+        return scoped_digest(SCOPE_CALIBRATION, self.digest_payload())
+
+    def digest_payload(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in self.to_dict().items()
+            if key not in CALIBRATION_DIGEST_SCOPE["excluded"]
+        }
 
 
 @dataclass(frozen=True)
@@ -256,6 +296,9 @@ class ContinuityReport:
     limitations: tuple[str, ...] = ()
     processing_ms: float = 0.0
     evidence_digest: str = ""
+    #: What the shot pinned, and what was actually verified. ``validate_capsule_pins``
+    #: guarantees the two agree; keeping both makes the agreement checkable later.
+    pins: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -271,6 +314,7 @@ class ContinuityReport:
             "limitations": list(self.limitations),
             "processing_ms": round(float(self.processing_ms), 3),
             "evidence_digest": self.evidence_digest,
+            "pins": dict(self.pins),
         }
 
     def dimension(self, name: str) -> DimensionResult:
@@ -292,6 +336,33 @@ def aggregate_verdict(states: Iterable[VerificationState]) -> VerificationState:
     return VerificationState.INSUFFICIENT_EVIDENCE
 
 
+#: Fields excluded from the evidence digest. Timing is a property of the machine,
+#: not of the finding: including it made every published report fail its own digest
+#: as soon as the runner measured it (finding F25).
+EVIDENCE_DIGEST_EXCLUSIONS = ("processing_ms", "evidence_digest")
+
+
+def report_digest(report: Mapping[str, Any], *, calibration_digest: str) -> str:
+    """Recomputable digest of a published report (timing excluded by construction)."""
+    body = {key: value for key, value in report.items() if key not in EVIDENCE_DIGEST_EXCLUSIONS}
+    return digest_of({"report": body, "thresholds": calibration_digest})
+
+
+def verify_report_evidence(report: Mapping[str, Any]) -> bool:
+    """True when ``report["evidence_digest"]`` matches the report's own content."""
+    recorded = report.get("evidence_digest") or ""
+    if not recorded:
+        return False
+    expected = report_digest(report, calibration_digest=str(report.get("calibration_digest", "")))
+    return hmac_compare(recorded, expected)
+
+
+def hmac_compare(left: str, right: str) -> bool:
+    import hmac as _hmac
+
+    return _hmac.compare_digest(str(left), str(right))
+
+
 def expression_curvature(observation: Observation) -> float | None:
     """Mouth-curvature proxy measured from the face crop's dark structure.
 
@@ -309,8 +380,14 @@ def expression_curvature(observation: Observation) -> float | None:
     return float((0.5 - mouth_centre) * 2.0)
 
 
-def _declared_appearance_markers(capsule: CharacterCapsule, scene_order: int) -> set[str]:
-    """Mutable canon facts that legitimately change the face from this scene on."""
+def _declared_appearance_markers(capsule: CharacterCapsule, scene_order: int | None) -> set[str]:
+    """Mutable canon facts that legitimately change the face from this scene on.
+
+    When the story order is unknown (no timeline was supplied) every mutable marker
+    is treated as potentially active. That keeps the face dimension from claiming
+    ``IDENTITY_DRIFT`` on a change the story declared, degrading it to
+    ``REVIEW_REQUIRED`` — the honest answer when the ordering cannot be checked.
+    """
     canon = capsule.modules.get("canon")
     facts = getattr(canon, "facts", None)
     if not isinstance(facts, Mapping):
@@ -320,6 +397,9 @@ def _declared_appearance_markers(capsule: CharacterCapsule, scene_order: int) ->
         if getattr(fact, "kind", None) is not None and fact.kind.value != "MUTABLE":
             continue
         added = getattr(fact, "added_at_scene", None)
+        if scene_order is None:
+            markers.add(f"{fact.predicate}={fact.value}")
+            continue
         if added is None or added > scene_order:
             continue
         markers.add(f"{fact.predicate}={fact.value}")
@@ -344,7 +424,16 @@ class ContinuityEvaluator:
 
     # -- distances ---------------------------------------------------------
     def _dimension(self, name: str, value: float) -> DimensionResult:
-        threshold = self.calibration.threshold(name)
+        try:
+            threshold = self.calibration.threshold(name)
+        except ThresholdsMissing:
+            # An inseparable (or missing) calibration is evidence about the
+            # measurement, not a licence to guess a boundary.
+            return self._not_measured(
+                name,
+                f"no calibrated threshold for {name}: the calibration distributions overlap "
+                "or the dimension has no labelled pairs, so no boundary is defensible",
+            )
         band = threshold.band(value)
         if band is Band.MATCH:
             state = {
@@ -418,9 +507,19 @@ class ContinuityEvaluator:
         reference_motion: np.ndarray | None = None,
         processing_ms: float = 0.0,
     ) -> ContinuityReport:
-        """Produce one independent continuity report for ``shot``."""
+        """Produce one independent continuity report for ``shot``.
+
+        The shot's pins are checked against the capsule before anything is
+        measured: verifying frame X against a capsule the shot was never authored
+        against produces a confident answer to the wrong question.
+
+        Without a ``timeline`` the scene order is unknown, so the story-dependent
+        dimensions (wardrobe plan, canon) are reported ``NOT_MEASURED`` instead of
+        being silently evaluated at scene 1.
+        """
         if not reference_images:
             raise ValidationError("continuity evaluation needs at least one reference image")
+        validate_capsule_pins(shot, capsule)
         candidate = observe(image)
         references = [observe(reference) for reference in reference_images]
         results: list[DimensionResult] = []
@@ -614,27 +713,41 @@ class ContinuityEvaluator:
         # -- wardrobe plan + canon ----------------------------------------
         conflicts: list[dict[str, Any]] = []
         wardrobe = capsule.modules.get("wardrobe")
-        scene_order = 1
+        scene_order: int | None = None
         if timeline is not None:
-            scene = timeline.scene(shot.scene_id)
-            scene_order = scene.order
-        if isinstance(wardrobe, WardrobeModule):
+            scene_order = timeline.scene(shot.scene_id).order
+        if scene_order is None and (
+            isinstance(wardrobe, WardrobeModule) or "canon" in capsule.modules
+        ):
+            results.append(
+                self._not_measured(
+                    "scene_context",
+                    "no timeline supplied: the shot's story position is unknown, so the "
+                    "wardrobe plan and canon cannot be evaluated at the right scene",
+                )
+            )
+            limitations.append(
+                "scene order unavailable: wardrobe-plan and canon dimensions were not evaluated"
+            )
+        if isinstance(wardrobe, WardrobeModule) and scene_order is not None:
             finding = check_wardrobe(
                 wardrobe,
                 sequence_id=shot.sequence_id,
                 shot_index=shot.shot_index,
                 actual_outfit_id=shot.declared.outfit_id,
+                scene_id=shot.scene_id,
             )
             if finding is not None:
                 conflicts.append(finding.to_dict())
-            try:
-                validate_outfit_era(
-                    wardrobe, outfit_id=shot.declared.outfit_id, scene_order=scene_order
-                )
-            except ValidationError as exc:
-                conflicts.append({"code": "OUTFIT_ERA_CONFLICT", "detail": str(exc)})
+            if scene_order is not None:
+                try:
+                    validate_outfit_era(
+                        wardrobe, outfit_id=shot.declared.outfit_id, scene_order=scene_order
+                    )
+                except ValidationError as exc:
+                    conflicts.append({"code": "OUTFIT_ERA_CONFLICT", "detail": str(exc)})
         canon_conflicts: tuple[Any, ...] = ()
-        if "canon" in capsule.modules:
+        if "canon" in capsule.modules and scene_order is not None:
             engine = CanonEngine(capsule)
             canon_conflicts = engine.check_shot(
                 shot_id=shot.shot_id,
@@ -784,7 +897,7 @@ class ContinuityEvaluator:
         report = ContinuityReport(
             shot_id=shot.shot_id,
             character_id=capsule.character_id,
-            capsule_revision=shot.capsule_revision,
+            capsule_revision=capsule.revision_no,
             capsule_digest=capsule.digest,
             verdict=verdict,
             dimensions=tuple(results),
@@ -792,13 +905,16 @@ class ContinuityEvaluator:
             calibration_digest=self.calibration.digest,
             limitations=tuple(limitations),
             processing_ms=processing_ms,
+            pins={
+                "shot_capsule_revision": shot.capsule_revision,
+                "verified_capsule_revision": capsule.revision_no,
+                "shot_capsule_digest": shot.capsule_digest,
+                "verified_capsule_digest": capsule.digest,
+                "module_pins_verified": sorted(shot.module_digests),
+                "scene_order": scene_order,
+            },
         )
-        evidence = digest_of(
-            {
-                "report": report.to_dict(),
-                "thresholds": self.calibration.digest,
-            }
-        )
+        evidence = report_digest(report.to_dict(), calibration_digest=self.calibration.digest)
         return ContinuityReport(
             shot_id=report.shot_id,
             character_id=report.character_id,
@@ -811,6 +927,7 @@ class ContinuityEvaluator:
             limitations=report.limitations,
             processing_ms=report.processing_ms,
             evidence_digest=evidence,
+            pins=report.pins,
         )
 
     def _scene_result(self, candidate: Observation) -> DimensionResult:
@@ -920,18 +1037,34 @@ def build_calibration(
     genuine_quantile: float = 0.95,
     impostor_quantile: float = 0.05,
     holdout: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
+    split: Mapping[str, Any] | None = None,
+    pruning: Mapping[str, Any] | None = None,
 ) -> CalibrationArtifact:
     """Derive three-band thresholds from labelled genuine/impostor distances.
 
-    ``accept`` is the ``genuine_quantile`` of genuine distances (so at most
-    ``1 - genuine_quantile`` of genuine pairs fall in the review band), and
-    ``reject`` is the ``impostor_quantile`` of impostor distances (so at most
-    ``impostor_quantile`` of impostors are accepted). When the two distributions
-    overlap, the bands are kept honest — overlap is *reported*, never hidden by
-    forcing ``accept == reject``.
+    Three declared outcomes per dimension (ADR-0010):
+
+    ``QUANTILE``
+        The usual case: ``accept`` is the ``genuine_quantile`` of genuine
+        distances and ``reject`` the ``impostor_quantile`` of impostor distances,
+        so at most ``1 - genuine_quantile`` of genuine pairs reach the review band
+        and at most ``impostor_quantile`` of impostors are accepted.
+    ``EER_FALLBACK``
+        The p95/p05 bands cross, but the distributions are still ordered on
+        average with an equal-error rate of at most ``MAX_FALLBACK_EER``. The
+        boundaries are placed symmetrically around that operating point and the
+        decision is labelled, so a reader sees the weaker fit instead of a
+        silently invented band.
+    ``NOT_MEASURED``
+        The measurement cannot separate the classes in the calibration split. No
+        threshold is emitted for the dimension; the numbers that prove the
+        inseparability are recorded and the verifier reports the dimension as
+        ``NOT_MEASURED``. (The previous code placed both boundaries at the
+        midpoint of an overlap, which produces a threshold that classifies coin
+        flips and makes every downstream verdict arbitrary.)
 
     ``holdout`` scores (a disjoint character) yield the FAR/FRR that are reported;
-    the calibration split's own scores are deliberately not used for reporting.
+    the calibration split's own scores are never used for reporting.
     """
     thresholds: dict[str, DimensionThreshold] = {}
     measured: dict[str, dict[str, Any]] = {}
@@ -939,23 +1072,59 @@ def build_calibration(
         genuine = np.asarray(scores.get("genuine", []), dtype=np.float64)
         impostor = np.asarray(scores.get("impostor", []), dtype=np.float64)
         if genuine.size == 0 or impostor.size == 0:
+            measured[dimension] = {
+                "status": "NOT_MEASURED",
+                "reason": "NO_LABELLED_PAIRS",
+                "genuine_n": int(genuine.size),
+                "impostor_n": int(impostor.size),
+            }
             continue
         accept = max(float(np.quantile(genuine, genuine_quantile)), MIN_ACCEPT)
         reject = float(np.quantile(impostor, impostor_quantile))
-        if accept >= reject - MIN_BAND:
-            # Overlapping distributions: keep the boundary at their midpoint so
-            # neither error is hidden, and record the overlap explicitly.
-            midpoint = (accept + reject) / 2.0
-            measured[dimension] = {
-                "overlap": accept > reject,
-                "raw_accept": round(accept, 6),
-                "raw_reject": round(reject, 6),
-                "min_band_applied": True,
+        eer = equal_error_rate(genuine, impostor)
+        band_fit: dict[str, Any] = {
+            "mode": "QUANTILE",
+            "raw_accept": round(accept, 6),
+            "raw_reject": round(reject, 6),
+        }
+        if accept > reject:
+            if eer["eer"] > MAX_FALLBACK_EER:
+                measured[dimension] = {
+                    "status": "NOT_MEASURED",
+                    "reason": "CALIBRATION_INSEPARABLE",
+                    "mode": "NONE",
+                    "genuine_n": int(genuine.size),
+                    "impostor_n": int(impostor.size),
+                    "eer": eer["eer"],
+                    "raw_accept": round(accept, 6),
+                    "raw_reject": round(reject, 6),
+                    "detail": (
+                        "the calibration split cannot separate genuine from impostor distances "
+                        f"(equal-error rate {eer['eer']:.3f} > {MAX_FALLBACK_EER:.2f}), so no "
+                        "threshold is defensible"
+                    ),
+                }
+                continue
+            boundary = float(eer["threshold"])
+            accept = max(boundary - MIN_BAND / 2.0, MIN_ACCEPT)
+            reject = max(boundary + MIN_BAND / 2.0, accept + MIN_BAND)
+            band_fit = {
+                "mode": "EER_FALLBACK",
+                "raw_accept": band_fit["raw_accept"],
+                "raw_reject": band_fit["raw_reject"],
+                "eer_threshold": round(boundary, 6),
+                "eer": eer["eer"],
+                "detail": (
+                    "the p95/p05 bands cross; boundaries sit at the equal-error point "
+                    f"(EER {eer['eer']:.3f} <= {MAX_FALLBACK_EER:.2f})"
+                ),
             }
+        elif accept >= reject - MIN_BAND:
+            midpoint = (accept + reject) / 2.0
+            band_fit["min_band_applied"] = True
             accept = midpoint - MIN_BAND / 2.0
             reject = midpoint + MIN_BAND / 2.0
         thresholds[dimension] = DimensionThreshold(accept=accept, reject=max(accept, reject))
-        eer = equal_error_rate(genuine, impostor)
         entry: dict[str, Any] = {
             "calibration_split": {
                 "genuine_n": int(genuine.size),
@@ -965,33 +1134,32 @@ def build_calibration(
                 "impostor_mean": round(float(impostor.mean()), 6),
                 "impostor_p05": round(float(np.quantile(impostor, 0.05)), 6),
                 "eer": eer["eer"],
-                "eer_threshold": round(eer["threshold"], 6),
-            }
+                "eer_threshold": round(float(eer["threshold"]), 6),
+                "accept": round(accept, 6),
+                "reject": round(reject, 6),
+            },
+            "band_fit": band_fit,
         }
-        if (
-            holdout
-            and dimension in holdout
-            and not (holdout[dimension].get("genuine") and holdout[dimension].get("impostor"))
-        ):
-            entry["holdout"] = {
-                "status": "NOT_MEASURED",
-                "reason": "held-out split has no pair of one class for this dimension",
-            }
-        elif holdout and dimension in holdout:
+        if holdout and dimension in holdout:
             held = holdout[dimension]
-            entry["holdout"] = {
-                "accept_boundary": operating_point(
-                    held.get("genuine", []), held.get("impostor", []), thresholds[dimension].accept
-                ),
-                "reject_boundary": operating_point(
-                    held.get("genuine", []), held.get("impostor", []), thresholds[dimension].reject
-                ),
-                "eer": equal_error_rate(held.get("genuine", []), held.get("impostor", [])),
-            }
-        if dimension in measured:
-            entry.update(measured[dimension])
-        metrics_entry = (metrics or {}).get(dimension, {})
-        entry.update({key: value for key, value in metrics_entry.items()})
+            held_genuine = held.get("genuine", [])
+            held_impostor = held.get("impostor", [])
+            if not held_genuine or not held_impostor:
+                entry["holdout"] = {
+                    "status": "NOT_MEASURED",
+                    "reason": "held-out split has no pair of one class for this dimension",
+                }
+            else:
+                entry["holdout"] = {
+                    "accept_boundary": operating_point(
+                        held_genuine, held_impostor, thresholds[dimension].accept
+                    ),
+                    "reject_boundary": operating_point(
+                        held_genuine, held_impostor, thresholds[dimension].reject
+                    ),
+                    "eer": equal_error_rate(held_genuine, held_impostor),
+                }
+        entry.update((metrics or {}).get(dimension, {}))
         measured[dimension] = entry
     return CalibrationArtifact(
         thresholds=thresholds,
@@ -1001,6 +1169,8 @@ def build_calibration(
         seed=seed,
         created_at=created_at,
         quality_floor=quality_floor,
+        split=dict(split or {}),
+        pruning=dict(pruning or {}),
     )
 
 

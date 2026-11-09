@@ -55,11 +55,33 @@ HARD_BINDING_ALGORITHMS = ("sha256",)
 #: Signing-key environment variable. There is no default key and no fallback.
 SIGNING_KEY_ENV = "CHARACTER_CAPSULE_SIGNING_KEY_FILE"
 
-#: Verification states of a bundle. ``UNSIGNED`` is deliberately distinct from
-#: ``VALID``: an unsigned bundle is *unverified*, not verified-by-default.
+#: Verification states of a bundle. Exactly one is returned, and the vocabulary is
+#: closed so a consumer can switch on it exhaustively.
+#:
+#: ``VALID``             every recorded artifact matched and the signature verified
+#:                       against a key supplied from *outside* the bundle
+#: ``INVALID``           an artifact changed, or the signature does not verify
+#: ``UNSIGNED``          nothing was signed: integrity checkable, authenticity absent
+#: ``UNTRUSTED_SIGNER``  signed, but no independent anchor vouches for the key
+#: ``INCOMPLETE``        not every recorded artifact was supplied for checking
+#: ``NOT_VERIFIABLE``    the environment cannot check a signature (no crypto backend)
 BUNDLE_VALID = "VALID"
-BUNDLE_UNSIGNED = "UNSIGNED"
 BUNDLE_INVALID = "INVALID"
+BUNDLE_UNSIGNED = "UNSIGNED"
+BUNDLE_UNTRUSTED_SIGNER = "UNTRUSTED_SIGNER"
+BUNDLE_INCOMPLETE = "INCOMPLETE"
+BUNDLE_NOT_VERIFIABLE = "NOT_VERIFIABLE"
+
+#: Most severe first. ``verify_bundle`` never reports a weaker state than one it
+#: has already proven.
+BUNDLE_STATE_SEVERITY = (
+    BUNDLE_INVALID,
+    BUNDLE_UNTRUSTED_SIGNER,
+    BUNDLE_NOT_VERIFIABLE,
+    BUNDLE_INCOMPLETE,
+    BUNDLE_UNSIGNED,
+    BUNDLE_VALID,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +237,39 @@ class Signature:
             signature_hex=str(payload["signature_hex"]),
             signed_at=str(payload["signed_at"]),
         )
+
+
+@dataclass(frozen=True)
+class TrustAnchor:
+    """A public key supplied by the *consumer*, never read from the bundle.
+
+    This is the whole point of separating integrity from authenticity: a bundle
+    that carries its own key proves only that whoever wrote it could also sign it.
+    """
+
+    public_key_hex: str
+    key_id: str = ""
+    label: str = ""
+
+    def __post_init__(self) -> None:
+        try:
+            raw = bytes.fromhex(self.public_key_hex)
+        except ValueError as exc:
+            raise ValidationError("trust anchor public key must be hex") from exc
+        if len(raw) != 32:
+            raise ValidationError("an Ed25519 public key is 32 bytes", got=len(raw))
+
+    @classmethod
+    def from_file(cls, path: str | Path, *, label: str = "") -> TrustAnchor:
+        raw = Path(path).read_bytes().strip()
+        try:
+            text = raw.decode("ascii")
+        except UnicodeDecodeError:
+            text = raw.hex()
+        return cls(public_key_hex=text.strip(), label=label or str(path))
+
+    def to_dict(self) -> dict[str, str]:
+        return {"public_key_hex": self.public_key_hex, "key_id": self.key_id, "label": self.label}
 
 
 @dataclass(frozen=True)
@@ -442,21 +497,41 @@ def sign_bundle(bundle: EvidenceBundle, *, signing_key: Any, signed_at: str) -> 
 
 @dataclass(frozen=True)
 class BundleVerification:
-    """Result of verifying a bundle against the bytes on disk."""
+    """Result of verifying a bundle against the bytes on disk.
+
+    ``integrity_ok`` answers "are these the bytes that were recorded?" and
+    ``authenticity`` answers "who vouches for them?" — two different questions
+    that the previous single boolean conflated.
+    """
 
     status: str
     checks: Mapping[str, bool]
     reasons: tuple[str, ...] = ()
+    integrity_ok: bool = False
+    authenticity: str = BUNDLE_UNSIGNED
+    missing_records: tuple[str, ...] = ()
+    signer_key_id: str = ""
+    trust_anchor_key_id: str = ""
 
     @property
     def ok(self) -> bool:
-        return self.status in {BUNDLE_VALID, BUNDLE_UNSIGNED} and all(self.checks.values())
+        """Strict: only a fully checked, externally anchored bundle is "ok"."""
+        return self.status == BUNDLE_VALID and all(self.checks.values())
+
+    @property
+    def integrity_verified(self) -> bool:
+        return self.integrity_ok and self.status != BUNDLE_INVALID
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
+            "integrity_ok": self.integrity_ok,
+            "authenticity": self.authenticity,
             "checks": dict(self.checks),
             "reasons": list(self.reasons),
+            "missing_records": list(self.missing_records),
+            "signer_key_id": self.signer_key_id,
+            "trust_anchor_key_id": self.trust_anchor_key_id,
         }
 
 
@@ -464,78 +539,171 @@ def verify_bundle(
     bundle: EvidenceBundle,
     *,
     files: Mapping[str, Path] | None = None,
+    trust_anchor: TrustAnchor | None = None,
     public_key_hex: str | None = None,
 ) -> BundleVerification:
-    """Re-check structure, recorded digests, hard binding and signature.
+    """Re-check structure, artifact bytes and signature; report exactly one state.
 
-    ``files`` maps a record ``name`` to the path that currently holds the bytes;
-    absent names are skipped and reported in ``checks["files_present"]`` so a
-    partial check can never look like a full pass.
+    ``files`` maps a record ``name`` to the path that currently holds the bytes.
+    **Every** recorded artifact must be supplied — a partial check is reported as
+    ``INCOMPLETE`` rather than passed. ``trust_anchor`` (or an explicit
+    ``public_key_hex``) is the key the *consumer* trusts; the key embedded in the
+    bundle is evidence about the signer, never a reason to trust it.
     """
     checks: dict[str, bool] = {}
     reasons: list[str] = []
+    missing: list[str] = []
 
+    # -- 1. structure ------------------------------------------------------
     checks["hard_binding_matches_records"] = (
         bundle.hard_binding.digest == _hard_binding_for(bundle.records).digest
     )
     if not checks["hard_binding_matches_records"]:
         reasons.append("hard binding does not match the recorded artifacts")
-
     checks["lineage_present"] = bool(bundle.lineage)
+    if not checks["lineage_present"]:
+        reasons.append("bundle has no lineage")
+    names = [record.name for record in bundle.records]
+    checks["records_unique"] = len(set(names)) == len(names)
+    if not checks["records_unique"]:
+        reasons.append("bundle names the same artifact more than once")
+    structure_ok = all(checks.values())
 
-    if files:
-        expected = {record.name: record.sha256 for record in bundle.records}
-        matched = 0
+    # -- 2. artifact bytes -------------------------------------------------
+    integrity_ok = False
+    if files is None:
+        checks["all_artifacts_supplied"] = False
+        reasons.append(
+            "no artifacts were supplied: completeness cannot be established "
+            "(the bundle is INCOMPLETE, not valid)"
+        )
+    else:
+        expected = {record.name: record for record in bundle.records}
+        supplied = set(files)
+        missing = sorted(set(expected) - supplied)
+        extra = sorted(supplied - set(expected))
+        checks["all_artifacts_supplied"] = not missing
+        if missing:
+            reasons.append("recorded artifacts were not supplied: " + ", ".join(missing))
+        if extra:
+            reasons.append("supplied files are not described by the bundle: " + ", ".join(extra))
         mismatched: list[str] = []
-        for name, path in files.items():
-            if name not in expected:
-                reasons.append(f"file {name!r} is not described by the bundle")
-                continue
-            actual = sha256_hex(Path(path).read_bytes())
-            if actual == expected[name]:
-                matched += 1
-            else:
+        for name in sorted(set(expected) & supplied):
+            actual = sha256_hex(Path(files[name]).read_bytes())
+            if actual != expected[name].sha256:
                 mismatched.append(name)
-        if mismatched:
-            reasons.append(
-                "content changed since the bundle was written: " + ", ".join(sorted(mismatched))
-            )
         checks["files_match"] = not mismatched
-        checks["files_present"] = matched > 0
+        if mismatched:
+            reasons.append("content changed since the bundle was written: " + ", ".join(mismatched))
+        integrity_ok = structure_ok and not missing and not mismatched
 
-    status: str
+    # -- 3. signature ------------------------------------------------------
+    anchor = trust_anchor
+    if anchor is None and public_key_hex:
+        anchor = TrustAnchor(public_key_hex=public_key_hex)
+    authenticity = BUNDLE_UNSIGNED
+    signer_key_id = ""
     if bundle.signature is None:
-        status = BUNDLE_UNSIGNED
+        checks["signature_present"] = False
         reasons.append(
             "bundle is unsigned: integrity is checkable, authenticity is not established"
         )
     else:
-        key_hex = public_key_hex or bundle.signature.public_key_hex
-        from nacl import signing
-
-        try:
-            verify_key = signing.VerifyKey(bytes.fromhex(key_hex))
-            verify_key.verify(
-                canonical_json(bundle.claim).encode("utf-8"),
-                bytes.fromhex(bundle.signature.signature_hex),
+        checks["signature_present"] = True
+        signer_key_id = bundle.signature.key_id
+        if anchor is None:
+            # No independent key: the signature can still be checked against the key
+            # the bundle carries. That detects an edited claim (the signature no longer
+            # matches) without establishing trust — the two are reported separately.
+            checks["trust_anchor_supplied"] = False
+            checking_key_hex = bundle.signature.public_key_hex
+            reasons.append(
+                "bundle is signed, but no independently trusted public key was supplied: "
+                "the signature is checked against its own key, which proves possession, "
+                "not trust"
             )
-            checks["signature_valid"] = True
-            status = BUNDLE_VALID
-        except Exception:  # noqa: BLE001 - any verification failure is INVALID, not a crash
-            checks["signature_valid"] = False
-            reasons.append("signature does not verify against the claim")
-            status = BUNDLE_INVALID
+            authenticity_default = BUNDLE_UNTRUSTED_SIGNER
+        elif anchor.public_key_hex.lower() != bundle.signature.public_key_hex.lower():
+            checks["trust_anchor_matches_signer"] = False
+            checking_key_hex = ""
+            authenticity = BUNDLE_UNTRUSTED_SIGNER
+            reasons.append("the supplied trust anchor is not the key that signed this bundle")
+        elif anchor.key_id and signer_key_id and anchor.key_id != signer_key_id:
+            # A pinned key id is part of the anchor: the same bytes with a different
+            # declared id is a different key generation as far as rotation/revocation
+            # policy is concerned.
+            checks["trust_anchor_matches_signer"] = True
+            checks["trust_anchor_key_id_matches"] = False
+            checking_key_hex = ""
+            authenticity = BUNDLE_UNTRUSTED_SIGNER
+            reasons.append(
+                "the trust anchor's key id does not match the signing key id",
+            )
+        else:
+            checks["trust_anchor_matches_signer"] = True
+            checking_key_hex = anchor.public_key_hex
+            authenticity_default = BUNDLE_VALID
+        if checking_key_hex:
+            try:
+                from nacl import signing
+            except Exception:  # noqa: BLE001 - absence is a typed state, not a crash
+                authenticity = BUNDLE_NOT_VERIFIABLE
+                checks["signature_checked"] = False
+                reasons.append(
+                    "no Ed25519 backend is importable, so the signature cannot be checked "
+                    "in this environment"
+                )
+            else:
+                try:
+                    signing.VerifyKey(bytes.fromhex(checking_key_hex)).verify(
+                        canonical_json(bundle.claim).encode("utf-8"),
+                        bytes.fromhex(bundle.signature.signature_hex),
+                    )
+                except Exception:  # noqa: BLE001 - a failed check is INVALID, not a crash
+                    authenticity = BUNDLE_INVALID
+                    checks["signature_checked"] = True
+                    checks["signature_valid"] = False
+                    reasons.append("signature does not verify against the claim")
+                else:
+                    authenticity = authenticity_default
+                    checks["signature_checked"] = True
+                    checks["signature_valid"] = True
 
-    if status == BUNDLE_VALID and not all(checks.values()):
+    # -- 4. one state, most severe first -----------------------------------
+    if not checks.get("files_match", True) or authenticity == BUNDLE_INVALID:
         status = BUNDLE_INVALID
+    elif authenticity == BUNDLE_UNTRUSTED_SIGNER:
+        status = BUNDLE_UNTRUSTED_SIGNER
+    elif authenticity == BUNDLE_NOT_VERIFIABLE:
+        status = BUNDLE_NOT_VERIFIABLE
+    elif files is None or missing:
+        status = BUNDLE_INCOMPLETE
+    elif authenticity == BUNDLE_UNSIGNED:
+        status = BUNDLE_UNSIGNED
+    elif not structure_ok:
+        status = BUNDLE_INVALID
+    else:
+        status = BUNDLE_VALID
+
     return BundleVerification(
-        status=status, checks=dict(sorted(checks.items())), reasons=tuple(reasons)
+        status=status,
+        checks=dict(sorted(checks.items())),
+        reasons=tuple(reasons),
+        integrity_ok=integrity_ok and structure_ok,
+        authenticity=authenticity,
+        missing_records=tuple(missing),
+        signer_key_id=signer_key_id,
+        trust_anchor_key_id="" if anchor is None else anchor.key_id,
     )
 
 
 __all__ = [
+    "BUNDLE_INCOMPLETE",
     "BUNDLE_INVALID",
+    "BUNDLE_NOT_VERIFIABLE",
+    "BUNDLE_STATE_SEVERITY",
     "BUNDLE_UNSIGNED",
+    "BUNDLE_UNTRUSTED_SIGNER",
     "BUNDLE_VALID",
     "SIGNING_KEY_ENV",
     "BundleVerification",
@@ -543,6 +711,7 @@ __all__ = [
     "EvidenceRecord",
     "HardBinding",
     "Signature",
+    "TrustAnchor",
     "build_bundle",
     "bundle_from_files",
     "load_signing_key",

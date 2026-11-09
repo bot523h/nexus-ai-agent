@@ -22,8 +22,9 @@ Pipeline
 from __future__ import annotations
 
 import json
+import os
 import platform
-import resource
+import secrets
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -33,14 +34,13 @@ from typing import Any
 import numpy as np
 
 from .audio_motion import gait_features, motion_distance, voice_distance, voice_features
-from .canonical import digest_of
+from .canonical import digest_of, sha256_hex
 from .continuity import (
     QUALITY_GATES,
+    CalibrationArtifact,
     ContinuityEvaluator,
     VerificationState,
     build_calibration,
-    equal_error_rate,
-    operating_point,
     scene_distance,
     short_digest,
 )
@@ -54,8 +54,10 @@ from .dataset import (
     build_timeline,
     character_split,
     motion_sequence,
+    split_report,
     voice_samples,
 )
+from .errors import ValidationError
 from .evidence import (
     bundle_from_files,
     load_signing_key,
@@ -69,6 +71,22 @@ from .wardrobe import WardrobeModule
 
 #: Human review is not available in this environment; it is reported as such.
 HUMAN_REVIEW = "NOT_MEASURED"
+
+
+def peak_rss_mb() -> float | None:
+    """Peak resident memory, or ``None`` when the platform cannot report it.
+
+    ``resource`` is POSIX-only. Importing it unconditionally made the whole
+    benchmark unimportable on Windows (finding F26); a missing measurement is now
+    reported as ``NOT_MEASURED`` instead of being a crash.
+    """
+    try:
+        import resource  # noqa: PLC0415 - optional, platform specific
+    except ImportError:
+        return None
+    usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # Linux reports kilobytes, macOS bytes.
+    return usage / 1024.0 if platform.system() != "Darwin" else usage / (1024.0 * 1024.0)
 
 
 @dataclass
@@ -130,7 +148,16 @@ class BenchmarkConfig:
     out_dir: Path | None = None
     seed: str = "nagar-character-capsule-benchmark-v1"
     calibration_quantiles: tuple[float, float] = (0.95, 0.05)
+    #: Every run publishes into its own directory named after this id, so two
+    #: concurrent runs can never bind each other's artifacts (finding F27).
+    run_id: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+def new_run_id() -> str:
+    """Sortable, unique run id: UTC timestamp + pid + random suffix."""
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return f"{stamp}-{os.getpid()}-{secrets.token_hex(3)}"
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +201,9 @@ def _pair_scores(
     return scores
 
 
-def _voice_calibration() -> tuple[dict[str, list[float]], dict[str, dict[str, list[float]]]]:
+def _voice_calibration(
+    calibration_ids: Sequence[str],
+) -> tuple[dict[str, list[float]], dict[str, dict[str, list[float]]]]:
     """Genuine/impostor voice distances from synthetic signature variants.
 
     Genuine pairs are *within* a character (three session variants: baseline,
@@ -182,28 +211,29 @@ def _voice_calibration() -> tuple[dict[str, list[float]], dict[str, dict[str, li
     Characters are split the same way as the visual calibration: the first two
     fit the threshold, the third is held out.
     """
-    from .audio_motion import VoiceSignature, synthesize_voice, voice_vector
+    from .audio_motion import synthesize_voice, voice_vector
+    from .dataset import VOICE_SESSIONS, voice_signature
 
+    # One session model, used by the fit *and* by the evaluator: the two must not
+    # drift apart, or the threshold is fitted on a different distribution than the
+    # one deployed (the same mistake the gallery-min fix corrected for faces).
     variants: dict[str, list[np.ndarray]] = {}
     for spec in CHARACTERS:
-        base = VoiceSignature.from_module(spec.voice)
-        sessions = [
-            base,
-            VoiceSignature(
-                f0_hz=base.f0_hz * 1.01,
-                timbre=base.timbre,
-                speaking_rate=min(base.speaking_rate * 1.05, 1.8),
-            ),
-            VoiceSignature(
-                f0_hz=base.f0_hz * 0.99,
-                timbre=base.timbre,
-                speaking_rate=max(base.speaking_rate * 0.96, 0.5),
-                breathiness=min(base.breathiness + 0.04, 0.3),
-            ),
+        variants[spec.character_id] = [
+            voice_features(synthesize_voice(voice_signature(spec.character_id, session=session)))
+            for session in VOICE_SESSIONS
         ]
-        variants[spec.character_id] = [voice_features(synthesize_voice(sig)) for sig in sessions]
+    # Statistics are fitted on the calibration characters only: letting the
+    # held-out character contribute its baseline leaked it into the fit (F23).
+    # Every session of those characters contributes, so the normalisation reflects
+    # legitimate session-to-session variation rather than one take per speaker.
     stats = _vector_stats(
-        [voice_vector(features) for features in variants.values() for features in features[:1]]
+        [
+            voice_vector(features)
+            for character_id, features_list in variants.items()
+            if character_id in calibration_ids
+            for features in features_list
+        ]
     )
     splits = {
         "calibration": {"genuine": [], "impostor": []},
@@ -227,17 +257,26 @@ def _voice_calibration() -> tuple[dict[str, list[float]], dict[str, dict[str, li
     return stats, splits
 
 
-def _motion_calibration() -> tuple[dict[str, list[float]], dict[str, dict[str, list[float]]]]:
+def _motion_calibration(
+    calibration_ids: Sequence[str],
+) -> tuple[dict[str, list[float]], dict[str, dict[str, list[float]]]]:
     """Genuine/impostor gait distances (three session seeds per character)."""
-    from .audio_motion import motion_vector, synthesize_gait
+    from .audio_motion import motion_vector
 
     variants: dict[str, list[dict[str, np.ndarray]]] = {}
     for spec in CHARACTERS:
         variants[spec.character_id] = [
-            gait_features(synthesize_gait(spec.motion.gait, seed=f"{spec.character_id}-{session}"))
+            gait_features(motion_sequence(spec.character_id, session=session))
             for session in ("a", "b", "c")
         ]
-    stats = _vector_stats([motion_vector(features[0]) for features in variants.values()])
+    stats = _vector_stats(
+        [
+            motion_vector(features)
+            for character_id, features_list in variants.items()
+            if character_id in calibration_ids
+            for features in features_list
+        ]
+    )
     splits = {
         "calibration": {"genuine": [], "impostor": []},
         "holdout": {"genuine": [], "impostor": []},
@@ -415,12 +454,25 @@ def _scenarios(corpus: Corpus) -> list[Scenario]:
             quoted_condition="OUT-0002 at shot index 0 (plan requires OUT-0001)",
         ),
         Scenario(
+            # The candidate is a *different recording session* of the same speaker
+            # and the reference is session "a" (they used to be the same array, which
+            # measured nothing — finding F24). Whether this can be verified is now a
+            # measured question: this corpus's look-alike pair sits 3 Hz apart, so
+            # voice is expected to be NOT_MEASURED (inseparable calibration) rather
+            # than VERIFIED, and that is the honest expectation to declare.
             name="extra_voice_identity",
-            description="voice identity measured alongside the visual dimensions",
+            description=(
+                "voice identity measured on an independent session; expected to be "
+                "INSUFFICIENT_EVIDENCE when the calibration split cannot separate speakers"
+            ),
             shot_id="SH-112",
             scene_id="SC-001",
             image_key="000001-ref-front",
-            expected=(VerificationState.VERIFIED_WITH_LIMITATIONS, VerificationState.VERIFIED),
+            expected=(
+                VerificationState.VERIFIED_WITH_LIMITATIONS,
+                VerificationState.VERIFIED,
+                VerificationState.INSUFFICIENT_EVIDENCE,
+            ),
             reference_keys=portraits,
             quoted_condition="reference voice vs same-identity session voice",
             with_voice=True,
@@ -492,26 +544,43 @@ def _shot_for(
 # ---------------------------------------------------------------------------
 
 
-def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
-    """Execute the benchmark and return (and write) the result document."""
-    started = time.perf_counter()
-    work = Path(config.work_dir)
-    out = Path(config.out_dir) if config.out_dir else work / "results"
-    out.mkdir(parents=True, exist_ok=True)
-    corpus = build_corpus(work, write=True)
-    capsule = build_capsule(CHARACTERS[0])
-    timeline = build_timeline()
+def build_calibration_from_corpus(
+    corpus: Corpus,
+    *,
+    calibration_ids: Sequence[str] | None = None,
+    holdout_ids: Sequence[str] | None = None,
+    seed: str = "character-capsule-v1",
+    quantiles: tuple[float, float] = (0.95, 0.05),
+    created_at: str | None = None,
+) -> CalibrationArtifact:
+    """Fit the decision bands on the calibration characters only (F23).
 
-    # Observations for every frame, computed once.
-    observations: dict[str, Observation] = {}
-    for record in corpus.frames:
-        observations[record.key] = observe(corpus.load(record))
-
+    Extracted from :func:`run_benchmark` so that the *fit* can be used (and tested)
+    without running the twelve scenarios. The holdout characters are measured with
+    these statistics but never contribute to them, and the split is recorded inside
+    the artefact so a reader can check the claim instead of trusting it.
+    """
+    if calibration_ids is None or holdout_ids is None:
+        derived_calibration, derived_holdout = character_split(corpus)
+        calibration_ids = calibration_ids or derived_calibration
+        holdout_ids = holdout_ids or derived_holdout
+    calibration_ids = tuple(calibration_ids)
+    holdout_ids = tuple(holdout_ids)
+    overlap = sorted(set(calibration_ids) & set(holdout_ids))
+    if overlap:
+        raise ValidationError(
+            "a character cannot be in both the calibration and the holdout split",
+            overlap=overlap,
+        )
+    observations: dict[str, Observation] = {
+        record.key: observe(corpus.load(record)) for record in corpus.frames
+    }
     portrait_references = [
         observations[record.key]
         for record in corpus.frames
         if record.purpose in {"reference", "reference_alt"}
         and record.kind == "portrait"
+        and record.character_id in calibration_ids
         and observations[record.key].face_quality > 0.0
     ]
     fullbody_references = [
@@ -519,6 +588,7 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         for record in corpus.frames
         if record.purpose in {"reference", "reference_alt"}
         and record.kind == "full_body"
+        and record.character_id in calibration_ids
         and observations[record.key].body_quality > 0.0
     ]
     stats: dict[str, Any] = {}
@@ -526,7 +596,11 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         stats[dimension] = _stats_for(portrait_references, dimension)
     stats["body"] = _stats_for(fullbody_references, "body")
     # Scene statistics are measured in background-colour space, not feature space.
-    reference_records = [record for record in corpus.frames if record.purpose == "reference"]
+    reference_records = [
+        record
+        for record in corpus.frames
+        if record.purpose == "reference" and record.character_id in calibration_ids
+    ]
     backgrounds = np.vstack(
         [np.asarray(observations[record.key].scene["background"]) for record in reference_records]
     )
@@ -534,28 +608,70 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         "mean": [round(float(value), 8) for value in backgrounds.mean(axis=0)],
         "std": [round(float(value), 8) for value in backgrounds.std(axis=0)],
     }
-    voice_stats, voice_scores = _voice_calibration()
-    motion_stats, motion_scores = _motion_calibration()
+    voice_stats, voice_scores = _voice_calibration(calibration_ids)
+    motion_stats, motion_scores = _motion_calibration(calibration_ids)
     stats["voice"] = voice_stats
     stats["motion"] = motion_stats
 
-    pairs, pruned_probes = _pair_scores_all(corpus, observations=observations, stats=stats)
+    pairs, pruned_probes = _pair_scores_all(
+        corpus, observations=observations, stats=stats, calibration_ids=calibration_ids
+    )
     calibration_scores = {dimension: entry["calibration"] for dimension, entry in pairs.items()}
     holdout_scores = {dimension: entry["holdout"] for dimension, entry in pairs.items()}
     calibration_scores["voice"] = voice_scores["calibration"]
     holdout_scores["voice"] = voice_scores["holdout"]
     calibration_scores["motion"] = motion_scores["calibration"]
     holdout_scores["motion"] = motion_scores["holdout"]
-
-    calibration = build_calibration(
+    return build_calibration(
         dimension_scores=calibration_scores,
         stats=stats,
         dataset_digest=corpus.digest,
-        seed=config.seed,
-        created_at=_now(),
+        seed=seed,
+        created_at=created_at or _now(),
         holdout=holdout_scores,
-        genuine_quantile=config.calibration_quantiles[0],
-        impostor_quantile=config.calibration_quantiles[1],
+        genuine_quantile=quantiles[0],
+        impostor_quantile=quantiles[1],
+        split={
+            "calibration": list(calibration_ids),
+            "holdout": list(holdout_ids),
+            "overlap": overlap,
+        },
+        pruning=pruned_probes,
+    )
+
+
+def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
+    """Execute the benchmark and return (and write) the result document."""
+    started = time.perf_counter()
+    work = Path(config.work_dir)
+    run_id = config.run_id or new_run_id()
+    base_out = Path(config.out_dir) if config.out_dir else work / "results"
+    base_out.mkdir(parents=True, exist_ok=True)
+    final_out = base_out / run_id
+    if final_out.exists():
+        raise FileExistsError(
+            f"run directory already exists: {final_out}; pick a new --run-id instead of "
+            "overwriting another run's evidence"
+        )
+    # Everything is written into a private staging directory and published with a
+    # single rename, so a reader never sees a half-written run (F27).
+    out = base_out / f".{run_id}.staging"
+    if out.exists():
+        import shutil as _shutil
+
+        _shutil.rmtree(out)
+    out.mkdir(parents=True)
+    corpus = build_corpus(work, write=True)
+    calibration_ids, holdout_ids = character_split(corpus)
+    capsule = build_capsule(CHARACTERS[0])
+    timeline = build_timeline()
+
+    calibration = build_calibration_from_corpus(
+        corpus,
+        calibration_ids=calibration_ids,
+        holdout_ids=holdout_ids,
+        seed=config.seed,
+        quantiles=config.calibration_quantiles,
     )
     (out / "calibration.json").write_text(
         json.dumps(calibration.to_dict(), ensure_ascii=False, indent=2, sort_keys=True),
@@ -585,17 +701,21 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
             image=image,
             reference_images=reference_images,
             timeline=timeline,
-            voice_samples=voice_samples(CHARACTERS[0].character_id)
+            # The candidate is a *different session* of the same speaker: comparing
+            # a take with itself yields distance 0 and measures nothing (F24).
+            voice_samples=voice_samples(CHARACTERS[0].character_id, session="b")
             if scenario.with_voice
             else None,
-            reference_voice=voice_samples(CHARACTERS[0].character_id)
+            reference_voice=voice_samples(CHARACTERS[0].character_id, session="a")
             if scenario.with_voice
             else None,
-            motion_sequence=motion_sequence(CHARACTERS[0].character_id)
+            motion_sequence=motion_sequence(CHARACTERS[0].character_id, session="b")
             if scenario.with_motion
             else None,
             reference_motion=(
-                motion_sequence(CHARACTERS[0].character_id) if scenario.with_motion else None
+                motion_sequence(CHARACTERS[0].character_id, session="a")
+                if scenario.with_motion
+                else None
             ),
         )
         elapsed_ms = (time.perf_counter() - started_shot) * 1000.0
@@ -615,30 +735,39 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         json.dumps(reports, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
     )
 
-    # Metrics measured from the held-out split.
+    # Metrics measured from the held-out split, read back from the calibration
+    # artefact: the numbers published here are exactly the ones the fit recorded,
+    # so the document cannot report a better holdout than the one it verified.
     holdout_metrics: dict[str, Any] = {}
-    for dimension, threshold in sorted(calibration.thresholds.items()):
-        entry = holdout_scores.get(dimension)
-        if not entry:
+    for dimension, entry in sorted(calibration.metrics.items()):
+        held = entry.get("holdout")
+        if not isinstance(held, Mapping):
             continue
-        genuine = entry.get("genuine", [])
-        impostor = entry.get("impostor", [])
-        if not genuine or not impostor:
-            holdout_metrics[dimension] = {"status": HUMAN_REVIEW, "reason": "no held-out pairs"}
+        if held.get("status"):
+            holdout_metrics[dimension] = dict(held)
             continue
-        point = operating_point(genuine, impostor, threshold.accept)
+        if not held.get("accept_boundary"):
+            continue
+        point = held["accept_boundary"]
         holdout_metrics[dimension] = {
             "at_accept_boundary": point,
-            "eer": equal_error_rate(genuine, impostor),
-            "genuine_n": len(genuine),
-            "impostor_n": len(impostor),
+            "eer": held["eer"],
+            "genuine_n": point.get("genuine_n"),
+            "impostor_n": point.get("impostor_n"),
         }
 
     total_ms = (time.perf_counter() - started) * 1000.0
-    peak_rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    rss = peak_rss_mb()
     results = {
         "schema": "character-capsule-benchmark/1",
         "seed": config.seed,
+        "run": {
+            "run_id": run_id,
+            "out_dir": str(final_out),
+            "staging_dir": str(out),
+            "atomic_publish": True,
+        },
+        "split": split_report(corpus),
         "created_at": _now(),
         "corpus": {
             "root": str(work),
@@ -651,8 +780,8 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         "calibration": {
             "digest": calibration.digest,
             "pruned_probes": {
-                "quality": pruned_probes["quality"],
-                "canon_marker": pruned_probes["canon_marker"],
+                "quality": calibration.pruning.get("quality", []),
+                "canon_marker": calibration.pruning.get("canon_marker", []),
                 "policy": (
                     "quality: face below QUALITY_GATES['face']; "
                     "canon_marker: frame carries a canon-declared appearance change"
@@ -672,7 +801,11 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
             "machine": platform.machine(),
             "cpu_count": _cpu_count(),
             "gpu": "NOT_MEASURED: no GPU device present (nvidia-smi unavailable)",
-            "peak_rss_mb": round(peak_rss_mb, 1),
+            "peak_rss_mb": (
+                "NOT_MEASURED: resource.getrusage unavailable on this platform"
+                if rss is None
+                else round(rss, 1)
+            ),
             "total_wall_ms": round(total_ms, 1),
             "mean_scenario_ms": round(
                 float(np.mean([outcome.processing_ms for outcome in outcomes])), 3
@@ -691,12 +824,25 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
             ),
         },
     }
-    results["results_digest"] = digest_of(
-        {key: value for key, value in results.items() if key not in {"created_at", "environment"}}
-    )
-    (out / "benchmark_results.json").write_text(
-        json.dumps(results, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
-    )
+    # The results digest identifies the *scientific content* of a run, so it must be
+    # reproducible from the same corpus and the same code. Timing, wall-clock paths and
+    # the evidence section (which is computed later and contains this digest's consumer)
+    # are excluded, and the exclusion list is published inside the document — a digest
+    # whose scope is invisible is a claim nobody can re-check (finding F25's sibling).
+    results["results_digest_scope"] = {
+        "algorithm": "sha256",
+        "excluded": {
+            "created_at": "wall clock",
+            "environment": "measured on this machine, not part of the result",
+            "run": "placement of this run on disk",
+            "evidence": "computed after this digest and binds it",
+            "results_digest": "self-reference",
+            "results_digest_scope": "self-reference",
+            "scenarios[].processing_ms": "timing",
+            "corpus.root": "the work directory this run was placed in",
+        },
+    }
+    results["results_digest"] = digest_of(_digestable_results(results))
     (out / "BENCHMARK.md").write_text(render_markdown(results), encoding="utf-8")
     results["evidence"] = _write_evidence(
         out=out,
@@ -704,10 +850,14 @@ def run_benchmark(config: BenchmarkConfig) -> dict[str, Any]:
         capsule=capsule,
         calibration_digest=calibration.digest,
         results=results,
+        run_id=run_id,
     )
+    # Written exactly once, after the evidence section exists: a document that
+    # embeds its own digest must not be rewritten afterwards.
     (out / "benchmark_results.json").write_text(
         json.dumps(results, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
     )
+    os.replace(out, final_out)
     return results
 
 
@@ -718,47 +868,30 @@ def _write_evidence(
     capsule: CharacterCapsule,
     calibration_digest: str,
     results: Mapping[str, Any],
+    run_id: str,
 ) -> dict[str, Any]:
-    """Write a content-addressed evidence bundle for the whole run.
+    """Write a content-addressed evidence bundle for this run.
 
-    The bundle is signed only when a signing key is configured outside the
-    repository; otherwise it is written unsigned and verification says so. A
-    prototype that silently signed with a checked-in key would be worse than one
-    that admits it has no key.
+    Three properties this function is responsible for:
+
+    * **every bound artifact is supplied back to the verifier**, so verification
+      reports ``UNSIGNED`` (unsigned) or ``VALID`` (signed and anchored) instead of
+      ``INCOMPLETE``;
+    * **source media is provable**: the corpus manifest carries the sha256 of every
+      frame, audio track and motion sequence, and the bundle binds that manifest;
+    * **a signing failure is never silent**: a configured-but-unusable key is
+      recorded as ``FAILED`` with the reason, not downgraded to "unsigned" without
+      a trace (finding F16).
     """
-    manifest_path = out / "corpus_manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "digest": corpus.digest,
-                "frames": [
-                    {
-                        "key": record.key,
-                        "path": record.path,
-                        "purpose": record.purpose,
-                        "condition": record.condition,
-                        "kind": record.kind,
-                        "digest": digest_of(
-                            {
-                                "key": record.key,
-                                "purpose": record.purpose,
-                                "condition": record.condition,
-                                "outfit_id": record.outfit_id,
-                                "background": record.background,
-                                "key_kelvin": record.key_kelvin,
-                                "kind": record.kind,
-                                "labels": dict(record.labels),
-                            }
-                        ),
-                    }
-                    for record in corpus.frames
-                ],
-            },
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
+    media_manifest = {
+        "schema": "character-capsule-corpus/1",
+        "digest": corpus.digest,
+        "frames": [record.to_dict() for record in corpus.frames],
+        "audio": corpus_audio_digests(),
+        "motion": corpus_motion_digests(),
+    }
+    (out / "corpus_manifest.json").write_text(
+        json.dumps(media_manifest, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
     )
     # ``benchmark_results.json`` embeds this bundle's own digest, so it is
     # deliberately *not* a record: binding a document that contains the binding is
@@ -768,14 +901,17 @@ def _write_evidence(
         "calibration.json": ("calibration", "application/json"),
         "continuity_reports.json": ("reports", "application/json"),
         "corpus_manifest.json": ("corpus", "application/json"),
+        "BENCHMARK.md": ("summary", "text/markdown"),
     }
     present = {str(out / name): spec for name, spec in artifacts.items() if (out / name).exists()}
     bundle = bundle_from_files(
-        bundle_id="EVD-NAGAR-CHAR-000001-RUN",
+        bundle_id=f"EVD-{capsule.character_id}-{run_id}",
         subject={
             "character_id": capsule.character_id,
             "capsule_digest": capsule.digest,
             "calibration_digest": calibration_digest,
+            "corpus_digest": corpus.digest,
+            "run_id": run_id,
             "media_type": "application/json",
         },
         assertions={
@@ -788,6 +924,17 @@ def _write_evidence(
                 }
                 for entry in results["scenarios"]
             ],
+            "split": dict(results.get("split", {})),
+            "media": {
+                "frames": len(corpus.frames),
+                "frame_digests": [record.sha256 for record in corpus.frames],
+                "audio": corpus_audio_digests(),
+                "motion": corpus_motion_digests(),
+                "note": (
+                    "the corpus manifest binds the bytes of every frame, audio track and "
+                    "motion sequence; the manifest itself is a record of this bundle"
+                ),
+            },
             "synthetic_marking": {
                 "ai_generated": True,
                 "all_subjects_synthetic": True,
@@ -814,29 +961,75 @@ def _write_evidence(
             "consent": "not applicable: every subject in this corpus is synthetic",
         },
     )
-    signed = False
+    signing: dict[str, Any] = {"status": "NOT_CONFIGURED"}
     try:
         key = load_signing_key()
-    except Exception:  # noqa: BLE001 - a missing key is an expected state, not a failure
+    except Exception as exc:  # noqa: BLE001 - distinguish "unset" from "broken" below
+        configured = bool(os.environ.get("CHARACTER_CAPSULE_SIGNING_KEY_FILE", "").strip())
+        signing = {
+            "status": "FAILED" if configured else "NOT_CONFIGURED",
+            "reason": str(exc),
+            "configured": configured,
+        }
         key = None
     if key is not None:
         bundle = sign_bundle(bundle, signing_key=key, signed_at=_now())
-        signed = True
+        signing = {"status": "SIGNED", "algorithm": "ed25519"}
     path = out / "evidence_bundle.json"
     path.write_text(
         json.dumps(bundle.to_dict(), ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
     )
-    verification = verify_bundle(bundle)
+    # Verify against the very files just written: completeness is checked, not assumed.
+    supplied = {
+        record.name: out / record.name for record in bundle.records if (out / record.name).exists()
+    }
+    verification = verify_bundle(bundle, files=supplied)
     return {
         "bundle_id": bundle.bundle_id,
         "path": str(path),
         "digest": bundle.digest,
         "claim_digest": bundle.claim_digest,
-        "signed": signed,
+        "signed": bundle.signature is not None,
+        "signing": signing,
         "signature_algorithm": None if bundle.signature is None else bundle.signature.algorithm,
         "verification": verification.to_dict(),
         "c2pa_manifest_shape": bundle.c2pa_manifest_shape(),
     }
+
+
+def corpus_audio_digests() -> list[dict[str, Any]]:
+    """Digest of each synthesised voice track (bytes, not metadata)."""
+    from .audio_motion import VoiceSignature, synthesize_voice
+    from .media import encode_wav
+
+    entries = []
+    for spec in CHARACTERS:
+        samples = synthesize_voice(VoiceSignature.from_module(spec.voice))
+        data = encode_wav(samples, sample_rate=16000)
+        entries.append(
+            {
+                "character_id": spec.character_id,
+                "media_type": "audio/wav",
+                "sha256": sha256_hex(data),
+            }
+        )
+    return entries
+
+
+def corpus_motion_digests() -> list[dict[str, Any]]:
+    """Digest of each motion sequence (the array the verifier measures)."""
+    entries = []
+    for spec in CHARACTERS:
+        sequence = motion_sequence(spec.character_id, session="a")
+        entries.append(
+            {
+                "character_id": spec.character_id,
+                "session": "a",
+                "frames": int(sequence.shape[0]),
+                "digest": sha256_hex(sequence.tobytes()),
+            }
+        )
+    return entries
 
 
 def _with_timing(report: Any, elapsed_ms: float) -> Any:
@@ -850,6 +1043,7 @@ def _pair_scores_all(
     *,
     observations: Mapping[str, Observation],
     stats: Mapping[str, Any],
+    calibration_ids: Sequence[str] | None = None,
 ) -> tuple[dict[str, dict[str, dict[str, list[float]]]], dict[str, list[str]]]:
     """Genuine/impostor distances computed the way the evaluator computes them.
 
@@ -1013,6 +1207,28 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _digestable_results(results: Mapping[str, Any]) -> dict[str, Any]:
+    """Strip the declared volatile fields before hashing a results document."""
+    volatile = {
+        "created_at",
+        "environment",
+        "run",
+        "evidence",
+        "results_digest",
+        "results_digest_scope",
+    }
+    payload = {key: value for key, value in results.items() if key not in volatile}
+    payload["scenarios"] = [
+        {key: value for key, value in entry.items() if key != "processing_ms"}
+        for entry in results.get("scenarios", [])
+    ]
+    if isinstance(payload.get("corpus"), Mapping):
+        payload["corpus"] = {
+            key: value for key, value in payload["corpus"].items() if key != "root"
+        }
+    return payload
+
+
 def render_markdown(results: Mapping[str, Any]) -> str:
     """Render the measured results as Markdown (no invented numbers)."""
     lines: list[str] = [
@@ -1071,7 +1287,7 @@ def render_markdown(results: Mapping[str, Any]) -> str:
         f"- python {results['environment']['python']} on {results['environment']['platform']}",
         f"- CPU count: {results['environment']['cpu_count']}",
         f"- GPU: {results['environment']['gpu']}",
-        f"- peak RSS: {results['environment']['peak_rss_mb']} MB",
+        f"- peak RSS: {results['environment']['peak_rss_mb']}",
         f"- total wall time: {results['environment']['total_wall_ms']} ms",
         "",
         "## Not measured",
@@ -1082,7 +1298,7 @@ def render_markdown(results: Mapping[str, Any]) -> str:
     lines.append("")
     lines.append(
         "Thresholds are fitted on synthetic frames and are **not** valid for photographic "
-        "or model-generated faces; see `VISUAL_CONTINUITY_EVALUATION.md`."
+        "or model-generated faces; see `VISUAL_CONTINUITY_EVALUATION_DESIGN.md`."
     )
     return "\n".join(lines) + "\n"
 
@@ -1094,15 +1310,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="run the character continuity benchmark")
     parser.add_argument("--work-dir", default="experiments/character_capsule/.work")
     parser.add_argument("--out-dir", default="")
+    parser.add_argument(
+        "--run-id",
+        default="",
+        help="publish into <out-dir>/<run-id>; generated when omitted",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     config = BenchmarkConfig(
         work_dir=Path(args.work_dir),
         out_dir=Path(args.out_dir) if args.out_dir else None,
+        run_id=args.run_id,
     )
     results = run_benchmark(config)
     print(
         json.dumps(
             {
+                "run_id": results["run"]["run_id"],
+                "out_dir": results["run"]["out_dir"],
                 "corpus_digest": results["corpus"]["digest"],
                 "calibration_digest": results["calibration"]["digest"],
                 "results_digest": results["results_digest"],
@@ -1119,6 +1343,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 __all__ = [
     "BenchmarkConfig",
     "HUMAN_REVIEW",
+    "corpus_audio_digests",
+    "corpus_motion_digests",
+    "new_run_id",
+    "peak_rss_mb",
     "Scenario",
     "build_calibration",
     "main",

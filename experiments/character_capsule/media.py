@@ -12,26 +12,75 @@ PNG the benchmark actually needs:
   RGBA) with all five filter types. Interlaced files and any other colour type
   are refused with :class:`MediaUnsupported` instead of being guessed at.
 
+PNG input is **untrusted**. A 190 KB file can declare 8000×8000 pixels and
+decompress to 192 MB; a crafted header can declare far more. Every decode is
+therefore bounded *before* allocation by an explicit :class:`DecodeLimits`:
+
+============  ==================================================================
+input bytes   refused when the file itself is larger than ``max_input_bytes``
+dimensions    ``max_width`` / ``max_height`` checked straight from IHDR
+pixels        ``max_pixels`` (width × height) checked before any row is decoded
+IDAT bytes    total compressed payload capped by ``max_idat_bytes``
+decompression streamed through ``max_decompressed_bytes`` and stopped exactly at
+              the declared bitmap size, so a bomb fails instead of allocating
+============  ==================================================================
+
 Everything the continuity verifier measures starts from these arrays, so the
-reader is strict: a truncated file, a bad CRC or an unknown critical chunk raises
-rather than returning a partially decoded image.
+reader is strict: a truncated file, a bad CRC, an unknown chunk or an exceeded
+cap raises rather than returning a partially decoded image.
 """
 
 from __future__ import annotations
 
 import struct
 import zlib
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from .errors import MediaUnsupported
+from .errors import MediaLimitExceeded, MediaUnsupported
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _IEND = b"IEND"
 _IDAT = b"IDAT"
 _IHDR = b"IHDR"
 _PLTE = b"PLTE"
+
+
+@dataclass(frozen=True)
+class DecodeLimits:
+    """Explicit resource caps for untrusted media.
+
+    The defaults are generous for a production still (16 MP) and tiny compared
+    with what a decompression bomb asks for.
+    """
+
+    max_width: int = 8192
+    max_height: int = 8192
+    max_pixels: int = 16_000_000
+    max_input_bytes: int = 32 * 1024 * 1024
+    max_idat_bytes: int = 48 * 1024 * 1024
+    max_decompressed_bytes: int = 96 * 1024 * 1024
+    max_audio_frames: int = 48_000 * 60 * 10  # 10 minutes at 48 kHz
+
+    def __post_init__(self) -> None:
+        for name in (
+            "max_width",
+            "max_height",
+            "max_pixels",
+            "max_input_bytes",
+            "max_idat_bytes",
+            "max_decompressed_bytes",
+            "max_audio_frames",
+        ):
+            if int(getattr(self, name)) <= 0:
+                raise MediaLimitExceeded("decode limits must be positive", limit=name)
+
+
+#: Defaults used by every caller that does not pass its own.
+DEFAULT_LIMITS = DecodeLimits()
+
 
 #: Media types this island recognises by *content*, never by filename.
 PNG_MIME = "image/png"
@@ -128,10 +177,17 @@ def _unfilter(raw: bytes, height: int, width: int, bpp: int) -> np.ndarray:
     return out
 
 
-def decode_png(data: bytes) -> np.ndarray:
+def decode_png(data: bytes, *, limits: DecodeLimits | None = None) -> np.ndarray:
     """Decode an 8-bit non-interlaced PNG into an ``(H, W, 3)`` uint8 array."""
+    limit = limits or DEFAULT_LIMITS
     if not data.startswith(_PNG_MAGIC):
         raise MediaUnsupported("not a PNG file")
+    if len(data) > limit.max_input_bytes:
+        raise MediaLimitExceeded(
+            "PNG input exceeds the configured byte cap",
+            size=len(data),
+            cap=limit.max_input_bytes,
+        )
     pos = len(_PNG_MAGIC)
     header: tuple[int, int, int, int, int] | None = None
     idat = bytearray()
@@ -139,6 +195,10 @@ def decode_png(data: bytes) -> np.ndarray:
     while pos + 8 <= len(data):
         (length,) = struct.unpack(">I", data[pos : pos + 4])
         kind = data[pos + 4 : pos + 8]
+        if length > limit.max_input_bytes:
+            raise MediaLimitExceeded(
+                "PNG chunk length exceeds the configured byte cap", length=length
+            )
         payload = data[pos + 8 : pos + 8 + length]
         if len(payload) != length or pos + 12 + length > len(data):
             raise MediaUnsupported("truncated PNG chunk")
@@ -147,7 +207,10 @@ def decode_png(data: bytes) -> np.ndarray:
             raise MediaUnsupported("PNG chunk CRC mismatch")
         pos += 12 + length
         if kind == _IHDR:
+            if header is not None:
+                raise MediaUnsupported("PNG declares more than one IHDR")
             width, height, depth, colour, comp, filt, interlace = struct.unpack(">IIBBBBB", payload)
+            _check_dimensions(width, height, limit)
             if depth != 8 or interlace != 0 or comp != 0 or filt != 0:
                 raise MediaUnsupported(
                     f"unsupported PNG header depth={depth} interlace={interlace}"
@@ -158,7 +221,15 @@ def decode_png(data: bytes) -> np.ndarray:
         elif kind == _PLTE:
             palette = payload
         elif kind == _IDAT:
+            if header is None:
+                raise MediaUnsupported("PNG data before IHDR")
             idat += payload
+            if len(idat) > limit.max_idat_bytes:
+                raise MediaLimitExceeded(
+                    "PNG compressed payload exceeds the configured cap",
+                    size=len(idat),
+                    cap=limit.max_idat_bytes,
+                )
         elif kind == _IEND:
             break
     if header is None:
@@ -167,7 +238,14 @@ def decode_png(data: bytes) -> np.ndarray:
         raise MediaUnsupported("palette chunk in an unsupported colour type")
     width, height, colour = header[0], header[1], header[2]
     channels = {0: 1, 2: 3, 4: 2, 6: 4}[colour]
-    raw = zlib.decompress(bytes(idat))
+    expected = height * (width * channels + 1)
+    if expected > limit.max_decompressed_bytes:
+        raise MediaLimitExceeded(
+            "PNG would decompress beyond the configured cap",
+            expected_bytes=expected,
+            cap=limit.max_decompressed_bytes,
+        )
+    raw = _decompress_bounded(bytes(idat), expected, limit)
     planes = _unfilter(raw, height, width, channels).reshape(height, width, channels)
     if channels == 1:
         return np.repeat(planes, 3, axis=2)
@@ -176,9 +254,52 @@ def decode_png(data: bytes) -> np.ndarray:
     return planes[:, :, :3].copy()
 
 
-def load_rgb(path: str | Path) -> np.ndarray:
-    """Load a PNG from disk as an ``(H, W, 3)`` uint8 array."""
-    return decode_png(Path(path).read_bytes())
+def _check_dimensions(width: int, height: int, limits: DecodeLimits) -> None:
+    if width <= 0 or height <= 0:
+        raise MediaUnsupported("PNG declares an empty image", width=width, height=height)
+    if width > limits.max_width or height > limits.max_height:
+        raise MediaLimitExceeded(
+            "PNG dimensions exceed the configured cap",
+            width=width,
+            height=height,
+            cap=(limits.max_width, limits.max_height),
+        )
+    if width * height > limits.max_pixels:
+        raise MediaLimitExceeded(
+            "PNG pixel count exceeds the configured cap",
+            pixels=width * height,
+            cap=limits.max_pixels,
+        )
+
+
+def _decompress_bounded(payload: bytes, expected: int, limits: DecodeLimits) -> bytes:
+    """Inflate ``payload`` but never past ``expected`` bytes (no bomb allocation)."""
+    if expected > limits.max_decompressed_bytes:
+        raise MediaLimitExceeded("declared bitmap exceeds the decompression cap", size=expected)
+    engine = zlib.decompressobj()
+    try:
+        raw = engine.decompress(payload, expected)
+    except zlib.error as exc:
+        raise MediaUnsupported("PNG image data is not a valid zlib stream") from exc
+    if engine.unconsumed_tail:
+        raise MediaLimitExceeded(
+            "PNG decompresses to more bytes than its header declares", declared=expected
+        )
+    if len(raw) != expected:
+        raise MediaUnsupported("truncated PNG scanline data", expected=expected, got=len(raw))
+    return raw
+
+
+def load_rgb(path: str | Path, *, limits: DecodeLimits | None = None) -> np.ndarray:
+    """Load a PNG from disk as an ``(H, W, 3)`` uint8 array, within the caps."""
+    limit = limits or DEFAULT_LIMITS
+    target = Path(path)
+    size = target.stat().st_size
+    if size > limit.max_input_bytes:
+        raise MediaLimitExceeded(
+            "image file exceeds the configured byte cap", size=size, cap=limit.max_input_bytes
+        )
+    return decode_png(target.read_bytes(), limits=limit)
 
 
 def save_rgb(path: str | Path, rgb: np.ndarray) -> None:
@@ -228,8 +349,13 @@ def encode_wav(samples: np.ndarray, *, sample_rate: int) -> bytes:
     return header + fmt + b"data" + struct.pack("<I", len(pcm)) + pcm
 
 
-def decode_wav(data: bytes) -> tuple[np.ndarray, int]:
+def decode_wav(data: bytes, *, limits: DecodeLimits | None = None) -> tuple[np.ndarray, int]:
     """Decode a 16-bit PCM mono/stereo WAV written by :func:`encode_wav`."""
+    limit = limits or DEFAULT_LIMITS
+    if len(data) > limit.max_input_bytes:
+        raise MediaLimitExceeded(
+            "WAV input exceeds the configured byte cap", size=len(data), cap=limit.max_input_bytes
+        )
     if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
         raise MediaUnsupported("not a RIFF/WAVE file")
     pos = 12
@@ -251,6 +377,11 @@ def decode_wav(data: bytes) -> tuple[np.ndarray, int]:
             samples = body
     if samples is None or sample_rate <= 0:
         raise MediaUnsupported("WAV has no data/fmt chunk")
+    frames = len(samples) // max(2 * max(channels, 1), 1)
+    if frames > limit.max_audio_frames:
+        raise MediaLimitExceeded(
+            "WAV frame count exceeds the configured cap", frames=frames, cap=limit.max_audio_frames
+        )
     pcm = np.frombuffer(samples, dtype="<i2").astype(np.float64) / 32768.0
     if channels > 1:
         pcm = pcm.reshape(-1, channels).mean(axis=1)

@@ -31,7 +31,7 @@ import numpy as np
 from .audio_motion import VoiceSignature, synthesize_gait, synthesize_voice
 from .canon import CanonFact, CanonModule, FactKind, StoryEvent
 from .canonical import digest_of, sha256_hex
-from .media import encode_wav, save_rgb
+from .media import encode_png, encode_wav
 from .model import (
     BodyModule,
     CharacterCapsule,
@@ -167,11 +167,17 @@ class FrameRecord:
     key_kelvin: int
     kind: str  # portrait | full_body
     labels: Mapping[str, str] = field(default_factory=dict)
+    #: sha256 of the encoded PNG bytes. The corpus digest is a digest *over these
+    #: digests*, so changing a frame's pixels changes the corpus digest (finding F15).
+    sha256: str = ""
+    size_bytes: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "key": self.key,
             "path": self.path,
+            "sha256": self.sha256,
+            "size_bytes": self.size_bytes,
             "character_id": self.character_id,
             "purpose": self.purpose,
             "condition": self.condition,
@@ -423,8 +429,10 @@ def build_corpus(root: str | Path, *, write: bool = True) -> Corpus:
         character_id: str | None = None,
     ) -> None:
         relative = f"frames/{key}.png"
+        data = encode_png(image)
         if write:
-            save_rgb(base / relative, image)
+            (base / relative).parent.mkdir(parents=True, exist_ok=True)
+            (base / relative).write_bytes(data)
         records.append(
             FrameRecord(
                 key=key,
@@ -439,6 +447,8 @@ def build_corpus(root: str | Path, *, write: bool = True) -> Corpus:
                 key_kelvin=key_kelvin,
                 kind=kind,
                 labels=dict(labels or {}),
+                sha256=sha256_hex(data),
+                size_bytes=len(data),
             )
         )
 
@@ -766,18 +776,54 @@ def _motion_manifest() -> list[dict[str, Any]]:
     return entries
 
 
-def motion_sequence(character_id: str) -> np.ndarray:
+#: Recording sessions the corpus models. A verifier must compare *different*
+#: sessions of the same character (that is what "same person, another take" means);
+#: comparing a take with itself measures nothing (finding F24).
+VOICE_SESSIONS: tuple[str, ...] = ("a", "b", "c")
+
+
+def voice_signature(character_id: str, *, session: str = "a") -> VoiceSignature:
+    """The voice a character has in one recording session.
+
+    Session ``b`` is the same speaker after a slightly different day: a little
+    faster, a little higher, a little breathier. The shift is deterministic, so
+    the corpus stays reproducible, and it is small, so a genuine probe stays
+    genuine while a real impostor does not.
+    """
+    from .audio_motion import VoiceSignature
+
     for spec in CHARACTERS:
         if spec.character_id == character_id:
-            return synthesize_gait(spec.motion.gait, seed=spec.character_id)
+            base = VoiceSignature.from_module(spec.voice)
+            if session == "a":
+                return base
+            if session == "b":
+                return VoiceSignature(
+                    f0_hz=min(base.f0_hz * 1.012, 320.0),
+                    timbre=base.timbre,
+                    speaking_rate=min(base.speaking_rate * 1.03, 1.8),
+                    breathiness=min(base.breathiness + 0.03, 0.3),
+                )
+            if session == "c":
+                return VoiceSignature(
+                    f0_hz=max(base.f0_hz * 0.988, 70.0),
+                    timbre=base.timbre,
+                    speaking_rate=max(base.speaking_rate * 0.97, 0.5),
+                    breathiness=max(base.breathiness - 0.02, 0.0),
+                )
+            raise KeyError(f"unknown voice session {session!r}")
     raise KeyError(character_id)
 
 
-def voice_samples(character_id: str) -> np.ndarray:
+def motion_sequence(character_id: str, *, session: str = "a") -> np.ndarray:
     for spec in CHARACTERS:
         if spec.character_id == character_id:
-            return synthesize_voice(VoiceSignature.from_module(spec.voice))
+            return synthesize_gait(spec.motion.gait, seed=f"{spec.character_id}-{session}")
     raise KeyError(character_id)
+
+
+def voice_samples(character_id: str, *, session: str = "a") -> np.ndarray:
+    return synthesize_voice(voice_signature(character_id, session=session))
 
 
 def character_split(corpus: Corpus) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -790,6 +836,20 @@ def character_split(corpus: Corpus) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """
     ids = sorted({record.character_id for record in corpus.frames})
     return tuple(ids[:2]), tuple(ids[2:])
+
+
+def split_report(corpus: Corpus) -> dict[str, Any]:
+    """The calibration/holdout split, written into results so it is auditable."""
+    calibration, holdout = character_split(corpus)
+    return {
+        "rule": (
+            "characters are sorted by id; the first two (protagonist + look-alike) fit "
+            "every threshold and every fitted statistic; the remainder is held out"
+        ),
+        "calibration": list(calibration),
+        "holdout": list(holdout),
+        "holdout_in_calibration": sorted(set(calibration) & set(holdout)),
+    }
 
 
 def scene_overrides_for_demo() -> SceneOverride:

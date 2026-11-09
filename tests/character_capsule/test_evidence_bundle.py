@@ -18,10 +18,14 @@ import pytest
 
 from experiments.character_capsule.errors import KeyUnavailable, ValidationError
 from experiments.character_capsule.evidence import (
+    BUNDLE_INCOMPLETE,
     BUNDLE_INVALID,
+    BUNDLE_NOT_VERIFIABLE,
     BUNDLE_UNSIGNED,
+    BUNDLE_UNTRUSTED_SIGNER,
     BUNDLE_VALID,
     EvidenceBundle,
+    TrustAnchor,
     bundle_from_files,
     load_signing_key,
     sign_bundle,
@@ -78,17 +82,54 @@ def test_tampering_with_a_record_breaks_the_hard_binding(tmp_path):
     assert not verification.ok
 
 
-def test_signing_then_verifying_is_valid(tmp_path):
+def test_a_signature_alone_is_not_authenticity(tmp_path):
+    """A bundle that carries its own key proves possession, not trust.
+
+    This is finding F06: the old verifier returned VALID for a bundle signed with a
+    key generated inside it, which any forger can do. Without a consumer-supplied
+    anchor the strongest true statement is UNTRUSTED_SIGNER.
+    """
     from nacl import signing
 
     bundle, files = _bundle(tmp_path)
     key_file = tmp_path / "signing.hex"
     key_file.write_text(signing.SigningKey.generate().encode().hex(), encoding="utf-8")
-    key = load_signing_key(key_file)
-    signed = sign_bundle(bundle, signing_key=key, signed_at="2026-11-09T00:00:00Z")
-    verification = verify_bundle(signed, files=files)
+    signed = sign_bundle(bundle, signing_key=load_signing_key(key_file), signed_at="now")
+    self_signed = verify_bundle(signed, files=files)
+    assert self_signed.status == BUNDLE_UNTRUSTED_SIGNER
+    assert self_signed.ok is False
+    assert self_signed.integrity_ok is True  # the bytes are fine; trust is absent
+
+
+def test_the_consumer_trust_anchor_makes_a_signature_valid(tmp_path):
+    from nacl import signing
+
+    bundle, files = _bundle(tmp_path)
+    key = signing.SigningKey.generate()
+    key_file = tmp_path / "signing.hex"
+    key_file.write_text(key.encode().hex(), encoding="utf-8")
+    signed = sign_bundle(bundle, signing_key=load_signing_key(key_file), signed_at="now")
+    anchor = TrustAnchor(public_key_hex=bytes(key.verify_key).hex())
+    verification = verify_bundle(signed, files=files, trust_anchor=anchor)
     assert verification.status == BUNDLE_VALID
+    assert verification.ok is True
     assert verification.checks["signature_valid"] is True
+    assert verification.checks["trust_anchor_matches_signer"] is True
+    assert verification.signer_key_id
+
+
+def test_an_expected_key_id_mismatch_is_refused(tmp_path):
+    from nacl import signing
+
+    bundle, files = _bundle(tmp_path)
+    key = signing.SigningKey.generate()
+    key_file = tmp_path / "signing.hex"
+    key_file.write_text(key.encode().hex(), encoding="utf-8")
+    signed = sign_bundle(bundle, signing_key=load_signing_key(key_file), signed_at="now")
+    anchor = TrustAnchor(public_key_hex=bytes(key.verify_key).hex(), key_id="not-the-signing-key")
+    verification = verify_bundle(signed, files=files, trust_anchor=anchor)
+    assert verification.status == BUNDLE_UNTRUSTED_SIGNER
+    assert verification.trust_anchor_key_id == "not-the-signing-key"
 
 
 def test_signature_does_not_survive_an_edit(tmp_path):
@@ -115,7 +156,49 @@ def test_a_foreign_key_does_not_verify(tmp_path):
     signed = sign_bundle(bundle, signing_key=load_signing_key(signer), signed_at="now")
     other = signing.SigningKey.generate().verify_key
     verification = verify_bundle(signed, public_key_hex=bytes(other).hex())
-    assert verification.status == BUNDLE_INVALID
+    # The signature is well formed but it is not from the key the consumer trusts:
+    # that is UNTRUSTED_SIGNER, not INVALID (the bundle is not corrupted, it is
+    # simply not from the expected signer).
+    assert verification.status == BUNDLE_UNTRUSTED_SIGNER
+    assert verification.checks["trust_anchor_matches_signer"] is False
+
+
+def test_missing_artifacts_are_incomplete_never_valid(tmp_path):
+    """F07: a bundle whose recorded files were not supplied is not "valid"."""
+    bundle, _ = _bundle(tmp_path)
+    partial = verify_bundle(bundle, files={"report.json": tmp_path / "report.json"})
+    assert partial.status == BUNDLE_INCOMPLETE
+    assert partial.ok is False
+    assert "frame.png" in partial.missing_records
+    assert partial.checks["all_artifacts_supplied"] is False
+
+
+def test_artifacts_that_were_never_offered_cannot_be_complete(tmp_path):
+    """Verifying without artifacts checks structure only; that is INCOMPLETE too."""
+    bundle, _ = _bundle(tmp_path)
+    verification = verify_bundle(bundle)
+    assert verification.status == BUNDLE_INCOMPLETE
+    assert verification.checks["all_artifacts_supplied"] is False
+
+
+def test_a_reamed_key_is_reported_not_verified(tmp_path):
+    """F16: a malformed key used to be silently treated as "unsigned"."""
+    bundle, files = _bundle(tmp_path)
+    with pytest.raises(ValidationError):
+        TrustAnchor(public_key_hex="zz" * 32)
+    # A signed bundle with an unusable trusted key must not read as VALID.
+    bundle_payload = bundle.to_dict()
+    bundle_payload["signature"] = {
+        "algorithm": "ed25519",
+        "key_id": "deadbeef",
+        "public_key_hex": "ff" * 32,
+        "signature_hex": "00" * 64,
+        "signed_at": "now",
+    }
+    forged = EvidenceBundle.from_dict(bundle_payload)
+    verification = verify_bundle(forged, files=files, public_key_hex="ff" * 32)
+    assert verification.status in {BUNDLE_INVALID, BUNDLE_NOT_VERIFIABLE}
+    assert verification.status != BUNDLE_VALID
 
 
 def test_no_key_configured_is_a_typed_refusal(tmp_path, monkeypatch):

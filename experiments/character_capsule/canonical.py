@@ -41,6 +41,7 @@ SCOPE_LINEAGE: str = "lineage"
 SCOPE_CALIBRATION: str = "calibration"
 SCOPE_BENCHMARK: str = "benchmark"
 SCOPE_EVIDENCE: str = "evidence"
+SCOPE_CONSENT_REVOCATION: str = "consent-revocation"
 
 
 def local_canonical_json(obj: Any) -> str:
@@ -90,6 +91,7 @@ def scoped_digest(scope: str, payload: Any) -> str:
         SCOPE_CALIBRATION,
         SCOPE_BENCHMARK,
         SCOPE_EVIDENCE,
+        SCOPE_CONSENT_REVOCATION,
     }
     if scope not in allowed:
         raise ValueError(f"unknown digest scope: {scope!r}")

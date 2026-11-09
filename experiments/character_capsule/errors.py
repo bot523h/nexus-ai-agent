@@ -47,6 +47,16 @@ class ScopeViolation(CapsuleError):
     code = "scope_violation"
 
 
+class PinMismatch(ValidationError):
+    """A shot's pinned capsule revision/digest/module digest is not the capsule supplied.
+
+    Distinct from a generic validation failure because it is the specific attack
+    of verifying a shot against a capsule it was never authored against.
+    """
+
+    code = "pin_mismatch"
+
+
 class UnknownReference(CapsuleError):
     """A reference points at something that does not exist in this store."""
 
@@ -81,6 +91,16 @@ class MediaUnsupported(CapsuleError):
     """A media container/processing operation is outside the supported allowlist."""
 
     code = "media_unsupported"
+
+
+class MediaLimitExceeded(MediaUnsupported):
+    """A declared media resource cap was exceeded (pixels, bytes, decompression).
+
+    Separate from :class:`MediaUnsupported` so a caller can tell "wrong format"
+    from "hostile size" without parsing a message.
+    """
+
+    code = "media_limit_exceeded"
 
 
 class ConsentRequired(CapsuleError):

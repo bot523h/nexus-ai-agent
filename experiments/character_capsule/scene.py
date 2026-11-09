@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
-from .errors import ScopeViolation, UnknownReference, ValidationError
+from .errors import PinMismatch, ScopeViolation, UnknownReference, ValidationError
 from .model import COLOUR_RE, CharacterCapsule, _require
 
 SCENE_ID_RE = re.compile(r"^SC-\d{3}$")
@@ -206,6 +206,64 @@ class ShotReference:
         }
 
 
+def shot_from_dict(payload: Mapping[str, Any]) -> ShotReference:
+    """Rebuild a shot record from JSON, refusing fields it does not understand.
+
+    An unknown key is a *pin the loader silently dropped*: a manifest that says
+    ``capsule_digest_v2`` and is loaded without it looks pinned while behaving
+    unpinned. Strict loading is what makes the record a boundary.
+    """
+    known = {
+        "shot_id",
+        "scene_id",
+        "sequence_id",
+        "shot_index",
+        "character_id",
+        "capsule_revision",
+        "capsule_digest",
+        "module_digests",
+        "declared",
+        "image_asset_id",
+        "voice_asset_id",
+        "motion_asset_id",
+    }
+    unknown = sorted(set(payload) - known)
+    if unknown:
+        raise ValidationError("shot manifest has unknown fields", fields=unknown)
+    declared_payload = payload.get("declared")
+    if not isinstance(declared_payload, Mapping):
+        raise ValidationError("shot manifest must declare the shot (outfit, expression, pose)")
+    declared_known = {"outfit_id", "expression", "pose", "canon_assertions"}
+    declared_unknown = sorted(set(declared_payload) - declared_known)
+    if declared_unknown:
+        raise ValidationError(
+            "shot manifest declared block has unknown fields", fields=declared_unknown
+        )
+    try:
+        declared = DeclaredShot(
+            outfit_id=str(declared_payload["outfit_id"]),
+            expression=str(declared_payload.get("expression", "neutral")),
+            pose=str(declared_payload.get("pose", "standing")),
+            canon_assertions=dict(declared_payload.get("canon_assertions", {})),
+        )
+        return ShotReference(
+            shot_id=str(payload["shot_id"]),
+            scene_id=str(payload["scene_id"]),
+            sequence_id=str(payload["sequence_id"]),
+            shot_index=int(payload["shot_index"]),
+            character_id=str(payload["character_id"]),
+            capsule_revision=int(payload["capsule_revision"]),
+            capsule_digest=str(payload["capsule_digest"]),
+            module_digests={str(k): str(v) for k, v in dict(payload["module_digests"]).items()},
+            declared=declared,
+            image_asset_id=str(payload["image_asset_id"]),
+            voice_asset_id=payload.get("voice_asset_id"),
+            motion_asset_id=payload.get("motion_asset_id"),
+        )
+    except KeyError as exc:
+        raise ValidationError(f"shot manifest is missing {exc.args[0]!r}") from exc
+
+
 class Timeline:
     """Ordered set of scenes; the only source of "story order"."""
 
@@ -236,6 +294,52 @@ class Timeline:
         )
 
 
+def validate_capsule_pins(shot: ShotReference, capsule: CharacterCapsule) -> None:
+    """Refuse a shot whose character, revision, digest or module pins do not match.
+
+    This is deliberately callable *without* a timeline, because a verifier must
+    check the pins even when it has no scene context: the pins are the contract
+    between the shot and the capsule it was authored against.
+    """
+    if shot.character_id != capsule.character_id:
+        raise PinMismatch(
+            "shot references a different character than the supplied capsule",
+            shot_character=shot.character_id,
+            capsule_character=capsule.character_id,
+        )
+    if shot.capsule_digest != capsule.digest:
+        raise PinMismatch(
+            "shot is pinned to a different capsule digest than the supplied capsule",
+            pinned=shot.capsule_digest,
+            supplied=capsule.digest,
+        )
+    if shot.capsule_revision > capsule.revision_no:
+        raise UnknownReference(
+            "shot pins a capsule revision that does not exist yet",
+            pinned=shot.capsule_revision,
+            available=capsule.revision_no,
+        )
+    if shot.capsule_revision != capsule.revision_no:
+        # A pinned, older revision is legitimate (re-render of a finished shot)
+        # but the caller must pass that exact revision; silently upgrading is drift.
+        raise PinMismatch(
+            "shot is pinned to a different capsule revision than the supplied one",
+            pinned=shot.capsule_revision,
+            supplied=capsule.revision_no,
+        )
+    current = capsule.module_digests()
+    for name, digest in shot.module_digests.items():
+        if name not in current:
+            raise UnknownReference(f"shot pins unknown module {name!r}", module=name)
+        if current[name] != digest:
+            raise PinMismatch(
+                "shot module pin does not match the supplied capsule revision",
+                module=name,
+                pinned=digest,
+                actual=current[name],
+            )
+
+
 def validate_shot_reference(
     shot: ShotReference,
     *,
@@ -250,37 +354,7 @@ def validate_shot_reference(
             shot_sequence=shot.sequence_id,
             scene_sequence=scene.sequence_id,
         )
-    if shot.character_id != capsule.character_id:
-        raise UnknownReference(
-            "shot references a different character than the supplied capsule",
-            shot_character=shot.character_id,
-            capsule_character=capsule.character_id,
-        )
-    if shot.capsule_revision > capsule.revision_no:
-        raise UnknownReference(
-            "shot pins a capsule revision that does not exist yet",
-            pinned=shot.capsule_revision,
-            available=capsule.revision_no,
-        )
-    if shot.capsule_revision != capsule.revision_no:
-        # A pinned, older revision is legitimate (re-render of a finished shot)
-        # but the caller must pass that exact revision; silently upgrading is drift.
-        raise UnknownReference(
-            "shot is pinned to a different capsule revision than the supplied one",
-            pinned=shot.capsule_revision,
-            supplied=capsule.revision_no,
-        )
-    current = capsule.module_digests()
-    for name, digest in shot.module_digests.items():
-        if name not in current:
-            raise UnknownReference(f"shot pins unknown module {name!r}", module=name)
-        if current[name] != digest:
-            raise ValidationError(
-                "shot module pin does not match the supplied capsule revision",
-                module=name,
-                pinned=digest,
-                actual=current[name],
-            )
+    validate_capsule_pins(shot, capsule)
     override = shot.declared.scene_override
     if override is not None and override.scene_id != shot.scene_id:
         raise ValidationError(

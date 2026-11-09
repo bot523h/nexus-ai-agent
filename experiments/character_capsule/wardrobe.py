@@ -28,6 +28,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any, ClassVar
 
+from .canonical import digest_of
 from .errors import ValidationError
 from .model import Scope, _Module, _require, _require_colour
 
@@ -49,6 +50,9 @@ class Outfit:
     accessories: tuple[str, ...] = ()
     era_from_scene: int | None = None
     era_to_scene: int | None = None
+    #: Outfit versions superseded by this one, oldest first. Kept so a shot that
+    #: pinned an older version stays resolvable after the costume changes.
+    supersedes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not OUTFIT_ID_RE.match(self.outfit_id):
@@ -73,9 +77,27 @@ class Outfit:
             return False
         return not (self.era_to_scene is not None and scene_order > self.era_to_scene)
 
+    @property
+    def content_digest(self) -> str:
+        """Identity of this *version's content* (revision-independent)."""
+        body = {
+            "outfit_id": self.outfit_id,
+            "version": self.version,
+            "label": self.label,
+            "top_colour": self.top_colour,
+            "bottom_colour": self.bottom_colour,
+            "accent_colour": self.accent_colour,
+            "material": self.material,
+            "accessories": list(self.accessories),
+            "era_from_scene": self.era_from_scene,
+            "era_to_scene": self.era_to_scene,
+        }
+        return digest_of(body)
+
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["accessories"] = list(self.accessories)
+        data["supersedes"] = list(self.supersedes)
         return data
 
 
@@ -200,13 +222,62 @@ class WardrobeModule(_Module):
         data["revision"] = self.revision + 1
         return WardrobeModule(**data)
 
+    def with_revision(self, revision: int) -> WardrobeModule:
+        return WardrobeModule(
+            revision=int(revision),
+            outfits=self.outfits,
+            sequence_baselines=self.sequence_baselines,
+            change_events=self.change_events,
+            scene_rules=self.scene_rules,
+        )
+
     # -- convenience constructors ----------------------------------------
     def with_outfit(self, outfit: Outfit) -> WardrobeModule:
+        """Add a new outfit version. An existing version is immutable.
+
+        Re-submitting *changed content* under an existing ``(outfit_id, version)``
+        is refused: a shot that referenced ``OUT-0001`` v1 would otherwise resolve
+        to different colours after the fact. A new version must carry a higher
+        version number and record what it supersedes.
+        """
         existing = self.outfits.get(outfit.outfit_id)
-        if existing is not None and existing == outfit:
-            return self
-        outfits = dict(self.outfits)
-        outfits[outfit.outfit_id] = outfit
+        if existing is None:
+            if outfit.version != 1:
+                raise ValidationError(
+                    "the first version of an outfit must be version 1", outfit_id=outfit.outfit_id
+                )
+            outfits = dict(self.outfits)
+            outfits[outfit.outfit_id] = outfit
+        else:
+            if existing == outfit:
+                return self
+            if outfit.version == existing.version:
+                raise ValidationError(
+                    f"outfit {outfit.outfit_id} version {outfit.version} is immutable; "
+                    "mint a higher version instead",
+                    outfit_id=outfit.outfit_id,
+                    version=outfit.version,
+                )
+            if outfit.version < existing.version:
+                raise ValidationError(
+                    "an outfit version cannot go backwards",
+                    outfit_id=outfit.outfit_id,
+                    existing=existing.version,
+                    proposed=outfit.version,
+                )
+            if not outfit.supersedes:
+                outfit = Outfit(
+                    **{
+                        **outfit.to_dict(),
+                        "accessories": outfit.accessories,
+                        "supersedes": (
+                            *existing.supersedes,
+                            f"{existing.version}:{existing.content_digest}",
+                        ),
+                    }
+                )
+            outfits = dict(self.outfits)
+            outfits[outfit.outfit_id] = outfit
         return WardrobeModule(
             revision=self.revision + 1,
             outfits=outfits,
@@ -236,8 +307,22 @@ class WardrobeModule(_Module):
         )
 
 
-def expected_outfit(module: WardrobeModule, *, sequence_id: str, shot_index: int) -> str:
-    """The outfit the plan requires for this shot (fails closed when undefined)."""
+def expected_outfit(
+    module: WardrobeModule,
+    *,
+    sequence_id: str,
+    shot_index: int,
+    scene_id: str | None = None,
+) -> str:
+    """The outfit the plan requires for this shot (fails closed when undefined).
+
+    Precedence: an explicit ``scene_rules`` entry for the shot's scene wins over
+    the sequence baseline and its change events. A scene rule is a canonical
+    statement about that scene ("she wears the cloak here"), so ignoring it made
+    the declared rule dead data — the defect this signature exists to close.
+    """
+    if scene_id is not None and scene_id in module.scene_rules:
+        return module.scene_rules[scene_id]
     base = module.sequence_baselines.get(sequence_id)
     if base is None:
         raise ValidationError(
@@ -257,9 +342,12 @@ def check_wardrobe(
     sequence_id: str,
     shot_index: int,
     actual_outfit_id: str,
+    scene_id: str | None = None,
 ) -> WardrobeFinding | None:
     """Return ``WARDROBE_DRIFT`` when a shot's outfit contradicts the plan."""
-    expected = expected_outfit(module, sequence_id=sequence_id, shot_index=shot_index)
+    expected = expected_outfit(
+        module, sequence_id=sequence_id, shot_index=shot_index, scene_id=scene_id
+    )
     if actual_outfit_id == expected:
         return None
     return WardrobeFinding(
@@ -288,11 +376,14 @@ def classify_change(
     sequence_id: str,
     shot_index: int,
     candidate_outfit_id: str,
+    scene_id: str | None = None,
 ) -> WardrobeContinuity:
     """Is switching to ``candidate_outfit_id`` here planned or drift?"""
     if candidate_outfit_id not in module.outfits:
         raise ValidationError(f"unknown outfit {candidate_outfit_id!r}")
-    expected = expected_outfit(module, sequence_id=sequence_id, shot_index=shot_index)
+    expected = expected_outfit(
+        module, sequence_id=sequence_id, shot_index=shot_index, scene_id=scene_id
+    )
     return (
         WardrobeContinuity.PLANNED
         if candidate_outfit_id == expected

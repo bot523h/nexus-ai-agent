@@ -114,6 +114,15 @@ class _Module:
     def digest(self) -> str:
         return scoped_digest(SCOPE_MODULE, {"module": self.MODULE, "payload": self.payload()})
 
+    def with_revision(self, revision: int) -> _Module:
+        """Return this module at ``revision`` without touching its content.
+
+        Dataclass modules use ``dataclasses.replace``; the two hand-written
+        modules (wardrobe, canon) override this because they validate in
+        ``__init__`` and ``replace`` does not apply to them.
+        """
+        return replace(self, revision=int(revision))  # type: ignore[return-value]
+
     def scope_of(self, field_name: str) -> Scope:
         try:
             return self.FIELD_SCOPES[field_name]
@@ -570,9 +579,40 @@ class CharacterCapsule:
     CANON_MODULE: ClassVar[str] = "canon"
 
     def with_module(self, module: _Module, *, note: str = "") -> CharacterCapsule:
-        """Replace one module, bump the capsule revision, re-seal."""
+        """Replace one module, bump the capsule revision, re-seal.
+
+        This door is *not* a bypass: every field whose declared scope is
+        ``IDENTITY`` is compared against the current module and a difference is a
+        :class:`ScopeViolation`. Identity changes go through
+        :meth:`new_identity_version`, which is the only code path that advances
+        ``identity_version``.
+        """
+        name = getattr(module, "MODULE", "")
+        if not name:
+            raise ValidationError("with_module needs a capsule module")
+        current = self.module(name)
+        if type(module) is not type(current):
+            raise ValidationError("module replacement must use the same module type", module=name)
+        previous = current.payload()
+        proposed = module.payload()
+        smuggled = sorted(
+            field_name
+            for field_name in set(previous) | set(proposed)
+            if previous.get(field_name) != proposed.get(field_name)
+            and current.FIELD_SCOPES.get(field_name) is Scope.IDENTITY
+        )
+        if smuggled:
+            raise ScopeViolation(
+                f"{name}.{', '.join(smuggled)} is IDENTITY-scoped; mint a new identity version "
+                "instead of replacing the module inside a revision",
+                module=name,
+                fields=smuggled,
+                identity_version=self.identity_version,
+            )
+        if previous == proposed:
+            raise ValidationError("module replacement carries no change", module=name)
         modules = dict(self.modules)
-        modules[module.MODULE] = module
+        modules[name] = module.with_revision(current.revision + 1)
         return replace(
             self,
             modules=modules,
@@ -625,21 +665,50 @@ class CharacterCapsule:
             note=note or self.note,
         ).seal()
 
+    #: Modules that carry IDENTITY-scoped fields. Every one of them is reachable
+    #: from :meth:`new_identity_version`; leaving voice out was a defect, because
+    #: `voice.f0_hz`/`timbre`/`voice_origin` are identity fields with no other door.
+    IDENTITY_MODULES: ClassVar[tuple[str, ...]] = ("face", "body", "voice")
+
     def new_identity_version(
         self,
         *,
         face_changes: Mapping[str, Any] | None = None,
         body_changes: Mapping[str, Any] | None = None,
+        voice_changes: Mapping[str, Any] | None = None,
         note: str = "",
     ) -> CharacterCapsule:
         """Mint a new identity version. This is the *only* door for IDENTITY fields."""
-        face = self.module("face")
-        body = self.module("body")
-        new_face = replace(face, revision=face.revision + 1, **dict(face_changes or {}))
-        new_body = replace(body, revision=body.revision + 1, **dict(body_changes or {}))
+        requested = {
+            "face": dict(face_changes or {}),
+            "body": dict(body_changes or {}),
+            "voice": dict(voice_changes or {}),
+        }
+        if not any(requested.values()):
+            raise ValidationError("a new identity version needs at least one identity field change")
         modules = dict(self.modules)
-        modules["face"] = new_face
-        modules["body"] = new_body
+        for name, changes in requested.items():
+            if not changes:
+                continue
+            module = self.module(name)
+            for field_name in changes:
+                if field_name == "revision":
+                    raise ValidationError("revision is managed by the capsule")
+                if field_name not in module.FIELD_SCOPES:
+                    raise ValidationError(
+                        f"unknown field {field_name!r} on module {name}", module=name
+                    )
+                if module.FIELD_SCOPES[field_name] is not Scope.IDENTITY:
+                    raise ValidationError(
+                        f"{name}.{field_name} is not IDENTITY-scoped; use apply_changes",
+                        module=name,
+                        field=field_name,
+                    )
+            modules[name] = replace(
+                module,
+                revision=module.revision + 1,
+                **{field_name: value for field_name, value in changes.items()},
+            )
         return replace(
             self,
             modules=modules,

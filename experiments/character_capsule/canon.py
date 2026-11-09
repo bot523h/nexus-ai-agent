@@ -164,6 +164,16 @@ class CanonModule(_Module):
                 raise CanonRuleViolation("duplicate story event id", event_id=event.event_id)
             seen.add(event.event_id)
 
+    def with_revision(self, revision: int) -> CanonModule:
+        return CanonModule(
+            revision=int(revision),
+            facts=self.facts,
+            story_events=self.story_events,
+            biography=self.biography,
+            personality=self.personality,
+            relationships=self.relationships,
+        )
+
     def payload(self) -> dict[str, Any]:
         return {
             "revision": self.revision,
