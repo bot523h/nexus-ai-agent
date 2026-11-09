@@ -27,6 +27,7 @@ authority above:
 
 from __future__ import annotations
 
+import re
 import tempfile
 import time
 import uuid
@@ -50,6 +51,7 @@ from nexus_ai_agent.creative.composition.proof import (
     verify_integrity,
     verify_media_semantics,
 )
+from nexus_ai_agent.creative.studio.authorization import ProjectAccess
 from nexus_ai_agent.creative.studio.bus import CommandBus
 from nexus_ai_agent.creative.studio.models import (
     ActorIdentity,
@@ -62,7 +64,7 @@ from nexus_ai_agent.creative.studio.models import (
 )
 
 from .compiler import CompiledPlan
-from .contracts import CompositionPlan, ResourceEstimate
+from .contracts import NODE_ID_PATTERN, CompositionPlan, ResourceEstimate
 
 #: The canonical operation that registers probed media in the project asset
 #: registry.  The composition layer does not keep its own asset registry — it
@@ -114,14 +116,18 @@ class CompositionExecutor:
         engine: MediaEngine | None = None,
         project: Project | None = None,
         actor: ActorIdentity | None = None,
+        access: ProjectAccess | None = None,
+        confirmed: bool = False,
     ) -> None:
+        self._confirmed = confirmed
         if bus is not None:
             self._bus = bus
             self._actor = actor or SERVICE_ACTOR
+            self._access = access
         else:
             self._project = project or _new_project()
             self._actor = actor or SERVICE_ACTOR
-            self._bus = _build_bus(self._project, self._actor)
+            self._access, self._bus = _build_bus(self._project, self._actor)
         self._engine = engine or MediaEngine()
         self._license_ledger = ffmpeg_ledger(self._engine.ffmpeg_binary)
 
@@ -161,8 +167,12 @@ class CompositionExecutor:
         for node_id in compiled.order:
             node = compiled.plan.node(node_id)
             spec = compiled.spec(node_id)
-            node_dir = workspace / f"node_{node_id}"
-            node_dir.mkdir(parents=True, exist_ok=True)
+            # The node directory is **derived**, then **verified**: a node id
+            # is a name, never a path, and the resolved directory must stay
+            # inside the guarded workspace even if the workspace itself is
+            # re-pointed by a symlink.  This is the containment guard for the
+            # per-node working area.
+            node_dir = _node_directory(workspace, node_id)
             # Every node gets its **own** scratch directory, so a node can
             # only write inside it and cannot see a sibling's intermediate.
             scratch_dir = Path(tempfile.mkdtemp(prefix="scratch_", dir=node_dir))
@@ -176,8 +186,21 @@ class CompositionExecutor:
             if bound.get("external_name"):
                 consumed_inputs[str(bound["external_name"])] = bound["hashes"].get("source", "")
 
+            # The canonical authorization runs **before** any media work: a
+            # node the bus would refuse must not leave output files behind.
+            self._authorize_node(node_id, node, spec)
+
             params = dict(node.params)
-            outcome = self._realize(node_id, node, spec, source_path, params, node_dir, scratch_dir)
+            outcome = self._realize(
+                node_id,
+                node,
+                spec,
+                source_path,
+                params,
+                node_dir,
+                scratch_dir,
+                timeout_seconds=self._node_timeout(compiled, node_id),
+            )
             produced[node_id] = outcome
 
             # Every node is verified, not only the exposed outputs: an
@@ -313,6 +336,18 @@ class CompositionExecutor:
             return str(unchanged[0])
         raise CompositionExecutionError("the canonical asset registry returned no asset id")
 
+    def _node_timeout(self, compiled: CompiledPlan, node_id: str) -> int:
+        """The **declared** budget of one node, in seconds.
+
+        The estimate the compiler published is the deadline the encoder is
+        held to, so a caller that reads ``ResourceEstimate.max_timeout_seconds``
+        reads the number that actually bounds the work.
+        """
+        requirement = compiled.requirements.get(node_id)
+        if requirement is not None:  # pragma: no branch
+            return int(requirement.timeout_seconds)
+        return int(compiled.estimate.max_timeout_seconds)
+
     def _realize(
         self,
         node_id: str,
@@ -322,6 +357,8 @@ class CompositionExecutor:
         params: dict[str, Any],
         node_dir: Path,
         scratch_dir: Path,
+        *,
+        timeout_seconds: int | None = None,
     ) -> MediaOutcome:
         """Produce the node's media with the canonical FFmpeg primitives.
 
@@ -339,6 +376,7 @@ class CompositionExecutor:
                 output_path=scratch_output,
                 params=params,
                 scratch_dir=scratch_dir,
+                timeout_seconds=timeout_seconds,
             )
         except MediaEngineError as exc:
             raise CompositionExecutionError(f"node {node_id!r} failed: {exc}") from exc
@@ -412,6 +450,41 @@ class CompositionExecutor:
         allowed = set(spec.input_model.model_fields)
         return {key: value for key, value in payload.items() if key in allowed}
 
+    def _authorize_node(self, node_id: str, node: Any, spec: Any) -> None:
+        """Ask the **bus** whether it would authorize this node, before running it.
+
+        The dispatch performs these checks itself, but by then the encoder has
+        already run and left files behind; a refused node must never have
+        produced media.  Rather than re-implementing the gates -- which would
+        create a second authority -- this calls ``CommandBus.check_authorization``,
+        which runs the *same* helpers the dispatch runs (actor grant, capability
+        availability, pack lifecycle, A/B/C/D ladder) and reserves nothing.
+
+        The input model is not validated here on purpose: the canonical
+        operations take the produced artifact's hash as input, and that hash
+        does not exist until the encode.  The dispatch validates the real input
+        before anything is applied.
+
+        One authority, consulted twice.
+        """
+        try:
+            self._bus.check_authorization(
+                _command(
+                    node.operation,
+                    dict(node.params),
+                    project_id=self._bus.project.project_id,
+                    actor=self._actor,
+                    idempotency_key=f"composition:{node_id}:{node.operation}",
+                    confirmed=self._confirmed,
+                    operation_schema_version=spec.schema_version,
+                )
+            )
+        except Exception as exc:
+            raise CompositionExecutionError(
+                f"the canonical bus refused node {node_id!r} ({node.operation}) "
+                f"before any media work: {type(exc).__name__}: {exc}"
+            ) from exc
+
     def _dispatch(self, node_id: str, node: Any, spec: Any, command_input: dict[str, Any]) -> Any:
         """Dispatch one canonical operation on the canonical bus."""
         try:
@@ -422,7 +495,7 @@ class CompositionExecutor:
                     project_id=self._bus.project.project_id,
                     actor=self._actor,
                     idempotency_key=f"composition:{node_id}:{node.operation}",
-                    confirmed=True,
+                    confirmed=self._confirmed,
                     operation_schema_version=spec.schema_version,
                 )
             )
@@ -507,6 +580,31 @@ class CompositionExecutor:
 # ---------------------------------------------------------------------------
 
 
+def _node_directory(workspace: Path, node_id: str) -> Path:
+    """The per-node working directory, **verified** to stay inside the workspace.
+
+    The node id is validated as a *name* (no separators, no parent
+    references) and the resolved directory is checked against the resolved
+    workspace.  Both checks are needed: the pattern alone would not survive a
+    workspace that is itself re-pointed by a symlink, and the containment
+    check alone would not survive a node id that names a sibling directory.
+    """
+    if not NODE_ID_PATTERN or not re.fullmatch(NODE_ID_PATTERN, node_id):
+        raise CompositionExecutionError(
+            f"node id {node_id!r} is not a plain name and may not be used as a directory"
+        )
+    root = Path(workspace).resolve()
+    node_dir = (root / f"node_{node_id}").resolve(strict=False)
+    try:
+        node_dir.relative_to(root)
+    except ValueError as exc:
+        raise CompositionExecutionError(
+            f"node {node_id!r} resolves outside the guarded workspace"
+        ) from exc
+    node_dir.mkdir(parents=True, exist_ok=True)
+    return node_dir
+
+
 def _new_project() -> Project:
     """A fresh, empty project for a composition to run in."""
     return new_project(
@@ -520,7 +618,7 @@ def _new_project() -> Project:
     )
 
 
-def _build_bus(project: Project, actor: ActorIdentity) -> CommandBus:
+def _build_bus(project: Project, actor: ActorIdentity) -> tuple[ProjectAccess, CommandBus]:
     """Build the canonical bus for a composition.
 
     The bus is built through the **single reviewed construction site**,
@@ -528,6 +626,10 @@ def _build_bus(project: Project, actor: ActorIdentity) -> CommandBus:
     is always the runtime registry and the experimental opt-in stays
     server-controlled.  The composition layer builds no bus of its own — it
     only supplies the authority for its own service actor.
+
+    The grant is returned as well, because the executor's **pre-flight**
+    authorization consults the very same object the bus will consult later —
+    one authority, consulted twice, never two authorities.
 
     A caller that has a real project and a real principal injects its own bus
     instead.
@@ -540,7 +642,7 @@ def _build_bus(project: Project, actor: ActorIdentity) -> CommandBus:
         project_id=project.project_id,
         permissions=frozenset({"project:read", "project:write"}),
     )
-    return build_job_bus(project, authorizer=access)
+    return access, build_job_bus(project, authorizer=access)
 
 
 def _command(

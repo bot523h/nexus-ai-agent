@@ -160,6 +160,10 @@ def _payload(workspace: Path, source: Path, key: str, *, with_video: bool = True
         "external_inputs": {"src": {"path": str(source), "sha256": digest}},
         "workspace_dir": str(workspace),
         "idempotency_key": key,
+        # The requester is named, and the level-C node is explicitly confirmed.
+        # The worker never invents either.
+        "actor": {"kind": "user", "actor_id": "e2e-requester"},
+        "confirmed": True,
     }
 
 
@@ -325,9 +329,15 @@ async def test_a_changed_staged_input_is_refused_before_any_media_work(harness) 
         }:
             break
         await asyncio.sleep(0.05)
-    assert status is not JobStatus.COMPLETED
+    # The row must reach a **terminal** failure: a job that merely stayed
+    # pending would pass a weaker assertion without ever exercising the
+    # digest refusal.
+    assert status in {JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
     result = await queue.get_result(job_id)
-    assert result is None or result.get("success") is not True
+    assert result is not None
+    assert result.get("success") is not True
+    assert result.get("error_code") == "invalid_request"
+    assert "digest mismatch" in str(result.get("error_detail", ""))
 
 
 async def test_the_durable_row_records_the_job(harness) -> None:

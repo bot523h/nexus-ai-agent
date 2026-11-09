@@ -193,7 +193,7 @@ def bench_composition(
                 fingerprints.append(compiled.fingerprint)
 
                 execute_started = time.monotonic()
-                result = CompositionExecutor().execute(
+                result = CompositionExecutor(confirmed=True).execute(
                     compiled,
                     external_inputs={"src": source},
                     workspace=workspace,

@@ -201,10 +201,25 @@ compiled plan in front of it.
   which reads the causal journal and the authoritative row and re-measures the
   artifact. The composition layer writes no passport of its own.
 * **Level C in a composition.** `media.image_to_video` is `PermissionLevel.CONFIRMATION`
-  (C). The composition worker dispatches with `confirmed=True` **only because the
-  composition request itself is the confirmation** — the same rule the `creative_render`
-  lane applies. `allow_experimental` remains a server-side decision and is never
-  read from a payload.
+  (C). The worker dispatches with the **requester's own** `confirmed` flag, a field of
+  `CompositionJobPayload` that defaults to `False`; the worker never fabricates it, and
+  an unconfirmed level-C node is refused by `CompositionExecutor._authorize_node`
+  *before* any media work. `allow_experimental` remains a server-side decision and is
+  never read from a payload.
+* **The requester is named.** `CompositionJobPayload.actor: ActorClaim` (`kind`,
+  `actor_id`) is **required**: the worker binds the canonical grant to that principal
+  instead of executing the row under a self-granted service identity.
+* **Authorization moves one step earlier, not one layer sideways.** A refused node must
+  not leave an encoded file behind, but re-implementing the gates in the composition
+  package would be a second authority. The bus therefore exposes
+  `CommandBus.check_authorization(command)`, which runs the *same* private helpers the
+  dispatch runs (`_spec_locked` for the envelope/schema pin, `_authorize_locked` for the
+  actor grant, the capability check, the pack lifecycle gate and the A/B/C/D ladder) and
+  stops before reference resolution, reservation and the handler. The composition
+  executor calls it before the encoder; the pack gate is still invoked from `bus.py`
+  only, which `tests/architecture/test_lifecycle_gate_boundary.py` enforces unchanged.
+  The input model is deliberately **not** validated there: the canonical operations take
+  the produced artifact's hash as input, and that hash only exists after the encode.
 
 ### Negative consequences
 

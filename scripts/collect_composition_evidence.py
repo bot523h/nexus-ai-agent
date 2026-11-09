@@ -98,7 +98,7 @@ def _a_real_composition(media_out: Path | None = None) -> dict[str, object]:
         source = _source_image(root / "source.png")
         plan = _plan(width=640, height=480, duration_us=1_000_000, fps=25)
         compiled = CompositionCompiler().compile(plan)
-        result = CompositionExecutor().execute(
+        result = CompositionExecutor(confirmed=True).execute(
             compiled, external_inputs={"src": source}, workspace=root / "work"
         )
         artifact = result.artifacts["final"]

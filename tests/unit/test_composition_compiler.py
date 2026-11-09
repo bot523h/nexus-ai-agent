@@ -13,6 +13,8 @@ and determinism.
 
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 from nexus_ai_agent.creative.composition.compiler import (
@@ -402,9 +404,25 @@ def test_the_compiler_resolves_against_the_live_registry_not_a_private_table(reg
 
 
 def test_registry_fingerprint_changes_when_the_surface_changes(registry) -> None:
+    """The fingerprint must move when the surface moves, not merely repeat.
+
+    A constant implementation would satisfy "deterministic across builds" on
+    its own, so the test **changes the surface** and asserts the fingerprint
+    differs.  The change is made on a *copy*, never on the live registry.
+    """
     baseline = registry_fingerprint(registry)
     other = build_runtime_registry()
     assert registry_fingerprint(other) == baseline  # deterministic across builds
+
+    # Drop one operation from a **deep** copy of the surface and prove the
+    # fingerprint notices.  A shallow copy would share the index dict and
+    # corrupt the module-scoped fixture, so the mutation is done on a
+    # throw-away registry only.
+    mutated = copy.deepcopy(registry)
+    mutated._index.pop(RESIZE, None)  # noqa: SLF001 - deliberate surface mutation
+    assert registry_fingerprint(mutated) != baseline
+    # ... and the live registry is untouched.
+    assert registry_fingerprint(registry) == baseline
 
 
 def test_plan_pins_the_canonical_capability_version(registry) -> None:

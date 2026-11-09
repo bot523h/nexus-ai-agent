@@ -27,9 +27,9 @@ import hashlib
 import os
 import stat
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .compiler import CompositionCompiler, CompositionError
 from .contracts import CompositionPlan, ExpectedOutput, ExternalInput, PlanNode, PortBinding
@@ -76,11 +76,36 @@ class StagedInput(BaseModel):
     sha256: str = Field(min_length=64, max_length=71)
 
 
+class ActorClaim(BaseModel):
+    """The identity the row was submitted under.
+
+    The worker never invents an identity: it binds the grant to the actor the
+    request names, so a row cannot silently self-grant an anonymous service
+    principal.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: The canonical actor kinds.  A row may not invent a fourth one: the claim
+    #: has to name a principal the bus knows how to check.
+    kind: Literal["user", "service", "agent"]
+    actor_id: str = Field(min_length=1, max_length=128)
+
+
 class CompositionJobPayload(BaseModel):
     """The trusty schema of the composition queue row.
 
     ``extra="forbid"`` rejects a row that tries to widen its own policy: the
     only knobs it carries are the ones this worker re-checks itself.
+
+    Two fields exist so the worker cannot grant more than it was asked for:
+
+    * ``actor`` — the principal the request was made under.  It is **required**:
+      a row without an identity is refused, because an anonymous row would
+      otherwise be executed under a self-granted service identity.
+    * ``confirmed`` — the requester's explicit confirmation for level-C
+      operations.  The worker never fabricates it; without it a level-C node is
+      refused before any media work happens.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -93,6 +118,10 @@ class CompositionJobPayload(BaseModel):
     workspace_dir: str = Field(min_length=1, max_length=1024)
     #: The durable idempotency key of the row.
     idempotency_key: str = Field(min_length=1, max_length=128)
+    #: The principal the request was submitted under.
+    actor: ActorClaim
+    #: The requester's explicit confirmation for level-C operations.
+    confirmed: bool = False
     #: Whether the requester intends a commercial use of the output.
     commercial_use: bool = False
 
@@ -203,7 +232,23 @@ def _bindings_from(item: dict[str, Any]) -> list[PortBinding]:
         for port, binding in raw.items():
             if not isinstance(binding, dict):
                 raise CompositionJobError("invalid_request", f"binding {port!r} is not an object")
+            unknown = set(binding) - {"external", "node_output"}
+            if unknown:
+                raise CompositionJobError(
+                    "invalid_request",
+                    f"binding {port!r} carries unknown keys {sorted(unknown)}",
+                )
+            if "external" in binding and "node_output" in binding:
+                raise CompositionJobError(
+                    "invalid_request",
+                    f"binding {port!r} names both external and node_output; "
+                    "exactly one source must be given",
+                )
             if "external" in binding:
+                if not isinstance(binding["external"], str) or not binding["external"]:
+                    raise CompositionJobError(
+                        "invalid_request", f"binding {port!r} names an empty external input"
+                    )
                 decoded.append(
                     PortBinding(
                         input_port=port,
@@ -237,15 +282,15 @@ def _bindings_from(item: dict[str, Any]) -> list[PortBinding]:
         for binding in raw:
             if not isinstance(binding, dict):
                 raise CompositionJobError("invalid_request", "a binding is not an object")
-            decoded.append(
-                PortBinding(
-                    input_port=binding["input_port"],
-                    source=binding["source"],
-                    external=binding.get("external"),
-                    node_id=binding.get("node_id"),
-                    output_port=binding.get("output_port"),
-                )
-            )
+            # The model shape goes through the canonical model itself, so
+            # ``extra="forbid"`` applies: an unknown key is refused here exactly
+            # as it is in the wire shape, rather than being silently dropped.
+            try:
+                decoded.append(PortBinding.model_validate(binding))
+            except ValidationError as exc:
+                raise CompositionJobError(
+                    "invalid_request", f"malformed binding {sorted(binding)}: {exc}"
+                ) from exc
         return decoded
     raise CompositionJobError("invalid_request", "bindings must be an object or a list")
 
@@ -391,7 +436,12 @@ async def composition_render_job(payload: dict[str, Any]) -> dict[str, Any]:
         code = "unknown_capability" if exc.code == "unknown_operation" else "policy_refused"
         return {"success": False, "error_code": code, "error_detail": str(exc)}
 
-    executor = CompositionExecutor()
+    from nexus_ai_agent.creative.studio.models import ActorIdentity
+
+    executor = CompositionExecutor(
+        actor=ActorIdentity(kind=data.actor.kind, actor_id=data.actor.actor_id),
+        confirmed=data.confirmed,
+    )
     try:
         result = executor.execute(compiled, external_inputs=inputs, workspace=workspace)
     except (CompositionExecutionError, CompositionError) as exc:
@@ -452,6 +502,7 @@ def _primary_artifact(artifacts: dict[str, ProofCarryingArtifact]) -> ProofCarry
 __all__ = [
     "COMPOSITION_JOB_TYPE",
     "ERROR_CODES",
+    "ActorClaim",
     "CompositionJobError",
     "CompositionJobPayload",
     "StagedInput",

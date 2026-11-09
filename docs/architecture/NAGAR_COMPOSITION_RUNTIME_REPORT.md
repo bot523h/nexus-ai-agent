@@ -689,11 +689,16 @@ python scripts/bench_composition.py --runs 10 --queue --json evidence/compositio
 python scripts/collect_composition_evidence.py --output evidence/composition_evidence.json
 ```
 
-> یک اثر رسانهٔ واقعی در `evidence/` به‌صورت **JSON** (هش، اندازه، اندازه‌گیری‌های
-> معنایی، رسیدها و دودواده) ثبت شده است. خودِ فایل MP4 در مخزن نگه‌داری نمی‌شود چون
-> artifact باینری است؛ اثباتِ آن از راه **هش + اندازه‌گیری مستقل بازتولیدشدنی** است
-> (`scripts/collect_composition_evidence.py` در هر اجرا همان زنجیره را دوباره می‌سازد و
-> هش/ابعاد/تعداد فریم را دوباره می‌سنجد).
+> خروجی رسانهٔ واقعی در دو جا ثبت شده است: (الف) به‌صورت **JSON** در
+> `evidence/composition_evidence.json` (هش، اندازه، اندازه‌گیری‌های معنایی، رسیدها و
+> داده‌های دودمانه) و (ب) به‌صورت **خودِ فایل دودویی** در
+> `evidence/media/composition_image_to_video.mp4` (۲۴۷۳ بایت، ۶۴۰×۴۸۰، `h264`,
+> `yuv420p`, ۲۵ fps, ۱٫۰۰ ثانیه) همراه با ورودی
+> `evidence/media/composition_source.png` (۷۸۲ بایت). فایل دودویی کوچک است
+> (زیر ۳ کیلوبایت) و همین باعث شده بتوان artifact واقعی را در مخزن نگه داشت؛ اثباتِ
+> آن هم از راه **هش + اندازه‌گیری مستقل** است و هم از راه **وجود واقعی فایل**.
+> `scripts/collect_composition_evidence.py --media-out evidence/media` در هر اجرا همان
+> زنجیره را دوباره می‌سازد و هش/ابعاد/تعداد فریم را از نو می‌سنجد.
 
 ---
 

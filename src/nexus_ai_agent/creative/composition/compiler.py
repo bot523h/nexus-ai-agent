@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ConfigDict, ValidationError, create_model
@@ -88,8 +88,11 @@ class CompiledPlan:
     #: ``node_id -> input port -> media contract``.
     input_contracts: Mapping[str, Mapping[str, MediaContract]]
     estimate: ResourceEstimate
-    fingerprint: str
-    registry_fingerprint: str
+    #: ``node_id -> declared cost`` — the per-node budget the executor holds
+    #: the runtime to (its timeout, its RAM, its scratch).
+    requirements: Mapping[str, ResourceRequirements] = field(default_factory=dict)
+    fingerprint: str = ""
+    registry_fingerprint: str = ""
 
     def spec(self, node_id: str) -> OperationSpec:
         return self.specs[node_id]
@@ -184,6 +187,9 @@ class CompositionCompiler:
         self._check_bindings(plan, specs, input_contracts, output_contracts)
         self._check_types(plan, specs, input_contracts, output_contracts)
         estimate = self.estimate_resources(plan, specs)
+        # The per-node declared cost stays attached to the compiled plan so the
+        # executor can hold each node to the deadline it published.
+        per_node = {node.node_id: self._requirements(specs[node.node_id]) for node in plan.nodes}
         return CompiledPlan(
             plan=plan,
             order=order,
@@ -191,6 +197,7 @@ class CompositionCompiler:
             input_contracts=input_contracts,
             output_contracts=output_contracts,
             estimate=estimate,
+            requirements=per_node,
             fingerprint=self._fingerprint(plan),
             registry_fingerprint=self._registry_fingerprint,
         )

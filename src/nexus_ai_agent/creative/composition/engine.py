@@ -188,11 +188,17 @@ class MediaEngine:
         output_path: Path,
         params: dict[str, Any],
         scratch_dir: Path,
+        timeout_seconds: int | None = None,
     ) -> MediaOutcome:
         """Produce the operation's output from *source*.
 
         ``output_path`` must resolve inside ``scratch_dir``: a node may only
         write into its own scratch directory.
+
+        ``timeout_seconds`` is the **declared** budget of the operation.  When
+        it is given it overrides the engine's default deadline, so the number
+        the compiler published in ``ResourceEstimate.max_timeout_seconds`` is
+        the number the encoder is actually held to.
         """
         destination = contained_path(scratch_dir, str(output_path))
         _refuse_symlink(source, "composition source")
@@ -201,12 +207,13 @@ class MediaEngine:
         enforce_input_limit(source, self._max_input_bytes)
         destination.parent.mkdir(parents=True, exist_ok=True)
 
+        timeout = self._timeout if timeout_seconds is None else int(timeout_seconds)
         if operation == RESIZE_OPERATION:
-            outcome = self._resize(source, destination, params)
+            outcome = self._resize(source, destination, params, timeout=timeout)
         elif operation == GRAYSCALE_OPERATION:
-            outcome = self._grayscale(source, destination)
+            outcome = self._grayscale(source, destination, timeout=timeout)
         elif operation == IMAGE_TO_VIDEO_OPERATION:
-            outcome = self._image_to_video(source, destination, params)
+            outcome = self._image_to_video(source, destination, params, timeout=timeout)
         else:
             raise MediaEngineError(
                 f"no media realization for operation {operation!r}; the live registry "
@@ -226,7 +233,14 @@ class MediaEngine:
 
     # -- realizations -------------------------------------------------------
 
-    def _resize(self, source: Path, destination: Path, params: dict[str, Any]) -> dict[str, Any]:
+    def _resize(
+        self,
+        source: Path,
+        destination: Path,
+        params: dict[str, Any],
+        *,
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
         width = int(params["width"])
         height = int(params["height"])
         try:
@@ -236,7 +250,7 @@ class MediaEngine:
                 width=width,
                 height=height,
                 binary=self._ffmpeg,
-                timeout=self._timeout,
+                timeout=self._timeout if timeout is None else timeout,
                 overwrite=True,
             )
         except RenderError as exc:
@@ -247,13 +261,19 @@ class MediaEngine:
             "filter": "scale=lanczos",
         }
 
-    def _grayscale(self, source: Path, destination: Path) -> dict[str, Any]:
+    def _grayscale(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
         try:
             artifact = grayscale_image(
                 source,
                 destination,
                 binary=self._ffmpeg,
-                timeout=self._timeout,
+                timeout=self._timeout if timeout is None else timeout,
                 overwrite=True,
             )
         except RenderError as exc:
@@ -265,7 +285,12 @@ class MediaEngine:
         }
 
     def _image_to_video(
-        self, source: Path, destination: Path, params: dict[str, Any]
+        self,
+        source: Path,
+        destination: Path,
+        params: dict[str, Any],
+        *,
+        timeout: int | None = None,
     ) -> dict[str, Any]:
         width = int(params["width"])
         height = int(params["height"])
@@ -295,7 +320,7 @@ class MediaEngine:
                 ir,
                 destination,
                 binary=self._ffmpeg,
-                timeout=self._timeout,
+                timeout=self._timeout if timeout is None else timeout,
                 overwrite=True,
             )
         except RenderError as exc:

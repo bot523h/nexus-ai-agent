@@ -184,6 +184,25 @@ the registry** (a plan compiled elsewhere cannot be replayed silently).
 The execution order is **Kahn's algorithm with a deterministic tie-break**
 (node id), so the same plan always compiles to the same order.
 
+### 2.3.1 Where the execution is authorized
+
+The compiler authorizes nothing. The executor asks the **bus** before it
+encodes anything:
+
+```python
+CommandBus.check_authorization(command)  # actor grant, capability, packs, A/B/C/D
+# ... on refusal: CompositionExecutionError, and no media file exists
+```
+
+`check_authorization` runs the same private helpers the dispatch runs
+(`_spec_locked`, `_authorize_locked`) and stops before reference resolution,
+reservation and the handler. The input model is not validated there on purpose:
+the canonical operations take the produced artifact's hash as input, and that
+hash only exists *after* the encode, which the dispatch itself validates before
+anything is applied. The pack lifecycle gate is still called from `bus.py`
+only — `tests/architecture/test_lifecycle_gate_boundary.py` enforces that with
+an AST scan of `src/`.
+
 ### 2.4 The derived capability
 
 A composition does **not** create a capability. It *derives* a plan over

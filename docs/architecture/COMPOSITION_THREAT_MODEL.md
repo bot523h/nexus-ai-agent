@@ -100,9 +100,22 @@ path from the producer).
 * **Control:** the composition owns **no** authorization. Every node is
   dispatched as a canonical `TypedCommand` on the canonical `CommandBus`, which
   runs the actor grant, the registry check, the pack lifecycle gate and the
-  A/B/C/D ladder.
-* **Enforced by:** `creative/composition/executor.py::CompositionExecutor._dispatch`
-* **Proved by:** `tests/architecture/test_composition_boundary.py::test_composition_package_owns_no_parallel_runtime`
+  A/B/C/D ladder. The **same** gates are additionally run *before* any media
+  work: `_authorize_node` calls `CommandBus.check_authorization`, which executes
+  the very helpers the dispatch executes (`_spec_locked`, `_authorize_locked`)
+  and stops before any reservation, reference resolution or handler. The
+  executor therefore constructs no gate of its own — the pack gate is still
+  invoked from `bus.py` **only**, and the architecture ratchet
+  `test_lifecycle_gate_boundary.py::test_only_the_bus_invokes_the_pack_lifecycle_gate`
+  still passes unchanged. One authority, consulted twice.
+* **Enforced by:** `creative/studio/bus.py::CommandBus.check_authorization`
+  → `…::_authorize_locked`, called by
+  `creative/composition/executor.py::CompositionExecutor._authorize_node`
+* **Proved by:** `tests/architecture/test_composition_boundary.py::test_composition_package_owns_no_parallel_runtime`,
+  `tests/architecture/test_lifecycle_gate_boundary.py::test_only_the_bus_invokes_the_pack_lifecycle_gate`,
+  `tests/unit/test_composition_security.py::test_a_denied_node_produces_no_media`,
+  `…::test_the_bus_preflight_enforces_the_actor_grant_and_reserves_nothing`,
+  `…::test_the_bus_preflight_accepts_what_the_dispatch_would_authorize`
 * **Status:** `VERIFIED`
 
 ### T7 — Elevation of privilege: an experimental or unavailable capability runs
@@ -117,11 +130,24 @@ path from the producer).
 ### T8 — Elevation of privilege: a level-C operation runs without confirmation
 
 * **Control:** `media.image_to_video` is `PermissionLevel.CONFIRMATION`. The
-  composition dispatches with `confirmed=True` **because the composition
-  request itself is the confirmation** — the same rule the `creative_render`
-  lane applies. The ladder itself is the canonical one.
-* **Enforced by:** `creative/studio/capabilities.py::check_permission`
-* **Proved by:** `tests/unit/test_media_transform_pack.py::test_the_pack_needs_no_level_d_confirmation_for_the_still_transforms`
+  worker passes the requester's own `confirmed` flag — a **required** field of
+  `CompositionJobPayload` that defaults to `False` — and never fabricates it.
+  An unconfirmed row fails the pre-flight before any media work.
+* **Enforced by:** `creative/studio/bus.py::CommandBus.check_authorization`
+  → `creative/studio/capabilities.py::check_permission(confirmed=command.confirmed)`,
+  called pre-encode by `creative/composition/executor.py::CompositionExecutor._authorize_node`
+* **Proved by:** `tests/unit/test_composition_security.py::test_a_level_c_node_needs_the_requesters_confirmation`
+* **Status:** `VERIFIED`
+
+### T8b — Spoofing: a queue row self-grants an anonymous service identity
+
+* **Control:** `CompositionJobPayload.actor` is **required** (`ActorClaim`:
+  `kind`, `actor_id`). The worker binds the grant to that principal; an
+  anonymous row is refused at validation, so no row can execute under an
+  invented service identity.
+* **Enforced by:** `creative/composition/job.py::CompositionJobPayload`,
+  `…::composition_render_job`
+* **Proved by:** `tests/unit/test_composition_security.py::test_a_row_without_an_actor_is_refused`
 * **Status:** `VERIFIED`
 
 ### T9 — Information disclosure: the encoder subprocess inherits a secret
@@ -161,11 +187,18 @@ path from the producer).
 * **Control:** every output path is resolved and required to stay under the
   node's scratch directory; a symlinked source is refused by `lstat`; the
   workspace itself is refused when it is a symlink or outside the canonical
-  creative root.
-* **Enforced by:** `creative/composition/engine.py::contained_path`,
+  creative root. A **node id** is a *name*, never a path: it is constrained by
+  `NODE_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"` at the model, re-validated when
+  the per-node directory is derived, and the resolved directory is required to
+  stay inside the resolved workspace before `mkdir`.
+* **Enforced by:** `creative/composition/contracts.py::PlanNode.node_id`,
+  `creative/composition/executor.py::_node_directory`,
+  `creative/composition/engine.py::contained_path`,
   `…::_refuse_symlink`, `creative/composition/job.py::trusted_workspace`
 * **Proved by:** `tests/unit/test_composition_security.py::test_a_path_traversal_is_refused`,
-  `…::test_a_symlink_escape_is_refused`, `…::test_a_symlinked_workspace_is_refused`
+  `…::test_a_symlink_escape_is_refused`, `…::test_a_symlinked_workspace_is_refused`,
+  `…::test_a_node_id_that_is_a_path_is_refused_by_the_model`,
+  `…::test_the_node_directory_is_verified_to_stay_inside_the_workspace`
 * **Status:** `VERIFIED`
 
 ### T13 — Information disclosure: one node reads another's intermediate
@@ -209,6 +242,27 @@ path from the producer).
 * **Status:** `VERIFIED`
 
 ---
+
+### T17 — Denial of service: the declared deadline is shorter than the enforced one
+
+* **Control:** the compiler publishes a per-node `ResourceRequirements.timeout_seconds`
+  and the executor **holds the encoder to exactly that number**
+  (`_node_timeout` → `MediaEngine.realize(timeout_seconds=…)`), so the published
+  estimate is the enforced deadline and not an optimistic label.
+* **Enforced by:** `creative/composition/executor.py::CompositionExecutor._node_timeout`,
+  `creative/composition/engine.py::MediaEngine.realize`
+* **Proved by:** `tests/unit/test_composition_runtime.py::test_the_declared_timeout_is_the_enforced_timeout`
+* **Status:** `VERIFIED`
+
+### T18 — Tampering: a binding smuggles a second source or an unknown key
+
+* **Control:** a binding is a **closed** shape: unknown keys are refused, the
+  two source kinds are mutually exclusive, and an empty external name is
+  refused. Nothing is silently discarded.
+* **Enforced by:** `creative/composition/job.py::_bindings_from`
+* **Proved by:** `tests/unit/test_composition_security.py::test_a_binding_that_names_two_sources_is_refused`,
+  `…::test_a_binding_with_an_unknown_key_is_refused`
+* **Status:** `VERIFIED`
 
 ## 3. The controls the operating system refused — `BLOCKED`
 

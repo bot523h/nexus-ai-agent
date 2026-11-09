@@ -403,3 +403,314 @@ def test_an_unchanged_staged_input_is_accepted(tmp_path: Path) -> None:
     digest = hashlib.sha256(b"original").hexdigest()
     resolved = guarded_input(str(staged), workspace, f"sha256:{digest}")
     assert resolved == staged.resolve()
+
+
+# --------------------------------------------------------------------------- #
+# 9. the guards the external review asked for
+# --------------------------------------------------------------------------- #
+
+
+def test_a_node_id_that_is_a_path_is_refused_by_the_model() -> None:
+    """A node id is a *name*; it may never carry a separator or a parent ref."""
+    from pydantic import ValidationError as PydanticValidationError
+
+    from nexus_ai_agent.creative.composition.contracts import PlanNode
+
+    for hostile in ("../escape", "a/b", "..", "node/../../etc", ".", "a b"):
+        with pytest.raises(PydanticValidationError):
+            PlanNode(
+                node_id=hostile,
+                operation="media.resize_image",
+                capability_id="media.resize_image",
+                capability_version="1.0.0",
+                operation_schema_version=1,
+            )
+
+
+def test_the_node_directory_is_verified_to_stay_inside_the_workspace(tmp_path: Path) -> None:
+    """Even a well-formed node id must resolve inside the guarded workspace."""
+    from nexus_ai_agent.creative.composition.executor import (
+        CompositionExecutionError,
+        _node_directory,
+    )
+
+    with pytest.raises(CompositionExecutionError):
+        _node_directory(tmp_path, "../escape")
+
+    inside = _node_directory(tmp_path, "resize")
+    assert inside.name == "node_resize"
+    assert inside.parent == tmp_path.resolve()
+    assert inside.is_dir()
+
+
+def test_a_binding_that_names_two_sources_is_refused() -> None:
+    """A binding must name exactly one source -- never both."""
+    from nexus_ai_agent.creative.composition.job import CompositionJobError, plan_from_dict
+
+    with pytest.raises(CompositionJobError):
+        plan_from_dict(
+            {
+                "nodes": [
+                    {
+                        "node_id": "x",
+                        "operation": "media.resize_image",
+                        "capability_id": "media.resize_image",
+                        "capability_version": "1.0.0",
+                        "operation_schema_version": 1,
+                        "params": {},
+                        "bindings": {
+                            "source": {"external": "src", "node_output": ["y", "resized"]}
+                        },
+                    }
+                ],
+                "external_inputs": [{"name": "src", "media_kind": "image"}],
+                "expected_outputs": [],
+            }
+        )
+
+
+def test_a_binding_with_an_unknown_key_is_refused() -> None:
+    """An unknown key in a binding is a typo or an attack -- never ignored."""
+    from nexus_ai_agent.creative.composition.job import CompositionJobError, plan_from_dict
+
+    with pytest.raises(CompositionJobError):
+        plan_from_dict(
+            {
+                "nodes": [
+                    {
+                        "node_id": "x",
+                        "operation": "media.resize_image",
+                        "capability_id": "media.resize_image",
+                        "capability_version": "1.0.0",
+                        "operation_schema_version": 1,
+                        "params": {},
+                        "bindings": {"source": {"external": "src", "surprise": True}},
+                    }
+                ],
+                "external_inputs": [{"name": "src", "media_kind": "image"}],
+                "expected_outputs": [],
+            }
+        )
+
+
+def test_a_row_without_an_actor_is_refused() -> None:
+    """A row that names no principal is refused: it may not self-grant one."""
+    from pydantic import ValidationError as PydanticValidationError
+
+    from nexus_ai_agent.creative.composition.job import CompositionJobPayload
+
+    with pytest.raises(PydanticValidationError):
+        CompositionJobPayload.model_validate(
+            {
+                "plan": {},
+                "workspace_dir": "/tmp/x",
+                "idempotency_key": "k",
+            }
+        )
+
+
+def test_a_level_c_node_needs_the_requesters_confirmation(tmp_path: Path) -> None:
+    """The worker never fabricates the confirmation a level-C node requires."""
+    from PIL import Image
+
+    from nexus_ai_agent.creative.composition.compiler import CompositionCompiler
+    from nexus_ai_agent.creative.composition.contracts import (
+        CompositionPlan,
+        ExpectedOutput,
+        ExternalInput,
+        PlanNode,
+        PortBinding,
+    )
+    from nexus_ai_agent.creative.composition.executor import (
+        CompositionExecutionError,
+        CompositionExecutor,
+    )
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    registry = build_runtime_registry()
+    descriptor = registry.describe("media.image_to_video")
+    assert descriptor.capability_id == "media.image_to_video"
+
+    source = tmp_path / "source.png"
+    Image.new("RGB", (320, 240), (200, 60, 30)).save(source)
+
+    plan = CompositionPlan(
+        nodes=(
+            PlanNode(
+                node_id="video",
+                operation="media.image_to_video",
+                capability_id=descriptor.capability_id,
+                capability_version=descriptor.version,
+                operation_schema_version=descriptor.operation_schema_version,
+                params={
+                    "width": 320,
+                    "height": 240,
+                    "duration_us": 1_000_000,
+                    "fps": 25,
+                    "encoder": "libx264",
+                },
+                bindings=(PortBinding(input_port="source", source="external", external="src"),),
+            ),
+        ),
+        external_inputs=(ExternalInput(name="src", media_kind="image"),),
+        expected_outputs=(ExpectedOutput(name="video", node_id="video", output_port="video"),),
+    )
+    compiled = CompositionCompiler(registry).compile(plan)
+    executor = CompositionExecutor(confirmed=False)
+    with pytest.raises(CompositionExecutionError):
+        executor.execute(
+            compiled,
+            external_inputs={"src": source},
+            workspace=tmp_path / "workspace",
+        )
+
+
+def test_a_denied_node_produces_no_media(tmp_path: Path) -> None:
+    """A refused node must fail *before* the encoder, leaving no artifact.
+
+    The assertion is on the filesystem, not on the exception alone: the point
+    of the pre-flight is that no encoded file exists when the node is refused.
+    """
+    from PIL import Image
+
+    from nexus_ai_agent.creative.composition.compiler import CompositionCompiler
+    from nexus_ai_agent.creative.composition.contracts import (
+        CompositionPlan,
+        ExpectedOutput,
+        ExternalInput,
+        PlanNode,
+        PortBinding,
+    )
+    from nexus_ai_agent.creative.composition.executor import (
+        CompositionExecutionError,
+        CompositionExecutor,
+    )
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    registry = build_runtime_registry()
+    descriptor = registry.describe("media.image_to_video")
+    source = tmp_path / "source.png"
+    Image.new("RGB", (320, 240), (200, 60, 30)).save(source)
+    workspace = tmp_path / "workspace"
+
+    plan = CompositionPlan(
+        nodes=(
+            PlanNode(
+                node_id="video",
+                operation="media.image_to_video",
+                capability_id=descriptor.capability_id,
+                capability_version=descriptor.version,
+                operation_schema_version=descriptor.operation_schema_version,
+                params={
+                    "width": 320,
+                    "height": 240,
+                    "duration_us": 1_000_000,
+                    "fps": 25,
+                    "encoder": "libx264",
+                },
+                bindings=(PortBinding(input_port="source", source="external", external="src"),),
+            ),
+        ),
+        external_inputs=(ExternalInput(name="src", media_kind="image"),),
+        expected_outputs=(ExpectedOutput(name="video", node_id="video", output_port="video"),),
+    )
+    compiled = CompositionCompiler(registry).compile(plan)
+
+    with pytest.raises(CompositionExecutionError):
+        CompositionExecutor(confirmed=False).execute(
+            compiled,
+            external_inputs={"src": source},
+            workspace=workspace,
+        )
+
+    produced = [p for p in workspace.rglob("*") if p.is_file()] if workspace.exists() else []
+    assert produced == [], f"a refused node wrote {produced}"
+
+
+def test_the_bus_preflight_enforces_the_actor_grant_and_reserves_nothing() -> None:
+    """``check_authorization`` is the *same* authority, consulted earlier.
+
+    Two properties are asserted, and each covers a different failure mode:
+
+    * the actor grant is enforced exactly as the dispatch enforces it -- a
+      command that carries an actor claim but reaches a bus with no trusted
+      authorizer is refused *here too*, so the pre-flight cannot be a way
+      around step 3 of the pipeline;
+    * a pre-flight reserves nothing: the same key can still be dispatched
+      afterwards, and the dispatch reports its own (input) verdict rather than
+      "already executing" or "already delivered".
+    """
+    from nexus_ai_agent.creative.composition.executor import _command, _new_project
+    from nexus_ai_agent.creative.render_jobs import build_job_bus
+    from nexus_ai_agent.creative.studio.models import ActorIdentity, AuthorizationError
+
+    project = _new_project()
+    actor = ActorIdentity(kind="service", actor_id="preflight-test")
+    schema_version = build_job_bus(project).registry.get_spec("media.resize_image").schema_version
+    command = _command(
+        "media.resize_image",
+        {},
+        project_id=project.project_id,
+        actor=actor,
+        idempotency_key="preflight:1",
+        operation_schema_version=schema_version,
+    )
+
+    unauthenticated = build_job_bus(project)  # deliberately no authorizer
+    with pytest.raises(AuthorizationError):
+        unauthenticated.check_authorization(command)
+
+    # ... and the refusal left no reservation behind: the same key still
+    # reaches its own verdict instead of an idempotency conflict.
+    with pytest.raises(Exception) as second:
+        unauthenticated.dispatch(command)
+    assert "already" not in str(second.value)
+
+
+def test_the_bus_preflight_accepts_what_the_dispatch_would_authorize() -> None:
+    """A level-B operation passes the pre-flight even with no input yet.
+
+    This is the property the executor relies on: authorization must not depend
+    on the artifact hash, which only exists after the encode.
+    """
+    from nexus_ai_agent.creative.composition.executor import _command, _new_project
+    from nexus_ai_agent.creative.render_jobs import build_job_bus
+    from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+    from nexus_ai_agent.creative.studio.models import ActorIdentity
+
+    project = _new_project()
+    actor = ActorIdentity(kind="service", actor_id="preflight-test")
+    access = ProjectAccess(
+        actor=actor,
+        project_id=project.project_id,
+        permissions=frozenset({"project:read", "project:write"}),
+    )
+    bus = build_job_bus(project, authorizer=access)
+    schema_version = bus.registry.get_spec("media.resize_image").schema_version
+
+    bus.check_authorization(
+        _command(
+            "media.resize_image",
+            {},
+            project_id=project.project_id,
+            actor=actor,
+            idempotency_key="preflight:2",
+            operation_schema_version=schema_version,
+        )
+    )
+
+    # The dispatch of the very same command still refuses the empty input --
+    # proof that the pre-flight skipped validation rather than faking it.
+    from nexus_ai_agent.creative.studio.models import CommandValidationError
+
+    with pytest.raises(CommandValidationError):
+        bus.dispatch(
+            _command(
+                "media.resize_image",
+                {},
+                project_id=project.project_id,
+                actor=actor,
+                idempotency_key="preflight:2",
+                operation_schema_version=schema_version,
+            )
+        )

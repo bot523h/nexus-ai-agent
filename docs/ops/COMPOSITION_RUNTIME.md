@@ -30,8 +30,15 @@ payload = {
     },
     "workspace_dir": "<abs path>",  # inside CREATIVE_TEMP_DIR, named creative_*
     "idempotency_key": "<durable key>",
+    "actor": {"kind": "user", "actor_id": "<principal>"},  # REQUIRED
+    "confirmed": False,  # the requester's own level-C confirmation; never invented
 }
 ```
+
+`actor` is **required**. The worker binds the canonical grant to that principal; a row
+without an identity is refused at validation, so no row can execute under a
+self-granted service identity. `confirmed` defaults to `False`: a level-C operation
+(`media.image_to_video`) is refused *before* any media work unless the requester said so.
 
 `workspace_dir` must satisfy the canonical workspace law
 (`creative/render_jobs.py::trusted_creative_root` + `WORKSPACE_PREFIX`):

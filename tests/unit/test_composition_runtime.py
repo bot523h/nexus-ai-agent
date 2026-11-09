@@ -130,7 +130,7 @@ def _plan(registry, *, with_video: bool = True) -> CompositionPlan:
 def test_the_executor_runs_a_plan_on_the_canonical_bus(registry, tmp_path: Path) -> None:
     source = _source_image(tmp_path / "source.png")
     compiled = CompositionCompiler(registry).compile(_plan(registry))
-    result = CompositionExecutor().execute(
+    result = CompositionExecutor(confirmed=True).execute(
         compiled, external_inputs={"src": source}, workspace=tmp_path / "work"
     )
     assert result.verified is True
@@ -142,7 +142,7 @@ def test_the_executor_runs_a_plan_on_the_canonical_bus(registry, tmp_path: Path)
 def test_every_node_is_verified_not_only_the_output(registry, tmp_path: Path) -> None:
     source = _source_image(tmp_path / "source.png")
     compiled = CompositionCompiler(registry).compile(_plan(registry))
-    result = CompositionExecutor().execute(
+    result = CompositionExecutor(confirmed=True).execute(
         compiled, external_inputs={"src": source}, workspace=tmp_path / "work"
     )
     for receipt in result.receipts:
@@ -162,7 +162,7 @@ def test_the_executor_records_the_derived_assets_on_the_canonical_bus(
 ) -> None:
     source = _source_image(tmp_path / "source.png")
     compiled = CompositionCompiler(registry).compile(_plan(registry))
-    executor = CompositionExecutor()
+    executor = CompositionExecutor(confirmed=True)
     result = executor.execute(
         compiled, external_inputs={"src": source}, workspace=tmp_path / "work"
     )
@@ -176,7 +176,7 @@ def test_the_executor_records_the_derived_assets_on_the_canonical_bus(
 def test_the_lineage_names_every_node_and_its_capability_version(registry, tmp_path: Path) -> None:
     source = _source_image(tmp_path / "source.png")
     compiled = CompositionCompiler(registry).compile(_plan(registry))
-    result = CompositionExecutor().execute(
+    result = CompositionExecutor(confirmed=True).execute(
         compiled, external_inputs={"src": source}, workspace=tmp_path / "work"
     )
     artifact = result.artifacts["final"]
@@ -192,7 +192,7 @@ def test_the_lineage_names_every_node_and_its_capability_version(registry, tmp_p
 def test_each_node_gets_its_own_scratch_directory(registry, tmp_path: Path) -> None:
     source = _source_image(tmp_path / "source.png")
     compiled = CompositionCompiler(registry).compile(_plan(registry))
-    CompositionExecutor().execute(
+    CompositionExecutor(confirmed=True).execute(
         compiled, external_inputs={"src": source}, workspace=tmp_path / "work"
     )
     node_dirs = sorted(p.name for p in (tmp_path / "work").iterdir() if p.is_dir())
@@ -205,7 +205,9 @@ def test_each_node_gets_its_own_scratch_directory(registry, tmp_path: Path) -> N
 def test_a_missing_external_input_is_refused(registry, tmp_path: Path) -> None:
     compiled = CompositionCompiler(registry).compile(_plan(registry))
     with pytest.raises(CompositionExecutionError):
-        CompositionExecutor().execute(compiled, external_inputs={}, workspace=tmp_path / "work")
+        CompositionExecutor(confirmed=True).execute(
+            compiled, external_inputs={}, workspace=tmp_path / "work"
+        )
 
 
 def test_the_engine_refuses_an_operation_it_cannot_realize(tmp_path: Path) -> None:
@@ -305,6 +307,7 @@ def test_the_payload_refuses_an_extra_field() -> None:
                 "plan": {},
                 "workspace_dir": "/tmp/x",
                 "idempotency_key": "k",
+                "actor": {"kind": "user", "actor_id": "a"},
                 "surprise": 1,
             }
         )
@@ -342,6 +345,8 @@ def test_the_worker_refuses_an_unknown_capability(
         "external_inputs": {},
         "workspace_dir": str(workspace),
         "idempotency_key": "k",
+        "actor": {"kind": "user", "actor_id": "tester"},
+        "confirmed": True,
     }
     try:
         result = asyncio.run(composition_render_job(payload))
@@ -376,6 +381,8 @@ def test_the_worker_returns_the_canonical_artifact_claim_dialect(
             "external_inputs": {"src": {"path": str(source), "sha256": digest}},
             "workspace_dir": str(workspace),
             "idempotency_key": "composition:1",
+            "actor": {"kind": "user", "actor_id": "tester"},
+            "confirmed": True,
         }
         result = asyncio.run(composition_render_job(payload))
         assert result["success"] is True, result
@@ -391,3 +398,41 @@ def test_the_worker_returns_the_canonical_artifact_claim_dialect(
         assert json.dumps(result, default=str)
     finally:
         settings_module.get_settings.cache_clear()
+
+
+def test_the_declared_timeout_is_the_enforced_timeout(
+    registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The number the compiler publishes is the number the encoder is held to.
+
+    The engine is instrumented through a subclass so the assertion is on the
+    value that actually reaches the canonical FFmpeg primitive, not on a
+    constant.  The *media* in this test is real; only the deadline is observed.
+    """
+    from nexus_ai_agent.creative.composition.compiler import CompositionCompiler
+    from nexus_ai_agent.creative.composition.engine import MediaEngine
+    from nexus_ai_agent.creative.composition.executor import CompositionExecutor
+
+    seen: list[int | None] = []
+
+    class RecordingEngine(MediaEngine):
+        def realize(self, operation, **kwargs):  # type: ignore[no-untyped-def]
+            seen.append(kwargs.get("timeout_seconds"))
+            return super().realize(operation, **kwargs)
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    source = _source_image(workspace / "source.png")
+    compiled = CompositionCompiler(registry).compile(_plan(registry))
+
+    executor = CompositionExecutor(engine=RecordingEngine(), confirmed=True)
+    executor.execute(compiled, external_inputs={"src": source}, workspace=workspace)
+
+    assert len(seen) == len(compiled.order)
+    for node_id, observed in zip(compiled.order, seen, strict=True):
+        declared = compiled.requirements[node_id].timeout_seconds
+        assert observed == declared, f"node {node_id}: declared {declared}, enforced {observed}"
+    # And the aggregate the caller reads matches the per-node maxima.
+    assert max(r.timeout_seconds for r in compiled.requirements.values()) == (
+        compiled.estimate.max_timeout_seconds
+    )

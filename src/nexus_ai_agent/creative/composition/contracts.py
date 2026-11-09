@@ -36,6 +36,12 @@ from nexus_ai_agent.creative.studio.models import MediaContract, MediaPort
 #: a worker that speaks another one — the version is part of the fingerprint.
 PLAN_VERSION = 1
 
+#: A node id is a **name**, never a path.  It is interpolated into the
+#: per-node working directory, so a node id carrying a separator or a parent
+#: reference would make the composition write outside its guarded workspace.
+#: The pattern admits only word characters and single dashes.
+NODE_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+
 #: The twelve licence/dependency categories the ledger keeps apart.
 #:
 #: Conflating them is how a runtime claims a permission it never had: a
@@ -112,7 +118,7 @@ class PlanNode(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    node_id: str = Field(min_length=1, max_length=64)
+    node_id: str = Field(min_length=1, max_length=64, pattern=NODE_ID_PATTERN)
     operation: str = Field(min_length=1, max_length=128)
     capability_id: str = Field(min_length=1, max_length=128)
     capability_version: str = Field(min_length=1, max_length=64)
