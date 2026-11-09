@@ -541,13 +541,159 @@ flowchart TD
 
 ## ۱۱. اجرای نهایی و وضعیت‌ها
 
-*(این بخش پس از اجرای نهایی روی درخت پاک پر می‌شود؛ ارقام در §۱۲ آمده‌اند.)*
+اجرای نهایی روی **درخت پاک** (پس از commit) و با همان محیط:
+
+| گیت | فرمان | نتیجه | وضعیت |
+|---|---|---|---|
+| کل مجموعهٔ تست | `pytest -q -m "not slow"` | `6621 passed, 39 skipped, 1163 warnings in 582.04s` | `VERIFIED` |
+| مبنای `main` تمیز | همان فرمان در worktree جداگانه | `6427 passed, 39 skipped, 0 failed` | `VERIFIED` |
+| lint | `ruff check .` | `All checks passed!` | `VERIFIED` |
+| قالب | `ruff format --check .` | `993 files already formatted` | `VERIFIED` |
+| انواع | `mypy src` | `Success: no issues found in 373 source files` | `VERIFIED` |
+| گیت اسناد | `pytest tests/unit/test_docs_integrity.py -q` | `117 passed` | `VERIFIED` |
+| گیت حقیقت عملیات | `python -m nexus_ai_agent.nagar --check` | `TRUTH GATE: GREEN` | `VERIFIED` |
+| پوشش پک | `python scripts/pack_coverage.py` | `ACCEPTED` — `media` 227/227 (۱۰۰٪)، مجموع ۹۷٫۱۷٪، `pytest exit: 0`، `evidence: verified` | `VERIFIED` |
+| مجموعه‌های جدید ترکیب | ۱۱ فایل | `184 passed in 15.34s` | `VERIFIED` |
+| E2E کانونی | `pytest tests/integration/test_composition_canonical_e2e.py -q` | `6 passed` | `VERIFIED` |
+| بنچمارک (صف) | `scripts/bench_composition.py --runs 10 --queue` | ۱۰ اجرا، نرخ خطا `0.0`، اثر انگشت تکرارپذیر | `VERIFIED` |
+| بنچمارک (اجراکننده) | `scripts/bench_composition.py --runs 10` | ۱۰ اجرا، نرخ خطا `0.0`، اثر انگشت تکرارپذیر | `VERIFIED` |
+
+### ۱۱.۱ جدول وضعیت نهایی
+
+| حوزه | وضعیت | دلیل کوتاه |
+|---|---|---|
+| ادغام کانونی (Registry/Queue/Bus/Policy/Provenance/Verification) | `VERIFIED` | گیت معماری ماشینی + E2E واقعی |
+| قرارداد قابلیت و IR | `VERIFIED` | ۲۲ + ۲۵ آزمون کامپایلر/قرارداد |
+| مدل تهدید و سخت‌سازی در سطح فرایند | `VERIFIED` | ۲۴ آزمون امنیتی شامل timeout گروه فرایند |
+| مدل تهدید و سخت‌سازی در سطح سیستم‌عامل (namespace/cgroup/seccomp/user-separation/egress) | `BLOCKED` | مجوز سیستم‌عامل در این محیط موجود نیست؛ صریحاً علامت خورده |
+| سهمیهٔ منابع | `HARDENED_BUT_NOT_COMPLETE` | تخمین مدل‌شده + timeout/سقف اندازه؛ بدون cgroup |
+| دفتر مجوز ۱۲ دسته‌ای | `VERIFIED` | ۲۱ آزمون؛ `UNKNOWN` هرگز «تأیید تجاری» نمی‌شود |
+| اثبات یکپارچگی در برابر معنایی | `VERIFIED` | ۲۰ + ۱۱ آزمون؛ نقص واقعی grayscale کشف و رفع شد |
+| E2E کانونی Image→Image و Image→Video | `VERIFIED` | ۶ آزمون با صف، کارگر ثبت‌شده و FFmpeg واقعی |
+| E2E Video→Video و Audio→Video | `DEFERRED` | هیچ قابلیت متناظری در رجیستری کانونی نیست؛ mock نشد |
+| جهش‌یابی سازمان‌یافته | `DEFERRED` | سه جهش دستی و اثبات‌شده اجرا شد؛ ابزار جهش مخزن برای این بسته ساخته نشد |
+| اسناد | `VERIFIED` | گیت ۱۱۷ تستی سبز |
+
+### ۱۱.۲ دربارهٔ «بازبینی مستقل»
+
+در این بسته **هیچ بازبینی مستقلی انجام نشده است**. آنچه انجام شده، **بازبینی
+خودِ نویسنده** است: گیت‌های معماری کانونی (که مخزن‌دار آن‌ها دیگری است) این شاخه را
+*به‌عنوان کدِ غریبه* بررسی کرده‌اند و سه ایراد واقعی پیدا کرده‌اند که در §۹ و §۱۰
+گزارش شده‌اند. گزارش این بازبینی **نباید** «بازبینی مستقل» تلقی شود و در این سند
+هم چنین ادعایی نشده است. `DEFERRED` — نیازمند بازبیننده‌ای که نویسنده نیست.
 
 ---
 
 ## ۱۲. شواهد تحویل (Git)
 
-*(این بخش پس از commit نهایی پر می‌شود.)*
+### ۱۲.۱ هویت شاخه و کامیت‌ها
+
+| قلم | مقدار |
+|---|---|
+| شاخه | `arena/da6837a6-nexus-ai-agent` |
+| SHA پایه (`origin/main`) | `5ed6d4e10be55f5baf5e9f2a8aa99775577621db` |
+| SHA سر (پیش از این commit گزارش) | `28a4914e9227dad2a529bdf7aceb1a6d86eb55ba` |
+| URL پریک pull request | `https://github.com/bot523h/nexus-ai-agent/pull/327` |
+| تعداد کامیت‌ها نسبت به `main` | ۴ |
+| تعداد فایل تغییرکرده | ۶۰ |
+| حجم تغییر | `+11271 / −40` خط |
+
+### ۱۲.۲ تاریخچهٔ کامیت‌ها
+
+| SHA | پیام |
+|---|---|
+| `81b442e` | `chore(board): claim task-284 nagar-creative-composition zone + Gate-0 live truth report` |
+| `a9d08f2` | `feat(composition): integrate the NAGAR composition runtime into the canonical path` |
+| `17e28fa` | `test(cognition): regenerate the committed quality baseline for the new pack` |
+| `28a4914` | `docs(audit): record the uncontaminated baseline and the accepted coverage run` |
+
+### ۱۲.۳ فایل‌های تغییرکرده (گروه‌بندی‌شده)
+
+**افزوده‌شده (۴۰ فایل):**
+
+* `LIVE_TRUTH_REPORT.md` — گزارش حقیقت زنده (Gate 0)
+* `docs/architecture/CANONICAL_INFRASTRUCTURE_AUDIT.md` — ممیزی ۸ محور (Gate 1)
+* `docs/architecture/adr/0014-creative-capability-composition.md` — ADR (Gate 2)
+* `docs/architecture/COMPOSITION_RUNTIME.md` — قرارداد قابلیت، IR، دفتر مجوز (Gate 3/5)
+* `docs/architecture/COMPOSITION_THREAT_MODEL.md` — مدل تهدید STRIDE (Gate 4)
+* `docs/architecture/NAGAR_COMPOSITION_RUNTIME_REPORT.md` — این گزارش (Gate 10)
+* `docs/ops/COMPOSITION_RUNTIME.md` — راهنمای یکپارچه‌سازی کانونی
+* `src/nexus_ai_agent/creative/composition/` — ۹ ماژول بستهٔ ترکیب
+* `src/nexus_ai_agent/creative/packs/media/` — پک جدید (۳ فایل)
+* `src/nexus_ai_agent/continuum/composition_bench.py` — هستهٔ اندازه‌گیری بنچمارک
+* `scripts/bench_composition.py`، `scripts/collect_composition_evidence.py`
+* `evidence/composition_evidence.json`، `evidence/composition_benchmark.json`،
+  `evidence/composition_benchmark_queue.json`
+* `tests/unit/test_composition_{compiler,contracts,license,proof,runtime,security,verifier}.py`
+* `tests/unit/test_media_{transform_pack,still_primitives}.py`
+* `tests/architecture/test_composition_boundary.py`
+* `tests/integration/test_composition_canonical_e2e.py`
+
+**تغییرکرده (۲۰ فایل):**
+
+* `src/nexus_ai_agent/creative/studio/models.py` — `MediaContract` و `MediaPort`
+* `src/nexus_ai_agent/creative/studio/capabilities.py` — پورت‌های رسانه و `media_derived_fields`
+* `src/nexus_ai_agent/creative/studio/lifecycle.py` — `nexus.media.transform` → `AVAILABLE`
+* `src/nexus_ai_agent/creative/packs/runtime.py` — `PackComposition("media", …)`
+* `src/nexus_ai_agent/creative/slideshow/ffmpeg.py` — allow-list متغیر محیطی + گروه فرایند
+* `src/nexus_ai_agent/worker.py` — ثبت کارگر `creative_composition`
+* `src/nexus_ai_agent/adapters/in_process_job_queue.py` — ثبت verifier
+* `src/nexus_ai_agent/nagar/sources.py` — افزودن پک media به سطح اعلان
+* `src/nexus_ai_agent/continuum/pack_coverage.py` — هدف‌های تست پک media
+* `.agents/board.json` — zone و claim
+* `docs/README.md`، `docs/architecture/adr/README.md` — ردیف‌های نمایه
+* `OPERATION_TRUTH.json`، `OPERATION_CONTRACT_MATRIX.md`، `L0_L4_MATURITY.md`،
+  `RECONCILIATION.md` — پروژکشن حقیقت **بازتولیدشده**
+* `tests/architecture/test_pack_activation_completeness.py`،
+  `tests/architecture/test_verification_registry_ratchet.py`،
+  `tests/architecture/test_slideshow_adapter_boundary.py` (تقویت‌شده) —
+  `tests/unit/test_capability_lifecycle.py`، `test_pack_runtime_composition.py`،
+  `test_operation_matrix_reconciliation.py`، `test_cognition_quality_eval.py` —
+  `tests/fixtures/cognition_quality_eval/v2_baseline.json` (بازتولیدشده)
+
+### ۱۲.۴ شواهد ادعای board
+
+| قلم | مقدار |
+|---|---|
+| شناسهٔ claim | `task-284-nagar-creative-composition` |
+| zone | `nagar-creative-composition` |
+| وضعیت | `active` |
+| نسل | ۱ |
+| زمان claim | `2026-11-09T10:00:22Z` |
+| مسیرهای انحصاری | ۳۶ |
+| فرمان بررسی هم‌پوشانی | `python scripts/agent_board.py check --branch arena/da6837a6-nexus-ai-agent --files <همهٔ مسیرهای تغییرکرده> --repo bot523h/nexus-ai-agent` |
+| خروجی بررسی هم‌پوشانی | `no overlap — safe to proceed (every consulted source was readable)` · **exit 0** · ۴۸ منبع خوانده‌شده |
+
+### ۱۲.۵ روش بازتولید
+
+```bash
+# 1) محیط (طبق AGENTS.md)
+python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
+
+# 2) گیت‌های ایستا
+make lint && make types
+
+# 3) کل مجموعهٔ تست
+pytest -q -m "not slow"
+
+# 4) گیت اسناد و گیت حقیقت
+pytest -q tests/unit/test_docs_integrity.py
+python -m nexus_ai_agent.nagar --check
+
+# 5) پوشش پک (روی درخت پاک)
+python scripts/pack_coverage.py
+
+# 6) بنچمارک و شواهد
+python scripts/bench_composition.py --runs 10 --json evidence/composition_benchmark.json
+python scripts/bench_composition.py --runs 10 --queue --json evidence/composition_benchmark_queue.json
+python scripts/collect_composition_evidence.py --output evidence/composition_evidence.json
+```
+
+> یک اثر رسانهٔ واقعی در `evidence/` به‌صورت **JSON** (هش، اندازه، اندازه‌گیری‌های
+> معنایی، رسیدها و دودواده) ثبت شده است. خودِ فایل MP4 در مخزن نگه‌داری نمی‌شود چون
+> artifact باینری است؛ اثباتِ آن از راه **هش + اندازه‌گیری مستقل بازتولیدشدنی** است
+> (`scripts/collect_composition_evidence.py` در هر اجرا همان زنجیره را دوباره می‌سازد و
+> هش/ابعاد/تعداد فریم را دوباره می‌سنجد).
 
 ---
 
