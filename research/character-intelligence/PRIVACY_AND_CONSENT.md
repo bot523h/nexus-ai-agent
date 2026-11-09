@@ -22,7 +22,7 @@ evidence bundle asserts `"real_person": false`.
 ConsentRecord(
     consent_id="CNS-0001",
     character_id="NAGAR-CHAR-000001",
-    subject_class=SubjectClass.SYNTHETIC,     # or REAL_PERSON
+    subject_class=SubjectClass.SYNTHETIC,  # or REAL_PERSON
     purposes=(ConsentPurpose.RENDER, ConsentPurpose.EXPORT),
     granted_at="2026-11-01T00:00:00Z",
     expires_at=None,
