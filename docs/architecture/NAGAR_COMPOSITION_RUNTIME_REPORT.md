@@ -27,7 +27,8 @@ DAG و اعتبارسنجی تایپی** را مالک است؛ رجیستری �
 سیاست مجوز، اثر انگشت پاسپورت و مرجع تأیید نهایی همگی **کانونی و دست‌نخورده** باقی ماندند.
 
 * **۶۰** عملیات در رجیستری زنده (۵۷ پیش از این شاخه + ۳ عملیات پک جدید).
-* **۱۹۴** تست جدید در ۱۱ فایل، همگی سبز؛ به‌علاوهٔ کل مجموعهٔ تست مخزن.
+* **۲۴۳** تست ترکیب در ۱۳ فایل، همگی سبز (۱۹۴ در زمان Gate 7؛ ۴۹ تازه در موج
+  دوم بازبینی و Slice 2 — §۹.۱)؛ به‌علاوهٔ کل مجموعهٔ تست مخزن.
 * **۳** جریان کامل از صف تا گذرنامهٔ اثر انگشت روی صف canonical اجرا شد.
 * **۰** موارد `TODO`/`FIXME`/`TBD` در صفحات معماری (گیت دروازهٔ اسناد).
 * یک **دروازهٔ معماری** که می‌گوید «هیچ CommandBus دومی ساخته نمی‌شود» در ابتدا قرمز شد؛
@@ -597,7 +598,8 @@ flowchart TD
 | گیت اسناد | `python -m pytest tests/unit/test_docs_integrity.py -q` | `117 passed` | `VERIFIED` |
 | گیت حقیقت عملیات | `python -m nexus_ai_agent.nagar --check` | `TRUTH GATE: GREEN` | `VERIFIED` |
 | پوشش پک | `python scripts/pack_coverage.py` | `ACCEPTED` — `media` 227/227 (۱۰۰٪)، مجموع ۹۷٫۱۷٪، `pytest exit: 0`، `evidence: verified` | `VERIFIED` |
-| مجموعه‌های جدید ترکیب | ۱۱ فایل | `194 passed` (به‌تفکیک در §۹.۱) | `VERIFIED` |
+| مجموعه‌های جدید ترکیب | ۱۳ فایل | `243 passed` (به‌تفکیک در §۹.۱) | `VERIFIED` |
+| گیت‌های معماری | `python -m pytest tests/architecture -q` | `377 passed` | `VERIFIED` |
 | E2E کانونی | `pytest tests/integration/test_composition_canonical_e2e.py -q` | `6 passed` | `VERIFIED` |
 | بنچمارک (صف) | `scripts/bench_composition.py --runs 10 --queue` | ۱۰ اجرا، نرخ خطا `0.0`، اثر انگشت تکرارپذیر | `VERIFIED` |
 | بنچمارک (اجراکننده) | `scripts/bench_composition.py --runs 10` | ۱۰ اجرا، نرخ خطا `0.0`، اثر انگشت تکرارپذیر | `VERIFIED` |
@@ -607,10 +609,10 @@ flowchart TD
 | حوزه | وضعیت | دلیل کوتاه |
 |---|---|---|
 | ادغام کانونی (Registry/Queue/Bus/Policy/Provenance/Verification) | `VERIFIED` | گیت معماری ماشینی + E2E واقعی |
-| قرارداد قابلیت و IR | `VERIFIED` | ۲۲ + ۲۵ آزمون کامپایلر/قرارداد |
+| قرارداد قابلیت و IR | `VERIFIED` | ۲۷ + ۲۸ آزمون کامپایلر/قرارداد |
 | اقتدار پیش از اجرا (pre-flight روی خود bus) | `VERIFIED` | `CommandBus.check_authorization` + گیت معماری «فقط bus» |
 | هفت یافتهٔ بازبینی بیرونی | `VERIFIED` | همه رفع شد، هر یک با آزمون ردّکننده |
-| مدل تهدید و سخت‌سازی در سطح فرایند | `VERIFIED` | ۳۳ آزمون امنیتی شامل timeout گروه فرایند |
+| مدل تهدید و سخت‌سازی در سطح فرایند | `VERIFIED` | ۳۶ آزمون امنیتی شامل timeout گروه فرایند |
 | مدل تهدید و سخت‌سازی در سطح سیستم‌عامل (namespace/cgroup/seccomp/user-separation/egress) | `BLOCKED` | مجوز سیستم‌عامل در این محیط موجود نیست؛ صریحاً علامت خورده |
 | سهمیهٔ منابع | `HARDENED_BUT_NOT_COMPLETE` | تخمین مدل‌شده + timeout/سقف اندازه؛ بدون cgroup |
 | دفتر مجوز ۱۲ دسته‌ای | `VERIFIED` | ۲۱ آزمون؛ `UNKNOWN` هرگز «تأیید تجاری» نمی‌شود |
@@ -620,7 +622,7 @@ flowchart TD
 | جهش‌یابی سازمان‌یافته | `VERIFIED` | کمپین `scripts/durable_project_state_mutations.py` اکنون **۲۸ جهش** دارد (۲۵ + ۳ جهش تازهٔ Slice-2 برای خط ترکیب)؛ **۲۸/۲۸ کشته** و در CI اجرا می‌شود. سه جهش دستی خط ترکیب هم در §۹.۴ ثبت شد |
 | اسناد | `VERIFIED` | گیت ۱۱۷ تستی سبز |
 
-### ۱۱.۲ بازبینی خودکار بیرونی: هفت یافته، هفت رفع
+### ۱۱.۲ بازبینی خودکار بیرونی: هشت یافته، هشت رفع
 
 روی PR #327 یک بازبین خودکار بیرونی (**Sourcery**) هفت یافتهٔ محتوایی و دو
 مثبت‌کاذب ثبت کرد. یافته‌ها **معتبر** بودند و همه رفع شدند — هر کدام در لایه‌ای که
@@ -635,6 +637,7 @@ flowchart TD
 | ۵ | 🟡 متوسط | تخمین timeout کمتر از سقف واقعی موتور بود (۱۲۰ s در برابر ۳۰۰ s) | `CompiledPlan.requirements` (نگاشت گره→`ResourceRequirements`) + `executor.py::_node_timeout()` + `engine.py::MediaEngine.realize(timeout_seconds=…)` | `test_the_declared_timeout_is_the_enforced_timeout` (مقدار واقعاً به primitive می‌رسد) |
 | ۶ | 🟡 متوسط | آزمون drift رجیستری **توخالی** بود (فقط تکرارپذیری را می‌سنجید) | آزمون اکنون سطح را روی یک **deep copy** تغییر می‌دهد و می‌سنجد اثر انگشت **تغییر می‌کند**، و رجیستری زنده دست‌نخورده می‌ماند | `test_registry_fingerprint_changes_when_the_surface_changes` |
 | ۷ | 🟡 متوسط | آزمون E2E ورودی دست‌کاری‌شده یک کار **گیرکرده** را هم می‌پذیرفت | اکنون **شکست ترمینال** با کد `invalid_request` و پیام `digest mismatch` را الزام می‌کند | `test_a_changed_staged_input_is_refused_before_any_media_work` |
+| ۸ | 🟡 متوسط | گزارش Gate 0 در فهرست اسناد نبود | یک ردیف در `docs/README.md` به `../LIVE_TRUTH_REPORT.md` | `tests/unit/test_docs_integrity.py` (۱۱۷ سبز) |
 
 **دو مثبت‌کاذب** که «رفع» نشدند و توضیح آن‌ها ثبت می‌شود: `creative/slideshow/ffmpeg.py`
 خطوط ۵۳۹–۵۴۰ که opengrep به‌عنوان «فراخوانی subprocess» علامت زد، در واقع **کلاس‌های
@@ -850,7 +853,7 @@ python scripts/collect_composition_evidence.py --output evidence/composition_evi
 4. دفتر مجوز ۱۲ دسته‌ای با سنجش زندهٔ FFmpeg.
 5. تفکیک اثبات یکپارچگی/معنایی با اصلاح واقعیِ بررسی grayscale.
 6. مدل تهدید STRIDE با ۱۶ تهدید و برچسب `BLOCKED` برای کنترل‌های سیستم‌عاملی.
-7. ۱۹۴ آزمون جدید در ۱۱ فایل.
+7. ۲۴۳ آزمون ترکیب در ۱۳ فایل (۱۹۴ در Gate 7، ۴۹ در ادامهٔ شاخه).
 8. بنچمارک ۱۰ اجرا در دو حالت + گزارش شواهد JSON.
 9. بازتولید پروژکشن حقیقت عملیات (`python -m nexus_ai_agent.nagar --docs`) پس از افزوده‌شدن پک.
 
@@ -895,7 +898,7 @@ python scripts/collect_composition_evidence.py --output evidence/composition_evi
 | ۱۲ | نقشهٔ راه NOW/NEXT/LATER | همین سند، §۱۳ |
 
 افزون بر این‌ها: کد مبدأ (`src/nexus_ai_agent/creative/composition/` و
-`src/nexus_ai_agent/creative/packs/media/`)، آزمون‌ها (۱۱ فایل، ۱۹۴ تست)، اسکریپت
+`src/nexus_ai_agent/creative/packs/media/`)، آزمون‌ها (۱۳ فایل، ۲۴۳ تست)، اسکریپت
 بنچمارک، JSON شواهد، و **یک خروجی رسانهٔ واقعی**
 (`evidence/media/composition_image_to_video.mp4` — ۲۴۷۳ بایت، ۶۴۰×۴۸۰، h264،
 yuv420p، ۲۵fps، ۱٫۰۰ ثانیه، ۲۵ فریم) به‌همراه تصویر ورودی آن
