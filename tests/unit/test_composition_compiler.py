@@ -58,13 +58,27 @@ def _node(registry, node_id: str, operation: str, **kwargs):
     )
 
 
+_OUTPUT_PORT = {
+    "media.resize_image": "resized",
+    "media.grayscale_image": "grayscale",
+    "media.image_to_video": "video",
+}
+
+
 def _plan(registry, nodes, *, outputs=None, inputs=()):
+    last = nodes[-1]
     return CompositionPlan(
         nodes=tuple(nodes),
         external_inputs=tuple(inputs),
         expected_outputs=tuple(
             outputs
-            or [ExpectedOutput(name="final", node_id=nodes[-1].node_id, output_port="video")]
+            or [
+                ExpectedOutput(
+                    name="final",
+                    node_id=last.node_id,
+                    output_port=_OUTPUT_PORT.get(last.operation, "video"),
+                )
+            ]
         ),
     )
 
@@ -431,3 +445,53 @@ def test_plan_pins_the_canonical_capability_version(registry) -> None:
     compiled = CompositionCompiler(registry).compile(plan)
     assert compiled.node("resize").capability_version == descriptor.version
     assert compiled.node("resize").operation_schema_version == descriptor.operation_schema_version
+
+
+def test_an_expected_output_must_name_a_real_port(registry) -> None:
+    """A deliverable bound to a port the node does not have is refused."""
+    node = _resize_node(registry)
+    plan = _plan(
+        registry,
+        [node],
+        outputs=[ExpectedOutput(name="final", node_id="resize", output_port="nope")],
+        inputs=[_image_input()],
+    )
+    with pytest.raises(CompositionError) as excinfo:
+        CompositionCompiler(registry).compile(plan)
+    assert excinfo.value.code == "unknown_binding"
+
+
+def test_a_plan_authored_for_another_ir_version_is_refused(registry) -> None:
+    """A different ``plan_version`` is a different language, not a superset."""
+    from nexus_ai_agent.creative.composition.contracts import PLAN_VERSION
+
+    node = _resize_node(registry)
+    plan = _plan(registry, [node], inputs=[_image_input()])
+    future = plan.model_copy(update={"plan_version": PLAN_VERSION + 1})
+    with pytest.raises(CompositionError) as excinfo:
+        CompositionCompiler(registry).compile(future)
+    assert excinfo.value.code == "unsupported_plan_version"
+
+
+def test_a_plan_over_the_node_quota_is_refused(registry) -> None:
+    """A plan may not ask the runtime for unbounded work."""
+    from nexus_ai_agent.creative.composition.compiler import MAX_NODES_PER_PLAN
+
+    nodes = [_resize_node(registry, node_id=f"n{i}") for i in range(MAX_NODES_PER_PLAN + 1)]
+    with pytest.raises(CompositionError) as excinfo:
+        CompositionCompiler(registry).compile(_plan(registry, nodes, inputs=[_image_input()]))
+    assert excinfo.value.code == "capability_quota_exceeded"
+    assert str(MAX_NODES_PER_PLAN) in excinfo.value.detail
+
+
+def test_a_plan_over_the_disk_quota_is_refused(registry, monkeypatch) -> None:
+    """The declared envelope is checked, and the refusal names the number."""
+    from nexus_ai_agent.creative.composition import compiler as compiler_module
+
+    monkeypatch.setattr(compiler_module, "MAX_TOTAL_DISK_MB", 1)
+    with pytest.raises(CompositionError) as excinfo:
+        CompositionCompiler(registry).compile(
+            _plan(registry, [_resize_node(registry)], inputs=[_image_input()])
+        )
+    assert excinfo.value.code == "capability_quota_exceeded"
+    assert "at most 1 MB" in excinfo.value.detail

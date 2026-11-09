@@ -153,10 +153,18 @@ def _stage(workspace: Path) -> Path:
     return source
 
 
+def _pinned(plan: CompositionPlan) -> CompositionPlan:
+    """Pin a plan to the live registry, the way a real submitter does."""
+    from nexus_ai_agent.creative.composition.compiler import registry_fingerprint
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    return plan.pinned(registry_fingerprint(build_runtime_registry()))
+
+
 def _payload(workspace: Path, source: Path, key: str, *, with_video: bool = True) -> dict:
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     return {
-        "plan": plan_to_dict(_plan(with_video=with_video)),
+        "plan": plan_to_dict(_pinned(_plan(with_video=with_video))),
         "external_inputs": {"src": {"path": str(source), "sha256": digest}},
         "workspace_dir": str(workspace),
         "idempotency_key": key,
@@ -260,7 +268,10 @@ async def test_image_to_image_composition_runs_through_the_canonical_chain(
     # the exposed artifact is the *grayscale* intermediate
     with Image.open(artifact) as image:
         rgb = image.convert("RGB")
-        assert all(low == high for low, high in rgb.getextrema())
+        # Pixel-by-pixel equality: a solid-colour palette PNG would satisfy a
+        # per-channel extrema check while not being grayscale at all.
+        red, green, blue = (channel.tobytes() for channel in rgb.split())
+        assert red == green == blue
 
     passport = PassportBuilder(journal, queue).build(job_id)
     assert passport.status is PassportStatus.VERIFIED, passport.findings

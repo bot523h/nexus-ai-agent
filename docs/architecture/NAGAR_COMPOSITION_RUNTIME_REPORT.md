@@ -468,6 +468,13 @@ $ python -m pytest -q -m "not slow"
 6631 passed, 39 skipped, 1164 warnings in 567.24s (0:09:27)
 ```
 
+بازاندازه‌گیری پس از موج دوم بازبینی (۲۰ آزمون تازه در همین دور):
+
+```
+$ ./venv/bin/python -m pytest -q -p no:randomly
+6651 passed, 39 skipped, 1163 warnings in 611.53s (0:10:11)
+```
+
 **مبنای مقایسه** — همان مجموعه روی `origin/main` تمیز، در یک worktree جداگانه
 (`git worktree add /tmp/main-baseline origin/main`) با همان مفسر و همان محیط مجازی:
 
@@ -596,6 +603,46 @@ flowchart TD
 خطوط ۵۳۹–۵۴۰ که opengrep به‌عنوان «فراخوانی subprocess» علامت زد، در واقع **کلاس‌های
 استثنا** (`TimeoutExpired`, `CompletedProcess`) هستند و هیچ فرایندی اجرا نمی‌کنند.
 
+#### ۱۱.۲.۱ موج دوم بازبینی: ۳۰ یافته در یک بسته، ۲۳ یافتهٔ تازه
+
+بازبین همان PR را دوباره اسکن کرد و ۳۰ یافتهٔ محتوایی ثبت کرد؛ هفتِ آن‌ها **همان
+هفت یافتهٔ قبلی** بودند (جدول بالا) و ۲۳ یافته تازه بود. دو مورد هم مثل قبل
+مثبت‌کاذبِ opengrep روی نام کلاس‌های استثنا هستند. هر ۲۳ یافته بررسی شد؛ **۲۲ مورد
+رفع شد** و یک مورد (`Returned assets are not durable`) فقط **جزئی** رفع شده و در
+پایین صادقانه علامت‌گذاری شده است.
+
+| # | شدت | یافته | رفع (نماد دقیق) | آزمون اثبات‌کننده |
+|---|---|---|---|---|
+| ۱ | 🟡 متوسط | دو job هم‌زمان خروجی هم را بازنویسی می‌کردند | نام انتشار هر گره `_run_id` را حمل می‌کند: `executor.py::_realize` → `node_dir / f"{node_id}-{self._run_id}{suffix}"` | `test_a_second_run_on_the_same_bus_is_a_new_execution` (دو اجرا دو مسیر متفاوت) |
+| ۲ | 🟠 بالا | سقف ورودی دیر اعمال می‌شد (بعد از خواندن فایل) | `executor.py::_resolve_binding` قبل از `probe_image` صریحاً `enforce_input_limit(path, MAX_INPUT_BYTES)` را صدا می‌زند؛ `job.py::guarded_input` هم **قبل از هش** اندازه را می‌سنجد | `test_a_staged_input_over_the_limit_is_refused_before_it_is_hashed` |
+| ۳ | 🟠 بالا | encoder تایم‌اوت‌شده زنده می‌ماند | `ffmpeg.py::_kill_process_group` بازنویسی شد (SIGKILL به گروه، حتی وقتی leader خارج شده) | `test_a_timed_out_encoder_group_is_killed_even_when_its_leader_exits` |
+| ۴ | 🟠 بالا | کار تجاری تأییدنشده اجرا می‌شد | `job.py::composition_render_job` دو دروازهٔ `commercial_use`: پیش از اجرا (اگر ورودی خارجی اعلام شده باشد، چون شرایطش نامعلوم است) و پس از اجرا (`license_ledger.effective_allow_commercial is not True` → `policy_refused`) | `test_a_commercial_row_over_unmeasured_input_is_refused_before_any_media` |
+| ۵ | 🟠 بالا | دفتر ناقص «تأیید تجاری» می‌داد | `contracts.py::LicenseLedger.effective_allow_commercial` وقتی **هر** دسته نامعلوم باشد `False` است | `test_one_verified_record_does_not_approve_the_ledger`، `test_a_complete_verified_permissive_ledger_is_commercially_approved` |
+| ۶ | 🟠 بالا | خروجی نامعتبر بعد از اجرا رد می‌شد | `compiler.py::_check_expected_outputs(plan, output_contracts)` در **زمان کامپایل** گره و **پورت خروجی** را الزام می‌کند (`unknown_binding`) | `test_an_expected_output_must_name_a_real_port` |
+| ۷ | 🟠 بالا | رسانهٔ نامعتبر تأیید می‌شد | `verifier.py::_semantic_pass` بدون `media_contract` حکم نمی‌دهد (`contract_missing`)؛ `proof.py::verify_video_semantics` اکنون duration ± بازه، codec و pixel format را هم می‌سنجد | `test_a_media_claim_without_a_contract_is_not_verified`، `test_a_claim_that_breaks_the_promised_codec_is_not_verified` |
+| ۸ | 🟠 بالا | کار رسانه‌ای صف را قفل می‌کرد | `job.py`: `await asyncio.to_thread(executor.execute, …, expected_digests=…)` | کل E2E روی `InProcessJobQueue` (heartbeat و وضعیت در طول اجرا خوانده می‌شود) |
+| ۹ | 🟠 بالا | دارایی‌های برگشتی پایدار نبودند | **جزئی**: `CompositionExecutor(project_id=…)` + `authorizer` → سطر می‌تواند زیر **هویت پروژهٔ پایدار** خودش اجرا شود و عضویت با `SQLApplicationDirectory` سنجیده شود؛ اما وضعیت پروژه هنوز در حافظه است (مخزن، repository پایدار پروژه ندارد) → **باقی‌مانده، علامت‌گذاری‌شده** | `test_a_row_naming_a_durable_project_is_authorized_by_the_directory` |
+| ۱۰ | 🟠 بالا | خروجی‌های درخواستی ناپدید می‌شدند | `job.py::_artifact_claims` برای **هر** خروجی مورد انتظار یک claim با شواهد خودش می‌سازد؛ نتیجه هم `outputs` را برمی‌گرداند | `test_every_expected_output_is_claimed_not_only_the_last` |
+| ۱۱ | 🟠 بالا | طرح‌ها منابع بی‌کران مصرف می‌کردند | `compiler.py`: `MAX_NODES_PER_PLAN=16`، `MAX_TOTAL_DISK_MB=8192`، `MAX_PEAK_RAM_MB=4096` در `_check_quota` | `test_a_plan_over_the_node_quota_is_refused`، `test_a_plan_over_the_disk_quota_is_refused` |
+| ۱۲ | 🟠 بالا | نسخهٔ پشتیبانی‌نشدهٔ طرح اجرا می‌شد | `compiler.py` نسخهٔ `plan_version` را می‌سنجد و رد می‌کند | `test_a_plan_authored_for_another_ir_version_is_refused` |
+| ۱۳ | 🟠 بالا | طرح pin‌نشده drift رجیستری را نمی‌دید | `job.py::plan_from_dict` فیلد `registry_fingerprint` را **الزامی** می‌کند؛ `contracts.py::CompositionPlan.pinned()` | `test_a_submitted_plan_must_pin_the_registry` |
+| ۱۴ | 🟡 متوسط | بازهٔ نامعلوم مدت‌زمان پذیرفته می‌شد | `studio/models.py::MediaContract.accepts` وقتی کران تولیدکننده `None` است و کران لازم `set` است، **fail-closed** | `test_a_contract_refuses_a_producer_whose_duration_is_unknown` |
+| ۱۵ | 🟠 بالا | encoder درخواستی نادیده گرفته می‌شد | `packs/media/operations.py`: `encoder: Literal["libx264"]` (جایگزینی خاموش ممکن نیست) | `test_the_video_input_refuses_another_encoder` |
+| ۱۶ | 🟡 متوسط | نوع ورودی خارجی اشتباه دسته‌بندی می‌شد | `contracts.py::ExternalInput`: `contract` از `media_kind` مشتق می‌شود (validator) | `test_an_external_input_contract_follows_its_declared_kind` |
+| ۱۷ | 🟡 متوسط | درخواست resize بعد از شروع فرایند شکست می‌خورد | `operations.py::_DerivedImageInput`: `ge=2, le=8192` + `model_validator` برای بودجهٔ ۳۳٬۱۷۷٬۶۰۰ پیکسل (۸K) | `test_the_resize_input_refuses_a_geometry_beyond_the_still_budget` |
+| ۱۸ | 🟡 متوسط | ورودی‌های رسانه‌ای اضافی نادیده گرفته می‌شدند | `compiler.py::_check_bindings` چند-ورودی‌بودن (fan-in) را رد می‌کند | کد مسیر `_check_bindings`؛ **آزمون ندارد** — رجیستری زندهٔ امروز عملیاتی با دو ورودی رسانه‌ای ندارد، پس این شاخه جز با spec ساختگی قابل اجرا نیست (صادقانه ثبت می‌شود) |
+| ۱۹ | 🟡 متوسط | دستورهای تکراری با هم تعارض داشتند | `executor.py::_run_id` (nonce) در `idempotency_key` هر گره | `test_a_second_run_on_the_same_bus_is_a_new_execution` |
+| ۲۰ | 🟡 متوسط | lineage ترتیب اشتباه گزارش می‌کرد | `executor.py::_collect_artifacts` از `compiled.order` پیروی می‌کند | `test_the_lineage_names_every_node_and_its_capability_version` + assert ترتیب در E2E |
+| ۲۱ | 🟡 متوسط | فیلدهای بدشکلِ طرح بی‌صدا دور ریخته می‌شدند | `job.py`: شکل سیم **بسته** (`PLAN_KEYS`/`NODE_KEYS`/`EXTERNAL_INPUT_KEYS`/`EXPECTED_OUTPUT_KEYS` + `_closed()`) | `test_a_wire_plan_with_an_unknown_key_is_refused` |
+| ۲۲ | 🟡 متوسط | آزمون grayscale رنگ‌دار را می‌پذیرفت | آزمون اکنون **پیکسل‌به‌پیکسل** برابری کانال‌ها را می‌سنجد (`channel.tobytes()`)، نه extrema را | `test_grayscale_produces_a_luma_only_png` (و همان ادعا در E2E) |
+| ۲۳ | 🟡 متوسط | گزارش Gate 0 در فهرست اسناد نبود | یک ردیف در `docs/README.md` به `../LIVE_TRUTH_REPORT.md` | `tests/unit/test_docs_integrity.py` (۱۱۷ سبز) |
+
+> **باقی‌ماندهٔ صادقانه (۱ مورد از ۲۳):** «دارایی‌های برگشتی پایدار نیستند».
+> سطر می‌تواند زیر هویت پروژهٔ پایدار اجرا شود و **عضویت** واقعاً سنجیده می‌شود،
+> اما وضعیت پروژه (دارایی‌ها، receiptها) هنوز در حافظه نگه داشته می‌شود، چون مخزن
+> repository پایدارِ پروژه ندارد. رفع کامل نیازمند یک لایهٔ persistence است که در
+> دامنهٔ این شاخه نیست. این مورد **رفع‌نشده** اعلام می‌شود، نه «رفع‌شده».
+
 > نکتهٔ مهم دربارهٔ یافتهٔ ۲: نخستین رفع من دروازهٔ پک را داخل خودِ executor صدا زد.
 > گیت معماری `test_only_the_bus_invokes_the_pack_lifecycle_gate` (که با اسکن AST
 > می‌گوید دروازه فقط از `bus.py` صدا زده شود) **قرمز شد** — و درست بود. پاسخ صحیح
@@ -609,8 +656,10 @@ flowchart TD
 
 1. **گیت‌های معماری کانونی مخزن** (که مالکشان نویسندهٔ این شاخه نیست) این شاخه را
    *به‌عنوان کدِ غریبه* بررسی کرده‌اند و در طول کار چند ایراد واقعی گرفته‌اند؛
-2. **یک بازبین خودکار بیرونی (Sourcery)** روی PR #327 هفت یافتهٔ محتوایی ثبت کرد که
-   همه در §۱۱.۲ فهرست و رفع شده‌اند.
+2. **یک بازبین خودکار بیرونی (Sourcery)** روی PR #327 در دو موج **۳۰ یافتهٔ محتوایی
+   متمایز** ثبت کرد (۷ در موج اول و ۳۰ در موج دوم که ۷ موردشان تکرار موج اول بود):
+   **۲۹ مورد رفع شد** و **۱ مورد** (`Returned assets are not durable`) جزئی باقی
+   مانده است.
 
 هیچ‌کدام از این دو **بازبینی انسانی مستقل** نیست: اولی مالِ مخزن است و دومی یک ابزار
 خودکار. این سند مدعی «بازبینی مستقل» نیست. `DEFERRED` — نیازمند بازبینندهٔ انسانی که

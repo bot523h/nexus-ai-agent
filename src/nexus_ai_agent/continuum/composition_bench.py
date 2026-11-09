@@ -289,7 +289,7 @@ def bench_composition_through_queue(
                     queue.register_handler(job_type, handler)
 
                 payload: dict[str, Any] = {
-                    "plan": plan_to_dict(plan),
+                    "plan": plan_to_dict(plan.pinned(compiled.registry_fingerprint)),
                     "external_inputs": {"src": {"path": str(source), "sha256": digest}},
                     "workspace_dir": str(workspace),
                     "idempotency_key": "composition:bench",

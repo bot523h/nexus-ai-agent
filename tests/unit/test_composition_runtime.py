@@ -47,6 +47,13 @@ def registry():
     return build_runtime_registry()
 
 
+def _live_fingerprint() -> str:
+    from nexus_ai_agent.creative.composition.compiler import registry_fingerprint
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    return registry_fingerprint(build_runtime_registry())
+
+
 def _pin(registry, operation: str) -> tuple[str, str, int]:
     descriptor = registry.describe(operation)
     return descriptor.capability_id, descriptor.version, descriptor.operation_schema_version
@@ -266,9 +273,37 @@ def test_the_compiler_refuses_a_node_whose_capability_does_not_match_its_operati
 
 
 def test_the_plan_round_trips_through_its_durable_form(registry) -> None:
-    plan = _plan(registry)
+    plan = _plan(registry).pinned(_live_fingerprint())
     decoded = plan_from_dict(plan_to_dict(plan))
     assert decoded.fingerprint() == plan.fingerprint()
+    assert decoded.registry_fingerprint == plan.registry_fingerprint
+
+
+def test_a_submitted_plan_must_pin_the_registry(registry) -> None:
+    """A durable row may execute later, so an unpinned row is refused."""
+    from nexus_ai_agent.creative.composition.job import CompositionJobError
+
+    with pytest.raises(CompositionJobError) as excinfo:
+        plan_from_dict(plan_to_dict(_plan(registry)))
+    assert excinfo.value.code == "invalid_request"
+    assert "pin" in str(excinfo.value)
+
+
+def test_a_wire_plan_with_an_unknown_key_is_refused(registry) -> None:
+    """A misspelled key is refused, never silently dropped."""
+    from nexus_ai_agent.creative.composition.job import CompositionJobError
+
+    wire = plan_to_dict(_plan(registry).pinned(_live_fingerprint()))
+    wire["surprise"] = 1
+    with pytest.raises(CompositionJobError) as excinfo:
+        plan_from_dict(wire)
+    assert "unknown keys" in str(excinfo.value)
+
+    wire = plan_to_dict(_plan(registry).pinned(_live_fingerprint()))
+    wire["nodes"][0]["surprise"] = 1
+    with pytest.raises(CompositionJobError) as excinfo:
+        plan_from_dict(wire)
+    assert "unknown keys" in str(excinfo.value)
 
 
 def test_a_malformed_plan_is_a_typed_failure() -> None:
@@ -341,6 +376,7 @@ def test_the_worker_refuses_an_unknown_capability(
             ],
             "external_inputs": [{"name": "src", "media_kind": "image"}],
             "expected_outputs": [{"name": "o", "node": "x", "output_port": "resized"}],
+            "registry_fingerprint": _live_fingerprint(),
         },
         "external_inputs": {},
         "workspace_dir": str(workspace),
@@ -377,7 +413,11 @@ def test_the_worker_returns_the_canonical_artifact_claim_dialect(
     try:
         plan = _plan(registry)
         payload = {
-            "plan": plan_to_dict(plan),
+            "plan": plan_to_dict(
+                plan.pinned(
+                    CompositionCompiler(registry).registry_fingerprint,
+                )
+            ),
             "external_inputs": {"src": {"path": str(source), "sha256": digest}},
             "workspace_dir": str(workspace),
             "idempotency_key": "composition:1",
@@ -436,3 +476,206 @@ def test_the_declared_timeout_is_the_enforced_timeout(
     assert max(r.timeout_seconds for r in compiled.requirements.values()) == (
         compiled.estimate.max_timeout_seconds
     )
+
+
+# ---------------------------------------------------------------------------
+# the second review: authority, commercial verdict, every output
+# ---------------------------------------------------------------------------
+
+
+def _workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """A trusted creative temp root plus one reserved workspace inside it."""
+    from nexus_ai_agent.config import settings as settings_module
+
+    root = tmp_path / "creative"
+    root.mkdir(exist_ok=True)
+    workspace = root / "creative_authority"
+    workspace.mkdir(exist_ok=True)
+    monkeypatch.setenv("CREATIVE_TEMP_DIR", str(root))
+    settings_module.get_settings.cache_clear()
+    return root, workspace
+
+
+def _wire_payload(
+    registry,
+    workspace: Path,
+    source: Path,
+    *,
+    key: str,
+    with_video: bool = False,
+    outputs: list[ExpectedOutput] | None = None,
+    **extra,
+) -> dict:
+    plan = _plan(registry, with_video=with_video)
+    if outputs is not None:
+        plan = plan.model_copy(update={"expected_outputs": tuple(outputs)})
+    payload = {
+        "plan": plan_to_dict(plan.pinned(_live_fingerprint())),
+        "external_inputs": {
+            "src": {"path": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+        },
+        "workspace_dir": str(workspace),
+        "idempotency_key": key,
+        "actor": {"kind": "user", "actor_id": "tester"},
+        "confirmed": True,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _seed_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, project_id: str):
+    """A durable principal/project membership in a throwaway database."""
+    from sqlmodel import SQLModel
+
+    from nexus_ai_agent.adapters.sql_application_directory import SQLApplicationDirectory
+    from nexus_ai_agent.application.principal import ChannelBinding
+    from nexus_ai_agent.config import settings as settings_module
+    from nexus_ai_agent.storage import db as db_module
+
+    monkeypatch.setenv("NEXUS_DB_PATH", str(tmp_path / "directory.sqlite"))
+    settings_module.get_settings.cache_clear()
+    db_module._sync_engine_instance = None  # type: ignore[attr-defined]
+    db_module._sync_engine_url = None  # type: ignore[attr-defined]
+    engine = db_module.sync_engine()
+    SQLModel.metadata.create_all(engine)
+    directory = SQLApplicationDirectory(engine)
+    principal = directory.resolve_or_create(ChannelBinding("cli", f"runtime-{project_id}"))
+    directory.ensure_project(project_id, principal)
+    return str(principal)
+
+
+def test_a_row_naming_a_durable_project_is_authorized_by_the_directory(
+    registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The requester's membership is checked, not assumed.
+
+    A member of the named project runs; an actor who is not a member is
+    refused as ``policy_refused`` before any media work, and the refusal names
+    the project it refused.
+    """
+    from nexus_ai_agent.config import settings as settings_module
+    from nexus_ai_agent.creative.composition.job import composition_render_job
+
+    _, workspace = _workspace(tmp_path, monkeypatch)
+    source = _source_image(workspace / "source.png")
+    principal = _seed_project(tmp_path, monkeypatch, "project-composition")
+    try:
+        member_payload = _wire_payload(
+            registry,
+            workspace,
+            source,
+            key="composition:authority:member",
+            actor={"kind": "user", "actor_id": principal},
+            project_id="project-composition",
+        )
+        result = asyncio.run(composition_render_job(member_payload))
+        assert result["success"] is True, result
+        assert result["authority"] == "injected_authorizer"
+
+        stranger_payload = _wire_payload(
+            registry,
+            workspace,
+            source,
+            key="composition:authority:stranger",
+            actor={"kind": "user", "actor_id": "p-nobody"},
+            project_id="project-composition",
+        )
+        refused = asyncio.run(composition_render_job(stranger_payload))
+        assert refused["success"] is False
+        assert refused["error_code"] == "policy_refused"
+        assert "project-composition" in refused["error_detail"]
+    finally:
+        settings_module.get_settings.cache_clear()
+
+
+def test_a_commercial_row_over_unmeasured_input_is_refused_before_any_media(
+    registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``commercial_use`` is a gate, not a comment.
+
+    The input's own terms are unknown to the runtime, so the commercial
+    verdict cannot be true; the row must fail without writing an artifact.
+    """
+    from nexus_ai_agent.config import settings as settings_module
+    from nexus_ai_agent.creative.composition.job import composition_render_job
+
+    _, workspace = _workspace(tmp_path, monkeypatch)
+    source = _source_image(workspace / "source.png")
+    try:
+        payload = _wire_payload(
+            registry,
+            workspace,
+            source,
+            key="composition:commercial",
+            commercial_use=True,
+        )
+        result = asyncio.run(composition_render_job(payload))
+        assert result["success"] is False
+        assert result["error_code"] == "policy_refused"
+        assert "commercial use is not approved" in result["error_detail"]
+        produced = [p for p in workspace.rglob("*") if p.is_file()]
+        assert produced == [source], f"a refused commercial row wrote {produced}"
+    finally:
+        settings_module.get_settings.cache_clear()
+
+
+def test_every_expected_output_is_claimed_not_only_the_last(
+    registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two deliverables mean two claims, each with its own measured evidence."""
+    from nexus_ai_agent.config import settings as settings_module
+    from nexus_ai_agent.creative.composition.job import composition_render_job
+
+    _, workspace = _workspace(tmp_path, monkeypatch)
+    source = _source_image(workspace / "source.png")
+    try:
+        payload = _wire_payload(
+            registry,
+            workspace,
+            source,
+            key="composition:multi-output",
+            with_video=True,
+            outputs=[
+                ExpectedOutput(name="still", node_id="gray", output_port="grayscale"),
+                ExpectedOutput(name="final", node_id="video", output_port="video"),
+            ],
+        )
+        result = asyncio.run(composition_render_job(payload))
+        assert result["success"] is True, result
+        claims = result["outputs"]
+        assert [claim["name"] for claim in claims] == ["still", "final"]
+        assert result["artifact_path"] == claims[-1]["artifact_path"]
+        for claim in claims:
+            assert claim["integrity_verified"] is True
+            assert claim["semantic_verified"] is True
+            measured = (
+                "sha256:" + hashlib.sha256(Path(claim["artifact_path"]).read_bytes()).hexdigest()
+            )
+            assert measured == claim["sha256"]
+        assert claims[0]["artifact_kind"] == "image"
+        assert claims[1]["artifact_kind"] == "video"
+    finally:
+        settings_module.get_settings.cache_clear()
+
+
+def test_a_second_run_on_the_same_bus_is_a_new_execution(registry, tmp_path: Path) -> None:
+    """The idempotency key carries an execution nonce.
+
+    Without it the bus would treat the second run as a redelivery of the first
+    and hand back the *reserved* result instead of executing the plan again.
+    """
+    source = _source_image(tmp_path / "source.png")
+    compiled = CompositionCompiler(registry).compile(
+        _plan(registry, with_video=False).pinned(_live_fingerprint())
+    )
+    executor = CompositionExecutor(confirmed=False)
+    first = executor.execute(compiled, external_inputs={"src": source}, workspace=tmp_path / "ws")
+    second = executor.execute(compiled, external_inputs={"src": source}, workspace=tmp_path / "ws")
+    assert first.receipts and second.receipts
+    assert first.outputs["gray"] != second.outputs["gray"]
+    for result in (first, second):
+        artifact = Path(result.outputs["gray"])
+        assert artifact.is_file()
+        assert "sha256:" + hashlib.sha256(artifact.read_bytes()).hexdigest() == (
+            result.artifacts["gray"].output_hash
+        )

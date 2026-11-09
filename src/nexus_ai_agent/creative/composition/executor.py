@@ -31,6 +31,7 @@ import re
 import tempfile
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -115,8 +116,10 @@ class CompositionExecutor:
         bus: CommandBus | None = None,
         engine: MediaEngine | None = None,
         project: Project | None = None,
+        project_id: str | None = None,
         actor: ActorIdentity | None = None,
         access: ProjectAccess | None = None,
+        authorizer: Any | None = None,
         confirmed: bool = False,
     ) -> None:
         self._confirmed = confirmed
@@ -124,12 +127,32 @@ class CompositionExecutor:
             self._bus = bus
             self._actor = actor or SERVICE_ACTOR
             self._access = access
+            self._authority = "injected_bus"
+        elif authorizer is not None:
+            # A trusted authorizer decides whether *this* actor may touch the
+            # project; the runtime never widens the answer.  ``ProjectAccess``
+            # is the only thing the bus consults, so it is exactly what the
+            # authorizer returned -- never a permission set built here.
+            self._project = project or _new_project(project_id)
+            self._actor = actor or SERVICE_ACTOR
+            decided = authorizer.authorize(self._actor, self._project.project_id)
+            self._access, self._bus = _build_bus(self._project, self._actor, decided)
+            self._authority = "injected_authorizer"
         else:
-            self._project = project or _new_project()
+            self._project = project or _new_project(project_id)
             self._actor = actor or SERVICE_ACTOR
             self._access, self._bus = _build_bus(self._project, self._actor)
+            #: The grant below is minted over a project this call just created.
+            #: It is *not* the requester's authority, and a caller that needs
+            #: the requester's authority must inject a bus or an authorizer.
+            self._authority = "ephemeral_service_grant"
         self._engine = engine or MediaEngine()
         self._license_ledger = ffmpeg_ledger(self._engine.ffmpeg_binary)
+        #: A nonce unique to the execution in flight.  The bus reserves
+        #: ``(project, operation, idempotency_key)``, so a key derived only from
+        #: the node would make a *second* composition collide with the first on
+        #: the same bus and return its reserved result instead of executing.
+        self._run_id = uuid.uuid4().hex[:12]
 
     @property
     def bus(self) -> CommandBus:
@@ -139,6 +162,17 @@ class CompositionExecutor:
     def license_ledger(self) -> Any:
         """The measured licence ledger of the tool that produced the media."""
         return self._license_ledger
+
+    @property
+    def authority_source(self) -> str:
+        """Where this execution's authority came from.
+
+        ``injected_bus`` / ``injected_authorizer`` mean a trusted composition
+        root decided; ``ephemeral_service_grant`` means the runtime minted a
+        local grant over a project it created in this call, which is **not**
+        the requester's project authority.
+        """
+        return self._authority
 
     @property
     def project(self) -> Project:
@@ -152,9 +186,13 @@ class CompositionExecutor:
         *,
         external_inputs: dict[str, Path],
         workspace: Path,
+        expected_digests: Mapping[str, str] | None = None,
     ) -> ExecutionResult:
         """Execute *compiled* and return the artifacts plus their evidence."""
         started = time.monotonic()
+        # A re-run of the same executor is a *new* execution: it must not reuse
+        # the previous run's reservations.
+        self._run_id = uuid.uuid4().hex[:12]
         workspace = Path(workspace)
         workspace.mkdir(parents=True, exist_ok=True)
 
@@ -177,7 +215,9 @@ class CompositionExecutor:
             # only write inside it and cannot see a sibling's intermediate.
             scratch_dir = Path(tempfile.mkdtemp(prefix="scratch_", dir=node_dir))
 
-            bound = self._resolve_binding(compiled, node, produced, external_inputs)
+            bound = self._resolve_binding(
+                compiled, node, produced, external_inputs, expected_digests or {}
+            )
             source_path = bound["path"]
             source_asset_id = self._register_source(bound)
             input_hashes.update(
@@ -274,9 +314,18 @@ class CompositionExecutor:
         node: Any,
         produced: dict[str, MediaOutcome],
         external_inputs: dict[str, Path],
+        expected_digests: Mapping[str, str],
     ) -> dict[str, Any]:
-        """Find the media that feeds a node, with its measured facts."""
+        """Find the media that feeds a node, with its measured facts.
+
+        The file is **re-measured at the point of use** and, for a staged
+        external input, compared with the digest the row was admitted with.  A
+        concurrent writer that replaced the file between admission and this
+        read would otherwise hand the encoder bytes the row never authorized.
+        """
         from nexus_ai_agent.creative.slideshow.probe import probe_image
+
+        from .engine import MAX_INPUT_BYTES, enforce_input_limit
 
         bindings = {binding.input_port: binding for binding in node.bindings}
         if not bindings:
@@ -303,7 +352,25 @@ class CompositionExecutor:
             external_name = None
         if not path.is_file():
             raise CompositionExecutionError(f"bound media is missing: {path}")
+        # Bound the file *before* decoding it: a huge staged image would
+        # otherwise consume the read and the decode before the engine's own
+        # limit ever ran.
+        try:
+            enforce_input_limit(path, MAX_INPUT_BYTES)
+        except Exception as exc:
+            raise CompositionExecutionError(
+                f"node {node.node_id!r}: the bound media is over the input limit: {exc}"
+            ) from exc
         evidence = probe_image(path)
+        if external_name is not None:
+            admitted = expected_digests.get(external_name)
+            if admitted and _strip_sha_prefix(admitted) != _strip_sha_prefix(
+                evidence.content_sha256
+            ):
+                raise CompositionExecutionError(
+                    f"external input {external_name!r} changed after it was admitted: "
+                    f"admitted {admitted}, measured {evidence.content_sha256}"
+                )
         return {
             "path": path,
             "evidence": evidence,
@@ -321,7 +388,11 @@ class CompositionExecutor:
                     {"assets": [evidence.model_dump(mode="json")]},
                     project_id=self._bus.project.project_id,
                     actor=self._actor,
-                    idempotency_key=f"scan:{evidence.evidence_id}",
+                    # The nonce keeps a *second* execution of the same plan a
+                    # new command: the same content probed again produces a
+                    # payload with a different path, and reusing the key would
+                    # raise an idempotency conflict instead of running.
+                    idempotency_key=f"scan:{self._run_id}:{evidence.evidence_id}",
                 )
             )
         except Exception as exc:
@@ -380,7 +451,11 @@ class CompositionExecutor:
             )
         except MediaEngineError as exc:
             raise CompositionExecutionError(f"node {node_id!r} failed: {exc}") from exc
-        published = node_dir / f"{node_id}{suffix}"
+        # The published name carries the execution nonce: two compositions
+        # sharing a workspace and a node id can never publish over each
+        # other's artifact (a deterministic name let one job replace bytes the
+        # other had already hashed and was about to verify).
+        published = node_dir / f"{node_id}-{self._run_id}{suffix}"
         Path(outcome.path).replace(published)
         outcome.facts["duration_seconds"] = 0.0
         return MediaOutcome(
@@ -474,7 +549,7 @@ class CompositionExecutor:
                     dict(node.params),
                     project_id=self._bus.project.project_id,
                     actor=self._actor,
-                    idempotency_key=f"composition:{node_id}:{node.operation}",
+                    idempotency_key=f"composition:{self._run_id}:{node_id}",
                     confirmed=self._confirmed,
                     operation_schema_version=spec.schema_version,
                 )
@@ -494,7 +569,7 @@ class CompositionExecutor:
                     command_input,
                     project_id=self._bus.project.project_id,
                     actor=self._actor,
-                    idempotency_key=f"composition:{node_id}:{node.operation}",
+                    idempotency_key=f"composition:{self._run_id}:{node_id}",
                     confirmed=self._confirmed,
                     operation_schema_version=spec.schema_version,
                 )
@@ -557,10 +632,16 @@ class CompositionExecutor:
                     "order": list(compiled.order),
                 },
                 tool_versions=self._engine.tool_versions(),
-                parameters={node.node_id: dict(node.params) for node in compiled.plan.nodes},
+                parameters={
+                    node_id: dict(compiled.node(node_id).params) for node_id in compiled.order
+                },
+                # The lineage states the order the nodes actually ran in: a plan
+                # may declare its nodes in any order, and provenance that
+                # reorders them would misdescribe the derivation.
                 lineage=tuple(
-                    f"{node.node_id}:{node.operation}@{node.capability_version}"
-                    for node in compiled.plan.nodes
+                    f"{node_id}:{compiled.node(node_id).operation}"
+                    f"@{compiled.node(node_id).capability_version}"
+                    for node_id in compiled.order
                 ),
                 receipts=receipts,
                 integrity=integrity,
@@ -605,10 +686,14 @@ def _node_directory(workspace: Path, node_id: str) -> Path:
     return node_dir
 
 
-def _new_project() -> Project:
-    """A fresh, empty project for a composition to run in."""
+def _new_project(project_id: str | None = None) -> Project:
+    """A fresh, empty project for a composition to run in.
+
+    ``project_id`` lets a row run under the **durable** project identity it was
+    authorized against; without one the project is a local, ephemeral one.
+    """
     return new_project(
-        project_id=f"proj_{uuid.uuid4().hex[:12]}",
+        project_id=project_id or f"proj_{uuid.uuid4().hex[:12]}",
         name="composition",
         timeline=Timeline(
             timeline_id=f"tl_{uuid.uuid4().hex[:12]}",
@@ -618,7 +703,11 @@ def _new_project() -> Project:
     )
 
 
-def _build_bus(project: Project, actor: ActorIdentity) -> tuple[ProjectAccess, CommandBus]:
+def _build_bus(
+    project: Project,
+    actor: ActorIdentity,
+    access: ProjectAccess | None = None,
+) -> tuple[ProjectAccess, CommandBus]:
     """Build the canonical bus for a composition.
 
     The bus is built through the **single reviewed construction site**,
@@ -637,11 +726,12 @@ def _build_bus(project: Project, actor: ActorIdentity) -> tuple[ProjectAccess, C
     from nexus_ai_agent.creative.render_jobs import build_job_bus
     from nexus_ai_agent.creative.studio.authorization import ProjectAccess
 
-    access = ProjectAccess(
-        actor=actor,
-        project_id=project.project_id,
-        permissions=frozenset({"project:read", "project:write"}),
-    )
+    if access is None:
+        access = ProjectAccess(
+            actor=actor,
+            project_id=project.project_id,
+            permissions=frozenset({"project:read", "project:write"}),
+        )
     return access, build_job_bus(project, authorizer=access)
 
 
@@ -678,3 +768,8 @@ __all__ = [
     "CompositionExecutor",
     "ExecutionResult",
 ]
+
+
+def _strip_sha_prefix(digest: str) -> str:
+    """``sha256:<hex>`` and ``<hex>`` name the same bytes."""
+    return digest.split(":", 1)[1] if digest.startswith("sha256:") else digest

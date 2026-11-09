@@ -23,6 +23,7 @@ What the worker does, in order:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import stat
@@ -124,6 +125,12 @@ class CompositionJobPayload(BaseModel):
     confirmed: bool = False
     #: Whether the requester intends a commercial use of the output.
     commercial_use: bool = False
+    #: The **durable** project the request belongs to.  When present the worker
+    #: resolves the requester's authority through the trusted application
+    #: directory and refuses the row unless the actor is a member of that
+    #: project; when absent the row runs on an ephemeral project the worker
+    #: creates, and the result says so (``authority``).
+    project_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +195,15 @@ def guarded_input(path: str, workspace: Path, expected_sha256: str) -> Path:
         raise CompositionJobError("invalid_request", "input path escapes its workspace") from exc
     if not candidate.is_file():
         raise CompositionJobError("invalid_request", f"staged input is missing: {path}")
+    # Bound the read *before* it happens: hashing a hostile terabyte is already
+    # a denial of service, so the size guard cannot wait for the engine.
+    from nexus_ai_agent.creative.composition.engine import MAX_INPUT_BYTES
+
+    if info.st_size > MAX_INPUT_BYTES:
+        raise CompositionJobError(
+            "invalid_request",
+            f"staged input is {info.st_size} bytes; the limit is {MAX_INPUT_BYTES}",
+        )
     digest = hashlib.sha256()
     with candidate.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -295,13 +311,59 @@ def _bindings_from(item: dict[str, Any]) -> list[PortBinding]:
     raise CompositionJobError("invalid_request", "bindings must be an object or a list")
 
 
+#: The only keys a submitted (durable) plan may carry.  A wire plan is a
+#: *closed* shape: a misspelled or unsupported key is refused, never dropped,
+#: because dropping it would execute a different plan than the one submitted.
+PLAN_KEYS = frozenset(
+    {"plan_version", "nodes", "external_inputs", "expected_outputs", "registry_fingerprint"}
+)
+NODE_KEYS = frozenset(
+    {
+        "node_id",
+        "operation",
+        "capability_id",
+        "capability_version",
+        "operation_schema_version",
+        "params",
+        "bindings",
+    }
+)
+EXTERNAL_INPUT_KEYS = frozenset({"name", "media_kind", "contract"})
+EXPECTED_OUTPUT_KEYS = frozenset({"name", "node", "node_id", "output_port"})
+
+
+def _closed(item: dict[str, Any], allowed: frozenset[str], what: str) -> None:
+    """Refuse an object that carries a key outside *allowed*."""
+    if not isinstance(item, dict):
+        raise CompositionJobError("invalid_request", f"{what} is not an object")
+    unknown = set(item) - allowed
+    if unknown:
+        raise CompositionJobError(
+            "invalid_request", f"{what} carries unknown keys {sorted(unknown)}"
+        )
+
+
 def plan_from_dict(raw: dict[str, Any]) -> CompositionPlan:
-    """Decode the row's plan into a :class:`CompositionPlan`."""
+    """Decode the row's plan into a :class:`CompositionPlan`.
+
+    The wire shape is **closed** (see :data:`PLAN_KEYS`) and a submitted plan
+    must **pin the registry fingerprint it was authored against**: the row is
+    durable and may execute later, so an unpinned plan could silently run
+    against a registry that changed in the meantime.
+    """
     if not isinstance(raw, dict):
         raise CompositionJobError("invalid_request", "plan must be an object")
+    _closed(raw, PLAN_KEYS, "plan")
+    if not raw.get("registry_fingerprint"):
+        raise CompositionJobError(
+            "invalid_request",
+            "a submitted plan must pin registry_fingerprint; "
+            "compile against the live registry and submit the pinned plan",
+        )
     try:
         nodes = []
         for item in raw.get("nodes", []):
+            _closed(item, NODE_KEYS, "plan node")
             nodes.append(
                 PlanNode(
                     node_id=item["node_id"],
@@ -313,6 +375,8 @@ def plan_from_dict(raw: dict[str, Any]) -> CompositionPlan:
                     bindings=tuple(_bindings_from(item)),
                 )
             )
+        for item in raw.get("external_inputs", []):
+            _closed(item, EXTERNAL_INPUT_KEYS, "external input")
         external_inputs = [
             ExternalInput(
                 name=item["name"],
@@ -321,6 +385,8 @@ def plan_from_dict(raw: dict[str, Any]) -> CompositionPlan:
             )
             for item in raw.get("external_inputs", [])
         ]
+        for item in raw.get("expected_outputs", []):
+            _closed(item, EXPECTED_OUTPUT_KEYS, "expected output")
         expected_outputs = [
             ExpectedOutput(
                 name=item["name"],
@@ -334,7 +400,7 @@ def plan_from_dict(raw: dict[str, Any]) -> CompositionPlan:
             nodes=tuple(nodes),
             external_inputs=tuple(external_inputs),
             expected_outputs=tuple(expected_outputs),
-            registry_fingerprint=raw.get("registry_fingerprint", ""),
+            registry_fingerprint=raw["registry_fingerprint"],
         )
     except CompositionJobError:
         raise
@@ -375,7 +441,11 @@ def plan_to_dict(plan: CompositionPlan) -> dict[str, Any]:
             {
                 "name": item.name,
                 "media_kind": item.media_kind,
-                "contract": item.contract.model_dump(mode="json"),
+                "contract": (
+                    item.contract.model_dump(mode="json")
+                    if item.contract is not None
+                    else {"kind": item.media_kind}
+                ),
             }
             for item in plan.external_inputs
         ],
@@ -438,12 +508,54 @@ async def composition_render_job(payload: dict[str, Any]) -> dict[str, Any]:
 
     from nexus_ai_agent.creative.studio.models import ActorIdentity
 
-    executor = CompositionExecutor(
-        actor=ActorIdentity(kind=data.actor.kind, actor_id=data.actor.actor_id),
-        confirmed=data.confirmed,
-    )
+    actor = ActorIdentity(kind=data.actor.kind, actor_id=data.actor.actor_id)
+    if data.project_id is not None:
+        # The requester named a durable project: the *directory* decides whether
+        # this actor may act on it.  A membership that does not exist is a
+        # refusal, never a grant minted here.
+        from nexus_ai_agent.adapters.sql_application_directory import SQLApplicationDirectory
+
+        try:
+            executor = CompositionExecutor(
+                actor=actor,
+                project_id=data.project_id,
+                authorizer=SQLApplicationDirectory(),
+                confirmed=data.confirmed,
+            )
+        except Exception as exc:  # noqa: BLE001 - AuthorizationError and friends
+            return {
+                "success": False,
+                "error_code": "policy_refused",
+                "error_detail": (
+                    f"the requester has no authority over project {data.project_id!r}: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            }
+    else:
+        executor = CompositionExecutor(actor=actor, confirmed=data.confirmed)
+
+    if data.commercial_use and plan.external_inputs:
+        # The runtime can measure *what* it consumed but not the terms it
+        # consumed it under, and an input asset's record is honestly UNKNOWN.
+        # The commercial verdict therefore cannot be true for such a plan, so
+        # the row is refused *before* any media work.
+        return {
+            "success": False,
+            "error_code": "policy_refused",
+            "error_detail": (
+                "commercial use is not approved: the licence terms of the consumed "
+                f"input(s) {sorted(item.name for item in plan.external_inputs)} are unknown"
+            ),
+            "authority": executor.authority_source,
+        }
     try:
-        result = executor.execute(compiled, external_inputs=inputs, workspace=workspace)
+        result = await asyncio.to_thread(
+            executor.execute,
+            compiled,
+            external_inputs=inputs,
+            workspace=workspace,
+            expected_digests={name: staged.sha256 for name, staged in data.external_inputs.items()},
+        )
     except (CompositionExecutionError, CompositionError) as exc:
         return {"success": False, "error_code": "execution_failed", "error_detail": str(exc)}
     except Exception as exc:  # noqa: BLE001 - an environment failure is operator-visible
@@ -453,38 +565,56 @@ async def composition_render_job(payload: dict[str, Any]) -> dict[str, Any]:
             "error_detail": f"{type(exc).__name__}: {exc}",
         }
 
-    primary = _primary_artifact(result.artifacts)
-    if primary is None:
+    if data.commercial_use and result.license_ledger.get("effective_allow_commercial") is not True:
+        return {
+            "success": False,
+            "error_code": "policy_refused",
+            "error_detail": (
+                "commercial use is not approved: the measured ledger does not prove it "
+                f"(unknown categories: {result.license_ledger.get('unknown_categories', [])})"
+            ),
+            "license_ledger": dict(result.license_ledger),
+            "authority": executor.authority_source,
+        }
+
+    # Every expected output is claimed, verified and returned -- not only the
+    # last one.  A plan that asked for two deliverables must not lose one.
+    claims = _artifact_claims(result.artifacts)
+    if not claims:
         return {
             "success": False,
             "error_code": "execution_failed",
             "error_detail": "the composition produced no artifact",
         }
-    artifact: ProofCarryingArtifact = primary
-    if not artifact.verified:
+    failed = [
+        claim
+        for claim in claims
+        if not (claim["integrity_verified"] and claim["semantic_verified"])
+    ]
+    if failed:
+        findings: list[str] = []
+        for name in [claim["name"] for claim in failed]:
+            failed_artifact = result.artifacts[name]
+            findings.extend(failed_artifact.integrity.findings)
+            findings.extend(failed_artifact.semantic.findings)
         return {
             "success": False,
             "error_code": "verification_failed",
-            "error_detail": "; ".join([*artifact.integrity.findings, *artifact.semantic.findings]),
+            "error_detail": "; ".join(findings),
+            "outputs": claims,
+            "authority": executor.authority_source,
         }
+    primary = claims[-1]
+    primary_artifact: ProofCarryingArtifact = result.artifacts[primary["name"]]
     return {
         "success": True,
-        "artifact_path": artifact.output_path,
-        "artifact_kind": "video" if artifact.output_path.endswith(".mp4") else "image",
-        "sha256": artifact.output_hash,
-        "size_bytes": artifact.output_size_bytes,
-        "duration_us": artifact.semantic.measurements.get("duration_us", 0),
-        "operation": artifact.operation_manifest.get("nodes", [{}])[-1].get("operation", ""),
-        "output_asset_id": artifact.receipts[-1].asset_id if artifact.receipts else "",
-        "plan_fingerprint": artifact.plan_fingerprint,
-        "registry_fingerprint": artifact.registry_fingerprint,
-        "integrity_verified": artifact.integrity.verified,
-        "semantic_verified": artifact.semantic.verified,
-        "semantic_measurements": dict(artifact.semantic.measurements),
-        "media_contract": dict(artifact.media_contract),
-        "lineage": list(artifact.lineage),
-        "license_ledger": dict(artifact.license_ledger),
-        "evidence": artifact.as_dict(),
+        **primary,
+        "outputs": claims,
+        "authority": executor.authority_source,
+        "semantic_measurements": dict(primary_artifact.semantic.measurements),
+        "lineage": list(primary_artifact.lineage),
+        "license_ledger": dict(primary_artifact.license_ledger),
+        "evidence": primary_artifact.as_dict(),
         "state_revision": result.state_revision,
         "state_hash": result.state_hash,
         "duration_seconds": result.duration_seconds,
@@ -492,11 +622,34 @@ async def composition_render_job(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _primary_artifact(artifacts: dict[str, ProofCarryingArtifact]) -> ProofCarryingArtifact | None:
-    """The artifact the row exposes: the last expected output, else the first."""
-    if not artifacts:
-        return None
-    return list(artifacts.values())[-1]
+def _artifact_claims(artifacts: dict[str, ProofCarryingArtifact]) -> list[dict[str, Any]]:
+    """One canonical claim per expected output, each with its own evidence.
+
+    The claim dialect is the one ``creative_render_job`` returns, so the
+    queue's registered verifier can re-measure every deliverable, not just one.
+    """
+    claims: list[dict[str, Any]] = []
+    for name, artifact in artifacts.items():
+        claims.append(
+            {
+                "name": name,
+                "artifact_path": artifact.output_path,
+                "artifact_kind": "video" if artifact.output_path.endswith(".mp4") else "image",
+                "sha256": artifact.output_hash,
+                "size_bytes": artifact.output_size_bytes,
+                "duration_us": artifact.semantic.measurements.get("duration_us", 0),
+                "operation": artifact.operation_manifest.get("nodes", [{}])[-1].get(
+                    "operation", ""
+                ),
+                "output_asset_id": artifact.receipts[-1].asset_id if artifact.receipts else "",
+                "plan_fingerprint": artifact.plan_fingerprint,
+                "registry_fingerprint": artifact.registry_fingerprint,
+                "integrity_verified": artifact.integrity.verified,
+                "semantic_verified": artifact.semantic.verified,
+                "media_contract": dict(artifact.media_contract),
+            }
+        )
+    return claims
 
 
 __all__ = [

@@ -666,6 +666,12 @@ class MediaContract(BaseModel):
             and produced.duration_us_max > self.duration_us_max
         ):
             return False
+        # An unknown bound on the produced side cannot satisfy a constrained
+        # bound on the required side: "we do not know" is not "it fits".
+        if self.duration_us_min is not None and produced.duration_us_min is None:
+            return False
+        if self.duration_us_max is not None and produced.duration_us_max is None:
+            return False
         return True
 
 

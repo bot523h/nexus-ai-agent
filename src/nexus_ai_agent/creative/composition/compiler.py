@@ -35,6 +35,7 @@ from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry, Oper
 from nexus_ai_agent.creative.studio.models import MediaContract
 
 from .contracts import (
+    PLAN_VERSION,
     CompositionPlan,
     ExternalInput,
     PlanNode,
@@ -59,8 +60,18 @@ ERROR_CODES: frozenset[str] = frozenset(
         "unknown_parameter",
         "registry_drift",
         "empty_plan",
+        "unsupported_plan_version",
+        "unsupported_media_fan_in",
+        "capability_quota_exceeded",
     }
 )
+
+
+#: The declared envelope of one submitted plan.  These are *quotas*, not
+#: measurements: they bound what a request may ask for before anything runs.
+MAX_NODES_PER_PLAN = 16
+MAX_TOTAL_DISK_MB = 8_192
+MAX_PEAK_RAM_MB = 4_096
 
 
 class CompositionError(ValueError):
@@ -174,6 +185,24 @@ class CompositionCompiler:
         """Validate *plan* and return the executable :class:`CompiledPlan`."""
         if not plan.nodes:
             raise CompositionError("empty_plan", "a composition needs at least one node")
+        # A plan authored for another IR version is refused rather than
+        # interpreted with today's semantics: the two versions may mean
+        # different things by the same fields.
+        if plan.plan_version != PLAN_VERSION:
+            raise CompositionError(
+                "unsupported_plan_version",
+                f"plan_version {plan.plan_version} is not supported; this runtime "
+                f"implements {PLAN_VERSION}",
+            )
+        # A plan is a *request*: it may not ask the runtime for unbounded work.
+        # The cap is the declared quota, checked from the estimate the compiler
+        # publishes, so the refusal names the number the caller exceeded.
+        if len(plan.nodes) > MAX_NODES_PER_PLAN:
+            raise CompositionError(
+                "capability_quota_exceeded",
+                f"the plan declares {len(plan.nodes)} nodes; the runtime accepts at most "
+                f"{MAX_NODES_PER_PLAN}",
+            )
 
         specs: dict[str, OperationSpec] = {}
         for node in plan.nodes:
@@ -185,8 +214,10 @@ class CompositionCompiler:
         input_contracts = self._input_contracts(specs)
         output_contracts = self._output_contracts(specs)
         self._check_bindings(plan, specs, input_contracts, output_contracts)
+        self._check_expected_outputs(plan, output_contracts)
         self._check_types(plan, specs, input_contracts, output_contracts)
         estimate = self.estimate_resources(plan, specs)
+        self._check_quota(estimate)
         # The per-node declared cost stays attached to the compiled plan so the
         # executor can hold each node to the deadline it published.
         per_node = {node.node_id: self._requirements(specs[node.node_id]) for node in plan.nodes}
@@ -201,6 +232,27 @@ class CompositionCompiler:
             fingerprint=self._fingerprint(plan),
             registry_fingerprint=self._registry_fingerprint,
         )
+
+    def _check_quota(self, estimate: ResourceEstimate) -> None:
+        """Refuse an estimate that exceeds the runtime's declared envelope."""
+        if estimate.total_disk_mb > MAX_TOTAL_DISK_MB:
+            raise CompositionError(
+                "capability_quota_exceeded",
+                f"the plan needs {estimate.total_disk_mb} MB of disk; the runtime accepts "
+                f"at most {MAX_TOTAL_DISK_MB} MB",
+            )
+        if estimate.peak_concurrent_ram_mb > MAX_PEAK_RAM_MB:
+            raise CompositionError(
+                "capability_quota_exceeded",
+                f"the plan needs {estimate.peak_concurrent_ram_mb} MB of RAM; the runtime "
+                f"accepts at most {MAX_PEAK_RAM_MB} MB",
+            )
+        if estimate.network_egress:
+            raise CompositionError(
+                "capability_quota_exceeded",
+                "the plan requires network egress and this runtime composes offline "
+                "operations only",
+            )
 
     def estimate_resources(
         self,
@@ -338,6 +390,19 @@ class CompositionCompiler:
         """Every required port bound exactly once, every binding resolvable."""
         for node in plan.nodes:
             spec = specs[node.node_id]
+            # The executor feeds exactly one media value into one canonical
+            # call, so an operation that declares more than one media *input*
+            # cannot be composed faithfully.  Refusing it here is the honest
+            # answer: silently feeding the first port would execute a
+            # different graph than the plan describes.
+            if len(spec.media_inputs) > 1:
+                ports = ", ".join(port.name for port in spec.media_inputs)
+                raise CompositionError(
+                    "unsupported_media_fan_in",
+                    f"node {node.node_id!r} ({node.operation}) declares "
+                    f"{len(spec.media_inputs)} media inputs ({ports}); this runtime "
+                    "composes exactly one media input per node",
+                )
             required = {port.name for port in spec.media_inputs if port.required}
             bound = {binding.input_port for binding in node.bindings}
             missing = sorted(required - bound)
@@ -385,6 +450,33 @@ class CompositionCompiler:
                 f"binding {binding.input_port!r} names unknown output port "
                 f"{binding.output_port!r} of node {binding.node_id!r}",
             )
+
+    def _check_expected_outputs(
+        self,
+        plan: CompositionPlan,
+        output_contracts: Mapping[str, Mapping[str, MediaContract]],
+    ) -> None:
+        """Every exposed output must name a node **and a port that exists**.
+
+        This is checked at compile time, not after execution: a plan whose
+        output names a typo would otherwise run every node, mutate the project
+        and only then discover that it has nothing to hand back.
+        """
+        for expected in plan.expected_outputs:
+            ports = output_contracts.get(expected.node_id)
+            if ports is None:
+                raise CompositionError(
+                    "unknown_binding",
+                    f"expected output {expected.name!r} names node {expected.node_id!r}, "
+                    "which is not in the plan",
+                )
+            if expected.output_port not in ports:
+                raise CompositionError(
+                    "unknown_binding",
+                    f"expected output {expected.name!r} names port "
+                    f"{expected.output_port!r} of node {expected.node_id!r}; that node "
+                    f"produces {sorted(ports)}",
+                )
 
     def _check_types(
         self,

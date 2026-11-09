@@ -465,6 +465,7 @@ def test_a_binding_that_names_two_sources_is_refused() -> None:
                 ],
                 "external_inputs": [{"name": "src", "media_kind": "image"}],
                 "expected_outputs": [],
+                "registry_fingerprint": _live_registry_fingerprint(),
             }
         )
 
@@ -489,6 +490,7 @@ def test_a_binding_with_an_unknown_key_is_refused() -> None:
                 ],
                 "external_inputs": [{"name": "src", "media_kind": "image"}],
                 "expected_outputs": [],
+                "registry_fingerprint": _live_registry_fingerprint(),
             }
         )
 
@@ -714,3 +716,141 @@ def test_the_bus_preflight_accepts_what_the_dispatch_would_authorize() -> None:
                 operation_schema_version=schema_version,
             )
         )
+
+
+def test_a_timed_out_encoder_group_is_killed_even_when_its_leader_exits() -> None:
+    """The group is killed, not just the leader.
+
+    A shell whose tree *ignores* ``SIGTERM`` is started exactly the way the
+    encoder is started (``start_new_session=True``).  ``SIGTERM`` alone leaves
+    it running; the escalation must therefore reach ``SIGKILL`` for the whole
+    group, and the group must be gone when the call returns.
+    """
+    import subprocess
+
+    from nexus_ai_agent.creative.slideshow.ffmpeg import _kill_process_group
+
+    # ``trap '' TERM`` is inherited by the child across exec, so BOTH the
+    # leader and its descendant ignore the polite signal.
+    process = subprocess.Popen(
+        ["/bin/sh", "-c", "trap '' TERM; sleep 60"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        group = os.getpgid(process.pid)
+        time.sleep(0.2)
+        assert _process_group_alive(group)
+
+        _kill_process_group(process)
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and _process_group_alive(group):
+            time.sleep(0.02)
+        assert not _process_group_alive(group), "the process group survived the kill"
+        assert process.poll() is not None
+    finally:
+        if process.poll() is None:  # pragma: no cover - defensive cleanup
+            process.kill()
+
+
+def _process_group_alive(group: int) -> bool:
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # pragma: no cover
+        return True
+    return True
+
+
+def _live_registry_fingerprint() -> str:
+    from nexus_ai_agent.creative.composition.compiler import registry_fingerprint
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    return registry_fingerprint(build_runtime_registry())
+
+
+def test_a_staged_input_over_the_limit_is_refused_before_it_is_hashed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The size guard runs *before* the digest, so a huge file is never read.
+
+    The limit is lowered for the test; the assertion is on the message, which
+    proves the refusal came from the size guard and not from a digest mismatch.
+    """
+    import hashlib
+
+    from nexus_ai_agent.creative.composition import engine as engine_module
+
+    workspace = tmp_path / "creative_ws"
+    workspace.mkdir()
+    staged = workspace / "input.png"
+    staged.write_bytes(b"x" * 4096)
+    digest = hashlib.sha256(b"x" * 4096).hexdigest()
+
+    monkeypatch.setattr(engine_module, "MAX_INPUT_BYTES", 64)
+    with pytest.raises(CompositionJobError) as excinfo:
+        guarded_input(str(staged), workspace, f"sha256:{digest}")
+    assert "the limit is 64" in excinfo.value.detail
+    assert "digest mismatch" not in excinfo.value.detail
+
+
+def test_a_staged_input_replaced_after_admission_is_refused_by_the_executor(
+    tmp_path: Path,
+) -> None:
+    """Admission and use must see the same bytes.
+
+    The row admits ``src`` with one digest; by the time the executor resolves
+    the binding the file holds something else.  Nothing may be encoded.
+    """
+    from PIL import Image
+
+    from nexus_ai_agent.creative.composition.compiler import CompositionCompiler
+    from nexus_ai_agent.creative.composition.contracts import (
+        CompositionPlan,
+        ExpectedOutput,
+        ExternalInput,
+        PlanNode,
+        PortBinding,
+    )
+    from nexus_ai_agent.creative.composition.executor import (
+        CompositionExecutionError,
+        CompositionExecutor,
+    )
+    from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
+
+    registry = build_runtime_registry()
+    descriptor = registry.describe("media.resize_image")
+    source = tmp_path / "source.png"
+    Image.new("RGB", (320, 240), (10, 20, 30)).save(source)
+
+    plan = CompositionPlan(
+        nodes=(
+            PlanNode(
+                node_id="resize",
+                operation="media.resize_image",
+                capability_id=descriptor.capability_id,
+                capability_version=descriptor.version,
+                operation_schema_version=descriptor.operation_schema_version,
+                params={"width": 160, "height": 120},
+                bindings=(PortBinding(input_port="source", source="external", external="src"),),
+            ),
+        ),
+        external_inputs=(ExternalInput(name="src", media_kind="image"),),
+        expected_outputs=(ExpectedOutput(name="still", node_id="resize", output_port="resized"),),
+    )
+    compiled = CompositionCompiler(registry).compile(plan)
+    workspace = tmp_path / "workspace"
+
+    with pytest.raises(CompositionExecutionError) as excinfo:
+        CompositionExecutor(confirmed=False).execute(
+            compiled,
+            external_inputs={"src": source},
+            workspace=workspace,
+            expected_digests={"src": "sha256:" + "0" * 64},
+        )
+    assert "changed after it was admitted" in str(excinfo.value)
+    produced = [p for p in workspace.rglob("*") if p.is_file()] if workspace.exists() else []
+    assert produced == [], f"a refused binding wrote {produced}"

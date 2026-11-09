@@ -377,3 +377,47 @@ def test_the_capability_names_are_stable() -> None:
     assert CAPABILITY_GRAYSCALE == "grayscale_image"
     assert CAPABILITY_IMAGE_TO_VIDEO == "image_to_video"
     assert PACKAGE_ID == "nexus.media.transform"
+
+
+def test_the_resize_input_refuses_a_geometry_beyond_the_still_budget() -> None:
+    """The schema, not the render lane, enforces the still geometry budget.
+
+    A width outside 2..8192 or a raster above the 8K pixel budget must fail
+    validation, so an impossible request never reaches a subprocess.
+    """
+
+    def _payload(width: int, height: int) -> ResizeImageInput:
+        return ResizeImageInput(
+            source_asset_id="a",
+            source_sha256=_sha256("x"),
+            output_path="/tmp/a.png",
+            output_sha256=_sha256("y"),
+            source_width=1920,
+            source_height=1080,
+            width=width,
+            height=height,
+        )
+
+    with pytest.raises(ValidationError):
+        _payload(8193, 480)
+    with pytest.raises(ValidationError):
+        _payload(1, 480)
+    with pytest.raises(ValidationError):
+        _payload(8192, 8192)
+    assert _payload(7680, 4320).width == 7680
+
+
+def test_the_video_input_refuses_another_encoder() -> None:
+    """The render lane has one encoder; naming another is refused, not substituted."""
+    with pytest.raises(ValidationError):
+        ImageToVideoInput(
+            source_asset_id="a",
+            source_sha256=_sha256("x"),
+            output_path="/tmp/a.mp4",
+            output_sha256=_sha256("y"),
+            width=64,
+            height=64,
+            duration_us=1_000_000,
+            fps=25,
+            encoder="libx265",
+        )

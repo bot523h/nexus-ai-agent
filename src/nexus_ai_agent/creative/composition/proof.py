@@ -34,7 +34,13 @@ _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
 _DIMENSIONS_RE = re.compile(r"Video:.*?(\d{2,5})x(\d{2,5})")
 _CODEC_RE = re.compile(r"Video:\s*([A-Za-z0-9_]+)")
 _FRAME_RE = re.compile(r"frame=\s*(\d+)")
-_PIXFMT_RE = re.compile(r"pix_fmt:?\s*([a-z0-9]+)")
+#: A pixel-format *shape*.  ``ffmpeg -i`` does not label the format with
+#: ``pix_fmt`` in its stream table; it prints it as the first bare token of the
+#: codec line -- ``Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive),
+#: 640x480`` -- so the token is recognised by name rather than by position.
+_PIXFMT_SHAPE = re.compile(
+    r"^(?:yuv|yuva|yuyv|uyvy|uyyvyy|rgb|bgr|gbr|gray|ya|nv|p0|p1|p2|p4)[a-z0-9]*$"
+)
 _FPS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*fps")
 
 
@@ -251,17 +257,38 @@ def _encoder_env() -> dict[str, str]:
     return encoder_env()
 
 
+def _pixel_format_of(raw: str) -> str | None:
+    """The measured pixel format, or ``None`` when the table does not say."""
+    for line in raw.splitlines():
+        if "Video:" not in line:
+            continue
+        for segment in line.split("Video:", 1)[1].split(","):
+            token = segment.strip().split("(")[0].strip().split()[0:1]
+            if token and _PIXFMT_SHAPE.match(token[0]):
+                return token[0].lower()
+    return None
+
+
 def verify_video_semantics(
     path: Path,
     *,
     expected_width: int | None = None,
     expected_height: int | None = None,
     expected_duration_us: int | None = None,
-    expected_fps: int | None = None,
+    expected_duration_us_min: int | None = None,
+    expected_duration_us_max: int | None = None,
+    expected_fps: float | None = None,
+    expected_codec: str | None = None,
+    expected_pixel_format: str | None = None,
     duration_tolerance_us: int = 500_000,
     binary: str | None = None,
 ) -> SemanticReport:
-    """Decode the clip and check the properties the plan promised."""
+    """Decode the clip and check **every** property the contract promised.
+
+    A promised codec, pixel format, frame rate or duration bound is a
+    *constraint*, not a description: the measurement has to satisfy it or the
+    artifact is not verified.
+    """
     target = Path(path)
     findings: list[str] = []
     measurements: dict[str, Any] = {}
@@ -288,9 +315,9 @@ def verify_video_semantics(
     codec = _CODEC_RE.search(raw)
     if codec is not None:
         measurements["codec"] = codec.group(1).lower()
-    pixel_format = _PIXFMT_RE.search(raw)
+    pixel_format = _pixel_format_of(raw)
     if pixel_format is not None:
-        measurements["pixel_format"] = pixel_format.group(1).lower()
+        measurements["pixel_format"] = pixel_format
     fps = _FPS_RE.search(raw)
     if fps is not None:
         measurements["frame_rate"] = float(fps.group(1))
@@ -319,6 +346,33 @@ def verify_video_semantics(
                 f"duration mismatch: expected {expected_duration_us}us, measured "
                 f"{measurements['duration_us']}us"
             )
+    if expected_duration_us_min is not None and "duration_us" in measurements:
+        if int(measurements["duration_us"]) < expected_duration_us_min:
+            findings.append(
+                f"duration below the promised minimum: expected >= "
+                f"{expected_duration_us_min}us, measured {measurements['duration_us']}us"
+            )
+    if expected_duration_us_max is not None and "duration_us" in measurements:
+        if int(measurements["duration_us"]) > expected_duration_us_max:
+            findings.append(
+                f"duration above the promised maximum: expected <= "
+                f"{expected_duration_us_max}us, measured {measurements['duration_us']}us"
+            )
+    if expected_codec is not None:
+        measured_codec = str(measurements.get("codec", "")).lower()
+        if measured_codec != expected_codec.lower():
+            findings.append(
+                f"codec mismatch: expected {expected_codec!r}, measured {measured_codec!r}"
+            )
+    if expected_pixel_format is not None:
+        measured_pixfmt = str(measurements.get("pixel_format", "")).lower()
+        if measured_pixfmt != expected_pixel_format.lower():
+            findings.append(
+                f"pixel format mismatch: expected {expected_pixel_format!r}, "
+                f"measured {measured_pixfmt!r}"
+            )
+    if expected_fps is not None and "frame_rate" not in measurements:
+        findings.append("the stream table carries no frame rate to compare")
     if expected_fps is not None and "frame_rate" in measurements:
         if abs(float(measurements["frame_rate"]) - expected_fps) > 0.5:
             findings.append(

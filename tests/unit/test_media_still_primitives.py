@@ -139,7 +139,11 @@ def test_grayscale_produces_a_luma_only_png(source: Path, tmp_path: Path) -> Non
     with Image.open(out) as image:
         assert image.mode in ("L", "LA", "P")
         rgb = image.convert("RGB")
-        assert all(low == high for low, high in rgb.getextrema())
+        # Per-pixel channel equality, not per-channel extrema: a palette PNG
+        # mapped to one solid colour has constant extrema on every channel yet
+        # is not grayscale at all.
+        red, green, blue = (channel.tobytes() for channel in rgb.split())
+        assert red == green == blue, "the output is not luma-only pixel by pixel"
     assert artifact.width == 320
     assert artifact.height == 240
 

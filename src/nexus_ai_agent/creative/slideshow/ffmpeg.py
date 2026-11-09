@@ -34,6 +34,7 @@ import re
 import shutil
 import signal
 import subprocess
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -535,9 +536,22 @@ def _run(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _kill_process_group(process)
-        stdout, stderr = process.communicate()
+        # The group has been SIGKILLed, so no descendant is left holding the
+        # pipes open; the second read is still bounded so a wedged kernel-side
+        # descriptor cannot hang the worker.
+        try:
+            stdout, stderr = process.communicate(timeout=_REAP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:  # pragma: no cover - kernel-level wedge
+            process.kill()
+            stdout, stderr = "", ""
         raise subprocess.TimeoutExpired(args, timeout, output=stdout, stderr=stderr) from None
     return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+
+#: Grace period a timed-out encoder gets between ``SIGTERM`` and ``SIGKILL``.
+_TERM_GRACE_SECONDS = 2.0
+#: Upper bound on the post-kill pipe drain, so a timed-out run cannot hang.
+_REAP_TIMEOUT_SECONDS = 5.0
 
 
 def _kill_process_group(process: subprocess.Popen[str]) -> None:
@@ -547,26 +561,71 @@ def _kill_process_group(process: subprocess.Popen[str]) -> None:
     grace period so a wedged child cannot outlive the deadline.  The group
     is the one :func:`_run` created (``start_new_session=True``), so this
     never signals the worker itself.
+
+    **The leader exiting is not the group exiting.**  ``ffmpeg`` spawns helpers,
+    and a helper that ignores ``SIGTERM`` would survive a check on the leader
+    alone while still holding the pipe open.  The wait therefore watches the
+    *group* (``killpg(group, 0)`` succeeds while any member lives), and
+    ``SIGKILL`` is sent to the group whenever the group outlives its grace
+    period -- regardless of what the leader did.
     """
     try:
-        group = os.getpgid(process.pid)
+        group: int | None = os.getpgid(process.pid)
     except (OSError, ProcessLookupError):
         group = None
-    for signal_number, grace in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 0.5)):
-        if process.poll() is not None and signal_number is signal.SIGKILL:
-            break
+    for signal_number, grace in ((signal.SIGTERM, _TERM_GRACE_SECONDS), (signal.SIGKILL, 0.5)):
+        if group is not None and not _group_is_alive(group):
+            return
+        if group is None and process.poll() is not None:
+            return
         try:
             if group is not None:
                 os.killpg(group, signal_number)
             else:  # pragma: no cover - the group always exists here
                 process.send_signal(signal_number)
         except (OSError, ProcessLookupError):
-            break
-        try:
-            process.wait(timeout=grace)
-        except subprocess.TimeoutExpired:
-            continue
-        break
+            return
+        _wait_for_group_exit(process, group, grace)
+
+
+def _group_is_alive(group: int) -> bool:
+    """Whether *any* member of the process group is still running."""
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # pragma: no cover - we own the group
+        return True
+    except OSError:  # pragma: no cover - defensive
+        return False
+    return True
+
+
+def _wait_for_group_exit(process: subprocess.Popen[str], group: int | None, grace: float) -> None:
+    """Wait up to *grace* seconds for the whole group to disappear.
+
+    The leader is reaped (non-blocking) on every pass: an exited child stays in
+    the process group as a zombie until it is waited for, and a zombie keeps
+    ``killpg(group, 0)`` succeeding -- which would make a dead group look alive
+    and hide the very descendants this function exists to find.
+    """
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        _reap_leader(process)
+        if group is not None:
+            if not _group_is_alive(group):
+                return
+        elif process.returncode is not None:
+            return
+        time.sleep(0.02)
+
+
+def _reap_leader(process: subprocess.Popen[str]) -> None:
+    """Collect the leader's exit status without ever blocking."""
+    try:
+        process.wait(timeout=0)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 @dataclass(frozen=True)

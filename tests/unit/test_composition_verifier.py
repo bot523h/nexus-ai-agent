@@ -23,7 +23,13 @@ def _sha256(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _result(path: Path, *, kind: str = "image", operation: str = "media.resize_image") -> dict:
+def _result(
+    path: Path,
+    *,
+    kind: str = "image",
+    operation: str = "media.resize_image",
+    contract: dict | None = None,
+) -> dict:
     return {
         "success": True,
         "artifact_path": str(path),
@@ -34,6 +40,9 @@ def _result(path: Path, *, kind: str = "image", operation: str = "media.resize_i
         "output_asset_id": "derived_1",
         "plan_fingerprint": "sha256:" + "1" * 64,
         "registry_fingerprint": "sha256:" + "2" * 64,
+        # The worker always returns the produced contract; the verifier now
+        # requires it, because an unconstrained claim proves nothing.
+        "media_contract": contract if contract is not None else {"kind": kind},
     }
 
 
@@ -147,3 +156,63 @@ def test_a_success_without_an_artifact_claim_is_refused(tmp_path: Path) -> None:
 
 def test_the_semantic_reason_code_is_stable() -> None:
     assert REASON_SEMANTIC_MISMATCH == "semantic_mismatch"
+
+
+def test_a_media_claim_without_a_contract_is_not_verified(tmp_path: Path) -> None:
+    """No contract means nothing was promised -- so nothing can be confirmed."""
+    artifact = _png(tmp_path / "out.png")
+    result = _result(artifact)
+    result.pop("media_contract")
+    outcome = composition_verifier({"workspace_dir": str(tmp_path)}, result)
+    assert outcome.ok is False
+    assert outcome.reason_code == "semantic_mismatch"
+    assert outcome.summary["semantic"]["method"] == "contract_missing"
+
+
+def test_a_claim_that_breaks_the_promised_codec_is_not_verified(tmp_path: Path) -> None:
+    """A promised codec must be the measured codec, not merely a suggestion."""
+    from nexus_ai_agent.creative.slideshow.ffmpeg import (
+        RenderIR,
+        RenderShot,
+        encode,
+        resolve_ffmpeg_bin,
+    )
+
+    video = tmp_path / "out.mp4"
+    encode(
+        RenderIR(
+            shots=(
+                RenderShot(
+                    evidence_id="e", image_path=str(_png(tmp_path / "s.png")), duration_us=500_000
+                ),
+            ),
+            template_id="t",
+            target_duration_us=500_000,
+            width=64,
+            height=48,
+            fps=25,
+            crf=20,
+            preset="veryfast",
+            audio_bitrate="192k",
+        ),
+        video,
+        binary=resolve_ffmpeg_bin(),
+        overwrite=True,
+    )
+    outcome = composition_verifier(
+        {"workspace_dir": str(tmp_path)},
+        _result(
+            video,
+            kind="video",
+            operation="media.image_to_video",
+            contract={
+                "kind": "video",
+                "codec": "libx265",
+                "width": 64,
+                "height": 48,
+            },
+        ),
+    )
+    assert outcome.ok is False
+    assert outcome.reason_code == "semantic_mismatch"
+    assert any("codec" in finding for finding in outcome.summary["semantic"]["findings"])

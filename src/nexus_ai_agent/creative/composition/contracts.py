@@ -104,7 +104,21 @@ class ExternalInput(BaseModel):
 
     name: str = Field(min_length=1, max_length=64)
     media_kind: CompositionMediaKind
-    contract: MediaContract = Field(default_factory=lambda: MediaContract(kind="image"))
+    #: When omitted the contract takes the declared ``media_kind`` -- it must
+    #: never quietly default to ``image`` for a video or audio input.
+    contract: MediaContract | None = None
+
+    @model_validator(mode="after")
+    def _contract_matches_kind(self) -> ExternalInput:
+        if self.contract is None:
+            object.__setattr__(self, "contract", MediaContract(kind=self.media_kind))
+            return self
+        if self.contract.kind != self.media_kind:
+            raise ValueError(
+                f"external input {self.name!r} declares kind {self.media_kind!r} "
+                f"but carries a {self.contract.kind!r} contract"
+            )
+        return self
 
 
 class PlanNode(BaseModel):
@@ -168,6 +182,18 @@ class CompositionPlan(BaseModel):
         if len(set(output_names)) != len(output_names):
             raise ValueError("expected output names must be unique")
         return self
+
+    def pinned(self, fingerprint: str) -> CompositionPlan:
+        """A copy of this plan **pinned** to a registry fingerprint.
+
+        A client authors a plan against the registry it can see, pins it, and
+        submits the pinned plan.  A durable row must always be pinned: it may
+        execute later, and an unpinned row could silently run against a
+        registry that changed in the meantime.
+        """
+        if not fingerprint:
+            raise ValueError("a pin needs a registry fingerprint")
+        return self.model_copy(update={"registry_fingerprint": fingerprint})
 
     def node(self, node_id: str) -> PlanNode:
         for node in self.nodes:
@@ -271,10 +297,16 @@ class LicenseLedger(BaseModel):
 
     @property
     def effective_allow_commercial(self) -> bool:
-        """True only when *every* record allows commercial use and proves it."""
-        return bool(self.records) and all(
-            record.effective_allow_commercial for record in self.records
-        )
+        """True only when **every** category is present, known and permissive.
+
+        A ledger that simply omits a category must not read as approval: "no
+        record" is ignorance, not permission.  So the answer is ``False``
+        unless all twelve categories are accounted for *and* each one allows
+        commercial use *and* proves it.
+        """
+        if set(self.unknown_categories):
+            return False
+        return all(record.effective_allow_commercial for record in self.records)
 
     @property
     def unknown_categories(self) -> tuple[str, ...]:

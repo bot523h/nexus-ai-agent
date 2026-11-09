@@ -31,7 +31,7 @@ from nexus_ai_agent.jobs.verification import (
     verify_artifact,
 )
 
-from .proof import verify_image_semantics, verify_video_semantics
+from .proof import SemanticReport, verify_image_semantics, verify_video_semantics
 
 #: The typed reason code of a failed semantic pass.
 REASON_SEMANTIC_MISMATCH = "semantic_mismatch"
@@ -125,16 +125,30 @@ def _semantic_pass(claim: ArtifactClaim, result: dict[str, object]) -> Any:
     if isinstance(contract_raw, dict):
         try:
             contract = MediaContract.model_validate(contract_raw)
-        except Exception:  # noqa: BLE001 - an unusable contract degrades safely
+        except Exception:  # noqa: BLE001 - reported below, never ignored
             contract = None
 
+    # A media claim with no usable contract cannot be verified: "no contract"
+    # means "nothing was promised", and a verifier that accepted an
+    # unconstrained claim would pass any decodable file at all.
+    if claim.kind in {"video", "image", "audio"} and contract is None:
+        return SemanticReport(
+            verified=False,
+            method="contract_missing",
+            findings=("the row carries no usable media contract for a media claim",),
+            measurements={},
+        )
+
     if claim.kind == "video":
-        expected_width = _int(contract, "width")
-        expected_height = _int(contract, "height")
         return verify_video_semantics(
             claim.path,
-            expected_width=expected_width,
-            expected_height=expected_height,
+            expected_width=_int(contract, "width"),
+            expected_height=_int(contract, "height"),
+            expected_duration_us_min=_int(contract, "duration_us_min"),
+            expected_duration_us_max=_int(contract, "duration_us_max"),
+            expected_fps=_float(contract, "frame_rate"),
+            expected_codec=_str(contract, "codec"),
+            expected_pixel_format=_str(contract, "pixel_format"),
         )
     if claim.kind == "image":
         return verify_image_semantics(
@@ -143,14 +157,22 @@ def _semantic_pass(claim: ArtifactClaim, result: dict[str, object]) -> Any:
         )
     # A non-media artifact has no semantic contract; the canonical integrity
     # pass above is the whole verification for it.
-    from .proof import SemanticReport
-
     return SemanticReport(
         verified=True,
         method="not_applicable",
         findings=(),
         measurements={"kind": claim.kind},
     )
+
+
+def _str(contract: object, field: str) -> str | None:
+    value = getattr(contract, field, None) if contract is not None else None
+    return str(value).lower() if isinstance(value, str) and value else None
+
+
+def _float(contract: object, field: str) -> float | None:
+    value = getattr(contract, field, None) if contract is not None else None
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 def _int(contract: object, field: str) -> int | None:

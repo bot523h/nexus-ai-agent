@@ -28,7 +28,7 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nexus_ai_agent.creative.studio.capabilities import (
     CapabilityRegistry,
@@ -94,8 +94,20 @@ class _DerivedImageInput(BaseModel):
     source_sha256: str = Field(min_length=64, max_length=71)
     output_path: str = Field(min_length=1, max_length=1024)
     output_sha256: str = Field(min_length=64, max_length=71)
-    width: int = Field(ge=1, le=16384)
-    height: int = Field(ge=1, le=16384)
+    #: The same bounds the still primitives enforce, declared **in the schema**:
+    #: a geometry the render lane would refuse must fail validation, not start
+    #: a process and then fail.
+    width: int = Field(ge=2, le=8192)
+    height: int = Field(ge=2, le=8192)
+
+    @model_validator(mode="after")
+    def _within_the_pixel_budget(self) -> _DerivedImageInput:
+        if self.width * self.height > 33_177_600:
+            raise ValueError(
+                f"{self.width}x{self.height} exceeds the 8K pixel budget the still "
+                "primitives accept"
+            )
+        return self
 
 
 class ResizeImageInput(_DerivedImageInput):
@@ -125,7 +137,10 @@ class ImageToVideoInput(BaseModel):
     height: int = Field(ge=2, le=16384)
     duration_us: int = Field(ge=1000, le=3_600_000_000)
     fps: int = Field(ge=1, le=240)
-    encoder: str = Field(min_length=1, max_length=64)
+    #: The render lane has exactly one encoder; a request for another one is
+    #: refused at validation instead of being silently substituted, because the
+    #: recorded provenance would then name an encoder that never ran.
+    encoder: Literal["libx264"] = Field()
 
 
 # ---------------------------------------------------------------------------

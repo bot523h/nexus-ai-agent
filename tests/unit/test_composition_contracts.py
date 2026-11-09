@@ -215,7 +215,29 @@ def test_a_permitted_but_unverified_licence_is_not_commercially_approved() -> No
     )
 
 
-def test_a_verified_permitted_licence_is_commercially_approved() -> None:
+def _complete_permissive_ledger() -> LicenseLedger:
+    return LicenseLedger(
+        records=tuple(
+            LicenseRecord(
+                category=category,
+                spdx_id="MIT",
+                allow_commercial=True,
+                commercial_use_verified=True,
+            )
+            for category in CATEGORIES
+        )
+    )
+
+
+def test_a_complete_verified_permissive_ledger_is_commercially_approved() -> None:
+    """Approval needs **every** category, not just the ones someone recorded."""
+    ledger = _complete_permissive_ledger()
+    assert ledger.unknown_categories == ()
+    assert ledger.effective_allow_commercial is True
+
+
+def test_one_verified_record_does_not_approve_the_ledger() -> None:
+    """An omitted category is ignorance, not permission."""
     ledger = LicenseLedger(
         records=(
             LicenseRecord(
@@ -226,7 +248,8 @@ def test_a_verified_permitted_licence_is_commercially_approved() -> None:
             ),
         )
     )
-    assert ledger.effective_allow_commercial is True
+    assert ledger.effective_allow_commercial is False
+    assert len(ledger.unknown_categories) == 11
 
 
 def test_the_ledger_refuses_an_unknown_category() -> None:
@@ -248,10 +271,13 @@ def test_the_tool_licence_never_implies_the_output_rights() -> None:
         )
     )
     assert "input_asset" in ledger.unknown_categories
-    assert ledger.effective_allow_commercial is True  # only the *recorded* facts
-    # ... and the input asset's own category is still missing, so a caller
-    # that requires every category must refuse.
+    # The tool's own record allows commercial use ...
+    assert ledger.of("runtime_software")[0].effective_allow_commercial is True
+    # ... but the ledger as a whole does not approve anything while eleven
+    # categories are unknown -- an in-permissive tool licence never becomes an
+    # output-media right.
     assert len(ledger.unknown_categories) == 11
+    assert ledger.effective_allow_commercial is False
 
 
 # ---------------------------------------------------------------------------
@@ -299,3 +325,29 @@ def test_the_estimate_refuses_a_zero_node_count() -> None:
             max_timeout_seconds=1,
             node_count=0,
         )
+
+
+def test_a_contract_refuses_a_producer_whose_duration_is_unknown() -> None:
+    """An unknown bound is not a fit.
+
+    The required contract names a minimum duration; a producer that cannot say
+    how long its clip is must be refused, because "we did not measure" cannot
+    satisfy "at least one second".
+    """
+    required = MediaContract(kind="video", duration_us_min=1_000_000)
+    assert required.accepts(MediaContract(kind="video", duration_us_min=2_000_000)) is True
+    assert required.accepts(MediaContract(kind="video")) is False
+
+    upper = MediaContract(kind="video", duration_us_max=1_000_000)
+    assert upper.accepts(MediaContract(kind="video", duration_us_max=900_000)) is True
+    assert upper.accepts(MediaContract(kind="video")) is False
+
+
+def test_an_external_input_contract_follows_its_declared_kind() -> None:
+    """A video input never quietly defaults to an *image* contract."""
+    derived = ExternalInput(name="clip", media_kind="video")
+    assert derived.contract is not None
+    assert derived.contract.kind == "video"
+
+    with pytest.raises(ValidationError):
+        ExternalInput(name="clip", media_kind="video", contract=MediaContract(kind="image"))
