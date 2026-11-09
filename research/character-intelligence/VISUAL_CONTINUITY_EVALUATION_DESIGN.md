@@ -1,6 +1,6 @@
 # Visual Continuity Evaluation — Design
 
-Status: **VERIFIED** — implemented in `continuity.py`, exercised by 58 tests and a
+Status: **VERIFIED** — implemented in `continuity.py`, exercised by 127 tests and a
 12-scenario benchmark.
 
 ## 1. The unit of decision is a *dimension*, not a score

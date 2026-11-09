@@ -28,15 +28,15 @@ Status: **VERIFIED** for the implemented controls (tested); items marked
 |---|---|---|---|
 | T1 | identity silently rewritten | `ScopeViolation` on IDENTITY fields; `RevisionConflict` on stale `expected_revision` (**yes**) | an editor with DB access can insert a new identity version; audit trail is the only trace (`PARTIAL`) |
 | T2 | shot re-pointed at a newer capsule | shots pin `capsule_revision` + `capsule_digest` + all module digests (**yes**) | a client that ignores the pinned digest is out of scope |
-| T3 | asset substituted in storage | per-object DEK wrapped by a KEK; canonical header bound inside the ciphertext (**yes**, PyNaCl `SecretBox`) | `SecretBox` has no AAD; binding is done by sealing the header inside the ciphertext (documented, not hidden) |
+| T3 | asset substituted in storage | NCC2 envelope: fresh per-blob data key, wrapped with XSalsa20-Poly1305 under the KEK, header used as associated data; recorded `sha256` re-checked on every read (**yes**) | a blob swapped for another blob of the same media type is caught by the digest, not by the AEAD alone |
 | T4 | key material leaks into the repo | no key in source; `CHARACTER_CAPSULE_KEK_FILE` / `CHARACTER_CAPSULE_SIGNING_KEY_FILE` must point outside; missing key = typed refusal (**yes**) | an operator can still commit a key; a pre-commit scan is `DEFERRED` |
 | T5 | look-alike accepted | calibrated face band + look-alike as the designated hard impostor (**yes**) | measured FAR 0.600 on held-out face pairs — the weakest control in the system |
-| T6 | verdict forged after the fact | content-addressed evidence bundle + optional Ed25519 signature; tamper detection tested (**yes**) | unsigned run (`UNSIGNED`) provides integrity, not authenticity; signing key custody `DEFERRED` |
-| T7 | real person's likeness used without consent | `ConsentLedger` + `AccessPolicy` gate export/render; revocation terminal (**yes**) | consent *verification* (is the signature on the release real?) `DEFERRED` |
+| T6 | verdict forged after the fact | content-addressed bundle, every artifact required, Ed25519 signature verified against a **consumer-supplied** trust anchor; six-state vocabulary (**yes**) | an unsigned run is `UNSIGNED`: integrity, not authenticity; a self-signed bundle is `UNTRUSTED_SIGNER`, never `VALID` |
+| T7 | real person's likeness used without consent | `AccessPolicy.require(EXPORT)` **then** consent (purpose, rights, territory, UTC-normalised expiry); revocation terminal and durable; imported consent quarantined (**yes**) | consent *verification* (is the signature on the release real?) `DEFERRED`; recall of already-distributed files is organisational |
 | T8 | model licence violation (research-only weights) | licence matrix; excluded packs; no weights committed (**yes**) | a future integrator can still add them; review is manual |
 | T9 | synthetic media presented as real | capsule carries `synthetic_marking`; bundle repeats it as an assertion (**yes**) | enforcement at export/distribution is outside this repo |
-| T10 | denial of service via huge assets | size limits in `BlobStore` + PNG decoder bounds (**partial**) | decompression-bomb tests are limited to hand-built cases |
-| T11 | audit trail tampering | append-only audit rows with actor + action + reason (**yes**) | no hash-chaining or external anchoring (`DEFERRED`) |
+| T10 | denial of service via huge assets | `DecodeLimits` checked from the header before allocation (16 MP, 8192 px side, 32 MB input, 96 MB decompressed, 10 min audio) + `BlobStore` byte cap (**yes**) | a slow-drip client is out of scope (there is no network API here) |
+| T11 | audit trail tampering | append-only audit rows with actor + action + reason + allow/deny, and a separate lineage chain (**yes**) | no hash-chaining or external anchoring on the `audit` table (`DEFERRED`) |
 | T12 | replay of an old verdict for a new shot | report binds `shot_id` + `capsule_digest` + `calibration_digest` + `evidence_digest` (**yes**) | a consumer that ignores those fields is out of scope |
 
 ## Trust boundaries
@@ -64,8 +64,15 @@ Status: **VERIFIED** for the implemented controls (tested); items marked
 
 ## Known gaps to state out loud
 
-1. Face verification is the weakest control (FAR 0.600 on 4/10 held-out scores).
-2. Evidence signing is not exercised here (no key); the code path is tested with
-   ephemeral keys only.
-3. Calibration artifacts are not signed; a signed-thresholds design is `DEFERRED`.
-4. No rate limiting on the verification API (there is no API here — `DEFERRED`).
+1. Face verification is the weakest control: FAR 0.600 / FRR 0.250 on the held-out
+   character at the accept boundary (4 genuine / 10 impostor pairs). The look-alike
+   pair is the hard case and it is the case the benchmark exists for.
+2. Voice identity is **not measurable on this corpus**: the look-alike pair is 3 Hz
+   apart while a session shift is ~2 Hz, so the calibration split is inseparable
+   (EER 1.0) and the dimension reports `NOT_MEASURED` instead of a threshold.
+3. Evidence signing is not exercised in CI (no key); the code path is tested with
+   ephemeral keys only, and a self-signed bundle is deliberately *not* `VALID`.
+4. Calibration artifacts are not signed; a signed-thresholds design is `DEFERRED`.
+5. No rate limiting on the verification API (there is no API here — `DEFERRED`).
+6. A correctly signed old bundle can be replayed; freshness needs a countersigned
+   timestamp, which is `DEFERRED`.

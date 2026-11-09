@@ -55,12 +55,19 @@ distinct purpose so that a release must name it explicitly.
 | evidence bundles | append-only, one per run | implemented |
 | audit trail | append-only | implemented |
 | embeddings / derived biometrics | not produced in this prototype (classical features are not stored) | by construction |
-| consents | kept after revocation (a revocation is itself evidence) | implemented |
+| consents | kept after revocation (a revocation is itself evidence) | implemented, durable |
+| imported consents | quarantined; authorize nothing until an owner adopts them | implemented |
 
-## Revocation semantics
+## Revocation semantics (enforced, not advisory)
 
-1. `revoke(consent_id, reason)` marks the record and writes an audit entry.
-2. `AccessPolicy.check_export(...)` refuses export for a revoked character.
+1. `revoke_consent(consent_id, reason)` marks the record, writes a revocation row and
+   appends to lineage.
+2. **Revocation is terminal**: the same `consent_id` can never be re-issued, and the
+   ledger refuses re-insertion with `ConsentRevoked`. A *new* consent needs a new id.
+3. Revocations are persisted and rehydrated on open, so a restart cannot resurrect a
+   revoked record.
+4. `AccessPolicy.require(EXPORT)` runs first, then the consent decision; a refusal
+   writes `allowed=false` plus the reason to the audit table.
 3. **Already-rendered outputs are not recalled** — the system cannot reach them.
    This is stated in the consent document and is the honest limitation of any local
    revocation: recall is an organisational process, not a code path.

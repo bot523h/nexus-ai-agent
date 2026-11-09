@@ -40,13 +40,30 @@ says so.
 ## Verification
 
 ```bash
+RUN=experiments/character_capsule/.work/results/final-757dafc
+
+# integrity only: every artifact must be supplied, no trust anchor
 PYTHONPATH=. python scripts/character_capsule/check_evidence.py \
-    --bundle experiments/character_capsule/.work/results/evidence_bundle.json \
-    --asset-dir experiments/character_capsule/.work/results
+    --bundle $RUN/evidence_bundle.json --asset-dir $RUN
 # exit 2 → UNSIGNED (integrity checkable, authenticity not established)
+
+# authenticity: the consumer supplies the key it trusts
+PYTHONPATH=. python scripts/character_capsule/check_evidence.py \
+    --bundle $RUN/evidence_bundle.json --asset-dir $RUN \
+    --trust-anchor trusted-signer.pub [--expect-key-id <key id>]
+# exit 0 → VALID
 ```
 
-Exit codes: `0` VALID, `2` UNSIGNED, `1` INVALID.
+Six states, one per outcome (ADR-0008):
+
+| state | meaning | exit |
+|---|---|---|
+| `VALID` | structure + every artifact byte + a *trusted* signature | 0 |
+| `INVALID` | recorded bytes changed, or the bundle contradicts itself | 1 |
+| `UNSIGNED` | integrity checkable, authenticity never established | 2 |
+| `INCOMPLETE` | artifacts described by the bundle were not supplied | 3 |
+| `UNTRUSTED_SIGNER` | signed, but not by the trusted key (or key id) | 4 |
+| `NOT_VERIFIABLE` | a signature exists but cannot be checked here | 5 |
 
 ## Design decisions and their reasons
 
@@ -75,8 +92,12 @@ Exit codes: `0` VALID, `2` UNSIGNED, `1` INVALID.
 | swap one byte of a described artifact | `files_match = false`, `ok = false` | `test_tampering_with_an_artifact_invalidates_the_bundle` |
 | edit a record's metadata | `hard_binding_matches_records = false` | `test_tampering_with_a_record_breaks_the_hard_binding` |
 | edit the claim after signing | `INVALID`, `signature_valid = false` | `test_signature_does_not_survive_an_edit` |
-| verify with a different public key | `INVALID` | `test_a_foreign_key_does_not_verify` |
+| verify with a different public key | `UNTRUSTED_SIGNER` (not `INVALID`: well formed, not trusted) | `test_a_foreign_key_does_not_verify` |
+| sign a bundle with a key the bundle itself carries | `UNTRUSTED_SIGNER`, never `VALID` | `test_a_signature_alone_is_not_authenticity` |
+| pin a key id and sign with the same bytes under another id | `UNTRUSTED_SIGNER` | `test_an_expected_key_id_mismatch_is_refused` |
+| withhold one recorded artifact | `INCOMPLETE`, `missing_records` names it | `test_missing_artifacts_are_incomplete_never_valid` |
 | rely on an unsigned bundle | `UNSIGNED` + explicit reason | `test_bundle_binds_every_artifact_it_names` |
+| rewrite a frame and re-run the corpus digest | per-frame `sha256` changes, binding fails | `test_f15b_a_rewritten_frame_changes_its_record_not_just_the_corpus_digest` |
 
 ## What it does not prove
 
@@ -87,6 +108,9 @@ Exit codes: `0` VALID, `2` UNSIGNED, `1` INVALID.
   itself as shape only.
 * **Nothing about time** — `created_at` is asserted by the producer, not
   countersigned by a timestamp authority (`DEFERRED`).
-* **Nothing about consent** — the disclosure block states the synthetic situation;
-  a real-person capsule would need a verifiable consent reference, which is
-  `DEFERRED` pending the consent ledger's production storage.
+* **Nothing about consent by itself** — the disclosure block states the synthetic
+  situation; a real-person export additionally requires the consent gate described in
+  `SECURITY_HARDENING_REPORT.md` §3, and an *imported* consent record stays inert
+  until an owner adopts it.
+* **Nothing about freshness** — a correctly signed old bundle replays. `created_at`
+  is recorded, not countersigned.

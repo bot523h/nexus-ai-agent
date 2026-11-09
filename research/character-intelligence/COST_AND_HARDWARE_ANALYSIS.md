@@ -11,7 +11,7 @@ Status: **VERIFIED for CPU measurements** (this workspace, 2 vCPU / ~3 GB);
 | `observe()` one frame (full descriptor) | ~3.5–4.5 ms | negligible |
 | one continuity evaluation (7 references + 1 candidate) | **249 ms mean** (min 79 ms, max 324 ms) | 57.3 MB peak RSS |
 | full benchmark run (corpus + calibration + 12 scenarios + evidence) | **6.84 s** | 57.3 MB |
-| full test suite `tests/character_capsule` (58 tests) | 28.8 s | < 120 MB |
+| full test suite `tests/character_capsule` (127 tests) | 68.8 s | < 160 MB |
 
 Per-shot cost is dominated by re-observing the gallery: seven references × ~4 ms,
 plus the candidate, plus the pure-numpy group distances. Caching observations per

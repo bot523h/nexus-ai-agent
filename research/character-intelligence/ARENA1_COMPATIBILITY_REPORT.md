@@ -52,7 +52,7 @@ board claim:
 ```
 research/character-intelligence/     (new: documents)
 experiments/character_capsule/       (new: prototype + CLI target)
-tests/character_capsule/             (new: 6 test modules, 58 tests)
+tests/character_capsule/             (new: 6 test modules, 127 tests after hardening)
 scripts/character_capsule/           (new: 3 thin CLIs)
 .agents/board.json                   (board CLI: zone + claim, no hand edit)
 ```

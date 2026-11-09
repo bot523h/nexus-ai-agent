@@ -24,7 +24,7 @@ PYTHONPATH=. python -m experiments.character_capsule.benchmark \
 → 12/12 scenarios passed, exit 0
 
 PYTHONPATH=. python -m pytest tests/character_capsule --noconftest -q
-→ 58 passed in 28.76 s
+→ 127 passed in 68.8 s (post-hardening, commit 757dafc)
 
 ruff check experiments/character_capsule scripts/character_capsule tests/character_capsule
 → All checks passed

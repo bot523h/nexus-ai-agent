@@ -8,14 +8,16 @@ image I/O). This wrapper only wires arguments to those calls.
 Example::
 
     python scripts/character_capsule/verify_shot.py \
-        --calibration experiments/character_capsule/.work/results/calibration.json \
+        --calibration experiments/character_capsule/.work/results/<run-id>/calibration.json \
         --image experiments/character_capsule/.work/frames/000001-shot-angle.png \
         --reference experiments/character_capsule/.work/frames/000001-ref-front.png \
         --shot-id SH-102
 
 Exit codes: ``0`` for VERIFIED / VERIFIED_WITH_LIMITATIONS, ``3`` for any state
 that needs a human (REVIEW_REQUIRED, INSUFFICIENT_EVIDENCE), ``4`` for a drift or
-conflict state. A wrapper that always exited ``0`` would be useless in CI.
+conflict state, ``5`` when the shot is refused outright (its pins do not match the
+capsule, the media cannot be decoded, the manifest is malformed). A wrapper that
+always exited ``0`` would be useless in CI.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from experiments.character_capsule.continuity import (  # noqa: E402
     VerificationState,
     load_calibration,
 )
+from experiments.character_capsule.errors import CapsuleError, PinMismatch  # noqa: E402
 from experiments.character_capsule.media import load_rgb  # noqa: E402
 from experiments.character_capsule.scene import (  # noqa: E402
     DeclaredShot,
@@ -117,12 +120,47 @@ def main(argv: list[str]) -> int:
             declared=DeclaredShot(outfit_id=args.outfit, expression=args.expression),
         )
     evaluator = ContinuityEvaluator(calibration)
-    report = evaluator.evaluate(
-        shot=shot,
-        capsule=capsule,
-        image=load_rgb(args.image),
-        reference_images=[load_rgb(path) for path in references],
-    )
+    try:
+        report = evaluator.evaluate(
+            shot=shot,
+            capsule=capsule,
+            image=load_rgb(args.image),
+            reference_images=[load_rgb(path) for path in references],
+        )
+    except PinMismatch as refusal:
+        # A refused shot is not a verdict: say so with a distinct exit code instead
+        # of letting a traceback stand in for an answer.
+        print(
+            json.dumps(
+                {
+                    "refused": True,
+                    "reason": "shot pins do not match the capsule",
+                    "detail": str(refusal),
+                    "details": dict(getattr(refusal, "details", {})),
+                    "shot_id": shot.shot_id,
+                    "pins_source": pins_source,
+                },
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 5
+    except CapsuleError as refusal:
+        print(
+            json.dumps(
+                {
+                    "refused": True,
+                    "reason": type(refusal).__name__,
+                    "detail": str(refusal),
+                    "details": dict(getattr(refusal, "details", {})),
+                },
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 5
     payload = report.to_dict()
     payload["pins_source"] = pins_source
     print(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True))
