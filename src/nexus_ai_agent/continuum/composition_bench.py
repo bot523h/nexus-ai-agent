@@ -293,6 +293,10 @@ def bench_composition_through_queue(
                     "external_inputs": {"src": {"path": str(source), "sha256": digest}},
                     "workspace_dir": str(workspace),
                     "idempotency_key": "composition:bench",
+                    # The requester is named and the level-C node is confirmed.
+                    # The worker accepts neither from itself.
+                    "actor": {"kind": "service", "actor_id": "composition-bench"},
+                    "confirmed": True,
                 }
                 enqueue_started = time.monotonic()
                 job_id = await queue.enqueue(
