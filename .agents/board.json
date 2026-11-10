@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-06T21:25:39Z",
+  "updated_at": "2026-11-08T08:42:47Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8593,6 +8593,38 @@
       "gates_owner": false,
       "delivered": [],
       "note": ""
+    },
+    {
+      "task": "task-324-closeout-docs-repair",
+      "title": "Repair PR #324 (NAGAR-ONE P0 final closeout): index the new audit report + fix the flagged report/board-evidence findings",
+      "title_fa": "تعمیر PR #324 (بستن نهایی P0): فهرست‌کردن گزارش ممیزی جدید و رفع یافته‌های گزارش/شواهد تخته",
+      "zone": "docs-architecture",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Repair the open docs-only PR #324 on its existing branch openhands/nagar-one-final-closeout-20261107. Root cause of the 5 red test/python-parity checks: docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md is not indexed in docs/README.md (TRUTH010). Also close the 5 unresolved review threads on the report and the memory note. No runtime change; no merge.",
+      "scope_fa": "تعمیر PR مستندات‌محور باز #324 روی همان شاخه. علت ریشهٔ ۵ چک قرمز: گزارش ممیزی در docs/README.md فهرست نشده (TRUTH010). همچنین بستن ۵ ترد بازبینی روی گزارش و یادداشت حافظه. بدون تغییر runtime و بدون ادغام.",
+      "acceptance_criteria": [
+        "the new audit report is indexed in docs/README.md and every docs-integrity / truth-doctor check is green",
+        "every unresolved review thread on PR #324 is answered with a commit SHA and resolved",
+        "the report is honest: SHA-bound evidence, corrected chronology, and no claim that outruns the enforced guarantee",
+        "no runtime file is modified and no secret value appears in any report"
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_docs_integrity.py tests/unit/test_truth_doctor.py tests/architecture/test_repo_truth_consistency.py",
+        "exact make lint + ruff format --check . result and the final head SHA; board check exit 0 before push"
+      ],
+      "prerequisites": [],
+      "exclusive_paths": [
+        "docs/README.md",
+        "docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md",
+        ".agents/board.json"
+      ],
+      "owner_hint": "openhands/nagar-one-final-closeout-20261107",
+      "agent_branch": "openhands/nagar-one-final-closeout-20261107",
+      "claimed_at": "2026-11-08T08:42:47Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1
     }
   ],
   "deferred_log": [
@@ -9447,6 +9479,54 @@
         "merge_commit_sha": "aadaf53157670b64af6978fcf41b592e108ac9ae",
         "recorded_by": "openhands/omni-recovery-integration-20261105",
         "recorded_at": "2026-11-05T13:13:23Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 319,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "65c020cf29151198faf75564df5edb4e7c61215b",
+        "recorded_by": "main",
+        "recorded_at": "2026-11-08T06:11:52Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 320,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "a8ce54a4923a7ad23301aeaa602478185980a050",
+        "recorded_by": "main",
+        "recorded_at": "2026-11-08T06:11:54Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 321,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "1919dc3d2f52bd9fee1512f5b38fddb878562b40",
+        "recorded_by": "main",
+        "recorded_at": "2026-11-08T06:11:55Z"
+      }
+    },
+    {
+      "kind": "pull_request",
+      "repository": "bot523h/nexus-ai-agent",
+      "number": 322,
+      "state": "merged_into_main",
+      "evidence": {
+        "source": "github_api",
+        "merge_commit_sha": "5ed6d4e10be55f5baf5e9f2a8aa99775577621db",
+        "recorded_by": "main",
+        "recorded_at": "2026-11-08T06:11:56Z"
       }
     }
   ]
