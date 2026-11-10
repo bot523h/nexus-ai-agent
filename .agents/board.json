@@ -1251,9 +1251,7 @@
         "tests/unit/test_studio_session.py",
         "tests/unit/test_studio_web.py",
         "tests/architecture/test_studio_web_boundary.py",
-        "docs/product/NAGAR_STUDIO_APP.md",
-        "docs/architecture/adr/0014-nagar-studio-web-app.md",
-        "docs/README.md"
+        "tests/architecture/test_studio_read_boundary.py"
       ]
     }
   ],
@@ -8644,9 +8642,7 @@
         "tests/unit/test_studio_session.py",
         "tests/unit/test_studio_web.py",
         "tests/architecture/test_studio_web_boundary.py",
-        "docs/product/NAGAR_STUDIO_APP.md",
-        "docs/architecture/adr/0014-nagar-studio-web-app.md",
-        "docs/README.md"
+        "tests/architecture/test_studio_read_boundary.py"
       ],
       "owner_hint": "Independent product-engineering lane. Reuses studio_read, JobRegistry and the dashboard gate; does not touch the creative/ or storage/ owners.",
       "agent_branch": "nagar-studio-app-20261110",
