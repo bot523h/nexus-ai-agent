@@ -257,6 +257,16 @@ class ArtifactPublication:
     publish: Callable[[dict[str, object], dict[str, object]], dict[str, object]]
     retract: Callable[[dict[str, object], dict[str, object]], None]
     finalize: Callable[[dict[str, object], dict[str, object]], None] | None = None
+    # ``confirm(payload, result)`` (optional, async)
+    #     runs AFTER the artifact was independently verified and published but
+    #     BEFORE the durable ``COMPLETED`` commit, and is the ONLY point at
+    #     which a durable side effect that must accompany the job's success
+    #     (e.g. the artifact→revision binding) may be committed.  It is
+    #     fail-closed: a raised exception fails the job (retryable) and the
+    #     attempt is retracted — a job can never be COMPLETED without its
+    #     confirmation, and a confirmation can never outlive a rejected
+    #     attempt.  It must be idempotent (a retry re-runs it).
+    confirm: Callable[[dict[str, object], dict[str, object]], Awaitable[None]] | None = None
 
 
 def default_artifact_publications() -> dict[str, ArtifactPublication]:
@@ -1814,6 +1824,41 @@ class InProcessJobQueue:
                 )
             if outcome.ok:
                 stored_passport: str | None = None
+                # Mandatory durable confirmation (task-282 Slice 2): the
+                # artifact→revision binding is committed HERE — after the
+                # independent verification and the atomic publication, before
+                # the COMPLETED commit — never inside the worker.  A refusal
+                # (or crash) fails the job closed and retracts this attempt, so
+                # a rejected artifact can never leave a durable binding behind.
+                if publication is not None and publication.confirm is not None:
+                    # Fence re-check at the commit boundary.  The binding is a
+                    # durable side effect, so a superseded attempt must never
+                    # commit it: ownership was last read before the (irreversible)
+                    # publication, and the re-probe window between that check and
+                    # here is the classic plain-filesystem fencing limit.  Re-read
+                    # the fence now so an attempt that lost the row can commit no
+                    # provenance and can reach no COMPLETED (it owns nothing).
+                    if not await asyncio.to_thread(
+                        self._owns_execution, claim, JobStatus.VERIFYING
+                    ):
+                        self._log_rejected(job_id, claim, JobStatus.COMPLETED)
+                        return
+                    confirm_error = await self._confirm_safely(publication, payload, result, claim)
+                    if confirm_error is not None:
+                        retract_context = dict(result)
+                        retract_context["_queue_job_id"] = claim.job_id
+                        retract_context["_queue_attempt"] = claim.attempt
+                        await asyncio.to_thread(publication.retract, payload, retract_context)
+                        status = failure_status(classify_verification_reason(confirm_error))
+                        await self._fail_owned(
+                            claim,
+                            job_type,
+                            payload,
+                            f"confirmation_failed:{confirm_error}",
+                            status,
+                            None,
+                        )
+                        return
                 final_result = {**result, VERIFICATION_RESULT_KEY: outcome.block}
                 if trim_request:
                     try:
@@ -2175,6 +2220,37 @@ class InProcessJobQueue:
             await asyncio.to_thread(publication.finalize, payload, finalize_context)
         except Exception:  # noqa: BLE001 - the job is already durably COMPLETED
             logger.warning("artifact publication finalize failed (backup left)", exc_info=True)
+
+    async def _confirm_safely(
+        self,
+        publication: ArtifactPublication,
+        payload: dict[str, object],
+        result: dict[str, object],
+        claim: ExecutionClaim,
+    ) -> str | None:
+        """Commit the attempt's mandatory durable side effect, fail-closed.
+
+        Runs after verification + publication and BEFORE the ``COMPLETED``
+        commit, so a job can never become terminal-success without its
+        confirmation (the artifact→revision binding).  Returns ``None`` on
+        success or a typed failure reason on refusal; any exception is a
+        refusal, never an unconfirmed success.  The queue-minted execution
+        identity is injected so the callback can scope the commit to this
+        exact attempt.
+        """
+        assert publication.confirm is not None
+        confirm_context = dict(result)
+        confirm_context["_queue_job_id"] = claim.job_id
+        confirm_context["_queue_attempt"] = claim.attempt
+        try:
+            await publication.confirm(payload, confirm_context)
+        except Exception as exc:  # noqa: BLE001 - an unconfirmed success must fail closed
+            logger.warning(
+                "artifact publication confirm failed; failing the job closed", exc_info=True
+            )
+            code = getattr(exc, "code", None)
+            return str(code) if isinstance(code, str) and code else "confirmation_failed"
+        return None
 
     async def _verify_safely(
         self,

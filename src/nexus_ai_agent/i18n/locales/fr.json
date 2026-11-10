@@ -80,5 +80,6 @@
   "creative.failed.render_failed": "❌ Échec du rendu ; essayez un média plus court ou d'autres paramètres.",
   "creative.failed.ffmpeg_unavailable": "❌ Le moteur de rendu n'est pas installé sur ce déploiement.",
   "creative.failed.internal": "❌ Une erreur interne est survenue ; les détails sont visibles par l'équipe.",
-  "creative.request_conflict": "♻️ Ce message a déjà été mis en file avec d'autres médias. Envoyez les nouveaux médias dans un nouveau message."
+  "creative.request_conflict": "♻️ Ce message a déjà été mis en file avec d'autres médias. Envoyez les nouveaux médias dans un nouveau message.",
+  "creative.failed.artifact_binding_failed": "❌ L’artefact publié n’a pas pu être lié à la révision exacte du projet, le rendu a donc été refusé. Renvoyez la commande."
 }

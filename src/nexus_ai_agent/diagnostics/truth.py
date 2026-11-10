@@ -414,6 +414,54 @@ def check_law_test_resolution(root: Path) -> list[Finding]:
     return findings
 
 
+def check_law_numbering(root: Path) -> list[Finding]:
+    """Law numbers in MODULE_MAP §3 must be unique and gap-free from R1.
+
+    A duplicated law number (two rules sharing ``R22``) or a skipped number makes
+    the register ambiguous: a cross-reference to ``R22`` resolves to two rules,
+    and a newcomer minting a law can land on an occupied slot.  This is the
+    machine enforcement of one unambiguous law namespace.
+    """
+    section = _module_map_section(root)
+    if not section:
+        return [
+            Finding(
+                "TRUTH023",
+                "error",
+                "MODULE_MAP.md §3 (boundary laws) is missing or unparsable",
+                "docs/architecture/MODULE_MAP.md",
+            )
+        ]
+    numbers = [int(match.group(1)[1:]) for match in _LAW_ROW.finditer(section)]
+    findings: list[Finding] = []
+    counts: dict[int, int] = {}
+    for number in numbers:
+        counts[number] = counts.get(number, 0) + 1
+    for number in sorted(counts):
+        if counts[number] > 1:
+            findings.append(
+                Finding(
+                    "TRUTH023",
+                    "error",
+                    f"law R{number} is declared {counts[number]} times",
+                    f"MODULE_MAP.md R{number}",
+                )
+            )
+    if numbers:
+        present = set(numbers)
+        for number in range(1, max(numbers) + 1):
+            if number not in present:
+                findings.append(
+                    Finding(
+                        "TRUTH024",
+                        "warning",
+                        f"law number R{number} is skipped (gap before R{max(numbers)})",
+                        f"MODULE_MAP.md R{number}",
+                    )
+                )
+    return findings
+
+
 # --------------------------------------------------------------------------- #
 # check 4 — machine-readable documentation claims resolve to code
 # --------------------------------------------------------------------------- #
@@ -661,6 +709,7 @@ CHECKS: tuple[tuple[str, Callable[[Path], list[Finding]]], ...] = (
     ("version-lockstep", check_version_lockstep),
     ("docs-index", check_docs_index),
     ("law-test-resolution", check_law_test_resolution),
+    ("law-numbering", check_law_numbering),
     ("claim-witnesses", check_claim_witnesses),
     ("fail-open-defaults", check_fail_open_defaults),
     ("board-truth", check_board_truth),
