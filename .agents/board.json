@@ -8561,7 +8561,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "expired",
+      "status": "active",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8592,8 +8592,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
-      "note": "",
-      "release_reason": "auto-released by gc at 2026-11-10T10:48:40Z (stale active lease)"
+      "note": ""
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -8641,7 +8640,7 @@
       "title_fa": "تعمیر PR #324 (بستن نهایی P0): فهرست‌کردن گزارش ممیزی جدید و رفع یافته‌های گزارش/شواهد تخته",
       "zone": "docs-architecture",
       "priority": "P0",
-      "status": "expired",
+      "status": "active",
       "scope": "Repair the open docs-only PR #324 on its existing branch openhands/nagar-one-final-closeout-20261107. Root cause of the 5 red test/python-parity checks: docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md is not indexed in docs/README.md (TRUTH010). Also close the 5 unresolved review threads on the report and the memory note. No runtime change; no merge.",
       "scope_fa": "تعمیر PR مستندات‌محور باز #324 روی همان شاخه. علت ریشهٔ ۵ چک قرمز: گزارش ممیزی در docs/README.md فهرست نشده (TRUTH010). همچنین بستن ۵ ترد بازبینی روی گزارش و یادداشت حافظه. بدون تغییر runtime و بدون ادغام.",
       "acceptance_criteria": [
@@ -8665,8 +8664,7 @@
       "claimed_at": "2026-11-08T08:42:47Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
-      "release_reason": "auto-released by gc at 2026-11-10T10:48:40Z (stale active lease)"
+      "generation": 1
     },
     {
       "task": "task-nagar-triad-closure-01",
