@@ -259,4 +259,8 @@ __all__ = [
     "intent_digest_of",
     "normalize_intent",
     "parse_intent",
+    "parse_delta_intent",
 ]
+
+# Delta Dialogue — additive re-export, keeps the IBPC public surface unified.
+from nexus_ai_agent.nagar.ibpc.delta import parse_delta_intent as parse_delta_intent  # noqa: F401, E402
