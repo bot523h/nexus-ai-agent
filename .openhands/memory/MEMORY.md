@@ -9,6 +9,24 @@ Index of durable, expensive-to-learn facts. Detail goes to daily logs.
   genuinely complete or the owner asks to stop. This supersedes the default habit of
   closing every exchange.
 
+## NEXUS-OMNI-FORENSIC-CLOSURE-2026-11-11 (durable, 2026-11-10)
+- **PR #330 truth-drift (PROVEN GREEN).** Adding `tests/unit/test_ibpc_delta.py` (names op id
+  `timeline.trim`) made the committed `OPERATION_TRUTH.json` stale — `nagar.sources.
+  read_suite_evidence` rglobs `tests/**/*.py`, so `suite_reference_files` grew. Fix = regenerate
+  with `python -m nexus_ai_agent.nagar` (plain, NOT `--docs`); pushed `6c367704`; **24/24 CI
+  jobs SUCCESS** (run 42910614078); PR #330 MERGEABLE.
+- **New rail (PR #331, `17843ac1`).** `make truth-check` (.PHONY) + `tests/unit/
+  test_ci_truth_parity.py`; **24/24 CI SUCCESS** (run 42918018092). Closes the gap that NO local
+  rail ran the truth gate (`.pre-commit-config.yaml` = ruff+mypy only; hooks not installed in a
+  fresh checkout). `--check` is fail-closed: clean→0, one removed ref→1.
+- **IBPC wiring truth (honest):** `delta` half-wired (via `intent.py`); `shadow`/`signature`
+  reachable in `ibpc/__init__.py` but NOT wired to `service.py`/approval. Canonical preview =
+  `preview.py`. Real-ffmpeg integration tests DO run (imageio-ffmpeg resolves), 204 triad pass.
+- **CI gotcha:** an "all-fail in ~10s" Actions run is usually a CANCELLED superseded run
+  (`cancel-in-progress`). Check `--json conclusion` (cancelled) + `gh run list --branch` for the
+  CURRENT run. `CircleCI Pipeline fail` shows on EVERY PR (no `.circleci/`); NOT a required check
+  (required = lint, test, merge-base-guard) — `UNSTABLE` != blocked.
+
 ## NAGAR-ONE P0 closeout + PR reconciliation (2026-11-07 continuation)
 > **SUPERSEDED (2026-11-08).** This interim block records the mid-campaign state (#319 at
 > `e52e30eb`, 24/24 mutants, 6421 tests). The FINAL, durable state is in the
