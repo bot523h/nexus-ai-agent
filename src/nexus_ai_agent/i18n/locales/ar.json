@@ -80,5 +80,6 @@
   "creative.failed.render_failed": "❌ فشل العرض؛ جرّب وسائط أقصر أو معطيات أخرى.",
   "creative.failed.ffmpeg_unavailable": "❌ محرك العرض غير مثبَّت في هذا النشر.",
   "creative.failed.internal": "❌ حدث خطأ داخلي؛ التفاصيل متاحة للفريق.",
-  "creative.request_conflict": "♻️ سبق إدراج هذه الرسالة بوسائط مختلفة. أرسل الوسائط الجديدة في رسالة جديدة."
+  "creative.request_conflict": "♻️ سبق إدراج هذه الرسالة بوسائط مختلفة. أرسل الوسائط الجديدة في رسالة جديدة.",
+  "creative.failed.artifact_binding_failed": "❌ تعذّر ربط الناتج المنشور بالمراجعة الدقيقة للمشروع، لذلك رُفض العرض. أعد إرسال الأمر."
 }

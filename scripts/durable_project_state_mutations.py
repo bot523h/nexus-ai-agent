@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STORE = ROOT / "src" / "nexus_ai_agent" / "creative" / "project_state" / "store.py"
 PERSISTENCE = ROOT / "src" / "nexus_ai_agent" / "creative" / "studio" / "persistence.py"
 RENDER_JOBS = ROOT / "src" / "nexus_ai_agent" / "creative" / "render_jobs.py"
+QUEUE = ROOT / "src" / "nexus_ai_agent" / "adapters" / "in_process_job_queue.py"
 HANDOFF = ROOT / "src" / "nexus_ai_agent" / "nagar" / "creative" / "handoff.py"
 TESTS = (
     "tests/unit/test_durable_project_state.py",
@@ -174,6 +175,117 @@ MUTATIONS: tuple[Mutation, ...] = (
         "            admitted = await revision_store.load_head(canonical.project_id)",
         "task-282: the handoff must pin the ADMITTED revision and never re-read the "
         "live head; re-reading re-targets the job at a concurrent head move (TOCTOU)",
+    ),
+    Mutation(
+        "artifact_binding_conflict_ignored",
+        STORE,
+        """        if row.revision_id != revision_id:
+            raise ArtifactBindingConflict("artifact already bound to a different revision")""",
+        """        if False:  # mutated: repointing an artifact to another revision is allowed
+            raise ArtifactBindingConflict("artifact already bound to a different revision")""",
+        "Slice 2: an artifact's provenance is fixed at first bind; dropping the "
+        "conflict check silently re-points it at another revision",
+    ),
+    Mutation(
+        "artifact_binding_skips_revision_validation",
+        STORE,
+        "        await self._load_validated_revision(project_id, revision_id)",
+        "        pass  # mutated: binding no longer validates the revision exists",
+        "Slice 2: an artifact must only bind to a revision that exists and validates; "
+        "skipping the load lets an artifact bind to a vanished/tampered revision",
+    ),
+    Mutation(
+        "artifact_verify_remeasure_removed",
+        STORE,
+        """        if measured != binding.artifact_id:
+            raise ArtifactRevisionMismatch(
+                "artifact bytes no longer match the bound content address"
+            )""",
+        """        if False:  # mutated: re-verification no longer re-measures the artifact
+            raise ArtifactRevisionMismatch(
+                "artifact bytes no longer match the bound content address"
+            )""",
+        "Slice 2: re-verification must re-measure the artifact bytes; removing the "
+        "re-measure trusts a replaced/tampered artifact",
+    ),
+    Mutation(
+        "artifact_binding_failopen",
+        RENDER_JOBS,
+        """    except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
+        raise CreativeRenderError(
+            "artifact_binding_failed", f"{type(exc).__name__}: {exc}"
+        ) from exc""",
+        """    except Exception:  # mutated: binding failure is swallowed
+        return result""",
+        "Slice 2: a refused binding must fail the job closed, never succeed without "
+        "provenance; swallowing the error lets a pinned job publish unbound",
+    ),
+    Mutation(
+        "artifact_binding_skips_digest_remeasure",
+        RENDER_JOBS,
+        """    if not is_content_address(raw_sha) or raw_sha != measured:
+        raise CreativeRenderError(
+            "artifact_binding_failed",
+            "reported artifact digest does not match the artifact's measured bytes",
+        )""",
+        """    if False:  # mutated: bind trusts the reported digest instead of re-measuring
+        raise CreativeRenderError(
+            "artifact_binding_failed",
+            "reported artifact digest does not match the artifact's measured bytes",
+        )""",
+        "Slice 2 review: the binding must re-measure the published bytes; trusting the "
+        "reported digest binds an artifact that a later write already replaced",
+    ),
+    Mutation(
+        "artifact_content_address_validation_removed",
+        STORE,
+        "        if not is_content_address(artifact_id):",
+        "        if False:  # mutated: a non-hex content address is accepted",
+        "Slice 2 review: a same-length non-hex id can never match a real file; "
+        "accepting it persists a permanently unverifiable binding",
+    ),
+    Mutation(
+        "artifact_verify_oserror_failopen",
+        STORE,
+        """        except OSError as exc:
+            raise ArtifactRevisionMismatch(
+                "artifact bytes could not be read for re-verification"
+            ) from exc""",
+        """        except OSError:  # mutated: a missing artifact is trusted as verified
+            return binding""",
+        "Slice 2 review: a missing/unreadable artifact must be a typed refusal, never "
+        "a silent 'verified' — fail-closed on the read path",
+    ),
+    Mutation(
+        "artifact_binding_confirmed_before_verification",
+        QUEUE,
+        "                if publication is not None and publication.confirm is not None:",
+        "                if False:  # mutated: the binding is never confirmed by the queue",
+        "D-0038 residual 1: the durable binding must be committed by the queue AFTER "
+        "verification+publication and BEFORE COMPLETED; disabling the confirm hook "
+        "means a job completes with no artifact→revision provenance",
+    ),
+    Mutation(
+        "artifact_confirmation_refusal_ignored",
+        QUEUE,
+        "                    if confirm_error is not None:",
+        "                    if False:  # mutated: a refused confirmation is ignored",
+        "D-0038 residual 1: a refused confirmation must fail the job closed; ignoring "
+        "it lets an unconfirmed job reach COMPLETED and publish without provenance",
+    ),
+    Mutation(
+        "confirmation_fence_recheck_removed",
+        QUEUE,
+        """                    if not await asyncio.to_thread(
+                        self._owns_execution, claim, JobStatus.VERIFYING
+                    ):
+                        self._log_rejected(job_id, claim, JobStatus.COMPLETED)
+                        return
+                    confirm_error = await self._confirm_safely(publication, payload, result, claim)""",
+        "                    confirm_error = await self._confirm_safely(publication, payload, result, claim)",
+        "the durable binding is a side effect: ownership must be re-read at the "
+        "commit boundary, else an attempt superseded during the re-probe window "
+        "commits provenance for a row it no longer owns",
     ),
 )
 

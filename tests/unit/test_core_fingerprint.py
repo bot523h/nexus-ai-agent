@@ -25,7 +25,7 @@ from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLi
 from nexus_ai_agent.storage.checkpoint_reconciler import CheckpointReconciler
 
 NOW = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)
-CURRENT_MANIFEST_HEAD = "20261104dpstate"  # single head of migrations/versions
+CURRENT_MANIFEST_HEAD = "20261106artbind"  # single head of migrations/versions
 
 
 def _langgraph_db(tmp_path: Path) -> Path:
@@ -120,7 +120,7 @@ def test_core_mismatch_is_warning_only_and_never_disables(tmp_path: Path) -> Non
     report = reconciler.run(apply=True, now=NOW)
 
     assert report.core_schema == (
-        "warning:db_head_mismatch:db=some-other-revision,manifest=20261104dpstate"
+        "warning:db_head_mismatch:db=some-other-revision,manifest=20261106artbind"
     )
     # Warning only: the lifecycle still applies (t1/cp1 was backfilled).
     assert report.applied is True

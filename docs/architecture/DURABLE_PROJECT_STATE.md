@@ -76,6 +76,70 @@ revision is a refusal, not a head read. This closes a TOCTOU where a concurrent
 commit between admission and handoff would otherwise silently re-target the job
 at a newer revision.
 
+## Artifact → revision binding (Slice 2)
+
+A pinned job executes one immutable revision; when it publishes an artifact, the
+artifact's **measured** content digest must be durably bound to that exact
+revision — never to the project head, which may have moved after admission.
+
+```
+worker(load R1) → publish(output.mp4, sha256=D) → record INTENT {artifact=D, revision=R1} → result
+                                                                                        │
+queue: verify(result) ─ re-measure bytes == D ──▶ publish (atomic rename) ──▶ confirm: bind(project, R1, artifact=D) ──▶ COMPLETED
+                                                                                        │
+        re-verification: verify_artifact(project, D, path) ─ re-measure bytes == D ─────┘   and R1 still validates
+```
+
+The worker does **not** commit the binding: it runs before the queue's
+independent verification and atomic publication, so a result the queue later
+rejects would otherwise leave a durable binding for an artifact that was never
+published. The worker records only the *measured* binding **intent**; the
+queue's post-publication `confirm` hook (`ArtifactPublication.confirm`, wired to
+`creative_render_binding_confirm`) commits the durable row, and only then may the
+job become `COMPLETED`. The hook is fail-closed: a refusal (or crash) fails the
+job and retracts this attempt, so a job is never `COMPLETED` without its binding
+and a rejected artifact never leaves one behind. The digest is re-measured from
+the published bytes in the hook as well.
+
+The queue **re-reads the fence** (`_owns_execution`) immediately before the
+confirmation, because the binding is a durable side effect: ownership was last
+read before the (irreversible) publication, and the re-probe window between that
+check and the confirmation is the classic plain-filesystem fencing limit. An
+attempt superseded in that window commits no provenance and reaches no
+`COMPLETED` — it owns nothing.
+
+**Crash-consistency model (honest, not claimed atomic).** If the process dies
+after the confirmation commits the binding but before the durable `COMPLETED`,
+the row stays `verifying` with a queue-owned heartbeat; startup recovery
+(`resume_pending`) supersedes its fencing token and re-runs the job. The binding
+is append-only history of bytes that *were* published and is **not** deleted by
+the later failure, and the job is never falsely `COMPLETED`. There is no
+cross-database atomic transaction between the artifact-binding store and the
+queue, so the guarantee is "no `COMPLETED` without a binding", **not** "the
+binding exists iff the job completed".
+
+The binding lives in the **same** `project_state` package and the **same** single
+storage schema (`store.py`, one module maps `storage.models`), as one
+content-addressed row:
+
+| Concept | Authoritative owner | Durable record | Identity / hash rule | Forbidden duplicate |
+|---|---|---|---|---|
+| Artifact | the worker's measured bytes | `projectartifactbinding` row | `artifact_id` = `sha256:<hex>` of the published bytes | a second artifact store |
+| Binding | `SqlArtifactBindingStore` | same row | append-only, idempotent per `(project_id, artifact_id)` | a second provenance ledger |
+
+- `bind()` records the digest against `(project_id, revision_id)`; the revision
+  must exist and its bytes must still hash to their own identity, so an artifact
+  can never bind to a tampered, vanished or re-homed revision;
+- the binding is **append-only**: re-binding the same artifact to a *different*
+  revision is a hard `ArtifactBindingConflict`, so an artifact's provenance can
+  never be silently re-pointed (idempotent for the same revision);
+- `verify_artifact()` **re-measures** the artifact's current bytes and confirms
+  the bound revision still validates — any divergence is a typed refusal
+  (`ArtifactRevisionMismatch` / `RevisionIntegrityError` / `CrossProjectAccess`);
+- the confirm hook wires this fail-closed: a refused binding fails the job and
+  retracts the attempt — never a `COMPLETED` job without provenance. Unpinned
+  (legacy) jobs publish no binding.
+
 ## Boundaries
 
 `tests/architecture/test_durable_project_state_boundary.py` enforces that the
@@ -94,8 +158,24 @@ exposes no combined `execute`-style method that would bypass the bus.
 - `tests/integration/test_durable_project_revision_pinning.py` — the worker loads
   the exact pinned revision (never a moved head) and refuses a vanished or
   tampered pin; the handoff pins the **admitted** revision even after a
-  concurrent head move (deterministic ordering, no sleeps).
+  concurrent head move (deterministic ordering, no sleeps); and (Slice 2) the
+  artifact→revision binding: bind/re-verify, idempotent replay, repoint refusal,
+  artifact-byte re-measurement, tampered-revision refusal, cross-project refusal,
+  the unpinned no-op, the intent/confirm split, and four queue-level end-to-end
+  proofs (a verified+published job commits its binding then `COMPLETED`; a
+  refused confirmation fails the job closed with no binding row and its published
+  bytes retracted; a superseded attempt commits no binding at the commit boundary
+  — fault-injected takeover in the re-probe window; and a crash after the
+  confirmation but before `COMPLETED` recovers honestly).
 - `tests/integration/test_durable_project_concurrency.py` — real interleaving
   (exactly one winner) and atomic rollback on an injected crash.
 - `tests/architecture/test_durable_project_state_boundary.py` — no parallel
   authority, single schema declaration site.
+- `tests/unit/test_migrations.py` — `alembic upgrade head` creates the exact
+  schema (including `projectartifactbinding`), no drift, downgrade empties it.
+- `scripts/durable_project_state_mutations.py` — 25/25 mutants killed (15 Slice 1
+  + 10 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
+  digest-remeasure-removed, content-address-validation-removed,
+  verify-oserror-fail-open, binding-fail-open, and the three queue confirm-seam
+  mutants — confirm-gate disabled, confirmation-refusal-ignored, and
+  confirmation-fence-recheck-removed).

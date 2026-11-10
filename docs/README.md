@@ -63,6 +63,12 @@ placeholder text.
 | [architecture/SEC4_EGRESS_GATE_DESIGN.md](architecture/SEC4_EGRESS_GATE_DESIGN.md) | SEC-4 unified provider-egress gate — DESIGN ONLY: the ungated `/ai`→Gemini path (evidence), the full first-party egress inventory, the single-authority `EgressGate` architecture, a staged migration plan, adversarial test definitions, and the five OPEN owner decisions. No runtime change. |
 | [architecture/TRUTH_DOCTOR.md](architecture/TRUTH_DOCTOR.md) | The repo-truth authority (law R16): one pure-stdlib scanner for version lock-step, docs index/link integrity, boundary-law→test resolution, documentation claim witnesses, and truthy-default verdict reads — with its finding codes and honest limits. |
 
+## Product (living view — updated in place)
+
+| Document | What it is |
+|---|---|
+| [product/NAGAR_ONE_PRODUCT_CONTRACT.md](product/NAGAR_ONE_PRODUCT_CONTRACT.md) | The NAGAR-ONE product frame: what the product is (Studio, not Telegram), the two non-negotiable laws (Intent ≠ Authority; one authority per responsibility), the target architecture chain, the traceability requirement, and the Stage 0–3 scope. |
+
 ## Overnight (dated engineering record — one-night session)
 
 | Document | What it is |
@@ -158,11 +164,13 @@ placeholder text.
 | [audits/NEXUS_OMNI_AUDIT_RESPONSE_2026-11-05.md](audits/NEXUS_OMNI_AUDIT_RESPONSE_2026-11-05.md) | Response to the independent audit of #316/#317/#318: the two P0 board findings (forgeable PR-merge evidence; `completed_released` satisfying prerequisites), the dependency-gate P1 hardening (real `no-fix` expiry, `(package, id)` keying, merge-blocking, stronger anti-vacuity), and the evidence-hygiene fixes — each with its fix and test. |
 | [audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-05.md](audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-05.md) | Morning handoff: PR #318 dependency gate delivered (CI green incl. the fail-closed proof), live `main` healthy, #316/#317 re-verified as *unmerged* via git+API, corrections to prior records, and the Now/Next/Later plan. |
 | [audits/NEXUS_OMNI_PR_CONVERGENCE_LEDGER_2026-11-03.md](audits/NEXUS_OMNI_PR_CONVERGENCE_LEDGER_2026-11-03.md) | NEXUS-OMNI PR convergence ledger: all 43 open PRs classified A–G with shared-file overlap, an integration matrix, and a dependency-safe merge order. |
+| [audits/NEXUS_OMNI_NAGAR_ONE_HANDOFF_2026-11-06.md](audits/NEXUS_OMNI_NAGAR_ONE_HANDOFF_2026-11-06.md) | NAGAR-ONE campaign handoff: PRs #319/#320/#321 (all required checks green), the two real CI defects found and fixed (migration-head coupling; PostgreSQL golden embeds the head), the honest DEFERRED status of durable IBPC, and the Now/Next/Later plan. |
 | [audits/NEXUS_OMNI_RUNTIME_DATA_RECOVERY_AUDIT_2026-11-03.md](audits/NEXUS_OMNI_RUNTIME_DATA_RECOVERY_AUDIT_2026-11-03.md) | NEXUS-OMNI runtime/data/recovery audit: queue ownership/fencing/passport, effect outbox, DB and migrations, asset library, and the backup/restore findings (housekeeping red). |
 | [audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md](audits/NEXUS_OMNI_MORNING_HANDOFF_2026-11-03.md) | NEXUS-OMNI morning handoff: executive summary, delivered fixes (PR #304/#305), open risks with owners, what is NOT proven, and the Now/Next/Later plan. |
 | [audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md](audits/NEXUS_OMNI_LIVE_CLOSEOUT_2026-11-04_FA.md) | NEXUS-OMNI live closeout (Persian): post-merge ground truth on `main` @ `b63a22a8`, the seven merged PRs, the Manus-artifact absence record, precise CI state, B2/R2 changes, backup/restore truth, SEC-4 status, the 42-PR classification, board-drift reconciliation, and the owned remediation plan. |
 | [audits/NEXUS_OMNI_DELTA_2026-11-05.md](audits/NEXUS_OMNI_DELTA_2026-11-05.md) | NEXUS-OMNI 2026-11-05 delta: live-main re-verification (PR #315 merged, mutation job green), the board-prerequisite enforcement finding + fix (PR #316), the fail-closed `maintenance` backup analysis, supply-chain re-check, and the honest Now/Next/Later. |
 | [audits/NEXUS_OMNI_FINAL_PREMERGE_PROOF_2026-11-06.md](audits/NEXUS_OMNI_FINAL_PREMERGE_PROOF_2026-11-06.md) | Final pre-merge hardening & integration proof for #316/#317/#318: the two P0 board findings (forgeable PR-merge evidence; `completed_released` satisfying prerequisites) and the dependency-gate P1 hardening, each with its fix, test and killed mutation — plus the combined-tree integration proof (zero conflicts, all gates green) and the explicit proven / NOT_PROVEN boundary. |
+| [audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md](audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md) | NAGAR-ONE P0 final closeout & PR reconciliation: the merge train #320→#321→#319→#322 (live `main` `5ed6d4e1`), the P0 confirmation-boundary fence (`6420432b`, 25/25 mutants), the R1..R29 boundary-law register reconciliation, the #294 OpenGrep false-positive disposition, and the honest residuals (D-0038). |
 
 ## Engineering (mission records)
 
@@ -170,6 +178,7 @@ placeholder text.
 |---|---|
 | [engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md](engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md) | M0 live audit for mission NAGAR-IBPC-LIVE-EDITING-01: 21-component inventory with file evidence, real execution path, verifier calibration, forbidden paths, NOW/NEXT/LATER. |
 | [engineering/NAGAR_IBPC.md](engineering/NAGAR_IBPC.md) | The IBPC slice (intent-bound proof capsules for live editing): chain, red-line→test map, scope semantics, verifier calibration, fencing, privacy, package map — plus the security closure (threat model, audio-ingress policy, approval identity contract, 13/13 mutation evidence) and the honest in-process lifecycle table (Implemented…ProductionVerified labels). |
+| [engineering/NAGAR_ONE_TRUTH_MATRIX.md](engineering/NAGAR_ONE_TRUTH_MATRIX.md) | The NAGAR-ONE technical truth matrix: every core capability labelled VERIFIED/PARTIAL/MISSING/BLOCKED/DEFERRED with its implementation site, test/evidence, and remaining gap — and the Stage 0–3 gate status. |
 
 ## History (archived — read-only, never a source of truth)
 

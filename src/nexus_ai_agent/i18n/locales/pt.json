@@ -80,5 +80,6 @@
   "creative.failed.render_failed": "❌ A renderização falhou; tente uma mídia mais curta ou outros parâmetros.",
   "creative.failed.ffmpeg_unavailable": "❌ O motor de renderização não está instalado nesta implantação.",
   "creative.failed.internal": "❌ Ocorreu um erro interno; os detalhes estão visíveis para a equipe.",
-  "creative.request_conflict": "♻️ Esta mensagem já foi enfileirada com outra mídia. Envie a nova mídia em uma mensagem nova."
+  "creative.request_conflict": "♻️ Esta mensagem já foi enfileirada com outra mídia. Envie a nova mídia em uma mensagem nova.",
+  "creative.failed.artifact_binding_failed": "❌ Não foi possível vincular o artefato publicado à revisão exata do projeto, então a renderização foi recusada. Reenvie o comando."
 }
