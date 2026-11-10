@@ -2816,3 +2816,94 @@ gate, refusal-ignored and confirmation-fence-recheck mutants). Migration
 `20261106artbind`; architecture page
 `docs/architecture/DURABLE_PROJECT_STATE.md`; boundary law R29 in
 `docs/architecture/MODULE_MAP.md` §3.
+
+## D-0039 — The IBPC media triad is deterministic and model-free: intent deltas fail closed, preview frames are self-verifying, and the scope-signature digest excludes its timestamp (mission NAGAR-IBPC-TRIAD-CLOSURE-01)
+
+**Date:** 2026-11-11 · **Status:** accepted · **Task:** `task-nagar-triad-closure-01`
+
+**Context.** The IBPC live-editing chain can already turn an absolute intent into
+a verifiable capsule. Three follow-on capabilities were requested on top of it —
+*Delta Dialogue* (relative edits to the last-committed scope), *Shadow Preview*
+(a cheap visual keyframe strip) and *Scope Signature* (a reproducible visual +
+motion fingerprint) — and each one could plausibly have been implemented with a
+model, a hosted API, a second subprocess owner, a disk cache or a
+timestamp-carrying identity. Any of those would put a non-repeatable or an
+unverifiable step on a chain whose whole value is that every claim is
+reproducible from bytes.
+
+**Decision.** Implement all three as deterministic, model-free leaf modules on
+the existing chain, importing no new dependency, with the following binding
+rules:
+
+- **Delta Dialogue** (`nagar/ibpc/delta.py`). The utterance is split into clauses
+  and *every* clause must resolve to exactly one unambiguous `DeltaOp`;
+  otherwise the **whole** request is a `Clarification` and no operation is
+  silently dropped. A negation anywhere is a `Refusal` (never executed). Two
+  operations that move the same anchor in opposite directions are
+  `contradictory_delta` and are refused. Asset identity must match the scope and
+  the source revision must be a non-negative integer — validated at the boundary
+  so no raw `ValidationError` escapes. **Persian word-numbers are normalised
+  context-safely and the bare word «نه» ("no") is deliberately never mapped to
+  `9`**, because mapping it would let a negated utterance become a spurious
+  positive delta. The result is a typed `DeltaIntentAST`/`Clarification`/`Refusal`
+  union — never a bare `object`.
+- **Shadow Preview** (`nagar/ibpc/shadow.py`). Keyframes are real JPEGs sampled
+  evenly over the **half-open** `[start, end)` (`max_keyframes ∈ [1,16]`); each
+  frame is sha256-digested before base64-encoding, so the manifest is
+  self-verifying (decode → hash → compare). The approval binds the
+  **order-independent** `composite_digest`
+  `sha256(b"".join(sorted(frame_digests)))`; the whole-manifest
+  `shadow_digest` is a distinct concept and is not substituted for it.
+- **Scope Signature** (`nagar/ibpc/signature.py`). A **64-bin** CIE L\*a\*b\*
+  histogram (L\*=32 / a\*=16 / b\*=16, D65, pure-Python sRGB→Lab, L2-normalised;
+  a black scope normalises to the zero vector, never NaN) plus a grayscale
+  mean-absolute-difference motion magnitude in `[0,255]`. `ScopeMatchEngine`
+  ranks cosine-similar candidates by a single documented score with a
+  deterministic tie-break — no hidden ranking, no optical-flow or "AI" claim.
+  **The `signature_digest` is taken over immutable content only and excludes
+  `computed_at`**, so two runs over the same input and algorithm version produce
+  the same digest. The digest payload embeds `SIGNATURE_SCHEMA_VERSION`
+  (`nexus.ibpc.scope_signature.v1`) and `SIGNATURE_ALGORITHM_VERSION`, so a change
+  to the colour/motion mathematics or to the payload shape is a visible version
+  bump, never a silent identity change. Both digests use the single canonical
+  JSON/digest helper (`nagar/ibpc/canonical.py`) — no second spelling.
+- **One subprocess discipline.** Every FFmpeg call is an argument **list**
+  (never `shell=True`), with a per-frame (30 s) and total (120 s) timeout, stdout
+  pipes only (no disk writes), binary resolved via
+  `creative.slideshow.ffmpeg`. An unavailable binary, a timeout or empty output
+  is a typed `ShadowRenderError` / `SignatureError`; a raw
+  `FileNotFoundError`/`OSError` never crosses the public boundary.
+
+**Rejected alternatives.** (a) A model / hosted API for relative-intent parsing —
+rejected: the Delta path is pure string/arithmetic work and a model would make it
+non-reproducible and non-auditable. (b) Mapping «نه» to `9` for "completeness" —
+rejected: it converts the most common negation into an execution (fail-open).
+(c) Digesting `computed_at` into `signature_digest` — rejected: identical inputs
+would then produce different identities, defeating the point of a fingerprint.
+(d) Encoding Shadow keyframes to disk (or a second ffmpeg-owning module) —
+rejected: a disk cache and a second subprocess authority both break the boundary
+law and add TOCTOU surface. (e) A 192-bin histogram — rejected in favour of the
+fixed 64-bin L\*/a\*/b\* split that the spec and the tests pin.
+
+**Confirmation.** Enforced by the deterministic units
+`tests/unit/test_ibpc_{delta,shadow,signature}.py`, the architecture/security
+guard `tests/architecture/test_ibpc_boundary.py` (no reverse import into
+`service`/`session`/`approval`/`footprint`, no `shell=True`, mandatory timeout),
+and the **real-FFmpeg** integration tests
+`tests/integration/test_ibpc_{shadow,signature}_ffmpeg.py` (a mock is never
+substituted for execution; the suites *skip* — never pass — when FFmpeg is
+absent). The digest-stability and `computed_at`-exclusion invariants are asserted
+directly.
+
+**Known limitations (honest).** The triad is delivered as deterministic library
+capabilities on the IBPC chain; it adds no new durable state and makes no
+cross-process durability claim of its own (those remain the existing
+queue/journal ports' claims). Colour conversion is the documented pure-Python
+sRGB→Lab at the pinned D65 white point and the fixed Rec.601 luma — not an
+ICC-managed pipeline; the constants are versioned and pinned by tests rather than
+left to environment defaults.
+
+**Evidence.** Branch `arena/nagar-delta-dialogue-vs1` (product PR); governance
+claims `task-nagar-triad-closure-01` and its three zones on board schema 2;
+engineering page `docs/engineering/NAGAR_IBPC.md`; spec
+`docs/superpowers/specs/2026-11-10-nagar-triad-design.md`.
