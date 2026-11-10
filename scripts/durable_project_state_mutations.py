@@ -347,6 +347,19 @@ MUTATIONS: tuple[Mutation, ...] = (
         "artifact and re-measure its bytes; trusting the intent's reported "
         "digest binds an artifact a later write already replaced",
     ),
+    Mutation(
+        "composition_asset_version_link_dropped",
+        COMPOSITION_JOB,
+        """                size_bytes=int(intent.get("size_bytes") or 0),
+                artifact_version_id=version_id,
+""",
+        """                size_bytes=int(intent.get("size_bytes") or 0),
+""",
+        "Slice 2 (composition): the binding must carry the Asset Library "
+        "version the artifact was registered as; dropping it leaves the "
+        "artifact→revision→asset-version chain unresolvable (artifact_version_id "
+        "silently back to None)",
+    ),
 )
 
 TEST_TIMEOUT_SECONDS = 600

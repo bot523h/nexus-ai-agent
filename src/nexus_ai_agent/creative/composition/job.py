@@ -786,6 +786,17 @@ async def composition_render_binding_confirm(
                 "published artifact bytes do not match the measured binding digest",
             )
         try:
+            version_id = await _register_artifact_in_library(
+                payload, measured, artifact_path, project_id=str(intent["project_id"])
+            )
+        except CompositionJobError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - registration must fail the job closed
+            raise CompositionJobError(
+                "invalid_request",
+                f"artifact registration failed: {type(exc).__name__}: {exc}",
+            ) from exc
+        try:
             await store.bind(
                 project_id=str(intent["project_id"]),
                 revision_id=str(intent["revision_id"]),
@@ -793,11 +804,57 @@ async def composition_render_binding_confirm(
                 job_id=job_id,
                 artifact_kind=str(intent.get("artifact_kind") or "binary"),
                 size_bytes=int(intent.get("size_bytes") or 0),
+                artifact_version_id=version_id,
             )
         except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
             raise CompositionJobError(
                 "invalid_request", f"artifact binding failed: {type(exc).__name__}: {exc}"
             ) from exc
+
+
+async def _register_artifact_in_library(
+    payload: dict[str, Any],
+    artifact_id: str,
+    artifact_path: Path,
+    *,
+    project_id: str,
+) -> str:
+    """Register one published artifact as an Asset Library version; return its id.
+
+    The artifact→revision binding completes the chain
+    ``artifact → revision → asset version``; without the version id the last hop
+    is unresolvable.  Registration goes through the library's own authorized
+    ingest under the row's actor, so an actor who may run the job but lacks
+    ``project:write`` is refused here rather than silently skipped.
+
+    Idempotent by construction: the content address is the idempotency key, so a
+    retried confirm re-uses the same version instead of minting a second one.
+    """
+    actor = payload.get("actor") or {}
+    actor_kind = str(actor.get("kind") or "")
+    actor_id = str(actor.get("actor_id") or "")
+    if not actor_kind or not actor_id:
+        raise CompositionJobError("invalid_request", "the row names no actor to register under")
+
+    from nexus_ai_agent.creative.assets.factory import build_asset_library
+    from nexus_ai_agent.creative.assets.models import IngestRequest
+
+    library = build_asset_library()
+    # The filename is derived from the content address, never the caller's path,
+    # so a retry with a different workspace still re-uses the same version.
+    request = IngestRequest(
+        idempotency_key=f"composition:{artifact_id}",
+        original_filename=f"{artifact_id[:16]}{artifact_path.suffix}",
+    )
+    with open(artifact_path, "rb") as stream:  # noqa: PTH123 - a real file handle
+        result = await library.ingest(
+            actor_kind=actor_kind,
+            actor_id=actor_id,
+            project_id=project_id,
+            request=request,
+            stream=stream,
+        )
+    return result.version_id
 
 
 def _published_path_for(artifact_id: str, outputs: Any) -> Path | None:

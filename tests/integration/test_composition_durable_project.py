@@ -491,3 +491,139 @@ def test_an_asset_revision_link_is_consistent(durable_env: Path) -> None:
     assert loaded.to_project().project_id == PROJECT_ID
     # The recorded state hash matches the recorded content, so a re-read agrees.
     assert sha256_file  # imported for the media lane; sanity that FFmpeg is wired
+
+
+@pytest.mark.asyncio
+async def test_confirm_links_each_artifact_to_an_asset_library_version(durable_env: Path) -> None:
+    """The binding resolves the whole chain: artifact → revision → asset version.
+
+    Before this, ``artifact_version_id`` was always ``None`` because nothing
+    produced a version; the chain stopped at the revision.  The confirm hook now
+    registers the published bytes through the Asset Library's authorized ingest
+    and records the resulting version id on the binding.
+    """
+    from nexus_ai_agent.creative.assets.factory import build_asset_library
+
+    actor = _seed_project()
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("assetlink"), parent=None)
+
+    workspace = _workspace(durable_env, "asset_link")
+    source = _source_image(workspace / "source.png")
+    payload = _payload(
+        workspace,
+        source,
+        actor,
+        key="composition:assetlink",
+        revision_id=revision.revision_id,
+        revision_hash=revision.state_hash,
+    )
+    result = await composition_render_job(payload)
+    assert result["success"] is True, result
+    await composition_render_binding_confirm(payload, {**result, "_queue_job_id": "job-99"})
+
+    bindings = SqlArtifactBindingStore()
+    library = build_asset_library()
+    assets = await library.list_project_assets(
+        actor_kind=actor.kind, actor_id=actor.actor_id, project_id=PROJECT_ID
+    )
+    by_version = {version.version_id: (identity, version) for identity, version in assets}
+    for intent in result["artifact_bindings"]:
+        bound = await bindings.resolve(PROJECT_ID, intent["artifact_id"])
+        # The chain's last hop is now resolvable, not a dangling None.
+        assert bound.artifact_version_id, "the binding records no asset version"
+        identity, version = by_version[bound.artifact_version_id]
+        # The registered version's bytes are exactly the bound artifact's bytes.
+        assert version.content_sha256 == intent["artifact_id"].removeprefix("sha256:")
+        assert identity.asset_id == version.asset_id
+
+
+@pytest.mark.asyncio
+async def test_confirm_registration_is_idempotent_on_retry(durable_env: Path) -> None:
+    """A retried confirm re-uses the version instead of minting a second asset.
+
+    The content address is the idempotency key, so the queue's fail-closed
+    retry semantics (a retry re-runs confirm) must not accumulate duplicates.
+    """
+    from nexus_ai_agent.creative.assets.factory import build_asset_library
+
+    actor = _seed_project()
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("idem"), parent=None)
+
+    workspace = _workspace(durable_env, "idem")
+    source = _source_image(workspace / "source.png")
+    payload = _payload(
+        workspace,
+        source,
+        actor,
+        key="composition:idem",
+        revision_id=revision.revision_id,
+        revision_hash=revision.state_hash,
+    )
+    result = await composition_render_job(payload)
+    assert result["success"] is True, result
+    for _ in range(2):
+        await composition_render_binding_confirm(payload, {**result, "_queue_job_id": "job-x"})
+
+    assets = await build_asset_library().list_project_assets(
+        actor_kind=actor.kind, actor_id=actor.actor_id, project_id=PROJECT_ID
+    )
+    assert len(assets) == len(result["artifact_bindings"])
+
+
+@pytest.mark.asyncio
+async def test_confirm_refuses_registration_without_write_permission(durable_env: Path) -> None:
+    """An actor who may run the job but lacks ``project:write`` is refused.
+
+    Registration goes through the library's authorized ingest, so the authority
+    is enforced by the library, not trusted from the payload.
+    """
+    from nexus_ai_agent.adapters.sql_application_directory import SQLApplicationDirectory
+    from nexus_ai_agent.application.principal import ChannelBinding
+    from nexus_ai_agent.creative.composition.job import CompositionJobError
+
+    writer = _seed_project()
+    directory = SQLApplicationDirectory()
+    reader = directory.resolve_or_create(ChannelBinding("cli", "reader"))
+    directory.ensure_project(
+        PROJECT_ID,
+        reader,
+        permissions=frozenset({"project:read"}),
+    )
+
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("readonly"), parent=None)
+
+    workspace = _workspace(durable_env, "readonly")
+    artifact = _source_image(workspace / "artifact.png")
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    payload = _payload(
+        workspace,
+        artifact,
+        ActorIdentity(kind="user", actor_id=str(reader)),
+        key="composition:readonly",
+        revision_id=revision.revision_id,
+        revision_hash=revision.state_hash,
+    )
+    result = {
+        "artifact_bindings": [
+            {
+                "artifact_id": f"sha256:{digest}",
+                "project_id": PROJECT_ID,
+                "revision_id": revision.revision_id,
+                "artifact_kind": "image",
+                "size_bytes": artifact.stat().st_size,
+            }
+        ],
+        "outputs": [{"artifact_path": str(artifact)}],
+        "_queue_job_id": "job-ro",
+    }
+    with pytest.raises(CompositionJobError):
+        await composition_render_binding_confirm(payload, result)
+    # A refused registration leaves no binding behind either.
+    from nexus_ai_agent.creative.project_state.models import ArtifactNotFound
+
+    with pytest.raises(ArtifactNotFound):
+        await SqlArtifactBindingStore().resolve(PROJECT_ID, f"sha256:{digest}")
+    assert writer is not None

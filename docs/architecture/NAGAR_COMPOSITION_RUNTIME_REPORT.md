@@ -27,7 +27,7 @@ DAG و اعتبارسنجی تایپی** را مالک است؛ رجیستری �
 سیاست مجوز، اثر انگشت پاسپورت و مرجع تأیید نهایی همگی **کانونی و دست‌نخورده** باقی ماندند.
 
 * **۶۰** عملیات در رجیستری زنده (۵۷ پیش از این شاخه + ۳ عملیات پک جدید).
-* **۲۴۳** تست ترکیب در ۱۳ فایل، همگی سبز (۱۹۴ در زمان Gate 7؛ ۴۹ تازه در موج
+* **۲۴۶** تست ترکیب در ۱۳ فایل، همگی سبز (۱۹۴ در زمان Gate 7؛ ۵۲ تازه در موج
   دوم بازبینی و Slice 2 — §۹.۱)؛ به‌علاوهٔ کل مجموعهٔ تست مخزن.
 * **۳** جریان کامل از صف تا گذرنامهٔ اثر انگشت روی صف canonical اجرا شد.
 * **۰** موارد `TODO`/`FIXME`/`TBD` در صفحات معماری (گیت دروازهٔ اسناد).
@@ -418,8 +418,8 @@ unknown_categories         : model, model_weights, dataset, input_asset,
 | `tests/unit/test_pack_runtime_composition.py` | **۱۸ passed** |
 | `tests/architecture/test_composition_boundary.py` | **۱۰ passed** |
 | `tests/integration/test_composition_canonical_e2e.py` | **۶ passed** |
-| `tests/integration/test_composition_durable_project.py` | **۱۰ passed** |
-| **جمع** | **۲۴۳ passed** |
+| `tests/integration/test_composition_durable_project.py` | **۱۳ passed** |
+| **جمع** | **۲۴۶ passed** |
 
 ### ۹.۲ پوشش ۲۴ رفتار خواسته‌شده
 
@@ -472,14 +472,15 @@ unknown_categories         : model, model_weights, dataset, input_asset,
 | جایگزینی `subprocess.run` با `Popen` + گروه فرایند | گیت معماری «فقط یک جای اجرا» **قرمز** شد | گیت به‌جای دور زدن، به‌روزرسانی و **تقویت** شد (بررسی `start_new_session` و `killpg`) |
 
 جهش‌یابی سازمان‌یافته برای این بسته **انجام شد** و در CI اجرا می‌شود:
-`scripts/durable_project_state_mutations.py` سه جهشِ تازهٔ خط ترکیب را اضافه کرد
-(۲۵ ← **۲۸**)، هر سه **کشته** شدند، و دو گاردِ خودِ هارنس تقویت شد:
+`scripts/durable_project_state_mutations.py` چهار جهشِ تازهٔ خط ترکیب را اضافه کرد
+(۲۵ ← **۲۹**)، هر چهار **کشته** شدند، و دو گاردِ خودِ هارنس تقویت شد:
 
 | جهش تازه | هدف | نتیجه |
 |---|---|---|
 | `composition_pin_hash_check_removed` | حذف مقایسهٔ `revision_hash` با `state_hash` در `_resolve_pinned_project` | **کشته** — `test_a_hash_mismatched_pin_is_refused` قرمز می‌شود |
 | `composition_binding_intents_skipped` | حذف ثبت `artifact_bindings` برای سطر pin‌شده | **کشته** — `test_confirm_binds_each_artifact_to_the_pinned_revision` قرمز می‌شود |
 | `composition_published_bytes_not_remeasured` | حذف بازاندازه‌گیری بایت‌های منتشرشده در هوک تأیید | **کشته** — `test_confirm_refuses_when_the_published_bytes_changed` قرمز می‌شود |
+| `composition_asset_version_link_dropped` | حذف `artifact_version_id=version_id` از فراخوانی `store.bind` | **کشته** — `test_confirm_links_each_artifact_to_an_asset_library_version` قرمز می‌شود |
 
 دو اصلاح در خودِ هارنس (که کمپین را صادق‌تر کرد):
 یک anchor **غیریکتا** (`cross_project_read_check_removed` سه بار رخ می‌داد) پیدا و
@@ -497,7 +498,7 @@ $ python -m pytest -q -m "not slow"
 
 > **به‌روزرسانی همین دور (Slice 2 + گاردهای جهش):** در این ادامهٔ شاخه، اجرای
 > کامل مجموعه روی همان مفسر **بدون** وابستگی‌های اختیاری نصب‌شده انجام نشد؛ به‌جای
-> آن، دامنهٔ تحت‌تأثیر مستقیم بازاجرا شد و سبز است: **۲۴۳ آزمون ترکیب** (جدول
+> آن، دامنهٔ تحت‌تأثیر مستقیم بازاجرا شد و سبز است: **۲۴۶ آزمون ترکیب** (جدول
 > §۹.۱) + **۳۷۷ گیت معماری** (شامل `test_operation_truth_gate.py` پس از
 > بازتولید مجازِ projection). اجرای `tests/unit` روی این مفسر **۶۴ شکست/۴۱ خطای
 > جمع‌آوری** داد که **همه** از نوع `ModuleNotFoundError` برای وابستگی‌های اختیاریِ
@@ -598,7 +599,7 @@ flowchart TD
 | گیت اسناد | `python -m pytest tests/unit/test_docs_integrity.py -q` | `117 passed` | `VERIFIED` |
 | گیت حقیقت عملیات | `python -m nexus_ai_agent.nagar --check` | `TRUTH GATE: GREEN` | `VERIFIED` |
 | پوشش پک | `python scripts/pack_coverage.py` | `ACCEPTED` — `media` 227/227 (۱۰۰٪)، مجموع ۹۷٫۱۷٪، `pytest exit: 0`، `evidence: verified` | `VERIFIED` |
-| مجموعه‌های جدید ترکیب | ۱۳ فایل | `243 passed` (به‌تفکیک در §۹.۱) | `VERIFIED` |
+| مجموعه‌های جدید ترکیب | ۱۳ فایل | `246 passed` (به‌تفکیک در §۹.۱) | `VERIFIED` |
 | گیت‌های معماری | `python -m pytest tests/architecture -q` | `377 passed` | `VERIFIED` |
 | E2E کانونی | `pytest tests/integration/test_composition_canonical_e2e.py -q` | `6 passed` | `VERIFIED` |
 | بنچمارک (صف) | `scripts/bench_composition.py --runs 10 --queue` | ۱۰ اجرا، نرخ خطا `0.0`، اثر انگشت تکرارپذیر | `VERIFIED` |
@@ -619,7 +620,7 @@ flowchart TD
 | اثبات یکپارچگی در برابر معنایی | `VERIFIED` | ۲۰ + ۱۱ آزمون؛ نقص واقعی grayscale کشف و رفع شد |
 | E2E کانونی Image→Image و Image→Video | `VERIFIED` | ۶ آزمون با صف، کارگر ثبت‌شده و FFmpeg واقعی |
 | E2E Video→Video و Audio→Video | `DEFERRED` | هیچ قابلیت متناظری در رجیستری کانونی نیست؛ mock نشد |
-| جهش‌یابی سازمان‌یافته | `VERIFIED` | کمپین `scripts/durable_project_state_mutations.py` اکنون **۲۸ جهش** دارد (۲۵ + ۳ جهش تازهٔ Slice-2 برای خط ترکیب)؛ **۲۸/۲۸ کشته** و در CI اجرا می‌شود. سه جهش دستی خط ترکیب هم در §۹.۴ ثبت شد |
+| جهش‌یابی سازمان‌یافته | `VERIFIED` | کمپین `scripts/durable_project_state_mutations.py` اکنون **۲۹ جهش** دارد (۲۵ + ۴ جهش تازهٔ Slice-2 برای خط ترکیب)؛ **۲۹/۲۹ کشته** و در CI اجرا می‌شود. سه جهش دستی خط ترکیب هم در §۹.۴ ثبت شد |
 | اسناد | `VERIFIED` | گیت ۱۱۷ تستی سبز |
 
 ### ۱۱.۲ بازبینی خودکار بیرونی: هشت یافته، هشت رفع
@@ -650,7 +651,8 @@ flowchart TD
 مثبت‌کاذبِ opengrep روی نام کلاس‌های استثنا هستند. هر ۲۳ یافته بررسی شد؛ **۲۳ مورد
 رفع شد** (شامل مورد `Returned assets are not durable` که در ادامهٔ همین شاخه با
 زیرساخت Slice-2 بسته شد و سه آزمون جاودانگی آن را اثبات می‌کنند). یک **باقی‌ماندهٔ
-صادقانهٔ کوچک** (سطرهای بی‌pin و `artifact_version_id`) در پایین علامت‌گذاری شده است.
+صادقانه** باز مانده است: سطرهای بی‌pin (فقط سازگاری با گذشته). پیوند
+`artifact_version_id` در همین دور بسته شد (به §۹.۴ و §۱۱.۳ نگاه کنید).
 
 | # | شدت | یافته | رفع (نماد دقیق) | آزمون اثبات‌کننده |
 |---|---|---|---|---|
@@ -686,9 +688,25 @@ flowchart TD
 > **ری‌استارت فرایند** (تفسیرگر تازه binding را از DB می‌خواند).
 > **باقی‌ماندهٔ صادقانه:** سطرهای **بی‌pin** (سازگاری با گذشته) هنوز روی یک پروژهٔ
 > درون‌حافظه اجرا می‌شوند؛ خودِ artifact جاودان گره می‌خورد اما جدول asset آن پروژهٔ
-> موقت ذخیره نمی‌شود. و `artifact_version_id` (پیوند به نسخهٔ Asset Library) برای
-> این خط پر نمی‌شود، چون executor نسخهٔ asset را برنمی‌گرداند؛ این یک باقی‌ماندهٔ
-> **علامت‌گذاری‌شده** است، نه ادعای رفع‌شده.
+> موقت ذخیره نمی‌شود.
+>
+> **به‌روزرسانی همین دور — بستن آخرین حلقهٔ `artifact_version_id`:** پیش‌تر
+> `artifact_version_id` همیشه `None` بود، چون هیچ تولیدکننده‌ای برای نسخهٔ Asset
+> Library وجود نداشت و `AssetLibraryService` هیچ factory تولیدی نداشت. اکنون:
+> `creative/assets/factory.py::build_asset_library` تنها سایت ساختِ کانونی است
+> (blob root ثابت زیر `settings.creative_temp_dir`، authorizer = همان
+> `SQLApplicationDirectory` موجود)؛ و هوک تأیید
+> (`job.py::composition_render_binding_confirm` → `_register_artifact_in_library`)
+> بایت‌های منتشرشده را از طریق ingest **مجاز** کتابخانه ثبت می‌کند و `version_id`
+> را روی binding می‌نویسد. زنجیرهٔ `artifact → revision → asset version` اکنون
+> **قابل‌حل** است. اثبات: `test_confirm_links_each_artifact_to_an_asset_library_version`
+> (نسخه واقعاً قابل خواندن است و digest آن با artifact یکی است)،
+> `test_confirm_registration_is_idempotent_on_retry` (کلید idempotency = content
+> address ⇒ retry نسخهٔ دوم نمی‌سازد)،
+> `test_confirm_refuses_registration_without_write_permission` (actori که
+> `project:write` ندارد refuse می‌شود و هیچ binding جا نمی‌ماند)؛ و mutant جدید
+> `composition_asset_version_link_dropped` در کمپین جهش **کشته شد** (اکنون
+> **29/29**). `VERIFIED` برای سطرهای pin‌شده.
 
 > نکتهٔ مهم دربارهٔ یافتهٔ ۲: نخستین رفع من دروازهٔ پک را داخل خودِ executor صدا زد.
 > گیت معماری `test_only_the_bus_invokes_the_pack_lifecycle_gate` (که با اسکن AST
@@ -706,8 +724,9 @@ flowchart TD
 2. **یک بازبین خودکار بیرونی (Sourcery)** روی PR #327 در دو موج **۳۰ یافتهٔ محتوایی
    متمایز** ثبت کرد (۷ در موج اول و ۳۰ در موج دوم که ۷ موردشان تکرار موج اول بود):
    **۲۹ مورد رفع شد** در آن زمان و مورد سی‌ام (`Returned assets are not durable`)
-   در ادامهٔ همین شاخه با زیرساخت Slice-2 بسته شد — تنها یک باقی‌ماندهٔ صادقانهٔ کوچک
-   (سطرهای بی‌pin و `artifact_version_id`) باز مانده است.
+   در ادامهٔ همین شاخه با زیرساخت Slice-2 بسته شد؛ و حلقهٔ `artifact_version_id`
+   نیز در همین دور بسته شد. تنها باقی‌ماندهٔ صادقانه سطرهای **بی‌pin** است
+   (سازگاری با گذشته).
 
 هیچ‌کدام از این دو **بازبینی انسانی مستقل** نیست: اولی مالِ مخزن است و دومی یک ابزار
 خودکار. این سند مدعی «بازبینی مستقل» نیست. `DEFERRED` — نیازمند بازبینندهٔ انسانی که
@@ -853,7 +872,7 @@ python scripts/collect_composition_evidence.py --output evidence/composition_evi
 4. دفتر مجوز ۱۲ دسته‌ای با سنجش زندهٔ FFmpeg.
 5. تفکیک اثبات یکپارچگی/معنایی با اصلاح واقعیِ بررسی grayscale.
 6. مدل تهدید STRIDE با ۱۶ تهدید و برچسب `BLOCKED` برای کنترل‌های سیستم‌عاملی.
-7. ۲۴۳ آزمون ترکیب در ۱۳ فایل (۱۹۴ در Gate 7، ۴۹ در ادامهٔ شاخه).
+7. ۲۴۶ آزمون ترکیب در ۱۳ فایل (۱۹۴ در Gate 7، ۵۲ در ادامهٔ شاخه).
 8. بنچمارک ۱۰ اجرا در دو حالت + گزارش شواهد JSON.
 9. بازتولید پروژکشن حقیقت عملیات (`python -m nexus_ai_agent.nagar --docs`) پس از افزوده‌شدن پک.
 
@@ -898,7 +917,7 @@ python scripts/collect_composition_evidence.py --output evidence/composition_evi
 | ۱۲ | نقشهٔ راه NOW/NEXT/LATER | همین سند، §۱۳ |
 
 افزون بر این‌ها: کد مبدأ (`src/nexus_ai_agent/creative/composition/` و
-`src/nexus_ai_agent/creative/packs/media/`)، آزمون‌ها (۱۳ فایل، ۲۴۳ تست)، اسکریپت
+`src/nexus_ai_agent/creative/packs/media/`)، آزمون‌ها (۱۳ فایل، ۲۴۶ تست)، اسکریپت
 بنچمارک، JSON شواهد، و **یک خروجی رسانهٔ واقعی**
 (`evidence/media/composition_image_to_video.mp4` — ۲۴۷۳ بایت، ۶۴۰×۴۸۰، h264،
 yuv420p، ۲۵fps، ۱٫۰۰ ثانیه، ۲۵ فریم) به‌همراه تصویر ورودی آن

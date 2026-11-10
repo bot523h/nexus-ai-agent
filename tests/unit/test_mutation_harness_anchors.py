@@ -234,8 +234,8 @@ def test_durable_project_state_anchors_occur_exactly_once(durable: dict[str, Any
         if count != 1:
             drift[f"{mutation.name}:{mutation.path.name}"] = count
     assert drift == {}, f"durable project-state anchors must occur exactly once: {drift}"
-    # 25 Slice-2 guards + 3 composition-durability guards (task-282 composition pin).
-    assert len(durable["MUTATIONS"]) == 28
+    # 25 Slice-2 guards + 4 composition-durability guards (task-282 composition pin).
+    assert len(durable["MUTATIONS"]) == 29
 
 
 def test_durable_project_state_mutants_differ_from_their_anchors(
