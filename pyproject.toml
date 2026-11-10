@@ -78,6 +78,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "nexus_ai_agent.creative.packs.caption" = ["fonts/*.ttf", "fonts/OFL.txt"]
+"nexus_ai_agent.web" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

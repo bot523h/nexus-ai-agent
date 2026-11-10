@@ -18,6 +18,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from nexus_ai_agent.api.dashboard import router as dashboard_router
 from nexus_ai_agent.api.studio import router as studio_router
+from nexus_ai_agent.api.studio_web import install_studio_web
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
 from nexus_ai_agent.creative import image_post
@@ -107,6 +108,7 @@ async def require_hmac_signature(request: Request) -> None:
 
 app.include_router(dashboard_router)
 app.include_router(studio_router)
+install_studio_web(app)
 
 
 @app.get("/", response_class=HTMLResponse)
