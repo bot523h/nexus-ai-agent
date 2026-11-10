@@ -196,7 +196,9 @@ def verify_shadow_manifest(manifest: ShadowPreviewManifest) -> None:
     and no disk, only the manifest: each keyframe must decode to a complete
     JPEG whose sha256 equals its ``frame_digest``; timestamps must lie in the
     half-open scope and strictly increase; and ``composite_digest`` must equal
-    the Spec §2.4 formula over those frame digests.
+    the Spec §2.4 formula over those frame digests. Timestamps must also equal the
+    deterministic sampling schedule for the frame count, so a retimed keyframe is
+    refused even though its bytes and composite are intact.
 
     Raises
     ------
@@ -226,6 +228,16 @@ def verify_shadow_manifest(manifest: ShadowPreviewManifest) -> None:
         if previous_ts is not None and kf.timestamp_us <= previous_ts:
             raise ShadowRenderError("timestamps_not_increasing", f"keyframe {index}")
         previous_ts = kf.timestamp_us
+    # Sampling is a pure function of (scope, frame count): a keyframe retimed inside
+    # the scope breaks the schedule even though its bytes and composite are intact.
+    timestamps = [kf.timestamp_us for kf in manifest.keyframes]
+    schedule = _sample_timestamps(manifest.scope_start_us, manifest.scope_end_us, len(timestamps))
+    for index, (actual, expected) in enumerate(zip(timestamps, schedule, strict=True)):
+        if actual != expected:
+            raise ShadowRenderError(
+                "timestamp_off_schedule",
+                f"keyframe {index} at {actual}us, schedule requires {expected}us",
+            )
     if _compute_composite_digest(manifest.keyframes) != manifest.composite_digest:
         raise ShadowRenderError(
             "composite_digest_mismatch", "composite does not match the keyframe digests"

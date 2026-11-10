@@ -58,7 +58,7 @@ FFmpeg is unavailable). Decision record: `docs/DECISION_LOG.md` D-0039.
 - **Shadow Preview** — a non-zero ffmpeg exit is `ffmpeg_failed` even when bytes
   were written; output without a complete JPEG envelope is `invalid_jpeg`. New
   public `verify_shadow_manifest` recomputes every frame digest and the composite
-  from the carried bytes and checks timestamps (half-open, strictly increasing).
+  from the carried bytes and checks timestamps (half-open, strictly increasing) against the sampling schedule.
   `build_shadow_preview` runs it on its own result. Frame count is capped at the
   scope length so timestamps never collide. A source-duration bound is enforced.
 - **Scope Signature** — the frame byte length is checked (`bad_frame_size`), a
@@ -77,9 +77,12 @@ FFmpeg is unavailable). Decision record: `docs/DECISION_LOG.md` D-0039.
   call, and no dynamic code.
 
 Residual limits (not hidden): `composite_digest` binds frame bytes only, as Spec
-§2.4 defines it, so an in-scope timestamp change verifies; `shadow_digest` detects
-it. Neither Shadow Preview nor Scope Signature is connected to the approval pipeline
-(`NOT_WIRED`, by mission). Lint and type checks could not run in this environment.
+§2.4 defines it. Timestamps are not part of the composite, but the verifier
+requires them to equal the deterministic sampling schedule, so an in-scope
+retimestamp is refused as `timestamp_off_schedule`. Neither Shadow Preview nor
+Scope Signature is connected to the approval pipeline (`NOT_WIRED`, by mission).
+Lint (`ruff`) and type checks (`mypy`) were run after the closure commits; see the
+evidence section in `docs/engineering/NAGAR_IBPC.md`.
 
 ### Studio Core (task-186 — discovery surface, preview/master boundary, Agent 2/3 integration contracts, session `arena/01a0da2a-nexus-ai-agent`)
 

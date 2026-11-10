@@ -525,19 +525,19 @@ class TestShadowIntegrity:
             verify_shadow_manifest(m.model_copy(update={"keyframes": ()}))
         assert exc.value.reason == "empty_manifest"
 
-    def test_in_scope_retimestamp_passes_composite_but_changes_shadow_digest(
-        self, tmp_path: Path
-    ) -> None:
-        """Recorded residual, not hidden: composite_digest (what approvals bind, Spec
-        §2.4) covers frame bytes only, so an in-scope retimestamp still verifies. The
-        whole-manifest shadow_digest is what detects it."""
-        from nexus_ai_agent.nagar.ibpc.shadow import verify_shadow_manifest
+    def test_in_scope_retimestamp_is_refused_by_the_schedule(self, tmp_path: Path) -> None:
+        """Retiming a keyframe inside the scope breaks the deterministic schedule.
+        composite_digest (what approvals bind, Spec §2.4) covers frame bytes only, so it
+        is unchanged by the retime; the verifier refuses the manifest on the schedule."""
+        from nexus_ai_agent.nagar.ibpc.shadow import ShadowRenderError, verify_shadow_manifest
 
         m = _build_manifest(tmp_path)
         first = m.keyframes[0]
         retimed_first = first.model_copy(update={"timestamp_us": first.timestamp_us + 1})
         retimed = m.model_copy(update={"keyframes": (retimed_first,) + m.keyframes[1:]})
-        verify_shadow_manifest(retimed)
+        with pytest.raises(ShadowRenderError) as exc:
+            verify_shadow_manifest(retimed)
+        assert exc.value.reason == "timestamp_off_schedule"
         assert retimed.composite_digest == m.composite_digest
         assert retimed.shadow_digest != m.shadow_digest
 

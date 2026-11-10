@@ -202,9 +202,10 @@ mypy are not installed and pip is blocked). The draft PR has not been opened.
 
 ### Residuals
 
-- `composite_digest` covers frame bytes only (Spec §2.4). An in-scope timestamp
-  change verifies against the composite and is detected only by `shadow_digest`.
-  Recorded by `test_in_scope_retimestamp_passes_composite_but_changes_shadow_digest`.
+- `composite_digest` covers frame bytes only (Spec §2.4). Timestamps are not in the
+  composite, but `verify_shadow_manifest` requires them to equal the deterministic
+  sampling schedule. A retimed keyframe is refused as `timestamp_off_schedule`;
+  `test_in_scope_retimestamp_is_refused_by_the_schedule` records it.
 - Shadow Preview and Scope Signature are not connected to the approval pipeline
   (`NOT_WIRED`). The mission keeps this boundary.
 - Lint (`ruff`) and type checks (`mypy`) are not executed in this environment.

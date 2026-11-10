@@ -236,17 +236,17 @@ def test_changing_the_source_changes_the_composite_the_approval_binds(tmp_path: 
     assert ma.composite_digest != mb.composite_digest
 
 
-def test_retimed_real_frame_passes_composite_but_moves_shadow_digest(tmp_path: Path) -> None:
-    """Recorded residual on real data: composite_digest (what approvals bind,
-    Spec §2.4) covers frame bytes only, so an in-scope retimestamp still verifies;
-    the whole-manifest shadow_digest is what detects it."""
-    from nexus_ai_agent.nagar.ibpc.shadow import verify_shadow_manifest
+def test_retimed_real_frame_is_refused_by_the_schedule(tmp_path: Path) -> None:
+    """On real output: a retimed keyframe breaks the schedule; composite is unchanged."""
+    from nexus_ai_agent.nagar.ibpc.shadow import ShadowRenderError, verify_shadow_manifest
 
     source = _clip(tmp_path)
     manifest = build_shadow_preview(source, _scope(0, 2_000_000), _PLAN_DIGEST, max_keyframes=3)
     first = manifest.keyframes[0]
     moved = first.model_copy(update={"timestamp_us": first.timestamp_us + 1})
     retimed = manifest.model_copy(update={"keyframes": (moved,) + manifest.keyframes[1:]})
-    verify_shadow_manifest(retimed)
+    with pytest.raises(ShadowRenderError) as exc:
+        verify_shadow_manifest(retimed)
+    assert exc.value.reason == "timestamp_off_schedule"
     assert retimed.composite_digest == manifest.composite_digest
     assert retimed.shadow_digest != manifest.shadow_digest
