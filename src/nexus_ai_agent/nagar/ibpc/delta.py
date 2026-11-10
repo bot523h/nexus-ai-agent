@@ -299,11 +299,14 @@ def parse_delta_intent(
     The returned ``resolved_ast`` is a standard ``TypedCreativeAST`` that
     can be passed unchanged to ``compile_ast``.
     """
-    if not isinstance(text, str):
+    # The boundary accepts untrusted callers, so the value is re-typed as object
+    # before the runtime check (annotated ``str`` would make the guard unreachable).
+    raw_text: object = text
+    if not isinstance(raw_text, str):
         return Refusal(
-            "invalid_text_type", f"intent text must be a string, got {type(text).__name__}"
+            "invalid_text_type", f"intent text must be a string, got {type(raw_text).__name__}"
         )
-    normalized = normalize_intent(text)
+    normalized = normalize_intent(raw_text)
     if not normalized:
         return Refusal("empty_intent", "empty delta intent text")
 
