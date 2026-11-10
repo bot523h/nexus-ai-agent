@@ -262,5 +262,11 @@ __all__ = [
     "parse_delta_intent",
 ]
 
-# Delta Dialogue — additive re-export, keeps the IBPC public surface unified.
-from nexus_ai_agent.nagar.ibpc.delta import parse_delta_intent as parse_delta_intent  # noqa: F401, E402
+# Delta Dialogue re-export, resolved lazily (PEP 562). ``delta`` imports this
+# module at import time, so an eager import here would form a cycle.
+def __getattr__(name: str) -> object:
+    if name == "parse_delta_intent":
+        from nexus_ai_agent.nagar.ibpc.delta import parse_delta_intent as _parse
+
+        return _parse
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
