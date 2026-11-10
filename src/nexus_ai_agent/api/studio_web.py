@@ -6,8 +6,8 @@ served by the existing FastAPI application. This module owns only *delivery*:
 * an explicit allow-list of assets (no directory serving, no path from the request
   ever reaches the filesystem),
 * a strict Content-Security-Policy and hardening headers on every app response,
-* ``Cache-Control: no-store`` on every ``/api/studio`` response (a browser or proxy
-  must never keep job state, plans or evidence),
+* ``Cache-Control: no-store`` on every ``/api/studio`` and ``/studio/session`` response
+  (a browser or proxy must never keep job state, plans or evidence),
 * ``GET /api/studio/overview``: the one place that states, in code, which product
   capabilities are real and which are deferred, so the UI cannot drift into
   presenting an unsupported capability as working.
@@ -221,7 +221,7 @@ async def overview() -> dict[str, object]:
     }
 
 
-web_router = APIRouter(tags=["studio-app"], include_in_schema=False)
+web_router = APIRouter(tags=["studio-app"])
 
 
 @web_router.get("/studio")
@@ -235,12 +235,28 @@ async def studio_index(request: Request) -> Response:
     return _app_response("index.html", request)
 
 
-@web_router.get("/studio/{asset_path:path}")
-async def studio_asset(asset_path: str, request: Request) -> Response:
-    # Lookup by exact key in a fixed dict: the request value is never joined to a path.
-    if asset_path not in _ASSETS or asset_path == "index.html":
-        return Response(status_code=404, headers=dict(_APP_HEADERS))
-    return _app_response(asset_path, request)
+def _register_asset_route(name: str) -> None:
+    """One literal route per allow-listed asset: no wildcard, no request-derived path."""
+
+    async def _serve(request: Request) -> Response:
+        return _app_response(name, request)
+
+    web_router.add_api_route(
+        f"/studio/{name}", _serve, methods=["GET"], name=f"studio_asset_{name}"
+    )
+
+
+for _name in _ASSETS:
+    if _name != "index.html":
+        _register_asset_route(_name)
+
+
+#: Every public operation the Studio shell serves (the allow-list *is* the routes).
+PUBLIC_SHELL_PATHS: tuple[str, ...] = (
+    "/studio",
+    "/studio/",
+    *(f"/studio/{name}" for name in _ASSETS if name != "index.html"),
+)
 
 
 def install_studio_web(app: FastAPI) -> None:
@@ -254,7 +270,7 @@ def install_studio_web(app: FastAPI) -> None:
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         response = await call_next(request)
-        if request.url.path.startswith("/api/studio"):
+        if request.url.path.startswith(("/api/studio", "/studio/session")):
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
         return response

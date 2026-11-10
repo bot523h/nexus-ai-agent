@@ -50,7 +50,8 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (!url.pathname.startsWith("/studio/")) return; // /api/* and everything else: network only
-  if (url.pathname === "/studio/sw.js") return;
+  // The worker itself and the credential exchange are network only, never cached or faked.
+  if (url.pathname === "/studio/sw.js" || url.pathname === "/studio/session") return;
   event.respondWith(
     fetch(request)
       .then((response) => {

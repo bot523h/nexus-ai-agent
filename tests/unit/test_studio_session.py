@@ -44,7 +44,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
 
 
 def _login(client: TestClient, token: str = TOKEN) -> Any:
-    return client.post("/api/studio/session", json={"token": token}, headers=MARK)
+    return client.post("/studio/session", json={"token": token}, headers=MARK)
 
 
 def test_login_sets_a_hardened_cookie_and_it_authorizes_the_read_route(client: TestClient) -> None:
@@ -57,7 +57,7 @@ def test_login_sets_a_hardened_cookie_and_it_authorizes_the_read_route(client: T
     assert "path=/" in cookie and "domain=" not in cookie
     assert TOKEN not in response.text and TOKEN not in response.headers["set-cookie"]
     assert client.get(JOB).status_code == 200
-    state = client.get("/api/studio/session").json()
+    state = client.get("/studio/session").json()
     assert state["authenticated"] is True and state["expires_at"] > time.time()
 
 
@@ -69,10 +69,10 @@ def test_wrong_token_is_rejected_and_sets_no_cookie(client: TestClient) -> None:
 
 
 def test_login_without_the_request_marker_is_refused(client: TestClient) -> None:
-    response = client.post("/api/studio/session", json={"token": TOKEN})
+    response = client.post("/studio/session", json={"token": TOKEN})
     assert response.status_code == 403
     assert "set-cookie" not in response.headers
-    assert client.delete("/api/studio/session").status_code == 403
+    assert client.delete("/studio/session").status_code == 403
 
 
 def test_fails_closed_without_a_configured_dashboard_token(
@@ -85,7 +85,7 @@ def test_fails_closed_without_a_configured_dashboard_token(
     assert _login(client).status_code == 503
     assert client.get(JOB).status_code == 503
     assert client.get("/api/studio/overview").status_code == 503
-    assert client.get("/api/studio/session").json()["configured"] is False
+    assert client.get("/studio/session").json()["configured"] is False
 
 
 def test_tampered_forged_and_malformed_cookies_are_treated_as_absent(client: TestClient) -> None:
@@ -145,7 +145,7 @@ def test_bearer_access_is_unchanged_without_any_cookie(client: TestClient) -> No
 
 def test_logout_clears_the_cookie(client: TestClient) -> None:
     _login(client)
-    response = client.delete("/api/studio/session", headers=MARK)
+    response = client.delete("/studio/session", headers=MARK)
     assert response.status_code == 200
     assert "max-age=0" in response.headers["set-cookie"].lower()
     assert client.get(JOB).status_code == 401
@@ -183,7 +183,7 @@ def test_overview_requires_auth_and_is_scoped_to_deployment_policy(client: TestC
 
 def test_studio_api_responses_are_never_cacheable(client: TestClient) -> None:
     _login(client)
-    for path in (JOB, "/api/studio/overview", "/api/studio/session"):
+    for path in (JOB, "/api/studio/overview", "/studio/session"):
         response = client.get(path)
         assert response.headers["cache-control"] == "no-store", path
         assert response.headers["x-content-type-options"] == "nosniff"

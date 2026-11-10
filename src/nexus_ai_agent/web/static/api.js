@@ -45,9 +45,9 @@ async function request(method, path, { body, signal } = {}) {
 const seg = (value) => encodeURIComponent(value);
 
 export const api = {
-  session: (signal) => request("GET", "/api/studio/session", { signal }),
-  login: (token) => request("POST", "/api/studio/session", { body: { token } }),
-  logout: () => request("DELETE", "/api/studio/session"),
+  session: (signal) => request("GET", "/studio/session", { signal }),
+  login: (token) => request("POST", "/studio/session", { body: { token } }),
+  logout: () => request("DELETE", "/studio/session"),
   overview: (signal) => request("GET", "/api/studio/overview", { signal }),
   jobState: (projectId, jobId, signal) =>
     request("GET", `/api/studio/projects/${seg(projectId)}/jobs/${seg(jobId)}/state`, { signal }),

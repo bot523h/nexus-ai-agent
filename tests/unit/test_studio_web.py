@@ -74,6 +74,9 @@ def test_service_worker_never_handles_api_or_non_get_requests() -> None:
     source = (web.STATIC_DIR / "sw.js").read_text(encoding="utf-8")
     assert 'request.method !== "GET"' in source
     assert 'url.pathname.startsWith("/studio/")' in source
+    # the credential exchange is network only (never answered from a cache)
+    assert 'url.pathname === "/studio/session"' in source
+    assert "/studio/session" not in source.split("const SHELL = [")[1].split("];")[0]
     # nothing but shell paths may be listed for precaching
     listed = re.findall(r'"(/[^"]*)"', source.split("const SHELL = [")[1].split("];")[0])
     assert listed and all(p.startswith("/studio/") for p in listed)
@@ -121,3 +124,15 @@ def test_client_code_never_stores_or_forwards_credentials() -> None:
 def test_shared_font_is_served_not_copied() -> None:
     assert web.FONT_PATH.is_file()
     assert not list(web.STATIC_DIR.glob("*.ttf")) and not list(web.STATIC_DIR.rglob("*.woff*"))
+
+
+def test_shell_routes_are_exactly_the_allow_list(client: TestClient) -> None:
+    """Literal routes, no wildcard: every shell path is served, anything else is 404."""
+    from nexus_ai_agent.api.studio_web import PUBLIC_SHELL_PATHS
+
+    assert "/studio/index.html" not in PUBLIC_SHELL_PATHS
+    for path in PUBLIC_SHELL_PATHS:
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code in (200, 307), path
+    for path in ("/studio/nope.js", "/studio/fonts/other.ttf", "/studio/index.html"):
+        assert client.get(path).status_code == 404, path

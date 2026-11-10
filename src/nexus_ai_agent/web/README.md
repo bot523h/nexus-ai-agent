@@ -11,7 +11,7 @@ free, promote it to `docs/product/` and `docs/architecture/adr/` and index it.
 | Surface | Path | Backing |
 | --- | --- | --- |
 | App shell (PWA, fa/RTL, light/dark) | `GET /studio/` | static files in `src/nexus_ai_agent/web/static/` |
-| Session | `GET/POST/DELETE /api/studio/session` | `api/studio_session.py` over the dashboard gate |
+| Session | `GET/POST/DELETE /studio/session` | `api/studio_session.py` over the dashboard gate |
 | Overview + capability truth | `GET /api/studio/overview` | `api/studio_web.py` |
 | Job state, plan, artifact passport, evidence, lineage, gaps | `GET /api/studio/projects/{p}/jobs/{j}/state` | existing `StudioReadService` (unchanged contract) |
 
@@ -74,7 +74,7 @@ token system; no secret in browser storage or client code; no mock capability.
 
 1. **Installable PWA, no build step.** Static ES modules, one stylesheet, one
    service worker, served same-origin by the existing FastAPI app under `/studio/`.
-2. **Session wrapper, not a new auth system.** `POST /api/studio/session` exchanges
+2. **Session wrapper, not a new auth system.** `POST /studio/session` exchanges
    the deployment token once for an `HttpOnly; Secure; SameSite=Strict`
    `__Host-` cookie holding `v1.<exp>.<nonce>.<mac>`. The MAC key is derived from the
    dashboard token (domain-separated HMAC), so there is no new secret, and rotating

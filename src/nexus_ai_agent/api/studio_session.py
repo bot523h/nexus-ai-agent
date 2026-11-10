@@ -158,7 +158,7 @@ class LoginRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)
 
 
-router = APIRouter(prefix="/api/studio", tags=["studio-session"])
+router = APIRouter(prefix="/studio", tags=["studio-session"])
 
 
 @router.get("/session")
