@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-08T08:42:47Z",
+  "updated_at": "2026-11-10T15:40:34Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1236,6 +1236,46 @@
         "tests/integration/test_durable_project_revision_pinning.py",
         "tests/unit/test_durable_project_state.py",
         "tests/unit/test_nagar_cognition_queue_handoff.py"
+      ]
+    },
+    {
+      "id": "nagar-triad-closure",
+      "description": "NAGAR-IBPC-TRIAD-CLOSURE-01 integration owner: shared IBPC files, triad docs, CHANGELOG",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/__init__.py",
+        "src/nexus_ai_agent/nagar/ibpc/intent.py",
+        "tests/architecture/test_ibpc_boundary.py",
+        "docs/superpowers/specs/2026-11-10-nagar-triad-design.md",
+        "docs/superpowers/plans/2026-11-10-nagar-triad.md",
+        ".superpowers/sdd/2026-11-10-nagar-triad/progress.md",
+        "docs/engineering/NAGAR_IBPC.md",
+        "CHANGELOG.md"
+      ]
+    },
+    {
+      "id": "nagar-delta-dialogue",
+      "description": "NAGAR Delta Dialogue relative-scope parser (delta.py)",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/delta.py",
+        "tests/unit/test_ibpc_delta.py"
+      ]
+    },
+    {
+      "id": "nagar-shadow-preview",
+      "description": "NAGAR Shadow Preview digest-bound keyframes (shadow.py)",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/shadow.py",
+        "tests/unit/test_ibpc_shadow.py",
+        "tests/integration/test_ibpc_shadow_ffmpeg.py"
+      ]
+    },
+    {
+      "id": "nagar-scope-signature",
+      "description": "NAGAR Scope Signature CIE-Lab fingerprint (signature.py)",
+      "paths": [
+        "src/nexus_ai_agent/nagar/ibpc/signature.py",
+        "tests/unit/test_ibpc_signature.py",
+        "tests/integration/test_ibpc_signature_ffmpeg.py"
       ]
     }
   ],
@@ -8521,7 +8561,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8552,7 +8592,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
-      "note": ""
+      "note": "",
+      "release_reason": "auto-released by gc at 2026-11-10T10:48:40Z (stale active lease)"
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -8600,7 +8641,7 @@
       "title_fa": "تعمیر PR #324 (بستن نهایی P0): فهرست‌کردن گزارش ممیزی جدید و رفع یافته‌های گزارش/شواهد تخته",
       "zone": "docs-architecture",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Repair the open docs-only PR #324 on its existing branch openhands/nagar-one-final-closeout-20261107. Root cause of the 5 red test/python-parity checks: docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md is not indexed in docs/README.md (TRUTH010). Also close the 5 unresolved review threads on the report and the memory note. No runtime change; no merge.",
       "scope_fa": "تعمیر PR مستندات‌محور باز #324 روی همان شاخه. علت ریشهٔ ۵ چک قرمز: گزارش ممیزی در docs/README.md فهرست نشده (TRUTH010). همچنین بستن ۵ ترد بازبینی روی گزارش و یادداشت حافظه. بدون تغییر runtime و بدون ادغام.",
       "acceptance_criteria": [
@@ -8622,6 +8663,162 @@
       "owner_hint": "openhands/nagar-one-final-closeout-20261107",
       "agent_branch": "openhands/nagar-one-final-closeout-20261107",
       "claimed_at": "2026-11-08T08:42:47Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-11-10T10:48:40Z (stale active lease)"
+    },
+    {
+      "task": "task-nagar-triad-closure-01",
+      "title": "NAGAR-IBPC-TRIAD-CLOSURE-01: convergence, contract and proof closure of Delta Dialogue, Shadow Preview and Scope Signature",
+      "title_fa": "NAGAR-IBPC-TRIAD-CLOSURE-01: همگرایی، بستن قرارداد و اثبات سه‌گانه Delta Dialogue · Shadow Preview · Scope Signature",
+      "zone": "nagar-triad-closure",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Integration owner of the shared IBPC files (ibpc/__init__.py, ibpc/intent.py, tests/architecture/test_ibpc_boundary.py) and the triad docs; merge-based convergence of the triad branch with origin/main (no history rewrite, no merge into main); reconciliation of the implementation with docs/superpowers/specs/2026-11-10-nagar-triad-design.md, with every deviation fixed or recorded in an ADR; CHANGELOG; draft PR with evidence.",
+      "scope_fa": "مالک یکپارچه‌سازی فایل‌های مشترک IBPC و مستندات سه‌گانه؛ همگرایی مبتنی بر merge با origin/main بدون بازنویسی تاریخچه و بدون merge به main؛ هم‌ترازسازی پیاده‌سازی با Spec تصویب‌شده و ثبت هر انحراف در ADR یا رفع آن؛ CHANGELOG؛ Draft PR با شواهد.",
+      "why_fa": "سه Zone نوشته شده‌اند اما قرارداد، اثبات و مرز مشترک هنوز بسته نیستند. بدون یک Integration Owner روشن، فایل‌های مشترک بین Zoneها تداخل خاموش ایجاد می‌کنند.",
+      "prerequisites": [
+        "task-ibpc-security-closure-01"
+      ],
+      "acceptance_criteria": [
+        "The governance PR registers this mission and its three zone tasks with real claim timestamps; the three pre-claim commits are disclosed in this note and in the PR body, not back-dated.",
+        "One integration owner is named for ibpc/__init__.py, ibpc/intent.py and tests/architecture/test_ibpc_boundary.py; the three zone tasks do not hold those files.",
+        "The triad branch converges with origin/main by merge commit; the three existing commits remain in history; no force-push, no history rewrite, no merge into main.",
+        "Every divergence between the code and docs/superpowers/specs/2026-11-10-nagar-triad-design.md is either fixed or recorded as an ADR with a reason; no silent deviation remains.",
+        "The final report states one of VERIFIED, VERIFIED_WITH_LIMITATIONS, HARDENED_BUT_NOT_COMPLETE or BLOCKED, with the HEAD SHA and the main base SHA."
+      ],
+      "evidence_required": [
+        "python scripts/agent_board.py check --files <changed files> --branch arena/nagar-delta-dialogue-vs1 (exit 0 required, exit 2 is not a pass)",
+        "PYTHONPATH=src python -m pytest tests/unit/test_agent_board.py -q",
+        "git merge-base origin/main HEAD and git log --oneline origin/main..HEAD after convergence",
+        "CI run on the draft PR head SHA, recorded with its conclusion"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/__init__.py",
+        "src/nexus_ai_agent/nagar/ibpc/intent.py",
+        "tests/architecture/test_ibpc_boundary.py",
+        "docs/superpowers/specs/2026-11-10-nagar-triad-design.md",
+        "docs/superpowers/plans/2026-11-10-nagar-triad.md",
+        ".superpowers/sdd/2026-11-10-nagar-triad/progress.md",
+        "docs/engineering/NAGAR_IBPC.md",
+        "CHANGELOG.md"
+      ],
+      "owner_hint": "arena/nagar-delta-dialogue-vs1 (proposed integration owner, to be confirmed in PR review)",
+      "note": "",
+      "note_fa": "یادداشت صداقت: کامیت‌های 741faf20 و f4a8d684 و 67d7e00b پیش از وجود هر Claim روی این Zoneها روی شاخه arena/nagar-delta-dialogue-vs1 ساخته شده‌اند. این موضوع افشا شده است؛ Claim از زمان ثبت واقعی خودش شروع می‌شود و به گذشته تاریخ‌گذاری نشده است.",
+      "agent_branch": "arena/nagar-delta-dialogue-vs1",
+      "claimed_at": "2026-11-10T10:48:40Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1
+    },
+    {
+      "task": "task-nagar-delta-dialogue-01",
+      "title": "NAGAR Delta Dialogue: fail-closed relative-scope parser",
+      "title_fa": "NAGAR Delta Dialogue: تحلیلگر نسبی Scope با رفتار Fail-closed",
+      "zone": "nagar-delta-dialogue",
+      "priority": "P1",
+      "status": "active",
+      "scope": "delta.py only: negation fail-closed, conflicting or mixed instructions return Clarification or Refusal, asset/revision/duration checks, typed return union, shared digit policy with intent.py.",
+      "scope_fa": "فقط delta.py: نفی Fail-closed، دستورهای متناقض یا ترکیبی با Clarification یا Refusal، بررسی asset/revision/duration، نوع بازگشت Union دقیق، سیاست عددی مشترک با intent.py.",
+      "why_fa": "پروب‌های موجود نشان دادند که نفی، تناقض، دستور ترکیبی و asset ناهم‌خوان اجرا می‌شوند، و revision منفی باعث Exception خام می‌شود.",
+      "prerequisites": [
+        "task-ibpc-security-closure-01"
+      ],
+      "acceptance_criteria": [
+        "A negated instruction (English and Persian) never produces a DeltaIntentAST; it returns Clarification or Refusal.",
+        "Contradictory or mixed instructions never execute a partial operation; each returns Clarification or Refusal.",
+        "A current_scope.asset_id that differs from the requested asset_id is refused.",
+        "Duration, source_revision and the scope bounds are validated before any model construction; invalid input returns a typed Refusal and never raises from caller input.",
+        "The return annotation is the exact union DeltaIntentAST | Clarification | Refusal, and digit normalisation is shared with intent.py."
+      ],
+      "evidence_required": [
+        "PYTHONPATH=src python -m pytest tests/unit/test_ibpc_delta.py -q (RED recorded before GREEN)",
+        "mutation check: removing each new guard makes its test fail"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/delta.py",
+        "tests/unit/test_ibpc_delta.py"
+      ],
+      "note": "",
+      "note_fa": "منوط به تصمیم مالکیت در Governance PR است؛ تا تأیید، کدی نوشته نمی‌شود.",
+      "agent_branch": "arena/nagar-delta-dialogue-vs1",
+      "claimed_at": "2026-11-10T10:48:40Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1
+    },
+    {
+      "task": "task-nagar-shadow-preview-01",
+      "title": "NAGAR Shadow Preview: digest-bound keyframe integrity with real FFmpeg proof",
+      "title_fa": "NAGAR Shadow Preview: یکپارچگی Digest-bound فریم‌ها با اثبات واقعی FFmpeg",
+      "zone": "nagar-shadow-preview",
+      "priority": "P1",
+      "status": "active",
+      "scope": "shadow.py and its tests: JPEG bytes bound to frame_digest, composite_digest derived from ordered validated frames and timestamps, shadow_digest covers metadata, half-open [start,end) sampling, 120 s total deadline, reject partial or failed FFmpeg output, schema_id and shadow_id per spec.",
+      "scope_fa": "shadow.py و تست‌هایش: اتصال بایت JPEG به frame_digest، composite_digest مشتق از فریم‌های معتبر با ترتیب و زمان، shadow_digest پوشش‌دهنده metadata، نمونه‌برداری نیمه‌باز [start,end)، سقف کلی ۱۲۰ ثانیه، رد خروجی ناقص یا ناموفق FFmpeg.",
+      "why_fa": "پروب‌ها نشان دادند که Timestamp از composite بیرون است، digest با JPEG تطبیق داده نمی‌شود، returncode ناموفق پذیرفته می‌شود و timeout به صورت خام بالا می‌آید.",
+      "prerequisites": [
+        "task-ibpc-security-closure-01"
+      ],
+      "acceptance_criteria": [
+        "A keyframe whose jpeg bytes do not hash to frame_digest is rejected at construction; a keyframe with a non-JPEG payload is rejected.",
+        "Changing any timestamp, reordering frames, or changing scope bounds or source_duration changes composite_digest or shadow_digest.",
+        "Sampling is half-open: no sampled timestamp equals scope end_us.",
+        "A non-zero returncode, partial stdout, empty stdout, or a timeout raises ShadowRenderError with a stable reason, never a raw subprocess exception.",
+        "A real FFmpeg integration test renders from a generated fixture, verifies the JPEG structure and digests independently, and proves tamper detection."
+      ],
+      "evidence_required": [
+        "PYTHONPATH=src python -m pytest tests/unit/test_ibpc_shadow.py -q",
+        "PYTHONPATH=src python -m pytest tests/integration/test_ibpc_shadow_ffmpeg.py -q (real ffmpeg, recorded version)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/shadow.py",
+        "tests/unit/test_ibpc_shadow.py",
+        "tests/integration/test_ibpc_shadow_ffmpeg.py"
+      ],
+      "note": "",
+      "note_fa": "Shadow تا پایان این مأموریت به Approval Pipeline متصل نمی‌شود؛ این مرز بخشی از Claim است.",
+      "agent_branch": "arena/nagar-delta-dialogue-vs1",
+      "claimed_at": "2026-11-10T10:48:40Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1
+    },
+    {
+      "task": "task-nagar-scope-signature-01",
+      "title": "NAGAR Scope Signature: contract-exact CIE-Lab fingerprint with real temporal metric",
+      "title_fa": "NAGAR Scope Signature: اثرانگشت CIE-Lab منطبق با قرارداد و متریک زمانی واقعی",
+      "zone": "nagar-scope-signature",
+      "priority": "P1",
+      "status": "active",
+      "scope": "signature.py and its tests: the 64-bin histogram of the approved spec or a versioned ADR for a different feature contract, a real consecutive-frame motion metric, validated finite and non-negative histograms with norm checks, cosine clamped to [0,1] as the spec defines, threshold and top_k limits, frame-size and output-length checks.",
+      "scope_fa": "signature.py و تست‌هایش: هیستوگرام ۶۴-بینی Spec تصویب‌شده یا ADR نسخه‌دار برای قرارداد دیگر، متریک زمانی واقعی بین فریم‌های متوالی، اعتبارسنجی هیستوگرام متناهی و نامنفی با بررسی نرم، Cosine محدود به [0,1]، کرانه‌های threshold و top_k، بررسی ابعاد و طول خروجی.",
+      "why_fa": "پروب‌ها نشان دادند که مقدار Cosine منفی برمی‌گردد، NaN پذیرفته می‌شود، motion_mad با میانگین روشنایی ثابت صفر است حتی اگر پیکسل‌ها حرکت کنند، و آستانه پیش‌فرض ۰٫۰ است نه ۰٫۸۰ مطابق Spec.",
+      "prerequisites": [
+        "task-ibpc-security-closure-01"
+      ],
+      "acceptance_criteria": [
+        "The histogram contract either matches the approved spec exactly (64 bins, L 32 / a 16 / b 16) or is replaced by a versioned ADR and Spec with the engineering reason; no silent 192-bin deviation remains.",
+        "The motion metric measures pixel change between consecutive frames and a test proves that two sequences with equal mean luminance but different pixel motion yield different motion values.",
+        "Histograms reject NaN, infinite, negative, wrong-length and non-unit-norm values; cosine similarity is clamped to [0,1] as specified.",
+        "threshold is validated in [0,1], top_k and max_results are bounded, default threshold is 0.80 as specified, and frame dimensions and output byte length are checked before use.",
+        "A real FFmpeg integration test computes the signature from a generated fixture, verifies its invariants, and proves determinism and difference between two distinct fixtures."
+      ],
+      "evidence_required": [
+        "PYTHONPATH=src python -m pytest tests/unit/test_ibpc_signature.py -q",
+        "PYTHONPATH=src python -m pytest tests/integration/test_ibpc_signature_ffmpeg.py -q (real ffmpeg, recorded version)"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/nagar/ibpc/signature.py",
+        "tests/unit/test_ibpc_signature.py",
+        "tests/integration/test_ibpc_signature_ffmpeg.py"
+      ],
+      "note": "",
+      "note_fa": "انتخاب قرارداد (Spec یا ADR) باید پیش از تغییر کد در بازبینی Governance PR تصمیم‌گیری شود.",
+      "agent_branch": "arena/nagar-delta-dialogue-vs1",
+      "claimed_at": "2026-11-10T10:48:40Z",
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1
