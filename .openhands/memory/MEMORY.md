@@ -10,6 +10,11 @@ Index of durable, expensive-to-learn facts. Detail goes to daily logs.
   closing every exchange.
 
 ## NAGAR-ONE P0 closeout + PR reconciliation (2026-11-07 continuation)
+> **SUPERSEDED (2026-11-08).** This interim block records the mid-campaign state (#319 at
+> `e52e30eb`, 24/24 mutants, 6421 tests). The FINAL, durable state is in the
+> **"NAGAR-ONE P0 closeout + PR reconciliation (durable, 2026-11-07, mission -02)"** block
+> below: #319 merged as `65c020cf`, campaign **25/25**, suite **6423 passed / 39 skipped**,
+> live `main` `5ed6d4e1`. Read that block, not this one, for current facts.
 - **#319 (task-282 Slice 2)** head now **`e52e30eb`**, **16/16 threads resolved**,
   **CI 42412872578 = SUCCESS** (27/27). **P0 fix**: the artifact→revision binding is
   now committed by the queue's **post-verification, pre-COMPLETED async `confirm` hook**
@@ -1179,3 +1184,23 @@ Only red check = the #234 flake (task-264, issue #237).
   prompts). Use `https://x-access-token:${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/...`.
 - **Never run the mutation campaign while the suite runs** — in-place source
   mutation makes the anchor-integrity test read a mutated file (spurious `0`).
+
+## NAGAR-ONE P0 closeout + PR reconciliation (durable, 2026-11-07, mission -02)
+- **main `6838c543` → `5ed6d4e1`** (verified live). Merge authorization via GitHub; all merges via API.
+- **Merge train:** #320→`a8ce54a4`, #321→`1919dc3d`, #319→`65c020cf`, #322→`5ed6d4e1`. Order #321 BEFORE
+  #319: #321 renames the duplicate storage law `R22`→`R25`, #319 adds `R29`; same MODULE_MAP §3 region →
+  #319 conflicted; resolved locally (main R25 + branch R29) as merge `c5b7da56`. Register now `R1..R29`,
+  no dups/gaps. **#323 closed** (redundant: files already on main; its MEMORY.md would delete 27 lines).
+  **#294 separate** (needs rebase); its OpenGrep SQL warning at `provenance/graph.py:612` is a **false
+  positive** (closed-set column name + parameter-bound values) — evidence reply posted + thread resolved.
+- **Protection `strict: true`**, required = `lint (ruff+mypy+version lockstep)`, `test (pytest -m "not slow")`,
+  `merge-base-guard (base == main)`, `enforce_admins: true`. So update each PR branch with main before merge.
+  `github_merge_pull_request` needs the FULL 40-hex `expectedHeadSha` (8-char sha → rejected); a 409
+  "Head branch was modified" means re-fetch the head sha and retry.
+- **P0 fence `6420432b`** (in #319): `_owns_execution` re-read immediately BEFORE the durable binding commit;
+  2 non-vacuous fault-injection tests; mutation `artifact_confirmation_refusal_ignored`; campaign 25/25 killed;
+  full suite 6423 passed / 39 skipped. Residuals in **D-0038** (schema-2 pin enforcement + atomic
+  concurrent-revision lock deferred).
+- **Board evidence:** `record-pr-merge` verified all 4 merges against live main; `agent_board.py check` = no
+  overlap. Report: `docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md` on branch
+  `openhands/nagar-one-final-closeout-20261107` (NEVER push to main).
