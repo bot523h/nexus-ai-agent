@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### NAGAR IBPC — Delta Dialogue, Shadow Preview & Scope Signature (mission NAGAR-IBPC-TRIAD-CLOSURE-01, session `arena/nagar-delta-dialogue-vs1`)
+
+Three deterministic, model-free media capabilities on the IBPC chain, each
+reachable without Telegram and each proven against **real** FFmpeg (mocks are
+never substituted for execution):
+
+- **Delta Dialogue** (`nagar/ibpc/delta.py`, `parse_delta_intent`): a relative
+  scope utterance — *"trim 1 more second from the end"*, *"یک ثانیه از تهش ببر"* —
+  is parsed into typed `DeltaOp`s and resolved against the last-committed scope.
+  It is fully deterministic (no LLM, no external API, no new dependency); a
+  negation is refused (never executed), a contradiction (same anchor moved both
+  ways) fails the whole request closed, and the Persian bare word *«نه»* is
+  deliberately **not** mapped to `9`, so a negated utterance can never become a
+  spurious positive delta. Asset identity and source revision are validated at
+  the boundary, so no raw `ValidationError` escapes the public API.
+- **Shadow Preview** (`nagar/ibpc/shadow.py`, `build_shadow_preview`): returns a
+  frozen `ShadowPreviewManifest` of real JPEG keyframes sampled evenly over the
+  **half-open** window `[start, end)`. Every frame is sha256-digested then
+  base64-encoded, so the manifest is self-verifying; the order-independent
+  `composite_digest` (distinct from the whole-manifest `shadow_digest`) is what
+  an approval binds.
+- **Scope Signature** (`nagar/ibpc/signature.py`, `compute_scope_signature`,
+  `ScopeMatchEngine`): a reproducible visual + motion fingerprint — a **64-bin
+  CIE L\*a\*b\*** histogram (L\*=32, a\*=16, b\*=16, D65, pure-Python sRGB→Lab,
+  L2-normalised) plus a grayscale mean-absolute-difference motion magnitude in
+  `[0, 255]` — and a **stable digest** that excludes `computed_at`, so two runs
+  over the same input and algorithm produce the same `signature_digest`.
+
+**Safety.** Every FFmpeg call is a list of arguments (never `shell=True`), with a
+per-frame (30 s) and total (120 s) timeout, stdout pipes only (no disk writes),
+and typed `ShadowRenderError` / `SignatureError` translations — a raw
+`FileNotFoundError`/`OSError` never crosses the public boundary. The boundary
+test (`tests/architecture/test_ibpc_boundary.py`) proves the modules carry no
+reverse dependency into `service`/`session`/`approval`/`footprint` and no
+`shell=True`. Real-FFmpeg integration tests live in
+`tests/integration/test_ibpc_shadow_ffmpeg.py` and
+`tests/integration/test_ibpc_signature_ffmpeg.py` (skipped, never passed, when
+FFmpeg is unavailable). Decision record: `docs/DECISION_LOG.md` D-0039.
+
 ### Studio Core (task-186 — discovery surface, preview/master boundary, Agent 2/3 integration contracts, session `arena/01a0da2a-nexus-ai-agent`)
 
 - **Capability discovery contract (`nagar.discovery.v1`)**:

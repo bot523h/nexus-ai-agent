@@ -55,14 +55,17 @@ from nexus_ai_agent.nagar.ibpc.delta import DeltaAnchor, DeltaOp, DeltaIntentAST
 from pydantic import ValidationError
 import pytest
 
+
 def test_delta_op_rejects_extra_fields():
     with pytest.raises(ValidationError):
         DeltaOp(anchor=DeltaAnchor.OUT_POINT, delta_us=-1_000_000, extra_field="bad")
+
 
 def test_delta_op_rejects_zero_delta():
     # zero delta is refused at parse level, but model allows it — the parse function guards it
     op = DeltaOp(anchor=DeltaAnchor.OUT_POINT, delta_us=0)
     assert op.delta_us == 0  # model allows; parse_delta_intent refuses
+
 
 def test_delta_anchor_values():
     assert DeltaAnchor.IN_POINT == "in_point"
@@ -84,7 +87,11 @@ File header docstring: mirror the style of `intent.py`. Imports: `from __future_
 from __future__ import annotations
 from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field
-from nexus_ai_agent.nagar.ibpc.models import DeltaAnchor, DeltaOp, DeltaIntentAST  # will be defined here
+from nexus_ai_agent.nagar.ibpc.models import (
+    DeltaAnchor,
+    DeltaOp,
+    DeltaIntentAST,
+)  # will be defined here
 # ...
 ```
 
@@ -130,16 +137,24 @@ SCOPE = VideoTimeScope(asset_id="a1", effect="keep", start_us=1_000_000, end_us=
 DURATION = 6_000_000
 CBN = "cbn_" + "a" * 64
 
+
 def _delta(text, scope=SCOPE):
     return parse_delta_intent(
-        text, current_scope=scope, project_id="p1", asset_id="a1",
-        source_revision=1, duration_us=DURATION, channel_binding_id=CBN,
+        text,
+        current_scope=scope,
+        project_id="p1",
+        asset_id="a1",
+        source_revision=1,
+        duration_us=DURATION,
+        channel_binding_id=CBN,
     )
+
 
 def test_english_trim_end():
     r = _delta("trim 1 more second from the end")
     assert isinstance(r, type(r).__mro__[0])  # DeltaIntentAST
     from nexus_ai_agent.nagar.ibpc.delta import DeltaAnchor, DeltaIntentAST
+
     assert isinstance(r, DeltaIntentAST)
     assert r.delta_op.anchor == DeltaAnchor.OUT_POINT
     assert r.delta_op.delta_us == -1_000_000
@@ -147,34 +162,44 @@ def test_english_trim_end():
     assert r.resolved_ast.scope.end_us == 3_000_000
     assert r.resolved_ast.scope.start_us == 1_000_000
 
+
 def test_persian_trim_end():
     r = _delta("یک ثانیه از تهش ببر")
     from nexus_ai_agent.nagar.ibpc.delta import DeltaAnchor, DeltaIntentAST
+
     assert isinstance(r, DeltaIntentAST)
     assert r.delta_op.anchor == DeltaAnchor.OUT_POINT
     assert r.delta_op.delta_us == -1_000_000
 
+
 def test_trim_start():
     r = _delta("trim 0.5 seconds from the start")
     from nexus_ai_agent.nagar.ibpc.delta import DeltaAnchor, DeltaIntentAST
+
     assert isinstance(r, DeltaIntentAST)
     assert r.delta_op.anchor == DeltaAnchor.IN_POINT
     assert r.delta_op.delta_us == 500_000  # start moves right
+
 
 def test_no_prior_scope_returns_clarification():
     r = parse_delta_intent(
         "trim 1 more second from the end",
         current_scope=None,
-        project_id="p1", asset_id="a1",
-        source_revision=1, duration_us=DURATION, channel_binding_id=CBN,
+        project_id="p1",
+        asset_id="a1",
+        source_revision=1,
+        duration_us=DURATION,
+        channel_binding_id=CBN,
     )
     assert isinstance(r, Clarification)
+
 
 def test_zero_delta_returns_refusal():
     # "trim 0 seconds" → no-op → Refusal
     r = _delta("trim 0 seconds from the end")
     assert isinstance(r, Refusal)
     assert r.reason == "zero_delta"
+
 
 def test_inverted_scope_returns_refusal():
     # scope [1s, 1.3s]; trim 1s from end → end would be 0.3s < start 1s
@@ -183,15 +208,19 @@ def test_inverted_scope_returns_refusal():
     assert isinstance(r, Refusal)
     assert r.reason == "delta_out_of_range"
 
+
 def test_base_scope_digest_in_result():
     r = _delta("trim 1 more second from the end")
     from nexus_ai_agent.nagar.ibpc.delta import DeltaIntentAST
+
     assert isinstance(r, DeltaIntentAST)
     assert r.base_scope_digest == SCOPE.scope_digest
+
 
 def test_resolved_ast_is_executable():
     r = _delta("trim 1 more second from the end")
     from nexus_ai_agent.nagar.ibpc.delta import DeltaIntentAST
+
     assert isinstance(r, DeltaIntentAST)
     assert r.resolved_ast.executable
     assert r.resolved_ast.operation == "timeline.trim"
@@ -290,6 +319,7 @@ Add to `test_ibpc_boundary.py`:
 def test_delta_does_not_import_service_layer():
     """delta.py must not import service, session, approval, or footprint."""
     import ast, pathlib
+
     src = pathlib.Path("src/nexus_ai_agent/nagar/ibpc/delta.py").read_text()
     tree = ast.parse(src)
     forbidden = {"service", "session", "approval", "footprint"}
@@ -343,14 +373,18 @@ Claude-Session: https://claude.ai/code/session_01LkQvdNSsQmLL5xUY4CvM4D"
 ```python
 # tests/unit/test_ibpc_shadow.py
 from nexus_ai_agent.nagar.ibpc.shadow import (
-    ShadowKeyframe, ShadowPreviewManifest, ShadowRenderError,
+    ShadowKeyframe,
+    ShadowPreviewManifest,
+    ShadowRenderError,
 )
 from pydantic import ValidationError
 import pytest
 
+
 def test_keyframe_rejects_bad_digest():
     with pytest.raises(ValidationError):
         ShadowKeyframe(timestamp_us=0, jpeg_b64="AA==", frame_digest="not_a_digest")
+
 
 def test_keyframe_accepts_valid():
     kf = ShadowKeyframe(
@@ -359,6 +393,7 @@ def test_keyframe_accepts_valid():
         frame_digest="sha256:" + "a" * 64,
     )
     assert kf.timestamp_us == 500_000
+
 
 def test_shadow_render_error_has_reason():
     err = ShadowRenderError("ffmpeg_not_found")
@@ -423,56 +458,87 @@ SCOPE = VideoTimeScope(asset_id="a1", effect="keep", start_us=0, end_us=2_000_00
 PLAN_DIGEST = "sha256:" + "b" * 64
 FAKE_JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 100 + b"\xff\xd9"  # minimal JPEG
 
+
 def _fake_ffmpeg_run(args, **kwargs):
     result = mock.Mock()
     result.stdout = FAKE_JPEG
     result.returncode = 0
     return result
 
+
 def test_build_returns_manifest(tmp_path):
     fake_src = tmp_path / "src.mp4"
     fake_src.write_bytes(b"fake")
     with mock.patch("subprocess.run", side_effect=_fake_ffmpeg_run):
-        with mock.patch("nexus_ai_agent.nagar.ibpc.shadow.resolve_ffmpeg_bin", return_value="ffmpeg"):
+        with mock.patch(
+            "nexus_ai_agent.nagar.ibpc.shadow.resolve_ffmpeg_bin", return_value="ffmpeg"
+        ):
             manifest = build_shadow_preview(
-                fake_src, SCOPE, PLAN_DIGEST,
-                max_keyframes=3, source_duration_us=2_000_000,
+                fake_src,
+                SCOPE,
+                PLAN_DIGEST,
+                max_keyframes=3,
+                source_duration_us=2_000_000,
             )
     assert len(manifest.keyframes) == 3
     assert manifest.plan_digest == PLAN_DIGEST
     assert manifest.scope_digest == SCOPE.scope_digest
     assert manifest.composite_digest.startswith("sha256:")
 
+
 def test_composite_digest_deterministic(tmp_path):
     fake_src = tmp_path / "src.mp4"
     fake_src.write_bytes(b"fake")
     with mock.patch("subprocess.run", side_effect=_fake_ffmpeg_run):
-        with mock.patch("nexus_ai_agent.nagar.ibpc.shadow.resolve_ffmpeg_bin", return_value="ffmpeg"):
-            m1 = build_shadow_preview(fake_src, SCOPE, PLAN_DIGEST, max_keyframes=2, source_duration_us=2_000_000)
-            m2 = build_shadow_preview(fake_src, SCOPE, PLAN_DIGEST, max_keyframes=2, source_duration_us=2_000_000)
+        with mock.patch(
+            "nexus_ai_agent.nagar.ibpc.shadow.resolve_ffmpeg_bin", return_value="ffmpeg"
+        ):
+            m1 = build_shadow_preview(
+                fake_src, SCOPE, PLAN_DIGEST, max_keyframes=2, source_duration_us=2_000_000
+            )
+            m2 = build_shadow_preview(
+                fake_src, SCOPE, PLAN_DIGEST, max_keyframes=2, source_duration_us=2_000_000
+            )
     assert m1.composite_digest == m2.composite_digest
+
 
 def test_empty_frame_raises(tmp_path):
     fake_src = tmp_path / "src.mp4"
     fake_src.write_bytes(b"fake")
-    empty_result = mock.Mock(); empty_result.stdout = b""; empty_result.returncode = 0
+    empty_result = mock.Mock()
+    empty_result.stdout = b""
+    empty_result.returncode = 0
     with mock.patch("subprocess.run", return_value=empty_result):
-        with mock.patch("nexus_ai_agent.nagar.ibpc.shadow.resolve_ffmpeg_bin", return_value="ffmpeg"):
+        with mock.patch(
+            "nexus_ai_agent.nagar.ibpc.shadow.resolve_ffmpeg_bin", return_value="ffmpeg"
+        ):
             with pytest.raises(ShadowRenderError) as exc:
-                build_shadow_preview(fake_src, SCOPE, PLAN_DIGEST, max_keyframes=1, source_duration_us=2_000_000)
+                build_shadow_preview(
+                    fake_src, SCOPE, PLAN_DIGEST, max_keyframes=1, source_duration_us=2_000_000
+                )
     assert exc.value.reason == "empty_frame"
 
+
 def test_ffmpeg_not_found_raises():
-    with mock.patch("nexus_ai_agent.nagar.ibpc.shadow.resolve_ffmpeg_bin", side_effect=FileNotFoundError):
+    with mock.patch(
+        "nexus_ai_agent.nagar.ibpc.shadow.resolve_ffmpeg_bin", side_effect=FileNotFoundError
+    ):
         with pytest.raises(ShadowRenderError) as exc:
-            build_shadow_preview(Path("/nonexistent.mp4"), SCOPE, PLAN_DIGEST, source_duration_us=2_000_000)
+            build_shadow_preview(
+                Path("/nonexistent.mp4"), SCOPE, PLAN_DIGEST, source_duration_us=2_000_000
+            )
     assert exc.value.reason == "ffmpeg_not_found"
+
 
 def test_max_keyframes_out_of_range():
     with pytest.raises(ValueError):
-        build_shadow_preview(Path("/x.mp4"), SCOPE, PLAN_DIGEST, max_keyframes=0, source_duration_us=2_000_000)
+        build_shadow_preview(
+            Path("/x.mp4"), SCOPE, PLAN_DIGEST, max_keyframes=0, source_duration_us=2_000_000
+        )
     with pytest.raises(ValueError):
-        build_shadow_preview(Path("/x.mp4"), SCOPE, PLAN_DIGEST, max_keyframes=17, source_duration_us=2_000_000)
+        build_shadow_preview(
+            Path("/x.mp4"), SCOPE, PLAN_DIGEST, max_keyframes=17, source_duration_us=2_000_000
+        )
 ```
 
 - [ ] **Step 2: Run to verify FAIL**
@@ -539,14 +605,20 @@ Claude-Session: https://claude.ai/code/session_01LkQvdNSsQmLL5xUY4CvM4D"
 ```python
 # tests/unit/test_ibpc_signature.py
 from nexus_ai_agent.nagar.ibpc.signature import (
-    ScopeSignature, ScopeMatch, SignatureError, cosine_similarity,
+    ScopeSignature,
+    ScopeMatch,
+    SignatureError,
+    cosine_similarity,
 )
 import pytest
+
 
 def _make_sig(hist, motion=0.0):
     return ScopeSignature(
         scope_digest="sha256:" + "c" * 64,
-        asset_id="a1", start_us=0, end_us=2_000_000,
+        asset_id="a1",
+        start_us=0,
+        end_us=2_000_000,
         color_histogram=tuple(hist),
         motion_magnitude=motion,
         sample_frames=4,
@@ -554,14 +626,17 @@ def _make_sig(hist, motion=0.0):
         signature_digest="sha256:" + "d" * 64,
     )
 
+
 def test_cosine_similarity_identical_unit_vectors():
     v = [1.0] + [0.0] * 63
     assert abs(cosine_similarity(tuple(v), tuple(v)) - 1.0) < 1e-9
+
 
 def test_cosine_similarity_orthogonal():
     a = [1.0] + [0.0] * 63
     b = [0.0, 1.0] + [0.0] * 62
     assert cosine_similarity(tuple(a), tuple(b)) < 1e-9
+
 
 def test_cosine_similarity_clipped_to_0_1():
     # floating point rounding must not produce > 1.0 or < 0.0
@@ -569,12 +644,15 @@ def test_cosine_similarity_clipped_to_0_1():
     s = cosine_similarity(v, v)
     assert 0.0 <= s <= 1.0
 
+
 def test_scope_match_model():
     m = ScopeMatch(
         candidate_scope_digest="sha256:" + "e" * 64,
-        cosine_similarity=0.95, motion_delta=2.3,
+        cosine_similarity=0.95,
+        motion_delta=2.3,
     )
     assert m.cosine_similarity == 0.95
+
 
 def test_signature_error_has_reason():
     e = SignatureError("empty_scope")
@@ -637,9 +715,11 @@ from nexus_ai_agent.nagar.ibpc.models import VideoTimeScope
 
 SCOPE = VideoTimeScope(asset_id="a1", effect="keep", start_us=0, end_us=2_000_000)
 
+
 def _make_rgb_frame(r, g, b, w=160, h=90):
     """Synthetic solid-colour raw RGB24 frame."""
     return bytes([r, g, b] * w * h)
+
 
 def _fake_run_rgb(args, **kwargs):
     result = mock.Mock()
@@ -647,42 +727,63 @@ def _fake_run_rgb(args, **kwargs):
     result.returncode = 0
     return result
 
+
 def test_signature_has_64_bin_histogram(tmp_path):
-    src = tmp_path / "v.mp4"; src.write_bytes(b"x")
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
     with mock.patch("subprocess.run", side_effect=_fake_run_rgb):
-        with mock.patch("nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", return_value="ffmpeg"):
+        with mock.patch(
+            "nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", return_value="ffmpeg"
+        ):
             sig = compute_scope_signature(src, SCOPE, max_frames=4, source_duration_us=2_000_000)
     assert len(sig.color_histogram) == 64
 
+
 def test_histogram_l2_normalised(tmp_path):
-    src = tmp_path / "v.mp4"; src.write_bytes(b"x")
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
     with mock.patch("subprocess.run", side_effect=_fake_run_rgb):
-        with mock.patch("nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", return_value="ffmpeg"):
+        with mock.patch(
+            "nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", return_value="ffmpeg"
+        ):
             sig = compute_scope_signature(src, SCOPE, max_frames=4, source_duration_us=2_000_000)
-    norm = math.sqrt(sum(x*x for x in sig.color_histogram))
+    norm = math.sqrt(sum(x * x for x in sig.color_histogram))
     assert abs(norm - 1.0) < 1e-6 or norm == 0.0  # zero vector allowed
 
+
 def test_all_black_video_zero_norm(tmp_path):
-    src = tmp_path / "v.mp4"; src.write_bytes(b"x")
-    black = mock.Mock(); black.stdout = bytes(160 * 90 * 3); black.returncode = 0
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
+    black = mock.Mock()
+    black.stdout = bytes(160 * 90 * 3)
+    black.returncode = 0
     with mock.patch("subprocess.run", return_value=black):
-        with mock.patch("nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", return_value="ffmpeg"):
+        with mock.patch(
+            "nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", return_value="ffmpeg"
+        ):
             sig = compute_scope_signature(src, SCOPE, max_frames=2, source_duration_us=2_000_000)
     # all-black → all L*=0 → all in first L* bin → zero a* and b* bins
     # norm may be non-zero (all weight in one bin); just check len and no NaN
     assert len(sig.color_histogram) == 64
     assert all(not math.isnan(x) for x in sig.color_histogram)
 
+
 def test_signature_digest_bound_to_content(tmp_path):
-    src = tmp_path / "v.mp4"; src.write_bytes(b"x")
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
     with mock.patch("subprocess.run", side_effect=_fake_run_rgb):
-        with mock.patch("nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", return_value="ffmpeg"):
+        with mock.patch(
+            "nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", return_value="ffmpeg"
+        ):
             s1 = compute_scope_signature(src, SCOPE, max_frames=2, source_duration_us=2_000_000)
             s2 = compute_scope_signature(src, SCOPE, max_frames=2, source_duration_us=2_000_000)
     assert s1.signature_digest == s2.signature_digest
 
+
 def test_ffmpeg_not_found_raises():
-    with mock.patch("nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", side_effect=FileNotFoundError):
+    with mock.patch(
+        "nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", side_effect=FileNotFoundError
+    ):
         with pytest.raises(SignatureError) as exc:
             compute_scope_signature(Path("/x.mp4"), SCOPE, source_duration_us=2_000_000)
     assert exc.value.reason == "ffmpeg_not_found"
@@ -704,18 +805,21 @@ def _rgb_to_lab(r: int, g: int, b: int) -> tuple[float, float, float]:
     def _linearise(c: int) -> float:
         v = c / 255.0
         return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+
     rl, gl, bl = _linearise(r), _linearise(g), _linearise(b)
     # linear RGB → XYZ (D65)
-    X = 0.4124564*rl + 0.3575761*gl + 0.1804375*bl
-    Y = 0.2126729*rl + 0.7151522*gl + 0.0721750*bl
-    Z = 0.0193339*rl + 0.1191920*gl + 0.9503041*bl
+    X = 0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl
+    Y = 0.2126729 * rl + 0.7151522 * gl + 0.0721750 * bl
+    Z = 0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl
+
     # XYZ → Lab (D65 white: Xn=0.95047, Yn=1.0, Zn=1.08883)
     def _f(t: float) -> float:
-        return t**(1/3) if t > 0.008856 else 7.787*t + 16/116
-    fx, fy, fz = _f(X/0.95047), _f(Y/1.0), _f(Z/1.08883)
-    L = max(0.0, 116*fy - 16)
-    a = 500*(fx - fy)
-    b_val = 200*(fy - fz)
+        return t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116
+
+    fx, fy, fz = _f(X / 0.95047), _f(Y / 1.0), _f(Z / 1.08883)
+    L = max(0.0, 116 * fy - 16)
+    a = 500 * (fx - fy)
+    b_val = 200 * (fy - fz)
     return L, a, b_val
 ```
 
@@ -766,21 +870,27 @@ Claude-Session: https://claude.ai/code/session_01LkQvdNSsQmLL5xUY4CvM4D"
 from nexus_ai_agent.nagar.ibpc.signature import ScopeMatchEngine, ScopeSignature, ScopeMatch
 import math
 
+
 def _sig(digest_char, hist):
-    norm = math.sqrt(sum(x*x for x in hist)) or 1.0
+    norm = math.sqrt(sum(x * x for x in hist)) or 1.0
     h = tuple(x / norm for x in hist)
     return ScopeSignature(
         scope_digest="sha256:" + digest_char * 64,
-        asset_id="a1", start_us=0, end_us=1_000_000,
+        asset_id="a1",
+        start_us=0,
+        end_us=1_000_000,
         color_histogram=h,
-        motion_magnitude=0.0, sample_frames=2,
+        motion_magnitude=0.0,
+        sample_frames=2,
         computed_at="2026-11-10T00:00:00Z",
         signature_digest="sha256:" + "0" * 64,
     )
 
-SOURCE = _sig("a", [1.0] + [0.0]*63)
-SIMILAR = _sig("b", [0.99, 0.141] + [0.0]*62)  # very close to SOURCE
-DIFFERENT = _sig("c", [0.0]*32 + [1.0] + [0.0]*31)  # orthogonal
+
+SOURCE = _sig("a", [1.0] + [0.0] * 63)
+SIMILAR = _sig("b", [0.99, 0.141] + [0.0] * 62)  # very close to SOURCE
+DIFFERENT = _sig("c", [0.0] * 32 + [1.0] + [0.0] * 31)  # orthogonal
+
 
 def test_find_similar_returns_above_threshold():
     engine = ScopeMatchEngine()
@@ -789,10 +899,12 @@ def test_find_similar_returns_above_threshold():
     assert results[0].candidate_scope_digest == SIMILAR.scope_digest
     assert results[0].cosine_similarity >= 0.5
 
+
 def test_find_similar_sorted_descending():
     engine = ScopeMatchEngine()
     results = engine.find_similar(SOURCE, [DIFFERENT, SIMILAR], threshold=0.0)
     assert results[0].cosine_similarity >= results[-1].cosine_similarity
+
 
 def test_max_results_respected():
     engine = ScopeMatchEngine()
@@ -800,10 +912,12 @@ def test_max_results_respected():
     results = engine.find_similar(SOURCE, many, threshold=0.0, max_results=3)
     assert len(results) <= 3
 
+
 def test_threshold_out_of_range():
     engine = ScopeMatchEngine()
     with pytest.raises(ValueError):
         engine.find_similar(SOURCE, [SIMILAR], threshold=1.5)
+
 
 def test_empty_candidates():
     engine = ScopeMatchEngine()
@@ -835,11 +949,13 @@ class ScopeMatchEngine:
         for cand in candidates:
             sim = cosine_similarity(source.color_histogram, cand.color_histogram)
             if sim >= threshold:
-                matches.append(ScopeMatch(
-                    candidate_scope_digest=cand.scope_digest,
-                    cosine_similarity=sim,
-                    motion_delta=abs(source.motion_magnitude - cand.motion_magnitude),
-                ))
+                matches.append(
+                    ScopeMatch(
+                        candidate_scope_digest=cand.scope_digest,
+                        cosine_similarity=sim,
+                        motion_delta=abs(source.motion_magnitude - cand.motion_magnitude),
+                    )
+                )
         matches.sort(key=lambda m: m.cosine_similarity, reverse=True)
         return matches[:max_results]
 ```
