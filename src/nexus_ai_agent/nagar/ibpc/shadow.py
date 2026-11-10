@@ -15,6 +15,13 @@ Contract (Spec §2):
 * ``scope_duration_s <= 0`` → :class:`ShadowRenderError` ``"empty_scope"``.
 * Timeout is enforced per frame (30 s) **and** in total (120 s); a hit raises
   :class:`ShadowRenderError` ``"timeout"``.
+* A non-zero ffmpeg exit is ``"ffmpeg_failed"`` even when it wrote bytes; output
+  that is not a complete JPEG (SOI … EOI) is ``"invalid_jpeg"``. Partial output is
+  never a frame.
+* ``verify_shadow_manifest`` recomputes every digest from the carried bytes and
+  checks timestamps; ``build_shadow_preview`` runs it on its own result.
+* Frame count is ``min(max_keyframes, scope length in us)`` so timestamps are
+  strictly increasing on any scope.
 * ``composite_digest = "sha256:" + sha256(b"".join(sorted(fd.encode() for fd in
   frame_digests))).hexdigest()`` — order-independent over the scope, and it is
   what an approval binds.  ``ShadowPreviewManifest.shadow_digest`` is a
@@ -29,6 +36,7 @@ explicitly MUST NOT import from ``service``, ``session``, ``approval``,
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import subprocess
 import time
@@ -56,6 +64,8 @@ _DEFAULT_TARGET_HEIGHT = 480  # px (480p per Spec §2.3)
 _PER_FRAME_TIMEOUT_S = 30
 _TOTAL_TIMEOUT_S = 120
 _DIGEST_PREFIX = "sha256:"
+_JPEG_SOI = b"\xff\xd8\xff"
+_JPEG_EOI = b"\xff\xd9"
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +139,19 @@ def _capture_frame(
         ) from exc
     if not result.stdout:
         raise ShadowRenderError("empty_frame", f"at t={ts_s:.3f}s (returncode={result.returncode})")
+    if result.returncode != 0:
+        # Bytes from a failed run are never a frame, even when they look like one.
+        raise ShadowRenderError("ffmpeg_failed", f"returncode={result.returncode} at t={ts_s:.3f}s")
+    if not _is_jpeg(result.stdout):
+        raise ShadowRenderError(
+            "invalid_jpeg", f"ffmpeg output at t={ts_s:.3f}s is not a complete JPEG"
+        )
     return result.stdout
+
+
+def _is_jpeg(data: bytes) -> bool:
+    """A complete-looking JPEG envelope: SOI marker at the start, EOI at the end."""
+    return len(data) >= 4 and data.startswith(_JPEG_SOI) and data.endswith(_JPEG_EOI)
 
 
 def _frame_to_keyframe(jpeg_bytes: bytes, timestamp_us: int) -> ShadowKeyframe:
@@ -165,6 +187,49 @@ def _sample_timestamps(scope_start_us: int, scope_end_us: int, n: int) -> list[i
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def verify_shadow_manifest(manifest: ShadowPreviewManifest) -> None:
+    """Recompute every digest from the carried bytes; raise on the first mismatch.
+
+    The consumer-side half of the self-verifying contract. It needs no ffmpeg
+    and no disk, only the manifest: each keyframe must decode to a complete
+    JPEG whose sha256 equals its ``frame_digest``; timestamps must lie in the
+    half-open scope and strictly increase; and ``composite_digest`` must equal
+    the Spec §2.4 formula over those frame digests.
+
+    Raises
+    ------
+    ShadowRenderError
+        With a machine-readable ``reason`` naming the first violated check.
+    """
+    if not manifest.keyframes:
+        raise ShadowRenderError("empty_manifest", "no keyframes")
+    if manifest.scope_end_us <= manifest.scope_start_us:
+        raise ShadowRenderError(
+            "empty_scope", f"{manifest.scope_start_us}..{manifest.scope_end_us}"
+        )
+    previous_ts: int | None = None
+    for index, kf in enumerate(manifest.keyframes):
+        try:
+            raw = base64.b64decode(kf.jpeg_b64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ShadowRenderError("tampered_frame", f"keyframe {index}: invalid base64") from exc
+        if not _is_jpeg(raw):
+            raise ShadowRenderError("invalid_jpeg", f"keyframe {index}: not a complete JPEG")
+        if _DIGEST_PREFIX + hashlib.sha256(raw).hexdigest() != kf.frame_digest:
+            raise ShadowRenderError("frame_digest_mismatch", f"keyframe {index}")
+        if not (manifest.scope_start_us <= kf.timestamp_us < manifest.scope_end_us):
+            raise ShadowRenderError(
+                "timestamp_out_of_scope", f"keyframe {index} at {kf.timestamp_us}us"
+            )
+        if previous_ts is not None and kf.timestamp_us <= previous_ts:
+            raise ShadowRenderError("timestamps_not_increasing", f"keyframe {index}")
+        previous_ts = kf.timestamp_us
+    if _compute_composite_digest(manifest.keyframes) != manifest.composite_digest:
+        raise ShadowRenderError(
+            "composite_digest_mismatch", "composite does not match the keyframe digests"
+        )
 
 
 def build_shadow_preview(
@@ -221,6 +286,10 @@ def build_shadow_preview(
 
     if scope.end_us <= scope.start_us:
         raise ShadowRenderError("empty_scope", f"{scope.start_us}..{scope.end_us}")
+    if source_duration_us > 0 and scope.end_us > source_duration_us:
+        raise ShadowRenderError(
+            "scope_outside_source", f"scope ends at {scope.end_us}us, source is {source_duration_us}us"
+        )
 
     try:
         resolved_bin = resolve_ffmpeg_bin(ffmpeg_bin)
@@ -229,7 +298,10 @@ def build_shadow_preview(
         # translated here so no raw resolver error crosses the public boundary.
         raise ShadowRenderError("ffmpeg_not_found", "ffmpeg binary could not be resolved") from exc
 
-    timestamps = _sample_timestamps(scope.start_us, scope.end_us, max_keyframes)
+    # Never more frames than microseconds: with fewer, timestamps would collide
+    # and the strip would stop being strictly ordered.
+    frame_count = min(max_keyframes, scope.end_us - scope.start_us)
+    timestamps = _sample_timestamps(scope.start_us, scope.end_us, frame_count)
 
     deadline = time.monotonic() + _TOTAL_TIMEOUT_S
     keyframes: list[ShadowKeyframe] = []
@@ -248,7 +320,7 @@ def build_shadow_preview(
         keyframes.append(_frame_to_keyframe(jpeg_bytes, ts_us))
 
     kf_tuple = tuple(keyframes)
-    return ShadowPreviewManifest(
+    manifest = ShadowPreviewManifest(
         plan_digest=plan_digest,
         scope_digest=scope.scope_digest,
         source_duration_us=source_duration_us,
@@ -257,6 +329,9 @@ def build_shadow_preview(
         keyframes=kf_tuple,
         composite_digest=_compute_composite_digest(kf_tuple),
     )
+    # A manifest that fails its own verifier is never returned.
+    verify_shadow_manifest(manifest)
+    return manifest
 
 
 __all__ = [
@@ -264,4 +339,5 @@ __all__ = [
     "ShadowPreviewManifest",
     "ShadowRenderError",
     "build_shadow_preview",
+    "verify_shadow_manifest",
 ]

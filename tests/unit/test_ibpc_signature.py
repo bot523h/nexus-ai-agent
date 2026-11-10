@@ -277,9 +277,9 @@ class TestSignatureError:
 # ---------------------------------------------------------------------------
 
 # 2x2 rgb24 frame = 12 bytes.
-FRAME_A = bytes([128, 64, 32, 200, 100, 50, 10, 200, 150, 255, 0, 128])
-FRAME_BLACK = bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-FRAME_WHITE = bytes([255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255])
+FRAME_A = bytes([128, 64, 32, 200, 100, 50, 10, 200, 150, 255, 0, 128]) * 3600  # 160x90 rgb24
+FRAME_BLACK = bytes(12) * 3600  # 160x90 rgb24
+FRAME_WHITE = bytes([255] * 12) * 3600  # 160x90 rgb24
 
 
 def _make_scope(start_us=0, end_us=2_000_000):
@@ -485,6 +485,11 @@ class TestComputeScopeSignature:
 # ---------------------------------------------------------------------------
 
 
+def _l2(vec):
+    norm = sum(x * x for x in vec) ** 0.5
+    return tuple(x / norm for x in vec) if norm else tuple(vec)
+
+
 def _make_engine_sig(seed: str, histogram=None, motion: float = 0.01):
     from nexus_ai_agent.nagar.ibpc.signature import ScopeSignature
 
@@ -495,7 +500,7 @@ def _make_engine_sig(seed: str, histogram=None, motion: float = 0.01):
         asset_id="a1",
         start_us=0,
         end_us=1_000_000,
-        color_histogram=histogram,
+        color_histogram=_l2(histogram),
         motion_magnitude=motion,
         sample_frames=5,
         computed_at="2026-01-01T00:00:00+00:00",
@@ -623,3 +628,167 @@ class TestPublicAPI:
             "cosine_similarity",
         }
         assert expected <= set(sig.__all__)
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 contract (NAGAR-IBPC-TRIAD-CLOSURE-01): exact spec validation,
+# frame-size and exit checks, a temporal motion test, and digest verification.
+# ---------------------------------------------------------------------------
+
+_INTEGRITY_DIGEST = "sha256:" + "c" * 64
+
+
+def _integrity_sig(**overrides):
+    from nexus_ai_agent.nagar.ibpc.signature import ScopeSignature
+
+    kw = dict(
+        scope_digest="sha256:" + "a" * 64,
+        asset_id="a1",
+        start_us=0,
+        end_us=2_000_000,
+        color_histogram=tuple([1.0 / 8.0] * 64),
+        motion_magnitude=1.5,
+        sample_frames=4,
+        computed_at="2026-11-10T00:00:00+00:00",
+        signature_digest=_INTEGRITY_DIGEST,
+    )
+    kw.update(overrides)
+    return ScopeSignature(**kw)
+
+
+class TestSignatureContract:
+    def test_unnormalised_histogram_is_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            _integrity_sig(color_histogram=tuple([0.5] * 64))
+
+    def test_infinite_motion_is_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            _integrity_sig(motion_magnitude=float("inf"))
+
+    def test_motion_above_the_8bit_range_is_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            _integrity_sig(motion_magnitude=256.0)
+
+    def test_scope_must_be_non_empty(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            _integrity_sig(start_us=2_000_000, end_us=2_000_000)
+
+    def test_nan_similarity_is_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        from nexus_ai_agent.nagar.ibpc.signature import ScopeMatch
+
+        with pytest.raises(ValidationError):
+            ScopeMatch(
+                candidate_scope_digest="sha256:" + "c" * 64,
+                cosine_similarity=float("nan"),
+                motion_delta=0.0,
+            )
+
+    def test_nan_threshold_is_refused(self) -> None:
+        from nexus_ai_agent.nagar.ibpc.signature import ScopeMatchEngine
+
+        q = _integrity_sig()
+        with pytest.raises(ValueError):
+            ScopeMatchEngine().find_similar(q, [], threshold=float("nan"))
+
+
+class TestMotionIsTemporal:
+    def test_motion_depends_on_frame_order_while_histogram_does_not(self) -> None:
+        from nexus_ai_agent.nagar.ibpc.signature import _accumulate_histogram, _motion_magnitude
+
+        a = bytes([255, 0, 0]) * 4  # red
+        b = bytes([0, 0, 255]) * 4  # blue
+        alternating = [a, b, a, b]
+        grouped = [a, a, b, b]
+        # identical multiset of frames → identical colour histogram …
+        assert _accumulate_histogram(alternating) == _accumulate_histogram(grouped)
+        # … but the temporal change differs: 3 changes vs 1 change over 3 pairs
+        m_alt = _motion_magnitude(alternating)
+        m_grp = _motion_magnitude(grouped)
+        assert m_alt > 0.0
+        assert abs(m_alt - 3.0 * m_grp) < 1e-9
+
+    def test_static_scope_has_exactly_zero_motion(self) -> None:
+        from nexus_ai_agent.nagar.ibpc.signature import _motion_magnitude
+
+        a = bytes([10, 200, 90]) * 4
+        assert _motion_magnitude([a, a, a]) == 0.0
+
+    def test_full_swing_is_bounded_by_the_8bit_range(self) -> None:
+        from nexus_ai_agent.nagar.ibpc.signature import _motion_magnitude
+
+        black = bytes(12)
+        white = bytes([255] * 12)
+        assert _motion_magnitude([black, white]) == pytest.approx(255.0)
+
+
+class TestCaptureIntegrity:
+    def _run(self, stdout: bytes, returncode: int, tmp_path: Path) -> str:
+        from nexus_ai_agent.nagar.ibpc.models import VideoTimeScope
+        from nexus_ai_agent.nagar.ibpc.signature import SignatureError, compute_scope_signature
+
+        src = tmp_path / "v.mp4"
+        src.write_bytes(b"fake")
+        scope = VideoTimeScope(asset_id="a1", effect="keep", start_us=0, end_us=2_000_000)
+
+        def _proc(*args, **kwargs):
+            r = mock.Mock()
+            r.stdout = stdout
+            r.returncode = returncode
+            return r
+
+        with (
+            mock.patch("subprocess.run", side_effect=_proc),
+            mock.patch(
+                "nexus_ai_agent.nagar.ibpc.signature.resolve_ffmpeg_bin", return_value="ffmpeg"
+            ),
+            pytest.raises(SignatureError) as exc,
+        ):
+            compute_scope_signature(src, scope, max_frames=2)
+        return exc.value.reason
+
+    def test_truncated_frame_is_refused_not_silently_measured(self, tmp_path: Path) -> None:
+        assert self._run(FRAME_A[:100], 0, tmp_path) == "bad_frame_size"
+
+    def test_nonzero_exit_with_full_size_bytes_is_refused(self, tmp_path: Path) -> None:
+        assert self._run(FRAME_A, 1, tmp_path) == "ffmpeg_failed"
+
+    def test_empty_sample_is_refused_not_dropped(self, tmp_path: Path) -> None:
+        assert self._run(b"", 0, tmp_path) == "empty_frames"
+
+
+class TestSignatureDigestVerification:
+    def test_verifier_accepts_untampered_and_refuses_altered_content(self) -> None:
+        from nexus_ai_agent.nagar.ibpc.signature import (
+            SignatureError,
+            _stable_digest,
+            verify_scope_signature,
+        )
+
+        hist = tuple([1.0 / 8.0] * 64)
+        digest = _stable_digest(
+            scope_digest="sha256:" + "a" * 64,
+            asset_id="a1",
+            start_us=0,
+            end_us=2_000_000,
+            histogram=hist,
+            motion_magnitude=1.5,
+            sample_frames=4,
+        )
+        sig = _integrity_sig(signature_digest=digest)
+        verify_scope_signature(sig)  # no raise
+
+        altered = sig.model_copy(update={"motion_magnitude": 2.0})
+        with pytest.raises(SignatureError) as exc:
+            verify_scope_signature(altered)
+        assert exc.value.reason == "signature_digest_mismatch"
+

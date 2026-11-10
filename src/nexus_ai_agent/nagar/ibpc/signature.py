@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nexus_ai_agent.creative.slideshow.ffmpeg import (
     FfmpegUnavailableError,
@@ -115,7 +115,8 @@ class ScopeSignature(BaseModel):
     start_us: int = Field(ge=0)
     end_us: int = Field(gt=0)
     color_histogram: tuple[float, ...]  # len == 64, L2-normalised
-    motion_magnitude: float = Field(ge=0.0)
+    # mean luma difference between consecutive frames, bounded by the 8-bit range
+    motion_magnitude: float = Field(ge=0.0, le=255.0, allow_inf_nan=False)
     sample_frames: int = Field(ge=1)
     computed_at: str
     signature_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
@@ -128,6 +129,16 @@ class ScopeSignature(BaseModel):
         _reject_non_finite(v)
         return v
 
+    @model_validator(mode="after")
+    def _check_consistency(self) -> ScopeSignature:
+        if self.end_us <= self.start_us:
+            raise ValueError("end_us must be greater than start_us")
+        energy = sum(x * x for x in self.color_histogram)
+        # L2-normalised, or the zero vector (an all-black scope)
+        if energy != 0.0 and abs(energy - 1.0) > 1e-9:
+            raise ValueError("color_histogram must be L2-normalised (or the zero vector)")
+        return self
+
 
 class ScopeMatch(BaseModel):
     """One similarity hit from :class:`ScopeMatchEngine`."""
@@ -135,8 +146,8 @@ class ScopeMatch(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     candidate_scope_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    cosine_similarity: Annotated[float, Field(ge=0.0, le=1.0)]
-    motion_delta: Annotated[float, Field(ge=0.0)]
+    cosine_similarity: Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+    motion_delta: Annotated[float, Field(ge=0.0, le=255.0, allow_inf_nan=False)]
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +274,31 @@ def _stable_digest(
 
 
 # ---------------------------------------------------------------------------
+# Public: verify_scope_signature
+# ---------------------------------------------------------------------------
+
+
+def verify_scope_signature(signature: ScopeSignature) -> None:
+    """Recompute ``signature_digest`` from the carried content; raise on mismatch.
+
+    Consumer-side check: a signature whose histogram, motion or sample count was
+    altered after computation no longer matches its digest. ``scope_digest`` is
+    bound as given by the caller (the scope itself is not carried here).
+    """
+    expected = _stable_digest(
+        scope_digest=signature.scope_digest,
+        asset_id=signature.asset_id,
+        start_us=signature.start_us,
+        end_us=signature.end_us,
+        histogram=signature.color_histogram,
+        motion_magnitude=signature.motion_magnitude,
+        sample_frames=signature.sample_frames,
+    )
+    if expected != signature.signature_digest:
+        raise SignatureError("signature_digest_mismatch", "content does not match signature_digest")
+
+
+# ---------------------------------------------------------------------------
 # Public: cosine_similarity
 # ---------------------------------------------------------------------------
 
@@ -312,6 +348,7 @@ def _capture_rgb_frame(
     disk writes), timeout enforced and translated to :class:`SignatureError`.
     """
     ts_s = timestamp_us / 1_000_000.0
+    expected_bytes = width * height * 3
     cmd = [
         ffmpeg_bin,
         "-nostdin",
@@ -335,6 +372,16 @@ def _capture_rgb_frame(
         raise SignatureError(
             "timeout", f"frame capture exceeded {timeout_s:.1f}s at t={ts_s:.3f}s"
         ) from exc
+    if not result.stdout:
+        raise SignatureError("empty_frames", f"no frame at t={ts_s:.3f}s (returncode={result.returncode})")
+    if result.returncode != 0:
+        # Bytes from a failed run are never a frame, even when they look like one.
+        raise SignatureError("ffmpeg_failed", f"returncode={result.returncode} at t={ts_s:.3f}s")
+    if len(result.stdout) != expected_bytes:
+        raise SignatureError(
+            "bad_frame_size",
+            f"got {len(result.stdout)} bytes, expected {expected_bytes} at t={ts_s:.3f}s",
+        )
     return result.stdout
 
 
@@ -396,8 +443,7 @@ def compute_scope_signature(
             height=frame_height,
             timeout_s=min(_PER_FRAME_TIMEOUT_S, remaining),
         )
-        if len(raw) >= 3:
-            frames.append(raw)
+        frames.append(raw)
 
     if not frames:
         raise SignatureError("empty_frames", "no frames could be extracted from the scope")
@@ -464,7 +510,7 @@ class ScopeMatchEngine:
         matches: list[ScopeMatch] = []
         for candidate in candidates:
             if len(candidate.color_histogram) != len(source.color_histogram):
-                continue
+                raise ValueError("candidate histogram length differs from the source")
             sim = cosine_similarity(source.color_histogram, candidate.color_histogram)
             if sim >= threshold:
                 matches.append(
@@ -488,4 +534,5 @@ __all__ = [
     "SignatureError",
     "compute_scope_signature",
     "cosine_similarity",
+    "verify_scope_signature",
 ]

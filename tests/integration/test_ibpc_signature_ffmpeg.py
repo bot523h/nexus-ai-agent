@@ -202,3 +202,107 @@ def test_unresolvable_ffmpeg_binary_is_a_typed_error(tmp_path: Path) -> None:
     with pytest.raises(SignatureError) as error:
         compute_scope_signature(source, _scope(), ffmpeg_bin="/nonexistent/ffmpeg-xyz")
     assert error.value.reason == "ffmpeg_not_found"
+
+
+def test_motion_separates_a_static_clip_from_an_animated_one(tmp_path: Path) -> None:
+    """Temporal metric on real FFmpeg output: a flat colour does not move, an
+    animated test pattern does. Same colour family, so only motion differs."""
+    import subprocess
+
+    from nexus_ai_agent.creative.slideshow.ffmpeg import resolve_ffmpeg_bin
+    from nexus_ai_agent.nagar.ibpc.models import VideoTimeScope
+    from nexus_ai_agent.nagar.ibpc.signature import compute_scope_signature
+
+    ffmpeg = resolve_ffmpeg_bin()
+    static = tmp_path / "static.mp4"
+    moving = tmp_path / "moving.mp4"
+    for path, lavfi in (
+        (static, "color=c=red:s=320x180:d=2:r=10"),
+        (moving, "testsrc=s=320x180:d=2:r=10"),
+    ):
+        subprocess.run(
+            [ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", lavfi, "-pix_fmt", "yuv420p", str(path)],
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+    scope = VideoTimeScope(asset_id="s", effect="keep", start_us=0, end_us=1_500_000)
+    sig_static = compute_scope_signature(static, scope, ffmpeg_bin=ffmpeg, max_frames=6)
+    sig_moving = compute_scope_signature(moving, scope, ffmpeg_bin=ffmpeg, max_frames=6)
+    assert sig_static.motion_magnitude < 1.0
+    assert sig_moving.motion_magnitude > sig_static.motion_magnitude + 1.0
+
+
+def test_real_signature_verifies_and_rerun_is_digest_identical(tmp_path: Path) -> None:
+    import math
+
+    from nexus_ai_agent.nagar.ibpc.signature import compute_scope_signature, verify_scope_signature
+
+    ffmpeg = resolve_ffmpeg_bin()
+    clip = tmp_path / "rerun.mp4"
+    subprocess.run(
+        [ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc=s=320x180:d=2:r=10",
+         "-pix_fmt", "yuv420p", str(clip)],
+        capture_output=True, check=True, timeout=120,
+    )
+    scope = VideoTimeScope(asset_id="s", effect="keep", start_us=0, end_us=1_500_000)
+    first = compute_scope_signature(clip, scope, ffmpeg_bin=ffmpeg, max_frames=6)
+    second = compute_scope_signature(clip, scope, ffmpeg_bin=ffmpeg, max_frames=6)
+    verify_scope_signature(first)
+    # computed_at differs between runs by design; the content digest must not
+    assert first.signature_digest == second.signature_digest
+    assert len(first.color_histogram) == 64
+    energy = sum(x * x for x in first.color_histogram)
+    assert math.isclose(energy, 1.0, rel_tol=0, abs_tol=1e-9)
+
+
+def test_tampered_real_signature_fails_verification(tmp_path: Path) -> None:
+    from nexus_ai_agent.nagar.ibpc.signature import (
+        SignatureError,
+        compute_scope_signature,
+        verify_scope_signature,
+    )
+
+    ffmpeg = resolve_ffmpeg_bin()
+    clip = tmp_path / "t.mp4"
+    subprocess.run(
+        [ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc=s=320x180:d=2:r=10",
+         "-pix_fmt", "yuv420p", str(clip)],
+        capture_output=True, check=True, timeout=120,
+    )
+    scope = VideoTimeScope(asset_id="s", effect="keep", start_us=0, end_us=1_500_000)
+    sig = compute_scope_signature(clip, scope, ffmpeg_bin=ffmpeg, max_frames=6)
+    forged = sig.model_copy(update={"motion_magnitude": sig.motion_magnitude + 1.0})
+    with pytest.raises(SignatureError) as exc:
+        verify_scope_signature(forged)
+    assert exc.value.reason == "signature_digest_mismatch"
+
+
+def test_identical_content_matches_and_dissimilar_content_does_not(tmp_path: Path) -> None:
+    from nexus_ai_agent.nagar.ibpc.signature import (
+        ScopeMatchEngine,
+        compute_scope_signature,
+        cosine_similarity,
+    )
+
+    ffmpeg = resolve_ffmpeg_bin()
+    moving = tmp_path / "m.mp4"
+    flat = tmp_path / "f.mp4"
+    for path, lavfi in (
+        (moving, "testsrc=s=320x180:d=2:r=10"),
+        (flat, "color=c=blue:s=320x180:d=2:r=10"),
+    ):
+        subprocess.run(
+            [ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", lavfi, "-pix_fmt", "yuv420p", str(path)],
+            capture_output=True, check=True, timeout=120,
+        )
+    scope = VideoTimeScope(asset_id="s", effect="keep", start_us=0, end_us=1_500_000)
+    q = compute_scope_signature(moving, scope, ffmpeg_bin=ffmpeg, max_frames=6)
+    same = compute_scope_signature(moving, scope, ffmpeg_bin=ffmpeg, max_frames=6)
+    other = compute_scope_signature(flat, scope, ffmpeg_bin=ffmpeg, max_frames=6)
+    assert cosine_similarity(q.color_histogram, same.color_histogram) == pytest.approx(1.0)
+    assert cosine_similarity(q.color_histogram, other.color_histogram) < 0.80
+    engine = ScopeMatchEngine()
+    hits = engine.find_similar(q, [same, other])  # default threshold 0.80
+    assert [h.candidate_scope_digest for h in hits] == [same.scope_digest]
+

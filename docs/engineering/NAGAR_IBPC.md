@@ -186,3 +186,28 @@ Worktree unchanged after the run (`git diff --exit-code` in CI).
 NEXT (not done, deliberately): durable approval ledger on the existing sqlite journal; multi-process
 session fencing via the job queue; then re-run the same mutation harness against the durable store.
 No durability, multi-process or production-readiness claim is made for the in-memory IBPC state.
+
+## Triad closure: status and residuals (NAGAR-IBPC-TRIAD-CLOSURE-01)
+
+**Status: `VERIFIED_WITH_LIMITATIONS`.** Unit, architecture and real-FFmpeg
+integration suites pass for the triad. Lint and type checks did not run (ruff and
+mypy are not installed and pip is blocked). The draft PR has not been opened.
+
+| Capability | Contract enforced | Proof |
+|---|---|---|
+| Delta Dialogue | fail-closed refusals; both-ends clauses refused; base scope bounds; typed boundary | `tests/unit/test_ibpc_delta.py` (56 with the owner's suite) |
+| Shadow Preview | digests recomputed from bytes; `ffmpeg_failed` / `invalid_jpeg`; half-open ordered strip; source bound | `tests/unit/test_ibpc_shadow.py` (37); `tests/integration/test_ibpc_shadow_ffmpeg.py` |
+| Scope Signature | 64-bin spec; L2 norm, finite and range checks; frame-size and exit checks; temporal motion; digest verification | `tests/unit/test_ibpc_signature.py`; `tests/integration/test_ibpc_signature_ffmpeg.py` |
+| Boundary | spawn allow-list exact; `run` only; list argv; timeout; no network / FS write / dynamic code in triad modules | `tests/architecture/test_ibpc_boundary.py` (23 tests, including eight mutants) |
+
+### Residuals
+
+- `composite_digest` covers frame bytes only (Spec §2.4). An in-scope timestamp
+  change verifies against the composite and is detected only by `shadow_digest`.
+  Recorded by `test_in_scope_retimestamp_passes_composite_but_changes_shadow_digest`.
+- Shadow Preview and Scope Signature are not connected to the approval pipeline
+  (`NOT_WIRED`). The mission keeps this boundary.
+- Lint (`ruff`) and type checks (`mypy`) are not executed in this environment.
+- Full-suite failures are identical on baseline `5fe94512` and on this branch
+  (243 failed, 141 errors in both). They come from environment gaps: `pytest-asyncio`,
+  `pydantic_settings`, `sqlalchemy`.

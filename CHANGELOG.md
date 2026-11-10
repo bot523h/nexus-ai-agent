@@ -46,6 +46,41 @@ reverse dependency into `service`/`session`/`approval`/`footprint` and no
 `tests/integration/test_ibpc_signature_ffmpeg.py` (skipped, never passed, when
 FFmpeg is unavailable). Decision record: `docs/DECISION_LOG.md` D-0039.
 
+#### Triad closure hardening (NAGAR-IBPC-TRIAD-CLOSURE-01, Stages 2–6)
+
+- **Delta Dialogue** — fail-closed on every ambiguous path: a clause naming both
+  start and end is `mixed_anchor` (previously silently resolved to the start); a
+  base scope outside the asset is `scope_out_of_bounds`; an invalid channel binding
+  is `invalid_request` (previously a raw `ValidationError`); non-string text is
+  `invalid_text_type` (previously `TypeError`); the Persian end anchor `ته` matches
+  whole words only (previously a substring match inside `گذشته`). The return
+  annotation resolves at runtime to `DeltaIntentAST | Clarification | Refusal`.
+- **Shadow Preview** — a non-zero ffmpeg exit is `ffmpeg_failed` even when bytes
+  were written; output without a complete JPEG envelope is `invalid_jpeg`. New
+  public `verify_shadow_manifest` recomputes every frame digest and the composite
+  from the carried bytes and checks timestamps (half-open, strictly increasing).
+  `build_shadow_preview` runs it on its own result. Frame count is capped at the
+  scope length so timestamps never collide. A source-duration bound is enforced.
+- **Scope Signature** — the frame byte length is checked (`bad_frame_size`), a
+  non-zero exit is `ffmpeg_failed`, and an empty sample is `empty_frames` instead of
+  being silently dropped. `ScopeSignature` rejects a histogram that is not
+  L2-normalised, a motion value outside `[0, 255]` or non-finite, and an empty
+  scope. `ScopeMatch` rejects NaN and infinity. New public `verify_scope_signature`
+  recomputes `signature_digest`. Candidate histograms of the wrong length raise
+  instead of being skipped.
+- **Architecture boundary** — the subprocess rules are mechanical: the spawn sites
+  equal the allow-list exactly (`footprint.py`, `shadow.py`, `signature.py`); only
+  `subprocess.run` is permitted; argv is a list literal (or a `list[...]` parameter
+  whose every call site passes a literal); `shell` is absent or `False`; no
+  `**kwargs` splat; a timeout is explicit. The checker is proven to fire on eight
+  deliberate mutants. Triad modules have no network import, no filesystem-write
+  call, and no dynamic code.
+
+Residual limits (not hidden): `composite_digest` binds frame bytes only, as Spec
+§2.4 defines it, so an in-scope timestamp change verifies; `shadow_digest` detects
+it. Neither Shadow Preview nor Scope Signature is connected to the approval pipeline
+(`NOT_WIRED`, by mission). Lint and type checks could not run in this environment.
+
 ### Studio Core (task-186 — discovery surface, preview/master boundary, Agent 2/3 integration contracts, session `arena/01a0da2a-nexus-ai-agent`)
 
 - **Capability discovery contract (`nagar.discovery.v1`)**:

@@ -161,3 +161,90 @@ def test_non_video_input_yields_a_typed_empty_frame_error(tmp_path: Path) -> Non
     with pytest.raises(ShadowRenderError) as error:
         build_shadow_preview(bogus, _scope(0, 1_000_000), _PLAN_DIGEST, max_keyframes=1)
     assert error.value.reason == "empty_frame"
+
+
+# ---------------------------------------------------------------------------
+# Stage 6 (NAGAR-IBPC-TRIAD-CLOSURE-01): tamper, rerun and source-change proof
+# on real FFmpeg output. Each check recomputes digests independently with
+# hashlib/base64 — the module's own verifier is one oracle, never the only one.
+# ---------------------------------------------------------------------------
+
+
+def _independent_frames(manifest) -> list[bytes]:
+    import base64
+
+    out = []
+    for kf in manifest.keyframes:
+        raw = base64.b64decode(kf.jpeg_b64, validate=True)
+        assert raw[:3] == b"\xff\xd8\xff" and raw[-2:] == b"\xff\xd9", "not a complete JPEG"
+        assert kf.frame_digest == "sha256:" + hashlib.sha256(raw).hexdigest(), "frame digest"
+        out.append(raw)
+    return out
+
+
+def test_real_manifest_passes_the_verifier_and_independent_recomputation(tmp_path: Path) -> None:
+    from nexus_ai_agent.nagar.ibpc.shadow import verify_shadow_manifest
+
+    source = _clip(tmp_path)
+    manifest = build_shadow_preview(source, _scope(0, 2_000_000), _PLAN_DIGEST, max_keyframes=4)
+    verify_shadow_manifest(manifest)
+    frames = _independent_frames(manifest)
+    assert manifest.composite_digest == _composite_of(manifest.keyframes)
+    assert len(frames) == 4
+
+
+def test_flipping_one_byte_of_a_real_frame_is_detected(tmp_path: Path) -> None:
+    import base64
+
+    from nexus_ai_agent.nagar.ibpc.shadow import ShadowRenderError, verify_shadow_manifest
+
+    source = _clip(tmp_path)
+    manifest = build_shadow_preview(source, _scope(0, 2_000_000), _PLAN_DIGEST, max_keyframes=3)
+    original = _independent_frames(manifest)[1]
+    tampered = bytearray(original)
+    tampered[len(tampered) // 2] ^= 0x01
+    # the independent hash of the tampered bytes differs from the recorded digest
+    assert "sha256:" + hashlib.sha256(bytes(tampered)).hexdigest() != manifest.keyframes[1].frame_digest
+    kf = manifest.keyframes[1].model_copy(
+        update={"jpeg_b64": base64.b64encode(bytes(tampered)).decode("ascii")}
+    )
+    bad = manifest.model_copy(
+        update={"keyframes": (manifest.keyframes[0], kf, manifest.keyframes[2])}
+    )
+    with pytest.raises(ShadowRenderError) as exc:
+        verify_shadow_manifest(bad)
+    assert exc.value.reason == "frame_digest_mismatch"
+
+
+def test_rerun_on_unchanged_source_is_bit_identical(tmp_path: Path) -> None:
+    # shadow_id is random per manifest, so compare the content-stable digests only
+    source = _clip(tmp_path)
+    first = build_shadow_preview(source, _scope(0, 2_000_000), _PLAN_DIGEST, max_keyframes=4)
+    second = build_shadow_preview(source, _scope(0, 2_000_000), _PLAN_DIGEST, max_keyframes=4)
+    assert [k.frame_digest for k in first.keyframes] == [k.frame_digest for k in second.keyframes]
+    assert first.composite_digest == second.composite_digest
+
+
+def test_changing_the_source_changes_the_composite_the_approval_binds(tmp_path: Path) -> None:
+    a = _clip(tmp_path, name="a.mp4")
+    b = _clip(tmp_path, lavfi="color=c=blue:size=160x90:rate=10:duration=2", name="b.mp4")
+    ma = build_shadow_preview(a, _scope(0, 1_000_000), _PLAN_DIGEST, max_keyframes=3)
+    mb = build_shadow_preview(b, _scope(0, 1_000_000), _PLAN_DIGEST, max_keyframes=3)
+    assert ma.composite_digest != mb.composite_digest
+
+
+def test_retimed_real_frame_passes_composite_but_moves_shadow_digest(tmp_path: Path) -> None:
+    """Recorded residual on real data: composite_digest (what approvals bind,
+    Spec §2.4) covers frame bytes only, so an in-scope retimestamp still verifies;
+    the whole-manifest shadow_digest is what detects it."""
+    from nexus_ai_agent.nagar.ibpc.shadow import verify_shadow_manifest
+
+    source = _clip(tmp_path)
+    manifest = build_shadow_preview(source, _scope(0, 2_000_000), _PLAN_DIGEST, max_keyframes=3)
+    first = manifest.keyframes[0]
+    moved = first.model_copy(update={"timestamp_us": first.timestamp_us + 1})
+    retimed = manifest.model_copy(update={"keyframes": (moved,) + manifest.keyframes[1:]})
+    verify_shadow_manifest(retimed)
+    assert retimed.composite_digest == manifest.composite_digest
+    assert retimed.shadow_digest != manifest.shadow_digest
+
