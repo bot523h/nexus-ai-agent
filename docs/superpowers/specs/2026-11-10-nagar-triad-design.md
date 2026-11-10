@@ -37,21 +37,25 @@ The existing `parse_intent` requires the caller to state an absolute range (`tri
 
 ```python
 class DeltaAnchor(str, Enum):
-    IN_POINT  = "in_point"   # move the start of the kept window
+    IN_POINT = "in_point"  # move the start of the kept window
     OUT_POINT = "out_point"  # move the end of the kept window
+
 
 class DeltaOp(BaseModel, frozen=True, extra="forbid"):
     """One relative mutation on the in- or out-point of the last committed scope."""
-    anchor:   DeltaAnchor
-    delta_us: int   # signed microseconds; negative = move earlier
+
+    anchor: DeltaAnchor
+    delta_us: int  # signed microseconds; negative = move earlier
+
 
 class DeltaIntentAST(BaseModel, frozen=True, extra="forbid"):
     """Typed result of parse_delta_intent — structurally identical to TypedCreativeAST
     but carries the resolved absolute scope so the existing compiler path is unchanged."""
-    base_scope_digest: str          # sha256 of the scope this delta was applied to
-    delta_op:          DeltaOp
-    resolved_ast:      TypedCreativeAST   # ready to pass to compile_ast unchanged
-    intent_digest:     str
+
+    base_scope_digest: str  # sha256 of the scope this delta was applied to
+    delta_op: DeltaOp
+    resolved_ast: TypedCreativeAST  # ready to pass to compile_ast unchanged
+    intent_digest: str
 ```
 
 ### 1.4 Parser rules (deterministic, no model)
@@ -98,9 +102,10 @@ The current `PreviewManifest.kind = "plan_derived"` is computed from the plan's 
 
 ```python
 class ShadowKeyframe(BaseModel, frozen=True, extra="forbid"):
-    timestamp_us:  int         # source timestamp of this frame
-    jpeg_b64:      str         # base64-encoded JPEG, 480p, quality-factor 23
-    frame_digest:  str         # sha256(raw JPEG bytes) — pattern ^sha256:[0-9a-f]{64}$
+    timestamp_us: int  # source timestamp of this frame
+    jpeg_b64: str  # base64-encoded JPEG, 480p, quality-factor 23
+    frame_digest: str  # sha256(raw JPEG bytes) — pattern ^sha256:[0-9a-f]{64}$
+
 
 class ShadowPreviewManifest(BaseModel, frozen=True, extra="forbid"):
     """Visual preview: a sparse set of keyframes from the affected scope only.
@@ -109,15 +114,16 @@ class ShadowPreviewManifest(BaseModel, frozen=True, extra="forbid"):
     the approval binds to, not plan_digest. The sort is by timestamp_us so the
     digest is order-independent within the scope.
     """
-    schema_id:         Literal["nexus.ibpc.shadow_preview.v1"]
-    shadow_id:         str    # default_factory: _new_id("shad")
-    plan_digest:       str    # ^sha256:...
-    scope_digest:      str    # ^sha256:...
+
+    schema_id: Literal["nexus.ibpc.shadow_preview.v1"]
+    shadow_id: str  # default_factory: _new_id("shad")
+    plan_digest: str  # ^sha256:...
+    scope_digest: str  # ^sha256:...
     source_duration_us: int
-    scope_start_us:    int
-    scope_end_us:      int
-    keyframes:         tuple[ShadowKeyframe, ...]
-    composite_digest:  str    # ^sha256:...  — approval binds this
+    scope_start_us: int
+    scope_end_us: int
+    keyframes: tuple[ShadowKeyframe, ...]
+    composite_digest: str  # ^sha256:...  — approval binds this
 
     @property
     def shadow_digest(self) -> str: ...  # digest_of(model_dump)
@@ -178,23 +184,25 @@ A user who graded the first 5 seconds of one clip and wants *"the same look on s
 ```python
 class ScopeSignature(BaseModel, frozen=True, extra="forbid"):
     """Deterministic, model-free visual + motion fingerprint of one scope."""
-    scope_digest:       str              # sha256 of the VideoTimeScope
-    asset_id:           str
-    start_us:           int
-    end_us:             int
+
+    scope_digest: str  # sha256 of the VideoTimeScope
+    asset_id: str
+    start_us: int
+    end_us: int
     # 64-bin CIE-L*a*b* histogram (L: 32 bins, a*: 16, b*: 16) — flattened
-    color_histogram:    tuple[float, ...] # len == 64, L2-normalised
+    color_histogram: tuple[float, ...]  # len == 64, L2-normalised
     # mean per-frame optical-flow magnitude (Farneback via OpenCV-free fallback)
-    motion_magnitude:   float
+    motion_magnitude: float
     # number of frames sampled
-    sample_frames:      int
-    computed_at:        str              # ISO-8601 UTC
-    signature_digest:   str             # sha256(model_dump except signature_digest)
+    sample_frames: int
+    computed_at: str  # ISO-8601 UTC
+    signature_digest: str  # sha256(model_dump except signature_digest)
+
 
 class ScopeMatch(BaseModel, frozen=True, extra="forbid"):
     candidate_scope_digest: str
-    cosine_similarity:      float   # [0.0, 1.0]
-    motion_delta:           float   # |source.motion_magnitude - candidate.motion_magnitude|
+    cosine_similarity: float  # [0.0, 1.0]
+    motion_delta: float  # |source.motion_magnitude - candidate.motion_magnitude|
 ```
 
 ### 3.4 Computation (`signature.py`)

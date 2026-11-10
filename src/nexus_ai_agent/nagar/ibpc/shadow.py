@@ -1,24 +1,29 @@
 """Shadow Preview — deterministic visual keyframe strip from scope pixels (NAGAR IBPC).
 
-Produces a :class:`ShadowPreviewManifest`: a frozen, digest-bound set of JPEG
-keyframes extracted from the *actual* source video at the committed scope
-boundaries.  Every frame is captured by calling ffmpeg as a subprocess with
-explicit list arguments (no ``shell=True``) and the frame bytes are
-sha256-digested before base64-encoding so the manifest is fully self-verifying.
+Produces a :class:`~nexus_ai_agent.nagar.ibpc.models.ShadowPreviewManifest`: a
+frozen, digest-bound set of JPEG keyframes extracted from the *actual* source
+video inside the committed scope.  Every frame is captured by calling ffmpeg as
+a subprocess with explicit list arguments (no ``shell=True``); the frame bytes
+are sha256-digested before base64-encoding, so the manifest is fully
+self-verifying (decode the base64, hash it, compare to ``frame_digest``).
 
-Design constraints:
-- No LLM, no external API, no new pip dependencies.
-- Pure Python CIE-Lab conversion is NOT needed here (that lives in signature.py).
-- ffmpeg is invoked via ``subprocess.run`` with a list of args, never shell=True.
-- All models: ``ConfigDict(extra="forbid", frozen=True)``.
-- ``composite_digest`` is derived from the ordered frame digests via ``canonical.digest_of``.
-- ``shadow_digest`` is a ``@property`` derived from the entire manifest (plan + scope
-  + composite_digest) — it is NOT stored as a field to stay frozen/pure.
+Contract (Spec §2):
 
-This module imports from ``models``, ``canonical``, and
-``nexus_ai_agent.creative.slideshow.ffmpeg`` (for ``resolve_ffmpeg_bin``).
-It explicitly MUST NOT import from ``service``, ``session``, ``approval``,
-``footprint``, or ``signature``.
+* Sampling is **half-open** ``[start, start + duration)``: no keyframe is ever
+  taken at or beyond the scope end.
+* ``max_keyframes`` ∈ [1, 16]; outside → ``ValueError``.
+* ``scope_duration_s <= 0`` → :class:`ShadowRenderError` ``"empty_scope"``.
+* Timeout is enforced per frame (30 s) **and** in total (120 s); a hit raises
+  :class:`ShadowRenderError` ``"timeout"``.
+* ``composite_digest = "sha256:" + sha256(b"".join(sorted(fd.encode() for fd in
+  frame_digests))).hexdigest()`` — order-independent over the scope, and it is
+  what an approval binds.  ``ShadowPreviewManifest.shadow_digest`` is a
+  *different* concept (digest of the whole manifest).
+
+No LLM, no external API, no new pip dependencies, no disk writes.  This module
+imports from ``models``, ``canonical`` and ``creative.slideshow.ffmpeg``; it
+explicitly MUST NOT import from ``service``, ``session``, ``approval``,
+``footprint`` or ``signature``.
 """
 
 from __future__ import annotations
@@ -26,14 +31,18 @@ from __future__ import annotations
 import base64
 import hashlib
 import subprocess
+import time
 from pathlib import Path
-from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from nexus_ai_agent.creative.slideshow.ffmpeg import resolve_ffmpeg_bin
-from nexus_ai_agent.nagar.ibpc.canonical import digest_of
-from nexus_ai_agent.nagar.ibpc.models import VideoTimeScope
+from nexus_ai_agent.creative.slideshow.ffmpeg import (
+    FfmpegUnavailableError,
+    resolve_ffmpeg_bin,
+)
+from nexus_ai_agent.nagar.ibpc.models import (
+    ShadowKeyframe,
+    ShadowPreviewManifest,
+    VideoTimeScope,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -41,11 +50,12 @@ from nexus_ai_agent.nagar.ibpc.models import VideoTimeScope
 
 _MIN_KEYFRAMES = 1
 _MAX_KEYFRAMES = 16
-_DEFAULT_MAX_KEYFRAMES = 5
-_DEFAULT_JPEG_QUALITY = 4   # vframes vf scale quality: 2=high, 31=low; 4 is good
-_DEFAULT_TARGET_HEIGHT = 120  # px — small enough for fast transfers
+_DEFAULT_MAX_KEYFRAMES = 8
+_DEFAULT_JPEG_QUALITY = 23  # ffmpeg -q:v (2 = best, 31 = worst)
+_DEFAULT_TARGET_HEIGHT = 480  # px (480p per Spec §2.3)
+_PER_FRAME_TIMEOUT_S = 30
+_TOTAL_TIMEOUT_S = 120
 _DIGEST_PREFIX = "sha256:"
-_HEX64_PATTERN = r"^sha256:[0-9a-f]{64}$"
 
 
 # ---------------------------------------------------------------------------
@@ -54,10 +64,10 @@ _HEX64_PATTERN = r"^sha256:[0-9a-f]{64}$"
 
 
 class ShadowRenderError(RuntimeError):
-    """Raised when a shadow preview frame cannot be captured.
+    """Raised when a shadow preview cannot be captured.
 
-    ``reason`` is a machine-readable slug, e.g. ``"empty_frame"``,
-    ``"ffmpeg_not_found"``, ``"ffmpeg_error"``.
+    ``reason`` is a machine-readable slug, e.g. ``"empty_scope"``,
+    ``"empty_frame"``, ``"ffmpeg_not_found"``, ``"timeout"``.
     """
 
     def __init__(self, reason: str, detail: str = "") -> None:
@@ -65,51 +75,6 @@ class ShadowRenderError(RuntimeError):
         self.detail = detail
         msg = reason if not detail else f"{reason}: {detail}"
         super().__init__(msg)
-
-
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
-
-
-class ShadowKeyframe(BaseModel):
-    """One JPEG keyframe extracted from the source at ``timestamp_us``."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    timestamp_us: int
-    jpeg_b64: str = Field(description="Base64-encoded JPEG bytes of the frame.")
-    frame_digest: Annotated[str, Field(pattern=_HEX64_PATTERN)]
-
-
-class ShadowPreviewManifest(BaseModel):
-    """Immutable manifest of all keyframes for one scope preview.
-
-    ``shadow_digest`` is a computed property (not a stored field) derived from
-    ``plan_digest``, ``scope_digest``, and ``composite_digest``; it
-    changes whenever any of those change.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    plan_digest: Annotated[str, Field(pattern=_HEX64_PATTERN)]
-    scope_digest: Annotated[str, Field(pattern=_HEX64_PATTERN)]
-    source_duration_us: int
-    scope_start_us: int
-    scope_end_us: int
-    keyframes: tuple[ShadowKeyframe, ...]
-    composite_digest: Annotated[str, Field(pattern=_HEX64_PATTERN)]
-
-    @property
-    def shadow_digest(self) -> str:
-        """Digest of the entire manifest (plan + scope + composite_digest)."""
-        return digest_of(
-            {
-                "plan_digest": self.plan_digest,
-                "scope_digest": self.scope_digest,
-                "composite_digest": self.composite_digest,
-            }
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -124,28 +89,44 @@ def _capture_frame(
     ffmpeg_bin: str,
     jpeg_quality: int,
     target_height: int,
+    timeout_s: float,
 ) -> bytes:
     """Extract one JPEG frame from *source_path* at *timestamp_us* via ffmpeg.
 
-    Returns raw JPEG bytes.  Raises :class:`ShadowRenderError` on failure.
+    Returns the raw JPEG bytes.  Raises :class:`ShadowRenderError` on an empty
+    result or a timeout.  The call always uses a list of arguments, never
+    ``shell=True``, and reads the frame from stdout (no disk writes).
     """
     ts_s = timestamp_us / 1_000_000.0
     cmd = [
         ffmpeg_bin,
-        "-ss", f"{ts_s:.6f}",
-        "-i", str(source_path),
-        "-vframes", "1",
-        "-vf", f"scale=-2:{target_height}",
-        "-q:v", str(jpeg_quality),
-        "-f", "image2",
-        "-vcodec", "mjpeg",
+        "-nostdin",
+        "-ss",
+        f"{ts_s:.6f}",
+        "-i",
+        str(source_path),
+        "-vframes",
+        "1",
+        "-vf",
+        f"scale=-2:{target_height}",
+        "-q:v",
+        str(jpeg_quality),
+        "-f",
+        "image2",
+        "-vcodec",
+        "mjpeg",
         "pipe:1",
     ]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=max(0.001, timeout_s),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ShadowRenderError(
+            "timeout", f"frame capture exceeded {timeout_s:.1f}s at t={ts_s:.3f}s"
+        ) from exc
     if not result.stdout:
         raise ShadowRenderError("empty_frame", f"at t={ts_s:.3f}s (returncode={result.returncode})")
     return result.stdout
@@ -162,24 +143,23 @@ def _frame_to_keyframe(jpeg_bytes: bytes, timestamp_us: int) -> ShadowKeyframe:
 
 
 def _compute_composite_digest(keyframes: tuple[ShadowKeyframe, ...]) -> str:
-    """Deterministic digest of all frame digests in order."""
-    return digest_of({"frames": [kf.frame_digest for kf in keyframes]})
+    """Spec §2.4 step 5 — order-independent digest of the frame digests."""
+    return (
+        _DIGEST_PREFIX
+        + hashlib.sha256(
+            b"".join(sorted(fd.encode() for fd in (kf.frame_digest for kf in keyframes)))
+        ).hexdigest()
+    )
 
 
-def _sample_timestamps(
-    scope_start_us: int,
-    scope_end_us: int,
-    n: int,
-) -> list[int]:
-    """Return *n* evenly-spaced timestamps in ``[scope_start_us, scope_end_us]``.
+def _sample_timestamps(scope_start_us: int, scope_end_us: int, n: int) -> list[int]:
+    """Return *n* evenly-spaced timestamps in the half-open ``[start, end)``.
 
-    With n=1 returns the midpoint; with n≥2 includes the first and last
-    frames of the scope.
+    ``timestamps[i] = start + floor(i * duration / n)`` for ``i`` in
+    ``[0, n)`` — every sample is strictly inside the scope (``< end``).
     """
-    if n == 1:
-        return [(scope_start_us + scope_end_us) // 2]
-    step = (scope_end_us - scope_start_us) // (n - 1)
-    return [scope_start_us + step * i for i in range(n)]
+    duration_us = scope_end_us - scope_start_us
+    return [scope_start_us + (i * duration_us) // n for i in range(n)]
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +176,7 @@ def build_shadow_preview(
     max_keyframes: int = _DEFAULT_MAX_KEYFRAMES,
     jpeg_quality: int = _DEFAULT_JPEG_QUALITY,
     target_height: int = _DEFAULT_TARGET_HEIGHT,
-    source_duration_us: int,
+    source_duration_us: int = 0,
 ) -> ShadowPreviewManifest:
     """Capture a keyframe strip for *scope* from *source_path*.
 
@@ -207,18 +187,19 @@ def build_shadow_preview(
     scope:
         The :class:`VideoTimeScope` whose boundaries define the preview window.
     plan_digest:
-        Digest of the compiled plan this preview belongs to (sha256:hex64).
+        Digest of the compiled plan this preview belongs to (``sha256:hex64``).
     ffmpeg_bin:
         Explicit path to the ffmpeg binary; resolved automatically when ``None``.
     max_keyframes:
-        Number of JPEG frames to extract (1–16, default 5).
+        Number of JPEG frames to extract (1–16, default 8).
     jpeg_quality:
-        ffmpeg ``-q:v`` value (2=best, 31=worst).
+        ffmpeg ``-q:v`` value (2 = best, 31 = worst, default 23).
     target_height:
-        Target frame height in pixels.
+        Target frame height in pixels (default 480).
     source_duration_us:
-        Total duration of the source asset in microseconds (required for
-        manifest metadata; not validated here — the caller is responsible).
+        Total duration of the source asset in microseconds.  Kept as an
+        additive keyword-only argument (default 0) so the manifest can record
+        source metadata without changing the Spec §2.4 signature.
 
     Returns
     -------
@@ -227,32 +208,42 @@ def build_shadow_preview(
 
     Raises
     ------
-    ShadowRenderError
-        On empty frame output or ffmpeg binary not found.
     ValueError
-        If *max_keyframes* is outside the allowed range 1–16.
+        If *max_keyframes* is outside 1–16.
+    ShadowRenderError
+        On an empty scope, empty frame output, ffmpeg binary not found, or a
+        per-frame / total timeout.
     """
     if not (_MIN_KEYFRAMES <= max_keyframes <= _MAX_KEYFRAMES):
         raise ValueError(
             f"max_keyframes must be {_MIN_KEYFRAMES}–{_MAX_KEYFRAMES}, got {max_keyframes}"
         )
 
-    # Resolve binary first (raises FileNotFoundError if missing)
+    if scope.end_us <= scope.start_us:
+        raise ShadowRenderError("empty_scope", f"{scope.start_us}..{scope.end_us}")
+
     try:
         resolved_bin = resolve_ffmpeg_bin(ffmpeg_bin)
-    except (FileNotFoundError, OSError):
-        raise ShadowRenderError("ffmpeg_not_found", "ffmpeg binary could not be resolved")
+    except (FfmpegUnavailableError, FileNotFoundError, OSError) as exc:
+        # FfmpegUnavailableError is a RuntimeError, not an OSError — it must be
+        # translated here so no raw resolver error crosses the public boundary.
+        raise ShadowRenderError("ffmpeg_not_found", "ffmpeg binary could not be resolved") from exc
 
     timestamps = _sample_timestamps(scope.start_us, scope.end_us, max_keyframes)
 
+    deadline = time.monotonic() + _TOTAL_TIMEOUT_S
     keyframes: list[ShadowKeyframe] = []
     for ts_us in timestamps:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ShadowRenderError("timeout", f"total render exceeded {_TOTAL_TIMEOUT_S}s")
         jpeg_bytes = _capture_frame(
             source_path,
             ts_us,
             ffmpeg_bin=resolved_bin,
             jpeg_quality=jpeg_quality,
             target_height=target_height,
+            timeout_s=min(_PER_FRAME_TIMEOUT_S, remaining),
         )
         keyframes.append(_frame_to_keyframe(jpeg_bytes, ts_us))
 

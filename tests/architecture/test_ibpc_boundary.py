@@ -46,6 +46,9 @@ SUBPROCESS_ALLOWED_IN = {"footprint.py", "shadow.py", "signature.py"}
 
 FORBIDDEN_CALLS = {"system", "popen", "exec", "eval", "__import__"}
 
+#: ``subprocess`` entry points that actually spawn a process.
+_SPAWN_ATTRS = {"run", "Popen", "call", "check_call", "check_output"}
+
 
 def _files() -> list[Path]:
     return sorted(IBPC.rglob("*.py"))
@@ -172,3 +175,74 @@ def test_authority_and_proof_are_injected_not_imported_from_execution() -> None:
                 assert not (module == forbidden or module.startswith(forbidden + ".")), (
                     f"{path.name}: imports {module}"
                 )
+
+
+def _subprocess_aliases(tree: ast.AST) -> set[str]:
+    """Local names bound to the ``subprocess`` module or one of its spawn calls.
+
+    ``import subprocess as sp`` and ``from subprocess import run as _run`` both
+    hide a process spawn behind an alias, so an AST check that only looks for the
+    literal ``subprocess.run`` attribute would miss them.
+    """
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "subprocess":
+                    aliases.add(alias.asname or "subprocess")
+        elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            for alias in node.names:
+                if alias.name in _SPAWN_ATTRS:
+                    aliases.add(alias.asname or alias.name)
+    return aliases
+
+
+def _spawn_calls(tree: ast.AST, aliases: set[str]) -> list[ast.Call]:
+    """Every ``subprocess`` spawn call, alias-aware (``sp.run`` and bare ``run``)."""
+    found: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            if func.value.id in aliases and func.attr in _SPAWN_ATTRS:
+                found.append(node)
+        elif isinstance(func, ast.Name) and func.id in aliases - {"subprocess"}:
+            found.append(node)
+    return found
+
+
+def test_every_subprocess_spawn_is_shell_free_and_timeout_bounded() -> None:
+    """Law: a spawned process must never use ``shell=True`` and must carry an
+    explicit ``timeout``.  This is the static half of the security gate; the
+    runtime half (timeout really terminating the child, missing ffmpeg, empty
+    output) lives in ``test_ibpc_shadow.py`` / ``test_ibpc_signature.py``."""
+    for path in _files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        aliases = _subprocess_aliases(tree)
+        for call in _spawn_calls(tree, aliases):
+            kw = {k.arg: k.value for k in call.keywords if k.arg is not None}
+            shell = kw.get("shell")
+            assert not (isinstance(shell, ast.Constant) and shell.value is True), (
+                f"{path.name}: subprocess call uses shell=True (line {call.lineno})"
+            )
+            assert "timeout" in kw, (
+                f"{path.name}: subprocess call without an explicit timeout (line {call.lineno})"
+            )
+
+
+def test_alias_detection_would_catch_a_hidden_spawn() -> None:
+    """Guard-of-the-guard: prove the alias-aware scan actually sees an aliased
+    spawn, so the shell/timeout law cannot be silently bypassed by renaming."""
+    src = "import subprocess as sp\nsp.run(['x'], shell=True)\n"
+    tree = ast.parse(src)
+    aliases = _subprocess_aliases(tree)
+    assert aliases == {"sp"}
+    calls = _spawn_calls(tree, aliases)
+    assert len(calls) == 1
+
+    src2 = "from subprocess import run as _run\n_run(['x'])\n"
+    tree2 = ast.parse(src2)
+    aliases2 = _subprocess_aliases(tree2)
+    assert aliases2 == {"_run"}
+    assert len(_spawn_calls(tree2, aliases2)) == 1

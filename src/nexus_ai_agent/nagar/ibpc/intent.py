@@ -263,4 +263,8 @@ __all__ = [
 ]
 
 # Delta Dialogue — additive re-export, keeps the IBPC public surface unified.
-from nexus_ai_agent.nagar.ibpc.delta import parse_delta_intent as parse_delta_intent  # noqa: F401, E402
+# Placed after the module body to avoid an intent<->delta import cycle; the
+# explicit E402/F401 noqa is the same contract the ``__all__`` re-export above uses.
+from nexus_ai_agent.nagar.ibpc.delta import (  # noqa: E402
+    parse_delta_intent as parse_delta_intent,  # noqa: F401
+)

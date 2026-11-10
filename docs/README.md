@@ -171,6 +171,13 @@ placeholder text.
 | [engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md](engineering/NAGAR_LIVE_EDITING_LIVE_AUDIT.md) | M0 live audit for mission NAGAR-IBPC-LIVE-EDITING-01: 21-component inventory with file evidence, real execution path, verifier calibration, forbidden paths, NOW/NEXT/LATER. |
 | [engineering/NAGAR_IBPC.md](engineering/NAGAR_IBPC.md) | The IBPC slice (intent-bound proof capsules for live editing): chain, red-line→test map, scope semantics, verifier calibration, fencing, privacy, package map — plus the security closure (threat model, audio-ingress policy, approval identity contract, 13/13 mutation evidence) and the honest in-process lifecycle table (Implemented…ProductionVerified labels). |
 
+## Superpowers (design specs & plans)
+
+| Document | What it is |
+|---|---|
+| [superpowers/specs/2026-11-10-nagar-triad-design.md](superpowers/specs/2026-11-10-nagar-triad-design.md) | Approved design spec for mission NAGAR-IBPC-TRIAD-CLOSURE-01: the Delta Dialogue, Shadow Preview and Scope Signature models, digests, subprocess security contract and test matrix. |
+| [superpowers/plans/2026-11-10-nagar-triad.md](superpowers/plans/2026-11-10-nagar-triad.md) | Execution plan for the NAGAR triad: phased RED→GREEN task list, real-FFmpeg integration steps and evidence checkpoints. |
+
 ## History (archived — read-only, never a source of truth)
 
 | Document | What it is |
