@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-08T08:42:47Z",
+  "updated_at": "2026-11-09T21:15:24Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1236,6 +1236,24 @@
         "tests/integration/test_durable_project_revision_pinning.py",
         "tests/unit/test_durable_project_state.py",
         "tests/unit/test_nagar_cognition_queue_handoff.py"
+      ]
+    },
+    {
+      "id": "nagar-studio-web",
+      "description": "NAGAR Studio web app: installable PWA shell served same-origin by the existing FastAPI app, an HttpOnly session wrapper over the existing dashboard gate, and read-only Studio views over the existing StudioReadService. No second queue, authority, store or execution path.",
+      "paths": [
+        "src/nexus_ai_agent/web/",
+        "src/nexus_ai_agent/api/studio_session.py",
+        "src/nexus_ai_agent/api/studio_web.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/app.py",
+        "pyproject.toml",
+        "tests/unit/test_studio_session.py",
+        "tests/unit/test_studio_web.py",
+        "tests/architecture/test_studio_web_boundary.py",
+        "tests/architecture/test_studio_read_boundary.py",
+        "scripts/api_gate_mutations.py",
+        "tests/integration/test_api_gate_inventory.py"
       ]
     }
   ],
@@ -8589,6 +8607,51 @@
       "agent_branch": "",
       "claimed_at": null,
       "generation": 0,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": ""
+    },
+    {
+      "task": "task-nagar-studio-web-01",
+      "title": "NAGAR Studio web app: first real vertical slice (PWA shell + session + read-only job/evidence view)",
+      "title_fa": "اپلیکیشن وب NAGAR Studio: اولین برش عمودی واقعی (PWA + نشست + نمای فقط‌خواندنی کار و شواهد)",
+      "zone": "nagar-studio-web",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Ship an installable, Persian/RTL-first web app for NAGAR Studio, served same-origin by the existing FastAPI app. It authenticates through a short-lived HttpOnly session derived from the existing dashboard gate (no token in JS or storage), and reads real durable job state, plan, artifact passport, evidence and lineage gaps through the existing StudioReadService. Capabilities without a backend contract (intent submit, approvals, project/job listing) are shown as explicitly deferred, never simulated.",
+      "scope_fa": "یک اپ وب نصب‌پذیر، فارسی/RTL-اول، که از همان FastAPI موجود هم‌مبدأ سرو می‌شود؛ ورود با نشست کوتاه‌عمر HttpOnly بر پایهٔ همان گیت dashboard؛ خواندن وضعیت واقعی کار، پلن، پاسپورت آرتیفکت، شواهد و شکاف‌های lineage از StudioReadService موجود. قابلیت‌های بدون قرارداد Backend صریحاً Deferred نمایش داده می‌شوند و هرگز شبیه‌سازی نمی‌شوند.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "The app is served same-origin with a strict CSP (no inline script, no third-party origin) and the service worker never caches /api responses.",
+        "No admin token or secret is ever stored in JS, localStorage, sessionStorage, IndexedDB or the service worker; the session cookie is HttpOnly, SameSite=Strict, expiring and tamper-evident.",
+        "A session can read exactly the same projects/jobs as the existing bearer gate; project scope remains the server-side NEXUS_STUDIO_PROJECT_IDS policy; unauthorized projects are indistinguishable from missing ones.",
+        "Every UI capability without a backend contract is rendered as DEFERRED with its reason; no mock data is shown as real.",
+        "No second queue, execution authority, job store, token system or artifact chain is introduced."
+      ],
+      "evidence_required": [
+        "Focused tests proving session fail-closed behavior, cookie flags, tamper/expiry rejection, CSRF header requirement, project-scope parity with the bearer gate, CSP/static assertions and no-storage-of-secrets assertions, with a removed guard turning a test RED.",
+        "A real browser run (Chromium) of login -> job state view against a seeded durable job row, with screenshots and the exact commands.",
+        "Exact ruff/format/mypy/pytest commands, exit codes and final SHA; board check exit 0 before push."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/web/",
+        "src/nexus_ai_agent/api/studio_session.py",
+        "src/nexus_ai_agent/api/studio_web.py",
+        "src/nexus_ai_agent/api/studio.py",
+        "src/nexus_ai_agent/api/app.py",
+        "pyproject.toml",
+        "tests/unit/test_studio_session.py",
+        "tests/unit/test_studio_web.py",
+        "tests/architecture/test_studio_web_boundary.py",
+        "tests/architecture/test_studio_read_boundary.py",
+        "scripts/api_gate_mutations.py",
+        "tests/integration/test_api_gate_inventory.py"
+      ],
+      "owner_hint": "Independent product-engineering lane. Reuses studio_read, JobRegistry and the dashboard gate; does not touch the creative/ or storage/ owners.",
+      "agent_branch": "nagar-studio-app-20261110",
+      "claimed_at": "2026-11-09T21:15:24Z",
+      "generation": 1,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],

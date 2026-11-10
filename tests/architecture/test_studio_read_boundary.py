@@ -38,4 +38,8 @@ def test_studio_api_exposes_only_get_route() -> None:
     assert "@router.get(" in source
     assert "@router.post(" not in source
     assert "from nexus_ai_agent.product.studio_read import" in source
-    assert "from nexus_ai_agent.api.dashboard import require_dashboard_token" in source
+    # The read route authenticates through the single shared caller gate, which in turn
+    # is the existing dashboard gate (web/README.md): no second token system.
+    assert "from nexus_ai_agent.api.studio_session import authenticate_studio_caller" in source
+    session = API_STUDIO.with_name("studio_session.py").read_text(encoding="utf-8")
+    assert "from nexus_ai_agent.api.dashboard import require_dashboard_token" in session

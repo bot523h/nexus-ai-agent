@@ -95,7 +95,7 @@ MUTATIONS = (
         "E",
         "studio_bearer_authentication_removed",
         STUDIO,
-        "    require_dashboard_token(authorization)",
+        "    authenticate_studio_caller(request, authorization)",
         "    # mutation: skip Studio bearer authentication",
         "test_the_studio_surface_enforces_project_scope_after_authentication",
         "Studio route accepted missing bearer",

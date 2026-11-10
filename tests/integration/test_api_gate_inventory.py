@@ -80,6 +80,29 @@ PUBLIC_OPERATIONS: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/"),
         ("GET", "/healthz"),
         ("GET", "/readyz"),
+        # NAGAR Studio web shell (src/nexus_ai_agent/web/README.md): static, secret-free
+        # assets so a browser can load the login screen.  One literal route per asset;
+        # no wildcard.  All data is behind /api/studio/* (the Studio surface below).
+        ("GET", "/studio"),
+        ("GET", "/studio/"),
+        ("GET", "/studio/app.js"),
+        ("GET", "/studio/api.js"),
+        ("GET", "/studio/dom.js"),
+        ("GET", "/studio/views.js"),
+        ("GET", "/studio/i18n.js"),
+        ("GET", "/studio/style.css"),
+        ("GET", "/studio/sw.js"),
+        ("GET", "/studio/manifest.webmanifest"),
+        ("GET", "/studio/icon.svg"),
+        ("GET", "/studio/icon-192.png"),
+        ("GET", "/studio/icon-512.png"),
+        ("GET", "/studio/fonts/vazirmatn.ttf"),
+        # Studio browser login/logout/state: public by nature (they *are* the credential
+        # exchange); POST is fail-closed on the dashboard token, throttled, and needs a
+        # CSRF marker header.  Deliberately outside /api/studio so that prefix stays gated.
+        ("GET", "/studio/session"),
+        ("POST", "/studio/session"),
+        ("DELETE", "/studio/session"),
     }
 )
 
