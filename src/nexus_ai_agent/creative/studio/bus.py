@@ -212,13 +212,36 @@ class CommandBus:
                 raise CommandExecutionError("nested command dispatch during execution is forbidden")
             return self._dispatch_locked(parsed)
 
-    def _dispatch_locked(self, command: TypedCommand) -> CommandResult:
+    def check_authorization(self, command: TypedCommand | dict[str, Any] | str | bytes) -> None:
+        """Answer "would the bus *authorize* this command?" without its input.
+
+        A caller that must authorize **before** doing expensive work uses this:
+        the composition executor would otherwise encode a file it is about to
+        throw away.  It runs steps 2a and 3-5 of the dispatch -- envelope
+        version, actor grant, capability availability, pack lifecycle and the
+        A/B/C/D ladder -- through the *same* helpers :meth:`dispatch` uses, so a
+        caller cannot get a different answer here than it would get there.
+
+        Step 2b (input-model validation) is deliberately skipped: for these
+        callers the input does not exist yet -- a composition node's output hash
+        only exists *after* the encode -- and validating a fabricated one would
+        be worse than not validating.  The dispatch still validates the real
+        input before anything is applied.
+
+        Nothing is reserved or mutated.
+        """
+        parsed = _parse(command)
+        with self._lock:
+            if self._executing:
+                raise CommandExecutionError("nested command dispatch during execution is forbidden")
+            self._authorize_locked(parsed, self._spec_locked(parsed))
+
+    def _spec_locked(self, command: TypedCommand) -> OperationSpec:
+        """Step 2a/b-1: the envelope version and the operation's schema pin."""
         if command.protocol_version != PROTOCOL_VERSION:
             raise CommandValidationError(
                 f"unsupported protocol_version: {command.protocol_version!r}"
             )
-
-        # 2b. Operation schema: look up the input model but do not execute it.
         # Unknown operations have no schema and therefore fail here. Schema
         # checks are pure/bounded (command input <= 512 KiB).
         spec = self._registry.get_spec(command.operation)
@@ -227,11 +250,10 @@ class CommandBus:
                 f"unsupported operation schema_version for {command.operation!r}: "
                 f"{command.operation_schema_version}"
             )
-        try:
-            validated = spec.input_model.model_validate(command.input)
-        except ValidationError as exc:
-            raise CommandValidationError(f"{command.operation}: invalid input: {exc}") from exc
+        return spec
 
+    def _authorize_locked(self, command: TypedCommand, spec: OperationSpec) -> ProjectAccess | None:
+        """Steps 3-5: the actor grant, the capability, the packs and the ladder."""
         # 3. Actor / project: target.project_id is only a *claim*. The injected
         # authorizer must independently bind that project and the real actor.
         # Claim-less legacy commands without an authorizer dispatch under
@@ -276,6 +298,22 @@ class CommandBus:
         decision = self._registry.check_permission(command.operation, confirmed=command.confirmed)
         if not decision.allowed:
             raise ExecutionPolicyError(f"{command.operation}: {decision.reason}")
+        return access
+
+    def _preflight_locked(self, command: TypedCommand) -> tuple[OperationSpec, Any]:
+        """Steps 2-5 of the dispatch: schema, actor, capability, packs, policy."""
+        spec = self._spec_locked(command)
+        # 2b. Operation schema: validate the input model but do not execute it.
+        try:
+            validated = spec.input_model.model_validate(command.input)
+        except ValidationError as exc:
+            raise CommandValidationError(f"{command.operation}: invalid input: {exc}") from exc
+        self._authorize_locked(command, spec)
+        return spec, validated
+
+    def _dispatch_locked(self, command: TypedCommand) -> CommandResult:
+        """The full pipeline: preflight, then references, reservation and handler."""
+        spec, validated = self._preflight_locked(command)
 
         # 6. All declared input_refs and semantic time references are validated
         # against the authorized current project before any reservation/handler.
@@ -299,6 +337,7 @@ class CommandBus:
             self._check_preconditions(command.preconditions)
             return self._apply_guarded(command, spec, input_data)
 
+        project_id = self._project.project_id
         key = (project_id, command.operation, command.idempotency_key)
         fingerprint = _fingerprint(command)
         prior = self._idempotency.get(key)

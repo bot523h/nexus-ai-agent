@@ -1,0 +1,369 @@
+{
+  "generated_by": "scripts/collect_composition_evidence.py",
+  "git": {
+    "branch": "arena/da6837a6-nexus-ai-agent",
+    "head_sha": "514a41a3961151edf6953eca4bb3f8f9bfbccf9d",
+    "base_sha": "514a41a3961151edf6953eca4bb3f8f9bfbccf9d",
+    "origin_main": "5ed6d4e10be55f5baf5e9f2a8aa99775577621db",
+    "status": "",
+    "commit_count_since_base": "13"
+  },
+  "environment": {
+    "python": "3.11.2",
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
+    "cpu_count": 2,
+    "ffmpeg_binary": "/home/user/nexus-ai-agent/venv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2",
+    "gpu": "none"
+  },
+  "ffmpeg": {
+    "binary": "/home/user/nexus-ai-agent/venv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2",
+    "version": "n9.0.2-17-g2a571b6068-20260930",
+    "version_line": "ffmpeg version n9.0.2-17-g2a571b6068-20260930 Copyright (c) 2000-2026 the FFmpeg developers",
+    "configuration": "--prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-ffbuild-linux-gnu- --arch=x86_64 --target-os=linux --enable-gpl --enable-version3 --disable-debug --enable-iconv --enable-zlib --enable-libxml2 --enable-libsoxr --enable-openssl --enable-libvmaf --enable-libxcb --enable-xlib --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libdav1d --enable-libvorbis --enable-librav1e --enable-librsvg --enable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --enable-avisynth --enable-chromaprint --enable-libdavs2 --enable-libdvdread --enable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --enable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribb24 --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --enable-librubberband --disable-schannel --enable-sdl2 --enable-libsnappy --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --enable-libdrm --enable-vaapi --enable-libvidstab --enable-libvvenc --disable-whisper --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs='-lgomp -ldl' --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-ffbuild-linux-gnu-gcc --cxx=x86_64-ffbuild-linux-gnu-g++ --ar=x86_64-ffbuild-linux-gnu-gcc-ar --ranlib=x86_64-ffbuild-linux-gnu-gcc-ranlib --nm=x86_64-ffbuild-linux-gnu-gcc-nm --extra-version=20260930",
+    "buildconf": "--prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-ffbuild-linux-gnu- --arch=x86_64 --target-os=linux --enable-gpl --enable-version3 --disable-debug --enable-iconv --enable-zlib --enable-libxml2 --enable-libsoxr --enable-openssl --enable-libvmaf --enable-libxcb --enable-xlib --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libdav1d --enable-libvorbis --enable-librav1e --enable-librsvg --enable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --enable-avisynth --enable-chromaprint --enable-libdavs2 --enable-libdvdread --enable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --enable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribb24 --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --enable-librubberband --disable-schannel --enable-sdl2 --enable-libsnappy --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --enable-libdrm --enable-vaapi --enable-libvidstab --enable-libvvenc --disable-whisper --enable-libx264 --enable-libx265 --enable-libxavs2 --enable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs='-lgomp -ldl' --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-ffbuild-linux-gnu-gcc --cxx=x86_64-ffbuild-linux-gnu-g++ --ar=x86_64-ffbuild-linux-gnu-gcc-ar --ranlib=x86_64-ffbuild-linux-gnu-gcc-ranlib --nm=x86_64-ffbuild-linux-gnu-gcc-nm --extra-version=20260930",
+    "gpl": true,
+    "version3": true,
+    "nonfree": false,
+    "static": true,
+    "enabled_components": [
+      "amf",
+      "avisynth",
+      "chromaprint",
+      "cuda",
+      "ffnvcodec",
+      "fontconfig",
+      "frei0r",
+      "gmp",
+      "gpl",
+      "iconv",
+      "libaom",
+      "libaribb24",
+      "libaribcaption",
+      "libass",
+      "libbluray",
+      "libdav1d",
+      "libdavs2",
+      "libdrm",
+      "libdvdnav",
+      "libdvdread",
+      "libfreetype",
+      "libfribidi",
+      "libgme",
+      "libharfbuzz",
+      "libjxl",
+      "libkvazaar",
+      "liblcevc",
+      "libmp3lame",
+      "liboapv",
+      "libopencore",
+      "libopenh264",
+      "libopenjpeg",
+      "libopenmpt",
+      "libopus",
+      "libplacebo",
+      "libpulse",
+      "librav1e",
+      "librist",
+      "librsvg",
+      "librubberband",
+      "libsnappy",
+      "libsoxr",
+      "libsrt",
+      "libssh",
+      "libsvtav1",
+      "libtheora",
+      "libtwolame",
+      "libuavs3d",
+      "libvidstab",
+      "libvmaf",
+      "libvorbis",
+      "libvpl",
+      "libvpx",
+      "libvvenc",
+      "libwebp",
+      "libx264",
+      "libx265",
+      "libxavs2",
+      "libxcb",
+      "libxml2",
+      "libxvid",
+      "libzimg",
+      "libzmq",
+      "libzvbi",
+      "lv2",
+      "lzma",
+      "openal",
+      "opencl",
+      "openssl",
+      "sdl2",
+      "vaapi",
+      "version3",
+      "vulkan",
+      "xlib",
+      "zlib"
+    ],
+    "encoders": {
+      "libx264": true,
+      "libx265": true,
+      "libvpx_vp9": true,
+      "mpeg4": true
+    }
+  },
+  "license_ledger": {
+    "categories": [
+      "adapter_code",
+      "runtime_software",
+      "library",
+      "model",
+      "model_weights",
+      "dataset",
+      "input_asset",
+      "distribution_restrictions",
+      "commercial_permission",
+      "attribution_notices",
+      "copyleft",
+      "network_use"
+    ],
+    "records": [
+      {
+        "category": "runtime_software",
+        "spdx_id": "GPL-2.0-or-later",
+        "copyleft": true,
+        "allow_commercial": true,
+        "commercial_use_verified": true,
+        "distribution_scope": "binary distribution of the tool; the produced media is governed by the input asset's own terms, not by this record",
+        "notice": "FFmpeg is invoked as an external binary; the tool's own licence obligations attach to redistributing the binary, not to the media it produces.",
+        "attribution_required": false,
+        "network_use_obligations": "none",
+        "evidence": "measured: ffmpeg version n9.0.2-17-g2a571b6068-20260930 Copyright (c) 2000-2026 the FFmpeg developers | gpl=True version3=True nonfree=False static=True"
+      },
+      {
+        "category": "library",
+        "spdx_id": "mixed: per-component licences of the linked libraries",
+        "copyleft": true,
+        "allow_commercial": true,
+        "commercial_use_verified": true,
+        "distribution_scope": "per-library; see the configure flags of the build",
+        "notice": "The linked libraries carry their own terms; the build's --enable-* flags are the authoritative list.",
+        "attribution_required": true,
+        "network_use_obligations": "none",
+        "evidence": "enabled components: amf, avisynth, chromaprint, cuda, ffnvcodec, fontconfig, frei0r, gmp, gpl, iconv, libaom, libaribb24, libaribcaption, libass, libbluray, libdav1d, libdavs2, libdrm, libdvdnav, libdvdread, libfreetype, libfribidi, libgme, libharfbuzz, libjxl, libkvazaar, liblcevc, libmp3lame, liboapv, libopencore, libopenh264, libopenjpeg, libopenmpt, libopus, libplacebo, libpulse, librav1e, librist, librsvg, librubberband, libsnappy, libsoxr, libsrt, libssh, libsvtav1, libtheora, libtwolame, libuavs3d, libvidstab, libvmaf, libvorbis, libvpl, libvpx, libvvenc, libwebp, libx264, libx265, libxavs2, libxcb, libxml2, libxvid, libzimg, libzmq, libzvbi, lv2, lzma, openal, opencl, openssl, sdl2, vaapi, version3, vulkan, xlib, zlib"
+      },
+      {
+        "category": "adapter_code",
+        "spdx_id": "Repository license (see LICENSE)",
+        "copyleft": false,
+        "allow_commercial": true,
+        "commercial_use_verified": false,
+        "distribution_scope": "this repository's own terms",
+        "notice": "",
+        "attribution_required": true,
+        "network_use_obligations": "none",
+        "evidence": "in-repository source of nexus_ai_agent.creative.composition"
+      }
+    ],
+    "unknown_categories": [
+      "model",
+      "model_weights",
+      "dataset",
+      "input_asset",
+      "distribution_restrictions",
+      "commercial_permission",
+      "attribution_notices",
+      "copyleft",
+      "network_use"
+    ],
+    "effective_allow_commercial": false,
+    "commercial_use_verified": false,
+    "note": "The tool's licence never implies the output's rights; the input asset and the distribution restrictions own that question."
+  },
+  "live_registry": {
+    "operation_count": 60,
+    "media_operations": [
+      "media.grayscale_image",
+      "media.image_to_video",
+      "media.pause",
+      "media.play",
+      "media.resize_image"
+    ],
+    "registry_fingerprint": "sha256:b30075f938eb61600b8281bda34ea6c09a3422a01df681fdf51768678110fe41"
+  },
+  "real_composition": {
+    "plan_fingerprint": "sha256:6eceb42be923659971e40517fa1b124f0d9c7ae174004e085af7914f6abf18da",
+    "registry_fingerprint": "sha256:b30075f938eb61600b8281bda34ea6c09a3422a01df681fdf51768678110fe41",
+    "artifact_path": "/tmp/nagar-evidence-jqmhskje/work/node_video/video-a5519c6bb616.mp4",
+    "artifact_sha256": "sha256:2f28cfc31bcc1d5003b269aaab9f0186b7b8211d183372fc4afd7fa83a4de327",
+    "artifact_size_bytes": 2473,
+    "integrity": {
+      "verified": true,
+      "method": "independent_rehash",
+      "findings": [],
+      "measured": {
+        "sha256": "sha256:2f28cfc31bcc1d5003b269aaab9f0186b7b8211d183372fc4afd7fa83a4de327",
+        "size_bytes": 2473
+      }
+    },
+    "semantic": {
+      "verified": true,
+      "method": "independent_video_decode",
+      "findings": [],
+      "measurements": {
+        "duration_us": 1000000,
+        "width": 640,
+        "height": 480,
+        "codec": "h264",
+        "pixel_format": "yuv420p",
+        "frame_rate": 25.0,
+        "has_audio": false,
+        "decoded_frames": 25,
+        "duration_delta_us": 0,
+        "expected_frames_from_contract": 25
+      }
+    },
+    "lineage": [
+      "resize:media.resize_image@1.0.0",
+      "gray:media.grayscale_image@1.0.0",
+      "video:media.image_to_video@1.0.0"
+    ],
+    "receipts": [
+      {
+        "node_id": "resize",
+        "operation": "media.resize_image",
+        "capability_id": "media.resize_image",
+        "capability_version": "1.0.0",
+        "params": {
+          "width": 640,
+          "height": 480
+        },
+        "input_hashes": {
+          "source": "sha256:ee4167edf543dc95a5c5ed1322f1427cf8fb8d8907a44da2f450fb615b9f505f"
+        },
+        "output_path": "/tmp/nagar-evidence-jqmhskje/work/node_resize/resize-a5519c6bb616.png",
+        "output_hash": "sha256:43a84539b3a5d434c5801ac7f1f56009cbf8fc7816c5f896a904e9ca6631e309",
+        "output_size_bytes": 1972,
+        "duration_seconds": 0.0,
+        "state_revision": 2,
+        "state_hash": "sha256:7c79f08e6afb5b2503ade094c19f5b59af185a1d63e068b841751992bfc132e2",
+        "asset_id": "derived_18b767d18ca5",
+        "semantic": {
+          "verified": true,
+          "method": "independent_image_decode",
+          "findings": [],
+          "measurements": {
+            "format": "PNG",
+            "mode": "RGB",
+            "width": 640,
+            "height": 480,
+            "has_alpha": false
+          }
+        }
+      },
+      {
+        "node_id": "gray",
+        "operation": "media.grayscale_image",
+        "capability_id": "media.grayscale_image",
+        "capability_version": "1.0.0",
+        "params": {},
+        "input_hashes": {
+          "source": "sha256:43a84539b3a5d434c5801ac7f1f56009cbf8fc7816c5f896a904e9ca6631e309"
+        },
+        "output_path": "/tmp/nagar-evidence-jqmhskje/work/node_gray/gray-a5519c6bb616.png",
+        "output_hash": "sha256:6e1eb4594f2b29059a4bf6bd88d0c6e501cdf37f0e781200c84800b92f9a9356",
+        "output_size_bytes": 1308,
+        "duration_seconds": 0.0,
+        "state_revision": 4,
+        "state_hash": "sha256:a9c6368163bfec010e5d68cd41119c8b07bd4b41579f5969e16f5e434fd1060b",
+        "asset_id": "derived_282d823dac88",
+        "semantic": {
+          "verified": true,
+          "method": "independent_image_decode",
+          "findings": [],
+          "measurements": {
+            "format": "PNG",
+            "mode": "L",
+            "width": 640,
+            "height": 480,
+            "has_alpha": false,
+            "channel_extrema": [
+              [
+                98,
+                98
+              ],
+              [
+                98,
+                98
+              ],
+              [
+                98,
+                98
+              ]
+            ],
+            "grayscale": true
+          }
+        }
+      },
+      {
+        "node_id": "video",
+        "operation": "media.image_to_video",
+        "capability_id": "media.image_to_video",
+        "capability_version": "1.0.0",
+        "params": {
+          "width": 640,
+          "height": 480,
+          "duration_us": 1000000,
+          "fps": 25,
+          "encoder": "libx264"
+        },
+        "input_hashes": {
+          "source": "sha256:6e1eb4594f2b29059a4bf6bd88d0c6e501cdf37f0e781200c84800b92f9a9356"
+        },
+        "output_path": "/tmp/nagar-evidence-jqmhskje/work/node_video/video-a5519c6bb616.mp4",
+        "output_hash": "sha256:2f28cfc31bcc1d5003b269aaab9f0186b7b8211d183372fc4afd7fa83a4de327",
+        "output_size_bytes": 2473,
+        "duration_seconds": 0.0,
+        "state_revision": 6,
+        "state_hash": "sha256:ad0c93600106c2e6deeab42fd0a1fa84c1eb0d384d70a5162f269722da0454f5",
+        "asset_id": "derived_2fa3b3674965",
+        "semantic": {
+          "verified": true,
+          "method": "independent_video_decode",
+          "findings": [],
+          "measurements": {
+            "duration_us": 1000000,
+            "width": 640,
+            "height": 480,
+            "codec": "h264",
+            "pixel_format": "yuv420p",
+            "frame_rate": 25.0,
+            "has_audio": false,
+            "decoded_frames": 25,
+            "duration_delta_us": 0,
+            "expected_frames_from_contract": 25
+          }
+        }
+      }
+    ],
+    "tool_versions": {
+      "ffmpeg": "n9.0.2-17-g2a571b6068-20260930",
+      "ffmpeg_binary": "/home/user/nexus-ai-agent/venv/lib/python3.11/site-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v9.0.2",
+      "ffmpeg_buildconf_sha256": "1473b6410dc4c9647899005fcf0b08edd0289f2677ce83c992d79d5d60ed433a"
+    },
+    "state_revision": 6,
+    "state_hash": "sha256:ad0c93600106c2e6deeab42fd0a1fa84c1eb0d384d70a5162f269722da0454f5",
+    "duration_seconds": 0.34410524899999473,
+    "resource_estimate": {
+      "peak_ram_mb": 512,
+      "total_ram_mb": 1024,
+      "peak_concurrent_ram_mb": 512,
+      "total_disk_mb": 384,
+      "scratch_mb": 384,
+      "cpu_threads": 2,
+      "gpu_memory_mb": 0,
+      "network_egress": false,
+      "max_timeout_seconds": 300,
+      "node_count": 3
+    },
+    "source_sha256": "sha256:ee4167edf543dc95a5c5ed1322f1427cf8fb8d8907a44da2f450fb615b9f505f",
+    "source_bytes": 782
+  }
+}

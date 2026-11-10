@@ -15,9 +15,16 @@ from nexus_ai_agent.adapters.in_process_job_queue import default_artifact_verifi
 from nexus_ai_agent.jobs.verification import VerificationOutcome
 from nexus_ai_agent.worker import default_job_handlers
 
-#: The verified job types this repository promises (task-178 + task-180).
+#: The verified job types this repository promises (task-178 + task-180,
+#: plus the composition runtime of ADR 0014).
 EXPECTED_VERIFIED_JOB_TYPES = frozenset(
-    {"creative_render", "slideshow_render", "story", "pdf_extract"}
+    {
+        "creative_render",
+        "slideshow_render",
+        "story",
+        "pdf_extract",
+        "creative_composition",
+    }
 )
 
 

@@ -121,6 +121,12 @@ PACK_LIFECYCLE: dict[str, PackLifecycle] = {
         state=LifecycleState.EXPERIMENTAL,
         reason="exposure/LUT twins + OTIO export real; the 4k master is a spec, not a render",
     ),
+    "nexus.media.transform": PackLifecycle(
+        pack_id="nexus.media.transform",
+        state=LifecycleState.AVAILABLE,
+        reason="real FFmpeg resize / grayscale / image-to-video path with independent "
+        "semantic verification of the produced bytes",
+    ),
     "nexus.vision.portrait": PackLifecycle(
         pack_id="nexus.vision.portrait",
         state=LifecycleState.EXPERIMENTAL,

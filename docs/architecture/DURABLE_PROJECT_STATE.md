@@ -173,9 +173,11 @@ exposes no combined `execute`-style method that would bypass the bus.
   authority, single schema declaration site.
 - `tests/unit/test_migrations.py` — `alembic upgrade head` creates the exact
   schema (including `projectartifactbinding`), no drift, downgrade empties it.
-- `scripts/durable_project_state_mutations.py` — 25/25 mutants killed (15 Slice 1
+- `scripts/durable_project_state_mutations.py` — 28/28 mutants killed (15 Slice 1
   + 10 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
   digest-remeasure-removed, content-address-validation-removed,
   verify-oserror-fail-open, binding-fail-open, and the three queue confirm-seam
   mutants — confirm-gate disabled, confirmation-refusal-ignored, and
-  confirmation-fence-recheck-removed).
+  confirmation-fence-recheck-removed — plus 3 Slice-2 composition-lane mutants:
+  pin-hash-check-removed, binding-intents-skipped and
+  published-bytes-not-remeasured).

@@ -113,6 +113,13 @@ def _register_delivery(registry: CapabilityRegistry) -> object:
     return registry
 
 
+def _register_media(registry: CapabilityRegistry) -> object:
+    from nexus_ai_agent.creative.packs.media.operations import register_media_operations
+
+    register_media_operations(registry)
+    return registry
+
+
 @dataclass(frozen=True)
 class PackComposition:
     """One builtin pack: where it lives, what it declares, how it is registered."""
@@ -167,6 +174,12 @@ COMPOSITION: tuple[PackComposition, ...] = (
         "nexus.color.delivery",
         _register_delivery,
         "colour transforms, proxies, OTIO delivery (Wave 7)",
+    ),
+    PackComposition(
+        "media",
+        "nexus.media.transform",
+        _register_media,
+        "still-image resize / grayscale / image-to-video transforms (ADR 0014)",
     ),
 )
 

@@ -384,9 +384,11 @@ jobs:
         run: git diff --exit-code
       # Same evidence rule for the durable Studio project/revision lifecycle
       # (task-282): content addressing, the compare-and-swap head, the
-      # cross-project read guard, the unset-token guard and the genesis
-      # primary-key arbiter are re-attacked five ways. Each mutant must flip the
-      # lifecycle suites RED and be restored byte for byte
+      # cross-project read guard, the unset-token guard, the genesis
+      # primary-key arbiter AND the composition lane's revision pin/binding
+      # guards (pin hash, binding intents, published-byte re-measurement) are
+      # re-attacked 28 ways. Each mutant must flip the lifecycle suites RED and
+      # be restored byte for byte
       # (scripts/durable_project_state_mutations.py).
       - run: python scripts/durable_project_state_mutations.py
       - name: the working tree must be unchanged after durable project-state mutation testing

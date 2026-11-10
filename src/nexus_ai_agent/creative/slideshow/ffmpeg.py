@@ -32,7 +32,9 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -482,14 +484,148 @@ def resolve_ffmpeg_bin(explicit: str | None = None) -> str:
         ) from error
 
 
+#: The environment variables an encoder subprocess may inherit.  Everything
+#: else — API tokens, cloud credentials, proxy settings, session cookies — is
+#: stripped, so a media process never sees a secret it has no business with.
+#: ``LD_LIBRARY_PATH`` is deliberately **not** allowed: it is a code-loading
+#: vector, and a shared-library need is expressed by the caller instead.
+_ENCODER_ENV_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "SOURCE_DATE_EPOCH",
+        "NEXUS_FFMPEG_BIN",
+    }
+)
+
+
+def encoder_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    """A minimal, allow-listed environment for an encoder subprocess."""
+    env = {key: os.environ[key] for key in _ENCODER_ENV_ALLOWLIST if key in os.environ}
+    if extra:
+        env.update(extra)
+    return env
+
+
 def _run(args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603 - argv list, shell=False, allow-listed binary
+    """Run the allow-listed binary with an argv list, no shell and a hard bound.
+
+    The child is started in its **own session** (``start_new_session=True``),
+    so the timeout can kill the whole process *group* instead of only the
+    direct child: an encoder that forked helpers must not leave them running
+    after the deadline.  ``subprocess.run``'s own timeout kills only the
+    direct child, which is why the group is created here and the group is
+    signalled here.
+    """
+    process = subprocess.Popen(  # noqa: S603 - argv list, shell=False, allow-listed binary
         args,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout,
-        check=False,
+        env=encoder_env(),
+        start_new_session=True,
     )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(process)
+        # The group has been SIGKILLed, so no descendant is left holding the
+        # pipes open; the second read is still bounded so a wedged kernel-side
+        # descriptor cannot hang the worker.
+        try:
+            stdout, stderr = process.communicate(timeout=_REAP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:  # pragma: no cover - kernel-level wedge
+            process.kill()
+            stdout, stderr = "", ""
+        raise subprocess.TimeoutExpired(args, timeout, output=stdout, stderr=stderr) from None
+    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+
+#: Grace period a timed-out encoder gets between ``SIGTERM`` and ``SIGKILL``.
+_TERM_GRACE_SECONDS = 2.0
+#: Upper bound on the post-kill pipe drain, so a timed-out run cannot hang.
+_REAP_TIMEOUT_SECONDS = 5.0
+
+
+def _kill_process_group(process: subprocess.Popen[str]) -> None:
+    """Terminate the child's whole process group, escalating to SIGKILL.
+
+    ``SIGTERM`` first so the encoder can clean up, ``SIGKILL`` after a short
+    grace period so a wedged child cannot outlive the deadline.  The group
+    is the one :func:`_run` created (``start_new_session=True``), so this
+    never signals the worker itself.
+
+    **The leader exiting is not the group exiting.**  ``ffmpeg`` spawns helpers,
+    and a helper that ignores ``SIGTERM`` would survive a check on the leader
+    alone while still holding the pipe open.  The wait therefore watches the
+    *group* (``killpg(group, 0)`` succeeds while any member lives), and
+    ``SIGKILL`` is sent to the group whenever the group outlives its grace
+    period -- regardless of what the leader did.
+    """
+    try:
+        group: int | None = os.getpgid(process.pid)
+    except (OSError, ProcessLookupError):
+        group = None
+    for signal_number, grace in ((signal.SIGTERM, _TERM_GRACE_SECONDS), (signal.SIGKILL, 0.5)):
+        if group is not None and not _group_is_alive(group):
+            return
+        if group is None and process.poll() is not None:
+            return
+        try:
+            if group is not None:
+                os.killpg(group, signal_number)
+            else:  # pragma: no cover - the group always exists here
+                process.send_signal(signal_number)
+        except (OSError, ProcessLookupError):
+            return
+        _wait_for_group_exit(process, group, grace)
+
+
+def _group_is_alive(group: int) -> bool:
+    """Whether *any* member of the process group is still running."""
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # pragma: no cover - we own the group
+        return True
+    except OSError:  # pragma: no cover - defensive
+        return False
+    return True
+
+
+def _wait_for_group_exit(process: subprocess.Popen[str], group: int | None, grace: float) -> None:
+    """Wait up to *grace* seconds for the whole group to disappear.
+
+    The leader is reaped (non-blocking) on every pass: an exited child stays in
+    the process group as a zombie until it is waited for, and a zombie keeps
+    ``killpg(group, 0)`` succeeding -- which would make a dead group look alive
+    and hide the very descendants this function exists to find.
+    """
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        _reap_leader(process)
+        if group is not None:
+            if not _group_is_alive(group):
+                return
+        elif process.returncode is not None:
+            return
+        time.sleep(0.02)
+
+
+def _reap_leader(process: subprocess.Popen[str]) -> None:
+    """Collect the leader's exit status without ever blocking."""
+    try:
+        process.wait(timeout=0)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 @dataclass(frozen=True)
@@ -626,6 +762,220 @@ def upscale_image(
     )
 
 
+@dataclass(frozen=True)
+class StillArtifact:
+    """A PNG produced by the local still-image stage — measured, not assumed."""
+
+    path: str
+    sha256: str
+    size_bytes: int
+    width: int
+    height: int
+    binary: str
+    operation: str
+
+
+def _validate_still_dimensions(width: int, height: int, *, label: str) -> None:
+    """Bound a still-image geometry before a process is ever started."""
+    if width < 2 or height < 2 or width > 8192 or height > 8192:
+        raise RenderError(f"{label} dimensions outside 2..8192: {width}x{height}")
+    if width * height > 33_177_600:  # bounded at roughly 8K UHD pixels
+        raise RenderError(f"{label} exceeds the 8K pixel budget: {width}x{height}")
+
+
+def build_resize_command(
+    input_path: Path,
+    *,
+    width: int,
+    height: int,
+    output_path: Path,
+    binary: str = "ffmpeg",
+) -> list[str]:
+    """Build the allow-listed exact-geometry still resize argv.
+
+    Same Lanczos scaler the upscale stage uses, but named for what it does:
+    an exact ``width`` x ``height`` geometry (the aspect ratio is *not*
+    preserved — a composition that wants letterboxing says so in its own
+    capability, not by accident here).
+    """
+    _validate_still_dimensions(width, height, label="resize")
+    return [
+        binary,
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-i",
+        str(input_path),
+        "-vf",
+        f"scale={width}:{height}:flags=lanczos",
+        "-frames:v",
+        "1",
+        "-c:v",
+        "png",
+        "-compression_level",
+        "6",
+        "-y",
+        str(output_path),
+    ]
+
+
+def build_grayscale_command(
+    input_path: Path,
+    *,
+    output_path: Path,
+    binary: str = "ffmpeg",
+) -> list[str]:
+    """Build the allow-listed luma-only (grayscale) still argv.
+
+    ``format=gray`` converts the decoded frame to a luma-only plane; the PNG
+    encoder then writes a true 8-bit grayscale PNG, which a verifier can
+    re-measure from the file's own colour type.
+    """
+    return [
+        binary,
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-i",
+        str(input_path),
+        "-vf",
+        "format=gray",
+        "-frames:v",
+        "1",
+        "-c:v",
+        "png",
+        "-pix_fmt",
+        "gray",
+        "-compression_level",
+        "6",
+        "-y",
+        str(output_path),
+    ]
+
+
+def _render_still(
+    args: list[str],
+    *,
+    destination: Path,
+    timeout: int,
+    overwrite: bool,
+    label: str,
+) -> str:
+    """Run one still-image encode into a staging file and publish it atomically.
+
+    The staging/rename dance is the same contract the encoder uses for a
+    master: a failed or timed-out process never leaves a half-written file and
+    an existing file is only replaced when the caller asked for it.
+    """
+    if destination.exists() and not overwrite:
+        raise RenderError(f"{destination} already exists; pass overwrite=True")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = destination.with_name(f".{destination.stem}.part{destination.suffix}")
+    staging.unlink(missing_ok=True)
+    try:
+        result = _run(args, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        staging.unlink(missing_ok=True)
+        raise RenderError(f"ffmpeg {label} timed out after {timeout}s") from error
+    if result.returncode != 0 or not staging.is_file():
+        staging.unlink(missing_ok=True)
+        raise RenderError(
+            f"ffmpeg {label} exited {result.returncode}: {(result.stderr or '').strip()[-600:]}"
+        )
+    staging.replace(destination)
+    return str(destination)
+
+
+def resize_image(
+    input_path: Path,
+    output_path: Path,
+    *,
+    width: int,
+    height: int,
+    binary: str | None = None,
+    timeout: int = 120,
+    overwrite: bool = False,
+) -> StillArtifact:
+    """Resize one still to an exact geometry into an atomically published PNG."""
+    source = Path(input_path)
+    if not source.is_file():
+        raise RenderError(f"resize input not found: {source}")
+    destination = Path(output_path)
+    if destination.suffix.lower() != ".png":
+        raise RenderError("resize output must use .png to avoid lossy re-encoding")
+    if source.resolve() == destination.resolve():
+        raise RenderError("resize never overwrites its source image")
+    _validate_still_dimensions(width, height, label="resize")
+    resolved = resolve_ffmpeg_bin(binary)
+    args = build_resize_command(
+        source, width=width, height=height, output_path=destination, binary=resolved
+    )
+    # The staging file name is derived from the destination, so the command
+    # must write there rather than onto the destination itself.
+    staging = destination.with_name(f".{destination.stem}.part{destination.suffix}")
+    args[-1] = str(staging)
+    path = _render_still(
+        args,
+        destination=destination,
+        timeout=timeout,
+        overwrite=overwrite,
+        label="resize",
+    )
+    return StillArtifact(
+        path=path,
+        sha256=sha256_file(destination),
+        size_bytes=destination.stat().st_size,
+        width=width,
+        height=height,
+        binary=resolved,
+        operation="resize",
+    )
+
+
+def grayscale_image(
+    input_path: Path,
+    output_path: Path,
+    *,
+    binary: str | None = None,
+    timeout: int = 120,
+    overwrite: bool = False,
+) -> StillArtifact:
+    """Convert one still to a luma-only PNG into an atomically published file."""
+    source = Path(input_path)
+    if not source.is_file():
+        raise RenderError(f"grayscale input not found: {source}")
+    destination = Path(output_path)
+    if destination.suffix.lower() != ".png":
+        raise RenderError("grayscale output must use .png to avoid lossy re-encoding")
+    if source.resolve() == destination.resolve():
+        raise RenderError("grayscale never overwrites its source image")
+    resolved = resolve_ffmpeg_bin(binary)
+    args = build_grayscale_command(source, output_path=destination, binary=resolved)
+    staging = destination.with_name(f".{destination.stem}.part{destination.suffix}")
+    args[-1] = str(staging)
+    path = _render_still(
+        args,
+        destination=destination,
+        timeout=timeout,
+        overwrite=overwrite,
+        label="grayscale",
+    )
+    from nexus_ai_agent.creative.slideshow.probe import probe_image
+
+    measured = probe_image(destination)
+    return StillArtifact(
+        path=path,
+        sha256=sha256_file(destination),
+        size_bytes=destination.stat().st_size,
+        width=int(measured.width or 0),
+        height=int(measured.height or 0),
+        binary=resolved,
+        operation="grayscale",
+    )
+
+
 def encode(
     ir: RenderIR,
     output_path: Path,
@@ -698,16 +1048,22 @@ __all__ = [
     "RenderError",
     "RenderIR",
     "RenderShot",
+    "StillArtifact",
     "UpscaleArtifact",
     "VideoInfo",
     "build_command",
     "build_filtergraph",
+    "build_grayscale_command",
+    "build_resize_command",
     "build_upscale_command",
     "encode",
+    "encoder_env",
+    "grayscale_image",
     "probe_video",
     "render_ir_dict",
     "render_ir_from_plan",
     "render_ir_hash",
+    "resize_image",
     "resolve_ffmpeg_bin",
     "sha256_file",
     "upscale_image",

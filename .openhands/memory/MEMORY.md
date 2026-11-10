@@ -1094,3 +1094,32 @@ Only red check = the #234 flake (task-264, issue #237).
   (PAT = owner; `OH_GIT_CREDENTIAL_ACCESS_TOKEN_GITHUB` fails for git here).
 - **`lint-fast` runs `ruff format --check`** (not just `ruff check`): always run
   `ruff format --check .` before pushing — a plain `ruff check` misses over-wrapped lines.
+
+## PR #327 — NAGAR composition lane + task-282 Slice 2 (2026-11-09, close-out)
+- Branch `arena/da6837a6-nexus-ai-agent`, PR **#327** (base main). Head `306607c6`.
+  **All 32 Sourcery review threads replied to + RESOLVED**; PR body rewritten with the
+  Slice-2 durable-binding section and honest residuals.
+- **GitHub auth split (durable):** `GITHUB_TOKEN` → **403** on repo mutations;
+  `GITHUB_PERSONAL_ACCESS_TOKEN` = **bot523h** (owner) works for `git push`, REST
+  `PATCH /pulls/327`, and GraphQL reply/resolve. Use the PAT for all GitHub writes.
+- **Env restored (durable):** `pip install -e ".[dev]"` reinstalls the editable install
+  into **USER** site (`/home/openhands/.local/...`). FULL unit suite then runs:
+  **5644 passed / 0 failed**. The only residual failures are 2 tests in
+  `tests/unit/test_selfhood_ledger.py` that spawn `python -I`, and **`-I` excludes user
+  site-packages** → `ModuleNotFoundError`; PRE-EXISTING + environmental (proven by
+  `git stash`), NOT a branch defect. Never chase it.
+  Green: **246 composition tests**, **architecture gates**, `durable_project_state_mutations.py` **29/29 killed**.
+  `ffmpeg` IS present (imageio-ffmpeg). Installed `typer` (unblocks the CLI gate) + `mypy`.
+- **OPERATION_TRUTH drift**: adding `tests/integration/test_composition_durable_project.py`
+  changes `OPERATION_TRUTH.json` `suite_reference_files`. Regenerate ONLY with the
+  canonical writer `python -m nexus_ai_agent.nagar`; `source_revision`/`generated_at`
+  are the two non-deterministic fields. Gate: `tests/architecture/test_operation_truth_gate.py`.
+- Report `docs/architecture/NAGAR_COMPOSITION_RUNTIME_REPORT.md`: composition suite is
+  **246** (13 files, not 194/11); durable campaign is **29** mutants (not 25). Keep in sync.
+- Slice 2 is **CLOSED** at head `f84a5f0b`: `creative/assets/factory.py` is the single
+  reviewed `AssetLibraryService` construction site; the confirm hook registers each
+  published artifact via the library's authorized ingest and records `version_id` on the
+  binding (idempotency key = content address; missing actor / no `project:write` fails
+  closed). Mutant `composition_asset_version_link_dropped` killed. Only residual left =
+  **unpinned** rows (back-compat) run on an in-memory project.
+- Detail: `.openhands/memory/2026-11-09.md`.

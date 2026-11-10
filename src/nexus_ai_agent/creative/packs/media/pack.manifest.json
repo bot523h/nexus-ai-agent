@@ -1,0 +1,61 @@
+{
+  "manifest_schema": "nexus.capability-pack.v1",
+  "package_id": "nexus.media.transform",
+  "version": "1.0.0",
+  "display_name": "Local still-image resize, grayscale and image-to-video transforms",
+  "download_size_mb": 0.01,
+  "capabilities": [
+    "media.resize_image",
+    "media.grayscale_image",
+    "media.image_to_video"
+  ],
+  "runtime": {
+    "native": {
+      "adapter_id": "nagar.local.media.transform.v1",
+      "sandbox": "process_isolated",
+      "network_required": false
+    },
+    "browser": null
+  },
+  "permissions": [
+    "read_project_images",
+    "write_derived_video_assets",
+    "write_timeline_layers"
+  ],
+  "network_policy": {
+    "upload_media": false,
+    "runtime_network": false,
+    "pack_update": "forbidden"
+  },
+  "hardware_requirements": {
+    "minimum_ram_mb": 256,
+    "recommended_ram_mb": 1024,
+    "minimum_cpu_threads": 1,
+    "gpu": {
+      "optional": true,
+      "webgpu": false
+    },
+    "disk_free_mb": 256
+  },
+  "artifacts": [],
+  "resource_budget": {
+    "max_resident_model_mb": 0,
+    "max_audio_minutes_in_memory": 0.5,
+    "max_preview_resolution": "1920x1080"
+  },
+  "compatibility": {
+    "min_nagar_version": "3.10.0",
+    "protocol_version": "nagar.command.v1",
+    "state_schema": "nagar.state.v1"
+  },
+  "security": {
+    "signature_algorithm": "ed25519",
+    "signature": "base64:placeholder-signed-manifest",
+    "trusted_publisher": "nagar-core",
+    "allow_arbitrary_native_code": false,
+    "allow_arbitrary_wasm_imports": false
+  },
+  "external_binaries": [
+    "ffmpeg"
+  ]
+}

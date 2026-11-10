@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "d386e4da5623fca7deeda672f4ebccf97ee224fa",
-    "generated_at": "2026-11-05T05:10:49Z",
+    "source_revision": "49372ceb65c78a22c16251e736f1707d2c337488",
+    "generated_at": "2026-11-09T21:58:59Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -64,20 +64,20 @@
   "l4_unavailable_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
   "reconciliation": {
     "catalog_count": 70,
-    "runtime_count": 57,
+    "runtime_count": 60,
     "overlap_count": 47,
     "missing_count": 23,
-    "runtime_only_count": 10,
-    "universe_count": 80,
+    "runtime_only_count": 13,
+    "universe_count": 83,
     "surface_count": 12,
-    "suite_executed_count": 57,
+    "suite_executed_count": 60,
     "missing_by_category": {
       "color": 3,
       "portrait": 10,
       "scene": 10
     },
     "runtime_only_by_category": {
-      "media": 2,
+      "media": 5,
       "slideshow": 6,
       "system": 1,
       "timeline": 1
@@ -108,8 +108,11 @@
       "scene.track_object"
     ],
     "runtime_only": [
+      "media.grayscale_image",
+      "media.image_to_video",
       "media.pause",
       "media.play",
+      "media.resize_image",
       "slideshow.compose",
       "slideshow.render",
       "slideshow.scan_assets",
@@ -121,8 +124,8 @@
     ]
   },
   "declaration_parity": {
-    "declared_count": 57,
-    "registered_count": 57,
+    "declared_count": 60,
+    "registered_count": 60,
     "declared_not_registered": [],
     "registered_not_declared": []
   },
@@ -470,6 +473,34 @@
           "tests/unit/test_operation_matrix_reconciliation.py"
         ]
       },
+      "media.grayscale_image": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/architecture/test_composition_boundary.py",
+          "tests/integration/test_composition_canonical_e2e.py",
+          "tests/integration/test_composition_durable_project.py",
+          "tests/unit/test_composition_compiler.py",
+          "tests/unit/test_composition_runtime.py",
+          "tests/unit/test_media_transform_pack.py"
+        ]
+      },
+      "media.image_to_video": {
+        "kinds": [
+          "dispatch",
+          "handler"
+        ],
+        "files": [
+          "tests/architecture/test_composition_boundary.py",
+          "tests/integration/test_composition_canonical_e2e.py",
+          "tests/unit/test_composition_compiler.py",
+          "tests/unit/test_composition_runtime.py",
+          "tests/unit/test_composition_security.py",
+          "tests/unit/test_composition_verifier.py",
+          "tests/unit/test_media_transform_pack.py"
+        ]
+      },
       "media.pause": {
         "kinds": [
           "dispatch"
@@ -502,6 +533,24 @@
           "tests/unit/test_studio_discovery.py",
           "tests/unit/test_studio_integration_contracts.py",
           "tests/unit/test_studio_preview_master_boundary.py"
+        ]
+      },
+      "media.resize_image": {
+        "kinds": [
+          "dispatch",
+          "handler"
+        ],
+        "files": [
+          "tests/architecture/test_composition_boundary.py",
+          "tests/integration/test_composition_canonical_e2e.py",
+          "tests/integration/test_composition_durable_project.py",
+          "tests/unit/test_composition_compiler.py",
+          "tests/unit/test_composition_contracts.py",
+          "tests/unit/test_composition_proof.py",
+          "tests/unit/test_composition_runtime.py",
+          "tests/unit/test_composition_security.py",
+          "tests/unit/test_composition_verifier.py",
+          "tests/unit/test_media_transform_pack.py"
         ]
       },
       "motion.add_glow": {
@@ -643,6 +692,7 @@
           "service"
         ],
         "files": [
+          "tests/unit/test_composition_compiler.py",
           "tests/unit/test_pack_manifest_verify.py",
           "tests/unit/test_slideshow_engine.py",
           "tests/unit/test_slideshow_invariants.py",
@@ -3274,6 +3324,126 @@
       "registrar_pack": "nexus.color.delivery"
     },
     {
+      "operation_id": "media.grayscale_image",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "media",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/architecture/test_composition_boundary.py",
+          "tests/integration/test_composition_canonical_e2e.py",
+          "tests/integration/test_composition_durable_project.py",
+          "tests/unit/test_composition_compiler.py",
+          "tests/unit/test_composition_runtime.py",
+          "tests/unit/test_media_transform_pack.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.media.operations.GrayscaleImageInput",
+        "handler": "_grayscale_image",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.media.transform"
+    },
+    {
+      "operation_id": "media.image_to_video",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "media",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "dispatch",
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/architecture/test_composition_boundary.py",
+          "tests/integration/test_composition_canonical_e2e.py",
+          "tests/unit/test_composition_compiler.py",
+          "tests/unit/test_composition_runtime.py",
+          "tests/unit/test_composition_security.py",
+          "tests/unit/test_composition_verifier.py",
+          "tests/unit/test_media_transform_pack.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.media.operations.ImageToVideoInput",
+        "handler": "_image_to_video",
+        "permission_level": "C"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.media.transform"
+    },
+    {
       "operation_id": "media.pause",
       "identity": {
         "t_id": "NOT_AVAILABLE",
@@ -3398,6 +3568,70 @@
       },
       "owner": "NOT_AVAILABLE",
       "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
+      "operation_id": "media.resize_image",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "media",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "dispatch",
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/architecture/test_composition_boundary.py",
+          "tests/integration/test_composition_canonical_e2e.py",
+          "tests/integration/test_composition_durable_project.py",
+          "tests/unit/test_composition_compiler.py",
+          "tests/unit/test_composition_contracts.py",
+          "tests/unit/test_composition_proof.py",
+          "tests/unit/test_composition_runtime.py",
+          "tests/unit/test_composition_security.py",
+          "tests/unit/test_composition_verifier.py",
+          "tests/unit/test_media_transform_pack.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.media.operations.ResizeImageInput",
+        "handler": "_resize_image",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.media.transform"
     },
     {
       "operation_id": "motion.add_glow",
@@ -5057,6 +5291,7 @@
           "service"
         ],
         "suite_reference_files": [
+          "tests/unit/test_composition_compiler.py",
           "tests/unit/test_pack_manifest_verify.py",
           "tests/unit/test_slideshow_engine.py",
           "tests/unit/test_slideshow_invariants.py",

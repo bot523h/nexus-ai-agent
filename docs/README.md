@@ -59,6 +59,12 @@ placeholder text.
 | [architecture/adr/0008-canonical-identity-arbitration.md](architecture/adr/0008-canonical-identity-arbitration.md) | One authority per identity, one durable lineage; dispositions for competing open PRs. |
 | [architecture/adr/0011-restricted-shell-flag-grammar.md](architecture/adr/0011-restricted-shell-flag-grammar.md) | The restricted shell validates a declared argument grammar, not a forbidden-option list. |
 | [architecture/adr/0012-local-first-llamaindex-retrieval.md](architecture/adr/0012-local-first-llamaindex-retrieval.md) | Knowledge-retrieval docs: living view + law R22 fitness test (behaviour record lives in DECISION_LOG D-0030). |
+| [architecture/adr/0014-creative-capability-composition.md](architecture/adr/0014-creative-capability-composition.md) | The Composition Compiler owns DAG logic only — the authority stays canonical (registry, queue, bus, policy, provenance, verification). |
+| [architecture/CANONICAL_INFRASTRUCTURE_AUDIT.md](architecture/CANONICAL_INFRASTRUCTURE_AUDIT.md) | The eight-axis audit of the canonical NEXUS substrate, with the live call graph and the gap list the composition runtime was built against. |
+| [architecture/COMPOSITION_RUNTIME.md](architecture/COMPOSITION_RUNTIME.md) | The composition capability contract, the typed media contract, the versioned parameter schema, the resource model, the composition IR and the twelve-category licence ledger. |
+| [architecture/COMPOSITION_THREAT_MODEL.md](architecture/COMPOSITION_THREAT_MODEL.md) | The STRIDE threat model of the composition runtime: every control with the symbol that enforces it and the test that proves it, plus the OS-level controls recorded as blocked. |
+| [architecture/NAGAR_COMPOSITION_RUNTIME_REPORT.md](architecture/NAGAR_COMPOSITION_RUNTIME_REPORT.md) | The final engineering report of the NAGAR composition runtime integration (Persian): novelty, capability candidates, verification report, benchmark report, roadmap. |
+| [../LIVE_TRUTH_REPORT.md](../LIVE_TRUTH_REPORT.md) | Gate 0 of the NAGAR composition runtime: the live truth report recorded from the workspace *before* any code change (SHAs, commands, measured outputs), so the deltas in the final report can be checked against it. |
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
 | [architecture/SEC4_EGRESS_GATE_DESIGN.md](architecture/SEC4_EGRESS_GATE_DESIGN.md) | SEC-4 unified provider-egress gate — DESIGN ONLY: the ungated `/ai`→Gemini path (evidence), the full first-party egress inventory, the single-authority `EgressGate` architecture, a staged migration plan, adversarial test definitions, and the five OPEN owner decisions. No runtime change. |
 | [architecture/TRUTH_DOCTOR.md](architecture/TRUTH_DOCTOR.md) | The repo-truth authority (law R16): one pure-stdlib scanner for version lock-step, docs index/link integrity, boundary-law→test resolution, documentation claim witnesses, and truthy-default verdict reads — with its finding codes and honest limits. |
@@ -117,6 +123,7 @@ placeholder text.
 | [ops/PACK_RUNTIME.md](ops/PACK_RUNTIME.md) | Unified pack runtime (wave 5): composition, activation gate, op-gap ledger, composition checklist for new packs. |
 | [ops/RUNBOOK_HARDENING.md](ops/RUNBOOK_HARDENING.md) | Runbook hardening pass (wave-4 step 8): boundary conditions, failure modes, operator knobs. |
 | [ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md](ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md) | Knowledge retrieval runbook: configuration, status meanings, recovery (corrupt store, interrupted run, root rotation), safety notes. |
+| [ops/COMPOSITION_RUNTIME.md](ops/COMPOSITION_RUNTIME.md) | Canonical integration guide for submitting a capability composition through the existing queue, worker registry and verifier, with the typed failure codes and the troubleshooting table. |
 
 ## Examples
 

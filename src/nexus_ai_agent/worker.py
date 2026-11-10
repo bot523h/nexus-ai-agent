@@ -29,6 +29,10 @@ def default_job_handlers() -> dict[str, JobHandler]:
     Composition roots register the full map so a resumed job always finds
     its handler, regardless of which process drains the queue.
     """
+    from nexus_ai_agent.creative.composition.job import (
+        COMPOSITION_JOB_TYPE,
+        composition_render_job,
+    )
     from nexus_ai_agent.creative.render_jobs import creative_render_job
     from nexus_ai_agent.creative.slideshow.worker_adapter import slideshow_render_job
 
@@ -40,6 +44,10 @@ def default_job_handlers() -> dict[str, JobHandler]:
         # task-166 (P0-B): one-shot /edit, /caption, /grade through the same
         # canonical chain (registry → CommandBus → lane → measured artifact).
         "creative_render": creative_render_job,
+        # ADR 0014: a typed capability composition runs on the same queue and
+        # the same worker registry; the composition layer owns no queue of its
+        # own and no authority of its own.
+        COMPOSITION_JOB_TYPE: composition_render_job,
     }
 
 

@@ -77,6 +77,10 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         "tests/unit/test_motion_pack.py",
         "tests/architecture/test_motion_pack_boundary.py",
     ),
+    "media": (
+        "tests/unit/test_media_transform_pack.py",
+        "tests/architecture/test_composition_boundary.py",
+    ),
     "slideshow": (
         "tests/unit/test_slideshow_pack.py",
         "tests/unit/test_slideshow_invariants.py",

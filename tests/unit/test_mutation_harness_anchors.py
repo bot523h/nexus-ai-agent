@@ -31,6 +31,7 @@ REFEREE = REPO / "scripts" / "board_referee_mutations.py"
 GATE5 = REPO / "scripts" / "gate5_mutation_probes.py"
 EXECUTION_CORE = REPO / "scripts" / "execution_core_mutations.py"
 RETENTION = REPO / "scripts" / "retention_verdict_mutations.py"
+DURABLE = REPO / "scripts" / "durable_project_state_mutations.py"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
 
@@ -61,6 +62,11 @@ def execution_core() -> dict[str, Any]:
 @pytest.fixture(scope="module")
 def retention() -> dict[str, Any]:
     return _load(RETENTION)
+
+
+@pytest.fixture(scope="module")
+def durable() -> dict[str, Any]:
+    return _load(DURABLE)
 
 
 def test_referee_mutations_anchor_exactly_once_in_agent_board(referee: dict[str, Any]) -> None:
@@ -211,3 +217,52 @@ def test_retention_pins_pythonpath_and_bounds_the_run(
     assert Path(seen["cwd"]) == Path(retention["REPO"])
     assert "no:cacheprovider" in seen["cmd"]
     assert seen["timeout"] == retention["TEST_TIMEOUT_S"]
+
+
+DURABLE = REPO / "scripts" / "durable_project_state_mutations.py"
+
+
+def test_durable_project_state_anchors_occur_exactly_once(durable: dict[str, Any]) -> None:
+    # A non-unique anchor makes ``str.replace(old, new, 1)`` mutate only the
+    # FIRST occurrence, leaving a live guard behind: the mutant then "survives"
+    # and the campaign silently proves nothing.  This turns that into an
+    # instant unit failure (the trap that once let
+    # ``cross_project_read_check_removed`` occur three times).
+    drift: dict[str, int] = {}
+    for mutation in durable["MUTATIONS"]:
+        count = mutation.path.read_text(encoding="utf-8").count(mutation.old)
+        if count != 1:
+            drift[f"{mutation.name}:{mutation.path.name}"] = count
+    assert drift == {}, f"durable project-state anchors must occur exactly once: {drift}"
+    # 25 Slice-2 guards + 4 composition-durability guards (task-282 composition pin).
+    assert len(durable["MUTATIONS"]) == 29
+
+
+def test_durable_project_state_mutants_differ_from_their_anchors(
+    durable: dict[str, Any],
+) -> None:
+    for mutation in durable["MUTATIONS"]:
+        assert mutation.old != mutation.new, mutation.name
+
+
+def test_durable_project_state_pins_pythonpath_and_bounds_the_run(
+    durable: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GOV-1 shadowed-import guard: without the PYTHONPATH pin a worktree run
+    # imports the editable-installed package and every mutant falsely survives.
+    seen: dict[str, Any] = {}
+
+    class _Done:
+        returncode = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _Done:
+        seen["cmd"] = cmd
+        seen.update(kwargs)
+        return _Done()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert durable["run_tests"]() is True
+    assert seen["env"]["PYTHONPATH"] == str(Path(durable["ROOT"]) / "src")
+    assert Path(seen["cwd"]) == Path(durable["ROOT"])
+    assert "no:cacheprovider" in seen["cmd"]
+    assert seen["timeout"] == durable["TEST_TIMEOUT_SECONDS"]

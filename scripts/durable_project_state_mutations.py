@@ -19,6 +19,7 @@ Exit code 0 means "N/N mutants killed".
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -30,11 +31,13 @@ PERSISTENCE = ROOT / "src" / "nexus_ai_agent" / "creative" / "studio" / "persist
 RENDER_JOBS = ROOT / "src" / "nexus_ai_agent" / "creative" / "render_jobs.py"
 QUEUE = ROOT / "src" / "nexus_ai_agent" / "adapters" / "in_process_job_queue.py"
 HANDOFF = ROOT / "src" / "nexus_ai_agent" / "nagar" / "creative" / "handoff.py"
+COMPOSITION_JOB = ROOT / "src" / "nexus_ai_agent" / "creative" / "composition" / "job.py"
 TESTS = (
     "tests/unit/test_durable_project_state.py",
     "tests/integration/test_durable_project_concurrency.py",
     "tests/integration/test_durable_project_restart.py",
     "tests/integration/test_durable_project_revision_pinning.py",
+    "tests/integration/test_composition_durable_project.py",
     "tests/unit/test_nagar_cognition_queue_handoff.py",
 )
 
@@ -60,8 +63,14 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "cross_project_read_check_removed",
         STORE,
-        "        if row.project_id != project_id:",
-        "        if False:",
+        """        if row is None:
+            raise RevisionNotFound(f"revision {revision_id!r} not found")
+        if row.project_id != project_id:
+            raise CrossProjectAccess("revision does not belong to the requested project")""",
+        """        if row is None:
+            raise RevisionNotFound(f"revision {revision_id!r} not found")
+        if False:
+            raise CrossProjectAccess("revision does not belong to the requested project")""",
         "a revision must only be readable through the project that owns it; "
         "removing the check leaks another project's state",
     ),
@@ -287,19 +296,87 @@ MUTATIONS: tuple[Mutation, ...] = (
         "commit boundary, else an attempt superseded during the re-probe window "
         "commits provenance for a row it no longer owns",
     ),
+    Mutation(
+        "composition_pin_hash_check_removed",
+        COMPOSITION_JOB,
+        "    if record.state_hash != data.revision_hash:\n"
+        "        raise CompositionJobError(\n"
+        '            "revision_unavailable", "pinned revision hash does not match the row\'s pin"\n'
+        "        )",
+        "    # mutated: the pin's hash is no longer checked against the revision",
+        "Slice 2 (composition): a pinned composition row must execute the exact "
+        "revision it was admitted against; dropping the hash check accepts a "
+        "revision whose content differs from the pin",
+    ),
+    Mutation(
+        "composition_binding_intents_skipped",
+        COMPOSITION_JOB,
+        "        try:\n"
+        '            output["artifact_bindings"] = _binding_intents(data, result)\n'
+        "        except CompositionExecutionError as exc:\n"
+        '            return {"success": False, "error_code": "execution_failed", "error_detail": str(exc)}',
+        "        # mutated: a pinned row records no binding intent",
+        "Slice 2 (composition): a pinned composition row must record the "
+        "measured artifact→revision intents; skipping them lets the job publish "
+        "with no durable artifact provenance",
+    ),
+    Mutation(
+        "composition_published_bytes_not_remeasured",
+        COMPOSITION_JOB,
+        """        artifact_path = _published_path_for(str(intent.get("artifact_id") or ""), published)
+        if artifact_path is None:
+            raise CompositionJobError(
+                "invalid_request", "a binding intent names an output that was not published"
+            )
+        try:
+            measured = content_address_of_file(artifact_path)
+        except OSError as exc:
+            raise CompositionJobError(
+                "invalid_request",
+                f"published artifact unreadable: {type(exc).__name__}",
+            ) from exc
+        if measured != intent.get("artifact_id"):
+            raise CompositionJobError(
+                "invalid_request",
+                "published artifact bytes do not match the measured binding digest",
+            )
+""",
+        """        measured = str(intent.get("artifact_id"))
+""",
+        "Slice 2 (composition): the confirm hook must locate the PUBLISHED "
+        "artifact and re-measure its bytes; trusting the intent's reported "
+        "digest binds an artifact a later write already replaced",
+    ),
+    Mutation(
+        "composition_asset_version_link_dropped",
+        COMPOSITION_JOB,
+        """                size_bytes=int(intent.get("size_bytes") or 0),
+                artifact_version_id=version_id,
+""",
+        """                size_bytes=int(intent.get("size_bytes") or 0),
+""",
+        "Slice 2 (composition): the binding must carry the Asset Library "
+        "version the artifact was registered as; dropping it leaves the "
+        "artifact→revision→asset-version chain unresolvable (artifact_version_id "
+        "silently back to None)",
+    ),
 )
 
 TEST_TIMEOUT_SECONDS = 600
 
 
 def run_tests() -> bool:
+    # GOV-1: pin PYTHONPATH to the tree under mutation so an isolated run never
+    # imports an editable-installed copy of the package and falsely survives.
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
     try:
         result = subprocess.run(  # noqa: S603 - fixed argv, shell=False, TESTS are repo-local literals
-            [sys.executable, "-m", "pytest", "-q", "-x", *TESTS],
+            [sys.executable, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *TESTS],
             cwd=ROOT,
             capture_output=True,
             text=True,
             timeout=TEST_TIMEOUT_SECONDS,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         print(f"(test run exceeded {TEST_TIMEOUT_SECONDS}s) ", end="", flush=True)

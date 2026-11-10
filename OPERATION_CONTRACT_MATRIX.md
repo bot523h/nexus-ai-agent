@@ -7,7 +7,7 @@ nine-stage pipeline for every operation of the universe (catalogue ∪ runtime).
 Statuses: `MISSING` / `PARTIAL` (design-only or wired-unproven) / `PRESENT`
 (static fact) / `PROVEN` (backed by executable evidence).
 
-Universe: **80** operations — catalogue 70, runtime 57, overlap 47, missing 23, runtime-only 10, surface-reachable 12.
+Universe: **83** operations — catalogue 70, runtime 60, overlap 47, missing 23, runtime-only 13, surface-reachable 12.
 
 | operation | id | flag | product | contract | registry | capability | | surface | command | execution | artifact | proof | L | UX modes | pack | | locality | registrar |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -41,8 +41,11 @@ Universe: **80** operations — catalogue 70, runtime 57, overlap 47, missing 23
 | delivery.export_otio | T70 | OPERATIONAL | PRESENT | PRESENT | PRESENT | PRESENT | PRESENT | PRESENT | PROVEN | PARTIAL | PROVEN | L3 | all three | LOCAL PACK | LOCAL_ONLY | nexus.color.delivery |
 | delivery.make_proxy_480p | T68 | OPERATIONAL | PRESENT | PRESENT | PRESENT | PRESENT | PRESENT | PRESENT | PROVEN | PARTIAL | PROVEN | L3 | all three | LOCAL PACK | LOCAL_ONLY | nexus.color.delivery |
 | delivery.render_master_4k | T69 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | manual | LOCAL PACK | LOCAL_ONLY | nexus.color.delivery |
+| media.grayscale_image | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.media.transform |
+| media.image_to_video | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.media.transform |
 | media.pause | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | BUILT-IN | LOCAL_ONLY | nexus_ai_agent.creative.studio.capabilities.build_wave1_registry() |
 | media.play | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | BUILT-IN | LOCAL_ONLY | nexus_ai_agent.creative.studio.capabilities.build_wave1_registry() |
+| media.resize_image | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.media.transform |
 | motion.add_glow | T35 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.motion.graphics |
 | motion.add_motion_blur | T36 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.motion.graphics |
 | motion.add_parallax | T33 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_PREFERRED | nexus.motion.graphics |

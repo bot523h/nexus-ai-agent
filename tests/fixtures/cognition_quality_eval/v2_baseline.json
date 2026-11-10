@@ -427,7 +427,7 @@
     "valid_proposals_accepted": 6
   },
   "evaluation_version": "nexus-cognition-quality-eval/v2",
-  "fingerprint": "268adff247b9060a",
+  "fingerprint": "f4868122ed9e87af",
   "refusal_reasons": {
     "authority_field": 16,
     "disallowed_operation": 3,
@@ -467,8 +467,11 @@
       "delivery.export_otio",
       "delivery.make_proxy_480p",
       "delivery.render_master_4k",
+      "media.grayscale_image",
+      "media.image_to_video",
       "media.pause",
       "media.play",
+      "media.resize_image",
       "motion.add_glow",
       "motion.add_motion_blur",
       "motion.add_parallax",

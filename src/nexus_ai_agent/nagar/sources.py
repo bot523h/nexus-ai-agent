@@ -94,6 +94,7 @@ _PACK_MODULES = (
     "nexus_ai_agent.creative.packs.motion.operations",
     "nexus_ai_agent.creative.packs.audio.operations",
     "nexus_ai_agent.creative.packs.delivery.operations",
+    "nexus_ai_agent.creative.packs.media.operations",
 )
 
 #: The studio core module scanned for ``operation_id=`` literals.
