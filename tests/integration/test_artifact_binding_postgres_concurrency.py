@@ -26,6 +26,7 @@ before the module ran.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import selectors
 import subprocess
@@ -75,6 +76,17 @@ if os.getenv(DESTRUCTIVE_OPT_IN) == "1" and not os.getenv("NEXUS_DATABASE_URL"):
     )
 
 _SOURCE_DURATION_US = 2_000_000
+
+
+def _address(nonce: str, tag: str) -> str:
+    """A content address unique to this run.
+
+    Content addresses are **global**: ``artifactcontentowner.artifact_id`` is a
+    primary key across every project (that is exactly the invariant under test).
+    A fixed literal would therefore collide with a previous run's ownership row,
+    so each address is derived from the run nonce to keep runs self-isolating.
+    """
+    return "sha256:" + hashlib.sha256(f"{nonce}:{tag}".encode()).hexdigest()
 
 
 def _project(project_id: str, name: str = "pinned"):
@@ -236,6 +248,34 @@ async def main():
 asyncio.run(main())
 """
 
+_CROSS_PROJECT_CHILD = """
+import asyncio, os, sys
+from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
+from nexus_ai_agent.storage.db import get_session
+
+async def main():
+    go = {go_file!r}
+    async with get_session():
+        pass
+    print("READY", flush=True)
+    while not os.path.exists(go):
+        await asyncio.sleep(0.01)
+    try:
+        b = await SqlArtifactBindingStore().bind(
+            project_id={project_id!r},
+            revision_id={revision_id!r},
+            artifact_id={artifact_id!r},
+            job_id={job_id!r},
+            size_bytes=1,
+            attempt=1,
+        )
+        print("BOUND", b.project_id, flush=True)
+    except Exception as exc:  # the losing racer must be refused, not crash
+        print("REFUSED", type(exc).__name__, flush=True)
+
+asyncio.run(main())
+"""
+
 
 async def _bind(
     project_id: str,
@@ -286,6 +326,22 @@ def _bound_rows(artifact_id: str) -> set[tuple[str, int]]:
     return {(str(row[0]), int(row[1])) for row in rows}
 
 
+def _bound_project_ids(artifact_id: str) -> set[str]:
+    """Every project that owns a committed binding row for one content address.
+
+    Read out-of-band from PostgreSQL, not from either child's stdout: the claim
+    that an address belongs to exactly one project must hold in the database,
+    not merely in the process that printed ``BOUND``.
+    """
+    engine = sync_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT DISTINCT project_id FROM projectartifactbinding WHERE artifact_id = :aid"),
+            {"aid": artifact_id},
+        ).fetchall()
+    return {str(row[0]) for row in rows}
+
+
 @pytest.fixture(scope="module")
 def nonce() -> str:
     return "pgfence-" + uuid.uuid4().hex[:12]
@@ -326,6 +382,12 @@ def cleanup(nonce: str) -> Iterator[None]:
         conn.execute(
             text("DELETE FROM projectartifactbinding WHERE project_id = :pid"), {"pid": nonce}
         )
+        # Remove the content-address ownership row BEFORE its project: the FK
+        # ``artifactcontentowner.project_id → appproject.project_id`` would
+        # otherwise refuse the project DELETE (the claim the fence introduced).
+        conn.execute(
+            text("DELETE FROM artifactcontentowner WHERE project_id = :pid"), {"pid": nonce}
+        )
         conn.execute(
             text("DELETE FROM projectrevisionhead WHERE project_id = :pid"), {"pid": nonce}
         )
@@ -348,7 +410,7 @@ async def test_cross_job_bind_owns_a_separate_row_and_only_that_job_retracts_it(
     project_id: str, cleanup: None
 ) -> None:
     revision_id = await _seed_revision(project_id)
-    artifact_id = "sha256:" + "1" * 64
+    artifact_id = _address(project_id, "cross-job")
 
     # Job A owns its own row at token 2 — a real, separate process.
     owner = _run_child(
@@ -423,7 +485,7 @@ async def test_owner_retract_after_successor_completed_keeps_survivors_row(
     provable row.
     """
     revision_id = await _seed_revision(project_id)
-    artifact_id = "sha256:" + "4" * 64
+    artifact_id = _address(project_id, "f5r4")
 
     # The job that will LOSE its terminal CAS binds first, at token 1.
     loser = _run_child(
@@ -468,6 +530,101 @@ async def test_owner_retract_after_successor_completed_keeps_survivors_row(
     assert survivor.revision_id == revision_id
 
 
+# ── cross-project ownership across real processes ────────────────────────────
+
+
+async def test_cross_project_race_attributes_one_content_address_to_one_project(
+    nonce: str,
+) -> None:
+    """One content address → exactly one project, decided by the database.
+
+    The pre-check this replaces was a Python read-then-insert: two processes
+    each observed "no owner" for the same address and both committed, silently
+    attributing one address to two projects (the cross-project TOCTOU).  Here two
+    independent OS processes, each with its own connection, race to first
+    attribute one ``artifact_id`` to two different projects.  The database — via
+    the ``artifactcontentowner`` primary key — must admit exactly one owner; the
+    loser is refused with ``CrossProjectAccess`` and writes no binding row.
+    """
+    project_a = f"{nonce}-a"
+    project_b = f"{nonce}-b"
+    artifact_id = _address(nonce, "cross-project")
+    revision_a = await _seed_revision(project_a)
+    revision_b = await _seed_revision(project_b)
+
+    go_file = REPO_ROOT / f".pgfence-go-{uuid.uuid4().hex}"
+    first = _spawn_child(
+        _CROSS_PROJECT_CHILD.format(
+            go_file=str(go_file),
+            project_id=project_a,
+            revision_id=revision_a,
+            artifact_id=artifact_id,
+            job_id="job-a",
+        )
+    )
+    second: subprocess.Popen[str] | None = None
+    try:
+        # Serialise schema warm-up (a local migration fcntl lock, a bootstrap
+        # artifact) while leaving the claim itself to race: each child parks at
+        # the file barrier before the next boots.
+        _wait_line(first, "READY")
+        second = _spawn_child(
+            _CROSS_PROJECT_CHILD.format(
+                go_file=str(go_file),
+                project_id=project_b,
+                revision_id=revision_b,
+                artifact_id=artifact_id,
+                job_id="job-b",
+            )
+        )
+        _wait_line(second, "READY")
+        go_file.write_text("go")
+        first_out, first_err = first.communicate(timeout=120)
+        second_out, second_err = second.communicate(timeout=120)
+        assert first.returncode == 0, first_err
+        assert second.returncode == 0, second_err
+    finally:
+        _reap(first)
+        if second is not None:
+            _reap(second)
+        go_file.unlink(missing_ok=True)
+
+    outcomes = {first_out.strip(), second_out.strip()}
+    assert any(o.startswith("BOUND") for o in outcomes), f"no winner bound: {outcomes}"
+    refused = next((o for o in outcomes if o.startswith("REFUSED")), None)
+    assert refused is not None, f"the losing project must be refused, not admitted: {outcomes}"
+    assert "CrossProjectAccess" in refused, refused
+
+    owners = _bound_project_ids(artifact_id)
+    winner_project = next(o for o in outcomes if o.startswith("BOUND")).split(" ", 1)[1].strip()
+    assert owners == {winner_project}, (
+        f"one content address must belong to exactly one project, got {owners}"
+    )
+
+    engine = sync_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text("DELETE FROM projectartifactbinding WHERE project_id IN (:a, :b)"),
+            {"a": project_a, "b": project_b},
+        )
+        conn.execute(
+            text("DELETE FROM artifactcontentowner WHERE artifact_id = :aid"),
+            {"aid": artifact_id},
+        )
+        conn.execute(
+            text("DELETE FROM projectrevisionhead WHERE project_id IN (:a, :b)"),
+            {"a": project_a, "b": project_b},
+        )
+        conn.execute(
+            text("DELETE FROM projectrevision WHERE project_id IN (:a, :b)"),
+            {"a": project_a, "b": project_b},
+        )
+        conn.execute(
+            text("DELETE FROM appproject WHERE project_id IN (:a, :b)"),
+            {"a": project_a, "b": project_b},
+        )
+
+
 # ── same-job fencing across real processes ───────────────────────────────────
 
 
@@ -475,7 +632,7 @@ async def test_same_job_stale_attempt_cannot_retract_across_processes(
     project_id: str, cleanup: None
 ) -> None:
     revision_id = await _seed_revision(project_id)
-    artifact_id = "sha256:" + "2" * 64
+    artifact_id = _address(project_id, "stale")
 
     for attempt in (1, 5):
         proc = _run_child(
@@ -507,7 +664,7 @@ async def test_same_job_stale_attempt_cannot_retract_across_processes(
 
 async def test_racing_advances_never_leave_the_lower_token(project_id: str, cleanup: None) -> None:
     revision_id = await _seed_revision(project_id)
-    artifact_id = "sha256:" + "3" * 64
+    artifact_id = _address(project_id, "race")
     seeded = await _bind(project_id, revision_id, artifact_id, "job-race", 1)
     assert seeded.attempt == 1
 

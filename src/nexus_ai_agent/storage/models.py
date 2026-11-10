@@ -566,7 +566,9 @@ class ProjectArtifactBinding(SQLModel, table=True):
     ``artifact_version_id`` are the job's, not the artifact's).
 
     ``artifact_id`` remains globally project-owned: every row for one content
-    address must carry the same ``project_id``, enforced by :class:`SqlArtifactBindingStore`.
+    address must carry the same ``project_id``, enforced **by the database**
+    through :class:`ArtifactContentOwner` (one primary-key row per content
+    address) rather than by a Python read-then-insert pre-check.
 
     ``revision_id`` is a foreign key to the immutable ``projectrevision`` row
     the job was admitted against; the read path re-validates that the revision
@@ -605,6 +607,39 @@ class ProjectArtifactBinding(SQLModel, table=True):
     # Optional immutable Asset Library version this artifact was registered as;
     # completes the artifact→revision→asset-version chain when the caller has it.
     artifact_version_id: str | None = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+# ── Content-address ownership identity (task-282 Slice 2, F1 cross-project) ──
+# ``ProjectArtifactBinding`` is keyed per producing job, so its key can never
+# enforce the older invariant that a *content address* belongs to exactly one
+# project: two jobs publishing identical bytes own two rows by design.  That
+# invariant is a property of the address, not of any job, so it needs its own
+# identity row.  This table is exactly that — one ownership row per content
+# address — and nothing else: it stores no bytes, no path, no verifier and no
+# revisions, so it is a uniqueness/integrity structure, **not** a parallel
+# artifact store or provenance authority.  The database, never a Python
+# pre-check, is what makes "one content address → one project" a hard fact.
+
+
+class ArtifactContentOwner(SQLModel, table=True):
+    """The single project that owns one content address (globally, across jobs).
+
+    ``artifact_id`` is the ``sha256:<64 hex>`` content address of the artifact
+    bytes and is the primary key, so the database admits exactly one owning
+    project per address.  ``SqlArtifactBindingStore.bind`` inserts this row to
+    *claim* the address before writing a per-job binding row; the loser of a
+    concurrent cross-project race takes the primary-key violation and is refused
+    (``CrossProjectAccess``) rather than silently co-owning the address.
+
+    Ownership is append-only: once a project owns an address it keeps owning it,
+    even if the last per-job binding for it is later retracted (the bytes remain
+    the project's in the Asset Library; only the per-job provenance record is
+    removed).  A content address is therefore never silently re-homed.
+    """
+
+    artifact_id: str = Field(primary_key=True)
+    project_id: str = Field(foreign_key="appproject.project_id", index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 

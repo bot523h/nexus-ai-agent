@@ -35,6 +35,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus_ai_agent.creative.project_state.models import (
+    ArtifactBindingAmbiguous,
     ArtifactBindingConflict,
     ArtifactBindingError,
     ArtifactNotFound,
@@ -457,26 +458,19 @@ class SqlArtifactBindingStore:
         await self._load_validated_revision(project_id, revision_id)
 
         async with self._session_factory() as session:
+            # The content address is claimed FIRST, atomically, in the database:
+            # a same-project replay (or a second job of the same project) is a
+            # no-op, while a *different* project's claim is refused here — before
+            # any per-job row is written (the F1 cross-project ownership fence).
+            # The claim is an INSERT against the address's primary key, so it is
+            # the database, not a read, that admits exactly one owner.
+            await self._claim_content_owner(session, artifact_id, project_id)
             existing = await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))
             if existing is not None:
                 return await self._reconcile_existing(
                     session, existing, project_id, revision_id, job_id, attempt
                 )
-            # A *new* per-job row.  The artifact's content address is still owned
-            # by exactly one project: two independent projects cannot both claim
-            # the same bytes through different jobs, so refuse the re-home.  This
-            # predicate is the only cross-project guard on the insert path (the
-            # existing-row path re-checks through ``_reconcile_existing``), and it
-            # is deliberately a DB read, not a Python pre-check on the caller.
-            owning_project = (
-                await session.execute(
-                    select(_BINDING.c.project_id)
-                    .where(_BINDING.c.artifact_id == artifact_id)
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if owning_project is not None and owning_project != project_id:
-                raise CrossProjectAccess("artifact id already bound to a different project")
+            # A *new* per-job row for an address this project already owns.
             session.add(
                 orm.ProjectArtifactBinding(
                     artifact_id=artifact_id,
@@ -507,6 +501,43 @@ class SqlArtifactBindingStore:
             row = await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))
             assert row is not None  # just committed
             return _as_binding(row)
+
+    @staticmethod
+    async def _claim_content_owner(
+        session: AsyncSession, artifact_id: str, project_id: str
+    ) -> None:
+        """Claim ``artifact_id`` for ``project_id`` — a DATABASE-enforced invariant.
+
+        A read followed by an insert is a TOCTOU: two projects racing the same
+        content address both observe "no owner" and both commit, attributing one
+        address to two projects.  The claim is therefore an INSERT of the
+        address's primary key (``artifactcontentowner.artifact_id``) inside a
+        SAVEPOINT, so the database itself admits exactly one owner.  The nested
+        transaction keeps the outer binding transaction usable after a refusal:
+        PostgreSQL aborts a transaction on a failed statement, so a bare
+        INSERT-and-catch would poison the session, and SQLite is given the same
+        path for one code path on both backends.
+
+        A same-project repeat (or a second job of the same project) finds the
+        row it already owns and is a no-op; a different project takes the
+        primary-key violation and is refused with ``CrossProjectAccess`` — the
+        refusal is read back from the committed owner row, never assumed.
+        """
+        try:
+            async with session.begin_nested():
+                session.add(
+                    orm.ArtifactContentOwner(artifact_id=artifact_id, project_id=project_id)
+                )
+                await session.flush()
+        except IntegrityError:
+            # The address is already owned (or a racer claimed it first): fall
+            # through to read the authoritative owner and decide from that.
+            pass
+        owner = await session.get(orm.ArtifactContentOwner, artifact_id)
+        if owner is None:  # pragma: no cover - the insert or an existing row must resolve
+            raise ArtifactBindingConflict("artifact ownership could not be established")
+        if owner.project_id != project_id:
+            raise CrossProjectAccess("artifact id already bound to a different project")
 
     @staticmethod
     async def _reconcile_existing(
@@ -588,10 +619,15 @@ class SqlArtifactBindingStore:
 
         With an explicit ``job_id`` the exact ``(artifact_id, job_id)`` row is
         returned, so a caller resolves *only* the provenance of the job it names
-        — even when several jobs share the artifact's bytes (F5/R4).  Without
-        one, the earliest binding for the artifact is returned: deterministic,
-        and byte-for-byte the old single-row contract for every artifact bound
-        by at most one job.
+        — even when several jobs share the artifact's bytes (F5/R4).
+
+        Without one, the resolve is deterministic **only while every row for the
+        address agrees on the revision it recorded**; then the earliest binding
+        is returned, byte-for-byte the old single-row contract.  When two rows
+        point the same address at *different* revisions the provenance is
+        genuinely ambiguous and the resolve fails closed with
+        :class:`ArtifactBindingAmbiguous` rather than silently returning an
+        arbitrary "earliest" one.  Multi-job consumers therefore pass ``job_id``.
         """
         async with self._session_factory() as session:
             row = await self._select_binding(session, artifact_id, job_id)
@@ -605,9 +641,32 @@ class SqlArtifactBindingStore:
     async def _select_binding(
         session: AsyncSession, artifact_id: str, job_id: str | None
     ) -> orm.ProjectArtifactBinding | None:
-        """One binding: the named job's exact row, else the artifact's earliest."""
+        """One binding: the named job's exact row, else the artifact's earliest.
+
+        The unscoped path first proves the address is unambiguous: it must be
+        bound to at most one revision.  Distinct revisions mean two different
+        states produced the same bytes, so "the earliest" would be an arbitrary
+        choice between two real provenances — refused before any row is read.
+        """
         if job_id is not None:
             return await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))
+        revisions = (
+            (
+                await session.execute(
+                    select(_BINDING.c.revision_id)
+                    .where(_BINDING.c.artifact_id == artifact_id)
+                    .distinct()
+                    .limit(2)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if len(revisions) > 1:
+            raise ArtifactBindingAmbiguous(
+                f"artifact {artifact_id!r} is bound to more than one revision; "
+                "resolve it with an explicit job_id"
+            )
         return (
             await session.execute(
                 select(orm.ProjectArtifactBinding)

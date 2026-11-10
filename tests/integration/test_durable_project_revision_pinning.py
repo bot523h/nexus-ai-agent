@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -1564,6 +1565,54 @@ def test_two_independent_jobs_sharing_bytes_own_independent_bindings(pin_env: Pa
         asyncio.run(bindings.resolve(PROJECT_ID, artifact_id))
 
 
+def test_unscoped_resolve_fails_closed_when_an_address_has_two_revisions(
+    pin_env: Path,
+) -> None:
+    """A content address bound to two *different* revisions is ambiguous.
+
+    Identity is per job, so two jobs may hold separate rows for the same bytes.
+    While they agree on the revision the unscoped resolve stays deterministic
+    (the old single-row contract).  When the same address is bound to
+    *different* revisions, "the earliest" would be an arbitrary pick between two
+    real provenances, so the unscoped resolve must fail closed — while each
+    job's row still resolves by its explicit ``job_id``.
+    """
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingAmbiguous
+
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev-one"), parent=None))
+    r2 = asyncio.run(_commit(store, _project("rev-two"), parent=r1.revision_id))
+    assert r1.revision_id != r2.revision_id
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "6" * 64
+
+    for job_id, revision_id in (("job-A", r1.revision_id), ("job-B", r2.revision_id)):
+        asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=revision_id,
+                artifact_id=artifact_id,
+                job_id=job_id,
+                size_bytes=1,
+                attempt=1,
+            )
+        )
+
+    # Each job still resolves its own exact provenance.
+    assert (
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-A")).revision_id
+        == r1.revision_id
+    )
+    assert (
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-B")).revision_id
+        == r2.revision_id
+    )
+
+    # The unscoped resolve is ambiguous: two real provenances, no safe default.
+    with pytest.raises(ArtifactBindingAmbiguous):
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id))
+
+
 def test_rebind_token_advance_is_scoped_to_the_owning_job(pin_env: Path) -> None:
     """F5/R4: a token advance moves only the advancing job's own row.
 
@@ -2346,3 +2395,105 @@ def test_restart_replay_rebinds_per_job_after_recovery(pin_env: Path) -> None:
     )
     assert asyncio.run(restarted.resolve(PROJECT_ID, artifact_id, job_id="job-B")).job_id == "job-B"
     assert asyncio.run(restarted.resolve(PROJECT_ID, artifact_id, job_id="job-A")).job_id == "job-A"
+
+
+def _bound_projects(artifact_id: str) -> set[str]:
+    """The distinct ``project_id`` values currently bound to one content address.
+
+    Read straight from SQLite (not through the store) so the assertion is about
+    what the *database* committed, not about an in-session object.
+    """
+    import sqlite3
+
+    path = os.environ["NEXUS_DB_PATH"]
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT project_id FROM projectartifactbinding WHERE artifact_id = ?",
+            (artifact_id,),
+        ).fetchall()
+    return {str(row[0]) for row in rows}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_binds_cannot_attribute_one_content_address_to_two_projects(
+    pin_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One content address may be owned by exactly one project — a DB invariant.
+
+    Two projects race to bind the *same* content address, each through its own
+    job, so the per-job ``(artifact_id, job_id)`` primary key cannot separate
+    them.  A read-then-insert ownership guard is a TOCTOU: under real
+    concurrency both reads observe "no owner row" and both inserts commit,
+    silently attributing one content address to two projects.
+
+    The two binds are released together from a barrier placed immediately after
+    each has validated its revision (before either opens its binding session),
+    so both enter the ownership guard with no visible owner row — the exact
+    interleaving the invariant must fail closed on.  Exactly one bind may win;
+    the loser must be refused with ``CrossProjectAccess``, and the database must
+    end up with rows for a single project.
+    """
+    from nexus_ai_agent.creative.project_state.models import CrossProjectAccess
+    from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
+    from nexus_ai_agent.creative.studio.models import compute_state_hash
+
+    store = SqlProjectRevisionStore()
+    project_a, project_b = "cross-project-a", "cross-project-b"
+    a_project = _project("a").model_copy(update={"project_id": project_a})
+    a_project.state_hash = compute_state_hash(a_project)
+    b_project = _project("b").model_copy(update={"project_id": project_b})
+    b_project.state_hash = compute_state_hash(b_project)
+    ra = await store.commit(
+        a_project, authorized_project_id=project_a, expected_parent_revision_id=None
+    )
+    rb = await store.commit(
+        b_project, authorized_project_id=project_b, expected_parent_revision_id=None
+    )
+
+    # Release both racers at the same instant, right before the guard.
+    barrier = asyncio.Barrier(2)
+    original_load = SqlProjectRevisionStore.load_revision
+
+    async def gated_load(self: SqlProjectRevisionStore, project_id: str, revision_id: str) -> Any:
+        record = await original_load(self, project_id, revision_id)
+        await barrier.wait()
+        return record
+
+    monkeypatch.setattr(SqlProjectRevisionStore, "load_revision", gated_load)
+
+    bindings = SqlArtifactBindingStore()
+    artifact_id = "sha256:" + "c" * 64
+    results = await asyncio.gather(
+        bindings.bind(
+            project_id=project_a,
+            revision_id=ra.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-A",
+            size_bytes=1,
+            attempt=1,
+        ),
+        bindings.bind(
+            project_id=project_b,
+            revision_id=rb.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-B",
+            size_bytes=1,
+            attempt=1,
+        ),
+        return_exceptions=True,
+    )
+
+    winners = [r for r in results if not isinstance(r, BaseException)]
+    refusals = [r for r in results if isinstance(r, BaseException)]
+    assert len(winners) == 1, (
+        f"exactly one project may own a content address, got {len(winners)}: {results!r}"
+    )
+    assert len(refusals) == 1 and isinstance(refusals[0], CrossProjectAccess), (
+        f"the losing project must be refused with CrossProjectAccess: {refusals!r}"
+    )
+    # The invariant must hold in the database, not just in the returned objects.
+    owners = _bound_projects(artifact_id)
+    assert owners == {winners[0].project_id}, (
+        f"the database must hold bindings for exactly the winning project: {owners!r}"
+    )
+    assert refusals[0].args  # the refusal carries a human-readable reason
