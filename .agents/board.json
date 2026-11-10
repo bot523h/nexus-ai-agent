@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-09T08:45:00Z",
+  "updated_at": "2026-11-10T12:08:41Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8521,7 +8521,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "completed_released",
+      "status": "active",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8546,9 +8546,9 @@
         "docs/architecture/DURABLE_PROJECT_STATE.md"
       ],
       "owner_hint": "Slice of task-282; waits on its dependency. No parallel authority.",
-      "agent_branch": "",
-      "claimed_at": null,
-      "generation": 2,
+      "agent_branch": "fix/binding-ownership-fence-20261107",
+      "claimed_at": "2026-11-10T12:08:41Z",
+      "generation": 3,
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [
@@ -8558,9 +8558,8 @@
         "Evidence: harness scripts/durable_project_state_mutations.py 29/29 killed (independently reproduced 2026-11-08 on a clean tree); tests/integration/test_durable_project_revision_pinning.py (incl. adversarial cross-job non-seizure); tests/integration/test_artifact_binding_postgres_concurrency.py (real multi-process race on PostgreSQL 16); ruff/mypy clean.",
         "REVIEW CLOSE-OUT (2026-11-09): all 14 Sourcery review threads on PR #325 are replied to and resolved (remediation commit e5c92d56; truthful audit table docs/audits/NAGAR_F1_LIVE_TRUTH_2026-11-08.md section 3a). F1-F4 and F6-F14 fixed; F5 (cross-job completed-job provenance loss) recorded OPEN as an owner design decision (R4). PR #325 body updated with the close-out matrix and honest residuals. Targeted gates re-run on head f4176790: ruff check clean, ruff format --check clean, mypy src clean (361 files), tests/unit/test_mutation_harness_anchors.py + test_pg_integration_safety.py + test_agent_board.py 160 passed; tests/integration/test_durable_project_revision_pinning.py + tests/architecture/test_durable_project_state_boundary.py 48 passed; test_in_process_job_queue.py + test_creative_execution_recovery.py + test_canonical_creative_execution.py 35 passed."
       ],
-      "note": "SLICE 2 STAGE 1 IS ON MAIN (PR #319, merged 2026-11-08 @ 65c020cf29151198faf75564df5edb4e7c61215b). Stage 1 = the durable, content-addressed artifact->revision binding over the SINGLE storage schema (ProjectArtifactBinding, migration 20261106artbind): the published artifact is bound to the EXACT admitted revision (never the head), the digest is re-measured from the published bytes at bind time and again on read, and the queue commits the binding via a confirm hook that runs after verification+publication and before the durable COMPLETED (a refusal fails the job closed with no row). STAGE 1.5 (F1 ownership fence) IS NOT ON MAIN — it is delivered by branch fix/binding-ownership-fence-20261107 (PR #325, open, not merged). It adds migration 20261107bindfence (the queue-minted (job_id, attempt) token on the binding row): a lost-CAS takeover retracts ONLY its own (artifact_id, job_id, attempt) row; a re-bind advances the token monotonically AND only for the owning job (single conditional UPDATE), so a different job sharing the bytes can never seize the row. CORRECTION (2026-11-08 live-truth audit): this record previously asserted the fence was already 'merged into main via PR #319'. That assertion was FALSE and is retracted here: #319 carried Stage 1 only; main's lost-CAS path leaves the committed binding in place after a failed COMPLETED CAS (a live-on-main orphan-provenance defect), and no remote branch carries the fence. REMAINING (honest, non-terminal): (a) merge this branch to land the F1 fence on main; (b) the 'as an AssetVersion' leg is NOT wired end-to-end — the producer (render_jobs) never registers the artifact in the Asset Library nor populates artifact_version_id (the column + link exist and are exercised by tests, but no live producer fills them). Evidence: harness 29/29 killed; tests/integration/test_durable_project_revision_pinning.py; tests/integration/test_artifact_binding_postgres_concurrency.py (real multi-process PostgreSQL race). AUDIT (2026-11-08): live-truth audit delivered in PR #325 — the false 'merged via #319' claim is corrected here, and the durable mutation harness gained the GOV-1 PYTHONPATH guard + a fail-closed --collect-only preflight. Evidence: full suite 6440 passed / 0 failed; harness 29/29 killed; PG multi-process fence 3 passed x4.",
-      "previous_release_reason": "auto-released by gc at 2026-11-08T17:32:55Z (stale active lease)",
-      "release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done."
+      "note": "",
+      "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done."
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
