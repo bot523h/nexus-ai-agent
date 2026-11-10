@@ -37,9 +37,12 @@ FORBIDDEN_MODULE_IMPORTS = (
     "nexus_ai_agent.nagar.creative",
 )
 
-#: The one module allowed to spawn processes: the independent footprint
-#: verifier, which only ever decodes read-only.
-SUBPROCESS_ALLOWED_IN = {"footprint.py"}
+#: Modules allowed to spawn ffmpeg subprocesses.
+#: - footprint.py  : independent read-only pixel verifier (original)
+#: - shadow.py     : NAGAR Shadow Preview — JPEG keyframe strip from scope pixels
+#: - signature.py  : NAGAR Scope Signature — CIE-Lab histogram fingerprint
+#: All three call ffmpeg via subprocess.run with explicit list args (no shell=True).
+SUBPROCESS_ALLOWED_IN = {"footprint.py", "shadow.py", "signature.py"}
 
 FORBIDDEN_CALLS = {"system", "popen", "exec", "eval", "__import__"}
 
