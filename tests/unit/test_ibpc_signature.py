@@ -791,4 +791,3 @@ class TestSignatureDigestVerification:
         with pytest.raises(SignatureError) as exc:
             verify_scope_signature(altered)
         assert exc.value.reason == "signature_digest_mismatch"
-

@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import re
 from enum import Enum
+
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from nexus_ai_agent.nagar.ibpc.models import TypedCreativeAST, VideoTimeScope

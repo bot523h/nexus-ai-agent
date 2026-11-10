@@ -221,7 +221,18 @@ def test_motion_separates_a_static_clip_from_an_animated_one(tmp_path: Path) -> 
         (moving, "testsrc=s=320x180:d=2:r=10"),
     ):
         subprocess.run(
-            [ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", lavfi, "-pix_fmt", "yuv420p", str(path)],
+            [
+                ffmpeg,
+                "-nostdin",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                lavfi,
+                "-pix_fmt",
+                "yuv420p",
+                str(path),
+            ],
             capture_output=True,
             check=True,
             timeout=120,
@@ -241,9 +252,21 @@ def test_real_signature_verifies_and_rerun_is_digest_identical(tmp_path: Path) -
     ffmpeg = resolve_ffmpeg_bin()
     clip = tmp_path / "rerun.mp4"
     subprocess.run(
-        [ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc=s=320x180:d=2:r=10",
-         "-pix_fmt", "yuv420p", str(clip)],
-        capture_output=True, check=True, timeout=120,
+        [
+            ffmpeg,
+            "-nostdin",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=s=320x180:d=2:r=10",
+            "-pix_fmt",
+            "yuv420p",
+            str(clip),
+        ],
+        capture_output=True,
+        check=True,
+        timeout=120,
     )
     scope = VideoTimeScope(asset_id="s", effect="keep", start_us=0, end_us=1_500_000)
     first = compute_scope_signature(clip, scope, ffmpeg_bin=ffmpeg, max_frames=6)
@@ -266,9 +289,21 @@ def test_tampered_real_signature_fails_verification(tmp_path: Path) -> None:
     ffmpeg = resolve_ffmpeg_bin()
     clip = tmp_path / "t.mp4"
     subprocess.run(
-        [ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", "testsrc=s=320x180:d=2:r=10",
-         "-pix_fmt", "yuv420p", str(clip)],
-        capture_output=True, check=True, timeout=120,
+        [
+            ffmpeg,
+            "-nostdin",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=s=320x180:d=2:r=10",
+            "-pix_fmt",
+            "yuv420p",
+            str(clip),
+        ],
+        capture_output=True,
+        check=True,
+        timeout=120,
     )
     scope = VideoTimeScope(asset_id="s", effect="keep", start_us=0, end_us=1_500_000)
     sig = compute_scope_signature(clip, scope, ffmpeg_bin=ffmpeg, max_frames=6)
@@ -293,8 +328,21 @@ def test_identical_content_matches_and_dissimilar_content_does_not(tmp_path: Pat
         (flat, "color=c=blue:s=320x180:d=2:r=10"),
     ):
         subprocess.run(
-            [ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i", lavfi, "-pix_fmt", "yuv420p", str(path)],
-            capture_output=True, check=True, timeout=120,
+            [
+                ffmpeg,
+                "-nostdin",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                lavfi,
+                "-pix_fmt",
+                "yuv420p",
+                str(path),
+            ],
+            capture_output=True,
+            check=True,
+            timeout=120,
         )
     scope = VideoTimeScope(asset_id="s", effect="keep", start_us=0, end_us=1_500_000)
     q = compute_scope_signature(moving, scope, ffmpeg_bin=ffmpeg, max_frames=6)
@@ -305,4 +353,3 @@ def test_identical_content_matches_and_dissimilar_content_does_not(tmp_path: Pat
     engine = ScopeMatchEngine()
     hits = engine.find_similar(q, [same, other])  # default threshold 0.80
     assert [h.candidate_scope_digest for h in hits] == [same.scope_digest]
-

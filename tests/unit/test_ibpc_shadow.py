@@ -420,8 +420,9 @@ def _ffmpeg_result(stdout: bytes, returncode: int):
     return _run
 
 
-def _build_manifest(tmp_path: Path, *, scope=None, source_duration_us: int = DURATION,
-                    max_keyframes: int = 3):
+def _build_manifest(
+    tmp_path: Path, *, scope=None, source_duration_us: int = DURATION, max_keyframes: int = 3
+):
     from nexus_ai_agent.nagar.ibpc.shadow import build_shadow_preview
 
     src = tmp_path / "v.mp4"
@@ -556,4 +557,3 @@ class TestShadowIntegrity:
         with pytest.raises(ShadowRenderError) as exc:
             _build_manifest(tmp_path, scope=_make_scope(0, 2_000_000), source_duration_us=1_000_000)
         assert exc.value.reason == "scope_outside_source"
-

@@ -288,7 +288,8 @@ def build_shadow_preview(
         raise ShadowRenderError("empty_scope", f"{scope.start_us}..{scope.end_us}")
     if source_duration_us > 0 and scope.end_us > source_duration_us:
         raise ShadowRenderError(
-            "scope_outside_source", f"scope ends at {scope.end_us}us, source is {source_duration_us}us"
+            "scope_outside_source",
+            f"scope ends at {scope.end_us}us, source is {source_duration_us}us",
         )
 
     try:

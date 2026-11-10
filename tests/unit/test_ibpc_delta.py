@@ -10,9 +10,10 @@ results and the public API.
 
 from __future__ import annotations
 
+import typing as _typing
+
 import pytest
 from pydantic import ValidationError
-import typing as _typing
 
 from nexus_ai_agent.nagar.ibpc.delta import (
     DeltaAnchor,
@@ -473,6 +474,7 @@ class TestPublicAPI:
         assert "parse_delta_intent" in intent_mod.__all__
         assert callable(intent_mod.parse_delta_intent)
 
+
 # ---------------------------------------------------------------------------
 # Stage 2 hardening (NAGAR-IBPC-TRIAD-CLOSURE-01): fail-closed contract.
 # Each test encodes a defect reproduced against the implementation under review.
@@ -588,4 +590,4 @@ class TestBoundsAndIdentity:
 class TestPublicTypes:
     def test_return_annotation_is_exact_union(self) -> None:
         hints = _typing.get_type_hints(parse_delta_intent)
-        assert hints["return"] == _typing.Union[DeltaIntentAST, Clarification, Refusal]
+        assert hints["return"] == (DeltaIntentAST | Clarification | Refusal)

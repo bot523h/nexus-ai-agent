@@ -168,8 +168,10 @@ def _assert_typed_wrapper_passes_literals(tree: ast.AST, argv: ast.expr, where: 
     fn = _innermost_function(tree, argv)
     assert fn is not None, f"{where}: argv name {argv.id!r} is not a function parameter"
     param = next((a for a in fn.args.args if a.arg == argv.id), None)
-    assert param is not None and param.annotation is not None and (
-        ast.unparse(param.annotation).startswith("list")
+    assert (
+        param is not None
+        and param.annotation is not None
+        and (ast.unparse(param.annotation).startswith("list"))
     ), f"{where}: argv parameter {argv.id!r} is not annotated list[...]"
     callers = [
         n
@@ -261,14 +263,18 @@ _CLEAN_SPAWN = (
     "    return subprocess.run(['ffmpeg', p], capture_output=True, timeout=5)\n"
 )
 _MUTANTS = {
-    "string argv with shell=True": "import subprocess\nsubprocess.run('ffmpeg x', shell=True, timeout=5)\n",
+    "string argv with shell=True": (
+        "import subprocess\nsubprocess.run('ffmpeg x', shell=True, timeout=5)\n"
+    ),
     "missing timeout": "import subprocess\nsubprocess.run(['ffmpeg'], capture_output=True)\n",
     "timeout=None": "import subprocess\nsubprocess.run(['ffmpeg'], timeout=None)\n",
     "Popen": "import subprocess\nsubprocess.Popen(['ffmpeg'], timeout=5)\n",
     "from-import alias": "from subprocess import run\nrun(['ffmpeg'], timeout=5)\n",
     "module alias": "import subprocess as sp\nsp.run(['ffmpeg'], timeout=5)\n",
     "kwargs splat": "import subprocess\nopts = {}\nsubprocess.run(['ffmpeg'], timeout=5, **opts)\n",
-    "untyped argv parameter": "import subprocess\ndef f(x):\n    return subprocess.run(x, timeout=5)\n",
+    "untyped argv parameter": (
+        "import subprocess\ndef f(x):\n    return subprocess.run(x, timeout=5)\n"
+    ),
 }
 
 
@@ -295,7 +301,9 @@ def test_no_process_spawn_through_os_or_asyncio_anywhere_in_ibpc() -> None:
             if base.id == "os" and (
                 attr in {"system", "popen"} or attr.startswith(("exec", "spawn", "posix_spawn"))
             ):
-                raise AssertionError(f"{path.name}: os.{attr} spawns a process (line {node.lineno})")
+                raise AssertionError(
+                    f"{path.name}: os.{attr} spawns a process (line {node.lineno})"
+                )
             if base.id == "asyncio" and attr.startswith("create_subprocess"):
                 raise AssertionError(f"{path.name}: asyncio.{attr} (line {node.lineno})")
 
@@ -304,9 +312,26 @@ def test_no_process_spawn_through_os_or_asyncio_anywhere_in_ibpc() -> None:
 #: network, no filesystem write, no dynamic code.
 TRIAD_MODULES = ("delta.py", "shadow.py", "signature.py")
 _NETWORK_MODULES = {
-    "socket", "ssl", "urllib", "http", "requests", "httpx", "aiohttp", "ftplib", "smtplib",
+    "socket",
+    "ssl",
+    "urllib",
+    "http",
+    "requests",
+    "httpx",
+    "aiohttp",
+    "ftplib",
+    "smtplib",
 }
-_FS_WRITE_ATTRS = {"write_bytes", "write_text", "unlink", "rmdir", "rmtree", "mkdir", "touch", "rename"}
+_FS_WRITE_ATTRS = {
+    "write_bytes",
+    "write_text",
+    "unlink",
+    "rmdir",
+    "rmtree",
+    "mkdir",
+    "touch",
+    "rename",
+}
 
 
 def test_triad_modules_have_no_network_filesystem_write_or_dynamic_code() -> None:
@@ -324,16 +349,14 @@ def test_triad_modules_have_no_network_filesystem_write_or_dynamic_code() -> Non
                     f"{name}: filesystem write .{node.func.attr}() (line {node.lineno})"
                 )
             if isinstance(node.func, ast.Name) and node.func.id == "open":
-                modes = [
-                    a.value for a in node.args[1:2] if isinstance(a, ast.Constant)
-                ] + [
+                modes = [a.value for a in node.args[1:2] if isinstance(a, ast.Constant)] + [
                     k.value.value
                     for k in node.keywords
                     if k.arg == "mode" and isinstance(k.value, ast.Constant)
                 ]
-                assert not any(
-                    isinstance(m, str) and any(c in m for c in "wax+") for m in modes
-                ), f"{name}: open() for writing (line {node.lineno})"
+                assert not any(isinstance(m, str) and any(c in m for c in "wax+") for m in modes), (
+                    f"{name}: open() for writing (line {node.lineno})"
+                )
             assert not (isinstance(node.func, ast.Name) and node.func.id in FORBIDDEN_CALLS), (
                 f"{name}: dynamic code call {node.func.id} (line {node.lineno})"
             )

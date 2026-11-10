@@ -373,7 +373,9 @@ def _capture_rgb_frame(
             "timeout", f"frame capture exceeded {timeout_s:.1f}s at t={ts_s:.3f}s"
         ) from exc
     if not result.stdout:
-        raise SignatureError("empty_frames", f"no frame at t={ts_s:.3f}s (returncode={result.returncode})")
+        raise SignatureError(
+            "empty_frames", f"no frame at t={ts_s:.3f}s (returncode={result.returncode})"
+        )
     if result.returncode != 0:
         # Bytes from a failed run are never a frame, even when they look like one.
         raise SignatureError("ffmpeg_failed", f"returncode={result.returncode} at t={ts_s:.3f}s")

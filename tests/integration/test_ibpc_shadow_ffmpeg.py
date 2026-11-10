@@ -204,7 +204,10 @@ def test_flipping_one_byte_of_a_real_frame_is_detected(tmp_path: Path) -> None:
     tampered = bytearray(original)
     tampered[len(tampered) // 2] ^= 0x01
     # the independent hash of the tampered bytes differs from the recorded digest
-    assert "sha256:" + hashlib.sha256(bytes(tampered)).hexdigest() != manifest.keyframes[1].frame_digest
+    assert (
+        "sha256:" + hashlib.sha256(bytes(tampered)).hexdigest()
+        != manifest.keyframes[1].frame_digest
+    )
     kf = manifest.keyframes[1].model_copy(
         update={"jpeg_b64": base64.b64encode(bytes(tampered)).decode("ascii")}
     )
@@ -247,4 +250,3 @@ def test_retimed_real_frame_passes_composite_but_moves_shadow_digest(tmp_path: P
     verify_shadow_manifest(retimed)
     assert retimed.composite_digest == manifest.composite_digest
     assert retimed.shadow_digest != manifest.shadow_digest
-
