@@ -89,9 +89,10 @@ def test_durable_project_state_anchors_occur_exactly_once(durable: dict[str, Any
         if count != 1:
             drift[mutation.name] = count
     assert drift == {}, f"durable anchors must occur exactly once: {drift}"
-    # 32 after the F14 non-integer-token guards (bind + retract) and the F1
-    # stale-row fallback refusal were added to the campaign (was 29).
-    assert len(durable["MUTATIONS"]) == 32
+    # 34 after the F5/R4 per-job ownership probes (job-scoped retraction +
+    # job-named resolve) joined the F14 non-integer-token guards and the F1
+    # stale-row fallback refusal (was 29 → 32).
+    assert len(durable["MUTATIONS"]) == 34
 
 
 def test_gate5_probe_anchors_occur_exactly_once_in_their_targets(gate5: dict[str, Any]) -> None:

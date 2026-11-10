@@ -1,20 +1,21 @@
 """The artifact-binding ownership fence on the real backend, across processes.
 
-The fencing token the queue mints is **per-job**, so a predicate that compares
-``artifact_id`` alone is not sufficient: two independent jobs can publish
-identical bytes and must not be able to seize (or retract) each other's
-binding.  ``tests/integration/test_durable_project_revision_pinning.py`` proves
-the single-process semantics on SQLite; this module proves the *same* contract
-on PostgreSQL with **real, separate OS processes**, which is the only way to
-exercise two independent connections racing on one row:
+Binding identity is **per job**: two independent jobs can publish identical
+bytes (the same ``artifact_id``) and each owns a *separate* row keyed by
+``(artifact_id, job_id)``.  ``tests/integration/test_durable_project_revision_pinning.py``
+proves the single-process semantics on SQLite; this module proves the *same*
+contract on PostgreSQL with **real, separate OS processes**, which is the only
+way to exercise two independent connections racing on one row:
 
-* a cross-job bind at a HIGHER token never takes ownership of the canonical
-  row (idempotency is defined on ``(project_id, artifact_id)``, not the job);
+* a cross-job bind never seizes another job's row — each job gets its own, so a
+  job that reaches COMPLETED keeps its provenance even after a peer loses its
+  terminal CAS and retracts (F5/R4);
 * neither job's retraction can delete a row the other job wrote;
-* the owner's exact ``(job_id, attempt)`` retraction — and only that — deletes;
-* the token advance is a single conditional ``UPDATE``, so two processes
-  racing to advance it can never leave the LOWER token behind (the atomic
-  statement that replaced a read-modify-write, F1).
+* a job's exact ``(job_id, attempt)`` retraction — and only that — deletes its
+  own row;
+* the token advance is a single conditional ``UPDATE`` scoped to the owning job,
+  so two processes racing to advance one job's row can never leave the LOWER
+  token behind (the atomic statement that replaced a read-modify-write, F1).
 
 Runs only where ``NEXUS_DATABASE_URL`` is set **and** the explicit
 ``NEXUS_PG_TEST_DESTRUCTIVE=1`` opt-in is present (D-0028): the URL alone may
@@ -253,21 +254,36 @@ async def _bind(
     )
 
 
-def _binding_owner(artifact_id: str) -> tuple[str, int] | None:
-    """Read a binding's ``(job_id, attempt)`` directly from PostgreSQL.
+def _binding_owner(artifact_id: str, job_id: str) -> tuple[str, int] | None:
+    """Read a job's binding ``(job_id, attempt)`` directly from PostgreSQL.
 
     Querying the database out-of-band — not the child's printed ``RETRACTED``
     value — is what proves the DELETE *committed*: if ``retract()`` executed the
     DELETE but omitted its ``commit()``, the child would roll it back on exit and
-    print ``True`` while the row survived.
+    print ``True`` while the row survived.  The row is scoped by ``job_id``
+    because identity is per job, so several jobs may share one ``artifact_id``.
     """
     engine = sync_engine()
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT job_id, attempt FROM projectartifactbinding WHERE artifact_id = :aid"),
-            {"aid": artifact_id},
+            text(
+                "SELECT job_id, attempt FROM projectartifactbinding "
+                "WHERE artifact_id = :aid AND job_id = :jid"
+            ),
+            {"aid": artifact_id, "jid": job_id},
         ).fetchone()
     return (str(row[0]), int(row[1])) if row is not None else None
+
+
+def _bound_rows(artifact_id: str) -> set[tuple[str, int]]:
+    """Every ``(job_id, attempt)`` row currently bound to one artifact."""
+    engine = sync_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT job_id, attempt FROM projectartifactbinding WHERE artifact_id = :aid"),
+            {"aid": artifact_id},
+        ).fetchall()
+    return {(str(row[0]), int(row[1])) for row in rows}
 
 
 @pytest.fixture(scope="module")
@@ -280,10 +296,20 @@ def _survival_baseline() -> Iterator[None]:
     """Snapshot/verify bindings that existed before the module (D-0028)."""
     engine = sync_engine()
     with engine.connect() as conn:
-        before = set(conn.execute(text("SELECT artifact_id FROM projectartifactbinding")).scalars())
+        before = {
+            (str(r[0]), str(r[1]))
+            for r in conn.execute(
+                text("SELECT artifact_id, job_id FROM projectartifactbinding")
+            ).fetchall()
+        }
     yield
     with engine.connect() as conn:
-        after = set(conn.execute(text("SELECT artifact_id FROM projectartifactbinding")).scalars())
+        after = {
+            (str(r[0]), str(r[1]))
+            for r in conn.execute(
+                text("SELECT artifact_id, job_id FROM projectartifactbinding")
+            ).fetchall()
+        }
     assert before <= after, "the module must never delete a binding it did not create"
 
 
@@ -318,13 +344,13 @@ async def _seed_revision(project_id: str) -> str:
 # ── cross-job ownership across real processes ────────────────────────────────
 
 
-async def test_cross_job_bind_never_seizes_and_only_the_owner_retracts(
+async def test_cross_job_bind_owns_a_separate_row_and_only_that_job_retracts_it(
     project_id: str, cleanup: None
 ) -> None:
     revision_id = await _seed_revision(project_id)
     artifact_id = "sha256:" + "1" * 64
 
-    # Job A owns the row at token 2 — a real, separate process.
+    # Job A owns its own row at token 2 — a real, separate process.
     owner = _run_child(
         _BIND_CHILD.format(
             project_id=project_id,
@@ -337,8 +363,9 @@ async def test_cross_job_bind_never_seizes_and_only_the_owner_retracts(
     assert owner.returncode == 0, owner.stderr
     assert "BOUND job-A 2" in owner.stdout
 
-    # Job B, an independent process with the same bytes and a HIGHER token,
-    # must be a cross-job idempotent no-op, not a takeover.
+    # Job B, an independent process with the SAME bytes, gets its OWN row: it
+    # neither seizes job A's binding nor is blocked by it.  Each job's provenance
+    # is independent, which is what F5/R4 requires.
     second = _run_child(
         _BIND_CHILD.format(
             project_id=project_id,
@@ -349,30 +376,96 @@ async def test_cross_job_bind_never_seizes_and_only_the_owner_retracts(
         )
     )
     assert second.returncode == 0, second.stderr
-    assert "BOUND job-A 2" in second.stdout, "a different job must never seize the binding"
+    assert "BOUND job-B 7" in second.stdout, (
+        "a second job must own its own binding, not seize job A's"
+    )
 
-    resolved = await SqlArtifactBindingStore().resolve(project_id, artifact_id)
-    assert (resolved.job_id, resolved.attempt) == ("job-A", 2)
+    # Each job resolves ONLY its own provenance.
+    store = SqlArtifactBindingStore()
+    a = await store.resolve(project_id, artifact_id, job_id="job-A")
+    assert (a.job_id, a.attempt) == ("job-A", 2)
+    b = await store.resolve(project_id, artifact_id, job_id="job-B")
+    assert (b.job_id, b.attempt) == ("job-B", 7)
+    assert _bound_rows(artifact_id) == {("job-A", 2), ("job-B", 7)}
 
-    # Job B's retraction (its own job_id AND attempt) removes nothing.
+    # Job B's retraction (its own job_id AND attempt) removes ONLY job B's row.
     b_retract = _run_child(
         _RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-B", attempt=7)
     )
     assert b_retract.returncode == 0, b_retract.stderr
-    assert "RETRACTED False" in b_retract.stdout
-    assert _binding_owner(artifact_id) == ("job-A", 2), (
-        "a cross-job retraction must leave the owner's committed row intact"
+    assert "RETRACTED True" in b_retract.stdout
+    assert _binding_owner(artifact_id, "job-A") == ("job-A", 2), (
+        "retracting one job's binding must leave the other job's committed row intact"
+    )
+    assert _binding_owner(artifact_id, "job-B") is None, (
+        "the retracting job's DELETE must COMMIT: its row is gone from PostgreSQL"
     )
 
-    # Only the owner's exact (job_id, attempt) retracts — in its own process.
+    # Job A's own retraction still works and commits its DELETE.
     a_retract = _run_child(
         _RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-A", attempt=2)
     )
     assert a_retract.returncode == 0, a_retract.stderr
     assert "RETRACTED True" in a_retract.stdout
-    assert _binding_owner(artifact_id) is None, (
+    assert _binding_owner(artifact_id, "job-A") is None, (
         "the owner's retraction must COMMIT the DELETE: the row is gone from PostgreSQL"
     )
+
+
+async def test_owner_retract_after_successor_completed_keeps_survivors_row(
+    project_id: str, cleanup: None
+) -> None:
+    """F5/R4 across real processes: the survivor's provenance outlives the loser.
+
+    The canonical mission scenario, on PostgreSQL with separate connections: a
+    job that loses its terminal ``COMPLETED`` CAS retracts its binding; the job
+    that DID reach COMPLETED, sharing the same bytes, must keep a resolvable,
+    provable row.
+    """
+    revision_id = await _seed_revision(project_id)
+    artifact_id = "sha256:" + "4" * 64
+
+    # The job that will LOSE its terminal CAS binds first, at token 1.
+    loser = _run_child(
+        _BIND_CHILD.format(
+            project_id=project_id,
+            revision_id=revision_id,
+            artifact_id=artifact_id,
+            job_id="job-loser",
+            attempt=1,
+        )
+    )
+    assert loser.returncode == 0, loser.stderr
+    assert "BOUND job-loser 1" in loser.stdout
+
+    # The successor — the job that reaches COMPLETED — adopts the same bytes in
+    # its own process.  It gets its own row; it never touches the loser's.
+    winner = _run_child(
+        _BIND_CHILD.format(
+            project_id=project_id,
+            revision_id=revision_id,
+            artifact_id=artifact_id,
+            job_id="job-winner",
+            attempt=1,
+        )
+    )
+    assert winner.returncode == 0, winner.stderr
+    assert "BOUND job-winner 1" in winner.stdout
+
+    # The loser loses the terminal CAS and retracts its OWN binding.
+    lose = _run_child(_RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-loser", attempt=1))
+    assert lose.returncode == 0, lose.stderr
+    assert "RETRACTED True" in lose.stdout
+
+    # The completed successor's binding MUST survive — in PostgreSQL, not just in
+    # the child that printed RETRACTED.
+    assert _binding_owner(artifact_id, "job-loser") is None, "the loser's row is gone"
+    assert _binding_owner(artifact_id, "job-winner") == ("job-winner", 1), (
+        "the completed job's provenance must survive the loser's retraction (F5/R4)"
+    )
+    survivor = await SqlArtifactBindingStore().resolve(project_id, artifact_id, job_id="job-winner")
+    assert (survivor.job_id, survivor.attempt) == ("job-winner", 1)
+    assert survivor.revision_id == revision_id
 
 
 # ── same-job fencing across real processes ───────────────────────────────────
@@ -396,17 +489,17 @@ async def test_same_job_stale_attempt_cannot_retract_across_processes(
         )
         assert proc.returncode == 0, proc.stderr
 
-    resolved = await SqlArtifactBindingStore().resolve(project_id, artifact_id)
+    resolved = await SqlArtifactBindingStore().resolve(project_id, artifact_id, job_id="job-X")
     assert resolved.attempt == 5, "the newer attempt must own the token"
 
     stale = _run_child(_RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-X", attempt=1))
     assert "RETRACTED False" in stale.stdout
-    assert _binding_owner(artifact_id) == ("job-X", 5), (
+    assert _binding_owner(artifact_id, "job-X") == ("job-X", 5), (
         "a stale attempt's retraction must not remove the live row"
     )
     live = _run_child(_RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-X", attempt=5))
     assert "RETRACTED True" in live.stdout
-    assert _binding_owner(artifact_id) is None, "the live attempt's DELETE must commit"
+    assert _binding_owner(artifact_id, "job-X") is None, "the live attempt's DELETE must commit"
 
 
 # ── the token advance is atomic under a real race ────────────────────────────
@@ -463,14 +556,14 @@ async def test_racing_advances_never_leave_the_lower_token(project_id: str, clea
             _reap(high)
         go_file.unlink(missing_ok=True)
 
-    resolved = await SqlArtifactBindingStore().resolve(project_id, artifact_id)
+    resolved = await SqlArtifactBindingStore().resolve(project_id, artifact_id, job_id="job-race")
     assert resolved.attempt == 5, "a lower racing advance must never win the row"
 
     stale = _run_child(_RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-race", attempt=3))
     assert "RETRACTED False" in stale.stdout
-    assert _binding_owner(artifact_id) == ("job-race", 5), (
+    assert _binding_owner(artifact_id, "job-race") == ("job-race", 5), (
         "the losing token's retraction must not remove the winner's committed row"
     )
     live = _run_child(_RETRACT_CHILD.format(artifact_id=artifact_id, job_id="job-race", attempt=5))
     assert "RETRACTED True" in live.stdout
-    assert _binding_owner(artifact_id) is None, "the winner's DELETE must commit"
+    assert _binding_owner(artifact_id, "job-race") is None, "the winner's DELETE must commit"

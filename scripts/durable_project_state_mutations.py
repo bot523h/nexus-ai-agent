@@ -309,6 +309,28 @@ MUTATIONS: tuple[Mutation, ...] = (
         "successor's live binding",
     ),
     Mutation(
+        "retraction_not_job_scoped",
+        STORE,
+        "                    _BINDING.c.artifact_id == artifact_id,\n"
+        "                    _BINDING.c.job_id == job_id,\n"
+        "                    _BINDING.c.attempt == attempt,",
+        "                    _BINDING.c.artifact_id == artifact_id,\n"
+        "                    _BINDING.c.attempt == attempt,  # mutated: job scope dropped from the delete predicate",
+        "F5/R4: retraction must be scoped to the OWNING job; dropping the job predicate "
+        "lets one job delete a different job's row for the shared bytes — the exact "
+        "provenance loss F5/R4 reports",
+    ),
+    Mutation(
+        "resolve_ignores_job_identity",
+        STORE,
+        "        if job_id is not None:\n"
+        "            return await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))",
+        "        if False:  # mutated: resolve ignores the named job's identity\n"
+        "            return await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))",
+        "F5/R4: resolve must return the NAMED job's row when a job_id is given; ignoring "
+        "it returns an arbitrary sibling's provenance for the same bytes",
+    ),
+    Mutation(
         "rebind_fencing_token_not_monotonic",
         STORE,
         """        await session.execute(

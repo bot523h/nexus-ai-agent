@@ -548,41 +548,49 @@ class ProjectRevisionHead(SQLModel, table=True):
 # against (``ProjectRevision``), never to a project head that may have moved.
 # This is the durable link the artifact→revision contract needs; it introduces
 # no parallel artifact store, verifier, passport or provenance authority — it is
-# a single content-addressed binding row whose bytes are re-measured on read.
+# one content-addressed binding row *per producing job* whose bytes are
+# re-measured on read (F5/R4: provenance is the job's, bytes stay de-duplicated).
 
 
 class ProjectArtifactBinding(SQLModel, table=True):
     """One immutable binding of a published artifact to the revision it served.
 
-    ``artifact_id`` is the content address (``sha256:<hex>``) of the artifact
-    bytes, so an identical artifact published twice is the same row (idempotent
-    replay) and can never be silently rewritten.  ``revision_id`` is a foreign
-    key to the immutable ``projectrevision`` row the job was admitted against;
-    the read path re-validates that the revision still hashes to its own
-    identity before the binding is trusted.
+    Identity is **per producing job**, not per artifact: ``artifact_id`` is the
+    content address (``sha256:<hex>``) of the artifact bytes and ``job_id`` is
+    the queue job that produced (or adopted) them, so the primary key is the
+    pair ``(artifact_id, job_id)``.  Two jobs that publish byte-identical
+    artifacts therefore hold **two** independent provenance rows: retracting one
+    job's binding can never delete the other job's.  Content de-duplication is
+    unchanged — the bytes are still identified by their SHA-256 in the Asset
+    Library — only the *provenance record* is per job (``revision_id`` /
+    ``artifact_version_id`` are the job's, not the artifact's).
 
-    A binding is immutable and can never be re-pointed: its ``(project_id,
-    artifact_id)`` identity and its ``revision_id`` are fixed, and a divergence
-    is a hard failure, never an update.  It is **not** append-only in the sense
-    that no row ever disappears: when the exact attempt that committed a
-    binding is superseded before its terminal ``COMPLETED`` CAS, the queue
-    retracts *that one row* — scoped to the writer's ``(job_id, attempt)``
-    fencing token — so a superseded attempt leaves no provenance behind.  A
-    consumer must therefore treat an absent binding as a legitimate state (the
-    artifact was produced by an attempt that did not complete), never as
-    impossible.
+    ``artifact_id`` remains globally project-owned: every row for one content
+    address must carry the same ``project_id``, enforced by :class:`SqlArtifactBindingStore`.
+
+    ``revision_id`` is a foreign key to the immutable ``projectrevision`` row
+    the job was admitted against; the read path re-validates that the revision
+    still hashes to its own identity before the binding is trusted.
+
+    A binding is immutable and can never be re-pointed: its ``(artifact_id,
+    job_id)`` identity and its ``revision_id`` are fixed, and a divergence is a
+    hard failure, never an update.  It is **not** append-only in the sense that
+    no row ever disappears: when the exact attempt that committed a binding is
+    superseded before its terminal ``COMPLETED`` CAS, the queue retracts *that
+    one row* — scoped to the writer's ``(job_id, attempt)`` fencing token — so a
+    superseded attempt leaves no provenance behind, and never touches another
+    job's row.  A consumer must therefore treat an absent binding as a
+    legitimate state (the artifact was produced by an attempt that did not
+    complete), never as impossible.
     """
-
-    __table_args__ = (
-        UniqueConstraint(
-            "project_id", "artifact_id", name="uq_projectartifactbinding_project_artifact"
-        ),
-    )
 
     artifact_id: str = Field(primary_key=True)
     project_id: str = Field(foreign_key="appproject.project_id", index=True)
     revision_id: str = Field(foreign_key="projectrevision.revision_id", index=True)
-    job_id: str = Field(default="", index=True)
+    #: The producing job (queue identity).  ``""`` for a caller outside the
+    #: queue.  Together with ``artifact_id`` it is the binding's primary key, so
+    #: two jobs sharing identical bytes own distinct provenance rows.
+    job_id: str = Field(default="", primary_key=True)
     #: The queue fencing token (``attempt``) of the execution that committed this
     #: binding.  0 for rows written before the token was recorded.  It lets a
     #: lost-CAS retraction delete *only* the row this exact attempt wrote — a
