@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-08T08:42:47Z",
+  "updated_at": "2026-11-11T08:36:03Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8175,7 +8175,7 @@
       "title_fa": "زیرساخت RFC 8785/JCS همراه با اثبات حفظ هش‌های تاریخی",
       "zone": "provenance-jcs-foundation-01",
       "priority": "P1",
-      "status": "queued",
+      "status": "active",
       "scope": "Add one explicit, public JCS canonicalization and digest API under provenance, backed by a vetted RFC 8785 implementation and a narrowly pinned direct dependency. Return canonical UTF-8 bytes and sha256:<hex> over those exact bytes. Enforce a fail-closed JSON-value boundary without implicit conversion. Preserve the existing provenance canonical_json/digest_of and IBPC re-export contract byte-for-byte; do not migrate callers, alter historical hashes, rebuild/reissue ledger or passports, add a parser, or introduce a lockfile absent from main. Record the pyproject.toml overlap with open PRs #193 and #307, but do not edit either branch. Maintain the durable handoff at .agents/handoffs/task-jcs-rfc8785-foundation-01.md. If blocked or stopping incomplete, commit/push recoverable work and use defer with the current generation; release only when every criterion and evidence item is complete.",
       "why_fa": "برای استفاده‌های آینده یک مرجع JCS سازگار با RFC 8785 لازم است، اما هش‌های Provenance، Ledger، Passport و IBPC قرارداد تاریخی دارند و در این مأموریت نباید تغییر کنند.",
       "prerequisites": [],
@@ -8210,13 +8210,13 @@
         ".agents/handoffs/task-jcs-rfc8785-foundation-01.md"
       ],
       "owner_hint": "",
-      "agent_branch": "",
-      "claimed_at": null,
+      "agent_branch": "nagar-jcs-rfc8785-foundation-01",
+      "claimed_at": "2026-11-11T08:36:03Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 0,
+      "generation": 1,
       "delivered": [],
-      "note": "Mission NEXUS-JCS-RFC8785-FOUNDATION-01. Governance registration only; implementation must not start until this Task is visible on main and an official fenced claim is pushed. Open pyproject overlap with PR #193 (stale) and PR #307 (dependency update) is disclosed; neither PR branch is modified."
+      "note": ""
     },
     {
       "task": "task-omni-r2-bucket-validation-01",
@@ -8521,7 +8521,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8552,7 +8552,8 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "delivered": [],
-      "note": ""
+      "note": "",
+      "release_reason": "auto-released by gc at 2026-11-11T08:36:03Z (stale active lease)"
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -8600,7 +8601,7 @@
       "title_fa": "تعمیر PR #324 (بستن نهایی P0): فهرست‌کردن گزارش ممیزی جدید و رفع یافته‌های گزارش/شواهد تخته",
       "zone": "docs-architecture",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Repair the open docs-only PR #324 on its existing branch openhands/nagar-one-final-closeout-20261107. Root cause of the 5 red test/python-parity checks: docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md is not indexed in docs/README.md (TRUTH010). Also close the 5 unresolved review threads on the report and the memory note. No runtime change; no merge.",
       "scope_fa": "تعمیر PR مستندات‌محور باز #324 روی همان شاخه. علت ریشهٔ ۵ چک قرمز: گزارش ممیزی در docs/README.md فهرست نشده (TRUTH010). همچنین بستن ۵ ترد بازبینی روی گزارش و یادداشت حافظه. بدون تغییر runtime و بدون ادغام.",
       "acceptance_criteria": [
@@ -8624,7 +8625,8 @@
       "claimed_at": "2026-11-08T08:42:47Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-11-11T08:36:03Z (stale active lease)"
     }
   ],
   "deferred_log": [
