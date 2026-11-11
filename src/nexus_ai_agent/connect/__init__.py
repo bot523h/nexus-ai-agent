@@ -1,9 +1,9 @@
-"""NAGAR CONNECT contracts: transport metadata, not execution authority.
+"""NAGAR CONNECT contracts and encrypted credential persistence.
 
-This package deliberately contains no web framework, persistence, credential
-secret, queue, provider, verifier, or CommandBus implementation. It validates
-external connection metadata before an adapter delegates to canonical NEXUS
-identity, authorization, and execution authorities.
+Transport adapters still own authentication and canonical ProjectAccess. This
+package provides immutable contracts plus a database adapter that persists only
+encrypted credential envelopes; it is not a command, API, MCP, or provider
+authority.
 """
 
 from nexus_ai_agent.connect.contracts import (
@@ -14,12 +14,36 @@ from nexus_ai_agent.connect.contracts import (
     ScopeGrant,
     authorize_read,
 )
+from nexus_ai_agent.connect.crypto import EncryptedSecret, EnvelopeCipher, SecretEnvelopeError
+from nexus_ai_agent.connect.key_provider import (
+    KeyEncryptionKey,
+    KeyProvider,
+    KeyProviderError,
+    StaticKeyRing,
+)
+from nexus_ai_agent.connect.persistence import (
+    ConnectionConflict,
+    ConnectionPersistenceError,
+    PersistedConnection,
+    SqlConnectionStore,
+)
 
 __all__ = [
+    "ConnectionConflict",
     "ConnectionContract",
+    "ConnectionPersistenceError",
     "ConnectionState",
     "CredentialDescriptor",
     "CredentialState",
+    "EncryptedSecret",
+    "EnvelopeCipher",
+    "KeyEncryptionKey",
+    "KeyProvider",
+    "KeyProviderError",
+    "PersistedConnection",
     "ScopeGrant",
+    "SecretEnvelopeError",
+    "SqlConnectionStore",
+    "StaticKeyRing",
     "authorize_read",
 ]

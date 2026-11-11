@@ -24,6 +24,12 @@ def _opaque_identifier(value: str) -> str:
     return value
 
 
+def _optional_opaque_identifier(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _opaque_identifier(value)
+
+
 class ConnectionState(StrEnum):
     ACTIVE = "active"
     REVOKED = "revoked"
@@ -78,7 +84,7 @@ class CredentialDescriptor(BaseModel):
     last_used_at: datetime | None = None
 
     _credential_id = field_validator("credential_id")(_opaque_identifier)
-    _rotated_from = field_validator("rotated_from")(_opaque_identifier)
+    _rotated_from = field_validator("rotated_from")(_optional_opaque_identifier)
 
     @model_validator(mode="after")
     def _reject_expired_state_mismatch(self) -> CredentialDescriptor:

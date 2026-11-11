@@ -8711,7 +8711,7 @@
       "zone": "nagar-connect-persistence",
       "priority": "P1",
       "status": "active",
-      "scope": "Implement a production-shaped, fail-closed persistence slice for CONNECT secrets: AES-256-GCM per-record DEKs, KEK key-ring provider, rotation by DEK re-wrap, durable credential rows through the existing database authority, migration, dependency declaration, and boundary tests. No API/MCP wiring or command execution.",
+      "scope": "Implement a production-shaped, fail-closed persistence slice for CONNECT secrets: AES-256-GCM per-record DEKs, KEK key-ring provider, rotation by DEK re-wrap, durable credential rows through the existing database authority, migration, canonical SQLModel schema registration, and boundary tests. No API/MCP wiring or command execution.",
       "scope_fa": "پیاده‌سازی slice پایدار و fail-closed برای Secretهای CONNECT: DEK اختصاصی هر رکورد با AES-256-GCM، provider حلقهٔ KEK، rotation با re-wrap کردن DEK، ردیف پایدار credential روی database authority موجود، migration، dependency و تست‌های مرزی؛ بدون API/MCP wiring یا اجرای فرمان.",
       "prerequisites": [],
       "acceptance_criteria": [
@@ -8740,7 +8740,8 @@
         "tests/unit/test_connect_persistence.py",
         "tests/architecture/test_connect_persistence_boundary.py",
         "migrations/versions/20261112_connect_credentials.py",
-        "pyproject.toml"
+        "src/nexus_ai_agent/storage/models.py",
+        "tests/unit/test_migrations.py"
       ],
       "owner_hint": "bot523h",
       "agent_branch": "nagar/connect-foundation-20261111",
@@ -8748,7 +8749,7 @@
       "ttl_hours": 24,
       "generation": 1,
       "gates_owner": false,
-      "note": "Continuation of the same dedicated CONNECT branch; previous foundation claim remains active on the branch and is intentionally skipped by same-branch overlap semantics."
+      "note": "Continuation of the same dedicated CONNECT branch; previous foundation claim remains active on the branch and is intentionally skipped by same-branch overlap semantics. The shared pyproject dependency declaration is deferred because another active Claim owns pyproject.toml; handoff records this explicitly."
     }
   ],
   "deferred_log": [
