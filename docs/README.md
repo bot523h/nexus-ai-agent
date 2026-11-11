@@ -180,6 +180,13 @@ placeholder text.
 | [engineering/NAGAR_IBPC.md](engineering/NAGAR_IBPC.md) | The IBPC slice (intent-bound proof capsules for live editing): chain, red-line→test map, scope semantics, verifier calibration, fencing, privacy, package map — plus the security closure (threat model, audio-ingress policy, approval identity contract, 13/13 mutation evidence) and the honest in-process lifecycle table (Implemented…ProductionVerified labels). |
 | [engineering/NAGAR_ONE_TRUTH_MATRIX.md](engineering/NAGAR_ONE_TRUTH_MATRIX.md) | The NAGAR-ONE technical truth matrix: every core capability labelled VERIFIED/PARTIAL/MISSING/BLOCKED/DEFERRED with its implementation site, test/evidence, and remaining gap — and the Stage 0–3 gate status. |
 
+## Superpowers (design specs & plans)
+
+| Document | What it is |
+|---|---|
+| [superpowers/specs/2026-11-10-nagar-triad-design.md](superpowers/specs/2026-11-10-nagar-triad-design.md) | Approved design spec for mission NAGAR-IBPC-TRIAD-CLOSURE-01: the Delta Dialogue, Shadow Preview and Scope Signature models, digests, subprocess security contract and test matrix. |
+| [superpowers/plans/2026-11-10-nagar-triad.md](superpowers/plans/2026-11-10-nagar-triad.md) | Execution plan for the NAGAR triad: phased RED→GREEN task list, real-FFmpeg integration steps and evidence checkpoints. |
+
 ## History (archived — read-only, never a source of truth)
 
 | Document | What it is |
