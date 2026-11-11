@@ -120,6 +120,147 @@ def to_psycopg_url(url: str) -> str:
     return urlunsplit(("postgresql+psycopg", parts.netloc, parts.path, parts.query, parts.fragment))
 
 
+# ── F-001: explicit asyncpg connection-argument resolution ──────────────
+#
+# The SQLAlchemy asyncpg dialect turns *every* URL query parameter into a
+# keyword argument for ``asyncpg.connect`` (``opts.update(url.query)``), but
+# ``asyncpg.connect`` accepts none of the libpq names — no ``sslmode``, no
+# ``channel_binding``, and no ``**kwargs``.  A canonical Neon URL
+# (``...?sslmode=require``) therefore raised
+# ``TypeError: unexpected keyword argument 'sslmode'`` at connect time.
+#
+# This resolver is the one place that maps libpq-style parameters onto what
+# asyncpg actually accepts.  It never forwards an unknown parameter (which
+# would be a fresh TypeError) and never silently drops a security requirement
+# (which would be a TLS downgrade): an unsupported *requirement* fails loudly.
+
+#: libpq ``sslmode`` values asyncpg accepts verbatim through its ``ssl``
+#: argument.  ``verify-full`` and ``verify-ca`` keep certificate and hostname
+#: verification; ``require`` demands TLS but (like libpq) skips verification.
+_PG_ASYNC_SSL_MODES = frozenset(
+    {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+)
+
+#: libpq parameters this resolver understands.  Anything else in the URL is
+#: rejected rather than forwarded to the driver.
+_PG_KNOWN_QUERY_PARAMS = frozenset(
+    {"sslmode", "sslrootcert", "sslcert", "sslkey", "channel_binding", "application_name"}
+)
+
+
+class PgConnectConfigError(ValueError):
+    """Raised when a PostgreSQL URL carries a parameter asyncpg cannot honour.
+
+    Raised instead of forwarding the parameter (a ``TypeError`` deep inside the
+    driver, with the password possibly in the traceback) or dropping it (a
+    silent weakening of a TLS requirement).
+    """
+
+
+def _split_pg_query(url: str) -> tuple[str, dict[str, list[str]]]:
+    """Return ``(url_without_known_query, parsed_query)`` for a PG URL.
+
+    The returned URL keeps the scheme/host/path but drops the parameters this
+    resolver translates itself, so the SQLAlchemy dialect never re-adds them as
+    driver kwargs.
+    """
+    parts = urlsplit(url)
+    query: dict[str, list[str]] = {}
+    for chunk in parts.query.split("&"):
+        if not chunk:
+            continue
+        key, _, value = chunk.partition("=")
+        query.setdefault(key.lower(), []).append(value)
+    kept = "&".join(
+        chunk
+        for chunk in parts.query.split("&")
+        if chunk and chunk.split("=", 1)[0].lower() not in _PG_KNOWN_QUERY_PARAMS
+    )
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, kept, parts.fragment)), query
+
+
+def resolve_asyncpg_connect_args(url: str) -> tuple[str, dict[str, Any]]:
+    """Resolve a PostgreSQL URL into ``(url_for_sqlalchemy, connect_args)``.
+
+    ``connect_args`` is exactly what ``asyncpg.connect`` accepts; ``url`` is the
+    same URL with the translated libpq parameters removed so the dialect does
+    not forward them again.
+
+    Security posture (never weaken TLS):
+
+    * ``sslmode=<mode>`` → ``ssl=<mode>`` (asyncpg accepts the same strings).
+    * ``sslmode=verify-full`` / ``verify-ca`` keep certificate verification.
+    * ``channel_binding=require`` → :class:`PgConnectConfigError`: asyncpg
+      hard-codes the SCRAM channel-binding flag to ``n``, so it cannot satisfy a
+      ``require`` requirement.  Refusing is the only non-weakening outcome.
+    * ``sslrootcert`` / ``sslcert`` / ``sslkey`` → a real ``ssl.SSLContext``.
+    * any other parameter → :class:`PgConnectConfigError` (no arbitrary kwargs).
+    """
+    import ssl as _ssl
+
+    stripped, query = _split_pg_query(url)
+
+    unknown = sorted(set(query) - _PG_KNOWN_QUERY_PARAMS)
+    if unknown:
+        raise PgConnectConfigError(
+            "unsupported PostgreSQL URL parameter(s): "
+            + ", ".join(unknown)
+            + " — the asyncpg driver does not accept arbitrary libpq keywords. "
+            "Use sslmode/sslrootcert/sslcert/sslkey or remove them."
+        )
+
+    connect_args: dict[str, Any] = {}
+
+    app_name = (query.get("application_name") or [""])[-1]
+    if app_name:
+        # asyncpg takes runtime parameters through ``server_settings``.
+        connect_args["server_settings"] = {"application_name": app_name}
+
+    channel_binding = (query.get("channel_binding") or [""])[-1].lower()
+    if channel_binding in ("require", "prefer"):
+        # asyncpg's SCRAM client hard-codes the channel-binding flag to "n"
+        # (asyncpg/protocol/scram.pyx), so SCRAM-SHA-256-PLUS cannot be
+        # negotiated.  "require" is a hard requirement we cannot meet; refusing
+        # beats connecting without it.
+        raise PgConnectConfigError(
+            "channel_binding=require is not supported by the asyncpg driver "
+            "(it cannot negotiate SCRAM-SHA-256-PLUS). Use the psycopg "
+            "(synchronous) path or drop the requirement — never silently "
+            "connect without it."
+        )
+
+    sslmode = (query.get("sslmode") or [""])[-1].lower()
+    rootcert = (query.get("sslrootcert") or [""])[-1]
+    cert = (query.get("sslcert") or [""])[-1]
+    key = (query.get("sslkey") or [""])[-1]
+
+    if sslmode and sslmode not in _PG_ASYNC_SSL_MODES:
+        raise PgConnectConfigError(
+            f"unsupported sslmode={sslmode!r}: expected one of "
+            + ", ".join(sorted(_PG_ASYNC_SSL_MODES))
+        )
+
+    if rootcert or cert or key:
+        ctx = _ssl.create_default_context(_ssl.Purpose.SERVER_AUTH, cafile=rootcert or None)
+        if cert:
+            ctx.load_cert_chain(cert, keyfile=key or None)
+        # A CA/client certificate is only meaningful with verification on; the
+        # absence of sslmode defaults to the secure choice rather than libpq's
+        # weaker "prefer".
+        if not sslmode or sslmode in ("prefer", "allow", "require"):
+            ctx.check_hostname = True
+            ctx.verify_mode = _ssl.CERT_REQUIRED
+        elif sslmode == "verify-ca":
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_REQUIRED
+        connect_args["ssl"] = ctx
+    elif sslmode:
+        # asyncpg accepts the libpq mode strings directly for ``ssl``.
+        connect_args["ssl"] = sslmode
+
+    return stripped, connect_args
+
+
 def resolve_migration_url() -> str:
     """Resolve the URL Alembic should migrate (D3).
 
@@ -441,7 +582,18 @@ def _get_pg_engine(url: str) -> Any:
     normalized = normalize_database_url(url)
     engine = _pg_engines.get(normalized)
     if engine is None:
-        engine = create_async_engine(to_asyncpg_url(normalized), echo=False, pool_pre_ping=True)
+        # F-001: translate libpq-style parameters (sslmode, channel_binding, …)
+        # into what asyncpg actually accepts *before* building the engine. The
+        # SQLAlchemy dialect would otherwise forward them verbatim as
+        # ``asyncpg.connect`` kwargs and raise ``TypeError: unexpected keyword
+        # argument 'sslmode'`` on a canonical Neon URL.
+        dsn, connect_args = resolve_asyncpg_connect_args(to_asyncpg_url(normalized))
+        engine = create_async_engine(
+            dsn,
+            echo=False,
+            pool_pre_ping=True,
+            connect_args=connect_args or {},
+        )
         _pg_engines[normalized] = engine
     return engine
 
