@@ -504,22 +504,31 @@ def test_apply_pg_uses_psql_for_plain_text_dumps(tmp_path, monkeypatch):
     pg_restore rejects the text format ("input file appears to be a text format
     dump. Please use psql."), so a real restore of a NEXUS backup goes through
     psql. Kill-mutation: reverting to pg_restore makes this fail.
+
+    The post-restore re-read is exercised too: the apply leg must prove the
+    target actually holds the dump's tables, not merely that psql exited 0.
     """
     from nexus_ai_agent.maintenance import restore as restore_module
 
     artifact = tmp_path / "backup.sql"
     artifact.write_text(
-        "-- PostgreSQL database dump\nCREATE TABLE t (id int);\n"
+        "-- PostgreSQL database dump\nCREATE TABLE public.t (id int);\n"
         "-- PostgreSQL database dump complete\n"
     )
-    captured: dict[str, list[str]] = {}
+    captured: dict[str, list[list[str]]] = {"argv": []}
 
     class _Done:
         returncode = 0
         stderr = ""
 
+        def __init__(self, stdout: str = "") -> None:
+            self.stdout = stdout
+
     def _fake_run(argv, **_kwargs):
-        captured["argv"] = list(argv)
+        captured["argv"].append(list(argv))
+        # The apply (--file) emits no rows; the table read (-tAc) answers.
+        if "-tAc" in argv:
+            return _Done(stdout="t\n")
         return _Done()
 
     monkeypatch.setattr(restore_module.shutil, "which", lambda name: f"/usr/bin/{name}")
@@ -527,6 +536,77 @@ def test_apply_pg_uses_psql_for_plain_text_dumps(tmp_path, monkeypatch):
 
     report = restore_module.DrillReport(mode="apply")
     restore_module._apply_postgres_restore(artifact, "postgresql://u:p@h/db", report, force=True)
-    assert captured["argv"][0].endswith("psql")
-    assert "pg_restore" not in " ".join(captured["argv"])
-    assert report.chain[-1]["state"] == "POSTGRES_LIVE_RESTORE"
+    apply_argv = captured["argv"][0]
+    assert apply_argv[0].endswith("psql")
+    assert "pg_restore" not in " ".join(apply_argv)
+    assert report.chain[-2]["state"] == "POSTGRES_LIVE_RESTORE"
+    assert report.chain[-1]["state"] == "POST_RESTORE_SCHEMA"
+    assert report.restored["tables"] == ["t"]
+
+
+def test_apply_pg_missing_table_after_apply_is_a_verification_error(tmp_path, monkeypatch):
+    """A zero exit code that did not land the schema must NOT be "proven".
+
+    This is the overclaim guard: the apply reports success, but the target is
+    re-read and the dump's table is absent — the drill must refuse to call the
+    restore proven.
+    """
+    from nexus_ai_agent.maintenance import restore as restore_module
+
+    artifact = tmp_path / "backup.sql"
+    artifact.write_text(
+        "-- PostgreSQL database dump\nCREATE TABLE public.gone (id int);\n"
+        "-- PostgreSQL database dump complete\n"
+    )
+
+    class _Done:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout: str = "") -> None:
+            self.stdout = stdout
+
+    def _fake_run(argv, **_kwargs):
+        if "-tAc" in argv:
+            return _Done(stdout="")  # the table never landed
+        return _Done()
+
+    monkeypatch.setattr(restore_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(restore_module.subprocess, "run", _fake_run)
+
+    report = restore_module.DrillReport(mode="apply")
+    with pytest.raises(restore_module.RestoreVerificationError, match="missing tables"):
+        restore_module._apply_postgres_restore(
+            artifact, "postgresql://u:p@h/db", report, force=True
+        )
+
+
+def test_apply_pg_unreadable_target_after_apply_is_a_verification_error(tmp_path, monkeypatch):
+    """If the target cannot be re-read, the restore is unproven, not proven."""
+    from nexus_ai_agent.maintenance import restore as restore_module
+
+    artifact = tmp_path / "backup.sql"
+    artifact.write_text(
+        "-- PostgreSQL database dump\nCREATE TABLE public.t (id int);\n"
+        "-- PostgreSQL database dump complete\n"
+    )
+
+    class _Done:
+        def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def _fake_run(argv, **_kwargs):
+        if "-tAc" in argv:
+            return _Done(returncode=1, stderr="connection refused")
+        return _Done()
+
+    monkeypatch.setattr(restore_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(restore_module.subprocess, "run", _fake_run)
+
+    report = restore_module.DrillReport(mode="apply")
+    with pytest.raises(restore_module.RestoreVerificationError, match="could not be re-read"):
+        restore_module._apply_postgres_restore(
+            artifact, "postgresql://u:p@h/db", report, force=True
+        )

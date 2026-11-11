@@ -127,6 +127,12 @@ def main() -> int:
     # 5. The truth gate still matches the sources.
     bundle["checks"]["truth_gate"] = run([sys.executable, "-m", "nexus_ai_agent.nagar", "--check"])  # type: ignore[index]
 
+    # 6. Real backup/restore benchmark (mission §14 item 14).
+    bundle["checks"]["benchmark"] = run(  # type: ignore[index]
+        [sys.executable, "scripts/p0_benchmark.py", "--rows", "20000"],
+        env={"NEXUS_DATABASE_URL": PG_URL},
+    )
+
     # The fix sites, bound to their exact content hash at this revision.
     bundle["fixed_sites"] = {
         rel: sha256_file(REPO / rel)

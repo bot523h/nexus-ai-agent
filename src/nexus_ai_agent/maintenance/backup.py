@@ -146,23 +146,43 @@ def _verify_sqlite_dump(dump_path: Path) -> dict[str, Any]:
     return verification
 
 
+def _last_meaningful_line(data: bytes) -> bytes:
+    """The last line that is not PG17 trailer noise.
+
+    PostgreSQL 17 appends a ``\\unrestrict <token>`` line (and a ``--`` marker)
+    AFTER pg_dump's completion footer, so the footer is not the final bytes.
+    Strip only that trailer — trailing blanks, ``--`` markers and ``\\unrestrict``
+    lines — so the footer must be the last *content* line. A truncated dump
+    whose data merely *contains* the footer string is still rejected.
+    """
+    lines = data.splitlines()
+    idx = len(lines) - 1
+    while idx >= 0:
+        line = lines[idx].strip()
+        if line and line != b"--" and not line.startswith(b"\\unrestrict"):
+            break
+        idx -= 1
+    return lines[idx].strip() if idx >= 0 else b""
+
+
 def _verify_postgres_dump(dump_path: Path) -> dict[str, Any]:
     """Structural verification for a plain-text pg_dump artifact.
 
     A real ``pg_restore`` verification needs a live target cluster; the
     nightly job has none, so we verify what is locally decidable and record
     it as typed evidence (the strongest honest claim available):
-    non-empty + pg_dump completion footer present.
+    non-empty + pg_dump completion footer present as the last content line.
     """
     data = dump_path.read_bytes()
     if not data:
         raise RuntimeError("pg_dump artifact is empty")
-    # pg_dump writes the completion footer, then (PostgreSQL 17+) an
-    # ``\unrestrict`` line that closes the ``\restrict`` preamble, so the
-    # footer is a *line* in the file, not its final bytes.
-    if _PG_DUMP_FOOTER.encode() not in data:
+    # The footer must be the last meaningful line, not merely present
+    # somewhere: a truncated dump whose *data* contains the footer string
+    # must still be rejected (a plain containment check is a false positive).
+    if _last_meaningful_line(data) != _PG_DUMP_FOOTER.encode():
         raise RuntimeError(
-            f"pg_dump artifact is truncated or failed mid-run (missing footer {_PG_DUMP_FOOTER!r})"
+            f"pg_dump artifact is truncated or failed mid-run (last meaningful "
+            f"line is not the footer {_PG_DUMP_FOOTER!r})"
         )
     return {"engine": "postgres", "footer": "present"}
 

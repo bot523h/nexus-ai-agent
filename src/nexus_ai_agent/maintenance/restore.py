@@ -390,6 +390,59 @@ def _apply_sqlite_restore(
 # ── postgres restore ────────────────────────────────────────────────────
 
 
+def _list_postgres_tables(psql: str, target_url: str) -> set[str]:
+    """Read the table names the target cluster actually holds.
+
+    A real post-restore proof must ask the *target* what it has, not trust the
+    exit code of the apply. This is the PostgreSQL analogue of reopening the
+    restored SQLite file.
+    """
+    proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
+        [
+            psql,
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-tAc",
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
+            "--dbname",
+            target_url,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RestoreVerificationError(
+            f"post-restore table read failed on the live target: "
+            f"{proc.stderr.strip()[:400]} — the apply reported success but the "
+            "target could not be re-read; classify CLUSTER-SIDE before claiming "
+            "the restore is proven"
+        )
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+
+
+def _expected_dump_tables(artifact: Path) -> set[str]:
+    """Table names the dump itself creates (``CREATE TABLE`` statements).
+
+    Read from the artifact text rather than the ORM so the proof compares the
+    dump to the target, independent of the application's current schema.
+    """
+    names: set[str] = set()
+    for raw in artifact.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line.upper().startswith("CREATE TABLE "):
+            continue
+        # ``CREATE TABLE public.task (`` / ``CREATE TABLE task (``
+        rest = line[len("CREATE TABLE ") :]
+        ident = rest.split("(", 1)[0].strip()
+        if not ident:
+            continue
+        names.add(ident.split(".")[-1].strip().strip('"'))
+    return names
+
+
 def _apply_postgres_restore(
     artifact: Path,
     target_url: str | None,
@@ -421,6 +474,7 @@ def _apply_postgres_restore(
             "refusing to restore into a live database without --force — "
             "this overwrites database objects on the target cluster"
         )
+    expected = _expected_dump_tables(artifact)
     proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
         [psql, "-v", "ON_ERROR_STOP=1", "--dbname", target_url, "--file", str(artifact)],
         capture_output=True,
@@ -435,6 +489,30 @@ def _apply_postgres_restore(
             "before retrying (roles? occupied connections? version match?)"
         )
     report.record("POSTGRES_LIVE_RESTORE", True, "psql applied the dump on the target cluster")
+
+    # Post-restore proof: reopen the TARGET and prove the dump's tables are
+    # actually there. Without this the ``RESTORE_PROVEN`` label would be an
+    # overclaim — the apply's exit code alone does not prove the schema landed.
+    present = _list_postgres_tables(psql, target_url)
+    missing = sorted(expected - present)
+    if missing:
+        raise RestoreVerificationError(
+            "restored target is missing tables the dump creates: "
+            + ", ".join(missing)
+            + " — the apply exited 0 but the schema did not land; do not point "
+            "the application at this target"
+        )
+    report.record(
+        "POST_RESTORE_SCHEMA",
+        True,
+        f"{len(expected)} dump tables present on the target",
+    )
+    report.restored.update(
+        {
+            "target": target_url,
+            "tables": sorted(present),
+        }
+    )
 
 
 # ── the drill ───────────────────────────────────────────────────────────

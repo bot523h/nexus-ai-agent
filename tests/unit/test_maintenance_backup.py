@@ -229,7 +229,29 @@ def test_postgres_dump_without_footer_still_rejected(tmp_path: Path) -> None:
 
     artifact = tmp_path / "truncated.sql"
     artifact.write_text("--\n-- PostgreSQL database dump\n--\nCREATE TABLE t (id int);\n")
-    with pytest.raises(RuntimeError, match="missing footer"):
+    with pytest.raises(RuntimeError, match="last meaningful line is not the footer"):
+        _verify_postgres_dump(artifact)
+
+
+def test_postgres_dump_with_footer_in_data_is_still_rejected(tmp_path: Path) -> None:
+    """A truncated dump whose *data* contains the footer literal must fail.
+
+    A plain containment check is a false positive: a row value can legitimately
+    hold the footer text. Only the footer as the LAST meaningful line proves a
+    complete dump.
+    """
+    from nexus_ai_agent.maintenance.backup import _PG_DUMP_FOOTER, _verify_postgres_dump
+
+    artifact = tmp_path / "poisoned.sql"
+    artifact.write_text(
+        "-- PostgreSQL database dump\n"
+        "\\restrict abc\n"
+        "CREATE TABLE t(v text);\n"
+        f"INSERT INTO t VALUES ('{_PG_DUMP_FOOTER}');\n"
+        "-- truncated before the real completion footer\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="last meaningful line is not the footer"):
         _verify_postgres_dump(artifact)
 
 
