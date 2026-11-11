@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-11T13:05:55Z",
+  "updated_at": "2026-11-11T21:19:58Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1249,6 +1249,22 @@
         "docs/architecture/NAGAR_CONNECT_THREAT_MODEL_20261111.md",
         "docs/architecture/NAGAR_CONNECT_API_CONTRACT_20261111.md",
         "docs/architecture/NAGAR_CONNECT_LIFECYCLE.mmd"
+      ]
+    },
+    {
+      "id": "nagar-connect-persistence",
+      "description": "NAGAR CONNECT durable credential persistence and envelope-encryption lifecycle, stacked on the existing CONNECT branch; no API/MCP wiring or second database authority.",
+      "paths": [
+        "src/nexus_ai_agent/connect/crypto.py",
+        "src/nexus_ai_agent/connect/key_provider.py",
+        "src/nexus_ai_agent/connect/persistence.py",
+        "src/nexus_ai_agent/connect/__init__.py",
+        "src/nexus_ai_agent/connect/PERSISTENCE.md",
+        "tests/unit/test_connect_crypto.py",
+        "tests/unit/test_connect_persistence.py",
+        "tests/architecture/test_connect_persistence_boundary.py",
+        "migrations/versions/20261112_connect_credentials.py",
+        "pyproject.toml"
       ]
     }
   ],
@@ -8687,6 +8703,52 @@
       "generation": 1,
       "gates_owner": false,
       "note": "Registered after live main/PR/claim inspection; deliberately limited to additive foundation artifacts outside active PR file paths."
+    },
+    {
+      "task": "nagar-connect-persistence-01",
+      "title": "NAGAR CONNECT persistence and envelope encryption",
+      "title_fa": "پایداری و رمزنگاری envelope برای NAGAR CONNECT",
+      "zone": "nagar-connect-persistence",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Implement a production-shaped, fail-closed persistence slice for CONNECT secrets: AES-256-GCM per-record DEKs, KEK key-ring provider, rotation by DEK re-wrap, durable credential rows through the existing database authority, migration, dependency declaration, and boundary tests. No API/MCP wiring or command execution.",
+      "scope_fa": "پیاده‌سازی slice پایدار و fail-closed برای Secretهای CONNECT: DEK اختصاصی هر رکورد با AES-256-GCM، provider حلقهٔ KEK، rotation با re-wrap کردن DEK، ردیف پایدار credential روی database authority موجود، migration، dependency و تست‌های مرزی؛ بدون API/MCP wiring یا اجرای فرمان.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Raw credential plaintext is accepted only transiently and is never represented in a persistence model, log, or error.",
+        "Each write uses a fresh 256-bit DEK and unique 96-bit nonce; ciphertext and AAD are authenticated.",
+        "KEKs are supplied by a key provider, never stored in the database; key-ring rotation re-wraps DEKs without re-encrypting ciphertext.",
+        "Persistence uses the existing database/session authority and one explicit Alembic migration with downgrade; no second engine or schema authority is introduced.",
+        "Revocation, expiry, connection identity binding, tamper detection, wrong-key rejection, rotation, and concurrent-safe version checks are tested.",
+        "Handoff documentation records operational bootstrap, rotation, incident response, exact gates, and deferred KMS/HSM adapter work."
+      ],
+      "evidence_required": [
+        "PYTHONPATH=src .venv/bin/pytest -q --confcutdir=tests/unit tests/unit/test_connect_crypto.py tests/unit/test_connect_persistence.py tests/architecture/test_connect_persistence_boundary.py",
+        ".venv/bin/ruff check src/nexus_ai_agent/connect tests/unit/test_connect_crypto.py tests/unit/test_connect_persistence.py tests/architecture/test_connect_persistence_boundary.py",
+        ".venv/bin/mypy src/nexus_ai_agent/connect",
+        "alembic upgrade head && alembic downgrade <previous-head> in an isolated SQLite database, or an equivalent migration contract test",
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <changed-files> --branch nagar/connect-foundation-20261111",
+        "independent review and final SHA in the PR body"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/connect/crypto.py",
+        "src/nexus_ai_agent/connect/key_provider.py",
+        "src/nexus_ai_agent/connect/persistence.py",
+        "src/nexus_ai_agent/connect/__init__.py",
+        "src/nexus_ai_agent/connect/PERSISTENCE.md",
+        "tests/unit/test_connect_crypto.py",
+        "tests/unit/test_connect_persistence.py",
+        "tests/architecture/test_connect_persistence_boundary.py",
+        "migrations/versions/20261112_connect_credentials.py",
+        "pyproject.toml"
+      ],
+      "owner_hint": "bot523h",
+      "agent_branch": "nagar/connect-foundation-20261111",
+      "claimed_at": "2026-11-11T21:19:58Z",
+      "ttl_hours": 24,
+      "generation": 1,
+      "gates_owner": false,
+      "note": "Continuation of the same dedicated CONNECT branch; previous foundation claim remains active on the branch and is intentionally skipped by same-branch overlap semantics."
     }
   ],
   "deferred_log": [
