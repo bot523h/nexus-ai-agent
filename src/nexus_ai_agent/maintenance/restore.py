@@ -43,6 +43,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -63,7 +64,7 @@ from nexus_ai_agent.maintenance.backup import (
     _verify_postgres_dump,
     _verify_sqlite_dump,
 )
-from nexus_ai_agent.maintenance.dump_sql import expected_dump_tables
+from nexus_ai_agent.maintenance.dump_sql import copy_row_counts, expected_dump_tables
 from nexus_ai_agent.maintenance.failures import (
     MaintenanceOperationError,
     classify_storage_failure,
@@ -72,6 +73,11 @@ from nexus_ai_agent.maintenance.housekeeping import _parse_backup_stamp
 from nexus_ai_agent.maintenance.redact import redact_text, split_dsn_password, target_identity
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
+
+#: A lowercase, 64-hex SHA-256. Used to reject a sidecar (or operator flag)
+#: whose ``sha256`` is not actually a hash, so it can never be "compared" as
+#: if it proved something (F-007D).
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 log = get_logger(__name__)
 
@@ -291,14 +297,27 @@ def _verify_checksum(
     if sidecar is not None:
         try:
             manifest = json.loads(sidecar.read_text(encoding="utf-8"))
-            recorded = str(manifest.get("sha256", ""))
         except (OSError, json.JSONDecodeError) as exc:
             raise RestoreVerificationError(
                 f"sidecar manifest exists but is unparseable ({exc}) — "
                 "refusing to treat the artifact as checksum-verified; "
                 "structural verification may still prove restorability"
             ) from exc
-        if recorded and recorded != measured:
+        # F-007D: a sidecar is evidence only if it is a well-formed manifest.
+        # ``{}`` (or any object missing a usable sha256) previously fell through
+        # to ``CHECKSUM_VERIFIED`` with nothing actually compared — an empty
+        # object is not proof. Refuse the manifest and fall back to the honest
+        # structural-only state instead of a fabricated verification.
+        problem = _sidecar_manifest_problem(manifest)
+        if problem is not None:
+            raise RestoreVerificationError(
+                f"sidecar manifest is present but not a usable checksum record "
+                f"({problem}) — refusing to report CHECKSUM_VERIFIED on an "
+                "unverified object; structural verification may still prove "
+                "restorability"
+            )
+        recorded = str(manifest["sha256"]).lower()
+        if recorded != measured:
             raise RestoreVerificationError(
                 "checksum MISMATCH against the remote sidecar manifest "
                 f"(manifest {recorded}, measured {measured}). The object in "
@@ -317,6 +336,38 @@ def _verify_checksum(
             "no checksum evidence available (no sidecar, no --expected-sha256)",
         )
     return measured
+
+
+def _sidecar_manifest_problem(manifest: object) -> str | None:
+    """Return why *manifest* cannot serve as checksum evidence, else ``None``.
+
+    F-007D: the sidecar is written by :func:`~.backup._build_sidecar` with a
+    fixed shape (``kind``/``key``/``sha256``/``size_bytes``/``timestamp``/
+    ``source``/``verification``). A drill must not label an object
+    ``CHECKSUM_VERIFIED`` off a manifest that does not actually pin a sha256:
+    ``{}`` compares nothing, yet the old code fell through to a green label.
+    Each field the finding names is checked here; a failure is reported so the
+    operator sees which field was wrong.
+    """
+    if not isinstance(manifest, dict):
+        return f"not a JSON object ({type(manifest).__name__})"
+    kind = manifest.get("kind")
+    if not isinstance(kind, str) or not kind.startswith("nexus.db-backup.meta/"):
+        return f"unexpected kind {kind!r}"
+    sha = manifest.get("sha256")
+    if not isinstance(sha, str) or not _SHA256_RE.fullmatch(sha):
+        return f"sha256 is not 64 lowercase hex ({sha!r})"
+    size = manifest.get("size_bytes")
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        return f"size_bytes is not a positive integer ({size!r})"
+    key = manifest.get("key")
+    if not isinstance(key, str) or not key:
+        return "key is missing or empty"
+    if not isinstance(manifest.get("timestamp"), str) or not manifest.get("timestamp"):
+        return "timestamp is missing or empty"
+    if not isinstance(manifest.get("source"), str) or not manifest.get("source"):
+        return "source is missing or empty"
+    return None
 
 
 # ── sqlite restore ──────────────────────────────────────────────────────
@@ -456,6 +507,50 @@ def _list_postgres_tables(
     return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
 
 
+def _list_postgres_row_counts(
+    psql: str, target_url: str, tables: list[str], env: dict[str, str] | None = None
+) -> dict[str, int]:
+    """Read exact row counts for *tables* from the target cluster.
+
+    F-007E: the post-restore data proof. Counts are read in one round-trip via
+    ``UNION ALL`` over ``count(*)``; identifiers are quoted with ``psql``'s
+    ``quote_ident`` semantics (``""`` doubled) so a table name can never break
+    out of the query. A missing table counts as absent from the mapping, which
+    the caller reports as a mismatch.
+    """
+    if not tables:
+        return {}
+    parts = []
+    for name in tables:
+        # Both the label (a string literal) and the table name (an identifier)
+        # are quoted so a crafted table name cannot break out of the query.
+        label = name.replace("'", "''")
+        quoted = name.replace('"', '""')
+        parts.append(f"SELECT '{label}' AS t, count(*) FROM \"{quoted}\"")
+    query = " UNION ALL ".join(parts)
+    proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
+        [psql, "-v", "ON_ERROR_STOP=1", "-tAF", "\t", "-c", query, "--dbname", target_url],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+        env=env,
+    )
+    if proc.returncode != 0:
+        raise RestoreVerificationError(
+            "post-restore row-count read failed on the live target: "
+            f"{redact_text(proc.stderr).strip()[:400]} — the apply reported "
+            "success but the data could not be re-read; classify CLUSTER-SIDE "
+            "before claiming the restore is proven"
+        )
+    counts: dict[str, int] = {}
+    for line in proc.stdout.splitlines():
+        name, _, value = line.partition("\t")
+        if name:
+            counts[name] = int(value)
+    return counts
+
+
 def _expected_dump_tables(artifact: Path) -> set[str]:
     """Table names the dump itself creates.
 
@@ -500,6 +595,7 @@ def _apply_postgres_restore(
     *,
     force: bool,
     scratch: Path,
+    expect_app_schema: bool = False,
 ) -> None:
     # Artifacts are plain-text ``pg_dump`` output (see
     # ``backup._dump_postgres``). ``pg_restore`` rejects that format
@@ -590,6 +686,69 @@ def _apply_postgres_restore(
         True,
         f"{len(expected)} dump tables present on the target",
     )
+
+    # F-007B/C: ``--expect-app-schema`` must mean the same thing for PostgreSQL
+    # as it does for SQLite. Previously it was silently ignored on this path, so
+    # a caller who asked for the application schema to be required got a green
+    # drill without it. A zero-table dump is likewise refused: an artifact that
+    # creates no tables cannot be "app-schema readable".
+    if expect_app_schema:
+        if not expected:
+            raise RestoreVerificationError(
+                "artifact creates no tables but --expect-app-schema was given — "
+                "an empty schema cannot be the application database; do not "
+                "point the application at this target"
+            )
+        app_tables = _expected_app_tables()
+        missing_app = sorted(app_tables - present)
+        if missing_app:
+            raise RestoreVerificationError(
+                "restored target is missing application tables: "
+                + ", ".join(missing_app)
+                + " — the dump is valid but not a complete application "
+                "database; do not point the application at this target"
+            )
+        report.record(
+            "APP_SCHEMA_READABLE",
+            True,
+            f"{len(app_tables)} app tables present on the target",
+        )
+
+    # F-007E: prove the *data* landed, not only the schema. A dump whose COPY
+    # blocks were dropped or truncated would otherwise pass every check above.
+    # The artifact's claimed per-table row counts are compared with the target's
+    # real counts; a mismatch is a failed restore, not a warning.
+    claimed, truncated = copy_row_counts(artifact)
+    if claimed and not truncated:
+        actual = _list_postgres_row_counts(psql, safe_url, sorted(claimed), pg_env)
+        mismatched = {
+            table: (rows, actual.get(table))
+            for table, rows in claimed.items()
+            if actual.get(table) != rows
+        }
+        if mismatched:
+            detail = ", ".join(
+                f"{table}: artifact {rows} vs target {got}"
+                for table, (rows, got) in mismatched.items()
+            )
+            raise RestoreVerificationError(
+                "restored target row counts do not match the dump: "
+                + detail
+                + " — the schema landed but the data did not; do not point "
+                "the application at this target"
+            )
+        report.record(
+            "POST_RESTORE_DATA",
+            True,
+            f"{len(claimed)} tables' row counts match the dump ({sum(claimed.values())} rows)",
+        )
+    else:
+        report.record(
+            "POST_RESTORE_DATA",
+            False,
+            "row-count proof skipped (no COPY data in the artifact or the "
+            "line budget was exceeded) — data landing is UNVERIFIED",
+        )
     report.restored.update(
         {
             # F-003: redacted identity, never the raw URL.
@@ -759,6 +918,15 @@ def _run_drill(
             ) from exc
         report.record("INTEGRITY_VERIFIED", True, "pg_dump footer present, non-empty")
 
+    # F-007E: "the artifact is verified" is its own state, distinct from a
+    # checksum match and from structural integrity. Recording it explicitly is
+    # what lets the proof line name exactly which evidence level was reached.
+    report.record(
+        "ARTIFACT_VERIFIED",
+        True,
+        "checksum + structural integrity verified",
+    )
+
     if not apply:
         # The proof label follows the CHECKSUM stage actually executed —
         # a structural-only artifact must never be relabeled as
@@ -794,9 +962,30 @@ def _run_drill(
             expect_app_schema=expect_app_schema,
         )
     else:
-        _apply_postgres_restore(artifact, target_url, report, force=force, scratch=staged)
+        _apply_postgres_restore(
+            artifact,
+            target_url,
+            report,
+            force=force,
+            scratch=staged,
+            expect_app_schema=expect_app_schema,
+        )
 
-    report.record("RESTORE_PROVEN", True, "restored and re-verified on the target")
+    # The final label must state the *weakest* evidence level actually reached:
+    # a restore that landed the schema but could not compare row counts is not
+    # the same claim as one that proved the data too (F-007E).
+    data_step = next(
+        (s for s in report.chain if s["state"] == "POST_RESTORE_DATA"),
+        None,
+    )
+    if data_step is not None and data_step["ok"]:
+        proven_detail = "restored, re-verified, and data row counts match on the target"
+    else:
+        proven_detail = (
+            "restored and re-verified on the target (schema only — "
+            "post-restore data comparison was not completed)"
+        )
+    report.record("RESTORE_PROVEN", True, proven_detail)
     report.ok = True
     log.info(
         "maintenance_restore_apply_ok",

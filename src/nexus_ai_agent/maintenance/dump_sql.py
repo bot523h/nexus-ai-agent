@@ -29,6 +29,7 @@ which an operator can see and fix; a false negative silently weakens the proof).
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 #: A qualified identifier: one or more parts joined by dots, where a part is
 #: either a double-quoted name (``""`` escapes a quote, spaces allowed) or a
@@ -177,3 +178,46 @@ def expected_dump_tables(sql_text: str) -> set[str]:
         if identifier:
             names.add(identifier)
     return names
+
+
+#: ``COPY <name> (cols) FROM stdin;`` — the data-bearing section of a text dump.
+_COPY_START = re.compile(
+    r"^COPY\s+(?P<name>" + _QUALIFIED_NAME + r")\s*(?:\([^)]*\))?\s*FROM\s+stdin\s*;",
+    re.IGNORECASE,
+)
+
+
+def copy_row_counts(path: Path, *, max_lines: int = 5_000_000) -> tuple[dict[str, int], bool]:
+    """Count data rows per table from a text ``pg_dump``, streaming the file.
+
+    F-007E: ``RESTORE_PROVEN`` after an apply previously proved only that the
+    *schema* landed; a dump whose data never arrived would still pass. This
+    gives the per-table row counts the artifact claims, so the drill can compare
+    them to the target. It reads line by line and never holds a row in memory,
+    so a multi-gigabyte dump costs a streaming pass, not its own size in RAM
+    (F-012). Returns ``({table: rows}, truncated)``; ``truncated`` is ``True``
+    when *max_lines* was exceeded, so the caller can label the proof honestly
+    rather than claim a comparison it did not finish.
+    """
+    counts: dict[str, int] = {}
+    current: str | None = None
+    seen = 0
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            seen += 1
+            if seen > max_lines:
+                return counts, True
+            if current is not None:
+                if line.startswith("\\."):
+                    current = None
+                    continue
+                if line.strip():
+                    counts[current] += 1
+                continue
+            match = _COPY_START.match(line)
+            if match:
+                name = _normalize_identifier(match.group("name"))
+                if name:
+                    counts.setdefault(name, 0)
+                    current = name
+    return counts, False

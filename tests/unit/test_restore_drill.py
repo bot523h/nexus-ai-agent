@@ -38,7 +38,6 @@ never bare RuntimeError.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -97,6 +96,24 @@ def _table_rows(db: Path, table: str) -> list[tuple]:
         return conn.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
 
 
+def _sidecar(artifact: Path, *, sha256: str | None = None) -> dict[str, Any]:
+    """A well-formed sidecar manifest, shaped like ``backup._build_sidecar``.
+
+    F-007D: a manifest must actually pin a sha256 and the artifact metadata to
+    count as checksum evidence, so the tests build the real shape rather than a
+    two-field stub that the drill now (correctly) refuses.
+    """
+    return {
+        "kind": "nexus.db-backup.meta/v1",
+        "key": f"backups/db/20250101-000000/{artifact.name}",
+        "sha256": sha256 if sha256 is not None else _sha256(artifact),
+        "size_bytes": artifact.stat().st_size,
+        "timestamp": "20250101-000000",
+        "source": "sqlite (online backup)",
+        "verification": {"tables": {"jobs": 3}},
+    }
+
+
 class TestLocalDrillHappyPath:
     def test_verify_only_drill_proves_chain_without_target(self, tmp_path, monkeypatch):
         artifact = _sqlite_artifact(tmp_path / "backup.sqlite3")
@@ -113,6 +130,7 @@ class TestLocalDrillHappyPath:
             "FETCHED",
             "CHECKSUM_VERIFIED",
             "INTEGRITY_VERIFIED",
+            "ARTIFACT_VERIFIED",
             "RESTORE_PROVEN",
         ]
         assert report.artifact["tables"]["jobs"] == 3
@@ -256,7 +274,7 @@ class TestChaosLocal:
         # by staging through the checksum stage directly (unit-level).
         report = DrillReport(mode="drill")
         sidecar = tmp_path / "backup.sqlite3.meta.json"
-        sidecar.write_text(json.dumps({"sha256": "f" * 64, "size_bytes": artifact.stat().st_size}))
+        sidecar.write_text(json.dumps(_sidecar(artifact, sha256="f" * 64)))
         with pytest.raises(RestoreVerificationError, match="sidecar"):
             restore_module._verify_checksum(artifact, report, expected_sha256=None, sidecar=sidecar)
 
@@ -264,9 +282,7 @@ class TestChaosLocal:
         artifact = _sqlite_artifact(tmp_path / "backup.sqlite3")
         report = DrillReport(mode="drill")
         sidecar = tmp_path / "backup.sqlite3.meta.json"
-        sidecar.write_text(
-            json.dumps({"sha256": _sha256(artifact), "size_bytes": artifact.stat().st_size})
-        )
+        sidecar.write_text(json.dumps(_sidecar(artifact)))
         restore_module._verify_checksum(artifact, report, expected_sha256=None, sidecar=sidecar)
         assert report.chain[0]["state"] == "CHECKSUM_VERIFIED"
 
@@ -364,14 +380,15 @@ class TestR2Leverage:
 
     def test_latest_picks_newest_and_ignores_sidecars(self, tmp_path, monkeypatch):
         older = _sqlite_artifact(tmp_path / "older.sqlite3").read_bytes()
-        newer = _sqlite_artifact(tmp_path / "newer.sqlite3").read_bytes()
+        newer_path = _sqlite_artifact(tmp_path / "newer.sqlite3")
+        newer = newer_path.read_bytes()
         fake = _FakeR2(
             {
                 "backups/db/20250101-000000/nexus-sqlite-20250101-000000.sqlite3": older,
                 "backups/db/20250101-000000/nexus-sqlite-20250101-000000.sqlite3.meta.json": b"{}",
                 "backups/db/20250303-030303/nexus-sqlite-20250303-030303.sqlite3": newer,
                 "backups/db/20250303-030303/nexus-sqlite-20250303-030303.sqlite3.meta.json": (
-                    json.dumps({"sha256": hashlib.sha256(newer).hexdigest()}).encode()
+                    json.dumps(_sidecar(newer_path)).encode()
                 ),
                 # junk keys must never poison discovery:
                 "backups/db/not-a-stamp-thing": b"x",
@@ -541,8 +558,13 @@ def test_apply_pg_uses_psql_for_plain_text_dumps(tmp_path, monkeypatch):
     apply_argv = captured["argv"][0]
     assert apply_argv[0].endswith("psql")
     assert "pg_restore" not in " ".join(apply_argv)
-    assert report.chain[-2]["state"] == "POSTGRES_LIVE_RESTORE"
-    assert report.chain[-1]["state"] == "POST_RESTORE_SCHEMA"
+    states = [s["state"] for s in report.chain]
+    assert states[-3] == "POSTGRES_LIVE_RESTORE"
+    assert states[-2] == "POST_RESTORE_SCHEMA"
+    # F-007E: the artifact has no COPY data, so the data proof is honestly
+    # recorded as unverified rather than silently skipped.
+    assert states[-1] == "POST_RESTORE_DATA"
+    assert report.chain[-1]["ok"] is False
     assert report.restored["tables"] == ["t"]
 
 
