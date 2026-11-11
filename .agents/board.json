@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-10T12:08:41Z",
+  "updated_at": "2026-11-11T21:19:58Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1236,6 +1236,35 @@
         "tests/integration/test_durable_project_revision_pinning.py",
         "tests/unit/test_durable_project_state.py",
         "tests/unit/test_nagar_cognition_queue_handoff.py"
+      ]
+    },
+    {
+      "id": "nagar-connect-foundation-01",
+      "description": "NAGAR CONNECT read-only foundation contracts, threat model, API contract, lifecycle, and boundary tests; no runtime authority or persistence.",
+      "paths": [
+        "src/nexus_ai_agent/connect/",
+        "tests/unit/test_connect_contracts.py",
+        "tests/architecture/test_connect_boundary.py",
+        "docs/architecture/NAGAR_CONNECT_FOUNDATION_20261111.md",
+        "docs/architecture/NAGAR_CONNECT_THREAT_MODEL_20261111.md",
+        "docs/architecture/NAGAR_CONNECT_API_CONTRACT_20261111.md",
+        "docs/architecture/NAGAR_CONNECT_LIFECYCLE.mmd"
+      ]
+    },
+    {
+      "id": "nagar-connect-persistence",
+      "description": "NAGAR CONNECT durable credential persistence and envelope-encryption lifecycle, stacked on the existing CONNECT branch; no API/MCP wiring or second database authority.",
+      "paths": [
+        "src/nexus_ai_agent/connect/crypto.py",
+        "src/nexus_ai_agent/connect/key_provider.py",
+        "src/nexus_ai_agent/connect/persistence.py",
+        "src/nexus_ai_agent/connect/__init__.py",
+        "src/nexus_ai_agent/connect/PERSISTENCE.md",
+        "tests/unit/test_connect_crypto.py",
+        "tests/unit/test_connect_persistence.py",
+        "tests/architecture/test_connect_persistence_boundary.py",
+        "migrations/versions/20261112_connect_credentials.py",
+        "pyproject.toml"
       ]
     }
   ],
@@ -8521,7 +8550,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8559,7 +8588,8 @@
         "REVIEW CLOSE-OUT (2026-11-09): all 14 Sourcery review threads on PR #325 are replied to and resolved (remediation commit e5c92d56; truthful audit table docs/audits/NAGAR_F1_LIVE_TRUTH_2026-11-08.md section 3a). F1-F4 and F6-F14 fixed; F5 (cross-job completed-job provenance loss) recorded OPEN as an owner design decision (R4). PR #325 body updated with the close-out matrix and honest residuals. Targeted gates re-run on head f4176790: ruff check clean, ruff format --check clean, mypy src clean (361 files), tests/unit/test_mutation_harness_anchors.py + test_pg_integration_safety.py + test_agent_board.py 160 passed; tests/integration/test_durable_project_revision_pinning.py + tests/architecture/test_durable_project_state_boundary.py 48 passed; test_in_process_job_queue.py + test_creative_execution_recovery.py + test_canonical_creative_execution.py 35 passed."
       ],
       "note": "",
-      "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done."
+      "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done.",
+      "release_reason": "auto-released by gc at 2026-11-11T13:05:55Z (stale active lease)"
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -8607,7 +8637,7 @@
       "title_fa": "تعمیر PR #324 (بستن نهایی P0): فهرست‌کردن گزارش ممیزی جدید و رفع یافته‌های گزارش/شواهد تخته",
       "zone": "docs-architecture",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Repair the open docs-only PR #324 on its existing branch openhands/nagar-one-final-closeout-20261107. Root cause of the 5 red test/python-parity checks: docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md is not indexed in docs/README.md (TRUTH010). Also close the 5 unresolved review threads on the report and the memory note. No runtime change; no merge.",
       "scope_fa": "تعمیر PR مستندات‌محور باز #324 روی همان شاخه. علت ریشهٔ ۵ چک قرمز: گزارش ممیزی در docs/README.md فهرست نشده (TRUTH010). همچنین بستن ۵ ترد بازبینی روی گزارش و یادداشت حافظه. بدون تغییر runtime و بدون ادغام.",
       "acceptance_criteria": [
@@ -8631,7 +8661,95 @@
       "claimed_at": "2026-11-08T08:42:47Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-11-11T13:05:55Z (stale active lease)"
+    },
+    {
+      "task": "nagar-connect-foundation-01",
+      "title": "NAGAR CONNECT controlled agent connectivity foundation",
+      "title_fa": "پایهٔ اتصال کنترل‌شدهٔ عامل‌ها برای NAGAR CONNECT",
+      "zone": "nagar-connect-foundation-01",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Evidence-driven read-only foundation: canonical contract types, threat model, versioned API/MCP contracts, lifecycle state machine, boundary tests, and an honest gap analysis. No new authority, persistence, API wiring, MCP server, or write path.",
+      "scope_fa": "پایهٔ خواندنی و مبتنی بر شواهد: قراردادهای canonical، مدل تهدید، قرارداد API/MCP نسخه‌دار، ماشین حالت چرخهٔ عمر، تست مرزی و تحلیل شکاف صادقانه؛ بدون Authority، Persistence، API wiring، MCP server یا مسیر نوشتن جدید.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "CONNECT contract models reuse ActorIdentity, TypedCommand, ProjectAccess, ArtifactRecord, EvidenceRecord, and ArtifactPassport concepts without creating a second authority.",
+        "Credential/connection lifecycle and fail-closed threat model are documented with explicit gaps.",
+        "Versioned read-only REST and MCP contracts are documented and explicitly mutation-free.",
+        "Boundary tests prove the foundation package has no web, storage, provider, shell, queue, or verifier-authority imports.",
+        "A reproducible report records the real E2E limitation and does not claim production readiness."
+      ],
+      "evidence_required": [
+        "pytest -q tests/unit/test_connect_contracts.py tests/architecture/test_connect_boundary.py",
+        "git diff --check",
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <changed-files> --branch nagar/connect-foundation-20261111",
+        "documented base SHA, exact test commands, and final status in the RFC"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/connect/",
+        "tests/unit/test_connect_contracts.py",
+        "tests/architecture/test_connect_boundary.py",
+        "docs/architecture/NAGAR_CONNECT_FOUNDATION_20261111.md",
+        "docs/architecture/NAGAR_CONNECT_THREAT_MODEL_20261111.md",
+        "docs/architecture/NAGAR_CONNECT_API_CONTRACT_20261111.md",
+        "docs/architecture/NAGAR_CONNECT_LIFECYCLE.mmd"
+      ],
+      "owner_hint": "bot523h",
+      "agent_branch": "nagar/connect-foundation-20261111",
+      "claimed_at": "2026-11-11T13:05:55Z",
+      "ttl_hours": 24,
+      "generation": 1,
+      "gates_owner": false,
+      "note": "Registered after live main/PR/claim inspection; deliberately limited to additive foundation artifacts outside active PR file paths."
+    },
+    {
+      "task": "nagar-connect-persistence-01",
+      "title": "NAGAR CONNECT persistence and envelope encryption",
+      "title_fa": "پایداری و رمزنگاری envelope برای NAGAR CONNECT",
+      "zone": "nagar-connect-persistence",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Implement a production-shaped, fail-closed persistence slice for CONNECT secrets: AES-256-GCM per-record DEKs, KEK key-ring provider, rotation by DEK re-wrap, durable credential rows through the existing database authority, migration, canonical SQLModel schema registration, and boundary tests. No API/MCP wiring or command execution.",
+      "scope_fa": "پیاده‌سازی slice پایدار و fail-closed برای Secretهای CONNECT: DEK اختصاصی هر رکورد با AES-256-GCM، provider حلقهٔ KEK، rotation با re-wrap کردن DEK، ردیف پایدار credential روی database authority موجود، migration، dependency و تست‌های مرزی؛ بدون API/MCP wiring یا اجرای فرمان.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "Raw credential plaintext is accepted only transiently and is never represented in a persistence model, log, or error.",
+        "Each write uses a fresh 256-bit DEK and unique 96-bit nonce; ciphertext and AAD are authenticated.",
+        "KEKs are supplied by a key provider, never stored in the database; key-ring rotation re-wraps DEKs without re-encrypting ciphertext.",
+        "Persistence uses the existing database/session authority and one explicit Alembic migration with downgrade; no second engine or schema authority is introduced.",
+        "Revocation, expiry, connection identity binding, tamper detection, wrong-key rejection, rotation, and concurrent-safe version checks are tested.",
+        "Handoff documentation records operational bootstrap, rotation, incident response, exact gates, and deferred KMS/HSM adapter work."
+      ],
+      "evidence_required": [
+        "PYTHONPATH=src .venv/bin/pytest -q --confcutdir=tests/unit tests/unit/test_connect_crypto.py tests/unit/test_connect_persistence.py tests/architecture/test_connect_persistence_boundary.py",
+        ".venv/bin/ruff check src/nexus_ai_agent/connect tests/unit/test_connect_crypto.py tests/unit/test_connect_persistence.py tests/architecture/test_connect_persistence_boundary.py",
+        ".venv/bin/mypy src/nexus_ai_agent/connect",
+        "alembic upgrade head && alembic downgrade <previous-head> in an isolated SQLite database, or an equivalent migration contract test",
+        "python scripts/agent_board.py check --repo bot523h/nexus-ai-agent --files <changed-files> --branch nagar/connect-foundation-20261111",
+        "independent review and final SHA in the PR body"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/connect/crypto.py",
+        "src/nexus_ai_agent/connect/key_provider.py",
+        "src/nexus_ai_agent/connect/persistence.py",
+        "src/nexus_ai_agent/connect/__init__.py",
+        "src/nexus_ai_agent/connect/PERSISTENCE.md",
+        "tests/unit/test_connect_crypto.py",
+        "tests/unit/test_connect_persistence.py",
+        "tests/architecture/test_connect_persistence_boundary.py",
+        "migrations/versions/20261112_connect_credentials.py",
+        "src/nexus_ai_agent/storage/models.py",
+        "tests/unit/test_migrations.py"
+      ],
+      "owner_hint": "bot523h",
+      "agent_branch": "nagar/connect-foundation-20261111",
+      "claimed_at": "2026-11-11T21:19:58Z",
+      "ttl_hours": 24,
+      "generation": 1,
+      "gates_owner": false,
+      "note": "Continuation of the same dedicated CONNECT branch; previous foundation claim remains active on the branch and is intentionally skipped by same-branch overlap semantics. The shared pyproject dependency declaration is deferred because another active Claim owns pyproject.toml; handoff records this explicitly."
     }
   ],
   "deferred_log": [
