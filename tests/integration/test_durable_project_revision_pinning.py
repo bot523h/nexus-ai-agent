@@ -2414,6 +2414,58 @@ def _bound_projects(artifact_id: str) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
+class _AsyncBarrier:
+    """A minimal ``asyncio.Barrier`` equivalent that also runs on Python 3.10.
+
+    ``asyncio.Barrier`` was added in 3.11, but this project's CI matrix still
+    includes 3.10, so the concurrency proof needs its own primitive.  The
+    semantics match the stdlib barrier for this test: :meth:`wait` blocks until
+    ``parties`` coroutines have arrived, then releases them together; no waiter
+    proceeds before the last one arrives.
+
+    The wait is bounded by ``timeout`` so a lost participant fails loudly rather
+    than hanging the suite, and both a timeout and a cancellation decrement the
+    arrival count under the lock, so a departed waiter can never leave a phantom
+    arrival behind (which would strand the surviving party forever).
+    """
+
+    def __init__(self, parties: int, timeout: float = 30.0) -> None:
+        if parties < 1:
+            raise ValueError("parties must be >= 1")
+        self._parties = parties
+        self._timeout = timeout
+        self._count = 0
+        self._generation = 0
+        self._condition = asyncio.Condition()
+
+    async def wait(self) -> None:
+        async with self._condition:
+            generation = self._generation
+            self._count += 1
+            if self._count >= self._parties:
+                # The last arrival releases every waiter and opens a new epoch.
+                self._count = 0
+                self._generation += 1
+                self._condition.notify_all()
+                return
+            try:
+                await asyncio.wait_for(
+                    self._condition.wait_for(lambda: self._generation != generation),
+                    timeout=self._timeout,
+                )
+            except asyncio.TimeoutError as exc:
+                self._count -= 1
+                self._condition.notify_all()
+                raise AssertionError(
+                    f"barrier timed out after {self._timeout}s: only "
+                    f"{self._count + 1} of {self._parties} parties arrived"
+                ) from exc
+            except asyncio.CancelledError:
+                self._count -= 1
+                self._condition.notify_all()
+                raise
+
+
 @pytest.mark.asyncio
 async def test_concurrent_binds_cannot_attribute_one_content_address_to_two_projects(
     pin_env: Path, monkeypatch: pytest.MonkeyPatch
@@ -2451,7 +2503,7 @@ async def test_concurrent_binds_cannot_attribute_one_content_address_to_two_proj
     )
 
     # Release both racers at the same instant, right before the guard.
-    barrier = asyncio.Barrier(2)
+    barrier = _AsyncBarrier(2)
     original_load = SqlProjectRevisionStore.load_revision
 
     async def gated_load(self: SqlProjectRevisionStore, project_id: str, revision_id: str) -> Any:

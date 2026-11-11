@@ -603,26 +603,28 @@ async def test_cross_project_race_attributes_one_content_address_to_one_project(
 
     engine = sync_engine()
     with engine.begin() as conn:
-        conn.execute(
-            text("DELETE FROM projectartifactbinding WHERE project_id IN (:a, :b)"),
-            {"a": project_a, "b": project_b},
-        )
-        conn.execute(
-            text("DELETE FROM artifactcontentowner WHERE artifact_id = :aid"),
-            {"aid": artifact_id},
-        )
-        conn.execute(
-            text("DELETE FROM projectrevisionhead WHERE project_id IN (:a, :b)"),
-            {"a": project_a, "b": project_b},
-        )
-        conn.execute(
-            text("DELETE FROM projectrevision WHERE project_id IN (:a, :b)"),
-            {"a": project_a, "b": project_b},
-        )
-        conn.execute(
-            text("DELETE FROM appproject WHERE project_id IN (:a, :b)"),
-            {"a": project_a, "b": project_b},
-        )
+        # Each project is deleted with its OWN bound ``project_id`` (never an
+        # ``IN (:a, :b)`` list, which the data-safety guard — correctly — refuses
+        # because a list can silently widen past this run's rows).  Order
+        # respects the FKs: the per-job binding rows, then the content-address
+        # ownership row (also scoped by the same run's ``project_id``, its
+        # ``artifact_id`` being derived from this run's nonce), then the revision
+        # head/revision, then the project itself.
+        for pid in (project_a, project_b):
+            conn.execute(
+                text("DELETE FROM projectartifactbinding WHERE project_id = :pid"),
+                {"pid": pid},
+            )
+            conn.execute(
+                text("DELETE FROM artifactcontentowner WHERE project_id = :pid"),
+                {"pid": pid},
+            )
+            conn.execute(
+                text("DELETE FROM projectrevisionhead WHERE project_id = :pid"),
+                {"pid": pid},
+            )
+            conn.execute(text("DELETE FROM projectrevision WHERE project_id = :pid"), {"pid": pid})
+            conn.execute(text("DELETE FROM appproject WHERE project_id = :pid"), {"pid": pid})
 
 
 # ── same-job fencing across real processes ───────────────────────────────────

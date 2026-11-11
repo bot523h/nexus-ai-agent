@@ -144,6 +144,11 @@ def test_the_delete_scope_guard_rejects_widening_predicates() -> None:
         "DELETE FROM t WHERE project_id = 'literal'",  # constant, not a bound nonce
         "DELETE FROM t WHERE other_id = :pid",  # not a per-run nonce column
         "DELETE FROM t WHERE project_id IN (SELECT project_id FROM appproject)",
+        # The exact form that reddened CI on PR #325: an ``IN`` list of two
+        # projects is not a scoped equality, so it is refused (it names a scoped
+        # column yet can widen past this run's rows).
+        "DELETE FROM projectartifactbinding WHERE project_id IN (:a, :b)",
+        "DELETE FROM artifactcontentowner WHERE artifact_id = :aid",  # no nonce column
     ]
     for sql in unsafe:
         assert _unscoped_delete_reason(sql) is not None, f"guard accepted an unsafe delete: {sql!r}"
@@ -155,6 +160,50 @@ def test_the_delete_scope_guard_rejects_widening_predicates() -> None:
     ]
     for sql in safe:
         assert _unscoped_delete_reason(sql) is None, f"guard rejected a safe delete: {sql!r}"
+
+
+#: Every table the fence's cleanup touches, with the scoped column it must use.
+#: The survival baseline below is checked for ALL of them, not just one: a single
+#: table left with an unscoped DELETE is enough to destroy another run's rows.
+_FENCE_CLEANUP_TABLES = (
+    "projectartifactbinding",
+    "artifactcontentowner",
+    "projectrevisionhead",
+    "projectrevision",
+    "appproject",
+)
+
+
+def test_every_fence_cleanup_delete_survives_another_projects_rows() -> None:
+    """A survival baseline for EVERY table in the fence cleanup, not just one.
+
+    The 2026-11-11 CI failure reddened on exactly one module and named three
+    tables; a guard that only pinned one table would have missed the other two.
+    Each DELETE in the fence module must be scoped so that a *different* project's
+    row (a fresh nonce, never bound by this run) is provably outside its predicate
+    — i.e. the predicate is ``<scoped-column> = :bound`` and nothing wider.
+    """
+    source = (
+        REPO_ROOT / "tests" / "integration" / "test_artifact_binding_postgres_concurrency.py"
+    ).read_text(encoding="utf-8")
+    deletes = [sql for sql in _sql_literals(source) if re.search(r"\bDELETE\b", sql, re.I)]
+    # The module must still clean up every table the fence writes to.
+    touched = {
+        match.group(1)
+        for sql in deletes
+        if (match := re.search(r"\bFROM\s+(\w+)", sql, re.IGNORECASE))
+    }
+    missing = [table for table in _FENCE_CLEANUP_TABLES if table not in touched]
+    assert missing == [], f"the fence cleanup no longer deletes from: {missing}"
+    # And every one of those DELETEs must be nonce-scoped (a survival baseline).
+    offenders = [
+        f"{_unscoped_delete_reason(sql)}: {sql!r}"
+        for sql in deletes
+        if _unscoped_delete_reason(sql)
+    ]
+    assert offenders == [], (
+        "an unscoped fence cleanup DELETE can destroy another run:\n" + "\n".join(offenders)
+    )
 
 
 def test_the_integration_module_issues_no_ddl_or_table_wide_statements() -> None:
