@@ -63,6 +63,7 @@ from nexus_ai_agent.maintenance.backup import (
     _verify_postgres_dump,
     _verify_sqlite_dump,
 )
+from nexus_ai_agent.maintenance.dump_sql import expected_dump_tables
 from nexus_ai_agent.maintenance.failures import (
     MaintenanceOperationError,
     classify_storage_failure,
@@ -456,23 +457,18 @@ def _list_postgres_tables(
 
 
 def _expected_dump_tables(artifact: Path) -> set[str]:
-    """Table names the dump itself creates (``CREATE TABLE`` statements).
+    """Table names the dump itself creates.
 
-    Read from the artifact text rather than the ORM so the proof compares the
-    dump to the target, independent of the application's current schema.
+    F-007: the artifact is scanned by :func:`dump_sql.expected_dump_tables`,
+    which strips comments, string literals and dollar-quoted function bodies and
+    understands ``IF NOT EXISTS``/``ONLY``/``UNLOGGED``/quoted identifiers and
+    ``PARTITION OF``. The old line-by-line ``startswith("CREATE TABLE ")`` test
+    missed indented/one-line statements and counted tables mentioned inside
+    function bodies, so the post-restore proof could pass while a table was
+    missing. Read from the artifact (not the ORM) so the proof compares the dump
+    to the target, independent of the application's current schema.
     """
-    names: set[str] = set()
-    for raw in artifact.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw.strip()
-        if not line.upper().startswith("CREATE TABLE "):
-            continue
-        # ``CREATE TABLE public.task (`` / ``CREATE TABLE task (``
-        rest = line[len("CREATE TABLE ") :]
-        ident = rest.split("(", 1)[0].strip()
-        if not ident:
-            continue
-        names.add(ident.split(".")[-1].strip().strip('"'))
-    return names
+    return expected_dump_tables(artifact.read_text(encoding="utf-8", errors="replace"))
 
 
 def _pg_psql_env(target_url: str, scratch: Path) -> tuple[str, dict[str, str]]:

@@ -20,8 +20,10 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _pg_safety import refuse_production_target, require_destructive_opt_in  # noqa: E402
+from nexus_ai_agent.maintenance.pg_safety import (  # noqa: E402
+    refuse_production_target,
+    require_destructive_opt_in,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 PG_URL = os.environ.get("NEXUS_DATABASE_URL", "postgresql://postgres:pg@127.0.0.1:5433/nexus")

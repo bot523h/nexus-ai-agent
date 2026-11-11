@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _pg_safety import refuse_production_target, require_destructive_opt_in  # noqa: E402
+from nexus_ai_agent.maintenance.pg_safety import (  # noqa: E402
+    refuse_production_target,
+    require_destructive_opt_in,
+)
 
 os.environ.setdefault("NEXUS_DATABASE_URL", "postgresql://postgres:pg@127.0.0.1:5433/nexus")
 
