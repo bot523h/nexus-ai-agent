@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
+from re import fullmatch
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -18,8 +19,8 @@ from nexus_ai_agent.creative.studio.models import ActorIdentity, AuthorizationEr
 
 
 def _opaque_identifier(value: str) -> str:
-    if not value.strip() or value != value.strip() or any(ord(char) < 32 for char in value):
-        raise ValueError("identifier must be a non-blank printable value")
+    if not fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", value):
+        raise ValueError("identifier must use the bounded ASCII identifier grammar")
     return value
 
 

@@ -149,10 +149,18 @@ def test_scope_and_rotation_identifiers_reject_control_or_blank_values():
     with pytest.raises(ValidationError):
         ScopeGrant(project_ids=("project\n",), scopes=frozenset({"project.read"}))
     with pytest.raises(ValidationError):
+        ScopeGrant(project_ids=("project\x7f",), scopes=frozenset({"project.read"}))
+    with pytest.raises(ValidationError):
         ScopeGrant(project_ids=("project_a",), scopes=frozenset({" project.read"}))
     with pytest.raises(ValidationError):
         CredentialDescriptor(
             credential_id="cred_test",
             state=CredentialState.ACTIVE,
             rotated_from=" ",
+        )
+    with pytest.raises(ValidationError):
+        CredentialDescriptor(
+            credential_id="cred_test",
+            state=CredentialState.ACTIVE,
+            rotated_from="旧-key",
         )
