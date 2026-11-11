@@ -14,10 +14,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _pg_safety import refuse_production_target, require_destructive_opt_in  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = os.environ.get("NEXUS_DATABASE_URL", "postgresql://postgres:pg@127.0.0.1:5433/nexus")
@@ -43,6 +47,14 @@ def main() -> int:
     if not pg_dump or not psql_bin:
         print("pg_dump/psql not on PATH — benchmark needs postgresql-client")
         return 2
+
+    # F-004: the benchmark DROPs/CREATEs tables and restores into DST. Both may
+    # be production via NEXUS_DATABASE_URL/NEXUS_BENCH_TARGET, so require the
+    # opt-in and refuse a managed host.
+    require_destructive_opt_in(SRC, what="p0_benchmark source (DROP/CREATE/INSERT)")
+    require_destructive_opt_in(DST, what="p0_benchmark target (DROP + restore)")
+    refuse_production_target(SRC, what="p0_benchmark source")
+    refuse_production_target(DST, what="p0_benchmark target")
 
     # Realistic seed: a wide-ish table plus a secondary with text payloads.
     psql(SRC, "DROP TABLE IF EXISTS bench_rows")

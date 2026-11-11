@@ -7,8 +7,12 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _pg_safety import refuse_production_target, require_destructive_opt_in  # noqa: E402
 
 os.environ.setdefault("NEXUS_DATABASE_URL", "postgresql://postgres:pg@127.0.0.1:5433/nexus")
 
@@ -34,6 +38,13 @@ def psql(url: str, sql: str) -> str:
 
 
 def main() -> int:
+    # F-004: DROP/CREATE + restore against live databases — require the opt-in
+    # and refuse a managed/production host.
+    require_destructive_opt_in(SRC, what="p0_type_fidelity source (DROP/CREATE/INSERT)")
+    require_destructive_opt_in(DST, what="p0_type_fidelity target (DROP + restore)")
+    refuse_production_target(SRC, what="p0_type_fidelity source")
+    refuse_production_target(DST, what="p0_type_fidelity target")
+
     psql(SRC, "DROP TABLE IF EXISTS fidelity")
     psql(SRC, DDL)
     insert = (

@@ -10,8 +10,12 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _pg_safety import refuse_production_target, require_destructive_opt_in  # noqa: E402
 
 os.environ["NEXUS_DATABASE_URL"] = "postgresql://postgres:pg@127.0.0.1:5433/nexus"
 os.environ["NEXUS_REQUIRE_POSTGRES"] = "1"
@@ -34,6 +38,14 @@ def psql(url: str, sql: str) -> str:
 
 
 def main() -> int:
+    # F-004: this script drops and rewrites tables on SRC and DST. It may be
+    # aimed at production through NEXUS_DATABASE_URL, so require the explicit
+    # opt-in and refuse a managed/production host even then.
+    require_destructive_opt_in(SRC, what="dr_proof source (DROP/CREATE/INSERT)")
+    require_destructive_opt_in(DST, what="dr_proof target (DROP + restore)")
+    refuse_production_target(SRC, what="dr_proof source")
+    refuse_production_target(DST, what="dr_proof target")
+
     # 1. Seed a uniquely identifiable row in the source database.
     psql(SRC, "DROP TABLE IF EXISTS dr_proof")
     psql(SRC, "CREATE TABLE dr_proof(v text)")

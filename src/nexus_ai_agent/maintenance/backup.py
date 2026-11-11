@@ -165,6 +165,32 @@ def _last_meaningful_line(data: bytes) -> bytes:
     return lines[idx].strip() if idx >= 0 else b""
 
 
+#: How much of a dump's tail to read to find its last meaningful line. The
+#: completion footer plus PG17's ``\unrestrict``/``--`` trailer is a few dozen
+#: bytes; 256 KiB is a generous bound that keeps the check O(1) in file size.
+_TAIL_WINDOW_BYTES = 256 * 1024
+
+
+def _last_meaningful_line_of_file(path: Path, window: int = _TAIL_WINDOW_BYTES) -> bytes:
+    """Streaming ``_last_meaningful_line`` over a file (F-012).
+
+    The previous implementation did ``path.read_bytes()`` and then searched the
+    result — a multi-gigabyte dump was loaded entirely into memory just to read
+    its final line, which can OOM the backup host. The footer is always at the
+    very end, so only the last ``window`` bytes are needed; this reads at most
+    that many regardless of file size.
+
+    A file smaller than the window is read whole (cheap, and the only correct
+    way to find a ``\\unrestrict`` trailer that spans the whole file).
+    """
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        if size > window:
+            handle.seek(size - window)
+        data = handle.read()
+    return _last_meaningful_line(data)
+
+
 def _verify_postgres_dump(dump_path: Path) -> dict[str, Any]:
     """Structural verification for a plain-text pg_dump artifact.
 
@@ -173,13 +199,13 @@ def _verify_postgres_dump(dump_path: Path) -> dict[str, Any]:
     it as typed evidence (the strongest honest claim available):
     non-empty + pg_dump completion footer present as the last content line.
     """
-    data = dump_path.read_bytes()
-    if not data:
+    # F-012: bounded-memory — only the tail is read, never the whole artifact.
+    if dump_path.stat().st_size == 0:
         raise RuntimeError("pg_dump artifact is empty")
     # The footer must be the last meaningful line, not merely present
     # somewhere: a truncated dump whose *data* contains the footer string
     # must still be rejected (a plain containment check is a false positive).
-    if _last_meaningful_line(data) != _PG_DUMP_FOOTER.encode():
+    if _last_meaningful_line_of_file(dump_path) != _PG_DUMP_FOOTER.encode():
         raise RuntimeError(
             f"pg_dump artifact is truncated or failed mid-run (last meaningful "
             f"line is not the footer {_PG_DUMP_FOOTER!r})"

@@ -185,8 +185,11 @@ def _detect_engine(artifact: Path, filename_hint: str) -> str:
     if filename_hint.endswith(".sqlite3"):
         return "sqlite"
     # Fallback: sniff the sqlite header, else the pg_dump header comment.
+    # F-012: read only the first bytes — the previous ``read_bytes()[:100]``
+    # loaded the whole (possibly multi-gigabyte) artifact to inspect 100 bytes.
     try:
-        head = artifact.read_bytes()[:100]
+        with artifact.open("rb") as handle:
+            head = handle.read(100)
     except OSError as exc:
         raise RestorePlanError(f"artifact is not readable: {artifact} ({exc})") from exc
     if head.startswith(b"SQLite format 3"):

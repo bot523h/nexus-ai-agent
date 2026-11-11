@@ -20,6 +20,9 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _pg_safety import refuse_production_target, require_destructive_opt_in  # noqa: E402
+
 REPO = Path(__file__).resolve().parents[1]
 PG_URL = os.environ.get("NEXUS_DATABASE_URL", "postgresql://postgres:pg@127.0.0.1:5433/nexus")
 
@@ -66,6 +69,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="docs/evidence/p0")
     args = ap.parse_args()
+
+    # F-004: the bundle runs migrations and dr_proof against PG_URL, which DROPs
+    # and rewrites tables. Require the opt-in and refuse a managed host.
+    require_destructive_opt_in(PG_URL, what="p0_evidence bundle (migrate + dr_proof)")
+    refuse_production_target(PG_URL, what="p0_evidence bundle")
+
     out_dir = REPO / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
 
