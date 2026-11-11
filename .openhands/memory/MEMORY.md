@@ -2,6 +2,91 @@
 
 Index of durable, expensive-to-learn facts. Detail goes to daily logs.
 
+## Environment + CI gotchas (2026-11-11, JCS session)
+- **The workspace Python is BARE**: no `nexus_ai_agent` installed, no
+  `pydantic`/`sqlalchemy`/`typer`. Run everything with `PYTHONPATH=src` and
+  `python3 -m pytest`/`-m mypy`/`-m ruff`. Install a targeted dep set (pytest,
+  pydantic, sqlmodel, sqlalchemy, structlog, httpx, numpy, pillow, ruff, mypy,
+  deptry, imageio-ffmpeg) — NEVER `pip install -e ".[dev]"` (torch closure).
+- **`--no-deps` CI lanes** (`trust-mutations`, `execution-core-mutations`,
+  `b2-blob-tier-mutations`) import the production package without its closure →
+  any NEW third-party import inside `nexus_ai_agent.provenance` (or other
+  imported-at-collection packages) MUST be **lazy** (inside the function), else
+  those jobs break with ImportError.
+- `agent_board.py show/next/gc` MUTATES `.agents/board.json` (auto-gc of stale
+  leases) → `git checkout -- .agents/board.json` before starting work.
+- `rfc8785` (Trail of Bits, `==0.1.4`, Apache-2.0, pure-Python, no runtime deps,
+  `>=3.8`, py.typed) **silently coerces** `tuple`→array, `IntEnum`→int and
+  `str`/`dict` subclasses→base; `dumps` returns **bytes**. A safe wrapper must
+  gate EXACT types before calling it. `provenance.jcs` does this.
+- Board `next_work` and many `queued` claims are STALE: verify each task's
+  deliverable path with `git cat-file -e origin/main:<path>` before believing it
+  is open (all 10 `next_work` deliverables were already on main on 2026-11-11).
+
+## nagar_ccr — standalone Creative Capability Runtime prototype (2026-11-09)
+- Lives in `/workspace/project` (a SEPARATE empty git repo, NOT this one), branch
+  `nagar-ccr-prototype`, commit `f223757`. Package `src/nagar_ccr/`; run with
+  `PYTHONPATH=src python3 scripts/demo.py`. **36 tests pass; 11/11 mutations killed.**
+- **2026-11-11 second-pass audit (branch `fix/output-path-containment-20261111`,
+  commit `2f46707`, LOCAL, not pushed):** found a REAL defect the first pass
+  over-claimed as mitigated — `policy` confined source paths but NOT the output
+  path (`image.encode`'s `out_path`), so the runtime wrote outside `allowed_roots`.
+  Fix: `CapabilitySpec.writes` declares write-target param keys; registry refuses a
+  `write:filesystem` cap that declares none (fail closed); `policy.evaluate` gained a
+  **fifth gate** confining every declared write target via `_resolve_within` (blocks
+  `..` AND symlink escape). **Durable rule: a path-containment gate that only walks
+  `plan.sources` is half a gate — enumerate write targets too.**
+- **Reality (durable):** `nexus-ai-agent` is NOT greenfield for the NAGAR mission —
+  it already has `OperationSpec`+registry (57 ops), `nexus.creative-ir.v1`, A/B/C/D
+  policy ladder (`creative/studio/bus.py`), CommandBus, `nagar/ibpc/*` verifier +
+  passport. The only real gap was a **typed Composition Compiler**; that is what the
+  prototype builds. Do not re-implement the registry/IR/passport.
+- **Digest design rule (reusable):** exclude execution bindings from identity —
+  `NON_SEMANTIC_PARAM_KEYS={"out_path"}` out of `plan_digest()`; passport digest over
+  a `semantic_payload()` that drops `generated_at`/`wall_seconds`/per-receipt
+  `seconds`; fingerprint produced *files* by bytes, not path. Otherwise the
+  reproducibility claim breaks.
+- **Plan budget rule:** wall budget = SUM of node envelopes; memory budget = MAX.
+- **Mutation-harness rule:** assert each anchor occurs EXACTLY once before
+  `str.replace(old,new,1)`; a first campaign run here killed only 4/10 (6 dead-safety
+  guards), fixed by adding one targeted test per survivor (`tests/test_guard_kills.py`).
+- **FFmpeg licence (verbatim):** LGPL-2.1+ by default; GPL-2.0+ only with
+  `--enable-gpl` → keep it a SEPARATE PROCESS so NAGAR's core stays permissive.
+  Sandbox has no system ffmpeg, but `pip install imageio-ffmpeg` gives FFmpeg 9.0.2.
+- **2026-11-11 third-pass: independent before/after PoC (durable, do this again):**
+  The output-containment fix was proven by running the SAME script against two
+  checkouts — `/tmp/ccr-before` (`git worktree add /tmp/ccr-before f223757`, pre-fix)
+  and the fixed tree — with `PYTHONPATH=<tree>/src`. BEFORE: policy `allowed=True`,
+  reasons `(permissions ok, egress ok, resources ok, sources ok)`, and it **wrote a
+  12347-byte PNG outside the allowed root**. AFTER: `PathDeniedError: '...' escapes
+  the allowed roots`, file NOT written. This is the reusable shape for any
+  "containment removed" claim: two worktrees + one script, report the decision AND
+  the on-disk side effect. Re-verified: 36 tests, 11/11 mutants, demo PASS, bench
+  `light.relight` 0.0721 s / 68.9 MB @640×360.
+- Sandbox: 4 vCPU / 15 GiB / **no GPU** / no rustc/go/java/cmake. See
+  `.openhands/memory/2026-11-09.md` for the full session log.
+
+## Engineering-debt watchdog automation (durable mechanics)
+- Observe-and-report only. Artifact: `.agents/evidence/AGENT_DEBT_WATCHDOG_<UTC-date>.md`;
+  commit on branch **`automation/debt-watchdog`**; update the single long-lived PR
+  **#301** (`chore(automation): engineering-debt watchdog <date>`). Additive commits,
+  never force-push. Reports 2026-10-30 … 2026-11-08 already exist on the branch.
+- **`gh` credential split (cost time):** export `GH_TOKEN`. The ambient `GITHUB_TOKEN`
+  works for check-runs/commit-status/`pr view` but returns `403 Resource not accessible
+  by integration` for `branches/main/protection` **and** for `gh pr edit`
+  (GraphQL `updatePullRequest`). Use `GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"` for
+  protection reads and PR title/body edits. Default `collect` (ambient) degrades to 15
+  workflow-derived contexts → 0 READY; the PAT collect reads the 3 canonical contexts.
+  Report both views.
+- Push: `origin` has no token; push via
+  `https://bot523h:${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/bot523h/nexus-ai-agent.git`.
+- Gate env (no venv): run with `PYTHONPATH=src` and install `pytest pytest-asyncio
+  pydantic pydantic-settings sqlmodel sqlalchemy alembic aiosqlite structlog typer httpx
+  python-multipart numpy pillow beautifulsoup4 psutil arabic-reshaper python-bidi
+  duckduckgo-search greenlet "sqlalchemy[asyncio]"` (without `greenlet`,
+  `test_agent_board.py` errors at import).
+- See `.openhands/memory/2026-11-09.md` for the latest run's findings.
+
 ## Working-style note (owner preference)
 - The owner reads a `finish` call as "the agent disconnected/stopped" and finds it
   disruptive. **Do not call `finish` after routine progress reports.** Keep working
@@ -10,11 +95,6 @@ Index of durable, expensive-to-learn facts. Detail goes to daily logs.
   closing every exchange.
 
 ## NAGAR-ONE P0 closeout + PR reconciliation (2026-11-07 continuation)
-> **SUPERSEDED (2026-11-08).** This interim block records the mid-campaign state (#319 at
-> `e52e30eb`, 24/24 mutants, 6421 tests). The FINAL, durable state is in the
-> **"NAGAR-ONE P0 closeout + PR reconciliation (durable, 2026-11-07, mission -02)"** block
-> below: #319 merged as `65c020cf`, campaign **25/25**, suite **6423 passed / 39 skipped**,
-> live `main` `5ed6d4e1`. Read that block, not this one, for current facts.
 - **#319 (task-282 Slice 2)** head now **`e52e30eb`**, **16/16 threads resolved**,
   **CI 42412872578 = SUCCESS** (27/27). **P0 fix**: the artifact→revision binding is
   now committed by the queue's **post-verification, pre-COMPLETED async `confirm` hook**
@@ -1100,22 +1180,50 @@ Only red check = the #234 flake (task-264, issue #237).
 - **`lint-fast` runs `ruff format --check`** (not just `ruff check`): always run
   `ruff format --check .` before pushing — a plain `ruff check` misses over-wrapped lines.
 
-## NAGAR-ONE P0 closeout + PR reconciliation (durable, 2026-11-07, mission -02)
-- **main `6838c543` → `5ed6d4e1`** (verified live). Merge authorization via GitHub; all merges via API.
-- **Merge train:** #320→`a8ce54a4`, #321→`1919dc3d`, #319→`65c020cf`, #322→`5ed6d4e1`. Order #321 BEFORE
-  #319: #321 renames the duplicate storage law `R22`→`R25`, #319 adds `R29`; same MODULE_MAP §3 region →
-  #319 conflicted; resolved locally (main R25 + branch R29) as merge `c5b7da56`. Register now `R1..R29`,
-  no dups/gaps. **#323 closed** (redundant: files already on main; its MEMORY.md would delete 27 lines).
-  **#294 separate** (needs rebase); its OpenGrep SQL warning at `provenance/graph.py:612` is a **false
-  positive** (closed-set column name + parameter-bound values) — evidence reply posted + thread resolved.
-- **Protection `strict: true`**, required = `lint (ruff+mypy+version lockstep)`, `test (pytest -m "not slow")`,
-  `merge-base-guard (base == main)`, `enforce_admins: true`. So update each PR branch with main before merge.
-  `github_merge_pull_request` needs the FULL 40-hex `expectedHeadSha` (8-char sha → rejected); a 409
-  "Head branch was modified" means re-fetch the head sha and retry.
-- **P0 fence `6420432b`** (in #319): `_owns_execution` re-read immediately BEFORE the durable binding commit;
-  2 non-vacuous fault-injection tests; mutation `artifact_confirmation_refusal_ignored`; campaign 25/25 killed;
-  full suite 6423 passed / 39 skipped. Residuals in **D-0038** (schema-2 pin enforcement + atomic
-  concurrent-revision lock deferred).
-- **Board evidence:** `record-pr-merge` verified all 4 merges against live main; `agent_board.py check` = no
-  overlap. Report: `docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md` on branch
-  `openhands/nagar-one-final-closeout-20261107` (NEVER push to main).
+## task-282 Slice 2 F1 — binding ownership fence (2026-11-07/08)
+- Branch `fix/binding-ownership-fence-20261107` (base = main `5ed6d4e1`). NOT pushed;
+  local head `7688bfcd` (3 commits). No PR opened (owner opens/merges; HARD RULE: never write main).
+  Migration **`20261107bindfence`** (adds `ProjectArtifactBinding.attempt`);
+  PostgreSQL golden **`d6457c71…`** (was `2fbfee72544a…`).
+- **Ownership is the `(job_id, attempt)` pair, not the artifact alone.** A DIFFERENT job
+  that publishes identical bytes (same content address) must never seize the canonical
+  row. The token advance is a single conditional `UPDATE ... WHERE artifact_id = :id
+  AND job_id = :job AND attempt < :new`; the redundant Python job guard was REMOVED so a
+  dropped SQL predicate cannot hide from the mutation campaign (the SQL guard is the sole
+  authority). Cross-job idempotency is on `(project_id, artifact_id)`; the returned binding
+  is RE-READ from the DB (the conditional UPDATE bypasses the ORM identity map).
+  `SqlArtifactBindingStore.retract()` is token-scoped on `(artifact_id, job_id, attempt)`.
+  Harness now **29/29 killed** (added `rebind_advance_not_job_scoped`).
+- **Mutation-anchor uniqueness trap (durable):** the harness applies with
+  `str.replace(old, new, 1)` — a NON-UNIQUE `old` silently mutates only the FIRST
+  occurrence, so a duplicated guard leaves a live copy and the mutant "kills" falsely.
+  Two durable anchors were non-unique (`cross_project_read_check_removed` 3x,
+  `artifact_binding_confirmed_before_verification` 2x) → widened both to unique
+  multi-line anchors. New guard `tests/unit/test_mutation_harness_anchors.py::
+  test_durable_project_state_anchors_occur_exactly_once` (mirrors the referee/gate5/
+  execution-core guards) turns this into an instant unit failure.
+- **New PG proof:** `tests/integration/test_artifact_binding_postgres_concurrency.py` —
+  real OS processes on PostgreSQL (cross-job non-seizure, owner-only retract, racing
+  advances never leave the lower token). Wired into `migrate-postgres`; a new
+  `test_pg_integration_safety.py` assertion proves every registered PG-writing module is
+  ACTUALLY run by CI (registered-but-uninvoked = silent hole). Runs locally only with
+  `NEXUS_DATABASE_URL` + `NEXUS_PG_TEST_DESTRUCTIVE=1`.
+- **Typed-delete rule**: SQLModel `Model.attr == x` predicates type as `bool` → mypy red.
+  Do NOT `from sqlmodel import col` inside `creative/project_state` — the boundary test
+  `tests/architecture/test_durable_project_state_boundary.py` allowlists top-level imports
+  and excludes `sqlmodel`. Use a module-level `_BINDING: Table = cast(Table, Model.__table__)`
+  accessor (`# type: ignore[attr-defined]`) + `_BINDING.c.attr == x`; rowcount via
+  `getattr(result, "rowcount", 0)`. Same idiom as `creative/assets/repository.py`.
+- **Environment-leak gotcha (cost a red full-suite run):** exporting `NEXUS_DATABASE_URL`
+  into the persistent shell silently repoints the WHOLE suite at Postgres → ~50 failures
+  in SQLite-default modules (surface_*, gamification, readyz, sync_engine_resolution).
+  Always run the full suite with `env -u NEXUS_DATABASE_URL -u NEXUS_PG_TEST_DESTRUCTIVE`.
+  Clean run on `7688bfcd`: **6437 passed / 41 skipped / 0 failed**.
+- `OPERATION_TRUTH.json` `source_revision` stamps the PREVIOUS commit (self-referential);
+  `generated_at`/`source_revision` are in `non_deterministic_fields` so the byte-exact
+  truth gate ignores them — a committed stamp equal to the parent is expected, not a bug.
+- `tests/architecture/test_durable_project_state_boundary.py` also enforces a top-level
+  import allowlist — any new stdlib/3p import into that package must be added there.
+- PR #324 (`openhands/nagar-one-final-closeout-20261107`, other agent) is open on the SAME
+  base `5ed6d4e1` and claims `.agents/board.json`; whichever PR merges second must
+  union-merge the board (per `merge_resolution_note`).
