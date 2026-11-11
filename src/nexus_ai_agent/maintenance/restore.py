@@ -397,10 +397,16 @@ def _apply_postgres_restore(
     *,
     force: bool,
 ) -> None:
-    pg_restore = shutil.which("pg_restore")
-    if pg_restore is None:
+    # Artifacts are plain-text ``pg_dump`` output (see
+    # ``backup._dump_postgres``). ``pg_restore`` rejects that format
+    # ("input file appears to be a text format dump. Please use psql."), so a
+    # real restore of a NEXUS backup is applied with ``psql``. The dump is
+    # written with ``--clean --if-exists``, so re-applying it over an existing
+    # database drops and recreates the objects instead of failing.
+    psql = shutil.which("psql")
+    if psql is None:
         raise RestorePlanError(
-            "pg_restore not found on PATH (install postgresql-client) — a real "
+            "psql not found on PATH (install postgresql-client) — a real "
             "PostgreSQL restore is UNVERIFIED in this environment; the "
             "structural leg (footer + bytes) is already proven above"
         )
@@ -412,11 +418,11 @@ def _apply_postgres_restore(
         )
     if not force:
         raise RestorePlanError(
-            "refusing to pg_restore into a live database without --force — "
+            "refusing to restore into a live database without --force — "
             "this overwrites database objects on the target cluster"
         )
     proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
-        [pg_restore, "--no-owner", "--clean", "--if-exists", "--dbname", target_url, str(artifact)],
+        [psql, "-v", "ON_ERROR_STOP=1", "--dbname", target_url, "--file", str(artifact)],
         capture_output=True,
         text=True,
         timeout=1800,
@@ -424,11 +430,11 @@ def _apply_postgres_restore(
     )
     if proc.returncode != 0:
         raise RestoreVerificationError(
-            f"pg_restore failed on the live target: {proc.stderr.strip()[:400]} — "
+            f"psql restore failed on the live target: {proc.stderr.strip()[:400]} — "
             "the structural artifact leg was verified; classify CLUSTER-SIDE "
             "before retrying (roles? occupied connections? version match?)"
         )
-    report.record("POSTGRES_LIVE_RESTORE", True, "pg_restore exited 0 on target cluster")
+    report.record("POSTGRES_LIVE_RESTORE", True, "psql applied the dump on the target cluster")
 
 
 # ── the drill ───────────────────────────────────────────────────────────

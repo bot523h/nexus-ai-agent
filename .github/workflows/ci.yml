@@ -702,6 +702,9 @@ jobs:
       # (job_id, attempt) retracts, and two racing token advances never leave
       # the lower token (task-282 slice-2 F1).
       - run: pytest -q tests/integration/test_artifact_binding_postgres_concurrency.py
+      # Persistence/durability on the real backend (mission P0): migrations are
+      # idempotent, a row survives a full engine rebuild, backend is postgresql.
+      - run: pytest -q tests/integration/test_postgres_persistence.py
       # Shared read-only adapter contract, PG leg (incl. golden stability
       # and the f4a9c2e71b08 lifecycle table).
       - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py

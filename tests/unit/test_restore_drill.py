@@ -464,13 +464,13 @@ class TestPostgresLegTruth:
     def test_apply_pg_requires_target_url_and_force(self, tmp_path, monkeypatch):
         import shutil
 
-        if shutil.which("pg_restore") is None:
+        if shutil.which("psql") is None:
             # Missing binary must be the named blocker — honest, never faked.
             artifact = tmp_path / "backup.sql"
             artifact.write_text(
                 "-- PostgreSQL database dump\nSELECT 1;\n-- PostgreSQL database dump complete\n"
             )
-            with pytest.raises(RestorePlanError, match="pg_restore not found"):
+            with pytest.raises(RestorePlanError, match="psql not found"):
                 restore_drill(
                     settings=_settings(tmp_path, monkeypatch),
                     from_local=artifact,
@@ -496,3 +496,37 @@ class TestPostgresLegTruth:
                     from_local=artifact,
                     apply=True,
                 )
+
+
+def test_apply_pg_uses_psql_for_plain_text_dumps(tmp_path, monkeypatch):
+    """Plain-text pg_dump output must be applied with ``psql``, not ``pg_restore``.
+
+    pg_restore rejects the text format ("input file appears to be a text format
+    dump. Please use psql."), so a real restore of a NEXUS backup goes through
+    psql. Kill-mutation: reverting to pg_restore makes this fail.
+    """
+    from nexus_ai_agent.maintenance import restore as restore_module
+
+    artifact = tmp_path / "backup.sql"
+    artifact.write_text(
+        "-- PostgreSQL database dump\nCREATE TABLE t (id int);\n"
+        "-- PostgreSQL database dump complete\n"
+    )
+    captured: dict[str, list[str]] = {}
+
+    class _Done:
+        returncode = 0
+        stderr = ""
+
+    def _fake_run(argv, **_kwargs):
+        captured["argv"] = list(argv)
+        return _Done()
+
+    monkeypatch.setattr(restore_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(restore_module.subprocess, "run", _fake_run)
+
+    report = restore_module.DrillReport(mode="apply")
+    restore_module._apply_postgres_restore(artifact, "postgresql://u:p@h/db", report, force=True)
+    assert captured["argv"][0].endswith("psql")
+    assert "pg_restore" not in " ".join(captured["argv"])
+    assert report.chain[-1]["state"] == "POSTGRES_LIVE_RESTORE"

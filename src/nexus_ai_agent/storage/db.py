@@ -128,8 +128,11 @@ def resolve_migration_url() -> str:
     returned in asyncpg form via :func:`to_asyncpg_url`) wins; otherwise the
     configured SQLite path is returned as a ``sqlite+aiosqlite://`` URL.  The
     C1 helpers are reused as-is — no URL logic is duplicated here.
+
+    Fails closed when ``NEXUS_REQUIRE_POSTGRES`` is set but no URL is present
+    (production): migrations must never target the SQLite fallback there.
     """
-    database_url = resolve_database_url()
+    database_url = enforce_postgres_policy()
     if database_url is not None:
         return to_asyncpg_url(database_url)
 
@@ -152,6 +155,61 @@ def resolve_database_url() -> str | None:
     if not value:
         return None
     return normalize_database_url(value)
+
+
+class BackendPolicyError(RuntimeError):
+    """Raised when the production backend policy cannot be satisfied.
+
+    The single failure this guards is the dangerous one: a production
+    deployment that silently degrades to SQLite because ``NEXUS_DATABASE_URL``
+    was never set.  It is deliberately distinct from a connection error, which
+    surfaces later (and already turns ``/readyz`` red).
+    """
+
+
+def postgres_required() -> bool:
+    """Whether ``NEXUS_REQUIRE_POSTGRES`` is in force (production policy)."""
+    from nexus_ai_agent.config.settings import get_settings
+
+    return bool(getattr(get_settings(), "require_postgres", False))
+
+
+def enforce_postgres_policy() -> str | None:
+    """Resolve the backend URL, failing closed when PostgreSQL is required.
+
+    This is the one place the SQLite-fallback decision is authorized:
+
+    * URL set            → return it (PostgreSQL).
+    * URL empty, not required → return ``None`` (the caller may use SQLite —
+      development, tests, CI).
+    * URL empty, required     → raise :class:`BackendPolicyError`; a production
+      deployment must never fall back to a local SQLite file it cannot persist.
+
+    Callers that would otherwise reach for SQLite must go through this instead
+    of :func:`resolve_database_url` so the policy cannot be bypassed.
+    """
+    database_url = resolve_database_url()
+    if database_url is None and postgres_required():
+        raise BackendPolicyError(
+            "NEXUS_REQUIRE_POSTGRES=true but NEXUS_DATABASE_URL is empty: "
+            "refusing the SQLite fallback. Set NEXUS_DATABASE_URL to the "
+            "canonical Neon connection string, or unset NEXUS_REQUIRE_POSTGRES "
+            "for development/test/CI."
+        )
+    return database_url
+
+
+def selected_backend() -> str:
+    """The backend the process will use, for health/observability reporting.
+
+    Returns ``"postgresql"`` or ``"sqlite"``.  When PostgreSQL is required but
+    unconfigured the backend is still reported as ``"postgresql"`` — the
+    intended backend — so readiness never presents a broken production
+    deployment as a healthy SQLite one (see :func:`enforce_postgres_policy`).
+    """
+    if resolve_database_url() is not None:
+        return "postgresql"
+    return "postgresql" if postgres_required() else "sqlite"
 
 
 # ── D5: Alembic-first bootstrap decision for SQLite ───────────────────
@@ -429,7 +487,7 @@ def sync_database_url(db_path: str | None = None) -> str:
     wins and the configured SQLite file (``NEXUS_DB_PATH``) is the fallback.
     """
     if db_path is None:
-        database_url = resolve_database_url()
+        database_url = enforce_postgres_policy()
         if database_url is not None:
             return to_psycopg_url(database_url)
         from nexus_ai_agent.config.settings import get_settings
@@ -520,7 +578,7 @@ async def get_session(db_path: str | None = None) -> AsyncIterator[AsyncSession]
     """
     await _dispose_replaced_engines()
     if db_path is None:
-        database_url = resolve_database_url()
+        database_url = enforce_postgres_policy()
         if database_url is not None:
             await _ensure_pg_schema(database_url)
             factory = _get_pg_session_factory(database_url)

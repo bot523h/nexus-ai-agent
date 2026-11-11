@@ -68,8 +68,11 @@ def _dump_postgres(database_url: str, dest: Path) -> None:
     pg_dump = shutil.which("pg_dump")
     if pg_dump is None:
         raise RuntimeError("pg_dump not found on PATH (install postgresql-client)")
+    # ``--clean --if-exists`` makes the artifact self-contained for recovery:
+    # a restore drops and recreates the objects instead of failing on an
+    # existing schema (the plain-text format is applied with ``psql``).
     proc = subprocess.run(
-        [pg_dump, "--no-owner", "--file", str(dest), database_url],
+        [pg_dump, "--no-owner", "--clean", "--if-exists", "--file", str(dest), database_url],
         capture_output=True,
         text=True,
         timeout=1800,
@@ -154,7 +157,10 @@ def _verify_postgres_dump(dump_path: Path) -> dict[str, Any]:
     data = dump_path.read_bytes()
     if not data:
         raise RuntimeError("pg_dump artifact is empty")
-    if not data.rstrip().endswith(_PG_DUMP_FOOTER.encode()):
+    # pg_dump writes the completion footer, then (PostgreSQL 17+) an
+    # ``\unrestrict`` line that closes the ``\restrict`` preamble, so the
+    # footer is a *line* in the file, not its final bytes.
+    if _PG_DUMP_FOOTER.encode() not in data:
         raise RuntimeError(
             f"pg_dump artifact is truncated or failed mid-run (missing footer {_PG_DUMP_FOOTER!r})"
         )

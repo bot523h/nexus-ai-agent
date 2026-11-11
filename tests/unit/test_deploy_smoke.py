@@ -50,6 +50,10 @@ services:
         value: "{{ .Env.NEXUS_WEBHOOK_URL }}"
       - name: NEXUS_WEBHOOK_SECRET
         value: "{{ .Env.NEXUS_WEBHOOK_SECRET }}"
+      - name: NEXUS_DATABASE_URL
+        value: "{{ .Env.NEXUS_DATABASE_URL }}"
+      - name: NEXUS_REQUIRE_POSTGRES
+        value: "true"
     health_check:
       path: /readyz
 """
@@ -103,6 +107,26 @@ def test_manifest_rejects_polling_run_mode(tmp_path: Path) -> None:
 def test_manifest_rejects_missing_service(tmp_path: Path) -> None:
     results = check_manifest(_write_manifest(tmp_path, "name: nexus-ai\nservices: []\n"))
     assert any(r.status == "FAIL" and "no service" in r.detail for r in results)
+
+
+def test_manifest_rejects_missing_postgres_persistence(tmp_path: Path) -> None:
+    # P0: a production manifest without the DB contract must FAIL, so a deploy
+    # that would silently fall back to SQLite is caught before it ships.
+    text = "\n".join(
+        line
+        for line in VALID_MANIFEST.splitlines()
+        if "NEXUS_DATABASE_URL" not in line and "NEXUS_REQUIRE_POSTGRES" not in line
+    )
+    results = check_manifest(_write_manifest(tmp_path, text))
+    detail = next(r.detail for r in results if r.status == "FAIL")
+    assert "NEXUS_DATABASE_URL" in detail
+    assert "NEXUS_REQUIRE_POSTGRES" in detail
+
+
+def test_real_repo_manifest_declares_postgres_persistence() -> None:
+    # The committed koyeb.yaml must satisfy the P0 persistence contract.
+    results = check_manifest(REPO_ROOT / "koyeb.yaml")
+    assert "FAIL" not in _statuses(results)
 
 
 def test_manifest_missing_file_fails(tmp_path: Path) -> None:

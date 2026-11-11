@@ -291,9 +291,20 @@ async def _database_readiness(timeout: float = 2.5) -> tuple[bool, str]:
     """
     from sqlalchemy import text
 
-    from nexus_ai_agent.storage.db import resolve_database_url, to_asyncpg_url
+    from nexus_ai_agent.storage.db import (
+        BackendPolicyError,
+        enforce_postgres_policy,
+        postgres_required,
+        to_asyncpg_url,
+    )
 
-    db_url = resolve_database_url()
+    try:
+        db_url = enforce_postgres_policy()
+    except BackendPolicyError as exc:
+        # PostgreSQL is required but unconfigured: report the *intended*
+        # backend so a broken production deployment is never presented as a
+        # healthy SQLite one.
+        return False, f"postgresql (required): {exc}"[:200]
 
     async def _probe() -> tuple[bool, str]:
         if db_url is not None:
@@ -306,6 +317,10 @@ async def _database_readiness(timeout: float = 2.5) -> tuple[bool, str]:
             finally:
                 await engine.dispose()
             return True, "postgresql"
+        if postgres_required():
+            # Unreachable after enforce_postgres_policy, kept as a belt-and-
+            # braces guard so a future refactor cannot report SQLite here.
+            return False, "postgresql (required) but NEXUS_DATABASE_URL is empty"
         db_path = Path(get_settings().db_path).expanduser()
         if not db_path.is_file():
             return False, f"sqlite database file missing: {db_path}"
@@ -357,13 +372,19 @@ async def readyz() -> JSONResponse:
     startup_state = startup.get("state")
     startup_ok = startup_state == "ready"
     identity = _deployment_identity()
+    # The backend the process *intends* to use, independent of whether the
+    # probe succeeded: a PostgreSQL deployment that cannot connect must report
+    # "postgresql", never a healthy "sqlite" (mission §14).
+    from nexus_ai_agent.storage.db import selected_backend
+
+    backend = selected_backend()
     payload: dict[str, object] = {
         "status": "ready" if db_ok and startup_ok else "not_ready",
         "version": identity["version"],
         "deploy_git_sha": identity["deploy_git_sha"],
         "db": {
             "ok": db_ok,
-            "backend": db_detail if db_ok else None,
+            "backend": backend,
             "detail": None if db_ok else db_detail,
         },
         "startup": {

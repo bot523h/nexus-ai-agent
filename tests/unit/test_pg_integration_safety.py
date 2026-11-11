@@ -34,10 +34,11 @@ INTEGRATION_MODULE = REPO_ROOT / "tests" / "integration" / "test_postgres_single
 #: Every module that writes to the ``NEXUS_DATABASE_URL`` database must obey the
 #: same data-safety contract: an explicit destructive opt-in and only
 #: nonce-scoped writes.  The fence module (task-282 slice-2 F1) is the second
-#: such module.
+#: such module; the persistence/durability module (mission P0) is the third.
 PG_WRITING_MODULES = (
     INTEGRATION_MODULE,
     REPO_ROOT / "tests" / "integration" / "test_artifact_binding_postgres_concurrency.py",
+    REPO_ROOT / "tests" / "integration" / "test_postgres_persistence.py",
 )
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
