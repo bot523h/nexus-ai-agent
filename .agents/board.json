@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-11T08:36:03Z",
+  "updated_at": "2026-11-11T08:44:16Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8215,8 +8215,16 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
-      "delivered": [],
-      "note": ""
+      "delivered": [
+        "src/nexus_ai_agent/provenance/jcs.py",
+        "src/nexus_ai_agent/provenance/__init__.py",
+        "pyproject.toml",
+        "tests/unit/test_provenance_jcs.py",
+        "tests/unit/test_provenance_legacy_hash_compatibility.py",
+        "tests/architecture/test_jcs_legacy_isolation.py",
+        ".agents/handoffs/task-jcs-rfc8785-foundation-01.md"
+      ],
+      "note": "PR #333 open (base main 5fe94512, head c5804579; impl a6dd22c7). RFC8785 JCS additive API provenance/jcs.py + fail-closed boundary; rfc8785==0.1.4 pinned; legacy goldens frozen + isolation guard. Local gates: 48+611+66 passed, ruff/format clean, mypy clean on changed files, deptry no finding, board check exit 0. Full make test NOT_PROVEN (budget)."
     },
     {
       "task": "task-omni-r2-bucket-validation-01",
