@@ -1,0 +1,20 @@
+stateDiagram-v2
+    [*] --> Active: canonical principal + ProjectAccess + usable credential
+    Active --> Expired: connection or credential expiry reached
+    Active --> Revoked: explicit revocation or canonical denial
+    Expired --> Revoked: terminal denial
+    Revoked --> [*]
+
+    state Active {
+        [*] --> CredentialActive
+        CredentialActive --> CredentialRotating: rotation requested
+        CredentialRotating --> CredentialActive: replacement verified
+        CredentialRotating --> CredentialRevoked: rotation failed
+        CredentialRevoked --> [*]
+    }
+
+    note right of Active
+      ConnectionContract is metadata only.
+      authorize_read requires canonical ProjectAccess.
+      No local scope record can create authority.
+    end note
