@@ -48,12 +48,17 @@ class ScopeGrant(BaseModel):
     project_ids: tuple[str, ...] = Field(min_length=1)
     scopes: frozenset[str] = frozenset()
 
+    _project_ids = field_validator("project_ids")(
+        lambda values: tuple(_opaque_identifier(value) for value in values)
+    )
+    _scopes = field_validator("scopes")(
+        lambda values: frozenset(_opaque_identifier(value) for value in values)
+    )
+
     @model_validator(mode="after")
     def _validate_ids(self) -> ScopeGrant:
-        if any(not value.strip() or ".." in value or "/" in value for value in self.project_ids):
+        if any(".." in value or "/" in value for value in self.project_ids):
             raise ValueError("project ids must be opaque local identifiers")
-        if any(not value.strip() or value != value.strip() for value in self.scopes):
-            raise ValueError("scopes must be non-blank identifiers")
         return self
 
     def allows(self, project_id: str, scope: str) -> bool:
@@ -72,6 +77,7 @@ class CredentialDescriptor(BaseModel):
     last_used_at: datetime | None = None
 
     _credential_id = field_validator("credential_id")(_opaque_identifier)
+    _rotated_from = field_validator("rotated_from")(_opaque_identifier)
 
     @model_validator(mode="after")
     def _reject_expired_state_mismatch(self) -> CredentialDescriptor:
@@ -83,6 +89,8 @@ class CredentialDescriptor(BaseModel):
 
     def is_usable(self, now: datetime | None = None) -> bool:
         instant = now or datetime.now(timezone.utc)
+        if instant.tzinfo is None:
+            raise PermissionError("request time must be timezone-aware")
         if self.state is not CredentialState.ACTIVE:
             return False
         return self.expires_at is None or instant < self.expires_at
@@ -114,6 +122,8 @@ class ConnectionContract(BaseModel):
 
     def is_usable(self, now: datetime | None = None) -> bool:
         instant = now or datetime.now(timezone.utc)
+        if instant.tzinfo is None:
+            raise PermissionError("request time must be timezone-aware")
         if self.state is not ConnectionState.ACTIVE:
             return False
         if self.expires_at is not None and instant >= self.expires_at:

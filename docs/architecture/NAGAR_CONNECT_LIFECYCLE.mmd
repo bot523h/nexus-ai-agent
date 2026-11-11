@@ -1,7 +1,7 @@
 stateDiagram-v2
     [*] --> Active: canonical principal + ProjectAccess + usable credential
     Active --> Expired: connection or credential expiry reached
-    Active --> Revoked: explicit revocation or canonical denial
+    Active --> Revoked: explicit revocation
     Expired --> Revoked: terminal denial
     Revoked --> [*]
 
@@ -16,5 +16,7 @@ stateDiagram-v2
     note right of Active
       ConnectionContract is metadata only.
       authorize_read requires canonical ProjectAccess.
+      A denied request is terminal for that request only;
+      it does not mutate the immutable contract.
       No local scope record can create authority.
     end note

@@ -110,6 +110,13 @@ def test_naive_request_time_fails_closed():
         )
 
 
+def test_direct_time_methods_fail_closed_for_naive_now():
+    with pytest.raises(PermissionError):
+        connection().credential.is_usable(datetime(2026, 11, 11, 13, 0))
+    with pytest.raises(PermissionError):
+        connection().is_usable(datetime(2026, 11, 11, 13, 0))
+
+
 def test_raw_secret_is_not_a_contract_field():
     with pytest.raises(ValidationError):
         CredentialDescriptor(
@@ -136,3 +143,16 @@ def test_identifiers_reject_whitespace(field):
                 state=ConnectionState.ACTIVE,
                 created_at=NOW,
             )
+
+
+def test_scope_and_rotation_identifiers_reject_control_or_blank_values():
+    with pytest.raises(ValidationError):
+        ScopeGrant(project_ids=("project\n",), scopes=frozenset({"project.read"}))
+    with pytest.raises(ValidationError):
+        ScopeGrant(project_ids=("project_a",), scopes=frozenset({" project.read"}))
+    with pytest.raises(ValidationError):
+        CredentialDescriptor(
+            credential_id="cred_test",
+            state=CredentialState.ACTIVE,
+            rotated_from=" ",
+        )
