@@ -44,6 +44,7 @@ dependencies = [
     "psutil>=5.9",
     "litellm>=1.74,<2",  # multi-provider routing chain (Ollama/Groq/Gemini/OpenRouter)
     "boto3==1.43.98",  # pinned: Cloudflare R2 blob tier (v3.9.0, latest on PyPI 2026-09-20)
+  "rfc8785==0.1.4",  # task-jcs-rfc8785-foundation-01: RFC 8785 JCS canonicalization (Apache-2.0, pure-Python, Trail of Bits, >=3.8)
   ]
 
 [project.scripts]
