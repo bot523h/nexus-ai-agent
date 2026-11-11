@@ -31,6 +31,7 @@ REFEREE = REPO / "scripts" / "board_referee_mutations.py"
 GATE5 = REPO / "scripts" / "gate5_mutation_probes.py"
 EXECUTION_CORE = REPO / "scripts" / "execution_core_mutations.py"
 RETENTION = REPO / "scripts" / "retention_verdict_mutations.py"
+DURABLE = REPO / "scripts" / "durable_project_state_mutations.py"
 CI = REPO / ".github" / "workflows" / "ci.yml"
 
 
@@ -63,6 +64,11 @@ def retention() -> dict[str, Any]:
     return _load(RETENTION)
 
 
+@pytest.fixture(scope="module")
+def durable() -> dict[str, Any]:
+    return _load(DURABLE)
+
+
 def test_referee_mutations_anchor_exactly_once_in_agent_board(referee: dict[str, Any]) -> None:
     source = Path(referee["SCRIPT"]).read_text(encoding="utf-8")
     assert Path(referee["SCRIPT"]) == REPO / "scripts" / "agent_board.py"
@@ -71,6 +77,22 @@ def test_referee_mutations_anchor_exactly_once_in_agent_board(referee: dict[str,
     # 42 after the PR #316 prerequisite/typed-PR hardening, the P0 verified-merge
     # and released-status guards, and the live-main-cache binding (was 33 → 38 → 42).
     assert len(referee["MUTATIONS"]) == 42
+
+
+def test_durable_project_state_anchors_occur_exactly_once(durable: dict[str, Any]) -> None:
+    # A non-unique anchor silently mutates only the FIRST occurrence (str.replace
+    # count=1), so a duplicated guard would leave a second live copy and the
+    # campaign would "kill" the mutant while the real hole stayed open.
+    drift: dict[str, int] = {}
+    for mutation in durable["MUTATIONS"]:
+        count = mutation.path.read_text(encoding="utf-8").count(mutation.old)
+        if count != 1:
+            drift[mutation.name] = count
+    assert drift == {}, f"durable anchors must occur exactly once: {drift}"
+    # 34 after the F5/R4 per-job ownership probes (job-scoped retraction +
+    # job-named resolve) joined the F14 non-integer-token guards and the F1
+    # stale-row fallback refusal (was 29 → 32).
+    assert len(durable["MUTATIONS"]) == 34
 
 
 def test_gate5_probe_anchors_occur_exactly_once_in_their_targets(gate5: dict[str, Any]) -> None:
@@ -211,3 +233,64 @@ def test_retention_pins_pythonpath_and_bounds_the_run(
     assert Path(seen["cwd"]) == Path(retention["REPO"])
     assert "no:cacheprovider" in seen["cmd"]
     assert seen["timeout"] == retention["TEST_TIMEOUT_S"]
+
+
+def test_durable_pins_pythonpath_to_the_tree_under_mutation(
+    durable: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GOV-1 shadowed-import guard (2026-11-08): the durable campaign ran WITHOUT
+    # the PYTHONPATH pin the other four harnesses have, so in an isolated
+    # worktree it could import the editable-installed package and every probe
+    # would falsely "survive" while the mutated bytes were never executed.
+    seen: dict[str, Any] = {}
+
+    class _Done:
+        returncode = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _Done:
+        seen["cmd"] = cmd
+        seen.update(kwargs)
+        return _Done()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert durable["run_tests"]() is True
+    assert seen["env"]["PYTHONPATH"] == str(Path(durable["ROOT"]) / "src")
+    assert Path(seen["cwd"]) == Path(durable["ROOT"])
+    assert seen["timeout"] == durable["TEST_TIMEOUT_SECONDS"]
+
+
+def test_durable_preflight_refuses_when_the_suites_do_not_collect(
+    durable: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A non-collecting target suite (a missing optional dependency, a stale
+    # symbol) makes the baseline RED after minutes; the preflight fails fast and
+    # closed instead of starting a doomed campaign.
+    class _Red:
+        returncode = 2
+        stdout = "ERROR: collection failed"
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Red())
+    assert durable["preflight"]() == 2
+
+
+def test_durable_preflight_treats_a_timeout_as_a_refusal(
+    durable: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _timeout(*args: Any, **kwargs: Any) -> Any:
+        raise subprocess.TimeoutExpired(cmd="pytest", timeout=1)
+
+    monkeypatch.setattr(subprocess, "run", _timeout)
+    assert durable["preflight"]() == 2
+
+
+def test_durable_preflight_passes_on_a_collecting_suite(
+    durable: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Green:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Green())
+    assert durable["preflight"]() == 0

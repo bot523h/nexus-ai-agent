@@ -43,12 +43,28 @@ DESTRUCTIVE_OPT_IN = "NEXUS_PG_TEST_DESTRUCTIVE"
 
 pytestmark = [
     pytest.mark.skipif(not os.getenv("NEXUS_DATABASE_URL"), reason="requires PostgreSQL"),
-    pytest.mark.skipif(not os.getenv(DESTRUCTIVE_OPT_IN), reason="requires destructive opt-in"),
+    # Strict equality, never `bool(os.getenv(...))`: a non-empty false-like value
+    # such as "0", "false" or "no" is truthy as a string and would silently arm
+    # this module against whatever NEXUS_DATABASE_URL names (D-0028).
+    pytest.mark.skipif(os.getenv(DESTRUCTIVE_OPT_IN) != "1", reason="requires destructive opt-in"),
     # The cached async engine/pool is bound to the loop it was created on;
     # pin this module's tests to ONE loop so both tests share it (the sync
     # baseline fixture above never touches that pool).
     pytest.mark.asyncio(loop_scope="module"),
 ]
+
+# The opt-in must never degrade into a silent skip: if it is armed but no
+# database is configured, every test here would collect as "skipped" and the
+# build would report green while the live PostgreSQL contract — the reason this
+# module exists — went unverified. A misconfigured run is therefore a red build.
+if os.getenv(DESTRUCTIVE_OPT_IN) == "1" and not os.getenv("NEXUS_DATABASE_URL"):
+    pytest.fail(
+        f"{DESTRUCTIVE_OPT_IN}=1 is set but NEXUS_DATABASE_URL is not: this module "
+        "would collect as skipped, so the PostgreSQL contract it exists to verify "
+        "would go unverified while the build stayed green. Set both variables, or "
+        "neither.",
+        pytrace=False,
+    )
 
 
 @pytest.fixture(scope="module")

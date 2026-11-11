@@ -163,14 +163,14 @@ flowchart TD
     sqlite -->|fresh| up["alembic upgrade head (under migration lock)"]
     sqlite -->|legacy tables, unstamped| adopt["adopt legacy sqlite: stamp, never replay DDL"]
     pg -->|pre-Alembic database| adoptpg["nexus adopt-pg: inspect → decide → stamp (D10)"]
-    pg -->|already stamped| head["verify head == 20261106artbind"]
+    pg -->|already stamped| head["verify head == 20261107bindfence"]
     up --> ready["ensure_startup_schema() → session factory"]
     adopt --> ready
     adoptpg --> ready
     head --> ready
 ```
 
-- Chain (9 revisions): `47903d282ede` (initial) → `f4a9c2e71b08` (checkpoint lifecycle table) → `7c2f9d41e8a3` (ai-memory consent) → `e575469d90b9` (nagar asset library v1) → `b5d8e2f4a917` (Telegram ids BIGINT on PostgreSQL, audit A-17) → `c3b7a91e2f46` (application principal/project membership, task-275) → `d4e1c0a79b21` (knowledge source registry, task-273) → `20261104dpstate` (durable project state, task-282) → `20261106artbind` (artifact→revision binding, task-282 slice-2) = **head**.
+- Chain (10 revisions): `47903d282ede` (initial) → `f4a9c2e71b08` (checkpoint lifecycle table) → `7c2f9d41e8a3` (ai-memory consent) → `e575469d90b9` (nagar asset library v1) → `b5d8e2f4a917` (Telegram ids BIGINT on PostgreSQL, audit A-17) → `c3b7a91e2f46` (application principal/project membership, task-275) → `d4e1c0a79b21` (knowledge source registry, task-273) → `20261104dpstate` (durable project state, task-282) → `20261106artbind` (artifact→revision binding, task-282 slice-2) → `20261107bindfence` (artifact-binding ownership fence, task-282 slice-2 F1) = **head**.
 - Migrations are idempotent: re-running `nexus migrate` at head is a no-op; CI proves it on a real `pgvector/pgvector:pg16` service container.
 - Schema drift fails fast rather than silently repairing: `storage/checkpoint_fingerprint.py` compares a DB fingerprint against a golden manifest, and `nexus checkpoints golden update` is human-only.
 

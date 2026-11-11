@@ -19,6 +19,7 @@ Exit code 0 means "N/N mutants killed".
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -60,8 +61,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "cross_project_read_check_removed",
         STORE,
-        "        if row.project_id != project_id:",
-        "        if False:",
+        '        if row.project_id != project_id:\n            raise CrossProjectAccess("revision does not belong to the requested project")',
+        '        if False:  # mutated: cross-project read check removed\n            raise CrossProjectAccess("revision does not belong to the requested project")',
         "a revision must only be readable through the project that owns it; "
         "removing the check leaks another project's state",
     ),
@@ -259,8 +260,8 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "artifact_binding_confirmed_before_verification",
         QUEUE,
-        "                if publication is not None and publication.confirm is not None:",
-        "                if False:  # mutated: the binding is never confirmed by the queue",
+        "                if publication is not None and publication.confirm is not None:\n                    # Fence re-check at the commit boundary.",
+        "                if False:  # mutated: the binding is never confirmed by the queue\n                    # Fence re-check at the commit boundary.",
         "D-0038 residual 1: the durable binding must be committed by the queue AFTER "
         "verification+publication and BEFORE COMPLETED; disabling the confirm hook "
         "means a job completes with no artifact→revision provenance",
@@ -287,24 +288,168 @@ MUTATIONS: tuple[Mutation, ...] = (
         "commit boundary, else an attempt superseded during the re-probe window "
         "commits provenance for a row it no longer owns",
     ),
+    Mutation(
+        "lost_cas_binding_retraction_removed",
+        QUEUE,
+        """                    if publication is not None and publication.confirm is not None:
+                        await self._retract_confirmation_safely(publication, payload, result, claim)""",
+        """                    if False:  # mutated: the committed binding is never retracted
+                        await self._retract_confirmation_safely(publication, payload, result, claim)""",
+        "F1: a takeover landing *inside* the confirm commit window makes the terminal "
+        "CAS fail; the committed binding must be retracted, else a superseded attempt "
+        "leaves orphan durable provenance for a job that never reached COMPLETED",
+    ),
+    Mutation(
+        "retraction_not_token_scoped",
+        STORE,
+        "                    _BINDING.c.attempt == attempt,",
+        "                    _BINDING.c.artifact_id == artifact_id,  # mutated: fencing token dropped from the delete predicate",
+        "F1: retraction must be scoped to the exact (job_id, attempt) that wrote the "
+        "row; dropping the fencing token lets a superseded attempt delete a "
+        "successor's live binding",
+    ),
+    Mutation(
+        "retraction_not_job_scoped",
+        STORE,
+        "                    _BINDING.c.artifact_id == artifact_id,\n"
+        "                    _BINDING.c.job_id == job_id,\n"
+        "                    _BINDING.c.attempt == attempt,",
+        "                    _BINDING.c.artifact_id == artifact_id,\n"
+        "                    _BINDING.c.attempt == attempt,  # mutated: job scope dropped from the delete predicate",
+        "F5/R4: retraction must be scoped to the OWNING job; dropping the job predicate "
+        "lets one job delete a different job's row for the shared bytes — the exact "
+        "provenance loss F5/R4 reports",
+    ),
+    Mutation(
+        "resolve_ignores_job_identity",
+        STORE,
+        "        if job_id is not None:\n"
+        "            return await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))",
+        "        if False:  # mutated: resolve ignores the named job's identity\n"
+        "            return await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))",
+        "F5/R4: resolve must return the NAMED job's row when a job_id is given; ignoring "
+        "it returns an arbitrary sibling's provenance for the same bytes",
+    ),
+    Mutation(
+        "rebind_fencing_token_not_monotonic",
+        STORE,
+        """        await session.execute(
+            update(orm.ProjectArtifactBinding)
+            .where(
+                _BINDING.c.artifact_id == row.artifact_id,
+                _BINDING.c.job_id == job_id,
+                _BINDING.c.attempt < attempt,
+            )
+            .values(attempt=attempt)
+            .execution_options(synchronize_session="fetch")
+        )
+        await session.commit()""",
+        """        await session.commit()  # mutated: the fencing token never advances on re-bind""",
+        "F1: a re-bind by a newer attempt of the SAME job must advance the fencing token "
+        "monotonically; otherwise a successor's row keeps the old token and a stale "
+        "retraction can delete it",
+    ),
+    Mutation(
+        "rebind_advance_not_job_scoped",
+        STORE,
+        "                _BINDING.c.job_id == job_id,\n                _BINDING.c.attempt < attempt,",
+        "                _BINDING.c.attempt < attempt,  # mutated: job scope dropped from the advance",
+        "F1: the token advance must be scoped to the owning job; dropping the job guard lets "
+        "a different job seize ownership of the row and later retract another job's binding",
+    ),
+    Mutation(
+        "non_integer_token_accepted",
+        STORE,
+        "        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 0:",
+        "        if attempt < 0:  # mutated: non-integer tokens accepted",
+        "F14: the fencing token is an integer identity; accepting a float/string/bool persists a "
+        "token an exact-token retract can never match (a float also survives the range check)",
+    ),
+    Mutation(
+        "stale_row_fallback_on_vanished_binding",
+        STORE,
+        "        if authoritative is None:\n"
+        "            # The authoritative re-read found no row: a concurrent owner\n"
+        "            # retracted the row we just reconciled against (a lost-CAS\n"
+        "            # retraction racing this successor's bind).  Confirming here would\n"
+        "            # let the caller reach COMPLETED with no durable binding — the F1\n"
+        "            # hole — so refuse closed.  A caller that still needs the artifact\n"
+        "            # re-binds (the retractor is superseded, so this cannot ping-pong:\n"
+        "            # only an attempt that already owned the row may retract it).\n"
+        "            raise ArtifactBindingConflict(\n"
+        '                "artifact binding vanished during reconciliation (retracted by its owner)"\n'
+        "            )\n"
+        "        return _as_binding(authoritative)",
+        "        return _as_binding(authoritative if authoritative is not None else row)  # mutated",
+        "F1: when the authoritative re-read finds no row the bind must fail closed; falling back "
+        "to the stale ORM row lets a successor confirm and reach COMPLETED with no binding",
+    ),
+    Mutation(
+        "retract_token_type_guard_removed",
+        STORE,
+        "        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:",
+        "        if attempt < 1:  # mutated: non-integer retract tokens accepted",
+        "F14: a non-integer retract token must be refused; accepting it can match a row an "
+        "exact-token retraction was never scoped to delete",
+    ),
 )
 
 TEST_TIMEOUT_SECONDS = 600
 
 
-def run_tests() -> bool:
+def _test_env() -> dict[str, str]:
+    """Run the suites against the tree under mutation, never an installed copy.
+
+    GOV-1 shadowed-import guard: in an isolated worktree the package is also
+    editable-installed, so without pinning ``PYTHONPATH`` to ``ROOT/src`` the
+    mutated bytes are never imported and every probe falsely survives.
+    """
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src")
+    return env
+
+
+def _run_pytest(extra: tuple[str, ...]) -> subprocess.CompletedProcess[str] | None:
     try:
-        result = subprocess.run(  # noqa: S603 - fixed argv, shell=False, TESTS are repo-local literals
-            [sys.executable, "-m", "pytest", "-q", "-x", *TESTS],
+        return subprocess.run(  # noqa: S603 - fixed argv, shell=False, TESTS are repo-local literals
+            [sys.executable, "-m", "pytest", "-q", "-x", *extra],
             cwd=ROOT,
+            env=_test_env(),
             capture_output=True,
             text=True,
             timeout=TEST_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
+        return None
+
+
+def run_tests() -> bool:
+    result = _run_pytest(TESTS)
+    if result is None:
         print(f"(test run exceeded {TEST_TIMEOUT_SECONDS}s) ", end="", flush=True)
         return False
     return result.returncode == 0
+
+
+def preflight() -> int:
+    """Refuse to run when the target suites do not even COLLECT.
+
+    ``-x`` still collects every module before it runs, so an import-time error
+    (a missing optional dependency, a stale symbol) makes the baseline RED — but
+    with an opaque failure and only after the multi-minute campaign starts.  A
+    ``--collect-only`` pass fails fast with the real cause.  Any exception here
+    (a missing ``pytest``, a timeout) is a refusal, never a silent pass.
+    """
+    result = _run_pytest(("--collect-only", *TESTS))
+    if result is None:
+        print("collect-only timed out; refusing to start the campaign")
+        return 2
+    if result.returncode != 0:
+        print("collect-only FAILED; refusing to start the campaign:")
+        print(result.stdout[-4000:])
+        print(result.stderr[-2000:])
+        return 2
+    return 0
 
 
 def main() -> int:
@@ -315,6 +460,10 @@ def main() -> int:
         for mutation in MUTATIONS:
             print(f"{mutation.name}: {mutation.why}")
         return 0
+
+    preflight_exit = preflight()
+    if preflight_exit != 0:
+        return preflight_exit
 
     print("baseline ... ", end="", flush=True)
     if not run_tests():

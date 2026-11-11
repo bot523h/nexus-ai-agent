@@ -108,6 +108,39 @@ check and the confirmation is the classic plain-filesystem fencing limit. An
 attempt superseded in that window commits no provenance and reaches no
 `COMPLETED` — it owns nothing.
 
+**Ownership fence (F1).** That re-check cannot cover a takeover landing *inside*
+the confirm commit window itself (after the re-check, at/around the binding
+write): the attempt commits its binding and *then* loses the terminal
+`COMPLETED` CAS, which would leave an orphan durable binding from a superseded
+attempt that never reached `COMPLETED`. The binding therefore carries the
+**queue-minted fencing token** (`attempt`) in its own column (migration
+`20261107bindfence`), and the lost-CAS path retracts **exactly** the row this
+attempt wrote — the delete is scoped on `(artifact_id, job_id, attempt)`, never a
+successor's row, a pre-fence row (`attempt = 0`), or another job's row.
+
+Ownership is the **`(job_id, attempt)` pair**, not the artifact alone: the
+queue's fencing token is per-job, so a comparison on `artifact_id` is not
+sufficient. Two *independent* jobs can publish identical bytes (the same content
+address); the second must never take ownership by presenting a higher token.
+The re-bind path therefore advances the token **only** when the caller is the
+row's existing job, **monotonically** and **atomically** (a single conditional
+`UPDATE ... WHERE job_id = :job AND attempt < :new`, never a read-modify-write,
+so two racing re-binds can never let the lower token commit last and reopen the
+hole; provenance is never rewritten), and the returned binding is re-read from
+the database so it is exactly what a fresh reader observes.
+
+**Cross-job idempotency (explicit).** Idempotency is defined on
+`(project_id, artifact_id)` — the artifact's identity — **not** on the job. The
+same artifact bound to the same revision is a canonical, single row: a bind by
+another job (or a replay) is a pure no-op that keeps the original owner and
+token; a bind to a different revision (or project) is a hard conflict — an
+artifact can never be silently re-pointed or re-homed. Because a different job
+never takes the token, its later retraction (scoped to its own `(job_id,
+attempt)`) can never match the canonical row. A retraction without a real token
+(`attempt >= 1`) is a typed refusal. The confirm hook is the **last** durable
+side effect before the terminal CAS, so a lost terminal CAS is the only
+non-crash exit that can leave a committed binding, and that exit retracts it.
+
 **Crash-consistency model (honest, not claimed atomic).** If the process dies
 after the confirmation commits the binding but before the durable `COMPLETED`,
 the row stays `verifying` with a queue-owned heartbeat; startup recovery
@@ -161,21 +194,31 @@ exposes no combined `execute`-style method that would bypass the bus.
   concurrent head move (deterministic ordering, no sleeps); and (Slice 2) the
   artifact→revision binding: bind/re-verify, idempotent replay, repoint refusal,
   artifact-byte re-measurement, tampered-revision refusal, cross-project refusal,
-  the unpinned no-op, the intent/confirm split, and four queue-level end-to-end
+  the unpinned no-op, the intent/confirm split, and the queue-level end-to-end
   proofs (a verified+published job commits its binding then `COMPLETED`; a
   refused confirmation fails the job closed with no binding row and its published
   bytes retracted; a superseded attempt commits no binding at the commit boundary
-  — fault-injected takeover in the re-probe window; and a crash after the
+  — fault-injected takeover in the re-probe window; a takeover landing *inside*
+  the confirm commit window retracts exactly its own row under the fencing token
+  (F1); token-scoped retraction that never deletes a successor's binding;
+  a token-less retraction is refused; the fencing token advances monotonically on
+  re-bind; a cross-job re-bind never seizes ownership; and a crash after the
   confirmation but before `COMPLETED` recovers honestly).
+- `tests/integration/test_artifact_binding_postgres_concurrency.py` — the same
+  fence across **real OS processes** on **PostgreSQL**: a cross-job bind never
+  seizes the row, only the owner's exact `(job_id, attempt)` retracts, and two
+  racing token advances never leave the lower token.
 - `tests/integration/test_durable_project_concurrency.py` — real interleaving
   (exactly one winner) and atomic rollback on an injected crash.
 - `tests/architecture/test_durable_project_state_boundary.py` — no parallel
   authority, single schema declaration site.
 - `tests/unit/test_migrations.py` — `alembic upgrade head` creates the exact
   schema (including `projectartifactbinding`), no drift, downgrade empties it.
-- `scripts/durable_project_state_mutations.py` — 25/25 mutants killed (15 Slice 1
-  + 10 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
+- `scripts/durable_project_state_mutations.py` — 29/29 mutants killed (15 Slice 1
+  + 14 Slice 2: repoint-ignored, revision-validation-skipped, re-measure-removed,
   digest-remeasure-removed, content-address-validation-removed,
-  verify-oserror-fail-open, binding-fail-open, and the three queue confirm-seam
+  verify-oserror-fail-open, binding-fail-open, the three queue confirm-seam
   mutants — confirm-gate disabled, confirmation-refusal-ignored, and
-  confirmation-fence-recheck-removed).
+  confirmation-fence-recheck-removed — and the four F1 ownership-fence mutants:
+  lost-CAS retraction removed, retraction not token-scoped, re-bind fencing
+  token no longer monotonic, and the re-bind token advance no longer job-scoped).

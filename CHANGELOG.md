@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fix — artifact-binding ownership fence (task-282 Slice 2, F1; session `fix/binding-ownership-fence-20261107`)
+
+- **A superseded execution could leave orphan durable provenance.** The
+  artifact→revision binding is committed by the queue's `confirm` hook between
+  verification/publication and the `COMPLETED` commit. A takeover landing
+  *inside* that commit window (after the boundary fence re-check, at the binding
+  write) let the attempt commit its binding and *then* lose the terminal
+  `COMPLETED` CAS — leaving a durable binding from an attempt that never reached
+  `COMPLETED`. The binding now records the queue-minted fencing token
+  (`attempt`) in a dedicated column (migration `20261107bindfence`), and the
+  lost-CAS path retracts **exactly** the row this attempt wrote: the delete is
+  scoped on `(artifact_id, job_id, attempt)` and can never remove a successor's
+  row, a pre-fence row (`attempt = 0`) or another job's row. A re-bind by a newer
+  attempt advances the token monotonically (provenance is never rewritten), and a
+  retraction without a real token (`attempt >= 1`) is a typed refusal.
+- **Ownership is the `(job_id, attempt)` pair, not the artifact alone.** Two
+  independent jobs can publish identical bytes (the same content address); the
+  token advance is therefore scoped to the *owning* job (a single conditional
+  `UPDATE ... WHERE job_id = :job AND attempt < :new`), so a different job can
+  never seize the canonical row by presenting a higher token and can never retract
+  another job's binding. Cross-job idempotency is defined on
+  `(project_id, artifact_id)`: the same artifact on the same revision is one
+  canonical row, and the returned binding is re-read from the database so it is
+  exactly what a fresh reader observes.
+- `SqlArtifactBindingStore.retract()` + `creative_render_binding_retract` queue
+  hook; the `ArtifactPublication` seam gains an optional `retract_confirmation`.
+  PostgreSQL checkpoint golden regenerated for the new head; the migration-head
+  pins across tests, CI and living docs updated. Boundary law R29 and the
+  durable-state page document the fence; the mutation campaign is now 29/29
+  (four F1 mutants: lost-CAS retraction removed, retraction not
+  token-scoped, re-bind token not monotonic, and the re-bind token advance no
+  longer job-scoped) and the boundary test is pinned by a
+  binding-write counter so it can no longer be satisfied by a write-then-retract.
+  A new `tests/unit/test_mutation_harness_anchors.py` guard proves every durable
+  mutation anchor occurs exactly once (a duplicated anchor would silently mutate
+  only the first occurrence), and
+  `tests/integration/test_artifact_binding_postgres_concurrency.py` proves the
+  fence across real OS processes on PostgreSQL.
+
 ### Studio Core (task-186 — discovery surface, preview/master boundary, Agent 2/3 integration contracts, session `arena/01a0da2a-nexus-ai-agent`)
 
 - **Capability discovery contract (`nagar.discovery.v1`)**:

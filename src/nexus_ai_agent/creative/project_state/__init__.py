@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from nexus_ai_agent.creative.project_state.lifecycle import DurableProject
 from nexus_ai_agent.creative.project_state.models import (
+    ArtifactBindingAmbiguous,
     ArtifactBindingConflict,
     ArtifactBindingError,
     ArtifactNotFound,
@@ -33,6 +34,7 @@ from nexus_ai_agent.creative.project_state.store import (
 
 __all__ = [
     "ArtifactBinding",
+    "ArtifactBindingAmbiguous",
     "ArtifactBindingConflict",
     "ArtifactBindingError",
     "ArtifactNotFound",

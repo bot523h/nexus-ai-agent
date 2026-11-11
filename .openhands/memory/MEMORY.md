@@ -1100,6 +1100,91 @@ Only red check = the #234 flake (task-264, issue #237).
 - **`lint-fast` runs `ruff format --check`** (not just `ruff check`): always run
   `ruff format --check .` before pushing — a plain `ruff check` misses over-wrapped lines.
 
+## task-282 Slice 2 F1 — binding ownership fence (2026-11-07/08)
+- Branch `fix/binding-ownership-fence-20261107` (base = main `5ed6d4e1`). NOT pushed;
+  local head `7688bfcd` (3 commits). No PR opened (owner opens/merges; HARD RULE: never write main).
+  Migration **`20261107bindfence`** (adds `ProjectArtifactBinding.attempt`);
+  PostgreSQL golden **`d6457c71…`** (was `2fbfee72544a…`).
+- **Ownership is the `(job_id, attempt)` pair, not the artifact alone.** A DIFFERENT job
+  that publishes identical bytes (same content address) must never seize the canonical
+  row. The token advance is a single conditional `UPDATE ... WHERE artifact_id = :id
+  AND job_id = :job AND attempt < :new`; the redundant Python job guard was REMOVED so a
+  dropped SQL predicate cannot hide from the mutation campaign (the SQL guard is the sole
+  authority). Cross-job idempotency is on `(project_id, artifact_id)`; the returned binding
+  is RE-READ from the DB (the conditional UPDATE bypasses the ORM identity map).
+  `SqlArtifactBindingStore.retract()` is token-scoped on `(artifact_id, job_id, attempt)`.
+  Harness now **29/29 killed** (added `rebind_advance_not_job_scoped`).
+- **Mutation-anchor uniqueness trap (durable):** the harness applies with
+  `str.replace(old, new, 1)` — a NON-UNIQUE `old` silently mutates only the FIRST
+  occurrence, so a duplicated guard leaves a live copy and the mutant "kills" falsely.
+  Two durable anchors were non-unique (`cross_project_read_check_removed` 3x,
+  `artifact_binding_confirmed_before_verification` 2x) → widened both to unique
+  multi-line anchors. New guard `tests/unit/test_mutation_harness_anchors.py::
+  test_durable_project_state_anchors_occur_exactly_once` (mirrors the referee/gate5/
+  execution-core guards) turns this into an instant unit failure.
+- **New PG proof:** `tests/integration/test_artifact_binding_postgres_concurrency.py` —
+  real OS processes on PostgreSQL (cross-job non-seizure, owner-only retract, racing
+  advances never leave the lower token). Wired into `migrate-postgres`; a new
+  `test_pg_integration_safety.py` assertion proves every registered PG-writing module is
+  ACTUALLY run by CI (registered-but-uninvoked = silent hole). Runs locally only with
+  `NEXUS_DATABASE_URL` + `NEXUS_PG_TEST_DESTRUCTIVE=1`.
+- **Typed-delete rule**: SQLModel `Model.attr == x` predicates type as `bool` → mypy red.
+  Do NOT `from sqlmodel import col` inside `creative/project_state` — the boundary test
+  `tests/architecture/test_durable_project_state_boundary.py` allowlists top-level imports
+  and excludes `sqlmodel`. Use a module-level `_BINDING: Table = cast(Table, Model.__table__)`
+  accessor (`# type: ignore[attr-defined]`) + `_BINDING.c.attr == x`; rowcount via
+  `getattr(result, "rowcount", 0)`. Same idiom as `creative/assets/repository.py`.
+- **Environment-leak gotcha (cost a red full-suite run):** exporting `NEXUS_DATABASE_URL`
+  into the persistent shell silently repoints the WHOLE suite at Postgres → ~50 failures
+  in SQLite-default modules (surface_*, gamification, readyz, sync_engine_resolution).
+  Always run the full suite with `env -u NEXUS_DATABASE_URL -u NEXUS_PG_TEST_DESTRUCTIVE`.
+  Clean run on `7688bfcd`: **6437 passed / 41 skipped / 0 failed**.
+- `OPERATION_TRUTH.json` `source_revision` stamps the PREVIOUS commit (self-referential);
+  `generated_at`/`source_revision` are in `non_deterministic_fields` so the byte-exact
+  truth gate ignores them — a committed stamp equal to the parent is expected, not a bug.
+- `tests/architecture/test_durable_project_state_boundary.py` also enforces a top-level
+  import allowlist — any new stdlib/3p import into that package must be added there.
+- PR #324 (`openhands/nagar-one-final-closeout-20261107`, other agent) is open on the SAME
+  base `5ed6d4e1` and claims `.agents/board.json`; whichever PR merges second must
+  union-merge the board (per `merge_resolution_note`).
+
+
+## F1 live-truth correction (durable, 2026-11-08)
+- **A board note LIED about a merge.** slice-2 claimed the F1 fence
+  (`20261107bindfence`) was merged via PR #319. FALSE: #319 = Stage-1 only (no
+  `attempt` col); main head = `20261106artbind`; main's lost-CAS does NOT retract
+  the binding (live-on-main orphan-provenance defect); fence on 0/247 remote
+  branches. Corrected in board.json. LESSON: re-derive "merged" claims from git +
+  GitHub before believing them. Detail: `.openhands/memory/2026-11-08.md`.
+- **Durable mutation harness had NO GOV-1 PYTHONPATH guard** (the other four do) →
+  added `_test_env()` + `--collect-only` `preflight()` + 4 anchor tests.
+- **Local PG for audits:** `sudo dockerd` + `docker run pgvector/pgvector:pg16`.
+- **Crash-consistency is honest by design** (binding = append-only; invariant is
+  "COMPLETED ⇒ has binding", not the converse).
+
+## PR #325 F1-fence remediation + review close-out (durable, 2026-11-09)
+- Branch `fix/binding-ownership-fence-20261107`, remediation commit **`e5c92d56`**
+  (PR #325, base main `5ed6d4e1`). F1–F4 + F6–F14 Sourcery findings closed; full
+  suite **6446 passed / 42 skipped**; durable harness **32/32 killed** (pin 29→32).
+- **All 14 review threads replied + resolved** (was 0/14) — a CI-green PR with
+  open threads is NOT done (SKILL §7.8). New head **`2f1794a5`** (board
+  close-out evidence). Lesson: fix the *threads*, not only the code.
+- **Env without a writable system site-packages**: `bash scripts/ci_install.sh
+  ".[dev]"` (pip `--user` fallback, ~5 min); then run `python -m ruff` /
+  `python -m mypy` (console scripts not on PATH). The 2 `test_selfhood_ledger`
+  failures are environmental: the test spawns `sys.executable -I` children and
+  `-I` implies `-s`, stripping the user-site dir → `import nexus_ai_agent` fails
+  in the child (CI installs system-wide, so it passes).
+- **F5 stays OPEN (R4)** — cross-job adoption: a `COMPLETED` job B can lose its
+  binding when the canonical row's owner (job A) later loses its CAS and
+  retracts. Two fixes (per-job rows / adopter registry) change the model and
+  contradict `test_two_independent_jobs_sharing_bytes_are_fenced_apart` → OWNER
+  DECISION. Audit doc §3a table + R4.
+- **Push gotcha**: `GITHUB_TOKEN` = 403 on this repo; no credential helper (git
+  prompts). Use `https://x-access-token:${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/...`.
+- **Never run the mutation campaign while the suite runs** — in-place source
+  mutation makes the anchor-integrity test read a mutated file (spurious `0`).
+
 ## NAGAR-ONE P0 closeout + PR reconciliation (durable, 2026-11-07, mission -02)
 - **main `6838c543` → `5ed6d4e1`** (verified live). Merge authorization via GitHub; all merges via API.
 - **Merge train:** #320→`a8ce54a4`, #321→`1919dc3d`, #319→`65c020cf`, #322→`5ed6d4e1`. Order #321 BEFORE

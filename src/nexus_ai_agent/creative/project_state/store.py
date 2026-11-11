@@ -28,13 +28,14 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import Table, delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus_ai_agent.creative.project_state.models import (
+    ArtifactBindingAmbiguous,
     ArtifactBindingConflict,
     ArtifactBindingError,
     ArtifactNotFound,
@@ -63,6 +64,11 @@ _ADDRESS_PREFIX = "sha256:"
 
 #: A canonical content address is exactly ``sha256:`` + 64 lowercase hex.
 _CONTENT_ADDRESS_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+# Typed table accessor (SQLAlchemy 2.0 style) so the token-scoped delete predicate
+# stays typed without importing SQLModel into this package (the architecture
+# ratchet forbids new ``sqlmodel`` imports outside the frozen baseline).
+_BINDING: Table = cast(Table, orm.ProjectArtifactBinding.__table__)  # type: ignore[attr-defined]
 
 
 def is_content_address(value: object) -> bool:
@@ -102,6 +108,8 @@ class ArtifactBinding:
     size_bytes: int
     created_at: datetime
     artifact_version_id: str | None = None
+    #: Fencing token of the execution that committed the binding (0 = pre-fence).
+    attempt: int = 0
 
 
 def _as_binding(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
@@ -114,6 +122,7 @@ def _as_binding(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
         size_bytes=row.size_bytes,
         created_at=row.created_at,
         artifact_version_id=row.artifact_version_id,
+        attempt=row.attempt,
     )
 
 
@@ -405,16 +414,20 @@ class SqlArtifactBindingStore:
         artifact_kind: str = "binary",
         size_bytes: int,
         artifact_version_id: str | None = None,
+        attempt: int = 0,
     ) -> ArtifactBinding:
         """Bind one measured artifact to the immutable revision it served.
 
         The revision must exist for ``project_id`` and its stored bytes must
         still hash to their own identity (``RevisionIntegrityError`` otherwise);
         the project must match (``CrossProjectAccess``).  The binding is
-        content-addressed and idempotent: the same ``(project_id, artifact_id)``
+        **per producing job** and idempotent: the same ``(artifact_id, job_id)``
         re-bound to the *same* revision is a no-op success, while a differing
-        revision for the same artifact is a hard conflict — an artifact's
-        provenance can never be silently re-pointed.
+        revision for that job is a hard conflict — a job's provenance can never
+        be silently re-pointed.  A *different* job binding the same bytes to the
+        same revision gets its **own** row (independent provenance), and the
+        content address stays owned by exactly one project (a second project is
+        refused, ``CrossProjectAccess``).
 
         ``artifact_id`` must be a well-formed ``sha256:<64 hex>`` content
         address; a same-length non-hex value is refused rather than stored as an
@@ -425,6 +438,11 @@ class SqlArtifactBindingStore:
         artifact→revision→asset-version chain; a binding without it is still
         valid (the artifact may not be in the Asset Library), but a caller that
         has a version should pass it so the chain is resolvable.
+
+        ``attempt`` is the queue fencing token of the committing execution.  It
+        is recorded so the queue can retract *exactly* the row this attempt
+        wrote if the execution is superseded before its terminal commit; 0 means
+        "no token" (a caller outside the queue, or a legacy row).
         """
         if not is_content_address(artifact_id):
             raise ArtifactBindingError("artifact_id must be a sha256:<64-hex> content address")
@@ -432,21 +450,34 @@ class SqlArtifactBindingStore:
             raise ArtifactBindingError("artifact_version_id must be non-empty when provided")
         if size_bytes < 0:
             raise ArtifactBindingError("size_bytes must be non-negative")
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 0:
+            raise ArtifactBindingError("attempt must be a non-negative integer fencing token")
 
         # The revision is the authority: load it (this re-validates its bytes,
         # refusing tampered/re-homed rows) before any binding row is written.
         await self._load_validated_revision(project_id, revision_id)
 
         async with self._session_factory() as session:
-            existing = await session.get(orm.ProjectArtifactBinding, artifact_id)
+            # The content address is claimed FIRST, atomically, in the database:
+            # a same-project replay (or a second job of the same project) is a
+            # no-op, while a *different* project's claim is refused here — before
+            # any per-job row is written (the F1 cross-project ownership fence).
+            # The claim is an INSERT against the address's primary key, so it is
+            # the database, not a read, that admits exactly one owner.
+            await self._claim_content_owner(session, artifact_id, project_id)
+            existing = await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))
             if existing is not None:
-                return self._reconcile_existing(existing, project_id, revision_id)
+                return await self._reconcile_existing(
+                    session, existing, project_id, revision_id, job_id, attempt
+                )
+            # A *new* per-job row for an address this project already owns.
             session.add(
                 orm.ProjectArtifactBinding(
                     artifact_id=artifact_id,
                     project_id=project_id,
                     revision_id=revision_id,
                     job_id=job_id,
+                    attempt=attempt,
                     artifact_kind=artifact_kind,
                     size_bytes=size_bytes,
                     artifact_version_id=artifact_version_id,
@@ -455,38 +486,227 @@ class SqlArtifactBindingStore:
             try:
                 await session.commit()
             except IntegrityError as exc:
-                # A concurrent binder won the primary key; re-read and apply the
-                # same idempotency/conflict rule rather than trusting the race.
+                # A concurrent binder won the (artifact_id, job_id) primary key;
+                # re-read and apply the same idempotency/conflict rule rather
+                # than trusting the race.
                 await session.rollback()
-                existing = await session.get(orm.ProjectArtifactBinding, artifact_id)
+                existing = await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))
                 if existing is None:  # pragma: no cover - a real PK collision must resolve
                     raise ArtifactBindingConflict(
                         "artifact binding raced and could not be read"
                     ) from exc
-                return self._reconcile_existing(existing, project_id, revision_id)
-            row = await session.get(orm.ProjectArtifactBinding, artifact_id)
+                return await self._reconcile_existing(
+                    session, existing, project_id, revision_id, job_id, attempt
+                )
+            row = await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))
             assert row is not None  # just committed
             return _as_binding(row)
 
     @staticmethod
-    def _reconcile_existing(
-        row: orm.ProjectArtifactBinding, project_id: str, revision_id: str
+    async def _claim_content_owner(
+        session: AsyncSession, artifact_id: str, project_id: str
+    ) -> None:
+        """Claim ``artifact_id`` for ``project_id`` — a DATABASE-enforced invariant.
+
+        A read followed by an insert is a TOCTOU: two projects racing the same
+        content address both observe "no owner" and both commit, attributing one
+        address to two projects.  The claim is therefore an INSERT of the
+        address's primary key (``artifactcontentowner.artifact_id``) inside a
+        SAVEPOINT, so the database itself admits exactly one owner.  The nested
+        transaction keeps the outer binding transaction usable after a refusal:
+        PostgreSQL aborts a transaction on a failed statement, so a bare
+        INSERT-and-catch would poison the session, and SQLite is given the same
+        path for one code path on both backends.
+
+        A same-project repeat (or a second job of the same project) finds the
+        row it already owns and is a no-op; a different project takes the
+        primary-key violation and is refused with ``CrossProjectAccess`` — the
+        refusal is read back from the committed owner row, never assumed.
+        """
+        try:
+            async with session.begin_nested():
+                session.add(
+                    orm.ArtifactContentOwner(artifact_id=artifact_id, project_id=project_id)
+                )
+                await session.flush()
+        except IntegrityError:
+            # The address is already owned (or a racer claimed it first): fall
+            # through to read the authoritative owner and decide from that.
+            pass
+        owner = await session.get(orm.ArtifactContentOwner, artifact_id)
+        if owner is None:  # pragma: no cover - the insert or an existing row must resolve
+            raise ArtifactBindingConflict("artifact ownership could not be established")
+        if owner.project_id != project_id:
+            raise CrossProjectAccess("artifact id already bound to a different project")
+
+    @staticmethod
+    async def _reconcile_existing(
+        session: AsyncSession,
+        row: orm.ProjectArtifactBinding,
+        project_id: str,
+        revision_id: str,
+        job_id: str,
+        attempt: int,
     ) -> ArtifactBinding:
+        # Provenance is the JOB's: the SAME artifact bound to the SAME revision
+        # by the SAME job is an idempotent replay, while a different project or
+        # revision for that job is a hard conflict — a job's binding can never be
+        # silently re-homed or re-pointed.  A *different* job that produced
+        # identical bytes never reaches here: its identity is the distinct
+        # ``(artifact_id, job_id)`` primary key, so it owns its own row and this
+        # job's retraction can never delete it (F5/R4).
         if row.project_id != project_id:
             raise CrossProjectAccess("artifact id already bound to a different project")
         if row.revision_id != revision_id:
             raise ArtifactBindingConflict("artifact already bound to a different revision")
-        return _as_binding(row)
+        # Ownership is the (artifact_id, job_id, attempt) triple, so the fencing
+        # token is advanced ONLY by the job that already owns the row — the
+        # conditional UPDATE is scoped to the owning job, and the *only* job
+        # guard is that predicate (a Python pre-check would be redundant and
+        # would hide a dropped predicate from the mutation campaign).  A
+        # different job's concurrent bind can never advance this row: its UPDATE
+        # matches nothing, so the bind is a pure no-op on this row.
+        #
+        # Same job: advance the token monotonically so a superseded attempt's
+        # retraction can never match a successor attempt's row.  The advance is a
+        # single conditional UPDATE, not a read-modify-write: two concurrent
+        # re-binds (a successor at a higher token racing a superseded attempt at a
+        # lower one) would otherwise both read the old token and the lower one
+        # could commit last, regressing the token and reopening the F1 hole.
+        await session.execute(
+            update(orm.ProjectArtifactBinding)
+            .where(
+                _BINDING.c.artifact_id == row.artifact_id,
+                _BINDING.c.job_id == job_id,
+                _BINDING.c.attempt < attempt,
+            )
+            .values(attempt=attempt)
+            .execution_options(synchronize_session="fetch")
+        )
+        await session.commit()
+        # The stored row is the authority for what the binding *is*.  The
+        # conditional UPDATE bypasses the ORM identity map, and another process
+        # may have advanced the token since it was loaded, so re-read the row
+        # from the database rather than trusting any in-session state — the
+        # returned binding must be exactly what a fresh reader would observe.
+        authoritative = (
+            await session.execute(
+                select(orm.ProjectArtifactBinding)
+                .where(
+                    _BINDING.c.artifact_id == row.artifact_id,
+                    _BINDING.c.job_id == row.job_id,
+                )
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if authoritative is None:
+            # The authoritative re-read found no row: a concurrent owner
+            # retracted the row we just reconciled against (a lost-CAS
+            # retraction racing this successor's bind).  Confirming here would
+            # let the caller reach COMPLETED with no durable binding — the F1
+            # hole — so refuse closed.  A caller that still needs the artifact
+            # re-binds (the retractor is superseded, so this cannot ping-pong:
+            # only an attempt that already owned the row may retract it).
+            raise ArtifactBindingConflict(
+                "artifact binding vanished during reconciliation (retracted by its owner)"
+            )
+        return _as_binding(authoritative)
 
-    async def resolve(self, project_id: str, artifact_id: str) -> ArtifactBinding:
-        """Return the binding for one artifact, or refuse with a typed error."""
+    async def resolve(
+        self, project_id: str, artifact_id: str, *, job_id: str | None = None
+    ) -> ArtifactBinding:
+        """Return the binding for one artifact, or refuse with a typed error.
+
+        With an explicit ``job_id`` the exact ``(artifact_id, job_id)`` row is
+        returned, so a caller resolves *only* the provenance of the job it names
+        — even when several jobs share the artifact's bytes (F5/R4).
+
+        Without one, the resolve is deterministic **only while every row for the
+        address agrees on the revision it recorded**; then the earliest binding
+        is returned, byte-for-byte the old single-row contract.  When two rows
+        point the same address at *different* revisions the provenance is
+        genuinely ambiguous and the resolve fails closed with
+        :class:`ArtifactBindingAmbiguous` rather than silently returning an
+        arbitrary "earliest" one.  Multi-job consumers therefore pass ``job_id``.
+        """
         async with self._session_factory() as session:
-            row = await session.get(orm.ProjectArtifactBinding, artifact_id)
+            row = await self._select_binding(session, artifact_id, job_id)
             if row is None:
                 raise ArtifactNotFound(f"artifact {artifact_id!r} is not bound")
             if row.project_id != project_id:
                 raise CrossProjectAccess("artifact does not belong to the requested project")
             return _as_binding(row)
+
+    @staticmethod
+    async def _select_binding(
+        session: AsyncSession, artifact_id: str, job_id: str | None
+    ) -> orm.ProjectArtifactBinding | None:
+        """One binding: the named job's exact row, else the artifact's earliest.
+
+        The unscoped path first proves the address is unambiguous: it must be
+        bound to at most one revision.  Distinct revisions mean two different
+        states produced the same bytes, so "the earliest" would be an arbitrary
+        choice between two real provenances — refused before any row is read.
+        """
+        if job_id is not None:
+            return await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))
+        revisions = (
+            (
+                await session.execute(
+                    select(_BINDING.c.revision_id)
+                    .where(_BINDING.c.artifact_id == artifact_id)
+                    .distinct()
+                    .limit(2)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if len(revisions) > 1:
+            raise ArtifactBindingAmbiguous(
+                f"artifact {artifact_id!r} is bound to more than one revision; "
+                "resolve it with an explicit job_id"
+            )
+        return (
+            await session.execute(
+                select(orm.ProjectArtifactBinding)
+                .where(_BINDING.c.artifact_id == artifact_id)
+                .order_by(_BINDING.c.created_at, _BINDING.c.job_id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    async def retract(
+        self,
+        *,
+        artifact_id: str,
+        job_id: str,
+        attempt: int,
+    ) -> bool:
+        """Delete the binding written by *exactly* this execution, or nothing.
+
+        Used by the queue when the attempt that committed a binding is then
+        superseded: the terminal ``COMPLETED`` CAS fails, so the binding must not
+        survive — but only the row this attempt wrote may be removed.  The delete
+        is scoped on ``artifact_id`` **and** ``job_id`` **and** ``attempt`` (the
+        fencing token), so it can never remove a successor's binding, a
+        pre-fence row (``attempt = 0``), or a row another job wrote.
+
+        Returns ``True`` iff a row was deleted.  Idempotent: a second call
+        deletes nothing and returns ``False``.
+        """
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+            raise ArtifactBindingError("retract requires a real fencing token (attempt >= 1)")
+        async with self._session_factory() as session:
+            result = await session.execute(
+                delete(orm.ProjectArtifactBinding).where(
+                    _BINDING.c.artifact_id == artifact_id,
+                    _BINDING.c.job_id == job_id,
+                    _BINDING.c.attempt == attempt,
+                )
+            )
+            await session.commit()
+            return bool(getattr(result, "rowcount", 0))
 
     async def _load_validated_revision(self, project_id: str, revision_id: str) -> RevisionRecord:
         """Load the bound revision and re-validate its bytes, with a typed refusal.
@@ -508,7 +728,7 @@ class SqlArtifactBindingStore:
         return record
 
     async def verify_artifact(
-        self, *, project_id: str, artifact_id: str, artifact_path: Path
+        self, *, project_id: str, artifact_id: str, artifact_path: Path, job_id: str | None = None
     ) -> ArtifactBinding:
         """Re-measure *artifact_path* against the binding, fail-closed.
 
@@ -517,8 +737,11 @@ class SqlArtifactBindingStore:
         divergence — changed bytes, missing/unreadable file, missing revision,
         tampered revision, cross project — is a typed refusal; the binding is
         never "assumed valid" and a raw filesystem error never escapes.
+
+        ``job_id`` selects the exact provenance row to verify (F5/R4); omitted,
+        the artifact's earliest binding is verified, exactly as before.
         """
-        binding = await self.resolve(project_id, artifact_id)
+        binding = await self.resolve(project_id, artifact_id, job_id=job_id)
         try:
             measured = content_address_of_file(artifact_path)
         except OSError as exc:

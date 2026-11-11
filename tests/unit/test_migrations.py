@@ -98,8 +98,11 @@ def _actual(db_file: str) -> tuple[set[str], set[tuple[str, str, bool]]]:
 def test_revision_chain_is_single_line() -> None:
     script = ScriptDirectory.from_config(_make_config())
     heads = script.get_heads()
-    assert heads == ["20261106artbind"]
+    assert heads == ["20261109contentowner"]
     assert [r.revision for r in script.walk_revisions()] == [
+        "20261109contentowner",
+        "20261108perjobbind",
+        "20261107bindfence",
         "20261106artbind",
         "20261104dpstate",
         "d4e1c0a79b21",
@@ -166,6 +169,73 @@ def test_upgrade_downgrade_upgrade_is_idempotent(db_path: str) -> None:
     command.downgrade(config, "base")
     command.upgrade(config, "head")
     assert _actual(db_path) == _expected()
+
+
+def test_per_job_migration_preserves_existing_rows_and_frees_the_key(db_path: str) -> None:
+    """20261108perjobbind: legacy rows survive verbatim, a second job may bind.
+
+    A pre-revision deployment keys ``projectartifactbinding`` on ``artifact_id``
+    alone (with ``UNIQUE(project_id, artifact_id)``), so it holds exactly one row
+    per content address.  The F5/R4 rebuild must copy those rows unchanged
+    (``job_id`` preserved) and drop the constraint that forbade a second job from
+    owning the same bytes; the lossy downgrade keeps the earliest row.
+    """
+    config = _make_config()
+    command.upgrade(config, "20261107bindfence")
+
+    legacy_artifact = "sha256:" + "a" * 64
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "INSERT INTO appproject (project_id, created_at) VALUES ('proj', '2026-01-01 00:00:00')"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO projectrevision (revision_id, project_id, parent_revision_id, "
+            "state_revision, state_hash, state_json, created_at) "
+            "VALUES ('rev-1', 'proj', NULL, 0, 'h', '{}', '2026-01-01 00:00:00')"
+        )
+        conn.exec_driver_sql(
+            "INSERT INTO projectartifactbinding (artifact_id, project_id, revision_id, job_id, "
+            "artifact_kind, size_bytes, artifact_version_id, created_at, attempt) "
+            "VALUES (?, 'proj', 'rev-1', '', 'binary', 123, NULL, '2026-01-01 00:00:00', 0)",
+            (legacy_artifact,),
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        preserved = conn.exec_driver_sql(
+            "SELECT artifact_id, project_id, revision_id, job_id, size_bytes, attempt "
+            "FROM projectartifactbinding"
+        ).fetchall()
+        # The legacy row is copied verbatim — the rebuild loses nothing.
+        assert preserved == [(legacy_artifact, "proj", "rev-1", "", 123, 0)]
+        # The composite key now admits a SECOND job owning the identical bytes,
+        # which the dropped UNIQUE(project_id, artifact_id) previously forbade.
+        conn.exec_driver_sql(
+            "INSERT INTO projectartifactbinding (artifact_id, project_id, revision_id, job_id, "
+            "artifact_kind, size_bytes, artifact_version_id, created_at, attempt) "
+            "VALUES (?, 'proj', 'rev-1', 'job-2', 'binary', 123, NULL, "
+            "'2026-01-02 00:00:00', 1)",
+            (legacy_artifact,),
+        )
+        count = conn.exec_driver_sql(
+            "SELECT count(*) FROM projectartifactbinding WHERE artifact_id = ?",
+            (legacy_artifact,),
+        ).scalar()
+        assert count == 2
+
+    # The downgrade cannot express two rows per address; it keeps the earliest
+    # (documented lossy) rather than failing.
+    command.downgrade(config, "20261107bindfence")
+    with engine.begin() as conn:
+        remaining = conn.exec_driver_sql(
+            "SELECT artifact_id, job_id FROM projectartifactbinding"
+        ).fetchall()
+        assert remaining == [(legacy_artifact, "")]
+    engine.dispose()
 
 
 def test_check_detects_out_of_band_changes(db_path: str) -> None:

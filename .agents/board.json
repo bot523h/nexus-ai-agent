@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-08T08:42:47Z",
+  "updated_at": "2026-11-10T12:08:41Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -8546,13 +8546,20 @@
         "docs/architecture/DURABLE_PROJECT_STATE.md"
       ],
       "owner_hint": "Slice of task-282; waits on its dependency. No parallel authority.",
-      "agent_branch": "nagar-one-slice2-artifact-revision-binding",
-      "claimed_at": "2026-11-06T21:25:39Z",
-      "generation": 1,
+      "agent_branch": "fix/binding-ownership-fence-20261107",
+      "claimed_at": "2026-11-10T12:08:41Z",
+      "generation": 3,
       "ttl_hours": 24,
       "gates_owner": false,
-      "delivered": [],
-      "note": ""
+      "delivered": [
+        "Slice 2 Stage 1 DELIVERED via PR #319 (merged into main @ 65c020cf29151198faf75564df5edb4e7c61215b; recorded as a completion_record): durable, content-addressed artifact->revision binding over the SINGLE storage schema (ProjectArtifactBinding, migration 20261106artbind) + SqlArtifactBindingStore.bind/verify/resolve + typed ArtifactBinding* errors + fail-closed producer intent and the queue confirm hook.",
+        "F1 ownership fence DELIVERED on branch fix/binding-ownership-fence-20261107 (PR #325 open against main @ 5ed6d4e1; NOT yet merged): migration 20261107bindfence adds the queue (job_id, attempt) fencing token; token-scoped retraction of exactly the attempt's own row; monotonic, job-scoped, atomic token advance; authoritative re-read; and a boundary fence re-check before the confirm commit.",
+        "CORRECTION (2026-11-08 live-truth audit): an earlier revision of this record claimed the F1 fence was 'merged into main via PR #319'. That was FALSE. PR #319 contained Stage 1 only; main's alembic head is 20261106artbind (no attempt column), main's lost-CAS path does NOT retract the binding (a real, live-on-main orphan-provenance defect this branch fixes), and the fence exists on NO remote branch. The fence is delivered by this branch's PR.",
+        "Evidence: harness scripts/durable_project_state_mutations.py 29/29 killed (independently reproduced 2026-11-08 on a clean tree); tests/integration/test_durable_project_revision_pinning.py (incl. adversarial cross-job non-seizure); tests/integration/test_artifact_binding_postgres_concurrency.py (real multi-process race on PostgreSQL 16); ruff/mypy clean.",
+        "REVIEW CLOSE-OUT (2026-11-09): all 14 Sourcery review threads on PR #325 are replied to and resolved (remediation commit e5c92d56; truthful audit table docs/audits/NAGAR_F1_LIVE_TRUTH_2026-11-08.md section 3a). F1-F4 and F6-F14 fixed; F5 (cross-job completed-job provenance loss) recorded OPEN as an owner design decision (R4). PR #325 body updated with the close-out matrix and honest residuals. Targeted gates re-run on head f4176790: ruff check clean, ruff format --check clean, mypy src clean (361 files), tests/unit/test_mutation_harness_anchors.py + test_pg_integration_safety.py + test_agent_board.py 160 passed; tests/integration/test_durable_project_revision_pinning.py + tests/architecture/test_durable_project_state_boundary.py 48 passed; test_in_process_job_queue.py + test_creative_execution_recovery.py + test_canonical_creative_execution.py 35 passed."
+      ],
+      "note": "",
+      "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done."
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -9489,8 +9496,8 @@
       "evidence": {
         "source": "github_api",
         "merge_commit_sha": "65c020cf29151198faf75564df5edb4e7c61215b",
-        "recorded_by": "main",
-        "recorded_at": "2026-11-08T06:11:52Z"
+        "recorded_by": "fix/binding-ownership-fence-20261107",
+        "recorded_at": "2026-11-08T18:06:49Z"
       }
     },
     {

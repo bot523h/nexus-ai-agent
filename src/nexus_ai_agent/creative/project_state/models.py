@@ -71,6 +71,20 @@ class ArtifactRevisionMismatch(ArtifactBindingError):
     """
 
 
+class ArtifactBindingAmbiguous(ArtifactBindingError):
+    """One content address is bound to more than one revision.
+
+    Identity is ``(artifact_id, job_id)``, so several jobs may hold separate
+    provenance rows for the *same bytes*.  An unscoped resolve (no ``job_id``)
+    is therefore only well-defined while every row agrees on the revision it
+    recorded; when two rows point the same address at *different* revisions the
+    provenance is genuinely ambiguous, so the resolve fails closed instead of
+    silently returning "the earliest" — an arbitrary pick between two real
+    provenances.  Callers resolve the exact job's row with an explicit
+    ``job_id``.
+    """
+
+
 @dataclass(frozen=True)
 class RevisionRecord:
     """One durable, immutable project revision as read back from storage."""

@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -1104,20 +1105,41 @@ async def test_queue_confirm_refuses_a_superseded_attempt_at_the_commit_boundary
     queue.register_artifact_publication(
         "creative_render", build_creative_render_publication(artifact_root)
     )
-    job_id = await queue.enqueue(
-        job_type="creative_render",
-        idempotency_key="fence-supersede-1",
-        payload={"workspace_dir": str(pin_env / "ws_fence")},
-    )
 
-    # Publication is the step immediately before the confirmation boundary.
-    published = artifact_root / "published" / job_id / "render.mp4"
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + 20.0
-    while loop.time() < deadline and not published.exists():
-        await asyncio.sleep(0.05)
-    await asyncio.sleep(0.5)  # let the (refused) confirm boundary settle
+    # The fence re-check must refuse *before* the confirmation runs, so the
+    # confirm hook must never write a binding at all — a distinct observable
+    # from "the row was written and then retracted by the lost-CAS path".  Count
+    # the store writes to pin that distinction.
+    from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
 
+    binds = {"n": 0}
+    real_bind = SqlArtifactBindingStore.bind
+
+    async def _counting_bind(self: Any, **kwargs: Any) -> Any:
+        binds["n"] += 1
+        return await real_bind(self, **kwargs)
+
+    SqlArtifactBindingStore.bind = _counting_bind  # type: ignore[method-assign]
+    try:
+        job_id = await queue.enqueue(
+            job_type="creative_render",
+            idempotency_key="fence-supersede-1",
+            payload={"workspace_dir": str(pin_env / "ws_fence")},
+        )
+
+        # Publication is the step immediately before the confirmation boundary.
+        published = artifact_root / "published" / job_id / "render.mp4"
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 20.0
+        while loop.time() < deadline and not published.exists():
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.5)  # let the (refused) confirm boundary settle
+    finally:
+        SqlArtifactBindingStore.bind = real_bind  # type: ignore[method-assign]
+
+    # The fence was re-read and refused the superseded attempt before the
+    # confirmation: no binding write was ever attempted.
+    assert binds["n"] == 0, "the boundary fence must refuse before the confirm hook runs"
     # The superseded attempt owns nothing: it reached no COMPLETED and wrote no
     # durable binding.  (The bytes it published are the successor's to reconcile.)
     assert await queue.get_status(job_id) is not JobStatus.COMPLETED
@@ -1211,6 +1233,635 @@ async def test_crash_after_confirm_before_completed_recovers_honestly(pin_env: P
 
 
 # ---------------------------------------------------------------------------
+# F1 ownership fence: a takeover landing *inside* the confirm commit window
+# (after the boundary fence re-check, at/around the binding write) must not
+# leave a durable binding from a superseded attempt.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_takeover_inside_the_confirm_window_retracts_the_binding(
+    pin_env: Path,
+) -> None:
+    """A takeover *inside* the confirm commit window leaves no binding behind.
+
+    This is the exact interleaving the earlier boundary re-check cannot cover:
+    the attempt passes the pre-confirm fence re-check, the confirm hook commits
+    the binding, and *then* a takeover bumps the fencing token so the terminal
+    ``COMPLETED`` CAS fails.  The queue must retract exactly the row this
+    attempt wrote (scoped by the queue-minted ``(job_id, attempt)`` token), so
+    no superseded execution leaves durable provenance and no job reaches
+    ``COMPLETED`` without a binding.
+    """
+    import sqlite3 as _sqlite3
+
+    from nexus_ai_agent.creative.project_state.store import (
+        ArtifactNotFound,
+        SqlArtifactBindingStore,
+        content_address_of_bytes,
+    )
+    from nexus_ai_agent.creative.render_jobs import build_creative_render_publication
+    from nexus_ai_agent.jobs.verification import VerificationOutcome
+
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("admitted"), parent=None)
+
+    artifact_root = pin_env / "artifacts"
+    artifact_root.mkdir()
+    queue_path = pin_env / "inside_window_queue.sqlite3"
+    queue = InProcessJobQueue(str(queue_path))
+
+    async def _handler(payload: dict) -> dict:
+        workspace = Path(str(payload["workspace_dir"]))
+        workspace.mkdir(parents=True, exist_ok=True)
+        artifact = workspace / "render.mp4"
+        artifact.write_bytes(b"queue-confirm-bytes")
+        digest = sha256_file(artifact)
+        return {
+            "success": True,
+            "artifact_path": str(artifact),
+            "workspace_dir": str(workspace),
+            "sha256": digest,
+            "size_bytes": artifact.stat().st_size,
+            "artifact_kind": "binary",
+            "artifact_binding": {
+                "artifact_id": digest,
+                "project_id": PROJECT_ID,
+                "revision_id": revision.revision_id,
+                "artifact_kind": "binary",
+                "size_bytes": artifact.stat().st_size,
+                "artifact_version_id": None,
+            },
+        }
+
+    def _takeover_inside_window() -> None:
+        connection = _sqlite3.connect(str(queue_path), timeout=30)
+        try:
+            connection.execute(
+                "UPDATE nexus_job_queue SET attempt = attempt + 1 "
+                "WHERE job_type = 'creative_render'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    real_bind = SqlArtifactBindingStore.bind
+    fired = {"n": 0}
+
+    async def _bind_then_takeover(self: Any, **kwargs: Any) -> Any:
+        # Fire the takeover exactly once, right before the real binding commit —
+        # i.e. after the queue's boundary fence re-check and inside the confirm
+        # commit window (the precise window Sourcery flagged).
+        if fired["n"] == 0:
+            fired["n"] = 1
+            _takeover_inside_window()
+        return await real_bind(self, **kwargs)
+
+    queue.register_handler("creative_render", _handler)
+    queue.register_artifact_verifier(
+        "creative_render",
+        lambda p, r: VerificationOutcome(ok=True, reason_code=None, summary={}),
+    )
+    queue.register_artifact_publication(
+        "creative_render", build_creative_render_publication(artifact_root)
+    )
+
+    SqlArtifactBindingStore.bind = _bind_then_takeover  # type: ignore[method-assign]
+    try:
+        job_id = await queue.enqueue(
+            job_type="creative_render",
+            idempotency_key="fence-inside-window-1",
+            payload={"workspace_dir": str(pin_env / "ws_inside_window")},
+        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 20.0
+        status = await queue.get_status(job_id)
+        terminal = {JobStatus.COMPLETED, JobStatus.FAILED_RETRYABLE, JobStatus.FAILED_TERMINAL}
+        while loop.time() < deadline and status not in terminal:
+            await asyncio.sleep(0.05)
+            status = await queue.get_status(job_id)
+        await asyncio.sleep(0.5)
+    finally:
+        SqlArtifactBindingStore.bind = real_bind  # type: ignore[method-assign]
+
+    assert fired["n"] == 1, "the takeover must have fired inside the confirm window"
+    # The superseded attempt never reached COMPLETED and left NO binding: the
+    # confirmation it committed was retracted under its own fencing token.
+    assert status is not JobStatus.COMPLETED
+    artifact_id = content_address_of_bytes(b"queue-confirm-bytes")
+    with pytest.raises(ArtifactNotFound):
+        await _binding_store().resolve(PROJECT_ID, artifact_id)
+
+
+def test_retract_is_token_scoped_and_never_deletes_a_successor_binding(
+    pin_env: Path,
+) -> None:
+    """``retract`` deletes only the row an exact ``(job_id, attempt)`` wrote."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "1" * 64
+
+    # The successor (attempt 7) owns the binding.
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-x",
+            size_bytes=1,
+            attempt=7,
+        )
+    )
+    # A superseded attempt (6) retracting cannot remove the successor's row.
+    removed = asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-x", attempt=6))
+    assert removed is False
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).attempt == 7
+    # A different job cannot remove it either.
+    removed = asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-y", attempt=7))
+    assert removed is False
+    # The exact owner removes exactly its own row.
+    removed = asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-x", attempt=7))
+    assert removed is True
+    from nexus_ai_agent.creative.project_state.store import ArtifactNotFound
+
+    with pytest.raises(ArtifactNotFound):
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id))
+    # Idempotent: a second retract removes nothing.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-x", attempt=7)) is False
+    )
+
+
+def test_retract_requires_a_real_fencing_token(pin_env: Path) -> None:
+    """A token-less retraction is refused: it could remove a pre-fence row."""
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingError
+
+    bindings = _binding_store()
+    with pytest.raises(ArtifactBindingError):
+        asyncio.run(bindings.retract(artifact_id="sha256:" + "2" * 64, job_id="j", attempt=0))
+
+
+def test_bind_and_retract_reject_non_integer_fencing_tokens(pin_env: Path) -> None:
+    """The token is an integer identity: floats, strings and bools are refused.
+
+    ``(job_id, attempt)`` is the ownership identity, and the queue's attempt is
+    an integer.  A float (``1.5``), a numeric string (``"3"``) or a bool (which
+    inherits from ``int``) would persist a token an exact-token retract could
+    never match — so the store refuses every non-int up front.
+    """
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingError
+
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "b" * 64
+
+    for bad in (1.5, "3", True, False, -1):
+        with pytest.raises(ArtifactBindingError):
+            asyncio.run(
+                bindings.bind(
+                    project_id=PROJECT_ID,
+                    revision_id=r1.revision_id,
+                    artifact_id=artifact_id,
+                    job_id="job-t",
+                    size_bytes=1,
+                    attempt=bad,  # type: ignore[arg-type]
+                )
+            )
+        with pytest.raises(ArtifactBindingError):
+            asyncio.run(
+                bindings.retract(artifact_id=artifact_id, job_id="job-t", attempt=bad)  # type: ignore[arg-type]
+            )
+
+
+def test_bind_advances_the_fencing_token_monotonically(pin_env: Path) -> None:
+    """A re-bind by a newer attempt advances the token; provenance is unchanged."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "3" * 64
+
+    first = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-z",
+            size_bytes=1,
+            attempt=4,
+        )
+    )
+    assert first.attempt == 4
+    # Same attempt: no-op, token unchanged.
+    again = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-z",
+            size_bytes=1,
+            attempt=4,
+        )
+    )
+    assert again.attempt == 4
+    # Newer attempt: token advances so a stale retraction cannot match it.
+    newer = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-z",
+            size_bytes=1,
+            attempt=9,
+        )
+    )
+    assert newer.attempt == 9
+    assert newer.revision_id == r1.revision_id  # provenance never rewritten
+    # A stale (older) re-bind must not regress the token a newer attempt owns.
+    stale = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-z",
+            size_bytes=1,
+            attempt=5,
+        )
+    )
+    assert stale.attempt == 9  # monotonic: the higher token is retained
+    # A stale (older) retraction cannot remove the row the newer attempt owns.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-z", attempt=4)) is False
+    )
+
+
+def test_two_independent_jobs_sharing_bytes_own_independent_bindings(pin_env: Path) -> None:
+    """F5/R4: two jobs sharing one artifact_id hold *independent* provenance rows.
+
+    The fencing token is per-job, and identity is ``(artifact_id, job_id)``: job
+    B — an independent execution that produced the *same bytes* — gets its own
+    binding row rather than a shared one.  Neither job's retraction can delete
+    the other's row, and each job resolves only its own provenance.
+    """
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "5" * 64
+
+    # Job A binds first (token 2): it owns (artifact_id, "job-A").
+    owned = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-A",
+            size_bytes=1,
+            attempt=2,
+        )
+    )
+    assert (owned.job_id, owned.attempt) == ("job-A", 2)
+
+    # Job B, an independent job with the same bytes, gets its OWN row — never a
+    # takeover of job A's, and never silently merged into it.
+    second = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-B",
+            size_bytes=1,
+            attempt=7,
+        )
+    )
+    assert (second.job_id, second.attempt) == ("job-B", 7), (
+        "a distinct job must own a distinct provenance row"
+    )
+
+    # Both rows resolve independently; the unscoped resolve is the earliest one.
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).job_id == "job-A"
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-B")).job_id == "job-B"
+
+    # Job B's retraction removes only B's own row; job A's is untouched.
+    assert asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-B", attempt=7)) is True
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).job_id == "job-A"
+    from nexus_ai_agent.creative.project_state.models import ArtifactNotFound
+
+    with pytest.raises(ArtifactNotFound):
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-B"))
+    # Idempotent: a second retract of B's row removes nothing.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-B", attempt=7)) is False
+    )
+    # A cross-job retraction can never touch job A's row.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-A", attempt=7)) is False
+    )
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).job_id == "job-A"
+
+    # Only the owner's exact (job_id, attempt) retracts its own row.
+    assert asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-A", attempt=2)) is True
+    with pytest.raises(ArtifactNotFound):
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id))
+
+
+def test_unscoped_resolve_fails_closed_when_an_address_has_two_revisions(
+    pin_env: Path,
+) -> None:
+    """A content address bound to two *different* revisions is ambiguous.
+
+    Identity is per job, so two jobs may hold separate rows for the same bytes.
+    While they agree on the revision the unscoped resolve stays deterministic
+    (the old single-row contract).  When the same address is bound to
+    *different* revisions, "the earliest" would be an arbitrary pick between two
+    real provenances, so the unscoped resolve must fail closed — while each
+    job's row still resolves by its explicit ``job_id``.
+    """
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingAmbiguous
+
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev-one"), parent=None))
+    r2 = asyncio.run(_commit(store, _project("rev-two"), parent=r1.revision_id))
+    assert r1.revision_id != r2.revision_id
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "6" * 64
+
+    for job_id, revision_id in (("job-A", r1.revision_id), ("job-B", r2.revision_id)):
+        asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=revision_id,
+                artifact_id=artifact_id,
+                job_id=job_id,
+                size_bytes=1,
+                attempt=1,
+            )
+        )
+
+    # Each job still resolves its own exact provenance.
+    assert (
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-A")).revision_id
+        == r1.revision_id
+    )
+    assert (
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-B")).revision_id
+        == r2.revision_id
+    )
+
+    # The unscoped resolve is ambiguous: two real provenances, no safe default.
+    with pytest.raises(ArtifactBindingAmbiguous):
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id))
+
+
+def test_rebind_token_advance_is_scoped_to_the_owning_job(pin_env: Path) -> None:
+    """F5/R4: a token advance moves only the advancing job's own row.
+
+    Identity is ``(artifact_id, job_id)``, so two jobs sharing one artifact's
+    bytes hold *two* rows for the same ``artifact_id``.  The conditional token
+    advance in ``_reconcile_existing`` must therefore be scoped to the owning
+    ``job_id``: a re-bind by one job must move only its own row.  If that
+    ownership predicate were dropped, the UPDATE would broadcast across every
+    row with the artifact id and silently advance a *different* job's fencing
+    token — letting a stale retraction of that other job match a token it never
+    wrote, and letting one job seize a successor's provenance.
+    """
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "7" * 64
+
+    # Two jobs share identical bytes; each owns its own row at its own token.
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-A",
+            size_bytes=1,
+            attempt=2,
+        )
+    )
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-B",
+            size_bytes=1,
+            attempt=3,
+        )
+    )
+
+    # Job B's successor attempt advances B's token — and only B's.
+    advanced = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-B",
+            size_bytes=1,
+            attempt=9,
+        )
+    )
+    assert advanced.attempt == 9
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-A")).attempt == 2
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-B")).attempt == 9
+    # Job A's own exact (job_id, attempt) still matches the row it wrote.
+    assert asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-A", attempt=2)) is True
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-B")).attempt == 9
+
+
+def test_bind_returns_the_authoritative_stored_row(pin_env: Path) -> None:
+    """The returned binding reflects the committed row, not stale ORM state.
+
+    A re-bind by the SAME job at a higher token advances the row and must report
+    the *stored* owner/attempt; the authoritative re-read makes the result
+    exactly what a fresh reader sees.  A *different* job is a distinct identity,
+    so it never observes (nor mutates) this job's row.
+    """
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "6" * 64
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="owner",
+            artifact_kind="video",
+            size_bytes=100,
+            attempt=1,
+        )
+    )
+    advanced = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="owner",
+            artifact_kind="audio",
+            size_bytes=999,
+            attempt=50,
+        )
+    )
+    resolved = asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="owner"))
+    assert (advanced.job_id, advanced.attempt) == (resolved.job_id, resolved.attempt)
+    assert advanced.job_id == "owner"
+    assert advanced.attempt == 50
+    # A token advance is not a metadata rewrite: the original row is preserved.
+    assert advanced.artifact_kind == "video"
+    assert advanced.size_bytes == 100
+    # A different job is a distinct identity: its bind writes its own row and
+    # never observes the owner's token.
+    other = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="other",
+            size_bytes=1,
+            attempt=3,
+        )
+    )
+    assert (other.job_id, other.attempt) == ("other", 3)
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="owner")).attempt == 50
+
+
+def test_bind_refuses_when_the_authoritative_reread_finds_no_row(pin_env: Path) -> None:
+    """F1: a successor attempt must not confirm on a binding retracted mid-reconcile.
+
+    ``_reconcile_existing`` re-reads the row from the database after the
+    conditional token advance and returns *that* as the authority.  If a
+    concurrent owner's retraction removes the row inside that window, the
+    re-read finds nothing; falling back to the stale ORM row would let the
+    caller reach COMPLETED with no durable binding (the F1 hole).  The window is
+    reproduced deterministically by wrapping the session factory so the
+    authoritative SELECT observes no row.  The successor is the SAME job at a
+    higher token (identity is ``(artifact_id, job_id)``), which is what reaches
+    reconciliation.
+    """
+    from sqlalchemy import Select
+
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingConflict
+    from nexus_ai_agent.storage.db import get_session
+
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    artifact_id = "sha256:" + "9" * 64
+    asyncio.run(
+        _binding_store().bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="owner",
+            size_bytes=1,
+            attempt=1,
+        )
+    )
+
+    class _VanishingResult:
+        def scalar_one_or_none(self) -> None:
+            return None
+
+    class _VanishingSession:
+        def __init__(self, factory: Any) -> None:
+            self._factory = factory
+            self._ctx: Any = None
+            self._session: Any = None
+
+        async def __aenter__(self) -> _VanishingSession:
+            self._ctx = self._factory()
+            self._session = await self._ctx.__aenter__()
+            return self
+
+        async def __aexit__(self, *exc: object) -> Any:
+            return await self._ctx.__aexit__(*exc)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._session, name)
+
+        async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+            # Only the authoritative SELECT (a Select of the binding row) is made
+            # to observe "no row"; the conditional UPDATE and everything else run
+            # against the real session.
+            if isinstance(statement, Select):
+                return _VanishingResult()
+            return await self._session.execute(statement, *args, **kwargs)
+
+    from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
+
+    racing = SqlArtifactBindingStore(session_factory=lambda: _VanishingSession(get_session))
+    with pytest.raises(ArtifactBindingConflict):
+        asyncio.run(
+            racing.bind(
+                project_id=PROJECT_ID,
+                revision_id=r1.revision_id,
+                artifact_id=artifact_id,
+                job_id="owner",
+                size_bytes=1,
+                attempt=9,
+            )
+        )
+
+
+def test_concurrent_rebinds_never_regress_the_fencing_token(pin_env: Path) -> None:
+    """A superseded (lower-token) re-bind must never regress the stored token.
+
+    The token advance is a single conditional UPDATE, not a read-modify-write.
+    ``asyncio.gather`` alone does not prove this: if the two binds happen to run
+    serially the dangerous schedule — the *lower* token committing *last* — is
+    never exercised, and a broken read-modify-write would still leave the higher
+    token and pass.  So the dangerous schedule is forced deterministically: the
+    higher token advances first, then the superseded lower token is applied
+    after it and must be a no-op.  A concurrent leg then proves the same under
+    real contention (no deadlock, same winner).
+    """
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "4" * 64
+
+    async def _bind(attempt: int, aid: str):
+        return await bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=aid,
+            job_id="job-race",
+            size_bytes=1,
+            attempt=attempt,
+        )
+
+    # Deterministic dangerous schedule: successor (5) commits, THEN the
+    # superseded attempt (3) commits last.  A read-modify-write advance would
+    # overwrite the row with 3 here; the conditional UPDATE leaves it at 5.
+    asyncio.run(_bind(5, artifact_id))
+    regressed = asyncio.run(_bind(3, artifact_id))
+    assert regressed.attempt == 5, "the lower token must never win when it commits last"
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id)).attempt == 5
+
+    # Concurrent leg on a FRESH artifact (no existing row): both tokens race the
+    # INSERT/PK conflict from a clean state, and real contention on one row must
+    # still leave the higher token.
+    race_artifact = "sha256:" + "7" * 64
+
+    async def _race() -> None:
+        await asyncio.gather(_bind(5, race_artifact), _bind(3, race_artifact))
+
+    asyncio.run(_race())
+    assert asyncio.run(bindings.resolve(PROJECT_ID, race_artifact)).attempt == 5
+    # The winner's retraction still works; the loser's cannot.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=race_artifact, job_id="job-race", attempt=3))
+        is False
+    )
+    assert (
+        asyncio.run(bindings.retract(artifact_id=race_artifact, job_id="job-race", attempt=5))
+        is True
+    )
+
+
+# ---------------------------------------------------------------------------
 # Slice 2 hardening (PR #319 review threads): identity, re-measure, metadata
 # ---------------------------------------------------------------------------
 
@@ -1282,7 +1933,7 @@ def test_bind_records_and_returns_the_asset_version_link(pin_env: Path) -> None:
 
 
 def test_bind_replay_does_not_rewrite_stored_metadata(pin_env: Path) -> None:
-    """A same-revision replay is a read-only no-op; the original row is kept."""
+    """A same-job, same-revision replay is a read-only no-op; the original row is kept."""
     store = SqlProjectRevisionStore()
     r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
     artifact = pin_env / "art.bin"
@@ -1301,13 +1952,13 @@ def test_bind_replay_does_not_rewrite_stored_metadata(pin_env: Path) -> None:
             size_bytes=100,
         )
     )
-    # Replay with DIFFERENT metadata: the stored row must be unchanged.
+    # Replay by the SAME job with DIFFERENT metadata: the stored row is unchanged.
     replay = asyncio.run(
         bindings.bind(
             project_id=PROJECT_ID,
             revision_id=r1.revision_id,
             artifact_id=artifact_id,
-            job_id="second",
+            job_id="first",
             artifact_kind="audio",
             size_bytes=999,
         )
@@ -1404,3 +2055,497 @@ def test_bind_published_artifact_refuses_missing_artifact_metadata(pin_env: Path
     with pytest.raises(CreativeRenderError) as exc:
         asyncio.run(_bind_published_artifact(data, {"success": True}))
     assert exc.value.code == "artifact_binding_failed"
+
+
+# ---------------------------------------------------------------------------
+# F5/R4 — per-job artifact binding identity (PR #325 review)
+#
+# Root cause: the binding table was keyed on ``artifact_id`` alone, so two jobs
+# that published byte-identical artifacts shared ONE provenance row.  When the
+# job that happened to *own* that row lost its terminal COMPLETED CAS and
+# retracted it, the OTHER (still-COMPLETED) job's provenance was destroyed.
+# The fix makes identity per producing job: primary key ``(artifact_id,
+# job_id)``.  Content de-duplication (the SHA-256 bytes) is unchanged; only the
+# *provenance record* is per job.
+# ---------------------------------------------------------------------------
+
+
+def test_owner_retract_after_successor_completed_keeps_successor_binding(
+    pin_env: Path,
+) -> None:
+    """F5/R4 canonical scenario: a successful job keeps its binding after retract.
+
+    1. Job A binds an artifact at a fixed content address.
+    2. Job B consumes the SAME artifact + SAME revision and adopts the binding.
+    3. Job B reaches COMPLETED (it holds durable provenance of its own).
+    4. Job A loses the terminal CAS (its attempt is superseded).
+    5. Job A retracts exactly its own binding.
+    6. Job B's binding must still exist, resolve by identity and re-verify.
+    """
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    store = SqlProjectRevisionStore()
+    revision = asyncio.run(_commit(store, _project("f5"), parent=None))
+    artifact = pin_env / "f5.bin"
+    artifact.write_bytes(b"identical-bytes-shared-by-two-jobs")
+    artifact_id = content_address_of_file(artifact)
+    bindings = _binding_store()
+
+    # 1. Job A creates + binds the artifact.
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=revision.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-A",
+            size_bytes=artifact.stat().st_size,
+            attempt=1,
+        )
+    )
+    # 2/3. Job B adopts the same bytes+revision; it becomes COMPLETED with its
+    # own provenance row.
+    adopted = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=revision.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-B",
+            size_bytes=artifact.stat().st_size,
+            attempt=1,
+        )
+    )
+    assert adopted.job_id == "job-B"
+
+    # 4/5. Job A loses the terminal CAS and retracts only its own row.
+    assert asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-A", attempt=1)) is True
+
+    # 6. Job B's binding survives, resolves by identity and re-verifies.
+    survivor = asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-B"))
+    assert survivor.job_id == "job-B"
+    assert survivor.revision_id == revision.revision_id
+    proven = asyncio.run(
+        bindings.verify_artifact(
+            project_id=PROJECT_ID,
+            artifact_id=artifact_id,
+            artifact_path=artifact,
+            job_id="job-B",
+        )
+    )
+    assert proven.job_id == "job-B"
+
+
+@pytest.mark.asyncio
+async def test_cross_job_adoption_race_keeps_both_jobs(pin_env: Path) -> None:
+    """Two jobs racing to adopt the same bytes both end up with their own row."""
+    store = SqlProjectRevisionStore()
+    revision = await _commit(store, _project("race"), parent=None)
+    artifact_id = "sha256:" + "a" * 64
+    bindings = _binding_store()
+
+    async def _bind(job: str) -> Any:
+        return await bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=revision.revision_id,
+            artifact_id=artifact_id,
+            job_id=job,
+            size_bytes=1,
+            attempt=1,
+        )
+
+    first, second = await asyncio.gather(_bind("job-A"), _bind("job-B"))
+    assert {first.job_id, second.job_id} == {"job-A", "job-B"}
+    assert (await bindings.resolve(PROJECT_ID, artifact_id, job_id="job-A")).job_id == "job-A"
+    assert (await bindings.resolve(PROJECT_ID, artifact_id, job_id="job-B")).job_id == "job-B"
+
+
+def test_exact_job_and_attempt_fence_each_row_independently(pin_env: Path) -> None:
+    """Retraction matches only its exact ``(artifact_id, job_id, attempt)`` row.
+
+    Two jobs bind the same artifact at the SAME token; the token alone is not an
+    identity, so neither may retract the other's row, and a wrong token matches
+    nothing.
+    """
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("fence"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "b" * 64
+    for job in ("job-A", "job-B"):
+        asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=r1.revision_id,
+                artifact_id=artifact_id,
+                job_id=job,
+                size_bytes=1,
+                attempt=1,
+            )
+        )
+    # A job's row can only be removed by its own exact (job_id, attempt) triple.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-A", attempt=2)) is False
+    )
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-C", attempt=1)) is False
+    )
+    assert asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-A", attempt=1)) is True
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-B")).job_id == "job-B"
+    assert asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-B", attempt=1)) is True
+    from nexus_ai_agent.creative.project_state.models import ArtifactNotFound
+
+    with pytest.raises(ArtifactNotFound):
+        asyncio.run(bindings.resolve(PROJECT_ID, artifact_id))
+
+
+def test_stale_attempt_cannot_delete_the_successors_row(pin_env: Path) -> None:
+    """A superseded (lower-token) attempt of one job never deletes its successor."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("stale"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "c" * 64
+    for attempt in (3, 9):
+        asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=r1.revision_id,
+                artifact_id=artifact_id,
+                job_id="job-X",
+                size_bytes=1,
+                attempt=attempt,
+            )
+        )
+    # The stale attempt's retraction does not match the successor's row.
+    assert (
+        asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-X", attempt=3)) is False
+    )
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-X")).attempt == 9
+    # The successor's own retraction removes exactly its row.
+    assert asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="job-X", attempt=9)) is True
+
+
+def test_many_jobs_sharing_identical_bytes_each_resolve(pin_env: Path) -> None:
+    """N jobs publishing identical bytes each keep independent, resolvable rows."""
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("many"), parent=None))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "d" * 64
+    jobs = ["j1", "j2", "j3", "j4"]
+    for job in jobs:
+        bound = asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=r1.revision_id,
+                artifact_id=artifact_id,
+                job_id=job,
+                size_bytes=1,
+                attempt=1,
+            )
+        )
+        assert bound.job_id == job
+    for job in jobs:
+        assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id=job)).job_id == job
+    # Removing one job's row leaves every other job's row intact.
+    assert asyncio.run(bindings.retract(artifact_id=artifact_id, job_id="j2", attempt=1)) is True
+    for job in ("j1", "j3", "j4"):
+        assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id=job)).job_id == job
+
+
+def test_same_artifact_conflicting_revisions_are_per_job(pin_env: Path) -> None:
+    """A job can never re-point its own binding; another job holds its own revision.
+
+    Identity is per job, so a re-bind of the SAME job to a different revision is
+    a hard conflict, while a *different* job publishing the same bytes against a
+    different admitted revision keeps independent provenance.
+    """
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingConflict
+
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    r2 = asyncio.run(_commit(store, _project("rev2"), parent=r1.revision_id))
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "e" * 64
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-A",
+            size_bytes=1,
+            attempt=1,
+        )
+    )
+    # The same job may not re-point its binding to another revision.
+    with pytest.raises(ArtifactBindingConflict):
+        asyncio.run(
+            bindings.bind(
+                project_id=PROJECT_ID,
+                revision_id=r2.revision_id,
+                artifact_id=artifact_id,
+                job_id="job-A",
+                size_bytes=1,
+                attempt=2,
+            )
+        )
+    # A different job with the same bytes bound to a different revision is its
+    # own provenance, not a conflict.
+    other = asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r2.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-B",
+            size_bytes=1,
+            attempt=1,
+        )
+    )
+    assert other.revision_id == r2.revision_id
+    assert asyncio.run(bindings.resolve(PROJECT_ID, artifact_id, job_id="job-A")).revision_id == (
+        r1.revision_id
+    )
+
+
+def test_cross_project_isolation_holds_for_every_job(pin_env: Path) -> None:
+    """A content address belongs to exactly one project, per job identity.
+
+    A second project cannot claim the same bytes through a *different* job, and
+    it cannot resolve the first project's job-scoped binding.
+    """
+    from nexus_ai_agent.creative.project_state.models import CrossProjectAccess
+    from nexus_ai_agent.creative.studio.models import compute_state_hash
+
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("rev1"), parent=None))
+    other = "f5-other-project"
+    other_project = _project("other").model_copy(update={"project_id": other})
+    other_project.state_hash = compute_state_hash(other_project)
+    r_other = asyncio.run(
+        store.commit(other_project, authorized_project_id=other, expected_parent_revision_id=None)
+    )
+    bindings = _binding_store()
+    artifact_id = "sha256:" + "f" * 64
+    asyncio.run(
+        bindings.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-A",
+            size_bytes=1,
+            attempt=1,
+        )
+    )
+    # A different project with a DIFFERENT job cannot bind the same content.
+    with pytest.raises(CrossProjectAccess):
+        asyncio.run(
+            bindings.bind(
+                project_id=other,
+                revision_id=r_other.revision_id,
+                artifact_id=artifact_id,
+                job_id="job-B",
+                size_bytes=1,
+                attempt=1,
+            )
+        )
+    # Nor resolve the owning project's job-scoped binding.
+    with pytest.raises(CrossProjectAccess):
+        asyncio.run(bindings.resolve(other, artifact_id, job_id="job-A"))
+
+
+def test_restart_replay_rebinds_per_job_after_recovery(pin_env: Path) -> None:
+    """A fresh store (simulated restart) resolves and replays each job's row.
+
+    Recovery re-runs a job; its replay is an idempotent no-op on its OWN row,
+    while a different job adopting the same bytes keeps a distinct row.
+    """
+    store = SqlProjectRevisionStore()
+    r1 = asyncio.run(_commit(store, _project("recovery"), parent=None))
+    artifact_id = "sha256:" + "1" * 64
+    first = _binding_store()
+    asyncio.run(
+        first.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-A",
+            size_bytes=1,
+            attempt=1,
+        )
+    )
+    # A NEW store instance (process restart) sees the committed row.
+    restarted = _binding_store()
+    assert asyncio.run(restarted.resolve(PROJECT_ID, artifact_id, job_id="job-A")).job_id == "job-A"
+    # Job A replays idempotently after recovery; Job B adopts its own row.
+    asyncio.run(
+        restarted.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-A",
+            size_bytes=1,
+            attempt=1,
+        )
+    )
+    asyncio.run(
+        restarted.bind(
+            project_id=PROJECT_ID,
+            revision_id=r1.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-B",
+            size_bytes=1,
+            attempt=1,
+        )
+    )
+    assert asyncio.run(restarted.resolve(PROJECT_ID, artifact_id, job_id="job-B")).job_id == "job-B"
+    assert asyncio.run(restarted.resolve(PROJECT_ID, artifact_id, job_id="job-A")).job_id == "job-A"
+
+
+def _bound_projects(artifact_id: str) -> set[str]:
+    """The distinct ``project_id`` values currently bound to one content address.
+
+    Read straight from SQLite (not through the store) so the assertion is about
+    what the *database* committed, not about an in-session object.
+    """
+    import sqlite3
+
+    path = os.environ["NEXUS_DB_PATH"]
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT project_id FROM projectartifactbinding WHERE artifact_id = ?",
+            (artifact_id,),
+        ).fetchall()
+    return {str(row[0]) for row in rows}
+
+
+class _AsyncBarrier:
+    """A minimal ``asyncio.Barrier`` equivalent that also runs on Python 3.10.
+
+    ``asyncio.Barrier`` was added in 3.11, but this project's CI matrix still
+    includes 3.10, so the concurrency proof needs its own primitive.  The
+    semantics match the stdlib barrier for this test: :meth:`wait` blocks until
+    ``parties`` coroutines have arrived, then releases them together; no waiter
+    proceeds before the last one arrives.
+
+    The wait is bounded by ``timeout`` so a lost participant fails loudly rather
+    than hanging the suite, and both a timeout and a cancellation decrement the
+    arrival count under the lock, so a departed waiter can never leave a phantom
+    arrival behind (which would strand the surviving party forever).
+    """
+
+    def __init__(self, parties: int, timeout: float = 30.0) -> None:
+        if parties < 1:
+            raise ValueError("parties must be >= 1")
+        self._parties = parties
+        self._timeout = timeout
+        self._count = 0
+        self._generation = 0
+        self._condition = asyncio.Condition()
+
+    async def wait(self) -> None:
+        async with self._condition:
+            generation = self._generation
+            self._count += 1
+            if self._count >= self._parties:
+                # The last arrival releases every waiter and opens a new epoch.
+                self._count = 0
+                self._generation += 1
+                self._condition.notify_all()
+                return
+            try:
+                await asyncio.wait_for(
+                    self._condition.wait_for(lambda: self._generation != generation),
+                    timeout=self._timeout,
+                )
+            except asyncio.TimeoutError as exc:
+                self._count -= 1
+                self._condition.notify_all()
+                raise AssertionError(
+                    f"barrier timed out after {self._timeout}s: only "
+                    f"{self._count + 1} of {self._parties} parties arrived"
+                ) from exc
+            except asyncio.CancelledError:
+                self._count -= 1
+                self._condition.notify_all()
+                raise
+
+
+@pytest.mark.asyncio
+async def test_concurrent_binds_cannot_attribute_one_content_address_to_two_projects(
+    pin_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One content address may be owned by exactly one project — a DB invariant.
+
+    Two projects race to bind the *same* content address, each through its own
+    job, so the per-job ``(artifact_id, job_id)`` primary key cannot separate
+    them.  A read-then-insert ownership guard is a TOCTOU: under real
+    concurrency both reads observe "no owner row" and both inserts commit,
+    silently attributing one content address to two projects.
+
+    The two binds are released together from a barrier placed immediately after
+    each has validated its revision (before either opens its binding session),
+    so both enter the ownership guard with no visible owner row — the exact
+    interleaving the invariant must fail closed on.  Exactly one bind may win;
+    the loser must be refused with ``CrossProjectAccess``, and the database must
+    end up with rows for a single project.
+    """
+    from nexus_ai_agent.creative.project_state.models import CrossProjectAccess
+    from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
+    from nexus_ai_agent.creative.studio.models import compute_state_hash
+
+    store = SqlProjectRevisionStore()
+    project_a, project_b = "cross-project-a", "cross-project-b"
+    a_project = _project("a").model_copy(update={"project_id": project_a})
+    a_project.state_hash = compute_state_hash(a_project)
+    b_project = _project("b").model_copy(update={"project_id": project_b})
+    b_project.state_hash = compute_state_hash(b_project)
+    ra = await store.commit(
+        a_project, authorized_project_id=project_a, expected_parent_revision_id=None
+    )
+    rb = await store.commit(
+        b_project, authorized_project_id=project_b, expected_parent_revision_id=None
+    )
+
+    # Release both racers at the same instant, right before the guard.
+    barrier = _AsyncBarrier(2)
+    original_load = SqlProjectRevisionStore.load_revision
+
+    async def gated_load(self: SqlProjectRevisionStore, project_id: str, revision_id: str) -> Any:
+        record = await original_load(self, project_id, revision_id)
+        await barrier.wait()
+        return record
+
+    monkeypatch.setattr(SqlProjectRevisionStore, "load_revision", gated_load)
+
+    bindings = SqlArtifactBindingStore()
+    artifact_id = "sha256:" + "c" * 64
+    results = await asyncio.gather(
+        bindings.bind(
+            project_id=project_a,
+            revision_id=ra.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-A",
+            size_bytes=1,
+            attempt=1,
+        ),
+        bindings.bind(
+            project_id=project_b,
+            revision_id=rb.revision_id,
+            artifact_id=artifact_id,
+            job_id="job-B",
+            size_bytes=1,
+            attempt=1,
+        ),
+        return_exceptions=True,
+    )
+
+    winners = [r for r in results if not isinstance(r, BaseException)]
+    refusals = [r for r in results if isinstance(r, BaseException)]
+    assert len(winners) == 1, (
+        f"exactly one project may own a content address, got {len(winners)}: {results!r}"
+    )
+    assert len(refusals) == 1 and isinstance(refusals[0], CrossProjectAccess), (
+        f"the losing project must be refused with CrossProjectAccess: {refusals!r}"
+    )
+    # The invariant must hold in the database, not just in the returned objects.
+    owners = _bound_projects(artifact_id)
+    assert owners == {winners[0].project_id}, (
+        f"the database must hold bindings for exactly the winning project: {owners!r}"
+    )
+    assert refusals[0].args  # the refusal carries a human-readable reason

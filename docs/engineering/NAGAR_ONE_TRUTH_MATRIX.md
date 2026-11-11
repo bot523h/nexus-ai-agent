@@ -11,10 +11,10 @@ Stage 1 change on `nagar-one-slice2-artifact-revision-binding` (PR #319).
 | Project identity | VERIFIED | `storage/models.py::AppProject`; `creative/studio/models.py::Project` | `tests/unit/test_durable_project_state.py` | — |
 | ProjectRevision (durable) | VERIFIED | `creative/project_state/store.py::SqlProjectRevisionStore`; `storage/models.py::ProjectRevision` | `tests/integration/test_durable_project_restart.py` (new process rebuilds identical id/hash) | — |
 | WorkingRevision / AcceptedRevision | VERIFIED | `ProjectRevisionHead` (single CAS head) | `tests/integration/test_durable_project_concurrency.py` (one winner) | — |
-| Revision CAS + durable persistence | VERIFIED | `store.py::commit` (conditional UPDATE) | same + `durable_project_state_mutations.py` (19/19) | — |
+| Revision CAS + durable persistence | VERIFIED | `store.py::commit` (conditional UPDATE) | same + `durable_project_state_mutations.py` (29/29) | — |
 | Asset Library (ingest/blob/identity) | VERIFIED | `creative/assets/*` | `tests/…/test_asset_library_*`; `scripts/asset_library_mutations.py` | — |
 | AssetVersion (immutable, measured) | VERIFIED | `assets/models.py::AssetVersion`; `storage/models.py::AssetVersion` | asset-library suite | — |
-| Revision ↔ AssetVersion binding (published artifact) | VERIFIED (this mission) | `project_state/store.py::SqlArtifactBindingStore`; `storage/models.py::ProjectArtifactBinding` | `tests/integration/test_durable_project_revision_pinning.py` (bind/re-verify/repoint/cross-project/fail-closed); 4 new mutants killed | AssetVersion *row* binding is by measured `sha256`; a later slice may pin the `version_id` explicitly |
+| Revision ↔ AssetVersion binding (published artifact) | VERIFIED (this mission) | `project_state/store.py::SqlArtifactBindingStore`; `storage/models.py::ProjectArtifactBinding` | `tests/integration/test_durable_project_revision_pinning.py` (bind/re-verify/repoint/cross-project/fail-closed + the F1 inside-window takeover retraction + token-scoped/monotonic/concurrent fencing + the adversarial cross-job non-seizure) and `tests/integration/test_artifact_binding_postgres_concurrency.py` (real OS processes, PostgreSQL: cross-job non-seizure, owner-only retract, racing advances); harness 29/29 (14 Slice-2 mutants) | AssetVersion *row* binding is by measured `sha256`; a later slice may pin the `version_id` explicitly |
 | Creative Intent (typed) | VERIFIED (narrow) | `application/creative_intent.py::CanonicalCreativeIntent` | `tests/…/test_canonical_creative_execution.py` | Trim-only; broader op coverage is later |
 | Typed Creative IR / AST | VERIFIED (studio-local) | `creative/spine/models.py`; `creative/rendering/ir.py` | spine + render-lane tests | — |
 | Compiler / Command DAG | VERIFIED | `creative/spine/compiler.py`; `creative/rendering/compiler.py` | compiler tests | — |
@@ -32,7 +32,7 @@ Stage 1 change on `nagar-one-slice2-artifact-revision-binding` (PR #319).
 | Privacy consent + cloud egress | PARTIAL | `nagar/ibpc/privacy.py` (LOCAL_VAULT default; typed refusal for non-local) | IBPC privacy tests | Durable consent store is **Stage 3** |
 | Studio API / Telegram adapter | PARTIAL | `bot/creative_surface.py`; `api/app.py` | surface tests | No approval/preview session API yet |
 | Recovery / restart behavior | VERIFIED (queue+revision) | queue recovery; `durable_project_restart.py` | restart suites | IBPC restart durability is **Stage 3** |
-| Migration schema (single head) | VERIFIED | `migrations/versions/*` (head `20261106artbind`) | `tests/unit/test_migrations.py` (upgrade=exact schema, no drift, downgrade empties) | — |
+| Migration schema (single head) | VERIFIED | `migrations/versions/*` (head `20261107bindfence`) | `tests/unit/test_migrations.py` (upgrade=exact schema, no drift, downgrade empties) | — |
 
 ## Stage gates (from the board)
 

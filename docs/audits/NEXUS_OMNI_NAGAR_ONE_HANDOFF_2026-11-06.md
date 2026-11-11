@@ -12,7 +12,7 @@ claim below is tied to a commit, a PR, or a command result. Nothing here is
 | Working branches (this campaign) | `nagar-one-slice2-artifact-revision-binding`, `nagar-one-stage0-truth-matrix`, `nagar-one-stage2-law-numbering` |
 | Open PRs on the repository | **45** (8 draft) — the #294 durable creative-graph package still gates slice-3 |
 | New PRs opened this campaign | #319, #320, #321 (all three required checks green) |
-| Alembic head after slice-2 | `20261106artbind` (single head) |
+| Alembic head after slice-2 | `20261106artbind` (single head at that time; later `20261107bindfence`) |
 | PostgreSQL checkpoint golden | regenerated `3683787993f0…` → `2fbfee72544a…` |
 
 ## 2. What shipped (three PRs, all required checks green)

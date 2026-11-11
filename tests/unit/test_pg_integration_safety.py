@@ -31,11 +31,20 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INTEGRATION_MODULE = REPO_ROOT / "tests" / "integration" / "test_postgres_single_engine.py"
+#: Every module that writes to the ``NEXUS_DATABASE_URL`` database must obey the
+#: same data-safety contract: an explicit destructive opt-in and only
+#: nonce-scoped writes.  The fence module (task-282 slice-2 F1) is the second
+#: such module.
+PG_WRITING_MODULES = (
+    INTEGRATION_MODULE,
+    REPO_ROOT / "tests" / "integration" / "test_artifact_binding_postgres_concurrency.py",
+)
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-#: Columns every scoped ``DELETE`` must filter on: the per-run nonce ids the
-#: module itself generated (a chat id, or the nonce used as a ``telegram_id``).
-SCOPED_COLUMNS = ("chat_id", "telegram_id")
+#: Columns every scoped ``DELETE`` must filter on: the per-run nonce ids a
+#: module itself generated (a chat id, the nonce used as a ``telegram_id``, or
+#: the project id a durable-state module scopes every row to).
+SCOPED_COLUMNS = ("chat_id", "telegram_id", "project_id")
 
 
 def _sql_literals(source: str) -> list[str]:
@@ -58,35 +67,172 @@ def _sql_literals(source: str) -> list[str]:
 
 
 def test_every_delete_in_the_integration_module_is_scoped_to_its_own_rows() -> None:
-    deletes = [
-        sql
-        for sql in _sql_literals(INTEGRATION_MODULE.read_text(encoding="utf-8"))
-        if re.search(r"\bDELETE\b", sql, re.IGNORECASE)
+    for module in PG_WRITING_MODULES:
+        deletes = [
+            sql
+            for sql in _sql_literals(module.read_text(encoding="utf-8"))
+            if re.search(r"\bDELETE\b", sql, re.IGNORECASE)
+        ]
+        assert deletes, (
+            f"{module.name}: the guard found no DELETE at all — it is no longer testing anything"
+        )
+        offenders: list[str] = []
+        for sql in deletes:
+            reason = _unscoped_delete_reason(sql)
+            if reason:
+                offenders.append(f"{reason}: {sql!r}")
+        assert not offenders, (
+            f"an unscoped delete in {module.name} can destroy another row's data:\n"
+            + "\n".join(offenders)
+        )
+
+
+#: A scoped delete is a conjunction of equalities that each bind a per-run nonce
+#: column to a bound parameter.  Anything else (a top-level ``OR``, a tautology
+#: such as ``TRUE``/``1 = 1``, ``IS NOT NULL``, a constant instead of a bound
+#: nonce, a subquery) can widen the delete past this run's rows and is refused.
+_SCOPED_CONJUNCT = re.compile(r"^\s*(\w+)\s*=\s*:\w+\s*$")
+
+
+def _where_clause(sql: str) -> str | None:
+    match = re.search(r"\bWHERE\b(.*)$", sql, re.IGNORECASE | re.DOTALL)
+    return match.group(1).strip() if match else None
+
+
+def _unscoped_delete_reason(sql: str) -> str | None:
+    """Return why *sql* is not nonce-scoped, or ``None`` when it is safe.
+
+    A substring check for a scoped-column name is not enough: a predicate such
+    as ``WHERE project_id = :pid OR TRUE`` names a scoped column yet deletes
+    every row.  So each conjunct of the ``WHERE`` must be exactly
+    ``<scoped-column> = :<bound-param>`` — no ``OR``, no tautology, no constant
+    in place of the per-run nonce.
+    """
+    where = _where_clause(sql)
+    if where is None:
+        return "no WHERE clause"
+    if re.search(r"\bOR\b", where, re.IGNORECASE):
+        return "a top-level OR can widen the delete past this run's rows"
+    if re.search(r"\b(TRUE|FALSE|IS\s+NOT\s+NULL)\b", where, re.IGNORECASE):
+        return "a tautology in the WHERE can widen the delete"
+    conjuncts = re.split(r"\bAND\b", where, flags=re.IGNORECASE)
+    scoped = 0
+    for conjunct in conjuncts:
+        match = _SCOPED_CONJUNCT.match(conjunct)
+        if match is None:
+            return f"conjunct {conjunct.strip()!r} is not a scoped equality to a bound nonce"
+        if match.group(1) in SCOPED_COLUMNS:
+            scoped += 1
+    if scoped == 0:
+        return "no conjunct binds a per-run nonce column"
+    return None
+
+
+def test_the_delete_scope_guard_rejects_widening_predicates() -> None:
+    """The guard must reject the evasions it exists to catch, not just ``WHERE``.
+
+    A substring check would accept ``WHERE project_id = :pid OR TRUE`` (it names
+    a scoped column) while deleting every project's rows.  Pin the guard's own
+    behaviour so a future weakening is caught here.
+    """
+    unsafe = [
+        "DELETE FROM projectartifactbinding",  # no WHERE
+        "DELETE FROM t WHERE TRUE",
+        "DELETE FROM t WHERE project_id = :pid OR TRUE",
+        "DELETE FROM t WHERE project_id = :pid OR 1 = 1",
+        "DELETE FROM t WHERE project_id IS NOT NULL",
+        "DELETE FROM t WHERE project_id = 'literal'",  # constant, not a bound nonce
+        "DELETE FROM t WHERE other_id = :pid",  # not a per-run nonce column
+        "DELETE FROM t WHERE project_id IN (SELECT project_id FROM appproject)",
+        # The exact form that reddened CI on PR #325: an ``IN`` list of two
+        # projects is not a scoped equality, so it is refused (it names a scoped
+        # column yet can widen past this run's rows).
+        "DELETE FROM projectartifactbinding WHERE project_id IN (:a, :b)",
+        "DELETE FROM artifactcontentowner WHERE artifact_id = :aid",  # no nonce column
     ]
-    assert deletes, "the guard found no DELETE at all — it is no longer testing anything"
-    offenders: list[str] = []
-    for sql in deletes:
-        if not re.search(r"\bWHERE\b", sql, re.IGNORECASE):
-            offenders.append(f"no WHERE clause: {sql!r}")
-        elif not any(column in sql for column in SCOPED_COLUMNS):
-            offenders.append(f"WHERE does not name a per-run nonce column: {sql!r}")
-    assert not offenders, "an unscoped delete can destroy another chat's data:\n" + "\n".join(
-        offenders
+    for sql in unsafe:
+        assert _unscoped_delete_reason(sql) is not None, f"guard accepted an unsafe delete: {sql!r}"
+
+    safe = [
+        "DELETE FROM projectartifactbinding WHERE project_id = :pid",
+        'DELETE FROM "user" WHERE telegram_id = :id',
+        "DELETE FROM t WHERE project_id = :pid AND artifact_id = :aid",
+    ]
+    for sql in safe:
+        assert _unscoped_delete_reason(sql) is None, f"guard rejected a safe delete: {sql!r}"
+
+
+#: Every table the fence's cleanup touches, with the scoped column it must use.
+#: The survival baseline below is checked for ALL of them, not just one: a single
+#: table left with an unscoped DELETE is enough to destroy another run's rows.
+_FENCE_CLEANUP_TABLES = (
+    "projectartifactbinding",
+    "artifactcontentowner",
+    "projectrevisionhead",
+    "projectrevision",
+    "appproject",
+)
+
+
+def test_every_fence_cleanup_delete_survives_another_projects_rows() -> None:
+    """A survival baseline for EVERY table in the fence cleanup, not just one.
+
+    The 2026-11-11 CI failure reddened on exactly one module and named three
+    tables; a guard that only pinned one table would have missed the other two.
+    Each DELETE in the fence module must be scoped so that a *different* project's
+    row (a fresh nonce, never bound by this run) is provably outside its predicate
+    — i.e. the predicate is ``<scoped-column> = :bound`` and nothing wider.
+    """
+    source = (
+        REPO_ROOT / "tests" / "integration" / "test_artifact_binding_postgres_concurrency.py"
+    ).read_text(encoding="utf-8")
+    deletes = [sql for sql in _sql_literals(source) if re.search(r"\bDELETE\b", sql, re.I)]
+    # The module must still clean up every table the fence writes to.
+    touched = {
+        match.group(1)
+        for sql in deletes
+        if (match := re.search(r"\bFROM\s+(\w+)", sql, re.IGNORECASE))
+    }
+    missing = [table for table in _FENCE_CLEANUP_TABLES if table not in touched]
+    assert missing == [], f"the fence cleanup no longer deletes from: {missing}"
+    # And every one of those DELETEs must be nonce-scoped (a survival baseline).
+    offenders = [
+        f"{_unscoped_delete_reason(sql)}: {sql!r}"
+        for sql in deletes
+        if _unscoped_delete_reason(sql)
+    ]
+    assert offenders == [], (
+        "an unscoped fence cleanup DELETE can destroy another run:\n" + "\n".join(offenders)
     )
 
 
 def test_the_integration_module_issues_no_ddl_or_table_wide_statements() -> None:
-    source = INTEGRATION_MODULE.read_text(encoding="utf-8")
-    offenders = [
-        sql
-        for sql in _sql_literals(source)
-        if re.search(r"\b(DROP|TRUNCATE|ALTER|UPDATE)\b", sql, re.IGNORECASE)
-    ]
-    assert offenders == [], "\n".join(offenders)
+    for module in PG_WRITING_MODULES:
+        source = module.read_text(encoding="utf-8")
+        offenders = [
+            sql
+            for sql in _sql_literals(source)
+            if re.search(r"\b(DROP|TRUNCATE|ALTER|UPDATE)\b", sql, re.IGNORECASE)
+        ]
+        assert offenders == [], f"{module.name}:\n" + "\n".join(offenders)
 
 
-def _module_level_skip_guards() -> list[str]:
-    tree = ast.parse(INTEGRATION_MODULE.read_text(encoding="utf-8"))
+def test_every_pg_writing_module_requires_the_destructive_opt_in() -> None:
+    """Every module that writes to the URL database arms the same opt-in."""
+    for module in PG_WRITING_MODULES:
+        loaded = _load_module(module)
+        assert getattr(loaded, "DESTRUCTIVE_OPT_IN", None) == "NEXUS_PG_TEST_DESTRUCTIVE", (
+            f"{module.name} must name the destructive opt-in variable"
+        )
+        guards = _module_level_skip_guards(module)
+        assert guards, f"{module.name} carries no module-level skip guards"
+        assert any("DESTRUCTIVE_OPT_IN" in guard for guard in guards), (
+            f"{module.name}: NEXUS_DATABASE_URL alone must not enable the module"
+        )
+
+
+def _module_level_skip_guards(module: Path = INTEGRATION_MODULE) -> list[str]:
+    tree = ast.parse(module.read_text(encoding="utf-8"))
     return [
         ast.unparse(node.value)
         for node in tree.body
@@ -98,25 +244,11 @@ def _module_level_skip_guards() -> list[str]:
     ]
 
 
-def test_the_integration_module_requires_an_explicit_destructive_opt_in() -> None:
-    module = _load_integration_module()
-    constant = getattr(module, "DESTRUCTIVE_OPT_IN", None)
-    assert constant == "NEXUS_PG_TEST_DESTRUCTIVE", (
-        "the module must name the destructive opt-in variable"
-    )
-    guards = _module_level_skip_guards()
-    assert guards, "the module carries no module-level skip guards"
-    assert any("DESTRUCTIVE_OPT_IN" in guard for guard in guards), (
-        "NEXUS_DATABASE_URL alone must not enable the module: the explicit "
-        "destructive opt-in has to be part of the module-level guards"
-    )
-
-
-def _load_integration_module() -> ModuleType:
+def _load_module(module_path: Path = INTEGRATION_MODULE) -> ModuleType:
     """Import the integration module fresh, so ``pytestmark`` is re-evaluated."""
-    name = "_nexus_pg_single_engine_probe"
+    name = "_nexus_pg_probe_" + module_path.stem
     sys.modules.pop(name, None)
-    spec = importlib.util.spec_from_file_location(name, INTEGRATION_MODULE)
+    spec = importlib.util.spec_from_file_location(name, module_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
@@ -127,24 +259,41 @@ def _load_integration_module() -> ModuleType:
     return module
 
 
-def test_the_module_is_skipped_without_the_destructive_opt_in(
+def test_the_integration_module_is_skipped_without_the_destructive_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The guard is behavioural, not decorative: prove it disarms the module.
 
     ``NEXUS_DATABASE_URL`` alone points the *application* at a database; it
-    must not by itself arm a module that writes to it.
+    must not by itself arm a module that writes to it.  Every registered writer
+    is loaded under the environment and its skip guards must actually fire.
     """
-    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus")
-    monkeypatch.delenv("NEXUS_PG_TEST_DESTRUCTIVE", raising=False)
+    for module_path in PG_WRITING_MODULES:
+        monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus")
+        monkeypatch.delenv("NEXUS_PG_TEST_DESTRUCTIVE", raising=False)
+        module = _load_module(module_path)
+        assert _skip_fired(module), f"{module_path.name} is not skipped without the opt-in"
 
-    module = _load_integration_module()
-    fired = [
-        bool(mark.args[0])
-        for mark in module.pytestmark
-        if getattr(mark, "name", "") == "skipif" and mark.args
-    ]
-    assert any(fired), "no skip guard fired with the destructive opt-in unset"
+
+def test_a_false_like_opt_in_value_does_not_arm_the_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``0``/``false``/``no``/``off`` are truthy strings — they must NOT arm.
+
+    ``os.getenv(...)`` returns the literal text, so ``bool(os.getenv(...))``
+    treats ``"0"`` as enabled and would write to whatever ``NEXUS_DATABASE_URL``
+    names.  Only the exact string ``"1"`` may arm a writing module.
+    """
+    for module_path in PG_WRITING_MODULES:
+        for value in ("0", "false", "False", "no", "off", "", "yes", "true", "2"):
+            monkeypatch.setenv(
+                "NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus"
+            )
+            monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", value)
+            module = _load_module(module_path)
+            assert _skip_fired(module), (
+                f"{module_path.name} armed for the destructive opt-in value {value!r}"
+            )
 
 
 def test_the_opt_in_armed_without_a_database_is_a_red_build(
@@ -158,29 +307,35 @@ def test_the_opt_in_armed_without_a_database_is_a_red_build(
     goes unverified. That is the exact failure mode the opt-in was added to
     prevent, so a misconfigured run has to be *red*.
     """
-    monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
-    monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", "1")
+    for module_path in PG_WRITING_MODULES:
+        monkeypatch.delenv("NEXUS_DATABASE_URL", raising=False)
+        monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", "1")
 
-    # ``pytest.fail`` raises ``Failed``, which derives from BaseException.
-    with pytest.raises(BaseException) as excinfo:
-        _load_integration_module()
-    assert "NEXUS_DATABASE_URL" in str(excinfo.value), (
-        "the module must say which variable is missing instead of skipping quietly"
-    )
+        # ``pytest.fail`` raises ``Failed``, which derives from BaseException.
+        with pytest.raises(BaseException) as excinfo:
+            _load_module(module_path)
+        assert "NEXUS_DATABASE_URL" in str(excinfo.value), (
+            "the module must say which variable is missing instead of skipping quietly"
+        )
 
 
 def test_the_module_runs_when_both_variables_are_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """… and the same guard must not have disabled it permanently."""
-    monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus")
-    monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", "1")
+    for module_path in PG_WRITING_MODULES:
+        monkeypatch.setenv("NEXUS_DATABASE_URL", "postgresql://u:p@db.example.invalid:5432/nexus")
+        monkeypatch.setenv("NEXUS_PG_TEST_DESTRUCTIVE", "1")
 
-    module = _load_integration_module()
-    fired = [
+        module = _load_module(module_path)
+        assert not _skip_fired(module), f"{module_path.name} skips even with both variables set"
+
+
+def _skip_fired(module: ModuleType) -> bool:
+    """True iff at least one module-level ``skipif`` condition is currently true."""
+    return any(
         bool(mark.args[0])
         for mark in module.pytestmark
         if getattr(mark, "name", "") == "skipif" and mark.args
-    ]
-    assert not any(fired), "the module skips even with both variables set"
+    )
 
 
 def _migrate_postgres_job() -> dict[str, Any]:
@@ -196,6 +351,16 @@ def test_the_ci_postgres_job_sets_the_destructive_opt_in() -> None:
     assert env.get("NEXUS_PG_TEST_DESTRUCTIVE") == "1", (
         "the migrate-postgres job runs the module without the opt-in, so it "
         "would skip and the live PostgreSQL proof would silently disappear"
+    )
+
+
+def test_every_pg_writing_module_is_actually_run_by_ci() -> None:
+    """A module registered as a writer but never invoked is a silent hole."""
+    runs = " ".join(str(step.get("run", "")) for step in _migrate_postgres_job().get("steps", []))
+    missing = [module.name for module in PG_WRITING_MODULES if module.name not in runs]
+    assert missing == [], (
+        "these PostgreSQL-writing modules are never run by the migrate-postgres "
+        f"job, so their live proof is silently absent: {missing}"
     )
 
 
