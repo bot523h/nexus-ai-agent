@@ -291,6 +291,7 @@ async def _database_readiness(timeout: float = 2.5) -> tuple[bool, str]:
     """
     from sqlalchemy import text
 
+    from nexus_ai_agent.maintenance.redact import redact_text
     from nexus_ai_agent.storage.db import (
         BackendPolicyError,
         enforce_postgres_policy,
@@ -305,12 +306,27 @@ async def _database_readiness(timeout: float = 2.5) -> tuple[bool, str]:
         # backend so a broken production deployment is never presented as a
         # healthy SQLite one.
         return False, f"postgresql (required): {exc}"[:200]
+    except ValueError as exc:
+        # F-008: a malformed URL (unsupported scheme, missing host, empty value
+        # the policy did not catch) raised a bare ``ValueError`` out of the
+        # endpoint, which FastAPI turned into an HTTP 500 — a crash page for a
+        # readiness probe. It is a *not ready* condition, not a server fault, so
+        # it must be a structured 503. The message is sanitised because a URL
+        # parser error can quote the credential-bearing URL back.
+        return False, f"postgresql (invalid configuration): {redact_text(str(exc))}"[:200]
 
     async def _probe() -> tuple[bool, str]:
         if db_url is not None:
             from sqlalchemy.ext.asyncio import create_async_engine
 
-            engine = create_async_engine(to_asyncpg_url(db_url))
+            from nexus_ai_agent.storage.db import resolve_asyncpg_connect_args
+
+            # F-001/F-008: the same resolver the application engine uses — a
+            # Neon URL (``?sslmode=require``) must not fail here with
+            # "unexpected keyword argument 'sslmode'", and a parameter asyncpg
+            # cannot honour must surface as a structured 503, not a 500.
+            async_url, connect_args = resolve_asyncpg_connect_args(to_asyncpg_url(db_url))
+            engine = create_async_engine(async_url, connect_args=connect_args)
             try:
                 async with engine.connect() as conn:
                     await conn.execute(text("SELECT 1"))
@@ -374,10 +390,15 @@ async def readyz() -> JSONResponse:
     identity = _deployment_identity()
     # The backend the process *intends* to use, independent of whether the
     # probe succeeded: a PostgreSQL deployment that cannot connect must report
-    # "postgresql", never a healthy "sqlite" (mission §14).
+    # "postgresql", never a healthy "sqlite" (mission §14). F-008: a malformed
+    # URL must not turn this into an HTTP 500 either — report the intended
+    # backend and let the failed probe drive the 503.
     from nexus_ai_agent.storage.db import selected_backend
 
-    backend = selected_backend()
+    try:
+        backend = selected_backend()
+    except ValueError:
+        backend = "postgresql"
     payload: dict[str, object] = {
         "status": "ready" if db_ok and startup_ok else "not_ready",
         "version": identity["version"],

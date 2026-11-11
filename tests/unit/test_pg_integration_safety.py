@@ -40,6 +40,17 @@ PG_WRITING_MODULES = (
     REPO_ROOT / "tests" / "integration" / "test_artifact_binding_postgres_concurrency.py",
     REPO_ROOT / "tests" / "integration" / "test_postgres_persistence.py",
 )
+
+#: Modules that exercise PostgreSQL against a **disposable target they create and
+#: drop themselves** (a per-run database or schema) rather than writing rows to
+#: ``NEXUS_DATABASE_URL``.  They carry the same destructive opt-in, but their
+#: safety property is "the configured database is only read, never mutated",
+#: so the nonce-scoped-``DELETE`` contract above does not apply.  They still must
+#: be *run* by CI (a registered-but-uninvoked proof is a silent hole) and they
+#: still may not write to the configured database — both enforced below.
+PG_DISPOSABLE_TARGET_MODULES = (
+    REPO_ROOT / "tests" / "integration" / "test_postgres_restore_atomicity.py",
+)
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 #: Columns every scoped ``DELETE`` must filter on: the per-run nonce ids a
@@ -358,11 +369,34 @@ def test_the_ci_postgres_job_sets_the_destructive_opt_in() -> None:
 def test_every_pg_writing_module_is_actually_run_by_ci() -> None:
     """A module registered as a writer but never invoked is a silent hole."""
     runs = " ".join(str(step.get("run", "")) for step in _migrate_postgres_job().get("steps", []))
-    missing = [module.name for module in PG_WRITING_MODULES if module.name not in runs]
+    registered = PG_WRITING_MODULES + PG_DISPOSABLE_TARGET_MODULES
+    missing = [module.name for module in registered if module.name not in runs]
     assert missing == [], (
-        "these PostgreSQL-writing modules are never run by the migrate-postgres "
+        "these PostgreSQL modules are never run by the migrate-postgres "
         f"job, so their live proof is silently absent: {missing}"
     )
+
+
+def test_disposable_target_modules_never_write_to_the_configured_database() -> None:
+    """A disposable-target module must derive its target, not write to the DSN.
+
+    These modules are allowed to run destructive SQL, but only against a
+    database they created and drop themselves.  They must therefore derive that
+    target (``make_url(...).set(database=...)``) rather than mutate whatever
+    ``NEXUS_DATABASE_URL`` names — otherwise the destructive opt-in would
+    authorise damage to a real database.
+    """
+    problems: list[str] = []
+    for module in PG_DISPOSABLE_TARGET_MODULES:
+        source = module.read_text(encoding="utf-8")
+        if "make_url(" not in source or "set(database=" not in source:
+            problems.append(
+                f"{module.name}: does not derive a disposable database via "
+                "make_url(...).set(database=...)"
+            )
+        if "NEXUS_DATABASE_URL" not in source:
+            problems.append(f"{module.name}: never reads NEXUS_DATABASE_URL (unexpected)")
+    assert not problems, "\n".join(problems)
 
 
 def test_the_ci_postgres_job_still_uses_a_disposable_service_container() -> None:

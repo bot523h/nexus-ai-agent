@@ -40,7 +40,7 @@ from nexus_ai_agent.maintenance.failures import (
     classify_storage_failure,
 )
 from nexus_ai_agent.observability.logging import get_logger
-from nexus_ai_agent.storage.db import resolve_database_url
+from nexus_ai_agent.storage.db import enforce_postgres_policy
 from nexus_ai_agent.storage.providers.b2 import B2Provider
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
 from nexus_ai_agent.storage.providers.r2 import R2Provider
@@ -281,7 +281,10 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
     """
     now = dt.datetime.now(dt.timezone.utc)
     stamp = now.strftime(STAMP_FORMAT)
-    database_url = resolve_database_url()
+    # F-005: consult the policy, not the raw URL. With ``NEXUS_REQUIRE_POSTGRES=true``
+    # and no URL this raises instead of silently taking a local SQLite backup of a
+    # production deployment that was supposed to be on PostgreSQL.
+    database_url = enforce_postgres_policy()
 
     if database_url:
         filename = f"nexus-pg-{stamp}.sql"

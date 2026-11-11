@@ -51,6 +51,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.maintenance.backup import (
@@ -67,12 +68,37 @@ from nexus_ai_agent.maintenance.failures import (
     classify_storage_failure,
 )
 from nexus_ai_agent.maintenance.housekeeping import _parse_backup_stamp
+from nexus_ai_agent.maintenance.redact import redact_text, split_dsn_password, target_identity
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
 
 log = get_logger(__name__)
 
 _DOWNLOAD_TIMEOUT_SECONDS = 600
+
+
+class _ScratchDir:
+    """A temporary directory whose removal is guaranteed (F-003).
+
+    ``tempfile.mkdtemp`` alone leaks: the previous code created
+    ``nexus_restore_fetch_*`` / ``nexus_restore_stage_*`` directories and never
+    removed them, so a failed drill left staged artifacts (and any passfile) on
+    disk.  This is a context manager so cleanup runs on success, exception and
+    cancellation alike — ``__exit__`` runs even when the body raises.
+    """
+
+    def __init__(self, prefix: str) -> None:
+        self._prefix = prefix
+        self.path: Path | None = None
+
+    def __enter__(self) -> Path:
+        self.path = Path(tempfile.mkdtemp(prefix=self._prefix))
+        return self.path
+
+    def __exit__(self, *_exc: object) -> None:
+        if self.path is not None:
+            shutil.rmtree(self.path, ignore_errors=True)
+            self.path = None
 
 
 class RestorePlanError(RuntimeError):
@@ -390,7 +416,9 @@ def _apply_sqlite_restore(
 # ── postgres restore ────────────────────────────────────────────────────
 
 
-def _list_postgres_tables(psql: str, target_url: str) -> set[str]:
+def _list_postgres_tables(
+    psql: str, target_url: str, env: dict[str, str] | None = None
+) -> set[str]:
     """Read the table names the target cluster actually holds.
 
     A real post-restore proof must ask the *target* what it has, not trust the
@@ -412,13 +440,14 @@ def _list_postgres_tables(psql: str, target_url: str) -> set[str]:
         text=True,
         timeout=120,
         check=False,
+        env=env,
     )
     if proc.returncode != 0:
         raise RestoreVerificationError(
             f"post-restore table read failed on the live target: "
-            f"{proc.stderr.strip()[:400]} — the apply reported success but the "
-            "target could not be re-read; classify CLUSTER-SIDE before claiming "
-            "the restore is proven"
+            f"{redact_text(proc.stderr).strip()[:400]} — the apply reported "
+            "success but the target could not be re-read; classify "
+            "CLUSTER-SIDE before claiming the restore is proven"
         )
     return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
 
@@ -443,12 +472,35 @@ def _expected_dump_tables(artifact: Path) -> set[str]:
     return names
 
 
+def _pg_psql_env(target_url: str, scratch: Path) -> tuple[str, dict[str, str]]:
+    """Return ``(password_free_url, env)`` for a credential-safe ``psql`` run.
+
+    F-003: the DSN on ``argv`` is world-readable via ``ps``. The password is
+    moved into a mode-0600 ``PGPASSFILE`` inside *scratch* (removed with the
+    scratch dir) and the URL handed to ``psql`` carries no password at all.
+    """
+    import os
+
+    stripped, password = split_dsn_password(target_url)
+    env = dict(os.environ)
+    if password is not None:
+        parts = urlsplit(target_url)
+        passfile = scratch / ".pgpass"
+        passfile.write_text(
+            f"{parts.hostname or '*'}:{parts.port or 5432}:*:{parts.username or '*'}:{password}\n"
+        )
+        passfile.chmod(0o600)
+        env["PGPASSFILE"] = str(passfile)
+    return stripped, env
+
+
 def _apply_postgres_restore(
     artifact: Path,
     target_url: str | None,
     report: DrillReport,
     *,
     force: bool,
+    scratch: Path,
 ) -> None:
     # Artifacts are plain-text ``pg_dump`` output (see
     # ``backup._dump_postgres``). ``pg_restore`` rejects that format
@@ -456,6 +508,16 @@ def _apply_postgres_restore(
     # real restore of a NEXUS backup is applied with ``psql``. The dump is
     # written with ``--clean --if-exists``, so re-applying it over an existing
     # database drops and recreates the objects instead of failing.
+    #
+    # F-002: ``--single-transaction`` (``-1``) wraps the whole artifact in one
+    # transaction. ``--clean --if-exists`` emits destructive DDL, so without
+    # ``-1`` a failure part-way through leaves the target with some tables
+    # dropped and others not — a partially destroyed database. With ``-1`` any
+    # failure rolls the entire apply back and the target is left exactly as it
+    # was. This is proven by
+    # ``tests/integration/test_postgres_restore_atomicity.py`` against a real
+    # cluster, and the full generated NEXUS dump is proven compatible with
+    # transactional execution there (PG17 trailers included).
     psql = shutil.which("psql")
     if psql is None:
         raise RestorePlanError(
@@ -474,26 +536,48 @@ def _apply_postgres_restore(
             "refusing to restore into a live database without --force — "
             "this overwrites database objects on the target cluster"
         )
+    # F-003: name the target by its redacted identity (host:port/db), never the
+    # credential-bearing URL; the password travels in a mode-0600 PGPASSFILE,
+    # not on argv (which `ps` exposes).
+    target_label = target_identity(target_url) or "target"
+    safe_url, pg_env = _pg_psql_env(target_url, scratch)
     expected = _expected_dump_tables(artifact)
     proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
-        [psql, "-v", "ON_ERROR_STOP=1", "--dbname", target_url, "--file", str(artifact)],
+        [
+            psql,
+            "-v",
+            "ON_ERROR_STOP=1",
+            "--single-transaction",
+            "--dbname",
+            safe_url,
+            "--file",
+            str(artifact),
+        ],
         capture_output=True,
         text=True,
         timeout=1800,
         check=False,
+        env=pg_env,
     )
     if proc.returncode != 0:
+        # F-003: the driver echoes the DSN back in its stderr; scrub it before
+        # it becomes evidence.
         raise RestoreVerificationError(
-            f"psql restore failed on the live target: {proc.stderr.strip()[:400]} — "
-            "the structural artifact leg was verified; classify CLUSTER-SIDE "
-            "before retrying (roles? occupied connections? version match?)"
+            f"psql restore failed on {target_label} (rolled back — the target "
+            f"is unchanged): {redact_text(proc.stderr).strip()[:400]} — "
+            "classify CLUSTER-SIDE before retrying (roles? occupied "
+            "connections? version match?)"
         )
-    report.record("POSTGRES_LIVE_RESTORE", True, "psql applied the dump on the target cluster")
+    report.record(
+        "POSTGRES_LIVE_RESTORE",
+        True,
+        f"psql applied the dump atomically on {target_label}",
+    )
 
     # Post-restore proof: reopen the TARGET and prove the dump's tables are
     # actually there. Without this the ``RESTORE_PROVEN`` label would be an
     # overclaim — the apply's exit code alone does not prove the schema landed.
-    present = _list_postgres_tables(psql, target_url)
+    present = _list_postgres_tables(psql, safe_url, pg_env)
     missing = sorted(expected - present)
     if missing:
         raise RestoreVerificationError(
@@ -509,7 +593,8 @@ def _apply_postgres_restore(
     )
     report.restored.update(
         {
-            "target": target_url,
+            # F-003: redacted identity, never the raw URL.
+            "target": target_label,
             "tables": sorted(present),
         }
     )
@@ -542,15 +627,77 @@ def restore_drill(
 
     mode = "apply" if apply else "drill"
     report = DrillReport(mode=mode)
-    now = dt.datetime.now(dt.timezone.utc)
-    stamp = now.strftime(STAMP_FORMAT)
 
     if apply and target is None and target_url is None:
         raise RestorePlanError(
             "--apply needs a target: --target (sqlite) or --target-url (postgres)"
         )
 
-    staged = Path(tempfile.mkdtemp(prefix="nexus_restore_stage_"))
+    # F-002: a live PostgreSQL target must never be the configured *source*
+    # database. Restoring a backup of the production database back onto the
+    # production database is the one destructive accident this guard exists to
+    # prevent; identity is compared on host/port/database (credentials
+    # irrelevant), and the check runs before any file is touched.
+    if apply and target_url is not None:
+        _guard_target_identity(target_url)
+
+    now = dt.datetime.now(dt.timezone.utc)
+    stamp = now.strftime(STAMP_FORMAT)
+
+    with _ScratchDir("nexus_restore_stage_") as staged:
+        return _run_drill(
+            staged=staged,
+            report=report,
+            settings=settings,
+            from_local=from_local,
+            from_r2_key=from_r2_key,
+            latest=latest,
+            target=target,
+            target_url=target_url,
+            expected_sha256=expected_sha256,
+            apply=apply,
+            force=force,
+            expect_app_schema=expect_app_schema,
+            stamp=stamp,
+        )
+
+
+def _guard_target_identity(target_url: str) -> None:
+    """Refuse a target that resolves to the configured source database (F-002).
+
+    The source is whatever ``NEXUS_DATABASE_URL`` names; restoring its own dump
+    back over it is a destructive no-op at best and a data-loss event at worst.
+    Identity is ``host:port/db`` — the same redacted identity the report carries.
+    """
+    from nexus_ai_agent.storage.db import resolve_database_url
+
+    source_url = resolve_database_url()
+    if source_url is None:
+        return
+    if target_identity(source_url) == target_identity(target_url):
+        raise RestorePlanError(
+            "refusing to restore: the target resolves to the configured source "
+            f"database ({target_identity(target_url)}) — restore into an "
+            "isolated target, never over the live source"
+        )
+
+
+def _run_drill(
+    *,
+    staged: Path,
+    report: DrillReport,
+    settings: Settings,
+    from_local: Path | None,
+    from_r2_key: str | None,
+    latest: bool,
+    target: Path | None,
+    target_url: str | None,
+    expected_sha256: str | None,
+    apply: bool,
+    force: bool,
+    expect_app_schema: bool,
+    stamp: str,
+) -> DrillReport:
     sidecar: Path | None = None
     filename_hint = ""
 
@@ -648,14 +795,15 @@ def restore_drill(
             expect_app_schema=expect_app_schema,
         )
     else:
-        _apply_postgres_restore(artifact, target_url, report, force=force)
+        _apply_postgres_restore(artifact, target_url, report, force=force, scratch=staged)
 
     report.record("RESTORE_PROVEN", True, "restored and re-verified on the target")
     report.ok = True
     log.info(
         "maintenance_restore_apply_ok",
         engine=engine,
-        target=str(target or target_url),
+        # F-003: never log the raw target URL — it carries the password.
+        target=str(target) if target is not None else target_identity(target_url),
         checksum=report.artifact.get("sha256"),
     )
     return report

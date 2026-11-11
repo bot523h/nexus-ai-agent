@@ -535,7 +535,9 @@ def test_apply_pg_uses_psql_for_plain_text_dumps(tmp_path, monkeypatch):
     monkeypatch.setattr(restore_module.subprocess, "run", _fake_run)
 
     report = restore_module.DrillReport(mode="apply")
-    restore_module._apply_postgres_restore(artifact, "postgresql://u:p@h/db", report, force=True)
+    restore_module._apply_postgres_restore(
+        artifact, "postgresql://u:p@h/db", report, force=True, scratch=tmp_path
+    )
     apply_argv = captured["argv"][0]
     assert apply_argv[0].endswith("psql")
     assert "pg_restore" not in " ".join(apply_argv)
@@ -577,7 +579,7 @@ def test_apply_pg_missing_table_after_apply_is_a_verification_error(tmp_path, mo
     report = restore_module.DrillReport(mode="apply")
     with pytest.raises(restore_module.RestoreVerificationError, match="missing tables"):
         restore_module._apply_postgres_restore(
-            artifact, "postgresql://u:p@h/db", report, force=True
+            artifact, "postgresql://u:p@h/db", report, force=True, scratch=tmp_path
         )
 
 
@@ -608,5 +610,5 @@ def test_apply_pg_unreadable_target_after_apply_is_a_verification_error(tmp_path
     report = restore_module.DrillReport(mode="apply")
     with pytest.raises(restore_module.RestoreVerificationError, match="could not be re-read"):
         restore_module._apply_postgres_restore(
-            artifact, "postgresql://u:p@h/db", report, force=True
+            artifact, "postgresql://u:p@h/db", report, force=True, scratch=tmp_path
         )

@@ -656,7 +656,19 @@ def sync_db_path_for(settings: Any) -> str | None:
     root that was given an explicit ``Settings`` object keeps its SQLite path
     while a PostgreSQL deployment no longer gets a second, SQLite database
     beside the configured one (audit A-02).
+
+    F-005: ``NEXUS_REQUIRE_POSTGRES=true`` is authoritative. This consulted the
+    raw ``settings.database_url`` only, so a production deployment that required
+    PostgreSQL but had a blank URL was handed a SQLite path — the exact
+    ``REQUIRE_POSTGRES=true → SQLite`` bypass the policy exists to forbid. The
+    policy is now consulted first and fails closed.
     """
+    if postgres_required():
+        # Raises BackendPolicyError when the URL is missing; returns the URL
+        # (→ ``None`` here, meaning "use sync_engine's PostgreSQL path")
+        # otherwise. Either way this never returns a SQLite path.
+        enforce_postgres_policy()
+        return None
     if (getattr(settings, "database_url", None) or "").strip():
         return None
     return str(settings.db_path)
