@@ -1,7 +1,7 @@
 # OMEGA audio engine — hardening report
 
 Branch `arena/288ef95e-nexus-ai-agent`, PR #337. Base `c3aa7c8`.
-Head at time of writing `ced3680`. **Status: `HARDENED_BUT_NOT_COMPLETE`.**
+Head at time of writing `14f2fa9`. **Status: `HARDENED_BUT_NOT_COMPLETE`.**
 
 Everything below is a measurement taken in this repository, on this tree, with
 the commands shown. Numbers that were not re-measured are labelled as carried
@@ -182,7 +182,9 @@ imports a pack but is absent from `PACK_TEST_TARGETS` **breaks the whole suite**
 
 ## 7. CI
 
-Run `43322843064` on `ced3680`: **24/24 jobs `success`**.
+Run `43328253118` on the final head `14f2fa9`: **24/24 jobs `success`**.
+Run `43322843064` on `ced3680` (code-identical to the above, docs aside) was
+also 24/24.
 
 ```
 lint (ruff + mypy + version lockstep)          success
@@ -232,8 +234,8 @@ This is why the status is `HARDENED_BUT_NOT_COMPLETE` and not `DONE`.
    (`total=97.52`, every pack ≥95%), the *provenance* was not. Registering the
    module in `pack_coverage.py` fixed all three groups at once.
 
-   **CI is now green on `ced3680`:** 24/24 jobs `success`, including all three
-   Python versions for both `continuum-evidence` and `python-parity`.
+   **CI is green on the final head `14f2fa9`:** 24/24 jobs `success`, including
+   all three Python versions for both `continuum-evidence` and `python-parity`.
 
 ---
 
@@ -259,3 +261,5 @@ This is why the status is `HARDENED_BUT_NOT_COMPLETE` and not `DONE`.
 | `5910c4f` | mutation campaign 39 → 74 probes, 74/74 killed |
 | `ba2643b` | close coverage gaps, fix the Wiener NaN |
 | `ced3680` | the hardening report |
+| `d539d5c` | record the green CI, stop understating the 3.10 evidence |
+| `14f2fa9` | the ledger was stale — §4.7 was already done |
