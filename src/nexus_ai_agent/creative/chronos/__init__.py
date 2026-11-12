@@ -33,6 +33,7 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
         scene_portrait_ops,
         temporal_optics,
         timeline,
+        weather_and_grading,
     )
     from . import color_science as color
     from .verifier import verify_persisted_relighting
@@ -277,6 +278,74 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
                     "readout_fraction": str(result.readout_fraction),
                 },
             )
+        if op == "weather.precipitation":
+            result = weather_and_grading.render_physical_precipitation_layer(
+                int(p["width_px"]),
+                int(p["height_px"]),
+                float(p["focal_length_y_px"]),
+                float(p["particle_depth_m"]),
+                float(p["terminal_velocity_m_s"]),
+                frame_rate_fps=float(p["frame_rate_fps"]),
+                shutter_angle_deg=float(p.get("shutter_angle_deg", "180")),
+                wind_velocity_m_s=tuple(float(v) for v in p.get("wind_m_s", "0,0").split(",")),
+                particle_count=int(p.get("particle_count", "64")),
+                extinction_per_m=float(p.get("extinction_per_m", "0")),
+                seed=int(p.get("seed", "0")),
+            )
+            np_save(output, result.layer)
+            return file_receipt(
+                command,
+                output,
+                "PHYSICAL_PRECIPITATION_LAYER",
+                {
+                    "vertical_streak_length_px": str(result.vertical_streak_length_px),
+                    "beer_lambert_attenuation": str(result.beer_lambert_attenuation),
+                },
+            )
+        if op == "grading.apply_cdl_lut":
+
+            def vector(name: str, default: str) -> tuple[float, ...]:
+                return tuple(float(value) for value in p.get(name, default).split(","))
+
+            lut = (
+                weather_and_grading.parse_cube_lut(
+                    Path(command.inputs[1]).read_text(encoding="utf-8")
+                )
+                if len(command.inputs) > 1
+                else None
+            )
+            result = weather_and_grading.apply_asc_cdl_and_3d_lut(
+                np_load(command.inputs[0]),
+                slope=vector("slope", "1,1,1"),
+                offset=vector("offset", "0,0,0"),
+                power=vector("power", "1,1,1"),
+                saturation=float(p.get("saturation", "1")),
+                lut=lut,
+            )
+            np_save(output, result)
+            return file_receipt(
+                command, output, "ASC_CDL_AND_3D_LUT", {"lut_size": str(lut.size if lut else 0)}
+            )
+        if op == "grading.serialize_cube":
+            lut = weather_and_grading.parse_cube_lut(
+                Path(command.inputs[0]).read_text(encoding="utf-8")
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(weather_and_grading.serialize_cube_lut(lut), encoding="utf-8")
+            return file_receipt(command, output, "CUBE_LUT_SERIALIZED", {"size": str(lut.size)})
+        if op == "grading.legalize_ebu_r103":
+            result = weather_and_grading.legalize_broadcast_rgb_ebu_r103(np_load(command.inputs[0]))
+            np_save(output, result.image)
+            return file_receipt(
+                command,
+                output,
+                "EBU_R103_LEGALIZED",
+                {
+                    "illegal_before": str(result.illegal_pixel_fraction_before),
+                    "illegal_after": str(result.illegal_pixel_fraction_after),
+                    "sobel_correlation": str(result.sobel_structure_correlation),
+                },
+            )
         if op == "audio.declick_wav":
             result = audio_continuity.declick_pcm_wav_splices(
                 command.inputs[0],
@@ -458,6 +527,10 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
         "temporal.phase_corr": wave2,
         "temporal.deflicker": wave2,
         "temporal.rectify_rolling": wave2,
+        "weather.precipitation": wave2,
+        "grading.apply_cdl_lut": wave2,
+        "grading.serialize_cube": wave2,
+        "grading.legalize_ebu_r103": wave2,
     }
 
 

@@ -74,6 +74,10 @@ class ChronosPort:
             "temporal.phase_corr",
             "temporal.deflicker",
             "temporal.rectify_rolling",
+            "weather.precipitation",
+            "grading.apply_cdl_lut",
+            "grading.serialize_cube",
+            "grading.legalize_ebu_r103",
         }
     )
 
