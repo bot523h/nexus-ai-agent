@@ -1,0 +1,203 @@
+"""Pure NumPy/Pillow color operations for Hyperion Phase 3.
+
+All transforms operate on floating-point RGB arrays and are deterministic.  They
+never silently clip floating-point results; PNG export is the explicit boundary
+where values are quantized to ``uint8``.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal
+
+import numpy as np
+from PIL import Image
+
+Array = np.ndarray
+
+# Bradford cone-response matrix (ICC/CIE convention).
+_BRADFORD = np.array(
+    [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]],
+    dtype=np.float64,
+)
+_BRADFORD_INV = np.linalg.inv(_BRADFORD)
+_D65 = np.array([0.95047, 1.0, 1.08883], dtype=np.float64)
+_RGB_TO_XYZ = np.array(
+    [
+        [0.4124564, 0.3575761, 0.1804375],
+        [0.2126729, 0.7151522, 0.0721750],
+        [0.0193339, 0.1191920, 0.9503041],
+    ],
+    dtype=np.float64,
+)
+_XYZ_TO_RGB = np.linalg.inv(_RGB_TO_XYZ)
+
+
+def _rgb(image: Array, *, name: str = "image") -> Array:
+    arr = np.asarray(image, dtype=np.float64)
+    if arr.ndim < 2 or arr.shape[-1] != 3:
+        raise ValueError(f"{name} must have a final RGB dimension of length 3")
+    if not np.all(np.isfinite(arr)):
+        raise ValueError(f"{name} must contain only finite values")
+    return arr
+
+
+def _temperature_white_point(kelvin: float) -> Array:
+    """Approximate a black-body chromaticity as an XYZ white point."""
+    if not np.isfinite(kelvin) or not 2000.0 <= kelvin <= 15000.0:
+        raise ValueError("kelvin must be finite and in the inclusive range 2000..15000")
+    t = kelvin
+    if t <= 4000:
+        x = -0.2661239e9 / t**3 - 0.2343580e6 / t**2 + 0.8776956e3 / t + 0.179910
+    else:
+        x = -3.0258469e9 / t**3 + 2.1070379e6 / t**2 + 0.2226347e3 / t + 0.240390
+    if t <= 2222:
+        y = -1.1063814 * x**3 - 1.34811020 * x**2 + 2.18555832 * x - 0.20219683
+    elif t <= 4000:
+        y = -0.9549476 * x**3 - 1.37418593 * x**2 + 2.09137015 * x - 0.16748867
+    else:
+        y = 3.0817580 * x**3 - 5.87338670 * x**2 + 3.75112997 * x - 0.37001483
+    return np.array([x / y, 1.0, (1.0 - x - y) / y], dtype=np.float64)
+
+
+def _rgb_to_xyz_white(rgb: Array) -> Array:
+    # sRGB/D65 matrix, used only to obtain a chromaticity estimate.
+    return _RGB_TO_XYZ @ rgb
+
+
+def white_balance_chromatic_adaptation(
+    image: Array,
+    kelvin: float | None = None,
+    *,
+    method: Literal["gray_world", "kelvin"] = "gray_world",
+) -> Array:
+    """White-balance RGB data using Bradford LMS chromatic adaptation.
+
+    ``gray_world`` estimates the scene illuminant from channel means and maps it
+    to neutral D65.  With ``kelvin`` (or ``method='kelvin'``), the supplied
+    2000--15000 K black-body white point is mapped to D65.  Results are floating
+    point and intentionally not clipped.
+    """
+    arr = _rgb(image)
+    if method not in {"gray_world", "kelvin"}:
+        raise ValueError("method must be 'gray_world' or 'kelvin'")
+    if method == "kelvin" and kelvin is None:
+        raise ValueError("kelvin is required when method='kelvin'")
+    if kelvin is not None and method == "gray_world":
+        method = "kelvin"
+    if method == "kelvin":
+        source_xyz = _temperature_white_point(float(kelvin))
+    else:
+        means = np.mean(arr.reshape(-1, 3), axis=0)
+        if np.any(means <= 0):
+            raise ValueError("gray-world channel means must be strictly positive")
+        source_xyz = _rgb_to_xyz_white(means / np.mean(means))
+    source_lms = _BRADFORD @ source_xyz
+    target_lms = _BRADFORD @ _D65
+    if np.any(np.abs(source_lms) < np.finfo(float).eps):
+        raise ValueError("source white point is unsuitable for Bradford adaptation")
+    adaptation_xyz = _BRADFORD_INV @ np.diag(target_lms / source_lms) @ _BRADFORD
+    adaptation_rgb = _XYZ_TO_RGB @ adaptation_xyz @ _RGB_TO_XYZ
+    return arr @ adaptation_rgb.T
+
+
+def hdr_to_sdr_filmic_tonemap(hdr: Array, *, exposure: float = 0.0, white: float = 11.2) -> Array:
+    """Map finite, nonnegative HDR RGB values to SDR with a filmic curve.
+
+    Luminance is tonemapped and chroma is restored by scaling each pixel by the
+    luminance ratio, which avoids hue shifts and retains highlight detail.
+    """
+    arr = _rgb(hdr, name="hdr")
+    if np.any(arr < 0):
+        raise ValueError("hdr must be nonnegative")
+    if not np.isfinite(exposure) or not np.isfinite(white) or white <= 0:
+        raise ValueError("exposure must be finite and white must be positive")
+    lum = np.sum(arr * np.array([0.2126, 0.7152, 0.0722]), axis=-1)
+    x = lum * (2.0**exposure)
+    # Hable/Uncharted-style rational filmic mapping; strictly increasing on x>=0.
+    a, b, c, d, e = 0.22, 0.30, 0.10, 0.20, 0.01
+
+    def curve(value: Array) -> Array:
+        return (value * (a * value + b)) / (value * (c * value + d) + e)
+
+    # Normalize by the asymptote so SDR output stays bounded at extreme HDR.
+    mapped = curve(x) / (a / c)
+    scale = np.divide(mapped, lum, out=np.zeros_like(mapped), where=lum > 0)
+    return arr * scale[..., None]
+
+
+def validate_spd_covariance(covariance: Array, *, tolerance: float = 1e-10) -> Array:
+    """Validate and return a symmetric positive-definite 3x3 covariance."""
+    cov = np.asarray(covariance, dtype=np.float64)
+    if cov.shape != (3, 3) or not np.all(np.isfinite(cov)):
+        raise ValueError("covariance must be a finite 3x3 matrix")
+    cov = (cov + cov.T) / 2.0
+    eigenvalues = np.linalg.eigvalsh(cov)
+    if np.min(eigenvalues) <= tolerance:
+        raise ValueError("covariance must be symmetric positive definite")
+    return cov
+
+
+def matrix_sqrt_spd(matrix: Array, *, inverse: bool = False) -> Array:
+    """Compute a symmetric (inverse) square root of an SPD 3x3 matrix."""
+    mat = validate_spd_covariance(matrix)
+    values, vectors = np.linalg.eigh(mat)
+    powers = values ** (-0.5 if inverse else 0.5)
+    return (vectors * powers) @ vectors.T
+
+
+def shot_to_shot_color_match_ot(source: Array, reference: Array, *, alpha: float = 1.0) -> Array:
+    """Match source mean/covariance to reference using a Gaussian OT map.
+
+    Inputs may be an image or an arbitrary array ending in RGB.  ``alpha`` blends
+    the full affine match with the identity transform (0 is a no-op, 1 is full).
+    """
+    src = _rgb(source, name="source")
+    ref = _rgb(reference, name="reference")
+    if not 0.0 <= alpha <= 1.0 or not np.isfinite(alpha):
+        raise ValueError("alpha must be finite and in the range 0..1")
+    src_flat, ref_flat = src.reshape(-1, 3), ref.reshape(-1, 3)
+    if len(src_flat) < 2 or len(ref_flat) < 2:
+        raise ValueError("source and reference require at least two RGB samples")
+    src_mean, ref_mean = src_flat.mean(axis=0), ref_flat.mean(axis=0)
+    src_cov = validate_spd_covariance(np.cov(src_flat, rowvar=False, bias=True))
+    ref_cov = validate_spd_covariance(np.cov(ref_flat, rowvar=False, bias=True))
+    transform = matrix_sqrt_spd(ref_cov) @ matrix_sqrt_spd(src_cov, inverse=True)
+    centered = src_flat - src_mean
+    matched = centered @ transform.T + ref_mean
+    result = (1.0 - alpha) * src_flat + alpha * matched
+    return result.reshape(src.shape)
+
+
+def save_color_png(image: Array, path: str | Path) -> None:
+    """Persist RGB data as an 8-bit PNG (the only operation that clips)."""
+    arr = _rgb(image)
+    if np.any((arr < 0) | (arr > 1)):
+        raise ValueError("PNG helper expects normalized RGB values in 0..1")
+    Image.fromarray(np.rint(arr * 255.0).astype(np.uint8), mode="RGB").save(path, format="PNG")
+
+
+def load_color_png(path: str | Path) -> Array:
+    """Load a PNG as normalized float64 RGB data."""
+    with Image.open(path) as image:
+        return np.asarray(image.convert("RGB"), dtype=np.float64) / 255.0
+
+
+def verify_color_png(path: str | Path) -> bool:
+    """Verify that a file is a readable RGB/RGBA PNG."""
+    try:
+        with Image.open(path) as image:
+            image.verify()
+        with Image.open(path) as image:
+            return image.format == "PNG" and image.mode in {"RGB", "RGBA", "L", "LA"}
+    except (OSError, ValueError):
+        return False
+
+
+# Compatibility aliases used by early Hyperion callers.
+white_balance = white_balance_chromatic_adaptation
+tonemap_hdr_to_sdr = hdr_to_sdr_filmic_tonemap
+color_match_ot = shot_to_shot_color_match_ot
+save_png = save_color_png
+load_png = load_color_png
+verify_png = verify_color_png
