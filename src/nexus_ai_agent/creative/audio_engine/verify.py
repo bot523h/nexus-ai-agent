@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_ai_agent.creative.audio_engine.ffmpeg_ops import (
@@ -82,6 +83,12 @@ __all__ = [
     "check_loudness_target",
     "check_canonical_profile",
     "decode_evidence",
+    "decode_for_analysis",
+    "cross_verify_loudness",
+    "CODE_CREST_NOT_INVARIANT",
+    "CODE_LOUDNESS_METER_DISAGREEMENT",
+    "STRICT_LINEAR_CREST_TOLERANCE_DB",
+    "LOUDNESS_CROSS_CHECK_TOLERANCE_LU",
 ]
 
 PASSPORT_SCHEMA: Literal["nagar.artifact_passport.v1"] = "nagar.artifact_passport.v1"
@@ -101,6 +108,9 @@ CODE_UNKNOWN_KEY = "passport_key_unknown"
 CODE_TARGET_NOT_RUN = "target_not_checked"
 #: A STRICT_LINEAR artifact whose crest factor did not survive the render.
 CODE_CREST_NOT_INVARIANT = "strict_linear_crest_not_invariant"
+#: The independent NumPy meter and FFmpeg's ebur128 disagree by more than the
+#: agreed tolerance — one of the two is wrong and the number cannot be trusted.
+CODE_LOUDNESS_METER_DISAGREEMENT = "loudness_meter_disagreement"
 
 
 class PassportError(RuntimeError):
@@ -530,6 +540,122 @@ def sign_passport(
 #: setting removes far more.
 STRICT_LINEAR_CREST_TOLERANCE_DB = 0.25
 
+#: Maximum permitted disagreement between the independent BS.1770 measurement in
+#: :mod:`~nexus_ai_agent.creative.audio_engine.loudness_bs1770` and FFmpeg's
+#: ``ebur128``.  0.1 LU is the resolution FFmpeg prints; the two implementations
+#: are expected to agree far more closely than that on clean material, and a
+#: larger gap means a coefficient, gate or channel-weight error in one of them.
+LOUDNESS_CROSS_CHECK_TOLERANCE_LU = 0.1
+
+
+def decode_for_analysis(
+    engine: FfmpegTranscoder,
+    path: Path,
+    *,
+    cancel: CancelToken | None = None,
+    workdir: Path | None = None,
+    max_seconds: float | None = None,
+) -> tuple[np.ndarray | None, int, int]:
+    """Decode ``path`` to ``(samples, sample_rate, channels)`` for metering.
+
+    ``samples`` is ``(channels, frames)`` ``float64`` in ``[-1, 1]``, or ``None``
+    when the file could not be decoded.  Separate from
+    :func:`decode_evidence`, which deliberately decodes to a throwaway sink just
+    to prove readability and keeps nothing: metering needs the samples, and
+    conflating the two would make one of them lie about what it did.
+
+    ``max_seconds`` bounds the analysis window; the returned rate and channel
+    count are the file's own, never resampled, because resampling changes the
+    loudness the meter would report.
+    """
+    from nexus_ai_agent.creative.audio_engine.numpy_dsp import decode_s32le
+
+    tmp_dir = workdir or Path(tempfile.gettempdir())
+    sink = Path(tempfile.mkstemp(prefix="nagar_meter_", suffix=".s32le", dir=str(tmp_dir))[1])
+    try:
+        probe = engine.probe(path, cancel=cancel)
+        if probe.channels is None or not probe.sample_rate:
+            return None, 0, 0
+        channels = int(probe.channels)
+        rate = int(probe.sample_rate)
+        max_frames = None if max_seconds is None else int(max_seconds * rate)
+        _outcome, _frames = engine.decode_all(path, pcm_path=sink, channels=channels, cancel=cancel)
+        decoded = decode_s32le(sink, channels=channels, max_frames=max_frames)
+        if decoded.size == 0:
+            return None, rate, channels
+        # ``decode_s32le`` returns ``(frames, channels)``.  The meter wants
+        # ``(channels, frames)``, so the matrix is transposed — never reshaped:
+        # counting interleaved samples as frames is how a stereo master silently
+        # appears to be twice as long.
+        if decoded.ndim == 1:
+            decoded = decoded.reshape(-1, channels)
+        matrix = np.ascontiguousarray(decoded.T)
+        return np.ascontiguousarray(matrix), rate, channels
+    except (AudioDecodeError, ValueError):
+        # Only the two failures that mean "this file cannot be metered": the
+        # decoder refused it, or the PCM geometry is impossible.  A blanket
+        # ``except`` here would have swallowed a real bug in this function and
+        # reported it as an unreadable file — which is exactly what happened
+        # while this was being written, so the narrow form is deliberate.
+        return None, 0, 0
+    finally:
+        sink.unlink(missing_ok=True)
+
+
+def cross_verify_loudness(
+    samples: np.ndarray | None,
+    *,
+    sample_rate: int | None,
+    channels: int | None,
+    ffmpeg_measurement: LoudnessMeasurement,
+    cancel: CancelToken | None = None,
+) -> tuple[str | None, str]:
+    """Compare the independent BS.1770 meter against FFmpeg's measurement.
+
+    Fail-closed in the specific sense that matters: if the samples are not
+    available the agreement cannot be *checked*, so the artifact is not reported
+    as loudly cross-verified.  A ``None`` sample array returns the code for
+    "unverifiable" rather than an empty success.
+
+    ``ebur128`` and this meter compute the same defined quantity, so they must
+    agree to within :data:`LOUDNESS_CROSS_CHECK_TOLERANCE_LU`.  When they do not,
+    the loudness number cannot be trusted in either direction and the artifact is
+    refused — a wrong integrated measurement is what lets a file miss its target
+    while reporting that it hit it.
+    """
+    from nexus_ai_agent.creative.audio_engine.loudness_bs1770 import measure_bs1770_numpy
+
+    _ = cancel
+    if samples is None or not sample_rate:
+        return (
+            CODE_LOUDNESS_METER_DISAGREEMENT,
+            "no decoded samples were supplied, so the integrated loudness cannot be "
+            "cross-verified against an independent BS.1770 implementation",
+        )
+    if ffmpeg_measurement.integrated_lufs is None:
+        # A silent file: nothing to cross-check, and the loudness path already
+        # refuses silence under its own code.
+        return None, ""
+    independent = measure_bs1770_numpy(samples, sample_rate=int(sample_rate), channels=channels)
+    if independent.lufs is None:
+        return (
+            CODE_LOUDNESS_METER_DISAGREEMENT,
+            "FFmpeg measured "
+            f"{ffmpeg_measurement.integrated_lufs:.2f} LUFS but the independent BS.1770 "
+            "meter measured no loudness at all (the signal is below the absolute gate "
+            "for it) — the two meters disagree about whether this file has content",
+        )
+    delta = abs(independent.lufs - ffmpeg_measurement.integrated_lufs)
+    if delta > LOUDNESS_CROSS_CHECK_TOLERANCE_LU:
+        return (
+            CODE_LOUDNESS_METER_DISAGREEMENT,
+            f"independent BS.1770 meter measured {independent.lufs:.3f} LUFS and FFmpeg "
+            f"ebur128 measured {ffmpeg_measurement.integrated_lufs:.3f} LUFS: "
+            f"{delta:.3f} LU apart, beyond the {LOUDNESS_CROSS_CHECK_TOLERANCE_LU:g} LU "
+            "tolerance, so neither number can be trusted",
+        )
+    return None, ""
+
 
 def _enforce_strict_linear_crest(
     *,
@@ -613,6 +739,7 @@ def verify_passport(
     require_signature: bool = True,
     cancel: CancelToken | None = None,
     source: Path | None = None,
+    cross_check: bool = True,
 ) -> VerificationReport:
     """Re-check a passport: signature, bytes, decode, loudness, canonical shape.
 
@@ -625,6 +752,13 @@ def verify_passport(
     Omitting it does not disable the check — a STRICT_LINEAR artifact whose crest
     cannot be verified is refused, because an unverifiable claim is not a
     verified one.
+
+    ``cross_check`` (default on) additionally re-measures the integrated
+    loudness with the independent NumPy BS.1770 meter and requires the two
+    implementations to agree to within
+    :data:`LOUDNESS_CROSS_CHECK_TOLERANCE_LU`.  It is a parameter rather than
+    always-on only so a caller can skip the decode when it already holds the
+    samples.
     """
     codes: list[str] = []
     details: list[str] = []
@@ -722,6 +856,25 @@ def verify_passport(
             if not fresh_check.passed:
                 codes.append(fresh_check.code or CODE_INTEGRATED_OUT_OF_RANGE)
                 details.append(str(fresh_check.detail))
+
+            # Independent cross-check of the number everything above depends on.
+            # ``ebur128`` and ``measure_bs1770_numpy`` compute the same defined
+            # quantity from different code; if they disagree, one of them is
+            # wrong and the integrated loudness cannot be reported as a fact.
+            if cross_check:
+                samples, meter_rate, meter_channels = decode_for_analysis(
+                    engine, Path(path), cancel=cancel
+                )
+                cross_code, cross_detail = cross_verify_loudness(
+                    samples,
+                    sample_rate=meter_rate,
+                    channels=meter_channels,
+                    ffmpeg_measurement=fresh,
+                )
+                if cross_code is not None:
+                    codes.append(cross_code)
+                    details.append(cross_detail)
+                    loudness_ok = False
 
             # STRICT_LINEAR means gain only: the file's crest factor must still
             # be the source's.  The source crest is NOT a passport claim here —
