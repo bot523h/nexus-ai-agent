@@ -1,7 +1,7 @@
 # OMEGA audio engine — hardening report
 
 Branch `arena/288ef95e-nexus-ai-agent`, PR #337. Base `c3aa7c8`.
-Head at time of writing `ba2643b`. **Status: `HARDENED_BUT_NOT_COMPLETE`.**
+Head at time of writing `ced3680`. **Status: `HARDENED_BUT_NOT_COMPLETE`.**
 
 Everything below is a measurement taken in this repository, on this tree, with
 the commands shown. Numbers that were not re-measured are labelled as carried
@@ -180,29 +180,64 @@ imports a pack but is absent from `PACK_TEST_TARGETS` **breaks the whole suite**
 
 ---
 
-## 7. What is not done
+## 7. CI
+
+Run `43322843064` on `ced3680`: **24/24 jobs `success`**.
+
+```
+lint (ruff + mypy + version lockstep)          success
+lint-fast (lockstep + pinned ruff)             success
+test (pytest -m "not slow")                    success
+python-parity (3.10) (3.11) (3.12)             success  success  success
+continuum-evidence (3.10) (3.11) (3.12)        success  success  success
+extras-matrix (core) (pdf) (speech) (translate) success ×4
+migrate-postgres                               success
+dependency-audit                               success
+merge-base-guard / release-lineage             success
+trust-mutations                                success
+governance-mutations                           success
+temporal-mutations                             success
+execution-core-mutations                       success
+api-gate-mutations                             success
+remote-key-mutations                           success
+b2-blob-tier-mutations                         success
+```
+
+That the `3.10` legs are green in CI does **not** upgrade item 1 below: the
+code was exercised on 3.10 by GitHub's runner, not by me, and static
+inspection was all I could do locally.
+
+---
+
+## 8. What is not done
 
 This is why the status is `HARDENED_BUT_NOT_COMPLETE` and not `DONE`.
 
-1. **Python 3.10 was never executed.** There is no 3.10 interpreter in the
-   build sandbox and egress is blocked. Compatibility was checked statically
-   only. CI runs a 3.10 leg; it is not the same thing as a local run and is not
-   claimed as one.
+1. **Python 3.10 was never executed by me.** There is no 3.10 interpreter in
+   the build sandbox and egress is blocked, so compatibility was checked
+   statically only. CI's `python-parity (3.10)` and `continuum-evidence (3.10)`
+   legs are green, which is real evidence — from a runner I cannot reproduce
+   locally. Any future local claim about 3.10 stays unsupported.
 2. **`verify.py` at 92% is the lowest module in the engine.** The uncovered
    lines are concentrated in passport failure branches that need a
    deliberately-corrupt artifact to reach.
 3. **`creative/slideshow` audio modules are barely exercised** (0–67%) because
    no audio suite targets them.
-4. **CI on the final commit was still running when this was written.** The
-   previous commit `5910c4f` failed three jobs — `test (pytest)`,
-   `python-parity`, and `continuum-evidence` — all tracing to one cause: an
-   unregistered test module made pytest exit non-zero, which flips the evidence
-   gate to `accepted=False`. That is fixed in `ba2643b` and reproduces locally
-   as `ACCEPTED`, but the fix has not been confirmed green on CI.
+4. **`continuum-evidence` and `python-parity` were red for one commit, and the
+   cause is worth recording.** Commit `5910c4f` failed `test (pytest)`,
+   `python-parity` (3.10/3.11/3.12), and `continuum-evidence` (3.10/3.11/3.12).
+   All three traced to a single line: a test module that imported a pack but was
+   absent from `PACK_TEST_TARGETS` made pytest exit non-zero, which flips the
+   evidence artifact to `accepted=False` — the coverage percentages were fine
+   (`total=97.52`, every pack ≥95%), the *provenance* was not. Registering the
+   module in `pack_coverage.py` fixed all three groups at once.
+
+   **CI is now green on `ced3680`:** 24/24 jobs `success`, including all three
+   Python versions for both `continuum-evidence` and `python-parity`.
 
 ---
 
-## 8. Commit ledger
+## 9. Commit ledger
 
 | commit | what |
 |---|---|
@@ -223,3 +258,4 @@ This is why the status is `HARDENED_BUT_NOT_COMPLETE` and not `DONE`.
 | `960ea26` | M/S matrix, HPSS, forensic QC, de-esser |
 | `5910c4f` | mutation campaign 39 → 74 probes, 74/74 killed |
 | `ba2643b` | close coverage gaps, fix the Wiener NaN |
+| `ced3680` | the hardening report |
