@@ -94,7 +94,7 @@ beats         0.1135   0.0936   0.1143  0.0117    28.3 MiB      2
 |---|---|
 | `ruff check src/ tests/ scripts/` + `ruff format` | clean |
 | `python -m nexus_ai_agent.nagar --docs` | clean |
-| `pytest tests/unit tests/architecture` | **6049 passed, 14 skipped, 0 failed** |
+| `pytest tests/unit tests/architecture` | **6231 passed, 14 skipped, 0 failed** (661.81 s) |
 | `scripts/mutate_omega_audio.py` | **75/75 KILLED** |
 | `scripts/omega_stage_a_benchmarks.py -n 3` | exit 0, all rows `ok` |
 | Engine coverage | **95.1%** (bar 95%) |
@@ -115,9 +115,10 @@ beats         0.1135   0.0936   0.1143  0.0117    28.3 MiB      2
 | §4.5 `NAGAR_STREAMING_PRESET` relabel | `VERIFIED` | 31 call sites renamed; a gate asserts the old name is unreachable |
 | §4.6 fail-closed `ffprobe -of json` | `VERIFIED` | every malformed document refuses; 3 probes |
 | §4.7 `_interval_candidates` mean gap | `VERIFIED` | 3 tests + 1 probe |
-| §4.7 `bpm_std_uncertainty` (Type A), spectral-flux octave disambiguation, full PCM/FFT/STFT/denoise audit | `HARDENED_BUT_NOT_COMPLETE` | mean-gap fix and confidence labelling are in; the GUM Type-A uncertainty report, the spectral-flux autocorrelation octave disambiguation and the full DSP audit are **not** implemented |
+| §4.7 `bpm_std_uncertainty` (Type A) + octave disambiguation | `VERIFIED` | `ac02b8b`: GUM combined standard uncertainty reported on the onset grid; octave decided by coverage comparison (`OCTAVE_DECISION_RATIO = 1.08`) with `SUBDIVISION_STRENGTH_RATIO = 0.80`; 4 octave + 5 GUM probes |
+| §4.7 full PCM/FFT/STFT/denoise measurement protocol | `HARDENED_BUT_NOT_COMPLETE` | the DSP claims are measured individually (§3), but there is no single written protocol note covering window choice, overlap and band edges |
 | §4.8 recipe identity + measured `ResourceBudget` | `VERIFIED` | 5956→ measured run shown in the earlier unit; 5 probes |
-| §8.2 mutation gates (12 named) | `VERIFIED` | 39 probes across 12 gate labels |
+| §8.2 mutation gates (12 named) | `VERIFIED` | **75 probes**, 75/75 killed; every anchor audited against the source |
 | §8.3 benchmarks N ≥ 3 + Peak RSS + tool version | `VERIFIED` | table above; harness refuses `N < 3` |
 | §8.2 **live CircleCI Pipeline 678** root-cause, 9 failures classified | `BLOCKED` | see §8 |
 | STAGE-B (K1–K4 kernels) | `DEFERRED` | correctly gated: not started, by design |
@@ -151,17 +152,15 @@ To close the CircleCI item, either the pipeline must be identified by its real
 platform and run id (a GitHub Actions run id, or a CircleCI project slug + token),
 or a `.circleci/config.yml` must be reintroduced. Both are owner decisions.
 
-## 9. Forward tasks (10)
+## 9. Forward tasks (8) — the two §4.7 items were closed in `ac02b8b`
 
 | # | Task | Why now |
 |---|---|---|
-| 1 | §4.7 GUM Type-A `bpm_std_uncertainty` on the measured onset grid (JCGM GUM §5.2) | the only remaining *unmeasured* number in the beat path |
-| 2 | §4.7 spectral-flux autocorrelation octave disambiguation (competing-peak test, not a constant) | 96/120/140 BPM pass today, but an octave error on real music is currently undetectable |
-| 3 | Full PCM/FFT/STFT/denoise audit note (window function, overlap, band edges, `afftdn` limits) | the doctrine demands a stated measurement protocol for every DSP claim |
-| 4 | STAGE-B K1: `RationalTime` + delta shot-DAG + verified `-c copy` assembly | the first kernel; `continuity.assert_lossless_assembly` is its proof seam |
-| 5 | STAGE-B K2: `K[R|t]` + Brown-Conrady + thin-lens CoC + GUM Jacobian `∂H_px/∂Z_c` | depends on K1's rational time |
-| 6 | STAGE-B K3: sRGB/BT.709 → scene-linear, Bradford, albedo/shading split, regularized Monge–Kantorovich relighting | needs a scene-linear substrate; measure `ρ_∇` and `ΔE2000` against a real render |
-| 7 | STAGE-B K4: Allen–Berkley ISM RIR + Woodworth ITD/ILD coupled to camera distance; liftered cepstral timbre; rational-PTS jaw/viseme solver | last kernel; couples to K2's geometry |
-| 8 | `DYNAMIC_ALLOWED` on a stereo source (the crest arithmetic is proven on mono→stereo; the 1:1 channel case needs the same reconstruction gate) | closes the last unmeasured branch of §4.5 |
-| 9 | Identify the real CI pipeline behind "Pipeline 678" (platform + run id) and classify its 9 failures | unblocks the last `BLOCKED` STAGE-A item |
-| 10 | Standing: `scripts/mutate_omega_audio.py` + the benchmark harness become a CI job, not a manual step | a gate that is only run by hand is a gate that will be skipped |
+| 1 | Full PCM/FFT/STFT/denoise audit note (window function, overlap, band edges, `afftdn` limits) | the doctrine demands a stated measurement protocol for every DSP claim |
+| 2 | STAGE-B K1: `RationalTime` + delta shot-DAG + verified `-c copy` assembly | the first kernel; `continuity.assert_lossless_assembly` is its proof seam |
+| 3 | STAGE-B K2: `K[R|t]` + Brown-Conrady + thin-lens CoC + GUM Jacobian `∂H_px/∂Z_c` | depends on K1's rational time |
+| 4 | STAGE-B K3: sRGB/BT.709 → scene-linear, Bradford, albedo/shading split, regularized Monge–Kantorovich relighting | needs a scene-linear substrate; measure `ρ_∇` and `ΔE2000` against a real render |
+| 5 | STAGE-B K4: Allen–Berkley ISM RIR + Woodworth ITD/ILD coupled to camera distance; liftered cepstral timbre; rational-PTS jaw/viseme solver | last kernel; couples to K2's geometry |
+| 6 | `DYNAMIC_ALLOWED` on a stereo source (the crest arithmetic is proven on mono→stereo; the 1:1 channel case needs the same reconstruction gate) | closes the last unmeasured branch of §4.5 |
+| 7 | Identify the real CI pipeline behind "Pipeline 678" (platform + run id) and classify its 9 failures | unblocks the last `BLOCKED` STAGE-A item |
+| 8 | Standing: `scripts/mutate_omega_audio.py` + the benchmark harness become a CI job, not a manual step | a gate that is only run by hand is a gate that will be skipped |
