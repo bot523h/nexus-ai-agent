@@ -664,10 +664,18 @@ def verify_passport(
 
 
 def _utc_now() -> str:
+    """RFC 3339 UTC timestamp with second precision.
+
+    ``datetime.UTC`` is a 3.11+ alias for ``datetime.timezone.utc``; this package
+    declares ``requires-python >= 3.10`` and CI runs a blocking 3.10 leg, so the
+    3.10-compatible spelling is used.  The two are the same object on 3.11+, which
+    is exactly why the difference is invisible locally and only shows up on the
+    oldest supported interpreter.
+    """
     import datetime
 
     return (
-        datetime.datetime.now(datetime.UTC)
+        datetime.datetime.now(datetime.timezone.utc)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")

@@ -754,9 +754,7 @@ def test_sync_multicam_rejects_unknown_or_non_video_clips() -> None:
 #: deliberately absent since OMEGA-02: without a local separation model it
 #: returns ``UNAVAILABLE / REQUIRES_LOCAL_MODEL`` and derives nothing rather than
 #: inventing unplayable "stems".
-DERIVING_OPERATIONS = frozenset(
-    {OPERATION_APPLY_MASK, OPERATION_WARP, OPERATION_ADD_PARTICLES}
-)
+DERIVING_OPERATIONS = frozenset({OPERATION_APPLY_MASK, OPERATION_WARP, OPERATION_ADD_PARTICLES})
 
 
 def test_handlers_never_mutate_the_state_they_receive() -> None:

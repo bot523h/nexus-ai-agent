@@ -92,9 +92,7 @@ def write_click_track(
         if index + length >= samples.size:
             break
         envelope = np.exp(-np.linspace(0.0, 12.0, length))
-        tone = np.sin(
-            2.0 * np.pi * (180.0 if beat % 4 == 0 else 320.0) * np.arange(length) / rate
-        )
+        tone = np.sin(2.0 * np.pi * (180.0 if beat % 4 == 0 else 320.0) * np.arange(length) / rate)
         samples[index : index + length] += (0.9 if beat % 4 == 0 else 0.5) * envelope * tone
     return _write(path, samples, rate=rate)
 
@@ -159,9 +157,7 @@ def write_with_noise_floor(
     )
 
 
-def write_multichannel(
-    path: Path, *, seconds: float = 3.0, rate: int = DEFAULT_RATE
-) -> Path:
+def write_multichannel(path: Path, *, seconds: float = 3.0, rate: int = DEFAULT_RATE) -> Path:
     tone = 0.2 * np.sin(2 * np.pi * 440.0 * _time(seconds, rate))
     return _write(path, tone, rate=rate, channels=2)
 

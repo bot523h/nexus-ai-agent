@@ -177,6 +177,7 @@ def test_bus_passes_experimental_pack_with_opt_in() -> None:
             ]
         }
     )
+
     # The lifecycle gate is what this test pins: with the opt-in the command
     # reaches the handler.  The handler then needs a real engine (audio is no
     # longer simulated), so a minimal double is composed — the gate itself is
