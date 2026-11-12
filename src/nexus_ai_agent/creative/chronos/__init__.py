@@ -31,6 +31,7 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
         identity_lock,
         merkle_ledger,
         scene_portrait_ops,
+        temporal_optics,
         timeline,
     )
     from . import color_science as color
@@ -233,6 +234,49 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
                     "shutter_fraction": str(result.shutter_fraction),
                 },
             )
+        if op == "temporal.phase_corr":
+            result = temporal_optics.estimate_subpixel_translation_phase_corr(
+                np_load(command.inputs[0]), np_load(command.inputs[1])
+            )
+            output.write_text(repr(result), encoding="utf-8")
+            return file_receipt(
+                command,
+                output,
+                "PHASE_CORRELATION_TRANSLATION",
+                {"dx_px": str(result.translation_x_px), "dy_px": str(result.translation_y_px)},
+            )
+        if op == "temporal.deflicker":
+            result = temporal_optics.stabilize_temporal_exposure_flicker(
+                np_load(command.inputs[0]), smoothing_radius=int(p.get("smoothing_radius", "3"))
+            )
+            np_save(output, result.frames)
+            return file_receipt(
+                command,
+                output,
+                "TEMPORAL_EXPOSURE_STABILIZED",
+                {
+                    "variance_before": str(result.temporal_flicker_variance_before),
+                    "variance_after": str(result.temporal_flicker_variance_after),
+                    "meets_target": str(result.meets_variance_target),
+                },
+            )
+        if op == "temporal.rectify_rolling":
+            result = temporal_optics.rectify_rolling_shutter_skew(
+                np_load(command.inputs[0]),
+                (float(p["velocity_x_px_per_second"]), float(p["velocity_y_px_per_second"])),
+                readout_duration_s=float(p["readout_duration_s"]),
+                frame_period_s=float(p["frame_period_s"]),
+            )
+            np_save(output, result.frame)
+            return file_receipt(
+                command,
+                output,
+                "ROLLING_SHUTTER_RECTIFIED",
+                {
+                    "max_warp_px": str(result.max_warp_px),
+                    "readout_fraction": str(result.readout_fraction),
+                },
+            )
         if op == "audio.declick_wav":
             result = audio_continuity.declick_pcm_wav_splices(
                 command.inputs[0],
@@ -411,6 +455,9 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
         "motion.foot_lock": wave2,
         "motion.verlet_chain": wave2,
         "motion.shutter_blur": wave2,
+        "temporal.phase_corr": wave2,
+        "temporal.deflicker": wave2,
+        "temporal.rectify_rolling": wave2,
     }
 
 

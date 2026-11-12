@@ -71,6 +71,9 @@ class ChronosPort:
             "motion.foot_lock",
             "motion.verlet_chain",
             "motion.shutter_blur",
+            "temporal.phase_corr",
+            "temporal.deflicker",
+            "temporal.rectify_rolling",
         }
     )
 
