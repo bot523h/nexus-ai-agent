@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "c3aa7c85e4b64400cb8d51b0880ef5e6cafd4e1b",
-    "generated_at": "2026-11-12T13:49:46Z",
+    "source_revision": "16929f8ceea4e736dfe85763ff75ec6a6bb04c33",
+    "generated_at": "2026-11-12T16:08:28Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -299,6 +299,7 @@
           "tests/unit/test_omega_continuity_assembly.py",
           "tests/unit/test_omega_evidence_ladder.py",
           "tests/unit/test_omega_native_engine.py",
+          "tests/unit/test_omega_stage_a_hardening.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       },
@@ -310,6 +311,7 @@
         "files": [
           "tests/unit/test_audio_pack_evidence_paths.py",
           "tests/unit/test_omega_audio_bus.py",
+          "tests/unit/test_omega_stage_a_hardening.py",
           "tests/unit/test_opgap_audio_motion.py",
           "tests/unit/test_opgap_wave5.py"
         ]
@@ -2040,6 +2042,7 @@
           "tests/unit/test_omega_continuity_assembly.py",
           "tests/unit/test_omega_evidence_ladder.py",
           "tests/unit/test_omega_native_engine.py",
+          "tests/unit/test_omega_stage_a_hardening.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
@@ -2097,6 +2100,7 @@
         "suite_reference_files": [
           "tests/unit/test_audio_pack_evidence_paths.py",
           "tests/unit/test_omega_audio_bus.py",
+          "tests/unit/test_omega_stage_a_hardening.py",
           "tests/unit/test_opgap_audio_motion.py",
           "tests/unit/test_opgap_wave5.py"
         ],

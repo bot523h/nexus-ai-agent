@@ -104,10 +104,7 @@ def sign_ed25519(seed: bytes, message: bytes) -> tuple[str, str]:
     nonce = int.from_bytes(hashlib.sha512(prefix + bytes(message)).digest(), "little") % _L
     encoded_r = _encode_point(_scalar_mult(_B, nonce))
     challenge = (
-        int.from_bytes(
-            hashlib.sha512(encoded_r + public + bytes(message)).digest(), "little"
-        )
-        % _L
+        int.from_bytes(hashlib.sha512(encoded_r + public + bytes(message)).digest(), "little") % _L
     )
     s = (nonce + challenge * scalar) % _L
     signature = encoded_r + s.to_bytes(32, "little")

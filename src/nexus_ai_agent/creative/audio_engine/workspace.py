@@ -199,9 +199,7 @@ class RuntimeWorkspace:
             if target == guarded or (
                 target.exists() and guarded.exists() and os.path.samefile(target, guarded)
             ):
-                raise AtomicPublishError(
-                    f"refusing to publish over a run input: {guarded.name}"
-                )
+                raise AtomicPublishError(f"refusing to publish over a run input: {guarded.name}")
         if target.is_symlink():
             raise AtomicPublishError(f"destination is a symlink, refusing to write: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)

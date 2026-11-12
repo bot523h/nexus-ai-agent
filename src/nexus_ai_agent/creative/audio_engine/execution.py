@@ -34,6 +34,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,7 @@ from nexus_ai_agent.creative.audio_engine.ffmpeg_ops import (
     FfmpegTranscoder,
 )
 from nexus_ai_agent.creative.audio_engine.models import (
+    CANONICAL_PROFILE_ID,
     MIN_PROGRAMME_SECONDS,
     TRUE_PEAK_TOLERANCE_DB,
     CanonicalStreamProfile,
@@ -61,7 +63,12 @@ from nexus_ai_agent.creative.audio_engine.models import (
     resolve_loudness_profile,
 )
 from nexus_ai_agent.creative.audio_engine.numpy_dsp import decode_s32le
-from nexus_ai_agent.creative.audio_engine.process import CancelToken, ProcessGovernor
+from nexus_ai_agent.creative.audio_engine.process import (
+    CancelToken,
+    ProcessCancelled,
+    ProcessGovernor,
+)
+from nexus_ai_agent.creative.audio_engine.recipe import recipe_identity
 from nexus_ai_agent.creative.audio_engine.verify import (
     ArtifactPassport,
     PassportError,
@@ -189,6 +196,46 @@ class LocalDirectorySourceCatalog(AudioSourceCatalog):
         return None
 
 
+#: Suffix of the sidecar that records *which recipe produced* a published
+#: artifact.  It lives next to the media file, is written after the atomic
+#: publish, and is the only thing the reuse path trusts: the artifact's own
+#: bytes cannot say whether they came from ``strength=0.2`` or ``0.9``.
+RECIPE_SUFFIX = ".recipe"
+
+
+def _read_recipe_marker(marker: Path) -> str | None:
+    """The recipe identity recorded for the artifact, or ``None``.
+
+    A missing, unreadable or malformed marker means "unknown producer", which
+    must never be treated as a match: an artifact of unknown provenance is
+    re-rendered rather than reused.
+    """
+    try:
+        text = marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return text or None
+
+
+def _write_recipe_marker(marker: Path, identity: str) -> None:
+    """Atomically record the recipe identity next to the published artifact."""
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    temporary = marker.with_name(f".{marker.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(identity + "\n", encoding="utf-8")
+        os.replace(temporary, marker)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _cancelled_before_start(cancel: CancelToken) -> BaseException:
+    """The refusal raised for a run whose token had already fired."""
+    return ProcessCancelled(
+        "the run was cancelled before its first process started; "
+        "nothing was rendered and nothing was published"
+    )
+
+
 @dataclass
 class _RunContext:
     """Bookkeeping for one execution (workspace + temp sinks + timings)."""
@@ -244,9 +291,7 @@ def build_native_audio_engine(
     root = Path(
         workspace_root or os.environ.get("NEXUS_CREATIVE_WORKSPACE") or Path.cwd() / ".nagar"
     )
-    media = Path(
-        media_root or os.environ.get("NEXUS_AUDIO_MEDIA_ROOT") or Path.cwd() / "media"
-    )
+    media = Path(media_root or os.environ.get("NEXUS_AUDIO_MEDIA_ROOT") or Path.cwd() / "media")
     key = signing_key
     if key is None:
         raw = os.environ.get("NEXUS_SIGNING_KEY", "").strip()
@@ -412,7 +457,9 @@ class NativeAudioEngine:
         )
 
     # -- beat detection --------------------------------------------------- #
-    def detect_beats(self, request: BeatRequest) -> BeatAnalysis:
+    def detect_beats(
+        self, request: BeatRequest, *, cancel: CancelToken | None = None
+    ) -> BeatAnalysis:
         if request.max_bpm <= request.min_bpm:
             raise EngineInputError("max_bpm must exceed min_bpm")
         source = self._path(request.source_asset_id)
@@ -474,7 +521,9 @@ class NativeAudioEngine:
         return data.reshape(-1)
 
     # -- loudness --------------------------------------------------------- #
-    def normalize_loudness(self, request: LoudnessRequest) -> ArtifactEvidence:
+    def normalize_loudness(
+        self, request: LoudnessRequest, *, cancel: CancelToken | None = None
+    ) -> ArtifactEvidence:
         try:
             profile = resolve_loudness_profile(
                 request.profile_id,
@@ -508,7 +557,49 @@ class NativeAudioEngine:
             builder=lambda staged, workspace, cancel: self._render_loudness(
                 staged, workspace, profile, cancel
             ),
+            cancel=cancel,
         )
+
+    def _canonical_form(
+        self,
+        staged: Path,
+        stream: CanonicalStreamProfile,
+        *,
+        cancel: CancelToken | None,
+        run_dir: Path | None,
+    ) -> Path:
+        """Convert ``staged`` to the canonical stream shape (idempotent).
+
+        Returns the *same* path when the source already has the shape, so the
+        common case costs one probe and no extra encode.  When it does not, the
+        conversion is explicit and its coefficients are stated in the filter
+        chain: ``pan=stereo|c0=c0|c1=c0`` is a dual-mono up-mix — the **same**
+        signal on both channels, which BS.1770 sums as ``10*log10(2)`` =
+        +3.0103 dB.  That constant is the whole reason this step exists.
+        """
+        probe = self._transcoder.probe(staged, cancel=cancel)
+        needs_rate = probe.sample_rate != stream.sample_rate
+        needs_channels = stream.enforce_channel_layout and probe.channels != stream.channels
+        if not needs_rate and not needs_channels:
+            return staged
+        destination = (run_dir or staged.parent) / f"canonical{stream.container}"
+        self._transcoder.render(
+            source=staged,
+            destination=destination,
+            audio_filters=list(stream.filter_arguments()),
+            profile_args=stream.format_arguments(),
+            container_hint=stream.container,
+            cancel=cancel,
+        )
+        converted = self._transcoder.probe(destination, cancel=cancel)
+        if converted.sample_rate != stream.sample_rate or (
+            stream.enforce_channel_layout and converted.channels != stream.channels
+        ):  # pragma: no cover - the encoder would have to ignore -ar/-ac
+            raise EngineRejected(
+                "canonical conversion did not produce the locked stream shape "
+                f"({converted.sample_rate} Hz / {converted.channels} ch)"
+            )
+        return destination
 
     def _render_loudness(
         self,
@@ -521,14 +612,23 @@ class NativeAudioEngine:
         run_dir: Path | None = None,
     ) -> Path:
         stream = profile_lock or CanonicalStreamProfile()
-        probe = self._transcoder.probe(staged, cancel=cancel)
+        # Pass 1 must measure the *canonical* stream shape, not the source
+        # layout: an up-mix to dual mono changes the BS.1770 energy sum by
+        # +3.0103 dB (+3.0103 LU on a mono programme), so a gain computed from
+        # the mono measurement lands 3 dB away from the target once the stereo
+        # file is re-measured.  Converting first and measuring second is the
+        # only order whose number describes the file that gets published.
+        measured_source = self._canonical_form(staged, stream, cancel=cancel, run_dir=run_dir)
+        probe = self._transcoder.probe(measured_source, cancel=cancel)
         duration_seconds = (probe.container_duration_us or 0) / 1_000_000
         if duration_seconds < MIN_PROGRAMME_SECONDS:
             raise EngineRejected(
                 f"programme is {duration_seconds:.2f}s; EBU R128 needs at least "
                 f"{MIN_PROGRAMME_SECONDS:g}s to measure"
             )
-        measurement = self._transcoder.measure_loudnorm_pass(staged, profile, cancel=cancel)
+        measurement = self._transcoder.measure_loudnorm_pass(
+            measured_source, profile, cancel=cancel
+        )
         if measurement is None:
             raise EngineRejected(
                 "the programme is silent (-inf LUFS): there is nothing to normalize, "
@@ -575,7 +675,7 @@ class NativeAudioEngine:
         )
         destination = (run_dir or staged.parent) / f"loudnorm{stream.container}"
         self._transcoder.render(
-            source=staged,
+            source=measured_source,
             destination=destination,
             audio_filters=[loudnorm, *stream.filter_arguments()],
             profile_args=stream.format_arguments(),
@@ -585,13 +685,13 @@ class NativeAudioEngine:
         return destination
 
     # -- denoise ---------------------------------------------------------- #
-    def remove_noise(self, request: DenoiseRequest) -> ArtifactEvidence:
+    def remove_noise(
+        self, request: DenoiseRequest, *, cancel: CancelToken | None = None
+    ) -> ArtifactEvidence:
         if not 0.0 <= request.strength <= 1.0:
             raise EngineInputError("strength must be within [0, 1]")
 
-        def builder(
-            staged: Path, workspace: RuntimeWorkspace, cancel: CancelToken | None
-        ) -> Path:
+        def builder(staged: Path, workspace: RuntimeWorkspace, cancel: CancelToken | None) -> Path:
             # ``afftdn`` attenuation is in dB; the public 0..1 "strength" maps
             # linearly onto 0..30 dB of noise reduction, which is the honest
             # maximum for a static-noise filter before musical artefacts appear.
@@ -629,6 +729,7 @@ class NativeAudioEngine:
             transaction_id=request.transaction_id,
             continuity_lock_hash=request.continuity_lock_hash,
             builder=builder,
+            cancel=cancel,
         )
 
     # -- the shared derive pipeline --------------------------------------- #
@@ -645,7 +746,18 @@ class NativeAudioEngine:
         transaction_id: str | None,
         continuity_lock_hash: str | None,
         builder: Any,  # noqa: ANN401 - Callable[[Path, RuntimeWorkspace, CancelToken|None], Path]
+        cancel: CancelToken | None = None,
     ) -> ArtifactEvidence:
+        """Stage, render, **verify**, then publish.  In that order, always.
+
+        The publish used to happen before verification, which made a rejected
+        artifact readable at its final path for the length of the verification
+        and left it there permanently if the process died inside that window.
+        Now the artifact is verified while it is still private to the run
+        directory, and the rename into ``media/`` is the last thing that happens.
+        A refusal therefore never creates the final path at all, so nothing has
+        to be quarantined afterwards.
+        """
         source_path = self._path(source_asset_id)
         workspace = RuntimeWorkspace(self._settings.workspace_root).prepare()
         stream = CanonicalStreamProfile()
@@ -656,70 +768,122 @@ class NativeAudioEngine:
                 f"asset {source_asset_id!r} bytes do not match the registered hash "
                 f"(disk {source_sha}, registry {expected_source_sha256})"
             )
-        # Reuse is only honest when the existing artifact still verifies as the
-        # one this request would have produced; otherwise a second run would
-        # silently show a stale file as its result.
-        if destination.is_file():
-            if hash_file(destination) and destination.stat().st_size:
-                passport = self._verify(
-                    operation=operation,
-                    asset_id=output_asset_id,
-                    path=destination,
-                    source_sha256=source_sha,
-                    loudness_profile=loudness_profile,
-                    expected_output_sha256=None,
-                    parameters=parameters,
-                    continuity_lock_hash=continuity_lock_hash,
-                    transaction_id=transaction_id,
+        identity = recipe_identity(
+            operation=operation,
+            source_sha256=source_sha,
+            parameters=dict(parameters),
+            profiles={
+                "canonical": stream.profile_id,
+                "loudness": None
+                if loudness_profile is None
+                else {
+                    "profile_id": loudness_profile.profile_id,
+                    "target_lufs": loudness_profile.target_lufs,
+                    "true_peak_dbtp": loudness_profile.true_peak_dbtp,
+                    "target_lra_lu": loudness_profile.target_lra_lu,
+                },
+            },
+            engine=self._engine_identity(),
+        )
+        # A published artifact carries its recipe identity in a sidecar, so the
+        # reuse decision is made against the recipe that *produced* the bytes,
+        # never against whatever recipe happens to be asking now.
+        marker = destination.with_name(destination.name + RECIPE_SUFFIX)
+        if destination.is_file() and _read_recipe_marker(marker) == identity:
+            passport = self._verify(
+                operation=operation,
+                asset_id=output_asset_id,
+                path=destination,
+                source_sha256=source_sha,
+                loudness_profile=loudness_profile,
+                expected_output_sha256=None,
+                parameters=parameters,
+                continuity_lock_hash=continuity_lock_hash,
+                transaction_id=transaction_id,
+                cancel=cancel,
+            )
+            if passport.verified:
+                return self._evidence(
+                    passport,
+                    output_asset_id=output_asset_id,
+                    destination=destination,
+                    reused=True,
                 )
-                if passport.verified:
-                    return self._evidence(
-                        passport,
-                        output_asset_id=output_asset_id,
-                        destination=destination,
-                        reused=True,
-                    )
+        if cancel is not None and cancel.cancelled:
+            raise _cancelled_before_start(cancel)
         staged = workspace.stage_input(source_path)
         # Every run gets its own isolated directory; it is removed afterwards
         # whether the run succeeds, refuses or raises (the builder's ``finally``
         # in ``workspace.run_directory``), so a refusal cannot leave a partial
         # file behind to be mistaken for media.
         with workspace.run_directory(request_id):
-            produced = builder(staged, workspace, None)
-            staged_size = produced.stat().st_size
-            if staged_size == 0:  # pragma: no cover - render already refuses this
+            # A cancelled job must not start a process at all.  The token is
+            # handed to the builder, which hands it to the process governor, so
+            # cancelling mid-render kills the process group; this check only
+            # covers the "already cancelled on arrival" case.
+            produced = builder(staged, workspace, cancel)
+            if cancel is not None and cancel.cancelled:
+                raise _cancelled_before_start(cancel)
+            if produced.stat().st_size == 0:  # pragma: no cover - render refuses this
                 raise EngineRejected("the encoder produced an empty file")
+            # Verification happens on the *private* run file, before the final
+            # path exists.  ``expected_output_sha256`` is not needed here: the
+            # hash is computed from these very bytes, and measuring them twice
+            # would only re-answer the same question.
+            passport = self._verify(
+                operation=operation,
+                asset_id=output_asset_id,
+                path=produced,
+                source_sha256=source_sha,
+                loudness_profile=loudness_profile,
+                expected_output_sha256=None,
+                parameters=parameters,
+                continuity_lock_hash=continuity_lock_hash,
+                transaction_id=transaction_id,
+                cancel=cancel,
+            )
+            if not passport.verified:
+                # Nothing was published, so there is nothing to quarantine: the
+                # run directory is about to be removed with the refused bytes in
+                # it, and the previous good artifact (if any) is still intact.
+                raise EngineRejected(
+                    f"{operation} produced an artifact that failed verification "
+                    f"({passport.canonical_code or 'loudness/loudness_target'}: "
+                    f"{passport.canonical_detail or passport.loudness_target})"
+                )
             published = workspace.publish(
                 produced,
                 destination,
                 replace=True,
                 protected=(staged,),
             )
-        passport = self._verify(
-            operation=operation,
-            asset_id=output_asset_id,
-            path=published.path,
-            source_sha256=source_sha,
-            loudness_profile=loudness_profile,
-            expected_output_sha256=published.sha256,
-            parameters=parameters,
-            continuity_lock_hash=continuity_lock_hash,
-            transaction_id=transaction_id,
-        )
-        if not passport.verified:
-            # The artifact is on disk but refused: it must not stay reachable
-            # as if it were good.  It is quarantined by name, not deleted, so an
-            # operator can look at the exact bytes that failed.
-            rejected = destination.with_name(destination.name + ".rejected")
-            os.replace(destination, rejected)
-            raise EngineRejected(
-                f"{operation} produced an artifact that failed verification "
-                f"({passport.canonical_code or 'loudness/loudness_target'}: "
-                f"{passport.canonical_detail or passport.loudness_target})"
-            )
+            if published.sha256 != passport.output_sha256:  # pragma: no cover - defensive
+                # The bytes moved between verification and the rename.  Treat it
+                # as a refusal and take the artifact back off the final path.
+                destination.unlink(missing_ok=True)
+                raise EngineRejected(
+                    f"{operation} published bytes that differ from the verified ones "
+                    f"(verified {passport.output_sha256}, published {published.sha256})"
+                )
+        _write_recipe_marker(marker, identity)
         return self._evidence(
             passport, output_asset_id=output_asset_id, destination=published.path, reused=False
         )
+
+    def _engine_identity(self) -> dict[str, str]:
+        """What produced the bytes, for the recipe identity.
+
+        The binary *name* (not its absolute path, which differs per machine) plus
+        the measurement/decode strategies.  An engine whose measurement strategy
+        changes must not reuse an artifact it would no longer accept.
+        """
+        return {
+            "backend": "ffmpeg",
+            "binary_name": Path(self._transcoder.binary).name,
+            "measurement": "ebur128(peak=true)",
+            "decode": "s32le full-file",
+            "canonical": CANONICAL_PROFILE_ID,
+        }
 
     def _verify(
         self,
@@ -733,6 +897,7 @@ class NativeAudioEngine:
         parameters: dict[str, object],
         continuity_lock_hash: str | None,
         transaction_id: str | None,
+        cancel: CancelToken | None = None,
     ) -> ArtifactPassport:
         try:
             return build_passport(
@@ -747,16 +912,13 @@ class NativeAudioEngine:
                 max_analysis_seconds=self._settings.max_analysis_seconds,
                 parameters=parameters,
                 continuity_lock_hash=continuity_lock_hash,
-                transactional_identity={"transaction_id": transaction_id}
-                if transaction_id
-                else {},
+                transactional_identity={"transaction_id": transaction_id} if transaction_id else {},
                 signing_key=self._settings.signing_key,
                 signer_key_id=self._settings.signer_key_id,
+                cancel=cancel,
             )
         except (PassportError, MediaContractError, WorkspaceBoundaryError) as error:
-            raise EngineRejected(
-                f"{operation} verification could not complete: {error}"
-            ) from error
+            raise EngineRejected(f"{operation} verification could not complete: {error}") from error
 
     def _evidence(
         self,
@@ -846,4 +1008,3 @@ class NativeAudioEngine:
             )
         finally:
             Path(sink).unlink(missing_ok=True)
-

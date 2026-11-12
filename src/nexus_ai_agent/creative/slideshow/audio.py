@@ -200,16 +200,26 @@ def _dominant_period(
 def _interval_candidates(
     onset_times: np.ndarray, min_period_seconds: float, max_period_seconds: float
 ) -> np.ndarray:
-    """Every inter-onset interval inside the window, averaged over skips 1..4."""
+    """Every inter-onset interval inside the window, averaged over skips 1..4.
+
+    The k-skip candidate is the **mean k-lag gap** ``(t[i+k] - t[i]) / k``: it
+    recovers the beat period when intermediate onsets were missed (an accent
+    pattern, a weak hit under the noise floor).
+
+    This used to be ``np.diff(onset_times, n=step)``, which is the k-th *finite
+    difference* — a quantity that is identically zero for evenly spaced onsets
+    and grows with the k-th derivative otherwise.  Dividing it by ``step`` does
+    not turn a finite difference into a gap, so skips 2..4 contributed either
+    zero (filtered out by the window) or a number with no physical meaning as a
+    period, and the octave-disambiguation they exist for did nothing.
+    """
+    ordered = np.sort(np.asarray(onset_times, dtype=np.float64).reshape(-1))
     differences: list[float] = []
     for step in (1, 2, 3, 4):
-        if onset_times.size > step:
-            gaps = np.diff(onset_times, n=step)
-            divided = gaps / step
+        if ordered.size > step:
+            gaps = (ordered[step:] - ordered[:-step]) / step
             differences.extend(
-                float(gap)
-                for gap in divided
-                if min_period_seconds <= gap <= max_period_seconds
+                float(gap) for gap in gaps if min_period_seconds <= gap <= max_period_seconds
             )
     return np.asarray(differences, dtype=np.float64)
 

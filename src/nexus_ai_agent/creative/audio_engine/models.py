@@ -336,7 +336,20 @@ def sha256_of_bytes(data: bytes) -> str:
 
 
 class MediaProbe(BaseModel):
-    """Container/stream facts read by the allow-listed binary."""
+    """Container/stream facts read by the allow-listed binary.
+
+    The fields from ``profile`` down are the typed contract of a *machine*
+    probe (``ffprobe -of json``): they exist so a verdict about a stream's
+    shape is made from a parsed document with required keys rather than from a
+    human-readable ``ffmpeg -i`` banner.  They are optional because a probe
+    taken by a binary that cannot emit JSON (or a caller that only needs the
+    container facts) leaves them ``None`` — and ``None`` is honestly "not
+    established here", never a guessed value.
+
+    ``source`` records exactly which probe produced the record, so downstream
+    evidence can tell a JSON probe from a banner parse without consulting the
+    code version that happened to be deployed.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -348,6 +361,14 @@ class MediaProbe(BaseModel):
     sample_format: str | None = None
     size_bytes: int = Field(ge=0)
     sha256: str
+    # -- machine-probe contract (ffprobe -of json) ----------------------- #
+    profile: str | None = None
+    pix_fmt: str | None = None
+    time_base: str | None = None
+    start_pts: int | None = None
+    duration_ts: int | None = None
+    extradata_hash: str | None = None
+    source: Literal["ffprobe_json", "banner"] = "banner"
 
     @property
     def is_stereo(self) -> bool:
@@ -501,11 +522,7 @@ class ResourceBudget(BaseModel):
 
     @property
     def within_budget(self) -> bool:
-        return (
-            self.within_deadline
-            and self.within_captured_budget
-            and self.within_analysis_budget
-        )
+        return self.within_deadline and self.within_captured_budget and self.within_analysis_budget
 
 
 class ProcessOutcome(BaseModel):

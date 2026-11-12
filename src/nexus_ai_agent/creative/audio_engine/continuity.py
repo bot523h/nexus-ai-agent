@@ -117,9 +117,7 @@ class ContinuityReport(BaseModel):
 
     @property
     def codes(self) -> tuple[str, ...]:
-        return tuple(
-            f"{axis.axis}:{axis.verdict}" for axis in self.axes if axis.verdict != "ok"
-        )
+        return tuple(f"{axis.axis}:{axis.verdict}" for axis in self.axes if axis.verdict != "ok")
 
 
 @dataclass(frozen=True)

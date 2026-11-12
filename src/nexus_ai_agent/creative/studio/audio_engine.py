@@ -224,6 +224,23 @@ class AudioEngineHealth:
 
 
 @runtime_checkable
+class Cancellable(Protocol):
+    """The *shape* of a cancellation token, declared at the port boundary.
+
+    The concrete token lives in the engine (``audio_engine.process.CancelToken``)
+    and the studio layer must not import it — that would make the contract
+    depend on one implementation.  A structural protocol keeps the seam one-way:
+    anything with ``cancel()`` and a ``cancelled`` property satisfies it, and an
+    engine that accepts its own richer token still conforms.
+    """
+
+    @property
+    def cancelled(self) -> bool: ...
+
+    def cancel(self, reason: str = ...) -> None: ...
+
+
+@runtime_checkable
 class AudioEnginePort(Protocol):
     """The execution seam: every method owns real bytes, none fabricates."""
 
@@ -231,11 +248,17 @@ class AudioEnginePort(Protocol):
 
     def precheck(self, request: SourceRequest) -> SourcePrecheck: ...
 
-    def detect_beats(self, request: BeatRequest) -> BeatAnalysis: ...
+    def detect_beats(
+        self, request: BeatRequest, *, cancel: Cancellable | None = None
+    ) -> BeatAnalysis: ...
 
-    def normalize_loudness(self, request: LoudnessRequest) -> ArtifactEvidence: ...
+    def normalize_loudness(
+        self, request: LoudnessRequest, *, cancel: Cancellable | None = None
+    ) -> ArtifactEvidence: ...
 
-    def remove_noise(self, request: DenoiseRequest) -> ArtifactEvidence: ...
+    def remove_noise(
+        self, request: DenoiseRequest, *, cancel: Cancellable | None = None
+    ) -> ArtifactEvidence: ...
 
 
 __all__ = [
@@ -245,6 +268,7 @@ __all__ = [
     "AudioEnginePortError",
     "BeatAnalysis",
     "BeatRequest",
+    "Cancellable",
     "DenoiseRequest",
     "EngineCapability",
     "EngineInputError",

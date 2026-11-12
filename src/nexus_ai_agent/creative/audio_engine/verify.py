@@ -238,9 +238,7 @@ def decode_evidence(
                     decoded_duration_us=duration_us,
                     elapsed_seconds=outcome.elapsed_seconds,
                     code=CODE_DECODE_FAILED,
-                    detail=(
-                        f"decoded {duration_us} us but the container claims {claim} us"
-                    ),
+                    detail=(f"decoded {duration_us} us but the container claims {claim} us"),
                 ),
                 hashlib.sha256((outcome.stderr_tail or "").encode()).hexdigest(),
             )
@@ -409,7 +407,8 @@ def build_passport(
         and (expected_output_sha256 is None or measured_sha == expected_output_sha256)
     )
     passport = ArtifactPassport(
-        passport_id="pp_" + hashlib.sha256(
+        passport_id="pp_"
+        + hashlib.sha256(
             canonical_json(
                 {
                     "operation": operation,
@@ -546,9 +545,7 @@ def verify_passport(
         bytes_ok = measured == passport.output_sha256
         if not bytes_ok:
             codes.append(CODE_SHA_MISMATCH)
-            details.append(
-                f"artifact sha256 {measured} != passport {passport.output_sha256}"
-            )
+            details.append(f"artifact sha256 {measured} != passport {passport.output_sha256}")
 
     # 3-5. re-measure when an engine is supplied
     decode_ok = passport.decode.decode_ok

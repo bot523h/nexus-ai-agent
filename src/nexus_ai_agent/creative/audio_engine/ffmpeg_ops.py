@@ -25,7 +25,11 @@ allow-list for the whole repository (explicit override → ``NEXUS_FFMPEG_BIN`` 
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
+import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
@@ -76,6 +80,15 @@ _MICROSECONDS_PER_SECOND = 1_000_000
 
 class AudioEngineError(RuntimeError):
     """The native audio engine could not produce a verifiable result."""
+
+
+class AudioProbeError(AudioEngineError):
+    """A machine probe could not establish the stream's shape (fail closed).
+
+    Deliberately distinct from :class:`AudioEngineError`: "I could not read the
+    stream" is a different fact from "the stream is wrong", and callers act on
+    them differently (retry/repair vs refuse).
+    """
 
 
 class AudioEngineUnavailableError(AudioEngineError):
@@ -137,12 +150,15 @@ class FfmpegEngine:
         self,
         *,
         binary: str | None = None,
+        probe_binary: str | None = None,
         governor: ProcessGovernor | None = None,
         deadline_seconds: float = 900.0,
         max_captured_bytes: int = 256 * 1024,
     ) -> None:
         self._explicit_binary = binary
         self._binary: str | None = None
+        self._explicit_probe_binary = probe_binary or os.environ.get("NEXUS_FFPROBE_BIN")
+        self._probe_binary: str | None = None
         self.governor = governor or ProcessGovernor()
         self.deadline_seconds = deadline_seconds
         self.max_captured_bytes = max_captured_bytes
@@ -165,6 +181,163 @@ class FfmpegEngine:
             return False
         return True
 
+    @property
+    def probe_binary(self) -> str | None:
+        """The ``ffprobe`` binary, or ``None`` when this environment has none.
+
+        ``ffprobe`` is a *separate executable* from ``ffmpeg``; a static build
+        can ship one without the other (the bundled imageio-ffmpeg wheel does
+        exactly that).  Resolution order is explicit argument, then
+        ``NEXUS_FFPROBE_BIN``, then a sibling of the resolved ``ffmpeg``, then
+        ``PATH``.  ``None`` is an honest "unavailable" — the caller must decide
+        whether a banner parse is an acceptable substitute, and
+        :meth:`probe` records which one it used.
+        """
+        if self._probe_binary is None:
+            candidate: str | None = self._explicit_probe_binary
+            if not candidate:
+                sibling = (
+                    Path(f"{self.binary[: -len('ffmpeg')]}ffprobe")
+                    if (self.binary.endswith("ffmpeg"))
+                    else None
+                )
+                if sibling is not None and sibling.is_file() and os.access(sibling, os.X_OK):
+                    candidate = str(sibling)
+            if not candidate:
+                candidate = shutil.which("ffprobe")
+            self._probe_binary = candidate or ""
+        return self._probe_binary or None
+
+    # -- probe ------------------------------------------------------------ #
+    #: Fields ffprobe must report for this engine to make a verdict.  Not in
+    #: this tuple, on purpose: ``channel_layout`` (ffprobe omits it for a plain
+    #: mono/stereo WAV, where the count already determines the layout) and
+    #: ``start_pts`` (absent on formats without an explicit start).  Their
+    #: absence is recorded as ``None``/a derived value, never guessed into a
+    #: different fact.
+    _REQUIRED_STREAM_KEYS = (
+        "codec_name",
+        "sample_rate",
+        "channels",
+        "sample_fmt",
+        "time_base",
+        "duration_ts",
+    )
+
+    def probe_json(self, path: Path | str, *, cancel: CancelToken | None = None) -> MediaProbe:
+        """Probe with ``ffprobe -of json`` under a **fail-closed** contract.
+
+        Every field the engine reasons about is required: a missing key, a
+        non-integer rate, a zero channel count or a ``pix_fmt`` on an audio
+        stream all raise :class:`AudioProbeError` instead of yielding a
+        partially-populated record.  A half-read stream shape is exactly what
+        produces a confident wrong verdict downstream, so "incomplete" must be
+        a refusal, not a default.
+
+        Raises :class:`AudioEngineUnavailableError` when no ``ffprobe`` exists
+        in this environment — the engine must never pretend it asked.
+        """
+        source = Path(path)
+        if not source.is_file():
+            raise AudioEngineError(f"media file not found: {source}")
+        binary = self.probe_binary
+        if binary is None:
+            raise AudioEngineUnavailableError(
+                "ffprobe is not installed in this environment; the typed probe "
+                "contract needs `ffprobe -of json` (set NEXUS_FFPROBE_BIN to a "
+                "real binary). A banner parse is not a substitute for a verdict."
+            )
+        outcome = self._run(
+            [
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                str(source),
+            ],
+            cancel=cancel,
+            binary_override=binary,
+        )
+        if not outcome.ok:
+            raise AudioProbeError(
+                f"ffprobe failed ({outcome.termination}): "
+                f"{(outcome.stderr_tail or '').strip()[-400:]}"
+            )
+        payload = _json_object(outcome.stdout_tail or outcome.stderr_tail)
+        streams = payload.get("streams")
+        if not isinstance(streams, list):
+            raise AudioProbeError("ffprobe JSON has no `streams` array")
+        audio = [entry for entry in streams if entry.get("codec_type") == "audio"]
+        if not audio:
+            raise AudioProbeError("ffprobe found no audio stream")
+        stream = audio[0]
+        missing = [key for key in self._REQUIRED_STREAM_KEYS if key not in stream]
+        if missing:
+            raise AudioProbeError(
+                f"ffprobe stream is missing required key(s): {', '.join(missing)}"
+            )
+        if stream.get("pix_fmt") is not None:
+            raise AudioProbeError(
+                f"audio stream declares pix_fmt={stream['pix_fmt']!r}; a video-shaped "
+                "stream is not a valid audio program"
+            )
+        sample_rate = _as_int(stream["sample_rate"], "sample_rate")
+        channels = _as_int(stream["channels"], "channels")
+        duration_ts = _as_int(stream["duration_ts"], "duration_ts")
+        start_pts = _as_int(stream["start_pts"], "start_pts") if "start_pts" in stream else None
+        time_base = str(stream["time_base"])
+        if sample_rate <= 0 or channels <= 0:
+            raise AudioProbeError(
+                f"ffprobe reported a non-physical stream (rate {sample_rate}, channels {channels})"
+            )
+        if duration_ts < 0:
+            raise AudioProbeError(f"ffprobe reported a negative duration_ts ({duration_ts})")
+        numerator, _, denominator = time_base.partition("/")
+        try:
+            seconds_per_tick = int(numerator) / int(denominator)
+        except (ValueError, ZeroDivisionError) as error:
+            raise AudioProbeError(f"ffprobe time_base is not a rational: {time_base!r}") from error
+        if seconds_per_tick <= 0:
+            raise AudioProbeError(f"ffprobe time_base is not positive: {time_base!r}")
+        raw_format = payload.get("format")
+        format_block: dict[str, object] = raw_format if isinstance(raw_format, dict) else {}
+        format_duration = format_block.get("duration")
+        duration_us = int(round(duration_ts * seconds_per_tick * _MICROSECONDS_PER_SECOND))
+        if duration_us == 0 and isinstance(format_duration, (str, int, float)):
+            if format_duration != "":
+                try:
+                    duration_us = int(round(float(format_duration) * _MICROSECONDS_PER_SECOND))
+                except (TypeError, ValueError) as error:
+                    raise AudioProbeError(
+                        f"ffprobe format duration is not a number: {format_duration!r}"
+                    ) from error
+        raw_layout = stream.get("channel_layout")
+        if isinstance(raw_layout, str) and raw_layout.strip():
+            layout: str = raw_layout.strip()
+        else:
+            # Derived from the count, and labelled as derived: this is the only
+            # honest reading of a document that states "1 channel" and no name.
+            layout = _LAYOUT_BY_COUNT.get(channels, f"unknown({channels}ch)")
+        return MediaProbe(
+            container_duration_us=duration_us,
+            sample_rate=sample_rate,
+            channels=channels,
+            channel_layout=layout,
+            codec=str(stream["codec_name"]),
+            sample_format=str(stream["sample_fmt"]),
+            size_bytes=source.stat().st_size,
+            sha256=hash_file(source),
+            profile=(stream.get("profile") if isinstance(stream.get("profile"), str) else None),
+            pix_fmt=None,
+            time_base=time_base,
+            start_pts=start_pts,
+            duration_ts=duration_ts,
+            extradata_hash=_extradata_hash(stream.get("extradata")),
+            source="ffprobe_json",
+        )
+
     def _run(
         self,
         args: Sequence[str],
@@ -172,8 +345,13 @@ class FfmpegEngine:
         deadline_seconds: float | None = None,
         cancel: CancelToken | None = None,
         stdout_path: str | None = None,
+        binary_override: str | None = None,
     ) -> ProcessOutcome:
-        argv = [self.binary, "-hide_banner", "-nostdin", *args]
+        executable = binary_override or self.binary
+        # ``-hide_banner``/``-nostdin`` are ffmpeg options; a different tool is
+        # invoked with its own arguments only.
+        prefix = ["-hide_banner", "-nostdin"] if executable == self.binary else []
+        argv = [executable, *prefix, *args]
         return self.governor.run(
             argv,
             deadline_seconds=deadline_seconds or self.deadline_seconds,
@@ -603,3 +781,55 @@ def _container_format(hint: Literal["flac", "wav"] | str) -> str:
 
 
 __all__ += ["FfmpegTranscoder", "corruption_marker", "resample_mono"]
+
+
+# -- probe helpers ----------------------------------------------------------- #
+
+
+#: Channel count -> layout name, for documents that omit ``channel_layout``.
+_LAYOUT_BY_COUNT = {1: "mono", 2: "stereo"}
+
+
+def _json_object(text: str) -> dict[str, object]:
+    """The last JSON object in ``text``, or a refusal.
+
+    ffprobe writes its document to stdout; some wrappers interleave a warning,
+    so the object is located rather than assumed to start at offset 0.  A
+    document that is not an object is a probe failure, never an empty probe.
+    """
+    start = text.find("{")
+    if start < 0:
+        raise AudioProbeError(f"ffprobe produced no JSON document: {text.strip()[-300:]}")
+    # ``raw_decode`` from the first ``{`` parses exactly one object and ignores
+    # whatever follows it.  Slicing between the outermost braces would instead
+    # span nested objects (``disposition``, ``metadata``) and be unparseable —
+    # and a truncated capture must fail here rather than half-parse.
+    try:
+        payload, _ = json.JSONDecoder().raw_decode(text[start:])
+    except json.JSONDecodeError as error:
+        raise AudioProbeError(f"ffprobe JSON is malformed: {error}") from error
+    if not isinstance(payload, dict):
+        raise AudioProbeError("ffprobe JSON is not an object")
+    return payload
+
+
+def _as_int(value: object, field: str) -> int:
+    """A required integer field, refusing a stringly-typed or empty value."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise AudioProbeError(f"ffprobe {field} is not an integer: {value!r}")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as error:
+        raise AudioProbeError(f"ffprobe {field} is not an integer: {value!r}") from error
+
+
+def _extradata_hash(extradata: object) -> str | None:
+    """A stable digest of a stream's codec extradata, when ffprobe reports it.
+
+    Extradata carries the codec-specific headers (for FLAC the STREAMINFO
+    block), so two streams with identical names but different extradata are not
+    the same stream.  ``None`` means "not reported", never "empty".
+    """
+    if not isinstance(extradata, str) or not extradata.strip():
+        return None
+    return "sha256:" + hashlib.sha256(extradata.encode("utf-8")).hexdigest()
