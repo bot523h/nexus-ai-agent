@@ -161,9 +161,19 @@ def check_loudness_target(
         )
     elif not peak_ok:
         code = CODE_TRUE_PEAK_EXCEEDED
+        # An *unmeasured* peak is a different failure from an exceeded one, and
+        # it used to crash here: formatting ``None`` with ``:.2f`` raises
+        # ``TypeError``, which turned "this file has no true peak" into a
+        # traceback instead of a refusal.  A ceiling that cannot be checked is a
+        # failure with a reason, never an exception at the caller.
         detail = (
-            f"true peak {measurement.true_peak_dbtp:.2f} dBTP exceeds the "
-            f"{profile.true_peak_dbtp:.1f} dBTP ceiling"
+            "true peak could not be measured, so the "
+            f"{profile.true_peak_dbtp:.1f} dBTP ceiling cannot be proven"
+            if measurement.true_peak_dbtp is None
+            else (
+                f"true peak {measurement.true_peak_dbtp:.2f} dBTP exceeds the "
+                f"{profile.true_peak_dbtp:.1f} dBTP ceiling"
+            )
         )
     crest_reduction_db: float | None = None
     if input_crest_factor_db is not None and measurement.true_peak_dbtp is not None:
