@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-10T12:08:41Z",
+  "updated_at": "2026-11-12T08:43:33Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -4425,6 +4425,39 @@
       "generation": 0
     },
     {
+      "task": "task-262-quarantine-retention",
+      "title": "Bounded retention for _quarantine forensic trees",
+      "title_fa": "نگهداری محدود برای درخت‌های پزشکی قانونی _quarantine",
+      "why_fa": "quarantine داده را برای همیشه نگه می‌دارد؛ در تولید رشد بدون حد می‌شود.",
+      "zone": "execution-core",
+      "priority": "P3",
+      "status": "active",
+      "scope": "Bound the _quarantine forensic trees so a long-running sidecar cannot grow without limit. Add an explicit, opt-in operator retention policy (default: keep everything) that prunes quarantine trees by age and/or total size, reusing the ONE filesystem security boundary (WorkspaceFilesystem) for every deletion and refusing symlinked or escaping paths, and journaling each prune decision (kept/removed) so a deletion is auditable and never silent.",
+      "acceptance_criteria": [
+        "age/size-bounded retention with an explicit operator switch (default: keep)",
+        "deletion is boundary-safe (same WorkspaceFilesystem rules) and journaled",
+        "tests: malicious retention paths cannot escape the root"
+      ],
+      "evidence_required": [
+        "tests/unit/test_execution_staging.py covers: default keep (no policy), age bound, size bound, combined bounds, symlinked quarantine tree refusal, and a journal of kept/removed decisions",
+        "exact commands + observed results in the PR body; `python scripts/agent_board.py check --files <changed> --branch <branch>` exits 0 with every source readable",
+        "mutation probe: disabling the operator switch (or the boundary check) turns the new test RED, restoring it returns GREEN with the tree byte-identical"
+      ],
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/execution/staging.py",
+        "tests/unit/test_execution_staging.py"
+      ],
+      "agent_branch": "arena/task-262-quarantine-retention",
+      "claimed_at": "2026-11-12T08:43:33Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "note": ""
+    },
+    {
       "task": "task-269-cognition-quality-evaluation",
       "title": "Cognition quality evaluation harness",
       "title_fa": "هارنس ارزیابی کیفیت شناخت Nagar",
@@ -8521,7 +8554,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8559,7 +8592,8 @@
         "REVIEW CLOSE-OUT (2026-11-09): all 14 Sourcery review threads on PR #325 are replied to and resolved (remediation commit e5c92d56; truthful audit table docs/audits/NAGAR_F1_LIVE_TRUTH_2026-11-08.md section 3a). F1-F4 and F6-F14 fixed; F5 (cross-job completed-job provenance loss) recorded OPEN as an owner design decision (R4). PR #325 body updated with the close-out matrix and honest residuals. Targeted gates re-run on head f4176790: ruff check clean, ruff format --check clean, mypy src clean (361 files), tests/unit/test_mutation_harness_anchors.py + test_pg_integration_safety.py + test_agent_board.py 160 passed; tests/integration/test_durable_project_revision_pinning.py + tests/architecture/test_durable_project_state_boundary.py 48 passed; test_in_process_job_queue.py + test_creative_execution_recovery.py + test_canonical_creative_execution.py 35 passed."
       ],
       "note": "",
-      "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done."
+      "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done.",
+      "release_reason": "auto-released by gc at 2026-11-12T08:31:54Z (stale active lease)"
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -8607,7 +8641,7 @@
       "title_fa": "تعمیر PR #324 (بستن نهایی P0): فهرست‌کردن گزارش ممیزی جدید و رفع یافته‌های گزارش/شواهد تخته",
       "zone": "docs-architecture",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Repair the open docs-only PR #324 on its existing branch openhands/nagar-one-final-closeout-20261107. Root cause of the 5 red test/python-parity checks: docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md is not indexed in docs/README.md (TRUTH010). Also close the 5 unresolved review threads on the report and the memory note. No runtime change; no merge.",
       "scope_fa": "تعمیر PR مستندات‌محور باز #324 روی همان شاخه. علت ریشهٔ ۵ چک قرمز: گزارش ممیزی در docs/README.md فهرست نشده (TRUTH010). همچنین بستن ۵ ترد بازبینی روی گزارش و یادداشت حافظه. بدون تغییر runtime و بدون ادغام.",
       "acceptance_criteria": [
@@ -8631,7 +8665,8 @@
       "claimed_at": "2026-11-08T08:42:47Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-11-12T08:31:54Z (stale active lease)"
     }
   ],
   "deferred_log": [
