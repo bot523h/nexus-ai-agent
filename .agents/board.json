@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-12T22:24:48Z",
+  "updated_at": "2026-11-12T23:07:44Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1240,10 +1240,18 @@
     },
     {
       "id": "episode-causality-lab",
-      "description": "NAGAR ATLAS: offline, deterministic episodic narrative-continuity and edit-planning compiler (advisory analysis layer; owns no project state)",
+      "description": "NAGAR ATLAS + AETHEL: offline deterministic episodic narrative-continuity, edit-planning, temporal composition and director compiler (advisory layer; owns no project state). Phase-2 zone expansion authorized by the coordinator.",
       "paths": [
         "src/nexus_ai_agent/creative/episode_causality_lab/",
-        "tests/creative/episode_causality_lab/"
+        "src/nexus_ai_agent/creative/director/",
+        "src/nexus_ai_agent/creative/composition/",
+        "src/nexus_ai_agent/creative/packs/scene/",
+        "src/nexus_ai_agent/creative/packs/portrait/",
+        "tests/creative/episode_causality_lab/",
+        "tests/creative/director/",
+        "tests/creative/composition/",
+        "tests/creative/packs/scene/",
+        "tests/creative/packs/portrait/"
       ]
     }
   ],
@@ -8671,14 +8679,22 @@
       ],
       "exclusive_paths": [
         "src/nexus_ai_agent/creative/episode_causality_lab/",
-        "tests/creative/episode_causality_lab/"
+        "src/nexus_ai_agent/creative/director/",
+        "src/nexus_ai_agent/creative/composition/",
+        "src/nexus_ai_agent/creative/packs/scene/",
+        "src/nexus_ai_agent/creative/packs/portrait/",
+        "tests/creative/episode_causality_lab/",
+        "tests/creative/director/",
+        "tests/creative/composition/",
+        "tests/creative/packs/scene/",
+        "tests/creative/packs/portrait/"
       ],
       "owner_hint": "",
       "agent_branch": "arena/atlas-episodic-causality-lab",
       "claimed_at": "2026-11-12T22:24:48Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "note": "",
+      "note": "Phase-2 (AETHEL) zone expansion authorized 2026-11-12 by the coordinator: adds creative/director, creative/composition, creative/packs/scene, creative/packs/portrait and their tests. No overlap with Alpha (audio), Beta (chronos) or Manus (storage/speech/color). Docs stay inside the owned package dirs (no docs/README.md or docs/architecture edits).",
       "generation": 1
     }
   ],
