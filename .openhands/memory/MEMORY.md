@@ -1148,6 +1148,30 @@ Only red check = the #234 flake (task-264, issue #237).
   base `5ed6d4e1` and claims `.agents/board.json`; whichever PR merges second must
   union-merge the board (per `merge_resolution_note`).
 
+## NEXUS post-merge closure (durable, 2026-11-11)
+- Branch `fix/postmerge-barrier-pg-20261111` (base main `c3aa7c85`); NOT pushed. Commits
+  `15e73fe0` (barrier + PG) and `768f0c77` (TRUTH043). See `2026-11-11.md` for detail.
+- **Do NOT rebuild merge verification** — it already lives in `scripts/agent_board.py`
+  (`_merge_still_verified`/`_verify_pr_merge`, re-derives against live GitHub main via the
+  compare API; harness `scripts/board_referee_mutations.py`). It only covers
+  `completion_records`/typed prerequisites, NOT a claim's `status`. `SATISFIED_STATUSES =
+  {"done","completed_merged"}` → a `completed_merged` claim can open a prerequisite.
+- **New truth check `TRUTH043`** (`diagnostics/truth.py`): a claim in `MERGED_STATUSES`
+  (`{completed_merged}`) must carry a 40-hex `merge_commit_sha` + positive int
+  `delivered_pr`. Structural-only (runs in shallow, network-less CI). Locked to the board
+  CLI's `SATISFIED_STATUSES` by `test_merged_statuses_are_a_satisfied_subset_of_the_board_cli`.
+- **A squash merge's commit has ONE parent** — never assert `>=2 parents` to mean "merged".
+- **This worktree is a SHALLOW clone** → `git merge-base --is-ancestor <sha> HEAD` is
+  unreliable; verify ancestry with `gh api repos/O/R/compare/main...<sha> --jq .status`
+  (`behind` = ancestor).
+- **PG available locally**: `NEXUS_DATABASE_URL=postgresql://pg:pg@localhost:5432/nexus`,
+  destructive tests need `NEXUS_PG_TEST_DESTRUCTIVE=1`. Full suite (env -u NEXUS_DATABASE_URL
+  -u NEXUS_PG_TEST_DESTRUCTIVE, `PYTHONPATH=/tmp/pm-wt/src`): **6474 passed / 45 skipped**.
+- `.agents/board.json` is schema-2, indent=2, trailing newline, insertion-ordered — edit with
+  `json.load(object_pairs_hook=OrderedDict)` + `json.dump(indent=2, ensure_ascii=False)`.
+- `main` CI green; only red is the scheduled `maintenance`/`backup-db` job (missing
+  `NEXUS_DATABASE_URL` secret, fail-closed, owner-side).
+
 
 ## F1 live-truth correction (durable, 2026-11-08)
 - **A board note LIED about a merge.** slice-2 claimed the F1 fence
@@ -1204,3 +1228,37 @@ Only red check = the #234 flake (task-264, issue #237).
 - **Board evidence:** `record-pr-merge` verified all 4 merges against live main; `agent_board.py check` = no
   overlap. Report: `docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md` on branch
   `openhands/nagar-one-final-closeout-20261107` (NEVER push to main).
+
+## task-262 quarantine retention + board staleness (durable, 2026-11-12)
+- **live main `c3aa7c85`** (2026-11-11, PR #332 merged). 51 open PRs; NONE had
+  green-required-checks + unresolved threads (priority-(a) target absent). The recent
+  green PRs (#335/#334/#333/#331/#330/#327/#326) all have **0** unresolved threads; the
+  thread-bearing PRs (#33/#97/#99/#129/#135/#140/#149/#157/#193/#257/#284) are all old+red.
+- **`next_work` is STALE vs `main`.** Already implemented on main: task-255, task-256,
+  task-260, task-261, task-263, task-269. Genuinely open: task-257, task-259, task-262,
+  task-264. Re-derive `next_work` against the tree before picking.
+- **A `next_work`-only task is UNCLAIMABLE**: `agent_board.py` `_find` resolves through
+  `claims` only, so `claim <id>` refuses "task not found" (exit 2). Register a `claims`
+  record first (mirror id/title/zone/priority/exclusive_paths + acceptance_criteria +
+  evidence_required), then `claim` (gen 0→1).
+- **Delivered task-262** (PR #336, branch `arena/task-262-quarantine-retention`):
+  `QuarantineRetentionPolicy` + `QuarantineRetention.prune()` in
+  `src/nexus_ai_agent/execution/staging.py` — opt-in age/size bound, **keep default**,
+  deletions via the ONE `WorkspaceFilesystem` boundary, symlinked tree **refused**, one
+  `QuarantineDecision` journal row per tree. Tests 62 passed; campaign **27/27**.
+- **Pinned-count coupling when adding execution-core probes** — update FOUR places:
+  (1) harness docstring table + title `M1–M25`→`M1–M27`; (2) `test_mutation_harness_anchors.py`
+  `len(PROBES)==25`→`27`; (3) `ci.yml` **job name AND step name** both embed the count;
+  (4) `docs/architecture/MODULE_MAP.md` R23 (`25 probes`→`27 probes`). The anchors test
+  reads the workflow by the job **dict key** `execution-core-mutations`, not the display name.
+- **Mutation anchor choice**: target a retention-SPECIFIC guard (operator-switch predicate;
+  journal append), never a redundant `WorkspaceFilesystem` layer — removing only the
+  explicit `_assert_no_symlink_components` in `QuarantineRetention` survives because
+  `remove_tree` still refuses the symlink (layered defense).
+- **Env**: this sandbox ships NO venv; `python3 -m pip install` a minimal set
+  (pytest, pydantic, sqlmodel, sqlalchemy, httpx, python-telegram-bot, langgraph,
+  langgraph-checkpoint-sqlite, aiosqlite, alembic, numpy, typer, fastapi, uvicorn,
+  beautifulsoup4, psutil, litellm, boto3, flashrank, arabic-reshaper, python-bidi,
+  pillow, sqlite-vec, langgraph-checkpoint-postgres, asyncpg, psycopg[binary,pool],
+  llama-index-core) to run `tests/unit`; `mypy src` still reports 6 pre-existing
+  import-not-found errors (pypdf/imageio_ffmpeg/chromadb) — environmental, not the change.
