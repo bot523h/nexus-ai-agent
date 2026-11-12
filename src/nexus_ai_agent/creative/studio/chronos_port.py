@@ -67,6 +67,10 @@ class ChronosPort:
             "scene.tonemap",
             "merkle.root",
             "merkle.verify",
+            "motion.solve_ik",
+            "motion.foot_lock",
+            "motion.verlet_chain",
+            "motion.shutter_blur",
         }
     )
 

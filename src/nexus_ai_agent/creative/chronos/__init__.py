@@ -25,6 +25,7 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
     from . import acoustics_lipsync as acoustic
     from . import (
         audio_continuity,
+        biomechanics_motion,
         compositor_25d,
         geometry,
         identity_lock,
@@ -143,6 +144,95 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
         op = command.operation
         result: Any
         output = Path(p.get("output", p.get("tiled_output", "chronos-output")))
+        if op == "motion.solve_ik":
+            data = np.load(command.inputs[0], allow_pickle=False)
+            limits = (
+                float(p.get("joint_min_rad", "-3.141592653589793")),
+                float(p.get("joint_max_rad", "3.141592653589793")),
+            )
+            result = biomechanics_motion.solve_two_bone_or_chain_ik(
+                data["root"],
+                tuple(float(value) for value in p["segment_lengths_m"].split(",")),
+                data["target"],
+                joint_angle_limits_rad=limits,
+                clamp_unreachable=p.get("clamp_unreachable", "false").lower() == "true",
+            )
+            output.write_text(repr(result), encoding="utf-8")
+            return file_receipt(
+                command,
+                output,
+                "DAMPED_LEAST_SQUARES_IK",
+                {"residual_m": str(result.target_residual_m), "reachable": str(result.reachable)},
+            )
+        if op == "motion.foot_lock":
+            from fractions import Fraction
+
+            data = np.load(command.inputs[0], allow_pickle=False)
+            pts = tuple(int(value) for value in p["pts"].split(","))
+            time_base = Fraction(int(p["time_base_num"]), int(p["time_base_den"]))
+            stamps = tuple(RationalTimestamp(value, time_base) for value in pts)
+            result = biomechanics_motion.enforce_stance_foot_lock(
+                stamps,
+                data["positions"],
+                data["stance"].astype(bool),
+                transition_frames=int(p.get("transition_frames", "2")),
+            )
+            output.write_text(repr(result), encoding="utf-8")
+            return file_receipt(
+                command,
+                output,
+                "STANCE_FOOT_LOCKED",
+                {
+                    "slip_before_mm": str(result.max_foot_slip_mm_before),
+                    "slip_after_mm": str(result.max_foot_slip_mm_after),
+                },
+            )
+        if op == "motion.verlet_chain":
+            from fractions import Fraction
+
+            data = np.load(command.inputs[0], allow_pickle=False)
+            pts = tuple(int(value) for value in p["pts"].split(","))
+            time_base = Fraction(int(p["time_base_num"]), int(p["time_base_den"]))
+            stamps = tuple(RationalTimestamp(value, time_base) for value in pts)
+            result = biomechanics_motion.simulate_secondary_verlet_chain(
+                stamps,
+                data["root_positions"],
+                data["initial_chain"],
+                gravity_m_s2=tuple(float(v) for v in p.get("gravity", "0,0,-9.81").split(",")),
+                wind_m_s2=tuple(float(v) for v in p.get("wind", "0,0,0").split(",")),
+                drag=float(p.get("drag", "0.02")),
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open("wb") as stream:
+                np.savez(
+                    stream,
+                    positions=np.asarray(result.positions),
+                    strain=result.max_segment_strain,
+                    rest_lengths=np.asarray(result.rest_lengths_m),
+                )
+            return file_receipt(
+                command,
+                output,
+                "VERLET_CHAIN_SIMULATED",
+                {"max_segment_strain": str(result.max_segment_strain)},
+            )
+        if op == "motion.shutter_blur":
+            result = biomechanics_motion.render_shutter_motion_blur_linear(
+                np_load(command.inputs[0]),
+                (float(p["velocity_x_px_per_frame"]), float(p["velocity_y_px_per_frame"])),
+                shutter_angle_deg=float(p.get("shutter_angle_deg", "180")),
+                subframe_samples=int(p.get("subframe_samples", "9")),
+            )
+            np_save(output, result.image)
+            return file_receipt(
+                command,
+                output,
+                "SCENE_LINEAR_SHUTTER_BLUR",
+                {
+                    "energy_relative_error": str(result.energy_relative_error),
+                    "shutter_fraction": str(result.shutter_fraction),
+                },
+            )
         if op == "audio.declick_wav":
             result = audio_continuity.declick_pcm_wav_splices(
                 command.inputs[0],
@@ -317,6 +407,10 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
         "scene.tonemap": wave2,
         "merkle.root": wave2,
         "merkle.verify": wave2,
+        "motion.solve_ik": wave2,
+        "motion.foot_lock": wave2,
+        "motion.verlet_chain": wave2,
+        "motion.shutter_blur": wave2,
     }
 
 
