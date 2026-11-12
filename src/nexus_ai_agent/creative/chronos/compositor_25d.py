@@ -23,6 +23,7 @@ class CompositorReceipt:
     full_frame_equivalent_working_bytes: int
     working_memory_reduction_ratio: float
     equivalent: bool | None = None
+    rgb8_output_buffer_bytes: int = 0
 
     def __bool__(self) -> bool:
         return self.equivalent is not False
@@ -138,6 +139,7 @@ def render_25d_multiplane_composite(
         max_tile_bytes,
         full_bytes,
         reduction,
+        rgb8_output_buffer_bytes=height * width * 3,
     )
 
 
@@ -168,4 +170,5 @@ def verify_tiled_compositor_equivalence(
         receipt.full_frame_equivalent_working_bytes,
         receipt.working_memory_reduction_ratio,
         equal and tiled_digest == full_digest,
+        receipt.rgb8_output_buffer_bytes,
     )

@@ -243,10 +243,12 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
         if op in {"scene.inpaint", "scene.retouch"}:
             image, mask = np_load(command.inputs[0]), np_load(command.inputs[1]).astype(bool)
             if op == "scene.inpaint":
-                result, before, after = scene_portrait_ops.inpaint_masked_region_pde(image, mask)
+                inpaint_receipt = scene_portrait_ops.inpaint_masked_region_pde(image, mask)
+                result = inpaint_receipt.image
                 meta = {
-                    "dirichlet_energy_before": str(before),
-                    "dirichlet_energy_after": str(after),
+                    "dirichlet_energy_before": str(inpaint_receipt.dirichlet_energy_before),
+                    "dirichlet_energy_after": str(inpaint_receipt.dirichlet_energy_after),
+                    "biharmonic_rms_residual": str(inpaint_receipt.biharmonic_rms_residual),
                 }
             else:
                 result = scene_portrait_ops.retouch_portrait_frequency_separation(image, mask)

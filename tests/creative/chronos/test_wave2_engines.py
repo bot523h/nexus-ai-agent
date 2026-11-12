@@ -108,8 +108,10 @@ def test_25d_render_and_scene_portrait_ops(tmp_path: Path) -> None:
     mask[3:5, 3:5] = True
     fixed = image.copy()
     fixed[3:5, 3:5] = 1.0
-    healed, before, after = inpaint_masked_region_pde(fixed, mask, iterations=50)
-    assert healed.shape == fixed.shape and after <= before
+    inpaint = inpaint_masked_region_pde(fixed, mask, iterations=50)
+    assert inpaint.image.shape == fixed.shape
+    assert inpaint.dirichlet_energy_after <= inpaint.dirichlet_energy_before
+    assert inpaint.biharmonic_rms_residual >= 0
     assert retouch_portrait_frequency_separation(fixed, mask).shape == fixed.shape
     mapped = tonemap_scene_linear_filmic(synthesize_physical_sky_dome(8, 6, 20.0) * 20)
     assert mapped.min() >= 0 and mapped.max() <= 1
@@ -426,12 +428,14 @@ def test_wave21_receipts_huber_memory_sor_and_halation(tmp_path: Path) -> None:
         and result.max_tile_window_working_bytes < result.full_frame_equivalent_working_bytes
     )
     assert result.working_memory_reduction_ratio > 1
+    assert result.rgb8_output_buffer_bytes == 64 * 64 * 3
     damaged = frame.copy()
     damaged[24:40, 24:40] = 0.9
     mask = np.zeros((64, 64), bool)
     mask[24:40, 24:40] = True
-    _, energy_before, energy_after = inpaint_masked_region_pde(damaged, mask, iterations=300)
-    assert energy_after < energy_before
+    inpaint = inpaint_masked_region_pde(damaged, mask, iterations=300)
+    assert inpaint.dirichlet_energy_after < inpaint.dirichlet_energy_before
+    assert inpaint.biharmonic_rms_residual >= 0
     hdr = np.zeros((17, 17, 3))
     hdr[7:10, 7:10] = 5.0
     plain = tonemap_scene_linear_filmic(hdr)
@@ -600,3 +604,106 @@ def test_all_wave2_default_handler_families(tmp_path: Path) -> None:
         ).metadata["verified"]
         == "True"
     )
+
+
+def test_wave3_gum_covariance_and_skew_ray_distance(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nexus_ai_agent.creative.chronos.identity_lock import (
+        verify_eyeline_and_180_rule,
+        verify_pose_invariant_identity,
+    )
+
+    points = np.array(
+        [
+            [-0.04, -0.03, 0.01],
+            [0.04, -0.02, -0.01],
+            [-0.03, 0.03, 0.02],
+            [0.03, 0.04, -0.02],
+            [0.01, 0.00, 0.03],
+            [-0.02, 0.01, -0.03],
+        ]
+    )
+    intrinsics = np.array([[900.0, 0.0, 320.0], [0.0, 850.0, 240.0], [0.0, 0.0, 1.0]])
+    observed_px = np.column_stack((320 + points[:, 0] * 450, 240 + points[:, 1] * 425))
+    observed_px[1] += (0.7, -0.4)
+    receipt = verify_pose_invariant_identity(
+        points,
+        observed_px,
+        intrinsics,
+        2.0,
+        pixel_sigma_px=0.6,
+        depth_sigma_m=0.015,
+    )
+    rotation = np.asarray(receipt.rotation_so3)
+    predicted = receipt.scale * points @ rotation + np.asarray(receipt.translation_m)
+    normalized = (observed_px - np.array([320.0, 240.0])) / np.array([900.0, 850.0])
+    measured = np.column_stack((normalized * 2.0, np.full(len(points), 2.0)))
+    input_covariance = np.diag([0.6**2, 0.6**2, 0.015**2])
+    distances = []
+    for residual, (x, y) in zip(predicted - measured, normalized, strict=True):
+        jacobian = np.array([[2 / 900, 0, x], [0, 2 / 850, y], [0, 0, 1.0]])
+        covariance = jacobian @ input_covariance @ jacobian.T
+        distances.append(float(residual @ np.linalg.solve(covariance, residual)))
+    assert receipt.mahalanobis_distance == pytest.approx(np.sqrt(np.mean(distances)), rel=1e-10)
+    singular_covariance = verify_pose_invariant_identity(
+        points,
+        observed_px,
+        intrinsics,
+        2.0,
+        pixel_sigma_px=0.0,
+        depth_sigma_m=0.015,
+    )
+    assert np.isfinite(singular_covariance.mahalanobis_distance)
+
+    camera_a = np.array([-2.0, 0.0, 0.0])
+    camera_b = np.array([-2.0, 10.0, 0.0])
+    actor_a = np.zeros(3)
+    actor_b = np.array([0.0, 10.0, 1.0])
+    gaze_a = np.array([1.0, 0.0, 0.0])
+    gaze_b = np.array([0.0, -1.0, 0.0])
+    skew = verify_eyeline_and_180_rule(camera_a, camera_b, actor_a, actor_b, gaze_a, gaze_b)
+    expected = abs(np.dot(actor_b - actor_a, np.cross(gaze_a, gaze_b))) / np.linalg.norm(
+        np.cross(gaze_a, gaze_b)
+    )
+    assert skew.skew_ray_closest_distance_m == pytest.approx(expected)
+    parallel = verify_eyeline_and_180_rule(
+        camera_a,
+        camera_b,
+        actor_a,
+        np.array([0.0, 10.0, 1.0]),
+        np.array([0.0, 1.0, 0.0]),
+        np.array([0.0, 1.0, 0.0]),
+    )
+    assert parallel.skew_ray_closest_distance_m == pytest.approx(1.0)
+    one_zero_ray = verify_eyeline_and_180_rule(
+        camera_a,
+        camera_b,
+        actor_a,
+        actor_b,
+        np.zeros(3),
+        np.array([0.0, 1.0, 0.0]),
+    )
+    assert one_zero_ray.skew_ray_closest_distance_m == pytest.approx(1.0)
+    both_zero_rays = verify_eyeline_and_180_rule(
+        camera_a, camera_b, actor_a, actor_b, np.zeros(3), np.zeros(3)
+    )
+    assert both_zero_rays.skew_ray_closest_distance_m == pytest.approx(np.linalg.norm(actor_b))
+
+    import nexus_ai_agent.creative.chronos.identity_lock as identity_lock
+
+    monkeypatch.setattr(identity_lock, "_brown_conrady_jacobian", lambda *_args: np.zeros((2, 2)))
+    with pytest.raises(ValueError, match="singular Brown-Conrady"):
+        identity_lock.verify_pose_invariant_identity(points, observed_px, intrinsics, 2.0)
+
+
+def test_wave3_h_and_d_tone_curve_receipt_contract() -> None:
+    from nexus_ai_agent.creative.chronos.scene_portrait_ops import tonemap_scene_linear_filmic
+
+    radiance = np.linspace(0, 100, 301).reshape(301, 1, 1)
+    hdr = np.repeat(radiance, 3, axis=2)
+    mapped = tonemap_scene_linear_filmic(hdr, d_min=0.05, d_max=0.92, gamma_contrast=1.15)[:, 0, 0]
+    assert mapped[0] == pytest.approx(0.05)
+    assert mapped[-1] < 0.92
+    assert np.all(np.diff(mapped) > 0)
+    assert mapped[-1] - mapped[-2] < mapped[1] - mapped[0]
+    with pytest.raises(ValueError):
+        tonemap_scene_linear_filmic(hdr, d_min=0.9, d_max=0.2)

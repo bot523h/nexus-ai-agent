@@ -163,7 +163,7 @@ def test_wave2_benchmarks_n3(tmp_path: Path) -> None:
             tile_size_px=8,
         ),
         "pde_retouch_tonemap": lambda i: tonemap_scene_linear_filmic(
-            retouch_portrait_frequency_separation(inpaint_masked_region_pde(img, mask)[0], mask)
+            retouch_portrait_frequency_separation(inpaint_masked_region_pde(img, mask).image, mask)
         ),
     }
     report = {}

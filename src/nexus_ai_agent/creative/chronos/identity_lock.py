@@ -20,6 +20,7 @@ class EyelineVerificationReceipt:
     accepted: bool
     gaze_ray_miss_distance_m: float
     eyeline_angle_error_deg: float
+    skew_ray_closest_distance_m: float = 0.0
 
     def __bool__(self) -> bool:
         return self.accepted
@@ -37,6 +38,24 @@ class IdentityVerificationReceipt:
     downweighted_landmark_count: int = 0
     world_space_scale_m: float = 0.0
     image_space_span_px: float = 0.0
+
+
+def _brown_conrady_jacobian(
+    x: float, y: float, distortion: tuple[float, float, float, float, float]
+) -> Array:
+    """Analytical Jacobian of the Brown-Conrady forward distortion map."""
+    k1, k2, k3, p1, p2 = distortion
+    r2 = x * x + y * y
+    radial = 1 + k1 * r2 + k2 * r2**2 + k3 * r2**3
+    radial_slope = k1 + 2 * k2 * r2 + 3 * k3 * r2**2
+    dr_dx, dr_dy = 2 * x * radial_slope, 2 * y * radial_slope
+    return np.array(
+        [
+            [radial + x * dr_dx + 2 * p1 * y + 6 * p2 * x, x * dr_dy + 2 * p1 * x + 2 * p2 * y],
+            [y * dr_dx + 2 * p1 * x + 2 * p2 * y, radial + y * dr_dy + 6 * p1 * y + 2 * p2 * x],
+        ],
+        dtype=np.float64,
+    )
 
 
 def verify_pose_invariant_identity(
@@ -68,18 +87,35 @@ def verify_pose_invariant_identity(
         or depth_sigma_m < 0
         or not np.all(np.isfinite(p))
         or not np.all(np.isfinite(q))
+        or not np.all(np.isfinite(k))
     ):
         raise KernelError("invalid depth, uncertainty, or landmark values")
-    if min(k[0, 0], k[1, 1]) <= 0:
-        raise KernelError("camera focal lengths must be positive")
-    normalized = np.array(
-        [
-            undistort_normalized_point(
-                (u - k[0, 2]) / k[0, 0], (v - k[1, 2]) / k[1, 1], distortion
-            )[:2]
-            for u, v in q
-        ]
-    )
+    camera_2x2 = k[:2, :2]
+    if min(k[0, 0], k[1, 1]) <= 0 or abs(float(np.linalg.det(camera_2x2))) <= 1e-15:
+        raise KernelError("camera focal lengths and pixel transform must be invertible")
+    try:
+        pixel_to_distorted = np.linalg.inv(camera_2x2)
+    except np.linalg.LinAlgError as exc:
+        raise KernelError("camera pixel transform must be invertible") from exc
+    normalized_points: list[tuple[float, float]] = []
+    jacobians: list[Array] = []
+    for u, v in q:
+        distorted_xy = pixel_to_distorted @ np.array([u - k[0, 2], v - k[1, 2]])
+        x, y, _ = undistort_normalized_point(
+            float(distorted_xy[0]), float(distorted_xy[1]), distortion
+        )
+        normalized_points.append((x, y))
+        try:
+            undistortion_jacobian = np.linalg.inv(_brown_conrady_jacobian(x, y, distortion))
+        except np.linalg.LinAlgError as exc:
+            raise KernelError("singular Brown-Conrady covariance Jacobian") from exc
+        normalized_pixel_jacobian = undistortion_jacobian @ pixel_to_distorted
+        jacobian = np.zeros((3, 3), dtype=np.float64)
+        jacobian[:2, :2] = depth_m * normalized_pixel_jacobian
+        jacobian[:2, 2] = (x, y)
+        jacobian[2, 2] = 1.0
+        jacobians.append(jacobian)
+    normalized = np.asarray(normalized_points, dtype=np.float64)
     observed = np.column_stack((normalized * depth_m, np.full(len(p), depth_m)))
     weights = np.ones(len(p), dtype=np.float64)
     rotation = np.eye(3)
@@ -101,9 +137,20 @@ def verify_pose_invariant_identity(
         residual_mm = np.linalg.norm(residual_points, axis=1) * 1000
         weights = np.minimum(1.0, huber_delta_mm / np.maximum(residual_mm, 1e-12))
     rms = float(np.sqrt(np.mean(residual_points**2)) * 1000)
-    sigma_depth_px_m = depth_m * pixel_sigma_px / min(k[0, 0], k[1, 1])
-    variance_mm2 = sigma_mm**2 + 1000**2 * (depth_sigma_m**2 + sigma_depth_px_m**2)
-    mahal = float(np.sqrt(np.sum(residual_points**2) * 1_000_000 / variance_mm2))
+    # GUM propagation: each landmark has its own 3x3 covariance because the
+    # pixel-to-ray Jacobian depends on its normalized image coordinates.
+    input_covariance = np.diag([pixel_sigma_px**2, pixel_sigma_px**2, depth_sigma_m**2])
+    squared_mahalanobis: list[float] = []
+    for residual, jacobian in zip(residual_points, jacobians, strict=True):
+        covariance = jacobian @ input_covariance @ jacobian.T
+        try:
+            whitened = np.linalg.solve(covariance, residual)
+        except np.linalg.LinAlgError:
+            # Zero-valued caller uncertainty is permitted for legacy inputs;
+            # use the Moore-Penrose inverse on the observable subspace.
+            whitened = np.linalg.pinv(covariance) @ residual
+        squared_mahalanobis.append(max(0.0, float(residual @ whitened)))
+    mahal = float(np.sqrt(np.mean(squared_mahalanobis)))
     span_px = float(np.linalg.norm(q.max(axis=0) - q.min(axis=0)))
     return IdentityVerificationReceipt(
         "GEOMETRIC_CRANIOFACIAL_INVARIANCE",
@@ -143,9 +190,25 @@ def verify_eyeline_and_180_rule(
     ):
         raise KernelError("invalid shot/reverse-shot vectors or tolerance")
     axis = ab - aa
+
+    # Closest approach of the two 3D gaze lines. In the parallel limit the
+    # cross-product formula is indeterminate, so use point-to-line distance.
+    direction_cross = np.cross(ga, gb)
+    cross_norm = float(np.linalg.norm(direction_cross))
+    origin_delta = ab - aa
+    norm_a, norm_b = float(np.linalg.norm(ga)), float(np.linalg.norm(gb))
+    if cross_norm > 1e-12:
+        skew_distance = abs(float(np.dot(origin_delta, direction_cross))) / cross_norm
+    elif norm_a > 1e-12:
+        skew_distance = float(np.linalg.norm(np.cross(origin_delta, ga)) / norm_a)
+    elif norm_b > 1e-12:
+        skew_distance = float(np.linalg.norm(np.cross(origin_delta, gb)) / norm_b)
+    else:
+        skew_distance = float(np.linalg.norm(origin_delta))
+
     side_a = float(np.dot(np.cross(axis, ca - aa), np.cross(axis, cb - aa)))
     if side_a < 0:
-        return EyelineVerificationReceipt(False, float("inf"), 180.0)
+        return EyelineVerificationReceipt(False, float("inf"), 180.0, skew_distance)
 
     def angle(x: Array, y: Array) -> float:
         den = float(np.linalg.norm(x) * np.linalg.norm(y))
@@ -162,4 +225,4 @@ def verify_eyeline_and_180_rule(
     miss_distance = max(miss(aa, ga, ab), miss(ab, gb, aa))
     angle_error = max(angle(ga, ab - aa), angle(gb, aa - ab))
     accepted = angle_error <= angular_tolerance_deg and miss_distance <= head_radius_m
-    return EyelineVerificationReceipt(accepted, miss_distance, angle_error)
+    return EyelineVerificationReceipt(accepted, miss_distance, angle_error, skew_distance)

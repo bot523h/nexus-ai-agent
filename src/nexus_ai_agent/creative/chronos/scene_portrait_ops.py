@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -10,23 +12,34 @@ from .contracts import KernelError
 FloatImage = NDArray[np.float64]
 
 
+@dataclass(frozen=True, slots=True)
+class PDEInpaintReceipt:
+    image: FloatImage
+    dirichlet_energy_before: float
+    dirichlet_energy_after: float
+    biharmonic_rms_residual: float
+
+
 def inpaint_masked_region_pde(
     image: FloatImage,
     mask: NDArray[np.bool_],
     *,
     iterations: int = 500,
     tolerance: float = 1e-6,
-    relaxation: float = 1.65,
-) -> tuple[FloatImage, float, float]:
-    """Solve harmonic extension by in-place SOR with fixed Dirichlet exterior."""
+    relaxation: float = 1.35,
+) -> PDEInpaintReceipt:
+    """Coupled harmonic/biharmonic extension using fixed-exterior SOR updates."""
     src, region = np.asarray(image, float), np.asarray(mask, bool)
     if (
         src.ndim != 3
+        or src.shape[2] != 3
         or region.shape != src.shape[:2]
         or not np.any(region)
         or iterations < 1
         or tolerance <= 0
+        or not np.isfinite(relaxation)
         or not 1.0 <= relaxation <= 1.9
+        or not np.all(np.isfinite(src))
     ):
         raise KernelError("invalid PDE image, mask, or solver controls")
     result = src.copy()
@@ -37,21 +50,47 @@ def inpaint_masked_region_pde(
         mx, my = region[:, 1:] | region[:, :-1], region[1:, :] | region[:-1, :]
         return float(np.sum(dx[mx] ** 2) + np.sum(dy[my] ** 2))
 
+    def laplacian(a: FloatImage) -> FloatImage:
+        padded = np.pad(a, ((1, 1), (1, 1), (0, 0)), mode="edge")
+        return padded[:-2, 1:-1] + padded[2:, 1:-1] + padded[1:-1, :-2] + padded[1:-1, 2:] - 4 * a
+
     before = energy(src)
+    height, width = region.shape
     for _ in range(iterations):
         max_change = 0.0
+        # Refresh edge extension each sweep; masked pixels themselves are
+        # relaxed in-place, while exterior pixels remain Dirichlet boundary data.
+        padded = np.pad(result, ((2, 2), (2, 2), (0, 0)), mode="edge")
         for y, x in zip(*np.nonzero(region), strict=True):
-            if y == 0 or x == 0 or y == src.shape[0] - 1 or x == src.shape[1] - 1:
+            if y == 0 or x == 0 or y == height - 1 or x == width - 1:
                 continue
-            average = (
-                result[y - 1, x] + result[y + 1, x] + result[y, x - 1] + result[y, x + 1]
-            ) / 4
+            py, px = y + 2, x + 2
+            axial = (
+                padded[py - 1, px] + padded[py + 1, px] + padded[py, px - 1] + padded[py, px + 1]
+            )
+            harmonic = axial / 4
+            diagonal = (
+                padded[py - 1, px - 1]
+                + padded[py - 1, px + 1]
+                + padded[py + 1, px - 1]
+                + padded[py + 1, px + 1]
+            )
+            axial_two = (
+                padded[py - 2, px] + padded[py + 2, px] + padded[py, px - 2] + padded[py, px + 2]
+            )
+            biharmonic = (8 * axial - 2 * diagonal - axial_two) / 20
             old = result[y, x].copy()
-            result[y, x] += relaxation * (average - old)
+            target = 0.5 * (harmonic + biharmonic)
+            result[y, x] += relaxation * (target - old)
             max_change = max(max_change, float(np.max(np.abs(result[y, x] - old))))
         if max_change < tolerance:
             break
-    return result, before, energy(result)
+    lap = laplacian(result)
+    biharmonic_residual = laplacian(lap)[region]
+    residual_rms = (
+        float(np.sqrt(np.mean(biharmonic_residual**2))) if biharmonic_residual.size else 0.0
+    )
+    return PDEInpaintReceipt(result, before, energy(result), residual_rms)
 
 
 def retouch_portrait_frequency_separation(
@@ -118,18 +157,26 @@ def synthesize_physical_sky_dome(
 def tonemap_scene_linear_filmic(
     hdr: FloatImage,
     *,
+    d_min: float = 0.0,
+    d_max: float = 1.0,
+    gamma_contrast: float = 1.0,
     halation_strength: float = 0.0,
     halation_threshold: float = 1.0,
     halation_radius_px: int = 2,
     log_exposure_slope: float = 2.0,
 ) -> FloatImage:
-    """Bounded red-emulsion highlight diffusion followed by monotone H&D response."""
+    """Apply an explicit H&D-like density curve and bounded red halation."""
     x = np.asarray(hdr, float)
     if (
         x.ndim != 3
         or x.shape[2] != 3
         or np.any(~np.isfinite(x))
         or np.any(x < 0)
+        or not np.isfinite(d_min)
+        or not np.isfinite(d_max)
+        or not 0 <= d_min < d_max <= 1
+        or not np.isfinite(gamma_contrast)
+        or gamma_contrast <= 0
         or halation_strength < 0
         or halation_threshold < 0
         or halation_radius_px < 0
@@ -153,7 +200,9 @@ def tonemap_scene_linear_filmic(
             spread += weight * padded[i : i + highlight.shape[0], :]
         exposed[..., 0] += halation_strength * spread
     log_exposure = np.log1p(exposed)
-    sigmoid = 1.0 / (1.0 + np.exp(-log_exposure_slope * (log_exposure - 1.5)))
-    black = 1.0 / (1.0 + np.exp(log_exposure_slope * 1.5))
-    output = (sigmoid - black) / (1.0 - black)
-    return np.asarray(np.clip(output, 0.0, 1.0), dtype=np.float64)
+    # H&D-like density grows with log exposure and approaches D_max
+    # asymptotically, giving an explicit highlight shoulder without clipping.
+    shoulder = log_exposure / (log_exposure + 1.0 / log_exposure_slope)
+    normalized_density = np.power(shoulder, gamma_contrast)
+    density = d_min + (d_max - d_min) * normalized_density
+    return np.asarray(np.clip(density, d_min, d_max), dtype=np.float64)
