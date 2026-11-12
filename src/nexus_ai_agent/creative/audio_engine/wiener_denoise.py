@@ -45,6 +45,7 @@ __all__ = [
     "wiener_denoise",
     "DEFAULT_FRAME",
     "DEFAULT_OVERLAP",
+    "NOISE_FLOOR_POWER",
 ]
 
 
@@ -52,6 +53,11 @@ __all__ = [
 #: 50 Hz harmonic spacing, short enough that the stationarity assumption inside
 #: one frame is defensible.
 DEFAULT_FRAME = 1024
+#: Smallest per-bin noise power the estimator will report, in power units:
+#: -200 dBFS.  Chosen to be physically below any real noise floor and high
+#: enough that dividing by it cannot overflow.
+NOISE_FLOOR_POWER = 1e-20
+
 #: Overlap fraction.  0.75 (hop = frame/4) gives better noise suppression than
 #: 0.5 at the same FFT size, and both are exactly COLA for a Hann window.
 DEFAULT_OVERLAP = 0.75
@@ -206,7 +212,13 @@ def estimate_noise_psd(
         windows = np.lib.stride_tricks.sliding_window_view(padded, 2 * neighbour_bins + 1)
         estimate = windows.min(axis=1)
     estimate = estimate * 10.0 ** (bias_correction_db / 10.0)
-    return np.maximum(estimate, np.finfo(np.float64).tiny)
+    # Floor at ``NOISE_FLOOR_POWER`` rather than the smallest representable
+    # float.  A power of 2.2e-308 is a legal float and a meaningless noise
+    # estimate: any signal divided by it overflows to infinity, which is how a
+    # silent or sub-window input produced NaN through the whole overlap-add.
+    # -200 dBFS per bin is far below any real converter noise and far above
+    # overflow.
+    return np.maximum(estimate, NOISE_FLOOR_POWER)
 
 
 def wiener_gain(
@@ -293,10 +305,18 @@ def wiener_denoise(
     previous_estimate = np.zeros(power.shape[1], dtype=np.float64)
     for index in range(power.shape[0]):
         current = power[index]
-        gamma = np.maximum(current / noise_psd, 0.0)
-        prior = smoothing * (previous_estimate / noise_psd) + (1.0 - smoothing) * np.maximum(
-            gamma - 1.0, 0.0
-        )
+        # ``noise_psd`` is floored at the smallest positive float by the
+        # estimator, which still divides to infinity for a loud bin.  Clamping the
+        # ratio keeps it finite instead of relying on a warning-filtered overflow.
+        gamma = np.clip(current / noise_psd, 0.0, 1e12)
+        prior = smoothing * np.clip(previous_estimate / noise_psd, 0.0, 1e12) + (
+            1.0 - smoothing
+        ) * np.maximum(gamma - 1.0, 0.0)
+        # ``prior`` is a ratio of powers and is non-negative by construction, but
+        # a silent bin gives 0/0.  Capping it before the division keeps the gain
+        # finite: without the cap a sub-window or silent input produced NaN,
+        # which then propagated through the overlap-add into the whole output.
+        prior = np.clip(np.nan_to_num(prior, nan=0.0, posinf=1e12), 0.0, 1e12)
         gain = prior / (1.0 + prior)
         gain = np.maximum(gain, floor)
         # ``strength`` blends toward unity: a partial denoise is a request for

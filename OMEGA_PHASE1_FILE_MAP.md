@@ -52,12 +52,12 @@ The engine sits **outside** `creative/packs` (which stays pure) and outside
 | `tests/unit/test_omega_engine_coverage.py` (81) | The engine's **refusal** surface: source resolution, composition and env fallbacks, beat-analysis refusals, loudness contract refusals, transcoder failures (empty concat, quoted path, failed copy leaving no partial file), every `verify_passport` refusal, the numeric layer, the workspace boundary. |
 | `tests/unit/test_omega_native_engine.py` (26) | Real FFmpeg end to end: post-decode LUFS at target for both locked profiles, true peak honoured, 96/120/140 BPM detected ±3%, silence → no tempo, corrupt input refused. |
 | `tests/unit/test_omega_audio_bus.py`, `test_omega_continuity_assembly.py`, `test_omega_evidence_ladder.py`, `test_audio_pack_evidence_paths.py`, `test_audio_pack.py` | The bus, the continuity verdicts, the ladder, every pack refusal branch. |
-| `scripts/mutate_omega_audio.py` (74 probes) | That the suite is load-bearing: revert a fix and a **named** test must fail. |
+| `scripts/mutate_omega_audio.py` (75 probes) | That the suite is load-bearing: revert a fix and a **named** test must fail. |
 | `scripts/omega_stage_a_benchmarks.py` | §8.3: N ≥ 3, median/min/max/sd, Peak RSS, process count, FFmpeg version; refuses `N < 3` and exits non-zero on `NOT_MEASURED`. |
 
 ## 5. What is measured on this branch
 
-Mutation campaign — `scripts/mutate_omega_audio.py`, **74/74 KILLED**
+Mutation campaign — `scripts/mutate_omega_audio.py`, **75/75 KILLED**
 (`ANCHOR_MISSING`, `AMBIGUOUS_ANCHOR` and `SURVIVED` all fail the gate).
 
 Engine coverage — `coverage run --source=src/nexus_ai_agent/creative/audio_engine`
@@ -95,7 +95,7 @@ beats         0.1135   0.0936   0.1143  0.0117    28.3 MiB      2
 | `ruff check src/ tests/ scripts/` + `ruff format` | clean |
 | `python -m nexus_ai_agent.nagar --docs` | clean |
 | `pytest tests/unit tests/architecture` | **6049 passed, 14 skipped, 0 failed** |
-| `scripts/mutate_omega_audio.py` | **74/74 KILLED** |
+| `scripts/mutate_omega_audio.py` | **75/75 KILLED** |
 | `scripts/omega_stage_a_benchmarks.py -n 3` | exit 0, all rows `ok` |
 | Engine coverage | **95.1%** (bar 95%) |
 | Canonical audio-pack coverage | 99.58% (939/943), contract 95% |

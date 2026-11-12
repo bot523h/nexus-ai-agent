@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "ac02b8bd4a6443717512b6c3b65b4fb37b69b07a",
-    "generated_at": "2026-11-12T20:01:58Z",
+    "source_revision": "5910c4f32efed2df1b9f1ee5283ed2a25c2fad44",
+    "generated_at": "2026-11-12T22:24:10Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -303,6 +303,7 @@
           "tests/unit/test_omega_native_engine.py",
           "tests/unit/test_omega_stage_a_hardening.py",
           "tests/unit/test_omega_wave2_recipe_binding.py",
+          "tests/unit/test_omega_wave2_verify_e2e.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       },
@@ -2050,6 +2051,7 @@
           "tests/unit/test_omega_native_engine.py",
           "tests/unit/test_omega_stage_a_hardening.py",
           "tests/unit/test_omega_wave2_recipe_binding.py",
+          "tests/unit/test_omega_wave2_verify_e2e.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,

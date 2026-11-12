@@ -64,6 +64,12 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         # handlers through refusal, cancellation and recipe-identity paths, so
         # it is pack evidence and must be measured (not host-layer).
         "tests/unit/test_omega_stage_a_hardening.py",
+        # WAVE-2: the stereo/HPSS/QC/de-esser suite drives the pack's
+        # `audio.remove_vocal` refusal and the QC surface the pack reports, so it
+        # is pack evidence.  Registering it here is what the contract requires
+        # rather than exempting it as host-layer — the exemption list is for
+        # modules that are evidence for a *host* layer, and this one is not.
+        "tests/unit/test_omega_wave2_stereo_forensic.py",
         "tests/architecture/test_audio_pack_boundary.py",
     ),
     "caption": (

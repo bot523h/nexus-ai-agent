@@ -813,6 +813,16 @@ PROBES: tuple[Probe, ...] = (
         test="test_canonical_profile_reasserts_its_rate_after_loudnorm",
     ),
     Probe(
+        name="wiener-noise-floor-is-tiny-not-a-power",
+        gate="wiener-noise-floor",
+        path=f"{AUDIO}/wiener_denoise.py",
+        old="    return np.maximum(estimate, NOISE_FLOOR_POWER)",
+        # A floor of float64.tiny is non-zero, so it reads as a floor, but every
+        # real signal divided by 2.2e-308 overflows and the WOLA comes back NaN.
+        new="    return np.maximum(estimate, np.finfo(np.float64).tiny)",
+        test="test_silence_still_floors_the_estimate_finitely",
+    ),
+    Probe(
         name="recipe-identity-ignores-parameters",
         gate="recipe-binding",
         path=f"{AUDIO}/recipe.py",

@@ -273,3 +273,119 @@ def test_empty_input_degenerates_cleanly() -> None:
     assert result.samples.size == 0
     assert result.frames == 0
     assert result.snr_gain_db is None
+
+
+# --------------------------------------------------------------------------- #
+# Degenerate paths — every one of these is a refusal or a documented ``None``,
+# and an untested refusal is a refusal nobody has checked.
+# --------------------------------------------------------------------------- #
+
+
+def test_frame_length_must_be_positive() -> None:
+    from nexus_ai_agent.creative.audio_engine.wiener_denoise import cola_window
+
+    with pytest.raises(ValueError, match="frame_length must be positive"):
+        cola_window(0, 0.75)
+
+
+def test_overlap_must_leave_a_hop() -> None:
+    from nexus_ai_agent.creative.audio_engine.wiener_denoise import _hop_for
+
+    with pytest.raises(ValueError, match="overlap leaves no hop"):
+        _hop_for(1024, 1.0)
+
+
+def test_a_sub_window_signal_is_edge_padded_not_dropped() -> None:
+    """A 100-sample input into a 1024-sample frame must still round-trip."""
+    signal = np.random.default_rng(2).standard_normal(100)
+    result = wiener_denoise(signal, sample_rate=RATE, strength=0.0)
+    assert result.samples.size == 100
+    assert np.max(np.abs(result.samples - signal)) < 1e-9
+
+
+def test_framing_an_empty_signal_returns_no_frames() -> None:
+    from nexus_ai_agent.creative.audio_engine.wiener_denoise import _frame_signal
+
+    frames, lead, count = _frame_signal(np.zeros(0), 1024, 256)
+    assert frames.shape == (0, 1024)
+    assert lead == 0 and count == 0
+
+
+def test_noise_estimate_refuses_an_impossible_percentile() -> None:
+    power = np.ones((8, 16))
+    with pytest.raises(ValueError, match="percentile"):
+        estimate_noise_psd(power, percentile=0.0)
+    with pytest.raises(ValueError, match="percentile"):
+        estimate_noise_psd(power, percentile=100.0)
+
+
+def test_noise_estimate_refuses_a_negative_neighbourhood() -> None:
+    with pytest.raises(ValueError, match="neighbour_bins"):
+        estimate_noise_psd(np.ones((8, 16)), neighbour_bins=-1)
+
+
+def test_noise_estimate_falls_back_without_a_neighbourhood() -> None:
+    """``neighbour_bins=0`` is an explicit request for the plain percentile."""
+    power = np.abs(np.random.default_rng(1).standard_normal((16, 32))) + 0.1
+    from numpy import percentile
+
+    with_neighbours = estimate_noise_psd(power, neighbour_bins=3)
+    without = estimate_noise_psd(power, neighbour_bins=0)
+    assert with_neighbours.shape == without.shape == (32,)
+    # With no neighbourhood the estimate *is* the bias-corrected percentile.
+    expected = percentile(power, 10.0, axis=0) * 10.0 ** (2.6 / 10.0)
+    assert np.allclose(without, expected, rtol=1e-9)
+
+
+def test_wiener_gain_refuses_an_impossible_floor() -> None:
+    with pytest.raises(ValueError, match="floor must be within"):
+        wiener_gain(np.ones(8), np.ones(8), floor=0.0)
+    with pytest.raises(ValueError, match="floor must be within"):
+        wiener_gain(np.ones(8), np.ones(8), floor=1.0)
+
+
+def test_a_perfect_estimate_reports_infinite_snr_not_a_number() -> None:
+    """Zero error is not "a large number": it is not a finite measurement."""
+    from nexus_ai_agent.creative.audio_engine.wiener_denoise import _instrumental_snr
+
+    clean = _clean(0.5)
+    assert _instrumental_snr(clean, clean, frame_length=1024, hop=256) == float("inf")
+
+
+def test_a_silent_reference_reports_negative_infinity() -> None:
+    from nexus_ai_agent.creative.audio_engine.wiener_denoise import _instrumental_snr
+
+    reference = np.zeros(1000)
+    estimate = np.random.default_rng(0).standard_normal(1000)
+    assert _instrumental_snr(reference, estimate, frame_length=1024, hop=256) == float("-inf")
+
+
+def test_the_noise_floor_is_a_representable_power_not_the_smallest_float() -> None:
+    """The floor must be ~-200 dBFS, not ``float64.tiny``.
+
+    ``np.finfo(np.float64).tiny`` is 2.2e-308: non-zero, so it looks like a
+    floor, but any real signal divided by it overflows to infinity and the
+    overlap-add turns the frame into NaN. The floor has to be a power level a
+    converter could plausibly see.
+    """
+    from nexus_ai_agent.creative.audio_engine.wiener_denoise import NOISE_FLOOR_POWER
+
+    assert NOISE_FLOOR_POWER == pytest.approx(1e-20)
+    # -200 dBFS, and strictly above the smallest normal double.
+    assert 10.0 * np.log10(NOISE_FLOOR_POWER) == pytest.approx(-200.0)
+    assert NOISE_FLOOR_POWER > np.finfo(np.float64).tiny * 1e100
+
+
+def test_silence_still_floors_the_estimate_finitely() -> None:
+    """A silent reference must floor to a finite power, never zero or inf."""
+    from nexus_ai_agent.creative.audio_engine.wiener_denoise import (
+        NOISE_FLOOR_POWER,
+        estimate_noise_psd,
+    )
+
+    power = np.zeros((8, 64), dtype=np.float64)
+    estimate = estimate_noise_psd(power)
+    assert estimate.shape == (64,)
+    assert np.all(np.isfinite(estimate))
+    assert np.all(estimate >= NOISE_FLOOR_POWER)
+    assert np.all(estimate == pytest.approx(NOISE_FLOOR_POWER))
