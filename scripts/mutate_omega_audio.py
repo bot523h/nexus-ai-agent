@@ -12,9 +12,9 @@ silently passing — an unmeasurable mutation is a failure, not a pass.
 
 Usage::
 
-    python scripts/omega_stage_a_mutations.py            # run every probe
-    python scripts/omega_stage_a_mutations.py -k tempo   # filter by name
-    python scripts/omega_stage_a_mutations.py --json     # machine-readable
+    python scripts/mutate_omega_audio.py            # run every probe
+    python scripts/mutate_omega_audio.py -k tempo   # filter by name
+    python scripts/mutate_omega_audio.py --json     # machine-readable
 
 Exit status: 0 when every probe was KILLED (the suite caught the mutation),
 1 when any probe SURVIVED, 2 on a setup problem (unreadable file, missing
@@ -444,6 +444,383 @@ PROBES: tuple[Probe, ...] = (
         old='    profile_id="nagar_streaming_preset",',
         new='    profile_id="streaming_master",',
         test="test_the_streaming_preset_is_named_a_preset_and_the_broadcast_profile_is_not",
+    ),
+    # -- §4.7 tempo: octave resolution (Part 1.2) -------------------------- #
+    Probe(
+        name="octave-subdivision-ratio-widened",
+        gate="section-4.7-octave",
+        path=SLIDESHOW,
+        old="SUBDIVISION_STRENGTH_RATIO = 0.80",
+        # 0.999 accepts every candidate whose leftover onsets are *any* weaker,
+        # which folds an isochronous 240 BPM stream down to 120 — measured 0.98
+        # for a genuinely isochronous pulse, so this threshold cannot separate it
+        # from a subdivision (0.65-0.71) any more.
+        new="SUBDIVISION_STRENGTH_RATIO = 0.999",
+        test="test_an_isochronous_fast_pulse_is_not_folded_down",
+    ),
+    Probe(
+        name="octave-subdivision-test-disabled",
+        gate="section-4.7-octave",
+        path=SLIDESHOW,
+        old="        if unexplained > 0.0 and subdivision_ratio <= SUBDIVISION_STRENGTH_RATIO:",
+        new="        if False:",
+        test="test_subdivisions_under_a_backbeat_are_folded_onto_the_beat",
+    ),
+    Probe(
+        name="octave-coverage-gate-removed",
+        gate="section-4.7-octave",
+        path=SLIDESHOW,
+        old="        if doubled_coverage >= TACTUS_COVERAGE:",
+        new="        if True:",
+        test="test_an_isochronous_fast_pulse_is_not_folded_down",
+    ),
+    Probe(
+        name="tempo-prior-ignores-the-measurement",
+        gate="section-4.7-octave",
+        path=SLIDESHOW,
+        old="    octaves = np.log2(bpm / TEMPO_PRIOR_CENTRE_BPM)",
+        # A prior that returns a constant is not a prior: it makes every octave
+        # candidate score identically and leaves the decision to chance.
+        new="    return 1.0\n    octaves = np.log2(bpm / TEMPO_PRIOR_CENTRE_BPM)",
+        test="test_uncertainty_is_reported_and_expanded_by_the_declared_coverage_factor",
+    ),
+    # -- §4.7 tempo: GUM uncertainty (Part 1.2) ---------------------------- #
+    Probe(
+        name="gum-type-a-drops-the-sqrt-m",
+        gate="section-4.7-gum",
+        path=SLIDESHOW,
+        old="    type_a = (60.0 / mean_period**2) * dispersion / np.sqrt(count)",
+        # Forgetting the 1/sqrt(M) is the classic Type-A error: it makes the
+        # stated uncertainty independent of how many intervals were averaged,
+        # i.e. it stops being a standard error.
+        new="    type_a = (60.0 / mean_period**2) * dispersion",
+        test="test_type_a_follows_the_gum_formula_exactly",
+    ),
+    Probe(
+        name="gum-type-b-uses-a-normal-divisor",
+        gate="section-4.7-gum",
+        path=SLIDESHOW,
+        old="RECTANGULAR_SD = 12.0**0.5",
+        # sqrt(3) is the Gaussian/either-side convention; a hop quantisation is a
+        # rectangular distribution and its standard deviation is dt/sqrt(12).
+        # Using sqrt(3) understates u_B by a factor of 2.
+        new="RECTANGULAR_SD = 3.0**0.5",
+        test="test_type_b_follows_the_hop_quantisation_model",
+    ),
+    Probe(
+        name="gum-expansion-factor-wrong",
+        gate="section-4.7-gum",
+        path=SLIDESHOW,
+        old="COVERAGE_FACTOR_95 = 1.96",
+        # 1.0 silently turns a 95 % expanded uncertainty into a 68 % one.
+        new="COVERAGE_FACTOR_95 = 1.0",
+        test="test_uncertainty_is_reported_and_expanded_by_the_declared_coverage_factor",
+    ),
+    Probe(
+        name="gum-combines-by-addition-not-quadrature",
+        gate="section-4.7-gum",
+        path=SLIDESHOW,
+        old="    combined = float(np.sqrt(type_a**2 + type_b**2))",
+        new="    combined = float(type_a + type_b)",
+        test="test_uncertainty_is_reported_and_expanded_by_the_declared_coverage_factor",
+    ),
+    Probe(
+        name="uncertainty-reported-when-nothing-was-detected",
+        gate="section-4.7-gum",
+        path=SLIDESHOW,
+        old=(
+            "    if count < 2 or mean_period <= 0 or hop_seconds <= 0:\n"
+            "        return 0.0, 0.0, 0.0, 0.0, 1.0"
+        ),
+        # Return a small non-zero number instead of zero: an undetected tempo
+        # would then look like a precise measurement.
+        new=(
+            "    if count < 2 or mean_period <= 0 or hop_seconds <= 0:\n"
+            "        return 0.01, 0.01, 0.014, 0.03, 1.0"
+        ),
+        test="test_uncertainty_is_zero_when_no_tempo_was_detected",
+    ),
+    # -- Part 3A: BS.1770 meter -------------------------------------------- #
+    Probe(
+        name="bs1770-shelf-normalised-like-a-highpass",
+        gate="bs1770-conformance",
+        path=f"{AUDIO}/loudness_bs1770.py",
+        old="    b0 = (vh + vb * k / _SHELF_Q + k * k) / denominator",
+        # Dropping the shelf's DC normalisation makes it a different filter: the
+        # measured coefficients no longer match the standard at all.
+        new="    b0 = vh + vb * k / _SHELF_Q + k * k",
+        test="test_k_weighting_reproduces_the_standard_coefficients",
+    ),
+    Probe(
+        name="bs1770-relative-gate-without-absolute-gate",
+        gate="bs1770-gating",
+        path=f"{AUDIO}/loudness_bs1770.py",
+        old="    above_absolute = values[values > absolute_floor]",
+        # Applying the relative gate to the *ungated* mean is the classic
+        # shortcut and shifts the integrated value on any programme with a
+        # long quiet passage.
+        new="    above_absolute = values",
+        test="test_two_stage_gating_matches_a_hand_computation",
+    ),
+    Probe(
+        name="bs1770-single-stage-gating",
+        gate="bs1770-gating",
+        path=f"{AUDIO}/loudness_bs1770.py",
+        old="    gated = above_absolute[above_absolute > relative_floor]",
+        new="    gated = above_absolute",
+        test="test_relative_gate_ignores_a_quiet_passage",
+    ),
+    Probe(
+        name="bs1770-surround-weight-flattened",
+        gate="bs1770-conformance",
+        path=f"{AUDIO}/loudness_bs1770.py",
+        old="        return np.array([1.0, 1.0, 1.0, 0.0, 1.41, 1.41], dtype=np.float64)",
+        # Flat weights drop the +1.5 dB surround boost and bring the LFE back in.
+        new="        return np.ones(6, dtype=np.float64)",
+        test="test_channel_weights_apply_the_surround_boost",
+    ),
+    Probe(
+        name="bs1770-true-peak-is-sample-peak",
+        gate="bs1770-true-peak",
+        path=f"{AUDIO}/loudness_bs1770.py",
+        old="    peak = float(np.max(np.abs(data)))\n    if factor <= 1 or data.size < 16:",
+        # Returning the sample peak is a 3 dB under-read on a signal that peaks
+        # between samples, which is the entire case a true-peak meter exists for.
+        new="    peak = float(np.max(np.abs(data)))\n    if True:",
+        test="test_true_peak_is_exact_for_tones_the_grid_misses",
+    ),
+    Probe(
+        name="bs1770-lra-uses-gating-blocks",
+        gate="bs1770-lra",
+        path=f"{AUDIO}/loudness_bs1770.py",
+        old=(
+            "    series = _short_term_series(\n"
+            "        block_mean_squares, sample_rate=sample_rate, hop_seconds=hop_seconds\n"
+            "    )\n"
+            "    if series.size < 3:\n"
+            "        return None\n"
+            "    loudness = np.array("
+        ),
+        # Using 400 ms blocks directly returns 0.003 LU where the standard says
+        # 20 LU: the sliding 3 s window is what LRA is defined over.
+        new=(
+            "    series = np.asarray(block_mean_squares, dtype=np.float64).reshape(-1)\n"
+            "    if series.size < 3:\n"
+            "        return None\n"
+            "    loudness = np.array("
+        ),
+        test="test_loudness_range_measures_a_twenty_decibel_swing_as_twenty_lu",
+    ),
+    Probe(
+        name="bs1770-cross-check-tolerance-huge",
+        gate="bs1770-cross-check",
+        path=f"{AUDIO}/verify.py",
+        old="LOUDNESS_CROSS_CHECK_TOLERANCE_LU = 0.1",
+        # A 50 LU tolerance makes the cross-check decorative: it can never fire.
+        new="LOUDNESS_CROSS_CHECK_TOLERANCE_LU = 50.0",
+        test="test_cross_verification_catches_a_wrong_ffmpeg_number",
+    ),
+    Probe(
+        name="bs1770-cross-check-passes-without-samples",
+        gate="bs1770-cross-check",
+        path=f"{AUDIO}/verify.py",
+        old=(
+            "    if samples is None or not sample_rate:\n"
+            "        return (\n"
+            "            CODE_LOUDNESS_METER_DISAGREEMENT,"
+        ),
+        # Fail-open: not having the samples becomes a pass, which is the failure
+        # mode "fail-closed" exists to rule out.
+        new="    if False:\n        return (\n            CODE_LOUDNESS_METER_DISAGREEMENT,",
+        test="test_cross_verification_is_fail_closed_without_samples",
+    ),
+    # -- Part 2: STRICT_LINEAR crest invariance ---------------------------- #
+    Probe(
+        name="strict-linear-crest-tolerance-huge",
+        gate="strict-linear-crest",
+        path=f"{AUDIO}/verify.py",
+        old="STRICT_LINEAR_CREST_TOLERANCE_DB = 0.25",
+        # 20 dB of tolerance means no limiter is ever detectable.
+        new="STRICT_LINEAR_CREST_TOLERANCE_DB = 20.0",
+        test="test_a_compressed_master_claiming_strict_linear_is_refused",
+    ),
+    Probe(
+        name="strict-linear-crest-check-skipped",
+        gate="strict-linear-crest",
+        path=f"{AUDIO}/verify.py",
+        old='            if claimed_target.processing_mode == "STRICT_LINEAR":',
+        new="            if False:",
+        test="test_a_compressed_master_claiming_strict_linear_is_refused",
+    ),
+    Probe(
+        name="strict-linear-refuses-only-with-a-source",
+        gate="strict-linear-crest",
+        path=f"{AUDIO}/verify.py",
+        old="    if source is None or not Path(source).exists():",
+        # Fail-open on the missing-evidence branch: an unverifiable claim passes.
+        new="    if False:",
+        test="test_a_missing_source_refuses_rather_than_passing",
+    ),
+    # -- Part 3B: Wiener denoiser ------------------------------------------ #
+    Probe(
+        name="wiener-symmetric-window",
+        gate="wiener-overlap-add",
+        path=f"{AUDIO}/wiener_denoise.py",
+        old="    return np.hanning(frame_length + 1)[:-1]",
+        # The symmetric Hann ripples by 1.3e-4 and reconstructs at 10 % error.
+        new="    return np.hanning(frame_length)",
+        test="test_reconstruction_is_exact",
+    ),
+    Probe(
+        name="wiener-noise-estimate-is-a-time-minimum",
+        gate="wiener-noise-estimate",
+        path=f"{AUDIO}/wiener_denoise.py",
+        old=(
+            "    time_percentile = np.percentile(power, percentile, axis=0)\n"
+            "    if neighbour_bins == 0 or time_percentile.size < 2 * neighbour_bins + 1:"
+        ),
+        # A running minimum is the speech-standard estimator and is wrong for
+        # music: a sustained tone *is* the minimum in its own bin.
+        new=(
+            "    time_percentile = np.min(power, axis=0)\n"
+            "    if neighbour_bins == 0 or time_percentile.size < 2 * neighbour_bins + 1:"
+        ),
+        test="test_noise_estimate_is_spectro_temporal",
+    ),
+    Probe(
+        name="wiener-noise-estimate-drops-the-neighbourhood",
+        gate="wiener-noise-estimate",
+        path=f"{AUDIO}/wiener_denoise.py",
+        old="        estimate = windows.min(axis=1)",
+        # Without the spectral neighbourhood a sustained harmonic lifts its own
+        # estimate to 18053 against a floor of 5.5 and the gains delete it.
+        new="        estimate = time_percentile",
+        test="test_noise_estimate_is_spectro_temporal",
+    ),
+    Probe(
+        name="wiener-gain-not-floored",
+        gate="wiener-overlap-add",
+        path=f"{AUDIO}/wiener_denoise.py",
+        old="        gain = np.maximum(gain, floor)",
+        # An unfloored Wiener gain is the textbook route to musical noise.
+        new="        gain = gain",
+        test="test_wiener_gain_is_bounded_and_floored",
+    ),
+    Probe(
+        name="wiener-strength-ignored",
+        gate="wiener-overlap-add",
+        path=f"{AUDIO}/wiener_denoise.py",
+        old="        gain = 1.0 - strength * (1.0 - gain)",
+        # Ignoring strength makes every request a full denoise.
+        new="        gain = gain",
+        test="test_strength_scales_suppression_monotonically",
+    ),
+    # -- Part 3C/3D: stereo, HPSS, QC ------------------------------------- #
+    Probe(
+        name="side-channel-sign-flipped",
+        gate="mid-side-exactness",
+        path=f"{AUDIO}/stereo_hpss.py",
+        old="    return (left_data + right_data) / 2.0, (left_data - right_data) / 2.0",
+        new="    return (left_data + right_data) / 2.0, (right_data - left_data) / 2.0",
+        test="test_mid_side_is_an_exact_change_of_basis",
+    ),
+    Probe(
+        name="hpss-masks-not-complementary",
+        gate="hpss-mask-sum",
+        path=f"{AUDIO}/stereo_hpss.py",
+        old="    mask_percussive = 1.0 - mask_harmonic",
+        # Computing the second mask independently breaks M_H + M_P = 1 and the
+        # two stems stop summing to the input.
+        new="    mask_percussive = percussive_power / safe",
+        test="test_hpss_reconstruction_is_exact",
+    ),
+    Probe(
+        name="hpss-both-filters-run-along-time",
+        gate="hpss-separation",
+        path=f"{AUDIO}/stereo_hpss.py",
+        old="    percussive = median_filter(magnitude, kernel_percussive, axis=1)",
+        # Filtering both along time keeps only horizontal structure: nothing is
+        # percussive any more.
+        new="    percussive = median_filter(magnitude, kernel_percussive, axis=0)",
+        test="test_hpss_separates_a_tone_from_clicks",
+    ),
+    Probe(
+        name="mono-foldback-risk-threshold-disabled",
+        gate="forensic-qc",
+        path=f"{AUDIO}/forensic_qc.py",
+        old="MONO_FOLDBACK_WARNING_CORRELATION = -0.25",
+        # A threshold of -1.1 can never be crossed, so anti-phase material passes.
+        new="MONO_FOLDBACK_WARNING_CORRELATION = -1.1",
+        test="test_out_of_phase_material_is_flagged",
+    ),
+    Probe(
+        name="clip-run-flattened-across-channels",
+        gate="forensic-qc",
+        path=f"{AUDIO}/forensic_qc.py",
+        old=(
+            "    max_clipped_run = max(\n"
+            "        (longest_true_run(clipped[channel]) for channel in range(clipped.shape[0])),\n"
+            "        default=0,\n"
+            "    )"
+        ),
+        # Flattening joins the end of one channel to the start of the next.
+        new="    max_clipped_run = longest_true_run(clipped)",
+        test="test_clipping_is_counted_with_its_longest_run",
+    ),
+    Probe(
+        name="programme-silence-counted-as-dropout",
+        gate="forensic-qc",
+        path=f"{AUDIO}/forensic_qc.py",
+        old="    interior = zeros[:, first:last]",
+        # Counting leading silence as a dropped buffer flags every clean file.
+        new="    interior = zeros",
+        test="test_leading_and_trailing_silence_is_not_a_dropout",
+    ),
+    Probe(
+        name="de-esser-attacks-the-voice-band",
+        gate="deess-band",
+        path=f"{AUDIO}/forensic_qc.py",
+        old="SIBILANCE_LOW_HZ = 4_500.0",
+        # A 500 Hz corner turns the de-esser into a low-pass on the programme.
+        new="SIBILANCE_LOW_HZ = 500.0",
+        test="test_de_esser_leaves_the_voice_band_untouched",
+    ),
+    Probe(
+        name="de-esser-gain-applied-outside-the-band",
+        gate="deess-band",
+        path=f"{AUDIO}/forensic_qc.py",
+        old="        output[channel] = low_band + high_scaled",
+        # Applying the gain to the whole signal instead of the high band is the
+        # difference between de-essing and ducking.
+        new=("        output[channel] = (low_band + high_scaled) * gains[0] + 0.0 * low_band"),
+        test="test_de_esser_leaves_the_voice_band_untouched",
+    ),
+    # -- Part 2: loudnorm rate guard --------------------------------------- #
+    Probe(
+        name="loudnorm-rate-guard-removed",
+        gate="loudnorm-rate-guard",
+        path=f"{AUDIO}/models.py",
+        old=(
+            "        return (\n"
+            "            ()\n"
+            "            if self.sample_rate == self.LOUDNORM_INTERNAL_RATE\n"
+            '            else (f"aresample={self.sample_rate}",)\n'
+            "        )"
+        ),
+        # Returning nothing leaves the file at 192 kHz, which the canonical
+        # profile check then refuses — the guard is what keeps the render usable.
+        new="        return ()\n        return (",
+        test="test_canonical_profile_reasserts_its_rate_after_loudnorm",
+    ),
+    Probe(
+        name="recipe-identity-ignores-parameters",
+        gate="recipe-binding",
+        path=f"{AUDIO}/recipe.py",
+        old='        "parameters": parameters,',
+        # Dropping parameters from the identity re-introduces the exact defect
+        # the Stage-A audit found: a cached artifact reused across recipes.
+        new='        "parameters": {},',
+        test="test_changing_one_parameter_changes_the_identity",
     ),
 )
 
