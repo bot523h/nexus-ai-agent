@@ -128,9 +128,9 @@ PROBES: tuple[Probe, ...] = (
         name="cancel-token-dropped",
         gate="cancellation",
         path=f"{AUDIO}/execution.py",
-        old="            produced = builder(staged, workspace, cancel, run_dir)",
+        old="            outcome = _as_render_outcome(builder(staged, workspace, cancel, run_dir))",
         # The defect: the builder never receives the caller's token.
-        new="            produced = builder(staged, workspace, None, run_dir)",
+        new="            outcome = _as_render_outcome(builder(staged, workspace, None, run_dir))",
         test="test_the_callers_cancel_token_reaches_the_builder",
     ),
     Probe(
@@ -386,6 +386,64 @@ PROBES: tuple[Probe, ...] = (
         ),
         new='        reason="duck/loudnorm twins compile; DSP/beat media paths unmapped",',
         test="test_the_audio_pack_state_matches_its_measured_evidence",
+    ),
+    Probe(
+        name="loudness-measured-before-canonical-conversion",
+        gate="crest-domain",
+        path=f"{AUDIO}/execution.py",
+        old=(
+            "        measured_source = self._canonical_form("
+            "staged, stream, cancel=cancel, run_dir=run_dir)"
+        ),
+        # The defect §4.5 is about: measure the *source* layout, then render the
+        # canonical one.  On a mono programme that is 3.0103 dB of pure error, and
+        # it makes the reported crest reduction (and the loudness target itself)
+        # describe a file that is never published.
+        new="        measured_source = staged  # measured before the canonical conversion",
+        test="test_loudness_pass_one_measures_the_canonical_channel_count",
+    ),
+    Probe(
+        name="crest-reduction-always-none",
+        gate="crest-measured",
+        path=f"{AUDIO}/verify.py",
+        old=(
+            "    crest_reduction_db: float | None = None\n"
+            "    if input_crest_factor_db is not None and measurement.true_peak_dbtp is not None:"
+        ),
+        new=(
+            "    crest_reduction_db: float | None = None\n"
+            "    if False and input_crest_factor_db is not None:  #"
+        ),
+        test="test_the_crest_reduction_is_arithmetic_on_the_measured_file",
+    ),
+    Probe(
+        name="strict-linear-secretly-dynamic",
+        gate="linear-vs-dynamic",
+        path=f"{AUDIO}/execution.py",
+        old=(
+            "        if projected_peak_dbtp > profile.true_peak_dbtp "
+            "+ TRUE_PEAK_TOLERANCE_DB and not dynamic:"
+        ),
+        # Allow the limiter for every profile: the broadcast target is then
+        # reachable by deleting crest factor, which is what STRICT_LINEAR forbids.
+        new="        if False:",
+        test="test_the_split_discriminates_on_the_same_signal",
+    ),
+    Probe(
+        name="crest-destruction-bound-removed",
+        gate="linear-vs-dynamic",
+        path=f"{AUDIO}/execution.py",
+        old="            if limit is not None and needed_reduction_db > limit:",
+        new="            if False:",
+        test="test_a_programme_that_would_have_to_be_crushed_is_refused_not_mastered",
+    ),
+    Probe(
+        name="preset-renamed-a-standard",
+        gate="preset-not-a-standard",
+        path=f"{AUDIO}/models.py",
+        old='    profile_id="nagar_streaming_preset",',
+        new='    profile_id="streaming_master",',
+        test="test_the_streaming_preset_is_named_a_preset_and_the_broadcast_profile_is_not",
     ),
 )
 

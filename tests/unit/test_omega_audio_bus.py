@@ -116,7 +116,7 @@ def test_normalize_loudness_records_a_measured_verified_artifact(
         {
             "audio_asset_id": "track",
             "output_asset_id": "track_master",
-            "profile": "streaming_master",
+            "profile": "nagar_streaming_preset",
             "confirmed": True,
         },
         confirmed=True,

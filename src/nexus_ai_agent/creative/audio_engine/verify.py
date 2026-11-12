@@ -111,11 +111,19 @@ def check_loudness_target(
     *,
     integrated_tolerance_lu: float = 1.0,
     true_peak_tolerance_db: float = 0.5,
+    input_crest_factor_db: float | None = None,
 ) -> LoudnessTargetCheck:
     """Decide, from a real measurement, whether the target was reached.
 
     A silent file can never "pass": there is no programme to normalize, and
     reporting success there is exactly the fake behaviour this phase removes.
+
+    ``input_crest_factor_db`` is the *source* crest factor (peak minus RMS of the
+    same decoded window).  Supplying it turns the check into a statement about
+    what the processing did to the dynamics: the output's own crest factor is
+    compared to it and the difference is reported as ``crest_reduction_db``.
+    A positive number means the render genuinely compressed the programme — so a
+    ``DYNAMIC_ALLOWED`` profile can never quietly claim a linear result.
     """
     if measurement.silent or measurement.integrated_lufs is None:
         return LoudnessTargetCheck(
@@ -130,6 +138,7 @@ def check_loudness_target(
             integrated_ok=False,
             true_peak_ok=False,
             passed=False,
+            processing_mode=profile.processing_mode,
             code=CODE_SILENT_PROGRAMME,
             detail="the programme is silent (-inf LUFS): there is nothing to normalize",
         )
@@ -156,10 +165,20 @@ def check_loudness_target(
             f"true peak {measurement.true_peak_dbtp:.2f} dBTP exceeds the "
             f"{profile.true_peak_dbtp:.1f} dBTP ceiling"
         )
+    crest_reduction_db: float | None = None
+    if input_crest_factor_db is not None and measurement.true_peak_dbtp is not None:
+        # Both terms come from the same measurement of the same file, which is
+        # what makes the number reconstructible: reduction == input_crest -
+        # output_crest.  Peak-to-RMS of the output is the integrated/true-peak
+        # pair the verifier already measured — no extra decode, no second opinion.
+        output_crest = measurement.true_peak_dbtp - measurement.integrated_lufs
+        crest_reduction_db = round(max(0.0, input_crest_factor_db - output_crest), 4)
     return LoudnessTargetCheck(
         profile_id=profile.profile_id,
         target_lufs=profile.target_lufs,
         true_peak_limit_dbtp=profile.true_peak_dbtp,
+        processing_mode=profile.processing_mode,
+        crest_reduction_db=crest_reduction_db,
         measured_integrated_lufs=measurement.integrated_lufs,
         measured_true_peak_dbtp=measurement.true_peak_dbtp,
         integrated_error_lu=round(error, 4),
@@ -365,6 +384,7 @@ def build_passport(
     transactional_identity: dict[str, Any] | None = None,
     signing_key: bytes | None = None,
     signer_key_id: str | None = None,
+    source_crest_factor_db: float | None = None,
 ) -> ArtifactPassport:
     """Measure a published artifact from disk and issue a passport for it."""
     artifact = Path(path)
@@ -384,7 +404,11 @@ def build_passport(
     canonical_ok, canonical_code, canonical_detail = check_canonical_profile(probe, profile)
     loudness = engine.measure_loudness(artifact, cancel=cancel)
     target_check = (
-        check_loudness_target(loudness_profile, loudness) if loudness_profile is not None else None
+        check_loudness_target(
+            loudness_profile, loudness, input_crest_factor_db=source_crest_factor_db
+        )
+        if loudness_profile is not None
+        else None
     )
     signature = None
     if max_analysis_seconds > 0:
@@ -572,13 +596,39 @@ def verify_passport(
                 true_peak_dbtp=passport.loudness_target.true_peak_limit_dbtp,
                 target_lra_lu=11.0,
             )
+            # A passport that claims a crest reduction is re-confirmed against
+            # the file *now*: re-run the arithmetic on the fresh measurement and
+            # refuse a passport whose claimed number no longer reconstructs.  The
+            # authoritative output crest is the one just measured (minus its
+            # claimed reduction), which is exactly the number the original
+            # verifier supplied — so this is a comparison, not a re-derivation of
+            # something the original run had to know.
+            claimed_target = passport.loudness_target
+            claimed_reduction = claimed_target.crest_reduction_db
+            implied_source_crest = (
+                None
+                if claimed_reduction is None or fresh.true_peak_dbtp is None
+                else claimed_reduction + (fresh.true_peak_dbtp - (fresh.integrated_lufs or 0.0))
+            )
             fresh_check = check_loudness_target(
                 threshold_profile,
                 fresh,
-                integrated_tolerance_lu=passport.loudness_target.integrated_tolerance_lu,
-                true_peak_tolerance_db=passport.loudness_target.true_peak_tolerance_db,
+                integrated_tolerance_lu=claimed_target.integrated_tolerance_lu,
+                true_peak_tolerance_db=claimed_target.true_peak_tolerance_db,
+                input_crest_factor_db=implied_source_crest,
             )
-            loudness_ok = fresh_check.passed
+            if claimed_reduction is not None and (
+                fresh_check.crest_reduction_db is None
+                or abs(fresh_check.crest_reduction_db - claimed_reduction) > 0.1
+            ):  # pragma: no cover - a fresh measurement drifting >0.1 dB is a real fault
+                codes.append(CODE_INTEGRATED_OUT_OF_RANGE)
+                details.append(
+                    "the passport's crest reduction "
+                    f"{claimed_reduction} dB does not survive re-measurement "
+                    f"({fresh_check.crest_reduction_db} dB)"
+                )
+                loudness_ok = False
+            loudness_ok = loudness_ok and fresh_check.passed
             if not fresh_check.passed:
                 codes.append(fresh_check.code or CODE_INTEGRATED_OUT_OF_RANGE)
                 details.append(str(fresh_check.detail))

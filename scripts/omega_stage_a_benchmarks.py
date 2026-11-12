@@ -149,7 +149,7 @@ def bench_loudness(workspace: Path, media: Path) -> Sample:
             source_asset_id="programme",
             output_asset_id=f"bench_master_{workspace.name}",
             source_sha256=hash_file(source),
-            profile_id="streaming_master",
+            profile_id="nagar_streaming_preset",
             target_lufs=-14.0,
             true_peak_dbtp=-1.0,
             target_lra_lu=11.0,

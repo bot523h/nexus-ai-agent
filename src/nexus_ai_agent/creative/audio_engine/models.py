@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -68,7 +69,22 @@ class LoudnessProfileId(str):
     """Marker type for the locked loudness profiles (documentation only)."""
 
 
-LoudnessProfileName = Literal["ebu_r128_broadcast", "streaming_master", "custom"]
+LoudnessProfileName = Literal["nagar_streaming_preset", "ebu_r128_broadcast", "custom"]
+
+#: How a profile is allowed to reach its integrated target.
+#:
+#: ``STRICT_LINEAR`` — gain only.  The peak ceiling is an *absolute* refusal:
+#: a programme whose crest factor needs more than ``TP - target`` dB cannot be
+#: rendered, because the only linear gain that lands on the target also puts the
+#: peaks over the ceiling.  A limiter would fix the peak by deleting the energy
+#: the target asks for, which is a false success.
+#:
+#: ``DYNAMIC_ALLOWED`` — gain, then a true-peak limiter.  The file genuinely
+#: reduces dynamic range, so the *measured* crest reduction is recorded in the
+#: passport (``crest_reduction_db``) and the caller is told the mode is
+#: ``DYNAMIC``.  A limiter that never acts is reported as ``DYNAMIC_ALLOWED``
+#: saturation, not as loss.
+ProcessingMode = Literal["STRICT_LINEAR", "DYNAMIC_ALLOWED"]
 
 
 class LoudnessProfile(BaseModel):
@@ -87,6 +103,16 @@ class LoudnessProfile(BaseModel):
     true_peak_dbtp: float = Field(ge=-20.0, le=0.0)
     target_lra_lu: float = Field(ge=0.0, le=50.0)
     standard: str = "ITU-R BS.1770-4 / EBU R128"
+    #: Whether a peak limiter may be used to reach the target.  See
+    #: :data:`ProcessingMode`; the default refuses dynamic processing.
+    processing_mode: ProcessingMode = "STRICT_LINEAR"
+    #: The most crest factor a dynamic render may remove to reach the target, in
+    #: dB.  ``None`` for a linear profile (it may remove none).  This is a
+    #: *destruction* bound, not a tuning knob: a per-click programme whose crest
+    #: is 27.8 dB can only be pushed to -14 LUFS by removing ~15 dB of it, i.e. by
+    #: turning transients into mush.  Refusing is the honest outcome — the number
+    #: is reachable, the master is not.
+    max_crest_reduction_db: float | None = None
 
     @property
     def locked(self) -> bool:
@@ -107,21 +133,29 @@ EBU_R128_BROADCAST = LoudnessProfile(
     true_peak_dbtp=-1.0,
     target_lra_lu=11.0,
     standard="EBU R128 broadcast (ITU-R BS.1770-4)",
+    processing_mode="STRICT_LINEAR",
 )
 
-STREAMING_MASTER = LoudnessProfile(
-    profile_id="streaming_master",
+#: -14 LUFS / -1 dBTP is a *delivery preset*, not a broadcast standard, and it
+#: is named as such: nothing in ITU-R BS.1770 or EBU R128 mandates -14 LUFS.
+#: Streaming services normalise on playback, so a master louder than the service
+#: target is turned back down — which is exactly why the dynamic path is allowed
+#: here and refused for the broadcast profile.
+NAGAR_STREAMING_PRESET = LoudnessProfile(
+    profile_id="nagar_streaming_preset",
     target_lufs=-14.0,
     true_peak_dbtp=-1.0,
     target_lra_lu=11.0,
-    standard="Streaming master (AES/EBU recommended practice)",
+    standard="NAGAR streaming delivery preset (-14 LUFS) — not a broadcast standard",
+    processing_mode="DYNAMIC_ALLOWED",
+    max_crest_reduction_db=9.0,
 )
 
 #: Every *locked* profile the studio ships.  ``custom`` is deliberately absent:
 #: it is constructed per request and validated by :func:`resolve_loudness_profile`.
 LOUDNESS_PROFILES: dict[str, LoudnessProfile] = {
     EBU_R128_BROADCAST.profile_id: EBU_R128_BROADCAST,
-    STREAMING_MASTER.profile_id: STREAMING_MASTER,
+    NAGAR_STREAMING_PRESET.profile_id: NAGAR_STREAMING_PRESET,
 }
 
 
@@ -296,7 +330,7 @@ class ContinuityLockSpec(BaseModel):
 
     spec_id: str = Field(min_length=1, max_length=128)
     stream: CanonicalStreamProfile = CANONICAL_PROFILE
-    loudness: LoudnessProfile = STREAMING_MASTER
+    loudness: LoudnessProfile = NAGAR_STREAMING_PRESET
     identity: IdentityLockSpec = Field(default_factory=IdentityLockSpec)
 
     def canonical_payload(self) -> dict[str, Any]:
@@ -411,6 +445,25 @@ class LoudnessMeasurement(BaseModel):
         return self
 
 
+class RenderOutcome(BaseModel):
+    """What a render builder hands back to the execution plane.
+
+    The artifact path alone is not enough: a loudness render also *knows* what
+    it did to the programme's dynamics.  Carrying that number back is the only
+    way the passport can state a measured crest reduction instead of reciting
+    the profile it was asked for.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
+
+    path: Path
+    #: Peak-to-RMS of the programme the gain was computed from, in dB.
+    source_crest_factor_db: float | None = None
+    #: The mode the render actually used (``None`` when the operation has no
+    #: loudness target at all, e.g. denoise).
+    processing_mode: ProcessingMode | None = None
+
+
 class LoudnessTargetCheck(BaseModel):
     """Did the produced file actually land on the target?  Explicit verdict."""
 
@@ -419,6 +472,13 @@ class LoudnessTargetCheck(BaseModel):
     profile_id: str
     target_lufs: float
     true_peak_limit_dbtp: float
+    #: The mode the profile allowed (``STRICT_LINEAR`` gain only, or
+    #: ``DYNAMIC_ALLOWED`` gain + peak limiting).
+    processing_mode: ProcessingMode = "STRICT_LINEAR"
+    #: How much crest factor the render actually removed, in dB, measured on the
+    #: published file against the source.  ``None`` when no source crest factor
+    #: was supplied — a missing measurement, never an assumed zero.
+    crest_reduction_db: float | None = None
     measured_integrated_lufs: float | None
     measured_true_peak_dbtp: float | None
     integrated_error_lu: float | None
@@ -610,8 +670,8 @@ __all__ = [
     "INTEGRATED_TOLERANCE_LU",
     "LOUDNESS_PROFILES",
     "MIN_PROGRAMME_SECONDS",
+    "NAGAR_STREAMING_PRESET",
     "SCHEMA_VERSION",
-    "STREAMING_MASTER",
     "SUPPORTED_SAMPLE_RATES",
     "TRUE_PEAK_TOLERANCE_DB",
     "CanonicalStreamProfile",
@@ -625,6 +685,8 @@ __all__ = [
     "MediaContractError",
     "MediaProbe",
     "ProcessOutcome",
+    "ProcessingMode",
+    "RenderOutcome",
     "ResourceBudget",
     "SpectralSignature",
     "canonical_hash",

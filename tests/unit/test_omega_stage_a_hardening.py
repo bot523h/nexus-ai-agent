@@ -1648,3 +1648,247 @@ def test_confidence_is_labelled_a_margin_not_a_probability(
     assert 0.0 <= analysis.confidence <= 1.0
     # The name is the contract: there is no `probability` field to mistake it for.
     assert "probability" not in type(analysis).model_fields
+
+
+# --------------------------------------------------------------------------- #
+# §4.5 — STRICT_LINEAR vs DYNAMIC_ALLOWED (crest reduction is measured)
+# --------------------------------------------------------------------------- #
+
+
+@requires_ffmpeg
+def test_the_streaming_preset_is_named_a_preset_and_the_broadcast_profile_is_not() -> None:
+    """-14 LUFS has no standard behind it, so it cannot be named like one.
+
+    The defect this pins: a profile called ``streaming_master`` invites a caller
+    to believe some body mandates -14 LUFS.  None does — it is a delivery preset.
+    """
+    from nexus_ai_agent.creative.audio_engine.models import (
+        EBU_R128_BROADCAST,
+        LOUDNESS_PROFILES,
+        NAGAR_STREAMING_PRESET,
+    )
+
+    assert NAGAR_STREAMING_PRESET.profile_id == "nagar_streaming_preset"
+    assert NAGAR_STREAMING_PRESET.processing_mode == "DYNAMIC_ALLOWED"
+    assert "not a broadcast standard" in NAGAR_STREAMING_PRESET.standard
+    assert EBU_R128_BROADCAST.processing_mode == "STRICT_LINEAR"
+    assert "ebur128" in EBU_R128_BROADCAST.standard.lower() or "EBU" in (
+        EBU_R128_BROADCAST.standard
+    )
+    assert "streaming_master" not in LOUDNESS_PROFILES, (
+        "the old, misleading profile name is still reachable by callers"
+    )
+
+
+def _mix_click_into_bed(path: Path, *, bed: float, click: float, seconds: float = 12.0) -> Path:
+    """A programme with a *realistic* crest: a noisy bed plus percussive hits.
+
+    ``omega_media.write_click_track`` is a bare impulse train — 27.8 dB of crest,
+    which no mastering chain could put at -14 LUFS without deleting the signal.
+    ``bed=0.05, click=0.5`` lands at ≈18.5 dB, the shape of an actual percussive
+    programme (close mics, quiet room), so it exercises the dynamic path instead
+    of the destruction guard.
+    """
+    import wave
+
+    rate = 48_000
+    n = int(rate * seconds)
+    rng = np.random.default_rng(7)
+    signal = bed * rng.standard_normal(n)
+    period = 60.0 / 96.0
+    length = int(0.05 * rate)
+    envelope = np.exp(-np.linspace(0.0, 12.0, length))
+    for beat, onset in enumerate(np.arange(0.0, seconds, period)):
+        start_index = int(onset * rate)
+        if start_index + length < n:
+            signal[start_index : start_index + length] += (
+                click
+                * envelope
+                * np.sin(
+                    2.0 * np.pi * (180.0 if beat % 4 == 0 else 320.0) * np.arange(length) / rate
+                )
+            )
+    pcm = (np.clip(signal, -1.0, 1.0) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(pcm.tobytes())
+    return path
+
+
+@requires_ffmpeg
+def test_the_split_discriminates_on_the_same_signal(
+    engine: NativeAudioEngine, media_dir: Path
+) -> None:
+    """Two profiles, two programmes, four verdicts — the split is not cosmetic.
+
+    * the percussive programme fits the linear budget at the broadcast target
+      (18.7 dB of crest < 22 dB) → STRICT_LINEAR renders it, removing *no* dynamics;
+    * the same programme at -14 LUFS needs 5.7 dB of crest removed → only the
+      DYNAMIC_ALLOWED preset may render it, and it reports the reduction;
+    * a bare click track (27.8 dB) cannot reach -23 LUFS linearly → the broadcast
+      profile refuses on *reachability*;
+    * and at -14 LUFS it is reachable only by removing ~11.8 dB, past the preset's
+      9 dB destruction bound → refused on *cost*.
+    """
+    from nexus_ai_agent.application.ports.audio_engine import LoudnessRequest
+
+    _mix_click_into_bed(media_dir / "percussive.wav", bed=0.05, click=0.5)
+    media.write_click_track(media_dir / "clicks.wav", bpm=96.0, seconds=12.0)
+
+    def render(request_id: str, source: str, profile: str, target: float) -> object:
+        return engine.normalize_loudness(
+            LoudnessRequest(
+                request_id=request_id,
+                source_asset_id=source,
+                output_asset_id=f"{request_id}_out",
+                profile_id=profile,
+                target_lufs=target,
+                true_peak_dbtp=-1.0,
+                target_lra_lu=11.0,
+            )
+        )
+
+    # 1. linear, within budget → renders, and the dynamics are untouched
+    broadcast = render("d10-linear-ok", "percussive", "ebu_r128_broadcast", -23.0)
+    assert broadcast.loudness_passed is True
+    assert broadcast.processing_mode == "STRICT_LINEAR"
+    assert broadcast.crest_reduction_db is not None
+    assert broadcast.crest_reduction_db < 1.0, (
+        "a linear render removed crest factor; the mode label is a lie"
+    )
+
+    # 2. the same signal at -14 LUFS can only go through the dynamic preset
+    preset = render("d10-dynamic-ok", "percussive", "nagar_streaming_preset", -14.0)
+    assert preset.loudness_passed is True
+    assert preset.processing_mode == "DYNAMIC_ALLOWED"
+    assert preset.crest_reduction_db is not None and preset.crest_reduction_db > 1.0
+
+    # 3. linear, past the crest budget → the *target* is unreachable, not the mode
+    with pytest.raises(EngineRejected, match="loudness_target_unreachable"):
+        render("d10-linear-refused", "clicks", "ebu_r128_broadcast", -23.0)
+
+    # 4. dynamic, but only by destroying the programme → refused on cost
+    with pytest.raises(EngineRejected, match="loudness_crest_destruction"):
+        render("d10-dynamic-refused", "clicks", "nagar_streaming_preset", -14.0)
+
+
+@requires_ffmpeg
+def test_the_crest_reduction_is_arithmetic_on_the_measured_file(
+    engine: NativeAudioEngine, media_dir: Path
+) -> None:
+    """``crest_reduction_db`` must reconstruct from the numbers beside it.
+
+    The claim is "this render removed N dB of crest factor".  It is only a
+    measurement if ``N == source_crest - output_crest``, and the two crests have
+    to be taken in the **same channel domain**.  This test pins both halves,
+    including the trap that makes the naive version wrong by 3.01 dB:
+
+    a mono programme measured before a dual-mono up-mix carries its energy once,
+    the published stereo file carries it twice (+10·log10(2) = +3.0103 dB of
+    BS.1770 channel sum), so the published file always measures ~3 dB *lower* in
+    crest than the source.  Comparing the two directly would report 3 dB of
+    "crest reduction" that no processing performed.
+    """
+    import math
+
+    from nexus_ai_agent.application.ports.audio_engine import LoudnessRequest
+    from nexus_ai_agent.creative.audio_engine.models import NAGAR_STREAMING_PRESET
+
+    source = _mix_click_into_bed(media_dir / "crest_src.wav", bed=0.05, click=0.5)
+    assert engine.probe(source).channels == 1, "the fixture must be mono to test the up-mix"
+    # An artefact of an earlier test in this module can still occupy the output
+    # id, and the reuse path never produces the up-mix this test measures — so the
+    # test owns its ids completely rather than trusting the fixture directory.
+    assert not list(media_dir.glob("crest_dst*")), "the fixture directory is not clean"
+    first_pass = engine._transcoder.measure_loudnorm_pass(source, NAGAR_STREAMING_PRESET)
+    assert first_pass is not None
+    mono_crest = first_pass["input_tp"] - first_pass["input_i"]
+    assert 17.0 < mono_crest < 20.0, (
+        f"fixture crest {mono_crest:.2f} dB is not the realistic programme this test "
+        "needs (a bare click track is the separate, destruction-bound case)"
+    )
+    stereo_domain_crest = mono_crest - 10.0 * math.log10(2.0)
+
+    evidence = engine.normalize_loudness(
+        LoudnessRequest(
+            request_id="d10-crest",
+            source_asset_id="crest_src",
+            output_asset_id="crest_dst",
+            profile_id="nagar_streaming_preset",
+            target_lufs=-14.0,
+            true_peak_dbtp=-1.0,
+            target_lra_lu=11.0,
+        )
+    )
+    assert evidence.loudness_passed is True
+    assert evidence.channels == 2, "the up-mix this test is about did not happen"
+    assert evidence.crest_reduction_db is not None
+    output_crest = evidence.true_peak_dbtp - evidence.integrated_lufs
+    assert evidence.crest_reduction_db == pytest.approx(
+        stereo_domain_crest - output_crest, abs=1e-3
+    ), (
+        "the reported reduction does not reconstruct from the measured file: it is "
+        "not the arithmetic of anything"
+    )
+    assert evidence.crest_reduction_db > 1.0, (
+        "a -14 LUFS render of an 18.7 dB-crest programme must remove crest factor"
+    )
+    # ... and the naive (mono-domain) comparison overstates it by exactly the
+    # up-mix term, which is why the engine measures the canonical shape instead.
+    naive = mono_crest - output_crest
+    assert naive - evidence.crest_reduction_db == pytest.approx(10.0 * math.log10(2.0), abs=1e-3)
+
+
+@requires_ffmpeg
+def test_a_linear_render_claims_no_crest_reduction(
+    engine: NativeAudioEngine, media_dir: Path
+) -> None:
+    """A gain-only render must report ~0 dB reduction, not a plausible number."""
+    from nexus_ai_agent.application.ports.audio_engine import LoudnessRequest
+
+    media.write_noisy_voice(media_dir / "linear_src.wav", seconds=8.0)
+    evidence = engine.normalize_loudness(
+        LoudnessRequest(
+            request_id="d10-linear",
+            source_asset_id="linear_src",
+            output_asset_id="linear_dst",
+            profile_id="nagar_streaming_preset",
+            target_lufs=-14.0,
+            true_peak_dbtp=-1.0,
+            target_lra_lu=11.0,
+        )
+    )
+    assert evidence.loudness_passed is True
+    assert evidence.crest_reduction_db is not None
+    assert evidence.crest_reduction_db < 1.0, (
+        "a gain-only render cannot remove crest factor; a non-zero number here "
+        "means the mode label and the processing disagree"
+    )
+
+
+def test_the_verifier_never_invents_a_crest_reduction_without_a_source() -> None:
+    """No source crest factor supplied → ``None``, never 0 dB.
+
+    A missing measurement reported as 0.0 is indistinguishable from "the limiter
+    did nothing", which is the exact ambiguity this field exists to remove.
+    """
+    from nexus_ai_agent.creative.audio_engine.models import (
+        EBU_R128_BROADCAST,
+        LoudnessMeasurement,
+    )
+    from nexus_ai_agent.creative.audio_engine.verify import check_loudness_target
+
+    measurement = LoudnessMeasurement(
+        integrated_lufs=-23.0,
+        true_peak_dbtp=-2.0,
+        loudness_range_lu=5.0,
+    )
+    unknown = check_loudness_target(EBU_R128_BROADCAST, measurement)
+    assert unknown.crest_reduction_db is None
+    assert unknown.processing_mode == "STRICT_LINEAR"
+
+    known = check_loudness_target(EBU_R128_BROADCAST, measurement, input_crest_factor_db=25.0)
+    # output crest = -2.0 - (-23.0) = 21 dB; reduction = 25 - 21 = 4 dB.
+    assert known.crest_reduction_db == pytest.approx(4.0, abs=1e-6)

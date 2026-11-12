@@ -191,7 +191,31 @@ two authorities disagree eventually and the disagreement is invisible.
 
 ---
 
-## 8. Measurement debt is declared, not hidden
+## 8. Loudness targets are earned, not labelled
+
+A loudness target is a **processing contract**, not a number to be announced.
+
+* A profile that may only apply **gain** **MUST** be labelled `STRICT_LINEAR`,
+  and its peak ceiling **MUST** be treated as an absolute refusal: a programme
+  whose crest factor exceeds `TP - target` cannot reach the target without a peak
+  ceiling breach, and the engine **MUST** refuse with the arithmetic in the
+  message rather than render a file that undershoots the target.
+* A profile that may apply **gain plus true-peak limiting** **MUST** be labelled
+  `DYNAMIC_ALLOWED`, **MUST** carry a `max_crest_reduction_db` destruction bound,
+  and **MUST** report the crest reduction it actually applied.
+* `-14 LUFS` **MUST NOT** be presented as a broadcast standard. No body mandates
+  it; it is a delivery preset, and the profile is named `nagar_streaming_preset`
+  for that reason.
+* A reported **crest reduction** **MUST** reconstruct as
+  `source_crest - output_crest` from measurements of the published file. It is
+  **MUST NOT** be derived from the profile that was requested.
+* When two measurements are compared across a channel-count change, the
+  dual-mono up-mix term `10*log10(N_out/N_in)` **MUST** be accounted for
+  explicitly. Two crest factors taken in different channel domains differ by
+  exactly that term, and comparing them without it manufactures 3.01 dB of
+  "reduction" out of nothing.
+
+## 9. Measurement debt is declared, not hidden
 
 * **Benchmarks** **MUST** run at least `N = 3` times and report the median, the
   spread, the Peak RSS, and the tool version. A single run is an anecdote.
@@ -207,7 +231,7 @@ two authorities disagree eventually and the disagreement is invisible.
 
 ---
 
-## 9. What this doctrine does not cover
+## 10. What this doctrine does not cover
 
 It does not claim the engine's output is *good*. Loudness, crest factor and
 spectral centroid are measurable properties, not judgements about whether a mix

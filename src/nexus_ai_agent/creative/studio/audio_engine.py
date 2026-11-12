@@ -113,6 +113,13 @@ class ArtifactEvidence(BaseModel):
     loudness_checked: bool = False
     loudness_passed: bool | None = None
     loudness_code: str | None = None
+    #: The mode the loudness profile allowed (``STRICT_LINEAR`` gain only, or
+    #: ``DYNAMIC_ALLOWED`` gain + peak limiting).  ``None`` when the operation
+    #: carries no loudness target.
+    processing_mode: str | None = None
+    #: Crest factor the render actually removed, in dB, measured on the published
+    #: file against the source programme.  ``None`` = not measured, never 0 dB.
+    crest_reduction_db: float | None = None
     spectral_centroid_hz: float | None = None
     rms_dbfs: float | None = None
     crest_factor_db: float | None = None

@@ -45,7 +45,7 @@ CANONICAL_SAMPLE_RATE = 48_000
 LOUDNESS_PROFILES: dict[str, tuple[float, float, float]] = {
     # profile id -> (integrated LUFS, true peak dBTP, loudness range LU)
     "ebu_r128_broadcast": (-23.0, -1.0, 11.0),
-    "streaming_master": (-14.0, -1.0, 11.0),
+    "nagar_streaming_preset": (-14.0, -1.0, 11.0),
 }
 #: Upper bound on the analysis a pure handler may ask for; the engine clamps to
 #: its own (bounded-memory) window, and this constant is documented there too.
@@ -148,8 +148,11 @@ class DetectBeatsInput(BaseModel):
 class NormalizeLoudnessInput(BaseModel):
     """Input payload for ``audio.normalize_loudness`` (Level C).
 
-    The target is a **profile first**: ``streaming_master`` (-14 LUFS) or
+    The target is a **profile first**: ``nagar_streaming_preset`` (-14 LUFS) or
     ``ebu_r128_broadcast`` (-23 LUFS), each with its true-peak ceiling and LRA.
+    -14 LUFS is a *delivery preset*, not a broadcast standard — the name says so
+    because a caller reading "streaming_master" would reasonably believe some
+    body mandates it.  Nothing does.
     A locked profile ignores the numeric fields (a caller that pins R128 and
     asks for -14 LUFS has stated a contradiction, and the engine refuses it);
     ``custom`` requires all three numbers explicitly.
@@ -158,8 +161,8 @@ class NormalizeLoudnessInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     audio_asset_id: str = Field(min_length=1)
-    profile: Literal["streaming_master", "ebu_r128_broadcast", "custom"] = Field(
-        default="streaming_master",
+    profile: Literal["nagar_streaming_preset", "ebu_r128_broadcast", "custom"] = Field(
+        default="nagar_streaming_preset",
         description="Locked loudness profile, or 'custom' with all three numbers stated.",
     )
     target_lufs: float | None = Field(

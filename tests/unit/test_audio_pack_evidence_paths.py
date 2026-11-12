@@ -120,9 +120,7 @@ def _bus(project: Project, engine: _Engine) -> CommandBus:
     )
 
 
-def _dispatch(
-    bus: CommandBus, operation: str, payload: dict[str, Any], **kwargs: Any
-) -> Any:  # noqa: ANN401
+def _dispatch(bus: CommandBus, operation: str, payload: dict[str, Any], **kwargs: Any) -> Any:  # noqa: ANN401
     return bus.dispatch(
         TypedCommand(
             command_id=f"cmd_{operation}_{abs(hash(str(payload))) % 10**6}",
@@ -187,9 +185,7 @@ def test_beats_accepts_video_media() -> None:
 
 
 def test_beats_rejects_a_non_media_asset() -> None:
-    still = AssetRecord(
-        asset_id="still", media_kind="image", content_sha256=HASH, duration_us=0
-    )
+    still = AssetRecord(asset_id="still", media_kind="image", content_sha256=HASH, duration_us=0)
     with pytest.raises(CommandValidationError, match="requires audio or video media"):
         _dispatch(
             _bus(_project(still), _Engine()),
@@ -586,7 +582,7 @@ def test_single_pass_loudness_is_refused_at_the_model() -> None:
     with pytest.raises(ValidationError, match="single-pass"):
         NormalizeLoudnessInput(
             audio_asset_id="voice",
-            profile="streaming_master",
+            profile="nagar_streaming_preset",
             two_pass=False,
             confirmed=True,
         )

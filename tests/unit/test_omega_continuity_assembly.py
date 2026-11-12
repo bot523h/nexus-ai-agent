@@ -80,7 +80,7 @@ def _render(engine: NativeAudioEngine, media_dir, name: str, amplitude: float, f
             source_asset_id=name,
             output_asset_id=f"{name}_master",
             source_sha256=hash_file(source),
-            profile_id="streaming_master",
+            profile_id="nagar_streaming_preset",
             target_lufs=-14.0,
             true_peak_dbtp=-1.0,
             target_lra_lu=11.0,
@@ -177,7 +177,7 @@ def test_two_renders_of_one_voice_do_not_drift(engine_and_media) -> None:
                 source_sha256=hash_file(source),
                 profile=CanonicalStreamProfile(),
                 loudness_profile=LoudnessProfile(
-                    profile_id="streaming_master",
+                    profile_id="nagar_streaming_preset",
                     target_lufs=-14.0,
                     true_peak_dbtp=-1.0,
                     target_lra_lu=11.0,
@@ -195,9 +195,7 @@ def test_two_renders_of_one_voice_do_not_drift(engine_and_media) -> None:
     assert pair_report.unknown_axes == ("continuity_lock",)
     assert not pair_report.stitchable
     assert pair_report.drift_axes == ()
-    assert all(
-        axis.verdict == "ok" for axis in pair_report.axes if axis.axis != "continuity_lock"
-    )
+    assert all(axis.verdict == "ok" for axis in pair_report.axes if axis.axis != "continuity_lock")
 
     # Under one declared series lock both segments verify as continuous, which
     # is the North-Star claim: same voice + same loudness + same stream shape.
@@ -258,7 +256,7 @@ def test_lock_drift_names_the_axis_that_moved() -> None:
         identity=IdentityLockSpec(series_id="nagar.s01", color_space="rec709"),
         stream=CanonicalStreamProfile(),
         loudness=LoudnessProfile(
-            profile_id="streaming_master",
+            profile_id="nagar_streaming_preset",
             target_lufs=-14.0,
             true_peak_dbtp=-1.0,
             target_lra_lu=11.0,
@@ -269,9 +267,7 @@ def test_lock_drift_names_the_axis_that_moved() -> None:
     drifted = detect_lock_drift(
         base,
         base.model_copy(
-            update={
-                "identity": IdentityLockSpec(series_id="nagar.s02", color_space="rec2020")
-            }
+            update={"identity": IdentityLockSpec(series_id="nagar.s02", color_space="rec2020")}
         ),
     )
     joined = " | ".join(drifted)

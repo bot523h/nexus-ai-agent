@@ -44,7 +44,7 @@ from nexus_ai_agent.creative.audio_engine.ffmpeg_ops import (
     FfmpegTranscoder,
 )
 from nexus_ai_agent.creative.audio_engine.models import (
-    STREAMING_MASTER,
+    NAGAR_STREAMING_PRESET,
     CanonicalStreamProfile,
 )
 from nexus_ai_agent.creative.audio_engine.process import (
@@ -140,7 +140,7 @@ def test_normalization_reaches_the_target_and_never_touches_the_source(
             source_asset_id="quiet",
             output_asset_id="quiet_master",
             source_sha256=before_sha,
-            profile_id="streaming_master",
+            profile_id="nagar_streaming_preset",
             target_lufs=-14.0,
             true_peak_dbtp=-1.0,
             target_lra_lu=11.0,
@@ -187,7 +187,7 @@ def test_a_silent_programme_is_refused_instead_of_normalized(
                 source_asset_id="silence",
                 output_asset_id="silence_master",
                 source_sha256=sha,
-                profile_id="streaming_master",
+                profile_id="nagar_streaming_preset",
                 target_lufs=-14.0,
                 true_peak_dbtp=-1.0,
                 target_lra_lu=11.0,
@@ -218,7 +218,7 @@ def test_a_corrupt_file_fails_decode_before_any_artifact_exists(
                 request_id="run-broken",
                 source_asset_id="broken",
                 output_asset_id="broken_master",
-                profile_id="streaming_master",
+                profile_id="nagar_streaming_preset",
                 target_lufs=-14.0,
                 true_peak_dbtp=-1.0,
                 target_lra_lu=11.0,
@@ -235,7 +235,7 @@ def test_a_corrupt_file_fails_decode_before_any_artifact_exists(
 
 @pytest.mark.parametrize(
     ("profile_id", "target"),
-    [("streaming_master", -14.0), ("ebu_r128_broadcast", -23.0)],
+    [("nagar_streaming_preset", -14.0), ("ebu_r128_broadcast", -23.0)],
 )
 def test_both_locked_loudness_profiles_land_on_their_target(
     engine: NativeAudioEngine, media_dir: Path, profile_id: str, target: float
@@ -267,7 +267,7 @@ def test_a_clipped_source_still_respects_the_true_peak_ceiling(
             source_asset_id="hot",
             output_asset_id="hot_master",
             source_sha256=hash_file(source),
-            profile_id="streaming_master",
+            profile_id="nagar_streaming_preset",
             target_lufs=-14.0,
             true_peak_dbtp=-1.0,
             target_lra_lu=11.0,
@@ -285,7 +285,7 @@ def test_the_loudness_target_check_is_not_a_rubber_stamp(
     source = media.write_sine(media_dir / "unprocessed.wav", amplitude=0.1)
     measurement = engine.measure(source)
     assert measurement.integrated_lufs is not None
-    verdict = check_loudness_target(STREAMING_MASTER, measurement)
+    verdict = check_loudness_target(NAGAR_STREAMING_PRESET, measurement)
     assert verdict.passed is False
     assert verdict.code == "integrated_loudness_out_of_range"
     assert verdict.integrated_error_lu is not None and verdict.integrated_error_lu < -5.0
@@ -303,9 +303,7 @@ def test_detected_tempo_follows_the_stimulus(
     name = f"pulse_{int(bpm)}"
     media.write_click_track(media_dir / f"{name}.wav", bpm=bpm)
     analysis = engine.detect_beats(
-        BeatRequest(
-            request_id=f"beats-{name}", source_asset_id=name, min_bpm=60.0, max_bpm=180.0
-        )
+        BeatRequest(request_id=f"beats-{name}", source_asset_id=name, min_bpm=60.0, max_bpm=180.0)
     )
     assert analysis.status == "detected"
     assert analysis.tempo_bpm is not None
@@ -392,9 +390,7 @@ def test_denoise_lowers_the_noise_floor_and_keeps_the_bursts(
     assert evidence.spectral_centroid_hz is not None
 
 
-def test_strength_zero_is_an_honest_passthrough(
-    engine: NativeAudioEngine, media_dir: Path
-) -> None:
+def test_strength_zero_is_an_honest_passthrough(engine: NativeAudioEngine, media_dir: Path) -> None:
     media.write_noisy_voice(media_dir / "passthrough.wav")
     evidence = engine.remove_noise(
         DenoiseRequest(
@@ -426,7 +422,7 @@ def test_passport_is_signed_and_refuses_tampering(
             source_asset_id="passport",
             output_asset_id="passport_master",
             source_sha256=hash_file(source),
-            profile_id="streaming_master",
+            profile_id="nagar_streaming_preset",
             target_lufs=-14.0,
             true_peak_dbtp=-1.0,
             target_lra_lu=11.0,
@@ -439,7 +435,7 @@ def test_passport_is_signed_and_refuses_tampering(
         path=published,
         source_sha256=hash_file(source),
         profile=CanonicalStreamProfile(),
-        loudness_profile=STREAMING_MASTER,
+        loudness_profile=NAGAR_STREAMING_PRESET,
         engine=engine._transcoder,  # noqa: SLF001 - exercising the passport builder
         expected_output_sha256=evidence.sha256,
         signing_key=SEED,
@@ -483,7 +479,7 @@ def test_signed_passport_serialises_and_reverifies_off_disk(
             source_asset_id="roundtrip",
             output_asset_id="roundtrip_master",
             source_sha256=hash_file(source),
-            profile_id="streaming_master",
+            profile_id="nagar_streaming_preset",
             target_lufs=-14.0,
             true_peak_dbtp=-1.0,
             target_lra_lu=11.0,
@@ -496,7 +492,7 @@ def test_signed_passport_serialises_and_reverifies_off_disk(
         path=published,
         source_sha256=hash_file(source),
         profile=CanonicalStreamProfile(),
-        loudness_profile=STREAMING_MASTER,
+        loudness_profile=NAGAR_STREAMING_PRESET,
         engine=engine._transcoder,  # noqa: SLF001
         signing_key=SEED,
         signer_key_id=key_id_for(derive_public_key(SEED)),
@@ -626,7 +622,7 @@ def test_no_staging_residue_after_a_refused_run(tmp_path: Path, media_dir: Path)
                 request_id="residue-run",
                 source_asset_id="empty",
                 output_asset_id="empty_master",
-                profile_id="streaming_master",
+                profile_id="nagar_streaming_preset",
                 target_lufs=-14.0,
                 true_peak_dbtp=-1.0,
                 target_lra_lu=11.0,
@@ -687,7 +683,7 @@ def test_a_sustained_programme_reaches_both_targets_while_the_percussive_one_can
     media.write_noisy_voice(media_dir / "sustained_a.wav", seconds=8.0)
     media.write_noisy_voice(media_dir / "sustained_b.wav", seconds=8.0)
     for source, profile_id, target in (
-        ("sustained_a", "streaming_master", -14.0),
+        ("sustained_a", "nagar_streaming_preset", -14.0),
         ("sustained_b", "ebu_r128_broadcast", -23.0),
     ):
         evidence = engine.normalize_loudness(

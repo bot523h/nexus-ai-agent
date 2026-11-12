@@ -70,7 +70,7 @@ def normalized(tmp_path_factory: pytest.TempPathFactory):
             source_asset_id="tone",
             output_asset_id="tone_master",
             source_sha256=hash_file(media_dir / "tone.wav"),
-            profile_id="streaming_master",
+            profile_id="nagar_streaming_preset",
             target_lufs=-14.0,
             true_peak_dbtp=-1.0,
             target_lra_lu=11.0,

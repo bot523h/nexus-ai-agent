@@ -55,12 +55,14 @@ from nexus_ai_agent.creative.audio_engine.ffmpeg_ops import (
 from nexus_ai_agent.creative.audio_engine.models import (
     CANONICAL_PROFILE_ID,
     MIN_PROGRAMME_SECONDS,
+    NAGAR_STREAMING_PRESET,
     TRUE_PEAK_TOLERANCE_DB,
     CanonicalStreamProfile,
     LoudnessMeasurement,
     LoudnessProfile,
     MediaContractError,
     MediaProbe,
+    RenderOutcome,
     ResourceBudget,
     resolve_loudness_profile,
 )
@@ -204,6 +206,19 @@ class LocalDirectorySourceCatalog(AudioSourceCatalog):
             if alternative.is_file():
                 return alternative
         return None
+
+
+def _as_render_outcome(value: Any) -> RenderOutcome:  # noqa: ANN401 - builder contract
+    """Normalise a builder's return value to a :class:`RenderOutcome`.
+
+    Builders that produce an artifact with no loudness target (denoise, ducking,
+    …) return a bare path; only the loudness path knows its processing mode.
+    Accepting both keeps the builder signature honest without forcing every
+    builder to invent a crest factor it never measured.
+    """
+    if isinstance(value, RenderOutcome):
+        return value
+    return RenderOutcome(path=Path(value))
 
 
 def _run_artifact_path(run_dir: Path | None, staged: Path, name: str) -> Path:
@@ -671,7 +686,7 @@ class NativeAudioEngine:
         *,
         profile_lock: CanonicalStreamProfile | None = None,
         run_dir: Path | None = None,
-    ) -> Path:
+    ) -> RenderOutcome:
         stream = profile_lock or CanonicalStreamProfile()
         # Pass 1 must measure the *canonical* stream shape, not the source
         # layout: an up-mix to dual mono changes the BS.1770 energy sum by
@@ -704,9 +719,25 @@ class NativeAudioEngine:
         # exactly the energy the LUFS target asks for.  Such a programme needs a
         # dynamic range the profile does not allow (a broadcast target of
         # -23 LUFS with the -1 dBTP ceiling caps the crest factor at 22 dB).
+        # Peak-to-RMS of the *source* programme, on the same measurement the
+        # gain is computed from.  The verifier compares it to the published
+        # file's own crest factor, so a dynamic render can never claim a linear
+        # result: the difference is the crest reduction that actually happened.
+        #
+        # Both numbers below are measured on ``measured_source`` — the file in
+        # the *canonical* stream shape, after the conversion above.  That is what
+        # makes them directly comparable to the published file: a mono source
+        # measured before a dual-mono up-mix carries its energy once, while the
+        # stereo artifact carries it twice (+10*log10(2) = +3.0103 dB of BS.1770
+        # channel sum), so measuring the source layout instead would report
+        # 3.01 dB of "crest reduction" that no processing performed (measured on
+        # the §4.5 fixture: 18.69 dB mono vs 15.68 dB as the 2-channel file).
+        # The ordering is the correction; there is no term to add afterwards.
+        source_crest_db = measurement["input_tp"] - measurement["input_i"]
         required_gain_db = profile.target_lufs - measurement["input_i"]
         projected_peak_dbtp = measurement["input_tp"] + required_gain_db
-        if projected_peak_dbtp > profile.true_peak_dbtp + TRUE_PEAK_TOLERANCE_DB:
+        dynamic = profile.processing_mode == "DYNAMIC_ALLOWED"
+        if projected_peak_dbtp > profile.true_peak_dbtp + TRUE_PEAK_TOLERANCE_DB and not dynamic:
             # How much crest factor the profile permits: the distance from the
             # integrated target up to the peak ceiling.
             crest_budget_db = profile.true_peak_dbtp - profile.target_lufs
@@ -722,7 +753,11 @@ class NativeAudioEngine:
                 f"limiter, not a dynamic pass — can satisfy both numbers at once. "
                 "Publishing a file that undershoots the target (or clips to reach it) "
                 "would be a false success; lower the target, raise the ceiling, or "
-                "supply a programme with less dynamic range."
+                "supply a programme with less dynamic range. (This profile is "
+                "STRICT_LINEAR: it does not permit a limiter to buy the target by "
+                "removing crest factor. A DYNAMIC_ALLOWED profile — "
+                f"{NAGAR_STREAMING_PRESET.profile_id!r} — would render it, and would "
+                "report the crest reduction it applied.)"
             )
         i_arg, tp_arg, lra_arg = profile.ffmpeg_loudnorm_targets()
         loudnorm = (
@@ -735,6 +770,55 @@ class NativeAudioEngine:
             ":linear=true:print_format=summary"
         )
         destination = (run_dir or staged.parent) / f"loudnorm{stream.container}"
+        if dynamic and projected_peak_dbtp > profile.true_peak_dbtp + TRUE_PEAK_TOLERANCE_DB:
+            # DYNAMIC_ALLOWED: the programme cannot sit under the ceiling at the
+            # target on gain alone.  What the target *costs* is arithmetic:
+            #
+            #   needed_reduction = source_crest - (ceiling - target)
+            #
+            # If that exceeds the profile's destruction bound the number is
+            # reachable and the master is not — a 27.8 dB-crest click track needs
+            # ~15 dB removed, i.e. its transients deleted.  Refuse, and say why.
+            needed_reduction_db = max(
+                0.0, source_crest_db - (profile.true_peak_dbtp - profile.target_lufs)
+            )
+            limit = profile.max_crest_reduction_db
+            if limit is not None and needed_reduction_db > limit:
+                raise EngineRejected(
+                    "loudness_crest_destruction: reaching "
+                    f"{profile.target_lufs:g} LUFS under a "
+                    f"{profile.true_peak_dbtp:g} dBTP ceiling needs "
+                    f"{needed_reduction_db:.2f} dB of crest reduction from this "
+                    f"programme's {source_crest_db:.2f} dB, but profile "
+                    f"{profile.profile_id!r} permits at most {limit:g} dB. The "
+                    "number is reachable by crushing the transients; the master "
+                    "would not be worth publishing, so the engine refuses instead. "
+                    "Lower the target, raise the ceiling, or supply a programme "
+                    "that needs less of its dynamics removed."
+                )
+            # ``linear=false`` is what makes this a *dynamic* normalisation: the
+            # limiter is an explicit part of the chain, so the render is
+            # deterministic and single-pass (the gain and the limiting are solved
+            # together, unlike a blind ``volume`` stage that the limiter then eats
+            # — which needed 6 measured iterations to land and still overshot the
+            # true-peak ceiling by 1 dB).  ``linear=true`` is *not* usable here:
+            # FFmpeg silently degrades it to this same dynamic path when linear
+            # gain cannot hit the target, which is why the verifier now measures
+            # the crest reduction instead of trusting the mode label.
+            dynamic_norm = loudnorm.replace(":linear=true", ":linear=false")
+            self._transcoder.render(
+                source=measured_source,
+                destination=destination,
+                audio_filters=[dynamic_norm, *stream.filter_arguments()],
+                profile_args=stream.format_arguments(),
+                container_hint=stream.container,
+                cancel=cancel,
+            )
+            return RenderOutcome(
+                path=destination,
+                source_crest_factor_db=source_crest_db,
+                processing_mode="DYNAMIC_ALLOWED",
+            )
         self._transcoder.render(
             source=measured_source,
             destination=destination,
@@ -743,7 +827,11 @@ class NativeAudioEngine:
             container_hint=stream.container,
             cancel=cancel,
         )
-        return destination
+        return RenderOutcome(
+            path=destination,
+            source_crest_factor_db=source_crest_db,
+            processing_mode="STRICT_LINEAR",
+        )
 
     # -- denoise ---------------------------------------------------------- #
     def remove_noise(
@@ -817,6 +905,7 @@ class NativeAudioEngine:
         continuity_lock_hash: str | None,
         builder: Any,  # noqa: ANN401 - Callable[[Path, RuntimeWorkspace, CancelToken|None], Path]
         cancel: CancelToken | None = None,
+        source_crest_factor_db: float | None = None,
     ) -> ArtifactEvidence:
         """Stage, render, **verify**, then publish.  In that order, always.
 
@@ -894,7 +983,8 @@ class NativeAudioEngine:
             # handed to the builder, which hands it to the process governor, so
             # cancelling mid-render kills the process group; this check only
             # covers the "already cancelled on arrival" case.
-            produced = builder(staged, workspace, cancel, run_dir)
+            outcome = _as_render_outcome(builder(staged, workspace, cancel, run_dir))
+            produced = outcome.path
             if cancel is not None and cancel.cancelled:
                 raise _cancelled_before_start(cancel)
             if produced.stat().st_size == 0:  # pragma: no cover - render refuses this
@@ -914,6 +1004,7 @@ class NativeAudioEngine:
                 continuity_lock_hash=continuity_lock_hash,
                 transaction_id=transaction_id,
                 cancel=cancel,
+                source_crest_factor_db=outcome.source_crest_factor_db,
             )
             if not passport.verified:
                 # Nothing was published, so there is nothing to quarantine: the
@@ -1086,6 +1177,7 @@ class NativeAudioEngine:
         continuity_lock_hash: str | None,
         transaction_id: str | None,
         cancel: CancelToken | None = None,
+        source_crest_factor_db: float | None = None,
     ) -> ArtifactPassport:
         try:
             return build_passport(
@@ -1104,6 +1196,7 @@ class NativeAudioEngine:
                 signing_key=self._settings.signing_key,
                 signer_key_id=self._settings.signer_key_id,
                 cancel=cancel,
+                source_crest_factor_db=source_crest_factor_db,
             )
         except (PassportError, MediaContractError, WorkspaceBoundaryError) as error:
             raise EngineRejected(f"{operation} verification could not complete: {error}") from error
@@ -1135,6 +1228,8 @@ class NativeAudioEngine:
             loudness_checked=target is not None,
             loudness_passed=None if target is None else target.passed,
             loudness_code=None if target is None else target.code,
+            processing_mode=None if target is None else target.processing_mode,
+            crest_reduction_db=None if target is None else target.crest_reduction_db,
             spectral_centroid_hz=None if signature is None else signature.spectral_centroid_hz,
             rms_dbfs=None if signature is None else signature.rms_dbfs,
             crest_factor_db=None if signature is None else signature.crest_factor_db,

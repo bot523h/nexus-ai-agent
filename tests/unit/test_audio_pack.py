@@ -328,7 +328,7 @@ def test_normalize_loudness_requires_level_c_confirmation() -> None:
     assert derived_asset.provenance["artifact_verified"] is True
     assert result.output["artifact_verified"] is True
     assert result.output["derivation"] == "rendered_artifact"
-    assert result.output["profile"] == "streaming_master"
+    assert result.output["profile"] == "nagar_streaming_preset"
 
 
 def test_normalize_loudness_profile_is_authoritative_over_loose_numbers() -> None:
