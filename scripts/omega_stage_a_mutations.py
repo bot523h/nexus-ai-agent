@@ -222,6 +222,80 @@ PROBES: tuple[Probe, ...] = (
         new="            if False:",
         test="test_bytes_that_change_between_verification_and_publication_are_refused",
     ),
+    Probe(
+        name="workspace-bypasses-the-authority",
+        gate="single-filesystem-authority",
+        path=f"{AUDIO}/workspace.py",
+        old=(
+            "        try:\n"
+            "            return self._fs.resolve(self._relative(candidate))\n"
+            "        except FilesystemBoundaryError as error:\n"
+            "            raise WorkspaceBoundaryError(str(error)) from error"
+        ),
+        # A second containment rule: a hand-rolled resolve that never asks the
+        # authority, so a symlinked leaf passes.
+        new="        return Path(os.path.normpath(str(candidate)))",
+        test="test_the_workspace_delegates_resolution_to_the_canonical_authority",
+    ),
+    Probe(
+        name="traversal-not-sanitised",
+        gate="workspace-boundary",
+        path=f"{AUDIO}/workspace.py",
+        old=(
+            "    stem = Path(raw).name\n"
+            '    if stem in ("", ".", "..") or "/" in stem or "\\\\" in stem'
+            ' or "\\x00" in stem:\n'
+            "        stem = default"
+        ),
+        # The defect: the raw asset id reaches the path, with no sanitiser at
+        # all.  (Mutating only ``Path(raw).name`` would survive because
+        # ``Path.name`` already strips traversal — which is why the probe
+        # attacks the whole sanitiser, not one line of it.)
+        new="    stem = raw",
+        test="test_a_traversal_asset_id_cannot_escape_the_media_directory",
+    ),
+    Probe(
+        name="replace-false-becomes-overwrite",
+        gate="workspace-boundary",
+        path=f"{AUDIO}/workspace.py",
+        old="        if replaced and not replace:",
+        new="        if False:",
+        test="test_an_existing_destination_is_not_overwritten_without_replace",
+    ),
+    Probe(
+        name="protected-input-not-checked",
+        gate="workspace-boundary",
+        path=f"{AUDIO}/workspace.py",
+        old="        if target_rel in protected_rels:",
+        new="        if False:",
+        test="test_publish_refuses_to_replace_a_run_input",
+    ),
+    Probe(
+        name="run-directory-not-cleaned",
+        gate="workspace-boundary",
+        path=f"{AUDIO}/workspace.py",
+        old="            self._remove_run(relative)",
+        new="            pass",
+        test="test_a_run_directory_removes_itself_even_when_the_run_raises",
+    ),
+    Probe(
+        name="unsafe-run-id-accepted",
+        gate="workspace-boundary",
+        path=f"{AUDIO}/workspace.py",
+        old=(
+            '        if "/" in identifier or "\\\\" in identifier or identifier in ("", ".", ".."):'
+        ),
+        new="        if False:",
+        test="test_an_unsafe_run_id_is_refused",
+    ),
+    Probe(
+        name="staged-input-hash-not-checked",
+        gate="workspace-boundary",
+        path=f"{AUDIO}/workspace.py",
+        old="        if expected_sha256 is not None and digest != expected_sha256:",
+        new="        if False:",
+        test="test_staging_an_input_is_content_addressed_and_idempotent",
+    ),
 )
 
 

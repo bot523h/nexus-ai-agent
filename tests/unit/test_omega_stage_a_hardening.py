@@ -1043,3 +1043,189 @@ def test_the_format_duration_is_used_only_when_duration_ts_is_zero(tmp_path: Pat
     )
     probe = FfmpegTranscoder(probe_binary=str(_fake_ffprobe(tmp_path, document))).probe_json(source)
     assert probe.container_duration_us == 1_750_000
+
+
+# --------------------------------------------------------------------------- #
+# D7 — the workspace is an adapter on the one filesystem authority
+# --------------------------------------------------------------------------- #
+
+
+def test_the_workspace_delegates_resolution_to_the_canonical_authority(tmp_path: Path) -> None:
+    """Behavioural, not structural: the authority's verdict IS the engine's.
+
+    Asserting ``isinstance`` would pass for any object of that class, including
+    one that is never consulted.  The proof that the engine has no second
+    containment rule is that a path the authority refuses (a symlinked
+    component) is refused by the workspace too, *through* the authority — and
+    that the authority's own error text is what surfaces.
+    """
+    from nexus_ai_agent.creative.audio_engine.workspace import (
+        RuntimeWorkspace,
+        WorkspaceBoundaryError,
+    )
+    from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
+
+    workspace = RuntimeWorkspace(tmp_path / "ws").prepare()
+    authority = workspace.filesystem
+    assert isinstance(authority, WorkspaceFilesystem)
+    assert authority.root == workspace.root
+
+    # A symlinked leaf: the authority refuses it, and so must the workspace.
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not in the workspace", encoding="utf-8")
+    link = workspace.media_dir / "leaf.flac"
+    link.symlink_to(outside)
+
+    from nexus_ai_agent.tools.filesystem_policy import FilesystemBoundaryError
+
+    # The authority refuses it (a leaf that resolves outside the boundary is an
+    # escape; a link that stays inside is refused as a symlink — both are the
+    # authority's verdicts, and the workspace only translates them).
+    with pytest.raises(FilesystemBoundaryError):
+        authority.resolve("media/leaf.flac")
+    try:
+        workspace.contain(link)
+    except WorkspaceBoundaryError as error:
+        assert isinstance(error.__cause__, FilesystemBoundaryError), (
+            "the workspace raised its own error instead of translating the "
+            "authority's: that is a second containment rule"
+        )
+    else:  # pragma: no cover - the authority always refuses this
+        raise AssertionError("a symlinked leaf was accepted")
+
+
+def test_a_traversal_asset_id_cannot_escape_the_media_directory(tmp_path: Path) -> None:
+    """``../../etc/passwd`` as an asset id resolves to a contained name."""
+    from nexus_ai_agent.creative.audio_engine.workspace import RuntimeWorkspace, safe_file_name
+
+    workspace = RuntimeWorkspace(tmp_path / "ws").prepare()
+    for hostile in ("../../etc/passwd", "..", ".", "a/b/../../c", "\x00null"):
+        resolved = workspace.media_path(hostile, suffix=".flac")
+        assert resolved.is_relative_to(workspace.media_dir), f"{hostile!r} escaped"
+        assert resolved.parent == workspace.media_dir
+    assert safe_file_name("../../etc/passwd", suffix=".flac", default="artifact").endswith(".flac")
+
+
+def test_a_symlinked_parent_cannot_redirect_a_write(tmp_path: Path) -> None:
+    """A symlink at any level below the root is refused, not followed."""
+    from nexus_ai_agent.creative.audio_engine.workspace import (
+        RuntimeWorkspace,
+        WorkspaceBoundaryError,
+    )
+
+    workspace = RuntimeWorkspace(tmp_path / "ws").prepare()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "victim.flac").write_bytes(b"keep me")
+    # Replace media/ with a link to an unrelated directory.
+    (workspace.media_dir / "placeholder.bin").write_bytes(b"x")
+    for entry in workspace.media_dir.iterdir():
+        entry.unlink()
+    workspace.media_dir.rmdir()
+    workspace.media_dir.symlink_to(outside, target_is_directory=True)
+    with pytest.raises((WorkspaceBoundaryError, Exception)):
+        workspace.media_path("escape", suffix=".flac")
+    assert (outside / "victim.flac").read_bytes() == b"keep me"
+
+
+def test_publish_refuses_a_symlinked_destination(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.audio_engine.workspace import (
+        AtomicPublishError,
+        RuntimeWorkspace,
+    )
+
+    workspace = RuntimeWorkspace(tmp_path / "ws").prepare()
+    outside = tmp_path / "elsewhere.flac"
+    outside.write_bytes(b"not yours")
+    destination = workspace.media_dir / "linked.flac"
+    destination.symlink_to(outside)
+    with pytest.raises((AtomicPublishError, Exception)):
+        with workspace.run_directory("sym-run") as run:
+            produced = run / "out.flac"
+            produced.write_bytes(b"FLaC" + b"\x00" * 32)
+            workspace.publish(produced, destination, replace=True)
+    assert outside.read_bytes() == b"not yours", "a publish wrote through a symlink"
+
+
+def test_an_existing_destination_is_not_overwritten_without_replace(tmp_path: Path) -> None:
+    """A concurrent second attempt must not silently win the same id."""
+    from nexus_ai_agent.creative.audio_engine.workspace import (
+        AtomicPublishError,
+        RuntimeWorkspace,
+    )
+
+    workspace = RuntimeWorkspace(tmp_path / "ws").prepare()
+    destination = workspace.media_dir / "contested.flac"
+    destination.write_bytes(b"first writer wins")
+    with pytest.raises(AtomicPublishError, match="already exists"):
+        with workspace.run_directory("contend-run") as run:
+            produced = run / "out.flac"
+            produced.write_bytes(b"FLaC" + b"\x01" * 32)
+            workspace.publish(produced, destination)
+    assert destination.read_bytes() == b"first writer wins"
+
+
+def test_publish_rejects_the_same_file_as_source_and_destination(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.audio_engine.workspace import (
+        AtomicPublishError,
+        RuntimeWorkspace,
+    )
+
+    workspace = RuntimeWorkspace(tmp_path / "ws").prepare()
+    same = workspace.media_dir / "self.flac"
+    same.write_bytes(b"FLaC")
+    with pytest.raises(AtomicPublishError, match="same file"):
+        workspace.publish(same, same, replace=True)
+
+
+def test_staging_an_input_is_content_addressed_and_idempotent(tmp_path: Path) -> None:
+    """The same bytes stage once; changed bytes never reuse the old copy."""
+    from nexus_ai_agent.creative.audio_engine.workspace import (
+        RuntimeWorkspace,
+        WorkspaceBoundaryError,
+        hash_file,
+    )
+
+    workspace = RuntimeWorkspace(tmp_path / "ws").prepare()
+    source = tmp_path / "input.wav"
+    source.write_bytes(b"RIFF" + b"\x00" * 100)
+    first = workspace.stage_input(source)
+    second = workspace.stage_input(source)
+    assert first == second
+    assert first.name.startswith(hash_file(source).split(":")[1])
+    # A registry hash that does not match the bytes must refuse before any copy.
+    with pytest.raises(WorkspaceBoundaryError, match="changed before staging"):
+        workspace.stage_input(source, expected_sha256="sha256:" + "0" * 64)
+    # Different bytes stage a different file.
+    source.write_bytes(b"RIFF" + b"\x01" * 100)
+    third = workspace.stage_input(source)
+    assert third != first
+
+
+def test_a_run_directory_removes_itself_even_when_the_run_raises(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.audio_engine.workspace import RuntimeWorkspace
+
+    workspace = RuntimeWorkspace(tmp_path / "ws").prepare()
+    with pytest.raises(RuntimeError, match="engine exploded"):
+        with workspace.run_directory("boom") as run:
+            (run / "partial.flac").write_bytes(b"FLaC partial")
+            raise RuntimeError("engine exploded")
+    assert list(workspace.staging_dir.iterdir()) == []
+    assert workspace.leftovers() == []
+
+
+def test_an_unsafe_run_id_is_refused(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.audio_engine.workspace import (
+        RuntimeWorkspace,
+        WorkspaceBoundaryError,
+    )
+
+    workspace = RuntimeWorkspace(tmp_path / "ws").prepare()
+    for hostile in ("../escape", "a/b", "a\\b", ".", ".."):
+        with pytest.raises(WorkspaceBoundaryError, match="unsafe run id"):
+            with workspace.run_directory(hostile):
+                pass
+    # An empty id is not hostile: it is the documented "generate one" case.
+    with workspace.run_directory("") as generated:
+        assert generated.parent == workspace.staging_dir
+        assert len(generated.name) == 32
