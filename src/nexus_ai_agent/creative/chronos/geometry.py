@@ -162,3 +162,24 @@ def backproject_character_height_m(
         float(uncertainty),
         max(recovered[0][2], recovered[1][2]),
     )
+
+
+def circle_of_confusion_px(
+    depth_m: float,
+    focus_distance_m: float,
+    focal_length_mm: float,
+    f_number: float,
+    sensor_width_mm: float,
+    image_width_px: int,
+) -> float:
+    """Thin-lens defocus disk diameter on sensor, returned in pixels."""
+    if (
+        min(depth_m, focus_distance_m, focal_length_mm, f_number, sensor_width_mm, image_width_px)
+        <= 0
+    ):
+        raise KernelError("thin-lens parameters must be positive")
+    f = focal_length_mm / 1000.0
+    coc_sensor_m = (
+        f * f / f_number * abs(depth_m - focus_distance_m) / (depth_m * (focus_distance_m - f))
+    )
+    return coc_sensor_m * 1000 / sensor_width_mm * image_width_px

@@ -5,6 +5,7 @@ from __future__ import annotations
 import resource
 import time
 import wave
+from collections.abc import Callable
 from fractions import Fraction
 from pathlib import Path
 
@@ -109,5 +110,75 @@ def test_chronos_benchmarks_n3(tmp_path: Path) -> None:
             "median_max_ms": report,
             "peak_rss_kib": peak_rss_kib,
             "staging_bytes": staging_bytes,
+        }
+    )
+
+
+def test_wave2_benchmarks_n3(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.chronos.audio_continuity import declick_pcm_wav_splices
+    from nexus_ai_agent.creative.chronos.compositor_25d import render_25d_multiplane_composite
+    from nexus_ai_agent.creative.chronos.identity_lock import verify_pose_invariant_identity
+    from nexus_ai_agent.creative.chronos.merkle_ledger import (
+        build_inclusion_proof,
+        merkle_root,
+        verify_inclusion_proof,
+    )
+    from nexus_ai_agent.creative.chronos.scene_portrait_ops import (
+        inpaint_masked_region_pde,
+        retouch_portrait_frequency_separation,
+        tonemap_scene_linear_filmic,
+    )
+
+    rate = 8000
+    samples = np.tile(np.sin(np.arange(256) * 0.1), (1,)).astype(np.float64)
+    wav_in = tmp_path / "wave2.wav"
+    with wave.open(str(wav_in), "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(rate)
+        writer.writeframes((samples * 12000).astype("<i2").tobytes())
+    points = np.array([[0.0, 0.0, 0.0], [0.04, 0.0, 0.0], [0.0, 0.04, 0.0], [0.02, 0.03, 0.0]])
+    k = np.array([[800.0, 0.0, 16.0], [0.0, 800.0, 16.0], [0.0, 0.0, 1.0]])
+    observed = np.column_stack((16 + points[:, 0] * 400, 16 + points[:, 1] * 400))
+    img = np.full((16, 16, 3), 0.4)
+    mask = np.zeros((16, 16), bool)
+    mask[6:10, 6:10] = True
+    receipts = [{"shot": i, "hash": str(i)} for i in range(4)]
+    root = merkle_root(receipts)
+    proof = build_inclusion_proof(receipts, 2)
+    focus = (3.0, 50.0, 2.8, 36.0, 16)
+    alpha = np.ones((16, 16))
+    cases: dict[str, Callable[[int], object]] = {
+        "declick": lambda i: declick_pcm_wav_splices(
+            wav_in, tmp_path / f"declick-{i}.wav", [128], bridge_frames=16
+        ),
+        "merkle": lambda i: verify_inclusion_proof(receipts[2], proof, root),
+        "identity": lambda i: verify_pose_invariant_identity(points, observed, k, 2.0),
+        "tiled_compositor": lambda i: render_25d_multiplane_composite(
+            [(img, alpha, 4.0)],
+            img,
+            tmp_path / f"tile-{i}.png",
+            beta=0.01,
+            focus=focus,
+            tile_size_px=8,
+        ),
+        "pde_retouch_tonemap": lambda i: tonemap_scene_linear_filmic(
+            retouch_portrait_frequency_separation(inpaint_masked_region_pde(img, mask)[0], mask)
+        ),
+    }
+    report = {}
+    for name, operation in cases.items():
+        times = []
+        for i in range(3):
+            start = time.perf_counter()
+            result = operation(i)
+            times.append((time.perf_counter() - start) * 1000)
+            assert result is not None
+        report[name] = (float(np.median(times)), max(times))
+    print(
+        {
+            "wave2_median_max_ms": report,
+            "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "staging_bytes": sum(p.stat().st_size for p in tmp_path.iterdir() if p.is_file()),
         }
     )
