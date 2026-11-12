@@ -99,6 +99,8 @@ CODE_UNSIGNED = "passport_unsigned"
 CODE_SIGNATURE_INVALID = "passport_signature_invalid"
 CODE_UNKNOWN_KEY = "passport_key_unknown"
 CODE_TARGET_NOT_RUN = "target_not_checked"
+#: A STRICT_LINEAR artifact whose crest factor did not survive the render.
+CODE_CREST_NOT_INVARIANT = "strict_linear_crest_not_invariant"
 
 
 class PassportError(RuntimeError):
@@ -521,6 +523,87 @@ def sign_passport(
     return claimed.with_signature(signature_hex=signature_hex, public_key_hex=public_hex)
 
 
+#: STRICT_LINEAR permits a loudness gain, not dynamic compression, so the crest
+#: factor of the published file must still be the source's to within measurement
+#: noise.  0.25 dB is the budget: two independent EBU R128 measurements of
+#: identical dynamics differ by well under it, while the smallest useful limiter
+#: setting removes far more.
+STRICT_LINEAR_CREST_TOLERANCE_DB = 0.25
+
+
+def _enforce_strict_linear_crest(
+    *,
+    passport: ArtifactPassport,
+    artifact_path: Path | None,
+    fresh: LoudnessMeasurement,
+    source: Path | None,
+    engine: FfmpegTranscoder | None,
+    cancel: CancelToken | None,
+) -> tuple[str | None, str]:
+    """Refuse a STRICT_LINEAR artifact whose crest factor moved.
+
+    Re-measures the source and the published file independently and compares
+    crest factors (``true_peak - integrated``, the same definition the renderer
+    uses).  Returns ``(code, detail)``; ``code`` is ``None`` when the artifact is
+    genuinely crest-invariant.
+    """
+    if artifact_path is None or not artifact_path.exists():
+        return (
+            CODE_CREST_NOT_INVARIANT,
+            "STRICT_LINEAR was claimed but the published artifact is not readable, "
+            "so the crest invariance cannot be verified",
+        )
+    if fresh.true_peak_dbtp is None or fresh.integrated_lufs is None:
+        return (
+            CODE_CREST_NOT_INVARIANT,
+            "STRICT_LINEAR was claimed but the artifact has no measurable loudness "
+            "(silent or unreadable), so crest invariance cannot be verified",
+        )
+    output_crest = fresh.true_peak_dbtp - fresh.integrated_lufs
+    if source is None or not Path(source).exists():
+        return (
+            CODE_CREST_NOT_INVARIANT,
+            "STRICT_LINEAR was claimed but no source programme was supplied, so the "
+            "crest reduction cannot be measured — an unverifiable claim is refused, "
+            "not passed",
+        )
+    measurer = engine if engine is not None else FfmpegTranscoder()
+    try:
+        source_measurement = measurer.measure_loudness(Path(source), cancel=cancel)
+    except Exception as error:  # pragma: no cover - unreadable source is an I/O fault
+        return (
+            CODE_CREST_NOT_INVARIANT,
+            f"STRICT_LINEAR was claimed but the source could not be measured: {error}",
+        )
+    if source_measurement.true_peak_dbtp is None or source_measurement.integrated_lufs is None:
+        return (
+            CODE_CREST_NOT_INVARIANT,
+            "STRICT_LINEAR was claimed but the source has no measurable loudness, so "
+            "crest reduction cannot be measured",
+        )
+    source_crest = source_measurement.true_peak_dbtp - source_measurement.integrated_lufs
+    reduction = source_crest - output_crest
+    claimed = passport.loudness_target.crest_reduction_db if passport.loudness_target else None
+    if abs(reduction) > STRICT_LINEAR_CREST_TOLERANCE_DB:
+        return (
+            CODE_CREST_NOT_INVARIANT,
+            f"STRICT_LINEAR was claimed but the published file removed {reduction:+.2f} dB "
+            f"of crest factor (source {source_crest:.2f} dB, published {output_crest:.2f} dB, "
+            f"budget {STRICT_LINEAR_CREST_TOLERANCE_DB:g} dB): this artifact was dynamically "
+            "compressed or limited and must not be published as a linear master",
+        )
+    if (
+        claimed is not None
+        and abs(claimed - max(0.0, reduction)) > STRICT_LINEAR_CREST_TOLERANCE_DB
+    ):
+        return (
+            CODE_CREST_NOT_INVARIANT,
+            f"the passport claims {claimed:.2f} dB of crest reduction but re-measurement "
+            f"against the source gives {max(0.0, reduction):.2f} dB",
+        )
+    return None, ""
+
+
 def verify_passport(
     passport: ArtifactPassport,
     *,
@@ -529,11 +612,19 @@ def verify_passport(
     engine: FfmpegTranscoder | None = None,
     require_signature: bool = True,
     cancel: CancelToken | None = None,
+    source: Path | None = None,
 ) -> VerificationReport:
     """Re-check a passport: signature, bytes, decode, loudness, canonical shape.
 
     Every check runs against the world *now*.  A passport that says "verified"
     is worth exactly as much as this function re-confirming it.
+
+    ``source`` is the programme the artifact was derived from, and it is what
+    makes the STRICT_LINEAR crest claim checkable: the source crest is measured
+    from the source *file*, not read back out of the passport being audited.
+    Omitting it does not disable the check — a STRICT_LINEAR artifact whose crest
+    cannot be verified is refused, because an unverifiable claim is not a
+    verified one.
     """
     codes: list[str] = []
     details: list[str] = []
@@ -606,39 +697,50 @@ def verify_passport(
                 true_peak_dbtp=passport.loudness_target.true_peak_limit_dbtp,
                 target_lra_lu=11.0,
             )
-            # A passport that claims a crest reduction is re-confirmed against
-            # the file *now*: re-run the arithmetic on the fresh measurement and
-            # refuse a passport whose claimed number no longer reconstructs.  The
-            # authoritative output crest is the one just measured (minus its
-            # claimed reduction), which is exactly the number the original
-            # verifier supplied — so this is a comparison, not a re-derivation of
-            # something the original run had to know.
+            # Re-run the *target* check on the fresh measurement.  Note what is
+            # deliberately NOT done here: the passport's claimed crest reduction
+            # is not fed back in as the source crest.  Doing that made the check a
+            # round trip — any claim re-derived itself exactly (2, 8 and 12 dB all
+            # "survived") and a tampered passport passed.  The crest claim is
+            # checked against a freshly measured source in
+            # ``_enforce_strict_linear_crest`` below, where it is falsifiable.
             claimed_target = passport.loudness_target
-            claimed_reduction = claimed_target.crest_reduction_db
-            implied_source_crest = (
-                None
-                if claimed_reduction is None or fresh.true_peak_dbtp is None
-                else claimed_reduction + (fresh.true_peak_dbtp - (fresh.integrated_lufs or 0.0))
-            )
             fresh_check = check_loudness_target(
                 threshold_profile,
                 fresh,
                 integrated_tolerance_lu=claimed_target.integrated_tolerance_lu,
                 true_peak_tolerance_db=claimed_target.true_peak_tolerance_db,
-                input_crest_factor_db=implied_source_crest,
+                # ``None`` — deliberately.  Re-confirming a *claimed* crest
+                # reduction by feeding the claim back in as the source crest
+                # re-derives the claim exactly whatever its value: 2 dB, 8 dB
+                # and 12 dB all "survive" because the arithmetic is a round trip.
+                # A tampered passport therefore passed, which is the specific
+                # failure this verifier exists to prevent.
+                input_crest_factor_db=None,
             )
-            if claimed_reduction is not None and (
-                fresh_check.crest_reduction_db is None
-                or abs(fresh_check.crest_reduction_db - claimed_reduction) > 0.1
-            ):  # pragma: no cover - a fresh measurement drifting >0.1 dB is a real fault
-                codes.append(CODE_INTEGRATED_OUT_OF_RANGE)
-                details.append(
-                    "the passport's crest reduction "
-                    f"{claimed_reduction} dB does not survive re-measurement "
-                    f"({fresh_check.crest_reduction_db} dB)"
-                )
-                loudness_ok = False
             loudness_ok = loudness_ok and fresh_check.passed
+            if not fresh_check.passed:
+                codes.append(fresh_check.code or CODE_INTEGRATED_OUT_OF_RANGE)
+                details.append(str(fresh_check.detail))
+
+            # STRICT_LINEAR means gain only: the file's crest factor must still
+            # be the source's.  The source crest is NOT a passport claim here —
+            # it is re-measured from the source file passed alongside, and if no
+            # source is available the check is reported as *unverifiable* rather
+            # than silently passed.
+            if claimed_target.processing_mode == "STRICT_LINEAR":
+                crest_code, crest_detail = _enforce_strict_linear_crest(
+                    passport=passport,
+                    artifact_path=path,
+                    fresh=fresh,
+                    source=source,
+                    engine=engine,
+                    cancel=cancel,
+                )
+                if crest_code is not None:
+                    codes.append(crest_code)
+                    details.append(crest_detail)
+                    loudness_ok = False
             if not fresh_check.passed:
                 codes.append(fresh_check.code or CODE_INTEGRATED_OUT_OF_RANGE)
                 details.append(str(fresh_check.detail))

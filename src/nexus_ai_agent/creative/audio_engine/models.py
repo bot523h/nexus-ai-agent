@@ -30,7 +30,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -263,6 +263,26 @@ class CanonicalStreamProfile(BaseModel):
             args += ["-ac", str(self.channels)]
         args += ["-c:a", self.codec, "-sample_fmt", self.sample_format]
         return tuple(args)
+
+    #: FFmpeg's ``loudnorm`` upsamples its input to 192 kHz internally to run its
+    #: true-peak detector, and in older builds leaves the stream there.  Anything
+    #: chained *after* it, and the muxer, therefore see 192 kHz unless the
+    #: canonical rate is re-asserted afterwards.  This constant names the rate so
+    #: the guard is a checked contract rather than a comment.
+    LOUDNORM_INTERNAL_RATE: ClassVar[int] = 192_000
+
+    def loudnorm_rate_guard(self) -> tuple[str, ...]:
+        """Filters that restore the canonical rate after a ``loudnorm`` stage.
+
+        A no-op when the canonical rate is already 192 kHz (nothing to restore),
+        which keeps the graph honest instead of inserting a redundant resampler
+        and claiming credit for it.
+        """
+        return (
+            ()
+            if self.sample_rate == self.LOUDNORM_INTERNAL_RATE
+            else (f"aresample={self.sample_rate}",)
+        )
 
     def filter_arguments(self) -> tuple[str, ...]:
         """The filter fragment mirroring :meth:`format_arguments`."""
