@@ -4431,7 +4431,7 @@
       "why_fa": "quarantine داده را برای همیشه نگه می‌دارد؛ در تولید رشد بدون حد می‌شود.",
       "zone": "execution-core",
       "priority": "P3",
-      "status": "active",
+      "status": "active_in_review",
       "scope": "Bound the _quarantine forensic trees so a long-running sidecar cannot grow without limit. Add an explicit, opt-in operator retention policy (default: keep everything) that prunes quarantine trees by age and/or total size, reusing the ONE filesystem security boundary (WorkspaceFilesystem) for every deletion and refusing symlinked or escaping paths, and journaling each prune decision (kept/removed) so a deletion is auditable and never silent.",
       "acceptance_criteria": [
         "age/size-bounded retention with an explicit operator switch (default: keep)",
@@ -4455,7 +4455,21 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
-      "note": ""
+      "note": "",
+      "pr": 336,
+      "evidence": {
+        "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/336",
+        "head_sha": "34a093fb",
+        "commands": [
+          "python3 -m ruff check . -> All checks passed!",
+          "python3 -m ruff format --check . -> 973 files already formatted",
+          "python3 -m mypy src -> 6 pre-existing environmental import-not-found errors, 0 in changed files",
+          "PYTHONPATH=src python3 -m pytest -q tests/unit/test_execution_staging.py -> 62 passed",
+          "python3 scripts/execution_core_mutations.py -> 27/27 mutations caught",
+          "python3 scripts/agent_board.py check --files <changed> --branch arena/task-262-quarantine-retention -> exit 0"
+        ],
+        "not_proven": "full suite (pytest -q -m 'not slow') not run in this 30-min window; execution-core-mutations CI job not yet green on this head"
+      }
     },
     {
       "task": "task-269-cognition-quality-evaluation",
