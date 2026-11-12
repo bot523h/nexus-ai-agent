@@ -205,10 +205,10 @@ def test_factory_geometry_color_and_acoustic_adapters(tmp_path: Path) -> None:
     ).sha256
 
 
-def test_popperian_falsification_20_probes(tmp_path: Path) -> None:
+def test_popperian_falsification_50_probes(tmp_path: Path) -> None:
     from nexus_ai_agent.creative.chronos.color_science import cct_kelvin_to_xyz, read_rgb8_png
     from nexus_ai_agent.creative.chronos.compositor_25d import render_25d_multiplane_composite
-    from nexus_ai_agent.creative.chronos.contracts import KernelError
+    from nexus_ai_agent.creative.chronos.contracts import Continuity, KernelError
     from nexus_ai_agent.creative.chronos.identity_lock import (
         verify_eyeline_and_180_rule,
         verify_pose_invariant_identity,
@@ -267,10 +267,113 @@ def test_popperian_falsification_20_probes(tmp_path: Path) -> None:
             np.ones((4, 3)), np.ones((4, 2)), np.eye(3), 1, sigma_mm=0
         ),
     ]
+    from fractions import Fraction
+
+    from nexus_ai_agent.creative.chronos import (
+        biomechanics_motion,
+        episode_pipeline,
+        geometry,
+        temporal_optics,
+        weather_and_grading,
+    )
+    from nexus_ai_agent.creative.chronos.contracts import RationalTimestamp
+
+    stamp = RationalTimestamp(0, Fraction(1, 24))
+    probes.extend(
+        [
+            lambda: biomechanics_motion.solve_two_bone_or_chain_ik(
+                np.zeros(3), (1.0, -1.0), np.ones(3)
+            ),
+            lambda: biomechanics_motion.solve_two_bone_or_chain_ik(
+                np.zeros(3), (1.0, 1.0), np.array([5.0, 0.0, 0.0])
+            ),
+            lambda: biomechanics_motion.solve_two_bone_or_chain_ik(
+                np.zeros(3), (1.0, 1.0), np.ones(3), damping=0
+            ),
+            lambda: biomechanics_motion.enforce_stance_foot_lock(
+                (stamp,), np.zeros((2, 3)), np.ones(1, dtype=bool)
+            ),
+            lambda: biomechanics_motion.enforce_stance_foot_lock(
+                (stamp, stamp), np.zeros((2, 3)), np.ones(2, dtype=bool)
+            ),
+            lambda: biomechanics_motion.simulate_secondary_verlet_chain(
+                (stamp,), np.zeros((1, 3)), np.zeros((2, 3)), drag=1
+            ),
+            lambda: biomechanics_motion.simulate_secondary_verlet_chain(
+                (stamp,),
+                np.zeros((1, 3)),
+                np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
+                rest_lengths_m=(0.0,),
+            ),
+            lambda: biomechanics_motion.render_shutter_motion_blur_linear(
+                image, (1.0, 0.0), shutter_angle_deg=0
+            ),
+            lambda: biomechanics_motion.render_shutter_motion_blur_linear(-image, (1.0, 0.0)),
+            lambda: temporal_optics.rectify_rolling_shutter_skew(
+                image, (1.0, 0.0), readout_duration_s=1, frame_period_s=0.5
+            ),
+            lambda: temporal_optics.rectify_rolling_shutter_skew(
+                image, (1.0,), readout_duration_s=0.1, frame_period_s=0.5
+            ),
+            lambda: weather_and_grading.render_physical_precipitation_layer(
+                0, 4, 50, 2, 3, frame_rate_fps=24
+            ),
+            lambda: weather_and_grading.render_physical_precipitation_layer(
+                4, 4, 50, 2, 3, frame_rate_fps=24, particle_rgb=(-1.0, 0.0, 0.0)
+            ),
+            lambda: weather_and_grading.parse_cube_lut("LUT_1D_SIZE 2\n"),
+            lambda: weather_and_grading.parse_cube_lut("LUT_3D_SIZE 2\n0 0 0\n"),
+            lambda: weather_and_grading.apply_asc_cdl_and_3d_lut(image, power=(1.0, 0.0, 1.0)),
+            lambda: weather_and_grading.apply_asc_cdl_and_3d_lut(image, slope=(-1.0, 1.0, 1.0)),
+            lambda: weather_and_grading.legalize_broadcast_rgb_ebu_r103(np.ones((4, 4))),
+            lambda: temporal_optics.estimate_subpixel_translation_phase_corr(
+                image, image, epsilon=0
+            ),
+            lambda: temporal_optics.estimate_subpixel_translation_phase_corr(
+                image, np.ones((3, 4, 3))
+            ),
+            lambda: temporal_optics.stabilize_temporal_exposure_flicker(
+                np.ones((2, 4, 4, 3)), epsilon=0
+            ),
+            lambda: temporal_optics.stabilize_temporal_exposure_flicker(-np.ones((2, 4, 4, 3))),
+            lambda: temporal_optics.rectify_rolling_shutter_skew(
+                image, (1.0, 0.0), readout_duration_s=-0.1, frame_period_s=0.5
+            ),
+            lambda: geometry.intrinsics(50, 0, 480, 36, 24),
+            lambda: geometry.backproject_character_height_m(
+                (0.0, 0.0), (0.0, 10.0), -2.0, np.eye(3)
+            ),
+            lambda: geometry.project(
+                np.array([[0.0, 0.0, -1.0]]), np.eye(3), np.zeros(3), np.eye(3)
+            ),
+            lambda: verify_eyeline_and_180_rule(
+                np.zeros(3),
+                np.ones(3),
+                np.zeros(3),
+                np.ones(3),
+                np.ones(3),
+                np.ones(3),
+                angular_tolerance_deg=0,
+            ),
+            lambda: verify_eyeline_and_180_rule(
+                np.zeros(3),
+                np.ones(3),
+                np.zeros(3),
+                np.ones(3),
+                np.ones(3),
+                np.ones(3),
+                head_radius_m=0,
+            ),
+            lambda: episode_pipeline.verify_cross_episode_show_bible(
+                episode_pipeline.ShowBibleCharacterBible("x", (), 1.8, (1.0,), (50.0, 0.0, 0.0)), ()
+            ),
+            lambda: episode_pipeline.ShotDAG(Continuity.FAIL).evaluate_delta(),
+        ]
+    )
     for probe in probes:
         with pytest.raises((KernelError, ValueError, OSError, KeyError)):
             probe()
-    assert len(probes) == 20
+    assert len(probes) == 50
     assert not verify_inclusion_proof({"n": 99}, proof, root)
 
 

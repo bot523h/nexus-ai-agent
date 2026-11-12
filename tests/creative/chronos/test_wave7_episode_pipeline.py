@@ -342,3 +342,37 @@ def test_episode_handlers_and_studio_port_manifest_binding(tmp_path: Path) -> No
     )
     assert json.loads(bible_output.read_text(encoding="utf-8"))["observations_checked"] == 2
     assert result.quality_claim == "SHOW_BIBLE_CONTINUITY"
+
+
+def test_wave7_episode_pipeline_benchmark_n3(tmp_path: Path) -> None:
+    import time
+
+    shots = [_shot(tmp_path, 0, 450.0), _shot(tmp_path, 1, 650.0)]
+    durations_ms: list[float] = []
+    roots: list[str] = []
+    output_bytes: list[int] = []
+    for repeat in range(3):
+        started = time.perf_counter()
+        passport = run_verified_episode_continuity_pipeline(
+            8, shots, _bible(), tmp_path / f"benchmark-{repeat}"
+        )
+        durations_ms.append((time.perf_counter() - started) * 1000)
+        assert passport.all_invariants_verified
+        roots.append(passport.merkle_root_sha256)
+        output_bytes.append(
+            sum(
+                path.stat().st_size
+                for path in (tmp_path / f"benchmark-{repeat}").rglob("*")
+                if path.is_file()
+            )
+        )
+    assert len(set(roots)) == 1
+    print(
+        {
+            "wave7_episode_pipeline_n": 3,
+            "median_ms": float(np.median(durations_ms)),
+            "max_ms": max(durations_ms),
+            "staging_and_publication_bytes": output_bytes,
+            "deterministic_merkle_root": roots[0],
+        }
+    )
