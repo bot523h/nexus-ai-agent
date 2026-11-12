@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-10T12:08:41Z",
+  "updated_at": "2026-11-12T15:52:33Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1236,6 +1236,25 @@
         "tests/integration/test_durable_project_revision_pinning.py",
         "tests/unit/test_durable_project_state.py",
         "tests/unit/test_nagar_cognition_queue_handoff.py"
+      ]
+    },
+    {
+      "id": "nagar-omega-audio-engine",
+      "description": "OMEGA native audio execution plane: engine (process/workspace/ffprobe/DSP/verify/continuity), the studio port it implements, the audio pack handlers that call it, and the evidence-based lifecycle axis.",
+      "paths": [
+        "src/nexus_ai_agent/creative/audio_engine/",
+        "src/nexus_ai_agent/creative/studio/audio_engine.py",
+        "src/nexus_ai_agent/creative/studio/evidence.py",
+        "src/nexus_ai_agent/creative/studio/lifecycle.py",
+        "src/nexus_ai_agent/creative/slideshow/audio.py",
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "tests/unit/test_omega_native_engine.py",
+        "tests/unit/test_omega_audio_bus.py",
+        "tests/unit/test_omega_evidence_ladder.py",
+        "tests/unit/test_omega_continuity_assembly.py",
+        "tests/unit/test_audio_pack_evidence_paths.py",
+        "tests/unit/omega_media.py",
+        "docs/architecture/NAGAR_MATHEMATICAL_ENGINEERING_DOCTRINE.md"
       ]
     }
   ],
@@ -8521,7 +8540,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "active",
+      "status": "expired",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8559,7 +8578,8 @@
         "REVIEW CLOSE-OUT (2026-11-09): all 14 Sourcery review threads on PR #325 are replied to and resolved (remediation commit e5c92d56; truthful audit table docs/audits/NAGAR_F1_LIVE_TRUTH_2026-11-08.md section 3a). F1-F4 and F6-F14 fixed; F5 (cross-job completed-job provenance loss) recorded OPEN as an owner design decision (R4). PR #325 body updated with the close-out matrix and honest residuals. Targeted gates re-run on head f4176790: ruff check clean, ruff format --check clean, mypy src clean (361 files), tests/unit/test_mutation_harness_anchors.py + test_pg_integration_safety.py + test_agent_board.py 160 passed; tests/integration/test_durable_project_revision_pinning.py + tests/architecture/test_durable_project_state_boundary.py 48 passed; test_in_process_job_queue.py + test_creative_execution_recovery.py + test_canonical_creative_execution.py 35 passed."
       ],
       "note": "",
-      "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done."
+      "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done.",
+      "release_reason": "auto-released by gc at 2026-11-12T15:52:33Z (stale active lease)"
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -8607,7 +8627,7 @@
       "title_fa": "تعمیر PR #324 (بستن نهایی P0): فهرست‌کردن گزارش ممیزی جدید و رفع یافته‌های گزارش/شواهد تخته",
       "zone": "docs-architecture",
       "priority": "P0",
-      "status": "active",
+      "status": "expired",
       "scope": "Repair the open docs-only PR #324 on its existing branch openhands/nagar-one-final-closeout-20261107. Root cause of the 5 red test/python-parity checks: docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md is not indexed in docs/README.md (TRUTH010). Also close the 5 unresolved review threads on the report and the memory note. No runtime change; no merge.",
       "scope_fa": "تعمیر PR مستندات‌محور باز #324 روی همان شاخه. علت ریشهٔ ۵ چک قرمز: گزارش ممیزی در docs/README.md فهرست نشده (TRUTH010). همچنین بستن ۵ ترد بازبینی روی گزارش و یادداشت حافظه. بدون تغییر runtime و بدون ادغام.",
       "acceptance_criteria": [
@@ -8631,7 +8651,50 @@
       "claimed_at": "2026-11-08T08:42:47Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1
+      "generation": 1,
+      "release_reason": "auto-released by gc at 2026-11-12T15:52:33Z (stale active lease)"
+    },
+    {
+      "task": "task-330-omega-forensic-hardening-stage-a",
+      "title": "OMEGA STAGE-A forensic hardening of 6915d32: verify-before-publish, recipe identity, cancellation, ffprobe JSON, lag-k tempo, loudness ordering",
+      "zone": "nagar-omega-audio-engine",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Close the P0/P1 defects an independent forensic audit of commit 6915d32 found in the audio execution plane: (1) _derive published the artifact BEFORE verifying it; (2) the artifact-reuse cache keyed only on output_asset_id so a different recipe (strength 0.2 vs 0.9) returned the earlier file with reused_existing=True; (3) _derive hard-coded cancel=None into the builder so cancellation never reached FFmpeg; (4) probe parsed `ffmpeg -i` stderr instead of fail-closed ffprobe JSON; (5) _interval_candidates used np.diff(x, n=k) (a k-th finite difference, always 0 for even onsets) instead of the mean k-lag gap (t[i+k]-t[i])/k, leaving steps 2..4 dead code and octave ambiguity unmanaged; (6) loudness pass-1 measured the source before canonical channel conversion. No parallel authority is introduced: RuntimeWorkspace stays the single workspace for the engine, and DB/attempt fencing stays owned by task-282.",
+      "acceptance_criteria": [
+        "A published-but-unverified byte sequence can never be observed at the final path: verify runs on staged bytes and the destination is only created by an atomic rename after the verifier agrees.",
+        "Reusing an existing artifact requires a recipe-identity match (source hash + operation + parameters + profiles + engine version), proved by a mutation test that fails if the key drops any component.",
+        "Cancellation reaches the FFmpeg process group end to end; a cancelled run leaves no staging residue and publishes nothing.",
+        "Probe evidence comes from ffprobe JSON with fail-closed handling of missing fields and corruption markers.",
+        "The k-lag tempo candidate uses (t[i+k]-t[i])/k and its octave handling is pinned by a test that fails on the np.diff(n=k) form.",
+        "Loudness pass 1 measures the canonical stream shape, not the source layout.",
+        "ruff, mypy, architecture gates and the full unit+architecture suite stay green with only the pre-existing local-environment failures."
+      ],
+      "evidence_required": [
+        "Adversarial tests reproducing each defect before the fix",
+        "Mutation probes proving each new gate is load-bearing",
+        "Exact commands, exit codes and tested SHA"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/audio_engine/",
+        "src/nexus_ai_agent/creative/slideshow/audio.py",
+        "src/nexus_ai_agent/creative/studio/audio_engine.py",
+        "src/nexus_ai_agent/creative/studio/evidence.py",
+        "src/nexus_ai_agent/creative/studio/lifecycle.py",
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "tests/unit/test_omega_native_engine.py",
+        "tests/unit/test_omega_audio_bus.py",
+        "tests/unit/test_audio_pack_evidence_paths.py",
+        "docs/architecture/NAGAR_MATHEMATICAL_ENGINEERING_DOCTRINE.md"
+      ],
+      "owner_hint": "Stage-A of the MPE-CHRONOS-OMEGA mission; render_jobs.py changes are covered by the task-282-slice-2 claim and were cleared by the referee.",
+      "agent_branch": "arena/288ef95e-nexus-ai-agent",
+      "claimed_at": "2026-11-12T00:00:00Z",
+      "generation": 0,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "Board has no create command, so the claim is registered directly by appending a schema-2 claim record."
     }
   ],
   "deferred_log": [
