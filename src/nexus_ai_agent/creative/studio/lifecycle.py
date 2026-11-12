@@ -129,7 +129,15 @@ PACK_LIFECYCLE: dict[str, PackLifecycle] = {
     "nexus.audio.studio": PackLifecycle(
         pack_id="nexus.audio.studio",
         state=LifecycleState.EXPERIMENTAL,
-        reason="duck/loudnorm twins compile; DSP/beat media paths unmapped",
+        # The reason is evidence-bound, not historical: beat detection,
+        # loudness normalization and denoise all run through the native engine
+        # and publish verifier-approved bytes, so the old "DSP/beat media paths
+        # unmapped" sentence had stopped being true. The state stays EXPERIMENTAL
+        # because a production run has not corroborated it with a second
+        # verifier key (PRODUCTION_PROVEN is earned, never assigned).
+        reason="native engine: loudness/denoise/beats run real DSP and publish "
+        "verifier-approved artifacts (ARTIFACT_VERIFIED); awaiting independent "
+        "production corroboration for PRODUCTION_PROVEN",
     ),
     "nexus.motion.graphics": PackLifecycle(
         pack_id="nexus.motion.graphics",

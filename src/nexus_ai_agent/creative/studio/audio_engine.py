@@ -85,6 +85,13 @@ class BeatAnalysis(BaseModel):
     min_bpm: float = 40.0
     max_bpm: float = 240.0
     analyzer: str = "nagar.audio.beat.v2"
+    #: ``confidence`` is a **normalised margin** against ``min_bpm``/``max_bpm``
+    #: and the period-variation tolerance — not a probability.  The field below
+    #: states that in the payload so a consumer cannot mistake it for one
+    #: (doctrine §4: confidence is not probability).
+    confidence_kind: Literal["normalized_margin"] = "normalized_margin"
+    #: What the analysis consumed, measured — the same report a render emits.
+    budget: dict[str, object] | None = None
 
 
 class ArtifactEvidence(BaseModel):

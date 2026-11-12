@@ -36,6 +36,7 @@ REPO = Path(__file__).resolve().parents[1]
 AUDIO = "src/nexus_ai_agent/creative/audio_engine"
 SLIDESHOW = "src/nexus_ai_agent/creative/slideshow/audio.py"
 TEST_FILE = "tests/unit/test_omega_stage_a_hardening.py"
+ENGINE_PORT = "src/nexus_ai_agent/creative/studio/audio_engine.py"
 
 
 @dataclass(frozen=True)
@@ -349,6 +350,42 @@ PROBES: tuple[Probe, ...] = (
         old='        media = (root.parent / "media").resolve(strict=False)',
         new='        media = Path.cwd() / "media"',
         test="test_the_media_root_is_not_the_process_working_directory",
+    ),
+    Probe(
+        name="analysis-budget-dropped",
+        gate="resource-budget",
+        path=f"{AUDIO}/execution.py",
+        old="                budget=self._analysis_budget(",
+        new="                budget=_NO_BUDGET(",
+        test="test_beat_analysis_reports_what_it_consumed",
+    ),
+    Probe(
+        name="confidence-unlabelled",
+        gate="confidence-not-probability",
+        path=f"{ENGINE_PORT}",
+        old='    confidence_kind: Literal["normalized_margin"] = "normalized_margin"',
+        new="",
+        test="test_confidence_is_labelled_a_margin_not_a_probability",
+    ),
+    Probe(
+        name="pack-claims-production-proven",
+        gate="earned-status",
+        path="src/nexus_ai_agent/creative/studio/lifecycle.py",
+        old='    "nexus.audio.studio": OperationEvidenceState.ARTIFACT_VERIFIED,',
+        new='    "nexus.audio.studio": OperationEvidenceState.PRODUCTION_PROVEN,',
+        test="test_the_pack_evidence_ceiling_is_artifact_verified_not_production_proven",
+    ),
+    Probe(
+        name="pack-reason-contradicts-evidence",
+        gate="earned-status",
+        path="src/nexus_ai_agent/creative/studio/lifecycle.py",
+        old=(
+            '        reason="native engine: loudness/denoise/beats run real DSP and publish "\n'
+            '        "verifier-approved artifacts (ARTIFACT_VERIFIED); awaiting independent "\n'
+            '        "production corroboration for PRODUCTION_PROVEN",'
+        ),
+        new='        reason="duck/loudnorm twins compile; DSP/beat media paths unmapped",',
+        test="test_the_audio_pack_state_matches_its_measured_evidence",
     ),
 )
 

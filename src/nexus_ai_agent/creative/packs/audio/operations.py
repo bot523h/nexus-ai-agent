@@ -230,10 +230,12 @@ def _detect_beats(project: Project, context: OperationContext) -> OperationOutco
             f"audio.detect_beats requires audio or video media, got: {audio_rec.media_kind!r}"
         )
     engine = _engine(context, OPERATION_DETECT_BEATS)
-    precheck = engine.precheck(SourceRequest(
-        asset_id=payload.audio_asset_id,
-        expected_sha256=audio_rec.content_sha256 or None,
-    ))
+    precheck = engine.precheck(
+        SourceRequest(
+            asset_id=payload.audio_asset_id,
+            expected_sha256=audio_rec.content_sha256 or None,
+        )
+    )
     if not precheck.readable:
         return OperationOutcome(
             project,
@@ -249,14 +251,16 @@ def _detect_beats(project: Project, context: OperationContext) -> OperationOutco
                 "tempo_source": "unavailable",
             },
         )
-    evidence = engine.detect_beats(BeatRequest(
-        request_id=f"beats:{payload.audio_asset_id}",
-        source_asset_id=payload.audio_asset_id,
-        source_sha256=precheck.sha256,
-        min_bpm=payload.min_bpm,
-        max_bpm=payload.max_bpm,
-        sensitivity=payload.sensitivity,
-    ))
+    evidence = engine.detect_beats(
+        BeatRequest(
+            request_id=f"beats:{payload.audio_asset_id}",
+            source_asset_id=payload.audio_asset_id,
+            source_sha256=precheck.sha256,
+            min_bpm=payload.min_bpm,
+            max_bpm=payload.max_bpm,
+            sensitivity=payload.sensitivity,
+        )
+    )
     if evidence.status != "detected" or evidence.tempo_bpm is None:
         return OperationOutcome(
             project,

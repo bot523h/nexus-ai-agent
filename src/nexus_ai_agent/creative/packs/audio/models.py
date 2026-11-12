@@ -158,9 +158,7 @@ class NormalizeLoudnessInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     audio_asset_id: str = Field(min_length=1)
-    profile: Literal[
-        "streaming_master", "ebu_r128_broadcast", "custom"
-    ] = Field(
+    profile: Literal["streaming_master", "ebu_r128_broadcast", "custom"] = Field(
         default="streaming_master",
         description="Locked loudness profile, or 'custom' with all three numbers stated.",
     )
@@ -211,9 +209,7 @@ class NormalizeLoudnessInput(BaseModel):
                 if value is None
             ]
             if missing:
-                raise ValueError(
-                    "profile 'custom' requires " + ", ".join(missing) + " explicitly"
-                )
+                raise ValueError("profile 'custom' requires " + ", ".join(missing) + " explicitly")
         if not self.two_pass:
             raise ValueError(
                 "single-pass loudness normalization is refused: a single pass cannot "

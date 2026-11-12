@@ -516,6 +516,8 @@ class NativeAudioEngine:
         source = self._path(request.source_asset_id)
         workspace = RuntimeWorkspace(self._settings.workspace_root).prepare()
         sink = Path(tempfile.mkstemp(prefix="nagar_beats_", suffix=".s32le")[1])
+        run_started = time.monotonic()
+        sink_bytes = 0
         try:
             probe = self._transcoder.probe(source)
             if probe.sample_rate is None or probe.channels is None:
@@ -540,6 +542,7 @@ class NativeAudioEngine:
             )
             if not outcome.ok:
                 raise EngineInputError(f"could not decode {source.name} for beat analysis")
+            sink_bytes = sink.stat().st_size
             pcm = self._read_pcm_window(sink, max_seconds=window)
             mono = pcm if pcm.ndim == 1 else pcm.mean(axis=1)
             evidence = collect_tempo_candidates(
@@ -559,6 +562,13 @@ class NativeAudioEngine:
                 ),
                 min_bpm=request.min_bpm,
                 max_bpm=request.max_bpm,
+                budget=self._analysis_budget(
+                    source=source,
+                    probe=probe,
+                    decoded_bytes=sink_bytes,
+                    elapsed_seconds=time.monotonic() - run_started,
+                    samples=int(np.asarray(mono).size),
+                ).report(),
             )
         finally:
             sink.unlink(missing_ok=True)
@@ -943,6 +953,42 @@ class NativeAudioEngine:
             destination=published.path,
             reused=False,
             budget=budget,
+        )
+
+    def _analysis_budget(
+        self,
+        *,
+        source: Path,
+        probe: MediaProbe,
+        decoded_bytes: int,
+        elapsed_seconds: float,
+        samples: int,
+    ) -> ResourceBudget:
+        """The budget of a read-only analysis (no artifact is published).
+
+        Same fields, different meaning for two of them: ``output_size_bytes`` is
+        0 because nothing was published, and ``decoded_samples`` is the number of
+        samples the analyser actually read (which the analysis window may have
+        truncated) rather than a duration-derived estimate.
+        """
+        governor = getattr(self._transcoder, "governor", None)
+        return ResourceBudget(
+            deadline_seconds=self._settings.deadline_seconds,
+            max_captured_bytes=self._settings.max_captured_bytes,
+            max_analysis_bytes=max(1, int(self._settings.max_analysis_seconds * 192_000 * 4)),
+            elapsed_seconds=max(0.0, elapsed_seconds),
+            peak_captured_bytes=self._settings.max_captured_bytes,
+            peak_analysis_bytes=decoded_bytes,
+            processes_started=int(getattr(governor, "processes_started", 0) or 0),
+            input_size_bytes=source.stat().st_size,
+            input_duration_us=int(probe.container_duration_us or 0),
+            decoded_samples=samples,
+            output_size_bytes=0,
+            staging_quota_bytes=self._settings.staging_quota_bytes,
+            staging_peak_bytes=0,
+            threads=self._settings.threads,
+            peak_rss_bytes=getattr(governor, "peak_rss_bytes", None),
+            ffmpeg_version=None,
         )
 
     # -- resources (§4.8) -------------------------------------------------- #

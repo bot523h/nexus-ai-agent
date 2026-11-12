@@ -211,8 +211,7 @@ def assert_verified(bundle: EvidenceBundle, *, at_least: OperationEvidenceState)
     assessment = assess_state(bundle)
     if assessment.state is OperationEvidenceState.CONTRADICTED:
         raise EvidenceStateError(
-            f"{bundle.operation}: evidence contradicts the claim — "
-            + "; ".join(assessment.reasons)
+            f"{bundle.operation}: evidence contradicts the claim — " + "; ".join(assessment.reasons)
         )
     if at_least not in STATE_ORDER:
         raise EvidenceStateError(f"unknown required state {at_least!r}")
@@ -227,4 +226,3 @@ def assert_verified(bundle: EvidenceBundle, *, at_least: OperationEvidenceState)
 def states_for(names: Sequence[str]) -> dict[str, OperationEvidenceState]:
     """Helper for reporting: fresh assessments start at ``PLANNED``."""
     return {name: OperationEvidenceState.PLANNED for name in names}
-

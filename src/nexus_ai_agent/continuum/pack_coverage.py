@@ -60,6 +60,10 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         # no measurable tempo, an artifact that fails verification, a replayed
         # request) are pack evidence and are measured here.
         "tests/unit/test_audio_pack_evidence_paths.py",
+        # STAGE-A: the engine-level hardening suite drives the same pack
+        # handlers through refusal, cancellation and recipe-identity paths, so
+        # it is pack evidence and must be measured (not host-layer).
+        "tests/unit/test_omega_stage_a_hardening.py",
         "tests/architecture/test_audio_pack_boundary.py",
     ),
     "caption": (

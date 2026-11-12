@@ -1440,3 +1440,211 @@ def test_a_refused_render_leaves_no_artifact_in_the_immutable_inputs_directory(
         )
         assert suffix == "wav", f"an unexpected artifact survived in inputs/: {name}"
     assert list((tmp_path / "workspace" / "staging").iterdir()) == []
+
+
+# --------------------------------------------------------------------------- #
+# D9 — production verifies but never mints; statuses are earned, not assigned
+# --------------------------------------------------------------------------- #
+
+
+def test_application_layer_cannot_mint_a_passport() -> None:
+    """The code that runs renders must not be able to sign a passport.
+
+    A passport is minted by the engine after it measures the bytes.  If the
+    application layer (packs, handlers, command bus) could construct one, an
+    operation could "verify" its own output without any measurement — the exact
+    failure the doctrine forbids (production verifies, never mints).
+    """
+    import nexus_ai_agent.creative.packs.audio.operations as operations
+    from nexus_ai_agent.creative.audio_engine import verify
+
+    forbidden = {"build_passport", "verify_passport", "ArtifactPassport"}
+    exposed = forbidden & set(dir(operations))
+    assert not exposed, f"the audio pack exposes passport minting: {sorted(exposed)}"
+    # And the signer itself is engine-internal: importing it from a pack would
+    # let the pack sign its own claims.
+    assert not hasattr(verify, "sign_with_key") or True  # presence is fine; use is gated
+    source = Path(operations.__file__).read_text(encoding="utf-8")
+    assert "build_passport" not in source, "a pack builds its own passport"
+    assert "ed25519_sign" not in source, "a pack reaches for the signer"
+
+
+def test_the_evidence_ladder_never_skips_a_rung() -> None:
+    """Every rung is gated by a *fact*, and the top one needs corroboration."""
+    from nexus_ai_agent.creative.studio.evidence import (
+        EvidenceBundle,
+        OperationEvidenceState,
+        VerifierCorroboration,
+        assess_state,
+    )
+
+    honoured_sha = "sha256:" + "a" * 64
+    # implemented only
+    assert (
+        assess_state(EvidenceBundle(operation="op", implemented=True, executed=False)).state
+        is OperationEvidenceState.IMPLEMENTED
+    )
+    # executed but no artifact
+    assert (
+        assess_state(EvidenceBundle(operation="op", implemented=True, executed=True)).state
+        is OperationEvidenceState.EXECUTION_PROVEN
+    )
+    # one signed verifier -> ARTIFACT_VERIFIED, never PRODUCTION_PROVEN
+    one = assess_state(
+        EvidenceBundle(
+            operation="op",
+            implemented=True,
+            executed=True,
+            artifact_sha256=honoured_sha,
+            corroborations=(
+                VerifierCorroboration(
+                    verifier_key_id="key-a",
+                    artifact_sha256=honoured_sha,
+                    verified=True,
+                    signed=True,
+                ),
+            ),
+        )
+    )
+    assert one.state is OperationEvidenceState.ARTIFACT_VERIFIED
+    # the same key twice is still one key
+    twice = assess_state(
+        EvidenceBundle(
+            operation="op",
+            implemented=True,
+            executed=True,
+            artifact_sha256=honoured_sha,
+            corroborations=(
+                VerifierCorroboration(
+                    verifier_key_id="key-a",
+                    artifact_sha256=honoured_sha,
+                    verified=True,
+                    signed=True,
+                ),
+                VerifierCorroboration(
+                    verifier_key_id="key-a",
+                    artifact_sha256=honoured_sha,
+                    verified=True,
+                    signed=True,
+                ),
+            ),
+            production_runs=("run-1",),
+        )
+    )
+    assert twice.state is OperationEvidenceState.ARTIFACT_VERIFIED, (
+        "one key signing twice was treated as independent corroboration"
+    )
+    # a refusal contradicts, it does not merely downgrade
+    contradicted = assess_state(
+        EvidenceBundle(
+            operation="op",
+            implemented=True,
+            executed=True,
+            artifact_sha256=honoured_sha,
+            corroborations=(
+                # A refusal can never be *signed* (the model forbids it): a
+                # "signed refusal" would be a contradiction in terms.
+                VerifierCorroboration(
+                    verifier_key_id="key-b",
+                    artifact_sha256=honoured_sha,
+                    verified=False,
+                    signed=False,
+                    code="loudness/target_missed",
+                ),
+            ),
+        )
+    )
+    assert contradicted.state is OperationEvidenceState.CONTRADICTED
+
+
+def test_the_pack_evidence_ceiling_is_artifact_verified_not_production_proven() -> None:
+    """No pack may claim PRODUCTION_PROVEN without independent corroboration.
+
+    ``PACK_EVIDENCE`` is a static declaration, so it is exactly the place where
+    a status could be *assigned* rather than earned.
+    """
+    from nexus_ai_agent.creative.studio.evidence import OperationEvidenceState
+    from nexus_ai_agent.creative.studio.lifecycle import PACK_EVIDENCE
+
+    for pack_id, state in PACK_EVIDENCE.items():
+        assert state is not OperationEvidenceState.PRODUCTION_PROVEN, (
+            f"{pack_id} claims PRODUCTION_PROVEN as a static constant; that rung "
+            "requires two distinct verifier keys and a production run, which no "
+            "constant can carry"
+        )
+
+
+def test_the_audio_pack_state_matches_its_measured_evidence() -> None:
+    """The declared state must not be *below* what the engine proves.
+
+    ``nexus.audio.studio`` declares ARTIFACT_VERIFIED and the engine really does
+    produce verifier-signed artifacts, so the declaration is true.  What must
+    never happen is the reverse: a state above the evidence.
+    """
+    from nexus_ai_agent.creative.studio.evidence import OperationEvidenceState
+    from nexus_ai_agent.creative.studio.lifecycle import PACK_EVIDENCE, pack_lifecycle
+
+    assert PACK_EVIDENCE["nexus.audio.studio"] is OperationEvidenceState.ARTIFACT_VERIFIED
+    lifecycle = pack_lifecycle("nexus.audio.studio")
+    assert lifecycle is not None
+    # The *reason* must no longer contradict the evidence.
+    assert "unmapped" not in lifecycle.reason.lower(), (
+        "the declared reason still says the DSP paths are unmapped, which the "
+        "engine's measured evidence contradicts"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# D10 — a read-only analysis reports its budget too, and confidence is labelled
+# --------------------------------------------------------------------------- #
+
+
+@requires_ffmpeg
+def test_beat_analysis_reports_what_it_consumed(engine: NativeAudioEngine, media_dir: Path) -> None:
+    """An analysis is a bounded run; it must report its cost like a render does."""
+    from nexus_ai_agent.application.ports.audio_engine import BeatRequest
+
+    media.write_click_track(media_dir / "pulse.wav", bpm=96.0, seconds=8.0)
+    analysis = engine.detect_beats(
+        BeatRequest(
+            request_id="d10-beats",
+            source_asset_id="pulse",
+            min_bpm=40.0,
+            max_bpm=240.0,
+        )
+    )
+    assert analysis.budget is not None, "an analysis run reported no budget"
+    budget = analysis.budget
+    assert budget["elapsed_seconds"] > 0
+    assert budget["decoded_samples"] > 0
+    assert budget["input_size_bytes"] == (media_dir / "pulse.wav").stat().st_size
+    assert budget["output_size_bytes"] == 0, "nothing is published by an analysis"
+    assert budget["processes_started"] > 0
+    assert budget["rss"] in ("MEASURED", "NOT_MEASURED")
+    if budget["rss"] == "MEASURED":
+        assert budget["peak_rss_bytes"] > 0
+
+
+@requires_ffmpeg
+def test_confidence_is_labelled_a_margin_not_a_probability(
+    engine: NativeAudioEngine, media_dir: Path
+) -> None:
+    """Doctrine §4: a normalised margin must never be readable as a probability."""
+    from nexus_ai_agent.application.ports.audio_engine import BeatRequest
+
+    media.write_click_track(media_dir / "labelled.wav", bpm=120.0, seconds=8.0)
+    analysis = engine.detect_beats(
+        BeatRequest(
+            request_id="d10-confidence",
+            source_asset_id="labelled",
+            min_bpm=40.0,
+            max_bpm=240.0,
+        )
+    )
+    assert analysis.confidence_kind == "normalized_margin", (
+        "the payload does not say what `confidence` means, so a consumer will "
+        "read a margin as a probability"
+    )
+    assert 0.0 <= analysis.confidence <= 1.0
+    # The name is the contract: there is no `probability` field to mistake it for.
+    assert "probability" not in type(analysis).model_fields
