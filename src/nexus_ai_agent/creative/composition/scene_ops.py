@@ -1,0 +1,263 @@
+"""Registrars for the ten missing ``scene.*`` catalogue operations (Wave 3).
+
+Each operation is a pure, deterministic image transform implemented in
+:mod:`kernels`. The handlers here adapt a typed payload plus a caller-supplied
+in-memory image store into an :class:`OperationOutcome`. They never touch the
+network, never dispatch a command, and never own project state: the caller
+supplies the images.
+
+The ``scene.imaging`` pack is *additive*: ``register_scene_operations`` adds the
+ten operations to any :class:`CapabilityRegistry` the caller passes, and
+``build_scene_registry`` builds one on top of the base wave-1 registry.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from nexus_ai_agent.creative.composition import scene_imaging as kernels
+from nexus_ai_agent.creative.packs.scene.errors import InvalidImageError
+from nexus_ai_agent.creative.packs.scene.models import (
+    DOMAIN,
+    SCENE_PACKAGE_ID,
+    ChromaticAberrationInput,
+    DepthOfFieldInput,
+    FogHazeInput,
+    HorizonLevelInput,
+    InsertObjectInput,
+    LensDistortionInput,
+    OutpaintInput,
+    ReflectionInput,
+    RemoveObjectInput,
+    SkyRelitInput,
+)
+from nexus_ai_agent.creative.studio.capabilities import (
+    CapabilityRegistry,
+    OperationContext,
+    OperationOutcome,
+    OperationSpec,
+)
+from nexus_ai_agent.creative.studio.models import PermissionLevel, Project
+
+__all__ = ["register_scene_operations", "build_scene_registry", "SCENE_HANDLERS"]
+
+
+def _split(context: OperationContext) -> tuple[dict[str, object], dict[str, Any]]:
+    """Split the caller-supplied ``_images`` store from the typed payload."""
+    data = dict(context.input_data)
+    store = data.pop("_images", None)
+    if not isinstance(store, dict):
+        raise InvalidImageError("operation requires an '_images' buffer store")
+    return data, store
+
+
+def _require(store: dict[str, Any], key: str) -> Any:
+    try:
+        return store[key]
+    except KeyError:
+        raise InvalidImageError(f"image buffer {key!r} not found") from None
+
+
+def _out(project: Project, context: OperationContext, image: Any) -> OperationOutcome:
+    """Return a no-state-change outcome carrying the produced image."""
+    return OperationOutcome(project=project, history=context.history, output={"image": image})
+
+
+def _insert_object(project: Project, context: OperationContext) -> OperationOutcome:
+    data, store = _split(context)
+    p = InsertObjectInput.model_validate(data)
+    result = kernels.insert_object_with_shadow(
+        _require(store, p.image_id),
+        _require(store, p.object_id),
+        _require(store, p.mask_id),
+        offset=(p.offset_x, p.offset_y),
+    )
+    return _out(project, context, result)
+
+
+def _remove_object(project: Project, context: OperationContext) -> OperationOutcome:
+    data, store = _split(context)
+    p = RemoveObjectInput.model_validate(data)
+    return _out(
+        project,
+        context,
+        kernels.remove_object_inpaint(
+            _require(store, p.image_id), _require(store, p.mask_id), iters=p.iters
+        ),
+    )
+
+
+def _outpaint(project: Project, context: OperationContext) -> OperationOutcome:
+    data, store = _split(context)
+    p = OutpaintInput.model_validate(data)
+    return _out(
+        project, context, kernels.outpaint_canvas_expand(_require(store, p.image_id), pad=p.pad)
+    )
+
+
+def _dof(project: Project, context: OperationContext) -> OperationOutcome:
+    data, store = _split(context)
+    p = DepthOfFieldInput.model_validate(data)
+    return _out(
+        project,
+        context,
+        kernels.synthesize_depth_of_field(
+            _require(store, p.image_id),
+            _require(store, p.depth_id),
+            focus=p.focus,
+            f_number=p.f_number,
+            f_mm=p.f_mm,
+        ),
+    )
+
+
+def _fog(project: Project, context: OperationContext) -> OperationOutcome:
+    data, store = _split(context)
+    p = FogHazeInput.model_validate(data)
+    return _out(
+        project,
+        context,
+        kernels.add_volumetric_fog_haze(
+            _require(store, p.image_id), _require(store, p.depth_id), beta=p.beta, g=p.g
+        ),
+    )
+
+
+def _lens(project: Project, context: OperationContext) -> OperationOutcome:
+    data, store = _split(context)
+    p = LensDistortionInput.model_validate(data)
+    return _out(
+        project,
+        context,
+        kernels.lens_distortion_correct(_require(store, p.image_id), k1=p.k1, k2=p.k2, k3=p.k3),
+    )
+
+
+def _chromatic(project: Project, context: OperationContext) -> OperationOutcome:
+    data, store = _split(context)
+    p = ChromaticAberrationInput.model_validate(data)
+    return _out(
+        project,
+        context,
+        kernels.chromatic_aberration_control(
+            _require(store, p.image_id), scales=(p.scale_r, p.scale_g, p.scale_b)
+        ),
+    )
+
+
+def _horizon(project: Project, context: OperationContext) -> OperationOutcome:
+    data, store = _split(context)
+    p = HorizonLevelInput.model_validate(data)
+    image, angle = kernels.perspective_horizon_level(_require(store, p.image_id))
+    return OperationOutcome(
+        project=project, history=context.history, output={"image": image, "angle_deg": angle}
+    )
+
+
+def _sky_relit(project: Project, context: OperationContext) -> OperationOutcome:
+    data, store = _split(context)
+    p = SkyRelitInput.model_validate(data)
+    return _out(
+        project,
+        context,
+        kernels.sky_replacement_relit(
+            _require(store, p.image_id),
+            _require(store, p.mask_id),
+            _require(store, p.sky_id),
+            sky_temp_k=p.sky_temp_k,
+        ),
+    )
+
+
+def _reflection(project: Project, context: OperationContext) -> OperationOutcome:
+    data, store = _split(context)
+    p = ReflectionInput.model_validate(data)
+    return _out(
+        project,
+        context,
+        kernels.reflection_water_glass_synth(
+            _require(store, p.image_id), axis=p.axis, fresnel=p.fresnel, waves=p.waves
+        ),
+    )
+
+
+SCENE_HANDLERS: dict[str, Any] = {
+    "insert_object_with_shadow": (
+        _insert_object,
+        InsertObjectInput,
+        "Insert a premultiplied-alpha object with a contact shadow.",
+    ),
+    "remove_object_inpaint": (
+        _remove_object,
+        RemoveObjectInput,
+        "Remove an object with multiscale harmonic inpainting.",
+    ),
+    "outpaint_canvas_expand": (
+        _outpaint,
+        OutpaintInput,
+        "Expand the canvas with a mirrored Laplacian-pyramid border.",
+    ),
+    "synthesize_depth_of_field": (
+        _dof,
+        DepthOfFieldInput,
+        "Depth-driven circle-of-confusion defocus.",
+    ),
+    "add_volumetric_fog_haze": (
+        _fog,
+        FogHazeInput,
+        "Koschmieder atmospheric scattering with HG phase.",
+    ),
+    "lens_distortion_correct": (_lens, LensDistortionInput, "Brown-Conrady radial undistortion."),
+    "chromatic_aberration_control": (
+        _chromatic,
+        ChromaticAberrationInput,
+        "Per-channel radial magnification for lateral CA.",
+    ),
+    "perspective_horizon_level": (
+        _horizon,
+        HorizonLevelInput,
+        "Estimate and level the dominant horizon.",
+    ),
+    "sky_replacement_relit": (
+        _sky_relit,
+        SkyRelitInput,
+        "Replace the sky and re-light the foreground.",
+    ),
+    "reflection_water_glass_synth": (
+        _reflection,
+        ReflectionInput,
+        "Flat mirror reflection with Fresnel and ripples.",
+    ),
+}
+
+
+def register_scene_operations(registry: CapabilityRegistry) -> CapabilityRegistry:
+    """Register the ten ``scene.*`` operations on ``registry`` (idempotent)."""
+    for name, (handler, model, description) in SCENE_HANDLERS.items():
+        operation_id = f"{DOMAIN}.{name}"
+        try:
+            registry.get_spec(operation_id)
+            continue  # already registered
+        except Exception:
+            pass
+        registry.register_operation(
+            DOMAIN,
+            name,
+            OperationSpec(
+                operation_id=operation_id,
+                description=description,
+                permission_level=PermissionLevel.REVERSIBLE,
+                input_model=model,
+                handler=handler,
+                required_packs=(SCENE_PACKAGE_ID,),
+                deterministic=True,
+            ),
+        )
+    return registry
+
+
+def build_scene_registry() -> CapabilityRegistry:
+    """A base registry pre-loaded with the ``scene.imaging`` operations."""
+    from nexus_ai_agent.creative.studio.capabilities import build_wave1_registry
+
+    return register_scene_operations(build_wave1_registry())
