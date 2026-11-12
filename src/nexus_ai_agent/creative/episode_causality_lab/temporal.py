@@ -151,7 +151,7 @@ def _bellman_ford(net: TemporalNetwork, *, max_relaxations: int) -> TemporalResu
 
     relaxations = 0
     changed_node: str | None = None
-    for i in range(len(nodes)):
+    for _pass in range(len(nodes)):
         changed_node = None
         for a, b, weight, cid in net._edges:  # noqa: SLF001
             if dist[a] + weight < dist[b]:
@@ -201,7 +201,9 @@ def _bellman_ford(net: TemporalNetwork, *, max_relaxations: int) -> TemporalResu
             reason="relaxation did not converge but no cycle could be extracted",
         )
     nodes_seq, cids, total = cycle
-    witness = NegativeCycleWitness(nodes=tuple(nodes_seq), constraint_ids=tuple(cids), total_weight=total)
+    witness = NegativeCycleWitness(
+        nodes=tuple(nodes_seq), constraint_ids=tuple(cids), total_weight=total
+    )
     if not witness.is_valid():
         return TemporalResult(
             status=Status.UNKNOWN,
@@ -248,24 +250,23 @@ def _extract_cycle(
 def _weigh_cycle(
     cycle_nodes: list[str], pred: dict[str, tuple[str, int, str]]
 ) -> tuple[list[str], list[str], int]:
-    """Recompute a cycle's total weight from its predecessor edges."""
+    """Recompute a cycle's total weight from its predecessor edges.
+
+    For each node on the cycle the predecessor edge is the edge that closes the
+    cycle at that node, so the cycle weight is their sum. The weight is
+    recomputed here — it is never read from a cached distance — so the reported
+    total is the true cycle weight.
+    """
     if not cycle_nodes:
         return [], [], 0
-    edges: list[tuple[str, int, str]] = []
     total = 0
-    for i, node in enumerate(cycle_nodes):
-        nxt = cycle_nodes[(i + 1) % len(cycle_nodes)]
-        step = pred.get(nxt)
-        # the predecessor edge of ``nxt`` must come from ``node`` to be on cycle
-        if step is None or step[0] != node:
-            # fall back: recompute using stored pred chain if consistent
-            step = pred.get(nxt)
-            if step is None:
-                continue
-        weight = step[1]
-        total += weight
-        edges.append((nxt, weight, step[2]))
-    constraint_ids = [e[2] for e in edges]
+    constraint_ids: list[str] = []
+    for node in cycle_nodes:
+        step = pred.get(node)
+        if step is None:
+            continue
+        total += step[1]
+        constraint_ids.append(step[2])
     # nodes in traversal order plus the closing node for readability
     ordered = cycle_nodes + [cycle_nodes[0]]
     return ordered, constraint_ids, total

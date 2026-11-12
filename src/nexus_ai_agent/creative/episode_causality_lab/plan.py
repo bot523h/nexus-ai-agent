@@ -314,9 +314,18 @@ def _resource_limited(
     rejected: list[RejectedCandidate],
     which: str,
 ) -> PlanResult:
+    """Honest result when a budget stopped the search short.
+
+    If a complete, feasible plan was found before the budget ran out, the
+    result is ``FEASIBLE_NOT_PROVEN_OPTIMAL`` (a real plan, not proven optimal).
+    If no complete plan was found, the result is ``RESOURCE_LIMIT`` — we cannot
+    even claim feasibility. Neither case is ever ``PROVEN_OPTIMAL``.
+    """
     steps = partial or ()
+    complete = bool(steps) and _plan_covers(partial)
+    status = SolverStatus.FEASIBLE_NOT_PROVEN_OPTIMAL if complete else SolverStatus.RESOURCE_LIMIT
     return PlanResult(
-        status=SolverStatus.RESOURCE_LIMIT,
+        status=status,
         steps=steps,
         total_frames=sum(s.frames for s in steps),
         total_preference=sum(s.preference for s in steps),
@@ -329,3 +338,10 @@ def _resource_limited(
         transitions_examined=transitions,
         optimal=False,
     )
+
+
+def _plan_covers(partial: tuple[PlanStep, ...] | None) -> bool:
+    """A partial plan is complete when its steps' covered beats are non-empty."""
+    if not partial:
+        return False
+    return all(step.covers for step in partial)

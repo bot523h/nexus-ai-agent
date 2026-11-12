@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import atlas_fixtures as fx
 import pytest
 
 from nexus_ai_agent.creative.episode_causality_lab import (
@@ -22,8 +23,6 @@ from nexus_ai_agent.creative.episode_causality_lab import (
     loads_story,
     parse_story,
 )
-
-import atlas_fixtures as fx
 
 
 def test_parse_minimal_document_round_trips() -> None:
@@ -70,9 +69,7 @@ def test_non_object_document_is_refused() -> None:
 
 def test_duplicate_character_id_is_refused() -> None:
     with pytest.raises(DuplicateIdentifierError):
-        parse_story(
-            fx.raw_doc(characters=(Character(id="alice"), Character(id="alice")))
-        )
+        parse_story(fx.raw_doc(characters=(Character(id="alice"), Character(id="alice"))))
 
 
 def test_duplicate_episode_order_is_refused() -> None:
@@ -80,9 +77,7 @@ def test_duplicate_episode_order_is_refused() -> None:
 
     with pytest.raises(DuplicateIdentifierError):
         parse_story(
-            fx.raw_doc(
-                episodes=(Episode(id="a", order_index=0), Episode(id="b", order_index=0))
-            )
+            fx.raw_doc(episodes=(Episode(id="a", order_index=0), Episode(id="b", order_index=0)))
         )
 
 
@@ -170,7 +165,9 @@ def test_oversized_raw_document_is_refused() -> None:
 
 def test_fact_referencing_unknown_entity_is_refused() -> None:
     with pytest.raises(UnknownReferenceError):
-        parse_story(fx.raw_doc(initial_facts=(fx.fact("ghost", FactRelation.KNOWS, "gun", TriValue.TRUE),)))
+        parse_story(
+            fx.raw_doc(initial_facts=(fx.fact("ghost", FactRelation.KNOWS, "gun", TriValue.TRUE),))
+        )
 
 
 def test_fingerprint_is_stable_and_order_independent_of_dict_keys() -> None:

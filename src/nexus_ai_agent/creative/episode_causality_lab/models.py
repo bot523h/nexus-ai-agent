@@ -56,6 +56,7 @@ __all__ = [
 SCHEMA_VERSION = 1
 
 _ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+_NODE_PATTERN = r"^(?:[A-Za-z0-9][A-Za-z0-9._-]*|(?:episode|scene):[A-Za-z0-9][A-Za-z0-9._-]*)$"
 
 
 @dataclass(frozen=True)
@@ -265,10 +266,23 @@ class TemporalConstraint(_Strict):
     upper: int = Field(ge=-INPUT_BOUNDS.max_abs_time, le=INPUT_BOUNDS.max_abs_time)
     source: SourceRef
 
-    @field_validator("id", "a", "b")
+    @field_validator("id")
     @classmethod
-    def _v(cls, v: str) -> str:
-        return _check_id(v, field_name="temporal field")
+    def _v_id(cls, v: str) -> str:
+        return _check_id(v, field_name="temporal.id")
+
+    @field_validator("a", "b")
+    @classmethod
+    def _v_node(cls, v: str) -> str:
+        if not v or len(v) > INPUT_BOUNDS.max_id_length:
+            raise StoryValidationError(
+                f"temporal node must be 1..{INPUT_BOUNDS.max_id_length} chars"
+            )
+        import re
+
+        if not re.match(_NODE_PATTERN, v):
+            raise StoryValidationError(f"temporal node={v!r} is not a valid node id")
+        return v
 
     @model_validator(mode="after")
     def _ordering(self) -> TemporalConstraint:

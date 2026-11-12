@@ -107,9 +107,7 @@ class IncrementalEngine:
             state = WorldState.from_snapshot(snapshot, current.closed_world)
             prefix_ids = {e.id for e in cur_events[:first_change]}
             prefix_findings = [
-                f
-                for f in previous_report.findings
-                if f.event_ids and f.event_ids[0] in prefix_ids
+                f for f in previous_report.findings if f.event_ids and f.event_ids[0] in prefix_ids
             ]
             prefix_deps = {
                 e.id: previous_report.dependencies.get(e.id, ()) for e in cur_events[:first_change]

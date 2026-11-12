@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import itertools
 
+import atlas_fixtures as fx
+
 from nexus_ai_agent.creative.episode_causality_lab import (
     Status,
     check_consistency,
 )
 from nexus_ai_agent.creative.episode_causality_lab.temporal import TemporalResult
-
-import atlas_fixtures as fx
 
 
 def _oracle_satisfiable(constraints, nodes, bound: int) -> bool:
@@ -113,7 +113,9 @@ def test_node_limit_returns_resource_limit_not_pass() -> None:
 
 def test_edge_limit_returns_resource_limit() -> None:
     cons = tuple(fx.constraint(f"c{i}", "a", f"n{i}", 0, 1) for i in range(10))
-    result = check_consistency(cons, extra_nodes=("a",) + tuple(f"n{i}" for i in range(10)), max_edges=3)
+    result = check_consistency(
+        cons, extra_nodes=("a",) + tuple(f"n{i}" for i in range(10)), max_edges=3
+    )
     assert result.status is Status.RESOURCE_LIMIT
     assert "edge count" in result.reason
 

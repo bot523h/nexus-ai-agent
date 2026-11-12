@@ -74,16 +74,6 @@ def analyze_story(
     if plan_request is not None:
         plan = plan_edit(plan_request)
 
-    notes: list[str] = []
-    if temporal.status is Status.UNKNOWN:
-        notes.append("temporal consistency could not be decided")
-    if temporal.status is Status.RESOURCE_LIMIT:
-        notes.append(temporal.reason)
-    if plan is not None and plan.status is SolverStatus.RESOURCE_LIMIT:
-        notes.append(plan.explanation)
-    if plan is not None and plan.status is SolverStatus.FEASIBLE_NOT_PROVEN_OPTIMAL:
-        notes.append(plan.explanation)
-
     overall = _fold(causal.status, temporal.status, plan.status if plan else None)
     suggestions = suggest_repairs(causal.findings, temporal)
     return AnalysisReport(
@@ -93,8 +83,22 @@ def analyze_story(
         temporal=temporal,
         plan=plan,
         suggestions=suggestions,
-        notes=tuple(notes),
+        notes=_collect_notes(temporal, plan),
     )
+
+
+def _collect_notes(temporal: TemporalResult, plan: PlanResult | None) -> tuple[str, ...]:
+    """Human-readable notes for any non-conclusive sub-result."""
+    notes: list[str] = []
+    if temporal.status is Status.UNKNOWN:
+        notes.append("temporal consistency could not be decided")
+    if temporal.status is Status.RESOURCE_LIMIT:
+        notes.append(temporal.reason)
+    if plan is not None and plan.status is SolverStatus.RESOURCE_LIMIT:
+        notes.append(plan.explanation)
+    if plan is not None and plan.status is SolverStatus.FEASIBLE_NOT_PROVEN_OPTIMAL:
+        notes.append(plan.explanation)
+    return tuple(notes)
 
 
 def _fold(causal: Status, temporal: Status, plan: SolverStatus | None) -> Status:

@@ -57,9 +57,7 @@ def loads_story(raw: bytes | str) -> StoryDocument:
     """Decode JSON bytes/str and validate. Never executes dynamic code."""
     if isinstance(raw, bytes):
         if len(raw) > MAX_DOCUMENT_BYTES:
-            raise LimitExceededError(
-                f"story document is {len(raw)} bytes > {MAX_DOCUMENT_BYTES}"
-            )
+            raise LimitExceededError(f"story document is {len(raw)} bytes > {MAX_DOCUMENT_BYTES}")
         text = raw.decode("utf-8")
     else:
         text = raw
@@ -91,7 +89,7 @@ def validate_references(doc: StoryDocument) -> None:
     locations = _unique(doc.locations, "location")
     episodes = _unique(doc.episodes, "episode")
     scenes = _unique(doc.scenes, "scene")
-    events = _unique(doc.events, "event")
+    _unique(doc.events, "event")
     _unique(doc.beats, "beat")
     _unique(doc.shot_candidates, "shot")
     _unique(doc.temporal_constraints, "temporal constraint")
@@ -172,9 +170,7 @@ def validate_references(doc: StoryDocument) -> None:
     for shot in doc.shot_candidates:
         for beat_id in shot.covers_beats:
             if beat_id not in {b.id for b in doc.beats}:
-                raise UnknownReferenceError(
-                    f"shot {shot.id!r} covers unknown beat {beat_id!r}"
-                )
+                raise UnknownReferenceError(f"shot {shot.id!r} covers unknown beat {beat_id!r}")
 
     _validate_temporal_nodes(doc, scenes)
 

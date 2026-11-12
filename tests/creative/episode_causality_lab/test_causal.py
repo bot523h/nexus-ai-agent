@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atlas_fixtures as fx
 import pytest
 
 from nexus_ai_agent.creative.episode_causality_lab import (
@@ -17,8 +18,6 @@ from nexus_ai_agent.creative.episode_causality_lab.causal import (
     CausalFindingCode,
     knows_fact_key,
 )
-
-import atlas_fixtures as fx
 
 
 def _analyze(**overrides):
@@ -65,9 +64,7 @@ def test_reveal_without_declared_knowledge_is_a_conflict() -> None:
             fx.fact("alice", FactRelation.POSSESSES, "gun", TriValue.TRUE),
             DeclaredFact(key=knows, value=TriValue.FALSE, source=fx.SRC),
         ),
-        events=(
-            fx.event("e1", EventKind.REVEAL_FACT, actor="bob", target="alice", fact_key=key),
-        ),
+        events=(fx.event("e1", EventKind.REVEAL_FACT, actor="bob", target="alice", fact_key=key),),
     )
     report = CausalEngine().analyze(doc)
     assert report.findings_for(CausalFindingCode.KNOWLEDGE_PREREQUISITE_UNMET)
@@ -89,7 +86,9 @@ def test_learn_then_reveal_passes() -> None:
     doc = fx.base_doc(
         events=(
             fx.event("e1", EventKind.LEARN_FACT, order=0, actor="bob", fact_key=key),
-            fx.event("e2", EventKind.REVEAL_FACT, order=1, actor="bob", target="alice", fact_key=key),
+            fx.event(
+                "e2", EventKind.REVEAL_FACT, order=1, actor="bob", target="alice", fact_key=key
+            ),
         )
     )
     report = CausalEngine().analyze(doc)
@@ -121,7 +120,9 @@ def test_injure_then_heal_track_state() -> None:
 def test_set_state_writes_a_declared_fact() -> None:
     key = FactKey(subject_id="alice", relation=FactRelation.ALIVE, target_id="alice")
     doc = fx.base_doc(
-        events=(fx.event("e1", EventKind.SET_STATE, actor="alice", fact_key=key, value=TriValue.FALSE),)
+        events=(
+            fx.event("e1", EventKind.SET_STATE, actor="alice", fact_key=key, value=TriValue.FALSE),
+        )
     )
     report = CausalEngine().analyze(doc)
     assert report.final_state.get(key) is TriValue.FALSE
@@ -142,8 +143,17 @@ def test_ambiguous_order_is_reported() -> None:
 def test_flashback_order_is_flagged_not_silently_reordered() -> None:
     doc = fx.base_doc(
         events=(
-            fx.event("e1", EventKind.ENTER_LOCATION, order=0, actor="alice", target="room", story_tick=100),
-            fx.event("e2", EventKind.ENTER_LOCATION, order=1, actor="bob", target="room", story_tick=50),
+            fx.event(
+                "e1",
+                EventKind.ENTER_LOCATION,
+                order=0,
+                actor="alice",
+                target="room",
+                story_tick=100,
+            ),
+            fx.event(
+                "e2", EventKind.ENTER_LOCATION, order=1, actor="bob", target="room", story_tick=50
+            ),
         )
     )
     report = CausalEngine().analyze(doc)
@@ -184,8 +194,12 @@ def test_dependency_tracks_last_writer_of_a_fact() -> None:
     doc = fx.base_doc(
         initial_facts=(fx.fact("alice", FactRelation.POSSESSES, "gun", TriValue.TRUE),),
         events=(
-            fx.event("e1", EventKind.TRANSFER_PROP, order=0, actor="alice", target="bob", prop="gun"),
-            fx.event("e2", EventKind.TRANSFER_PROP, order=1, actor="bob", target="alice", prop="gun"),
+            fx.event(
+                "e1", EventKind.TRANSFER_PROP, order=0, actor="alice", target="bob", prop="gun"
+            ),
+            fx.event(
+                "e2", EventKind.TRANSFER_PROP, order=1, actor="bob", target="alice", prop="gun"
+            ),
         ),
     )
     report = CausalEngine().analyze(doc)
@@ -196,8 +210,12 @@ def test_second_transfer_from_emptied_holder_is_a_conflict() -> None:
     doc = fx.base_doc(
         initial_facts=(fx.fact("alice", FactRelation.POSSESSES, "gun", TriValue.TRUE),),
         events=(
-            fx.event("e1", EventKind.TRANSFER_PROP, order=0, actor="alice", target="bob", prop="gun"),
-            fx.event("e2", EventKind.TRANSFER_PROP, order=1, actor="alice", target="bob", prop="gun"),
+            fx.event(
+                "e1", EventKind.TRANSFER_PROP, order=0, actor="alice", target="bob", prop="gun"
+            ),
+            fx.event(
+                "e2", EventKind.TRANSFER_PROP, order=1, actor="alice", target="bob", prop="gun"
+            ),
         ),
     )
     report = CausalEngine().analyze(doc)

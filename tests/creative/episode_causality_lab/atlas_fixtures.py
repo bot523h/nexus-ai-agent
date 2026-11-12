@@ -32,6 +32,15 @@ from nexus_ai_agent.creative.episode_causality_lab import (
 
 SRC = SourceRef(path="ep01/sc01", line=1)
 
+# Re-exported so tests can build documents via ``fx.<Type>`` without a second
+# import line each time.
+Character = Character
+Prop = Prop
+Location = Location
+Episode = Episode
+Scene = Scene
+StoryBeat = StoryBeat
+
 
 def fact(subject: str, relation: FactRelation, target: str, value: TriValue) -> DeclaredFact:
     return DeclaredFact(
@@ -116,6 +125,31 @@ def constraint(cid: str, a: str, b: str, lower: int, upper: int) -> TemporalCons
 
 def beat(bid: str, order: int) -> StoryBeat:
     return StoryBeat(id=bid, episode_id="ep1", order_index=order)
+
+
+def event_in(
+    eid: str,
+    kind: EventKind,
+    *,
+    episode: str,
+    scene: str,
+    order: int = 0,
+    actor: str | None = None,
+    target: str | None = None,
+    prop: str | None = None,
+) -> Event:
+    """An event placed in an explicit episode/scene (for multi-episode stories)."""
+    return Event(
+        id=eid,
+        episode_id=episode,
+        scene_id=scene,
+        order_index=order,
+        kind=kind,
+        actor_id=actor,
+        target_id=target,
+        prop_id=prop,
+        source=SRC,
+    )
 
 
 def shot(

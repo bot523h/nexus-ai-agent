@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "closed_world": false,
+  "characters": [
+    {"id": "mara"},
+    {"id": "ivo"}
+  ],
+  "props": [
+    {"id": "brass_key", "unique": true}
+  ],
+  "locations": [
+    {"id": "lighthouse"},
+    {"id": "harbour"}
+  ],
+  "episodes": [
+    {"id": "ep1", "order_index": 0, "title": "The Key"},
+    {"id": "ep2", "order_index": 1, "title": "The Return"}
+  ],
+  "scenes": [
+    {"id": "ep1_s1", "episode_id": "ep1", "location_id": "lighthouse", "order_index": 0, "time_of_day": "NIGHT"},
+    {"id": "ep2_s1", "episode_id": "ep2", "location_id": "harbour", "order_index": 0, "time_of_day": "DAWN"}
+  ],
+  "initial_facts": [
+    {
+      "key": {"subject_id": "mara", "relation": "possesses", "target_id": "brass_key"},
+      "value": "TRUE",
+      "source": {"path": "ep1_s1", "line": 1}
+    }
+  ],
+  "events": [
+    {
+      "id": "ep1_e1",
+      "episode_id": "ep1",
+      "scene_id": "ep1_s1",
+      "order_index": 0,
+      "story_tick": 100,
+      "kind": "transfer_prop",
+      "actor_id": "mara",
+      "target_id": "ivo",
+      "prop_id": "brass_key",
+      "source": {"path": "ep1_s1", "line": 12}
+    },
+    {
+      "id": "ep2_e1",
+      "episode_id": "ep2",
+      "scene_id": "ep2_s1",
+      "order_index": 0,
+      "story_tick": 500,
+      "kind": "transfer_prop",
+      "actor_id": "ivo",
+      "target_id": "mara",
+      "prop_id": "brass_key",
+      "source": {"path": "ep2_s1", "line": 40}
+    }
+  ],
+  "temporal_constraints": [
+    {
+      "id": "tc1",
+      "a": "ep1_e1",
+      "b": "ep2_e1",
+      "lower": 100,
+      "upper": 10000,
+      "source": {"path": "timeline", "line": 1}
+    }
+  ],
+  "beats": [
+    {"id": "b1", "episode_id": "ep1", "order_index": 0, "description": "Mara holds the key"},
+    {"id": "b2", "episode_id": "ep1", "order_index": 1, "description": "Mara hands it over"},
+    {"id": "b3", "episode_id": "ep2", "order_index": 0, "description": "Ivo returns it"}
+  ],
+  "shot_candidates": [
+    {
+      "id": "shot_a",
+      "asset_ref": "asset://takes/shot_a",
+      "covers_beats": ["b1", "b2"],
+      "frames": 48,
+      "preference": 1,
+      "evidence_status": "TRUE",
+      "evidence_ref": "evidence://continuity/shot_a",
+      "source": {"path": "coverage", "line": 1}
+    },
+    {
+      "id": "shot_b",
+      "asset_ref": "asset://takes/shot_b",
+      "covers_beats": ["b2", "b3"],
+      "frames": 72,
+      "preference": 2,
+      "evidence_status": "TRUE",
+      "evidence_ref": "evidence://continuity/shot_b",
+      "source": {"path": "coverage", "line": 2}
+    },
+    {
+      "id": "shot_c",
+      "asset_ref": "asset://takes/shot_c",
+      "covers_beats": ["b3"],
+      "frames": 24,
+      "preference": 1,
+      "evidence_status": "UNKNOWN",
+      "evidence_ref": "",
+      "source": {"path": "coverage", "line": 3}
+    }
+  ]
+}

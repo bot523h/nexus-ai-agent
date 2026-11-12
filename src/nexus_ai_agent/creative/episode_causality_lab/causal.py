@@ -204,9 +204,7 @@ def encode_fact_token(fact: FactKey) -> str:
 
 def knows_fact_key(actor: str, fact: FactKey) -> FactKey:
     """The ``(actor, knows, <encoded fact>)`` key the engine reads/writes."""
-    return FactKey(
-        subject_id=actor, relation=FactRelation.KNOWS, target_id=encode_fact_token(fact)
-    )
+    return FactKey(subject_id=actor, relation=FactRelation.KNOWS, target_id=encode_fact_token(fact))
 
 
 def _knows(actor: str, fact: FactKey) -> FactKey:
@@ -220,18 +218,6 @@ def _sanitize(raw: str) -> str:
     encoded with ``|`` is rewritten to ``.`` so it remains a legal target id.
     """
     return raw.replace("|", ".")
-
-
-def _fact_key_from_encoded(encoded: str) -> FactKey | None:
-    parts = encoded.split(".")
-    if len(parts) != 3:
-        return None
-    try:
-        return FactKey(
-            subject_id=parts[0], relation=FactRelation(parts[1]), target_id=parts[2]
-        )
-    except Exception:  # pragma: no cover - defensive; keys are built internally
-        return None
 
 
 class CausalEngine:
@@ -423,7 +409,7 @@ class CausalEngine:
             if event.fact_key and event.value is not None:
                 self._set(state, event.fact_key, event.value)
             return ()
-        return ()  # pragma: no cover - enum is exhaustive
+        raise AssertionError(f"unhandled event kind: {kind!r}")
 
     def _at(self, actor: str, location: str) -> FactKey:
         return FactKey(subject_id=actor, relation=FactRelation.AT_LOCATION, target_id=location)
@@ -484,9 +470,7 @@ class CausalEngine:
             last_writer[newposs.as_tuple()] = event.id
         return deps
 
-    def _reveal(
-        self, event: Event, state: WorldState, findings: list[Finding]
-    ) -> tuple[str, ...]:
+    def _reveal(self, event: Event, state: WorldState, findings: list[Finding]) -> tuple[str, ...]:
         if not event.actor_id or not event.fact_key:
             return ()
         knows = _knows(event.actor_id, event.fact_key)

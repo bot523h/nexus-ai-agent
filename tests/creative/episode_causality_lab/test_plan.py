@@ -8,21 +8,19 @@ budget.
 
 from __future__ import annotations
 
-import itertools
+import atlas_fixtures as fx
 
 from nexus_ai_agent.creative.episode_causality_lab import (
     PlanRequest,
-    ShotCandidate,
     SolverStatus,
     TriValue,
+    check_consistency,
     plan_edit,
 )
 from nexus_ai_agent.creative.episode_causality_lab.plan import (
     DEFAULT_MAX_STATES,
     DEFAULT_MAX_TRANSITIONS,
 )
-
-import atlas_fixtures as fx
 
 
 def _brute_force_optimum(beats, candidates, budget, require_verified):
@@ -32,9 +30,9 @@ def _brute_force_optimum(beats, candidates, budget, require_verified):
     usable = [
         c
         for c in candidates
-        if (not require_verified)
-        or (c.evidence_status is TriValue.TRUE and bool(c.evidence_ref))
+        if (not require_verified) or (c.evidence_status is TriValue.TRUE and bool(c.evidence_ref))
     ]
+
     # For every candidate, the set of starting positions where its full run is
     # contiguous and every covered beat is in its set.
     def run_from(cand, start):
@@ -62,14 +60,24 @@ def _brute_force_optimum(beats, candidates, budget, require_verified):
                 continue
             if frames + cand.frames > budget:
                 continue
-            rec(pos + run, frames + cand.frames, pref + cand.preference, used | {cand.id}, steps + (cand,))
+            rec(
+                pos + run,
+                frames + cand.frames,
+                pref + cand.preference,
+                used | {cand.id},
+                steps + (cand,),
+            )
 
     rec(0, 0, 0, frozenset(), ())
     return best
 
 
 def test_single_candidate_covers_all_beats() -> None:
-    req = PlanRequest(beats=("b1", "b2", "b3"), candidates=(fx.shot("s1", ("b1", "b2", "b3"), 30),), frame_budget=100)
+    req = PlanRequest(
+        beats=("b1", "b2", "b3"),
+        candidates=(fx.shot("s1", ("b1", "b2", "b3"), 30),),
+        frame_budget=100,
+    )
     result = plan_edit(req)
     assert result.status is SolverStatus.PROVEN_OPTIMAL
     assert result.covers == ("b1", "b2", "b3")
@@ -79,7 +87,10 @@ def test_single_candidate_covers_all_beats() -> None:
 def test_cheaper_candidate_is_preferred() -> None:
     req = PlanRequest(
         beats=("b1",),
-        candidates=(fx.shot("s1", ("b1",), 10, preference=5), fx.shot("s2", ("b1",), 10, preference=1)),
+        candidates=(
+            fx.shot("s1", ("b1",), 10, preference=5),
+            fx.shot("s2", ("b1",), 10, preference=1),
+        ),
         frame_budget=100,
     )
     result = plan_edit(req)
@@ -93,7 +104,9 @@ def test_infeasible_when_budget_too_small() -> None:
 
 
 def test_infeasible_when_a_beat_has_no_candidate() -> None:
-    req = PlanRequest(beats=("b1", "b2"), candidates=(fx.shot("s1", ("b1",), 10),), frame_budget=100)
+    req = PlanRequest(
+        beats=("b1", "b2"), candidates=(fx.shot("s1", ("b1",), 10),), frame_budget=100
+    )
     result = plan_edit(req)
     assert result.status is SolverStatus.INFEASIBLE
     assert "b2" in result.explanation
@@ -161,6 +174,46 @@ def test_state_budget_is_honest() -> None:
     req = PlanRequest(beats=beats, candidates=cands, frame_budget=100)
     result = plan_edit(req, max_states=0)
     assert result.status is SolverStatus.RESOURCE_LIMIT
+
+
+def test_complete_plan_found_before_budget_is_feasible_not_optimal() -> None:
+    # A single candidate covers both beats; a tight transition budget cuts the
+    # search after that complete plan is already known. It is feasible, but must
+    # NOT be claimed optimal.
+    req = PlanRequest(
+        beats=("b0", "b1"),
+        candidates=(
+            fx.shot("s0", ("b0",), 1),
+            fx.shot("s1", ("b0", "b1"), 2),
+            fx.shot("s2", ("b1",), 1),
+        ),
+        frame_budget=100,
+    )
+    result = plan_edit(req, max_transitions=2)
+    assert result.status is SolverStatus.FEASIBLE_NOT_PROVEN_OPTIMAL
+    assert result.optimal is False
+    assert result.covers == ("b0", "b1")
+
+
+def test_feasible_not_optimal_folds_to_resource_limit_in_analysis() -> None:
+    req = PlanRequest(
+        beats=("b0", "b1"),
+        candidates=(
+            fx.shot("s0", ("b0",), 1),
+            fx.shot("s1", ("b0", "b1"), 2),
+            fx.shot("s2", ("b1",), 1),
+        ),
+        frame_budget=100,
+    )
+    from nexus_ai_agent.creative.episode_causality_lab.analysis import _collect_notes
+    from nexus_ai_agent.creative.episode_causality_lab.plan import plan_edit as pe
+
+    plan = pe(req, max_transitions=2)
+    notes = _collect_notes(
+        check_consistency(()),
+        plan,
+    )
+    assert any("incomplete" in n for n in notes)
 
 
 def test_deterministic_tie_break_by_candidate_id() -> None:
