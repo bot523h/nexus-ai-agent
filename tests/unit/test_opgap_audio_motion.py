@@ -113,8 +113,59 @@ def test_manifests_advertise_new_capabilities() -> None:
     assert "motion.add_parallax" in motion_manifest["capabilities"]
 
 
+class _DenoiseEngine:
+    """In-memory engine double for the denoise contract (no media bytes).
+
+    What the engine *measures* is pinned against real FFmpeg in
+    ``tests/unit/test_omega_native_engine.py``; this double proves the handler
+    forwards the request and records the measured evidence it was handed.
+    """
+
+    def precheck(self, request):  # noqa: ANN001, ANN202 - test double
+        from nexus_ai_agent.application.ports.audio_engine import SourcePrecheck
+
+        return SourcePrecheck(
+            asset_id=request.asset_id,
+            path=f"/media/{request.asset_id}.wav",
+            exists=True,
+            sha256="sha256:" + "1" * 64,
+            readable=True,
+        )
+
+    def remove_noise(self, request):  # noqa: ANN001, ANN202
+        from nexus_ai_agent.application.ports.audio_engine import ArtifactEvidence
+
+        return ArtifactEvidence(
+            asset_id=request.output_asset_id,
+            output_path=f"/workspace/media/{request.output_asset_id}.flac",
+            sha256="sha256:" + "4" * 64,
+            size_bytes=2048,
+            duration_us=8_000_000,
+            sample_rate=48_000,
+            channels=2,
+            codec="flac",
+            spectral_centroid_hz=980.0,
+            rms_dbfs=-29.5,
+            crest_factor_db=11.2,
+            dynamic_range_db=6.4,
+            acoustic_signature_sha256="sha256:" + "5" * 64,
+            verified=True,
+            passport_id="pp_denoise",
+            reused_existing=False,
+        )
+
+
+def _audio_bus_with_engine():  # noqa: ANN202 - test helper
+    return CommandBus(
+        _project_with_media(),
+        registry=build_audio_registry(),
+        allow_experimental=True,
+        audio_engine=_DenoiseEngine(),
+    )
+
+
 def test_remove_noise_execution() -> None:
-    bus = _audio_bus()
+    bus = _audio_bus_with_engine()
     result = bus.dispatch(
         TypedCommand(
             command_id="cmd_denoise_01",
@@ -134,7 +185,11 @@ def test_remove_noise_execution() -> None:
     assert derived.media_kind == "audio"
     assert derived.duration_us == 8_000_000
     assert derived.parent_asset_ids == ("voice_01",)
-    assert derived.provenance["processor"] == "nagar.audio.studio.denoise.v1"
+    assert derived.provenance["processor"] == "nagar.audio.studio.denoise.v2"
+    assert derived.provenance["artifact_verified"] is True
+    assert derived.provenance["claims"].startswith("static broadband noise")
+    assert derived.provenance["measured"]["acoustic_signature_sha256"] == "sha256:" + "5" * 64
+    assert result.output["derivation"] == "rendered_artifact"
     assert derived.content_sha256 == result.output["content_sha256"]
 
 
@@ -144,13 +199,25 @@ def test_remove_noise_is_deterministic() -> None:
         "strength": 0.8,
         "output_asset_id": "voice_01_clean",
     }
-    first = _audio_bus().dispatch(
+    first = _audio_bus_with_engine().dispatch(
         TypedCommand(command_id="cmd_a", operation="audio.remove_noise", input=payload)
     )
-    second = _audio_bus().dispatch(
+    second = _audio_bus_with_engine().dispatch(
         TypedCommand(command_id="cmd_b", operation="audio.remove_noise", input=payload)
     )
     assert first.output["content_sha256"] == second.output["content_sha256"]
+
+
+def test_remove_noise_refuses_without_a_media_engine() -> None:
+    """The old handler derived a hash from a seed string with no bytes behind it."""
+    with pytest.raises(CommandValidationError, match="native audio engine"):
+        _audio_bus().dispatch(
+            TypedCommand(
+                command_id="cmd_denoise_noengine",
+                operation="audio.remove_noise",
+                input={"audio_asset_id": "voice_01"},
+            )
+        )
 
 
 def test_deess_execution() -> None:

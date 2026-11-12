@@ -55,6 +55,11 @@ from nexus_ai_agent.continuum import provenance
 PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
     "audio": (
         "tests/unit/test_audio_pack.py",
+        # OMEGA-02: the audio handlers now execute real DSP through an injected
+        # engine port, so their refusal/degenerate branches (unreadable source,
+        # no measurable tempo, an artifact that fails verification, a replayed
+        # request) are pack evidence and are measured here.
+        "tests/unit/test_audio_pack_evidence_paths.py",
         "tests/architecture/test_audio_pack_boundary.py",
     ),
     "caption": (
@@ -109,6 +114,10 @@ HOST_LAYER_PACK_IMPORTERS: Mapping[str, str] = {
     "tests/unit/test_ibpc_security.py": (
         "IBPC security closure (nagar.ibpc, host layer): adversarial audio staging + approval "
         "identity isolation; mutation-attacked by scripts/ibpc_security_mutations.py"
+    ),
+    "tests/unit/test_omega_audio_bus.py": (
+        "OMEGA audio pack end-to-end through CommandBus with the real engine (host layer): the "
+        "pack's own handler coverage stays in its canonical targets"
     ),
 }
 

@@ -453,7 +453,14 @@ def test_add_particles_rejects_a_window_outside_the_clip() -> None:
 
 
 @pytest.mark.parametrize(("policy", "stems"), [("two_stem", 2), ("four_stem", 4)])
-def test_remove_vocal_derives_one_asset_per_stem(policy: str, stems: int) -> None:
+def test_remove_vocal_is_unavailable_without_a_local_model(policy: str, stems: int) -> None:
+    """No separation model ships here: the honest answer is UNAVAILABLE.
+
+    The stems are *not* fabricated (the previous version derived one
+    content-addressed "stem" per layout stem from a seed string — bytes that
+    encoded nothing and could never be played).  The layout the caller asked
+    for is echoed back so the caller can see what an engine would produce.
+    """
     bus = _bus(build_audio_registry())
     result = _dispatch(
         bus,
@@ -466,35 +473,23 @@ def test_remove_vocal_derives_one_asset_per_stem(policy: str, stems: int) -> Non
         },
     )
     assert result.status == "applied"
-    assert result.output["stem_count"] == stems
-    assert set(result.output["stem_asset_ids"]) in (
-        {"vocals", "accompaniment"},
-        {"vocals", "drums", "bass", "other"},
-    )
-
-    hashes = set()
-    for stem, asset_id in result.output["stem_asset_ids"].items():
-        record = _asset(bus.project, asset_id)
-        assert record.media_kind == "audio"
-        assert record.parent_asset_ids == ("music_01",)
-        assert record.duration_us == 12_000_000
-        assert record.provenance["processor"] == "nagar.audio.studio.stems.v1"
-        assert record.provenance["stem"] == stem
-        assert record.provenance["stem_policy"] == policy
-        hashes.add(record.content_sha256)
-    assert len(hashes) == stems, "every stem must have its own content hash"
+    assert result.output["execution_status"] == "UNAVAILABLE"
+    assert result.output["code"] == "REQUIRES_LOCAL_MODEL"
+    assert result.output["stem_count"] == 0
+    assert result.output["stem_asset_ids"] == {}
+    assert result.output["requires"]["network"] is False
+    # Nothing was recorded: an unavailable operation may not derive assets.
+    assert not any(record.asset_id.startswith(f"music_{policy}") for record in bus.project.assets)
 
 
-def test_remove_vocal_is_deterministic_and_requires_audio_media() -> None:
-    payload = {
-        "audio_asset_id": "music_01",
-        "stem_policy": "two_stem",
-        "output_asset_id": "stems",
-    }
-    first = _dispatch(_bus(build_audio_registry()), OPERATION_REMOVE_VOCAL, payload)
-    second = _dispatch(_bus(build_audio_registry()), OPERATION_REMOVE_VOCAL, payload)
-    assert first.output["content_sha256"] == second.output["content_sha256"]
+def test_remove_vocal_reports_the_layout_it_would_produce() -> None:
+    from nexus_ai_agent.creative.packs.audio.models import STEM_LAYOUTS
 
+    assert STEM_LAYOUTS["two_stem"] == ("vocals", "accompaniment")
+    assert len(STEM_LAYOUTS["four_stem"]) == 4
+
+
+def test_remove_vocal_requires_audio_media() -> None:
     with pytest.raises(CommandValidationError, match="requires an audio asset"):
         _dispatch(
             _bus(build_audio_registry()),
@@ -755,8 +750,12 @@ def test_sync_multicam_rejects_unknown_or_non_video_clips() -> None:
 
 
 #: Operations that add a derived asset; the rest are analysis-only by contract.
+#: Operations that legitimately add a derived asset.  ``audio.remove_vocal`` is
+#: deliberately absent since OMEGA-02: without a local separation model it
+#: returns ``UNAVAILABLE / REQUIRES_LOCAL_MODEL`` and derives nothing rather than
+#: inventing unplayable "stems".
 DERIVING_OPERATIONS = frozenset(
-    {OPERATION_APPLY_MASK, OPERATION_WARP, OPERATION_ADD_PARTICLES, OPERATION_REMOVE_VOCAL}
+    {OPERATION_APPLY_MASK, OPERATION_WARP, OPERATION_ADD_PARTICLES}
 )
 
 

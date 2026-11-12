@@ -157,10 +157,16 @@ class CommandBus:
         *,
         authorizer: ProjectAuthorizer | None = None,
         allow_experimental: bool = False,
+        audio_engine: Any = None,
     ) -> None:
         self._registry = registry if registry is not None else build_wave1_registry()
         self._resolver = resolver if resolver is not None else ReferenceResolver()
         self._authorizer = authorizer
+        # Composition-root execution seam for media operations (typed ``Any``
+        # for the same reason as ``OperationContext.audio_engine``).  The bus
+        # only carries it to the handler; it never inspects it, so a command can
+        # neither supply nor replace an engine.
+        self._audio_engine = audio_engine
         # Trusted composition-root opt-in for EXPERIMENTAL packs. Deliberately
         # not an envelope field: a command must never widen its own lifecycle.
         self._allow_experimental = allow_experimental
@@ -347,7 +353,10 @@ class CommandBus:
     ) -> CommandResult:
         """9. The only execution request into a registered pure handler."""
         context = OperationContext(
-            command=command, input_data=input_data, history=tuple(self._history)
+            command=command,
+            input_data=input_data,
+            history=tuple(self._history),
+            audio_engine=self._audio_engine,
         )
         try:
             # A buggy handler cannot mutate central state even if it then raises.

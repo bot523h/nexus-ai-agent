@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "c160871db935b3fd33056c6e4c33b865557b519d",
-    "generated_at": "2026-11-08T18:51:46Z",
+    "source_revision": "c3aa7c85e4b64400cb8d51b0880ef5e6cafd4e1b",
+    "generated_at": "2026-11-12T13:49:46Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -224,6 +224,7 @@
           "handler"
         ],
         "files": [
+          "tests/unit/test_audio_pack_evidence_paths.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       },
@@ -234,6 +235,8 @@
         ],
         "files": [
           "tests/unit/test_audio_pack.py",
+          "tests/unit/test_audio_pack_evidence_paths.py",
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       },
@@ -243,6 +246,7 @@
           "handler"
         ],
         "files": [
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_audio_motion.py",
           "tests/unit/test_opgap_wave5.py"
         ]
@@ -254,7 +258,9 @@
         ],
         "files": [
           "tests/unit/test_audio_pack.py",
+          "tests/unit/test_audio_pack_evidence_paths.py",
           "tests/unit/test_capability_lifecycle.py",
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       },
@@ -265,6 +271,8 @@
         ],
         "files": [
           "tests/unit/test_audio_pack.py",
+          "tests/unit/test_audio_pack_evidence_paths.py",
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       },
@@ -274,6 +282,7 @@
           "handler"
         ],
         "files": [
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_audio_motion.py",
           "tests/unit/test_opgap_wave5.py"
         ]
@@ -285,6 +294,11 @@
         ],
         "files": [
           "tests/unit/test_audio_pack.py",
+          "tests/unit/test_audio_pack_evidence_paths.py",
+          "tests/unit/test_omega_audio_bus.py",
+          "tests/unit/test_omega_continuity_assembly.py",
+          "tests/unit/test_omega_evidence_ladder.py",
+          "tests/unit/test_omega_native_engine.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       },
@@ -294,6 +308,8 @@
           "handler"
         ],
         "files": [
+          "tests/unit/test_audio_pack_evidence_paths.py",
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_audio_motion.py",
           "tests/unit/test_opgap_wave5.py"
         ]
@@ -304,6 +320,7 @@
           "handler"
         ],
         "files": [
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_wave5.py"
         ]
       },
@@ -313,6 +330,7 @@
           "handler"
         ],
         "files": [
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_audio_motion.py",
           "tests/unit/test_opgap_wave5.py"
         ]
@@ -1671,6 +1689,7 @@
           "handler"
         ],
         "suite_reference_files": [
+          "tests/unit/test_audio_pack_evidence_paths.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
@@ -1727,6 +1746,8 @@
         ],
         "suite_reference_files": [
           "tests/unit/test_audio_pack.py",
+          "tests/unit/test_audio_pack_evidence_paths.py",
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
@@ -1782,6 +1803,7 @@
           "handler"
         ],
         "suite_reference_files": [
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_audio_motion.py",
           "tests/unit/test_opgap_wave5.py"
         ],
@@ -1839,7 +1861,9 @@
         ],
         "suite_reference_files": [
           "tests/unit/test_audio_pack.py",
+          "tests/unit/test_audio_pack_evidence_paths.py",
           "tests/unit/test_capability_lifecycle.py",
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
@@ -1896,6 +1920,8 @@
         ],
         "suite_reference_files": [
           "tests/unit/test_audio_pack.py",
+          "tests/unit/test_audio_pack_evidence_paths.py",
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
@@ -1951,6 +1977,7 @@
           "handler"
         ],
         "suite_reference_files": [
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_audio_motion.py",
           "tests/unit/test_opgap_wave5.py"
         ],
@@ -2008,6 +2035,11 @@
         ],
         "suite_reference_files": [
           "tests/unit/test_audio_pack.py",
+          "tests/unit/test_audio_pack_evidence_paths.py",
+          "tests/unit/test_omega_audio_bus.py",
+          "tests/unit/test_omega_continuity_assembly.py",
+          "tests/unit/test_omega_evidence_ladder.py",
+          "tests/unit/test_omega_native_engine.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
@@ -2063,6 +2095,8 @@
           "handler"
         ],
         "suite_reference_files": [
+          "tests/unit/test_audio_pack_evidence_paths.py",
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_audio_motion.py",
           "tests/unit/test_opgap_wave5.py"
         ],
@@ -2119,6 +2153,7 @@
           "handler"
         ],
         "suite_reference_files": [
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_wave5.py"
         ],
         "recorded_execution_proof": false,
@@ -2174,6 +2209,7 @@
           "handler"
         ],
         "suite_reference_files": [
+          "tests/unit/test_omega_audio_bus.py",
           "tests/unit/test_opgap_audio_motion.py",
           "tests/unit/test_opgap_wave5.py"
         ],

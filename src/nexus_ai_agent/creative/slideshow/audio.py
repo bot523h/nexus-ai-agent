@@ -58,6 +58,25 @@ class AudioError(ValueError):
 
 
 @dataclass(frozen=True)
+class TempoEvidence:
+    """Raw tempo evidence: how a tempo was (or was not) derived from a signal.
+
+    ``status`` is the honest word for the outcome — ``detected`` means the
+    inter-onset intervals agreed; ``insufficient_onsets`` / ``irregular_onsets``
+    mean no tempo exists in the evidence and the caller must not invent one.
+    """
+
+    status: str
+    duration_us: int
+    onset_count: int
+    tempo_bpm: float | None
+    beat_period_us: int | None
+    confidence: float
+    first_beat_us: int
+    onset_seconds: tuple[float, ...]
+
+
+@dataclass(frozen=True)
 class PcmAudio:
     """Mono float32 samples in ``[-1, 1]`` plus the sample rate."""
 
@@ -148,22 +167,25 @@ def _pick_onsets(envelope: np.ndarray, sample_rate: int) -> tuple[np.ndarray, np
     return np.asarray(times, dtype=np.float64), np.asarray(strengths, dtype=np.float64)
 
 
-def _dominant_period(onset_times: np.ndarray) -> tuple[float | None, float]:
-    """Dominant inter-onset period in seconds and its relative variation."""
+def _dominant_period(
+    onset_times: np.ndarray,
+    *,
+    min_period_seconds: float = MIN_PERIOD_SECONDS,
+    max_period_seconds: float = MAX_PERIOD_SECONDS,
+) -> tuple[float | None, float]:
+    """Dominant inter-onset period in seconds and its relative variation.
+
+    The search window is a parameter, not a constant: a caller that asks for
+    ``min_bpm=140`` must not receive a 60 BPM answer from a hard-coded window
+    (that is precisely the "constant instead of analysis" failure this pack is
+    being fixed for).  ``collect_tempo_candidates`` exposes the raw evidence.
+    """
     if onset_times.size < MIN_ONSETS_FOR_TEMPO:
         return None, 1.0
-    differences: list[float] = []
-    for step in (1, 2, 3, 4):
-        if onset_times.size > step:
-            gaps = np.diff(onset_times, n=step)
-            divided = gaps / step
-            differences.extend(
-                float(gap) for gap in divided if MIN_PERIOD_SECONDS <= gap <= MAX_PERIOD_SECONDS
-            )
-    if len(differences) < 4:
+    values = _interval_candidates(onset_times, min_period_seconds, max_period_seconds)
+    if values.size < 4:
         return None, 1.0
-    values = np.asarray(differences, dtype=np.float64)
-    bins = np.arange(MIN_PERIOD_SECONDS, MAX_PERIOD_SECONDS + 0.02, 0.02)
+    bins = np.arange(min_period_seconds, max_period_seconds + 0.02, 0.02)
     histogram, edges = np.histogram(values, bins=bins)
     peak = int(np.argmax(histogram))
     low, high = float(edges[peak]), float(edges[peak + 1])
@@ -173,6 +195,87 @@ def _dominant_period(onset_times: np.ndarray) -> tuple[float | None, float]:
     period = float(np.median(in_bin))
     variation = float(in_bin.std() / period) if period > 0 else 1.0
     return (period, variation) if variation <= MAX_PERIOD_VARIATION else (None, variation)
+
+
+def _interval_candidates(
+    onset_times: np.ndarray, min_period_seconds: float, max_period_seconds: float
+) -> np.ndarray:
+    """Every inter-onset interval inside the window, averaged over skips 1..4."""
+    differences: list[float] = []
+    for step in (1, 2, 3, 4):
+        if onset_times.size > step:
+            gaps = np.diff(onset_times, n=step)
+            divided = gaps / step
+            differences.extend(
+                float(gap)
+                for gap in divided
+                if min_period_seconds <= gap <= max_period_seconds
+            )
+    return np.asarray(differences, dtype=np.float64)
+
+
+def collect_tempo_candidates(
+    audio: PcmAudio,
+    *,
+    min_bpm: float = 40.0,
+    max_bpm: float = 240.0,
+) -> TempoEvidence:
+    """The raw onset/tempo evidence behind an estimate (no fallback involved).
+
+    This is what a host adapter uses to *report* how a tempo was derived —
+    ``detected`` versus ``insufficient_onsets`` — instead of a caller having to
+    guess from a boolean.
+    """
+    if min_bpm <= 0 or max_bpm <= min_bpm:
+        raise AudioError(f"invalid tempo window: min_bpm={min_bpm}, max_bpm={max_bpm}")
+    min_period = 60.0 / max_bpm
+    max_period = 60.0 / min_bpm
+    duration_us = audio.duration_us
+    if duration_us <= 0:
+        return TempoEvidence(
+            status="empty_audio",
+            duration_us=0,
+            onset_count=0,
+            tempo_bpm=None,
+            beat_period_us=None,
+            confidence=0.0,
+            first_beat_us=0,
+            onset_seconds=(),
+        )
+    envelope = frame_rms(audio.samples, audio.sample_rate)
+    onsets, strengths = _pick_onsets(envelope, audio.sample_rate)
+    period, variation = _dominant_period(
+        onsets, min_period_seconds=min_period, max_period_seconds=max_period
+    )
+    anchor = float(onsets[int(np.argmax(strengths))]) if onsets.size and strengths.size else 0.0
+    if period is None:
+        return TempoEvidence(
+            status=(
+                "insufficient_onsets" if onsets.size < MIN_ONSETS_FOR_TEMPO else "irregular_onsets"
+            ),
+            duration_us=duration_us,
+            onset_count=int(onsets.size),
+            tempo_bpm=None,
+            beat_period_us=None,
+            confidence=round(float(max(0.0, min(1.0, 1.0 - variation))), 4),
+            first_beat_us=int(round(anchor * MICROSECONDS_PER_SECOND)),
+            onset_seconds=tuple(round(float(value), 6) for value in onsets[:200]),
+        )
+    tempo = 60.0 / period
+    confidence = max(
+        0.0,
+        min(1.0, (1.0 - variation) * min(1.0, onsets.size / 24.0)),
+    )
+    return TempoEvidence(
+        status="detected",
+        duration_us=duration_us,
+        onset_count=int(onsets.size),
+        tempo_bpm=round(tempo, 4),
+        beat_period_us=int(round(period * MICROSECONDS_PER_SECOND)),
+        confidence=round(confidence, 4),
+        first_beat_us=int(round(anchor * MICROSECONDS_PER_SECOND)),
+        onset_seconds=tuple(round(float(value), 6) for value in onsets[:200]),
+    )
 
 
 def estimate_beat_grid(
@@ -253,3 +356,19 @@ def beat_grid_for_file(
     audio = read_wav_mono(path)
     grid = estimate_beat_grid(audio, fallback_bpm=fallback_bpm, bpm_tolerance=bpm_tolerance)
     return grid.model_copy(update={"source_path": str(path)})
+
+
+def tempo_evidence_for_file(
+    path: Path | str | None,
+    *,
+    pcm: PcmAudio | None = None,
+    min_bpm: float = 40.0,
+    max_bpm: float = 240.0,
+) -> TempoEvidence:
+    """Decode (or accept already-decoded PCM) and return raw tempo evidence.
+
+    ``path`` may be ``None`` when the caller already holds decoded samples
+    (the engine decodes with FFmpeg, so it never needs a WAV on disk).
+    """
+    audio = pcm if pcm is not None else read_wav_mono(path)  # type: ignore[arg-type]
+    return collect_tempo_candidates(audio, min_bpm=min_bpm, max_bpm=max_bpm)

@@ -17,6 +17,20 @@ maturity axis and the gate that enforces it:
   ``STUB``, and ``RETIRED`` all refuse — the error names the pack, the
   state found, and the state required.
 
+Evidence axis (OMEGA-01/02)
+---------------------------
+``OMEGA-01`` added a second, orthogonal ladder —
+``PLANNED → IMPLEMENTED → EXECUTION_PROVEN → ARTIFACT_VERIFIED →
+PRODUCTION_PROVEN`` (:mod:`nexus_ai_agent.creative.studio.evidence`) — that
+answers a different question: *what, exactly, has been proven about this
+operation, and by which evidence?*  A record now carries the state that its
+evidence supports (:attr:`PackLifecycle.evidence_state`), so a pack cannot claim
+``PRODUCTION_PROVEN`` in prose while its table says otherwise.  The maturity
+axis above still decides *whether* a command may run; the evidence axis decides
+what may be *claimed* about the result.  The evidence for a state is not stored
+in this table — it is re-derived from the artifacts on every assessment, and the
+table only records the ceiling those measurements reached.
+
 Two axes, two authorities — do not conflate them:
 
 * **lifecycle** (this module): pack *maturity* — may this pack execute here
@@ -41,9 +55,10 @@ Change a state here only with the tests that prove the new behavior.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
+from nexus_ai_agent.creative.studio.evidence import OperationEvidenceState
 from nexus_ai_agent.creative.studio.models import NagarError
 
 
@@ -68,6 +83,11 @@ class PackLifecycle:
     state: LifecycleState
     reason: str
     successor: str | None = None
+    #: The highest state the pack's *measured* evidence supports.  Defaults to
+    #: ``IMPLEMENTED`` for an executable pack (its handlers exist and its media
+    #: paths were reviewed) and ``PLANNED`` for a ``STUB``; a deployment raises
+    #: it only by presenting verifier corroborations (``studio.evidence``).
+    evidence_state: OperationEvidenceState = OperationEvidenceState.IMPLEMENTED
 
     @property
     def executable(self) -> bool:
@@ -134,14 +154,52 @@ PACK_LIFECYCLE: dict[str, PackLifecycle] = {
 }
 
 
+#: Evidence ceilings measured for this checkout, per pack.
+#:
+#: Every entry below is the *ceiling* the pack's canonical evidence reaches, and
+#: each is produced by re-decoding a published artifact (not by a handler's own
+#: claim): ``audio.normalize_loudness`` lands on its locked target and passes the
+#: independent true-peak gate, ``audio.remove_noise`` publishes a verified
+#: artifact, ``audio.detect_beats`` measures a real tempo.  The canonical audio
+#: target set carries exactly **one** signing key id, so the honest ceiling is
+#: ``ARTIFACT_VERIFIED``; ``PRODUCTION_PROVEN`` additionally requires two
+#: independent verifier key ids over the same artifact hash and is therefore
+#: not claimed anywhere in this table.
+PACK_EVIDENCE: dict[str, OperationEvidenceState] = {
+    "nexus.slideshow.compose": OperationEvidenceState.EXECUTION_PROVEN,
+    "nexus.language.caption": OperationEvidenceState.EXECUTION_PROVEN,
+    "nexus.edit.timeline": OperationEvidenceState.EXECUTION_PROVEN,
+    "nexus.audio.studio": OperationEvidenceState.ARTIFACT_VERIFIED,
+    "nexus.motion.graphics": OperationEvidenceState.EXECUTION_PROVEN,
+    "nexus.color.delivery": OperationEvidenceState.EXECUTION_PROVEN,
+    "nexus.vision.portrait": OperationEvidenceState.IMPLEMENTED,
+    "nexus.vision.scene": OperationEvidenceState.IMPLEMENTED,
+}
+
+
+def pack_evidence_state(pack_id: str) -> OperationEvidenceState:
+    """The evidence ceiling for ``pack_id`` (unknown → fail-closed ``PLANNED``).
+
+    Unlike :func:`pack_lifecycle` this never raises: it is a *report*, and an
+    unknown pack has proven nothing, which is exactly ``PLANNED``.
+    """
+    if pack_id not in PACK_LIFECYCLE:
+        return OperationEvidenceState.PLANNED
+    return PACK_EVIDENCE.get(pack_id, OperationEvidenceState.IMPLEMENTED)
+
+
 def pack_lifecycle(pack_id: str) -> PackLifecycle:
     """Return the lifecycle record for ``pack_id`` (unknown → fail-closed)."""
     try:
-        return PACK_LIFECYCLE[pack_id]
+        record = PACK_LIFECYCLE[pack_id]
     except KeyError:
         raise PackRequirementError(
             f"unknown pack {pack_id!r} (known: {sorted(PACK_LIFECYCLE)})"
         ) from None
+    evidence = pack_evidence_state(pack_id)
+    if record.evidence_state is evidence:
+        return record
+    return replace(record, evidence_state=evidence)
 
 
 def check_required_packs(
@@ -169,9 +227,11 @@ def check_required_packs(
 
 __all__ = [
     "LifecycleState",
+    "PACK_EVIDENCE",
     "PACK_LIFECYCLE",
     "PackLifecycle",
     "PackRequirementError",
     "check_required_packs",
+    "pack_evidence_state",
     "pack_lifecycle",
 ]
