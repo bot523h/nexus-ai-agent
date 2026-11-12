@@ -90,6 +90,21 @@ class BeatAnalysis(BaseModel):
     #: states that in the payload so a consumer cannot mistake it for one
     #: (doctrine §4: confidence is not probability).
     confidence_kind: Literal["normalized_margin"] = "normalized_margin"
+    #: Uncertainty of ``tempo_bpm``, JCGM GUM combined Type A + Type B standard
+    #: uncertainty in BPM.  ``0.0`` when ``status != "detected"``: an undetected
+    #: tempo has no uncertainty, and reporting a small one would imply a
+    #: measurement that was never made.
+    bpm_std_uncertainty: float = Field(default=0.0, ge=0.0)
+    bpm_uncertainty_type_a: float = Field(default=0.0, ge=0.0)
+    bpm_uncertainty_type_b: float = Field(default=0.0, ge=0.0)
+    #: 95% expanded uncertainty, ``1.96 * bpm_std_uncertainty``.
+    bpm_ci95_half_width: float = Field(default=0.0, ge=0.0)
+    #: Which octave relation the retained period has to the raw autocorrelation
+    #: peak (``as_is`` / ``half`` / ``double``), so a consumer can see that the
+    #: estimator moved off the naive peak and by how much.
+    octave_relation: Literal["as_is", "half", "double"] = "as_is"
+    #: Comb score of the retained period relative to its best octave rival.
+    octave_pulse_clarity: float = Field(default=0.0, ge=0.0)
     #: What the analysis consumed, measured — the same report a render emits.
     budget: dict[str, object] | None = None
 

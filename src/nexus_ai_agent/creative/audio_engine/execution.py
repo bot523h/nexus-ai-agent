@@ -571,6 +571,12 @@ class NativeAudioEngine:
                 beat_period_us=evidence.beat_period_us,
                 confidence=evidence.confidence,
                 first_beat_us=evidence.first_beat_us,
+                bpm_std_uncertainty=evidence.bpm_std_uncertainty,
+                bpm_uncertainty_type_a=evidence.bpm_uncertainty_type_a,
+                bpm_uncertainty_type_b=evidence.bpm_uncertainty_type_b,
+                bpm_ci95_half_width=evidence.bpm_ci95_half_width,
+                octave_relation=evidence.octave_relation,  # type: ignore[arg-type]
+                octave_pulse_clarity=evidence.octave_pulse_clarity,
                 onset_count=evidence.onset_count,
                 onset_times_us=tuple(
                     int(round(seconds * 1_000_000)) for seconds in evidence.onset_seconds
