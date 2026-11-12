@@ -13,6 +13,7 @@ from pathlib import Path
 from nexus_ai_agent.maintenance.pg_safety import (  # noqa: E402
     refuse_production_target,
     require_destructive_opt_in,
+    require_pg_client,
 )
 
 os.environ.setdefault("NEXUS_DATABASE_URL", "postgresql://postgres:pg@127.0.0.1:5433/nexus")
@@ -21,8 +22,13 @@ from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.maintenance.backup import _dump_postgres
 from nexus_ai_agent.maintenance.restore import restore_drill
 
-SRC = "postgresql://postgres:pg@127.0.0.1:5433/nexus"
-DST = "postgresql://postgres:pg@127.0.0.1:5433/nexus_restore_target"
+# F-009.6: the source/target must follow the configured environment rather
+# than a hard-coded 127.0.0.1:5433 pair, so the script runs against CI's
+# service container (localhost:5432) or any disposable cluster.
+SRC = os.environ.get("NEXUS_DATABASE_URL", "postgresql://postgres:pg@127.0.0.1:5433/nexus")
+DST = os.environ.get(
+    "NEXUS_FIDELITY_TARGET", "postgresql://postgres:pg@127.0.0.1:5433/nexus_restore_target"
+)
 
 DDL = (
     "CREATE TABLE fidelity("
@@ -45,6 +51,7 @@ def main() -> int:
     require_destructive_opt_in(DST, what="p0_type_fidelity target (DROP + restore)")
     refuse_production_target(SRC, what="p0_type_fidelity source")
     refuse_production_target(DST, what="p0_type_fidelity target")
+    require_pg_client(what="p0_type_fidelity")
 
     psql(SRC, "DROP TABLE IF EXISTS fidelity")
     psql(SRC, DDL)

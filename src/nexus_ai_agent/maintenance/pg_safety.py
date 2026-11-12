@@ -17,11 +17,43 @@ to write so the operator can see the target before any statement runs.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from urllib.parse import urlsplit
 
 #: The only accepted value. A truthiness check would treat ``"0"`` as enabled.
 _ARMED = "1"
+
+#: Client binaries the PostgreSQL backup/restore paths shell out to. Absence is
+#: an operational misconfiguration, not a transient error (F-010.7).
+PG_CLIENT_BINARIES = ("pg_dump", "psql")
+
+
+def missing_pg_client_binaries() -> list[str]:
+    """Names of required PostgreSQL client binaries absent from ``PATH``."""
+    return [name for name in PG_CLIENT_BINARIES if shutil.which(name) is None]
+
+
+def require_pg_client(*, what: str) -> None:
+    """Abort with an actionable message when the PG client is not installed.
+
+    F-010.7: ``_dump_postgres``/``_apply_postgres_restore`` shell out to
+    ``pg_dump``/``psql``. The production image did not install
+    ``postgresql-client``, so the first production backup would have failed at
+    run time with a bare ``RuntimeError``. This turns that into a named,
+    operator-actionable preflight — and the Dockerfile now installs the client,
+    so the check is a defence against a stripped or custom image.
+    """
+    missing = missing_pg_client_binaries()
+    if not missing:
+        return
+    sys.stderr.write(
+        f"[pg-safety] {what} needs PostgreSQL client binaries: "
+        f"{', '.join(missing)} not found on PATH.\n"
+        "  Install them (Debian/Ubuntu: apt-get install postgresql-client;\n"
+        "  the shipped Dockerfile already does) and re-run.\n"
+    )
+    raise SystemExit(2)
 
 
 def _identity(url: str) -> str:

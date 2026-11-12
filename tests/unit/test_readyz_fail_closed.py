@@ -89,3 +89,26 @@ def test_unreachable_postgres_is_not_ready_not_a_crash(_reset_settings) -> None:
 
 def _run() -> tuple[bool, str]:
     return asyncio.run(_database_readiness(timeout=1.0))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # A driver-level failure (DNS) whose message can carry the DSN verbatim.
+        f"postgresql://u:{POISON}@does-not-resolve.invalid/db?sslmode=require",
+        # A parameter asyncpg rejects — the driver quotes the DSN back.
+        f"postgresql://u:{POISON}@h.invalid/db?channel_binding=require",
+    ],
+)
+def test_generic_probe_failure_never_leaks_the_credential(_reset_settings, url: str) -> None:
+    """F-001 #10: *every* failure path must sanitise, not only the ValueError one.
+
+    The ValueError branch already redacted, but the generic ``except Exception``
+    returned ``str(exc)`` raw. A driver error that quotes the DSN would then
+    echo the password into ``/readyz``.
+    """
+    _reset_settings(NEXUS_DATABASE_URL=url, NEXUS_REQUIRE_POSTGRES="true")
+    ok, detail = _run()
+    assert ok is False
+    assert POISON not in detail, "the credential leaked through the generic probe path"
+    assert detail

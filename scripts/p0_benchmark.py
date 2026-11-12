@@ -22,6 +22,7 @@ from pathlib import Path
 from nexus_ai_agent.maintenance.pg_safety import (  # noqa: E402
     refuse_production_target,
     require_destructive_opt_in,
+    require_pg_client,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -56,6 +57,7 @@ def main() -> int:
     require_destructive_opt_in(DST, what="p0_benchmark target (DROP + restore)")
     refuse_production_target(SRC, what="p0_benchmark source")
     refuse_production_target(DST, what="p0_benchmark target")
+    require_pg_client(what="p0_benchmark")
 
     # Realistic seed: a wide-ish table plus a secondary with text payloads.
     psql(SRC, "DROP TABLE IF EXISTS bench_rows")

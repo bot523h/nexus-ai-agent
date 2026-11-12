@@ -171,9 +171,39 @@ class TestPgEngineSelection:
         engine = db_module._get_pg_engine("postgres://u:p@h:5432/db")
 
         assert engine is sentinel
+        # F-001: the engine is built through ``resolve_asyncpg_connect_args``,
+        # so a URL with no libpq parameters still passes an (empty) connect_args
+        # rather than leaving the dialect to forward raw keywords.
         assert calls == [
-            {"url": "postgresql+asyncpg://u:p@h:5432/db", "echo": False, "pool_pre_ping": True}
+            {
+                "url": "postgresql+asyncpg://u:p@h:5432/db",
+                "echo": False,
+                "pool_pre_ping": True,
+                "connect_args": {},
+            }
         ]
+
+    def test_engine_translates_sslmode_into_connect_args(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F-001: a Neon-style ``?sslmode=require`` must not reach asyncpg raw."""
+        calls: list[dict[str, Any]] = []
+        sentinel = object()
+
+        def fake_create_async_engine(url: str, **kwargs: Any) -> Any:
+            calls.append({"url": url, **kwargs})
+            return sentinel
+
+        monkeypatch.setattr(db_module, "create_async_engine", fake_create_async_engine)
+        monkeypatch.setattr(db_module, "_pg_engines", {})
+
+        engine = db_module._get_pg_engine("postgres://u:p@h:5432/db?sslmode=require")
+
+        assert engine is sentinel
+        assert len(calls) == 1
+        # The libpq parameter is gone from the URL and translated to ``ssl``.
+        assert "sslmode" not in calls[0]["url"]
+        assert calls[0]["connect_args"] == {"ssl": "require"}
 
     def test_engine_is_cached_per_normalized_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sentinel = object()

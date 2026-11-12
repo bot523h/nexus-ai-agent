@@ -81,3 +81,26 @@ def test_create_backup_fails_closed_when_postgres_is_required(_env) -> None:
 def test_selected_backend_reports_postgresql_when_required_but_unconfigured(_env) -> None:
     _env(NEXUS_REQUIRE_POSTGRES="true")
     assert db_module.selected_backend() == "postgresql"
+
+
+def test_get_checkpointer_fails_closed_when_postgres_is_required(_env) -> None:
+    """F-005B: the checkpointer must not bypass the canonical policy.
+
+    With ``NEXUS_REQUIRE_POSTGRES=true`` and no URL, ``get_checkpointer`` must
+    raise rather than hand back a local SQLite saver — the exact
+    ``REQUIRE_POSTGRES=true → SQLite`` bypass this finding names.
+    """
+    _env(NEXUS_REQUIRE_POSTGRES="true")
+    from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
+
+    with pytest.raises(BackendPolicyError):
+        get_checkpointer("/tmp/should-not-be-used.sqlite")
+
+
+def test_get_checkpointer_uses_sqlite_for_development(_env, tmp_path) -> None:
+    """The policy must not break the ordinary development path."""
+    _env()
+    from nexus_ai_agent.storage.langgraph_checkpoint import get_checkpointer
+
+    saver = get_checkpointer(str(tmp_path / "dev.sqlite"))
+    assert saver is not None

@@ -19,6 +19,7 @@ Each test below fails on the pre-fix code and passes after it.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -242,13 +243,41 @@ def test_row_count_reader_quotes_identifiers_against_injection(tmp_path, monkeyp
     assert counts == {'evil"; DROP TABLE x; --': 0}
 
 
+def _drill_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Settings without R2 and without a pg DSN (unit isolation)."""
+    for key in (
+        "NEXUS_DATABASE_URL",
+        "R2_ACCOUNT_ID",
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+        "R2_BUCKET",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    from nexus_ai_agent.config.settings import Settings
+
+    return Settings(db_path=str(tmp_path / "app.sqlite3"))
+
+
+def _sqlite_artifact(path: Path) -> Path:
+    """A real backup-shaped sqlite artifact (same function the backup uses)."""
+    from nexus_ai_agent.maintenance.backup import _dump_sqlite
+
+    source = path.parent / f"{path.stem}-source.sqlite3"
+    with sqlite3.connect(source) as conn:
+        conn.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, payload TEXT)")
+        for i in range(3):
+            conn.execute("INSERT INTO jobs VALUES (?, ?)", (f"row-{i}", "payload-" + "x" * 32))
+        conn.commit()
+    _dump_sqlite(source, path)
+    return path
+
+
 def test_artifact_verified_state_is_distinct(tmp_path: Path, monkeypatch) -> None:
     """E: ARTIFACT_VERIFIED and POST_RESTORE_DATA are real, recorded states."""
     from nexus_ai_agent.maintenance.restore import restore_drill
-    from tests.unit.test_restore_drill import _settings, _sqlite_artifact
 
     artifact = _sqlite_artifact(tmp_path / "backup.sqlite3")
-    report = restore_drill(settings=_settings(tmp_path, monkeypatch), from_local=artifact)
+    report = restore_drill(settings=_drill_settings(tmp_path, monkeypatch), from_local=artifact)
     states = [s["state"] for s in report.chain]
     assert "ARTIFACT_VERIFIED" in states
     assert states.index("ARTIFACT_VERIFIED") > states.index("INTEGRITY_VERIFIED")

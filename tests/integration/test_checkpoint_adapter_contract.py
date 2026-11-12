@@ -35,7 +35,16 @@ from nexus_ai_agent.storage.checkpoint_pg_adapter import (
 )
 
 PG_URL = os.getenv("NEXUS_DATABASE_URL")
-requires_pg = pytest.mark.skipif(not PG_URL, reason="requires PostgreSQL")
+#: The PG leg writes to whatever ``NEXUS_DATABASE_URL`` names, so it needs the
+#: same explicit opt-in as the other PostgreSQL-writing modules (F-011.6).  The
+#: guard sits on the PG leg, not the module: the SQLite leg must keep running in
+#: the default ``test`` job, which has no database.
+DESTRUCTIVE_OPT_IN = "NEXUS_PG_TEST_DESTRUCTIVE"
+PG_ENABLED = bool(PG_URL) and os.getenv(DESTRUCTIVE_OPT_IN) == "1"
+requires_pg = pytest.mark.skipif(
+    not PG_ENABLED,
+    reason=f"requires PostgreSQL (NEXUS_DATABASE_URL) + {DESTRUCTIVE_OPT_IN}=1",
+)
 
 # One id namespace per test session so re-runs against a persistent PG
 # database never collide with earlier seeds.
@@ -120,8 +129,8 @@ def adapter(request, tmp_path) -> CheckpointReadAdapter:
         _seed_sqlite(path)
         adapter: CheckpointReadAdapter = SQLiteCheckpointAdapter(str(path))
     else:
-        if not PG_URL:
-            pytest.skip("requires PostgreSQL (NEXUS_DATABASE_URL)")
+        if not PG_ENABLED:
+            pytest.skip(f"requires PostgreSQL + {DESTRUCTIVE_OPT_IN}=1")
         _ensure_pg_seeded()
         adapter = PostgresCheckpointAdapter(PG_URL)  # type: ignore[arg-type]
     try:

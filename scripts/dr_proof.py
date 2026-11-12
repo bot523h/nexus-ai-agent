@@ -16,10 +16,11 @@ from pathlib import Path
 from nexus_ai_agent.maintenance.pg_safety import (  # noqa: E402
     refuse_production_target,
     require_destructive_opt_in,
+    require_pg_client,
 )
 
-os.environ["NEXUS_DATABASE_URL"] = "postgresql://postgres:pg@127.0.0.1:5433/nexus"
-os.environ["NEXUS_REQUIRE_POSTGRES"] = "1"
+os.environ.setdefault("NEXUS_DATABASE_URL", "postgresql://postgres:pg@127.0.0.1:5433/nexus")
+os.environ.setdefault("NEXUS_REQUIRE_POSTGRES", "1")
 
 from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.maintenance.backup import (
@@ -28,8 +29,15 @@ from nexus_ai_agent.maintenance.backup import (
 )
 from nexus_ai_agent.maintenance.restore import restore_drill
 
-SRC = "postgresql://postgres:pg@127.0.0.1:5433/nexus"
-DST = "postgresql://postgres:pg@127.0.0.1:5433/nexus_restore_target"
+# F-009.6: respect the configured test environment. The previous version
+# *overwrote* NEXUS_DATABASE_URL and pinned the source/target to a hard-coded
+# 127.0.0.1:5433 pair, so the script could not be run against the CI service
+# container (localhost:5432) or any other disposable cluster. The default is
+# now the local dev cluster; an operator's environment wins.
+SRC = os.environ.get("NEXUS_DATABASE_URL", "postgresql://postgres:pg@127.0.0.1:5433/nexus")
+DST = os.environ.get(
+    "NEXUS_DR_TARGET", "postgresql://postgres:pg@127.0.0.1:5433/nexus_restore_target"
+)
 SENTINEL = "hello-durability-42"
 
 
@@ -46,6 +54,7 @@ def main() -> int:
     require_destructive_opt_in(DST, what="dr_proof target (DROP + restore)")
     refuse_production_target(SRC, what="dr_proof source")
     refuse_production_target(DST, what="dr_proof target")
+    require_pg_client(what="dr_proof")
 
     # 1. Seed a uniquely identifiable row in the source database.
     psql(SRC, "DROP TABLE IF EXISTS dr_proof")

@@ -366,7 +366,12 @@ async def _database_readiness(timeout: float = 2.5) -> tuple[bool, str]:
     try:
         return await asyncio.wait_for(_probe(), timeout=timeout)
     except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"[:200]
+        # F-001 #10: connection failures must produce *sanitised* diagnostics.
+        # The ValueError branch above redacts because a URL parser error can
+        # quote the credential-bearing URL back; a driver error can do the same
+        # (asyncpg reports an invalid DSN verbatim). Redact here too so no
+        # failure path can echo a password into /readyz.
+        return False, f"{type(exc).__name__}: {redact_text(str(exc))}"[:200]
 
 
 @app.get("/readyz")
