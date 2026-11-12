@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import resource
 import time
+import wave
 from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
 
 from nexus_ai_agent.creative.chronos.acoustics_lipsync import shoebox_rir
-from nexus_ai_agent.creative.chronos.color_science import srgb_decode
+from nexus_ai_agent.creative.chronos.color_science import (
+    read_rgb8_png,
+    srgb_decode,
+    write_rgb8_png,
+)
 from nexus_ai_agent.creative.chronos.contracts import RationalTimestamp
 from nexus_ai_agent.creative.chronos.geometry import intrinsics, project
+from nexus_ai_agent.creative.chronos.timeline import assemble_pcm_wav_stream_copy
+from nexus_ai_agent.creative.chronos.verifier import verify_persisted_relighting
 from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand
 
 
@@ -37,7 +44,44 @@ def test_chronos_benchmarks_n3(tmp_path: Path) -> None:
             0,
         )
 
+    shot_paths = [tmp_path / f"bench-shot-{index}.wav" for index in range(3)]
+    for path in shot_paths:
+        with wave.open(str(path), "wb") as writer:
+            writer.setnchannels(1)
+            writer.setsampwidth(2)
+            writer.setframerate(48000)
+            writer.writeframes(np.arange(256, dtype="<i2").tobytes())
+
+    def wav_assembly_case() -> np.ndarray:
+        output = tmp_path / f"assembled-{len(list(tmp_path.glob('assembled-*.wav')))}.wav"
+        receipt = assemble_pcm_wav_stream_copy(shot_paths, output, tmp_path / "stage")
+        return np.asarray(
+            [receipt.total_sample_frames, receipt.splice_boundaries_verified], dtype=float
+        )
+
+    grid_y, grid_x = np.mgrid[0:24, 0:24]
+    target_rgb = np.repeat(
+        (0.4 + 0.2 * np.sin(grid_x / 4) * np.cos(grid_y / 5))[:, :, None], 3, axis=2
+    )
+    source_rgb = target_rgb * 0.8 + 0.05
+
+    def png_roundtrip_case() -> np.ndarray:
+        source_path, target_path, relit_path = (
+            tmp_path / "benchmark-source.png",
+            tmp_path / "benchmark-target.png",
+            tmp_path / "benchmark-relit.png",
+        )
+        write_rgb8_png(source_path, np.rint(source_rgb * 255).astype(np.uint8))
+        write_rgb8_png(target_path, np.rint(target_rgb * 255).astype(np.uint8))
+        write_rgb8_png(relit_path, np.rint(target_rgb * 255).astype(np.uint8))
+        verify_persisted_relighting(
+            source_rgb, read_rgb8_png(relit_path) / 255.0, target_rgb, tmp_path / "verified.png"
+        )
+        return read_rgb8_png(tmp_path / "verified.png").astype(np.float64)
+
     cases = {
+        "pcm_wav_real_disk": wav_assembly_case,
+        "png_real_disk": png_roundtrip_case,
         "timeline": timeline_case,
         "geometry": geometry_case,
         "color": color_case,

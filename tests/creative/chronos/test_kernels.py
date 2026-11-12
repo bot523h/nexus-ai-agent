@@ -342,7 +342,7 @@ def test_png_writer_and_probe_refusal_branches(
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(stdout='{"streams":[]}'),
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout='{"streams":[]}'),
     )
     with pytest.raises(KernelError):
         ffprobe_signature(tmp_path / "none")
@@ -350,7 +350,9 @@ def test_png_writer_and_probe_refusal_branches(
         subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
-            stdout='{"streams":[{"codec_name":"x","time_base":"1/1"}]}'
+            returncode=0,
+            stderr="",
+            stdout='{"streams":[{"codec_name":"x","time_base":"1/1"}]}',
         ),
     )
     with pytest.raises(KernelError):

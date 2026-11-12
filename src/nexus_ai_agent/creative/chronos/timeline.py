@@ -65,26 +65,27 @@ class ShotDAG:
 
 
 def ffprobe_signature(path: str | Path, *, executable: str = "ffprobe") -> StreamSignature:
-    """Probe one stream and reject missing fields rather than guessing."""
-    command = [executable, "-v", "error", "-show_streams", "-of", "json", str(path)]
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
-    streams = json.loads(result.stdout).get("streams", [])
+    """Probe one stream with timeout and strict stderr/status checks."""
+    data = _probe(Path(path), executable, packets=False)
+    streams = _streams(data)
     if len(streams) != 1:
         raise KernelError("expected exactly one media stream")
     stream = streams[0]
-    codec_type = stream.get("codec_type")
-    fmt = stream.get("pix_fmt") if codec_type == "video" else stream.get("sample_fmt")
-    required = (stream.get("codec_name"), stream.get("time_base"), stream.get("extradata_hash"))
-    if any(value is None for value in required):
-        raise KernelError("ffprobe omitted required compatibility metadata")
-    tb = Fraction(str(stream["time_base"]))
+    key = _stream_key(stream)
+    time_base = key[7]
+    if not isinstance(time_base, Fraction):
+        raise KernelError("invalid probed rational time base")
+    profile_value = stream.get("profile")
+    sample_rate_value = stream.get("sample_rate")
+    format_value = key[3]
+    layout_value = stream.get("channel_layout")
     return StreamSignature(
         str(stream["codec_name"]),
-        stream.get("profile"),
-        fmt,
-        tb,
-        stream.get("sample_rate"),
-        stream.get("channel_layout"),
+        profile_value if isinstance(profile_value, str) else None,
+        format_value if isinstance(format_value, str) else None,
+        time_base,
+        int(sample_rate_value) if isinstance(sample_rate_value, (str, int)) else None,
+        layout_value if isinstance(layout_value, str) else None,
         str(stream["extradata_hash"]),
     )
 
@@ -318,7 +319,15 @@ def concat_copy(
             output_counts, _ = _check_packets(assembled)
             if output_counts != summed_counts:
                 raise KernelError("packet conservation failed")
-            if abs(_fraction_duration(assembled) - expected_duration) > Fraction(1, 1000):
+            quanta = [
+                Fraction(str(stream["time_base"]))
+                for stream in canonical
+                if stream.get("time_base") is not None
+            ]
+            if not quanta:
+                raise KernelError("no packet time base available for duration tolerance")
+            tolerance = min(quanta)
+            if abs(_fraction_duration(assembled) - expected_duration) > tolerance:
                 raise KernelError("duration conservation failed")
             staged_hash = hashlib.sha256(staged.read_bytes()).hexdigest()
             os.replace(staged, destination)
@@ -333,7 +342,151 @@ def concat_copy(
                 output_counts,
                 len(splice_times),
             )
-        except Exception:
+        except Exception as exc:
             staged.unlink(missing_ok=True)
             destination.unlink(missing_ok=True)
-            raise
+            if isinstance(exc, KernelError):
+                raise
+            raise KernelError("stream-copy assembly or verification failed") from exc
+
+
+@dataclass(frozen=True, slots=True)
+class PcmWavReceipt:
+    quality_claim: str
+    verification_mode: str
+    sha256: str
+    duration_seconds: Fraction
+    total_sample_frames: int
+    splice_boundaries_verified: int
+    boundary_amplitude_steps: tuple[float, ...]
+
+
+def _wav_signature(reader: object) -> tuple[int, int, int, str]:
+    import wave
+
+    if not isinstance(reader, wave.Wave_read):
+        raise KernelError("invalid WAV reader")
+    signature = (
+        reader.getnchannels(),
+        reader.getsampwidth(),
+        reader.getframerate(),
+        reader.getcomptype(),
+    )
+    if min(signature[:3]) <= 0 or signature[3] != "NONE":
+        raise KernelError("only non-empty uncompressed PCM WAV streams are supported")
+    return signature
+
+
+def verify_pcm_wav_assembly(
+    staged_path: Path,
+    expected_signature: tuple[int, int, int, str],
+    expected_frames: int,
+    expected_bytes: int,
+    splice_frames: Sequence[int],
+) -> tuple[Fraction, tuple[float, ...]]:
+    """Independently reopen staged WAV bytes and prove exact PCM frame conservation."""
+    import wave
+
+    try:
+        with wave.open(str(staged_path), "rb") as reader:
+            actual_signature = _wav_signature(reader)
+            frames = reader.getnframes()
+            pcm = reader.readframes(frames)
+    except (wave.Error, EOFError, OSError) as exc:
+        raise KernelError(f"staged WAV is corrupt: {exc}") from exc
+    if actual_signature != expected_signature:
+        raise KernelError("staged WAV signature changed")
+    channels, width, rate, _ = expected_signature
+    if frames != expected_frames or len(pcm) != expected_bytes:
+        raise KernelError("PCM sample-frame or byte conservation failed")
+    if len(pcm) != frames * channels * width:
+        raise KernelError("PCM payload length does not match header")
+    if frames <= 0:
+        raise KernelError("assembled WAV contains no frames")
+    steps: list[float] = []
+    frame_bytes = channels * width
+    for boundary in splice_frames:
+        if boundary <= 0 or boundary >= frames:
+            raise KernelError("splice boundary is outside assembled audio")
+        before = pcm[(boundary - 1) * frame_bytes : boundary * frame_bytes]
+        after = pcm[boundary * frame_bytes : (boundary + 1) * frame_bytes]
+        left = int.from_bytes(before[:width], "little", signed=True)
+        right = int.from_bytes(after[:width], "little", signed=True)
+        scale = float(1 << (8 * width - 1))
+        steps.append(abs(right - left) / scale)
+    return Fraction(frames, rate), tuple(steps)
+
+
+def assemble_pcm_wav_stream_copy(
+    inputs: Sequence[Path], destination_path: Path, staging_dir: Path
+) -> PcmWavReceipt:
+    """Concatenate PCM WAV frame bytes without decode/requantization, then verify on disk."""
+    import wave
+
+    if len(inputs) < 2 or not destination_path.is_absolute() or not staging_dir.is_absolute():
+        raise KernelError("absolute paths and at least two WAV shots are required")
+    if destination_path.exists():
+        raise KernelError("destination already exists")
+    resolved = [path.resolve(strict=True) for path in inputs]
+    canonical: tuple[int, int, int, str] | None = None
+    shot_frames: list[bytes] = []
+    counts: list[int] = []
+    for path in resolved:
+        try:
+            with wave.open(str(path), "rb") as reader:
+                signature = _wav_signature(reader)
+                frame_count = reader.getnframes()
+                payload = reader.readframes(frame_count)
+        except (wave.Error, EOFError, OSError) as exc:
+            raise KernelError(f"invalid input WAV {path.name}: {exc}") from exc
+        if frame_count <= 0 or len(payload) != frame_count * signature[0] * signature[1]:
+            raise KernelError("input WAV is empty or truncated")
+        if canonical is None:
+            canonical = signature
+        elif signature != canonical:
+            raise KernelError("input WAV format mismatch")
+        shot_frames.append(payload)
+        counts.append(frame_count)
+    if canonical is None:
+        raise KernelError("no canonical WAV format")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    staged_path = staging_dir / (destination_path.stem + ".staged.wav")
+    if staged_path.exists():
+        staged_path.unlink()
+    expected_frames = sum(counts)
+    expected_bytes = sum(map(len, shot_frames))
+    boundaries: list[int] = []
+    elapsed = 0
+    for count in counts[:-1]:
+        elapsed += count
+        boundaries.append(elapsed)
+    try:
+        with wave.open(str(staged_path), "wb") as writer:
+            writer.setnchannels(canonical[0])
+            writer.setsampwidth(canonical[1])
+            writer.setframerate(canonical[2])
+            writer.setcomptype("NONE", "not compressed")
+            for payload in shot_frames:
+                writer.writeframesraw(payload)
+        duration, steps = verify_pcm_wav_assembly(
+            staged_path, canonical, expected_frames, expected_bytes, boundaries
+        )
+        staged_hash = hashlib.sha256(staged_path.read_bytes()).hexdigest()
+        os.replace(staged_path, destination_path)
+        published_hash = hashlib.sha256(destination_path.read_bytes()).hexdigest()
+        if published_hash != staged_hash:
+            destination_path.unlink(missing_ok=True)
+            raise KernelError("published WAV hash mismatch")
+        return PcmWavReceipt(
+            "NO_ADDITIONAL_REENCODE_LOSS_AT_ASSEMBLY",
+            "REAL_DISK_PCM_WAV",
+            published_hash,
+            duration,
+            expected_frames,
+            len(boundaries),
+            steps,
+        )
+    except Exception:
+        staged_path.unlink(missing_ok=True)
+        destination_path.unlink(missing_ok=True)
+        raise

@@ -202,3 +202,64 @@ def read_rgb8_png(path: str | Path) -> NDArray[np.uint8]:
         rows.append(np.frombuffer(raw[begin + 1 : begin + 1 + stride], dtype=np.uint8))
     output: NDArray[np.uint8] = np.stack(rows).reshape(height, width, 3)
     return output
+
+
+def cct_kelvin_to_xyz(kelvin: float) -> tuple[float, float, float]:
+    """Approximate Planckian-locus chromaticity (CIE 1931 xy) for 2000–15000 K."""
+    if not 2000.0 <= kelvin <= 15000.0:
+        raise KernelError("CCT is outside supported [2000, 15000] K domain")
+    temperature = kelvin
+    if temperature <= 4000:
+        x = (
+            -0.2661239e9 / temperature**3
+            - 0.2343580e6 / temperature**2
+            + 0.8776956e3 / temperature
+            + 0.179910
+        )
+    else:
+        x = (
+            -3.0258469e9 / temperature**3
+            + 2.1070379e6 / temperature**2
+            + 0.2226347e3 / temperature
+            + 0.240390
+        )
+    if temperature <= 2222:
+        y = -1.1063814 * x**3 - 1.34811020 * x**2 + 2.18555832 * x - 0.20219683
+    elif temperature <= 4000:
+        y = -0.9549476 * x**3 - 1.37418593 * x**2 + 2.09137015 * x - 0.16748867
+    else:
+        y = 3.0817580 * x**3 - 5.87338670 * x**2 + 3.75112997 * x - 0.37001483
+    if y <= 0:
+        raise KernelError("CCT approximation produced invalid chromaticity")
+    return float(x / y), 1.0, float((1 - x - y) / y)
+
+
+def _symmetric_power(matrix: FloatArray, exponent: float) -> FloatArray:
+    values, vectors = np.linalg.eigh((matrix + matrix.T) / 2)
+    if np.any(values <= 0):
+        raise KernelError("regularized covariance is not positive definite")
+    result: FloatArray = np.asarray((vectors * values**exponent) @ vectors.T, dtype=np.float64)
+    return result
+
+
+def match_linear_rgb_gaussian_ot(
+    source_rgb: FloatArray, target_rgb: FloatArray, regularization: float = 1e-6
+) -> FloatArray:
+    """3-channel Gaussian OT mapping in scene-linear RGB using symmetric eigensystems."""
+    source = np.asarray(source_rgb, dtype=np.float64)
+    target = np.asarray(target_rgb, dtype=np.float64)
+    if source.shape[-1:] != (3,) or target.shape[-1:] != (3,) or source.size < 6 or target.size < 6:
+        raise KernelError("source and target must each contain at least two RGB samples")
+    if regularization <= 0 or not np.all(np.isfinite(source)) or not np.all(np.isfinite(target)):
+        raise KernelError("invalid Gaussian OT inputs")
+    s = source.reshape(-1, 3)
+    t = target.reshape(-1, 3)
+    mean_s, mean_t = s.mean(axis=0), t.mean(axis=0)
+    cov_s = np.cov(s, rowvar=False) + regularization * np.eye(3)
+    cov_t = np.cov(t, rowvar=False) + regularization * np.eye(3)
+    root_s = _symmetric_power(cov_s, 0.5)
+    inv_root_s = _symmetric_power(cov_s, -0.5)
+    transport = inv_root_s @ _symmetric_power(root_s @ cov_t @ root_s, 0.5) @ inv_root_s
+    transformed = (s - mean_s) @ transport.T + mean_t
+    output: FloatArray = np.asarray(transformed.reshape(source.shape), dtype=np.float64)
+    return output

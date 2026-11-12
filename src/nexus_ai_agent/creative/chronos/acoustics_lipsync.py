@@ -28,6 +28,9 @@ class RoomTelemetry:
     drr_db: float
     rt60_seconds: float
     itd_seconds: float
+    sabine_rt60_seconds: float | None = None
+    measured_drr_db: float | None = None
+    measured_rt60_seconds: float | None = None
 
 
 def woodworth_itd(azimuth_radians: float, head_radius_m: float = 0.0875) -> float:
@@ -250,7 +253,18 @@ def synthesize_stereo_room_ir(
         )
     )
     rt60 = sabine_rt60(volume, surface, absorption)
-    return stereo, RoomTelemetry(float(drr), rt60, itd)
+    try:
+        measured = measure_rir_acoustics(np.mean(stereo, axis=1), sample_rate)
+    except KernelError:
+        measured = None
+    return stereo, RoomTelemetry(
+        float(drr),
+        rt60,
+        itd,
+        rt60,
+        measured.measured_drr_db if measured is not None else None,
+        measured.measured_rt60_seconds if measured is not None else None,
+    )
 
 
 def render_spatial_dialogue(
@@ -276,3 +290,63 @@ def render_spatial_dialogue(
     energy = float(np.sum(output**2))
     telemetry = RoomTelemetry(float(10 * np.log10(max(energy, 1e-15))), 0.0, 0.0)
     return output, telemetry
+
+
+@dataclass(frozen=True, slots=True)
+class AcousticMeasurementReceipt:
+    measured_drr_db: float
+    measured_rt60_seconds: float
+    direct_arrival_sample: int
+    regression_decay_db_per_second: float
+
+
+@dataclass(frozen=True, slots=True)
+class JawTrajectoryReceipt:
+    aperture: FloatArray
+    peak_lag_frames: float
+
+
+def measure_rir_acoustics(
+    rir: FloatArray, sample_rate_hz: int, direct_window_ms: float = 2.5
+) -> AcousticMeasurementReceipt:
+    """Measure direct/reverberant energy and Schroeder T20/T30 decay from RIR."""
+    signal = np.asarray(rir, dtype=np.float64).reshape(-1)
+    if (
+        sample_rate_hz <= 0
+        or direct_window_ms <= 0
+        or signal.size < 16
+        or not np.all(np.isfinite(signal))
+    ):
+        raise KernelError("invalid RIR measurement input")
+    peak = int(np.argmax(np.abs(signal)))
+    radius = max(1, int(round(direct_window_ms * sample_rate_hz / 1000)))
+    lo, hi = max(0, peak - radius), min(len(signal), peak + radius + 1)
+    direct_energy = float(np.sum(signal[lo:hi] ** 2))
+    tail_energy = float(np.sum(signal[:lo] ** 2) + np.sum(signal[hi:] ** 2))
+    if direct_energy <= 0 or tail_energy <= 0:
+        raise KernelError("RIR needs nonzero direct and reverberant energy")
+    drr = 10 * np.log10(direct_energy / tail_energy)
+    decay = np.cumsum(signal[::-1] ** 2)[::-1]
+    decay_db = 10 * np.log10(np.maximum(decay / decay[0], 1e-30))
+    indices = np.flatnonzero((decay_db <= -5) & (decay_db >= -25))
+    if len(indices) < 3:
+        indices = np.flatnonzero((decay_db <= -5) & (decay_db >= -15))
+    if len(indices) < 3:
+        raise KernelError("RIR decay is too short for Schroeder regression")
+    times = indices.astype(np.float64) / sample_rate_hz
+    slope = float(np.polyfit(times, decay_db[indices], 1)[0])
+    if slope >= 0:
+        raise KernelError("RIR decay regression must have negative slope")
+    return AcousticMeasurementReceipt(float(drr), float(-60 / slope), peak, slope)
+
+
+def solve_jaw_trajectory(
+    samples: list[tuple[RationalTimestamp, float]], natural_frequency_hz: float
+) -> JawTrajectoryReceipt:
+    """Return aperture and measured peak timing lag relative to maximum input."""
+    aperture = jaw_aperture(samples, natural_frequency_hz)
+    targets = np.asarray([value for _, value in samples], dtype=np.float64)
+    peak_input = int(np.argmax(targets))
+    peak_output = int(np.argmax(aperture))
+    lag = float(peak_output - peak_input)
+    return JawTrajectoryReceipt(aperture, lag)

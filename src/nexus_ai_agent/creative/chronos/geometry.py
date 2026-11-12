@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -69,3 +71,94 @@ def projected_height_jacobian(f_px: float, height_m: float, depth_m: float) -> f
     if depth_m <= 0:
         raise KernelError("depth must be positive")
     return -f_px * height_m / depth_m**2
+
+
+@dataclass(frozen=True, slots=True)
+class WorldScaleReceipt:
+    world_space_contract: str
+    image_space_contract: str
+    world_height_m: float
+    projected_height_px: float
+    gum_uncertainty_m: float
+    undistortion_residual: float
+
+
+def undistort_normalized_point(
+    distorted_x: float,
+    distorted_y: float,
+    distortion: tuple[float, float, float, float, float] = (0, 0, 0, 0, 0),
+    tolerance: float = 1e-10,
+    max_iterations: int = 100,
+) -> tuple[float, float, float]:
+    """Invert Brown-Conrady distortion by Newton iterations; return x,y,residual."""
+    target = np.array([distorted_x, distorted_y], dtype=np.float64)
+    if not np.all(np.isfinite(target)) or tolerance <= 0 or max_iterations <= 0:
+        raise KernelError("invalid undistortion inputs")
+
+    def distort(point: FloatArray) -> FloatArray:
+        x, y = point
+        k1, k2, k3, p1, p2 = distortion
+        r2 = x * x + y * y
+        radial = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+        return np.array(
+            [
+                x * radial + 2 * p1 * x * y + p2 * (r2 + 2 * x * x),
+                y * radial + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y,
+            ]
+        )
+
+    estimate = target.copy()
+    for _ in range(max_iterations):
+        residual_vector = distort(estimate) - target
+        residual = float(np.linalg.norm(residual_vector))
+        if residual < tolerance:
+            return float(estimate[0]), float(estimate[1]), residual
+        step = 1e-6
+        jacobian = np.column_stack(
+            [
+                (distort(estimate + np.eye(2)[i] * step) - distort(estimate - np.eye(2)[i] * step))
+                / (2 * step)
+                for i in range(2)
+            ]
+        )
+        try:
+            estimate -= np.linalg.solve(jacobian, residual_vector)
+        except np.linalg.LinAlgError as exc:
+            raise KernelError("singular lens-distortion inversion") from exc
+        if not np.all(np.isfinite(estimate)):
+            raise KernelError("undistortion diverged")
+    raise KernelError("undistortion did not converge to requested residual")
+
+
+def backproject_character_height_m(
+    top_px: tuple[float, float],
+    bottom_px: tuple[float, float],
+    depth_m: float,
+    k: FloatArray,
+    distortion: tuple[float, float, float, float, float] = (0, 0, 0, 0, 0),
+    pixel_uncertainty: float = 0.5,
+) -> WorldScaleReceipt:
+    """Recover metric vertical character height from calibrated image endpoints."""
+    if depth_m <= 0 or k.shape != (3, 3) or pixel_uncertainty < 0:
+        raise KernelError("invalid metric back-projection inputs")
+    inv_k = np.linalg.solve(k, np.eye(3))
+    recovered: list[tuple[float, float, float]] = []
+    for u, v in (top_px, bottom_px):
+        normalized = inv_k @ np.array([u, v, 1.0])
+        if abs(normalized[2]) < 1e-12:
+            raise KernelError("singular pixel ray")
+        x_d, y_d = normalized[0] / normalized[2], normalized[1] / normalized[2]
+        x, y, residual = undistort_normalized_point(x_d, y_d, distortion)
+        recovered.append((x, y, residual))
+    height = abs(recovered[0][1] - recovered[1][1]) * depth_m
+    fy = float(k[1, 1])
+    uncertainty = abs(depth_m / fy) * np.sqrt(2) * pixel_uncertainty
+    projected = float(np.linalg.norm(np.asarray(top_px) - np.asarray(bottom_px)))
+    return WorldScaleReceipt(
+        "WORLD_SPACE_CHARACTER_SCALE",
+        "IMAGE_SPACE_PROJECTED_SCALE",
+        float(height),
+        projected,
+        float(uncertainty),
+        max(recovered[0][2], recovered[1][2]),
+    )
