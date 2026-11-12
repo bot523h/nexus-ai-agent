@@ -79,6 +79,33 @@ class ProcessLaunchError(GovernedProcessError):
     """The binary could not be started at all."""
 
 
+def _peak_rss_bytes(pid: int) -> int | None:
+    """Peak resident set size of a *finished or running* child, in bytes.
+
+    ``/proc/<pid>/status`` reports ``VmHWM`` ("high water mark"), which is the
+    kernel's own peak RSS for the process — the same number ``/usr/bin/time -v``
+    prints, and the honest one to report for a render (a sampled *current* RSS
+    would under-report a short spike).  ``maxrss`` in ``wait4`` would be cheaper
+    but it is only available after the process is reaped, and a killed group
+    must still be reported.
+
+    Returns ``None`` when the kernel does not expose it (a non-Linux host, or a
+    process already reaped), which callers MUST surface as ``NOT_MEASURED``
+    rather than as zero.
+    """
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("VmHWM:"):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        return int(parts[1]) * 1024  # /proc reports KiB
+                    return None
+    except OSError:
+        return None
+    return None
+
+
 class CancelToken:
     """A thread-safe cooperative cancellation flag.
 
@@ -179,6 +206,10 @@ class ProcessGovernor:
         self._clock = clock
         self._poll = max(0.001, poll_seconds)
         self._processes_started = 0
+        #: Highest child peak RSS this governor has observed.  ``None`` until a
+        #: child reports one, and permanently ``None`` on a host without /proc —
+        #: which is the honest state, not a zero.
+        self.peak_rss_bytes: int | None = None
         self._lock = threading.Lock()
 
     @property
@@ -260,7 +291,11 @@ class ProcessGovernor:
             termination = "exited"
             detail: str | None = None
             returncode: int | None = None
+            peak_rss: int | None = None
             while True:
+                sample = _peak_rss_bytes(process.pid)
+                if sample is not None and (peak_rss is None or sample > peak_rss):
+                    peak_rss = sample
                 returncode = process.poll()
                 if returncode is not None:
                     break
@@ -279,6 +314,13 @@ class ProcessGovernor:
                     break
                 time.sleep(self._poll)
 
+            final_rss = _peak_rss_bytes(process.pid)
+            if final_rss is not None and (peak_rss is None or final_rss > peak_rss):
+                peak_rss = final_rss
+            if peak_rss is not None:
+                with self._lock:
+                    if self.peak_rss_bytes is None or peak_rss > self.peak_rss_bytes:
+                        self.peak_rss_bytes = peak_rss
             # The group is gone (or exited); joining the drains bounds the call.
             for thread in drain_threads:
                 thread.join(timeout=max(1.0, self._poll * 50))
@@ -292,6 +334,7 @@ class ProcessGovernor:
                 stdout_tail=stdout_sink.tail[-4000:],
                 stderr_tail=stderr_sink.tail[-8000:],
                 captured_bytes=stdout_sink.total + stderr_sink.total,
+                peak_rss_bytes=peak_rss,
                 detail=detail,
             )
             if termination == "timeout":

@@ -120,6 +120,10 @@ class ArtifactEvidence(BaseModel):
     reused_existing: bool = False
     transaction_id: str | None = None
     parameters: dict[str, object] = Field(default_factory=dict)
+    #: What the run actually consumed, measured.  ``None`` for a reused artifact
+    #: (nothing ran) and for a state-only request.  ``rss`` inside the report is
+    #: explicitly ``NOT_MEASURED`` on a host without ``/proc``.
+    budget: dict[str, object] | None = None
 
 
 class LoudnessRequest(BaseModel):

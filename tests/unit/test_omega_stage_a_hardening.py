@@ -522,11 +522,14 @@ def test_loudness_pass_one_measures_the_canonical_channel_count(
     computed from (the upmix changes the energy sum by +3.0103 dB).
     """
     source = media.write_noisy_voice(media_dir / "mono.wav")
-    measured_paths: list[Path] = []
+    measured_shapes: list[tuple[int | None, int | None]] = []
     real_measure = ffmpeg_ops.FfmpegTranscoder.measure_loudnorm_pass
 
     def spy(self: FfmpegTranscoder, path: Path, profile: object, *, cancel: object = None):
-        measured_paths.append(Path(path))
+        # The path lives inside the run directory, which is removed when the run
+        # finishes — so the shape must be read *during* pass 1, not afterwards.
+        measured = self.probe(path, cancel=cancel)  # type: ignore[arg-type]
+        measured_shapes.append((measured.channels, measured.sample_rate))
         return real_measure(self, path, profile, cancel=cancel)  # type: ignore[arg-type]
 
     monkeypatch.setattr(ffmpeg_ops.FfmpegTranscoder, "measure_loudnorm_pass", spy)
@@ -546,12 +549,13 @@ def test_loudness_pass_one_measures_the_canonical_channel_count(
             target_lra_lu=11.0,
         )
     )
-    assert measured_paths, "pass 1 never ran"
-    canonical = engine.probe(measured_paths[0])
-    assert canonical.channels == 2, (
+    assert measured_shapes, "pass 1 never ran"
+    channels, rate = measured_shapes[0]
+    assert channels == 2, (
         "pass 1 measured the source layout; the gain was computed for a different "
         "channel count than the one that gets published"
     )
+    assert rate == 48_000
 
 
 # --------------------------------------------------------------------------- #
@@ -1229,3 +1233,210 @@ def test_an_unsafe_run_id_is_refused(tmp_path: Path) -> None:
     with workspace.run_directory("") as generated:
         assert generated.parent == workspace.staging_dir
         assert len(generated.name) == 32
+
+
+# --------------------------------------------------------------------------- #
+# D8 — the resource budget is measured, and "not measured" is said out loud
+# --------------------------------------------------------------------------- #
+
+
+@requires_ffmpeg
+def test_the_budget_reports_measurements_not_estimates(
+    engine: NativeAudioEngine, media_dir: Path
+) -> None:
+    """Every field the doctrine calls a measurement must actually be measured.
+
+    The previous implementation shipped ``ResourceBudget`` as dead code: nothing
+    ever constructed it, so the numbers a reader would have trusted did not
+    exist.  This asserts they do, and that they agree with independently
+    measurable facts about the same run.
+    """
+    source = media.write_noisy_voice(media_dir / "budget.wav", seconds=8.0)
+    evidence = engine.remove_noise(
+        DenoiseRequest(
+            request_id="d8-budget",
+            source_asset_id="budget",
+            output_asset_id="budget_out",
+            source_sha256=hash_file(source),
+            strength=0.5,
+        )
+    )
+    budget = evidence.budget
+    assert budget is not None, "a real render must report what it consumed"
+    # Input size is the file on disk, not a guess.
+    assert budget["input_size_bytes"] == source.stat().st_size
+    # The decoder's own duration, cross-checked against the probe.
+    probe = engine.probe(source)
+    assert budget["input_duration_us"] == probe.container_duration_us
+    assert budget["decoded_samples"] == pytest.approx(
+        probe.container_duration_us * probe.sample_rate / 1_000_000, rel=1e-3
+    )
+    # Output size is the published artifact.
+    assert budget["output_size_bytes"] == Path(evidence.output_path).stat().st_size
+    # The run really did stage something, and staging is empty afterwards.
+    assert budget["staging_peak_bytes"] > 0, "staging was never occupied?"
+    assert budget["staging_peak_bytes"] >= budget["output_size_bytes"]
+    assert budget["processes_started"] > 0, "a render must have started processes"
+    assert budget["elapsed_seconds"] > 0
+    assert budget["within_budget"] is True
+    assert budget["ffmpeg_version"], "the tool version is part of the evidence"
+
+
+@requires_ffmpeg
+def test_peak_rss_is_measured_or_explicitly_not_measured(
+    engine: NativeAudioEngine, media_dir: Path
+) -> None:
+    """``None`` must never be presented as zero.
+
+    On Linux ``/proc/<pid>/status`` gives the kernel's own high-water mark; on a
+    host without it the only honest answer is ``NOT_MEASURED``.  Either way the
+    report says which one it is, and a measured value is physically plausible.
+    """
+    media.write_noisy_voice(media_dir / "rss.wav", seconds=8.0)
+    evidence = engine.remove_noise(
+        DenoiseRequest(
+            request_id="d8-rss",
+            source_asset_id="rss",
+            output_asset_id="rss_out",
+            source_sha256=hash_file(media_dir / "rss.wav"),
+            strength=0.5,
+        )
+    )
+    budget = evidence.budget
+    assert budget is not None
+    if budget["rss"] == "NOT_MEASURED":
+        assert budget["peak_rss_bytes"] is None
+    else:
+        assert budget["rss"] == "MEASURED"
+        rss = budget["peak_rss_bytes"]
+        assert isinstance(rss, int) and rss > 0
+        # An FFmpeg process decoding a few megabytes cannot fit in 1 MiB, and a
+        # small image would not be using 10 GiB.  A wrong unit (KiB reported as
+        # bytes, or bytes as KiB) fails here.
+        assert 1 << 20 < rss < 10 << 30, f"implausible peak RSS: {rss} bytes"
+
+
+def test_the_staging_quota_refuses_before_it_copies(tmp_path: Path) -> None:
+    """A quota checked only *after* the copy is a report, not a bound."""
+    from nexus_ai_agent.creative.audio_engine.execution import (
+        AudioExecutionSettings,
+        LocalDirectorySourceCatalog,
+        NativeAudioEngine,
+    )
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    engine = NativeAudioEngine(
+        catalog=LocalDirectorySourceCatalog(media_dir),
+        settings=AudioExecutionSettings(
+            workspace_root=tmp_path / "ws",
+            staging_quota_bytes=1024,  # absurdly small on purpose
+        ),
+    )
+    workspace = tmp_path / "ws"
+    leftover = workspace / "staging" / "leaked-run"
+    leftover.mkdir(parents=True)
+    (leftover / "huge.flac").write_bytes(b"\x00" * 8192)
+    media.write_noisy_voice(media_dir / "voice.wav", seconds=8.0)
+    with pytest.raises(EngineRejected, match="staging quota exceeded"):
+        engine.remove_noise(
+            DenoiseRequest(
+                request_id="d8-quota",
+                source_asset_id="voice",
+                output_asset_id="quota_out",
+                source_sha256=hash_file(media_dir / "voice.wav"),
+                strength=0.5,
+            )
+        )
+    assert not (workspace / "media" / "quota_out.flac").exists()
+
+
+@requires_ffmpeg
+def test_a_capped_thread_count_reaches_the_ffmpeg_argv(
+    tmp_path: Path, media_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``threads`` must be enforced, not merely recorded."""
+    from nexus_ai_agent.creative.audio_engine import ffmpeg_ops
+    from nexus_ai_agent.creative.audio_engine.execution import (
+        AudioExecutionSettings,
+        LocalDirectorySourceCatalog,
+        NativeAudioEngine,
+    )
+
+    engine = NativeAudioEngine(
+        catalog=LocalDirectorySourceCatalog(media_dir),
+        settings=AudioExecutionSettings(workspace_root=tmp_path / "ws", threads=1),
+    )
+    argvs: list[tuple[str, ...]] = []
+    real_run = ffmpeg_ops.FfmpegTranscoder._run
+    real_governor_run = ffmpeg_ops.ProcessGovernor.run
+
+    # The ``-threads`` flag is assembled inside ``_run``, so the observation
+    # point has to be the governor (which receives the final argv).
+    def spy_governor(self, argv, **kwargs):  # type: ignore[no-untyped-def]
+        argvs.append(tuple(argv))
+        return real_governor_run(self, argv, **kwargs)
+
+    monkeypatch.setattr(ffmpeg_ops.ProcessGovernor, "run", spy_governor)
+    assert real_run is not None
+    media.write_noisy_voice(media_dir / "thr.wav", seconds=8.0)
+    engine.remove_noise(
+        DenoiseRequest(
+            request_id="d8-threads",
+            source_asset_id="thr",
+            output_asset_id="thr_out",
+            source_sha256=hash_file(media_dir / "thr.wav"),
+            strength=0.5,
+        )
+    )
+    renders = [argv for argv in argvs if "-af" in argv and "ffmpeg" in argv[0]]
+    assert renders, "no render ran"
+    for argv in renders:
+        assert "-threads" in argv and argv[argv.index("-threads") + 1] == "1"
+
+
+@requires_ffmpeg
+def test_a_refused_render_leaves_no_artifact_in_the_immutable_inputs_directory(
+    engine: NativeAudioEngine, media_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A *refused* run must not leave its rendered file in ``inputs/``.
+
+    ``inputs/`` is content-addressed and immutable.  The engine used to render
+    into ``staged.parent`` — that is, into ``inputs/`` — which is invisible on
+    the success path (``publish`` moves the file out) and permanent on the
+    refusal path: the run directory is cleaned up, but a file written into
+    ``inputs/`` is not.  A later reader could then mistake a rejected artifact
+    for a staged input.  This is the assertion that pins the fix.
+    """
+    from nexus_ai_agent.creative.audio_engine import execution as execution_module
+
+    media.write_noisy_voice(media_dir / "immutable.wav", seconds=8.0)
+    real_build = execution_module.build_passport
+
+    def refusing(**kwargs: object) -> object:
+        raise execution_module.PassportError("forced refusal after the render")
+
+    monkeypatch.setattr(execution_module, "build_passport", refusing)
+    with pytest.raises(EngineRejected):
+        engine.remove_noise(
+            DenoiseRequest(
+                request_id="d8-inputs",
+                source_asset_id="immutable",
+                output_asset_id="immutable_out",
+                source_sha256=hash_file(media_dir / "immutable.wav"),
+                strength=0.5,
+            )
+        )
+    monkeypatch.setattr(execution_module, "build_passport", real_build)
+
+    inputs = tmp_path / "workspace" / "inputs"
+    names = sorted(entry.name for entry in inputs.iterdir())
+    assert names, "the run staged nothing?"
+    for name in names:
+        # Exactly the staged input: a 64-hex name with the source's extension.
+        stem, _, suffix = name.partition(".")
+        assert len(stem) == 64 and all(c in "0123456789abcdef" for c in stem), (
+            f"a non-input file was left in the immutable inputs/ directory: {name}"
+        )
+        assert suffix == "wav", f"an unexpected artifact survived in inputs/: {name}"
+    assert list((tmp_path / "workspace" / "staging").iterdir()) == []

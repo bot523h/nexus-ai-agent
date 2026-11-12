@@ -127,9 +127,9 @@ PROBES: tuple[Probe, ...] = (
         name="cancel-token-dropped",
         gate="cancellation",
         path=f"{AUDIO}/execution.py",
-        old="            produced = builder(staged, workspace, cancel)",
+        old="            produced = builder(staged, workspace, cancel, run_dir)",
         # The defect: the builder never receives the caller's token.
-        new="            produced = builder(staged, workspace, None)",
+        new="            produced = builder(staged, workspace, None, run_dir)",
         test="test_the_callers_cancel_token_reaches_the_builder",
     ),
     Probe(
@@ -295,6 +295,60 @@ PROBES: tuple[Probe, ...] = (
         old="        if expected_sha256 is not None and digest != expected_sha256:",
         new="        if False:",
         test="test_staging_an_input_is_content_addressed_and_idempotent",
+    ),
+    Probe(
+        name="rss-reported-as-zero",
+        gate="resource-budget",
+        path=f"{AUDIO}/process.py",
+        old="                        return int(parts[1]) * 1024  # /proc reports KiB",
+        # The defect: a wrong unit (KiB reported as bytes) — the plausibility
+        # assertion in the RSS test must catch it.
+        new="                        return int(parts[1])",
+        test="test_peak_rss_is_measured_or_explicitly_not_measured",
+    ),
+    Probe(
+        name="staging-quota-not-enforced",
+        gate="resource-budget",
+        path=f"{AUDIO}/execution.py",
+        old="        used = _tree_bytes(workspace.staging_dir)",
+        new="        used = 0",
+        test="test_the_staging_quota_refuses_before_it_copies",
+    ),
+    Probe(
+        name="threads-not-in-argv",
+        gate="resource-budget",
+        path=f"{AUDIO}/ffmpeg_ops.py",
+        old="        if executable == self.binary and self.threads is not None:",
+        new="        if False:",
+        test="test_a_capped_thread_count_reaches_the_ffmpeg_argv",
+    ),
+    Probe(
+        name="render-writes-into-inputs",
+        gate="resource-budget",
+        path=f"{AUDIO}/execution.py",
+        old=(
+            "            destination = _run_artifact_path("
+            'run_dir, staged, f"denoise{stream.container}")'
+        ),
+        # The old behaviour: render next to the staged input (i.e. in inputs/).
+        new='            destination = staged.parent / f"denoise{stream.container}"',
+        test="test_a_refused_render_leaves_no_artifact_in_the_immutable_inputs_directory",
+    ),
+    Probe(
+        name="budget-never-reported",
+        gate="resource-budget",
+        path=f"{AUDIO}/execution.py",
+        old="            budget=None if budget is None else budget.report(),",
+        new="            budget=None,",
+        test="test_the_budget_reports_measurements_not_estimates",
+    ),
+    Probe(
+        name="cwd-is-the-media-root",
+        gate="resource-budget",
+        path=f"{AUDIO}/execution.py",
+        old='        media = (root.parent / "media").resolve(strict=False)',
+        new='        media = Path.cwd() / "media"',
+        test="test_the_media_root_is_not_the_process_working_directory",
     ),
 )
 

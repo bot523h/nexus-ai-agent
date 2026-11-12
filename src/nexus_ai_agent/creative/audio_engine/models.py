@@ -496,7 +496,17 @@ def _round(value: float | None, digits: int = 4) -> float | None:
 
 
 class ResourceBudget(BaseModel):
-    """The resource ceiling a bounded run was given, plus what it actually used."""
+    """The resource ceiling a bounded run was given, plus what it actually used.
+
+    Every ``peak_*``/``*_bytes`` field here is a **measurement**, not an
+    estimate: input size comes from ``stat``, decoded samples from the decoder's
+    own frame count, wall clock and captured bytes from the process governor's
+    accounting, and peak RSS from the kernel's ``VmHWM``.
+
+    :attr:`peak_rss_bytes` is the one field that can legitimately be ``None``:
+    a host without ``/proc`` cannot answer, and the honest answer there is
+    ``NOT_MEASURED`` (:attr:`rss_measured`), never ``0``.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -507,6 +517,21 @@ class ResourceBudget(BaseModel):
     peak_captured_bytes: int = Field(ge=0, default=0)
     peak_analysis_bytes: int = Field(ge=0, default=0)
     processes_started: int = Field(ge=0, default=0)
+    # -- the measurements §4.8 requires ---------------------------------- #
+    input_size_bytes: int = Field(ge=0, default=0)
+    input_duration_us: int = Field(ge=0, default=0)
+    decoded_samples: int = Field(ge=0, default=0)
+    output_size_bytes: int = Field(ge=0, default=0)
+    staging_quota_bytes: int = Field(gt=0, default=8 * 1024**3)
+    staging_peak_bytes: int = Field(ge=0, default=0)
+    threads: int | None = Field(default=None, ge=1)
+    peak_rss_bytes: int | None = Field(default=None, ge=0)
+    ffmpeg_version: str | None = None
+
+    @property
+    def rss_measured(self) -> bool:
+        """``False`` means ``NOT_MEASURED`` on this host — not "used no memory"."""
+        return self.peak_rss_bytes is not None
 
     @property
     def within_deadline(self) -> bool:
@@ -521,8 +546,38 @@ class ResourceBudget(BaseModel):
         return self.peak_analysis_bytes <= self.max_analysis_bytes
 
     @property
+    def within_staging_quota(self) -> bool:
+        return self.staging_peak_bytes <= self.staging_quota_bytes
+
+    @property
     def within_budget(self) -> bool:
-        return self.within_deadline and self.within_captured_budget and self.within_analysis_budget
+        return (
+            self.within_deadline
+            and self.within_captured_budget
+            and self.within_analysis_budget
+            and self.within_staging_quota
+        )
+
+    def report(self) -> dict[str, object]:
+        """The budget as evidence: explicit about what was *not* measured."""
+        return {
+            "deadline_seconds": self.deadline_seconds,
+            "elapsed_seconds": round(self.elapsed_seconds, 4),
+            "input_size_bytes": self.input_size_bytes,
+            "input_duration_us": self.input_duration_us,
+            "decoded_samples": self.decoded_samples,
+            "output_size_bytes": self.output_size_bytes,
+            "peak_captured_bytes": self.peak_captured_bytes,
+            "peak_analysis_bytes": self.peak_analysis_bytes,
+            "staging_peak_bytes": self.staging_peak_bytes,
+            "staging_quota_bytes": self.staging_quota_bytes,
+            "processes_started": self.processes_started,
+            "threads": self.threads,
+            "peak_rss_bytes": self.peak_rss_bytes,
+            "rss": "MEASURED" if self.rss_measured else "NOT_MEASURED",
+            "ffmpeg_version": self.ffmpeg_version,
+            "within_budget": self.within_budget,
+        }
 
 
 class ProcessOutcome(BaseModel):
@@ -537,6 +592,9 @@ class ProcessOutcome(BaseModel):
     stdout_tail: str = ""
     stderr_tail: str = ""
     captured_bytes: int = Field(ge=0, default=0)
+    #: The kernel's own peak RSS for the child (``VmHWM``), or ``None`` when the
+    #: host does not expose it.  ``None`` is ``NOT_MEASURED`` — never zero.
+    peak_rss_bytes: int | None = Field(default=None, ge=0)
     detail: str | None = None
 
     @property

@@ -162,6 +162,10 @@ class FfmpegEngine:
         self.governor = governor or ProcessGovernor()
         self.deadline_seconds = deadline_seconds
         self.max_captured_bytes = max_captured_bytes
+        #: CPU threads for every child (``-threads``).  ``None`` = FFmpeg's own
+        #: default.  Set by the engine from ``AudioExecutionSettings.threads``;
+        #: kept here so the *transcoder* is the one place that emits the flag.
+        self.threads: int | None = None
 
     # -- binary ----------------------------------------------------------- #
     @property
@@ -351,6 +355,10 @@ class FfmpegEngine:
         # ``-hide_banner``/``-nostdin`` are ffmpeg options; a different tool is
         # invoked with its own arguments only.
         prefix = ["-hide_banner", "-nostdin"] if executable == self.binary else []
+        if executable == self.binary and self.threads is not None:
+            # Placed before the inputs so it applies globally; FFmpeg accepts it
+            # as a global option and an explicit per-stream value would win.
+            prefix += ["-threads", str(self.threads)]
         argv = [executable, *prefix, *args]
         return self.governor.run(
             argv,

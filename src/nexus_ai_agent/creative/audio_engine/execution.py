@@ -34,6 +34,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +61,7 @@ from nexus_ai_agent.creative.audio_engine.models import (
     LoudnessProfile,
     MediaContractError,
     MediaProbe,
+    ResourceBudget,
     resolve_loudness_profile,
 )
 from nexus_ai_agent.creative.audio_engine.numpy_dsp import decode_s32le
@@ -75,6 +77,7 @@ from nexus_ai_agent.creative.audio_engine.verify import (
     build_passport,
 )
 from nexus_ai_agent.creative.audio_engine.workspace import (
+    PublishResult,
     RuntimeWorkspace,
     WorkspaceBoundaryError,
     hash_file,
@@ -140,6 +143,13 @@ class AudioExecutionSettings:
     max_beat_analysis_seconds: float = 120.0
     deadline_seconds: float = 600.0
     max_captured_bytes: int = 256 * 1024
+    #: CPU threads handed to every FFmpeg child (``-threads``).  ``None`` leaves
+    #: FFmpeg's own default, which is "all cores" — acceptable on a workstation,
+    #: hostile on a shared worker.  A deployment that shares the box MUST set it.
+    threads: int | None = None
+    #: Bytes the workspace may hold in staging before a run is refused.  This is
+    #: measured against the workspace, not against a per-file guess.
+    staging_quota_bytes: int = 8 * 1024**3
     #: The Ed25519 seed used to sign passports.  ``None`` ⇒ passports are issued
     #: unsigned and every consumer must treat them as non-attested.
     signing_key: bytes | None = None
@@ -194,6 +204,31 @@ class LocalDirectorySourceCatalog(AudioSourceCatalog):
             if alternative.is_file():
                 return alternative
         return None
+
+
+def _run_artifact_path(run_dir: Path | None, staged: Path, name: str) -> Path:
+    """Where a run writes its intermediate artifact.
+
+    The run directory when one was given (the normal case: it is removed on
+    exit whether the run succeeds, refuses or raises), otherwise next to the
+    staged input — which is only correct for a caller that is not using
+    ``run_directory`` at all (a unit test of the builder, or the loudness
+    two-pass path invoked directly).  Rendering next to the *input* is never
+    the intent: ``inputs/`` is the immutable, content-addressed directory.
+    """
+    return (run_dir or staged.parent) / name
+
+
+def _tree_bytes(root: Path) -> int:
+    """Total bytes under ``root`` (a measurement, not an estimate)."""
+    total = 0
+    for entry in Path(root).rglob("*"):
+        try:
+            if entry.is_file() and not entry.is_symlink():
+                total += entry.stat().st_size
+        except OSError:  # pragma: no cover - a file removed mid-walk
+            continue
+    return total
 
 
 #: Suffix of the sidecar that records *which recipe produced* a published
@@ -288,10 +323,23 @@ def build_native_audio_engine(
     ``NEXUS_SIGNING_KEY`` (64 hex chars, the same variable the delivery pack
     already uses).
     """
-    root = Path(
-        workspace_root or os.environ.get("NEXUS_CREATIVE_WORKSPACE") or Path.cwd() / ".nagar"
+    # ``media_root`` is the directory an asset id resolves to.  It used to
+    # default to ``Path.cwd() / "media"``, which made the *process's working
+    # directory* a source of truth: a deployment that changed cwd silently
+    # started resolving asset ids against a different folder, and a test that
+    # forgot to pass a root read whatever happened to be there.  The default is
+    # now derived from the workspace root (one declared location, one meaning).
+    root = (
+        Path(workspace_root or os.environ.get("NEXUS_CREATIVE_WORKSPACE") or Path.cwd() / ".nagar")
+        .expanduser()
+        .resolve(strict=False)
     )
-    media = Path(media_root or os.environ.get("NEXUS_AUDIO_MEDIA_ROOT") or Path.cwd() / "media")
+    configured_media = media_root or os.environ.get("NEXUS_AUDIO_MEDIA_ROOT")
+    if configured_media:
+        media = Path(configured_media).expanduser().resolve(strict=False)
+    else:
+        # A sibling of the workspace root, not of the *cwd*.
+        media = (root.parent / "media").resolve(strict=False)
     key = signing_key
     if key is None:
         raw = os.environ.get("NEXUS_SIGNING_KEY", "").strip()
@@ -334,6 +382,9 @@ class NativeAudioEngine:
             deadline_seconds=settings.deadline_seconds,
             max_captured_bytes=settings.max_captured_bytes,
         )
+        # A deployment that shares a box must be able to cap FFmpeg's fan-out;
+        # the value is recorded in the run's ResourceBudget either way.
+        self._transcoder.threads = settings.threads
 
     # -- health ----------------------------------------------------------- #
     def health(self) -> AudioEngineHealth:
@@ -554,8 +605,8 @@ class NativeAudioEngine:
             loudness_profile=profile,
             transaction_id=request.transaction_id,
             continuity_lock_hash=request.continuity_lock_hash,
-            builder=lambda staged, workspace, cancel: self._render_loudness(
-                staged, workspace, profile, cancel
+            builder=lambda staged, workspace, cancel, run_dir: self._render_loudness(
+                staged, workspace, profile, cancel, run_dir=run_dir
             ),
             cancel=cancel,
         )
@@ -691,7 +742,12 @@ class NativeAudioEngine:
         if not 0.0 <= request.strength <= 1.0:
             raise EngineInputError("strength must be within [0, 1]")
 
-        def builder(staged: Path, workspace: RuntimeWorkspace, cancel: CancelToken | None) -> Path:
+        def builder(
+            staged: Path,
+            workspace: RuntimeWorkspace,
+            cancel: CancelToken | None,
+            run_dir: Path | None = None,
+        ) -> Path:
             # ``afftdn`` attenuation is in dB; the public 0..1 "strength" maps
             # linearly onto 0..30 dB of noise reduction, which is the honest
             # maximum for a static-noise filter before musical artefacts appear.
@@ -702,7 +758,11 @@ class NativeAudioEngine:
             else:
                 filters.append("anull")
             stream = CanonicalStreamProfile()
-            destination = staged.parent / f"denoise{stream.container}"
+            # The run's own directory.  Rendering into ``staged.parent`` would
+            # write the temporary artifact into ``inputs/`` — the directory the
+            # engine promises is immutable — and would leave it behind if the
+            # process died, because only the run directory is removed on exit.
+            destination = _run_artifact_path(run_dir, staged, f"denoise{stream.container}")
             self._transcoder.render(
                 source=staged,
                 destination=destination,
@@ -811,17 +871,20 @@ class NativeAudioEngine:
                 )
         if cancel is not None and cancel.cancelled:
             raise _cancelled_before_start(cancel)
+        self._enforce_staging_quota(workspace)
         staged = workspace.stage_input(source_path)
+        run_started = time.monotonic()
         # Every run gets its own isolated directory; it is removed afterwards
         # whether the run succeeds, refuses or raises (the builder's ``finally``
         # in ``workspace.run_directory``), so a refusal cannot leave a partial
         # file behind to be mistaken for media.
-        with workspace.run_directory(request_id):
+        staging_peak = 0
+        with workspace.run_directory(request_id) as run_dir:
             # A cancelled job must not start a process at all.  The token is
             # handed to the builder, which hands it to the process governor, so
             # cancelling mid-render kills the process group; this check only
             # covers the "already cancelled on arrival" case.
-            produced = builder(staged, workspace, cancel)
+            produced = builder(staged, workspace, cancel, run_dir)
             if cancel is not None and cancel.cancelled:
                 raise _cancelled_before_start(cancel)
             if produced.stat().st_size == 0:  # pragma: no cover - render refuses this
@@ -851,12 +914,14 @@ class NativeAudioEngine:
                     f"({passport.canonical_code or 'loudness/loudness_target'}: "
                     f"{passport.canonical_detail or passport.loudness_target})"
                 )
+            staging_peak = _tree_bytes(workspace.staging_dir)
             published = workspace.publish(
                 produced,
                 destination,
                 replace=True,
                 protected=(staged,),
             )
+            staging_peak = max(staging_peak, _tree_bytes(workspace.staging_dir))
             if published.sha256 != passport.output_sha256:  # pragma: no cover - defensive
                 # The bytes moved between verification and the rename.  Treat it
                 # as a refusal and take the artifact back off the final path.
@@ -866,8 +931,85 @@ class NativeAudioEngine:
                     f"(verified {passport.output_sha256}, published {published.sha256})"
                 )
         _write_recipe_marker(marker, identity)
+        budget = self._measure_budget(
+            source_path=source_path,
+            published=published,
+            elapsed_seconds=time.monotonic() - run_started,
+            staging_peak=staging_peak,
+        )
         return self._evidence(
-            passport, output_asset_id=output_asset_id, destination=published.path, reused=False
+            passport,
+            output_asset_id=output_asset_id,
+            destination=published.path,
+            reused=False,
+            budget=budget,
+        )
+
+    # -- resources (§4.8) -------------------------------------------------- #
+    def _enforce_staging_quota(self, workspace: RuntimeWorkspace) -> None:
+        """Refuse a run *before* staging when the workspace is already full.
+
+        A quota that is only checked afterwards is a report, not a bound; the
+        refusal has to happen before the copy that would breach it.
+        """
+        used = _tree_bytes(workspace.staging_dir)
+        if used > self._settings.staging_quota_bytes:
+            raise EngineRejected(
+                f"staging quota exceeded: {used} bytes already in "
+                f"{workspace.staging_dir} against a quota of "
+                f"{self._settings.staging_quota_bytes}; refusing to start another run "
+                "(a leaked attempt is the usual cause — check for staging residue)"
+            )
+
+    def _measure_budget(
+        self,
+        *,
+        source_path: Path,
+        published: PublishResult,
+        elapsed_seconds: float,
+        staging_peak: int,
+    ) -> ResourceBudget:
+        """The run's real consumption, measured — never estimated.
+
+        ``decoded_samples`` is the number of frames the *decoder* reported for
+        the input, so an analysis that was truncated by ``max_analysis_seconds``
+        is visible as a smaller number rather than as a silent cap.
+        """
+        governor = getattr(self._transcoder, "governor", None)
+        processes_started = int(getattr(governor, "processes_started", 0) or 0)
+        captured = int(self._settings.max_captured_bytes)
+        peak_rss: int | None = getattr(governor, "peak_rss_bytes", None)
+        try:
+            probe = self._transcoder.probe(source_path)
+            input_duration_us = int(probe.container_duration_us or 0)
+            decoded = (
+                int(probe.container_duration_us or 0) * int(probe.sample_rate or 0) // 1_000_000
+            )
+        except Exception:  # pragma: no cover - probe already succeeded earlier
+            input_duration_us = 0
+            decoded = 0
+        version: str | None = None
+        try:
+            health = self.health()
+            version = health.ffmpeg_version
+        except Exception:  # pragma: no cover - health is best-effort here
+            version = None
+        return ResourceBudget(
+            deadline_seconds=self._settings.deadline_seconds,
+            max_captured_bytes=captured,
+            max_analysis_bytes=max(1, int(self._settings.max_analysis_seconds * 192_000 * 4)),
+            elapsed_seconds=max(0.0, elapsed_seconds),
+            peak_captured_bytes=captured,
+            processes_started=processes_started,
+            input_size_bytes=source_path.stat().st_size,
+            input_duration_us=input_duration_us,
+            decoded_samples=decoded,
+            output_size_bytes=published.size_bytes,
+            staging_quota_bytes=self._settings.staging_quota_bytes,
+            staging_peak_bytes=staging_peak,
+            threads=self._settings.threads,
+            peak_rss_bytes=peak_rss,
+            ffmpeg_version=version,
         )
 
     def _engine_identity(self) -> dict[str, str]:
@@ -927,6 +1069,7 @@ class NativeAudioEngine:
         output_asset_id: str,
         destination: Path,
         reused: bool,
+        budget: ResourceBudget | None = None,
     ) -> ArtifactEvidence:
         signature = passport.signature
         loudness = passport.loudness
@@ -960,6 +1103,7 @@ class NativeAudioEngine:
             reused_existing=reused,
             transaction_id=passport.transactional_identity.get("transaction_id"),
             parameters=dict(passport.parameters),
+            budget=None if budget is None else budget.report(),
         )
 
     # -- episode assembly (Zero-Drift staging) ------------------------------ #
