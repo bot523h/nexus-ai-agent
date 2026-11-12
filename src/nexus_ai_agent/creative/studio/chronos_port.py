@@ -55,6 +55,18 @@ class ChronosPort:
             "color.relight_png",
             "acoustics.render_spatial_dialogue",
             "acoustics.verify_timbre_and_lipsync",
+            "audio.declick_wav",
+            "audio.duck_ambience",
+            "identity.verify_pose",
+            "identity.verify_eyeline",
+            "compositor.render_25d",
+            "compositor.verify_equivalence",
+            "scene.inpaint",
+            "scene.retouch",
+            "scene.sky",
+            "scene.tonemap",
+            "merkle.root",
+            "merkle.verify",
         }
     )
 

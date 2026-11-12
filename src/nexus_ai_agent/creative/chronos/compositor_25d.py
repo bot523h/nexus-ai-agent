@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -15,17 +16,32 @@ from .geometry import circle_of_confusion_px
 FloatImage = NDArray[np.float64]
 
 
+@dataclass(frozen=True, slots=True)
+class CompositorReceipt:
+    sha256: str
+    max_tile_window_working_bytes: int
+    full_frame_equivalent_working_bytes: int
+    working_memory_reduction_ratio: float
+    equivalent: bool | None = None
+
+    def __bool__(self) -> bool:
+        return self.equivalent is not False
+
+
 def _composite(
     layers: Sequence[tuple[FloatImage, FloatImage, float]],
     haze: FloatImage,
-    beta: float,
+    beta: float | tuple[float, float, float],
     focus: tuple[float, float, float, float, int],
 ) -> FloatImage:
-    if not layers or beta < 0:
+    if not layers:
         raise KernelError("layers required and extinction must be nonnegative")
     shape = np.asarray(layers[0][0]).shape
     if len(shape) != 3 or shape[2] != 3 or np.asarray(haze).shape != shape:
         raise KernelError("RGB layer and haze shapes must match")
+    beta_rgb = np.asarray((beta,) * 3 if isinstance(beta, (int, float)) else beta, dtype=float)
+    if beta_rgb.shape != (3,) or np.any(beta_rgb < 0):
+        raise KernelError("extinction must be a nonnegative scalar or RGB triple")
     out = np.broadcast_to(haze, shape).copy()
     for rgb, alpha, depth in sorted(layers, key=lambda item: item[2], reverse=True):
         image, mask = np.asarray(rgb, float), np.asarray(alpha, float)
@@ -36,7 +52,7 @@ def _composite(
             or np.any((mask < 0) | (mask > 1))
         ):
             raise KernelError("invalid 2.5D layer or alpha")
-        transmission = np.exp(-beta * depth)
+        transmission = np.exp(-beta_rgb * depth)
         scene = image * transmission + haze * (1 - transmission)
         radius = circle_of_confusion_px(depth, *focus)
         # Small, deterministic separable box approximation to a defocus disk.
@@ -60,7 +76,7 @@ def render_25d_multiplane_composite(
     beta: float | tuple[float, float, float],
     focus: tuple[float, float, float, float, int],
     tile_size_px: int = 32,
-) -> str:
+) -> CompositorReceipt:
     """Evaluate each padded tile independently; only output RGB8 is frame-sized."""
     import hashlib
     import math
@@ -78,6 +94,8 @@ def render_25d_multiplane_composite(
     halo = max(math.ceil(circle_of_confusion_px(depth, *focus) / 2) for _, _, depth in order)
     radii = [min(8, math.ceil(circle_of_confusion_px(depth, *focus) / 2)) for _, _, depth in order]
     output = np.empty((height, width, 3), dtype=np.uint8)
+    max_tile_bytes = 0
+    bytes_per_window_pixel = 0.0
     for y0 in range(0, height, tile_size_px):
         y1 = min(height, y0 + tile_size_px)
         for x0 in range(0, width, tile_size_px):
@@ -103,11 +121,24 @@ def render_25d_multiplane_composite(
                             blurred += pp[dy : dy + plane.shape[0], dx : dx + plane.shape[1]]
                     plane = blurred / ((2 * radius + 1) ** 2)
                 acc = plane * mask[..., None] + acc * (1 - mask[..., None])
+                working = htile.nbytes + acc.nbytes + image.nbytes + mask.nbytes + plane.nbytes
+                if radius:
+                    working += pp.nbytes + blurred.nbytes
+                max_tile_bytes = max(max_tile_bytes, working)
+            window_pixels = htile.shape[0] * htile.shape[1]
+            bytes_per_window_pixel = max(bytes_per_window_pixel, max_tile_bytes / window_pixels)
             oy, ox = y0 - ya + pad[0][0], x0 - xa + pad[1][0]
             interior = acc[oy : oy + (y1 - y0), ox : ox + (x1 - x0)]
             output[y0:y1, x0:x1] = np.rint(srgb_encode(interior) * 255).astype(np.uint8)
     write_rgb8_png(output_path, output)
-    return hashlib.sha256(Path(output_path).read_bytes()).hexdigest()
+    full_bytes = int(bytes_per_window_pixel * height * width)
+    reduction = full_bytes / max_tile_bytes if max_tile_bytes else 1.0
+    return CompositorReceipt(
+        hashlib.sha256(Path(output_path).read_bytes()).hexdigest(),
+        max_tile_bytes,
+        full_bytes,
+        reduction,
+    )
 
 
 def verify_tiled_compositor_equivalence(
@@ -116,14 +147,25 @@ def verify_tiled_compositor_equivalence(
     tiled_path: str | Path,
     full_path: str | Path,
     *,
-    beta: float,
+    beta: float | tuple[float, float, float],
     focus: tuple[float, float, float, float, int],
     tile_size_px: int = 32,
-) -> bool:
+) -> CompositorReceipt:
     """Persist tiled and monolithic outputs and require exact RGB8 equality."""
-    render_25d_multiplane_composite(
+    receipt = render_25d_multiplane_composite(
         layers, haze, tiled_path, beta=beta, focus=focus, tile_size_px=tile_size_px
     )
     full = _composite(layers, haze, beta, focus)
     write_rgb8_png(full_path, np.rint(srgb_encode(full) * 255).astype(np.uint8))
-    return np.array_equal(read_rgb8_png(tiled_path), read_rgb8_png(full_path))
+    equal = np.array_equal(read_rgb8_png(tiled_path), read_rgb8_png(full_path))
+    import hashlib
+
+    tiled_digest = hashlib.sha256(Path(tiled_path).read_bytes()).hexdigest()
+    full_digest = hashlib.sha256(Path(full_path).read_bytes()).hexdigest()
+    return CompositorReceipt(
+        tiled_digest,
+        receipt.max_tile_window_working_bytes,
+        receipt.full_frame_equivalent_working_bytes,
+        receipt.working_memory_reduction_ratio,
+        equal and tiled_digest == full_digest,
+    )

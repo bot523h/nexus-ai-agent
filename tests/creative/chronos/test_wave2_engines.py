@@ -3,7 +3,7 @@ from __future__ import annotations
 import wave
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -339,7 +339,7 @@ def test_wave2_refusal_branches_and_factory_ffmpeg_mock(
         np.array([0.0, 1.0, 0.0]),
         np.array([0.0, -1.0, 0.0]),
     )
-    assert verify_eyeline_and_180_rule(
+    eyeline = verify_eyeline_and_180_rule(
         np.array([-2.0, 0.0, 0.0]),
         np.array([-2.0, 10.0, 0.0]),
         np.zeros(3),
@@ -347,6 +347,7 @@ def test_wave2_refusal_branches_and_factory_ffmpeg_mock(
         np.array([0.0, 1.0, 0.0]),
         np.array([0.0, -1.0, 0.0]),
     )
+    assert eyeline and eyeline.gaze_ray_miss_distance_m == 0.0
     assert not verify_inclusion_proof({"a": 1}, InclusionProof(9, 2, ()), b"x")
     with pytest.raises(ValueError):
         node_hash(b"x", b"y")
@@ -383,3 +384,219 @@ def test_merkle_empty_singleton_and_malformed_proof() -> None:
     proof = InclusionProof(0, 1, ((False, b"bad"),))
     assert not verify_inclusion_proof(singleton[0], proof, merkle_root(singleton))
     assert not verify_inclusion_proof(singleton[0], InclusionProof(0, 1, ()), b"bad")
+
+
+def test_wave21_receipts_huber_memory_sor_and_halation(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.chronos.compositor_25d import verify_tiled_compositor_equivalence
+    from nexus_ai_agent.creative.chronos.identity_lock import verify_pose_invariant_identity
+    from nexus_ai_agent.creative.chronos.scene_portrait_ops import (
+        inpaint_masked_region_pde,
+        tonemap_scene_linear_filmic,
+    )
+
+    points = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.06, 0.0, 0.0],
+            [0.0, 0.04, 0.0],
+            [0.02, 0.03, 0.0],
+            [0.04, 0.04, 0.0],
+            [0.01, 0.01, 0.0],
+        ]
+    )
+    k = np.array([[1000.0, 0.0, 32.0], [0.0, 1000.0, 32.0], [0.0, 0.0, 1.0]])
+    obs = np.column_stack((32 + points[:, 0] * 500, 32 + points[:, 1] * 500))
+    obs[-1] += np.array([80.0, -60.0])
+    pose = verify_pose_invariant_identity(points, obs, k, 2.0, huber_delta_mm=2.0)
+    assert pose.downweighted_landmark_count >= 1 and abs(np.linalg.det(pose.rotation_so3)) > 0.99
+    frame = np.full((64, 64, 3), 0.3)
+    alpha = np.ones((64, 64))
+    layers = [(frame, alpha, 4.0)]
+    result = verify_tiled_compositor_equivalence(
+        layers,
+        frame,
+        tmp_path / "tiles.png",
+        tmp_path / "full.png",
+        beta=(0.001, 0.002, 0.004),
+        focus=(3.0, 50.0, 2.8, 36.0, 64),
+        tile_size_px=16,
+    )
+    assert (
+        result.equivalent
+        and result.max_tile_window_working_bytes < result.full_frame_equivalent_working_bytes
+    )
+    assert result.working_memory_reduction_ratio > 1
+    damaged = frame.copy()
+    damaged[24:40, 24:40] = 0.9
+    mask = np.zeros((64, 64), bool)
+    mask[24:40, 24:40] = True
+    _, energy_before, energy_after = inpaint_masked_region_pde(damaged, mask, iterations=300)
+    assert energy_after < energy_before
+    hdr = np.zeros((17, 17, 3))
+    hdr[7:10, 7:10] = 5.0
+    plain = tonemap_scene_linear_filmic(hdr)
+    halo = tonemap_scene_linear_filmic(hdr, halation_strength=0.5, halation_threshold=1.0)
+    assert halo[..., 0].sum() > plain[..., 0].sum()
+    curve = tonemap_scene_linear_filmic(np.repeat(np.linspace(0, 30, 64)[:, None, None], 3, axis=2))
+    assert np.all(np.diff(curve[:, 0, 0]) >= 0) and curve.min() >= 0 and curve.max() <= 1
+
+
+def test_wave2_audio_port_handler_dispatch(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
+    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
+
+    src = tmp_path / "click.wav"
+    with wave.open(str(src), "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(8000)
+        vals = np.r_[np.full(100, 12000, dtype=np.int16), np.full(100, -12000, dtype=np.int16)]
+        writer.writeframes(vals.astype("<i2").tobytes())
+    out = tmp_path / "fixed.wav"
+    cmd = ChronosCommand(
+        "audio.declick_wav",
+        (str(src),),
+        {"output": str(out), "splice_frames": "100", "bridge_frames": "16"},
+    )
+    receipt = ChronosPort(build_default_chronos_handlers()).execute(cmd)
+    assert out.exists() and receipt.sha256
+
+
+def test_all_wave2_default_handler_families(tmp_path: Path) -> None:
+    import json
+
+    from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
+    from nexus_ai_agent.creative.chronos.merkle_ledger import build_inclusion_proof, merkle_root
+    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
+
+    port = ChronosPort(build_default_chronos_handlers())
+
+    def save(name: str, data: Any) -> str:
+        path = tmp_path / name
+        np.save(path, data, allow_pickle=False)
+        return str(path)
+
+    dialogue = np.ones(128)
+    ambience = np.full(128, 0.1)
+    d, a = save("dialogue.npy", dialogue), save("ambience.npy", ambience)
+    assert port.execute(
+        ChronosCommand(
+            "audio.duck_ambience",
+            (d, a),
+            {"output": str(tmp_path / "duck.npy"), "sample_rate_hz": "8000"},
+        )
+    ).sha256
+    pts = np.array([[0.0, 0.0, 0.0], [0.06, 0.0, 0.0], [0.0, 0.04, 0.0], [0.02, 0.03, 0.0]])
+    k = np.array([[1000.0, 0.0, 32.0], [0.0, 1000.0, 32.0], [0.0, 0.0, 1.0]])
+    obs = np.column_stack((32 + pts[:, 0] * 500, 32 + pts[:, 1] * 500))
+    inputs = (save("pts.npy", pts), save("obs.npy", obs), save("k.npy", k))
+    assert port.execute(
+        ChronosCommand(
+            "identity.verify_pose", inputs, {"output": str(tmp_path / "pose.txt"), "depth_m": "2"}
+        )
+    ).sha256
+    vecs = [
+        save(f"vec{i}.npy", v)
+        for i, v in enumerate(
+            (
+                [-2.0, 0.0, 0.0],
+                [-2.0, 10.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 10.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, -1.0, 0.0],
+            )
+        )
+    ]
+    assert port.execute(
+        ChronosCommand(
+            "identity.verify_eyeline", tuple(vecs), {"output": str(tmp_path / "eye.txt")}
+        )
+    ).sha256
+    rgb = np.full((32, 32, 3), 0.3)
+    alpha = np.ones((32, 32))
+    layers = tmp_path / "layers.npz"
+    np.savez(layers, rgb0=rgb, alpha0=alpha, depth0=np.array(3.0))
+    haze = save("haze.npy", rgb)
+    common = {
+        "layer_count": "1",
+        "focus_m": "3",
+        "focal_mm": "50",
+        "f_number": "2.8",
+        "sensor_mm": "36",
+        "width_px": "32",
+        "tile_size_px": "8",
+    }
+    p = {**common, "output": str(tmp_path / "comp.png"), "beta_rgb": "0.001,0.002,0.004"}
+    assert port.execute(ChronosCommand("compositor.render_25d", (str(layers), haze), p)).sha256
+    p = {
+        **common,
+        "output": str(tmp_path / "comp2.png"),
+        "full_output": str(tmp_path / "full2.png"),
+        "beta": "0.001",
+    }
+    assert (
+        port.execute(
+            ChronosCommand("compositor.verify_equivalence", (str(layers), haze), p)
+        ).metadata["equivalent"]
+        == "True"
+    )
+    image = rgb.copy()
+    image[12:20, 12:20] = 0.8
+    mask = np.zeros((32, 32), bool)
+    mask[12:20, 12:20] = True
+    ip, mp = save("image.npy", image), save("mask.npy", mask)
+    assert port.execute(
+        ChronosCommand("scene.inpaint", (ip, mp), {"output": str(tmp_path / "inpaint.npy")})
+    ).sha256
+    assert port.execute(
+        ChronosCommand("scene.retouch", (ip, mp), {"output": str(tmp_path / "retouch.npy")})
+    ).sha256
+    assert port.execute(
+        ChronosCommand(
+            "scene.sky",
+            (ip,),
+            {
+                "output": str(tmp_path / "sky.npy"),
+                "width": "8",
+                "height": "8",
+                "solar_elevation_deg": "20",
+            },
+        )
+    ).sha256
+    assert port.execute(
+        ChronosCommand(
+            "scene.tonemap",
+            (ip,),
+            {"output": str(tmp_path / "tone.npy"), "halation_strength": ".1"},
+        )
+    ).sha256
+    receipt_list = [{"id": i} for i in range(3)]
+    inp = tmp_path / "receipts.json"
+    inp.write_text(json.dumps(receipt_list))
+    root = merkle_root(receipt_list)
+    proof = build_inclusion_proof(receipt_list, 1)
+    root_cmd = ChronosCommand("merkle.root", (str(inp),), {"output": str(tmp_path / "root.txt")})
+    assert port.execute(root_cmd).metadata["leaf_count"] == "3"
+    proof_file = tmp_path / "proof.json"
+    proof_file.write_text(
+        json.dumps(
+            {
+                "receipt": receipt_list[1],
+                "root": root.hex(),
+                "proof": {
+                    "leaf_index": proof.leaf_index,
+                    "tree_size": proof.tree_size,
+                    "audit_path": [[left, digest.hex()] for left, digest in proof.audit_path],
+                },
+            }
+        )
+    )
+    assert (
+        port.execute(
+            ChronosCommand(
+                "merkle.verify", (str(proof_file),), {"output": str(tmp_path / "proof.txt")}
+            )
+        ).metadata["verified"]
+        == "True"
+    )

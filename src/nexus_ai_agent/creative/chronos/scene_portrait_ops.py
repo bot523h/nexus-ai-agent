@@ -11,36 +11,47 @@ FloatImage = NDArray[np.float64]
 
 
 def inpaint_masked_region_pde(
-    image: FloatImage, mask: NDArray[np.bool_], *, iterations: int = 500, tolerance: float = 1e-6
+    image: FloatImage,
+    mask: NDArray[np.bool_],
+    *,
+    iterations: int = 500,
+    tolerance: float = 1e-6,
+    relaxation: float = 1.65,
 ) -> tuple[FloatImage, float, float]:
-    """Solve a discrete harmonic extension by Jacobi iteration with fixed exterior."""
-    src, omega = np.asarray(image, float), np.asarray(mask, bool)
+    """Solve harmonic extension by in-place SOR with fixed Dirichlet exterior."""
+    src, region = np.asarray(image, float), np.asarray(mask, bool)
     if (
         src.ndim != 3
-        or omega.shape != src.shape[:2]
-        or not np.any(omega)
+        or region.shape != src.shape[:2]
+        or not np.any(region)
         or iterations < 1
         or tolerance <= 0
+        or not 1.0 <= relaxation <= 1.9
     ):
         raise KernelError("invalid PDE image, mask, or solver controls")
     result = src.copy()
-    ys, xs = np.nonzero(omega)
-    result[omega] = np.mean(src[~omega], axis=0) if np.any(~omega) else 0
+    result[region] = np.mean(src[~region], axis=0) if np.any(~region) else 0
 
-    def residual(a: FloatImage) -> float:
-        lap = 4 * a[1:-1, 1:-1] - a[:-2, 1:-1] - a[2:, 1:-1] - a[1:-1, :-2] - a[1:-1, 2:]
-        active = omega[1:-1, 1:-1]
-        return float(np.mean(lap[active] ** 2)) if np.any(active) else 0.0
+    def energy(a: FloatImage) -> float:
+        dx, dy = np.diff(a, axis=1), np.diff(a, axis=0)
+        mx, my = region[:, 1:] | region[:, :-1], region[1:, :] | region[:-1, :]
+        return float(np.sum(dx[mx] ** 2) + np.sum(dy[my] ** 2))
 
-    before = residual(result)
+    before = energy(src)
     for _ in range(iterations):
-        old = result.copy()
-        avg = (old[:-2, 1:-1] + old[2:, 1:-1] + old[1:-1, :-2] + old[1:-1, 2:]) / 4
-        inner = omega[1:-1, 1:-1]
-        result[1:-1, 1:-1][inner] = avg[inner]
-        if float(np.max(np.abs(result - old))) < tolerance:
+        max_change = 0.0
+        for y, x in zip(*np.nonzero(region), strict=True):
+            if y == 0 or x == 0 or y == src.shape[0] - 1 or x == src.shape[1] - 1:
+                continue
+            average = (
+                result[y - 1, x] + result[y + 1, x] + result[y, x - 1] + result[y, x + 1]
+            ) / 4
+            old = result[y, x].copy()
+            result[y, x] += relaxation * (average - old)
+            max_change = max(max_change, float(np.max(np.abs(result[y, x] - old))))
+        if max_change < tolerance:
             break
-    return result, before, residual(result)
+    return result, before, energy(result)
 
 
 def retouch_portrait_frequency_separation(
@@ -104,15 +115,45 @@ def synthesize_physical_sky_dome(
     return np.broadcast_to(mix * horizon + (1 - mix) * zenith, (height, width, 3)).copy()
 
 
-def tonemap_scene_linear_filmic(hdr: FloatImage) -> FloatImage:
-    """Monotonic Hable-style rational curve, clamped to display RGB [0,1]."""
+def tonemap_scene_linear_filmic(
+    hdr: FloatImage,
+    *,
+    halation_strength: float = 0.0,
+    halation_threshold: float = 1.0,
+    halation_radius_px: int = 2,
+    log_exposure_slope: float = 2.0,
+) -> FloatImage:
+    """Bounded red-emulsion highlight diffusion followed by monotone H&D response."""
     x = np.asarray(hdr, float)
-    if np.any(~np.isfinite(x)) or np.any(x < 0):
-        raise KernelError("HDR radiance must be finite and nonnegative")
-    a, b, c, d, e, f = 0.15, 0.50, 0.10, 0.20, 0.02, 0.30
-
-    def curve(v: NDArray[np.float64]) -> NDArray[np.float64]:
-        return ((v * (a * v + c * b) + d * e) / (v * (a * v + b) + d * f)) - e / f
-
-    white = float(curve(np.array(11.2)))
-    return np.asarray(np.clip(curve(x) / white, 0, 1), dtype=np.float64)
+    if (
+        x.ndim != 3
+        or x.shape[2] != 3
+        or np.any(~np.isfinite(x))
+        or np.any(x < 0)
+        or halation_strength < 0
+        or halation_threshold < 0
+        or halation_radius_px < 0
+        or log_exposure_slope <= 0
+    ):
+        raise KernelError("invalid HDR radiance or emulsion parameters")
+    exposed = x.copy()
+    if halation_strength and halation_radius_px:
+        highlight = np.maximum(x.max(axis=2) - halation_threshold, 0.0)
+        radius = halation_radius_px
+        coords = np.arange(-radius, radius + 1, dtype=float)
+        kernel = np.exp(-(coords**2) / max(1.0, radius**2 / 2))
+        kernel /= kernel.sum()
+        padded = np.pad(highlight, radius, mode="edge")
+        blurred = np.zeros_like(highlight)
+        for i, weight in enumerate(kernel):
+            blurred += weight * padded[radius:-radius, i : i + highlight.shape[1]]
+        padded = np.pad(blurred, ((radius, radius), (0, 0)), mode="edge")
+        spread = np.zeros_like(highlight)
+        for i, weight in enumerate(kernel):
+            spread += weight * padded[i : i + highlight.shape[0], :]
+        exposed[..., 0] += halation_strength * spread
+    log_exposure = np.log1p(exposed)
+    sigmoid = 1.0 / (1.0 + np.exp(-log_exposure_slope * (log_exposure - 1.5)))
+    black = 1.0 / (1.0 + np.exp(log_exposure_slope * 1.5))
+    output = (sigmoid - black) / (1.0 - black)
+    return np.asarray(np.clip(output, 0.0, 1.0), dtype=np.float64)
