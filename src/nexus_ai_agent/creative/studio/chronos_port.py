@@ -78,6 +78,8 @@ class ChronosPort:
             "grading.apply_cdl_lut",
             "grading.serialize_cube",
             "grading.legalize_ebu_r103",
+            "episode.verify_show_bible",
+            "episode.run_verified",
         }
     )
 

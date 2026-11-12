@@ -27,6 +27,7 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
         audio_continuity,
         biomechanics_motion,
         compositor_25d,
+        episode_pipeline,
         geometry,
         identity_lock,
         merkle_ledger,
@@ -346,6 +347,134 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
                     "sobel_correlation": str(result.sobel_structure_correlation),
                 },
             )
+        if op == "episode.verify_show_bible":
+            from dataclasses import asdict
+
+            manifest_path = Path(command.inputs[0])
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            bible = episode_pipeline.ShowBibleCharacterBible(**payload["show_bible"])
+            observations = [
+                episode_pipeline.ShowBibleShotObservation(**item)
+                for item in payload["observations"]
+            ]
+            result = episode_pipeline.verify_cross_episode_show_bible(bible, observations)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(asdict(result), sort_keys=True), encoding="utf-8")
+            return file_receipt(
+                command,
+                output,
+                "SHOW_BIBLE_CONTINUITY",
+                {"shots": str(result.observations_checked)},
+            )
+        if op == "episode.run_verified":
+            from dataclasses import asdict
+            from fractions import Fraction
+
+            manifest_path = Path(command.inputs[0]).resolve()
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            bible = episode_pipeline.ShowBibleCharacterBible(**payload["show_bible"])
+
+            def asset(value: str) -> Path:
+                item = Path(value)
+                return item if item.is_absolute() else manifest_path.parent / item
+
+            shots = []
+            for record in payload["shots"]:
+                stamps = tuple(
+                    RationalTimestamp(
+                        int(item["pts"]),
+                        Fraction(int(item["time_base_num"]), int(item["time_base_den"])),
+                    )
+                    for item in record["foot_timestamps"]
+                )
+                shots.append(
+                    episode_pipeline.EpisodeShotInput(
+                        shot_index=int(record["shot_index"]),
+                        scene_linear_rgb=np.asarray(record["scene_linear_rgb"], dtype=np.float64),
+                        alpha=np.asarray(record["alpha"], dtype=np.float64),
+                        depth_m=float(record["depth_m"]),
+                        canonical_landmarks_m=np.asarray(
+                            record["canonical_landmarks_m"], dtype=np.float64
+                        ),
+                        observed_landmarks_3d_m=np.asarray(
+                            record["observed_landmarks_3d_m"], dtype=np.float64
+                        ),
+                        observed_landmarks_px=np.asarray(
+                            record["observed_landmarks_px"], dtype=np.float64
+                        ),
+                        intrinsics=np.asarray(record["intrinsics"], dtype=np.float64),
+                        camera_depth_m=float(record["camera_depth_m"]),
+                        top_px=cast(tuple[float, float], tuple(float(v) for v in record["top_px"])),
+                        bottom_px=cast(
+                            tuple[float, float], tuple(float(v) for v in record["bottom_px"])
+                        ),
+                        camera_a=np.asarray(record["camera_a"], dtype=np.float64),
+                        camera_b=np.asarray(record["camera_b"], dtype=np.float64),
+                        actor_a=np.asarray(record["actor_a"], dtype=np.float64),
+                        actor_b=np.asarray(record["actor_b"], dtype=np.float64),
+                        gaze_a=np.asarray(record["gaze_a"], dtype=np.float64),
+                        gaze_b=np.asarray(record["gaze_b"], dtype=np.float64),
+                        ik_root_position=np.asarray(record["ik_root_position"], dtype=np.float64),
+                        ik_segment_lengths_m=tuple(
+                            float(v) for v in record["ik_segment_lengths_m"]
+                        ),
+                        ik_effector_target=np.asarray(
+                            record["ik_effector_target"], dtype=np.float64
+                        ),
+                        foot_timestamps=stamps,
+                        ankle_positions_m=np.asarray(record["ankle_positions_m"], dtype=np.float64),
+                        stance_contact=np.asarray(record["stance_contact"], dtype=bool),
+                        cepstral_envelope=tuple(float(v) for v in record["cepstral_envelope"]),
+                        skin_tone_lab=cast(
+                            tuple[float, float, float],
+                            tuple(float(v) for v in record["skin_tone_lab"]),
+                        ),
+                        dialogue_wav_path=asset(record["dialogue_wav_path"]),
+                        ambience_wav_path=asset(record["ambience_wav_path"]),
+                        speaker_position_m=cast(
+                            tuple[float, float, float],
+                            tuple(float(v) for v in record["speaker_position_m"]),
+                        ),
+                        camera_position_m=cast(
+                            tuple[float, float, float],
+                            tuple(float(v) for v in record["camera_position_m"]),
+                        ),
+                        camera_right_unit=cast(
+                            tuple[float, float, float],
+                            tuple(float(v) for v in record.get("camera_right_unit", (1, 0, 0))),
+                        ),
+                        room_dimensions_m=cast(
+                            tuple[float, float, float],
+                            tuple(float(v) for v in record.get("room_dimensions_m", (6, 5, 3))),
+                        ),
+                        room_absorption=float(record.get("room_absorption", 0.35)),
+                    )
+                )
+            raw_dag = payload.get("shot_dag")
+            dag = (
+                None
+                if raw_dag is None
+                else episode_pipeline.ShotDAG(
+                    Continuity(raw_dag.get("continuity", "OK")),
+                    raw_dag.get("previous_input_hashes", {}),
+                    raw_dag.get("current_input_hashes", {}),
+                    {key: tuple(value) for key, value in raw_dag.get("dependencies", {}).items()},
+                )
+            )
+            result = episode_pipeline.run_verified_episode_continuity_pipeline(
+                int(payload["episode_index"]), shots, bible, p["staging_dir"], shot_dag=dag
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(asdict(result), sort_keys=True), encoding="utf-8")
+            return file_receipt(
+                command,
+                output,
+                "VERIFIED_EPISODE_CONTINUITY_PASSPORT",
+                {
+                    "merkle_root_sha256": result.merkle_root_sha256,
+                    "published_wav_sha256": result.published_wav_sha256,
+                },
+            )
         if op == "audio.declick_wav":
             result = audio_continuity.declick_pcm_wav_splices(
                 command.inputs[0],
@@ -531,6 +660,8 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
         "grading.apply_cdl_lut": wave2,
         "grading.serialize_cube": wave2,
         "grading.legalize_ebu_r103": wave2,
+        "episode.verify_show_bible": wave2,
+        "episode.run_verified": wave2,
     }
 
 
