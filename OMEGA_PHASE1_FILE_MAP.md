@@ -1,107 +1,167 @@
-# NAGAR CHRONOS-OMEGA — Phase 1 File Map
+# NAGAR CHRONOS-OMEGA — STAGE-A File Map
 
-Branch `arena/288ef95e-nexus-ai-agent` (from `c3aa7c8`).
-Every row states **what the file is responsible for** and **what proof exists** for it.
-No operation in this map is a display/demo operation: each `READY` path is backed by an
-artifact that is re-decoded and re-measured *after* the final encode.
+Branch `arena/288ef95e-nexus-ai-agent`, tip `620855b1`, forked from `c3aa7c8`.
+`6915d328` (the OMEGA-02 audio execution plane) remains in the ancestry.
+
+**Deliverable 1 of the OMEGA prompt.** Every row states what a file is responsible
+for and what proof exists for it. Nothing here is a display/demo operation: each
+verified path is backed by an artifact that is decoded and re-measured *after* the
+final encode.
+
+Status vocabulary is limited to `VERIFIED`, `VERIFIED_WITH_LIMITATIONS`,
+`HARDENED_BUT_NOT_COMPLETE`, `BLOCKED`, `DEFERRED`.
 
 ---
 
-## 1. New execution plane — `src/nexus_ai_agent/creative/audio_engine/`
+## 1. Normative doctrine (new in STAGE-A)
 
-The engine is deliberately **outside** `creative/packs` (stays pure) and outside
-`creative/studio` (stays engine-free). A composition root injects it.
-
-| File | Lines | Responsibility | Proof |
-|---|---|---|---|
-| `__init__.py` | 100 | Package contract + public surface (`NativeAudioEngine`, `build_native_audio_engine`, profiles, passports). Documents which module owns which concern. | Imported by tests + `render_jobs`; `test_no_orphan_modules` green. |
-| `models.py` | 559 | `CanonicalStreamProfile` (48 kHz, channel layout, codec, sample format, `format_arguments()`), `LoudnessProfile` (`EBU_R128_BROADCAST` −23/−1/11, `STREAMING_MASTER` −14/−1/11), `ContinuityLockSpec`, `IdentityLockSpec`, `MediaProbe`, `SpectralSignature`, `LoudnessMeasurement` (silent = all-`None`), `LoudnessTargetCheck`, `DecodeEvidence`, `ResourceBudget`, `ProcessOutcome`. | Pure pydantic; validators refuse unsupported rates, silent-with-numbers, etc. |
-| `process.py` | 344 | **The only place a child process is created.** `ProcessGovernor`: mandatory deadline, cancellation token, process-*group* kill, poll loop, bounded stdout/stderr `_BoundedSink`, stdin closed, drain threads joined. `ProcessTimeout` / `ProcessCancelled` carry the `ProcessOutcome`. | 3 adversarial tests: deadline kill (<20 s), cancel mid-run, captured bytes bounded. |
-| `workspace.py` | 237 | `RuntimeWorkspace`: isolated `staging/`, `inputs/`, `media/`, per-run directories, `contain()` boundary, `stage_input()` (hash-addressed copy), `publish()` = atomic `os.replace` **only**, refuses existing destination, refuses a run's own input, `hash_file()`. | Tests: atomic publish, overwrite refused, run-input protection, out-of-root refused, no staging residue after refusal. |
-| `ffmpeg_ops.py` | 605 | `FfmpegEngine` (probe by parsing `ffmpeg -i`; `measure_loudness` via `ebur128`; `measure_loudnorm_pass`), `FfmpegTranscoder` (`render`, `assemble_stream_copy`, `decode_all`, `signature`, `signature_resampled`), `resolve_ffmpeg_bin`, `corruption_marker()` + `AudioDecodeError` / `AudioEngineUnavailableError` / `AudioEncodingError` / `AudioMeasurementError`. | **FFmpeg exits 0 on damaged input while printing `corrupt input packet`** — the corruption gate turns that into a typed refusal (pinned by test). |
-| `numpy_dsp.py` | 244 | Bounded-memory analysis: frame streaming, RMS/peak/crest/dynamic range (P95−P10), zero-crossing rate, spectral centroid + 8-band energy ratios via `sliding_window_view`, onset envelope, tempo candidates with confidence. | `analyse_samples` refuses non-mono input (caught a real bug in `signature`). |
-| `verify.py` | 617 | `ArtifactPassport` (schema-versioned, canonical payload, Ed25519 signature), `build_passport`, `verify_passport`, `PassportKeyring`, `check_loudness_target`, `decode_`/`signature_` gates, `VerificationReport` with per-check codes. Verifies the **file on disk after the final encode** — never a pre-encoder array. | Tests: verified / tampered-byte / forged-payload / unknown-key / JSON round-trip. |
-| `ed25519_sign.py` | 133 | `derive_public_key`, `sign_ed25519`, `key_id_for`, `Ed25519SigningError`. Reuses the group law from `creative.packs.ed25519` and **verifies every signature it produces before returning it**. | RFC 8032 vectors via the shared verifier; round-trip tests. |
-| `continuity.py` | 466 | Zero-Drift: `compare_continuity` (per-axis verdicts `ok`/`drift`/`unknown`, tolerances documented in `TOLERANCES`), `detect_lock_drift` (cheap pre-production lock comparison), `assert_lossless_assembly` → `AssemblyProof` (`stream_copy` vs `re_encode_required` with the reason), `ContinuityError`. | Tests: stitchable pair, wrong-rate blocks copy, mono-blocks-stereo, missing evidence = `unknown` **not** `ok`. |
-| `execution.py` | 850 | `NativeAudioEngine` (implements the port), `AudioExecutionSettings` (budgets + signing key), `AudioSourceCatalog` / `CallbackSourceCatalog` / `LocalDirectorySourceCatalog`, `build_native_audio_engine()` (the one place that decides where bytes live), `prove_lossless_assembly()`, and the shared `_derive` pipeline: **stage → run in isolated dir → atomic publish → verify the published bytes → quarantine `<name>.rejected` on refusal → reuse a still-verified artifact on replay**. Also refuses an *unreachable* loudness request up front: if raising the programme to the target would push its peaks past the true-peak ceiling, no limiter or dynamic pass can satisfy both numbers, so it refuses with the arithmetic (`loudness_target_unreachable`) instead of publishing an undershooting file. | 24 real-FFmpeg tests + 8 end-to-end bus tests + 11 continuity tickets. |
-
-## 2. The port (contract home)
-
-| File | Lines | Responsibility | Why here |
-|---|---|---|---|
-| `creative/studio/audio_engine.py` | 257 | `AudioEnginePort` Protocol, `ArtifactEvidence`, `BeatAnalysis`, `SourcePrecheck`, `SourceRequest`, `LoudnessRequest`, `DenoiseRequest`, `BeatRequest`, `EngineCapability`, `AudioEngineHealth`, `EngineUnavailable` / `EngineInputError` / `EngineRejected`. | `creative/packs/audio/**` may import **only** stdlib + pydantic + `creative.studio` (`test_audio_pack_boundary`). Declaring the contract here is what lets the pack type its seam without crossing a layer. |
-| `application/ports/audio_engine.py` | 51 | Compatibility re-export of the above (defines nothing of its own). | Callers already using the older path keep working. |
-
-## 3. Studio lifecycle — evidence-based states
-
-| File | Lines | Responsibility |
+| File | Responsibility | Status |
 |---|---|---|
-| `creative/studio/evidence.py` | 230 | `OperationEvidenceState` ladder `PLANNED → IMPLEMENTED → EXECUTION_PROVEN → ARTIFACT_VERIFIED → PRODUCTION_PROVEN` + red state `CONTRADICTED`. Promotion requires a **signed** verifier corroboration naming the same artifact hash; a refusal is `CONTRADICTED`; `PRODUCTION_PROVEN` needs **two independent key ids**. `assess_state`, `assert_verified`, `states_for`. |
-| `creative/studio/lifecycle.py` | +64 | Existing maturity axis untouched. Adds `PackLifecycle.evidence_state`, `PACK_EVIDENCE` (measured ceilings), `pack_evidence_state()`. Rationale documented: canonical audio evidence carries **one** signing key ⇒ honest ceiling is `ARTIFACT_VERIFIED`; nothing claims `PRODUCTION_PROVEN`. |
-| `creative/studio/capabilities.py`, `creative/studio/bus.py` | +23 | The `audio_engine` composition seam threaded `CommandBus → OperationContext`. Duck-typed `Any` so studio stays free of the engine. |
+| `docs/architecture/NAGAR_MATHEMATICAL_ENGINEERING_DOCTRINE.md` | The normative MUST/MUST-NOT layer: four layers (A–D), the eight-part scientific contract, JCGM GUM uncertainty, `Confidence ≠ Probability` (§4), verify-before-publication (§5), the evidence ladder (§6), the single-authority rule (§7), loudness targets are earned not labelled (§8), measurement debt is declared (§9). | `VERIFIED` — indexed in `docs/README.md`, enforced by tests (see §7) |
 
-## 4. The audio pack — real execution, no simulation
+## 2. The execution plane — `src/nexus_ai_agent/creative/audio_engine/`
 
-| File | Lines | Change |
+The engine sits **outside** `creative/packs` (which stays pure) and outside
+`creative/studio` (which stays engine-free). A composition root injects it.
+
+| File | Responsibility | STAGE-A change |
 |---|---|---|
-| `creative/packs/audio/models.py` | +158 | Canonical profile constants, the two locked loudness profiles, `NormalizeLoudnessInput` validator (a locked profile **locks** its numbers; `custom` requires all three; single-pass is refused), `EXECUTION_STATUS_READY`/`UNAVAILABLE`, `CODE_REQUIRES_LOCAL_MODEL`/`^AUDIO_ENGINE`/`^MEDIA_BYTES`, `DetectedBeatGrid` + in-process beat memory, `BeatGridRef` reconciling `total_beats` with its markers. |
-| `creative/packs/audio/operations.py` | +639 | `audio.normalize_loudness` → real two-pass `loudnorm`, verified artifact, measured evidence. `audio.detect_beats` → real measurement (no `120` constant). `audio.beat_sync_cut` → snaps to the **measured** grid, otherwise the declared anchor explicitly labelled `tempo_source="default_120"`. `audio.remove_noise` → real `highpass`+`afftdn`, signature evidence, no separation claim. `audio.remove_vocal` → **honest `UNAVAILABLE / REQUIRES_LOCAL_MODEL`, zero assets**. State-only ops labelled `derivation="state_only"`, `artifact_verified=False`. |
-| `creative/slideshow/audio.py` | +145 | Upgraded the existing analyzer (not replaced): `TempoEvidence`, `collect_tempo_candidates`, `tempo_evidence_for_file`. |
+| `models.py` | `CanonicalStreamProfile`, `LoudnessProfile`, `ProcessingMode`, `RenderOutcome`, `LoudnessTargetCheck`, `MediaProbe`, `SpectralSignature`, `ResourceBudget`, `ProcessOutcome`. | §4.5: `ProcessingMode = STRICT_LINEAR | DYNAMIC_ALLOWED`; `max_crest_reduction_db` destruction bound; `-14 LUFS` renamed `NAGAR_STREAMING_PRESET`; `LoudnessTargetCheck.processing_mode`/`crest_reduction_db`; `RenderOutcome` carries the source crest factor back from a builder. §4.8: `ResourceBudget` became measured. |
+| `verify.py` | `ArtifactPassport` + Ed25519, `build_passport`, `verify_passport`, `check_loudness_target`, `decode_evidence`, per-check codes. | §4.5: computes `crest_reduction_db` from the source and published crest factors; `verify_passport` re-derives the claim from a **fresh** measurement and refuses a passport whose number no longer reconstructs. Fixed a real crash: an unmeasurable true peak raised `TypeError` instead of failing the ceiling check. |
+| `execution.py` | `NativeAudioEngine` (implements the port), `AudioExecutionSettings`, the source catalogs, `build_native_audio_engine`, and the `_derive` pipeline: stage → render in an isolated run dir → **verify the private bytes** → atomic publish → measure the budget. | §4.1 verify-before-publish, §4.2 thin workspace adapter, §4.5 canonical conversion **before** pass-1 loudness + the linear/dynamic split with a measured crest reduction, §4.8 measured `ResourceBudget` (`-threads`, staging quota, Peak RSS from `/proc`). Media root derives from the workspace, never `Path.cwd()`. |
+| `workspace.py` | `RuntimeWorkspace`: isolated `staging/`, `inputs/`, `media/`, per-run directories, `contain()`, `stage_input()`, atomic `publish()`. | §4.2: now a **thin adapter** on `tools/filesystem_policy.WorkspaceFilesystem` — one containment authority, no second boundary rule. |
+| `process.py` | `ProcessGovernor` — the only place a child process is created. Deadline, `CancelToken`, process-**group** kill/reap, bounded capture, `_peak_rss_bytes` from `/proc/<pid>/status` `VmHWM`. | §4.4 cancellation reaches FFmpeg; §4.8 Peak RSS measured or honestly `None`. |
+| `ffmpeg_ops.py` | `probe` (banner), `probe_json` (fail-closed `ffprobe -of json` contract), `measure_loudness` (ebur128), `measure_loudnorm_pass`, `render`, `assemble_stream_copy`, `decode_all`, `signature`. | §4.6 typed probe contract; corruption gate (FFmpeg exits 0 on damaged input). |
+| `continuity.py`, `numpy_dsp.py`, `recipe.py`, `ed25519_sign.py` | Zero-Drift continuity verdicts; bounded-memory DSP; recipe identity hash; Ed25519. | §4.7 `_interval_candidates` mean-gap fix; §4.8 recipe identity over the full tuple. |
 
-## 5. Composition root
+## 3. The port and the packs
 
-| File | Change |
+| File | Responsibility | STAGE-A change |
+|---|---|---|
+| `creative/studio/audio_engine.py` | `AudioEnginePort` Protocol + `ArtifactEvidence`, `BeatAnalysis`, and the request models. | `ArtifactEvidence.processing_mode`/`crest_reduction_db`; `BeatAnalysis.budget` + `confidence_kind: Literal["normalized_margin"]`. |
+| `creative/studio/evidence.py` | The evidence ladder `PLANNED → IMPLEMENTED → EXECUTION_PROVEN → ARTIFACT_VERIFIED → PRODUCTION_PROVEN`, red state `CONTRADICTED`. | §4.3: unchanged *because it was already correct* — production verifies but never mints. Now pinned by a gate that static `PACK_EVIDENCE` may never contain `PRODUCTION_PROVEN`. |
+| `creative/studio/lifecycle.py` | `PACK_LIFECYCLE`, `PACK_EVIDENCE`, `pack_lifecycle()`, `pack_evidence_state()`. | §4.3: the `nexus.audio.studio` reason was stale (claimed DSP paths "unmapped"); it now matches the measured state. |
+| `creative/packs/audio/models.py` | Canonical constants, the locked loudness profiles, `NormalizeLoudnessInput`. | §4.5: `nagar_streaming_preset` replaces `streaming_master`. |
+| `continuum/pack_coverage.py` | The canonical-test-target registry (a new pack test can never be silently left out of the evidence). | Registered `tests/unit/test_omega_stage_a_hardening.py` as canonical **audio-pack** evidence. |
+
+## 4. Tests — every one drives real FFmpeg or the exact function
+
+| File | Proves |
 |---|---|
-| `creative/render_jobs.py` | `AUDIO_ENGINE_OPERATIONS` + `_audio_engine_for(operation)`; `build_job_bus(..., audio_engine=...)`. The render lane now *gives* the engine-backed operations a real engine and `None` to everything else — no handler can be handed a process-spawning engine it does not need. |
+| `tests/unit/test_omega_stage_a_hardening.py` (63) | The four P0 defects reproduced-then-fixed: no unverified byte ever appears at a published path; a changed recipe parameter never returns the previous artifact; the caller's `CancelToken` reaches the builder; lag-k candidates are **mean gaps**, not finite differences. Plus §4.5: the linear/dynamic split discriminates on one signal (4 verdicts), the crest reduction is arithmetic on the measured file including the dual-mono up-mix term, a destructive target is refused, and `confidence` is labelled a margin. |
+| `tests/unit/test_omega_engine_coverage.py` (81) | The engine's **refusal** surface: source resolution, composition and env fallbacks, beat-analysis refusals, loudness contract refusals, transcoder failures (empty concat, quoted path, failed copy leaving no partial file), every `verify_passport` refusal, the numeric layer, the workspace boundary. |
+| `tests/unit/test_omega_native_engine.py` (26) | Real FFmpeg end to end: post-decode LUFS at target for both locked profiles, true peak honoured, 96/120/140 BPM detected ±3%, silence → no tempo, corrupt input refused. |
+| `tests/unit/test_omega_audio_bus.py`, `test_omega_continuity_assembly.py`, `test_omega_evidence_ladder.py`, `test_audio_pack_evidence_paths.py`, `test_audio_pack.py` | The bus, the continuity verdicts, the ladder, every pack refusal branch. |
+| `scripts/omega_stage_a_mutations.py` (39 probes) | That the suite is load-bearing: revert a fix and a **named** test must fail. |
+| `scripts/omega_stage_a_benchmarks.py` | §8.3: N ≥ 3, median/min/max/sd, Peak RSS, process count, FFmpeg version; refuses `N < 3` and exits non-zero on `NOT_MEASURED`. |
 
-## 6. Tests (all real, all in CI)
+## 5. What is measured on this branch
 
-| File | Lines | What it proves |
-|---|---|---|
-| `tests/unit/omega_media.py` | 178 | Synthetic adversarial media generated at test time (no binary fixtures): quiet sine, clipped/hot, 96 BPM clicks, noisy voice, silence, corrupt RIFF, noise floor, multichannel. |
-| `tests/unit/test_omega_native_engine.py` | 700 | Real FFmpeg. Source byte-identical after every run; post-decode LUFS at target for both locked profiles; true peak honoured on clipped input; the target check is **not** a rubber stamp; 96/120/140 BPM each detected (±3%), never the old constant, and a window excluding the truth reports **no** tempo; silence → no tempo; corrupt file refused; decode-corruption gate; denoise lowers the floor; strength 0 is an honest passthrough; passport verified/tampered/forged/unknown-key/JSON round-trip; deadline kill; cancellation; bounded capture; atomic publish + boundaries; no staging residue; **an unreachable target is refused with the arithmetic**, while a sustained programme reaches both locked targets — proving the gate discriminates rather than blocking loudness work wholesale. |
-| `tests/unit/test_omega_audio_bus.py` | 286 | End-to-end `CommandBus`: the recorded `content_sha256` equals the file's hash read independently; replay reuses the same passport; a source whose bytes drifted from the registry is refused; silent source fails with nothing written; state-only ops labelled. |
-| `tests/unit/test_omega_evidence_ladder.py` | 240 | Ladder against a real run: one key ⇒ `ARTIFACT_VERIFIED`; two keys ⇒ `PRODUCTION_PROVEN`; same key twice ≠ two verifiers; refusal ⇒ `CONTRADICTED`; wrong-hash corroboration promotes nothing; `PACK_EVIDENCE` cannot exceed the proof. |
-| `tests/unit/test_omega_continuity_assembly.py` | 292 | Stitchability proved on rendered segments, blocked on rate/layout mismatch; two episodes under one lock are continuous; a different voice drifts; missing evidence is `unknown`, never `ok`; tolerances pinned. |
-| `tests/unit/test_audio_pack_evidence_paths.py` | 609 | Every refusal/degenerate handler branch with a declared double: unreadable bytes, no tempo, engine refusal, missed target, unverified artifact, replay, clamping arithmetic, model-level refusals. |
-| `tests/unit/test_audio_pack.py`, `test_opgap_wave5.py`, `test_opgap_audio_motion.py`, `test_capability_lifecycle.py` | +337 | Stale fake-behaviour expectations rewritten to the new truth (`remove_vocal` UNAVAILABLE, denoise needs an engine, no `120 BPM` constant). |
+Mutation campaign — `scripts/omega_stage_a_mutations.py`, **39/39 KILLED**
+(`ANCHOR_MISSING`, `AMBIGUOUS_ANCHOR` and `SURVIVED` all fail the gate).
 
-## 7. What the engine proves on a real run
-
-One `python` invocation against synthetic media (FFmpeg n9.0.2), verifier included:
+Engine coverage — `coverage run --source=src/nexus_ai_agent/creative/audio_engine`
+over the six engine suites, **95.1%** (1839 statements, 89 uncovered; the bar was
+95%):
 
 ```
-normalize (ebu_r128_broadcast): -23.0 LUFS / TP -10.6 / verified=True / 0.04 s
-                                / 48000 Hz flac 2ch
-beats (sustained programme):    no onsets → status="insufficient_onsets", tempo=None
-                                (reported as a reason, never as 120)
-denoise:                        rms -19.68 dBFS, centroid 7916 Hz, verified=True
-assembly:                       stream_copy — all segments share one stream shape
-sources after the run:          both SHA-256 values unchanged
-staging leftover:               []
+execution 97%  models 97%  process 97%  numpy_dsp 96%  continuity 95%
+ffmpeg_ops 94%  verify 93%  ed25519 93%  workspace 92%  recipe 100%
 ```
 
-And the case that motivated the up-front gate (a 96 BPM click track at −31.43 LUFS /
-−3.61 dBTP), refused before any file is published:
+§4.5 behaviour on a real 18.7 dB-crest programme (mono, dual-mono up-mix):
 
 ```
-loudness_target_unreachable: this programme cannot reach -23 LUFS without exceeding
-the -1 dBTP ceiling. It measures -31.43 LUFS at -3.61 dBTP (crest 27.82 dB) and needs
-+8.43 dB, which would peak at +4.82 dBTP. This profile allows at most 22 dB of crest
-factor, so no render — not a limiter, not a dynamic pass — can satisfy both numbers at
-once. Publishing a file that undershoots the target (or clips to reach it) would be a
-false success; lower the target, raise the ceiling, or supply a programme with less
-dynamic range.
+linear render @ -23 LUFS (ebu_r128_broadcast)  → target reached, crest removed < 1 dB
+preset     @ -14 LUFS (nagar_streaming_preset) → target reached, 2.38 dB reported
+27.8 dB bare click track, -23 LUFS → refused: loudness_target_unreachable
+27.8 dB bare click track, -14 LUFS → refused: loudness_crest_destruction
+                                     (needs 11.81 dB, profile permits 9 dB)
 ```
 
-## 8. Gates
+§8.3 benchmarks, N=3, ffmpeg `n9.0.2-17-g2a571b6068-20260930`, py 3.11.2:
 
-| Gate | Status |
+```
+benchmark   median s    min s    max s    sd s    peak RSS  procs
+denoise       0.4842   0.4840   0.4997  0.0090    38.1 MiB      8
+loudness      0.9934   0.9912   1.0192  0.0156   131.7 MiB     13
+beats         0.1135   0.0936   0.1143  0.0117    28.3 MiB      2
+```
+
+## 6. Gates
+
+| Gate | Result |
 |---|---|
-| `ruff check src/ tests/` | clean |
-| `mypy` (engine, port, evidence, lifecycle, audio pack) | clean, 17 files |
-| Canonical audio pack coverage | **99.58%** (939/943 lines; was 93.6% mid-work), contract ≥ 95% |
-| `test_audio_pack_boundary`, `test_nagar_studio_isolation` | green (this is why the port moved into `creative.studio`) |
-| `test_no_orphan_modules`, `test_lifecycle_gate_boundary`, `test_pack_manifest_is_data_only`, `test_delivery_pack_boundary`, `test_pack_trust_boundary` | green |
-| `python -m nexus_ai_agent.nagar --docs` + truth gate + mutation probes | regenerated, 41 tests green |
-| `tests/unit` + `tests/architecture` | **5889 passed**, 9 failures — all pre-existing local-env failures (B2/Neon SDK versions, pg engine, PDF, knowledge CLI), identical on a pristine `c3aa7c8` worktree |
+| `ruff check src/ tests/ scripts/` + `ruff format` | clean |
+| `python -m nexus_ai_agent.nagar --docs` | clean |
+| `pytest tests/unit tests/architecture` | **6049 passed, 14 skipped, 0 failed** |
+| `scripts/omega_stage_a_mutations.py` | **39/39 KILLED** |
+| `scripts/omega_stage_a_benchmarks.py -n 3` | exit 0, all rows `ok` |
+| Engine coverage | **95.1%** (bar 95%) |
+| Canonical audio-pack coverage | 99.58% (939/943), contract 95% |
+| `scripts/agent_board.py check --files <exact list>` | no overlap, before every push |
+
+## 7. STAGE-A status — honest ledger
+
+| Item | Status | Evidence / what is missing |
+|---|---|---|
+| §Doctrine registered | `VERIFIED` | normative file + `docs/README.md` index row |
+| §4.1 verify-before-publish + fenced order | `VERIFIED` | 4 tests + 2 mutation probes |
+| §4.2 thin workspace adapter | `VERIFIED` | 7 boundary tests + 1 probe |
+| §4.3 measurement ≠ provenance | `VERIFIED_WITH_LIMITATIONS` | ladder + 2 gates; limitation: the canonical audio evidence carries one signing key, so the honest ceiling is `ARTIFACT_VERIFIED` |
+| §4.4 cancellation + process-group kill/reap | `VERIFIED` | cancel-mid-render, pre-cancelled, post-process tests |
+| §4.5 canonical conversion before pass-1 | `VERIFIED` | pass-1 spy test + `loudness-measured-before-canonical-conversion` probe |
+| §4.5 `STRICT_LINEAR` vs `DYNAMIC_ALLOWED` + crest | `VERIFIED` | 4 verdicts on one signal, arithmetic reconstruction, destruction bound |
+| §4.5 `NAGAR_STREAMING_PRESET` relabel | `VERIFIED` | 31 call sites renamed; a gate asserts the old name is unreachable |
+| §4.6 fail-closed `ffprobe -of json` | `VERIFIED` | every malformed document refuses; 3 probes |
+| §4.7 `_interval_candidates` mean gap | `VERIFIED` | 3 tests + 1 probe |
+| §4.7 `bpm_std_uncertainty` (Type A), spectral-flux octave disambiguation, full PCM/FFT/STFT/denoise audit | `HARDENED_BUT_NOT_COMPLETE` | mean-gap fix and confidence labelling are in; the GUM Type-A uncertainty report, the spectral-flux autocorrelation octave disambiguation and the full DSP audit are **not** implemented |
+| §4.8 recipe identity + measured `ResourceBudget` | `VERIFIED` | 5956→ measured run shown in the earlier unit; 5 probes |
+| §8.2 mutation gates (12 named) | `VERIFIED` | 39 probes across 12 gate labels |
+| §8.3 benchmarks N ≥ 3 + Peak RSS + tool version | `VERIFIED` | table above; harness refuses `N < 3` |
+| §8.2 **live CircleCI Pipeline 678** root-cause, 9 failures classified | `BLOCKED` | see §8 |
+| STAGE-B (K1–K4 kernels) | `DEFERRED` | correctly gated: not started, by design |
+
+## 8. The one BLOCKED item, and why
+
+The instruction asks for a live CircleCI **Pipeline 678** root-cause with each of
+the nine failures labelled `BASELINE_REPRODUCED | REGRESSION | ENVIRONMENT_BLOCKED |
+NONDETERMINISTIC | UNCLASSIFIED`. That classification cannot be produced here, and
+saying so is the only honest answer:
+
+1. **`.circleci/` does not exist** — not in the working tree, and `git log --all --
+   .circleci` returns nothing, so no ref in this repository has ever carried it.
+   `docs/DECISION_LOG.md` records the removal: the branch `circleci-project-setup`
+   was "Irrelevant — CI platform cut … `.circleci/` does not exist on `main`; the
+   project standardizes on GitHub Actions."
+2. **The project's CI is GitHub Actions** (`.github/workflows/ci.yml`,
+   `queue-ownership-mutations.yml`, `maintenance.yml`). Every recent run reachable
+   through the API is a GitHub Actions run, not a CircleCI pipeline.
+3. **`circleci.com` is not reachable from this sandbox** (egress is allowlisted to
+   GitHub/npm/PyPI), so no CircleCI API query can be made even in principle.
+
+The one *currently failing* scheduled workflow on `main` — GitHub Actions run
+`43207417853` (`maintenance`) — was inspected instead and **is** classified:
+
+| Check | Classification | Root cause |
+|---|---|---|
+| `backup-db` → step "Preflight — required production backup configuration" | `ENVIRONMENT_BLOCKED` | the scheduled job refuses to run without production backup credentials, which a fork/sandbox CI does not have. `housekeeping` and `restore-drill` were `skipped` as a result. Nothing in the audio engine, and no code defect. |
+
+To close the CircleCI item, either the pipeline must be identified by its real
+platform and run id (a GitHub Actions run id, or a CircleCI project slug + token),
+or a `.circleci/config.yml` must be reintroduced. Both are owner decisions.
+
+## 9. Forward tasks (10)
+
+| # | Task | Why now |
+|---|---|---|
+| 1 | §4.7 GUM Type-A `bpm_std_uncertainty` on the measured onset grid (JCGM GUM §5.2) | the only remaining *unmeasured* number in the beat path |
+| 2 | §4.7 spectral-flux autocorrelation octave disambiguation (competing-peak test, not a constant) | 96/120/140 BPM pass today, but an octave error on real music is currently undetectable |
+| 3 | Full PCM/FFT/STFT/denoise audit note (window function, overlap, band edges, `afftdn` limits) | the doctrine demands a stated measurement protocol for every DSP claim |
+| 4 | STAGE-B K1: `RationalTime` + delta shot-DAG + verified `-c copy` assembly | the first kernel; `continuity.assert_lossless_assembly` is its proof seam |
+| 5 | STAGE-B K2: `K[R|t]` + Brown-Conrady + thin-lens CoC + GUM Jacobian `∂H_px/∂Z_c` | depends on K1's rational time |
+| 6 | STAGE-B K3: sRGB/BT.709 → scene-linear, Bradford, albedo/shading split, regularized Monge–Kantorovich relighting | needs a scene-linear substrate; measure `ρ_∇` and `ΔE2000` against a real render |
+| 7 | STAGE-B K4: Allen–Berkley ISM RIR + Woodworth ITD/ILD coupled to camera distance; liftered cepstral timbre; rational-PTS jaw/viseme solver | last kernel; couples to K2's geometry |
+| 8 | `DYNAMIC_ALLOWED` on a stereo source (the crest arithmetic is proven on mono→stereo; the 1:1 channel case needs the same reconstruction gate) | closes the last unmeasured branch of §4.5 |
+| 9 | Identify the real CI pipeline behind "Pipeline 678" (platform + run id) and classify its 9 failures | unblocks the last `BLOCKED` STAGE-A item |
+| 10 | Standing: `scripts/omega_stage_a_mutations.py` + the benchmark harness become a CI job, not a manual step | a gate that is only run by hand is a gate that will be skipped |
