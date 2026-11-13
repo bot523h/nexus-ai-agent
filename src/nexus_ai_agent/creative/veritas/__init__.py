@@ -26,6 +26,7 @@ from nexus_ai_agent.creative.veritas.catoptric_reflection_physics import (
 )
 from nexus_ai_agent.creative.veritas.continuum_and_quantum_mechanics import (
     PhaseCoherenceResult,
+    bohmian_edge_weight,
     bohmian_quantum_potential,
     madelung_continuity_residual,
     propagate_occluded_object_se3,
@@ -92,15 +93,19 @@ from nexus_ai_agent.creative.veritas.projective_shadow_transport import (
     synthesize_coherent_cast_shadows,
 )
 from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
+    COMPILER_VERSION,
     LAW_COUNT,
     LawReceipt,
     RealMediaVeritasBundle,
     compile_and_heal_real_media_shot,
+    merkle_root_from_payloads,
 )
 from nexus_ai_agent.creative.veritas.reality_auditor import (
+    LAW_NAMES,
     CinemaShot,
     VeritasRealityAuditor,
     VeritasRealityPassport,
+    build_corrupted_15_law_cinema_shot,
 )
 from nexus_ai_agent.creative.veritas.se3_object_permanence import (
     ObjectState,
@@ -230,4 +235,9 @@ __all__ = [
     "compile_and_heal_real_media_shot",
     "omnia_cinema_physics",
     "real_media_veritas_compiler",
+    "bohmian_edge_weight",
+    "LAW_NAMES",
+    "build_corrupted_15_law_cinema_shot",
+    "COMPILER_VERSION",
+    "merkle_root_from_payloads",
 ]

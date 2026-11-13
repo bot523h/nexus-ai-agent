@@ -454,3 +454,41 @@ class TestLaw15Mutants:
         patch[2:14, 7:9] = 1.0
         result = rectify_stroboscopic_wagon_wheel(patch, angular_velocity_rad_s=200.0, fps=24.0)
         assert result.aliased is True
+
+
+def test_true_code_mutants_are_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable each of the 15 law handlers in turn; every mutant must be killed."""
+    from nexus_ai_agent.creative.veritas.reality_auditor import (
+        VeritasRealityAuditor,
+        build_corrupted_15_law_cinema_shot,
+    )
+
+    handlers = [
+        "_law_hand",
+        "_law_eyes",
+        "_law_reflection",
+        "_law_shadow",
+        "_law_objects",
+        "_law_typography",
+        "_law_collision",
+        "_law_cloth",
+        "_law_time",
+        "_law_face",
+        "_law_phase",
+        "_law_anamorphic",
+        "_law_viseme",
+        "_law_fluid",
+        "_law_rotor",
+    ]
+    shot = build_corrupted_15_law_cinema_shot()
+    baseline = VeritasRealityAuditor().audit_and_heal_cinema_shot(shot).pre_audit_violations
+    assert baseline >= 15
+    killed = 0
+    for name in handlers:
+        auditor = VeritasRealityAuditor()
+        with monkeypatch.context() as ctx:
+            ctx.setattr(auditor, name, lambda _shot: ((), ()))
+            mutated = auditor.audit_and_heal_cinema_shot(shot).pre_audit_violations
+        if mutated < baseline:
+            killed += 1
+    assert killed == 15

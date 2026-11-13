@@ -85,6 +85,7 @@ from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
 )
 from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
     compile_and_heal_real_media_shot,
+    merkle_root_from_payloads,
 )
 from nexus_ai_agent.creative.veritas.se3_object_permanence import ObjectPermanenceError
 from nexus_ai_agent.creative.veritas.symplectic_contact_mechanics import (
@@ -1266,3 +1267,63 @@ def test_compiler_rejects_invalid_configuration(tmp_path: Path) -> None:
     payload = bundle.as_dict()
     assert payload["png_count"] == 2
     assert len(payload["laws"]) == 15
+
+
+def test_law14_helmholtz_projection_odd_grid_7x7_zero_divergence() -> None:
+    rng = np.random.default_rng(7)
+    velocity = rng.normal(size=(2, 7, 7, 2))
+    height = np.abs(rng.normal(size=(2, 7, 7))) + 0.5
+    result = enforce_helmholtz_fluid_conservation(velocity, height)
+    assert result.divergence_after < 1e-12
+
+
+def test_law13_doppler_shifts_sinusoid_fft_peak() -> None:
+    fs = 48000.0
+    n = 48000
+    t = np.arange(n) / fs
+    signal = np.sin(2.0 * np.pi * 440.0 * t)
+    result = apply_acoustic_doppler_shift(signal, fs, 30.0)
+    spectrum = np.abs(np.fft.rfft(result.shifted_signal))
+    freqs = np.fft.rfftfreq(n, d=1.0 / fs)
+    peak = float(freqs[int(np.argmax(spectrum))])
+    expected = 440.0 * 343.0 / (343.0 - 30.0)
+    assert abs(peak - expected) < 1.0
+
+
+def test_law15_symmetric_shutter_zero_phase_bias() -> None:
+    patch = np.zeros((16, 16))
+    patch[4:12, 7:9] = 1.0
+    coarse = rectify_stroboscopic_wagon_wheel(
+        patch, angular_velocity_rad_s=30.0, fps=24.0, shutter_angle_deg=180.0, samples=16
+    )
+    fine = rectify_stroboscopic_wagon_wheel(
+        patch, angular_velocity_rad_s=30.0, fps=24.0, shutter_angle_deg=180.0, samples=128
+    )
+    assert float(np.max(np.abs(coarse.healed_patch - fine.healed_patch))) < 0.05
+
+
+def test_compiler_writes_healed_media_and_binds_merkle_digests(tmp_path: Path) -> None:
+    rng = np.random.default_rng(11)
+    frames = rng.random((3, 8, 8, 3))
+    audio = np.sin(2.0 * np.pi * 440.0 * np.arange(4800) / 48000.0)
+    bundle = compile_and_heal_real_media_shot(
+        tmp_path / "healed",
+        input_frames=frames,
+        input_audio_pcm=audio,
+        num_frames=3,
+        height=8,
+        width=8,
+        mux_mp4=False,
+    )
+    assert bundle.input_frames_sha256 and bundle.output_frames_sha256
+    assert bundle.input_frames_sha256 != bundle.output_frames_sha256
+    assert bundle.input_audio_sha256 and bundle.output_audio_sha256
+    assert len(bundle.leaf_payloads) == 15
+    for payload in bundle.leaf_payloads:
+        assert payload["compiler_version"] == "veritas-omnia-2.0"
+        assert payload["input_frames_sha256"] == bundle.input_frames_sha256
+        assert payload["output_frames_sha256"] == bundle.output_frames_sha256
+        assert payload["input_audio_sha256"] == bundle.input_audio_sha256
+        assert payload["output_audio_sha256"] == bundle.output_audio_sha256
+    assert merkle_root_from_payloads(bundle.leaf_payloads) == bundle.merkle_root
+    assert bundle.healed is True

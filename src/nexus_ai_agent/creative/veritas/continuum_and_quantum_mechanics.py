@@ -103,11 +103,17 @@ class PhaseCoherenceResult:
     boiling_after: float
     iterations: int
     violations: tuple[str, ...]
+    violations_after: tuple[str, ...] = ()
+    bohmian_weight: FloatArray | None = None
 
     @property
     def healed(self) -> bool:
-        """True when a violation was detected and boiling energy strictly fell."""
-        return bool(self.violations) and self.boiling_after < self.boiling_before
+        """True when a violation was detected, boiling fell and re-audit is clean."""
+        return (
+            bool(self.violations)
+            and self.boiling_after <= self.boiling_before
+            and not self.violations_after
+        )
 
 
 def _laplacian(field: FloatArray) -> FloatArray:
@@ -183,13 +189,20 @@ def madelung_continuity_residual(
     phase: FloatArray,
     *,
     dt: float = 1.0,
+    previous_density: FloatArray | None = None,
 ) -> float:
-    """RMS residual of ``d rho / dt + div(rho grad Phi) = 0`` (hbar/m = 1).
+    """RMS residual of the time-dependent Madelung continuity equation.
 
-    A coherent Madelung fluid transports density as a probability current
-    ``j = rho grad Phi``. Generative frames that "boil" violate continuity: the
-    measured divergence does not match the observed density change. This scalar
-    is a compact falsification metric for that failure.
+    The Madelung fluid transports density as a probability current
+    ``j = rho grad Phi``, so the exact continuity statement is
+
+    ``d rho / dt + div(rho grad Phi) = 0``.
+
+    When ``previous_density`` is supplied the temporal term is evaluated by a
+    genuine backward difference ``(rho - rho_prev) / dt``; when it is omitted the
+    query is a steady-state one and the temporal term is identically zero. The
+    residual is the root-mean-square of the full left-hand side, so both spatial
+    transport and temporal density evolution participate in the metric.
     """
     rho = np.asarray(density, dtype=np.float64)
     phi = np.asarray(phase, dtype=np.float64)
@@ -201,12 +214,42 @@ def madelung_continuity_residual(
         raise ValueError("fields must be finite")
     if dt <= 0.0:
         raise ValueError("dt must be strictly positive")
+
+    if previous_density is None:
+        drho_dt = np.zeros_like(rho)
+    else:
+        rho_prev = np.asarray(previous_density, dtype=np.float64)
+        if rho_prev.shape != rho.shape:
+            raise ValueError("previous_density must match the density shape")
+        if not np.all(np.isfinite(rho_prev)):
+            raise ValueError("previous_density must be finite")
+        drho_dt = (rho - rho_prev) / dt
+
     gradients = np.gradient(phi)
     flux = [rho * component for component in gradients]
     divergence = np.zeros_like(rho)
     for axis, component in enumerate(flux):
         divergence = divergence + np.gradient(component, axis=axis)
-    return float(np.sqrt(np.mean(divergence**2)))
+
+    return float(np.sqrt(np.mean((drho_dt + divergence) ** 2)))
+
+
+def bohmian_edge_weight(
+    density: FloatArray,
+    *,
+    hbar_eff: float = 1.0,
+    epsilon: float = 1e-6,
+) -> FloatArray:
+    """Bohmian edge-protection weight ``exp(-|Q| / (mean|Q| + eps))`` in (0, 1].
+
+    Flat regions carry a small quantum potential so the weight approaches one and
+    smoothing is fully applied; across a genuine physical boundary ``|Q|`` spikes,
+    the weight collapses toward zero and the sharp phase/wavefunction gradient is
+    preserved.
+    """
+    potential = np.abs(bohmian_quantum_potential(density, hbar_eff=hbar_eff))
+    scale = float(np.mean(potential)) + epsilon
+    return np.asarray(np.exp(-potential / scale), dtype=np.float64)
 
 
 def stabilize_madelung_phase_coherence(
@@ -220,12 +263,15 @@ def stabilize_madelung_phase_coherence(
 ) -> PhaseCoherenceResult:
     """Detect and heal high-frequency phase boiling in a Madelung fluid.
 
-    The input density ``rho`` and optical phase ``Phi`` are fused into
+    The density ``rho`` and optical phase ``Phi`` are fused into
     ``psi = sqrt(rho) exp(i Phi)``. Phase-wrap discontinuities are unwrapped and
     the high-frequency spectral energy ratio of the phase is measured. When it
-    exceeds ``boiling_threshold`` the phase is repeatedly brick-wall low-passed
-    (an idealised Bohmian smoothing) until the boiling energy falls below
-    threshold or ``max_iterations`` is exhausted.
+    exceeds ``boiling_threshold`` the phase is repeatedly low-passed, but the
+    smoothing is **gated by the Bohmian edge-protection weight** so that flat
+    regions are aggressively regularised while genuine object boundaries, where
+    ``|Q(rho)|`` spikes, retain their sharp gradients. After stabilisation the
+    wavefunction is re-audited from measured post-heal metrics to populate
+    ``violations_after``.
 
     Raises
     ------
@@ -260,6 +306,7 @@ def stabilize_madelung_phase_coherence(
     if float(np.max(np.abs(unwrapped - phi))) > np.pi:
         violations.append("phase_discontinuity")
 
+    weight = bohmian_edge_weight(rho, hbar_eff=hbar_eff)
     current = unwrapped
     before = _high_frequency_ratio(current)
     if before > boiling_threshold:
@@ -267,14 +314,30 @@ def stabilize_madelung_phase_coherence(
 
     iterations = 0
     metric = before
+    cutoff = smoothing_cutoff
+    previous_metric = metric
     while metric > boiling_threshold and iterations < max_iterations:
-        current = _lowpass(current, smoothing_cutoff)
+        smoothed = _lowpass(current, cutoff)
+        current = weight * smoothed + (1.0 - weight) * current
         metric = _high_frequency_ratio(current)
+        if metric > previous_metric * 0.99 and cutoff > 1:
+            cutoff -= 1
+        previous_metric = metric
         iterations += 1
 
     amplitude = np.sqrt(np.clip(rho, 0.0, None))
     wavefunction = amplitude * np.exp(1j * current)
     quantum_potential = bohmian_quantum_potential(rho, hbar_eff=hbar_eff)
+
+    violations_after: list[str] = []
+    if _high_frequency_ratio(current) > boiling_threshold:
+        violations_after.append("temporal_phase_boiling")
+    recheck = current
+    for axis in range(current.ndim):
+        recheck = np.unwrap(recheck, axis=axis)
+    if float(np.max(np.abs(recheck - current))) > np.pi:
+        violations_after.append("phase_discontinuity")
+
     return PhaseCoherenceResult(
         wavefunction=wavefunction,
         density=rho,
@@ -284,6 +347,8 @@ def stabilize_madelung_phase_coherence(
         boiling_after=metric,
         iterations=iterations,
         violations=tuple(violations),
+        violations_after=tuple(violations_after),
+        bohmian_weight=weight,
     )
 
 
@@ -300,6 +365,7 @@ __all__ = [
     "XpbdResult",
     "audit_and_enforce_thermodynamic_arrow",
     "audit_object_permanence",
+    "bohmian_edge_weight",
     "bohmian_quantum_potential",
     "capsule_sdf",
     "fourier_advection_diffusion",

@@ -41,7 +41,7 @@ def _facs_violation() -> np.ndarray:
 
 
 def test_law_names_cover_ten_laws() -> None:
-    assert set(LAW_NAMES) == set(range(1, 11))
+    assert set(LAW_NAMES) == set(range(1, 16))
 
 
 def test_empty_shot_is_not_healed() -> None:
@@ -83,7 +83,7 @@ def test_passport_as_dict_is_json_safe() -> None:
     passport = VeritasRealityAuditor().audit_and_heal_cinema_shot(CinemaShot(hand=_broken_hand()))
     payload = passport.as_dict()
     assert payload["pre_audit_violations"] == passport.pre_audit_violations
-    assert set(payload["law_violations_before"]) == {str(law) for law in range(1, 11)}
+    assert set(payload["law_violations_before"]) == {str(law) for law in range(1, 16)}
 
 
 def test_clean_hand_has_no_violations() -> None:
@@ -171,7 +171,7 @@ def _clean_full_shot() -> CinemaShot:
 def test_full_clean_shot_dispatches_every_law() -> None:
     passport = VeritasRealityAuditor().audit_and_heal_cinema_shot(_clean_full_shot())
     assert passport.post_heal_violations == 0
-    assert set(passport.law_violations_before) == set(range(1, 11))
+    assert set(passport.law_violations_before) == set(range(1, 16))
 
 
 def test_violating_shot_exercises_healing_paths() -> None:

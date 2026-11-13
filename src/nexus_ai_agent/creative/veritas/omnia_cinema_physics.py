@@ -52,10 +52,17 @@ class AnamorphicOpticsResult:
     vignetting_map: FloatArray
     healed_image: FloatArray
     violations: tuple[str, ...]
+    delta_red: float = 0.0
+    delta_blue: float = 0.0
+    vignette_residual_before: float = 0.0
+    vignette_residual_after: float = 0.0
 
     @property
     def healed(self) -> bool:
-        return self.fringe_after < self.fringe_before
+        return (
+            self.fringe_after < self.fringe_before
+            and self.vignette_residual_after <= self.vignette_residual_before
+        )
 
 
 def _bilinear(channel: FloatArray, xs: FloatArray, ys: FloatArray) -> FloatArray:
@@ -102,6 +109,27 @@ def _fringe_metric(image: FloatArray) -> float:
     return float(np.mean(np.abs(image[:, :, 0] - image[:, :, 2])[mask]))
 
 
+def _vignette_residual(image: FloatArray, vignetting: FloatArray) -> float:
+    """Radial non-flatness of ``image / vignetting`` across five annuli."""
+    ratio = image.mean(axis=2) / np.clip(vignetting, 1e-6, None)
+    height, width = int(ratio.shape[0]), int(ratio.shape[1])
+    cy = (height - 1) / 2.0
+    cx = (width - 1) / 2.0
+    ys, xs = np.meshgrid(
+        np.arange(height, dtype=np.float64), np.arange(width, dtype=np.float64), indexing="ij"
+    )
+    radius = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
+    edges = np.linspace(0.0, float(radius.max()) + 1e-9, 6)
+    means: list[float] = []
+    for index in range(5):
+        annulus = (radius >= edges[index]) & (radius < edges[index + 1])
+        if bool(np.any(annulus)):
+            means.append(float(ratio[annulus].mean()))
+    if len(means) < 2:
+        return 0.0
+    return float(np.std(means))
+
+
 def _cos4_vignetting_map(height: int, width: int, focal_pixels: float) -> FloatArray:
     cy = (height - 1) / 2.0
     cx = (width - 1) / 2.0
@@ -120,7 +148,8 @@ def rectify_anamorphic_dioptric_optics(
     focal_length_mm: float = 40.0,
     sensor_width_mm: float = 36.0,
     sensor_height_mm: float = 24.0,
-    cauchy_b_coefficient: float = 1.5e-3,
+    cauchy_a_coefficient: float = 1.5168,
+    cauchy_b_coefficient: float = 0.0042,
 ) -> AnamorphicOpticsResult:
     """Heal anamorphic lateral chromatic aberration and cos^4 vignetting."""
 
@@ -153,14 +182,27 @@ def rectify_anamorphic_dioptric_optics(
     )
 
     fringe_before = _fringe_metric(array)
-    # Cauchy dispersion n(lambda) = A + B/lambda^2 sets the sign of the radial
-    # lateral displacement between the red and blue channels.
-    epsilon = float(np.clip(fringe_before * 0.5 + cauchy_b_coefficient, 0.0, 0.05))
+
+    # Explicit Cauchy dispersion n(lambda) = A + B / lambda_um^2 evaluated at the
+    # reference RGB wavelengths of a crown/flint doublet.
+    lambda_r, lambda_g, lambda_b = 0.650, 0.532, 0.460
+    n_r = cauchy_a_coefficient + cauchy_b_coefficient / lambda_r**2
+    n_g = cauchy_a_coefficient + cauchy_b_coefficient / lambda_g**2
+    n_b = cauchy_a_coefficient + cauchy_b_coefficient / lambda_b**2
+    delta_r = (n_r - n_g) / n_g
+    delta_b = (n_b - n_g) / n_g
+
+    # The corrupted frame carries the dispersion-induced magnification, so the
+    # healing resample inverts it; a small measured residual term locks any
+    # leftover fringe that the analytic model does not explain.
+    residual_lock = float(np.clip(fringe_before * 0.5, 0.0, 0.02))
 
     def _candidate(sign: float) -> FloatArray:
         healed = np.array(array, copy=True)
-        healed[:, :, 0] = _radial_resample(array[:, :, 0], 1.0 + sign * epsilon)
-        healed[:, :, 2] = _radial_resample(array[:, :, 2], 1.0 - sign * epsilon)
+        scale_r = 1.0 / (1.0 + sign * (delta_r + residual_lock))
+        scale_b = 1.0 / (1.0 + sign * (delta_b - residual_lock))
+        healed[:, :, 0] = _radial_resample(array[:, :, 0], scale_r)
+        healed[:, :, 2] = _radial_resample(array[:, :, 2], scale_b)
         return np.clip(healed, 0.0, 1.0)
 
     positive = _candidate(1.0)
@@ -173,7 +215,18 @@ def rectify_anamorphic_dioptric_optics(
         corrected, fringe_after = negative, negative_metric
 
     vignetting = _cos4_vignetting_map(height, width, float(fx))
-    healed_image = np.clip(corrected / np.clip(vignetting, 1e-6, None)[:, :, None], 0.0, 1.0)
+    flat = np.ones_like(vignetting)
+    vignette_residual_before = _vignette_residual(corrected, flat)
+    compensated = np.clip(corrected / np.clip(vignetting, 1e-6, None)[:, :, None], 0.0, 1.0)
+    compensated_residual = _vignette_residual(compensated, flat)
+    # The cos^4 compensation is only applied when it demonstrably flattens the
+    # radial profile; otherwise it would manufacture edge brightening.
+    if compensated_residual <= vignette_residual_before:
+        healed_image = compensated
+        vignette_residual_after = compensated_residual
+    else:
+        healed_image = corrected
+        vignette_residual_after = vignette_residual_before
 
     violations: list[str] = []
     if fringe_before > 1e-6:
@@ -191,6 +244,10 @@ def rectify_anamorphic_dioptric_optics(
         vignetting_map=vignetting,
         healed_image=healed_image,
         violations=tuple(violations),
+        delta_red=float(delta_r),
+        delta_blue=float(delta_b),
+        vignette_residual_before=vignette_residual_before,
+        vignette_residual_after=vignette_residual_after,
     )
 
 
@@ -236,7 +293,9 @@ def audit_and_heal_viseme_formant_sync(
     f1_hz: FloatArray,
     f2_hz: FloatArray | None = None,
     rms_energy: FloatArray | None = None,
+    au18_lip_pucker: FloatArray | None = None,
     kappa1: float = 0.8,
+    kappa2: float = 0.6,
     silence_rms: float = 1e-4,
 ) -> VisemeFormantResult:
     """Enforce the Stevens-House articulatory tube invariant."""
@@ -276,6 +335,19 @@ def audit_and_heal_viseme_formant_sync(
         if not bool(np.all(np.isfinite(formant2))):
             raise BioAcousticSyncError("F2 sequence contains non-finite values")
 
+    pucker = (
+        None
+        if au18_lip_pucker is None
+        else np.asarray(au18_lip_pucker, dtype=np.float64).reshape(-1)
+    )
+    if pucker is not None:
+        if pucker.shape != jaw.shape:
+            raise BioAcousticSyncError("AU18 sequence must match the viseme sequence length")
+        if not bool(np.all(np.isfinite(pucker))):
+            raise BioAcousticSyncError("AU18 sequence contains non-finite values")
+        if float(pucker.min()) < -1e-9 or float(pucker.max()) > 1.0 + 1e-9:
+            raise BioAcousticSyncError("AU18 must lie in [0, 1]")
+
     required = np.clip(kappa1 * (formant1 - 300.0) / 700.0, 0.0, 1.0)
     silent = energy < silence_rms
 
@@ -297,6 +369,13 @@ def audit_and_heal_viseme_formant_sync(
     if bool(np.any(conflict)):
         violations.append("bilabial_formant_conflict")
         healed_lips[conflict] = 0.7
+
+    if pucker is not None and formant2 is not None:
+        required_pucker = np.clip(kappa2 * (1200.0 - formant2) / 500.0, 0.0, 1.0)
+        rounded = (~silent) & (formant2 < 1200.0) & (pucker < required_pucker - 1e-9)
+        if bool(np.any(rounded)):
+            violations.append("lip_rounding_underarticulation")
+            healed_lips[rounded] = np.maximum(healed_lips[rounded], required_pucker[rounded])
 
     residual = np.abs(healed_jaw - required)
     residual[silent] = 0.0
@@ -323,7 +402,12 @@ def apply_acoustic_doppler_shift(
     *,
     sound_speed_m_s: float = 343.0,
 ) -> DopplerShiftResult:
-    """Apply the exact relativistic acoustic Doppler factor, length-preserving."""
+    """Apply the classical moving-source acoustic Doppler factor ``c / (c - v_r)``.
+
+    The shift is applied as a phase-continuous frequency-domain resampling, so a
+    pure sinusoid at ``f0`` emerges cleanly at ``alpha * f0`` with no flat-line
+    clipping at the tail of the buffer. ``|v_r| >= c`` fails closed.
+    """
 
     signal = np.asarray(pcm_signal, dtype=np.float64).reshape(-1)
     if signal.size == 0:
@@ -338,9 +422,16 @@ def apply_acoustic_doppler_shift(
         raise BioAcousticSyncError("radial velocity reaches the sonic singularity")
 
     factor = sound_speed_m_s / (sound_speed_m_s - float(radial_velocity_m_s))
-    indices = np.arange(signal.size, dtype=np.float64)
-    source = np.clip(indices * factor, 0.0, float(signal.size - 1))
-    shifted = np.interp(source, indices, signal)
+    count = int(signal.size)
+    spectrum = np.fft.rfft(signal)
+    freqs = np.fft.rfftfreq(count, d=1.0 / sample_rate_hz)
+    # Frequency-domain resampling: output content at nu comes from input at nu/alpha,
+    # which shifts every partial by exactly alpha with no tail clipping.
+    source = freqs / factor
+    valid = source <= freqs[-1]
+    real = np.where(valid, np.interp(source, freqs, spectrum.real), 0.0)
+    imag = np.where(valid, np.interp(source, freqs, spectrum.imag), 0.0)
+    shifted = np.fft.irfft(real + 1j * imag, n=count)
     return DopplerShiftResult(
         shifted_signal=np.asarray(shifted, dtype=np.float64),
         doppler_factor=float(factor),
@@ -371,13 +462,26 @@ class FluidConservationResult:
         return self.divergence_after < 1e-11 and not self.violations
 
 
+def _wavenumbers(n_rows: int, n_cols: int) -> tuple[FloatArray, FloatArray]:
+    """Discrete spectral wavenumbers with Nyquist modes zeroed on even grids.
+
+    A self-conjugate Nyquist mode exists only when the dimension is even; on an
+    odd grid the highest retained frequency is an ordinary conjugate pair and must
+    not be touched. Zeroing the Nyquist wavenumber is the standard spectral-CFD
+    convention because that mode cannot represent a derivative on the grid.
+    """
+    kx = 2.0 * np.pi * np.fft.rfftfreq(n_cols, d=1.0 / n_cols) / n_cols
+    ky = 2.0 * np.pi * np.fft.fftfreq(n_rows, d=1.0 / n_rows) / n_rows
+    if n_cols % 2 == 0:
+        kx[-1] = 0.0
+    if n_rows % 2 == 0:
+        ky[n_rows // 2] = 0.0
+    return kx, ky
+
+
 def _spectral_divergence(velocity: FloatArray) -> FloatArray:
     height, width = int(velocity.shape[1]), int(velocity.shape[2])
-    kx = 2.0 * np.pi * np.fft.rfftfreq(width, d=1.0 / width) / width
-    ky = 2.0 * np.pi * np.fft.fftfreq(height, d=1.0 / height) / height
-    kx[-1] = 0.0
-    if height % 2 == 0:
-        ky[height // 2] = 0.0
+    kx, ky = _wavenumbers(height, width)
     kxx, kyy = np.meshgrid(kx, ky, indexing="xy")
     ux_hat = np.fft.rfft2(velocity[:, :, :, 0], axes=(1, 2))
     uy_hat = np.fft.rfft2(velocity[:, :, :, 1], axes=(1, 2))
@@ -409,11 +513,7 @@ def enforce_helmholtz_fluid_conservation(
         raise FluidConservationError("fluid height must be non-negative")
 
     n_frames, n_rows, n_cols = int(vel.shape[0]), int(vel.shape[1]), int(vel.shape[2])
-    kx = 2.0 * np.pi * np.fft.rfftfreq(n_cols, d=1.0 / n_cols) / n_cols
-    ky = 2.0 * np.pi * np.fft.fftfreq(n_rows, d=1.0 / n_rows) / n_rows
-    kx[-1] = 0.0
-    if n_rows % 2 == 0:
-        ky[n_rows // 2] = 0.0
+    kx, ky = _wavenumbers(n_rows, n_cols)
     kxx, kyy = np.meshgrid(kx, ky, indexing="xy")
     k_sq = kxx**2 + kyy**2
     safe_k = np.where(k_sq > 1e-24, k_sq, 1.0)
@@ -536,7 +636,8 @@ def rectify_stroboscopic_wagon_wheel(
     if delta_phi * delta_alias < 0.0:
         violations.append("wagon_wheel_sign_reversal")
 
-    angles = np.linspace(0.0, blur_arc, samples, endpoint=False, dtype=np.float64)
+    # Symmetric about the frame timestamp centre: zero temporal phase bias.
+    angles = np.linspace(-0.5 * blur_arc, 0.5 * blur_arc, samples, endpoint=True, dtype=np.float64)
     accumulator = np.zeros_like(array, dtype=np.float64)
     for angle in angles:
         accumulator += _rotate(array, float(angle))

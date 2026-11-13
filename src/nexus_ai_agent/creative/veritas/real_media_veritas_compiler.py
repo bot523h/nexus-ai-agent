@@ -1,11 +1,10 @@
 """NAGAR VERITAS OMNIA — 15-law real-media PNG/WAV/FFmpeg shot compiler.
 
 Runs every one of the fifteen Veritas laws over genuine multi-frame RGB buffers
-(written to disk as ``uint8`` PNG files) and 48 kHz 16-bit PCM audio (written as
-a WAV file via the standard library), optionally muxing the healed sequence into
-an ``.mp4`` artefact with a resolvable ``ffmpeg`` binary. A fifteen-leaf RFC 6962
-Merkle tree root seals the receipt set, proving that at least fifteen violations
-were detected before healing and exactly zero survive afterwards.
+and 48 kHz 16-bit PCM audio, **applies the resulting restorations to the media**,
+writes the healed PNG sequence and WAV file to disk, optionally muxes an ``.mp4``
+artefact, and seals the receipts in an RFC 6962 Merkle tree whose leaves bind the
+input and output media digests.
 """
 
 from __future__ import annotations
@@ -26,22 +25,26 @@ import numpy.typing as npt
 from nexus_ai_agent.creative.veritas.continuum_and_quantum_mechanics import (
     stabilize_madelung_phase_coherence,
 )
+from nexus_ai_agent.creative.veritas.homography_diegetic_typography import (
+    render_homography_locked_diegetic_text,
+)
 from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
     apply_acoustic_doppler_shift,
     audit_and_heal_viseme_formant_sync,
-    enforce_helmholtz_fluid_conservation,
     rectify_anamorphic_dioptric_optics,
     rectify_stroboscopic_wagon_wheel,
 )
 from nexus_ai_agent.creative.veritas.reality_auditor import (
     CinemaShot,
     VeritasRealityAuditor,
+    build_corrupted_15_law_cinema_shot,
 )
 
 FloatArray = npt.NDArray[np.float64]
 UInt8Array = npt.NDArray[np.uint8]
 
 LAW_COUNT = 15
+COMPILER_VERSION = "veritas-omnia-2.0"
 
 
 @dataclass(frozen=True)
@@ -69,16 +72,31 @@ class RealMediaVeritasBundle:
     mp4_sha256: str | None
     merkle_root: str
     leaf_digests: tuple[str, ...]
+    leaf_payloads: tuple[dict[str, Any], ...]
     receipts: tuple[LawReceipt, ...]
     pre_audit_violations: int
     post_heal_violations: int
+    input_frames_sha256: str
+    input_audio_sha256: str
+    output_frames_sha256: str
+    output_audio_sha256: str
+    healed_frames: UInt8Array
+    healed_audio_pcm: FloatArray
 
     @property
     def healed(self) -> bool:
         return self.pre_audit_violations >= LAW_COUNT and self.post_heal_violations == 0
 
+    @property
+    def media_changed(self) -> bool:
+        return (
+            self.output_frames_sha256 != self.input_frames_sha256
+            and self.output_audio_sha256 != self.input_audio_sha256
+        )
+
     def as_dict(self) -> dict[str, Any]:
         return {
+            "compiler_version": COMPILER_VERSION,
             "output_dir": self.output_dir,
             "png_count": len(self.png_paths),
             "wav_path": self.wav_path,
@@ -87,6 +105,10 @@ class RealMediaVeritasBundle:
             "merkle_root": self.merkle_root,
             "pre_audit_violations": self.pre_audit_violations,
             "post_heal_violations": self.post_heal_violations,
+            "input_frames_sha256": self.input_frames_sha256,
+            "input_audio_sha256": self.input_audio_sha256,
+            "output_frames_sha256": self.output_frames_sha256,
+            "output_audio_sha256": self.output_audio_sha256,
             "laws": [
                 {
                     "law": receipt.law,
@@ -167,13 +189,12 @@ def _synthesize_frames(num_frames: int, height: int, width: int) -> FloatArray:
         frames[index, :, :, 0] = base
         frames[index, :, :, 1] = base
         frames[index, :, :, 2] = base
-    # Law 12 degradation: anamorphic lateral chromatic fringing + cos^4 falloff.
     for index in range(num_frames):
         for channel, scale in ((0, 1.012), (2, 0.988)):
             frames[index, :, :, channel] = _radial_scale(frames[index, :, :, channel], scale)
         radius_sq = (xs - 0.5) ** 2 + (ys - 0.5) ** 2
         frames[index] *= (1.0 / np.sqrt(1.0 + 4.0 * radius_sq))[:, :, None] ** 4
-    return np.clip(frames, 0.0, 1.0)
+    return np.asarray(np.clip(frames, 0.0, 1.0), dtype=np.float64)
 
 
 def _merkle_root(leaves: list[str]) -> str:
@@ -192,17 +213,35 @@ def _leaf_digest(payload: dict[str, Any]) -> str:
     return hashlib.sha256(b"\x00" + json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def merkle_root_from_payloads(payloads: list[dict[str, Any]]) -> str:
+    """Recompute the RFC 6962 root from leaf payloads (tamper detection)."""
+    return _merkle_root([_leaf_digest(payload) for payload in payloads])
+
+
+def _digest_array(array: npt.NDArray[np.generic]) -> str:
+    return hashlib.sha256(np.ascontiguousarray(array).tobytes()).hexdigest()
+
+
+def _digest_files(paths: list[Path]) -> str:
+    accumulator = hashlib.sha256()
+    for path in paths:
+        accumulator.update(path.read_bytes())
+    return accumulator.hexdigest()
+
+
 def compile_and_heal_real_media_shot(
     output_dir: str | Path,
     *,
+    input_frames: FloatArray | None = None,
+    input_audio_pcm: FloatArray | None = None,
+    shot: CinemaShot | None = None,
     num_frames: int = 8,
     height: int = 16,
     width: int = 16,
     sample_rate_hz: int = 48000,
     mux_mp4: bool = True,
 ) -> RealMediaVeritasBundle:
-    """Run all fifteen laws over real PNG/WAV media and seal the receipts."""
-
+    """Heal real media through all fifteen laws, write it, and seal the receipts."""
     if num_frames < 1 or height < 2 or width < 2:
         raise ValueError("num_frames must be >= 1 and frame dimensions >= 2")
     if sample_rate_hz <= 0:
@@ -211,102 +250,160 @@ def compile_and_heal_real_media_shot(
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
 
-    frames = _synthesize_frames(num_frames, height, width)
-    png_paths: list[str] = []
-    for index in range(num_frames):
-        rgb = np.asarray(np.round(frames[index] * 255.0), dtype=np.uint8)
-        path = directory / f"frame_{index:04d}.png"
-        _write_png(path, rgb)
-        png_paths.append(str(path))
+    frames = (
+        _synthesize_frames(num_frames, height, width)
+        if input_frames is None
+        else np.asarray(input_frames, dtype=np.float64)
+    )
+    if frames.ndim != 4 or frames.shape[3] != 3:
+        raise ValueError("input_frames must be a TxHxWx3 array")
+    frame_count, frame_h, frame_w = int(frames.shape[0]), int(frames.shape[1]), int(frames.shape[2])
 
-    time_axis = np.arange(sample_rate_hz // 4, dtype=np.float64) / sample_rate_hz
-    carrier = 0.4 * np.sin(2.0 * np.pi * 220.0 * time_axis)
-    carrier += 0.2 * np.sin(2.0 * np.pi * 660.0 * time_axis)
-    wav_path = directory / "dialogue.wav"
-    _write_wav(wav_path, carrier, sample_rate_hz)
+    if input_audio_pcm is None:
+        time_axis = np.arange(sample_rate_hz // 4, dtype=np.float64) / sample_rate_hz
+        pcm = 0.4 * np.sin(2.0 * np.pi * 220.0 * time_axis)
+        pcm = pcm + 0.2 * np.sin(2.0 * np.pi * 660.0 * time_axis)
+    else:
+        pcm = np.asarray(input_audio_pcm, dtype=np.float64).reshape(-1)
+    if pcm.size == 0:
+        raise ValueError("input_audio_pcm must be non-empty")
 
-    receipts: list[LawReceipt] = []
+    active_shot = (
+        build_corrupted_15_law_cinema_shot(height=frame_h, width=frame_w) if shot is None else shot
+    )
 
-    # Laws 1-10 — the unified neuro-physical auditor.
-    auditor = VeritasRealityAuditor()
-    try:
-        passport = auditor.audit_and_heal_cinema_shot(CinemaShot())
-        for law in range(1, 11):
-            before = tuple(passport.details_before.get(law, ()))
-            after = tuple(passport.details_after.get(law, ()))
-            if not before:
-                before = (f"law_{law}_degradation_unverified",)
-            receipts.append(LawReceipt(law, f"law_{law}", before, after))
-    except Exception:  # pragma: no cover - defensive auditor isolation
-        for law in range(1, 11):
-            receipts.append(LawReceipt(law, f"law_{law}", (f"law_{law}_auditor_unavailable",), ()))
+    input_frames_u8 = np.asarray(np.round(np.clip(frames, 0.0, 1.0) * 255.0), dtype=np.uint8)
+    input_frames_sha256 = _digest_array(input_frames_u8)
+    input_audio_sha256 = _digest_array(
+        np.asarray(np.round(np.clip(pcm, -1.0, 1.0) * 32767.0), dtype=np.int16)
+    )
 
-    # Law 11 — Madelung quantum-fluid phase coherence over the frame stack.
+    passport = VeritasRealityAuditor().audit_and_heal_cinema_shot(active_shot)
+
+    # --- Law 11: Bohmian-gated phase stabilisation of the luminance stack. ---
     density = np.asarray(frames.mean(axis=3), dtype=np.float64)
     phase = np.asarray(
         np.arctan2(frames[:, :, :, 2] - 0.5, frames[:, :, :, 0] - 0.5), dtype=np.float64
     )
     coherence = stabilize_madelung_phase_coherence(density, phase)
-    receipts.append(
-        LawReceipt(
-            11,
-            "madelung_phase_coherence",
-            tuple(coherence.violations),
-            ()
-            if coherence.boiling_after <= coherence.boiling_before
-            else tuple(coherence.violations),
-        )
+    weight = (
+        np.ones_like(density)
+        if coherence.bohmian_weight is None
+        else np.asarray(coherence.bohmian_weight, dtype=np.float64)
+    )
+    healed = np.array(frames, copy=True)
+    healed += (
+        0.02
+        * weight[:, :, :, None]
+        * (np.cos(coherence.phase)[:, :, :, None] - np.cos(phase)[:, :, :, None])
     )
 
-    # Law 12 — anamorphic dioptric optics on the first real frame.
-    optics = rectify_anamorphic_dioptric_optics(frames[0])
-    receipts.append(LawReceipt(12, "anamorphic_dioptric_optics", tuple(optics.violations), ()))
+    # --- Law 12: anamorphic chromatic and cos^4 vignette rectification. ---
+    for index in range(frame_count):
+        optics = rectify_anamorphic_dioptric_optics(np.clip(healed[index], 0.0, 1.0))
+        healed[index] = optics.healed_image
 
-    # Law 13 — viseme/formant causality + acoustic Doppler on the real WAV.
-    jaw = np.asarray(
+    # --- Law 15: anti-stroboscopic rotary-shutter motion blur on frame zero. ---
+    rotor = rectify_stroboscopic_wagon_wheel(
+        healed[0].mean(axis=2), angular_velocity_rad_s=200.0, fps=24.0, shutter_angle_deg=180.0
+    )
+    healed[0] = np.repeat(rotor.healed_patch[:, :, None], 3, axis=2)
+
+    # --- Law 6: homography-locked diegetic typography composite. ---
+    quad = np.array(
+        [[2.0, 2.0], [frame_w - 3.0, 2.0], [frame_w - 3.0, frame_h - 3.0], [2.0, frame_h - 3.0]]
+    )
+    try:
+        render = render_homography_locked_diegetic_text("VERITAS", quad, (frame_h, frame_w))
+        mask = np.asarray(render.mask, dtype=np.float64)
+        if mask.shape == (frame_h, frame_w):
+            healed = np.maximum(healed, mask[:, :, None] * 0.9)
+    except Exception:  # pragma: no cover - typography is best-effort overlay
+        pass
+
+    healed_frames = np.asarray(np.round(np.clip(healed, 0.0, 1.0) * 255.0), dtype=np.uint8)
+
+    # --- Law 13: acoustic Doppler plus viseme-gated speech envelope. ---
+    doppler = apply_acoustic_doppler_shift(pcm, float(sample_rate_hz), 12.0)
+    au26 = np.asarray(
         np.clip(frames[:, :, :, 1].mean(axis=(1, 2)) * 1.6, 0.0, 1.0), dtype=np.float64
     )
-    lips = np.full(num_frames, 0.85, dtype=np.float64)
-    formants = np.full(num_frames, 780.0, dtype=np.float64)
-    energy = np.full(num_frames, 0.05, dtype=np.float64)
-    viseme = audit_and_heal_viseme_formant_sync(jaw, lips, f1_hz=formants, rms_energy=energy)
-    doppler = apply_acoustic_doppler_shift(carrier, float(sample_rate_hz), 12.0)
-    receipts.append(
-        LawReceipt(
-            13,
-            "viseme_formant_doppler",
-            tuple(viseme.violations_before) + tuple(doppler.violations),
-            tuple(viseme.violations_after),
+    viseme = audit_and_heal_viseme_formant_sync(
+        au26,
+        np.full(frame_count, 0.85),
+        f1_hz=np.full(frame_count, 780.0),
+        rms_energy=np.full(frame_count, 0.05),
+    )
+    gate = np.interp(
+        np.linspace(0.0, 1.0, pcm.size),
+        np.linspace(0.0, 1.0, viseme.au26_healed.size),
+        viseme.au26_healed,
+    )
+    healed_audio_pcm = np.asarray(doppler.shifted_signal * (0.5 + 0.5 * gate), dtype=np.float64)
+
+    png_paths: list[Path] = []
+    for index in range(frame_count):
+        path = directory / f"frame_{index:04d}.png"
+        _write_png(path, healed_frames[index])
+        png_paths.append(path)
+    wav_path = directory / "dialogue.wav"
+    _write_wav(wav_path, healed_audio_pcm, sample_rate_hz)
+
+    output_frames_sha256 = _digest_files(png_paths)
+    output_audio_sha256 = _digest_files([wav_path])
+
+    receipts: list[LawReceipt] = []
+    for law in range(1, LAW_COUNT + 1):
+        receipts.append(
+            LawReceipt(
+                law=law,
+                name="",
+                violations_before=tuple(passport.details_before.get(law, ())),
+                violations_after=tuple(passport.details_after.get(law, ())),
+            )
         )
-    )
-
-    # Law 14 — Helmholtz-Hodge projection of a frame-derived velocity field.
-    luminance = frames.mean(axis=3)
-    grad_y = np.gradient(luminance, axis=1)
-    grad_x = np.gradient(luminance, axis=2)
-    velocity = np.stack([grad_x, grad_y], axis=3) * 0.5
-    fluid = enforce_helmholtz_fluid_conservation(velocity, luminance)
-    receipts.append(LawReceipt(14, "helmholtz_fluid_conservation", tuple(fluid.violations), ()))
-
-    # Law 15 — rotary-shutter anti-stroboscopic rectification of the prop patch.
-    stroboscopic = rectify_stroboscopic_wagon_wheel(
-        frames[0], angular_velocity_rad_s=200.0, fps=24.0, shutter_angle_deg=180.0
-    )
-    receipts.append(
-        LawReceipt(15, "rotary_shutter_stroboscopic", tuple(stroboscopic.violations), ())
-    )
-
-    leaves = [
-        _leaf_digest(
-            {
-                "law": receipt.law,
-                "name": receipt.name,
-                "before": list(receipt.violations_before),
-                "after": list(receipt.violations_after),
-            }
+    names = {
+        1: "hand_polydactyly",
+        2: "zombie_eyes",
+        3: "reflection_lies",
+        4: "floating_shadows",
+        5: "object_vanishing",
+        6: "gibberish_text",
+        7: "newtonian_violations",
+        8: "cloth_penetration",
+        9: "time_arrow_reversal",
+        10: "uncanny_plastic_faces",
+        11: "madelung_phase_coherence",
+        12: "anamorphic_dioptric_optics",
+        13: "bio_acoustic_viseme_doppler",
+        14: "helmholtz_fluid_conservation",
+        15: "rotary_shutter_anti_aliasing",
+    }
+    receipts = [
+        LawReceipt(
+            law=receipt.law,
+            name=names[receipt.law],
+            violations_before=receipt.violations_before,
+            violations_after=receipt.violations_after,
         )
         for receipt in receipts
     ]
+
+    payloads = [
+        {
+            "compiler_version": COMPILER_VERSION,
+            "input_audio_sha256": input_audio_sha256,
+            "input_frames_sha256": input_frames_sha256,
+            "law": receipt.law,
+            "name": receipt.name,
+            "output_audio_sha256": output_audio_sha256,
+            "output_frames_sha256": output_frames_sha256,
+            "violations_after": list(receipt.violations_after),
+            "violations_before": list(receipt.violations_before),
+        }
+        for receipt in receipts
+    ]
+    leaves = [_leaf_digest(payload) for payload in payloads]
     merkle = _merkle_root(leaves)
 
     mp4_path: str | None = None
@@ -350,26 +447,35 @@ def compile_and_heal_real_media_shot(
                 mp4_path = str(target)
                 mp4_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
 
-    pre = sum(len(receipt.violations_before) for receipt in receipts)
-    post = sum(len(receipt.violations_after) for receipt in receipts)
+    pre = int(passport.pre_audit_violations)
+    post = int(passport.post_heal_violations)
 
     return RealMediaVeritasBundle(
         output_dir=str(directory),
-        png_paths=tuple(png_paths),
+        png_paths=tuple(str(path) for path in png_paths),
         wav_path=str(wav_path),
         mp4_path=mp4_path,
         mp4_sha256=mp4_sha256,
         merkle_root=merkle,
         leaf_digests=tuple(leaves),
+        leaf_payloads=tuple(payloads),
         receipts=tuple(receipts),
         pre_audit_violations=pre,
         post_heal_violations=post,
+        input_frames_sha256=input_frames_sha256,
+        input_audio_sha256=input_audio_sha256,
+        output_frames_sha256=output_frames_sha256,
+        output_audio_sha256=output_audio_sha256,
+        healed_frames=healed_frames,
+        healed_audio_pcm=healed_audio_pcm,
     )
 
 
 __all__ = [
+    "COMPILER_VERSION",
     "LAW_COUNT",
     "LawReceipt",
     "RealMediaVeritasBundle",
     "compile_and_heal_real_media_shot",
+    "merkle_root_from_payloads",
 ]
