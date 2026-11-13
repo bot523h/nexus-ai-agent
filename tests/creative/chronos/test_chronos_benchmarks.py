@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from nexus_ai_agent.creative.chronos.acoustics_lipsync import shoebox_rir
+from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand
 from nexus_ai_agent.creative.chronos.color_science import (
     read_rgb8_png,
     srgb_decode,
@@ -21,7 +22,6 @@ from nexus_ai_agent.creative.chronos.contracts import RationalTimestamp
 from nexus_ai_agent.creative.chronos.geometry import intrinsics, project
 from nexus_ai_agent.creative.chronos.timeline import assemble_pcm_wav_stream_copy
 from nexus_ai_agent.creative.chronos.verifier import verify_persisted_relighting
-from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand
 
 
 def test_chronos_benchmarks_n3(tmp_path: Path) -> None:

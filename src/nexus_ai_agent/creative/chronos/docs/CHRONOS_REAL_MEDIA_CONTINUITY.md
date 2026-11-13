@@ -35,11 +35,19 @@ egress.
   no-follow, rename, and quarantine operations; it adds no alternate filesystem
   boundary.
 - The adapter does not create a second filesystem-policy layer, job queue,
-  database, or causal journal. It does not claim to commit a queue job or write
-  the canonical Asset Library tables. `ChronosAssetVersionRecord` and
-  `ChronosArtifactPassport` are immutable measured lineage values returned to
-  the caller; durable AssetVersion/ArtifactPassport reconciliation remains the
-  responsibility of the existing NEXUS asset and provenance authorities.
+  SQL database, or causal journal. If a canonical `CommandBus` is injected, the
+  adapter first dispatches the confirmed, local-only
+  `chronos.staged_spine_master` operation with actor/project authorization and
+  current revision/hash preconditions; a denial occurs before any stage exists.
+  `ChronosAssetVersionRecord` and `ChronosArtifactPassport` are immutable
+  measured lineage projections persisted together through the injected
+  `ChronosAssetVersionStore`/`ArtifactPassportSink` transaction contract. The
+  default `FileChronosLedger` stores both in one atomically replaced JCS ledger
+  under `.chronos-ledger/`; `InMemoryChronosLedger` is provided for isolated
+  tests. A real repository adapter can implement the same pair-commit contract.
+  This execution ledger does not impersonate the SQLModel Asset Library row or
+  the causal-journal-backed `provenance.passport.ArtifactPassport`; those
+  authorities can be connected through the injected transactional sink.
 
 ## Recipe identity
 

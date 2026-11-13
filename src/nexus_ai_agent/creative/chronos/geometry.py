@@ -66,7 +66,7 @@ def project(
     xd = x * radial + 2 * p1 * x * y + p2 * (r2 + 2 * x * x)
     yd = y * radial + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y
     pixels = (k @ np.stack((xd, yd, np.ones_like(x)), axis=0)).T
-    return cast(FloatArray, pixels[:, :2] / pixels[:, 2, None])
+    return pixels[:, :2] / pixels[:, 2, None]
 
 
 def coc_diameter_px(

@@ -119,7 +119,7 @@ def test_25d_render_and_scene_portrait_ops(tmp_path: Path) -> None:
 
 def test_handler_factory_has_port_operations() -> None:
     from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosPort
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosPort
 
     handlers = build_default_chronos_handlers()
     assert set(handlers) == ChronosPort.OPERATIONS
@@ -127,7 +127,7 @@ def test_handler_factory_has_port_operations() -> None:
 
 def test_default_wav_handler_real_disk(tmp_path: Path) -> None:
     from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
 
     files = []
     for n in range(2):
@@ -150,8 +150,8 @@ def test_default_wav_handler_real_disk(tmp_path: Path) -> None:
 
 def test_factory_geometry_color_and_acoustic_adapters(tmp_path: Path) -> None:
     from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
     from nexus_ai_agent.creative.chronos.color_science import write_rgb8_png
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
 
     handlers = build_default_chronos_handlers()
     port = ChronosPort(handlers)
@@ -206,6 +206,7 @@ def test_factory_geometry_color_and_acoustic_adapters(tmp_path: Path) -> None:
 
 
 def test_popperian_falsification_50_probes(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
     from nexus_ai_agent.creative.chronos.color_science import cct_kelvin_to_xyz, read_rgb8_png
     from nexus_ai_agent.creative.chronos.compositor_25d import render_25d_multiplane_composite
     from nexus_ai_agent.creative.chronos.contracts import Continuity, KernelError
@@ -218,7 +219,6 @@ def test_popperian_falsification_50_probes(tmp_path: Path) -> None:
         synthesize_physical_sky_dome,
         tonemap_scene_linear_filmic,
     )
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
 
     image = np.ones((4, 4, 3))
     alpha = np.ones((4, 4))
@@ -410,6 +410,7 @@ def test_wave2_refusal_branches_and_factory_ffmpeg_mock(
     from types import SimpleNamespace
 
     from nexus_ai_agent.creative.chronos import build_default_chronos_handlers, timeline
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
     from nexus_ai_agent.creative.chronos.color_science import cct_kelvin_to_xyz
     from nexus_ai_agent.creative.chronos.compositor_25d import render_25d_multiplane_composite
     from nexus_ai_agent.creative.chronos.contracts import KernelError
@@ -424,7 +425,6 @@ def test_wave2_refusal_branches_and_factory_ffmpeg_mock(
         verify_inclusion_proof,
     )
     from nexus_ai_agent.creative.chronos.scene_portrait_ops import inpaint_masked_region_pde
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
 
     with pytest.raises(KernelError):
         circle_of_confusion_px(1, 1, 50, 2, 0, 100)
@@ -550,7 +550,7 @@ def test_wave21_receipts_huber_memory_sor_and_halation(tmp_path: Path) -> None:
 
 def test_wave2_audio_port_handler_dispatch(tmp_path: Path) -> None:
     from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
 
     src = tmp_path / "click.wav"
     with wave.open(str(src), "wb") as writer:
@@ -573,8 +573,8 @@ def test_all_wave2_default_handler_families(tmp_path: Path) -> None:
     import json
 
     from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
     from nexus_ai_agent.creative.chronos.merkle_ledger import build_inclusion_proof, merkle_root
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
 
     port = ChronosPort(build_default_chronos_handlers())
 

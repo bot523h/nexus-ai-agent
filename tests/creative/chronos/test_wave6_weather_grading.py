@@ -189,7 +189,7 @@ def test_ebu_r103_legality_hue_compression_and_structure() -> None:
 
 def test_wave6_weather_grading_port_handlers_use_disk(tmp_path: Path) -> None:
     from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
 
     port = ChronosPort(build_default_chronos_handlers())
     precipitation_path = tmp_path / "rain.npy"

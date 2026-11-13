@@ -143,7 +143,7 @@ def test_rolling_shutter_refusals() -> None:
 
 def test_wave5_temporal_handlers_write_numpy_outputs(tmp_path: Path) -> None:
     from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
 
     port = ChronosPort(build_default_chronos_handlers())
     height, width = 32, 40

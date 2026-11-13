@@ -21,11 +21,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, cast
+from threading import RLock
+from typing import Any, Literal, Protocol, TypeAlias, cast
 
 import numpy as np
 from numpy.typing import NDArray
 from PIL import Image
+from pydantic import BaseModel, ConfigDict, Field
 
 from nexus_ai_agent.creative.chronos import (
     acoustic_space_continuity,
@@ -47,6 +49,22 @@ from nexus_ai_agent.creative.chronos.real_media_continuity import (
     execute_real_media_season_continuity,
     measure_patch_delta_e00_by_frame,
 )
+from nexus_ai_agent.creative.studio.capabilities import (
+    CapabilityRegistry,
+    OperationContext,
+    OperationOutcome,
+    OperationSpec,
+)
+from nexus_ai_agent.creative.studio.models import (
+    ActorIdentity,
+    CommandProvenance,
+    ExecutionPolicy,
+    PermissionLevel,
+    Preconditions,
+    RequestContext,
+    TargetRef,
+    TypedCommand,
+)
 from nexus_ai_agent.execution import ExecutionIdentity
 from nexus_ai_agent.tools.filesystem_policy import (
     FilesystemBoundaryError,
@@ -60,9 +78,23 @@ JsonValue: TypeAlias = "None | bool | int | float | str | list[JsonValue] | dict
 ENGINE_VERSION = "chronos-omniverse-1.0"
 REAL_MEDIA_OPERATION: OperationName = "chronos.real_media_continuity"
 OMNIVERSE_OPERATION: OperationName = "chronos.omniverse_mastering"
+CHRONOS_STAGED_SPINE_MASTER = "chronos.staged_spine_master"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_SAFE_INTEGER = (1 << 53) - 1
+
+
+class ChronosSpineCommandInput(BaseModel):
+    """Bounded canonical CommandBus payload; media bytes remain in private inputs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    project_id: str = Field(min_length=1, max_length=128)
+    parent_revision_id: str = Field(min_length=1, max_length=512)
+    attempt_id: str = Field(min_length=1, max_length=128)
+    fencing_token: int = Field(strict=True, ge=1, le=_MAX_SAFE_INTEGER)
+    operation_name: Literal["chronos.real_media_continuity", "chronos.omniverse_mastering"]
+    recipe_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ChronosSpineExecutionError(RuntimeError):
@@ -71,6 +103,18 @@ class ChronosSpineExecutionError(RuntimeError):
 
 class ChronosVerificationRefusalError(ChronosSpineExecutionError):
     """Private bytes failed independent verification or the attempt was stale."""
+
+
+class ChronosCommandAuthorizationError(ChronosSpineExecutionError):
+    """The canonical CommandBus refused the staged execution intent."""
+
+
+class ChronosLedgerError(ChronosSpineExecutionError):
+    """Canonical asset-version/passport persistence failed closed."""
+
+
+class ChronosLedgerConflictError(ChronosLedgerError):
+    """An asset-version identity is already bound to conflicting evidence."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +285,57 @@ class ChronosSpineExecutionReceipt:
     engine_summary: Mapping[str, object]
 
 
+class ChronosAssetVersionStore(Protocol):
+    """Transactional store contract for the immutable asset/passport pair."""
+
+    def get_pair(
+        self, asset_version_id: str, /
+    ) -> tuple[ChronosAssetVersionRecord, ChronosArtifactPassport] | None: ...
+
+    def commit_pair(
+        self,
+        asset_version: ChronosAssetVersionRecord,
+        passport: ChronosArtifactPassport,
+        *,
+        active_fencing_token: FencingTokenReader,
+    ) -> None: ...
+
+    def discard_pair(self, asset_version_id: str, *, fencing_token: int) -> None: ...
+
+
+class ArtifactPassportSink(Protocol):
+    """The passport side of the same atomic asset/passport transaction."""
+
+    def get_pair(
+        self, asset_version_id: str, /
+    ) -> tuple[ChronosAssetVersionRecord, ChronosArtifactPassport] | None: ...
+
+    def commit_pair(
+        self,
+        asset_version: ChronosAssetVersionRecord,
+        passport: ChronosArtifactPassport,
+        *,
+        active_fencing_token: FencingTokenReader,
+    ) -> None: ...
+
+    def discard_pair(self, asset_version_id: str, *, fencing_token: int) -> None: ...
+
+
+class ChronosCommandBus(Protocol):
+    """Injectable canonical studio bus boundary used before private staging."""
+
+    @property
+    def registry(self) -> CapabilityRegistry: ...
+
+    @property
+    def state_revision(self) -> int: ...
+
+    @property
+    def state_hash(self) -> str: ...
+
+    def dispatch(self, command: TypedCommand, /) -> Any: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _Snapshot:
     attempt: ChronosSpineAttempt
@@ -249,6 +344,355 @@ class _Snapshot:
 
 FencingTokenReader: TypeAlias = Callable[[str, str], int]
 PreVerifyHook: TypeAlias = Callable[[Path], None]
+
+_FILE_LEDGER_LOCK_GUARD = RLock()
+_FILE_LEDGER_LOCKS: dict[str, RLock] = {}
+_LEDGER_RELATIVE_PATH = ".chronos-ledger/asset-passport-ledger-v1.json"
+
+
+def _passport_for_record(record: ChronosAssetVersionRecord) -> ChronosArtifactPassport:
+    payload = record.to_dict()
+    payload.pop("published_path", None)
+    digest = hashlib.sha256(jcs_canonical_json(payload).encode("utf-8")).hexdigest()
+    return ChronosArtifactPassport(
+        record.asset_version_id,
+        record.project_id,
+        record.parent_revision_id,
+        record.produced_revision_id,
+        record.attempt_id,
+        record.fencing_token,
+        record.recipe_digest,
+        record.merkle_root,
+        record.input_content_sha256,
+        record.output_content_sha256,
+        record.published_file_digests,
+        record.verification_tier,
+        record.verified_at_utc,
+        record.sample_drift,
+        record.max_delta_e00,
+        record.epipolar_sampson_error,
+        record.rt60_error,
+        digest,
+    )
+
+
+def _pair_is_well_formed(
+    record: ChronosAssetVersionRecord, passport: ChronosArtifactPassport
+) -> bool:
+    expected = _passport_for_record(record)
+    return passport == expected and record.verification_tier == "REAL-DISK"
+
+
+def _same_retry_evidence(
+    stored_record: ChronosAssetVersionRecord,
+    stored_passport: ChronosArtifactPassport,
+    proposed_record: ChronosAssetVersionRecord,
+) -> bool:
+    if not _pair_is_well_formed(stored_record, stored_passport):
+        return False
+    stored = stored_record.to_dict()
+    proposed = proposed_record.to_dict()
+    stored.pop("verified_at_utc", None)
+    proposed.pop("verified_at_utc", None)
+    return stored == proposed
+
+
+def _read_digest_map(value: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, dict) or not value:
+        raise ChronosLedgerError("persisted artifact digest map is empty or malformed")
+    items: list[tuple[str, str]] = []
+    for path, digest in value.items():
+        if (
+            not isinstance(path, str)
+            or not path
+            or not isinstance(digest, str)
+            or not _SHA256_RE.fullmatch(digest)
+        ):
+            raise ChronosLedgerError("persisted artifact digest map contains invalid data")
+        items.append((path, digest))
+    return tuple(sorted(items))
+
+
+def _record_from_dict(value: object) -> ChronosAssetVersionRecord:
+    if not isinstance(value, dict):
+        raise ChronosLedgerError("persisted asset-version record is not an object")
+    try:
+        fencing_token = value["fencing_token"]
+        sample_drift = value["sample_drift"]
+        if type(fencing_token) is not int or type(sample_drift) is not int:
+            raise TypeError("integer fields are malformed")
+        tier = value["verification_tier"]
+        if tier != "REAL-DISK":
+            raise ValueError("verification tier is not REAL-DISK")
+        for name in (
+            "asset_version_id",
+            "project_id",
+            "parent_revision_id",
+            "produced_revision_id",
+            "attempt_id",
+            "recipe_digest",
+            "merkle_root",
+            "input_content_sha256",
+            "output_content_sha256",
+            "verified_at_utc",
+            "published_path",
+        ):
+            if not isinstance(value[name], str):
+                raise TypeError(f"{name} is not a string")
+        for name in ("max_delta_e00",):
+            if isinstance(value[name], bool) or not isinstance(value[name], (int, float)):
+                raise TypeError(f"{name} is not numeric")
+        epipolar = value["epipolar_sampson_error"]
+        rt60 = value["rt60_error"]
+        if epipolar is not None and (
+            isinstance(epipolar, bool) or not isinstance(epipolar, (int, float))
+        ):
+            raise TypeError("epipolar_sampson_error is malformed")
+        if rt60 is not None and (isinstance(rt60, bool) or not isinstance(rt60, (int, float))):
+            raise TypeError("rt60_error is malformed")
+        return ChronosAssetVersionRecord(
+            value["asset_version_id"],
+            value["project_id"],
+            value["parent_revision_id"],
+            value["produced_revision_id"],
+            value["attempt_id"],
+            fencing_token,
+            value["recipe_digest"],
+            value["merkle_root"],
+            value["input_content_sha256"],
+            value["output_content_sha256"],
+            _read_digest_map(value["published_file_digests"]),
+            "REAL-DISK",
+            value["verified_at_utc"],
+            sample_drift,
+            float(value["max_delta_e00"]),
+            None if epipolar is None else float(epipolar),
+            None if rt60 is None else float(rt60),
+            value["published_path"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        if isinstance(exc, ChronosLedgerError):
+            raise
+        raise ChronosLedgerError("persisted asset-version record is malformed") from exc
+
+
+def _passport_from_dict(value: object) -> ChronosArtifactPassport:
+    if not isinstance(value, dict):
+        raise ChronosLedgerError("persisted artifact passport is not an object")
+    try:
+        fencing_token = value["fencing_token"]
+        sample_drift = value["sample_drift"]
+        if type(fencing_token) is not int or type(sample_drift) is not int:
+            raise TypeError("integer fields are malformed")
+        if value["verification_tier"] != "REAL-DISK":
+            raise ValueError("verification tier is not REAL-DISK")
+        string_fields = (
+            "asset_version_id",
+            "project_id",
+            "parent_revision_id",
+            "produced_revision_id",
+            "attempt_id",
+            "recipe_digest",
+            "merkle_root",
+            "input_content_sha256",
+            "output_content_sha256",
+            "verified_at_utc",
+            "passport_digest",
+        )
+        if any(not isinstance(value[name], str) for name in string_fields):
+            raise TypeError("passport string field is malformed")
+        max_delta = value["max_delta_e00"]
+        epipolar = value["epipolar_sampson_error"]
+        rt60 = value["rt60_error"]
+        for metric in (max_delta, epipolar, rt60):
+            if metric is not None and (
+                isinstance(metric, bool) or not isinstance(metric, (int, float))
+            ):
+                raise TypeError("passport metric is malformed")
+        return ChronosArtifactPassport(
+            value["asset_version_id"],
+            value["project_id"],
+            value["parent_revision_id"],
+            value["produced_revision_id"],
+            value["attempt_id"],
+            fencing_token,
+            value["recipe_digest"],
+            value["merkle_root"],
+            value["input_content_sha256"],
+            value["output_content_sha256"],
+            _read_digest_map(value["published_file_digests"]),
+            "REAL-DISK",
+            value["verified_at_utc"],
+            sample_drift,
+            float(max_delta),
+            None if epipolar is None else float(epipolar),
+            None if rt60 is None else float(rt60),
+            value["passport_digest"],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        if isinstance(exc, ChronosLedgerError):
+            raise
+        raise ChronosLedgerError("persisted artifact passport is malformed") from exc
+
+
+class InMemoryChronosLedger:
+    """Atomic in-memory asset/passport pair store for isolated local execution."""
+
+    def __init__(self) -> None:
+        self._records: dict[str, tuple[ChronosAssetVersionRecord, ChronosArtifactPassport]] = {}
+        self._lock = RLock()
+
+    def get_pair(
+        self, asset_version_id: str, /
+    ) -> tuple[ChronosAssetVersionRecord, ChronosArtifactPassport] | None:
+        with self._lock:
+            return self._records.get(asset_version_id)
+
+    def commit_pair(
+        self,
+        asset_version: ChronosAssetVersionRecord,
+        passport: ChronosArtifactPassport,
+        *,
+        active_fencing_token: FencingTokenReader,
+    ) -> None:
+        _require_record_fence(asset_version, active_fencing_token)
+        if not _pair_is_well_formed(asset_version, passport):
+            raise ChronosLedgerError("asset/passport pair does not reconcile")
+        with self._lock:
+            prior = self._records.get(asset_version.asset_version_id)
+            if prior is not None:
+                if prior == (asset_version, passport):
+                    return
+                raise ChronosLedgerConflictError("asset-version id is already registered")
+            self._records[asset_version.asset_version_id] = (asset_version, passport)
+
+    def discard_pair(self, asset_version_id: str, *, fencing_token: int) -> None:
+        with self._lock:
+            prior = self._records.get(asset_version_id)
+            if prior is None:
+                return
+            if prior[0].fencing_token != fencing_token:
+                raise ChronosLedgerConflictError("cannot roll back another fence's ledger entry")
+            del self._records[asset_version_id]
+
+
+class FileChronosLedger:
+    """Atomic JCS-backed local store for canonical Chronos asset/passport pairs."""
+
+    def __init__(self, workspace_root: str | Path) -> None:
+        root = Path(workspace_root).expanduser().resolve(strict=False)
+        self._fs = WorkspaceFilesystem(root)
+        key = str(root)
+        with _FILE_LEDGER_LOCK_GUARD:
+            self._lock = _FILE_LEDGER_LOCKS.setdefault(key, RLock())
+
+    def _write_all(
+        self,
+        records: Mapping[str, tuple[ChronosAssetVersionRecord, ChronosArtifactPassport]],
+    ) -> None:
+        self._fs.ensure_directory(".chronos-ledger")
+        payload: dict[str, object] = {
+            "schema": "chronos-asset-passport-ledger-v1",
+            "asset_versions": {
+                key: record.to_dict() for key, (record, _) in sorted(records.items())
+            },
+            "artifact_passports": {
+                key: passport.to_dict() for key, (_, passport) in sorted(records.items())
+            },
+        }
+        temporary = f".chronos-ledger/asset-passport-ledger.{secrets.token_hex(8)}.tmp"
+        try:
+            self._fs.write_text(temporary, jcs_canonical_json(payload))
+            self._fs.rename_within(temporary, _LEDGER_RELATIVE_PATH)
+        except (FilesystemBoundaryError, OSError) as exc:
+            try:
+                self._fs.unlink(temporary)
+            except (FilesystemBoundaryError, OSError):
+                pass
+            raise ChronosLedgerError("canonical Chronos ledger commit failed") from exc
+
+    def _read_all(
+        self,
+    ) -> dict[str, tuple[ChronosAssetVersionRecord, ChronosArtifactPassport]]:
+        if not self._fs.exists(_LEDGER_RELATIVE_PATH):
+            return {}
+        try:
+            payload_bytes = self._fs.read_bytes(_LEDGER_RELATIVE_PATH, max_bytes=16 << 20)
+            payload = json.loads(payload_bytes)
+        except (FilesystemBoundaryError, OSError, json.JSONDecodeError, UnicodeError) as exc:
+            raise ChronosLedgerError("canonical Chronos ledger is unreadable") from exc
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema") != "chronos-asset-passport-ledger-v1"
+            or payload_bytes != jcs_canonical_json(payload).encode("utf-8")
+        ):
+            raise ChronosLedgerError("canonical Chronos ledger schema or encoding is invalid")
+        versions = payload.get("asset_versions")
+        passports = payload.get("artifact_passports")
+        if (
+            not isinstance(versions, dict)
+            or not isinstance(passports, dict)
+            or set(versions) != set(passports)
+        ):
+            raise ChronosLedgerError("canonical Chronos ledger has unpaired records")
+        result: dict[str, tuple[ChronosAssetVersionRecord, ChronosArtifactPassport]] = {}
+        for asset_id, raw_record in versions.items():
+            if not isinstance(asset_id, str):
+                raise ChronosLedgerError("canonical Chronos ledger has a non-string identity")
+            record = _record_from_dict(raw_record)
+            passport = _passport_from_dict(passports[asset_id])
+            if record.asset_version_id != asset_id or not _pair_is_well_formed(record, passport):
+                raise ChronosLedgerError("canonical Chronos ledger pair failed reconciliation")
+            result[asset_id] = (record, passport)
+        return result
+
+    def get_pair(
+        self, asset_version_id: str, /
+    ) -> tuple[ChronosAssetVersionRecord, ChronosArtifactPassport] | None:
+        with self._lock:
+            return self._read_all().get(asset_version_id)
+
+    def commit_pair(
+        self,
+        asset_version: ChronosAssetVersionRecord,
+        passport: ChronosArtifactPassport,
+        *,
+        active_fencing_token: FencingTokenReader,
+    ) -> None:
+        _require_record_fence(asset_version, active_fencing_token)
+        if not _pair_is_well_formed(asset_version, passport):
+            raise ChronosLedgerError("asset/passport pair does not reconcile")
+        with self._lock:
+            records = self._read_all()
+            prior = records.get(asset_version.asset_version_id)
+            if prior is not None:
+                if prior == (asset_version, passport):
+                    return
+                raise ChronosLedgerConflictError("asset-version id is already registered")
+            records[asset_version.asset_version_id] = (asset_version, passport)
+            self._write_all(records)
+
+    def discard_pair(self, asset_version_id: str, *, fencing_token: int) -> None:
+        with self._lock:
+            records = self._read_all()
+            prior = records.get(asset_version_id)
+            if prior is None:
+                return
+            if prior[0].fencing_token != fencing_token:
+                raise ChronosLedgerConflictError("cannot roll back another fence's ledger entry")
+            del records[asset_version_id]
+            self._write_all(records)
+
+
+def _require_record_fence(
+    record: ChronosAssetVersionRecord, token_reader: FencingTokenReader
+) -> None:
+    try:
+        current = token_reader(record.project_id, record.attempt_id)
+    except Exception as exc:  # noqa: BLE001 - the sink independently enforces the fence
+        raise ChronosVerificationRefusalError("active fencing authority was unavailable") from exc
+    if type(current) is not int or current != record.fencing_token:
+        raise ChronosVerificationRefusalError("stale fence refused by Chronos persistence sink")
 
 
 def _component(value: object, name: str) -> str:
@@ -271,6 +715,138 @@ def _lineage_token(value: object, name: str) -> str:
     return value
 
 
+def _chronos_spine_command_handler(project: Any, context: OperationContext) -> OperationOutcome:
+    """CommandBus's registered authorization/validation operation (no media I/O)."""
+    validated = ChronosSpineCommandInput.model_validate(context.input_data)
+    if (
+        project.project_id != validated.project_id
+        or context.command.target.project_id != project.project_id
+    ):
+        raise ChronosSpineExecutionError("staged spine command project binding is inconsistent")
+    return OperationOutcome(
+        project,
+        context.history,
+        {
+            "authorized": True,
+            "project_id": validated.project_id,
+            "attempt_id": validated.attempt_id,
+            "fencing_token": validated.fencing_token,
+            "recipe_digest": validated.recipe_digest,
+            "operation_name": validated.operation_name,
+        },
+    )
+
+
+def register_chronos_staged_spine_operation(registry: CapabilityRegistry) -> None:
+    """Register the fenced execution intent in the canonical studio registry.
+
+    It is a confirmed, local-only command requiring both project write access
+    and ``chronos:render``. The pure handler validates/authorizes intent; actual
+    media I/O remains in the staged adapter after successful bus dispatch.
+    """
+    if CHRONOS_STAGED_SPINE_MASTER in registry:
+        existing = registry.get_spec(CHRONOS_STAGED_SPINE_MASTER)
+        if (
+            existing.input_model is not ChronosSpineCommandInput
+            or existing.permission_level is not PermissionLevel.CONFIRMATION
+            or "chronos:render" not in existing.required_permissions
+            or not existing.deterministic
+            or existing.execution_modes != ("local",)
+        ):
+            raise ChronosSpineExecutionError(
+                "existing staged spine CommandBus registration violates its authorization contract"
+            )
+        return
+    registry.register_domain("chronos", "Fenced Chronos media execution")
+    registry.register_operation(
+        "chronos",
+        "staged_spine_master",
+        OperationSpec(
+            operation_id=CHRONOS_STAGED_SPINE_MASTER,
+            description="Authorize a deterministic, fenced Chronos staged media execution.",
+            permission_level=PermissionLevel.CONFIRMATION,
+            input_model=ChronosSpineCommandInput,
+            handler=_chronos_spine_command_handler,
+            deterministic=True,
+            schema_version=1,
+            execution_modes=("local",),
+            required_permissions=("chronos:render",),
+        ),
+    )
+
+
+def _authorize_through_command_bus(
+    command_bus: ChronosCommandBus,
+    attempt: ChronosSpineAttempt,
+    recipe: ChronosRecipeIdentity,
+    actor: ActorIdentity | None,
+) -> None:
+    if actor is None:
+        raise ChronosCommandAuthorizationError("CommandBus dispatch requires a trusted actor claim")
+    register_chronos_staged_spine_operation(command_bus.registry)
+    state_revision = command_bus.state_revision
+    state_hash = command_bus.state_hash
+    if type(state_revision) is not int or state_revision < 0 or not isinstance(state_hash, str):
+        raise ChronosCommandAuthorizationError("CommandBus exposed invalid precondition state")
+    key_payload = {
+        "project_id": attempt.project_id,
+        "attempt_id": attempt.attempt_id,
+        "fencing_token": attempt.fencing_token,
+        "recipe_digest": recipe.recipe_digest,
+        "state_revision": state_revision,
+        "state_hash": state_hash,
+    }
+    command_key_digest = hashlib.sha256(jcs_canonical_json(key_payload).encode("utf-8")).hexdigest()
+    command_id = f"cmd_chronos_{command_key_digest[:32]}"
+    command = TypedCommand(
+        schema_version=2,
+        operation_schema_version=1,
+        command_id=command_id,
+        actor=actor,
+        operation=CHRONOS_STAGED_SPINE_MASTER,
+        target=TargetRef(project_id=attempt.project_id),
+        input={
+            "project_id": attempt.project_id,
+            "parent_revision_id": attempt.parent_revision_id,
+            "attempt_id": attempt.attempt_id,
+            "fencing_token": attempt.fencing_token,
+            "operation_name": attempt.operation_name,
+            "recipe_digest": recipe.recipe_digest,
+        },
+        provenance=CommandProvenance(
+            source="service",
+            source_id="chronos-spine",
+            reason="fenced staged media execution",
+        ),
+        request_context=RequestContext(channel="local", request_id=command_id),
+        execution_policy=ExecutionPolicy(mode="local", network_access=False),
+        preconditions=Preconditions(state_revision=state_revision, state_hash=state_hash),
+        idempotency_key=f"chronos_{command_key_digest[:48]}",
+        confirmed=True,
+    )
+    try:
+        result = command_bus.dispatch(command)
+    except Exception as exc:  # noqa: BLE001 - bus denials must stop before staging
+        raise ChronosCommandAuthorizationError(
+            "canonical CommandBus denied staged Chronos execution"
+        ) from exc
+    output = getattr(result, "output", None)
+    expected = {
+        "authorized": True,
+        "project_id": attempt.project_id,
+        "attempt_id": attempt.attempt_id,
+        "fencing_token": attempt.fencing_token,
+        "recipe_digest": recipe.recipe_digest,
+        "operation_name": attempt.operation_name,
+    }
+    if not isinstance(output, Mapping) or any(
+        output.get(key) != value for key, value in expected.items()
+    ):
+        raise ChronosCommandAuthorizationError(
+            "CommandBus returned an invalid staged-spine authorization receipt"
+        )
+
+
 def _float_jcs(value: float) -> str:
     """ECMAScript-compatible shortest binary64 spelling for RFC 8785 numbers."""
     if not math.isfinite(value):
@@ -278,7 +854,9 @@ def _float_jcs(value: float) -> str:
     if value == 0.0:
         return "0"
     negative = value < 0
-    raw = repr(abs(value)).lower()
+    # NumPy 2's ``float64`` is a ``float`` subclass but its repr is
+    # ``np.float64(...)``; canonical JSON requires the binary64 decimal token.
+    raw = repr(abs(float(value))).lower()
     if "e" in raw:
         mantissa, exponent_text = raw.split("e", 1)
         exponent = int(exponent_text)
@@ -1282,16 +1860,63 @@ def _decode_mp4_bytes(content: bytes, parameters: Mapping[str, object]) -> None:
         raise ChronosVerificationRefusalError("staged MP4 failed independent stream decoding")
 
 
+def _remove_new_publication(fs: WorkspaceFilesystem, published_rel: str) -> None:
+    try:
+        fs.remove_tree(published_rel)
+    except (FilesystemBoundaryError, OSError) as exc:
+        raise ChronosLedgerError("failed to remove unregistered Chronos publication") from exc
+
+
+def _verify_published_directory(
+    workspace_fs: WorkspaceFilesystem,
+    published_rel: str,
+    record: ChronosAssetVersionRecord,
+) -> None:
+    """Re-measure a prior immutable version before accepting an idempotent retry."""
+    if not _directory_exists(workspace_fs, published_rel):
+        raise ChronosLedgerError("ledger references a missing published asset version")
+    published_root = workspace_fs.resolve(published_rel)
+    if Path(record.published_path).expanduser().resolve(strict=False) != published_root:
+        raise ChronosLedgerError("ledger published path does not match the version identity")
+    output_fs = WorkspaceFilesystem(published_root)
+    expected = dict(record.published_file_digests)
+    observed: set[str] = set()
+    for file_path in output_fs.iter_files():
+        relative = file_path.relative_to(published_root).as_posix()
+        observed.add(relative)
+        digest, size = output_fs.hash_file(relative)
+        if size <= 0 or expected.get(relative) != digest:
+            raise ChronosVerificationRefusalError(
+                "existing immutable asset bytes differ from their persisted ledger digest"
+            )
+    if observed != set(expected):
+        raise ChronosVerificationRefusalError(
+            "existing immutable asset file set differs from the persisted ledger"
+        )
+
+
 def execute_chronos_staged_attempt(
     workspace_root: str | Path,
     attempt: ChronosSpineAttempt,
     *,
     active_fencing_token: FencingTokenReader,
     before_verify: PreVerifyHook | None = None,
+    command_bus: ChronosCommandBus | None = None,
+    command_actor: ActorIdentity | None = None,
+    asset_version_store: ChronosAssetVersionStore | None = None,
+    passport_sink: ArtifactPassportSink | None = None,
 ) -> ChronosSpineExecutionReceipt:
     """Stage, render, independently verify, and atomically publish one attempt."""
     if not callable(active_fencing_token):
         raise ChronosSpineExecutionError("an authoritative active fencing-token reader is required")
+    if (
+        asset_version_store is not None
+        and passport_sink is not None
+        and asset_version_store is not passport_sink
+    ):
+        raise ChronosLedgerError(
+            "asset-version and passport sinks must share one atomic transaction coordinator"
+        )
     snapshot = _snapshot_attempt(attempt)
     stable_attempt = snapshot.attempt
     try:
@@ -1333,13 +1958,23 @@ def execute_chronos_staged_attempt(
         recipe_digest,
     )
     _require_current_fence(stable_attempt, active_fencing_token)
+    if command_bus is not None:
+        _authorize_through_command_bus(command_bus, stable_attempt, recipe, command_actor)
 
     root = Path(workspace_root).expanduser().resolve(strict=False)
     root.mkdir(parents=True, exist_ok=True)
     fs = WorkspaceFilesystem(root)
+    ledger: ChronosAssetVersionStore | ArtifactPassportSink = (
+        asset_version_store
+        if asset_version_store is not None
+        else passport_sink
+        if passport_sink is not None
+        else FileChronosLedger(root)
+    )
     stage_name = f"{stable_attempt.attempt_id}_{stable_attempt.fencing_token}"
     stage_rel = f".staging/{stage_name}"
     owns_stage = False
+    published_by_attempt: str | None = None
     try:
         fs.ensure_directory(".staging")
         if _directory_exists(fs, stage_rel):
@@ -1418,37 +2053,67 @@ def execute_chronos_staged_attempt(
             verification.rt60_error,
             str(root / published_rel),
         )
-        passport_payload = record.to_dict()
-        passport_payload.pop("published_path", None)
-        passport_digest = hashlib.sha256(
-            jcs_canonical_json(passport_payload).encode("utf-8")
-        ).hexdigest()
-        passport = ChronosArtifactPassport(
-            record.asset_version_id,
-            record.project_id,
-            record.parent_revision_id,
-            record.produced_revision_id,
-            record.attempt_id,
-            record.fencing_token,
-            record.recipe_digest,
-            record.merkle_root,
-            record.input_content_sha256,
-            record.output_content_sha256,
-            record.published_file_digests,
-            record.verification_tier,
-            record.verified_at_utc,
-            record.sample_drift,
-            record.max_delta_e00,
-            record.epipolar_sampson_error,
-            record.rt60_error,
-            passport_digest,
-        )
+        passport = _passport_for_record(record)
+        stored_pair = ledger.get_pair(asset_version_id)
+        if stored_pair is not None:
+            stored_record, stored_passport = stored_pair
+            if not _same_retry_evidence(stored_record, stored_passport, record):
+                raise ChronosLedgerConflictError(
+                    "asset-version id is already bound to different recipe or media evidence"
+                )
+            _require_current_fence(stable_attempt, active_fencing_token)
+            _verify_published_directory(fs, published_rel, stored_record)
+            fs.remove_tree(stage_rel)
+            owns_stage = False
+            return ChronosSpineExecutionReceipt(
+                recipe,
+                verification,
+                stored_record,
+                stored_passport,
+                dict(engine_summary),
+            )
         # Recheck immediately before the only namespace transition. rename_within
         # is descriptor-relative and atomic; an existing version is never replaced.
         _require_current_fence(stable_attempt, active_fencing_token)
         if _directory_exists(fs, published_rel):
             raise ChronosSpineExecutionError("immutable asset-version destination already exists")
         fs.rename_within(stage_rel, published_rel, create_parents=True)
+        owns_stage = False
+        published_by_attempt = published_rel
+        try:
+            ledger.commit_pair(
+                record,
+                passport,
+                active_fencing_token=active_fencing_token,
+            )
+        except ChronosVerificationRefusalError:
+            _remove_new_publication(fs, published_rel)
+            published_by_attempt = None
+            raise
+        except Exception as exc:  # noqa: BLE001 - durable record failure invalidates publish
+            _remove_new_publication(fs, published_rel)
+            published_by_attempt = None
+            raise ChronosLedgerError("canonical asset/passport commit failed") from exc
+        try:
+            persisted_pair = ledger.get_pair(asset_version_id)
+            if persisted_pair != (record, passport):
+                raise ChronosLedgerError("canonical asset/passport read-back did not match commit")
+            _require_current_fence(stable_attempt, active_fencing_token)
+        except Exception as exc:  # noqa: BLE001 - post-commit stale/corrupt store rolls back
+            try:
+                ledger.discard_pair(asset_version_id, fencing_token=record.fencing_token)
+            except Exception as discard_exc:  # noqa: BLE001 - preserve fail-closed result
+                _remove_new_publication(fs, published_rel)
+                published_by_attempt = None
+                raise ChronosLedgerError(
+                    "asset/passport rollback failed after commit refusal"
+                ) from discard_exc
+            _remove_new_publication(fs, published_rel)
+            published_by_attempt = None
+            if isinstance(exc, ChronosSpineExecutionError):
+                raise
+            raise ChronosLedgerError("canonical asset/passport read-back failed") from exc
+        published_by_attempt = None
         return ChronosSpineExecutionReceipt(
             recipe,
             verification,
@@ -1457,18 +2122,26 @@ def execute_chronos_staged_attempt(
             dict(engine_summary),
         )
     except ChronosVerificationRefusalError:
+        if published_by_attempt is not None:
+            _remove_new_publication(fs, published_by_attempt)
         if owns_stage:
             _quarantine_stage(fs, stage_rel, stage_name)
         raise
     except ChronosSpineExecutionError:
+        if published_by_attempt is not None:
+            _remove_new_publication(fs, published_by_attempt)
         if owns_stage:
             _quarantine_stage(fs, stage_rel, stage_name)
         raise
     except (FilesystemBoundaryError, OSError, ValueError, TypeError) as exc:
+        if published_by_attempt is not None:
+            _remove_new_publication(fs, published_by_attempt)
         if owns_stage:
             _quarantine_stage(fs, stage_rel, stage_name)
         raise ChronosSpineExecutionError("Chronos staged attempt failed closed") from exc
     except Exception as exc:  # noqa: BLE001 - hooks and renderer failures also quarantine
+        if published_by_attempt is not None:
+            _remove_new_publication(fs, published_by_attempt)
         if owns_stage:
             _quarantine_stage(fs, stage_rel, stage_name)
         raise ChronosSpineExecutionError("Chronos staged attempt failed closed") from exc

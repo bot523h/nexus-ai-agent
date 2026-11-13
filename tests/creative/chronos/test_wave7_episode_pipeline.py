@@ -264,7 +264,7 @@ def test_show_bible_nonfinite_and_numeric_refusal(tmp_path: Path) -> None:
 
 def test_episode_handlers_and_studio_port_manifest_binding(tmp_path: Path) -> None:
     from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
 
     bible = _bible()
     shots = [_shot(tmp_path, 0), _shot(tmp_path, 1, 700.0)]

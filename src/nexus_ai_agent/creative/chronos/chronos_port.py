@@ -80,6 +80,7 @@ class ChronosPort:
             "grading.legalize_ebu_r103",
             "episode.verify_show_bible",
             "episode.run_verified",
+            "chronos.staged_spine_master",
         }
     )
 

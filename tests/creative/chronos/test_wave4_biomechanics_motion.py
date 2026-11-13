@@ -163,7 +163,7 @@ def test_scene_linear_shutter_blur_conserves_energy_and_refuses_invalid() -> Non
 
 def test_wave4_motion_handlers_write_receipts(tmp_path: Path) -> None:
     from nexus_ai_agent.creative.chronos import build_default_chronos_handlers
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
 
     port = ChronosPort(build_default_chronos_handlers())
     ik_input = tmp_path / "ik.npz"

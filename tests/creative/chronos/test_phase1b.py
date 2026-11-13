@@ -11,6 +11,12 @@ from nexus_ai_agent.creative.chronos.acoustics_lipsync import (
     measure_rir_acoustics,
     solve_jaw_trajectory,
 )
+from nexus_ai_agent.creative.chronos.chronos_port import (
+    ChronosCommand,
+    ChronosExecutionReceipt,
+    ChronosHandler,
+    ChronosPort,
+)
 from nexus_ai_agent.creative.chronos.color_science import (
     cct_kelvin_to_xyz,
     match_linear_rgb_gaussian_ot,
@@ -25,12 +31,6 @@ from nexus_ai_agent.creative.chronos.geometry import (
 from nexus_ai_agent.creative.chronos.timeline import (
     assemble_pcm_wav_stream_copy,
     verify_pcm_wav_assembly,
-)
-from nexus_ai_agent.creative.studio.chronos_port import (
-    ChronosCommand,
-    ChronosExecutionReceipt,
-    ChronosHandler,
-    ChronosPort,
 )
 
 
@@ -333,7 +333,7 @@ def test_probe_signature_success_and_jacobian_domain(monkeypatch: pytest.MonkeyP
 
 
 def test_studio_port_registry_tamper_and_receipt_validation() -> None:
-    from nexus_ai_agent.creative.studio.chronos_port import (
+    from nexus_ai_agent.creative.chronos.chronos_port import (
         ChronosCommand,
         ChronosExecutionReceipt,
         ChronosPort,

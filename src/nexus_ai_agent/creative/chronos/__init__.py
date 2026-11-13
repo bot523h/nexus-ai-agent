@@ -8,7 +8,17 @@ from typing import Any, cast
 from .bridge import (
     CHRONOS_SPINE_OPERATIONS,
     CHRONOS_STAGED_SPINE_MASTER,
+    build_chronos_staged_spine_handler,
     dispatch_chronos_spine_operation,
+    register_chronos_staged_spine_operation,
+    staged_spine_command,
+)
+from .chronos_port import (
+    ChronosCommand,
+    ChronosExecutionReceipt,
+    ChronosHandler,
+    ChronosPort,
+    execute_chronos_command,
 )
 from .contracts import Continuity, KernelError, RationalTimestamp
 from .multicamera_mastering import (
@@ -20,15 +30,24 @@ from .nexus_spine_adapter import (
     ENGINE_VERSION,
     OMNIVERSE_OPERATION,
     REAL_MEDIA_OPERATION,
+    ArtifactPassportSink,
     ChronosArtifactPassport,
     ChronosAssetVersionRecord,
+    ChronosAssetVersionStore,
+    ChronosCommandAuthorizationError,
+    ChronosCommandBus,
     ChronosFileVerification,
+    ChronosLedgerConflictError,
+    ChronosLedgerError,
     ChronosRecipeIdentity,
     ChronosSpineAttempt,
+    ChronosSpineCommandInput,
     ChronosSpineExecutionError,
     ChronosSpineExecutionReceipt,
     ChronosVerificationReceipt,
     ChronosVerificationRefusalError,
+    FileChronosLedger,
+    InMemoryChronosLedger,
     compute_chronos_recipe_identity,
     execute_chronos_staged_attempt,
     jcs_canonical_json,
@@ -51,10 +70,11 @@ from .real_media_continuity import (
 
 
 def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
-    """Build local adapters for the Studio port's six canonical Wave-1 operations.
+    """Build local adapters for the deterministic Chronos operation allowlist.
 
-    The Studio module stays dependency-free: composition direction is Chronos adapter
-    to pure Studio port. Each adapter accepts the immutable command protocol.
+    The Studio command envelope remains dependency-light. The staged spine is
+    present as a fail-closed placeholder here; callers bind real attempt,
+    fencing and persistence dependencies with ``build_chronos_staged_spine_handler``.
     """
     import hashlib
     import json
@@ -62,7 +82,7 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
 
     import numpy as np
 
-    from nexus_ai_agent.creative.studio.chronos_port import ChronosExecutionReceipt
+    from nexus_ai_agent.creative.chronos.chronos_port import ChronosExecutionReceipt
 
     from . import acoustics_lipsync as acoustic
     from . import (
@@ -699,7 +719,13 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
         with path.open("wb") as stream:
             np.save(stream, value, allow_pickle=False)
 
+    def staged_spine_unbound(_command: Any) -> Any:
+        raise ValueError(
+            "chronos.staged_spine_master requires an attempt-bound handler from bridge"
+        )
+
     return {
+        "chronos.staged_spine_master": staged_spine_unbound,
         "timeline.assemble_wav": wav,
         "timeline.assemble_ffmpeg": ffmpeg,
         "geometry.project_and_verify_scale": scale,
@@ -735,19 +761,32 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
 
 
 __all__ = [
+    "ArtifactPassportSink",
     "CHRONOS_SPINE_OPERATIONS",
     "CHRONOS_STAGED_SPINE_MASTER",
+    "ChronosPort",
     "CharacterIdentityAnchor",
     "ChronosArtifactPassport",
     "ChronosAssetVersionRecord",
+    "ChronosAssetVersionStore",
+    "ChronosCommand",
+    "ChronosCommandAuthorizationError",
+    "ChronosCommandBus",
+    "ChronosExecutionReceipt",
+    "ChronosHandler",
+    "ChronosLedgerConflictError",
+    "ChronosLedgerError",
     "ChronosFileVerification",
     "ChronosRecipeIdentity",
+    "ChronosSpineCommandInput",
     "ChronosSpineAttempt",
     "ChronosSpineExecutionError",
     "ChronosSpineExecutionReceipt",
     "ChronosVerificationReceipt",
     "ChronosVerificationRefusalError",
     "ENGINE_VERSION",
+    "FileChronosLedger",
+    "InMemoryChronosLedger",
     "OMNIVERSE_OPERATION",
     "REAL_MEDIA_OPERATION",
     "Continuity",
@@ -763,8 +802,10 @@ __all__ = [
     "bresenham_sample_counts",
     "build_default_chronos_handlers",
     "canonical_sample_horizon",
+    "build_chronos_staged_spine_handler",
     "compute_chronos_recipe_identity",
     "dispatch_chronos_spine_operation",
+    "execute_chronos_command",
     "execute_chronos_staged_attempt",
     "jcs_canonical_json",
     "discover_ffmpeg_executable",
@@ -772,5 +813,7 @@ __all__ = [
     "execute_real_media_season_continuity",
     "measure_patch_delta_e00_by_frame",
     "restore_anchored_color_frames",
+    "register_chronos_staged_spine_operation",
+    "staged_spine_command",
     "verify_staged_chronos_artifacts",
 ]

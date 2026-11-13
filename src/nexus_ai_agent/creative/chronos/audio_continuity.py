@@ -6,7 +6,6 @@ import wave
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -92,11 +91,11 @@ def _encode_pcm(x: FloatArray, width: int) -> bytes:
     values = np.rint(np.clip(x, -1, hi / (hi + 1)) * (1 << (bits - 1))).astype(np.int64)
     values = np.clip(values, lo, hi)
     if width == 1:
-        return cast(bytes, (values + 128).astype(np.uint8).tobytes())
+        return (values + 128).astype(np.uint8).tobytes()
     if width == 2:
-        return cast(bytes, values.astype("<i2").tobytes())
+        return values.astype("<i2").tobytes()
     if width == 4:
-        return cast(bytes, values.astype("<i4").tobytes())
+        return values.astype("<i4").tobytes()
     out = np.empty((len(values), 3), dtype=np.uint8)
     v = values.astype(np.int32)
     out[:, 0], out[:, 1], out[:, 2] = v & 255, (v >> 8) & 255, (v >> 16) & 255

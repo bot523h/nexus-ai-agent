@@ -23,6 +23,7 @@ from nexus_ai_agent.creative.chronos import (
     real_media_continuity as real_media,
 )
 from nexus_ai_agent.creative.chronos.acoustic_space_continuity import AcousticRoomSpec
+from nexus_ai_agent.creative.chronos.chronos_port import ChronosCommand, ChronosPort
 from nexus_ai_agent.creative.chronos.contracts import KernelError
 from nexus_ai_agent.creative.chronos.kinetic_match_cut_engine import (
     estimate_subpixel_phase_translation,
@@ -43,7 +44,6 @@ from nexus_ai_agent.creative.chronos.multicamera_mastering import (
     execute_multicamera_mastering_manifest,
 )
 from nexus_ai_agent.creative.chronos.nexus_spine_adapter import REAL_MEDIA_OPERATION
-from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
 
 
 def _shot(index: int, **overrides: object) -> MultiCameraShotInput:
@@ -83,7 +83,7 @@ def _shot(index: int, **overrides: object) -> MultiCameraShotInput:
     return MultiCameraShotInput(**defaults)  # type: ignore[arg-type]
 
 
-def test_phase4_typed_refusal_probe_ledger_is_50_of_50(tmp_path: Path) -> None:
+def test_phase5_typed_refusal_probe_ledger_is_60_of_60(tmp_path: Path) -> None:
     room = AcousticRoomSpec("ledger-room", (12.0, 10.0, 4.0), (0.25,) * 6)
     intrinsics = np.eye(3)
     F = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])

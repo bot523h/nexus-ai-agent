@@ -18,18 +18,31 @@ from nexus_ai_agent.creative.chronos import (
     CHRONOS_STAGED_SPINE_MASTER,
     REAL_MEDIA_OPERATION,
     CharacterIdentityAnchor,
+    ChronosCommand,
+    ChronosCommandAuthorizationError,
+    ChronosLedgerError,
+    ChronosPort,
     ChronosSpineAttempt,
     ChronosSpineExecutionError,
     ChronosVerificationRefusalError,
+    FileChronosLedger,
+    InMemoryChronosLedger,
     RealMediaShot,
+    build_chronos_staged_spine_handler,
     compute_chronos_recipe_identity,
     dispatch_chronos_spine_operation,
     jcs_canonical_json,
     merkle_ledger,
+    register_chronos_staged_spine_operation,
+    staged_spine_command,
 )
 from nexus_ai_agent.creative.chronos import nexus_spine_adapter as spine_adapter
 from nexus_ai_agent.creative.chronos.acoustic_space_continuity import AcousticRoomSpec
 from nexus_ai_agent.creative.chronos.multicamera_mastering import MultiCameraShotInput
+from nexus_ai_agent.creative.studio.authorization import ProjectAccess
+from nexus_ai_agent.creative.studio.bus import CommandBus
+from nexus_ai_agent.creative.studio.capabilities import build_wave1_registry
+from nexus_ai_agent.creative.studio.models import ActorIdentity, Timeline, new_project
 from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
 
 
@@ -75,6 +88,19 @@ def _attempt(
 
 def _reader(expected: int) -> Any:
     return lambda project_id, attempt_id: expected
+
+
+def _authorized_command_bus(project_id: str) -> tuple[CommandBus, ActorIdentity]:
+    actor = ActorIdentity(kind="service", actor_id="chronos-e2e-service")
+    registry = build_wave1_registry()
+    register_chronos_staged_spine_operation(registry)
+    access = ProjectAccess(
+        actor,
+        project_id,
+        frozenset({"project:write", "chronos:render"}),
+    )
+    project = new_project(project_id, "Chronos E2E", Timeline(timeline_id="main", duration_us=0))
+    return CommandBus(project, registry=registry, authorizer=access), actor
 
 
 def _real_media_attempt() -> ChronosSpineAttempt:
@@ -153,6 +179,9 @@ def test_omniverse_mastering_is_disk_verified_then_atomically_published(
         actual, size = output_fs.hash_file(relative)
         assert actual == expected
         assert size > 0
+    stored_pair = FileChronosLedger(workspace).get_pair(record.asset_version_id)
+    assert stored_pair == (record, receipt.artifact_passport)
+    assert (workspace / ".chronos-ledger" / "asset-passport-ledger-v1.json").is_file()
     assert {item.relative_path for item in receipt.verification.files} == {
         relative for relative, _ in record.published_file_digests
     }
@@ -236,7 +265,7 @@ def test_optional_mp4_is_hashed_and_decoded_from_persisted_bytes(tmp_path: Path)
     assert not (tampered_workspace / "published").exists()
 
 
-def test_existing_asset_version_is_never_overwritten(tmp_path: Path) -> None:
+def test_asset_version_retry_is_idempotent_and_never_overwrites_bytes(tmp_path: Path) -> None:
     attempt = _attempt(attempt_id="immutable-version", fencing_token=13)
     workspace = tmp_path / "immutable-root"
     first = dispatch_chronos_spine_operation(
@@ -251,15 +280,156 @@ def test_existing_asset_version_is_never_overwritten(tmp_path: Path) -> None:
         for relative, _ in first.asset_version.published_file_digests
     }
 
-    with pytest.raises(ChronosSpineExecutionError, match="destination already exists"):
+    retry = dispatch_chronos_spine_operation(
+        CHRONOS_STAGED_SPINE_MASTER,
+        workspace,
+        attempt,
+        active_fencing_token=_reader(attempt.fencing_token),
+    )
+    assert retry.asset_version == first.asset_version
+    assert retry.artifact_passport == first.artifact_passport
+    assert all((published / relative).read_bytes() == data for relative, data in before.items())
+    assert not (workspace / ".staging" / f"{attempt.attempt_id}_{attempt.fencing_token}").exists()
+
+
+def test_chronos_port_and_canonical_command_bus_execute_and_persist_pair(
+    tmp_path: Path,
+) -> None:
+    attempt = _real_media_attempt()
+    workspace = tmp_path / "port-command-bus-root"
+    command_bus, actor = _authorized_command_bus(attempt.project_id)
+    ledger = InMemoryChronosLedger()
+    handler = build_chronos_staged_spine_handler(
+        workspace,
+        attempt,
+        active_fencing_token=_reader(attempt.fencing_token),
+        command_bus=command_bus,
+        command_actor=actor,
+        asset_version_store=ledger,
+        passport_sink=ledger,
+    )
+    port = ChronosPort({CHRONOS_STAGED_SPINE_MASTER: handler})
+    port_command = staged_spine_command(attempt)
+    port_receipt = port.execute(port_command)
+
+    stored = ledger.get_pair(port_receipt.metadata["asset_version_id"])
+    assert stored is not None
+    assert stored[0].asset_version_id == port_receipt.metadata["asset_version_id"]
+    assert stored[1].passport_digest == port_receipt.metadata["passport_digest"]
+    assert port_receipt.quality_claim == "REAL-DISK_CHRONOS_SPINE_VERIFIED"
+    assert command_bus.state_revision == 1
+    assert len(command_bus.history) == 1
+    assert CHRONOS_STAGED_SPINE_MASTER in ChronosPort.OPERATIONS
+    assert CHRONOS_STAGED_SPINE_MASTER in CHRONOS_SPINE_OPERATIONS
+
+
+def test_chronos_port_rejects_unbound_or_tampered_recipe_intent(tmp_path: Path) -> None:
+    attempt = _real_media_attempt()
+    workspace = tmp_path / "port-recipe-mismatch"
+    handler = build_chronos_staged_spine_handler(
+        workspace,
+        attempt,
+        active_fencing_token=_reader(attempt.fencing_token),
+    )
+    port = ChronosPort({CHRONOS_STAGED_SPINE_MASTER: handler})
+    forged = ChronosCommand(
+        operation=CHRONOS_STAGED_SPINE_MASTER,
+        inputs=(attempt.project_id, attempt.parent_revision_id, attempt.attempt_id),
+        parameters={
+            "fencing_token": str(attempt.fencing_token),
+            "operation_name": attempt.operation_name,
+            "recipe_digest": "0" * 64,
+        },
+    )
+    with pytest.raises(ValueError, match="does not match its bound attempt"):
+        port.execute(forged)
+    assert not (workspace / ".staging").exists()
+
+
+def test_command_bus_denial_fails_before_any_staging_or_ledger_write(tmp_path: Path) -> None:
+    attempt = _real_media_attempt()
+    workspace = tmp_path / "denied-command-bus-root"
+    actor = ActorIdentity(kind="service", actor_id="unprivileged-service")
+    registry = build_wave1_registry()
+    register_chronos_staged_spine_operation(registry)
+    access = ProjectAccess(actor, attempt.project_id, frozenset({"project:write"}))
+    project = new_project(
+        attempt.project_id, "Denied Chronos", Timeline(timeline_id="main", duration_us=0)
+    )
+    command_bus = CommandBus(project, registry=registry, authorizer=access)
+    handler = build_chronos_staged_spine_handler(
+        workspace,
+        attempt,
+        active_fencing_token=_reader(attempt.fencing_token),
+        command_bus=command_bus,
+        command_actor=actor,
+    )
+    port = ChronosPort({CHRONOS_STAGED_SPINE_MASTER: handler})
+
+    with pytest.raises(ChronosCommandAuthorizationError, match="denied"):
+        port.execute(staged_spine_command(attempt))
+    assert not (workspace / ".staging").exists()
+    assert not (workspace / "published").exists()
+    assert not (workspace / ".chronos-ledger").exists()
+    assert command_bus.state_revision == 0
+
+
+def test_stale_fence_at_persistent_commit_rolls_back_promoted_bytes(tmp_path: Path) -> None:
+    attempt = _real_media_attempt()
+    workspace = tmp_path / "stale-ledger-fence-root"
+    ledger = InMemoryChronosLedger()
+    observed = iter((attempt.fencing_token,) * 3 + (attempt.fencing_token + 1,))
+
+    with pytest.raises(ChronosVerificationRefusalError, match="stale fence"):
+        dispatch_chronos_spine_operation(
+            CHRONOS_STAGED_SPINE_MASTER,
+            workspace,
+            attempt,
+            active_fencing_token=lambda _project, _attempt: next(observed),
+            asset_version_store=ledger,
+            passport_sink=ledger,
+        )
+    assert not list((workspace / "published").rglob("av_*"))
+    assert not ledger._records
+
+
+def test_persistence_rejection_rolls_back_newly_promoted_asset(tmp_path: Path) -> None:
+    attempt = _real_media_attempt()
+    workspace = tmp_path / "rejecting-ledger-root"
+
+    class RejectingLedger(InMemoryChronosLedger):
+        def commit_pair(
+            self, asset_version: Any, passport: Any, *, active_fencing_token: Any
+        ) -> None:
+            raise ChronosLedgerError("repository rejected fenced asset/passport commit")
+
+    ledger = RejectingLedger()
+    with pytest.raises(ChronosLedgerError, match="canonical asset/passport commit failed"):
         dispatch_chronos_spine_operation(
             CHRONOS_STAGED_SPINE_MASTER,
             workspace,
             attempt,
             active_fencing_token=_reader(attempt.fencing_token),
+            asset_version_store=ledger,
+            passport_sink=ledger,
         )
-    assert all((published / relative).read_bytes() == data for relative, data in before.items())
-    assert not (workspace / ".staging" / f"{attempt.attempt_id}_{attempt.fencing_token}").exists()
+    assert not list((workspace / "published").rglob("av_*"))
+    assert not ledger._records
+
+
+def test_separate_nontransactional_sinks_refuse_before_staging(tmp_path: Path) -> None:
+    attempt = _real_media_attempt()
+    workspace = tmp_path / "split-sinks-root"
+    with pytest.raises(ChronosLedgerError, match="atomic transaction coordinator"):
+        dispatch_chronos_spine_operation(
+            CHRONOS_STAGED_SPINE_MASTER,
+            workspace,
+            attempt,
+            active_fencing_token=_reader(attempt.fencing_token),
+            asset_version_store=InMemoryChronosLedger(),
+            passport_sink=InMemoryChronosLedger(),
+        )
+    assert not (workspace / ".staging").exists()
 
 
 def test_duplicate_stage_refusal_does_not_move_another_owner_stage(tmp_path: Path) -> None:
@@ -364,6 +534,7 @@ def test_jcs_canonicalization_uses_rfc8785_number_and_utf16_key_rules() -> None:
     assert jcs_canonical_json(333333333.33333329) == "333333333.3333333"
     assert jcs_canonical_json(1e-7) == "1e-7"
     assert jcs_canonical_json(1e21) == "1e+21"
+    assert jcs_canonical_json(np.float64(0.64574489882531)) == "0.64574489882531"
     assert jcs_canonical_json({"\U00010000": 1, "\ue000": 2}) == '{"𐀀":1,"\ue000":2}'
     assert hashlib.sha256(jcs_canonical_json({"x": 1}).encode()).hexdigest()
 
@@ -680,3 +851,8 @@ def test_missing_and_bad_digest_file_refuse_closed(tmp_path: Path) -> None:
         spine_adapter._verify_staged_file(fs, "missing.bin", valid_digest)
     with pytest.raises(ChronosVerificationRefusalError, match="decoder could not run"):
         spine_adapter._decode_mp4_bytes(b"invalid", {"ffmpeg_path": "/missing/ffmpeg"})
+
+    (root / ".chronos-ledger").mkdir()
+    fs.write_bytes(".chronos-ledger/asset-passport-ledger-v1.json", b"{")
+    with pytest.raises(ChronosLedgerError, match="ledger is unreadable"):
+        FileChronosLedger(root).get_pair("missing-version")
