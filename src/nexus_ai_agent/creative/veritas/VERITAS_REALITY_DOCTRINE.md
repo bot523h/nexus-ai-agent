@@ -77,3 +77,69 @@ The ten laws are not ten separate tools; they are ten clauses of a single contra
 A physics engine that is never attacked is a physics engine that has never been tested. NAGAR VERITAS is therefore defended by two independent adversarial suites. The first is a set of sixty falsification probes, six per law, each of which states a specific, falsifiable physical claim and fails if the engine does not uphold it. These probes are Popperian in spirit: they are designed to be capable of failure, and their passing is meaningful precisely because each could have gone the other way. The second is a mutation campaign of forty mutants, four per law, in which a deliberately corrupted artefact or parameter is fed to the engine's own oracle. A mutant is killed when the oracle rejects it, and the campaign certifies a forty-out-of-forty kill rate. Together the probes and the mutants establish that the engine detects the ten deadly sins not by accident and not by threshold-tuning, but because the mathematics of each law leaves the sin no room to hide.
 
 The entire suite is vectorised NumPy and completes in well under eight seconds, which is itself a kind of proof: a real physics court does not need a GPU, a network, or a language model to know that six fingers are impossible. It needs only the laws, the arithmetic that applies them, and the discipline to attack its own conclusions until they hold. That is the doctrine of NAGAR VERITAS.
+
+## Law 11 — The Madelung Quantum-Fluid Phase-Coherence Transport
+
+The ten laws above police the geometry, optics, dynamics and thermodynamics of a
+frame. There remains a failure mode that is invisible to all of them: temporal
+texture boiling. Generative video frequently exhibits a high-frequency,
+frame-to-frame shimmer in which surfaces seethe like liquid while their
+silhouettes stay nominally fixed. Nothing teleports, no shadow detaches, no hand
+grows a sixth finger — yet the image is plainly unreal. Law 11 confronts this
+residual hallucination with the mathematics of quantum fluids.
+
+The construction begins by fusing the frame's luminance-chrominance density
+`rho(x, t)` and its optical phase `Phi(x, t)` into a single complex
+wavefunction,
+
+```
+psi(x, t) = sqrt(rho(x, t)) * exp(i * Phi(x, t)).
+```
+
+Writing `psi = sqrt(rho) exp(i S / hbar_eff)` and substituting into the
+Schrodinger equation, then separating real and imaginary parts, yields the two
+Madelung equations. The imaginary part is the continuity equation
+
+```
+d rho / dt + div(rho * grad Phi) = 0,
+```
+
+which says that density is transported as a probability current
+`j = rho * grad Phi`. The real part is a Hamilton-Jacobi equation whose only
+non-classical term is the Bohmian quantum potential
+
+```
+Q(rho) = -(hbar_eff^2 / 2) * laplacian(sqrt(rho)) / sqrt(rho).
+```
+
+This `Q` is the engine of the law. It is a measure of local curvature of the
+amplitude field. Over a smooth gradient `Q` is negligible, so the fluid evolves
+classically and texture drifts naturally. Across a genuine physical edge — a
+silhouette, a specular boundary, a hard shadow terminator — the second
+derivative of `sqrt(rho)` spikes, and `Q` diverges. That divergence is precisely
+the property we want: the quantum pressure resists smoothing exactly where the
+image carries real structure, and yields freely where the structure is noise.
+A naive Gaussian blur cannot make this distinction; it destroys edges and noise
+alike. The Bohmian regulariser is therefore edge-preserving by construction
+rather than by heuristic.
+
+Operationally the auditor measures the high-frequency spectral energy ratio of
+the phase field, the fraction of `|FFT(Phi)|^2` that lives outside the
+lowest-frequency block. When this ratio exceeds the boiling threshold the phase
+is declared to be boiling, and the engine applies successive brick-wall
+low-pass sweeps in the Fourier domain until the ratio falls below threshold or
+the iteration budget is exhausted. Phase-wrap discontinuities are first removed
+by unwrapping along every axis, since a `2*pi` jump is a measurement artefact
+rather than a physical event. The healed phase is then recombined with the
+original amplitude to produce a regularised wavefunction, and the pass reports
+the boiling ratio before and after together with the number of sweeps applied.
+
+The invariant is stated compactly: a frame is phase-coherent when its phase
+boiling ratio lies below threshold after unwrapping, and a healed frame must
+satisfy `boiling_after < boiling_before` whenever a violation was detected.
+The continuity residual, the RMS of `div(rho * grad Phi)`, provides an
+independent falsification metric: a frame whose measured divergence does not
+match its density transport is boiling regardless of how plausible it looks.
+Together these two scalars let the auditor prove, rather than assert, that a
+shot has been transported forward in time as a coherent quantum fluid and not
+merely re-rendered with fresh noise.

@@ -8,6 +8,11 @@ whole package as reachable.
 
 from __future__ import annotations
 
+from nexus_ai_agent.creative.veritas import (
+    biophysical_human,
+    catoptric_and_projective_optics,
+    continuum_and_quantum_mechanics,
+)
 from nexus_ai_agent.creative.veritas.catoptric_reflection_physics import (
     CatoptricGeometryError,
     FresnelResult,
@@ -16,6 +21,15 @@ from nexus_ai_agent.creative.veritas.catoptric_reflection_physics import (
     compute_householder_reflection_pose,
     verify_reflection_epipolar_consistency,
     warp_ripple_reflection,
+)
+from nexus_ai_agent.creative.veritas.continuum_and_quantum_mechanics import (
+    PhaseCoherenceResult,
+    bohmian_quantum_potential,
+    madelung_continuity_residual,
+    propagate_occluded_object_se3,
+    stabilize_madelung_phase_coherence,
+    step_symplectic_verlet,
+    verify_retarded_wave_causality,
 )
 from nexus_ai_agent.creative.veritas.hand_kinematics import (
     CANONICAL_JOINT_COUNT,
@@ -162,4 +176,14 @@ __all__ = [
     "verify_reflection_epipolar_consistency",
     "verify_retarded_causality",
     "warp_ripple_reflection",
+    "PhaseCoherenceResult",
+    "bohmian_quantum_potential",
+    "madelung_continuity_residual",
+    "propagate_occluded_object_se3",
+    "stabilize_madelung_phase_coherence",
+    "step_symplectic_verlet",
+    "verify_retarded_wave_causality",
+    "biophysical_human",
+    "catoptric_and_projective_optics",
+    "continuum_and_quantum_mechanics",
 ]
