@@ -1243,3 +1243,21 @@ Only red check = the #234 flake (task-264, issue #237).
 - **mypy `--strict` numpy gotcha**: `return np.clip(x, ...).astype(np.float32)` triggers
   `no-any-return`; assign to a typed local (`clipped: np.ndarray = ...`) then `return clipped`.
 - Full suite (extras installed): **7158 passed, 44 skipped, 1 pre-existing failure**.
+
+## NAGAR TITAN Waves 13-20 (durable, 2026-11-12/13)
+- New package `src/nexus_ai_agent/creative/atlas/` (9 modules) + `tests/creative/atlas/`:
+  Wave13 portal metrics, Wave14 atmosphere, Wave15 eikonal+crowd, Wave16 voronoi fracture+ledger,
+  Wave17 Seidel/anamorphic optics, Wave18 Riccati/Pontryagin pacing, Wave19 feature-film compiler,
+  Wave20 staged spine + falsification + `TITAN_CONTINUITY_DOCTRINE.md`. Branch
+  `arena/atlas-episodic-causality-lab`; commits `492f9eab c763cce2 961282e6 c0b06059 e8a378fe
+  3813dbde 5773edb1 d524ddf1`. 310 tests, **100% line+branch coverage**, mypy --strict clean.
+- **Doc-placement rule (reusable)**: the shared `docs/README.md` index is often off-limits and
+  `tests/unit/test_docs_integrity.py` requires EVERY `docs/*.md` to be indexed there — so a new
+  architecture page written under `docs/architecture/` BREAKS the gate. Put doctrine docs inside the
+  owned source zone and record the move-to-docs handoff.
+- **Real-disk verify pattern**: `WorkspaceFilesystem.write_bytes(rel, raw, create_parents=True)`
+  then `read_bytes(rel, max_bytes=...)`; export functions re-open and re-hash the bytes.
+  Two-phase publish via `AttemptStaging(root, job_id=, attempt_id=, final_root=)`.
+- **TITAN APIs are all `_Strict`/dataclass validated, bounded, fail-closed** — e.g.
+  `TemporalConstraint` fields are `a`/`b` (NOT `node_a`/`node_b`); `CrowdResult` has
+  `max_overlap`/`min_separation` (no `.steps`); `AnamorphicLens` PSF `size` must be ODD.
