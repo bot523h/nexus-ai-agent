@@ -22,6 +22,6 @@ OPERATIONS: Final[tuple[str, ...]] = (
     "verify_color_png",
 )
 
-KELVIN_RANGE: Final[tuple[float, float]] = (2000.0, 15000.0)
+KELVIN_RANGE: Final[tuple[float, float]] = (1000.0, 40000.0)
 
 __all__ = ["KELVIN_RANGE", "OPERATIONS"]

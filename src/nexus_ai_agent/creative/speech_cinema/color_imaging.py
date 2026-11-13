@@ -48,10 +48,21 @@ def _rgb(image: object, *, name: str = "image") -> Array:
     return arr
 
 
+KELVIN_MIN: float = 1000.0
+KELVIN_MAX: float = 40000.0
+DEFAULT_TARGET_KELVIN: float = 6500.0
+
+
 def _temperature_white_point(kelvin: float) -> Array:
-    """Approximate a black-body chromaticity as an XYZ white point."""
-    if not np.isfinite(kelvin) or not 2000.0 <= kelvin <= 15000.0:
-        raise ValueError("kelvin must be finite and in the inclusive range 2000..15000")
+    """Approximate a black-body chromaticity as an XYZ white point.
+
+    The Kim-type cubic fit is published for roughly 1667--25000 K.  The accepted
+    range 1000--40000 K is an extrapolation outside that band: the chromaticity
+    stays finite and is used for both source and destination, so identity and
+    round-trip guarantees hold, but absolute colour accuracy is not claimed there.
+    """
+    if not np.isfinite(kelvin) or not KELVIN_MIN <= kelvin <= KELVIN_MAX:
+        raise ValueError("kelvin must be finite and in the inclusive range 1000..40000")
     t = kelvin
     if t <= 4000:
         x = -0.2661239e9 / t**3 - 0.2343580e6 / t**2 + 0.8776956e3 / t + 0.179910
@@ -76,13 +87,16 @@ def white_balance_chromatic_adaptation(
     kelvin: float | None = None,
     *,
     method: Literal["gray_world", "kelvin"] = "gray_world",
+    target_kelvin: float = DEFAULT_TARGET_KELVIN,
 ) -> Array:
     """White-balance RGB data using Bradford LMS chromatic adaptation.
 
     ``gray_world`` estimates the scene illuminant from channel means and maps it
-    to neutral D65.  With ``kelvin`` (or ``method='kelvin'``), the supplied
-    2000--15000 K black-body white point is mapped to D65.  Results are floating
-    point and intentionally not clipped.
+    to neutral D65.  With ``kelvin`` (or ``method='kelvin'``), the black-body white
+    point at ``kelvin`` is mapped to the black-body white point at ``target_kelvin``
+    (default 6500 K), using the same locus function for both ends.  Equal
+    temperatures therefore give the identity.  Results are floating point and
+    intentionally not clipped.
     """
     arr = _rgb(image)
     if method not in {"gray_world", "kelvin"}:
@@ -95,18 +109,36 @@ def white_balance_chromatic_adaptation(
         if kelvin is None:  # pragma: no cover - guarded above; narrows the type
             raise ValueError("kelvin is required when method='kelvin'")
         source_xyz = _temperature_white_point(float(kelvin))
+        target_xyz = _temperature_white_point(float(target_kelvin))
     else:
         means: Array = np.mean(arr.reshape(-1, 3), axis=0)
         if bool(np.any(means <= 0)):
             raise ValueError("gray-world channel means must be strictly positive")
         source_xyz = _rgb_to_xyz_white(means / float(np.mean(means)))
+        target_xyz = _D65
+    adaptation_rgb = _adaptation_rgb(source_xyz, target_xyz)
+    return np.asarray(arr @ adaptation_rgb.T, dtype=np.float64)
+
+
+def _adaptation_rgb(source_xyz: Array, target_xyz: Array) -> Array:
+    """Return linear-RGB matrix M = M_A^-1 diag(rho_t/rho_s, gamma_t/gamma_s, beta_t/beta_s) M_A."""
     source_lms: Array = np.asarray(_BRADFORD @ source_xyz, dtype=np.float64)
-    target_lms: Array = np.asarray(_BRADFORD @ _D65, dtype=np.float64)
+    target_lms: Array = np.asarray(_BRADFORD @ target_xyz, dtype=np.float64)
     if bool(np.any(np.abs(source_lms) < np.finfo(float).eps)):
         raise ValueError("source white point is unsuitable for Bradford adaptation")
     adaptation_xyz = _BRADFORD_INV @ np.diag(target_lms / source_lms) @ _BRADFORD
-    adaptation_rgb: Array = np.asarray(_XYZ_TO_RGB @ adaptation_xyz @ _RGB_TO_XYZ, dtype=np.float64)
-    return np.asarray(arr @ adaptation_rgb.T, dtype=np.float64)
+    return np.asarray(_XYZ_TO_RGB @ adaptation_xyz @ _RGB_TO_XYZ, dtype=np.float64)
+
+
+def bradford_adapt(
+    image: object, src_kelvin: float, dst_kelvin: float = DEFAULT_TARGET_KELVIN
+) -> Array:
+    """Bradford-adapt linear RGB from the ``src_kelvin`` to the ``dst_kelvin`` black-body white."""
+    arr = _rgb(image)
+    matrix = _adaptation_rgb(
+        _temperature_white_point(float(src_kelvin)), _temperature_white_point(float(dst_kelvin))
+    )
+    return np.asarray(arr @ matrix.T, dtype=np.float64)
 
 
 def hdr_to_sdr_filmic_tonemap(hdr: Array, *, exposure: float = 0.0, white: float = 11.2) -> Array:

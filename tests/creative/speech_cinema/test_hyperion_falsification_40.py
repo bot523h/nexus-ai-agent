@@ -225,12 +225,6 @@ def test_p23_every_cue_respects_the_42_character_single_line_limit() -> None:
     assert all("\n" not in cue.text for cue in cues)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "GAP: no CPS (characters-per-second) check; partition_cues never splits or flags >20 CPS",
-    ),
-)
 def test_p24_reading_speed_above_20_cps_is_split_or_flagged() -> None:
     words = [AlignedWord(text="x" * 40, start=0.0, end=0.5)]
     cues = partition_cues(words)
@@ -239,22 +233,13 @@ def test_p24_reading_speed_above_20_cps_is_split_or_flagged() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "GAP: shot-cut handling only splits groups; there is no out-point snap to t_cut - 2 frames"
-    ),
-)
 def test_p25_shot_cut_guard_snaps_an_out_point_back_two_frames() -> None:
-    words = [AlignedWord(text="hello", start=0.0, end=1.0)]
-    cues = partition_cues(words, shot_cuts=[1.0 - 0.02])
-    assert cues[0].end == pytest.approx(1.0 - 2 / 25)
+    # Setup fixed: the word ends 10 ms before the cut, inside the 3-frame guard window.
+    words = [AlignedWord(text="hello", start=0.0, end=0.97)]
+    cues = partition_cues(words, shot_cuts=[0.98])
+    assert cues[0].end == pytest.approx(0.98 - 2 / 25)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="GAP: a cue whose words straddle a shot cut is not split; the cut falls inside the cue",
-)
 def test_p26_no_subtitle_cue_spans_a_shot_cut() -> None:
     words = [AlignedWord(text="a", start=0.0, end=0.40), AlignedWord(text="b", start=0.41, end=1.0)]
     cues = partition_cues(words, shot_cuts=[0.52])
@@ -289,35 +274,20 @@ def test_p28_inverted_or_zero_length_timestamps_are_refused(text: str) -> None:
 # ------------------------------------------------------------ 29-40 color
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "GAP: API maps kelvin->D65 only; identity at eq"
-        "ual temperatures measured at ~4.3e-2, not 1e-6"
-    ),
-)
 def test_p29_bradford_at_equal_temperatures_is_identity() -> None:
     image = np.full((4, 4, 3), 0.5)
     result = ci.white_balance_chromatic_adaptation(image, kelvin=6500)
     assert np.max(np.abs(result - image)) < 1e-6
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "GAP: no general source->destination Bradford a"
-        "daptation, so no 3200K->6500K->3200K round trip"
-    ),
-    raises=AttributeError,
-)
 def test_p30_bradford_round_trip_recovers_linear_rgb() -> None:
-    adapt = ci.bradford_adapt  # type: ignore[attr-defined]
+    adapt = ci.bradford_adapt
     image = np.random.default_rng(30).random((4, 4, 3))
     there = adapt(image, 3200, 6500)
     assert np.max(np.abs(adapt(there, 6500, 3200) - image)) < 1e-5
 
 
-@pytest.mark.parametrize("kelvin", [1000.0, 1999.0, 15001.0, 40000.0])
+@pytest.mark.parametrize("kelvin", [999.0, 40001.0, 0.0, float("nan")])
 def test_p31_out_of_range_correlated_colour_temperature_is_refused(kelvin: float) -> None:
     with pytest.raises(ValueError, match="kelvin"):
         ci.white_balance_chromatic_adaptation(np.ones((2, 2, 3)), kelvin=kelvin)

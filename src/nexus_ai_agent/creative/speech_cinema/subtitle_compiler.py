@@ -20,6 +20,13 @@ class SubtitleCue:
     end: float
     text: str
     index: int = 0
+    #: True when the cue cannot meet the reading-speed or shot-cut guards (e.g. one
+    #: word alone exceeds the CPS limit, or a single word straddles a shot cut).
+    flagged: bool = False
+
+
+_GUARD_FRAMES = 3  # a cue starting < 3 frames before a cut is moved to the cut
+_SNAP_FRAMES = 2  # a cue ending < 3 frames before a cut is pulled back 2 frames
 
 
 def _stamp(t: float, vtt: bool = False) -> str:
@@ -37,34 +44,75 @@ def partition_cues(
     max_duration: float = 4.0,
     shot_cuts: list[float] | tuple[float, ...] = (),
     max_gap: float = 0.8,
+    max_cps: float = 20.0,
+    fps: float = 25.0,
 ) -> tuple[SubtitleCue, ...]:
+    """Group aligned words into cues.
+
+    A new cue starts before a word when the line would exceed ``max_chars``, the
+    cue would exceed ``max_duration`` or ``max_cps`` (characters per second), the
+    silence gap exceeds ``max_gap``, or a shot cut falls between the previous word's
+    end and this word's end.  Cue times are then guarded against shot cuts at
+    ``fps`` (start clamp within 3 frames before a cut; end snap 2 frames before it).
+    """
+    if not fps > 0:
+        raise ValueError("fps must be positive")
     ws = list(words)
     cuts = sorted(float(x) for x in shot_cuts)
     out: list[SubtitleCue] = []
     group: list[AlignedWord] = []
 
     def flush() -> None:
-        if group:
-            out.append(
-                SubtitleCue(
-                    group[0].start, group[-1].end, " ".join(w.text for w in group), len(out) + 1
-                )
-            )
-            group.clear()
+        if not group:
+            return
+        text = " ".join(w.text for w in group)
+        start, end = group[0].start, group[-1].end
+        new_start, new_end, ok = _guard_cut(start, end, cuts, fps)
+        if not ok:
+            new_start, new_end = start, end
+        dur = new_end - new_start
+        over_cps = dur <= 0 or len(text) / dur > max_cps
+        out.append(
+            SubtitleCue(new_start, new_end, text, len(out) + 1, flagged=(not ok) or over_cps)
+        )
+        group.clear()
 
     for w in ws:
-        proposed = " ".join(x.text for x in group + [w])
-        cut = any(group and group[-1].end <= c <= w.start for c in cuts)
-        if group and (
-            len(proposed) > max_chars
-            or w.end - group[0].start > max_duration
-            or cut
-            or w.start - group[-1].end > max_gap
-        ):
-            flush()
+        if group:
+            proposed = " ".join(x.text for x in group + [w])
+            span = w.end - group[0].start
+            cut = any(group[-1].end <= c < w.end for c in cuts)
+            cps = len(proposed) / span if span > 0 else float("inf")
+            if (
+                len(proposed) > max_chars
+                or span > max_duration
+                or cut
+                or w.start - group[-1].end > max_gap
+                or cps > max_cps
+            ):
+                flush()
         group.append(w)
     flush()
     return tuple(out)
+
+
+def _guard_cut(
+    start: float, end: float, cuts: list[float], fps: float
+) -> tuple[float, float, bool]:
+    """Return guarded (start, end, ok); ``ok`` is False when no valid guarded span exists."""
+    frame = 1.0 / fps
+    guard = _GUARD_FRAMES * frame
+    snap = _SNAP_FRAMES * frame
+    new_start, new_end = start, end
+    for c in cuts:
+        if c - guard < new_start < c:
+            new_start = c
+    for c in cuts:
+        if new_start < c and new_end >= c - guard and new_end > c - snap:
+            new_end = c - snap
+    if new_end > new_start:
+        return new_start, new_end, True
+    return start, end, False
 
 
 compile_subtitles = partition_cues

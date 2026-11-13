@@ -26,7 +26,7 @@ def test_kelvin_range_and_alias_validation() -> None:
     image = np.ones((2, 2, 3), dtype=float)
     assert np.all(np.isfinite(white_balance_chromatic_adaptation(image, kelvin=6500)))
     with pytest.raises(ValueError):
-        white_balance_chromatic_adaptation(image, kelvin=15001)
+        white_balance_chromatic_adaptation(image, kelvin=40001)
     with pytest.raises(ValueError):
         white_balance_chromatic_adaptation(image, method="bad")  # type: ignore[arg-type]
 

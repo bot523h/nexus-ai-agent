@@ -98,7 +98,7 @@ def test_kat_matrix_sqrt_inverse_is_the_reciprocal_root_of_a_diagonal_matrix() -
 def test_kat_subtitle_42_character_line_is_allowed_and_43_splits() -> None:
     fits = [
         sc.AlignedWord(text="a" * 20, start=0.0, end=0.5),
-        sc.AlignedWord(text="b" * 21, start=0.6, end=1.0),
+        sc.AlignedWord(text="b" * 21, start=0.6, end=2.5),  # 42 chars over 2.5 s = 16.8 CPS
     ]
     assert len(sc.partition_cues(fits)) == 1
     overflows = [

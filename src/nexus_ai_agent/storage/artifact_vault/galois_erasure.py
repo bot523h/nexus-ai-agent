@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from numpy.typing import NDArray
 
 PRIMITIVE_POLYNOMIAL = 0x11D
 _EXP = np.zeros(512, dtype=np.uint16)
@@ -42,6 +43,17 @@ def gf_inverse(a: int) -> int:
 
 inverse = gf_inverse
 gf_inv = gf_inverse
+
+
+def _gf_scale(vector: np.ndarray, coefficient: int) -> np.ndarray:
+    """Vectorised GF(256) multiply of a uint8 vector by a scalar via log/exp gathers."""
+    if coefficient == 0:
+        return np.zeros(vector.shape, dtype=np.uint8)
+    idx = np.asarray(vector, dtype=np.uint8)
+    logs = _LOG[idx] + _LOG[int(coefficient)]
+    out: NDArray[np.uint8] = np.asarray(_EXP[logs], dtype=np.uint8)
+    out[idx == 0] = 0
+    return out
 
 
 def _matrix_multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -126,10 +138,7 @@ def encode(data: bytes | bytearray | memoryview, k: int, m: int) -> list[Erasure
         parity = np.zeros(size, dtype=np.uint8)
         for col, coefficient in enumerate(row):
             if coefficient:
-                parity ^= np.array(
-                    [gf_multiply(int(v), int(coefficient)) for v in data_arrays[col]],
-                    dtype=np.uint8,
-                )
+                parity ^= _gf_scale(data_arrays[col], int(coefficient))
         shards.append(bytes(parity))
     return [ErasureShard(i, shard, k + m, k, m) for i, shard in enumerate(shards)]
 
@@ -159,10 +168,7 @@ def reconstruct(
         output = np.zeros(size, dtype=np.uint8)
         for col, coefficient in enumerate(row):
             if coefficient:
-                output ^= np.array(
-                    [gf_multiply(int(v), int(coefficient)) for v in selected_arrays[col]],
-                    dtype=np.uint8,
-                )
+                output ^= _gf_scale(selected_arrays[col], int(coefficient))
         recovered.append(bytes(output))
     result = b"".join(recovered)
     return result if original_size is None else result[:original_size]

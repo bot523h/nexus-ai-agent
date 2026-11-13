@@ -26,7 +26,7 @@ Callers should preserve sample rate metadata and treat times as seconds unless d
 | `mypy --strict` (artifact_vault, speech_cinema, packs/color) | **0 issues in 12 files** |
 | `ruff check` / `ruff format --check` | clean |
 | `pytest --cov-fail-under=95` (zone, `-m "not slow"`) | **99.65 % total**, **every file >= 99 %** |
-| Falsification ledger | **40 probes**: 35 pass, 5 recorded as strict-xfail gaps |
+| Falsification ledger | **40 probes**: 40 pass, 0 xfail (60 collected items, including parametrised cases) |
 | Mutation campaign | **30 / 30 killed** |
 | Benchmarks | N = 3 per workload (table below) |
 
@@ -51,18 +51,18 @@ The remaining misses are defensive guards that are unreachable by construction (
 
 * **Probes 1-14 (artifact_vault):** GF(2^8) inverse and distributivity, RS parameter refusal, erasure recovery for parity, data, mixed and `m+1` losses, Merkle tamper detection (leaf and node), on-disk heal, CDC resynchronisation, traversal refusal, empty-payload and bounds refusal. All pass.
 * **Probes 15-28 (speech_cinema):** silence, NaN/Inf, sample rate, DTW band and monotonicity, WSOLA identity and exact counts, stretch-ratio refusal, 42-character limit, SRT/VTT/ASS validity, inverted timestamps. Pass.
-  * **Gaps (strict xfail):** p24 (CPS > 20 split or flag), p25 (out-point snap to `t_cut - 2 frames`), p26 (no cue may span a shot cut).
+  * **Former gaps, now passing:** p24 (CPS > 20 splits or flags), p25 (out-point inside the 3-frame guard snaps to `t_cut - 2 frames`), p26 (no cue spans a shot cut).
 * **Probes 29-40 (color):** Bradford, filmic bound and monotonicity, Gaussian OT mean and covariance, zero-variance refusal, channel-count refusal, negative radiance refusal, alpha blend and bounds. Pass.
-  * **Gaps (strict xfail):** p29 (Bradford identity at equal temperatures, measured error about 4.3e-2 against a 1e-6 target) and p30 (no general source-to-destination Bradford API, so no round trip).
+  * **Former gaps, now passing:** p29 (Bradford identity at equal temperatures, previously about 4.3e-2 error, now below 1e-6) and p30 (`bradford_adapt` round trip 3200 K to 6500 K and back).
 
 ### Specification-to-implementation discrepancies (recorded, not hidden)
 
 | Handover wording | Implemented reality | Resolution |
 |---|---|---|
-| Kelvin range 1000-40000 K | 2000-15000 K | Probe 31 tests the implemented bound; `KELVIN_RANGE` is declared in the pack contract. |
+| Kelvin range 1000-40000 K | Resolved: 1000-40000 K implemented, `KELVIN_RANGE` updated | Chromaticity is finite across the range but the Kim-type fit is published for about 1667-25000 K; the outer bands are extrapolation. |
 | `auto_heal_artifact` / `WorkspaceFilesystem` | `ArtifactVault.verify_and_heal_artifact` over a root directory | Probes 11 and 13 test the real API. |
-| CPS, shot-cut snap and in-point guard | Not implemented; cuts only split groups | Strict-xfail gaps p24, p25, p26. |
-| Bradford `T_src -> T_dst` identity | Only `kelvin -> D65` exists | Strict-xfail gaps p29, p30. |
+| CPS, shot-cut snap and in-point guard | Implemented: `max_cps=20`, `fps=25`, `SubtitleCue.flagged` | Probes p24, p25, p26 pass. p25 setup corrected (see below). |
+| Bradford `T_src -> T_dst` identity | Implemented: `bradford_adapt`, `target_kelvin=6500` | Probes p29, p30 pass. |
 
 ### Defects found by falsification and fixed in this phase
 
@@ -94,7 +94,7 @@ Golden masters and KATs are labelled as such in `test_hyperion_known_answers.py`
 | `speech_cinema_vad_dtw_wsola_subtitles_5s_16k` | 3 | 134.1 | 180.6 | 5243 |
 | `color_imaging_bradford_filmic_ot_128x128x3` | 3 | 7.7 | 25.7 | 3846 |
 
-**Top performance risk:** the Reed-Solomon path over GF(2^8) is pure-Python per byte. Encode, heal and read of 256 KiB take about 10.5 s. Vectorising the GF multiply with NumPy log and exp table lookups is the first optimisation to make. The benchmark asserts only a 60 s ceiling, so it will not catch this regression by itself.
+**Performance:** the GF(2^8) multiply is vectorised with NumPy log/exp table lookups (`_gf_scale`). A 256 KiB, k=8, m=4 encode measures about 5 ms and reconstruct about 5 ms, down from about 10.5 s before (roughly 2000x). The round trip is byte-exact. The benchmark asserts only a 60 s ceiling, so a future regression to the per-byte loop would not fail it on its own; the timing above is the check.
 
 ### Commit ledger
 
@@ -103,10 +103,18 @@ Golden masters and KATs are labelled as such in `test_hyperion_known_answers.py`
 | `02c983b` | Manus baseline (vault, speech_cinema, color) |
 | `2ff717c` | Board claim for the Hyperion completion zone |
 | `6d2cd4f` | Stage 1: boundary fix (367/367) and `mypy --strict` zero |
-| this commit | Stage 2 and 3: ten defect fixes, 40-probe ledger, coverage, 30-mutant campaign, N = 3 benchmarks, doctrine |
+| this commit | Vectorised GF(2^8) RS (10.5 s to about 5 ms), Bradford `bradford_adapt` with 1000-40000 K range, CPS and shot-cut guards, 40/40 probes passing, doctrine |
 
 Known blocker outside the zone: `tests/unit/test_pack_coverage_contract.py` fails at `02c983b` as well, because `creative/packs/color` has no `pack.manifest.json` and no entry in `continuum/pack_coverage.py::PACK_TEST_TARGETS`. Those files are not in the authorised zone.
 
 ### Out of scope (not changed)
 
 Alpha (`audio_engine`, `packs/audio`, `slideshow/audio.py`), Beta (`chronos`), OpenHands (`episode_causality_lab`, `director`, `composition`, `packs/scene`, `packs/portrait`), `creative/studio/bus.py`, `docs/README.md`, `docs/OPERATION_TRUTH.json`, and the `#334` branch and claim.
+
+## Closure deviations (disclosed)
+
+* **Probe 31 bounds moved.** The refusal set is now `999, 40001, 0, NaN` because 1000-40000 K is the implemented range. Previously `1999` and `15001` were refused.
+* **Probe 25 setup corrected.** The word now ends at 0.97 s with a cut at 0.98 s, expected end 0.90 s. The old setup ended at 1.00 s, which straddled the cut and tested the separate straddle rule covered by p26.
+* **KAT subtitle timing adjusted.** The 42-character fit case now spans 2.5 s (16.8 CPS) instead of 1.0 s (42 CPS), so the character-limit assertion is not undercut by the new CPS rule.
+* **Kelvin default target changed.** `white_balance_chromatic_adaptation(kelvin=...)` now maps to `target_kelvin=6500` on the black-body locus, not to D65. Gray-world still targets D65.
+* **Pack test updated.** `packs/color` `test_kelvin_range_and_alias_validation` refuses 40001 K instead of 15001 K.
