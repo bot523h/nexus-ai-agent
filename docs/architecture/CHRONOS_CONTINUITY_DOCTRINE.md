@@ -81,3 +81,15 @@ The Wave 13 N=3 microbenchmark processes 256 noisy correspondences, a 128×128 f
 | 3 | 5.263 ms | 5.086 ms | 7.088 ms | 9.318×10⁻⁸ |
 
 The consolidated refusal and mutation ledgers are recorded after the Phase 4 final gate run.
+
+## Phase 4 — Wave 14 acoustic-space continuity
+
+`acoustic_space_continuity.py` computes area-weighted Sabine–Eyring room invariants, including fixed-room RT60 and critical distance. Its deterministic 3D shoebox image-source model evaluates a 27-cell neighborhood for `max_order=2`, uses six independent wall absorptions and air attenuation, distributes path delays fractionally, and applies Woodworth ITD plus bounded head-shadow ILD. Cross-shot receipts require invariant same-room RT60 and non-increasing DRR from distant to near camera positions. Mono dialogue is FFT-convolved into stereo and explicitly cropped to the original PCM sample horizon; `sample_drift` is zero by construction after input validation.
+
+`test_acoustic_space_continuity.py` verifies the room formula, 27-path RIR, binaural channel difference, exact-length convolution, distance-ordered cross-shot behavior, and typed refusals. Scoped coverage was 99% for this module.
+
+The Wave 14 N=3 benchmark includes three camera RIRs at 48 kHz, the continuity audit, an additional binaural RIR, and one second (48,000 samples) of FFT-convolved dialogue. The same RT60, zero RT60 spread, DRR ordering, and audio checksum were observed in all three runs.
+
+| N | Median | Minimum | Maximum | Output samples | RT60 spread | Sample drift |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3 | 9.728 ms | 9.653 ms | 10.105 ms | 48,000 | 0.0 s | 0 |
