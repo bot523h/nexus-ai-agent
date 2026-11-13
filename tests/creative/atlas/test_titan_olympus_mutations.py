@@ -15,10 +15,12 @@ the targeted test file, so a kill means a real behavioural assertion failed.
 
 from __future__ import annotations
 
+import ast
 import os
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -530,18 +532,134 @@ def test_every_target_test_file_exists() -> None:
         assert (REPO_ROOT / target).is_file(), f"missing target test {target}"
 
 
+# --- causal kill proof: baseline, syntactic validity, exit-code discrimination ----
+
+
+@dataclass(frozen=True)
+class MutationKillReceipt:
+    """A structured receipt proving one mutant was killed by a *test assertion*."""
+
+    mutant_id: str
+    target_module: str
+    target_test_file: str
+    killed_by_node_id: str
+    exit_code: int
+
+
+# pytest exit-code contract (see pytest's ``ExitCode`` enum):
+#   0 OK, 1 TESTS_FAILED, 2 INTERRUPTED, 3 INTERNAL_ERROR, 4 USAGE_ERROR,
+#   5 NO_TESTS_COLLECTED.
+_PYTEST_TESTS_FAILED = 1
+# A collection crash (not a test assertion) leaks one of these into the output.
+_COLLECTION_CRASH_MARKERS = (
+    "ImportError",
+    "ModuleNotFoundError",
+    "SyntaxError",
+    "ERROR collecting",
+)
+
+# Two mutants live inside ``media_sine.synthesise_test_clip`` after a real
+# ``ffprobe`` call; their only killing assertion is a ``@requires_ffmpeg`` test.
+# Without the binaries that test is *skipped*, so the mutant cannot be killed —
+# the campaign skips it explicitly rather than reporting a false kill.
+_FFMPEG_GATED_ANCHORS: frozenset[str] = frozenset(
+    {
+        "if (probe.width, probe.height) != (w, h):",
+        "if probe.nb_frames != frames:",
+    }
+)
+_HAS_FFMPEG: bool = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+
+
+def _failed_node_ids(stdout: str) -> list[str]:
+    """Extract ``FAILED <nodeid>`` lines from a pytest ``-q`` summary."""
+    ids: list[str] = []
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("FAILED "):
+            node = stripped[len("FAILED ") :].split(" ")[0].strip()
+            if node:
+                ids.append(node)
+    return ids
+
+
+# A single pristine copy of the unmutated tree, used for Step A baselines. The
+# baseline for a given target file is identical for every mutant that targets it,
+# so it is computed once and memoised by target-file path.
+_BASELINE_STATUS: dict[str, int] = {}
+
+
+def _make_pristine_tree(destination: Path) -> Path:
+    shutil.copytree(SRC, destination / "src")
+    shutil.copytree(TESTS, destination / "tests")
+    shutil.copy(REPO_ROOT / "pyproject.toml", destination / "pyproject.toml")
+    return destination
+
+
+def _baseline_is_green(target_test: str, pristine_tree: Path) -> None:
+    """Step A — the unmutated target test file must pass (exit code 0)."""
+    if target_test not in _BASELINE_STATUS:
+        env: dict[str, Any] = dict(os.environ)
+        env["PYTHONPATH"] = str(pristine_tree / "src")
+        baseline = subprocess.run(
+            [sys.executable, "-m", "pytest", target_test, "-q", "-p", "no:cacheprovider"],
+            cwd=pristine_tree,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        _BASELINE_STATUS[target_test] = baseline.returncode
+        if baseline.returncode != 0:
+            raise AssertionError(
+                f"baseline FAILED for {target_test} (exit {baseline.returncode}); the target "
+                f"test file is not green before mutation:\n{baseline.stdout[-2000:]}"
+            )
+    assert _BASELINE_STATUS[target_test] == 0
+
+
+@pytest.fixture(scope="session")
+def pristine_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return _make_pristine_tree(tmp_path_factory.mktemp("pristine") / "tree")
+
+
 @pytest.mark.parametrize(("rel", "old", "new", "target_test"), MUTANTS)
-def test_mutant_is_killed(rel: str, old: str, new: str, target_test: str, tmp_path: Path) -> None:
-    """Each injected defect must make the targeted test file fail."""
+def test_mutant_is_killed(
+    rel: str, old: str, new: str, target_test: str, tmp_path: Path, pristine_tree: Path
+) -> None:
+    """Each injected defect must make the targeted test file fail (by assertion).
+
+    Three proofs are required, in order:
+
+    * Step A — the unmutated target test file is green (``returncode == 0``);
+    * Step B — the mutated module source is still valid Python (``ast.parse``);
+    * Step C — pytest exits specifically with ``1`` (TESTS_FAILED) and reports at
+      least one ``FAILED test_...`` node id, with no collection crash
+      (``ImportError``/``ModuleNotFoundError``/``SyntaxError``). This separates a
+      genuine *assertion* kill from an accidental syntax/import/collection error
+      (exit codes 2/3/4/5).
+    """
     work = tmp_path / "campaign"
-    shutil.copytree(SRC, work / "src")
-    shutil.copytree(TESTS, work / "tests")
-    shutil.copy(REPO_ROOT / "pyproject.toml", work / "pyproject.toml")
+    _make_pristine_tree(work)
+
+    if old in _FFMPEG_GATED_ANCHORS and not _HAS_FFMPEG:
+        pytest.skip(
+            f"{rel}: mutant is only killed by a real-ffmpeg test that skips "
+            "without ffmpeg/ffprobe on PATH (NOT a kill)"
+        )
+
+    # Step A — baseline pre-flight on the unmutated tree (memoised per target file).
+    _baseline_is_green(target_test, pristine_tree)
 
     module = work / "src" / rel
     original = module.read_text(encoding="utf-8")
     assert original.count(old) == 1
-    module.write_text(original.replace(old, new, 1), encoding="utf-8")
+    mutated = original.replace(old, new, 1)
+
+    # Step B — the mutated source must still parse as valid Python.
+    ast.parse(mutated, filename=str(module))
+    module.write_text(mutated, encoding="utf-8")
 
     env: dict[str, Any] = dict(os.environ)
     env["PYTHONPATH"] = str(work / "src")
@@ -554,6 +672,85 @@ def test_mutant_is_killed(rel: str, old: str, new: str, target_test: str, tmp_pa
         timeout=300,
         check=False,
     )
-    assert result.returncode != 0, (
-        f"mutant SURVIVED in {rel}: {old!r} -> {new!r}\nstdout tail:\n{result.stdout[-2000:]}"
+
+    combined = result.stdout + result.stderr
+    if result.returncode == 0:
+        raise AssertionError(
+            f"mutant SURVIVED in {rel}: {old!r} -> {new!r}\nstdout tail:\n{result.stdout[-2000:]}"
+        )
+    # Step C — a *causal assertion* kill, not a collection/infra crash.
+    assert result.returncode == _PYTEST_TESTS_FAILED, (
+        f"mutant in {rel} did not fail by assertion: pytest exit "
+        f"{result.returncode} != {_PYTEST_TESTS_FAILED} (TESTS_FAILED). "
+        f"exit 2=INTERRUPTED, 3=INTERNAL_ERROR, 4=USAGE_ERROR, 5=NO_TESTS_COLLECTED.\n"
+        f"stdout tail:\n{result.stdout[-2000:]}"
     )
+    for marker in _COLLECTION_CRASH_MARKERS:
+        assert marker not in combined, (
+            f"mutant in {rel} produced a collection/infra crash marker {marker!r}; "
+            f"that is not an assertion kill:\n{combined[-2000:]}"
+        )
+    node_ids = _failed_node_ids(result.stdout)
+    assert node_ids, (
+        f"mutant in {rel} exited {result.returncode} but reported no 'FAILED <nodeid>'; "
+        f"not a verifiable assertion kill:\n{result.stdout[-2000:]}"
+    )
+
+
+def _collect_kill_receipts(base: Path, pristine_tree: Path) -> list[MutationKillReceipt]:
+    """Run all 80 mutants and return a structured kill receipt for each (M01..M80)."""
+    receipts: list[MutationKillReceipt] = []
+    for index, (rel, old, new, target_test) in enumerate(MUTANTS, start=1):
+        mutant_id = f"M{index:02d}"
+        if old in _FFMPEG_GATED_ANCHORS and not _HAS_FFMPEG:
+            pytest.skip(
+                f"{mutant_id} ({rel}): ffmpeg-gated; cannot be killed without ffmpeg/ffprobe"
+            )
+        _baseline_is_green(target_test, pristine_tree)
+        work = base / mutant_id
+        _make_pristine_tree(work)
+
+        module = work / "src" / rel
+        mutated = module.read_text(encoding="utf-8").replace(old, new, 1)
+        ast.parse(mutated, filename=str(module))
+        module.write_text(mutated, encoding="utf-8")
+
+        env: dict[str, Any] = dict(os.environ)
+        env["PYTHONPATH"] = str(work / "src")
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", target_test, "-q", "-p", "no:cacheprovider", "-x"],
+            cwd=work,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        nodes = _failed_node_ids(result.stdout)
+        receipts.append(
+            MutationKillReceipt(
+                mutant_id=mutant_id,
+                target_module=rel,
+                target_test_file=target_test,
+                killed_by_node_id=nodes[0] if nodes else "",
+                exit_code=result.returncode,
+            )
+        )
+    return receipts
+
+
+def test_all_eighty_mutants_have_a_causal_assertion_kill_receipt(
+    tmp_path_factory: pytest.TempPathFactory, pristine_tree: Path
+) -> None:
+    """Every mutant M01..M80 must be killed specifically by a failing assertion."""
+    if not _HAS_FFMPEG:
+        pytest.skip("full 80/80 receipt requires ffmpeg/ffprobe on PATH")
+    base = tmp_path_factory.mktemp("kill_ledger")
+    receipts = _collect_kill_receipts(base, pristine_tree)
+    assert len(receipts) == 80
+    assert [r.mutant_id for r in receipts] == [f"M{i:02d}" for i in range(1, 81)]
+    bad = [r for r in receipts if r.exit_code != _PYTEST_TESTS_FAILED or not r.killed_by_node_id]
+    assert not bad, f"non-causal kills: {bad}"
+    for r in receipts:
+        assert r.exit_code == _PYTEST_TESTS_FAILED
+        assert r.killed_by_node_id.startswith("test_") or "::test_" in r.killed_by_node_id
