@@ -5,11 +5,34 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, cast
 
+from .bridge import (
+    CHRONOS_SPINE_OPERATIONS,
+    CHRONOS_STAGED_SPINE_MASTER,
+    dispatch_chronos_spine_operation,
+)
 from .contracts import Continuity, KernelError, RationalTimestamp
 from .multicamera_mastering import (
     MultiCameraMasteringReceipt,
     MultiCameraShotInput,
     execute_multicamera_mastering,
+)
+from .nexus_spine_adapter import (
+    ENGINE_VERSION,
+    OMNIVERSE_OPERATION,
+    REAL_MEDIA_OPERATION,
+    ChronosArtifactPassport,
+    ChronosAssetVersionRecord,
+    ChronosFileVerification,
+    ChronosRecipeIdentity,
+    ChronosSpineAttempt,
+    ChronosSpineExecutionError,
+    ChronosSpineExecutionReceipt,
+    ChronosVerificationReceipt,
+    ChronosVerificationRefusalError,
+    compute_chronos_recipe_identity,
+    execute_chronos_staged_attempt,
+    jcs_canonical_json,
+    verify_staged_chronos_artifacts,
 )
 from .real_media_continuity import (
     CharacterIdentityAnchor,
@@ -712,7 +735,21 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
 
 
 __all__ = [
+    "CHRONOS_SPINE_OPERATIONS",
+    "CHRONOS_STAGED_SPINE_MASTER",
     "CharacterIdentityAnchor",
+    "ChronosArtifactPassport",
+    "ChronosAssetVersionRecord",
+    "ChronosFileVerification",
+    "ChronosRecipeIdentity",
+    "ChronosSpineAttempt",
+    "ChronosSpineExecutionError",
+    "ChronosSpineExecutionReceipt",
+    "ChronosVerificationReceipt",
+    "ChronosVerificationRefusalError",
+    "ENGINE_VERSION",
+    "OMNIVERSE_OPERATION",
+    "REAL_MEDIA_OPERATION",
     "Continuity",
     "KernelError",
     "MultiCameraMasteringReceipt",
@@ -726,9 +763,14 @@ __all__ = [
     "bresenham_sample_counts",
     "build_default_chronos_handlers",
     "canonical_sample_horizon",
+    "compute_chronos_recipe_identity",
+    "dispatch_chronos_spine_operation",
+    "execute_chronos_staged_attempt",
+    "jcs_canonical_json",
     "discover_ffmpeg_executable",
     "execute_multicamera_mastering",
     "execute_real_media_season_continuity",
     "measure_patch_delta_e00_by_frame",
     "restore_anchored_color_frames",
+    "verify_staged_chronos_artifacts",
 ]

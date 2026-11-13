@@ -7,7 +7,7 @@ import math
 import textwrap
 import wave
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 from types import ModuleType
@@ -30,6 +30,7 @@ from nexus_ai_agent.creative.chronos import (
     kinetic_match_cut_engine,
     merkle_ledger,
     multicam_epipolar_matching,
+    nexus_spine_adapter,
     real_media_continuity,
     scene_portrait_ops,
     temporal_optics,
@@ -1708,3 +1709,240 @@ def time_token() -> str:
     import time
 
     return f"{time.time_ns()}"
+
+
+def _phase17_real_media_stage(
+    root: Path,
+) -> tuple[nexus_spine_adapter.ChronosSpineAttempt, dict[str, object], Path]:
+    anchor = real_media_continuity.CharacterIdentityAnchor(
+        "mutation-anchor",
+        np.array(
+            [
+                [-0.06, -0.05, 0.0],
+                [0.06, -0.05, 0.0],
+                [-0.05, 0.05, 0.0],
+                [0.05, 0.05, 0.0],
+                [-0.025, 0.0, 0.015],
+                [0.025, 0.0, -0.015],
+            ]
+        ),
+    )
+    frames = np.full((2, 8, 8, 3), (0.24, 0.34, 0.42), dtype=np.float64)
+    shots = tuple(
+        real_media_continuity.RealMediaShot(
+            1,
+            shot_index,
+            frames.copy(),
+            anchor.cranial_landmarks_m.copy(),
+            np.zeros(4004, dtype=np.float64),
+        )
+        for shot_index in (1, 2)
+    )
+    attempt = nexus_spine_adapter.ChronosSpineAttempt(
+        "mutation-project",
+        "sha256:parent",
+        "mutation-attempt",
+        5,
+        nexus_spine_adapter.REAL_MEDIA_OPERATION,
+        {
+            "episode_count": 1,
+            "shots_per_episode": 2,
+            "frame_count_per_shot": 2,
+            "frame_size": (8, 8),
+            "max_delta_e00": 1.0,
+            "render_mp4": False,
+        },
+        real_media_shots=shots,
+        show_bible_anchor=anchor,
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    result, summary = nexus_spine_adapter._engine_run(attempt, root)
+    del result
+    stage_fs = WorkspaceFilesystem(root)
+    wrapper = {
+        "schema": "chronos-spine-receipt-v1",
+        "recipe_digest": nexus_spine_adapter.compute_chronos_recipe_identity(attempt).recipe_digest,
+        "operation_name": attempt.operation_name,
+        "engine_version": nexus_spine_adapter.ENGINE_VERSION,
+        "engine_summary": dict(summary),
+    }
+    stage_fs.write_text(
+        "chronos-spine-receipt.json", nexus_spine_adapter.jcs_canonical_json(wrapper)
+    )
+    return attempt, dict(summary), root
+
+
+def test_phase17_ast_mutation_campaign_kills_10_of_10(tmp_path: Path) -> None:
+    adapter = nexus_spine_adapter
+    attempt, summary, valid_stage = _phase17_real_media_stage(tmp_path / "valid-stage")
+    file_root = tmp_path / "digest-files"
+    file_root.mkdir()
+    file_fs = WorkspaceFilesystem(file_root)
+    file_fs.write_bytes("good.bin", b"verified bytes")
+    good_digest = hashlib.sha256(b"verified bytes").hexdigest()
+    file_fs.write_bytes("empty.bin", b"")
+    empty_digest = hashlib.sha256(b"").hexdigest()
+
+    def assert_valid_file() -> None:
+        try:
+            result = adapter._verify_staged_file(file_fs, "good.bin", good_digest)
+        except adapter.ChronosVerificationRefusalError as exc:
+            raise AssertionError("valid staged file was refused") from exc
+        assert result[0] == good_digest
+
+    def assert_empty_refused() -> None:
+        try:
+            adapter._verify_staged_file(file_fs, "empty.bin", empty_digest)
+        except adapter.ChronosVerificationRefusalError:
+            return
+        raise AssertionError("zero-byte artifact passed digest verification")
+
+    def assert_fence_current() -> None:
+        try:
+            result = adapter._require_current_fence(attempt, lambda _project, _attempt: 5)
+        except adapter.ChronosVerificationRefusalError as exc:
+            raise AssertionError("current fence was refused") from exc
+        assert result is None
+
+    def assert_recipe_parameters_bind() -> None:
+        changed = replace(
+            attempt,
+            parameters={**attempt.parameters, "max_delta_e00": 0.1},
+        )
+        assert (
+            adapter.compute_chronos_recipe_identity(attempt).recipe_digest
+            != adapter.compute_chronos_recipe_identity(changed).recipe_digest
+        )
+
+    def assert_project_identity_binds() -> None:
+        changed = replace(attempt, project_id="another-project")
+        assert (
+            adapter.compute_chronos_recipe_identity(attempt).recipe_digest
+            != adapter.compute_chronos_recipe_identity(changed).recipe_digest
+        )
+
+    def assert_stage_verifies() -> None:
+        try:
+            receipt = adapter.verify_staged_chronos_artifacts(
+                valid_stage, attempt, expected_summary=summary
+            )
+        except adapter.ChronosVerificationRefusalError as exc:
+            raise AssertionError("valid on-disk evidence was refused") from exc
+        assert receipt.verification_tier == "REAL-DISK"
+
+    cases: list[MutationCase] = [
+        MutationCase(
+            "76 RFC 8785 decimal/scientific threshold",
+            adapter,
+            "_float_jcs",
+            "if 1e-6 <= magnitude < 1e21:",
+            "if 1e-7 <= magnitude < 1e21:",
+            lambda: _assert_result(
+                lambda: adapter.jcs_canonical_json(1e-7),
+                lambda result: result == "1e-7",
+                "JCS uses ECMAScript exponent notation below 1e-6",
+            ),
+        ),
+        MutationCase(
+            "77 RFC 8785 UTF-16 property ordering",
+            adapter,
+            "jcs_canonical_json",
+            'key=lambda item: item.encode("utf-16be")',
+            "key=lambda item: item",
+            lambda: _assert_result(
+                lambda: adapter.jcs_canonical_json({"\U00010000": 1, "\ue000": 2}),
+                lambda result: result == '{"𐀀":1,"\ue000":2}',
+                "JCS object keys sort by UTF-16 code units",
+            ),
+        ),
+        MutationCase(
+            "78 active fencing-token comparison direction",
+            adapter,
+            "_require_current_fence",
+            "current != attempt.fencing_token",
+            "current == attempt.fencing_token",
+            assert_fence_current,
+        ),
+        MutationCase(
+            "79 staged digest mismatch comparison direction",
+            adapter,
+            "_read_verified_file",
+            "digest != expected_digest",
+            "digest == expected_digest",
+            assert_valid_file,
+        ),
+        MutationCase(
+            "80 zero-byte artifact acceptance",
+            adapter,
+            "_read_verified_file",
+            "size <= 0 or digest != expected_digest",
+            "size < 0 or digest != expected_digest",
+            assert_empty_refused,
+        ),
+        MutationCase(
+            "81 RFC 6962 root mismatch refusal",
+            adapter,
+            "verify_staged_chronos_artifacts",
+            "root_claim != recomputed",
+            "root_claim == recomputed",
+            assert_stage_verifies,
+        ),
+        MutationCase(
+            "82 RFC 6962 inclusion-proof verification gate",
+            adapter,
+            "verify_staged_chronos_artifacts",
+            "or not merkle_ledger.verify_rfc6962_bundle(bundle)",
+            "or merkle_ledger.verify_rfc6962_bundle(bundle)",
+            assert_stage_verifies,
+        ),
+        MutationCase(
+            "83 exact 48 kHz persisted sample-rate contract",
+            adapter,
+            "verify_staged_chronos_artifacts",
+            "sample_rate != 48_000",
+            "sample_rate == 48_000",
+            assert_stage_verifies,
+        ),
+        MutationCase(
+            "84 recipe parameter omission",
+            adapter,
+            "compute_chronos_recipe_identity",
+            '"parameters": parameters,',
+            '"parameters": {},',
+            assert_recipe_parameters_bind,
+        ),
+        MutationCase(
+            "85 recipe project-lineage omission",
+            adapter,
+            "compute_chronos_recipe_identity",
+            '"project_id": snapshot.attempt.project_id,',
+            '"project_id": "",',
+            assert_project_identity_binds,
+        ),
+    ]
+    assert len(cases) == 10
+    killed: list[str] = []
+    for case in cases:
+        case.assertion_check()
+        parent, attribute = _resolve_target(case.module, case.function_name)
+        original = getattr(parent, attribute)
+        try:
+            mutant = _function_ast_mutant(
+                case.module,
+                case.function_name,
+                case.original_fragment,
+                case.mutant_fragment,
+            )
+            setattr(parent, attribute, mutant)
+            try:
+                case.assertion_check()
+            except AssertionError:
+                killed.append(case.label)
+            else:
+                raise AssertionError(f"surviving Wave 17 mutant: {case.label}")
+        finally:
+            setattr(parent, attribute, original)
+    assert len(killed) == 10, (
+        f"surviving Wave 17 mutants: {sorted(set(c.label for c in cases) - set(killed))}"
+    )
+    assert len(set(killed)) == 10

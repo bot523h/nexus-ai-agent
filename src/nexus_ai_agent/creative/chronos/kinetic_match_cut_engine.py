@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -192,14 +193,26 @@ def optimize_match_on_action_cut(
     def endpoint_velocity(trajectory: FloatArray, index: int, incoming_side: bool) -> FloatArray:
         if incoming_side:
             if index + 1 < len(trajectory):
-                return (trajectory[index + 1] - trajectory[index]) * source_frame_rate_fps
+                return cast(
+                    FloatArray,
+                    (trajectory[index + 1] - trajectory[index]) * source_frame_rate_fps,
+                )
             if index > 0:
-                return (trajectory[index] - trajectory[index - 1]) * source_frame_rate_fps
+                return cast(
+                    FloatArray,
+                    (trajectory[index] - trajectory[index - 1]) * source_frame_rate_fps,
+                )
         else:
             if index > 0:
-                return (trajectory[index] - trajectory[index - 1]) * source_frame_rate_fps
+                return cast(
+                    FloatArray,
+                    (trajectory[index] - trajectory[index - 1]) * source_frame_rate_fps,
+                )
             if index + 1 < len(trajectory):
-                return (trajectory[index + 1] - trajectory[index]) * source_frame_rate_fps
+                return cast(
+                    FloatArray,
+                    (trajectory[index + 1] - trajectory[index]) * source_frame_rate_fps,
+                )
         return np.zeros_like(trajectory[index])
 
     bridge_positions, bridge_velocities = _hermite_bridge(

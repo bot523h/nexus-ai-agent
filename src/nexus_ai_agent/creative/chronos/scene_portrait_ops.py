@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -52,7 +53,10 @@ def inpaint_masked_region_pde(
 
     def laplacian(a: FloatImage) -> FloatImage:
         padded = np.pad(a, ((1, 1), (1, 1), (0, 0)), mode="edge")
-        return padded[:-2, 1:-1] + padded[2:, 1:-1] + padded[1:-1, :-2] + padded[1:-1, 2:] - 4 * a
+        return cast(
+            FloatImage,
+            padded[:-2, 1:-1] + padded[2:, 1:-1] + padded[1:-1, :-2] + padded[1:-1, 2:] - 4 * a,
+        )
 
     before = energy(src)
     height, width = region.shape

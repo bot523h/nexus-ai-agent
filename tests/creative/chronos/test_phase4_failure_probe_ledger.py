@@ -1,4 +1,4 @@
-"""Fifty typed fail-closed probes for Phase 4 camera, audio, and bridge boundaries."""
+"""Sixty typed fail-closed probes for Chronos media and spine boundaries."""
 
 from __future__ import annotations
 
@@ -11,8 +11,13 @@ import numpy as np
 import pytest
 
 from nexus_ai_agent.creative.chronos import (
+    ChronosSpineAttempt,
+    ChronosSpineExecutionError,
+    ChronosVerificationRefusalError,
     acoustic_space_continuity,
     build_default_chronos_handlers,
+    compute_chronos_recipe_identity,
+    dispatch_chronos_spine_operation,
 )
 from nexus_ai_agent.creative.chronos import (
     real_media_continuity as real_media,
@@ -37,6 +42,7 @@ from nexus_ai_agent.creative.chronos.multicamera_mastering import (
     execute_multicamera_mastering,
     execute_multicamera_mastering_manifest,
 )
+from nexus_ai_agent.creative.chronos.nexus_spine_adapter import REAL_MEDIA_OPERATION
 from nexus_ai_agent.creative.studio.chronos_port import ChronosCommand, ChronosPort
 
 
@@ -448,7 +454,112 @@ def test_phase4_typed_refusal_probe_ledger_is_50_of_50(tmp_path: Path) -> None:
             KernelError,
         ),
     ]
-    assert len(probes) == 50
+    spine_anchor = real_media.CharacterIdentityAnchor(
+        "probe-anchor",
+        np.array(
+            [
+                [-0.06, -0.05, 0.0],
+                [0.06, -0.05, 0.0],
+                [-0.05, 0.05, 0.0],
+                [0.05, 0.05, 0.0],
+                [-0.025, 0.0, 0.015],
+                [0.025, 0.0, -0.015],
+            ]
+        ),
+    )
+    spine_attempt = ChronosSpineAttempt(
+        "probe-project",
+        "sha256:parent",
+        "probe-attempt",
+        1,
+        REAL_MEDIA_OPERATION,
+        {"sample_rate_hz": 48_000, "frame_size": [8, 8]},
+        real_media_shots=(
+            real_media.RealMediaShot(
+                1,
+                1,
+                np.full((1, 8, 8, 3), 0.25),
+                spine_anchor.cranial_landmarks_m,
+                np.zeros(2002),
+            ),
+        ),
+        show_bible_anchor=spine_anchor,
+    )
+    probes.extend(
+        [
+            (
+                "spine rejects empty project identity",
+                lambda: compute_chronos_recipe_identity(replace(spine_attempt, project_id="")),
+                ChronosSpineExecutionError,
+            ),
+            (
+                "spine rejects project path traversal",
+                lambda: compute_chronos_recipe_identity(
+                    replace(spine_attempt, project_id="../escape")
+                ),
+                ChronosSpineExecutionError,
+            ),
+            (
+                "spine rejects empty parent revision",
+                lambda: compute_chronos_recipe_identity(
+                    replace(spine_attempt, parent_revision_id=" ")
+                ),
+                ChronosSpineExecutionError,
+            ),
+            (
+                "spine rejects attempt path traversal",
+                lambda: compute_chronos_recipe_identity(
+                    replace(spine_attempt, attempt_id="attempt/../../escape")
+                ),
+                ChronosSpineExecutionError,
+            ),
+            (
+                "spine rejects zero fencing token",
+                lambda: compute_chronos_recipe_identity(replace(spine_attempt, fencing_token=0)),
+                ChronosSpineExecutionError,
+            ),
+            (
+                "spine rejects boolean fencing token alias",
+                lambda: compute_chronos_recipe_identity(replace(spine_attempt, fencing_token=True)),
+                ChronosSpineExecutionError,
+            ),
+            (
+                "spine rejects unsupported recipe operation",
+                lambda: compute_chronos_recipe_identity(
+                    replace(spine_attempt, operation_name="unknown")
+                ),
+                ChronosSpineExecutionError,
+            ),
+            (
+                "spine rejects non-finite recipe parameters",
+                lambda: compute_chronos_recipe_identity(
+                    replace(spine_attempt, parameters={"temperature": float("nan")})
+                ),
+                ChronosSpineExecutionError,
+            ),
+            (
+                "spine refuses stale active fence before render",
+                lambda: dispatch_chronos_spine_operation(
+                    "chronos.staged_spine_master",
+                    tmp_path / "stale-fence-probe",
+                    spine_attempt,
+                    active_fencing_token=lambda project_id, attempt_id: 2,
+                ),
+                ChronosVerificationRefusalError,
+            ),
+            (
+                "spine bridge rejects unregistered operation",
+                lambda: dispatch_chronos_spine_operation(
+                    "chronos.unregistered",
+                    tmp_path / "unknown-operation-probe",
+                    spine_attempt,
+                    active_fencing_token=lambda project_id, attempt_id: 1,
+                ),
+                ValueError,
+            ),
+        ]
+    )
+    assert len(probes) == 60
     killed: list[str] = []
     for label, call, exception_type in probes:
         try:
@@ -457,8 +568,8 @@ def test_phase4_typed_refusal_probe_ledger_is_50_of_50(tmp_path: Path) -> None:
             killed.append(label)
         else:
             pytest.fail(f"probe did not raise {exception_type.__name__}: {label}")
-    assert len(killed) == 50
-    assert len(set(killed)) == 50
+    assert len(killed) == 60
+    assert len(set(killed)) == 60
 
 
 def replace_shot(shot: MultiCameraShotInput, **changes: object) -> MultiCameraShotInput:
