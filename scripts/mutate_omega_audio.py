@@ -1,34 +1,17 @@
 #!/usr/bin/env python3
-"""STAGE-A mutation campaign: prove each new guard is load-bearing.
+"""Inherited 77 OMEGA probe specifications and backward-compatible CLI.
 
-A regression test that cannot fail is documentation, not evidence.  This script
-applies one *targeted* mutation per gate to a **copy** of the tree, runs the
-gate's test, and requires the test to FAIL.  If a mutation survives (the suite
-still passes), the gate it protects is not actually enforced by a test.
+The canonical STAGE-B runner adds 33 probes and requires passing clean controls,
+valid syntax, identical collected tests and an actual call-phase failure.
+This entrypoint delegates to it, so the historical command cannot bypass those
+checks or score a collection/setup error as a killed mutation.
 
-Each probe is a textual substitution against an exact anchor in the source, so a
-refactor that moves the code makes the probe report ``ANCHOR_MISSING`` instead of
-silently passing — an unmeasurable mutation is a failure, not a pass.
-
-Usage::
-
-    python scripts/mutate_omega_audio.py            # run every probe
-    python scripts/mutate_omega_audio.py -k tempo   # filter by name
-    python scripts/mutate_omega_audio.py --json     # machine-readable
-
-Exit status: 0 when every probe was KILLED (the suite caught the mutation),
-1 when any probe SURVIVED, 2 on a setup problem (unreadable file, missing
-anchor) — never 0 by accident.
+    python scripts/run_audio_engine_mutations.py  # canonical, 110 probes
+    python scripts/mutate_omega_audio.py          # same controlled campaign
 """
 
 from __future__ import annotations
 
-import argparse
-import json
-import shutil
-import subprocess
-import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -146,7 +129,8 @@ PROBES: tuple[Probe, ...] = (
         path=f"{AUDIO}/execution.py",
         old="            if cancel is not None and cancel.cancelled:",
         new="            if False:",
-        test="test_a_cancel_that_fires_during_the_render_publishes_nothing",
+        test="test_post_builder_cancellation_precedes_verification",
+        test_file="tests/unit/test_audio_engine_mutation_contracts.py",
     ),
     Probe(
         name="lag-k-finite-difference",
@@ -276,7 +260,8 @@ PROBES: tuple[Probe, ...] = (
         path=f"{AUDIO}/workspace.py",
         old="        if target_rel in protected_rels:",
         new="        if False:",
-        test="test_publish_refuses_to_replace_a_run_input",
+        test="test_explicitly_protected_path_is_reserved",
+        test_file="tests/unit/test_audio_engine_mutation_contracts.py",
     ),
     Probe(
         name="run-directory-not-cleaned",
@@ -356,14 +341,25 @@ PROBES: tuple[Probe, ...] = (
         path=f"{AUDIO}/execution.py",
         old='        media = (root.parent / "media").resolve(strict=False)',
         new='        media = Path.cwd() / "media"',
-        test="test_the_media_root_is_not_the_process_working_directory",
+        test="test_media_root_is_derived_from_workspace_when_cwd_is_already_foreign",
+        test_file="tests/unit/test_audio_engine_mutation_contracts.py",
     ),
     Probe(
         name="analysis-budget-dropped",
         gate="resource-budget",
         path=f"{AUDIO}/execution.py",
-        old="                budget=self._analysis_budget(",
-        new="                budget=_NO_BUDGET(",
+        old=(
+            "                budget=self._analysis_budget(\n"
+            "                    source=source,\n"
+            "                    probe=probe,\n"
+            "                    decoded_bytes=sink_bytes,\n"
+            "                    elapsed_seconds=time.monotonic() - run_started,\n"
+            "                    samples=int(np.asarray(mono).size),\n"
+            "                ).report(),"
+        ),
+        # Omit the report semantically; an undefined replacement function only
+        # proved that the interpreter could raise NameError, not this invariant.
+        new="                budget=None,",
         test="test_beat_analysis_reports_what_it_consumed",
     ),
     Probe(
@@ -457,14 +453,18 @@ PROBES: tuple[Probe, ...] = (
         path=f"{AUDIO}/execution.py",
         old="            if limit is not None and needed_reduction_db > limit:",
         new="            if False:",
-        test="test_a_programme_that_would_have_to_be_crushed_is_refused_not_mastered",
+        test="test_the_split_discriminates_on_the_same_signal",
     ),
     Probe(
         name="preset-renamed-a-standard",
         gate="preset-not-a-standard",
         path=f"{AUDIO}/models.py",
-        old='    profile_id="nagar_streaming_preset",',
-        new='    profile_id="streaming_master",',
+        # Mutate the public claim, not a Literal at module-import time: the
+        # original invalid profile name could only cause a collection error.
+        old=(
+            '    standard="NAGAR streaming delivery preset (-14 LUFS) — not a broadcast standard",'
+        ),
+        new='    standard="ITU-R BS.1770-4 streaming standard",',
         test="test_the_streaming_preset_is_named_a_preset_and_the_broadcast_profile_is_not",
     ),
     # -- §4.7 tempo: octave resolution (Part 1.2) -------------------------- #
@@ -478,7 +478,8 @@ PROBES: tuple[Probe, ...] = (
         # for a genuinely isochronous pulse, so this threshold cannot separate it
         # from a subdivision (0.65-0.71) any more.
         new="SUBDIVISION_STRENGTH_RATIO = 0.999",
-        test="test_an_isochronous_fast_pulse_is_not_folded_down",
+        test="test_nearly_equal_onset_strengths_do_not_manufacture",
+        test_file="tests/unit/test_audio_engine_mutation_contracts.py",
     ),
     Probe(
         name="octave-subdivision-test-disabled",
@@ -487,6 +488,7 @@ PROBES: tuple[Probe, ...] = (
         old="        if unexplained > 0.0 and subdivision_ratio <= SUBDIVISION_STRENGTH_RATIO:",
         new="        if False:",
         test="test_subdivisions_under_a_backbeat_are_folded_onto_the_beat",
+        test_file="tests/unit/test_omega_wave2_tempo_uncertainty.py",
     ),
     Probe(
         name="octave-coverage-gate-removed",
@@ -495,6 +497,7 @@ PROBES: tuple[Probe, ...] = (
         old="        if doubled_coverage >= TACTUS_COVERAGE:",
         new="        if True:",
         test="test_an_isochronous_fast_pulse_is_not_folded_down",
+        test_file="tests/unit/test_omega_wave2_tempo_uncertainty.py",
     ),
     Probe(
         name="tempo-prior-ignores-the-measurement",
@@ -504,7 +507,8 @@ PROBES: tuple[Probe, ...] = (
         # A prior that returns a constant is not a prior: it makes every octave
         # candidate score identically and leaves the decision to chance.
         new="    return 1.0\n    octaves = np.log2(bpm / TEMPO_PRIOR_CENTRE_BPM)",
-        test="test_uncertainty_is_reported_and_expanded_by_the_declared_coverage_factor",
+        test="test_tempo_prior_has_a_log_frequency_shape",
+        test_file="tests/unit/test_audio_engine_mutation_contracts.py",
     ),
     # -- §4.7 tempo: GUM uncertainty (Part 1.2) ---------------------------- #
     Probe(
@@ -517,6 +521,7 @@ PROBES: tuple[Probe, ...] = (
         # i.e. it stops being a standard error.
         new="    type_a = (60.0 / mean_period**2) * dispersion",
         test="test_type_a_follows_the_gum_formula_exactly",
+        test_file="tests/unit/test_omega_wave2_tempo_uncertainty.py",
     ),
     Probe(
         name="gum-type-b-uses-a-normal-divisor",
@@ -528,6 +533,7 @@ PROBES: tuple[Probe, ...] = (
         # Using sqrt(3) understates u_B by a factor of 2.
         new="RECTANGULAR_SD = 3.0**0.5",
         test="test_type_b_follows_the_hop_quantisation_model",
+        test_file="tests/unit/test_omega_wave2_tempo_uncertainty.py",
     ),
     Probe(
         name="gum-expansion-factor-wrong",
@@ -536,7 +542,8 @@ PROBES: tuple[Probe, ...] = (
         old="COVERAGE_FACTOR_95 = 1.96",
         # 1.0 silently turns a 95 % expanded uncertainty into a 68 % one.
         new="COVERAGE_FACTOR_95 = 1.0",
-        test="test_uncertainty_is_reported_and_expanded_by_the_declared_coverage_factor",
+        test="test_type_a_follows_the_gum_formula_exactly",
+        test_file="tests/unit/test_omega_wave2_tempo_uncertainty.py",
     ),
     Probe(
         name="gum-combines-by-addition-not-quadrature",
@@ -545,6 +552,7 @@ PROBES: tuple[Probe, ...] = (
         old="    combined = float(np.sqrt(type_a**2 + type_b**2))",
         new="    combined = float(type_a + type_b)",
         test="test_uncertainty_is_reported_and_expanded_by_the_declared_coverage_factor",
+        test_file="tests/unit/test_omega_wave2_tempo_uncertainty.py",
     ),
     Probe(
         name="uncertainty-reported-when-nothing-was-detected",
@@ -560,7 +568,8 @@ PROBES: tuple[Probe, ...] = (
             "    if count < 2 or mean_period <= 0 or hop_seconds <= 0:\n"
             "        return 0.01, 0.01, 0.014, 0.03, 1.0"
         ),
-        test="test_uncertainty_is_zero_when_no_tempo_was_detected",
+        test="test_no_interval_population_cannot_claim_nonzero_gum_precision",
+        test_file="tests/unit/test_audio_engine_mutation_contracts.py",
     ),
     # -- Part 3A: BS.1770 meter -------------------------------------------- #
     Probe(
@@ -572,6 +581,7 @@ PROBES: tuple[Probe, ...] = (
         # measured coefficients no longer match the standard at all.
         new="    b0 = vh + vb * k / _SHELF_Q + k * k",
         test="test_k_weighting_reproduces_the_standard_coefficients",
+        test_file="tests/unit/test_omega_wave2_bs1770.py",
     ),
     Probe(
         name="bs1770-relative-gate-without-absolute-gate",
@@ -582,7 +592,8 @@ PROBES: tuple[Probe, ...] = (
         # shortcut and shifts the integrated value on any programme with a
         # long quiet passage.
         new="    above_absolute = values",
-        test="test_two_stage_gating_matches_a_hand_computation",
+        test="test_absolute_gate_is_applied_before_computing_the_relative_mean",
+        test_file="tests/unit/test_audio_engine_mutation_contracts.py",
     ),
     Probe(
         name="bs1770-single-stage-gating",
@@ -591,6 +602,7 @@ PROBES: tuple[Probe, ...] = (
         old="    gated = above_absolute[above_absolute > relative_floor]",
         new="    gated = above_absolute",
         test="test_relative_gate_ignores_a_quiet_passage",
+        test_file="tests/unit/test_omega_wave2_bs1770.py",
     ),
     Probe(
         name="bs1770-surround-weight-flattened",
@@ -600,6 +612,7 @@ PROBES: tuple[Probe, ...] = (
         # Flat weights drop the +1.5 dB surround boost and bring the LFE back in.
         new="        return np.ones(6, dtype=np.float64)",
         test="test_channel_weights_apply_the_surround_boost",
+        test_file="tests/unit/test_omega_wave2_bs1770.py",
     ),
     Probe(
         name="bs1770-true-peak-is-sample-peak",
@@ -610,6 +623,7 @@ PROBES: tuple[Probe, ...] = (
         # between samples, which is the entire case a true-peak meter exists for.
         new="    peak = float(np.max(np.abs(data)))\n    if True:",
         test="test_true_peak_is_exact_for_tones_the_grid_misses",
+        test_file="tests/unit/test_omega_wave2_bs1770.py",
     ),
     Probe(
         name="bs1770-lra-uses-gating-blocks",
@@ -631,7 +645,8 @@ PROBES: tuple[Probe, ...] = (
             "        return None\n"
             "    loudness = np.array("
         ),
-        test="test_loudness_range_measures_a_twenty_decibel_swing_as_twenty_lu",
+        test="test_lra_uses_three_second_levels",
+        test_file="tests/unit/test_audio_engine_mutation_contracts.py",
     ),
     Probe(
         name="bs1770-cross-check-tolerance-huge",
@@ -641,6 +656,7 @@ PROBES: tuple[Probe, ...] = (
         # A 50 LU tolerance makes the cross-check decorative: it can never fire.
         new="LOUDNESS_CROSS_CHECK_TOLERANCE_LU = 50.0",
         test="test_cross_verification_catches_a_wrong_ffmpeg_number",
+        test_file="tests/unit/test_omega_wave2_bs1770.py",
     ),
     Probe(
         name="bs1770-cross-check-passes-without-samples",
@@ -655,6 +671,7 @@ PROBES: tuple[Probe, ...] = (
         # mode "fail-closed" exists to rule out.
         new="    if False:\n        return (\n            CODE_LOUDNESS_METER_DISAGREEMENT,",
         test="test_cross_verification_is_fail_closed_without_samples",
+        test_file="tests/unit/test_omega_wave2_bs1770.py",
     ),
     # -- Part 2: STRICT_LINEAR crest invariance ---------------------------- #
     Probe(
@@ -665,6 +682,7 @@ PROBES: tuple[Probe, ...] = (
         # 20 dB of tolerance means no limiter is ever detectable.
         new="STRICT_LINEAR_CREST_TOLERANCE_DB = 20.0",
         test="test_a_compressed_master_claiming_strict_linear_is_refused",
+        test_file="tests/unit/test_omega_wave2_loudness_guards.py",
     ),
     Probe(
         name="strict-linear-crest-check-skipped",
@@ -672,7 +690,8 @@ PROBES: tuple[Probe, ...] = (
         path=f"{AUDIO}/verify.py",
         old='            if claimed_target.processing_mode == "STRICT_LINEAR":',
         new="            if False:",
-        test="test_a_compressed_master_claiming_strict_linear_is_refused",
+        test="test_a_compressed_master_claiming_strict_linear_fails_verification",
+        test_file="tests/unit/test_omega_wave2_verify_e2e.py",
     ),
     Probe(
         name="strict-linear-refuses-only-with-a-source",
@@ -682,6 +701,7 @@ PROBES: tuple[Probe, ...] = (
         # Fail-open on the missing-evidence branch: an unverifiable claim passes.
         new="    if False:",
         test="test_a_missing_source_refuses_rather_than_passing",
+        test_file="tests/unit/test_omega_wave2_loudness_guards.py",
     ),
     # -- Part 3B: Wiener denoiser ------------------------------------------ #
     Probe(
@@ -691,7 +711,8 @@ PROBES: tuple[Probe, ...] = (
         old="    return np.hanning(frame_length + 1)[:-1]",
         # The symmetric Hann ripples by 1.3e-4 and reconstructs at 10 % error.
         new="    return np.hanning(frame_length)",
-        test="test_reconstruction_is_exact",
+        test="test_the_window_makes_the_overlap_add_exactly_invertible",
+        test_file="tests/unit/test_omega_wave2_wiener_denoise.py",
     ),
     Probe(
         name="wiener-noise-estimate-is-a-time-minimum",
@@ -707,7 +728,8 @@ PROBES: tuple[Probe, ...] = (
             "    time_percentile = np.min(power, axis=0)\n"
             "    if neighbour_bins == 0 or time_percentile.size < 2 * neighbour_bins + 1:"
         ),
-        test="test_noise_estimate_is_spectro_temporal",
+        test="test_noise_psd_is_a_time_percentile",
+        test_file="tests/unit/test_audio_engine_mutation_contracts.py",
     ),
     Probe(
         name="wiener-noise-estimate-drops-the-neighbourhood",
@@ -718,6 +740,7 @@ PROBES: tuple[Probe, ...] = (
         # estimate to 18053 against a floor of 5.5 and the gains delete it.
         new="        estimate = time_percentile",
         test="test_noise_estimate_is_spectro_temporal",
+        test_file="tests/unit/test_omega_wave2_wiener_denoise.py",
     ),
     Probe(
         name="wiener-gain-not-floored",
@@ -726,7 +749,8 @@ PROBES: tuple[Probe, ...] = (
         old="        gain = np.maximum(gain, floor)",
         # An unfloored Wiener gain is the textbook route to musical noise.
         new="        gain = gain",
-        test="test_wiener_gain_is_bounded_and_floored",
+        test="test_spectral_floor_controls_the_residual",
+        test_file="tests/unit/test_omega_wave2_wiener_denoise.py",
     ),
     Probe(
         name="wiener-strength-ignored",
@@ -736,6 +760,7 @@ PROBES: tuple[Probe, ...] = (
         # Ignoring strength makes every request a full denoise.
         new="        gain = gain",
         test="test_strength_scales_suppression_monotonically",
+        test_file="tests/unit/test_omega_wave2_wiener_denoise.py",
     ),
     # -- Part 3C/3D: stereo, HPSS, QC ------------------------------------- #
     Probe(
@@ -745,6 +770,7 @@ PROBES: tuple[Probe, ...] = (
         old="    return (left_data + right_data) / 2.0, (left_data - right_data) / 2.0",
         new="    return (left_data + right_data) / 2.0, (right_data - left_data) / 2.0",
         test="test_mid_side_is_an_exact_change_of_basis",
+        test_file="tests/unit/test_omega_wave2_stereo_forensic.py",
     ),
     Probe(
         name="hpss-masks-not-complementary",
@@ -755,6 +781,7 @@ PROBES: tuple[Probe, ...] = (
         # two stems stop summing to the input.
         new="    mask_percussive = percussive_power / safe",
         test="test_hpss_reconstruction_is_exact",
+        test_file="tests/unit/test_omega_wave2_stereo_forensic.py",
     ),
     Probe(
         name="hpss-both-filters-run-along-time",
@@ -765,6 +792,7 @@ PROBES: tuple[Probe, ...] = (
         # percussive any more.
         new="    percussive = median_filter(magnitude, kernel_percussive, axis=0)",
         test="test_hpss_separates_a_tone_from_clicks",
+        test_file="tests/unit/test_omega_wave2_stereo_forensic.py",
     ),
     Probe(
         name="mono-foldback-risk-threshold-disabled",
@@ -774,6 +802,7 @@ PROBES: tuple[Probe, ...] = (
         # A threshold of -1.1 can never be crossed, so anti-phase material passes.
         new="MONO_FOLDBACK_WARNING_CORRELATION = -1.1",
         test="test_out_of_phase_material_is_flagged",
+        test_file="tests/unit/test_omega_wave2_stereo_forensic.py",
     ),
     Probe(
         name="clip-run-flattened-across-channels",
@@ -788,6 +817,7 @@ PROBES: tuple[Probe, ...] = (
         # Flattening joins the end of one channel to the start of the next.
         new="    max_clipped_run = longest_true_run(clipped)",
         test="test_clipping_is_counted_with_its_longest_run",
+        test_file="tests/unit/test_omega_wave2_stereo_forensic.py",
     ),
     Probe(
         name="programme-silence-counted-as-dropout",
@@ -797,6 +827,7 @@ PROBES: tuple[Probe, ...] = (
         # Counting leading silence as a dropped buffer flags every clean file.
         new="    interior = zeros",
         test="test_leading_and_trailing_silence_is_not_a_dropout",
+        test_file="tests/unit/test_omega_wave2_stereo_forensic.py",
     ),
     Probe(
         name="de-esser-attacks-the-voice-band",
@@ -806,6 +837,7 @@ PROBES: tuple[Probe, ...] = (
         # A 500 Hz corner turns the de-esser into a low-pass on the programme.
         new="SIBILANCE_LOW_HZ = 500.0",
         test="test_de_esser_leaves_the_voice_band_untouched",
+        test_file="tests/unit/test_omega_wave2_stereo_forensic.py",
     ),
     Probe(
         name="de-esser-gain-applied-outside-the-band",
@@ -815,7 +847,8 @@ PROBES: tuple[Probe, ...] = (
         # Applying the gain to the whole signal instead of the high band is the
         # difference between de-essing and ducking.
         new=("        output[channel] = (low_band + high_scaled) * gains[0] + 0.0 * low_band"),
-        test="test_de_esser_leaves_the_voice_band_untouched",
+        test="test_active_deessing_preserves_the_low_tone",
+        test_file="tests/unit/test_audio_engine_mutation_contracts.py",
     ),
     # -- Part 2: loudnorm rate guard --------------------------------------- #
     Probe(
@@ -835,6 +868,7 @@ PROBES: tuple[Probe, ...] = (
         # to turn a collection error into a false "kill" in the legacy runner.
         new="        return ()",
         test="test_canonical_profile_reasserts_its_rate_after_loudnorm",
+        test_file="tests/unit/test_omega_wave2_loudness_guards.py",
     ),
     Probe(
         name="wiener-noise-floor-is-tiny-not-a-power",
@@ -849,6 +883,7 @@ PROBES: tuple[Probe, ...] = (
             "    )"
         ),
         test="test_silence_still_floors_the_estimate_finitely",
+        test_file="tests/unit/test_omega_wave2_wiener_denoise.py",
     ),
     Probe(
         name="recipe-identity-ignores-parameters",
@@ -859,6 +894,7 @@ PROBES: tuple[Probe, ...] = (
         # the Stage-A audit found: a cached artifact reused across recipes.
         new='        "parameters": {},',
         test="test_changing_one_parameter_changes_the_identity",
+        test_file="tests/unit/test_omega_wave2_recipe_binding.py",
     ),
     Probe(
         name="banner-channels-only-understands-named-layouts",
@@ -879,100 +915,15 @@ PROBES: tuple[Probe, ...] = (
 
 
 def _run_probe(probe: Probe) -> dict[str, object]:
-    target = REPO / probe.path
-    source = target.read_text(encoding="utf-8")
-    if probe.old not in source:
-        return {
-            "name": probe.name,
-            "gate": probe.gate,
-            "verdict": "ANCHOR_MISSING",
-            "detail": "the mutated anchor is not in the file (refactor invalidated the probe)",
-        }
-    if source.count(probe.old) != 1:
-        return {
-            "name": probe.name,
-            "gate": probe.gate,
-            "verdict": "AMBIGUOUS_ANCHOR",
-            "detail": f"the anchor occurs {source.count(probe.old)} times",
-        }
-    with tempfile.TemporaryDirectory(prefix="omega_mut_") as scratch:
-        work = Path(scratch) / "tree"
-        # Copy only what the test needs: the package, the tests, the config.
-        for name in ("src", "tests", "pyproject.toml"):
-            origin = REPO / name
-            if origin.is_dir():
-                shutil.copytree(origin, work / name, ignore=shutil.ignore_patterns("__pycache__"))
-            else:
-                shutil.copy2(origin, work / name)
-        mutated = work / probe.path
-        mutated.write_text(source.replace(probe.old, probe.new), encoding="utf-8")
-        environment = {
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
-            "PYTHONPATH": f"{work / 'src'}:{work / 'tests' / 'unit'}",
-            "HOME": scratch,
-        }
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pytest",
-                str(work / probe.test_file),
-                "-k",
-                probe.test,
-                "-x",
-                "-q",
-                "-p",
-                "no:cacheprovider",
-            ],
-            cwd=work,
-            capture_output=True,
-            text=True,
-            env=environment,
-            timeout=600,
-        )
-    killed = completed.returncode != 0
-    return {
-        "name": probe.name,
-        "gate": probe.gate,
-        "verdict": "KILLED" if killed else "SURVIVED",
-        "exit_code": completed.returncode,
-        "tail": (completed.stdout or completed.stderr or "").strip().splitlines()[-3:],
-    }
+    from run_audio_engine_mutations import run_probe
+
+    return run_probe(probe)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("-k", "--filter", default="", help="substring of the probe name")
-    parser.add_argument("--json", action="store_true", help="machine-readable output")
-    args = parser.parse_args(argv)
+    from run_audio_engine_mutations import main as controlled_main
 
-    selected = [p for p in PROBES if args.filter in p.name]
-    if not selected:
-        print(f"no probe matches {args.filter!r}", file=sys.stderr)
-        return 2
-
-    results = [_run_probe(probe) for probe in selected]
-    survived = [r for r in results if r["verdict"] != "KILLED"]
-
-    if args.json:
-        print(json.dumps({"probes": results, "survived": len(survived)}, indent=2))
-    else:
-        width = max(len(str(r["name"])) for r in results)
-        for result in results:
-            print(f"  {str(result['name']).ljust(width)}  {result['verdict']}")
-            if result["verdict"] != "KILLED":
-                print(f"      {result['detail'] if 'detail' in result else result.get('tail')}")
-        print()
-        print(f"{len(results) - len(survived)}/{len(results)} mutations killed")
-
-    if survived:
-        print(
-            f"FAIL: {len(survived)} mutation(s) survived — the gate they attack is not "
-            "enforced by a test",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
+    return controlled_main(argv)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point

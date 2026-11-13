@@ -427,7 +427,7 @@
     "valid_proposals_accepted": 6
   },
   "evaluation_version": "nexus-cognition-quality-eval/v2",
-  "fingerprint": "268adff247b9060a",
+  "fingerprint": "9adf4e326065c1a7",
   "refusal_reasons": {
     "authority_field": 16,
     "disallowed_operation": 3,
@@ -441,6 +441,7 @@
   "registry": {
     "offered_operations": [
       "audio.align_music",
+      "audio.bark_master",
       "audio.beat_sync_cut",
       "audio.deess",
       "audio.detect_beats",
@@ -449,6 +450,9 @@
       "audio.normalize_loudness",
       "audio.remove_noise",
       "audio.remove_vocal",
+      "audio.restore_voice",
+      "audio.spatialize",
+      "audio.sync_foley",
       "audio.time_stretch",
       "caption.align_words",
       "caption.burn_in",

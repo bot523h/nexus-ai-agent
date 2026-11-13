@@ -6,7 +6,7 @@ says so and gives the tier; nothing here is a prose-only claim.
 
 ## Active Stage-B session — 2026-11-13
 
-**Current branch: `arena/5a8952b7-nexus-ai-agent`; status: `STAGE_B_IN_PROGRESS`.**
+**Current branch: `arena/5a8952b7-nexus-ai-agent`; status: `STAGE_B_FINAL_PACK_PENDING`.**
 The exact requested Stage-A baseline `a24a1bc6e3c530064ca980701f58ad317e164f25`
 was fetched, its complete handoff read, and fast-forwarded onto this branch.
 The starting HEAD and clean tree were verified before implementation. PR #337
@@ -21,9 +21,10 @@ spine-lineage adapter **100%**, slideshow audio **97.99%**. Every engine module
 is above 95% using unrounded counts, including continuity **152/159 = 95.60%**
 (the Stage-A rounded `95%` had actually been 94.9686%). Both mypy modes pass
 (380 total / 16 engine files).
-Post-format mutation campaign: **77/77 KILLED**. The first run found a surviving
-required-shape-check mutation; the parser ordering was corrected and the
-original test kills it again. No evidence gate was weakened.
+Post-format legacy runner reported **77/77**; this is **not controlled-kill
+proof**. The first run exposed a required-shape-check issue, and the parser
+ordering was corrected. B4's control/selector audit below supersedes every
+historical 77/77 report; no evidence gate was weakened.
 
 B1 was pushed at `76574db1c9540d63105cf2fb7c3d3de896930956`; its clean-tree
 pack gate was **ACCEPTED** (audio 99.58%, all packs 97.52%).
@@ -32,7 +33,8 @@ Wave B2 adds the K1 ACN/SN3D HOA rotation/binaural/FDN and K2 WOLA MMSE-LSA,
 consistent POCS declipping and delayed WPE kernels. Final combined run:
 **892 passed, 1 skipped**; K1 **234/234**, K2 **243/243**, lineage **130/130**
 lines covered; every engine module and slideshow audio above the unrounded 95%
-bar. Post-format inherited mutations **77/77 KILLED**; mypy **382 / strict 18**;
+bar. Post-format legacy runner reported **77/77** (not controlled proof);
+mypy **382 / strict 18**;
 Ruff **826 files**. The private-publication adapter also closes the target-free
 independent-meter gap before conferring its cross-verified tier.
 
@@ -63,13 +65,59 @@ at 24/29.970/60 fps have maximum absolute **0.07177 ms**. Foley starts exactly
 at sample 123 for all six materials; synthetic master **-24.000 LKFS**,
 **-15.9205 dBTP**, active masker margin **5.99964 dB**.
 
-The inherited mutation runner's loudnorm-rate mutant was discovered to be
-invalid syntax, not a genuine assertion kill. It is now a valid semantic mutant
-and the original test still kills it (post-format legacy run 77/77). **B4 must
-replace "any nonzero means killed" with clean controls and call-phase evidence**,
-then add 33 probes for 110 total. Historical logs are retained, not relabelled.
+B3 was pushed at `bfdc801d4b4bc2275105576d822995e1465f4373`; its clean-tree
+pack gate was **ACCEPTED**: audio **1112/1116 = 99.64%**, all packs
+**5796/5939 = 97.59%**, 34 canonical test modules.
 
-The full implementation/evidence and outstanding B4 work are in
+**B4 code, coverage, controlled-mutation and full-suite gates are complete.**
+The inherited runner's loudnorm mutant had invalid syntax; B4 additionally
+found **40 absent/misrouted test selectors** and an import-breaking preset
+mutation. Historical 77/77 exit-code reports are not genuine-kill proof.
+After repairing controls/routes, **13 real survivors (97/110)** were exposed;
+new independent fixtures and correctly selected existing oracles now kill them.
+The legacy command delegates to `scripts/run_audio_engine_mutations.py`.
+
+Final controlled campaign: **110/110 KILLED**, no survivors/missing/ambiguous,
+all passing same-copy controls, identical collected IDs, unchanged inputs and
+`accepted=True`. There are **105 assertion/expectation + 5 call-phase runtime
+exception kills**, not 110 assertion kills. Syntax/import/collection,
+setup/teardown errors, skips/xfails, absent tests and timeouts never kill.
+The 33 added probes cover K1–K4, auxiliary recipe hashes, active fencing and
+post-verification private-byte integrity. Runner self-tests prove the classifier
+fails closed and equivalent mutants survive.
+
+B4 final combined coverage: **1057 passed, 1 skipped** (247.24 s). Every one of
+20 engine modules and slideshow audio is >=95% **unrounded**; K1–K4 each 100%,
+workspace 100%, verify 100%, slideshow **391/399 = 97.99499%**. The lowest engine
+module is BS.1770 **191/201 = 95.02488%**. Global/strict mypy **384 / 20**,
+Ruff **1035 repository-root files** (834 targeted src/tests/scripts) with
+**0.16.8**, generated truth **GREEN**. Post-documentation docs/truth/pack-harness/
+compatibility regression **425 passed**; read-only ownership **56 readable
+sources, no overlap**, and forbidden zones unchanged from the Stage-A baseline.
+
+Final full repository command `.venv/bin/python -m pytest tests -m "not slow" -q`:
+**7331 passed, 45 skipped, 0 failed**, 1325 warnings, **592.50 s**. The first run's
+13 stale-registry/baseline failures were fixed via the user's engineering-choice
+authorization for exactly three compatibility files. Current runtime is the
+historical 57 IDs **plus exactly four Stage-B audio IDs = 61**; the historical
+70/57 audit and its 23 gaps remain intact. A separately generated/reviewed
+cognition candidate changed only those four IDs and fingerprint to
+`9adf4e326065c1a7`; **all 51 case outcomes and contracts are unchanged**.
+
+Fresh standalone N=3 benchmark reproduces **0.0717664 ms** maximum corrected-PCM
+residual, exact six-material onset **sample 123**, synthetic master
+**-24.00000 LKFS / -15.92052 dBTP**, and seed-42 restoration gain **9.93912 dB**.
+Whole benchmark-process RSS **76,984,320 bytes**; bounded synthetic/offline
+measurements only. Natural-speech/listening/real-time guarantees remain unclaimed.
+
+**Next step:** commit/push B4, then run the canonical pack gate on that clean
+checkpoint and record its actual commit/verdict. Do not reuse B3's acceptance.
+Ignored artifacts can disappear on sandbox rehydration (observed again at the
+last user pause); code and pushed B1–B3 history survived. Local metadata was
+restored on this same fixed branch only after byte-for-byte comparison to B3.
+Never execute the historical branch restoration example in section 7.1 below.
+
+The full implementation/evidence and final-gate reproduction commands are in
 [AUDIO_ENGINE_REMEDIATION_LEDGER.md](AUDIO_ENGINE_REMEDIATION_LEDGER.md).
 The lineage bridge deliberately uses host-supplied canonical fencing and an
 append-only AssetVersion writer; it does **not** claim cross-zone DB/CommandBus

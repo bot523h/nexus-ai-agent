@@ -160,14 +160,27 @@ def test_signed_private_bytes_publish_then_emit_revision_bound_immutable_lineage
     assert publisher.workspace.leftovers() == []
 
 
-def test_stale_fence_has_zero_public_bytes_even_after_successful_verification(publisher):
+def test_stale_fence_has_zero_public_bytes_even_after_successful_verification(
+    publisher, monkeypatch
+):
     publisher.fence.token = 8
+    monkeypatch.setattr(
+        publisher.workspace,
+        "publish",
+        lambda *a, **kw: pytest.fail("stale attempt reached publication"),
+    )
     with pytest.raises(spine.AudioPublishRefused, match="stale fencing token"):
         publisher.publish()
     publisher.assert_refused_cleanly()
 
 
-def test_tampered_private_bytes_after_verify_are_never_published(publisher):
+def test_tampered_private_bytes_after_verify_are_never_published(publisher, monkeypatch):
+    monkeypatch.setattr(
+        publisher.workspace,
+        "publish",
+        lambda *a, **kw: pytest.fail("unverified bytes reached publication"),
+    )
+
     def tamper():
         assert publisher.produced is not None
         publisher.produced.write_bytes(b"unverified staged bytes")

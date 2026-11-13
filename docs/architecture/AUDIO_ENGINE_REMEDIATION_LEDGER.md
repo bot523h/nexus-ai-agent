@@ -1,7 +1,8 @@
 # OMEGA audio-engine remediation ledger
 
-This is measured execution evidence, not a claim that the entire NEXUS Spine
-or Stage-B is closed. The bootstrap and standing prohibitions remain in
+This is measured execution evidence for the bounded STAGE-B audio kernels and
+native pack surface, not a claim that the entire NEXUS Spine or production host
+integration is closed. The bootstrap and standing prohibitions remain in
 [OMEGA_SESSION_HANDOFF.md](OMEGA_SESSION_HANDOFF.md).
 
 ## Baseline and scope (2026-11-13)
@@ -60,8 +61,10 @@ commit, as required; its result is recorded in the next checkpoint.
 The first post-format mutation run found **76/77**, not green: the optional
 stream-duration refusal masked the removed required-shape check. Required
 codec/sample-format access now precedes duration alternatives; the original
-malformed-shape test kills that mutation again. Final post-format campaign:
-**77/77 KILLED, 0 SURVIVED**. No mutation anchor or acceptance gate was weakened.
+malformed-shape test kills that mutation again. The legacy post-format runner
+reported **77/77 KILLED, 0 SURVIVED**. This was **not controlled-kill proof**:
+B4 subsequently found absent/misrouted tests and an import-breaking mutation.
+The controlled B4 campaign below supersedes all historical 77/77 claims.
 
 B1 checkpoint: `76574db1c9540d63105cf2fb7c3d3de896930956`, pushed on the
 session branch. Its **clean-tree** `scripts/pack_coverage.py` verdict was
@@ -127,7 +130,8 @@ Final combined run: **892 passed, 1 skipped** (106.76 s). K1 **234/234**, K2
 **243/243**, lineage **130/130** lines covered; every engine module and slideshow
 `audio.py` pass the **unrounded per-module 95%** check. Slideshow **391/399**.
 Global/strict mypy: **382 / 18 files**, repository Ruff format **826 files**.
-Post-source-format mutation campaign **77/77 KILLED**. Read-only multisource
+Post-source-format legacy runner reported **77/77** (not controlled proof;
+see the B4 audit below). Read-only multisource
 ownership check: **56 readable sources, no overlap**. Raw logs, coverage JSON
 and benchmark JSON are ignored under `ci-artifacts/omega-b2-*`.
 
@@ -188,15 +192,187 @@ by `python -m nexus_ai_agent.nagar --docs`; no proof registry entry was invented
 Mutation audit found that the inherited loudnorm-rate mutant contained an
 unclosed parenthesis. Historical 77/77 logs used the old runner's "any nonzero"
 classification and thus included that collection error. The replacement is now
-syntactically valid (`return ()`); the unchanged rate-guard test kills the
-semantic defect. The post-format inherited campaign again reports **77/77**.
-B4 must additionally establish clean controls and distinguish real test-call
-failures from collection/setup errors; the historical runner is not sufficient
-for final acceptance.
+syntactically valid (`return ()`), but the post-format legacy **77/77** still
+did not prove the named rate test ran: its test module was also misrouted.
+B4 corrects that route and demonstrates a genuine call-phase kill. Historical
+77/77 reports must not be relabelled as the controlled evidence below.
 
-## Remaining work
+B3 checkpoint: `bfdc801d4b4bc2275105576d822995e1465f4373`, pushed on the
+session branch. Its **clean-tree** pack gate was **ACCEPTED**: audio
+**1112/1116 = 99.64%**, all packs **5796/5939 = 97.59%**, 34 canonical test
+modules, Python 3.11.2. Pack source digest:
+`sha256:f205a56b56aab21b4cfeb625cdb3816b7e98412bb29b1bb47b5a063405063a1e`.
 
-- B4: 33 additional deterministic mutation probes (110 total), a controlled
-  mutation runner, full-repository regression and final clean-tree evidence.
+## Wave B4 — controlled mutations and repository-wide closure
+
+### Mutation evidence is not an exit-code guess
+
+`scripts/run_audio_engine_mutations.py` retains the 77 inherited named probes
+and adds **33**: K1 7, K2 8, K3 8, K4 7, auxiliary-source recipe binding 1,
+and fenced/private-byte publication 2. Every one requires:
+
+1. Exactly one source anchor and a syntactically valid replacement.
+2. A passing unmutated control in the **same temporary copy**, before mutation.
+3. Fresh interpreters, isolated source precedence and no bytecode cache; the
+   repository's async autouse fixture still runs through `pytest_asyncio`.
+4. Identical collected test IDs and semantic pytest hook reports. Only a failed
+   **call phase** can kill; no tests, skips/xfails, collection/import/syntax,
+   setup/teardown errors or timeouts fail the campaign rather than count as kills.
+5. Stable source/test/config/harness input hashes across the whole campaign.
+   Filtered runs are diagnostics and have `accepted=False`.
+
+The legacy command delegates to the controlled runner; it cannot bypass these
+rules. Runner self-tests use actual isolated subprocesses to demonstrate a
+passing control, real assertion kill, equivalent-mutant survival, lazy-import
+failure, invalid syntax, absent/ambiguous anchors, failed/absent controls,
+async fixtures and CLI fail-closed behaviour, including live input edits.
+
+**Audit findings, not concealed false greens:** 40 inherited selectors selected
+no test in their specified module (including three obsolete test names); the
+preset-name mutation broke Pydantic model construction during collection.
+The earlier loudnorm mutation also had invalid syntax. Routes are now explicit,
+and the preset probe changes its public standard claim without breaking import.
+The budget probe now actually omits the report instead of invoking an undefined
+name. Once controls/routes were repaired, **13 real survivors** remained
+(**97/110**, retained in `omega-b4-mutations-survivors.*`).
+
+Independent regressions now isolate cancellation *before* verification,
+protection of a declared path before an inode exists, composition from an
+already-foreign cwd, near-equal octave strengths, nonconstant log-tempo prior,
+no-population GUM refusal, absolute-before-relative loudness gating, true
+three-second LRA, percentile-vs-minimum PSD and engaged de-essing's protected
+low tone. Other probes now select the existing stronger window/COLA, gain-floor,
+fixed-1.96 and end-to-end passport oracles. The stale-fence/tamper tests also
+assert publication is **never entered**, not just that cleanup hides a leak.
+No algorithm, threshold or coverage policy was weakened to kill a survivor.
+
+Final post-format campaign: **110/110 KILLED**, **0 survived/missing/ambiguous**,
+all passing controls, unchanged inputs, `accepted=True`.
+**105 assertion/expectation kills + 5 call-phase runtime-exception kills**;
+this is explicitly **not** a claim of 110 assertion kills. The five are:
+
+| Probe | Call-phase exception |
+|---|---|
+| Required ffprobe key guard | `KeyError` |
+| Filename traversal sanitization | `WorkspaceBoundaryError` |
+| Confidence-kind field removal | `AttributeError` |
+| Missing-PCM cross-meter guard | `TypeError` |
+| Cross-channel clipping-run shape | `ValueError` |
+
+Report: `ci-artifacts/omega-b4-mutations.json`; full copied-input manifest
+**835 files**, SHA-256
+`f88aae4e32a9fdf720a75d18ccdecef78da9bb528f5f420e7e3f2ca2e74f6150`.
+Targeted-source manifest SHA-256:
+`0069a9207cae3bd6203a685355abb385afcf86c72d6d1ceada3af46d03e244cd`.
+
+### Minimal registry compatibility, without rewriting history
+
+The first full non-slow run found **13 failed, 7298 passed, 45 skipped**.
+All failures were the four-operation registry delta invalidating stale inventory
+assertions and a reviewed cognition baseline, not a failed DSP test. The user
+again delegated the engineering choice after the exact three-file extension
+was disclosed. The repair is limited to:
+
+- Reconciliation tests now require the **exact historical 57-operation set plus
+  exactly the four STAGE-B audio IDs = 61**. The 70-product audit, 47 overlap,
+  23 missing gaps and 9 surface operations remain unchanged. Historical
+  `OPERATION_MATRIX.json` / `RECONCILIATION.json` were not rewritten.
+- The cognition harness generated a separate candidate. Review proved **only**
+  four registry additions and fingerprint `268adff247b9060a` ->
+  `9adf4e326065c1a7`; **all 51 case outcomes, counts, refusal taxonomy and
+  execution/verification contracts are identical**. Only then was the candidate
+  deliberately adopted and the two pinned fingerprint assertions updated.
+  The production evaluator/checker and its overwrite refusal are unchanged.
+- The repository generator alone refreshed affected operation-truth suite
+  references. No proof registry record, exemptions or provenance weakening.
+
+### Final measured gates (Python 3.11.2)
+
+| Gate | Observed result |
+|---|---|
+| Controlled campaign | **110/110 KILLED**, full/stable-input acceptance |
+| Combined engine/pack/slideshow regression | **1057 passed, 1 skipped** (247.24 s, concurrent with campaign/static checks) |
+| Full `pytest tests -m "not slow" -q` | **7331 passed, 45 skipped, 0 failed**, 1325 warnings (592.50 s) |
+| Global / strict-engine mypy | **384 / 20 source files**, no issues |
+| Ruff check / format check | Repository root **1035 files**, targeted src/tests/scripts **834**, pinned **0.16.8**; both passed |
+| Docs/truth/pack-harness/compatibility regression | **425 passed** (110.96 s), after updating the ledger/handoff |
+| Read-only ownership / forbidden zones | **56 readable sources, no overlap**; no forbidden-path diff from Stage-A |
+| Generated truth | `python -m nexus_ai_agent.nagar --check`: **GREEN** |
+| Per-module line coverage | Every engine module and slideshow audio **>=95% unrounded** |
+| B4 pack coverage | Runs on the committed clean checkpoint; recorded after that run, never inferred from B3 |
+
+Per-module line evidence (`covered / statements`; no aggregate exemption):
+
+| Module | Lines | Percent |
+|---|---:|---:|
+| Engine exports | 10/10 | 100 |
+| K1 ambisonics/binaural/FDN | 234/234 | 100 |
+| K2 voice restoration | 243/243 | 100 |
+| K3 AV sync/Foley | 168/168 | 100 |
+| K4 Bark mastering | 142/142 | 100 |
+| Continuity | 152/159 | 95.59748 |
+| Ed25519 | 45/46 | 97.82609 |
+| Execution | 448/458 | 97.81659 |
+| FFmpeg operations | 436/451 | 96.67406 |
+| Forensic QC | 185/194 | 95.36082 |
+| BS.1770 meter | 191/201 | **95.02488** |
+| Models | 261/270 | 96.66667 |
+| NumPy DSP | 119/124 | 95.96774 |
+| Process governor | 183/189 | 96.82540 |
+| Recipe | 10/10 | 100 |
+| Spine lineage | 130/130 | 100 |
+| Stereo/HPSS | 107/107 | 100 |
+| Passport verification | 321/321 | 100 |
+| Wiener | 135/137 | 98.54015 |
+| Workspace | 141/141 | 100 |
+| Slideshow audio | 391/399 | 97.99499 |
+
+A fresh, standalone N=3 benchmark reproduces the same numerical K1–K4 results:
+maximum corrected-PCM sync residual **0.0717664 ms**, exact six-material onset
+**sample 123**, master **-24.00000 LKFS / -15.92052 dBTP**; seed-42 synthetic
+restoration SNR gain **9.93912 dB**. Timing median/spread seconds: FDN
+**1.12187 / 0.03256**, restoration **0.28709 / 0.02667**, sync
+**0.01029 / 0.00136**, six-material Foley **0.00792 / 0.00130**, mastering
+**0.03690 / 0.00575**. Whole benchmark-process peak RSS **76,984,320 bytes**.
+These are synthetic offline measurements, not a real-time or listening SLA.
+
+### Reproduce the final gates
+
+All commands run at the repository root; `.venv/bin/python` is Python 3.11.2:
+
+```sh
+.venv/bin/python scripts/run_audio_engine_mutations.py \
+  --json-out ci-artifacts/omega-b4-mutations.json
+.venv/bin/python -m coverage run --data-file=ci-artifacts/omega-b4.coverage \
+  --source=src/nexus_ai_agent/creative/audio_engine,nexus_ai_agent.creative.slideshow.audio \
+  -m pytest tests/unit/test_omega*.py tests/unit/test_audio_engine_*.py \
+  tests/unit/test_slideshow*.py tests/unit/test_audio_pack*.py \
+  tests/unit/test_opgap_wave5.py tests/integration/test_audio_engine_*.py \
+  tests/architecture/test_audio_pack_boundary.py -q
+.venv/bin/python -m coverage json --data-file=ci-artifacts/omega-b4.coverage \
+  -o ci-artifacts/omega-b4-coverage.json
+.venv/bin/python -m pytest tests -m "not slow" -q
+.venv/bin/python tests/integration/test_audio_engine_stage_b_benchmarks.py
+.venv/bin/python -m mypy src
+.venv/bin/python -m mypy --strict src/nexus_ai_agent/creative/audio_engine
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check .
+.venv/bin/python -m nexus_ai_agent.nagar --check
+# Only AFTER a committed clean tree:
+.venv/bin/python scripts/pack_coverage.py --json-out ci-artifacts/omega-b4-pack.json
+```
+
+Ignored logs/JSON are reproducible local artifacts, not committed datasets;
+this sandbox can discard them on rehydration. The runner/tests and exact
+commands above are durable. The local test environment omits the optional heavy
+`sentence-transformers`/`llama-cpp-python` stacks; the reported skips are retained,
+not converted to passes. Python 3.10 remains **UNVERIFIED_LOCALLY**.
+
+## Remaining boundaries
+
+- B4 code/static/full-suite gates are complete; the final pack acceptance must
+  still be measured on its committed clean checkpoint and recorded explicitly.
 - Production persistence/CommandBus convergence is still owned by the canonical
   Spine/AssetVersion host; an engine-side protocol is not its implementation.
+- No new edits to the board, IBPC, Chronos, Atlas, Hyperion, Veritas, studio bus
+  or DB authority. PR #337 remains **OPEN / unmerged** for Phase-2.
