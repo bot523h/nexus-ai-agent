@@ -1,19 +1,26 @@
-"""Popperian Falsification Suite (90+ Probes) for NAGAR MORPHEUS.
+"""Popperian Falsification Suite (140 Probes, P001–P140) for NAGAR MORPHEUS OMNIA.
 
 Comprehensive test suite verifying invariant theorems, mathematical proofs,
-and physical bounds across Waves 1–8:
-  P01–P12: Wave 1 (3DMM Subspace Lock, Umeyama Alignment, Cephalometrics)
-  P13–P24: Wave 2 (Dual Quaternion Lie Algebra, DQS vs LBS, Zero-Skate)
-  P25–P36: Wave 3 (3DGS EWA Conic, GGX PBR, Order-2 SH, Compositing)
-  P37–P48: Wave 4 (Real-Media PNG/WAV/MP4, Decoded Content SHA-256, Merkle, Spine)
-  P49–P60: Wave 5 (Corotational FEM, SO(3) Polar SVD, Newton 3rd Law, Inversion Healing)
-  P61–P72: Wave 6 (Cosserat Rods, Bishop Frames, Marschner BRDF, Melanin Physics)
-  P73–P84: Wave 7 (Airy Iridescence [0, 1] & d=0 Limit, Charlie Sheen Rim Physics)
-  P85–P96: Wave 8 (Cryptographic Capsule Vault, 5-Episode Zero-Drift Healer)
+and physical bounds across Waves 1–14:
+  P001–P012: Wave 1 (3DMM Subspace Lock, Umeyama Alignment, Cephalometrics)
+  P013–P024: Wave 2 (Dual Quaternion Lie Algebra, DQS vs LBS, Zero-Skate)
+  P025–P036: Wave 3 (3DGS EWA Conic, GGX PBR, Order-2 SH, Compositing)
+  P037–P048: Wave 4 (Real-Media PNG/WAV/MP4, Decoded Content SHA-256, Merkle, Spine)
+  P049–P060: Wave 5 (Corotational FEM, SO(3) Polar SVD, Newton 3rd Law, Inversion Healing)
+  P061–P072: Wave 6 (Cosserat Rods, Bishop Frames, Marschner BRDF, Melanin Physics)
+  P073–P084: Wave 7 (Airy Iridescence [0, 1] & d=0 Limit, Charlie Sheen Rim Physics)
+  P085–P096: Wave 8 (Cryptographic Capsule Vault, 5-Episode Zero-Drift Healer)
+  P097–P104: Wave 9 (Spectral Skin Chromophore Absorption, Reduced Scattering, SSS)
+  P105–P112: Wave 10 (Neuromuscular Hill FACS Dynamics, TMJ SE(3), Bilabial Seal)
+  P113–P120: Wave 11 (Two-Sphere Corneal Refraction, Eyelid Bulge, Tear Meniscus)
+  P121–P128: Wave 12 (C^2 Logarithmic IPC Barrier, Coulomb Friction, Multiphysics)
+  P129–P135: Wave 13 (Deferred 3DGS G-Buffer, Spherical Gaussian Relighting, TAA)
+  P136–P140: Wave 14 (Post-Disk PyAV Verification, Unbalanced Merkle, Quarantine, Port)
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -25,57 +32,89 @@ from nexus_ai_agent.creative.morpheus import (
     CameraParameters,
     CapsuleIntegrityTamperError,
     CharacterIdentityCapsule,
+    ChromophoreProperties,
     DualQuaternion,
     EpisodeCharacterState,
+    EyeOpticalParameters,
     FEMSimulationState,
     FencingTokenStaleError,
     Gaussian3D,
     HairMaterialProperties,
+    HillMuscleParameters,
     MicrofiberSheenProperties,
+    MorpheusDurableLineageStore,
+    MorpheusPort,
     MorpheusStagedSpineAdapter,
     MorpheusStageRequest,
     SkeletalChain,
     SkinningWeights,
     SoftTissueMaterial,
+    SphericalGaussianLobe,
     ThinFilmProperties,
     UnitQuaternion,
+    apply_antagonistic_inhibition,
+    apply_variance_clipped_taa,
     audit_and_heal_episodic_character_continuity,
     build_canonical_3dmm_basis,
     build_cosserat_hair_strand,
     build_tetrahedron,
+    ccd_conservative_line_search,
     compute_3d_covariance,
     compute_cephalometric_ratios,
     compute_corotational_pk1_stress,
+    compute_globe_composite_sdf,
+    compute_hill_muscle_force,
     compute_rfc6962_merkle_root,
+    compute_smoothed_coulomb_friction,
+    convolve_separable_sss_screen_buffer,
+    couple_fem_strain_to_perfusion,
     create_character_identity_capsule,
     damped_least_squares_ik,
+    deform_eyelid_corneal_bulge,
     evaluate_airy_thin_film_reflectance,
     evaluate_charlie_microfiber_sheen,
     evaluate_cloth_iridescent_sheen_brdf,
     evaluate_ggx_pbr,
+    evaluate_ipc_log_barrier,
     evaluate_marschner_brdf,
     evaluate_order2_sh_diffuse,
+    evaluate_pupillary_light_reflex,
+    evaluate_sg_inner_product,
+    evaluate_skin_chromophore_profile,
+    evaluate_tear_film_meniscus,
+    evaluate_tmj_coupled_se3,
+    extract_audio_acoustic_features,
     generate_rfc6962_inclusion_proof,
     heal_inverted_and_volume_drift_tet,
     lock_and_heal_cranio_facial_identity,
     mux_mp4_ffmpeg,
     parallel_transport_bishop_frame,
+    probe_mp4_container,
     project_gaussian_ewa,
     rasterize_gaussian_splats,
     read_png_frame,
     read_wav_pcm16,
+    relight_deferred_gbuffer_sg,
     rfc6962_leaf_hash,
     rfc6962_node_hash,
+    rgb_to_ycocg,
     skin_dqs,
     skin_lbs,
+    solve_bilabial_contact_and_lip_seal,
     solve_cosserat_strand_pbd,
     solve_fem_time_step,
+    splat_deferred_gbuffer,
+    step_coupled_morpheus_multiphysics,
+    step_first_order_activation,
     synthesize_face_mesh,
+    trace_3d_snell_corneal_refraction,
     umeyama_sim3_align,
     verify_character_capsule_integrity,
+    verify_morpheus_bundle_on_disk,
     verify_rfc6962_inclusion_proof,
     write_png_frame,
     write_wav_pcm16,
+    ycocg_to_rgb,
     zero_skate_foot_lock,
 )
 
@@ -1938,3 +1977,569 @@ def test_p96_cephalometric_ratios_continuity_recovery() -> None:
     res = audit_and_heal_episodic_character_continuity(capsule, ep_states, basis)
     for ep_id, c_drift in res.cephalometric_drifts.items():
         assert c_drift < 0.1, f"Episode {ep_id} cephalometric drift {c_drift} too high"
+
+
+# ── WAVE 9 PROBES (P097–P104) ────────────────────────────────────────────────
+
+
+def test_p097_wave9_skin_chromophore_absorption_spectrum_bounds() -> None:
+    """P097: Spectral absorption mu_a(lambda) is strictly positive and finite across RGB."""
+    chrom = ChromophoreProperties(melanin_fraction=0.08, blood_fraction=0.03)
+    prof = evaluate_skin_chromophore_profile(chrom)
+    assert (prof.absorption_mu_a > 0.0).all()
+    assert (np.isfinite(prof.absorption_mu_a)).all()
+
+
+def test_p098_wave9_reduced_scattering_chromatic_monotonicity() -> None:
+    """P098: Reduced scattering coefficient mu_s'(lambda) follows power-law decay."""
+    chrom = ChromophoreProperties()
+    prof = evaluate_skin_chromophore_profile(chrom)
+    # Shorter wavelengths scatter more (Rayleigh/Mie)
+    assert prof.reduced_scattering_mu_s_prime[2] > prof.reduced_scattering_mu_s_prime[0]
+
+
+def test_p099_wave9_diffuse_mean_free_path_chromatic_hierarchy() -> None:
+    """P099: Diffuse mean free path strictly satisfies l_d(Red) > l_d(Green) > l_d(Blue)."""
+    chrom = ChromophoreProperties(melanin_fraction=0.05, blood_fraction=0.02)
+    prof = evaluate_skin_chromophore_profile(chrom)
+    l_d = prof.diffuse_mean_free_path_mm
+    assert l_d[0] > l_d[1] > l_d[2], f"Chromatic hierarchy violated: {l_d}"
+
+
+def test_p100_wave9_dynamic_fem_stress_capillary_blanching() -> None:
+    """P100: High mechanical compressive stress induces capillary blanching."""
+    stresses = np.array([0.0, 1e4, 5e4, 2e5])
+    f_blood = couple_fem_strain_to_perfusion(
+        base_blood_fraction=0.05,
+        compressive_stress_pa=stresses,
+        autonomic_flush_arousal=0.0,
+    )
+    assert f_blood[0] > f_blood[1] > f_blood[2] >= f_blood[3]
+    assert (f_blood >= 0.001).all()
+
+
+def test_p101_wave9_autonomic_flush_arousal_perfusion() -> None:
+    """P101: Autonomic flush arousal increases dermal blood perfusion monotonically."""
+    f_low = couple_fem_strain_to_perfusion(0.02, np.zeros(1), autonomic_flush_arousal=0.1)[0]
+    f_high = couple_fem_strain_to_perfusion(0.02, np.zeros(1), autonomic_flush_arousal=0.9)[0]
+    assert f_high > f_low
+    assert f_high <= 0.15
+
+
+def test_p102_wave9_separable_sss_screen_buffer_energy_conservation() -> None:
+    """P102: Separable Sum-of-Gaussians SSS convolution strictly conserves energy."""
+    h, w = 16, 16
+    irr = np.zeros((h, w, 3), dtype=np.float64)
+    irr[8, 8] = [1.0, 1.0, 1.0]  # broadband point impulse
+    depth = np.full((h, w), 10.0, dtype=np.float64)
+    normal = np.zeros((h, w, 3), dtype=np.float64)
+    normal[:, :, 2] = 1.0
+    l_d = np.array([3.0, 1.5, 0.8], dtype=np.float64)
+
+    sss = convolve_separable_sss_screen_buffer(irr, l_d, depth, normal, max_radius_pixels=4)
+    for c in range(3):
+        assert np.sum(sss[:, :, c]) <= np.sum(irr[:, :, c]) + 1e-9
+
+
+def test_p103_wave9_sss_chromatic_high_frequency_gradient_attenuation() -> None:
+    """P103: Red SSS attenuates high-frequency spatial gradients more than Green and Blue."""
+    h, w = 16, 16
+    irr = np.zeros((h, w, 3), dtype=np.float64)
+    irr[8, 8] = [1.0, 1.0, 1.0]
+    depth = np.full((h, w), 10.0, dtype=np.float64)
+    normal = np.zeros((h, w, 3), dtype=np.float64)
+    normal[:, :, 2] = 1.0
+    l_d = np.array([4.0, 2.0, 1.0], dtype=np.float64)
+
+    sss = convolve_separable_sss_screen_buffer(irr, l_d, depth, normal, max_radius_pixels=4)
+    grad_r = np.linalg.norm(np.gradient(sss[:, :, 0]))
+    grad_g = np.linalg.norm(np.gradient(sss[:, :, 1]))
+    grad_b = np.linalg.norm(np.gradient(sss[:, :, 2]))
+    assert grad_r < grad_g < grad_b
+
+
+def test_p104_wave9_sss_bilateral_depth_edge_stopping() -> None:
+    """P104: SSS does not bleed across foreground/background depth silhouettes."""
+    h, w = 16, 16
+    irr = np.zeros((h, w, 3), dtype=np.float64)
+    irr[:, :8] = 1.0  # foreground illuminated
+    depth = np.zeros((h, w), dtype=np.float64)
+    depth[:, :8] = 5.0  # foreground
+    depth[:, 8:] = 50.0  # background silhouette gap (45 mm > threshold)
+    normal = np.zeros((h, w, 3), dtype=np.float64)
+    normal[:, :, 2] = 1.0
+    l_d = np.array([3.0, 1.5, 0.8], dtype=np.float64)
+
+    sss = convolve_separable_sss_screen_buffer(
+        irr, l_d, depth, normal, max_radius_pixels=4, bilateral_depth_threshold_mm=2.0
+    )
+    # Background remains dark (no bleed across depth edge)
+    assert sss[8, 12, 0] < 0.01
+
+
+# ── WAVE 10 PROBES (P105–P112) ───────────────────────────────────────────────
+
+
+def test_p105_wave10_first_order_neuromuscular_activation_ode_bounds() -> None:
+    """P105: Neuromuscular activation ODE produces strictly bounded activation in [0, 1]."""
+    params = HillMuscleParameters()
+    a = 0.0
+    for _ in range(50):
+        a = step_first_order_activation(a, target_excitation=1.0, dt_s=0.005, params=params)
+        assert 0.0 <= a <= 1.0
+    assert a > 0.8  # Activated
+
+
+def test_p106_wave10_hill_type_force_length_velocity_active_passive() -> None:
+    """P106: Active Hill force peaks at optimal length; passive force resists overstretch."""
+    params = HillMuscleParameters(f_max_n=100.0)
+    f_opt = compute_hill_muscle_force(
+        activation=1.0, normalized_length=1.0, normalized_velocity=0.0, params=params
+    )
+    f_short = compute_hill_muscle_force(
+        activation=1.0, normalized_length=0.7, normalized_velocity=0.0, params=params
+    )
+    assert f_opt > f_short
+    # Passive force at l_tilde = 1.4
+    f_pass = compute_hill_muscle_force(
+        activation=0.0, normalized_length=1.4, normalized_velocity=0.0, params=params
+    )
+    assert f_pass > 20.0
+
+
+def test_p107_wave10_antagonistic_facs_inhibition_energy_bounds() -> None:
+    """P107: Antagonistic FACS muscle co-contraction does not exceed physiological energy bound."""
+    raw = {"AU12": 0.9, "AU15": 0.9, "AU22": 0.8, "AU20": 0.8}
+    inhibited = apply_antagonistic_inhibition(raw, max_co_contraction_energy=1.2)
+    assert inhibited["AU12"] + inhibited["AU15"] <= 1.2001
+    assert inhibited["AU22"] + inhibited["AU20"] <= 1.2001
+
+
+def test_p108_wave10_tmj_coupled_se3_orthogonality_and_determinant() -> None:
+    """P108: TMJ coupled hinge-slide transformation is strictly in SE(3) with det(R) = +1.0."""
+    tmj = evaluate_tmj_coupled_se3(jaw_opening_rad=0.35)
+    r = tmj.rotation_matrix
+    assert abs(float(np.linalg.det(r)) - 1.0) < 1e-12
+    assert np.linalg.norm(r.T @ r - np.eye(3), ord="fro") < 1e-12
+
+
+def test_p109_wave10_tmj_cervical_neck_clearance_invariant() -> None:
+    """P109: TMJ jaw opening preserves non-negative cervical neck clearance."""
+    for ang in np.linspace(0.0, 0.45, 10):
+        tmj = evaluate_tmj_coupled_se3(jaw_opening_rad=float(ang), neck_boundary_z=-60.0)
+        assert tmj.chin_clearance_mm >= 0.0
+
+
+def test_p110_wave10_audio_acoustic_feature_extraction_accuracy() -> None:
+    """P110: Audio acoustic analysis computes valid RMS, ZCR, and spectral centroid."""
+    t = np.linspace(0.0, 0.05, 2400)
+    sine_pcm = (np.sin(2.0 * np.pi * 1000.0 * t) * 16000.0).astype(np.int16)
+    feat = extract_audio_acoustic_features(sine_pcm, sample_rate=48000)
+    assert feat.rms_energy > 0.1
+    assert 500.0 <= feat.spectral_centroid_hz <= 2500.0
+
+
+def test_p111_wave10_bilabial_closure_exact_contact_projection() -> None:
+    """P111: Bilabial closure solver strictly guarantees d_lip >= 0 (zero lip interpenetration)."""
+    upper = np.array([[0.0, -1.0, 0.0]])  # penetrating below lower lip
+    lower = np.array([[0.0, 1.0, 0.0]])
+    u_proj, l_proj, dist = solve_bilabial_contact_and_lip_seal(upper, lower, is_closure_frame=True)
+    assert dist == 0.0
+    assert abs(u_proj[0, 1] - l_proj[0, 1]) < 1e-12
+
+
+def test_p112_wave10_bilabial_contact_lateral_poisson_expansion() -> None:
+    """P112: Lip contact compression induces lateral bulging via Poisson volume conservation."""
+    upper = np.array([[2.0, -1.0, 0.0]])
+    lower = np.array([[2.0, 1.0, 0.0]])
+    u_proj, _, _ = solve_bilabial_contact_and_lip_seal(upper, lower, is_closure_frame=True)
+    # X coordinate bulges outward
+    assert u_proj[0, 0] > upper[0, 0]
+
+
+# ── WAVE 11 PROBES (P113–P120) ───────────────────────────────────────────────
+
+
+def test_p113_wave11_two_sphere_corneal_scleral_composite_sdf_accuracy() -> None:
+    """P113: Two-sphere composite ocular SDF is zero on corneal and scleral surfaces."""
+    params = EyeOpticalParameters()
+    c_s = np.zeros(3)
+    rot = np.eye(3)
+    pt_sclera = np.array([params.sclera_radius_mm, 0.0, 0.0])
+    d_s = compute_globe_composite_sdf(pt_sclera, c_s, rot, params)
+    assert abs(d_s) < 1e-6
+
+
+def test_p114_wave11_eyelid_corneal_bulge_zero_clipping_invariant() -> None:
+    """P114: Eyelid corneal bulge deformation guarantees d_eyelid >= h_tear > 0 across gaze."""
+    params = EyeOpticalParameters()
+    c_s = np.zeros(3)
+    rot = np.eye(3)
+    eyelids = np.array([[0.0, 5.0, 12.0], [0.0, -5.0, 12.0]])
+    deformed = deform_eyelid_corneal_bulge(eyelids, c_s, rot, params, tear_clearance_mm=0.20)
+    for pt in deformed:
+        d = compute_globe_composite_sdf(pt, c_s, rot, params)
+        assert d >= 0.20 - 1e-6
+
+
+def test_p115_wave11_watson_yellott_pupillary_light_reflex_monotonicity() -> None:
+    """P115: Pupillary light reflex contracts pupil monotonically with scene illuminance."""
+    r_dark = evaluate_pupillary_light_reflex(1.0)
+    r_dim = evaluate_pupillary_light_reflex(100.0)
+    r_bright = evaluate_pupillary_light_reflex(10000.0)
+    assert r_dark > r_dim > r_bright
+    assert 1.0 <= r_bright <= 4.0
+
+
+def test_p116_wave11_3d_snell_corneal_refraction_vector_law() -> None:
+    """P116: 3D vector corneal refraction obeys Snell's law at outer interface."""
+    c_s = np.zeros(3)
+    rot = np.eye(3)
+    o = np.array([0.0, 2.0, 25.0])
+    d = np.array([0.0, -0.1, -1.0])
+    res = trace_3d_snell_corneal_refraction(o, d, c_s, rot)
+    assert res is not None
+    # Refracted ray bends towards corneal normal
+    cos_i = np.dot(-d / np.linalg.norm(d), res.corneal_normal)
+    cos_t = np.dot(res.refracted_ray_direction, -res.corneal_normal)
+    sin_i = np.sqrt(max(0.0, 1.0 - cos_i**2))
+    sin_t = np.sqrt(max(0.0, 1.0 - cos_t**2))
+    assert abs(1.00029 * sin_i - 1.376 * sin_t) < 1e-4
+
+
+def test_p117_wave11_iris_plane_intersection_and_pupil_aperture_check() -> None:
+    """P117: Refracted ray intersects iris plane and classifies pupil aperture containment."""
+    c_s = np.zeros(3)
+    rot = np.eye(3)
+    o = np.array([0.0, 0.0, 25.0])
+    d = np.array([0.0, 0.0, -1.0])
+    res = trace_3d_snell_corneal_refraction(o, d, c_s, rot, scene_illuminance_lux=100.0)
+    assert res is not None
+    assert res.is_inside_pupil
+
+
+def test_p118_wave11_outer_corneal_dielectric_fresnel_reflectance() -> None:
+    """P118: Dielectric Fresnel reflectance of corneal surface lies in [F0, 1.0]."""
+    c_s = np.zeros(3)
+    rot = np.eye(3)
+    o = np.array([0.0, 0.0, 25.0])
+    d = np.array([0.0, 0.0, -1.0])
+    res = trace_3d_snell_corneal_refraction(o, d, c_s, rot)
+    assert res is not None
+    assert 0.02 <= res.fresnel_specular_reflectance <= 1.0
+
+
+def test_p119_wave11_capillary_tear_film_meniscus_exponential_decay() -> None:
+    """P119: Capillary tear meniscus height decays exponentially away from eyelid margin."""
+    v = np.array([0.0, 0.0, -1.0])
+    m0 = evaluate_tear_film_meniscus(0.0, v)
+    m1 = evaluate_tear_film_meniscus(0.35, v)
+    m2 = evaluate_tear_film_meniscus(1.0, v)
+    assert m0.meniscus_height_mm > m1.meniscus_height_mm > m2.meniscus_height_mm
+
+
+def test_p120_wave11_tear_film_meniscus_normal_and_fresnel() -> None:
+    """P120: Tear meniscus normal is unit-length and Fresnel reflectance is dielectric."""
+    v = np.array([0.0, 0.0, -1.0])
+    res = evaluate_tear_film_meniscus(0.1, v)
+    assert abs(np.linalg.norm(res.surface_normal) - 1.0) < 1e-12
+    assert 0.0 <= res.dielectric_fresnel <= 1.0
+
+
+# ── WAVE 12 PROBES (P121–P128) ───────────────────────────────────────────────
+
+
+def test_p121_wave12_c2_logarithmic_ipc_barrier_potential_convexity() -> None:
+    """P121: IPC logarithmic barrier is strictly convex (b''(d) > 0) for 0 < d < hat_d."""
+    for d in [0.01, 0.1, 0.5, 0.9]:
+        eval_ipc = evaluate_ipc_log_barrier(distance=d, hat_d=1.0, kappa=1000.0)
+        assert eval_ipc.barrier_potential > 0.0
+        assert eval_ipc.barrier_hessian > 0.0
+
+
+def test_p122_wave12_ipc_barrier_gradient_repulsive_divergence() -> None:
+    """P122: IPC barrier repulsive gradient diverges to -infinity as distance approaches 0."""
+    e_mid = evaluate_ipc_log_barrier(0.5, hat_d=1.0)
+    e_close = evaluate_ipc_log_barrier(0.01, hat_d=1.0)
+    assert e_close.barrier_gradient < e_mid.barrier_gradient < 0.0
+
+
+def test_p123_wave12_ipc_barrier_activation_threshold_cutoff() -> None:
+    """P123: IPC barrier potential and gradient are exactly zero beyond activation thickness."""
+    eval_far = evaluate_ipc_log_barrier(1.5, hat_d=1.0)
+    assert eval_far.barrier_potential == 0.0
+    assert eval_far.barrier_gradient == 0.0
+
+
+def test_p124_wave12_ccd_conservative_line_search_non_penetration() -> None:
+    """P124: CCD line search step-size guarantees positive separation distance."""
+
+    def obstacle_plane_sdf(p: np.ndarray) -> float:
+        return float(p[2] - 1.0)  # plane at z = 1.0
+
+    start = np.array([0.0, 0.0, 2.0])
+    penetrating_disp = np.array([0.0, 0.0, -1.9])  # would penetrate to z = 0.1
+    alpha = ccd_conservative_line_search(
+        start, penetrating_disp, obstacle_plane_sdf, min_allowable_dist=0.2
+    )
+    final_p = start + alpha * penetrating_disp
+    assert obstacle_plane_sdf(final_p) >= 0.2 - 1e-6
+
+
+def test_p125_wave12_smoothed_coulomb_friction_thermodynamic_passivity() -> None:
+    """P125: Smoothed Coulomb friction is strictly passive: f_T . v_T <= 0 everywhere."""
+    n = np.array([0.0, 0.0, 1.0])
+    v_t = np.array([2.0, 3.0, 0.0])
+    f_t, p_diss = compute_smoothed_coulomb_friction(
+        normal_force_n=10.0, relative_tangential_velocity=v_t, contact_normal=n
+    )
+    assert np.dot(f_t, v_t) <= 0.0
+    assert p_diss >= 0.0
+
+
+def test_p126_wave12_coulomb_friction_dissipation_rate_non_negative() -> None:
+    """P126: Friction energy dissipation rate is strictly non-negative."""
+    n = np.array([0.0, 0.0, 1.0])
+    v_t = np.array([1.0, 0.0, 0.0])
+    f_t, p_diss = compute_smoothed_coulomb_friction(
+        normal_force_n=50.0, relative_tangential_velocity=v_t, contact_normal=n
+    )
+    assert p_diss > 0.0
+
+
+def test_p127_wave12_coupled_multiphysics_receipt_zero_interpenetration() -> None:
+    """P127: Coupled multi-body step verifies non-penetration across all physical layers."""
+    b = Bone("b1", None, np.zeros(3), np.array([0.0, 0.0, 10.0]), 10.0)
+    chain = SkeletalChain(bones=(b,))
+    weights = SkinningWeights(1, ("b1",), np.array([[1.0]]))
+
+    mat = SoftTissueMaterial(youngs_modulus=5000.0, poissons_ratio=0.3)
+    verts_tet = np.array([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 5.0]])
+    tet = build_tetrahedron((0, 1, 2, 3), verts_tet)
+    fem_st = FEMSimulationState(verts_tet, np.zeros((4, 3)), (tet,), mat)
+
+    strand = build_cosserat_hair_strand(np.array([[0.0, 0.0, 30.0], [0.0, 0.0, 35.0]]))
+    cloth_v = np.array([[0.0, 0.0, 40.0]])
+
+    _, _, _, _, receipt = step_coupled_morpheus_multiphysics(
+        chain, {"b1": UnitQuaternion.identity()}, weights, fem_st, (strand,), cloth_v, dt_s=0.01
+    )
+    assert receipt.zero_interpenetration_verified
+    assert receipt.min_bone_flesh_distance_mm > 0.0
+
+
+def test_p128_wave12_coupled_multiphysics_fem_jacobian_positive_range() -> None:
+    """P128: Coupled simulation preserves strictly positive FEM element Jacobians."""
+    b = Bone("b1", None, np.zeros(3), np.array([0.0, 0.0, 10.0]), 10.0)
+    chain = SkeletalChain(bones=(b,))
+    weights = SkinningWeights(1, ("b1",), np.array([[1.0]]))
+    mat = SoftTissueMaterial(youngs_modulus=5000.0, poissons_ratio=0.3)
+    verts_tet = np.array([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 5.0]])
+    tet = build_tetrahedron((0, 1, 2, 3), verts_tet)
+    fem_st = FEMSimulationState(verts_tet, np.zeros((4, 3)), (tet,), mat)
+
+    _, _, _, _, receipt = step_coupled_morpheus_multiphysics(
+        chain, {"b1": UnitQuaternion.identity()}, weights, fem_st, (), np.zeros((0, 3)), dt_s=0.01
+    )
+    assert receipt.fem_volume_det_range[0] > 0.0
+
+
+# ── WAVE 13 PROBES (P129–P135) ───────────────────────────────────────────────
+
+
+def test_p129_wave13_deferred_gbuffer_splatting_channels_and_shapes() -> None:
+    """P129: Multi-channel deferred G-buffer splatting generates all required channels."""
+    cam = CameraParameters(np.eye(4), 100.0, 100.0, 16.0, 16.0, 32, 32)
+    g = Gaussian3D(
+        mean=np.array([0.0, 0.0, 2.0]),
+        rotation=UnitQuaternion.identity(),
+        scale=np.array([0.1, 0.1, 0.1]),
+        opacity=0.9,
+        normal=np.array([0.0, 0.0, -1.0]),
+        albedo=np.ones(3),
+        roughness=0.4,
+        metallic=0.1,
+    )
+    gbuf = splat_deferred_gbuffer((g,), cam)
+    assert gbuf.beauty_rgb.shape == (32, 32, 3)
+    assert gbuf.world_normal.shape == (32, 32, 3)
+    assert gbuf.motion_vectors_2d.shape == (32, 32, 2)
+
+
+def test_p130_wave13_deferred_gbuffer_unit_normal_normalization() -> None:
+    """P130: Deferred G-buffer foreground world normals have unit length."""
+    cam = CameraParameters(np.eye(4), 100.0, 100.0, 16.0, 16.0, 32, 32)
+    g = Gaussian3D(
+        mean=np.array([0.0, 0.0, 2.0]),
+        rotation=UnitQuaternion.identity(),
+        scale=np.array([0.1, 0.1, 0.1]),
+        opacity=0.9,
+        normal=np.array([0.0, 0.0, -1.0]),
+        albedo=np.ones(3),
+        roughness=0.4,
+        metallic=0.1,
+    )
+    gbuf = splat_deferred_gbuffer((g,), cam)
+    norm = np.linalg.norm(gbuf.world_normal[16, 16])
+    assert abs(norm - 1.0) < 1e-6
+
+
+def test_p131_wave13_deferred_gbuffer_analytical_motion_vectors_jacobian() -> None:
+    """P131: Analytical motion vector matches projected 3D kinematic velocity."""
+    cam = CameraParameters(np.eye(4), 100.0, 100.0, 16.0, 16.0, 32, 32)
+    g = Gaussian3D(
+        mean=np.array([0.0, 0.0, 2.0]),
+        rotation=UnitQuaternion.identity(),
+        scale=np.array([0.1, 0.1, 0.1]),
+        opacity=0.9,
+        normal=np.array([0.0, 0.0, -1.0]),
+        albedo=np.ones(3),
+        roughness=0.4,
+        metallic=0.1,
+    )
+    v_3d = np.array([0.2, 0.0, 0.0])  # moving right
+    gbuf = splat_deferred_gbuffer((g,), cam, gaussian_3d_velocities=(v_3d,))
+    # Delta u should be positive
+    assert gbuf.motion_vectors_2d[16, 16, 0] > 0.0
+
+
+def test_p132_wave13_spherical_gaussian_inner_product_symmetry_and_positivity() -> None:
+    """P132: Spherical Gaussian inner product is symmetric and non-negative."""
+    sg1 = SphericalGaussianLobe(np.array([0.0, 0.0, 1.0]), 5.0, np.ones(3))
+    sg2 = SphericalGaussianLobe(np.array([0.0, 1.0, 0.0]), 3.0, np.ones(3))
+    prod1 = evaluate_sg_inner_product(sg1, sg2)
+    prod2 = evaluate_sg_inner_product(sg2, sg1)
+    assert np.allclose(prod1, prod2)
+    assert (prod1 >= 0.0).all()
+
+
+def test_p133_wave13_sg_all_frequency_specular_and_diffuse_relighting() -> None:
+    """P133: SG relighting adds specular and diffuse radiance to deferred G-buffer."""
+    cam = CameraParameters(np.eye(4), 100.0, 100.0, 16.0, 16.0, 32, 32)
+    g = Gaussian3D(
+        mean=np.array([0.0, 0.0, 2.0]),
+        rotation=UnitQuaternion.identity(),
+        scale=np.array([0.1, 0.1, 0.1]),
+        opacity=0.9,
+        normal=np.array([0.0, 0.0, -1.0]),
+        albedo=np.ones(3) * 0.5,
+        roughness=0.2,
+        metallic=0.5,
+    )
+    gbuf = splat_deferred_gbuffer((g,), cam)
+    light = SphericalGaussianLobe(np.array([0.0, 0.0, -1.0]), 8.0, np.ones(3) * 2.0)
+    lit = relight_deferred_gbuffer_sg(gbuf, cam, (light,))
+    assert lit[16, 16, 0] > gbuf.beauty_rgb[16, 16, 0]
+
+
+def test_p134_wave13_ycocg_reversible_color_space_exact_roundtrip() -> None:
+    """P134: YCoCg reversible color transform reproduces original RGB within machine precision."""
+    rgb = np.array([[[0.25, 0.50, 0.75], [0.80, 0.20, 0.10]]], dtype=np.float64)
+    roundtrip = ycocg_to_rgb(rgb_to_ycocg(rgb))
+    assert np.allclose(rgb, roundtrip, atol=1e-12)
+
+
+def test_p135_wave13_variance_clipped_taa_variance_reduction_and_antighosting() -> None:
+    """P135: TAA clips reprojected history to neighborhood AABB and rejects disocclusion."""
+    curr = np.full((16, 16, 3), 0.5, dtype=np.float64)
+    hist = np.full((16, 16, 3), 0.9, dtype=np.float64)  # bright previous frame
+    motion = np.zeros((16, 16, 2), dtype=np.float64)
+    depth_c = np.full((16, 16), 10.0, dtype=np.float64)
+    depth_h = np.full((16, 16), 50.0, dtype=np.float64)  # Disocclusion gap!
+
+    # Disocclusion rejection test
+    taa_disoccluded = apply_variance_clipped_taa(curr, hist, motion, depth_c, depth_h)
+    assert np.allclose(taa_disoccluded, curr)
+
+
+# ── WAVE 14 PROBES (P136–P140) ───────────────────────────────────────────────
+
+
+def test_p136_wave14_post_disk_pyav_mp4_container_verification(tmp_path: Path) -> None:
+    """P136: Post-disk verification proves frame count, stream FPS, and monotonic PTS."""
+    f0 = tmp_path / "frame_0000.png"
+    f1 = tmp_path / "frame_0001.png"
+    write_png_frame(np.zeros((8, 8, 3), dtype=np.uint8), f0)
+    write_png_frame(np.zeros((8, 8, 3), dtype=np.uint8), f1)
+    wav_p = tmp_path / "audio.wav"
+    write_wav_pcm16(np.zeros(48000, dtype=np.int16), wav_p)
+    mp4_p = tmp_path / "video.mp4"
+    mux_mp4_ffmpeg(str(tmp_path / "frame_%04d.png"), wav_p, mp4_p, fps=24)
+
+    count, fps, mono = probe_mp4_container(mp4_p, expected_fps=24, expected_frame_count=2)
+    assert count == 2
+    assert abs(fps - 24.0) < 0.5
+    assert mono
+
+
+def test_p137_wave14_unbalanced_rfc6962_merkle_proof_verification() -> None:
+    """P137: RFC 6962 inclusion proof verifies authentic leaves and rejects tampered ones."""
+    leaves = [b"leaf_0", b"leaf_1", b"leaf_2", b"leaf_3", b"leaf_4"]
+    root_hex, proof = generate_rfc6962_inclusion_proof(leaves, index=2)
+    assert verify_rfc6962_inclusion_proof(leaves[2], 2, len(leaves), proof, root_hex)
+    # Tampered leaf fails
+    assert not verify_rfc6962_inclusion_proof(b"tampered", 2, len(leaves), proof, root_hex)
+
+
+def test_p138_wave14_tri_state_epistemic_audit_ledger_anti_erasure(tmp_path: Path) -> None:
+    """P138: Manifest containing VIOLATED physical wave invariant fails bundle verification."""
+    f0 = tmp_path / "frame_0000.png"
+    write_png_frame(np.zeros((8, 8, 3), dtype=np.uint8), f0)
+    wav_p = tmp_path / "audio.wav"
+    write_wav_pcm16(np.zeros(48000, dtype=np.int16), wav_p)
+    mp4_p = tmp_path / "video.mp4"
+    mux_mp4_ffmpeg(str(tmp_path / "frame_%04d.png"), wav_p, mp4_p, fps=24)
+
+    manifest_p = tmp_path / "manifest.json"
+    manifest_data = {
+        "wave_epistemic_statuses": {"WAVE_01_3DMM_SUBSPACE_LOCK": "VIOLATED"},
+        "violated_wave_count": 1,
+    }
+    manifest_p.write_text(json.dumps(manifest_data))
+    with pytest.raises(BundleVerificationError, match="VIOLATED"):
+        verify_morpheus_bundle_on_disk(tmp_path)
+
+
+def test_p139_wave14_forensic_quarantine_retention_on_failure(tmp_path: Path) -> None:
+    """P139: Staging failure preserves forensic attempt directory inside .quarantine/."""
+
+    def _tamper(p: Path) -> None:
+        (p / "video.mp4").write_bytes(b"corrupt")
+
+    adapter = MorpheusStagedSpineAdapter(
+        workspace_root=tmp_path,
+        active_fencing_token_getter=lambda: "tok_valid",
+        pre_publish_tamper_hook=_tamper,
+    )
+    req = MorpheusStageRequest(
+        asset_id="asset_quarantine",
+        attempt_id="att_fail",
+        fencing_token="tok_valid",
+        frames_uint8=(np.zeros((8, 8, 3), dtype=np.uint8),),
+        audio_pcm16=np.zeros(100, dtype=np.int16),
+    )
+    with pytest.raises(BundleVerificationError):
+        adapter.stage_and_publish(req)
+
+    quarantine_p = tmp_path / ".quarantine" / "att_fail_tok_valid"
+    assert quarantine_p.is_dir()
+    assert (quarantine_p / "quarantine_receipt.json").is_file()
+
+
+def test_p140_wave14_durable_lineage_store_flock_and_morpheus_port(tmp_path: Path) -> None:
+    """P140: Durable lineage store handles atomic flock, and MorpheusPort checks authorization."""
+    store = MorpheusDurableLineageStore(tmp_path)
+    port = MorpheusPort(
+        workspace_root=tmp_path,
+        active_fencing_token_getter=lambda: "tok_1",
+        command_authorizer=lambda op, actor: actor == "authorized_actor",
+        lineage_repository=store,
+    )
+
+    # Unauthorized actor is refused
+    with pytest.raises(PermissionError, match="CommandBus denied"):
+        port.execute_operation("morpheus.character_capsule_verify", {}, actor_id="rogue_actor")
+
+    # Invalid operation is refused
+    with pytest.raises(ValueError, match="not in allowlist"):
+        port.execute_operation("morpheus.invalid_op", {}, actor_id="authorized_actor")

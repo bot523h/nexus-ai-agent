@@ -835,3 +835,607 @@ def test_morpheus_spine_pre_publish_stale_fencing() -> None:
 
         with pytest.raises(FencingTokenStaleError, match="before promotion"):
             adapter.stage_and_publish(req)
+
+
+# ── WAVE 9 COVERAGE GUARDS ───────────────────────────────────────────────────
+
+
+def test_wave9_spectral_skin_chromophore_sss_coverage_guards() -> None:
+    from nexus_ai_agent.creative.morpheus.spectral_skin_chromophore_sss import (
+        ChromophoreProperties,
+        compute_spectral_mu_a,
+        compute_spectral_mu_s_prime,
+        convolve_separable_sss_screen_buffer,
+        couple_fem_strain_to_perfusion,
+    )
+
+    with pytest.raises(ValueError, match="melanin_fraction"):
+        ChromophoreProperties(melanin_fraction=-0.1)
+    with pytest.raises(ValueError, match="melanin_fraction"):
+        ChromophoreProperties(melanin_fraction=1.5)
+    with pytest.raises(ValueError, match="blood_fraction"):
+        ChromophoreProperties(blood_fraction=-0.1)
+    with pytest.raises(ValueError, match="blood_fraction"):
+        ChromophoreProperties(blood_fraction=1.5)
+    with pytest.raises(ValueError, match="oxygenation_ratio"):
+        ChromophoreProperties(oxygenation_ratio=-0.1)
+    with pytest.raises(ValueError, match="oxygenation_ratio"):
+        ChromophoreProperties(oxygenation_ratio=1.5)
+    with pytest.raises(ValueError, match="Scattering coefficients"):
+        ChromophoreProperties(scattering_a=-1.0)
+
+    with pytest.raises(ValueError, match="wavelength_nm must be positive"):
+        compute_spectral_mu_a(-500.0, 0.05, 0.8, 0.02, 0.7)
+    with pytest.raises(ValueError, match="wavelength_nm must be positive"):
+        compute_spectral_mu_s_prime(-500.0)
+
+    with pytest.raises(ValueError, match="autonomic_flush_arousal must be in"):
+        couple_fem_strain_to_perfusion(0.05, np.zeros(1), autonomic_flush_arousal=-0.1)
+    with pytest.raises(ValueError, match="autonomic_flush_arousal must be in"):
+        couple_fem_strain_to_perfusion(0.05, np.zeros(1), autonomic_flush_arousal=1.5)
+
+    h, w = 8, 8
+    irr = np.ones((h, w, 3), dtype=np.float64)
+    depth = np.full((h, w), 10.0, dtype=np.float64)
+    normal = np.zeros((h, w, 3), dtype=np.float64)
+    normal[:, :, 2] = 1.0
+    l_d = np.array([2.0, 1.0, 0.5])
+
+    with pytest.raises(ValueError, match=r"irradiance_rgb must be \(H, W, 3\)"):
+        convolve_separable_sss_screen_buffer(np.ones((h, w)), l_d, depth, normal)
+    with pytest.raises(ValueError, match="depth_z shape"):
+        convolve_separable_sss_screen_buffer(irr, l_d, np.ones((h, w + 1)), normal)
+    with pytest.raises(ValueError, match="world_normal shape"):
+        convolve_separable_sss_screen_buffer(irr, l_d, depth, np.ones((h, w, 2)))
+    with pytest.raises(ValueError, match="pixel_size_mm must be positive"):
+        convolve_separable_sss_screen_buffer(irr, l_d, depth, normal, pixel_size_mm=-1.0)
+
+    depth_with_zeros = depth.copy()
+    depth_with_zeros[0, :] = -1.0
+    depth_with_zeros[2:4, :] = 50.0
+    res = convolve_separable_sss_screen_buffer(
+        irr, l_d, depth_with_zeros, normal, max_radius_pixels=2, bilateral_depth_threshold_mm=1.0
+    )
+    assert res.shape == (h, w, 3)
+
+
+# ── WAVE 10 COVERAGE GUARDS ──────────────────────────────────────────────────
+
+
+def test_wave10_neuromuscular_facs_articulatory_coverage_guards() -> None:
+    from nexus_ai_agent.creative.morpheus.neuromuscular_facs_articulatory_solver import (
+        HillMuscleParameters,
+        apply_antagonistic_inhibition,
+        compute_hill_muscle_force,
+        evaluate_tmj_coupled_se3,
+        extract_audio_acoustic_features,
+        solve_bilabial_contact_and_lip_seal,
+        step_first_order_activation,
+    )
+
+    with pytest.raises(ValueError, match="f_max_n and optimal_length_mm"):
+        HillMuscleParameters(f_max_n=-10.0)
+    with pytest.raises(ValueError, match="Time constants tau_act and tau_deact"):
+        HillMuscleParameters(tau_act_s=-0.01)
+
+    params = HillMuscleParameters()
+    with pytest.raises(ValueError, match="dt_s must be positive"):
+        step_first_order_activation(0.5, 1.0, dt_s=-0.01, params=params)
+
+    a_deact = step_first_order_activation(0.8, 0.2, dt_s=0.01, params=params)
+    assert a_deact < 0.8
+
+    f_ecc = compute_hill_muscle_force(1.0, 1.0, 0.5, params=params)
+    assert f_ecc > 80.0
+
+    f_zero_pas = compute_hill_muscle_force(0.0, 0.9, 0.0, params=params)
+    assert f_zero_pas == 0.0
+
+    inhibited_noop = apply_antagonistic_inhibition(
+        {"AU12": 0.3, "AU15": 0.3, "AU22": 0.2, "AU20": 0.2}
+    )
+    assert inhibited_noop["AU12"] == 0.3
+
+    with pytest.raises(ValueError, match="jaw_opening_rad must be in"):
+        evaluate_tmj_coupled_se3(jaw_opening_rad=-0.1)
+
+    chin_low = np.array([0.0, 0.0, -100.0])
+    tmj_clamped = evaluate_tmj_coupled_se3(
+        jaw_opening_rad=0.3, mandible_chin_rest=chin_low, neck_boundary_z=-50.0
+    )
+    assert tmj_clamped.chin_clearance_mm == 0.0
+
+    with pytest.raises(ValueError, match="samples must be int16"):
+        extract_audio_acoustic_features(np.zeros(10, dtype=np.float32))
+    empty_feat = extract_audio_acoustic_features(np.zeros(0, dtype=np.int16))
+    assert empty_feat.rms_energy == 0.0
+
+    with pytest.raises(ValueError, match="upper_lip_vertices must be"):
+        solve_bilabial_contact_and_lip_seal(np.zeros((4, 2)), np.zeros((4, 3)), False)
+    with pytest.raises(ValueError, match="lower_lip_vertices must be"):
+        solve_bilabial_contact_and_lip_seal(np.zeros((4, 3)), np.zeros((4, 2)), False)
+    with pytest.raises(ValueError, match="Upper and lower lip vertex counts must match"):
+        solve_bilabial_contact_and_lip_seal(np.zeros((4, 3)), np.zeros((5, 3)), False)
+
+    u_open = np.array([[0.0, 5.0, 0.0]])
+    l_open = np.array([[0.0, 0.0, 0.0]])
+    _, _, d_open = solve_bilabial_contact_and_lip_seal(u_open, l_open, is_closure_frame=False)
+    assert d_open == 5.0
+
+
+# ── WAVE 11 COVERAGE GUARDS ──────────────────────────────────────────────────
+
+
+def test_wave11_ocular_corneal_refraction_coverage_guards() -> None:
+    from nexus_ai_agent.creative.morpheus.ocular_corneal_refraction_meniscus import (
+        EyeOpticalParameters,
+        deform_eyelid_corneal_bulge,
+        evaluate_pupillary_light_reflex,
+        trace_3d_snell_corneal_refraction,
+    )
+
+    with pytest.raises(ValueError, match="cornea_radius must be smaller than sclera_radius"):
+        EyeOpticalParameters(cornea_radius_mm=20.0, sclera_radius_mm=12.0)
+    with pytest.raises(ValueError, match="Refractive indices must be > 1.0"):
+        EyeOpticalParameters(cornea_ior=0.8)
+
+    params = EyeOpticalParameters()
+    c_s = np.zeros(3)
+    rot = np.eye(3)
+
+    with pytest.raises(ValueError, match="eyelid_vertices must be"):
+        deform_eyelid_corneal_bulge(np.zeros((4, 2)), c_s, rot, params)
+
+    eyelid_center = np.zeros((1, 3))
+    def_center = deform_eyelid_corneal_bulge(eyelid_center, c_s, rot, params)
+    assert def_center.shape == (1, 3)
+
+    with pytest.raises(ValueError, match="scene_illuminance_lux cannot be negative"):
+        evaluate_pupillary_light_reflex(-10.0)
+
+    ray_miss = trace_3d_snell_corneal_refraction(
+        view_ray_origin=np.array([100.0, 100.0, 100.0]),
+        view_ray_direction=np.array([1.0, 0.0, 0.0]),
+        sclera_center=c_s,
+        gaze_rotation=rot,
+    )
+    assert ray_miss is None
+
+    ray_away = trace_3d_snell_corneal_refraction(
+        view_ray_origin=np.array([0.0, 0.0, 25.0]),
+        view_ray_direction=np.array([0.0, 0.0, 1.0]),
+        sclera_center=c_s,
+        gaze_rotation=rot,
+    )
+    assert ray_away is None
+
+
+# ── WAVE 12 COVERAGE GUARDS ──────────────────────────────────────────────────
+
+
+def test_wave12_coupled_multiphysics_ipc_coverage_guards() -> None:
+    from nexus_ai_agent.creative.morpheus import (
+        Bone,
+        FEMSimulationState,
+        SkeletalChain,
+        SkinningWeights,
+        SoftTissueMaterial,
+        UnitQuaternion,
+        build_tetrahedron,
+    )
+    from nexus_ai_agent.creative.morpheus.coupled_multiphysics_ipc_contact import (
+        ccd_conservative_line_search,
+        compute_smoothed_coulomb_friction,
+        evaluate_ipc_log_barrier,
+        step_coupled_morpheus_multiphysics,
+    )
+
+    with pytest.raises(ValueError, match="hat_d and kappa must be strictly positive"):
+        evaluate_ipc_log_barrier(0.1, hat_d=-1.0)
+    with pytest.raises(ValueError, match="non-positive distance"):
+        evaluate_ipc_log_barrier(-0.1, hat_d=1.0)
+
+    f_zero, p_zero = compute_smoothed_coulomb_friction(0.0, np.zeros(3), np.array([0.0, 0.0, 1.0]))
+    assert np.allclose(f_zero, 0.0)
+    assert p_zero == 0.0
+
+    alpha_max = ccd_conservative_line_search(
+        start_point=np.array([0.0, 0.0, 0.0]),
+        displacement_step=np.array([0.0, 0.0, 1.0]),
+        obstacle_sdf_fn=lambda p: -10.0,
+        max_bisections=3,
+    )
+    assert alpha_max < 0.2
+
+    b = Bone("b1", None, np.zeros(3), np.array([0.0, 0.0, 10.0]), 10.0)
+    chain = SkeletalChain((b,))
+    weights = SkinningWeights(1, ("b1",), np.array([[1.0]]))
+    mat = SoftTissueMaterial(5000.0, 0.3)
+    v = np.array([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 5.0]])
+    tet = build_tetrahedron((0, 1, 2, 3), v)
+    fem = FEMSimulationState(v, np.zeros((4, 3)), (tet,), mat)
+
+    with pytest.raises(ValueError, match="dt_s must be positive"):
+        step_coupled_morpheus_multiphysics(
+            chain,
+            {"b1": UnitQuaternion.identity()},
+            weights,
+            fem,
+            (),
+            np.zeros((0, 3)),
+            dt_s=0.0,
+        )
+
+    bad_weights = SkinningWeights(2, ("b1", "b2"), np.eye(2))
+    # Weights mismatch falls back gracefully
+    bone_fb, _, _, _, _ = step_coupled_morpheus_multiphysics(
+        chain, {"b1": UnitQuaternion.identity()}, bad_weights, fem, (), np.zeros((0, 3))
+    )
+    assert bone_fb.shape == (1, 3)
+
+    cloth_near = np.array([[0.0, 0.0, 26.5]])
+    _, _, _, cloth_out, receipt = step_coupled_morpheus_multiphysics(
+        chain,
+        {"b1": UnitQuaternion.identity()},
+        weights,
+        fem,
+        (),
+        cloth_near,
+        dt_s=0.01,
+        ipc_hat_d_mm=2.0,
+    )
+    assert cloth_out.shape == (1, 3)
+
+
+# ── WAVE 13 COVERAGE GUARDS ──────────────────────────────────────────────────
+
+
+def test_wave13_gaussian_deferred_relighting_coverage_guards() -> None:
+    from nexus_ai_agent.creative.morpheus import CameraParameters, Gaussian3D, UnitQuaternion
+    from nexus_ai_agent.creative.morpheus.gaussian_deferred_relighting_taa import (
+        SphericalGaussianLobe,
+        apply_variance_clipped_taa,
+        evaluate_sg_inner_product,
+        relight_deferred_gbuffer_sg,
+        splat_deferred_gbuffer,
+    )
+
+    with pytest.raises(ValueError, match="Focal lengths fx and fy must be positive"):
+        CameraParameters(np.eye(4), -10.0, 10.0, 10.0, 10.0, 16, 16)
+    with pytest.raises(ValueError, match="Focal lengths fx and fy must be positive"):
+        CameraParameters(np.eye(4), 10.0, -10.0, 10.0, 10.0, 16, 16)
+    with pytest.raises(ValueError, match="Image dimensions width and height must be positive"):
+        CameraParameters(np.eye(4), 10.0, 10.0, 10.0, 10.0, 0, 16)
+
+    cam = CameraParameters(np.eye(4), 50.0, 50.0, 8.0, 8.0, 16, 16)
+
+    g_behind = Gaussian3D(
+        mean=np.array([0.0, 0.0, -5.0]),
+        rotation=UnitQuaternion.identity(),
+        scale=np.array([0.1, 0.1, 0.1]),
+        opacity=0.9,
+        normal=np.array([0.0, 0.0, 1.0]),
+        albedo=np.ones(3),
+        roughness=0.5,
+        metallic=0.0,
+    )
+    g_out_of_bounds = Gaussian3D(
+        mean=np.array([100.0, 100.0, 2.0]),
+        rotation=UnitQuaternion.identity(),
+        scale=np.array([0.1, 0.1, 0.1]),
+        opacity=0.9,
+        normal=np.array([0.0, 0.0, 1.0]),
+        albedo=np.ones(3),
+        roughness=0.5,
+        metallic=0.0,
+    )
+    gbuf_empty = splat_deferred_gbuffer((g_behind, g_out_of_bounds), cam)
+    assert np.all(gbuf_empty.alpha_matte == 0.0)
+
+    sg_1 = SphericalGaussianLobe(np.array([0.0, 0.0, 1.0]), 1.0, np.ones(3))
+    sg_antipodal = SphericalGaussianLobe(np.array([0.0, 0.0, -1.0]), 1.0, np.ones(3))
+    prod_zero = evaluate_sg_inner_product(sg_1, sg_antipodal)
+    assert prod_zero.shape == (3,)
+
+    lit_empty = relight_deferred_gbuffer_sg(gbuf_empty, cam, (sg_1,))
+    assert lit_empty.shape == (16, 16, 3)
+
+    with pytest.raises(ValueError, match="current and history frame shapes mismatch"):
+        apply_variance_clipped_taa(
+            np.zeros((8, 8, 3)),
+            np.zeros((9, 8, 3)),
+            np.zeros((8, 8, 2)),
+            np.zeros((8, 8)),
+            np.zeros((8, 8)),
+        )
+    with pytest.raises(ValueError, match="motion_vectors_2d shape mismatch"):
+        apply_variance_clipped_taa(
+            np.zeros((8, 8, 3)),
+            np.zeros((8, 8, 3)),
+            np.zeros((8, 8, 3)),
+            np.zeros((8, 8)),
+            np.zeros((8, 8)),
+        )
+
+    big_motion = np.full((8, 8, 2), 100.0)
+    taa_oob = apply_variance_clipped_taa(
+        np.ones((8, 8, 3)), np.zeros((8, 8, 3)), big_motion, np.zeros((8, 8)), np.zeros((8, 8))
+    )
+    assert np.allclose(taa_oob, 1.0)
+
+
+# ── WAVE 14 COVERAGE GUARDS ──────────────────────────────────────────────────
+
+
+def test_wave14_real_media_spine_and_port_coverage_guards(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.morpheus.morpheus_port import MorpheusPort
+    from nexus_ai_agent.creative.morpheus.morpheus_real_media_spine import (
+        MorpheusAssetVersionRecord,
+        MorpheusBundleDigests,
+        MorpheusDurableLineageStore,
+        largest_power_of_two_less_than,
+        probe_mp4_container,
+        read_png_frame,
+        write_png_frame,
+    )
+
+    with pytest.raises(ValueError, match="n must be > 1"):
+        largest_power_of_two_less_than(1)
+
+    with pytest.raises(ValueError, match=r"rgb must be \(H, W, 3\) uint8 array"):
+        write_png_frame(np.zeros((8, 8), dtype=np.uint8), tmp_path / "bad.png")
+    with pytest.raises(ValueError, match=r"rgb must be \(H, W, 3\) uint8 array"):
+        write_png_frame(np.zeros((8, 8, 3), dtype=np.float32), tmp_path / "bad.png")
+
+    with pytest.raises(FileNotFoundError, match="PNG frame not found"):
+        read_png_frame(tmp_path / "nonexistent.png")
+
+    with pytest.raises(FileNotFoundError, match="MP4 file not found"):
+        probe_mp4_container(tmp_path / "nonexistent.mp4", 24, 10)
+
+    corrupt_mp4 = tmp_path / "corrupt.mp4"
+    corrupt_mp4.write_bytes(b"not an mp4")
+    with pytest.raises(BundleVerificationError, match="Failed to open MP4 container"):
+        probe_mp4_container(corrupt_mp4, 24, 10)
+
+    store = MorpheusDurableLineageStore(tmp_path)
+    assert store.get_asset_version("nonexistent") is None
+    assert store.get_artifact_passport("nonexistent") is None
+
+    store.ledger_file.write_text("corrupted json content")
+    assert store.get_asset_version("nonexistent") is None
+
+    digests = MorpheusBundleDigests("a", "b", "c", "d", "e", "f", "g", "h")
+    rec = MorpheusAssetVersionRecord(
+        "asset_100", "att_1", "tok_01", digests, "pub_dir", "pub_mp4", "manifest_sha"
+    )
+    passport = store.record_asset_version(rec)
+    assert passport.asset_id == "asset_100"
+
+    passport_replay = store.record_asset_version(rec)
+    assert passport_replay.passport_id == passport.passport_id
+
+    retrieved_rec = store.get_asset_version("asset_100")
+    assert retrieved_rec is not None
+    assert retrieved_rec.asset_id == "asset_100"
+
+    retrieved_pass = store.get_artifact_passport("asset_100")
+    assert retrieved_pass is not None
+    assert retrieved_pass.passport_id == passport.passport_id
+
+    rec_stale = MorpheusAssetVersionRecord(
+        "asset_100", "att_2", "tok_00", digests, "pub_dir", "pub_mp4", "manifest_sha"
+    )
+    with pytest.raises(FencingTokenStaleError, match="Fencing token regression"):
+        store.record_asset_version(rec_stale)
+
+    from nexus_ai_agent.creative.morpheus.morpheus_real_media_spine import (
+        MorpheusStagedSpineAdapter,
+        MorpheusStageRequest,
+        mux_mp4_ffmpeg,
+        verify_morpheus_bundle_on_disk,
+    )
+
+    with pytest.raises(FileNotFoundError, match="Audio WAV missing"):
+        mux_mp4_ffmpeg(
+            str(tmp_path / "frame_%04d.png"),
+            tmp_path / "missing.wav",
+            tmp_path / "out.mp4",
+        )
+
+    stale_p1_req = MorpheusStageRequest(
+        asset_id="asset_stale_p1",
+        attempt_id="att_p1",
+        fencing_token="tok_bad",
+        frames_uint8=(np.zeros((8, 8, 3), dtype=np.uint8),),
+        audio_pcm16=np.zeros(2400, dtype=np.int16),
+    )
+    adapter_stale1 = MorpheusStagedSpineAdapter(tmp_path / "sp_stale", lambda: "tok_good")
+    with pytest.raises(FencingTokenStaleError, match="Fencing token stale before staging"):
+        adapter_stale1.stage_and_publish(stale_p1_req)
+
+    def authorizer(op: str, actor: str) -> bool:
+        if actor == "error_actor":
+            raise RuntimeError("authorizer crashed")
+        return actor == "auth_user"
+
+    port = MorpheusPort(
+        workspace_root=tmp_path,
+        active_fencing_token_getter=lambda: "tok_1",
+        command_authorizer=authorizer,
+        lineage_repository=store,
+    )
+
+    with pytest.raises(PermissionError, match="CommandBus authorization error"):
+        port.execute_operation("morpheus.character_capsule_verify", {}, actor_id="error_actor")
+
+    from nexus_ai_agent.creative.morpheus import (
+        Bone,
+        FEMSimulationState,
+        MorpheusStageRequest,
+        SkeletalChain,
+        SkinningWeights,
+        SoftTissueMaterial,
+        UnitQuaternion,
+        build_tetrahedron,
+        create_character_identity_capsule,
+    )
+
+    with pytest.raises(PermissionError, match="CommandBus denied"):
+        port.execute_operation("morpheus.character_capsule_verify", {}, actor_id="unauth_user")
+
+    capsule = create_character_identity_capsule(
+        character_id="hero",
+        canonical_alpha_id=(0.0, 0.0),
+        cephalometric_ratios={"ip_bz": 0.4},
+        skeletal_rest_lengths={},
+        soft_tissue_rest_volumes=(),
+        hair_strand_count=0,
+        hair_rest_segment_lengths=(),
+        melanin_absorption=(0.1, 0.2, 0.3),
+        cloth_thin_film_thickness_nm=400.0,
+        cloth_sheen_roughness=0.3,
+    )
+    res_capsule = port.execute_operation(
+        "morpheus.character_capsule_verify",
+        {"capsule": capsule},
+        actor_id="auth_user",
+        idempotency_key="idem_1",
+    )
+    assert res_capsule.status == "SUCCESS"
+
+    res_bad_cap = port.execute_operation(
+        "morpheus.character_capsule_verify",
+        {"capsule": "bad"},
+        actor_id="auth_user",
+    )
+    assert res_bad_cap.status == "REFUSED"
+
+    res_replayed = port.execute_operation(
+        "morpheus.character_capsule_verify",
+        {},
+        actor_id="auth_user",
+        idempotency_key="idem_1",
+    )
+    assert res_replayed.idempotent_replayed is True
+
+    stage_req = MorpheusStageRequest(
+        asset_id="ast_port",
+        attempt_id="att_port",
+        fencing_token="tok_1",
+        frames_uint8=(np.zeros((8, 8, 3), dtype=np.uint8),),
+        audio_pcm16=np.zeros(2400, dtype=np.int16),
+    )
+    res_spine = port.execute_operation(
+        "morpheus.staged_spine_master",
+        {"request": stage_req},
+        actor_id="auth_user",
+    )
+    assert res_spine.status == "SUCCESS"
+    assert res_spine.data is not None
+    pub_mp4 = str(res_spine.data["published_mp4_path"])
+    with pytest.raises(BundleVerificationError, match="Decoded MP4 frame count"):
+        probe_mp4_container(pub_mp4, expected_fps=24, expected_frame_count=999)
+
+    with pytest.raises(BundleVerificationError, match="MP4 stream fps"):
+        probe_mp4_container(pub_mp4, expected_fps=120, expected_frame_count=1)
+
+    # Test verify_morpheus_bundle_on_disk with epistemic violations
+    dummy_staging_viol = tmp_path / "dummy_viol"
+    dummy_staging_viol.mkdir(parents=True, exist_ok=True)
+    (dummy_staging_viol / "manifest.json").write_text(
+        json.dumps({"wave_epistemic_statuses": {"WAVE_01": "VIOLATED"}})
+    )
+    with pytest.raises(BundleVerificationError, match="VIOLATED physical wave invariant"):
+        verify_morpheus_bundle_on_disk(dummy_staging_viol)
+
+    res_bad_req = port.execute_operation(
+        "morpheus.staged_spine_master",
+        {"request": "bad"},
+        actor_id="auth_user",
+    )
+    assert res_bad_req.status == "REFUSED"
+
+    b = Bone("b1", None, np.zeros(3), np.array([0.0, 0.0, 10.0]), 10.0)
+    chain = SkeletalChain((b,))
+    weights = SkinningWeights(1, ("b1",), np.array([[1.0]]))
+    mat = SoftTissueMaterial(5000.0, 0.3)
+    v_tet = np.array([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 5.0]])
+    tet = build_tetrahedron((0, 1, 2, 3), v_tet)
+    fem = FEMSimulationState(v_tet, np.zeros((4, 3)), (tet,), mat)
+
+    res_render = port.execute_operation(
+        "morpheus.multiphysics_relight_render",
+        {
+            "skeletal_chain": chain,
+            "joint_rotations": {"b1": UnitQuaternion.identity()},
+            "skinning_weights": weights,
+            "fem_state": fem,
+            "hair_strands": (),
+            "cloth_vertices": np.zeros((0, 3)),
+        },
+        actor_id="auth_user",
+    )
+    assert res_render.status == "SUCCESS"
+
+
+def test_wave_deep_branch_coverage_completion() -> None:
+    """Exercise remaining defensive branch completions across Morpheus modules."""
+    from nexus_ai_agent.creative.morpheus.coupled_multiphysics_ipc_contact import (
+        compute_smoothed_coulomb_friction,
+    )
+    from nexus_ai_agent.creative.morpheus.gaussian_deferred_relighting_taa import (
+        SphericalGaussianLobe,
+    )
+    from nexus_ai_agent.creative.morpheus.ocular_corneal_refraction_meniscus import (
+        EyeOpticalParameters,
+        trace_3d_snell_corneal_refraction,
+    )
+    from nexus_ai_agent.creative.morpheus.spectral_skin_chromophore_sss import (
+        ChromophoreProperties,
+    )
+
+    # 1. SphericalGaussianLobe validation guards
+    with pytest.raises(ValueError, match="axis_direction must be"):
+        SphericalGaussianLobe(np.zeros(2), 1.0, np.ones(3))
+
+    with pytest.raises(ValueError, match="must be unit length"):
+        SphericalGaussianLobe(np.array([2.0, 0.0, 0.0]), 1.0, np.ones(3))
+
+    with pytest.raises(ValueError, match="sharpness must be positive"):
+        SphericalGaussianLobe(np.array([0.0, 0.0, 1.0]), -1.0, np.ones(3))
+
+    with pytest.raises(ValueError, match="amplitude_rgb must be non-negative"):
+        SphericalGaussianLobe(np.array([0.0, 0.0, 1.0]), 1.0, np.array([-1.0, 0.0, 0.0]))
+
+    with pytest.raises(ValueError, match="amplitude_rgb must be non-negative"):
+        SphericalGaussianLobe(np.array([0.0, 0.0, 1.0]), 1.0, np.ones(2))
+
+    # 2. compute_smoothed_coulomb_friction with speed_t >= eps_velocity (phi = 1.0)
+    f_t, p_diss = compute_smoothed_coulomb_friction(
+        normal_force_n=10.0,
+        relative_tangential_velocity=np.array([10.0, 0.0, 0.0]),
+        contact_normal=np.array([0.0, 1.0, 0.0]),
+        mu_friction=0.3,
+        eps_velocity=1e-3,
+    )
+    assert f_t.shape == (3,)
+    assert p_diss > 0.0
+
+    # 3. trace_3d_snell_corneal_refraction missing ray returning None
+    opt = EyeOpticalParameters()
+    res_miss = trace_3d_snell_corneal_refraction(
+        view_ray_origin=np.array([0.0, 0.0, -100.0]),
+        view_ray_direction=np.array([0.0, 1.0, 0.0]),  # perpendicular to cornea vertex at [0,0,0]
+        sclera_center=np.zeros(3),
+        gaze_rotation=np.eye(3),
+        params=opt,
+    )
+    assert res_miss is None
+
+    # 4. ChromophoreProperties invalid oxygenation ratio
+    with pytest.raises(ValueError, match="oxygenation_ratio must be in"):
+        ChromophoreProperties(oxygenation_ratio=0.2)
+
+    with pytest.raises(ValueError, match="oxygenation_ratio must be in"):
+        ChromophoreProperties(oxygenation_ratio=1.2)

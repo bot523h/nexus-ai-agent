@@ -1,6 +1,6 @@
-"""Popperian Mutation Campaign (80/80 True AST/Code Mutations) for NAGAR MORPHEUS.
+"""Popperian Mutation Campaign (120/120 True AST/Code Mutations) for NAGAR MORPHEUS OMNIA.
 
-Executes 80 distinct implementation mutations (10 mutations per wave across Waves 1–8)
+Executes 120 distinct implementation mutations across Waves 1–14 (M001–M120)
 loaded via `importlib.util.spec_from_file_location` without evicting C-extensions
 (`numpy`, `scipy`, `PIL`) from `sys.modules` (Golden Rule #3).
 Proves 100% (80/80) mutation kill rate (0 survivors) on the exact oracle that passes
@@ -2198,5 +2198,850 @@ def test_m80_kill_wave8_exact_continuity_condition() -> None:
         old_fragment="exact_continuity = all(drift < 1e-12 for drift in post_drifts.values())",
         new_fragment="exact_continuity = all(drift > 1.0 for drift in post_drifts.values())",
         mutant_id="M80",
+        oracle=oracle,
+    )
+
+
+# ── WAVE 9 MUTATIONS: M81–M87 (spectral_skin_chromophore_sss.py) ────────────
+
+
+def test_m81_kill_wave9_chromophore_scattering_rayleigh_power() -> None:
+    """M81: Mutating Rayleigh power in reduced scattering violates chromatic ordering."""
+
+    def oracle(mod: Any) -> None:
+        prof = mod.evaluate_skin_chromophore_profile(mod.ChromophoreProperties())
+        assert prof.reduced_scattering_mu_s_prime[2] > prof.reduced_scattering_mu_s_prime[0]
+
+    run_mutation_kill_probe(
+        source_filename="spectral_skin_chromophore_sss.py",
+        old_fragment="mu_s_prime = a_s * (rel**-b_mie) + c_s * (rel**-4.0)",
+        new_fragment="mu_s_prime = a_s * (rel**-b_mie) + c_s * (rel**4.0)",
+        mutant_id="M81",
+        oracle=oracle,
+    )
+
+
+def test_m82_kill_wave9_diffuse_mean_free_path_scale() -> None:
+    """M82: Mutating diffusion coefficient scale alters mean free path calculation."""
+
+    def oracle(mod: Any) -> None:
+        prof = mod.evaluate_skin_chromophore_profile(mod.ChromophoreProperties())
+        assert 0.7 < prof.diffuse_mean_free_path_mm[0] < 1.0
+
+    run_mutation_kill_probe(
+        source_filename="spectral_skin_chromophore_sss.py",
+        old_fragment="l_d_cm = 1.0 / np.sqrt(3.0 * mu_a * (mu_a + mu_sp))",
+        new_fragment="l_d_cm = 0.01 / np.sqrt(3.0 * mu_a * (mu_a + mu_sp))",
+        mutant_id="M82",
+        oracle=oracle,
+    )
+
+
+def test_m83_kill_wave9_compressive_stress_blanching_sign() -> None:
+    """M83: Mutating stress sign prevents capillary blanching under mechanical compression."""
+
+    def oracle(mod: Any) -> None:
+        stresses = np.array([0.0, 50000.0])
+        f = mod.couple_fem_strain_to_perfusion(0.05, stresses)
+        assert f[1] < f[0]
+
+    run_mutation_kill_probe(
+        source_filename="spectral_skin_chromophore_sss.py",
+        old_fragment="delta_blanch = k_blanch * np.maximum(0.0, sigma)",
+        new_fragment="delta_blanch = -k_blanch * np.maximum(0.0, sigma)",
+        mutant_id="M83",
+        oracle=oracle,
+    )
+
+
+def test_m84_kill_wave9_autonomic_flush_arousal_coupling() -> None:
+    """M84: Inverting autonomic flush arousal decreases perfusion during emotional arousal."""
+
+    def oracle(mod: Any) -> None:
+        f0 = mod.couple_fem_strain_to_perfusion(0.05, np.zeros(1), autonomic_flush_arousal=0.0)[0]
+        f1 = mod.couple_fem_strain_to_perfusion(0.05, np.zeros(1), autonomic_flush_arousal=0.8)[0]
+        assert f1 > f0
+
+    run_mutation_kill_probe(
+        source_filename="spectral_skin_chromophore_sss.py",
+        old_fragment="delta_flush = k_flush * autonomic_flush_arousal",
+        new_fragment="delta_flush = -k_flush * autonomic_flush_arousal",
+        mutant_id="M84",
+        oracle=oracle,
+    )
+
+
+def test_m85_kill_wave9_blood_perfusion_bounds_clamp() -> None:
+    """M85: Eliminating minimum blood perfusion clamp allows unphysical ischemia <= 0."""
+
+    def oracle(mod: Any) -> None:
+        stresses = np.array([1e8])
+        f = mod.couple_fem_strain_to_perfusion(0.01, stresses)
+        assert f[0] >= 0.001
+
+    run_mutation_kill_probe(
+        source_filename="spectral_skin_chromophore_sss.py",
+        old_fragment="return np.clip(f_modulated, 0.001, 0.15)",
+        new_fragment="return f_modulated",
+        mutant_id="M85",
+        oracle=oracle,
+    )
+
+
+def test_m86_kill_wave9_sss_bilateral_depth_edge_stopping() -> None:
+    """M86: Neutralizing bilateral depth attenuation bleeds SSS light across silhouettes."""
+
+    def oracle(mod: Any) -> None:
+        h, w = 8, 8
+        irr = np.zeros((h, w, 3), dtype=np.float64)
+        irr[:, :4] = 1.0
+        depth = np.zeros((h, w), dtype=np.float64)
+        depth[:, :4] = 5.0
+        depth[:, 4:] = 50.0
+        normal = np.zeros((h, w, 3), dtype=np.float64)
+        normal[:, :, 2] = 1.0
+        l_d = np.array([3.0, 1.5, 0.8])
+        sss = mod.convolve_separable_sss_screen_buffer(irr, l_d, depth, normal, max_radius_pixels=3)
+        assert sss[4, 4, 0] < 0.05
+
+    run_mutation_kill_probe(
+        source_filename="spectral_skin_chromophore_sss.py",
+        old_fragment="bilateral_depth_threshold_mm: float = 2.0,",
+        new_fragment="bilateral_depth_threshold_mm: float = 200.0,",
+        mutant_id="M86",
+        oracle=oracle,
+    )
+
+
+def test_m87_kill_wave9_sum_of_gaussians_energy_normalization() -> None:
+    """M87: Omitting kernel weight normalization violates energy conservation."""
+
+    def oracle(mod: Any) -> None:
+        h, w = 8, 8
+        irr = np.full((h, w, 3), 0.3, dtype=np.float64)
+        depth = np.full((h, w), 10.0, dtype=np.float64)
+        normal = np.zeros((h, w, 3), dtype=np.float64)
+        normal[:, :, 2] = 1.0
+        l_d = np.array([2.0, 1.0, 0.5])
+        sss = mod.convolve_separable_sss_screen_buffer(irr, l_d, depth, normal, max_radius_pixels=2)
+        assert np.sum(sss[:, :, 0]) <= np.sum(irr[:, :, 0]) + 1e-4
+
+    run_mutation_kill_probe(
+        source_filename="spectral_skin_chromophore_sss.py",
+        old_fragment="if out_energy > in_energy and in_energy > 1e-9:",
+        new_fragment="out_rgb[:, :, c] *= 2.0\n        if False:",
+        mutant_id="M87",
+        oracle=oracle,
+    )
+
+
+# ── WAVE 10 MUTATIONS: M88–M94 (neuromuscular_facs_articulatory_solver.py) ──
+
+
+def test_m88_kill_wave10_activation_rate_constant() -> None:
+    """M88: Mutating activation time constant scaling delays neuromuscular response."""
+
+    def oracle(mod: Any) -> None:
+        params = mod.HillMuscleParameters()
+        a = mod.step_first_order_activation(0.0, 1.0, dt_s=0.01, params=params)
+        assert a > 0.15
+
+    run_mutation_kill_probe(
+        source_filename="neuromuscular_facs_articulatory_solver.py",
+        old_fragment="tau = params.tau_act_s * (0.5 + 1.5 * a)",
+        new_fragment="tau = params.tau_act_s * 100.0",
+        mutant_id="M88",
+        oracle=oracle,
+    )
+
+
+def test_m89_kill_wave10_hill_active_force_bell_shift() -> None:
+    """M89: Shifting active force-length bell curve misaligns optimal isometric tension."""
+
+    def oracle(mod: Any) -> None:
+        params = mod.HillMuscleParameters()
+        f_opt = mod.compute_hill_muscle_force(1.0, 1.0, 0.0, params=params)
+        f_short = mod.compute_hill_muscle_force(1.0, 0.7, 0.0, params=params)
+        assert f_opt > f_short
+
+    run_mutation_kill_probe(
+        source_filename="neuromuscular_facs_articulatory_solver.py",
+        old_fragment="f_l = np.exp(-((l_tilde - 1.0) ** 2) / max(params.gamma_l, 1e-4))",
+        new_fragment="f_l = np.exp(-((l_tilde - 0.5) ** 2) / max(params.gamma_l, 1e-4))",
+        mutant_id="M89",
+        oracle=oracle,
+    )
+
+
+def test_m90_kill_wave10_hill_concentric_force_velocity() -> None:
+    """M90: Inverting concentric velocity response incorrectly increases force under shortening."""
+
+    def oracle(mod: Any) -> None:
+        params = mod.HillMuscleParameters()
+        f_iso = mod.compute_hill_muscle_force(1.0, 1.0, 0.0, params=params)
+        f_short = mod.compute_hill_muscle_force(1.0, 1.0, -0.5, params=params)
+        assert f_iso > f_short
+
+    run_mutation_kill_probe(
+        source_filename="neuromuscular_facs_articulatory_solver.py",
+        old_fragment="f_v = (1.0 + v_tilde) / (1.0 - params.k_v * v_tilde)",
+        new_fragment="f_v = (1.0 - 10.0 * v_tilde) / (1.0 - params.k_v * v_tilde)",
+        mutant_id="M90",
+        oracle=oracle,
+    )
+
+
+def test_m91_kill_wave10_antagonistic_inhibition_scale() -> None:
+    """M91: Omitting antagonistic FACS energy scaling violates co-contraction limits."""
+
+    def oracle(mod: Any) -> None:
+        res = mod.apply_antagonistic_inhibition(
+            {"AU12": 0.9, "AU15": 0.9}, max_co_contraction_energy=1.0
+        )
+        assert res["AU12"] + res["AU15"] <= 1.0001
+
+    run_mutation_kill_probe(
+        source_filename="neuromuscular_facs_articulatory_solver.py",
+        old_fragment='out["AU12"] = a12 * scale',
+        new_fragment='out["AU12"] = a12',
+        mutant_id="M91",
+        oracle=oracle,
+    )
+
+
+def test_m92_kill_wave10_tmj_translation_coupling() -> None:
+    """M92: Neutralizing condylar translation slide produces unnatural pure hinge jaw opening."""
+
+    def oracle(mod: Any) -> None:
+        tmj = mod.evaluate_tmj_coupled_se3(jaw_opening_rad=0.3)
+        assert abs(tmj.translation_vector[1]) > 0.5
+
+    run_mutation_kill_probe(
+        source_filename="neuromuscular_facs_articulatory_solver.py",
+        old_fragment="t_slide = np.array([0.0, slide_y, slide_z], dtype=np.float64)",
+        new_fragment="t_slide = np.zeros(3, dtype=np.float64)",
+        mutant_id="M92",
+        oracle=oracle,
+    )
+
+
+def test_m93_kill_wave10_bilabial_contact_lock_bypass() -> None:
+    """M93: Skipping contact resolution allows lip interpenetration during closure."""
+
+    def oracle(mod: Any) -> None:
+        u_lip = np.array([[0.0, -2.0, 0.0]])
+        l_lip = np.array([[0.0, 2.0, 0.0]])
+        u_p, l_p, _ = mod.solve_bilabial_contact_and_lip_seal(u_lip, l_lip, is_closure_frame=False)
+        assert abs(u_p[0, 1] - l_p[0, 1]) < 1e-6
+
+    run_mutation_kill_probe(
+        source_filename="neuromuscular_facs_articulatory_solver.py",
+        old_fragment="if is_closure_frame or min_dist < 0.0:",
+        new_fragment="if False:",
+        mutant_id="M93",
+        oracle=oracle,
+    )
+
+
+def test_m94_kill_wave10_bilabial_poisson_lateral_bulge() -> None:
+    """M94: Suppressing lateral Poisson bulge violates contact volume conservation."""
+
+    def oracle(mod: Any) -> None:
+        u_lip = np.array([[1.0, -1.0, 0.0]])
+        l_lip = np.array([[1.0, 1.0, 0.0]])
+        u_p, _, _ = mod.solve_bilabial_contact_and_lip_seal(u_lip, l_lip, is_closure_frame=True)
+        assert u_p[0, 0] > u_lip[0, 0]
+
+    run_mutation_kill_probe(
+        source_filename="neuromuscular_facs_articulatory_solver.py",
+        old_fragment="bulge = lateral_sign * compression * poisson_expansion_factor",
+        new_fragment="bulge = 0.0",
+        mutant_id="M94",
+        oracle=oracle,
+    )
+
+
+# ── WAVE 11 MUTATIONS: M95–M101 (ocular_corneal_refraction_meniscus.py) ─────
+
+
+def test_m95_kill_wave11_corneal_center_offset() -> None:
+    """M95: Inverting corneal center offset displaces cornea into globe interior."""
+
+    def oracle(mod: Any) -> None:
+        params = mod.EyeOpticalParameters()
+        c_s = np.zeros(3)
+        rot = np.eye(3)
+        pt_cornea = np.array([0.0, 0.0, params.cornea_center_offset_mm + params.cornea_radius_mm])
+        d = mod.compute_globe_composite_sdf(pt_cornea, c_s, rot, params)
+        assert abs(d) < 1e-4
+
+    run_mutation_kill_probe(
+        source_filename="ocular_corneal_refraction_meniscus.py",
+        old_fragment="c_c = c_s + params.cornea_center_offset_mm * gaze_dir",
+        new_fragment="c_c = c_s - params.cornea_center_offset_mm * gaze_dir",
+        mutant_id="M95",
+        oracle=oracle,
+    )
+
+
+def test_m96_kill_wave11_eyelid_bulge_displacement() -> None:
+    """M96: Reversing radial deformation pulls eyelids into eyeball causing clipping."""
+
+    def oracle(mod: Any) -> None:
+        params = mod.EyeOpticalParameters()
+        c_s = np.zeros(3)
+        rot = np.eye(3)
+        eyelids = np.array([[0.0, 0.0, 10.0]])
+        def_v = mod.deform_eyelid_corneal_bulge(eyelids, c_s, rot, params, tear_clearance_mm=0.20)
+        dist = mod.compute_globe_composite_sdf(def_v[0], c_s, rot, params)
+        assert dist >= 0.20 - 1e-6
+
+    run_mutation_kill_probe(
+        source_filename="ocular_corneal_refraction_meniscus.py",
+        old_fragment="deformed[i] = pt + penetration * r_hat",
+        new_fragment="deformed[i] = pt - penetration * r_hat",
+        mutant_id="M96",
+        oracle=oracle,
+    )
+
+
+def test_m97_kill_wave11_pupillary_light_reflex_formula() -> None:
+    """M97: Mutating light reflex formula dilates pupil under high illuminance."""
+
+    def oracle(mod: Any) -> None:
+        r_dark = mod.evaluate_pupillary_light_reflex(1.0)
+        r_bright = mod.evaluate_pupillary_light_reflex(10000.0)
+        assert r_dark > r_bright
+
+    run_mutation_kill_probe(
+        source_filename="ocular_corneal_refraction_meniscus.py",
+        old_fragment="contraction = 1.0 / (1.0 + 0.05 * np.sqrt(lux))",
+        new_fragment="contraction = 1.0 + 0.05 * np.sqrt(lux)",
+        mutant_id="M97",
+        oracle=oracle,
+    )
+
+
+def test_m98_kill_wave11_snell_refraction_sine_squared() -> None:
+    """M98: Mutating Snell discriminant distorts refraction angle."""
+
+    def oracle(mod: Any) -> None:
+        c_s = np.zeros(3)
+        rot = np.eye(3)
+        o = np.array([0.0, 2.0, 25.0])
+        d = np.array([0.0, -0.1, -1.0])
+        res = mod.trace_3d_snell_corneal_refraction(o, d, c_s, rot)
+        assert res is not None
+        cos_i = np.dot(-d / np.linalg.norm(d), res.corneal_normal)
+        cos_t = np.dot(res.refracted_ray_direction, -res.corneal_normal)
+        assert cos_t > cos_i
+
+    run_mutation_kill_probe(
+        source_filename="ocular_corneal_refraction_meniscus.py",
+        old_fragment="sin2_theta_t = eta**2 * (1.0 - cos_theta_i**2)",
+        new_fragment="sin2_theta_t = eta**2 * (1.0 + cos_theta_i**2)",
+        mutant_id="M98",
+        oracle=oracle,
+    )
+
+
+def test_m99_kill_wave11_iris_plane_intersection_check() -> None:
+    """M99: Rejecting forward iris plane intersection drops valid corneal view rays."""
+
+    def oracle(mod: Any) -> None:
+        c_s = np.zeros(3)
+        rot = np.eye(3)
+        o = np.array([0.0, 0.0, 25.0])
+        d = np.array([0.0, 0.0, -1.0])
+        res = mod.trace_3d_snell_corneal_refraction(o, d, c_s, rot)
+        assert res is not None
+
+    run_mutation_kill_probe(
+        source_filename="ocular_corneal_refraction_meniscus.py",
+        old_fragment="if t_iris <= 0.0:",
+        new_fragment="if t_iris >= 0.0:",
+        mutant_id="M99",
+        oracle=oracle,
+    )
+
+
+def test_m100_kill_wave11_corneal_outer_fresnel_f0() -> None:
+    """M100: Mutating normal-incidence corneal reflectance F0 breaks dielectric bounds."""
+
+    def oracle(mod: Any) -> None:
+        c_s = np.zeros(3)
+        rot = np.eye(3)
+        o = np.array([0.0, 0.0, 25.0])
+        d = np.array([0.0, 0.0, -1.0])
+        res = mod.trace_3d_snell_corneal_refraction(o, d, c_s, rot)
+        assert res is not None
+        assert res.fresnel_specular_reflectance < 0.10
+
+    run_mutation_kill_probe(
+        source_filename="ocular_corneal_refraction_meniscus.py",
+        old_fragment="f0 = ((n1 - n2) / (n1 + n2)) ** 2",
+        new_fragment="f0 = ((n1 + n2) / (n1 + n2)) ** 2",
+        mutant_id="M100",
+        oracle=oracle,
+    )
+
+
+def test_m101_kill_wave11_tear_meniscus_height_decay() -> None:
+    """M101: Inverting meniscus decay increases height with distance from lid margin."""
+
+    def oracle(mod: Any) -> None:
+        v = np.array([0.0, 0.0, -1.0])
+        m0 = mod.evaluate_tear_film_meniscus(0.0, v)
+        m1 = mod.evaluate_tear_film_meniscus(0.5, v)
+        assert m0.meniscus_height_mm > m1.meniscus_height_mm
+
+    run_mutation_kill_probe(
+        source_filename="ocular_corneal_refraction_meniscus.py",
+        old_fragment="h = meniscus_h0_mm * np.exp(-u / max(capillary_length_mm, 1e-4))",
+        new_fragment="h = meniscus_h0_mm * np.exp(u / max(capillary_length_mm, 1e-4))",
+        mutant_id="M101",
+        oracle=oracle,
+    )
+
+
+# ── WAVE 12 MUTATIONS: M102–M108 (coupled_multiphysics_ipc_contact.py) ───────
+
+
+def test_m102_kill_wave12_ipc_barrier_potential_sign() -> None:
+    """M102: Inverting IPC barrier potential yields negative barrier energy."""
+
+    def oracle(mod: Any) -> None:
+        res = mod.evaluate_ipc_log_barrier(0.1, hat_d=1.0)
+        assert res.barrier_potential > 0.0
+
+    run_mutation_kill_probe(
+        source_filename="coupled_multiphysics_ipc_contact.py",
+        old_fragment="pot = -kappa * (diff**2) * ln_ratio",
+        new_fragment="pot = kappa * (diff**2) * ln_ratio",
+        mutant_id="M102",
+        oracle=oracle,
+    )
+
+
+def test_m103_kill_wave12_ipc_barrier_repulsive_gradient() -> None:
+    """M103: Inverting barrier gradient produces attractive instead of repulsive force."""
+
+    def oracle(mod: Any) -> None:
+        res = mod.evaluate_ipc_log_barrier(0.1, hat_d=1.0)
+        assert res.barrier_gradient < 0.0
+
+    run_mutation_kill_probe(
+        source_filename="coupled_multiphysics_ipc_contact.py",
+        old_fragment="grad = -kappa * (2.0 * diff * ln_ratio + (diff**2) / d)",
+        new_fragment="grad = kappa * (2.0 * diff * ln_ratio + (diff**2) / d)",
+        mutant_id="M103",
+        oracle=oracle,
+    )
+
+
+def test_m104_kill_wave12_ipc_barrier_hessian_convexity() -> None:
+    """M104: Inverting barrier Hessian breaks positive-definite convexity."""
+
+    def oracle(mod: Any) -> None:
+        res = mod.evaluate_ipc_log_barrier(0.1, hat_d=1.0)
+        assert res.barrier_hessian > 10.0
+
+    run_mutation_kill_probe(
+        source_filename="coupled_multiphysics_ipc_contact.py",
+        old_fragment="hess = -kappa * (2.0 * ln_ratio + 4.0 * diff / d - (diff**2) / (d**2))",
+        new_fragment="hess = -kappa * 100.0",
+        mutant_id="M104",
+        oracle=oracle,
+    )
+
+
+def test_m105_kill_wave12_ipc_activation_threshold_cutoff() -> None:
+    """M105: Inverting activation cutoff applies barrier at infinite separation distance."""
+
+    def oracle(mod: Any) -> None:
+        res = mod.evaluate_ipc_log_barrier(2.0, hat_d=1.0)
+        assert res.barrier_potential == 0.0
+
+    run_mutation_kill_probe(
+        source_filename="coupled_multiphysics_ipc_contact.py",
+        old_fragment="if d >= hat_d:",
+        new_fragment="if d < hat_d:",
+        mutant_id="M105",
+        oracle=oracle,
+    )
+
+
+def test_m106_kill_wave12_ccd_line_search_bisection() -> None:
+    """M106: Expanding step size instead of bisecting causes CCD penetration failure."""
+
+    def oracle(mod: Any) -> None:
+        alpha = mod.ccd_conservative_line_search(
+            np.array([0.0, 0.0, 1.0]),
+            np.array([0.0, 0.0, -0.9]),
+            lambda p: float(p[2] - 0.5),
+            min_allowable_dist=0.2,
+        )
+        assert alpha < 1.0
+
+    run_mutation_kill_probe(
+        source_filename="coupled_multiphysics_ipc_contact.py",
+        old_fragment="alpha *= 0.5",
+        new_fragment="alpha *= 1.5",
+        mutant_id="M106",
+        oracle=oracle,
+    )
+
+
+def test_m107_kill_wave12_coulomb_friction_tangent_direction() -> None:
+    """M107: Inverting friction tangent force creates thermodynamic energy injection."""
+
+    def oracle(mod: Any) -> None:
+        n = np.array([0.0, 0.0, 1.0])
+        v_t = np.array([1.0, 0.0, 0.0])
+        f_t, _ = mod.compute_smoothed_coulomb_friction(10.0, v_t, n)
+        assert np.dot(f_t, v_t) <= 0.0
+
+    run_mutation_kill_probe(
+        source_filename="coupled_multiphysics_ipc_contact.py",
+        old_fragment="f_t = -f_t_mag * (v_t / speed_t)",
+        new_fragment="f_t = f_t_mag * (v_t / speed_t)",
+        mutant_id="M107",
+        oracle=oracle,
+    )
+
+
+def test_m108_kill_wave12_coupled_receipt_non_penetration_flag() -> None:
+    """M108: Masking verification flag falsely certifies penetrated simulations."""
+
+    def oracle(mod: Any) -> None:
+        from nexus_ai_agent.creative.morpheus import (
+            Bone,
+            FEMSimulationState,
+            SkeletalChain,
+            SkinningWeights,
+            SoftTissueMaterial,
+            UnitQuaternion,
+            build_tetrahedron,
+        )
+
+        b = Bone("b1", None, np.zeros(3), np.array([0.0, 0.0, 10.0]), 10.0)
+        chain = SkeletalChain((b,))
+        weights = SkinningWeights(1, ("b1",), np.array([[1.0]]))
+        mat = SoftTissueMaterial(5000.0, 0.3)
+        v = np.array([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 5.0]])
+        tet = build_tetrahedron((0, 1, 2, 3), v)
+        fem = FEMSimulationState(v, np.zeros((4, 3)), (tet,), mat)
+        _, _, _, _, receipt = mod.step_coupled_morpheus_multiphysics(
+            chain,
+            {"b1": UnitQuaternion.identity()},
+            weights,
+            fem,
+            (),
+            np.zeros((0, 3)),
+            dt_s=0.01,
+        )
+        assert receipt.zero_interpenetration_verified is True
+
+    run_mutation_kill_probe(
+        source_filename="coupled_multiphysics_ipc_contact.py",
+        old_fragment="verified_non_penetration = bool(",
+        new_fragment="verified_non_penetration = False and bool(",
+        mutant_id="M108",
+        oracle=oracle,
+    )
+
+
+# ── WAVE 13 MUTATIONS: M109–M114 (gaussian_deferred_relighting_taa.py) ───────
+
+
+def test_m109_kill_wave13_deferred_normal_normalization() -> None:
+    """M109: Suppressing normal unit normalization distorts deferred world normals."""
+
+    def oracle(mod: Any) -> None:
+        from nexus_ai_agent.creative.morpheus import CameraParameters, Gaussian3D, UnitQuaternion
+
+        cam = CameraParameters(np.eye(4), 50.0, 50.0, 8.0, 8.0, 16, 16)
+        g = Gaussian3D(
+            mean=np.array([0.0, 0.0, 2.0]),
+            rotation=UnitQuaternion.identity(),
+            scale=np.array([0.1, 0.1, 0.1]),
+            opacity=0.9,
+            normal=np.array([0.0, 0.0, -1.0]),
+            albedo=np.ones(3),
+            roughness=0.5,
+            metallic=0.0,
+        )
+        gbuf = mod.splat_deferred_gbuffer((g,), cam)
+        norm = float(np.linalg.norm(gbuf.world_normal[8, 8]))
+        assert abs(norm - 1.0) < 1e-4
+
+    run_mutation_kill_probe(
+        source_filename="gaussian_deferred_relighting_taa.py",
+        old_fragment="acc_normal = np.where(fg_mask, acc_normal / np.maximum(norm_len, 1e-8), 0.0)",
+        new_fragment="acc_normal = np.where(fg_mask, acc_normal * 10.0, 0.0)",
+        mutant_id="M109",
+        oracle=oracle,
+    )
+
+
+def test_m110_kill_wave13_analytical_motion_vector_projection() -> None:
+    """M110: Suppressing perspective motion projection zeroes deferred motion vectors."""
+
+    def oracle(mod: Any) -> None:
+        from nexus_ai_agent.creative.morpheus import CameraParameters, Gaussian3D, UnitQuaternion
+
+        cam = CameraParameters(np.eye(4), 50.0, 50.0, 8.0, 8.0, 16, 16)
+        g = Gaussian3D(
+            mean=np.array([0.0, 0.0, 2.0]),
+            rotation=UnitQuaternion.identity(),
+            scale=np.array([0.1, 0.1, 0.1]),
+            opacity=0.9,
+            normal=np.array([0.0, 0.0, -1.0]),
+            albedo=np.ones(3),
+            roughness=0.5,
+            metallic=0.0,
+        )
+        gbuf = mod.splat_deferred_gbuffer(
+            (g,), cam, gaussian_3d_velocities=(np.array([1.0, 0.0, 0.0]),)
+        )
+        assert abs(gbuf.motion_vectors_2d[8, 8, 0]) > 0.01
+
+    run_mutation_kill_probe(
+        source_filename="gaussian_deferred_relighting_taa.py",
+        old_fragment="delta_u = float((fx * v_3d[0]) / max(t_z, 0.1))",
+        new_fragment="delta_u = 0.0",
+        mutant_id="M110",
+        oracle=oracle,
+    )
+
+
+def test_m111_kill_wave13_sg_inner_product_sum_vector() -> None:
+    """M111: Subtracting SG axes instead of adding breaks inner product magnitude."""
+
+    def oracle(mod: Any) -> None:
+        sg1 = mod.SphericalGaussianLobe(np.array([0.0, 0.0, 1.0]), 4.0, np.ones(3))
+        sg2 = mod.SphericalGaussianLobe(np.array([0.0, 0.0, 1.0]), 4.0, np.ones(3))
+        prod = mod.evaluate_sg_inner_product(sg1, sg2)
+        assert prod[0] > 0.1
+
+    frag_old_m111 = "xi_m = sg1.sharpness * sg1.axis_direction + sg2.sharpness * sg2.axis_direction"
+    frag_new_m111 = "xi_m = sg1.sharpness * sg1.axis_direction - sg2.sharpness * sg2.axis_direction"
+    run_mutation_kill_probe(
+        source_filename="gaussian_deferred_relighting_taa.py",
+        old_fragment=frag_old_m111,
+        new_fragment=frag_new_m111,
+        mutant_id="M111",
+        oracle=oracle,
+    )
+
+
+def test_m112_kill_wave13_ycocg_luma_coefficients() -> None:
+    """M112: Mutating YCoCg luma coefficients breaks reversible color roundtrip."""
+
+    def oracle(mod: Any) -> None:
+        rgb = np.array([[[0.3, 0.6, 0.9]]], dtype=np.float64)
+        rt = mod.ycocg_to_rgb(mod.rgb_to_ycocg(rgb))
+        assert np.allclose(rgb, rt, atol=1e-10)
+
+    run_mutation_kill_probe(
+        source_filename="gaussian_deferred_relighting_taa.py",
+        old_fragment="y = 0.25 * r + 0.50 * g + 0.25 * b",
+        new_fragment="y = 0.50 * r + 0.50 * g + 0.25 * b",
+        mutant_id="M112",
+        oracle=oracle,
+    )
+
+
+def test_m113_kill_wave13_taa_depth_disocclusion_rejection() -> None:
+    """M113: Reversing disocclusion condition causes ghosting artifacts on depth jump."""
+
+    def oracle(mod: Any) -> None:
+        curr = np.full((8, 8, 3), 0.2)
+        curr[0, 0] = 0.9
+        hist = np.full((8, 8, 3), 0.8)
+        motion = np.zeros((8, 8, 2))
+        d_curr = np.full((8, 8), 10.0)
+        d_hist = np.full((8, 8), 50.0)
+        taa = mod.apply_variance_clipped_taa(
+            curr, hist, motion, d_curr, d_hist, gamma_variance=10.0
+        )
+        assert abs(taa[1, 1, 0] - curr[1, 1, 0]) < 1e-4
+
+    frag_old_m113 = (
+        "if abs(depth_current[y, x] - depth_history[y0, x0]) > disocclusion_threshold_mm:"
+    )
+    frag_new_m113 = (
+        "if abs(depth_current[y, x] - depth_history[y0, x0]) < disocclusion_threshold_mm:"
+    )
+    run_mutation_kill_probe(
+        source_filename="gaussian_deferred_relighting_taa.py",
+        old_fragment=frag_old_m113,
+        new_fragment=frag_new_m113,
+        mutant_id="M113",
+        oracle=oracle,
+    )
+
+
+def test_m114_kill_wave13_taa_variance_box_clamping() -> None:
+    """M114: Omitting history variance box clipping allows unconstrained color ghosting."""
+
+    def oracle(mod: Any) -> None:
+        curr = np.full((8, 8, 3), 0.2)
+        hist = np.full((8, 8, 3), 0.9)
+        motion = np.zeros((8, 8, 2))
+        d_curr = np.full((8, 8), 10.0)
+        d_hist = np.full((8, 8), 10.0)
+        taa = mod.apply_variance_clipped_taa(curr, hist, motion, d_curr, d_hist)
+        assert np.all(taa <= 0.25)
+
+    run_mutation_kill_probe(
+        source_filename="gaussian_deferred_relighting_taa.py",
+        old_fragment="hist_clipped = np.clip(hist_sample, aabb_min, aabb_max)",
+        new_fragment="hist_clipped = hist_sample",
+        mutant_id="M114",
+        oracle=oracle,
+    )
+
+
+# ── WAVE 14 MUTATIONS: M115–M120 (morpheus_real_media_spine.py & morpheus_port.py)
+
+
+def test_m115_kill_wave14_pyav_frame_count_verification(tmp_path: Path) -> None:
+    """M115: Inverting PyAV decoded frame count check fails valid MP4 files."""
+
+    def oracle(mod: Any) -> None:
+        f0 = tmp_path / "f0.png"
+        f1 = tmp_path / "f1.png"
+        wav_p = tmp_path / "a.wav"
+        mp4_p = tmp_path / "v.mp4"
+        mod.write_png_frame(np.zeros((8, 8, 3), dtype=np.uint8), f0)
+        mod.write_png_frame(np.zeros((8, 8, 3), dtype=np.uint8), f1)
+        mod.write_wav_pcm16(np.zeros(48000, dtype=np.int16), wav_p)
+        mod.mux_mp4_ffmpeg(str(tmp_path / "f%d.png"), wav_p, mp4_p, fps=24)
+        c, _, _ = mod.probe_mp4_container(mp4_p, expected_fps=24, expected_frame_count=2)
+        assert c == 2
+
+    run_mutation_kill_probe(
+        source_filename="morpheus_real_media_spine.py",
+        old_fragment="if decoded_count != expected_frame_count:",
+        new_fragment="if decoded_count == expected_frame_count:",
+        mutant_id="M115",
+        oracle=oracle,
+    )
+
+
+def test_m116_kill_wave14_rfc6962_leaf_hash_prefix() -> None:
+    """M116: Inverting sibling direction check invalidates RFC 6962 inclusion proofs."""
+
+    def oracle(mod: Any) -> None:
+        leaves = [b"leaf_0", b"leaf_1", b"leaf_2"]
+        root_hex, proof = mod.generate_rfc6962_inclusion_proof(leaves, index=1)
+        valid = mod.verify_rfc6962_inclusion_proof(leaves[1], 1, len(leaves), proof, root_hex)
+        assert valid is True
+
+    run_mutation_kill_probe(
+        source_filename="morpheus_real_media_spine.py",
+        old_fragment='if direction == "L":',
+        new_fragment='if direction == "X":',
+        mutant_id="M116",
+        oracle=oracle,
+    )
+
+
+def test_m117_kill_wave14_lineage_fencing_token_regression(tmp_path: Path) -> None:
+    """M117: Inverting fencing token regression check allows stale state poisoning."""
+
+    def oracle(mod: Any) -> None:
+        store = mod.MorpheusDurableLineageStore(tmp_path)
+        d = mod.MorpheusBundleDigests("a", "b", "c", "d", "e", "f", "g", "h")
+        rec1 = mod.MorpheusAssetVersionRecord("ast1", "att1", "tok_02", d, "p1", "p2", "m1")
+        rec2 = mod.MorpheusAssetVersionRecord("ast1", "att2", "tok_01", d, "p1", "p2", "m2")
+        store.record_asset_version(rec1)
+        try:
+            store.record_asset_version(rec2)
+            passed = False
+        except mod.FencingTokenStaleError:
+            passed = True
+        assert passed
+
+    run_mutation_kill_probe(
+        source_filename="morpheus_real_media_spine.py",
+        old_fragment="if record.fencing_token < existing_token:",
+        new_fragment="if record.fencing_token > existing_token:",
+        mutant_id="M117",
+        oracle=oracle,
+    )
+
+
+def test_m118_kill_wave14_epistemic_audit_violation_check() -> None:
+    """M118: Masking VIOLATED status ignores epistemic physical law failure."""
+
+    def oracle(mod: Any) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp_p = Path(td)
+            m_file = tmp_p / "manifest.json"
+            import json
+
+            m_file.write_text(json.dumps({"wave_epistemic_statuses": {"W1": "VIOLATED"}}))
+            with pytest.raises(mod.BundleVerificationError, match="VIOLATED"):
+                mod.verify_morpheus_bundle_on_disk(tmp_p)
+
+    run_mutation_kill_probe(
+        source_filename="morpheus_real_media_spine.py",
+        old_fragment='if status == "VIOLATED":',
+        new_fragment='if status == "NOT_VIOLATED":',
+        mutant_id="M118",
+        oracle=oracle,
+    )
+
+
+def test_m119_kill_wave14_forensic_quarantine_path() -> None:
+    """M119: Altering quarantine directory path breaks forensic audit trail."""
+
+    def oracle(mod: Any) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp_p = Path(td)
+            adapter = mod.MorpheusStagedSpineAdapter(
+                workspace_root=tmp_p,
+                active_fencing_token_getter=lambda: "tok1",
+                pre_publish_tamper_hook=lambda p: None,
+            )
+            req = mod.MorpheusStageRequest("a", "att1", "tok1", (), np.zeros(0, dtype=np.int16))
+            try:
+                adapter.stage_and_publish(req)
+            except Exception:
+                pass
+            q_dir = tmp_p / ".quarantine" / "att1_tok1"
+            assert q_dir.is_dir()
+
+    run_mutation_kill_probe(
+        source_filename="morpheus_real_media_spine.py",
+        old_fragment='/ ".quarantine"',
+        new_fragment='/ ".wrong_quarantine"',
+        mutant_id="M119",
+        oracle=oracle,
+    )
+
+
+def test_m120_kill_wave14_port_allowlist_check(tmp_path: Path) -> None:
+    """M120: Inverting allowlist check permits unvetted operations in MorpheusPort."""
+
+    def oracle(mod: Any) -> None:
+        port = mod.MorpheusPort(
+            workspace_root=tmp_path,
+            active_fencing_token_getter=lambda: "t1",
+        )
+        try:
+            port.execute_operation("unauthorized.op", {})
+            passed = False
+        except ValueError:
+            passed = True
+        assert passed
+
+    run_mutation_kill_probe(
+        source_filename="morpheus_port.py",
+        old_fragment="if operation not in MORPHEUS_PORT_OPERATIONS:",
+        new_fragment="if operation in MORPHEUS_PORT_OPERATIONS:",
+        mutant_id="M120",
         oracle=oracle,
     )
