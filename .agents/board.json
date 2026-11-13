@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-10T12:08:41Z",
+  "updated_at": "2026-11-13T09:01:59Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -4423,6 +4423,45 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 0
+    },
+    {
+      "task": "task-257-queued-cancel-semantics",
+      "title": "Define cancellation semantics for not-yet-owned (pending) requests",
+      "title_fa": "تعریف معنای لغو برای درخواست‌های در صف (بدون مالک)",
+      "zone": "execution-core",
+      "priority": "P2",
+      "status": "active",
+      "scope": "لغو امروز فقط attempt در حال پرواز را می‌بندد؛ ردیف pending اصلاً cancellable نیست و این باید قرارداد صریح شود.",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "explicit contract: cancel(pending) is either a typed refusal or a fenced dequeue — one documented choice",
+        "idempotency + duplicate-cancel matrix extended; no authority bypass",
+        "I1-I10 table updated if a new invariant is introduced"
+      ],
+      "evidence_required": [
+        "explicit contract: cancel(pending) is either a typed refusal or a fenced dequeue — one documented choice, not both",
+        "idempotency + duplicate-cancel matrix extended; no authority bypass (a bare job_id still cancels nothing)",
+        "I1-I10 table updated if a new invariant is introduced",
+        "exact commands + observed results in the PR body; each agent runs its own lint/types/test gates"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/execution/contract.py",
+        "src/nexus_ai_agent/adapters/native_local_backend.py"
+      ],
+      "owner_hint": "arena/task-257-queued-cancel-semantics is the exclusive implementation branch",
+      "note": "DELIVERED via PR #338 (base main c3aa7c85, head e308b7ff); CI running, no failures. Slice: state+prove the pending-refusal choice (code was already correct via layered guards). Gates run: ruff check (pass), ruff format --check (pass), mypy src (361 files, pass), pytest targeted 396 passed. NOT_PROVEN: full suite + execution_core_mutations campaign (30-min budget). No new pinned mutation probe (refusal is over-determined by independent guards).",
+      "agent_branch": "arena/task-257-queued-cancel-semantics",
+      "claimed_at": "2026-11-13T08:43:46Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "evidence": {
+        "pr": 338,
+        "head_sha": "e308b7ff",
+        "base_main": "c3aa7c85"
+      }
     },
     {
       "task": "task-269-cognition-quality-evaluation",
