@@ -67,16 +67,36 @@ __all__ = [
     "probe_banner_channels",
 ]
 
-_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+#: ``Duration: 00:00:02.00``. ``\s*`` after the colon and around the colons:
+#: FFmpeg has shipped ``Duration: N/A``, ``Duration: 00:00:02.00`` and (in some
+#: muxers) a trailing-comma form.  A missing duration is legitimate — a raw
+#: stream has none — so this returns ``None`` rather than raising.
+_DURATION_RE = re.compile(
+    r"Duration\s*:\s*(?P<h>\d+)\s*:\s*(?P<m>\d+)\s*:\s*(?P<s>\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
 _AUDIO_STREAM_RE = re.compile(
     r"Stream #\d+:\d+(?:\[[^\]]*\])?(?:\([^)]*\))?: Audio: (?P<codec>[A-Za-z0-9_]+)"
     r"(?: \([^)]*\))?, (?P<rate>\d+) Hz, (?P<layout>[^,]+)"
     r"(?:, (?P<sample_fmt>[A-Za-z0-9]+)(?: \([^)]*\))?)?"
 )
-_SUMMARY_I_RE = re.compile(r"I:\s*(-?[\d.]+|-inf)\s*LUFS")
-_SUMMARY_LRA_RE = re.compile(r"LRA:\s*(-?[\d.]+|-inf)\s*LU")
-_SUMMARY_PEAK_RE = re.compile(r"Peak:\s*(-?[\d.]+|-inf)\s*dBFS")
-_SUMMARY_THRESHOLD_RE = re.compile(r"Threshold:\s*(-?[\d.]+|-inf)\s*LUFS")
+#: A measured value in a summary line. ``\s*`` everywhere on purpose: FFmpeg has
+#: changed the column padding around these labels more than once, and a regex
+#: that assumes one space fails closed on the next release.  The unit is matched
+#: case-insensitively and with an optional space (``-14.2LUFS`` is legal).
+_SUMMARY_VALUE = r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[+-]?inf)\s*(?P<unit>[A-Za-z]+)"
+_SUMMARY_I_RE = re.compile(r"\bI\s*:\s*" + _SUMMARY_VALUE, re.IGNORECASE)
+_SUMMARY_LRA_RE = re.compile(r"\bLRA\s*:\s*" + _SUMMARY_VALUE, re.IGNORECASE)
+_SUMMARY_PEAK_RE = re.compile(r"\b(?:Peak|TPK)\s*:\s*" + _SUMMARY_VALUE, re.IGNORECASE)
+_SUMMARY_THRESHOLD_RE = re.compile(r"\bThreshold\s*:\s*" + _SUMMARY_VALUE, re.IGNORECASE)
+#: The unit each label is expected to carry, so a renamed/altered unit refuses
+#: instead of silently becoming a number with the wrong meaning.
+_SUMMARY_UNITS: dict[str, frozenset[str]] = {
+    "I": frozenset({"lufs"}),
+    "LRA": frozenset({"lu"}),
+    "Peak": frozenset({"dbfs", "dbtp"}),
+    "Threshold": frozenset({"lufs"}),
+}
 _MICROSECONDS_PER_SECOND = 1_000_000
 
 #: ``N channels`` / ``N channel`` / ``N ch`` as printed by FFmpeg 5.x and 6.x.
@@ -472,10 +492,13 @@ class FfmpegEngine:
         duration_us: int | None = None
         duration = _DURATION_RE.search(text)
         if duration is not None:
-            hours, minutes, seconds = duration.groups()
             duration_us = int(
                 round(
-                    (int(hours) * 3600 + int(minutes) * 60 + float(seconds))
+                    (
+                        int(duration.group("h")) * 3600
+                        + int(duration.group("m")) * 60
+                        + float(duration.group("s"))
+                    )
                     * _MICROSECONDS_PER_SECOND
                 )
             )
@@ -535,16 +558,14 @@ class FfmpegEngine:
         integrated_block = _section(summary, "Integrated loudness:", "Loudness range:")
         lra_block = _section(summary, "Loudness range:", "True peak:")
         peak_block = _section(summary, "True peak:", None)
-        integrated = _SUMMARY_I_RE.search(integrated_block)
-        threshold = _SUMMARY_THRESHOLD_RE.search(integrated_block)
-        lra = _SUMMARY_LRA_RE.search(lra_block)
-        peak = _SUMMARY_PEAK_RE.search(peak_block)
-        if integrated is None or peak is None:
+        integrated_lufs = _summary_value(integrated_block, "I", _SUMMARY_I_RE)
+        threshold_value = _summary_value(integrated_block, "Threshold", _SUMMARY_THRESHOLD_RE)
+        lra_value = _summary_value(lra_block, "LRA", _SUMMARY_LRA_RE)
+        true_peak = _summary_value(peak_block, "Peak", _SUMMARY_PEAK_RE)
+        if (integrated_lufs is None and "-inf" not in integrated_block.lower()) or (
+            true_peak is None and "-inf" not in peak_block.lower()
+        ):
             raise AudioMeasurementError("ebur128 summary is missing integrated loudness or peak")
-        integrated_lufs = _parse_float(integrated.group(1))
-        true_peak = _parse_float(peak.group(1))
-        lra_value = _parse_float(lra.group(1)) if lra is not None else None
-        threshold_value = _parse_float(threshold.group(1)) if threshold is not None else None
         probe = self.probe(source, cancel=cancel)
         seconds = (probe.container_duration_us or 0) / _MICROSECONDS_PER_SECOND
         if integrated_lufs is None:
@@ -622,6 +643,36 @@ class FfmpegEngine:
                     f"loudnorm JSON field {key!r} is not a number: {raw!r}"
                 ) from error
         return values
+
+
+def _summary_value(block: str, label: str, pattern: re.Pattern[str]) -> float | None:
+    """Read one labelled number from an ``ebur128`` summary block.
+
+    Deliberately multi-format. The observed shapes across FFmpeg 4.x–9.x are:
+
+    * ``    I:         -14.2 LUFS`` (the common one, pad-aligned)
+    * ``I: -14.2 LUFS`` (minimum spacing)
+    * ``I: -14.2LUFS`` (no space before the unit)
+    * ``I: -inf LUFS`` (silence, gating never opened)
+
+    Returns ``None`` for a missing line, an ``-inf`` value, or a unit that does
+    not belong to the label.  The last case matters: reading
+    ``Threshold: -24.2 LUFS`` while looking for ``LRA`` would otherwise yield a
+    plausible number under the wrong name — which is worse than refusing,
+    because it looks like a measurement.
+    """
+    match = pattern.search(block)
+    if match is None:
+        return None
+    unit = (match.group("unit") or "").lower()
+    accepted = _SUMMARY_UNITS.get(label)
+    if accepted is not None and unit not in accepted:
+        raise AudioMeasurementError(
+            f"ebur128 summary line for {label!r} carries unit {unit!r}; "
+            f"expected one of {sorted(accepted)}. The summary format changed and "
+            "a number read from it would not mean what its label says."
+        )
+    return _parse_float(match.group(1))
 
 
 def _section(text: str, start: str, end: str | None) -> str:

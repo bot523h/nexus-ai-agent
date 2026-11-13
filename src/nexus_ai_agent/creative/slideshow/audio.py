@@ -180,8 +180,15 @@ def read_wav_mono(path: Path | str) -> PcmAudio:
         if packed.size % 3:
             packed = packed[: packed.size - (packed.size % 3)]
         triplets = packed.reshape(-1, 3).astype(np.int32)
-        values = (triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)) << 8
-        signed = values.astype(np.int32)
+        # Assemble the 24-bit word, then sign-extend in place.
+        #
+        # Do *not* left-shift into the top of the int32 to "align" it: a
+        # negative 24-bit sample shifts to INT32_MIN, which wraps, and the
+        # sign-extension test below then never fires.  That decoded every
+        # 24-bit file at roughly 256x its true amplitude with the sign
+        # reversed on the loud samples — silent, because the samples are still
+        # finite and still look like audio.
+        signed = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
         signed[signed >= 0x800000] -= 0x1000000
         data = signed.astype(np.float32) / 8388608.0
     elif width == 4:
