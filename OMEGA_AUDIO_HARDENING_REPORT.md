@@ -1,7 +1,7 @@
 # OMEGA audio engine — hardening report
 
 Branch `arena/288ef95e-nexus-ai-agent`, PR #337. Base `c3aa7c8`.
-Head at time of writing `14f2fa9`. **Status: `HARDENED_BUT_NOT_COMPLETE`.**
+Head at time of writing `fba5e0e`. **Status: `HARDENED_BUT_NOT_COMPLETE`.**
 
 Everything below is a measurement taken in this repository, on this tree, with
 the commands shown. Numbers that were not re-measured are labelled as carried
@@ -77,6 +77,28 @@ mutation probe that reverts the floor to `float64.tiny`.
 
 Repaired before the hardening work proper began.
 
+### 2.4 A loudness-target failure was reported twice — `fba5e0e`
+
+`verify_passport` appended the target check's failure from two places; lines
+856-858 and 897-899 were byte-identical. A passport whose target check failed
+therefore produced the same code and the same detail **twice**, so a report with
+one problem read as two independent problems.
+
+Found by writing a test that asserts the *count*, not the presence — every
+existing test asked "is the code in the list", which is exactly the question a
+duplicate cannot fail.
+
+### 2.5 A dead branch that looked covered — `fba5e0e`
+
+`stage_input` has a handler for `ContentLimitExceeded` with the specific message
+"input grew while it was being staged". It is unreachable: `ContentLimitExceeded`
+subclasses `FilesystemBoundaryError`, and the generic handler is checked first.
+
+The *behaviour* is correct — a growing input is refused — but the specific
+message is dead code, and no test could ever turn those two lines green. Rather
+than delete the branch and lose the intent, the behaviour is asserted and the
+inheritance trap is documented at the test that discovered it.
+
 ---
 
 ## 3. The independent measurements
@@ -105,7 +127,7 @@ programme is narrowband, so a harmonic cannot drag its own estimate up.
 
 ---
 
-## 4. The mutation campaign — 75/75 killed
+## 4. The mutation campaign — 76/76 killed
 
 `scripts/mutate_omega_audio.py`. Each probe reverts a specific fix and asserts
 that a **named** test fails. A probe whose anchor text no longer exists reports
@@ -113,7 +135,7 @@ that a **named** test fails. A probe whose anchor text no longer exists reports
 trustworthy.
 
 ```
-75/75 mutations killed
+76/76 mutations killed
 ```
 
 Groups: §4.7 octave (4), GUM (5), BS.1770 (9), STRICT_LINEAR (3), Wiener (6),
@@ -121,26 +143,36 @@ M/S + HPSS (3), forensic QC (5), Part 2 (2), original Stage-A (39).
 
 **The campaign was re-run every time the source changed**, including after a
 `ruff format` pass — formatting rewrote one anchor, and a green run from before
-that edit would not have been evidence. The final 75/75 is against the exact
-tree at `ba2643b`.
+that edit would not have been evidence. The final 76/76 is against the exact
+tree at `fba5e0e`.
+
+**Wave-2.1 added a probe that would have caught a real gap.**
+`stereo-source-crest-tainted-by-the-upmix-term` adds `+3.0103 dB` to the source
+crest unconditionally. Every pre-existing test drove a *mono* source into a
+stereo master, where that term is correct, so the mutation survived the entire
+suite. It is killed only by the new 1:1 stereo test.
 
 ---
 
 ## 5. Coverage of `creative/audio_engine`
 
-Measured with `--source=src/nexus_ai_agent/creative/audio_engine` over 12
-suites, 381 passed / 1 skipped:
+Measured with `--source=src/nexus_ai_agent/creative/audio_engine` over the
+engine suites, 479 passed / 1 skipped. **The bar is per-module, not aggregate**,
+because an aggregate hides the one file nobody exercised:
 
 ```
-TOTAL                2557   124   95%
-recipe.py             100%      execution.py       97%
-models.py              97%      process.py         97%
-numpy_dsp.py           96%      ffmpeg_ops.py      95%
-loudness_bs1770.py     95%      forensic_qc.py     95%
-stereo_hpss.py         94%      ed25519_sign.py    93%
-verify.py              92%      workspace.py       92%
-wiener_denoise.py      98%
+TOTAL                2554    80   97%
+verify.py             100%      stereo_hpss.py    100%
+recipe.py             100%      workspace.py       99%
+wiener_denoise.py      98%      ed25519_sign.py    98%
+execution.py           97%      models.py          97%
+process.py             97%      numpy_dsp.py       96%
+continuity.py          95%      ffmpeg_ops.py      95%
+forensic_qc.py         95%      loudness_bs1770.py 95%
 ```
+
+`verify.py` 92 → **100%**, `stereo_hpss.py` 94 → **100%**, `workspace.py`
+92 → **99%**, `ed25519_sign.py` 93 → **98%**.
 
 Scoping matters and is deliberate: including `creative/slideshow` in the same
 run drags TOTAL to 72%, because three slideshow modules execute at 0% under the
@@ -167,7 +199,7 @@ reproduced 25.300 dB, and both canonical files measured 22.300 dB — a
 |---|---|
 | `ruff check .` | All checks passed |
 | `ruff format --check .` | 1010 files unchanged |
-| `pytest tests/unit tests/architecture` | **6231 passed, 14 skipped, 0 failed** (661.81 s) |
+| `pytest tests/unit tests/architecture` | **6332 passed, 14 skipped, 0 failed** (766.64 s) |
 | pack-coverage contract | 97 passed |
 | `scripts/pack_coverage.py` | `verdict: ACCEPTED`, 97.52% total, all packs ≥95% |
 
@@ -182,9 +214,9 @@ imports a pack but is absent from `PACK_TEST_TARGETS` **breaks the whole suite**
 
 ## 7. CI
 
-Run `43328253118` on the final head `14f2fa9`: **24/24 jobs `success`**.
-Run `43322843064` on `ced3680` (code-identical to the above, docs aside) was
-also 24/24.
+Run `43387872963` on the final head `fba5e0e`: **24/24 jobs `success`**.
+Earlier runs `43328253118` (`14f2fa9`) and `43322843064` (`ced3680`) were also
+24/24.
 
 ```
 lint (ruff + mypy + version lockstep)          success
@@ -220,12 +252,18 @@ This is why the status is `HARDENED_BUT_NOT_COMPLETE` and not `DONE`.
    statically only. CI's `python-parity (3.10)` and `continuum-evidence (3.10)`
    legs are green, which is real evidence — from a runner I cannot reproduce
    locally. Any future local claim about 3.10 stays unsupported.
-2. **`verify.py` at 92% is the lowest module in the engine.** The uncovered
-   lines are concentrated in passport failure branches that need a
-   deliberately-corrupt artifact to reach.
+2. **`workspace.py` at 99% carries two genuinely unreachable lines** — the
+   `ContentLimitExceeded` branch described in §2.5. Every other module is ≥95%
+   and `verify.py` is 100%, so this is one dead branch and not a coverage debt.
 3. **`creative/slideshow` audio modules are barely exercised** (0–67%) because
    no audio suite targets them.
-4. **`continuum-evidence` and `python-parity` were red for one commit, and the
+4. **Two forward tasks need out-of-zone files.** The `AssetVersion`
+   persistence adapter (task-282 schema) and audio publishing on
+   `studio/bus.py` cannot be written from the audio zone. Both now have exact
+   signatures and invariants in doctrine §11 (`record_asset_version(...)` with 4
+   invariants; `publish_audio_artifact(...)` with 3), so Phase-2 integration is
+   a call site and not a redesign.
+5. **`continuum-evidence` and `python-parity` were red for one commit, and the
    cause is worth recording.** Commit `5910c4f` failed `test (pytest)`,
    `python-parity` (3.10/3.11/3.12), and `continuum-evidence` (3.10/3.11/3.12).
    All three traced to a single line: a test module that imported a pack but was
@@ -234,7 +272,7 @@ This is why the status is `HARDENED_BUT_NOT_COMPLETE` and not `DONE`.
    (`total=97.52`, every pack ≥95%), the *provenance* was not. Registering the
    module in `pack_coverage.py` fixed all three groups at once.
 
-   **CI is green on the final head `14f2fa9`:** 24/24 jobs `success`, including
+   **CI is green on the final head `fba5e0e`:** 24/24 jobs `success`, including
    all three Python versions for both `continuum-evidence` and `python-parity`.
 
 ---
@@ -263,3 +301,5 @@ This is why the status is `HARDENED_BUT_NOT_COMPLETE` and not `DONE`.
 | `ced3680` | the hardening report |
 | `d539d5c` | record the green CI, stop understating the 3.10 evidence |
 | `14f2fa9` | the ledger was stale — §4.7 was already done |
+| `8a88383` | cite the final green run |
+| `fba5e0e` | Wave-2.1: every module ≥95%, the duplicated failure, the 1:1 stereo case |
