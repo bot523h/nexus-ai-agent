@@ -36,6 +36,7 @@ from nexus_ai_agent.adapters.sql_application_directory import (
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.application.principal import ChannelBinding
 from nexus_ai_agent.config import settings as settings_module
+from nexus_ai_agent.connect.key_provider import StaticKeyRing
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.creative.slideshow.ffmpeg import (
     FfmpegUnavailableError,
@@ -139,6 +140,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             attempt_provider=queue.get_attempt_history,
             authority=DirectoryAuthority(directory),
             channel_binding_ref=channel_binding_id(binding),
+            approval_key_provider=StaticKeyRing({"test-v1": b"t" * 32}, active_key_id="test-v1"),
         )
     )
     yield service, queue, creative_root, journal, str(principal)
@@ -223,6 +225,38 @@ async def test_scope_signature_transplant_between_proposals_is_refused(
     assert refused.status == "refused"
     assert "scope_signature_mismatch" in refused.detail
     assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_canonical_delta_refinement_updates_scope_and_replaces_proposal(
+    harness, tmp_path: Path
+) -> None:
+    service, _queue, _root, _journal, principal = harness
+    source = tmp_path / "delta-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    base = service.submit_text_intent(
+        sid,
+        "delta-base",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(base, PipelineResult)
+    refined = service.submit_text_intent(
+        sid,
+        "delta-revision",
+        sequence_number=2,
+        text="trim 0.2 seconds from the end",
+        asset_id="src",
+        source_path=str(source),
+        base_approval_id=base.approval_id,
+    )
+    assert isinstance(refined, PipelineResult)
+    assert refined.ast.scope.start_us == base.ast.scope.start_us
+    assert refined.ast.scope.end_us == base.ast.scope.end_us - 200_000
+    assert base.approval_id not in service._contexts
 
 
 @pytest.mark.asyncio
@@ -490,6 +524,7 @@ async def test_voice_turn_flows_through_the_same_pipeline(harness, tmp_path: Pat
         authority=service._deps.authority,
         channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
+        approval_key_provider=service._deps.approval_key_provider,
     )
     sid = _open_session(service, principal)
     result = await service.submit_voice_intent(

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from nexus_ai_agent.nagar.ibpc import (  # noqa: F401 — reachability (law R20)
     approval,
+    approval_mac,
     authority,
     canonical,
     compiler,

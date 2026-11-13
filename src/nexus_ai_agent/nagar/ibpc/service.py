@@ -31,22 +31,25 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from nexus_ai_agent.application.creative_intent import CanonicalCreativeIntent
 from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort, JobStatus
+from nexus_ai_agent.connect.key_provider import KeyProvider, KeyProviderError
 from nexus_ai_agent.creative.slideshow.ffmpeg import RenderError, sha256_file
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError, ApprovalIdentity, ApprovalLedger
+from nexus_ai_agent.nagar.ibpc.approval_mac import ApprovalEnvelope, issue_envelope, verify_envelope
 from nexus_ai_agent.nagar.ibpc.authority import (
     CanonicalAuthorityError,
     CanonicalAuthorityPort,
 )
 from nexus_ai_agent.nagar.ibpc.canonical import digest_of
 from nexus_ai_agent.nagar.ibpc.compiler import CompilationRefused, compile_ast
+from nexus_ai_agent.nagar.ibpc.delta import DeltaIntentAST, parse_delta_intent
 from nexus_ai_agent.nagar.ibpc.footprint import FootprintVerifyError, probe_media, verify_keep
 from nexus_ai_agent.nagar.ibpc.intent import (
     Clarification,
@@ -75,6 +78,8 @@ from nexus_ai_agent.nagar.ibpc.session import (
     TransitionError,
     TurnState,
 )
+from nexus_ai_agent.nagar.ibpc.shadow import build_shadow_preview
+from nexus_ai_agent.nagar.ibpc.signature import compute_scope_signature
 from nexus_ai_agent.provenance.canonicalization import (
     CanonicalizationScheme,
     canonical_digest,
@@ -137,6 +142,9 @@ class IBPCServiceDeps:
     #: first, so an active/pending approval can never lose its context. Set to
     #: ``None`` to keep every context (unbounded, the legacy behaviour).
     max_contexts: int | None = 1024
+    #: Shared, stable key ring used only for authenticated approval envelopes.
+    #: None permits planning but fails closed at approval/admission.
+    approval_key_provider: KeyProvider | None = None
 
 
 @dataclass(frozen=True)
@@ -185,6 +193,9 @@ class _TurnContext:
     #: terminal contexts are evicted, oldest first.
     created_order: int = 0
     scope_signature: str | None = None
+    shadow_manifest: Any = None
+    media_signature: Any = None
+    approval_envelope: ApprovalEnvelope | None = None
 
 
 class IBPCService:
@@ -250,6 +261,7 @@ class IBPCService:
         text: str,
         asset_id: str,
         source_path: str,
+        base_approval_id: str | None = None,
     ) -> PipelineResult | Clarification | Refusal:
         session = self._sessions.get_session(session_id)
         revision = int(self._deps.revision_provider())
@@ -276,24 +288,72 @@ class IBPCService:
         duration_us = info.duration_us
         source_asset_digest = sha256_file(src)
 
-        parsed = parse_intent(
-            text,
-            project_id=session.project_id,
-            asset_id=asset_id,
-            source_revision=revision,
-            duration_us=duration_us,
-            channel_binding_id=verified.channel_binding_id,
-        )
-        if not isinstance(parsed, IntentAST):
+        base_scope = None
+        base_binding = None
+        if base_approval_id is not None:
+            try:
+                base_binding = self._approvals.get(base_approval_id)
+                base_ctx = self._contexts[base_approval_id]
+            except (ApprovalError, KeyError):
+                self._sessions.mark_failed(session_id, turn_id)
+                return Refusal("unknown_base_proposal", "Delta base proposal is unavailable")
+            if (
+                base_binding.session_id != session_id
+                or base_binding.principal_id != session.principal_id
+                or base_binding.project_id != session.project_id
+                or base_binding.state is not ApprovalState.PENDING
+            ):
+                self._sessions.mark_failed(session_id, turn_id)
+                return Refusal(
+                    "stale_base_proposal", "Delta requires the current unapproved proposal"
+                )
+            base_scope = base_ctx.ast.scope
+            parsed = parse_delta_intent(
+                text,
+                current_scope=base_scope,
+                project_id=session.project_id,
+                asset_id=asset_id,
+                source_revision=revision,
+                duration_us=duration_us,
+                channel_binding_id=verified.channel_binding_id,
+            )
+        else:
+            parsed = parse_intent(
+                text,
+                project_id=session.project_id,
+                asset_id=asset_id,
+                source_revision=revision,
+                duration_us=duration_us,
+                channel_binding_id=verified.channel_binding_id,
+            )
+        if not isinstance(parsed, (IntentAST, DeltaIntentAST)):
             # clarification / refusal: no approval, no execution, turn stays live
             return parsed
-        ast = parsed.ast
+        ast = parsed.ast if isinstance(parsed, IntentAST) else parsed.resolved_ast
+        if base_binding is not None and base_approval_id is not None:
+            self._approvals.revoke(base_approval_id)
+            self._contexts.pop(base_approval_id, None)
         try:
             plan = compile_ast(ast, registry=self._deps.registry)
         except CompilationRefused as exc:
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal(exc.reason, exc.detail)
         preview = build_preview(plan, ast, source_duration_us=duration_us, fps=fps)
+        try:
+            shadow_manifest = build_shadow_preview(
+                src,
+                ast.scope,
+                plan.plan_digest,
+                ffmpeg_bin=self._deps.verifier_binary,
+                source_duration_us=duration_us,
+                max_keyframes=3,
+            )
+            media_signature = compute_scope_signature(
+                src, ast.scope, ffmpeg_bin=self._deps.verifier_binary, max_frames=3
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._sessions.mark_failed(session_id, turn_id)
+            return Refusal("media_evidence_unavailable", str(exc))
         readback = render_readback(ast, plan, preview)
 
         binding = ApprovalBinding(
@@ -329,6 +389,8 @@ class IBPCService:
                 principal_id=session.principal_id,
                 binding_ref=verified.channel_binding_id,
                 verified_identity=verified,
+                shadow_manifest=shadow_manifest,
+                media_signature=media_signature,
             ),
         )
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
@@ -622,7 +684,21 @@ class IBPCService:
                 "target_asset_refs": [ctx.ast.asset_id, ctx.source_asset_digest],
                 "capability_set": [CANONICAL_OPERATION],
                 "parameter_digest": digest_of(ctx.ast.params),
-                "shadow_preview_digest": ctx.preview.preview_digest,
+                "metadata_preview_digest": ctx.preview.preview_digest,
+                "shadow_manifest": ctx.shadow_manifest.model_dump(mode="json")
+                if ctx.shadow_manifest
+                else None,
+                "media_signature": ctx.media_signature.model_dump(mode="json")
+                if ctx.media_signature
+                else None,
+                "proposal_id": ctx.ast.ast_id,
+                "proposal_revision": ctx.ast.source_revision,
+                "parent_scope_digest": ctx.ast.scope.scope_digest,
+                "source_asset": {
+                    "asset_id": ctx.ast.asset_id,
+                    "sha256": ctx.source_asset_digest,
+                    "byte_length": ctx.source_path.stat().st_size,
+                },
             },
             CanonicalizationScheme.JCS_RFC8785_V2,
         )
@@ -636,9 +712,20 @@ class IBPCService:
         session/turn/approval/context, any identity mismatch, stale revision,
         changed asset or tampered digests. Never changes another turn's state.
         """
-        _session, _turn, _ctx, identity = self._resolve_identity(
+        _session, _turn, ctx, identity = self._resolve_identity(
             session_id, turn_id, approval_id, principal_id=principal_id
         )
+        provider = self._deps.approval_key_provider
+        if provider is None:
+            raise ApprovalError(
+                "approval_key_unavailable", "approval authentication is not configured"
+            )
+        try:
+            provider.key(provider.active_key_id)
+        except (KeyProviderError, AttributeError) as exc:
+            raise ApprovalError(
+                "approval_key_unavailable", "configured approval key is invalid"
+            ) from exc
         binding = self._approvals.approve(
             approval_id,
             identity=identity,
@@ -648,6 +735,24 @@ class IBPCService:
         if ctx is None:
             raise ApprovalError("missing_context", "approval context disappeared")
         ctx.scope_signature = self._scope_signature(ctx, identity)
+        try:
+            issued_at = self._deps.now()
+            issue_dt = datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
+            if issue_dt.tzinfo is None:
+                raise ValueError("approval issue time must be timezone-aware")
+            expires_at = (issue_dt + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            ctx.approval_envelope = issue_envelope(
+                provider,
+                approval_id=approval_id,
+                payload={"scope_digest": ctx.scope_signature},
+                issued_at=issued_at,
+                expires_at=expires_at,
+            )
+        except (KeyProviderError, TypeError, ValueError) as exc:
+            self._approvals.revoke(approval_id)
+            raise ApprovalError(
+                "approval_key_unavailable", "approval envelope could not be issued"
+            ) from exc
         self._sessions.mark_approved(session_id, turn_id)
         return binding
 
@@ -831,6 +936,18 @@ class IBPCService:
             ):
                 error = ScopeSignatureMismatchError()
                 return ExecutionOutcome(status="refused", detail=f"{error.reason}: {error.detail}")
+            provider = self._deps.approval_key_provider
+            envelope = ctx.approval_envelope
+            if (
+                provider is None
+                or envelope is None
+                or not verify_envelope(
+                    provider, envelope, {"scope_digest": ctx.scope_signature}, now=self._deps.now()
+                )
+            ):
+                return ExecutionOutcome(
+                    status="refused", detail="approval_mac_invalid: envelope verification failed"
+                )
             try:
                 self._approvals.consume(approval_id, identity=identity)
             except ApprovalError as exc:
