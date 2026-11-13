@@ -40,9 +40,7 @@ def test_source_white_maps_to_neutral_under_the_default_target() -> None:
 def test_bradford_adapt_defaults_to_d65_and_explicit_target_still_selects_black_body() -> None:
     image = np.random.default_rng(11).random((2, 2, 3)) + 0.1
     default = ci.bradford_adapt(image, 3200.0)
-    explicit_d65_matrix = image @ ci._adaptation_rgb(
-        ci._temperature_white_point(3200.0), ci._D65
-    ).T
+    explicit_d65_matrix = image @ ci._adaptation_rgb(ci._temperature_white_point(3200.0), ci._D65).T
     explicit_black_body = ci.bradford_adapt(image, 3200.0, 6500.0)
 
     assert np.allclose(default, explicit_d65_matrix, atol=1e-12)

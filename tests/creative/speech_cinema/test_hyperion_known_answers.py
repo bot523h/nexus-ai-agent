@@ -8,9 +8,8 @@ These pin constants and boundaries that behavioural properties alone cannot see.
 
 from __future__ import annotations
 
-import itertools
-
 import hashlib
+import itertools
 
 import numpy as np
 
