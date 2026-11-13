@@ -23,6 +23,10 @@ from typing import Any
 
 import numpy as np
 
+from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
+    RotarySubframeSequence,
+    validate_rotary_subframes,
+)
 from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
     FloatArray,
     RealMediaVeritasBundle,
@@ -138,12 +142,53 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
             if completed.returncode:
                 raise ValueError("MP4 decode refused")
         expected_names = {path.name for path in pngs} | {wav.name, manifest_path.name}
+        temporal_digest = ""
+        if bundle.rotary_evidence_sha256:
+            evidence_path = artifact("rotary_subframes.json")
+            expected_names.add(evidence_path.name)
+            temporal_digest = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+            if temporal_digest != bundle.rotary_evidence_sha256:
+                raise ValueError("rotary evidence digest mismatch")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            sequence = RotarySubframeSequence(
+                np.asarray(evidence["reference_rgb_u8"], dtype=np.float64) / 255,
+                frames.astype(np.float64) / 255,
+                np.asarray(evidence["timestamps_s"], dtype=np.float64),
+                np.asarray(evidence["phases_rad"], dtype=np.float64),
+                np.asarray(evidence["exposure_offsets_s"], dtype=np.float64),
+                evidence["source_fps"],
+                evidence["output_fps"],
+                evidence["angular_velocity_rad_s"],
+                evidence["source_frame_count"],
+                evidence["shutter_angle_deg"],
+            )
+            if (
+                validate_rotary_subframes(sequence, quantized=True)
+                or sequence.output_fps != manifest["fps"]
+                or sequence.source_fps != bundle.source_fps
+            ):
+                raise ValueError("decoded rotary trajectory refused")
+        elif bundle.output_fps != bundle.source_fps:
+            raise ValueError("HFR clock without rendered subframes")
         if manifest["mp4_name"]:
             expected_names.add(manifest["mp4_name"])
         if {path.name for path in directory.iterdir()} != expected_names:
             raise ValueError("unbound staging artifacts")
-        if manifest["fps"] != 24 or manifest["sample_rate_hz"] != 48000:
+        if (
+            manifest["fps"] != bundle.output_fps
+            or manifest["source_fps"] != bundle.source_fps
+            or manifest["sample_rate_hz"] != 48000
+            or manifest["output_frame_count"] != len(pngs)
+        ):
             raise ValueError("unsupported media clock")
+        temporal_binding = {
+            "fps": bundle.output_fps,
+            "source_fps": bundle.source_fps,
+            "output_frame_count": len(pngs),
+            "rotary_evidence_sha256": temporal_digest,
+        }
+        if manifest["rotary_evidence_sha256"] != temporal_digest:
+            raise ValueError("manifest rotary digest mismatch")
         payloads, proofs = manifest["leaf_payloads"], manifest["inclusion_proofs"]
         if (
             len(payloads) != 15
@@ -154,7 +199,9 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
         for index, (payload, proof) in enumerate(zip(payloads, proofs, strict=True)):
             if payload["law"] != index + 1 or payload["violations_after"]:
                 raise ValueError("invalid law receipt")
-            if any(payload[name] != value for name, value in actual.items()):
+            if any(
+                payload[name] != value for name, value in {**actual, **temporal_binding}.items()
+            ):
                 raise ValueError("leaf content mismatch")
             leaf = hashlib.sha256(b"\x00" + json.dumps(payload, sort_keys=True).encode()).digest()
             if not _verify_inclusion(leaf, index, 15, proof, bundle.merkle_root):
@@ -169,7 +216,9 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
         )
         audit = VeritasRealityAuditor().audit_and_heal_cinema_shot(shot)
         if audit.pre_audit_violations or audit.post_heal_violations:
-            raise ValueError("decoded physical observations are not compliant")
+            raise ValueError(
+                f"decoded physical observations are not compliant: {audit.details_before}"
+            )
         return True
     except (
         OSError,
@@ -268,6 +317,7 @@ class VeritasStagedSpineAdapter:
                 input_frames=request.input_frames_rgb,
                 input_audio_pcm=request.input_audio_pcm,
                 sample_rate_hz=request.sample_rate_hz,
+                fps=float(request.fps),
             )
             if self.pre_publish_tamper_hook is not None:
                 self.pre_publish_tamper_hook(stage)

@@ -11,7 +11,7 @@ rectification (Law 15).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import numpy.typing as npt
@@ -638,10 +638,10 @@ def rectify_stroboscopic_wagon_wheel(
     delta_phi = float(angular_velocity_rad_s) / fps
     delta_alias = float(((delta_phi + np.pi) % (2.0 * np.pi)) - np.pi)
     blur_arc = delta_phi * (shutter_angle_deg / 360.0)
-    aliased = bool(abs(delta_phi) > np.pi or delta_phi * delta_alias < 0.0)
+    aliased = bool(abs(delta_phi) >= np.pi or delta_phi * delta_alias < 0.0)
 
     violations: list[str] = []
-    if abs(delta_phi) > np.pi:
+    if abs(delta_phi) >= np.pi:
         violations.append("nyquist_rotary_aliasing")
     if delta_phi * delta_alias < 0.0:
         violations.append("wagon_wheel_sign_reversal")
@@ -663,7 +663,197 @@ def rectify_stroboscopic_wagon_wheel(
     )
 
 
+def _reference_green_gains(means: FloatArray) -> FloatArray:
+    return np.asarray(means[1] / np.maximum(means[[0, 2]], 1e-12), dtype=np.float64)
+
+
+def calibrate_catadioptric_optics(image: FloatArray) -> AnamorphicOpticsResult:
+    """Cauchy registration plus explicit reference-green radiometric prior.
+
+    This is lossy grey-edge neutralization, NOT recovery of arbitrary true scene
+    colors. Use only where reference-green/achromatic edges are the requested
+    calibration target. The final edge projection is evaluated in the exact
+    RGB8 domain used by the PNG writer, without changing the fringe threshold.
+    """
+    result = rectify_anamorphic_dioptric_optics(image)
+    if result.fringe_before <= 1e-6:
+        return replace(
+            result, healed_image=np.array(image, copy=True), fringe_after=result.fringe_before
+        )
+    rgb = result.healed_image.copy()
+    interior = rgb[1:-1, 1:-1] if min(rgb.shape[:2]) > 2 else rgb
+    valid = interior[..., 1] > 1e-12
+    if not np.any(valid):
+        return result  # no green reference: retain the violation, do not invent calibration
+    means = np.mean(interior[valid], axis=0)
+    gains = _reference_green_gains(means)
+    rgb[..., 0] *= gains[0]
+    rgb[..., 2] *= gains[1]
+    pixels = np.rint(np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+    # Repeatedly project the measured edge set onto the requested green carrier.
+    # Pixels never leave the projected set, so termination takes at most H*W
+    # iterations even if quantization changes which edges reach the percentile.
+    for _ in range(pixels.shape[0] * pixels.shape[1]):
+        measured = pixels.astype(np.float64) / 255
+        if _fringe_metric(measured) <= 1e-6:
+            break
+        gray = measured.mean(axis=2)
+        gradient = np.abs(np.gradient(gray, axis=0)) + np.abs(np.gradient(gray, axis=1))
+        edge = gradient >= np.percentile(gradient, 90.0)
+        pixels[..., 0][edge] = pixels[..., 1][edge]
+        pixels[..., 2][edge] = pixels[..., 1][edge]
+    healed = pixels.astype(np.float64) / 255
+    return replace(result, healed_image=healed, fringe_after=_fringe_metric(healed))
+
+
+@dataclass(frozen=True)
+class RotarySubframeSequence:
+    """Actual model-rendered HFR frames, not a label on existing captures."""
+
+    reference: FloatArray
+    frames: FloatArray
+    timestamps_s: FloatArray
+    phases_rad: FloatArray
+    exposure_offsets_s: FloatArray
+    source_fps: float
+    output_fps: float
+    angular_velocity_rad_s: float
+    source_frame_count: int
+    shutter_angle_deg: float
+
+
+def synthesize_rotary_subframes(
+    reference: FloatArray,
+    *,
+    angular_velocity_rad_s: float,
+    fps: float,
+    source_frame_count: int = 2,
+    shutter_angle_deg: float = 180.0,
+    samples: int = 16,
+) -> RotarySubframeSequence:
+    """Render a known rigid-rotation model on a genuinely expanded timeline.
+
+    Frames are generated from a supplied reference and known velocity. This does
+    not infer ambiguous motion from an arbitrary aliased recording. Pixel
+    regeneration is intentionally explicit; no source-frame interpolation is
+    mislabeled as independently captured data.
+    """
+    patch = np.asarray(reference, dtype=np.float64)
+    if patch.ndim not in (2, 3) or min(patch.shape[:2]) < 2 or not np.all(np.isfinite(patch)):
+        raise StroboscopicAliasingError("reference must be finite HxW or HxWxC")
+    if not np.isfinite(fps) or fps <= 0 or not np.isfinite(angular_velocity_rad_s):
+        raise StroboscopicAliasingError("motion clock must be finite and positive")
+    if type(source_frame_count) is not int or source_frame_count < 1 or samples < 2:
+        raise StroboscopicAliasingError(
+            "positive frame count and at least two exposure nodes required"
+        )
+    if not np.isfinite(shutter_angle_deg) or not 0 < shutter_angle_deg <= 360:
+        raise StroboscopicAliasingError("invalid shutter angle")
+    factor = max(1, int(np.ceil(abs(angular_velocity_rad_s) / (0.85 * np.pi * fps))))
+    count = source_frame_count * factor
+    if count > 4096 or count * patch.size * samples > 50_000_000:
+        raise StroboscopicAliasingError("temporal synthesis exceeds local resource budget")
+    output_fps = fps * factor
+    shutter = max(180.0, shutter_angle_deg)
+    timestamps = np.arange(count, dtype=np.float64) / output_fps
+    phases = angular_velocity_rad_s * timestamps
+    exposure = shutter / (360.0 * output_fps)
+    offsets = np.linspace(-0.5 * exposure, 0.5 * exposure, samples)
+    frames = np.stack(
+        [
+            np.mean(
+                np.stack(
+                    [
+                        _rotate(patch, float(phase + angular_velocity_rad_s * offset))
+                        for offset in offsets
+                    ]
+                ),
+                axis=0,
+            )
+            for phase in phases
+        ]
+    )
+    return RotarySubframeSequence(
+        patch.copy(),
+        frames,
+        timestamps,
+        phases,
+        offsets,
+        fps,
+        output_fps,
+        angular_velocity_rad_s,
+        source_frame_count,
+        shutter,
+    )
+
+
+def validate_rotary_subframes(
+    sequence: RotarySubframeSequence, *, quantized: bool = False
+) -> tuple[str, ...]:
+    """Validate a rendered sampling trajectory, separately from image semantics."""
+    violations: list[str] = []
+    count = len(sequence.timestamps_s)
+    if sequence.output_fps <= 0 or not np.isfinite(sequence.output_fps):
+        return ("invalid_output_clock",)
+    factor = sequence.output_fps / sequence.source_fps if sequence.source_fps > 0 else 0.0
+    if factor < 1 or factor != int(factor) or count != sequence.source_frame_count * factor:
+        violations.append("missing_subframes")
+    if sequence.frames.shape[0] != count or sequence.phases_rad.shape != (count,):
+        return tuple(violations + ["trajectory_shape_mismatch"])
+    if not (np.all(np.isfinite(sequence.frames)) and np.all(np.isfinite(sequence.phases_rad))):
+        violations.append("nonfinite_render")
+    expected_times = np.arange(count) / sequence.output_fps
+    if not np.allclose(sequence.timestamps_s, expected_times, rtol=0, atol=1e-12):
+        violations.append("nonuniform_subframe_clock")
+    expected_phases = sequence.angular_velocity_rad_s * sequence.timestamps_s
+    if not np.allclose(sequence.phases_rad, expected_phases, rtol=0, atol=1e-12):
+        violations.append("phase_discontinuity")
+    if abs(sequence.angular_velocity_rad_s) / sequence.output_fps >= np.pi:
+        violations.append("nyquist_rotary_aliasing")
+    expected_exposure = sequence.shutter_angle_deg / (360 * sequence.output_fps)
+    nodes = sequence.exposure_offsets_s
+    if not 180 <= sequence.shutter_angle_deg <= 360 or nodes.ndim != 1 or nodes.size < 2:
+        violations.append("invalid_exposure")
+    elif not np.allclose(
+        nodes,
+        np.linspace(-expected_exposure / 2, expected_exposure / 2, nodes.size),
+        rtol=0,
+        atol=1e-12,
+    ):
+        violations.append("asymmetric_exposure")
+    if not violations:
+        for index, phase in enumerate(sequence.phases_rad):
+            predicted = np.mean(
+                np.stack(
+                    [
+                        _rotate(
+                            sequence.reference,
+                            float(phase + sequence.angular_velocity_rad_s * node),
+                        )
+                        for node in nodes
+                    ]
+                ),
+                axis=0,
+            )
+            matches = (
+                np.array_equal(
+                    np.rint(np.clip(sequence.frames[index], 0, 1) * 255),
+                    np.rint(np.clip(predicted, 0, 1) * 255),
+                )
+                if quantized
+                else np.allclose(sequence.frames[index], predicted, rtol=0, atol=1e-12)
+            )
+            if not matches:
+                violations.append("subframe_render_mismatch")
+                break
+    return tuple(violations)
+
+
 __all__ = [
+    "calibrate_catadioptric_optics",
+    "RotarySubframeSequence",
+    "synthesize_rotary_subframes",
+    "validate_rotary_subframes",
     "AnamorphicOpticsResult",
     "BioAcousticSyncError",
     "DopplerShiftResult",

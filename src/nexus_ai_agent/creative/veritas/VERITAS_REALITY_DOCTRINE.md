@@ -310,3 +310,23 @@ Only the new Python module is registered in `sys.modules`; C extensions remain
 loaded. Together with M72--M81 and the 15 handler-disable mutants this is 50
 runtime/source mutants. The original 56 input fault-injection probes remain a
 separate category (106 checks total, not 106 equation mutants).
+
+### Explicit calibrated reference and model-rendered temporal evidence
+
+Reference-green calibration is an explicitly lossy achromatic prior: interior
+red and blue gains are relative to measured green, with boundary fringe
+projection after geometric Cauchy/cos-four correction. It does not identify
+unknown original scene colors. Rotary recovery renders a supplied reference
+under known constant angular velocity, with symmetric exposure quadrature and
+phase-continuous timestamps. It does not recover uniquely identifiable motion
+from an arbitrary aliased recording. The output frame rate, frame count and
+rotary evidence digest are bound to the manifest and all fifteen Merkle leaves.
+The disk verifier regenerates RGB8 samples from that evidence.
+
+The complete synthetic state fixture now closes from twenty violations to zero;
+re-auditing the healed state gives zero/zero. State closure is **not** a decoded
+pixel certificate. A flat-field HFR fixture passes staged verification, while a
+textured corrupted fixture still fails decoded Laws 11–14 and is refused.
+Never publish the latter merely because state receipts report zero residuals.
+The mutation suite contains 66 internal source mutants (M72–M137), separate
+from the fifteen disabled-handler mutants and fifty-six fault probes.

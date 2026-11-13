@@ -34,9 +34,9 @@ from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
     _bilinear,
     apply_acoustic_doppler_shift,
     audit_and_heal_viseme_formant_sync,
+    calibrate_catadioptric_optics,
     enforce_helmholtz_fluid_conservation,
-    rectify_anamorphic_dioptric_optics,
-    rectify_stroboscopic_wagon_wheel,
+    synthesize_rotary_subframes,
 )
 from nexus_ai_agent.creative.veritas.reality_auditor import (
     CinemaShot,
@@ -92,6 +92,9 @@ class RealMediaVeritasBundle:
     output_audio_content_sha256: str
     output_mp4_sha256: str
     post_disk_verified: bool = False
+    output_fps: float = 24.0
+    source_fps: float = 24.0
+    rotary_evidence_sha256: str = ""
 
     @property
     def healed(self) -> bool:
@@ -107,6 +110,9 @@ class RealMediaVeritasBundle:
     def as_dict(self) -> dict[str, Any]:
         return {
             "compiler_version": COMPILER_VERSION,
+            "fps": self.output_fps,
+            "source_fps": self.source_fps,
+            "rotary_evidence_sha256": self.rotary_evidence_sha256,
             "output_dir": self.output_dir,
             "png_count": len(self.png_paths),
             "wav_path": self.wav_path,
@@ -404,6 +410,7 @@ def compile_and_heal_real_media_shot(
     width: int = 16,
     sample_rate_hz: int = 48000,
     mux_mp4: bool = True,
+    fps: float = 24.0,
     use_synthetic_corrupted_shot: bool = False,
 ) -> RealMediaVeritasBundle:
     """Heal real media through all fifteen laws, write it, and seal the receipts."""
@@ -411,6 +418,8 @@ def compile_and_heal_real_media_shot(
         raise ValueError("num_frames must be >= 1 and frame dimensions >= 2")
     if sample_rate_hz <= 0:
         raise ValueError("sample_rate_hz must be positive")
+    if not np.isfinite(fps) or fps <= 0:
+        raise ValueError("fps must be finite and positive")
 
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
@@ -438,7 +447,9 @@ def compile_and_heal_real_media_shot(
     elif use_synthetic_corrupted_shot or (input_frames is None and input_audio_pcm is None):
         active_shot = build_corrupted_15_law_cinema_shot(height=frame_h, width=frame_w)
     else:
-        active_shot = extract_cinema_shot_from_media(frames, pcm, sample_rate_hz=sample_rate_hz)
+        active_shot = extract_cinema_shot_from_media(
+            frames, pcm, sample_rate_hz=sample_rate_hz, fps=fps
+        )
 
     input_frames_u8 = np.asarray(np.round(np.clip(frames, 0.0, 1.0) * 255.0), dtype=np.uint8)
     input_frames_sha256 = _digest_array(input_frames_u8)
@@ -458,7 +469,7 @@ def compile_and_heal_real_media_shot(
         gy, gx = np.gradient(density)
         phase = np.arctan2(gy, gx)
         coherence = stabilize_madelung_phase_coherence(
-            density, phase, previous_density=previous_density, dt=1.0 / 24.0
+            density, phase, previous_density=previous_density, dt=1.0 / fps
         )
         if coherence.violations:
             ratio = np.divide(
@@ -466,17 +477,17 @@ def compile_and_heal_real_media_shot(
             )
             healed[index] *= ratio[:, :, None]
         previous_density = np.asarray(healed[index] @ np.array([0.2126, 0.7152, 0.0722]))
-        optics = rectify_anamorphic_dioptric_optics(np.clip(healed[index], 0.0, 1.0))
+        optics = calibrate_catadioptric_optics(np.clip(healed[index], 0.0, 1.0))
         if optics.fringe_before > 1e-6:
             healed[index] = optics.healed_image
 
     # Project the measured inter-frame velocity and apply the correction as
     # a backward RGB warp. A clean, static sequence has exactly zero correction.
-    observed = extract_cinema_shot_from_media(np.clip(healed, 0, 1), pcm)
+    observed = extract_cinema_shot_from_media(np.clip(healed, 0, 1), pcm, fps=fps)
     assert observed.fluid is not None
     velocity, height_field = observed.fluid
     fluid = enforce_helmholtz_fluid_conservation(velocity, height_field)
-    correction = (fluid.solenoidal_velocity - velocity) / 24.0
+    correction = (fluid.solenoidal_velocity - velocity) / fps
     yy, xx = np.meshgrid(np.arange(frame_h), np.arange(frame_w), indexing="ij")
     for index in range(1, frame_count):
         for channel in range(3):
@@ -488,17 +499,6 @@ def compile_and_heal_real_media_shot(
     # Do not invent a 200 rad/s rotor in caller media. Apply exposure integration
     # over all frames and channels only when such motion was actually supplied.
     omega = active_shot.rotor[1] if active_shot.rotor is not None else 0.0
-    if abs(omega) > 0:
-        for index in range(frame_count):
-            for channel in range(3):
-                rotor = rectify_stroboscopic_wagon_wheel(
-                    healed[index, :, :, channel],
-                    angular_velocity_rad_s=omega,
-                    fps=24.0,
-                    shutter_angle_deg=180.0,
-                )
-                healed[index, :, :, channel] = rotor.healed_patch
-
     # --- Law 6: homography-locked diegetic typography composite. ---
     quad = np.array(
         [[2.0, 2.0], [frame_w - 3.0, 2.0], [frame_w - 3.0, frame_h - 3.0], [2.0, frame_h - 3.0]]
@@ -510,6 +510,40 @@ def compile_and_heal_real_media_shot(
             healed = np.maximum(healed, mask[:, :, None] * 0.9)
     except Exception:  # pragma: no cover - typography is best-effort overlay
         pass
+
+    output_fps = fps
+    rotary_evidence_sha256 = ""
+    if abs(omega) / fps >= np.pi:
+        # Explicit known-velocity model re-render, not inferred recovery of an
+        # arbitrary aliased recording. Render every new timestamp from a bound
+        # canonical reference, and persist that reference plus exposure model.
+        reference_u8 = np.rint(np.clip(healed[0], 0, 1) * 255).astype(np.uint8)
+        sequence = synthesize_rotary_subframes(
+            reference_u8.astype(np.float64) / 255,
+            angular_velocity_rad_s=omega,
+            fps=fps,
+            source_frame_count=frame_count,
+        )
+        healed = sequence.frames
+        output_fps = sequence.output_fps
+        frame_count = len(healed)
+        evidence = {
+            "kind": "known-velocity-model-render",
+            "reference_rgb_u8": reference_u8.tolist(),
+            "timestamps_s": sequence.timestamps_s.tolist(),
+            "phases_rad": sequence.phases_rad.tolist(),
+            "exposure_offsets_s": sequence.exposure_offsets_s.tolist(),
+            "source_fps": fps,
+            "output_fps": output_fps,
+            "angular_velocity_rad_s": omega,
+            "source_frame_count": sequence.source_frame_count,
+            "shutter_angle_deg": sequence.shutter_angle_deg,
+        }
+        evidence_path = directory / "rotary_subframes.json"
+        evidence_path.write_text(
+            json.dumps(evidence, sort_keys=True, allow_nan=False), encoding="utf-8"
+        )
+        rotary_evidence_sha256 = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
 
     healed_frames = np.asarray(np.round(np.clip(healed, 0.0, 1.0) * 255.0), dtype=np.uint8)
 
@@ -605,7 +639,7 @@ def compile_and_heal_real_media_shot(
                     binary,
                     "-y",
                     "-framerate",
-                    "24",
+                    str(output_fps),
                     "-i",
                     pattern,
                     "-i",
@@ -643,6 +677,10 @@ def compile_and_heal_real_media_shot(
             "input_audio_content_sha256": input_audio_sha256,
             "output_audio_content_sha256": output_audio_content_sha256,
             "output_mp4_sha256": mp4_sha256 or "",
+            "fps": output_fps,
+            "source_fps": fps,
+            "output_frame_count": frame_count,
+            "rotary_evidence_sha256": rotary_evidence_sha256,
             "input_audio_sha256": input_audio_sha256,
             "input_frames_sha256": input_frames_sha256,
             "law": receipt.law,
@@ -683,6 +721,9 @@ def compile_and_heal_real_media_shot(
         input_audio_content_sha256=input_audio_sha256,
         output_audio_content_sha256=output_audio_content_sha256,
         output_mp4_sha256=mp4_sha256 or "",
+        output_fps=output_fps,
+        source_fps=fps,
+        rotary_evidence_sha256=rotary_evidence_sha256,
     )
 
     manifest = bundle.as_dict()
@@ -694,7 +735,8 @@ def compile_and_heal_real_media_shot(
             "leaf_payloads": payloads,
             "inclusion_proofs": [_inclusion_proof(leaves, i) for i in range(LAW_COUNT)],
             "sample_rate_hz": sample_rate_hz,
-            "fps": 24.0,
+            "fps": output_fps,
+            "output_frame_count": frame_count,
         }
     )
     (directory / "veritas_merkle_bundle.json").write_text(

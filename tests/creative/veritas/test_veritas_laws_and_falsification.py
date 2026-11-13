@@ -1043,16 +1043,15 @@ def test_real_media_compiler_end_to_end(tmp_path: Path) -> None:
     bundle = compile_and_heal_real_media_shot(
         tmp_path / "shot", num_frames=3, height=8, width=8, mux_mp4=True
     )
-    assert len(bundle.png_paths) == 3
+    assert len(bundle.png_paths) == 12
+    assert bundle.output_fps == 96
     for path in bundle.png_paths:
         assert Path(path).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     assert Path(bundle.wav_path).exists()
     assert bundle.pre_audit_violations >= 15
-    # Actual re-validation exposes residual optical/rotary defects. Previously
-    # this test accepted an empty after-list without checking the healed state.
-    assert bundle.post_heal_violations > 0
-    assert bundle.healed is False
-    assert {r.law for r in bundle.receipts if r.violations_after} == {12, 15}
+    assert bundle.post_heal_violations == 0
+    assert bundle.healed is True
+    assert not any(r.violations_after for r in bundle.receipts)
     assert len(bundle.receipts) == 15
     assert len(bundle.leaf_digests) == 15
     assert len(bundle.merkle_root) == 64
@@ -1268,7 +1267,7 @@ def test_compiler_rejects_invalid_configuration(tmp_path: Path) -> None:
         tmp_path / "c", num_frames=2, height=8, width=8, mux_mp4=False
     )
     payload = bundle.as_dict()
-    assert payload["png_count"] == 2
+    assert payload["png_count"] == 8
     assert len(payload["laws"]) == 15
 
 
@@ -1329,8 +1328,8 @@ def test_compiler_writes_healed_media_and_binds_merkle_digests(tmp_path: Path) -
         assert payload["input_audio_sha256"] == bundle.input_audio_sha256
         assert payload["output_audio_sha256"] == bundle.output_audio_sha256
     assert merkle_root_from_payloads(bundle.leaf_payloads) == bundle.merkle_root
-    assert bundle.healed is False
-    assert bundle.receipts[11].violations_after == ("lateral_chromatic_aberration",)
+    assert bundle.healed is True
+    assert bundle.receipts[11].violations_after == ()
 
 
 def test_caller_media_is_not_assigned_synthetic_anatomy(tmp_path: Path) -> None:

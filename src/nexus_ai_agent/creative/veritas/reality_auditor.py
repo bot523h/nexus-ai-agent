@@ -42,11 +42,15 @@ from nexus_ai_agent.creative.veritas.ocular_biophysics import (
     synthesize_saccade_vor_trajectory,
 )
 from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
+    RotarySubframeSequence,
     apply_acoustic_doppler_shift,
     audit_and_heal_viseme_formant_sync,
+    calibrate_catadioptric_optics,
     enforce_helmholtz_fluid_conservation,
     rectify_anamorphic_dioptric_optics,
     rectify_stroboscopic_wagon_wheel,
+    synthesize_rotary_subframes,
+    validate_rotary_subframes,
 )
 from nexus_ai_agent.creative.veritas.projective_shadow_transport import (
     synthesize_coherent_cast_shadows,
@@ -122,6 +126,7 @@ class CinemaShot:
     doppler: tuple[FloatArray, float] | None = None
     fluid: tuple[FloatArray, FloatArray] | None = None
     rotor: tuple[FloatArray, float, float] | None = None
+    rotor_samples: RotarySubframeSequence | None = None
 
 
 @dataclass(frozen=True)
@@ -392,7 +397,7 @@ class VeritasRealityAuditor:
     def _law_anamorphic(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         if shot.anamorphic is None:
             return (), ()
-        result = rectify_anamorphic_dioptric_optics(shot.anamorphic)
+        result = calibrate_catadioptric_optics(shot.anamorphic)
         # Squeeze and the lens's cos^4 map are configuration, not evidence of
         # a defect in an otherwise flat decoded image. Only observed defects
         # belong in the shot audit (kernel receipts still expose lens settings).
@@ -461,10 +466,18 @@ class VeritasRealityAuditor:
         result = rectify_stroboscopic_wagon_wheel(patch, angular_velocity_rad_s=omega, fps=fps)
         before = tuple(result.violations)
         after: list[str] = []
-        recheck = rectify_stroboscopic_wagon_wheel(
-            result.healed_patch, angular_velocity_rad_s=omega, fps=fps
-        )
-        after.extend(recheck.violations)
+        if shot.rotor_samples is not None:
+            sequence = shot.rotor_samples
+            before = tuple(before) + validate_rotary_subframes(sequence)
+            if sequence.output_fps != fps or sequence.angular_velocity_rad_s != omega:
+                before += ("trajectory_clock_mismatch",)
+            if not np.allclose(patch, sequence.frames[0], rtol=0, atol=1e-12):
+                before += ("trajectory_patch_mismatch",)
+            # Supplied trajectory evidence is validated, never silently replaced.
+            after.extend(before)
+        elif before:
+            sequence = synthesize_rotary_subframes(patch, angular_velocity_rad_s=omega, fps=fps)
+            after.extend(validate_rotary_subframes(sequence))
         return before, tuple(after)
 
     def _heal_geometric_observations(self, shot: CinemaShot) -> CinemaShot:
@@ -647,7 +660,7 @@ class VeritasRealityAuditor:
             )
             healed = replace(healed, phase=state)
         if shot.anamorphic is not None:
-            optics = rectify_anamorphic_dioptric_optics(shot.anamorphic)
+            optics = calibrate_catadioptric_optics(shot.anamorphic)
             healed = replace(healed, anamorphic=optics.healed_image)
         if shot.viseme is not None:
             jaw, stretch, f1, energy = shot.viseme[:4]
@@ -686,10 +699,15 @@ class VeritasRealityAuditor:
         if shot.fluid is not None:
             fluid = enforce_helmholtz_fluid_conservation(*shot.fluid)
             healed = replace(healed, fluid=(fluid.solenoidal_velocity, fluid.healed_height))
-        if shot.rotor is not None:
+        if shot.rotor is not None and shot.rotor_samples is None:
             patch, omega, fps = shot.rotor
-            rotor = rectify_stroboscopic_wagon_wheel(patch, angular_velocity_rad_s=omega, fps=fps)
-            healed = replace(healed, rotor=(rotor.healed_patch, omega, fps))
+            if abs(omega) / fps >= np.pi:
+                sequence = synthesize_rotary_subframes(patch, angular_velocity_rad_s=omega, fps=fps)
+                healed = replace(
+                    healed,
+                    rotor=(sequence.frames[0], omega, sequence.output_fps),
+                    rotor_samples=sequence,
+                )
         recheck = self.audit_and_heal_cinema_shot(healed)
         if recheck.pre_audit_violations or recheck.post_heal_violations:
             raise VeritasHealingRefusalError(recheck)
@@ -714,6 +732,19 @@ class VeritasRealityAuditor:
             15: self._law_rotor,
         }
         return handlers[law](shot)
+
+    def audit_and_heal(self, shot: CinemaShot, *, heal: bool = True) -> VeritasRealityPassport:
+        """Public audit alias; non-healing reports retain every raw violation."""
+        report = self.audit_and_heal_cinema_shot(shot)
+        if heal:
+            return report
+        raw = replace(
+            report,
+            law_violations_after=report.law_violations_before.copy(),
+            details_after=report.details_before.copy(),
+            post_heal_violations=report.pre_audit_violations,
+        )
+        return replace(raw, digest=_rfc6962_digest(raw.as_dict()))
 
     def audit_and_heal_cinema_shot(self, shot: CinemaShot) -> VeritasRealityPassport:
         """Run all fifteen laws, heal deterministically and hash the result."""

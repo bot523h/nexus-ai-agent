@@ -76,14 +76,18 @@ from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
     FluidConservationError,
     FluidConservationResult,
     OmniaOpticsError,
+    RotarySubframeSequence,
     StroboscopicAliasingError,
     StroboscopicResult,
     VisemeFormantResult,
     apply_acoustic_doppler_shift,
     audit_and_heal_viseme_formant_sync,
+    calibrate_catadioptric_optics,
     enforce_helmholtz_fluid_conservation,
     rectify_anamorphic_dioptric_optics,
     rectify_stroboscopic_wagon_wheel,
+    synthesize_rotary_subframes,
+    validate_rotary_subframes,
 )
 from nexus_ai_agent.creative.veritas.projective_shadow_transport import (
     ShadowField,
@@ -153,6 +157,10 @@ from nexus_ai_agent.creative.veritas.xpbd_cloth_drape import (
 )
 
 __all__ = [
+    "calibrate_catadioptric_optics",
+    "RotarySubframeSequence",
+    "synthesize_rotary_subframes",
+    "validate_rotary_subframes",
     "VeritasHealingRefusalError",
     "heal_cinema_shot",
     "VeritasAssetVersionRecord",
