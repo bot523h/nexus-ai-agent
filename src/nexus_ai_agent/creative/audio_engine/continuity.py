@@ -38,6 +38,7 @@ The axis definitions are the North Star's, not invented here:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -256,12 +257,16 @@ def compare_continuity(
     ref_probe = getattr(reference, "probe", None)
     cand_probe = getattr(candidate, "probe", None)
     if isinstance(ref_probe, MediaProbe) and isinstance(cand_probe, MediaProbe):
-        for label, pick in (
+        # Annotated rather than a bare lambda: ``--strict`` cannot infer a type
+        # for a lambda passed through an untyped tuple, and this tuple is the
+        # definition of which stream-shape axes are compared.
+        pickers: tuple[tuple[str, Callable[[MediaProbe], float | str | None]], ...] = (
             ("stream_sample_rate", lambda probe: probe.sample_rate),
             ("stream_channels", lambda probe: probe.channels),
             ("stream_codec", lambda probe: probe.codec),
             ("stream_sample_format", lambda probe: probe.sample_format),
-        ):
+        )
+        for label, pick in pickers:
             left, right = pick(ref_probe), pick(cand_probe)
             unmeasurable = left is None or right is None
             axes.append(

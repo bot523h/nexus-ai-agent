@@ -218,7 +218,7 @@ def estimate_noise_psd(
     # silent or sub-window input produced NaN through the whole overlap-add.
     # -200 dBFS per bin is far below any real converter noise and far above
     # overflow.
-    return np.maximum(estimate, NOISE_FLOOR_POWER)
+    return np.asarray(np.maximum(estimate, NOISE_FLOOR_POWER), dtype=np.float64)
 
 
 def wiener_gain(
@@ -234,7 +234,7 @@ def wiener_gain(
         raise ValueError("floor must be within (0, 1)")
     posteriori = np.maximum(frame_power / noise_psd - 1.0, 0.0)
     gain = posteriori / (1.0 + posteriori)
-    return np.maximum(gain, floor)
+    return np.asarray(np.maximum(gain, floor), dtype=np.float64)
 
 
 def _instrumental_snr(

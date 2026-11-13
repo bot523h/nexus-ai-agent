@@ -116,7 +116,10 @@ def resample_mono(samples: np.ndarray, *, source_rate: int, target_rate: int) ->
     duration = samples.size / float(source_rate)
     target_count = max(1, int(round(duration * target_rate)))
     source_positions = np.arange(target_count, dtype=np.float64) * (source_rate / target_rate)
-    return np.interp(source_positions, np.arange(samples.size, dtype=np.float64), samples)
+    return np.asarray(
+        np.interp(source_positions, np.arange(samples.size, dtype=np.float64), samples),
+        dtype=np.float64,
+    )
 
 
 @dataclass(frozen=True)

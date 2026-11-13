@@ -120,7 +120,7 @@ def _smoothness(values: np.ndarray, axis: int) -> np.ndarray:
     if values.shape[axis] < 2:
         return np.zeros_like(values)
     difference = np.diff(values, axis=axis)
-    return np.abs(difference).mean(axis=axis)
+    return np.asarray(np.abs(difference).mean(axis=axis), dtype=np.float64)
 
 
 def hpss_masks(
@@ -158,7 +158,7 @@ def hpss_masks(
         widths[axis] = (pad, pad)
         padded = np.pad(data, widths, mode="edge")
         windows = np.lib.stride_tricks.sliding_window_view(padded, size, axis=axis)
-        return np.median(windows, axis=-1)
+        return np.asarray(np.median(windows, axis=-1), dtype=np.float64)
 
     harmonic = median_filter(magnitude, kernel_harmonic, axis=0)
     percussive = median_filter(magnitude, kernel_percussive, axis=1)

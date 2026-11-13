@@ -63,6 +63,8 @@ __all__ = [
     "AudioDecodeError",
     "FfmpegEngine",
     "FfmpegUnavailableError",
+    "parse_audio_stream_channels",
+    "probe_banner_channels",
 ]
 
 _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
@@ -76,6 +78,98 @@ _SUMMARY_LRA_RE = re.compile(r"LRA:\s*(-?[\d.]+|-inf)\s*LU")
 _SUMMARY_PEAK_RE = re.compile(r"Peak:\s*(-?[\d.]+|-inf)\s*dBFS")
 _SUMMARY_THRESHOLD_RE = re.compile(r"Threshold:\s*(-?[\d.]+|-inf)\s*LUFS")
 _MICROSECONDS_PER_SECOND = 1_000_000
+
+#: ``N channels`` / ``N channel`` / ``N ch`` as printed by FFmpeg 5.x and 6.x.
+_COUNT_LAYOUT_RE = re.compile(r"^(\d+)\s*ch(?:annels?)?\b", re.IGNORECASE)
+
+#: Surround notation: ``2.1``, ``5.1(side)``, ``7.1.4``.
+_SURROUND_LAYOUT_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?(?:\(.*\))?$")
+
+#: Named layouts whose channel count is not in the name.
+_NAMED_LAYOUTS: dict[str, int] = {
+    "mono": 1,
+    "stereo": 2,
+    "downmix": 2,
+    "quad": 4,
+    "quadraphonic": 4,
+    "hexagonal": 6,
+    "octagonal": 8,
+}
+
+
+def probe_banner_channels(
+    banner: str,
+) -> tuple[int | None, int | None, str | None, str | None] | None:
+    """Parse one ``ffmpeg -i`` banner's audio stream line.
+
+    Returns ``(channels, sample_rate, codec, layout)`` or ``None`` when no audio
+    stream line is present. Split out from `probe()` so the version-dependent
+    banner shape can be tested against verbatim lines from several FFmpeg
+    releases without invoking the binary — the parser is the part that changes
+    between versions, not the subprocess call around it.
+    """
+    stream = _AUDIO_STREAM_RE.search(banner)
+    if stream is None:
+        return None
+    layout = stream.group("layout").strip()
+    return (
+        parse_audio_stream_channels(layout),
+        int(stream.group("rate")),
+        stream.group("codec"),
+        layout,
+    )
+
+
+def parse_audio_stream_channels(layout_token: str) -> int | None:
+    """Channel count from an ``ffmpeg -i`` banner's channel-layout token.
+
+    The token after ``<rate> Hz,`` is **not stable across FFmpeg versions**, and
+    the difference is not cosmetic. As measured here:
+
+    ===========  =====================================  ============
+    version      banner fragment                        token
+    ===========  =====================================  ============
+    9.0.2        ``48000 Hz, mono, s16``                 ``mono``
+    9.0.2        ``48000 Hz, stereo, fltp``              ``stereo``
+    6.1.1        ``48000 Hz, 1 channels, s16``           ``1 channels``
+    6.1.1        ``48000 Hz, 2 channels, flt``           ``2 channels``
+    ===========  =====================================  ============
+
+    A parser that only understands ``mono``/``stereo`` returns ``None`` on 6.1.1,
+    and ``channels is None`` makes ``probe()`` fail closed — every artifact is
+    then rejected as "carries no decodable audio stream". A sandbox that ships
+    9.x cannot see this; it is a genuine portability defect, not an environment
+    problem, and it is why this is a function with its own tests rather than a
+    ternary inside ``probe()``.
+
+    ``ffprobe`` is not an option: decision r5 forbids a second required binary,
+    and CI provisions FFmpeg from the ``imageio-ffmpeg`` wheel, which has no
+    ``ffprobe``.
+
+    Returns ``None`` for anything unrecognised — the caller keeps failing closed,
+    because a guessed channel count would corrupt the loudness channel sum.
+    """
+    token = (layout_token or "").strip()
+    if not token:
+        return None
+    lowered = token.lower()
+    # ``mono`` / ``stereo`` / ``quad`` and friends, optionally with a tag.
+    name = lowered.split("(", 1)[0].strip()
+    if name in _NAMED_LAYOUTS:
+        return _NAMED_LAYOUTS[name]
+    # ``5.1`` / ``5.1(side)`` / ``7.1.4`` — the components sum to the count.
+    surround = _SURROUND_LAYOUT_RE.match(lowered)
+    if surround is not None:
+        parts = [int(part) for part in surround.groups() if part is not None]
+        if all(part >= 0 for part in parts) and sum(parts) >= 1:
+            return sum(parts)
+        return None
+    # ``1 channels`` / ``2 channel`` / ``6 ch`` (FFmpeg 5.x and 6.x).
+    counted = _COUNT_LAYOUT_RE.match(lowered)
+    if counted is not None:
+        count = int(counted.group(1))
+        return count if count >= 1 else None
+    return None
 
 
 class AudioEngineError(RuntimeError):
@@ -394,9 +488,10 @@ class FfmpegEngine:
             rate = int(stream.group("rate"))
             layout = stream.group("layout").strip()
             sample_format = stream.group("sample_fmt")
-            channels = (
-                1 if layout.startswith("mono") else 2 if layout.startswith("stereo") else None
-            )
+            # The banner's layout token changed shape between FFmpeg versions
+            # (9.x prints ``mono``/``stereo``, 6.1.1 prints ``1 channels``).
+            # See :func:`parse_audio_stream_channels`.
+            channels = parse_audio_stream_channels(layout)
         return MediaProbe(
             container_duration_us=duration_us,
             sample_rate=rate,

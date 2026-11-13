@@ -41,7 +41,13 @@ ENGINE_PORT = "src/nexus_ai_agent/creative/studio/audio_engine.py"
 
 @dataclass(frozen=True)
 class Probe:
-    """One mutation: (file, exact old text, replacement, test selector)."""
+    """One mutation: (file, exact old text, replacement, test selector).
+
+    ``test_file`` defaults to the main hardening suite.  A probe whose named
+    test lives elsewhere names that module, so a probe can target the file its
+    invariant actually belongs to rather than forcing every invariant into one
+    suite.
+    """
 
     name: str
     gate: str
@@ -49,6 +55,7 @@ class Probe:
     old: str
     new: str
     test: str
+    test_file: str = TEST_FILE
 
 
 PROBES: tuple[Probe, ...] = (
@@ -831,10 +838,14 @@ PROBES: tuple[Probe, ...] = (
         name="wiener-noise-floor-is-tiny-not-a-power",
         gate="wiener-noise-floor",
         path=f"{AUDIO}/wiener_denoise.py",
-        old="    return np.maximum(estimate, NOISE_FLOOR_POWER)",
+        old=("    return np.asarray(np.maximum(estimate, NOISE_FLOOR_POWER), dtype=np.float64)"),
         # A floor of float64.tiny is non-zero, so it reads as a floor, but every
         # real signal divided by 2.2e-308 overflows and the WOLA comes back NaN.
-        new="    return np.maximum(estimate, np.finfo(np.float64).tiny)",
+        new=(
+            "    return np.asarray(\n"
+            "        np.maximum(estimate, np.finfo(np.float64).tiny), dtype=np.float64\n"
+            "    )"
+        ),
         test="test_silence_still_floors_the_estimate_finitely",
     ),
     Probe(
@@ -846,6 +857,21 @@ PROBES: tuple[Probe, ...] = (
         # the Stage-A audit found: a cached artifact reused across recipes.
         new='        "parameters": {},',
         test="test_changing_one_parameter_changes_the_identity",
+    ),
+    Probe(
+        name="banner-channels-only-understands-named-layouts",
+        gate="ffmpeg-banner-portability",
+        path=f"{AUDIO}/ffmpeg_ops.py",
+        old="""    counted = _COUNT_LAYOUT_RE.match(lowered)
+    if counted is not None:
+        count = int(counted.group(1))
+        return count if count >= 1 else None""",
+        # The exact original defect: understand ``mono``/``stereo`` only, so an
+        # FFmpeg 6.1.1 banner ("1 channels") yields None and probe() fails
+        # closed.  A 9.x-only test suite cannot see this.
+        new="""    return None""",
+        test="test_a_6_1_1_banner_is_no_longer_none",
+        test_file="tests/unit/test_omega_wave2_ffmpeg_banner_versions.py",
     ),
 )
 
@@ -888,7 +914,7 @@ def _run_probe(probe: Probe) -> dict[str, object]:
                 sys.executable,
                 "-m",
                 "pytest",
-                str(work / TEST_FILE),
+                str(work / probe.test_file),
                 "-k",
                 probe.test,
                 "-x",

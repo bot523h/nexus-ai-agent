@@ -52,12 +52,12 @@ The engine sits **outside** `creative/packs` (which stays pure) and outside
 | `tests/unit/test_omega_engine_coverage.py` (81) | The engine's **refusal** surface: source resolution, composition and env fallbacks, beat-analysis refusals, loudness contract refusals, transcoder failures (empty concat, quoted path, failed copy leaving no partial file), every `verify_passport` refusal, the numeric layer, the workspace boundary. |
 | `tests/unit/test_omega_native_engine.py` (26) | Real FFmpeg end to end: post-decode LUFS at target for both locked profiles, true peak honoured, 96/120/140 BPM detected ±3%, silence → no tempo, corrupt input refused. |
 | `tests/unit/test_omega_audio_bus.py`, `test_omega_continuity_assembly.py`, `test_omega_evidence_ladder.py`, `test_audio_pack_evidence_paths.py`, `test_audio_pack.py` | The bus, the continuity verdicts, the ladder, every pack refusal branch. |
-| `scripts/mutate_omega_audio.py` (75 probes) | That the suite is load-bearing: revert a fix and a **named** test must fail. |
+| `scripts/mutate_omega_audio.py` (77 probes) | That the suite is load-bearing: revert a fix and a **named** test must fail. |
 | `scripts/omega_stage_a_benchmarks.py` | §8.3: N ≥ 3, median/min/max/sd, Peak RSS, process count, FFmpeg version; refuses `N < 3` and exits non-zero on `NOT_MEASURED`. |
 
 ## 5. What is measured on this branch
 
-Mutation campaign — `scripts/mutate_omega_audio.py`, **76/76 KILLED**
+Mutation campaign — `scripts/mutate_omega_audio.py`, **77/77 KILLED**
 (`ANCHOR_MISSING`, `AMBIGUOUS_ANCHOR` and `SURVIVED` all fail the gate).
 
 Engine coverage — `coverage run --source=src/nexus_ai_agent/creative/audio_engine`
@@ -98,7 +98,7 @@ beats         0.1135   0.0936   0.1143  0.0117    28.3 MiB      2
 | `pytest tests/unit tests/architecture` | **6231 passed, 14 skipped, 0 failed** (661.81 s) |
 | `scripts/mutate_omega_audio.py` | **75/75 KILLED** |
 | `scripts/omega_stage_a_benchmarks.py -n 3` | exit 0, all rows `ok` |
-| Engine coverage | **97%**, and every module individually **>=95%** (`verify.py` 100%) |
+| Engine coverage | **97%**, every module individually **>=95%** (`verify.py` 100%); `mypy --strict` clean on all 15 files |
 | Canonical audio-pack coverage | 99.58% (939/943), contract 95% |
 | `scripts/agent_board.py check --files <exact list>` | no overlap, before every push |
 
@@ -115,6 +115,7 @@ beats         0.1135   0.0936   0.1143  0.0117    28.3 MiB      2
 | §4.5 `STRICT_LINEAR` vs `DYNAMIC_ALLOWED` + crest | `VERIFIED` | 4 verdicts on one signal, arithmetic reconstruction, destruction bound, **and the 1:1 stereo case** (no up-mix term; the phantom-3.01 dB mutation is killed) |
 | §4.5 `NAGAR_STREAMING_PRESET` relabel | `VERIFIED` | 31 call sites renamed; a gate asserts the old name is unreachable |
 | §4.6 fail-closed `ffprobe -of json` | `VERIFIED` | every malformed document refuses; 3 probes |
+| §4.6 channel-layout parsing across FFmpeg 4.x–9.x | `VERIFIED` | `parse_audio_stream_channels`; verbatim 4.4 / 6.1.1 / 7.1 / 9.0.2 banners; 6.1.1's `N channels` now resolves where it returned `None`; 1 probe |
 | §4.7 `_interval_candidates` mean gap | `VERIFIED` | 3 tests + 1 probe |
 | §4.7 `bpm_std_uncertainty` (Type A) + octave disambiguation | `VERIFIED` | `ac02b8b`: GUM combined standard uncertainty reported on the onset grid; octave decided by coverage comparison (`OCTAVE_DECISION_RATIO = 1.08`) with `SUBDIVISION_STRENGTH_RATIO = 0.80`; 4 octave + 5 GUM probes |
 | §4.7 full PCM/FFT/STFT/denoise measurement protocol | `VERIFIED` | `docs/architecture/AUDIO_DSP_MEASUREMENT_PROTOCOL.md` — every constant read from the source, including the five things the protocol explicitly does *not* cover |
@@ -154,6 +155,10 @@ platform and run id (a GitHub Actions run id, or a CircleCI project slug + token
 or a `.circleci/config.yml` must be reintroduced. Both are owner decisions.
 
 ## 9. Forward tasks — 6 in-zone (4 closed this wave), 2 out-of-zone with a written handoff contract
+
+**Session handoff:** `docs/architecture/OMEGA_SESSION_HANDOFF.md` is the bootstrap
+source for the next session — commit list, per-module coverage, verification
+tiers and the DO-NOT list.
 
 | # | Task | Why now |
 |---|---|---|

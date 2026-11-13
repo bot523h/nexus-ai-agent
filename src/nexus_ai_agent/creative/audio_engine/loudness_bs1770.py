@@ -233,7 +233,7 @@ def _block_mean_squares(
     )
     starts = np.arange(0, weighted.shape[1] - block + 1, hop)
     sums = cumulative[:, starts + block] - cumulative[:, starts]
-    return sums / block
+    return np.asarray(sums / block, dtype=np.float64)
 
 
 def _lufs(mean_square: float) -> float | None:
@@ -287,7 +287,7 @@ def _short_term_series(
     if window > values.size:
         return np.zeros(0, dtype=np.float64)
     cumulative = np.concatenate([[0.0], np.cumsum(values)])
-    return (cumulative[window:] - cumulative[:-window]) / window
+    return np.asarray((cumulative[window:] - cumulative[:-window]) / window, dtype=np.float64)
 
 
 def short_term_max(

@@ -70,6 +70,14 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         # rather than exempting it as host-layer — the exemption list is for
         # modules that are evidence for a *host* layer, and this one is not.
         "tests/unit/test_omega_wave2_stereo_forensic.py",
+        # WAVE-2.1: the FFmpeg banner parser decides whether the pack can read a
+        # stream at all.  On a 6.1.1 host a `None` channel count made every
+        # artifact fail closed, so this suite is pack evidence.
+        "tests/unit/test_omega_wave2_ffmpeg_banner_versions.py",
+        # The 3.10 compatibility guard covers the whole OMEGA zone, so it is
+        # evidence for every pack that zone serves; it is registered against
+        # audio, the pack it is written for.
+        "tests/unit/test_omega_wave2_py310_compat.py",
         "tests/architecture/test_audio_pack_boundary.py",
     ),
     "caption": (
