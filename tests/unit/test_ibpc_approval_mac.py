@@ -29,6 +29,9 @@ def test_approval_envelope_is_keyed_and_scope_bound() -> None:
     assert not verify_envelope(
         ring, replace(envelope, approval_id="a-2"), scope, now="2026-11-13T00:01:00Z"
     )
+    assert not verify_envelope(
+        ring, replace(envelope, mac="0" * 64), scope, now="2026-11-13T00:01:00Z"
+    )
 
 
 def test_unknown_key_and_expiry_fail_closed() -> None:
@@ -37,4 +40,6 @@ def test_unknown_key_and_expiry_fail_closed() -> None:
     assert not verify_envelope(
         ring, replace(envelope, key_id="unknown"), {"x": 1}, now="2026-11-13T00:01:00Z"
     )
+    wrong_key = StaticKeyRing({"known": b"x" * 32}, active_key_id="known")
+    assert not verify_envelope(wrong_key, envelope, {"x": 1}, now="2026-11-13T00:01:00Z")
     assert not verify_envelope(ring, envelope, {"x": 1}, now="2026-11-13T00:10:00Z")

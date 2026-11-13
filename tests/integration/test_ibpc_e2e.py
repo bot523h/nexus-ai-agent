@@ -23,6 +23,7 @@ Proven by these tests:
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -184,6 +185,31 @@ async def test_scope_signature_tamper_refuses_before_queue_admission(
     assert outcome.status == "refused"
     assert "scope_signature_mismatch" in outcome.detail
     assert queue.job_ids() == []
+
+
+def test_scope_digest_explicitly_binds_proposal_revision(harness, tmp_path: Path) -> None:
+    service, _queue, _root, _journal, principal = harness
+    source = tmp_path / "revision-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    proposal = service.submit_text_intent(
+        sid,
+        "revision-binding",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(proposal, PipelineResult)
+    _session, _turn, context, identity = service._resolve_identity(
+        sid, "revision-binding", proposal.approval_id, principal_id=principal
+    )
+    original = service._scope_signature(context, identity)
+    changed_ast = context.ast.model_copy(
+        update={"source_revision": context.ast.source_revision + 1}
+    )
+    changed_context = replace(context, ast=changed_ast)
+    assert service._scope_signature(changed_context, identity) != original
 
 
 @pytest.mark.asyncio

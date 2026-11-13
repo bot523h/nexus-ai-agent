@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from nexus_ai_agent.connect.key_provider import StaticKeyRing
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError
 from nexus_ai_agent.nagar.ibpc.privacy import PrivacyPolicy
@@ -378,6 +379,35 @@ def service_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "probe_media",
         lambda path, *, binary=None: (types.SimpleNamespace(duration_us=2_000_000), 30.0),
     )
+
+    def fake_shadow(path, scope, plan_digest, **kwargs):
+        payload = {
+            "plan_digest": plan_digest,
+            "scope_digest": scope.scope_digest,
+            "source_duration_us": 2_000_000,
+            "scope_start_us": scope.start_us,
+            "scope_end_us": scope.end_us,
+            "keyframes": [],
+            "composite_digest": "sha256:" + "0" * 64,
+        }
+        return types.SimpleNamespace(model_dump=lambda **_kw: payload)
+
+    def fake_signature(path, scope, **kwargs):
+        payload = {
+            "scope_digest": scope.scope_digest,
+            "asset_id": scope.asset_id,
+            "start_us": scope.start_us,
+            "end_us": scope.end_us,
+            "color_histogram": [0.0] * 64,
+            "motion_magnitude": 0.0,
+            "sample_frames": 1,
+            "computed_at": "2026-10-31T00:00:00Z",
+            "signature_digest": "sha256:" + "0" * 64,
+        }
+        return types.SimpleNamespace(model_dump=lambda **_kw: payload)
+
+    monkeypatch.setattr(service_mod, "build_shadow_preview", fake_shadow)
+    monkeypatch.setattr(service_mod, "compute_scope_signature", fake_signature)
     clip = tmp_path / "src.mp4"
     _fake_asset(clip)
     queue = _RecordingQueue()
@@ -391,6 +421,7 @@ def service_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             revision_provider=lambda: revision["current"],
             authority=authority,
             channel_binding_ref=BINDING_REF,
+            approval_key_provider=StaticKeyRing({"unit": b"u" * 32}, active_key_id="unit"),
         )
     )
     return service, queue, clip, revision, authority

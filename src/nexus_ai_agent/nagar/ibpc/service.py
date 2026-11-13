@@ -78,7 +78,7 @@ from nexus_ai_agent.nagar.ibpc.session import (
     TransitionError,
     TurnState,
 )
-from nexus_ai_agent.nagar.ibpc.shadow import build_shadow_preview
+from nexus_ai_agent.nagar.ibpc.shadow import build_shadow_preview, verify_shadow_manifest
 from nexus_ai_agent.nagar.ibpc.signature import compute_scope_signature
 from nexus_ai_agent.provenance.canonicalization import (
     CanonicalizationScheme,
@@ -200,6 +200,7 @@ class _TurnContext:
     approval_envelope: ApprovalEnvelope | None = None
     parent_proposal_id: str | None = None
     parent_scope_digest: str | None = None
+    delta_spec: dict[str, Any] | None = None
 
 
 class IBPCService:
@@ -350,6 +351,14 @@ class IBPCService:
             # clarification / refusal: no approval, no execution, turn stays live
             return parsed
         ast = parsed.ast if isinstance(parsed, IntentAST) else parsed.resolved_ast
+        delta_spec = (
+            {
+                "base_scope_digest": parsed.base_scope_digest,
+                "delta_ops": [op.model_dump(mode="json") for op in parsed.delta_ops],
+            }
+            if isinstance(parsed, DeltaIntentAST)
+            else None
+        )
         if base_binding is not None and base_approval_id is not None:
             self._approvals.revoke(base_approval_id)
             self._contexts.pop(base_approval_id, None)
@@ -413,6 +422,7 @@ class IBPCService:
                 media_signature=media_signature,
                 parent_proposal_id=parent_proposal_id,
                 parent_scope_digest=parent_scope_digest,
+                delta_spec=delta_spec,
             ),
         )
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
@@ -521,6 +531,21 @@ class IBPCService:
             self._sessions.mark_failed(session_id, turn_id)
             return Refusal(exc.reason, exc.detail)
         preview = build_preview(plan, ast, source_duration_us=info.duration_us, fps=fps)
+        try:
+            shadow_manifest = build_shadow_preview(
+                src,
+                ast.scope,
+                plan.plan_digest,
+                ffmpeg_bin=self._deps.verifier_binary,
+                source_duration_us=info.duration_us,
+                max_keyframes=3,
+            )
+            media_signature = compute_scope_signature(
+                src, ast.scope, ffmpeg_bin=self._deps.verifier_binary, max_frames=3
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._sessions.mark_failed(session_id, turn_id)
+            return Refusal("media_evidence_unavailable", str(exc))
         readback = render_readback(ast, plan, preview)
         binding = ApprovalBinding(
             session_id=session_id,
@@ -555,6 +580,8 @@ class IBPCService:
                 principal_id=session.principal_id,
                 binding_ref=verified.channel_binding_id,
                 verified_identity=verified,
+                shadow_manifest=shadow_manifest,
+                media_signature=media_signature,
             ),
         )
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
@@ -568,6 +595,8 @@ class IBPCService:
             plan=plan,
             preview=preview,
             readback=readback,
+            shadow_manifest=shadow_manifest,
+            media_signature=media_signature,
         )
 
     # -- canonical authority --------------------------------------------------
@@ -704,6 +733,8 @@ class IBPCService:
             {
                 "identity": identity.as_dict(),
                 "intent_id": ctx.ast.ast_id,
+                "normalized_intent_digest": ctx.intent_digest,
+                "delta_spec": ctx.delta_spec,
                 "normalized_plan": ctx.plan.model_dump(mode="json"),
                 "target_asset_refs": [ctx.ast.asset_id, ctx.source_asset_digest],
                 "capability_set": [CANONICAL_OPERATION],
@@ -1010,6 +1041,34 @@ class IBPCService:
                 detail="source_changed_during_staging: staged content does not match the "
                 "admitted asset digest",
             )
+        try:
+            if ctx.shadow_manifest is None or ctx.media_signature is None:
+                raise SessionError(
+                    "media_evidence_missing", "approved media evidence is unavailable"
+                )
+            verify_shadow_manifest(ctx.shadow_manifest)
+            if (
+                ctx.shadow_manifest.plan_digest != ctx.plan.plan_digest
+                or ctx.shadow_manifest.scope_digest != ctx.ast.scope.scope_digest
+            ):
+                raise SessionError(
+                    "shadow_scope_mismatch", "Shadow evidence no longer matches the plan"
+                )
+            staged_signature = await asyncio.to_thread(
+                compute_scope_signature,
+                input_path,
+                ctx.ast.scope,
+                ffmpeg_bin=self._deps.verifier_binary,
+                max_frames=3,
+            )
+            if not hmac.compare_digest(
+                staged_signature.signature_digest, ctx.media_signature.signature_digest
+            ):
+                raise SessionError("media_signature_mismatch", "staged media evidence changed")
+        except (SessionError, RuntimeError, ValueError) as exc:
+            self._sessions.mark_failed(session_id, turn_id)
+            reason = getattr(exc, "reason", "media_evidence_invalid")
+            return ExecutionOutcome(status="refused", detail=f"{reason}: {exc}")
         in_us = int(ctx.ast.params["in_point_us"])
         out_us = int(ctx.ast.params["out_point_us"])
         idempotency_key = f"ibpc:{approval_id}"
