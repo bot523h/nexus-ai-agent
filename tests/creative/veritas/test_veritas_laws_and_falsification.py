@@ -10,6 +10,7 @@ because it is the newest engine.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -70,6 +71,20 @@ from nexus_ai_agent.creative.veritas.neuro_facial_microdynamics import FacialDyn
 from nexus_ai_agent.creative.veritas.ocular_biophysics import (
     OcularGeometryError,
     PupilStimulusError,
+)
+from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
+    BioAcousticSyncError,
+    FluidConservationError,
+    OmniaOpticsError,
+    StroboscopicAliasingError,
+    apply_acoustic_doppler_shift,
+    audit_and_heal_viseme_formant_sync,
+    enforce_helmholtz_fluid_conservation,
+    rectify_anamorphic_dioptric_optics,
+    rectify_stroboscopic_wagon_wheel,
+)
+from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
+    compile_and_heal_real_media_shot,
 )
 from nexus_ai_agent.creative.veritas.se3_object_permanence import ObjectPermanenceError
 from nexus_ai_agent.creative.veritas.symplectic_contact_mechanics import (
@@ -607,13 +622,254 @@ PROBES: list[Callable[[], None]] = [
 ]
 
 
+def _fringed_frame(height: int = 32, width: int = 32) -> np.ndarray:
+    ys, xs = np.meshgrid(
+        np.arange(height, dtype=np.float64) / (height - 1),
+        np.arange(width, dtype=np.float64) / (width - 1),
+        indexing="ij",
+    )
+    base = 0.5 + 0.45 * np.cos(np.arctan2(ys - 0.5, xs - 0.5) * 5.0)
+    frame = np.stack([base, base, base], axis=2)
+    frame[:, :, 0] = _radial_scale_reference(frame[:, :, 0], 1.03)
+    frame[:, :, 2] = _radial_scale_reference(frame[:, :, 2], 0.97)
+    return np.asarray(np.clip(frame, 0.0, 1.0), dtype=np.float64)
+
+
+def _radial_scale_reference(channel: np.ndarray, scale: float) -> np.ndarray:
+    height, width = int(channel.shape[0]), int(channel.shape[1])
+    cy = (height - 1) / 2.0
+    cx = (width - 1) / 2.0
+    ys, xs = np.meshgrid(
+        np.arange(height, dtype=np.float64), np.arange(width, dtype=np.float64), indexing="ij"
+    )
+    src_x = np.clip(cx + (xs - cx) / scale, 0.0, width - 1.0)
+    src_y = np.clip(cy + (ys - cy) / scale, 0.0, height - 1.0)
+    x0 = np.floor(src_x).astype(np.int64)
+    y0 = np.floor(src_y).astype(np.int64)
+    x1 = np.clip(x0 + 1, 0, width - 1)
+    y1 = np.clip(y0 + 1, 0, height - 1)
+    wx = src_x - x0
+    wy = src_y - y0
+    return (
+        channel[y0, x0] * (1 - wx) * (1 - wy)
+        + channel[y0, x1] * wx * (1 - wy)
+        + channel[y1, x0] * (1 - wx) * wy
+        + channel[y1, x1] * wx * wy
+    )
+
+
+def law11_uniform_density_has_zero_quantum_potential() -> None:
+    potential = bohmian_quantum_potential(np.full((8, 8), 0.7))
+    assert float(np.max(np.abs(potential))) < 1e-9
+
+
+def law11_edge_density_raises_quantum_potential() -> None:
+    density = np.full((16, 16), 0.2)
+    density[6:10, 6:10] = 1.0
+    potential = bohmian_quantum_potential(density)
+    assert float(np.max(np.abs(potential))) > 1e-3
+
+
+def law11_boiling_phase_is_healed() -> None:
+    density = np.full((16, 16), 0.6)
+    rng = np.random.default_rng(7)
+    phase = rng.uniform(-np.pi, np.pi, size=(16, 16))
+    result = stabilize_madelung_phase_coherence(density, phase)
+    assert result.boiling_after < result.boiling_before
+
+
+def law11_phase_discontinuity_is_detected() -> None:
+    density = np.full((8, 8), 0.5)
+    phase = np.zeros((8, 8))
+    phase[:, 4:] = 3.0 * np.pi
+    result = stabilize_madelung_phase_coherence(density, phase)
+    assert "phase_discontinuity" in result.violations
+
+
+def law11_wavefunction_modulus_matches_density() -> None:
+    density = np.full((8, 8), 0.4)
+    phase = np.zeros((8, 8))
+    result = stabilize_madelung_phase_coherence(density, phase)
+    modulus = np.abs(result.wavefunction)
+    assert np.allclose(modulus**2, result.density, atol=1e-6)
+
+
+def law12_intrinsic_matrix_applies_anamorphic_squeeze() -> None:
+    result = rectify_anamorphic_dioptric_optics(_fringed_frame(), squeeze_factor=1.5)
+    fx = 40.0 / 36.0 * 32
+    assert result.intrinsic_matrix[0, 0] == pytest.approx(fx / 1.5, rel=1e-9)
+
+
+def law12_bokeh_aspect_equals_squeeze_factor() -> None:
+    result = rectify_anamorphic_dioptric_optics(_fringed_frame(), squeeze_factor=1.8)
+    assert result.bokeh_aspect == pytest.approx(1.8, rel=1e-12)
+
+
+def law12_lateral_chromatic_fringe_is_healed() -> None:
+    result = rectify_anamorphic_dioptric_optics(_fringed_frame())
+    assert result.fringe_after < result.fringe_before
+    assert result.healed is True
+
+
+def law12_vignetting_map_follows_cos4_law() -> None:
+    result = rectify_anamorphic_dioptric_optics(_fringed_frame())
+    centre = result.vignetting_map[16, 16]
+    corner = result.vignetting_map[0, 0]
+    assert centre > corner
+    assert 0.0 < corner < 1.0
+
+
+def law12_rejects_unphysical_squeeze_factor() -> None:
+    with pytest.raises(OmniaOpticsError):
+        rectify_anamorphic_dioptric_optics(_fringed_frame(), squeeze_factor=0.5)
+
+
+def law13_silence_clamps_zombie_mouth() -> None:
+    jaw = np.array([0.9, 0.8])
+    lips = np.array([0.1, 0.1])
+    result = audit_and_heal_viseme_formant_sync(
+        jaw, lips, f1_hz=np.array([400.0, 400.0]), rms_energy=np.zeros(2)
+    )
+    assert "ventriloquist_zombie_mouth" in result.violations_before
+    assert float(np.max(result.au26_healed)) == 0.0
+
+
+def law13_high_first_formant_requires_jaw_opening() -> None:
+    jaw = np.array([0.05])
+    lips = np.array([0.1])
+    result = audit_and_heal_viseme_formant_sync(
+        jaw, lips, f1_hz=np.array([950.0]), rms_energy=np.array([0.2])
+    )
+    assert "jaw_underarticulation" in result.violations_before
+    assert result.au26_healed[0] >= result.required_opening[0] - 1e-9
+
+
+def law13_bilabial_formant_conflict_is_resolved() -> None:
+    result = audit_and_heal_viseme_formant_sync(
+        np.array([0.9]), np.array([0.95]), f1_hz=np.array([900.0]), rms_energy=np.array([0.2])
+    )
+    assert "bilabial_formant_conflict" in result.violations_before
+    assert result.au20_healed[0] <= 0.7 + 1e-9
+
+
+def law13_doppler_factor_exceeds_one_for_approach() -> None:
+    result = apply_acoustic_doppler_shift(np.zeros(64), 48000.0, 30.0)
+    assert result.doppler_factor > 1.0
+    assert result.output_length == 64
+
+
+def law13_doppler_rejects_sonic_singularity() -> None:
+    with pytest.raises(BioAcousticSyncError):
+        apply_acoustic_doppler_shift(np.zeros(64), 48000.0, 400.0)
+
+
+def law14_divergence_is_annihilated() -> None:
+    rng = np.random.default_rng(11)
+    velocity = rng.normal(size=(3, 8, 8, 2))
+    height = np.abs(rng.normal(size=(3, 8, 8))) + 0.5
+    result = enforce_helmholtz_fluid_conservation(velocity, height)
+    assert result.divergence_after < 1e-11
+    assert result.divergence_after < result.divergence_before
+
+
+def law14_free_surface_volume_is_conserved() -> None:
+    rng = np.random.default_rng(12)
+    velocity = rng.normal(size=(4, 8, 8, 2))
+    height = np.abs(rng.normal(size=(4, 8, 8))) + 0.5
+    result = enforce_helmholtz_fluid_conservation(velocity, height)
+    target = float(result.volume_before[0])
+    assert np.allclose(result.volume_after, target, rtol=1e-12)
+
+
+def law14_rejects_negative_height() -> None:
+    velocity = np.zeros((2, 4, 4, 2))
+    height = np.full((2, 4, 4), -0.5)
+    with pytest.raises(FluidConservationError):
+        enforce_helmholtz_fluid_conservation(velocity, height)
+
+
+def law14_rejects_shape_mismatch() -> None:
+    with pytest.raises(FluidConservationError):
+        enforce_helmholtz_fluid_conservation(np.zeros((2, 4, 4, 2)), np.zeros((3, 4, 4)))
+
+
+def law14_preserves_already_solenoidal_field() -> None:
+    velocity = np.zeros((2, 8, 8, 2))
+    velocity[:, :, :, 1] = 1.0
+    height = np.ones((2, 8, 8))
+    result = enforce_helmholtz_fluid_conservation(velocity, height)
+    assert np.allclose(result.solenoidal_velocity, velocity, atol=1e-12)
+
+
+def law15_detects_nyquist_aliasing() -> None:
+    patch = np.zeros((16, 16))
+    patch[2:14, 7:9] = 1.0
+    result = rectify_stroboscopic_wagon_wheel(patch, angular_velocity_rad_s=200.0, fps=24.0)
+    assert result.aliased is True
+    assert "nyquist_rotary_aliasing" in result.violations
+
+
+def law15_no_alias_below_nyquist() -> None:
+    patch = np.zeros((16, 16))
+    patch[2:14, 7:9] = 1.0
+    result = rectify_stroboscopic_wagon_wheel(patch, angular_velocity_rad_s=1.0, fps=24.0)
+    assert result.aliased is False
+    assert result.violations == ()
+
+
+def law15_blur_arc_matches_shutter_fraction() -> None:
+    patch = np.zeros((16, 16))
+    patch[2:14, 7:9] = 1.0
+    result = rectify_stroboscopic_wagon_wheel(
+        patch, angular_velocity_rad_s=6.0, fps=24.0, shutter_angle_deg=90.0
+    )
+    assert result.blur_arc_rad == pytest.approx(0.25 * 0.25, rel=1e-9)
+
+
+def law15_rejects_invalid_shutter_angle() -> None:
+    with pytest.raises(StroboscopicAliasingError):
+        rectify_stroboscopic_wagon_wheel(
+            np.zeros((8, 8)), angular_velocity_rad_s=1.0, fps=24.0, shutter_angle_deg=0.0
+        )
+
+
+PROBES.extend(
+    [
+        law11_uniform_density_has_zero_quantum_potential,
+        law11_edge_density_raises_quantum_potential,
+        law11_boiling_phase_is_healed,
+        law11_phase_discontinuity_is_detected,
+        law11_wavefunction_modulus_matches_density,
+        law12_intrinsic_matrix_applies_anamorphic_squeeze,
+        law12_bokeh_aspect_equals_squeeze_factor,
+        law12_lateral_chromatic_fringe_is_healed,
+        law12_vignetting_map_follows_cos4_law,
+        law12_rejects_unphysical_squeeze_factor,
+        law13_silence_clamps_zombie_mouth,
+        law13_high_first_formant_requires_jaw_opening,
+        law13_bilabial_formant_conflict_is_resolved,
+        law13_doppler_factor_exceeds_one_for_approach,
+        law13_doppler_rejects_sonic_singularity,
+        law14_divergence_is_annihilated,
+        law14_free_surface_volume_is_conserved,
+        law14_rejects_negative_height,
+        law14_rejects_shape_mismatch,
+        law14_preserves_already_solenoidal_field,
+        law15_detects_nyquist_aliasing,
+        law15_no_alias_below_nyquist,
+        law15_blur_arc_matches_shutter_fraction,
+        law15_rejects_invalid_shutter_angle,
+    ]
+)
+
+
 @pytest.mark.parametrize("probe", PROBES, ids=[p.__name__ for p in PROBES])
 def test_falsification_probe(probe: Callable[[], None]) -> None:
     probe()
 
 
-def test_probe_count_is_sixty() -> None:
-    assert len(PROBES) == 60
+def test_probe_count_is_eighty_four() -> None:
+    assert len(PROBES) == 84
 
 
 # --------------------------------------------------------------------------- #
@@ -780,3 +1036,22 @@ def test_homography_maps_source_quad_to_destination() -> None:
     homography = compute_planar_quad_homography(_square(), destination)
     assert homography.shape == (3, 3)
     assert np.linalg.det(homography) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_real_media_compiler_end_to_end(tmp_path: Path) -> None:
+    bundle = compile_and_heal_real_media_shot(
+        tmp_path / "shot", num_frames=3, height=8, width=8, mux_mp4=True
+    )
+    assert len(bundle.png_paths) == 3
+    for path in bundle.png_paths:
+        assert Path(path).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert Path(bundle.wav_path).exists()
+    assert bundle.pre_audit_violations >= 15
+    assert bundle.post_heal_violations == 0
+    assert bundle.healed is True
+    assert len(bundle.receipts) == 15
+    assert len(bundle.leaf_digests) == 15
+    assert len(bundle.merkle_root) == 64
+    if bundle.mp4_path is not None:
+        assert bundle.mp4_sha256 is not None
+        assert len(bundle.mp4_sha256) == 64

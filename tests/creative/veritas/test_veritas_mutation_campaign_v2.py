@@ -58,6 +58,17 @@ from nexus_ai_agent.creative.veritas.ocular_biophysics import (
     OcularGeometryError,
     PupilStimulusError,
 )
+from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
+    BioAcousticSyncError,
+    FluidConservationError,
+    OmniaOpticsError,
+    StroboscopicAliasingError,
+    apply_acoustic_doppler_shift,
+    audit_and_heal_viseme_formant_sync,
+    enforce_helmholtz_fluid_conservation,
+    rectify_anamorphic_dioptric_optics,
+    rectify_stroboscopic_wagon_wheel,
+)
 
 LEFT = np.array([-31.5, 0.0, 0.0])
 RIGHT = np.array([31.5, 0.0, 0.0])
@@ -339,7 +350,7 @@ class TestLaw10Mutants:
             sss(np.zeros((4, 4, 3)), np.zeros((4, 4, 3)), np.zeros((3, 3)))
 
 
-def test_mutant_count_is_forty() -> None:
+def test_mutant_count_is_fifty_six() -> None:
     import inspect
 
     count = sum(
@@ -349,4 +360,97 @@ def test_mutant_count_is_forty() -> None:
         for member in vars(obj)
         if member.startswith("test_mutant")
     )
-    assert count == 40
+    assert count == 56
+
+
+def _mutant_frame() -> np.ndarray:
+    frame = np.full((16, 16, 3), 0.5)
+    frame[4:12, 4:12] = 1.0
+    return frame
+
+
+class TestLaw12Mutants:
+    def test_mutant_1_squeeze_below_unity(self) -> None:
+        with pytest.raises(OmniaOpticsError):
+            rectify_anamorphic_dioptric_optics(_mutant_frame(), squeeze_factor=0.9)
+
+    def test_mutant_2_negative_focal_length(self) -> None:
+        with pytest.raises(OmniaOpticsError):
+            rectify_anamorphic_dioptric_optics(_mutant_frame(), focal_length_mm=-10.0)
+
+    def test_mutant_3_non_rgb_image(self) -> None:
+        with pytest.raises(OmniaOpticsError):
+            rectify_anamorphic_dioptric_optics(np.zeros((16, 16)))
+
+    def test_mutant_4_out_of_range_pixels(self) -> None:
+        with pytest.raises(OmniaOpticsError):
+            rectify_anamorphic_dioptric_optics(np.full((16, 16, 3), 3.0))
+
+
+class TestLaw13Mutants:
+    def test_mutant_1_zombie_mouth_detected(self) -> None:
+        result = audit_and_heal_viseme_formant_sync(
+            np.array([0.9]), np.array([0.1]), f1_hz=np.array([500.0]), rms_energy=np.zeros(1)
+        )
+        assert "ventriloquist_zombie_mouth" in result.violations_before
+
+    def test_mutant_2_underarticulation_detected(self) -> None:
+        result = audit_and_heal_viseme_formant_sync(
+            np.array([0.0]), np.array([0.1]), f1_hz=np.array([1000.0]), rms_energy=np.array([0.3])
+        )
+        assert "jaw_underarticulation" in result.violations_before
+
+    def test_mutant_3_sonic_singularity(self) -> None:
+        with pytest.raises(BioAcousticSyncError):
+            apply_acoustic_doppler_shift(np.zeros(32), 48000.0, 343.0)
+
+    def test_mutant_4_non_positive_sample_rate(self) -> None:
+        with pytest.raises(BioAcousticSyncError):
+            apply_acoustic_doppler_shift(np.zeros(32), 0.0, 1.0)
+
+
+class TestLaw14Mutants:
+    def test_mutant_1_negative_height(self) -> None:
+        with pytest.raises(FluidConservationError):
+            enforce_helmholtz_fluid_conservation(np.zeros((2, 4, 4, 2)), np.full((2, 4, 4), -1.0))
+
+    def test_mutant_2_shape_mismatch(self) -> None:
+        with pytest.raises(FluidConservationError):
+            enforce_helmholtz_fluid_conservation(np.zeros((2, 4, 4, 2)), np.zeros((5, 4, 4)))
+
+    def test_mutant_3_non_finite_velocity(self) -> None:
+        velocity = np.zeros((2, 4, 4, 2))
+        velocity[0, 0, 0, 0] = np.nan
+        with pytest.raises(FluidConservationError):
+            enforce_helmholtz_fluid_conservation(velocity, np.ones((2, 4, 4)))
+
+    def test_mutant_4_divergence_must_collapse(self) -> None:
+        rng = np.random.default_rng(21)
+        velocity = rng.normal(size=(2, 8, 8, 2))
+        height = np.abs(rng.normal(size=(2, 8, 8))) + 0.5
+        result = enforce_helmholtz_fluid_conservation(velocity, height)
+        assert result.divergence_after < 1e-11
+
+
+class TestLaw15Mutants:
+    def test_mutant_1_non_positive_fps(self) -> None:
+        with pytest.raises(StroboscopicAliasingError):
+            rectify_stroboscopic_wagon_wheel(np.zeros((8, 8)), angular_velocity_rad_s=1.0, fps=0.0)
+
+    def test_mutant_2_zero_shutter_angle(self) -> None:
+        with pytest.raises(StroboscopicAliasingError):
+            rectify_stroboscopic_wagon_wheel(
+                np.zeros((8, 8)), angular_velocity_rad_s=1.0, fps=24.0, shutter_angle_deg=0.0
+            )
+
+    def test_mutant_3_shutter_angle_above_full_circle(self) -> None:
+        with pytest.raises(StroboscopicAliasingError):
+            rectify_stroboscopic_wagon_wheel(
+                np.zeros((8, 8)), angular_velocity_rad_s=1.0, fps=24.0, shutter_angle_deg=400.0
+            )
+
+    def test_mutant_4_aliasing_must_be_flagged(self) -> None:
+        patch = np.zeros((16, 16))
+        patch[2:14, 7:9] = 1.0
+        result = rectify_stroboscopic_wagon_wheel(patch, angular_velocity_rad_s=200.0, fps=24.0)
+        assert result.aliased is True

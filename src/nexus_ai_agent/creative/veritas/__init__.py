@@ -12,6 +12,8 @@ from nexus_ai_agent.creative.veritas import (
     biophysical_human,
     catoptric_and_projective_optics,
     continuum_and_quantum_mechanics,
+    omnia_cinema_physics,
+    real_media_veritas_compiler,
 )
 from nexus_ai_agent.creative.veritas.catoptric_reflection_physics import (
     CatoptricGeometryError,
@@ -66,12 +68,34 @@ from nexus_ai_agent.creative.veritas.ocular_biophysics import (
     solve_binocular_vergence,
     synthesize_saccade_vor_trajectory,
 )
+from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
+    AnamorphicOpticsResult,
+    BioAcousticSyncError,
+    DopplerShiftResult,
+    FluidConservationError,
+    FluidConservationResult,
+    OmniaOpticsError,
+    StroboscopicAliasingError,
+    StroboscopicResult,
+    VisemeFormantResult,
+    apply_acoustic_doppler_shift,
+    audit_and_heal_viseme_formant_sync,
+    enforce_helmholtz_fluid_conservation,
+    rectify_anamorphic_dioptric_optics,
+    rectify_stroboscopic_wagon_wheel,
+)
 from nexus_ai_agent.creative.veritas.projective_shadow_transport import (
     ShadowField,
     compute_shadow_projection_matrix,
     penumbra_radius,
     project_vertices_to_shadow,
     synthesize_coherent_cast_shadows,
+)
+from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
+    LAW_COUNT,
+    LawReceipt,
+    RealMediaVeritasBundle,
+    compile_and_heal_real_media_shot,
 )
 from nexus_ai_agent.creative.veritas.reality_auditor import (
     CinemaShot,
@@ -186,4 +210,24 @@ __all__ = [
     "biophysical_human",
     "catoptric_and_projective_optics",
     "continuum_and_quantum_mechanics",
+    "AnamorphicOpticsResult",
+    "BioAcousticSyncError",
+    "DopplerShiftResult",
+    "FluidConservationError",
+    "FluidConservationResult",
+    "OmniaOpticsError",
+    "StroboscopicAliasingError",
+    "StroboscopicResult",
+    "VisemeFormantResult",
+    "apply_acoustic_doppler_shift",
+    "audit_and_heal_viseme_formant_sync",
+    "enforce_helmholtz_fluid_conservation",
+    "rectify_anamorphic_dioptric_optics",
+    "rectify_stroboscopic_wagon_wheel",
+    "LAW_COUNT",
+    "LawReceipt",
+    "RealMediaVeritasBundle",
+    "compile_and_heal_real_media_shot",
+    "omnia_cinema_physics",
+    "real_media_veritas_compiler",
 ]
