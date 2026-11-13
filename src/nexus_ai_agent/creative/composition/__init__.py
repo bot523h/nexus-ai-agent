@@ -41,6 +41,23 @@ from .errors import (
     TimeWarpError,
     UnknownNodeError,
 )
+from .montage_optimizer import (
+    DEFAULT_MAX_STATES as MONTAGE_DEFAULT_MAX_STATES,
+)
+from .montage_optimizer import (
+    FEASIBLE_BOUNDED,
+    BeatAnchor,
+    ClipCandidate,
+    MontageError,
+    MontageRequest,
+    MontageSchedule,
+    MontageWeights,
+    compile_dag_to_render_spec,
+    compile_montage_to_timeline_dag,
+    jump_cost_from_setups,
+    optimize_rhythmic_montage,
+    tension_fraction,
+)
 from .rational_time import (
     CANONICAL_RATES,
     RATE_23_976,
@@ -59,6 +76,19 @@ from .rational_time import (
 
 __all__ = [
     "ALL_OPERATORS",
+    "FEASIBLE_BOUNDED",
+    "MONTAGE_DEFAULT_MAX_STATES",
+    "BeatAnchor",
+    "ClipCandidate",
+    "MontageError",
+    "MontageRequest",
+    "MontageSchedule",
+    "MontageWeights",
+    "compile_dag_to_render_spec",
+    "compile_montage_to_timeline_dag",
+    "jump_cost_from_setups",
+    "optimize_rhythmic_montage",
+    "tension_fraction",
     "CANONICAL_RATES",
     "OPERATOR_FACTORS",
     "RATE_23_976",
