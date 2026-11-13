@@ -30,6 +30,7 @@ from nexus_ai_agent.nagar.ibpc import (  # noqa: F401 — reachability (law R20)
     authority,
     canonical,
     compiler,
+    delta,
     footprint,
     intent,
     models,
@@ -38,6 +39,8 @@ from nexus_ai_agent.nagar.ibpc import (  # noqa: F401 — reachability (law R20)
     proof,
     service,
     session,
+    shadow,
+    signature,
 )
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError, ApprovalLedger
 from nexus_ai_agent.nagar.ibpc.authority import (
@@ -128,6 +131,7 @@ __all__ = [
     "canonical",
     "compile_ast",
     "compiler",
+    "delta",
     "evaluate_proof_gate",
     "footprint",
     "intent",
@@ -140,4 +144,6 @@ __all__ = [
     "render_readback",
     "service",
     "session",
+    "shadow",
+    "signature",
 ]

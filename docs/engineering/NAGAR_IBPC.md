@@ -81,12 +81,50 @@ Logs/records carry transcripts and audio as digests only (`redact_mapping`).
 | `approval.py` | single-use digest-bound ApprovalLedger |
 | `session.py` | LiveSessionManager + VoiceTurn fencing |
 | `privacy.py` | modes, consent, redaction |
-| `footprint.py` | the ONLY subprocess owner: read-only decode + content-matched verification |
+| `footprint.py` | the ONLY subprocess owner for verification: read-only decode + content-matched verification |
 | `service.py` | IBPCService composing injected ports only (queue/registry/journal/facts/caption) |
+| `delta.py` | deterministic relative-scope ("Delta Dialogue") parser → typed `DeltaOp`s resolved against the committed scope (task-282 triad) |
+| `shadow.py` | deterministic Shadow Preview: real-FFmpeg JPEG keyframe strip + self-verifying `ShadowPreviewManifest` (task-282 triad) |
+| `signature.py` | Scope Signature: 64-bin CIE L\*a\*b\* histogram + motion magnitude + stable digest; `ScopeMatchEngine` (task-282 triad) |
 
 Boundary enforcement: `tests/architecture/test_ibpc_boundary.py` (no imports of adapters/worker/
 render_jobs/bus/pack-runtime; subprocess only in footprint; queue constants pinned against the canonical
 worker's own map; every module imported by name from the package `__init__`).
+
+## Deterministic media triad — Delta Dialogue, Shadow Preview, Scope Signature
+
+Mission `NAGAR-IBPC-TRIAD-CLOSURE-01` adds three model-free capabilities to the IBPC chain. All three
+are deterministic, import no new dependency, and never put a model, an external API or a non-repeatable
+computation on the path. `delta.py`, `shadow.py` and `signature.py` are **leaf** modules: they read
+`models`/`canonical` (+ `creative.slideshow.ffmpeg` for the resolver) and **must not** import
+`service`/`session`/`approval`/`footprint` (enforced by the boundary test, no import cycle).
+
+| Capability | Entry point | Contract |
+|---|---|---|
+| **Delta Dialogue** | `delta.parse_delta_intent` | Relative utterance → `DeltaIntentAST` (applied to the committed `VideoTimeScope`). Every clause must resolve to exactly one unambiguous op or the *whole* request is a `Clarification` — no op is silently dropped. Negation → `Refusal`; same-anchor opposite directions → `contradictory_delta`; asset mismatch and negative revision are validated here (no raw `ValidationError`). |
+| **Shadow Preview** | `shadow.build_shadow_preview` | Real JPEG keyframes, evenly sampled over the **half-open** `[start, end)`; `max_keyframes ∈ [1,16]`. `composite_digest = sha256(b"".join(sorted(frame_digests)))` (order-independent, what an approval binds); `ShadowPreviewManifest.shadow_digest` is the digest of the whole manifest — a different concept. |
+| **Scope Signature** | `signature.compute_scope_signature`, `signature.ScopeMatchEngine` | 64-bin CIE L\*a\*b\* histogram (L\*=32/a\*=16/b\*=16, D65, pure Python, L2-normalised) + grayscale Rec.601 MAD motion ∈ `[0,255]`. `signature_digest` is **stable**: it is taken over immutable content and `computed_at` is excluded. `find_similar` returns cosine-similar hits `>= 0.80`, sorted descending (deterministic tie-break), capped at `max_results`. |
+
+**Persian semantics.** Word-numbers (یک…پنج, نیم, ۱…) are normalised context-safely; the bare word
+*«نه»* ("no") is **never** mapped to `9`, so a negated utterance can never be turned into a spurious
+positive delta (`docs/architecture/adr` records the doc-layer rule; the behaviour record is
+`docs/DECISION_LOG.md` D-0039).
+
+**Colour & motion provenance (no unspecified transform).** The histogram is computed from FFmpeg
+`rgb24` output mapped through *8-bit sRGB → linear RGB (the exact piecewise transfer function, table
+evaluated once) → CIE XYZ (D65: `0.95047/1.00000/1.08883`) → CIE L\*a\*b\** and binned on the fixed
+domains L\*∈[0,100], a\*/b\*∈[-128,127]. Grayscale for motion is the fixed Rec.601 luma
+(`0.299R+0.587G+0.114B`). Both definitions are constants in the module and are pinned by tests.
+
+**FFmpeg subprocess security.** Every call is an argument **list** (never `shell=True`), with a
+per-frame 30 s and a total 120 s timeout, stdout pipes only (no disk writes), and the ffmpeg binary
+resolved through `creative.slideshow.ffmpeg.resolve_ffmpeg_bin`. An unavailable binary, a timeout or an
+empty frame is a typed `ShadowRenderError` / `SignatureError` — a raw `FileNotFoundError`/`OSError` is
+translated and never crosses the public boundary.
+
+**Testing.** Deterministic units in `tests/unit/test_ibpc_{delta,shadow,signature}.py`; real-FFmpeg
+integration in `tests/integration/test_ibpc_{shadow,signature}_ffmpeg.py` (skipped — never passed —
+when FFmpeg is absent); architecture/security in `tests/architecture/test_ibpc_boundary.py`.
 
 ## Status enum (final report will use)
 
@@ -148,3 +186,29 @@ Worktree unchanged after the run (`git diff --exit-code` in CI).
 NEXT (not done, deliberately): durable approval ledger on the existing sqlite journal; multi-process
 session fencing via the job queue; then re-run the same mutation harness against the durable store.
 No durability, multi-process or production-readiness claim is made for the in-memory IBPC state.
+
+## Triad closure: status and residuals (NAGAR-IBPC-TRIAD-CLOSURE-01)
+
+**Status: `VERIFIED_WITH_LIMITATIONS`.** Unit, architecture and real-FFmpeg
+integration suites pass for the triad. Lint and type checks did not run (ruff and
+mypy are not installed and pip is blocked). The draft PR has not been opened.
+
+| Capability | Contract enforced | Proof |
+|---|---|---|
+| Delta Dialogue | fail-closed refusals; both-ends clauses refused; base scope bounds; typed boundary | `tests/unit/test_ibpc_delta.py` (56 with the owner's suite) |
+| Shadow Preview | digests recomputed from bytes; `ffmpeg_failed` / `invalid_jpeg`; half-open ordered strip; source bound | `tests/unit/test_ibpc_shadow.py` (37); `tests/integration/test_ibpc_shadow_ffmpeg.py` |
+| Scope Signature | 64-bin spec; L2 norm, finite and range checks; frame-size and exit checks; temporal motion; digest verification | `tests/unit/test_ibpc_signature.py`; `tests/integration/test_ibpc_signature_ffmpeg.py` |
+| Boundary | spawn allow-list exact; `run` only; list argv; timeout; no network / FS write / dynamic code in triad modules | `tests/architecture/test_ibpc_boundary.py` (23 tests, including eight mutants) |
+
+### Residuals
+
+- `composite_digest` covers frame bytes only (Spec §2.4). Timestamps are not in the
+  composite, but `verify_shadow_manifest` requires them to equal the deterministic
+  sampling schedule. A retimed keyframe is refused as `timestamp_off_schedule`;
+  `test_in_scope_retimestamp_is_refused_by_the_schedule` records it.
+- Shadow Preview and Scope Signature are not connected to the approval pipeline
+  (`NOT_WIRED`). The mission keeps this boundary.
+- Lint (`ruff`) and type checks (`mypy`) are not executed in this environment.
+- Full-suite failures are identical on baseline `5fe94512` and on this branch
+  (243 failed, 141 errors in both). They come from environment gaps: `pytest-asyncio`,
+  `pydantic_settings`, `sqlalchemy`.
