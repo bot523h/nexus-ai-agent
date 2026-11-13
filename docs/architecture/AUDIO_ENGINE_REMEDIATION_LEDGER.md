@@ -299,7 +299,7 @@ was disclosed. The repair is limited to:
 | Read-only ownership / forbidden zones | **56 readable sources, no overlap**; no forbidden-path diff from Stage-A |
 | Generated truth | `python -m nexus_ai_agent.nagar --check`: **GREEN** |
 | Per-module line coverage | Every engine module and slideshow audio **>=95% unrounded** |
-| B4 pack coverage | Runs on the committed clean checkpoint; recorded after that run, never inferred from B3 |
+| B4 clean-tree pack coverage | **ACCEPTED** on `703503c4`; audio **1112/1116 = 99.64%**, all packs **5796/5939 = 97.59%**, 34 canonical test modules |
 
 Per-module line evidence (`covered / statements`; no aggregate exemption):
 
@@ -368,10 +368,28 @@ commands above are durable. The local test environment omits the optional heavy
 `sentence-transformers`/`llama-cpp-python` stacks; the reported skips are retained,
 not converted to passes. Python 3.10 remains **UNVERIFIED_LOCALLY**.
 
+## B4 committed checkpoint and clean-tree acceptance
+
+B4 was committed and pushed as
+`703503c4e24864ebc7d1da47de01968408ea464a`. Its canonical pack gate ran **after**
+the commit with a clean tree and returned **ACCEPTED** (pytest exit 0,
+verified evidence): audio **1112/1116 = 99.64%**, total **5796/5939 = 97.59%**,
+34 canonical test modules, CPython 3.11.2. Source digest:
+`sha256:f205a56b56aab21b4cfeb625cdb3816b7e98412bb29b1bb47b5a063405063a1e`.
+The pack source matches B3 because B4 changes tests/harness/evidence, not DSP or
+pack behaviour; this is nevertheless a **fresh clean-commit measurement**.
+`ci-artifacts/omega-b4-pack.{json,log}` holds the local result. The committed
+source/test/config/harness inputs were compared to the accepted controlled
+campaign manifest byte for byte; all **835** still match. The legacy CLI's
+filtered preset diagnostic also kills the valid semantic mutation and correctly
+reports that a filtered run is **not** full-campaign acceptance.
+
+This documentation-only follow-up records an already measured checkpoint; no
+source/test/harness input is changed. B1–B4's requested engine-side gates are
+complete. Production host-integration limits are not promoted by that result.
+
 ## Remaining boundaries
 
-- B4 code/static/full-suite gates are complete; the final pack acceptance must
-  still be measured on its committed clean checkpoint and recorded explicitly.
 - Production persistence/CommandBus convergence is still owned by the canonical
   Spine/AssetVersion host; an engine-side protocol is not its implementation.
 - No new edits to the board, IBPC, Chronos, Atlas, Hyperion, Veritas, studio bus

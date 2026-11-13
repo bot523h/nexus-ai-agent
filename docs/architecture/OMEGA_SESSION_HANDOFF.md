@@ -6,7 +6,7 @@ says so and gives the tier; nothing here is a prose-only claim.
 
 ## Active Stage-B session — 2026-11-13
 
-**Current branch: `arena/5a8952b7-nexus-ai-agent`; status: `STAGE_B_FINAL_PACK_PENDING`.**
+**Current branch: `arena/5a8952b7-nexus-ai-agent`; status: `STAGE_B_AUDIO_VERIFIED_PHASE2_HOST_PENDING`.**
 The exact requested Stage-A baseline `a24a1bc6e3c530064ca980701f58ad317e164f25`
 was fetched, its complete handoff read, and fast-forwarded onto this branch.
 The starting HEAD and clean tree were verified before implementation. PR #337
@@ -110,12 +110,25 @@ residual, exact six-material onset **sample 123**, synthetic master
 Whole benchmark-process RSS **76,984,320 bytes**; bounded synthetic/offline
 measurements only. Natural-speech/listening/real-time guarantees remain unclaimed.
 
-**Next step:** commit/push B4, then run the canonical pack gate on that clean
-checkpoint and record its actual commit/verdict. Do not reuse B3's acceptance.
+B4 was committed and pushed as
+`703503c4e24864ebc7d1da47de01968408ea464a`. Its **fresh clean-tree** pack gate
+was **ACCEPTED**: audio **1112/1116 = 99.64%**, total **5796/5939 = 97.59%**,
+34 canonical test modules, CPython 3.11.2, pytest exit 0 and verified evidence.
+Pack source digest:
+`sha256:f205a56b56aab21b4cfeb625cdb3816b7e98412bb29b1bb47b5a063405063a1e`.
+All **835** source/test/config/harness inputs still match the accepted mutation
+manifest. This documentation-only follow-up records that measured result; B1–B4
+are engine-side complete, **not** production Spine/DB/AssetVersion integration
+or distributed/crash-recovery closure.
+
+**Next ownership boundary:** Phase-2's canonical Spine host may wire the held
+fence and append-only AssetVersion protocols. No parallel-agent zone is changed
+or implicitly authorized by this handoff. PR #337 remains held/unmerged.
 Ignored artifacts can disappear on sandbox rehydration (observed again at the
-last user pause); code and pushed B1–B3 history survived. Local metadata was
-restored on this same fixed branch only after byte-for-byte comparison to B3.
-Never execute the historical branch restoration example in section 7.1 below.
+last user pause); retained code was compared byte for byte to pushed B3 before
+restoring metadata on this same fixed branch. Never execute the historical
+branch restoration example in section 7.1 below. Rerun the durable final-gate
+commands in the ledger to recreate disposable evidence after rehydration.
 
 The full implementation/evidence and final-gate reproduction commands are in
 [AUDIO_ENGINE_REMEDIATION_LEDGER.md](AUDIO_ENGINE_REMEDIATION_LEDGER.md).
