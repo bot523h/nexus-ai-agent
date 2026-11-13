@@ -25,7 +25,26 @@ Post-format mutation campaign: **77/77 KILLED**. The first run found a surviving
 required-shape-check mutation; the parser ordering was corrected and the
 original test kills it again. No evidence gate was weakened.
 
-The full implementation/evidence and outstanding B2–B4 work are in
+B1 was pushed at `76574db1c9540d63105cf2fb7c3d3de896930956`; its clean-tree
+pack gate was **ACCEPTED** (audio 99.58%, all packs 97.52%).
+
+Wave B2 adds the K1 ACN/SN3D HOA rotation/binaural/FDN and K2 WOLA MMSE-LSA,
+consistent POCS declipping and delayed WPE kernels. Final combined run:
+**892 passed, 1 skipped**; K1 **234/234**, K2 **243/243**, lineage **130/130**
+lines covered; every engine module and slideshow audio above the unrounded 95%
+bar. Post-format inherited mutations **77/77 KILLED**; mypy **382 / strict 18**;
+Ruff **826 files**. The private-publication adapter also closes the target-free
+independent-meter gap before conferring its cross-verified tier.
+
+Measured K1 octave-band RT60: **0.7641 / 0.5787 / 0.4084 s** for
+**0.8 / 0.6 / 0.4 s**, within 8%. Synthetic K2 5 dB noise / 15% clipping
+benchmark: three seeds gain **9.8989–9.9391 dB** SNR. Increasing denoiser
+strength monotonically improves envelope correlation; declipping alone does
+not. Analytic HRTFs are not measured/personalized, and synthetic restoration
+results are not natural-speech/listening validation. The reproducible N=3
+benchmark reports timing spread and whole-process peak RSS with explicit scope.
+
+The full implementation/evidence and outstanding B3–B4 work are in
 [AUDIO_ENGINE_REMEDIATION_LEDGER.md](AUDIO_ENGINE_REMEDIATION_LEDGER.md).
 The lineage bridge deliberately uses host-supplied canonical fencing and an
 append-only AssetVersion writer; it does **not** claim cross-zone DB/CommandBus

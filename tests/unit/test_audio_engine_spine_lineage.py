@@ -184,6 +184,25 @@ def test_canonical_verify_passport_failure_cannot_emit_a_version(publisher):
     publisher.assert_refused_cleanly()
 
 
+@pytest.mark.parametrize("missing_pcm", [False, True])
+def test_untargeted_publish_must_earn_independent_meter_verification(
+    publisher, monkeypatch, missing_pcm
+):
+    decode = spine.decode_for_analysis
+
+    def failed_measurement(*args, **kwargs):
+        assert not publisher.destination.exists()
+        samples, rate, channels = decode(*args, **kwargs)
+        # An untargeted passport normally skips verify_passport's target check.
+        # It must still not confer CROSS_VERIFIED on absent or silent PCM.
+        return (None if missing_pcm else samples * 0), rate, channels
+
+    monkeypatch.setattr(spine, "decode_for_analysis", failed_measurement)
+    with pytest.raises(spine.AudioPublishRefused, match="private loudness cross-verification"):
+        publisher.publish()
+    publisher.assert_refused_cleanly()
+
+
 def test_writer_failure_retracts_only_this_attempts_published_name(publisher):
     publisher.writer.fail = True
     with pytest.raises(RuntimeError, match="writer unavailable"):

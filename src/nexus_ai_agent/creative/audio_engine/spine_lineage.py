@@ -35,6 +35,8 @@ from nexus_ai_agent.creative.audio_engine.verify import (
     ArtifactPassport,
     PassportKeyring,
     build_passport,
+    cross_verify_loudness,
+    decode_for_analysis,
     verify_passport,
 )
 from nexus_ai_agent.creative.audio_engine.workspace import (
@@ -240,6 +242,23 @@ def execute_fenced_staged_audio_publish(
             raise AudioPublishRefused("no measured programme loudness for the AssetVersion")
         if measurement.true_peak_dbtp is None:
             raise AudioPublishRefused("no measured true peak for the AssetVersion")
+        # verify_passport's target cross-check only runs when a loudness target
+        # exists. This adapter confers CROSS_VERIFIED even for untargeted DSP,
+        # so independently meter the actual private PCM in that case as well.
+        samples, rate, channels = decode_for_analysis(
+            engine, produced, cancel=cancel, workdir=run_dir
+        )
+        cross_code, cross_detail = cross_verify_loudness(
+            samples,
+            sample_rate=rate,
+            channels=channels,
+            ffmpeg_measurement=measurement,
+            cancel=cancel,
+        )
+        if cross_code is not None:
+            raise AudioPublishRefused(
+                f"private loudness cross-verification refused: {cross_detail}"
+            )
         record = AudioAssetVersionRecord(
             project_id=identity.project_id,
             parent_revision_id=identity.parent_revision_id,
