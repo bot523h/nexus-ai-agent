@@ -4,9 +4,41 @@
 number in it was measured on the tree it names. Where something is unverified it
 says so and gives the tier; nothing here is a prose-only claim.
 
-Written at session closure. The audio-engine hardening work is complete enough
-to hand over: the engine measures what it claims, refuses what it cannot verify,
-and every guard is held by a mutation probe.
+## Active Stage-B session — 2026-11-13
+
+**Current branch: `arena/5a8952b7-nexus-ai-agent`; status: `STAGE_B_IN_PROGRESS`.**
+The exact requested Stage-A baseline `a24a1bc6e3c530064ca980701f58ad317e164f25`
+was fetched, its complete handoff read, and fast-forwarded onto this branch.
+The starting HEAD and clean tree were verified before implementation. PR #337
+and `main` remain untouched. The live Stage-A CI run `43413790414` was successful;
+that is historical baseline evidence, not a claim about new Stage-B commits.
+
+Wave B1 implements the workspace subclass fix, optional primary ffprobe JSON
+and duration/R128 parsing families, the signed revision-bound private-stage
+publication adapter, and deterministic slideshow decoder/tempo coverage.
+The final expanded focused run measured **839 passed, 1 skipped**; workspace and
+spine-lineage adapter **100%**, slideshow audio **97.99%**. Every engine module
+is above 95% using unrounded counts, including continuity **152/159 = 95.60%**
+(the Stage-A rounded `95%` had actually been 94.9686%). Both mypy modes pass
+(380 total / 16 engine files).
+Post-format mutation campaign: **77/77 KILLED**. The first run found a surviving
+required-shape-check mutation; the parser ordering was corrected and the
+original test kills it again. No evidence gate was weakened.
+
+The full implementation/evidence and outstanding B2–B4 work are in
+[AUDIO_ENGINE_REMEDIATION_LEDGER.md](AUDIO_ENGINE_REMEDIATION_LEDGER.md).
+The lineage bridge deliberately uses host-supplied canonical fencing and an
+append-only AssetVersion writer; it does **not** claim cross-zone DB/CommandBus
+persistence wiring or distributed-transaction/crash-recovery closure.
+
+The sections below retain the Stage-A historical evidence and all **eight
+standing DO-NOT rules**. Never switch this session to the historical branch,
+merge PR #337, or execute its old snapshot-restore branch commands. New work
+must remain on the current session branch above.
+
+Written at Stage-A closure. The audio-engine hardening work measures what it
+claims and refuses what it cannot verify; the historical counts below apply
+only to the named Stage-A tree.
 
 ---
 

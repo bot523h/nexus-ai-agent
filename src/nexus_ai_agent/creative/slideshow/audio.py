@@ -180,9 +180,10 @@ def read_wav_mono(path: Path | str) -> PcmAudio:
         if packed.size % 3:
             packed = packed[: packed.size - (packed.size % 3)]
         triplets = packed.reshape(-1, 3).astype(np.int32)
-        values = (triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)) << 8
-        signed = values.astype(np.int32)
-        signed[signed >= 0x800000] -= 0x1000000
+        values = triplets[:, 0] | (triplets[:, 1] << 8) | (triplets[:, 2] << 16)
+        # Sign-extend *24* bits, without shifting the value into the 32-bit
+        # sign bit (which scales the decoded signal by 256 and overflows).
+        signed = (values ^ 0x800000) - 0x800000
         data = signed.astype(np.float32) / 8388608.0
     elif width == 4:
         data = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
@@ -372,7 +373,10 @@ def _autocorrelation_period(
         denominator = left - 2.0 * centre + right
         if denominator != 0:
             refined += 0.5 * (left - right) / denominator
-    return (low + refined) * hop_seconds
+    period = (low + refined) * hop_seconds
+    # ceil(max_period / hop) includes a boundary bin outside a narrow search
+    # window. A quantized peak there is not permission to ignore that window.
+    return period if min_period <= period <= max_period else None
 
 
 def _comb_score(

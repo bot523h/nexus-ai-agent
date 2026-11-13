@@ -27,10 +27,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Literal
 
@@ -67,7 +70,7 @@ __all__ = [
     "probe_banner_channels",
 ]
 
-_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+_DURATION_RE = re.compile(r"\bduration\s*[:=]\s*(\d+):([0-5]\d):([0-5]\d(?:\.\d+)?)", re.IGNORECASE)
 _AUDIO_STREAM_RE = re.compile(
     r"Stream #\d+:\d+(?:\[[^\]]*\])?(?:\([^)]*\))?: Audio: (?P<codec>[A-Za-z0-9_]+)"
     r"(?: \([^)]*\))?, (?P<rate>\d+) Hz, (?P<layout>[^,]+)"
@@ -232,9 +235,170 @@ def _parse_float(raw: str) -> float | None:
     if text in ("-inf", "inf", "nan"):
         return None
     try:
-        return float(text)
-    except ValueError:  # pragma: no cover - regex already constrained the shape
+        value = float(text)
+    except ValueError:
         return None
+    return value if math.isfinite(value) else None
+
+
+def _json_documents(text: str) -> Iterator[dict[str, object]]:
+    """Complete JSON objects in mixed tool output, never a truncated fragment."""
+    decoder = json.JSONDecoder()
+    cursor = 0
+    while (start := text.find("{", cursor)) >= 0:
+        try:
+            payload, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            cursor = start + 1
+            continue
+        cursor = end
+        if isinstance(payload, dict):
+            yield payload
+
+
+def _duration_seconds(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    number = _parse_float(str(value))
+    return number if number is not None and number >= 0.0 else None
+
+
+def parse_duration_us(text: str) -> int | None:
+    """Duration from structured stream/format JSON, key-value output, or a banner.
+
+    Stream ticks take precedence over rounded format seconds. Progress
+    ``out_time`` is deliberately NOT a container duration. Invalid/non-finite
+    measurements never become a made-up zero or a negative duration.
+    """
+    for document in _json_documents(text):
+        streams = document.get("streams", [])
+        if isinstance(streams, list):
+            for stream in streams:
+                if not isinstance(stream, dict) or stream.get("codec_type", "audio") != "audio":
+                    continue
+                if "duration_ts" in stream and "time_base" in stream:
+                    try:
+                        ticks = Fraction(str(stream["duration_ts"]))
+                        base = Fraction(str(stream["time_base"]))
+                        if ticks >= 0 and base > 0:
+                            return round(ticks * base * _MICROSECONDS_PER_SECOND)
+                    except (ValueError, ZeroDivisionError):
+                        pass
+                seconds = _duration_seconds(stream.get("duration"))
+                if seconds is not None:
+                    return round(seconds * _MICROSECONDS_PER_SECOND)
+        format_block = document.get("format", document)
+        if isinstance(format_block, dict):
+            seconds = _duration_seconds(format_block.get("duration"))
+            if seconds is not None:
+                return round(seconds * _MICROSECONDS_PER_SECOND)
+    duration = _DURATION_RE.search(text)
+    if duration is not None:
+        hours, minutes, seconds_text = duration.groups()
+        return round(
+            (Fraction(hours) * 3600 + Fraction(minutes) * 60 + Fraction(seconds_text))
+            * _MICROSECONDS_PER_SECOND
+        )
+    pairs = re.findall(
+        r"(?im)^\s*(?:TAG:)?(duration(?:_us)?)\s*[=:]\s*([+\d.eE-]+)\s*(?:s)?\s*$", text
+    )
+    for key, raw in reversed(pairs):
+        seconds = _duration_seconds(raw)
+        if seconds is not None:
+            return round(seconds * (1 if key.lower().endswith("_us") else 1_000_000))
+    return None
+
+
+@dataclass(frozen=True)
+class Ebur128Summary:
+    integrated_lufs: float | None
+    true_peak_dbtp: float | None
+    loudness_range_lu: float | None
+    relative_threshold_lufs: float | None
+
+
+def parse_ebur128_summary(text: str) -> Ebur128Summary:
+    """Read independent R128 evidence, not loudnorm's processing plan.
+
+    Supports the 4.x/6.x/7.x/9.x section summaries, explicit unit-bearing
+    alternative labels, scanner metadata (``lavfi.r128.*``), and structured
+    scanner JSON. Missing I/TP is a refusal; ``-inf`` is valid silence. LRA's
+    threshold must never be mistaken for the integrated gate threshold.
+    """
+    raw: dict[str, str] = {}
+    aliases = {
+        "integrated_lufs": "i",
+        "integrated_loudness_lufs": "i",
+        "true_peak_dbtp": "tp",
+        "loudness_range_lu": "lra",
+        "relative_threshold_lufs": "threshold",
+    }
+    for document in _json_documents(text):
+        block = document.get("ebur128", document)
+        if isinstance(block, dict):
+            for key, name in aliases.items():
+                value = block.get(key)
+                if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                    raw[name] = str(value)
+    number = r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|-?inf)"
+    metadata = {
+        "i": "I",
+        "lra": "LRA",
+        "threshold": "I_threshold",
+        "tp": "true_peak",
+    }
+    for name, key in metadata.items():
+        values = re.findall(rf"lavfi\.r128\.{key}\s*=\s*{number}\b", text, re.IGNORECASE)
+        if values:
+            # FFmpeg's scanner metadata true_peak is a LINEAR amplitude.
+            value = values[-1]
+            if name == "tp":
+                linear = _parse_float(value)
+                value = str(20.0 * math.log10(linear)) if linear and linear > 0 else "-inf"
+            raw[name] = value
+    summary = re.split(r"(?i)\bsummary\s*:", text)[-1]
+    patterns = {
+        "i": (
+            rf"\b(?:I|integrated(?:\s+loudness)?|programme\s+loudness)\s*[:=]\s*{number}"
+            r"\s*(?:LUFS|LKFS)\b"
+        ),
+        "lra": rf"\b(?:LRA|loudness\s+range)\s*[:=]\s*{number}\s*LU\b",
+        "tp": rf"\b(?:Peak|TP|true[ _-]*peak)\s*[:=]\s*{number}\s*dB(?:FS|TP)\b",
+    }
+    for name, pattern in patterns.items():
+        values = re.findall(pattern, summary, re.IGNORECASE)
+        if values:
+            raw[name] = values[-1]
+    threshold = re.search(
+        rf"\b(?:Threshold|relative[ _-]*threshold)\s*[:=]\s*{number}\s*(?:LUFS|LKFS)\b",
+        summary,
+        re.IGNORECASE,
+    )
+    if threshold is not None:
+        raw["threshold"] = threshold.group(1)
+    # Keep the established scanner-family parser as well. Its scoped gate
+    # threshold wins over LRA's identically named Threshold label.
+    integrated_block = _section(summary, "Integrated loudness:", "Loudness range:")
+    legacy = {
+        "i": _SUMMARY_I_RE.search(integrated_block),
+        "threshold": _SUMMARY_THRESHOLD_RE.search(integrated_block),
+        "lra": _SUMMARY_LRA_RE.search(_section(summary, "Loudness range:", "True peak:")),
+        "tp": _SUMMARY_PEAK_RE.search(_section(summary, "True peak:", None)),
+    }
+    for name, match in legacy.items():
+        if match is not None:
+            raw[name] = match.group(1)
+    if "i" not in raw or "tp" not in raw:
+        raise AudioMeasurementError("ebur128 summary is missing integrated loudness or peak")
+    for key in ("i", "tp"):
+        if _parse_float(raw[key]) is None and raw[key].lower() != "-inf":
+            raise AudioMeasurementError(f"ebur128 {key} is not a finite measurement or -inf")
+    return Ebur128Summary(
+        integrated_lufs=_parse_float(raw["i"]),
+        true_peak_dbtp=_parse_float(raw["tp"]),
+        loudness_range_lu=_parse_float(raw.get("lra", "")),
+        relative_threshold_lufs=_parse_float(raw.get("threshold", "")),
+    )
 
 
 class FfmpegEngine:
@@ -319,7 +483,6 @@ class FfmpegEngine:
         "channels",
         "sample_fmt",
         "time_base",
-        "duration_ts",
     )
 
     def probe_json(self, path: Path | str, *, cancel: CancelToken | None = None) -> MediaProbe:
@@ -367,6 +530,8 @@ class FfmpegEngine:
         streams = payload.get("streams")
         if not isinstance(streams, list):
             raise AudioProbeError("ffprobe JSON has no `streams` array")
+        if any(not isinstance(entry, dict) for entry in streams):
+            raise AudioProbeError("ffprobe streams contains a non-object entry")
         audio = [entry for entry in streams if entry.get("codec_type") == "audio"]
         if not audio:
             raise AudioProbeError("ffprobe found no audio stream")
@@ -381,16 +546,24 @@ class FfmpegEngine:
                 f"audio stream declares pix_fmt={stream['pix_fmt']!r}; a video-shaped "
                 "stream is not a valid audio program"
             )
+        # Read required shape fields before optional duration alternatives, so
+        # an absent format cannot be concealed by a second duration refusal.
+        codec = str(stream["codec_name"])
+        sample_format = str(stream["sample_fmt"])
         sample_rate = _as_int(stream["sample_rate"], "sample_rate")
         channels = _as_int(stream["channels"], "channels")
-        duration_ts = _as_int(stream["duration_ts"], "duration_ts")
+        duration_ts = (
+            _as_int(stream["duration_ts"], "duration_ts") if "duration_ts" in stream else None
+        )
+        if duration_ts is None and _duration_seconds(stream.get("duration")) is None:
+            raise AudioProbeError("ffprobe stream is missing required key: duration_ts or duration")
         start_pts = _as_int(stream["start_pts"], "start_pts") if "start_pts" in stream else None
         time_base = str(stream["time_base"])
         if sample_rate <= 0 or channels <= 0:
             raise AudioProbeError(
                 f"ffprobe reported a non-physical stream (rate {sample_rate}, channels {channels})"
             )
-        if duration_ts < 0:
+        if duration_ts is not None and duration_ts < 0:
             raise AudioProbeError(f"ffprobe reported a negative duration_ts ({duration_ts})")
         numerator, _, denominator = time_base.partition("/")
         try:
@@ -402,15 +575,20 @@ class FfmpegEngine:
         raw_format = payload.get("format")
         format_block: dict[str, object] = raw_format if isinstance(raw_format, dict) else {}
         format_duration = format_block.get("duration")
-        duration_us = int(round(duration_ts * seconds_per_tick * _MICROSECONDS_PER_SECOND))
-        if duration_us == 0 and isinstance(format_duration, (str, int, float)):
-            if format_duration != "":
-                try:
-                    duration_us = int(round(float(format_duration) * _MICROSECONDS_PER_SECOND))
-                except (TypeError, ValueError) as error:
-                    raise AudioProbeError(
-                        f"ffprobe format duration is not a number: {format_duration!r}"
-                    ) from error
+        if duration_ts is not None:
+            duration_us = round(duration_ts * Fraction(time_base) * _MICROSECONDS_PER_SECOND)
+        else:
+            # Some demuxers report decimal stream seconds rather than ticks.
+            stream_seconds = _duration_seconds(stream.get("duration"))
+            assert stream_seconds is not None  # validated above, never guessed
+            duration_us = round(stream_seconds * _MICROSECONDS_PER_SECOND)
+        if duration_us == 0 and format_duration not in (None, ""):
+            seconds = _duration_seconds(format_duration)
+            if seconds is None:
+                raise AudioProbeError(
+                    f"ffprobe format duration is not a number: {format_duration!r}"
+                )
+            duration_us = round(seconds * _MICROSECONDS_PER_SECOND)
         raw_layout = stream.get("channel_layout")
         if isinstance(raw_layout, str) and raw_layout.strip():
             layout: str = raw_layout.strip()
@@ -423,8 +601,8 @@ class FfmpegEngine:
             sample_rate=sample_rate,
             channels=channels,
             channel_layout=layout,
-            codec=str(stream["codec_name"]),
-            sample_format=str(stream["sample_fmt"]),
+            codec=codec,
+            sample_format=sample_format,
             size_bytes=source.stat().st_size,
             sha256=hash_file(source),
             profile=(stream.get("profile") if isinstance(stream.get("profile"), str) else None),
@@ -467,18 +645,13 @@ class FfmpegEngine:
         source = Path(path)
         if not source.is_file():
             raise AudioEngineError(f"media file not found: {source}")
+        if self.probe_binary is not None:
+            # Optional, but authoritative when available. An installed probe
+            # returning malformed evidence must NOT be hidden by a banner.
+            return self.probe_json(source, cancel=cancel)
         outcome = self._run(["-i", str(source)], cancel=cancel)
         text = outcome.stderr_tail
-        duration_us: int | None = None
-        duration = _DURATION_RE.search(text)
-        if duration is not None:
-            hours, minutes, seconds = duration.groups()
-            duration_us = int(
-                round(
-                    (int(hours) * 3600 + int(minutes) * 60 + float(seconds))
-                    * _MICROSECONDS_PER_SECOND
-                )
-            )
+        duration_us = parse_duration_us(text)
         codec = layout = sample_format = None
         channels = None
         rate = None
@@ -524,27 +697,11 @@ class FfmpegEngine:
                 f"{(outcome.stderr_tail or '').strip()[-400:]}"
             )
         text = outcome.stderr_tail
-        summary = text[text.rfind("Summary:") :] if "Summary:" in text else ""
-        if not summary:
-            raise AudioMeasurementError(
-                "ebur128 produced no summary; the file is not decodable audio: "
-                f"{text.strip()[-400:]}"
-            )
-        # The summary repeats labels (Threshold appears under I and under LRA);
-        # splitting on the section headers keeps each number with its meaning.
-        integrated_block = _section(summary, "Integrated loudness:", "Loudness range:")
-        lra_block = _section(summary, "Loudness range:", "True peak:")
-        peak_block = _section(summary, "True peak:", None)
-        integrated = _SUMMARY_I_RE.search(integrated_block)
-        threshold = _SUMMARY_THRESHOLD_RE.search(integrated_block)
-        lra = _SUMMARY_LRA_RE.search(lra_block)
-        peak = _SUMMARY_PEAK_RE.search(peak_block)
-        if integrated is None or peak is None:
-            raise AudioMeasurementError("ebur128 summary is missing integrated loudness or peak")
-        integrated_lufs = _parse_float(integrated.group(1))
-        true_peak = _parse_float(peak.group(1))
-        lra_value = _parse_float(lra.group(1)) if lra is not None else None
-        threshold_value = _parse_float(threshold.group(1)) if threshold is not None else None
+        measurement = parse_ebur128_summary(text)
+        integrated_lufs = measurement.integrated_lufs
+        true_peak = measurement.true_peak_dbtp
+        lra_value = measurement.loudness_range_lu
+        threshold_value = measurement.relative_threshold_lufs
         probe = self.probe(source, cancel=cancel)
         seconds = (probe.container_duration_us or 0) / _MICROSECONDS_PER_SECOND
         if integrated_lufs is None:

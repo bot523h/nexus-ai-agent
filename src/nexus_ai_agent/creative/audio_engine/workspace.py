@@ -211,12 +211,12 @@ class RuntimeWorkspace:
             try:
                 written, _sha, _size = self._fs.write_stream(relative, handle, max_bytes=cap)
                 return written
-            except FilesystemBoundaryError as error:  # pragma: no cover - disk refusal
-                raise WorkspaceBoundaryError(str(error)) from error
             except ContentLimitExceeded as error:
                 raise WorkspaceBoundaryError(
                     f"input grew while it was being staged: {error}"
                 ) from error
+            except FilesystemBoundaryError as error:
+                raise WorkspaceBoundaryError(str(error)) from error
 
     # -- runs ------------------------------------------------------------- #
     @contextmanager
