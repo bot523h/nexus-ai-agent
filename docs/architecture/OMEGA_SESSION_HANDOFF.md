@@ -16,11 +16,11 @@ and every guard is held by a mutation probe.
 |---|---|
 | branch | `arena/288ef95e-nexus-ai-agent` |
 | base | `c3aa7c8` (`main` merge point) |
-| head | `2f9561f` (closure commit — a file cannot contain its own hash, so this line was added by the commit after it) |
+| head | `bdbcb12` (the last commit is a docs follow-up recording its own run) |
 | PR | [#337](https://github.com/bot523h/nexus-ai-agent/pull/337) — **open, unmerged, deliberately** |
 | status string | `HARDENED_BUT_NOT_COMPLETE` |
 | commits | 26 (`git rev-list --count c3aa7c8..HEAD`) |
-| CI | **24/24 jobs `success`** — run `43403965714` on `2f9561f` |
+| CI | **24/24 jobs `success`** — run `43403965714` on `2f9561f`; `bdbcb12` is docs-only and re-polls |
 
 The PR is held for Phase-2 integration of four parallel agent branches. It is
 **not** waiting on a defect.
@@ -56,7 +56,7 @@ The PR is held for Phase-2 integration of four parallel agent branches. It is
 | 23 | `4b17b52` | record Wave-2.1 and the two defects it found |
 | 24 | `75bd152` | cite run `43393070087` |
 | 25 | `2f9561f` | **closure**: FFmpeg banner portability across 4.x–9.x, the 3.10 guard, `mypy --strict`, this handoff |
-| 26 | *(docs follow-up)* | records run `43403965714` in this file; the SHA is `git log -1 2f9561f..HEAD` |
+| 26 | `bdbcb12` | record run `43403965714`, the 24 job names, and the four failed 3.10 routes |
 
 ---
 
