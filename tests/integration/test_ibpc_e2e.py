@@ -185,6 +185,47 @@ async def test_scope_signature_tamper_refuses_before_queue_admission(
 
 
 @pytest.mark.asyncio
+async def test_scope_signature_transplant_between_proposals_is_refused(
+    harness, tmp_path: Path
+) -> None:
+    service, queue, _creative_root, _journal, principal = harness
+    source = tmp_path / "transplant-source.mp4"
+    _clip(source)
+    sessions = [_open_session(service, principal), _open_session(service, principal)]
+    results = []
+    for index, (session_id, text) in enumerate(
+        zip(
+            sessions, ("trim from 0.5 to 1.5 seconds", "trim from 0.2 to 1.2 seconds"), strict=True
+        ),
+        start=1,
+    ):
+        result = service.submit_text_intent(
+            session_id,
+            f"transplant-{index}",
+            sequence_number=1,
+            text=text,
+            asset_id="src",
+            source_path=str(source),
+        )
+        assert isinstance(result, PipelineResult)
+        service.approve(
+            session_id, f"transplant-{index}", result.approval_id, principal_id=principal
+        )
+        results.append(result)
+
+    first_ctx = service._contexts[results[0].approval_id]
+    second_ctx = service._contexts[results[1].approval_id]
+    assert first_ctx.scope_signature and second_ctx.scope_signature
+    second_ctx.scope_signature = first_ctx.scope_signature
+    refused = await service.execute(
+        sessions[1], "transplant-2", results[1].approval_id, principal_id=principal
+    )
+    assert refused.status == "refused"
+    assert "scope_signature_mismatch" in refused.detail
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
 async def test_full_chain_text_intent_to_verified_capsule(harness, tmp_path: Path) -> None:
     service, queue, creative_root, journal, principal = harness
     source = tmp_path / "source.mp4"

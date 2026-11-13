@@ -75,6 +75,10 @@ from nexus_ai_agent.nagar.ibpc.session import (
     TransitionError,
     TurnState,
 )
+from nexus_ai_agent.provenance.canonicalization import (
+    CanonicalizationScheme,
+    canonical_digest,
+)
 
 #: Closed surface constants. Pinned against the canonical worker's own map by
 #: tests/architecture/test_ibpc_boundary.py (which may import render_jobs; this
@@ -610,7 +614,7 @@ class IBPCService:
     @staticmethod
     def _scope_signature(ctx: _TurnContext, identity: ApprovalIdentity) -> str:
         """Sign the canonical approval scope using the frozen IBPC digest form."""
-        return digest_of(
+        return canonical_digest(
             {
                 "identity": identity.as_dict(),
                 "intent_id": ctx.ast.ast_id,
@@ -619,7 +623,8 @@ class IBPCService:
                 "capability_set": [CANONICAL_OPERATION],
                 "parameter_digest": digest_of(ctx.ast.params),
                 "shadow_preview_digest": ctx.preview.preview_digest,
-            }
+            },
+            CanonicalizationScheme.JCS_RFC8785_V2,
         )
 
     def approve(
