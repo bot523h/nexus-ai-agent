@@ -831,7 +831,9 @@ PROBES: tuple[Probe, ...] = (
         ),
         # Returning nothing leaves the file at 192 kHz, which the canonical
         # profile check then refuses — the guard is what keeps the render usable.
-        new="        return ()\n        return (",
+        # Keep the mutant syntactically valid: an unclosed parenthesis used
+        # to turn a collection error into a false "kill" in the legacy runner.
+        new="        return ()",
         test="test_canonical_profile_reasserts_its_rate_after_loudnorm",
     ),
     Probe(

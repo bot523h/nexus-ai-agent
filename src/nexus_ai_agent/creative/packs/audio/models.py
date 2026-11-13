@@ -16,7 +16,7 @@ Surface:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -33,6 +33,14 @@ OPERATION_EQ_VOICE = "audio.eq_voice"
 OPERATION_TIME_STRETCH = "audio.time_stretch"
 OPERATION_REMOVE_VOCAL = "audio.remove_vocal"
 OPERATION_ALIGN_MUSIC = "audio.align_music"
+OPERATION_SPATIALIZE = "audio.spatialize"
+OPERATION_RESTORE_VOICE = "audio.restore_voice"
+OPERATION_SYNC_FOLEY = "audio.sync_foley"
+OPERATION_BARK_MASTER = "audio.bark_master"
+
+# These offline, whole-signal NumPy kernels refuse longer inputs; they never
+# silently truncate media. A host must segment longer programmes explicitly.
+MAX_STAGE_B_SECONDS = 10.0
 
 #: The canonical audio stream lock every derived artifact is produced under, and
 #: the loudness targets the studio ships.  These are *contract constants* (data,
@@ -384,3 +392,123 @@ def clear_beat_analysis(asset_id: str | None = None) -> None:
 
 
 _BEAT_MEMORY: dict[str, DetectedBeatGrid] = {}
+
+
+class _KernelInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    audio_asset_id: str = Field(min_length=1)
+    output_asset_id: str | None = Field(default=None, min_length=1)
+
+
+class SpatializeInput(_KernelInput):
+    """K1: downmix a point source, ACN/SN3D encode/rotate, binaural + room."""
+
+    kernel: Literal["K1"] = "K1"
+    order: Literal[1, 2, 3] = 1
+    azimuth: float = 0.0
+    elevation: float = Field(default=0.0, ge=-1.5707963267948966, le=1.5707963267948966)
+    yaw: float = 0.0
+    pitch: float = 0.0
+    roll: float = 0.0
+    room_wet: float = Field(default=0.2, ge=0, le=1)
+    volume_m3: float = Field(default=120, gt=0, le=10000)
+    surface_area_m2: float = Field(default=150, gt=0, le=10000)
+    rt60_low: float = Field(default=0.8, ge=0.05, le=10)
+    rt60_mid: float = Field(default=0.6, ge=0.05, le=10)
+    rt60_high: float = Field(default=0.4, ge=0.05, le=10)
+    tail_seconds: float = Field(default=1.0, ge=0, le=5)
+
+    @model_validator(mode="after")
+    def _passive_room(self) -> SpatializeInput:
+        if not self.rt60_high <= self.rt60_mid <= self.rt60_low:
+            raise ValueError("passive room requires high <= mid <= low RT60")
+        return self
+
+
+class RestoreVoiceInput(_KernelInput):
+    """K2: explicit clipping/bandwidth prior, noise-only reference, optional WPE."""
+
+    kernel: Literal["K2"] = "K2"
+    clipping_threshold: float = Field(default=0.98, gt=0, le=1)
+    bandwidth_hz: float = Field(default=7000, gt=0, lt=24000)
+    strength: float = Field(default=1, ge=0, le=1)
+    noise_asset_id: str | None = Field(default=None, min_length=1)
+    dereverberate: bool = False
+    wpe_taps: int = Field(default=6, ge=1, le=16)
+
+
+class FoleyCollisionInput(BaseModel):
+    """Positions are exact samples at the canonical 48000 Hz output rate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    sample_index: int = Field(ge=0, strict=True)
+    material: Literal["wood", "metal", "glass", "stone", "leather_footstep", "cloth_rustle"]
+    impulse_ns: float = Field(default=1, gt=0, le=100)
+    contact_seconds: float = Field(default=0.001, ge=0, le=0.25)
+    duration_seconds: float = Field(default=1, ge=0.001, le=5)
+    seed: int = Field(default=0, ge=0)
+
+
+class SyncFoleyInput(_KernelInput):
+    """K3: supplied motion features, measured RMS sync and modal collision Foley."""
+
+    kernel: Literal["K3"] = "K3"
+    visual_motion: tuple[float, ...] = Field(min_length=4, max_length=2401)
+    frame_rate: float = Field(gt=0, le=240)
+    collisions: tuple[FoleyCollisionInput, ...] = Field(default=(), max_length=1000)
+    foley_gain: float = Field(default=0.1, ge=0, le=1)
+
+
+class BarkMasterInput(_KernelInput):
+    """K4: audio_asset_id is dialogue; stems share time zero, ends are padded."""
+
+    kernel: Literal["K4"] = "K4"
+    music_asset_id: str = Field(min_length=1)
+    sfx_foley_asset_id: str = Field(min_length=1)
+
+
+KernelInput = SpatializeInput | RestoreVoiceInput | SyncFoleyInput | BarkMasterInput
+STAGE_B_INPUT_MODELS: dict[
+    str,
+    type[SpatializeInput] | type[RestoreVoiceInput] | type[SyncFoleyInput] | type[BarkMasterInput],
+] = {
+    OPERATION_SPATIALIZE: SpatializeInput,
+    OPERATION_RESTORE_VOICE: RestoreVoiceInput,
+    OPERATION_SYNC_FOLEY: SyncFoleyInput,
+    OPERATION_BARK_MASTER: BarkMasterInput,
+}
+Sha256Ref = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+
+
+def kernel_source_ids(payload: KernelInput) -> tuple[str, ...]:
+    ids = [payload.audio_asset_id]
+    if isinstance(payload, RestoreVoiceInput) and payload.noise_asset_id is not None:
+        ids.append(payload.noise_asset_id)
+    if isinstance(payload, BarkMasterInput):
+        ids.extend((payload.music_asset_id, payload.sfx_foley_asset_id))
+    return tuple(dict.fromkeys(ids))
+
+
+class StageBAudioRequest(BaseModel):
+    """Pure pack-declared injected port contract; no studio/DB authority added."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: str = Field(min_length=1)
+    operation: Literal[
+        "audio.spatialize", "audio.restore_voice", "audio.sync_foley", "audio.bark_master"
+    ]
+    output_asset_id: str = Field(min_length=1)
+    payload: KernelInput = Field(discriminator="kernel")
+    source_hashes: dict[str, Sha256Ref]
+    transaction_id: str | None = None
+
+    @model_validator(mode="after")
+    def _bind_kernel_and_sources(self) -> StageBAudioRequest:
+        if not isinstance(self.payload, STAGE_B_INPUT_MODELS[self.operation]):
+            raise ValueError("operation does not match its typed kernel input")
+        if set(self.source_hashes) != set(kernel_source_ids(self.payload)):
+            raise ValueError("every input source must be bound to its registered content hash")
+        return self

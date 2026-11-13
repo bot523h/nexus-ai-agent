@@ -79,6 +79,9 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         # audio, the pack it is written for.
         "tests/unit/test_omega_wave2_py310_compat.py",
         "tests/architecture/test_audio_pack_boundary.py",
+        # STAGE-B: real injected K1..K4 handlers plus fail-closed contract paths.
+        # These import the pack and must be canonical evidence, not exemptions.
+        "tests/integration/test_audio_engine_stage_b_pack.py",
     ),
     "caption": (
         "tests/unit/test_caption_pack.py",

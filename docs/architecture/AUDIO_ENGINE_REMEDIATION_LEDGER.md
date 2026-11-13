@@ -131,10 +131,72 @@ Post-source-format mutation campaign **77/77 KILLED**. Read-only multisource
 ownership check: **56 readable sources, no overlap**. Raw logs, coverage JSON
 and benchmark JSON are ignored under `ci-artifacts/omega-b2-*`.
 
+B2 checkpoint: `e6880216069f4c873489cd7276315342011a66c4`, pushed on the
+session branch. Its clean-tree pack gate was **ACCEPTED** (audio 99.58%, total
+97.52%, 33 canonical test modules). B3's new pack surface requires a new gate;
+that B2 result is not reused as proof for the new operations.
+
+## Wave B3 — K3 synchronization/Foley, K4 Bark mastering and pack reachability
+
+| Surface | Executed contract / limits |
+|---|---|
+| GCC-PHAT | Full linear FFT padding, spectral-zero refusal, 32x correlation grid and parabolic sub-bin interpolation; signed audio-minus-picture lag. Endpoint baseline removal avoids a shared, mean-subtraction-induced rectangular edge falsely dominating sparse feature correlation. |
+| Visual alignment | Timestamped cubic-Hermite frame-to-envelope interpolation, tested at 24, 30000/1001 and 60 fps; fractional zero-extended sinc correction, followed by a new residual measurement on corrected PCM in the default RMS path. No claim to reconstruct events above visual Nyquist. |
+| ITU window | Explicit asymmetric **[-15,+5] ms** decision, inclusive boundaries. Correction targets zero, even for an offset already inside the window; residuals must be <=0.5 ms. |
+| Modal Foley | Wood, metal, glass, stone, leather-footstep and cloth-rustle modal presets, positive damping, force/contact excitation, impulse linearity, deterministic friction seed. Exact integer collision samples; overlap-add and tail truncation only, no peak normalization. Relative acoustic units, not calibrated SPL. |
+| Bark model | 24 Zwicker critical bands partition every FFT bin; asymmetric **+25 dB/Bark** lower-side and level-dependent **-27..-10 dB/Bark** upper-side spreading. Explicit assumed full-scale SPL calibration (100 dB default), not an inferred hearing threshold. |
+| Speech priority | +6 dB speech/masker target; only conflicting music/SFX **800..4500 Hz** bins can be carved. Dialogue unchanged; linked stereo gains. **Coherent** music+SFX power is used: summing their separate powers understated correlated maskers and failed an independent waveform test. |
+| Protected bands | Bass <250 Hz and air >6 kHz preserved at the carving stage. Global final loudness gain/limiting naturally affects the complete master. A protected out-of-band masker can make +6 dB infeasible; the result explicitly reports `margin_reached=False`. |
+| Three-stem delivery | Dialogue/music/SFX-Foley master to **-24 LKFS +/-0.1 LU**, true peak **<=-1 dBTP**. Channel-linked lookahead limiter only when needed; iterative actual BS.1770 measurements and refusal on silence/nonconvergence. No target number is copied into a measurement. |
+| Reachability | Four typed operations: `audio.spatialize`, `audio.restore_voice`, `audio.sync_foley`, `audio.bark_master`; registered in engine health, package exports, pure pack registry and data-only manifest. Real CommandBus dispatches prove all four produce measured artifacts. No DSP imports/I/O in the pack. |
+| Private verification | Canonicalize/hash all primary and auxiliary inputs privately; all hashes bind recipe reuse. Signed canonical `verify_passport` and independent NumPy metering before publication. K4's signed target check explicitly uses **0.1 LU / 0 dB peak tolerances**, not the legacy broader defaults. |
+| Bounded execution | Whole-signal inputs limited to **min(10 seconds, configured analysis bound)**; oversized/unknown-duration inputs refuse rather than truncate. A deployment signing key/id is required. Cancellation is cooperative at kernel boundaries, not mid-NumPy preemption. Replay verifies existing bytes but does not invent unperformed kernel remeasurements. |
+
+### Measured B3 benchmark and regression
+
+The same standalone N=3 benchmark now includes K3/K4. At 24/29.970/60 fps,
+absolute offset errors were **0.000195 / 0.000150 / 0.000187 ms**; freshly
+measured corrected-PCM residuals **-0.07177 / -0.07175 / +0.03624 ms**.
+All six Foley first-active indices were exactly the requested **sample 123**.
+The synthetic master measured **-24.00000 LKFS**, **-15.92052 dBTP**; minimum
+active speech/masker margin **5.99964 dB**. Protected 160/7000 Hz music tone
+changes before mastering were **-0.0000677 / +0.00000762 dB**.
+
+N=3 timing medians/spreads (seconds): FDN **1.13020 / 0.07264**; restoration
+**0.27347 / 0.02827**; sync **0.01035 / 0.00125**; six-material Foley
+**0.00695 / 0.00080**; Bark master **0.03580 / 0.00383**. Whole benchmark-process
+peak RSS **77,180,928 bytes**, including imports and every kernel, not isolated
+per-kernel memory. These are bounded synthetic/offline observations, not a
+real-time SLA or natural-speech/picture-understanding/listening guarantee.
+
+Reproduce B3 with the B2 combined coverage command, adding
+`tests/unit/test_opgap_wave5.py` and replacing the single integration target
+with `tests/integration/test_audio_engine_*.py`. Final: **1014 passed, 1 skipped**
+(128.26 s). K1 **234/234**, K2 **243/243**, K3 **168/168**, K4 **142/142**;
+execution **448/458 = 97.82%**; slideshow **391/399**; every engine module passes
+95% **unrounded**. Global/strict mypy **384 / 20 files**; Ruff **831 files**.
+Docs/truth/activation regression **155 passed**; canonical truth generator and
+`--check` green. Logs/JSON: `ci-artifacts/omega-b3-*`.
+
+The user's engineering-choice authorization permits the minimal compatibility
+extension: the exact ten-operation inventory assertion now expects fourteen;
+the new pack-importing integration suite is in canonical `PACK_TEST_TARGETS`.
+Only that audio target list changed in the coverage harness; no provenance or
+threshold policy was weakened. Operation-truth artifacts were refreshed solely
+by `python -m nexus_ai_agent.nagar --docs`; no proof registry entry was invented.
+
+Mutation audit found that the inherited loudnorm-rate mutant contained an
+unclosed parenthesis. Historical 77/77 logs used the old runner's "any nonzero"
+classification and thus included that collection error. The replacement is now
+syntactically valid (`return ()`); the unchanged rate-guard test kills the
+semantic defect. The post-format inherited campaign again reports **77/77**.
+B4 must additionally establish clean controls and distinguish real test-call
+failures from collection/setup errors; the historical runner is not sufficient
+for final acceptance.
+
 ## Remaining work
 
-- B3: sub-frame synchronization, Foley, Bark mastering and pure pack/engine wiring.
-- B4: 33 additional deterministic mutation probes, unrounded per-module 95%
-  gate, full-repository regression run and final evidence update.
+- B4: 33 additional deterministic mutation probes (110 total), a controlled
+  mutation runner, full-repository regression and final clean-tree evidence.
 - Production persistence/CommandBus convergence is still owned by the canonical
   Spine/AssetVersion host; an engine-side protocol is not its implementation.

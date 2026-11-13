@@ -52,6 +52,7 @@ from nexus_ai_agent.creative.packs.audio.models import (
     EXECUTION_STATUS_READY,
     EXECUTION_STATUS_UNAVAILABLE,
     OPERATION_ALIGN_MUSIC,
+    OPERATION_BARK_MASTER,
     OPERATION_BEAT_SYNC_CUT,
     OPERATION_DEESS,
     OPERATION_DETECT_BEATS,
@@ -60,7 +61,11 @@ from nexus_ai_agent.creative.packs.audio.models import (
     OPERATION_NORMALIZE_LOUDNESS,
     OPERATION_REMOVE_NOISE,
     OPERATION_REMOVE_VOCAL,
+    OPERATION_RESTORE_VOICE,
+    OPERATION_SPATIALIZE,
+    OPERATION_SYNC_FOLEY,
     OPERATION_TIME_STRETCH,
+    STAGE_B_INPUT_MODELS,
     VOICE_EQ_CUTS,
     VOICE_EQ_PRESETS,
     AlignMusicInput,
@@ -75,7 +80,9 @@ from nexus_ai_agent.creative.packs.audio.models import (
     NormalizeLoudnessInput,
     RemoveNoiseInput,
     RemoveVocalInput,
+    StageBAudioRequest,
     TimeStretchInput,
+    kernel_source_ids,
     last_beat_analysis,
     record_beat_analysis,
 )
@@ -961,6 +968,83 @@ def _align_music(project: Project, context: OperationContext) -> OperationOutcom
     )
 
 
+def _execute_stage_b(project: Project, context: OperationContext) -> OperationOutcome:
+    """Typed K1..K4 dispatch through an injected port; never imports any DSP."""
+    operation = context.command.operation
+    payload = STAGE_B_INPUT_MODELS[operation].model_validate(context.input_data)
+    known = _asset_index(project)
+    parents = tuple(
+        _require_audio_asset(known, asset_id, operation) for asset_id in kernel_source_ids(payload)
+    )
+    output_id = (
+        payload.output_asset_id
+        or "stageb_" + hashlib.sha256(context.command.command_id.encode()).hexdigest()[:16]
+    )
+    if output_id in known:
+        raise CommandValidationError(f"{operation} output asset already exists: {output_id!r}")
+    engine = _engine(context, operation)
+    execute = getattr(engine, "execute_stage_b", None)
+    if not callable(execute):
+        raise CommandValidationError("the composed audio engine does not implement Stage-B kernels")
+    try:
+        request = StageBAudioRequest.model_validate(
+            {
+                "request_id": hashlib.sha256(
+                    f"{operation}:{context.command.command_id}".encode()
+                ).hexdigest()[:32],
+                "operation": operation,
+                "output_asset_id": output_id,
+                "payload": payload,
+                "source_hashes": {parent.asset_id: parent.content_sha256 for parent in parents},
+                "transaction_id": context.command.command_id,
+            }
+        )
+    except ValueError as error:
+        raise CommandValidationError(
+            f"{operation} requires content-bound source assets: {error}"
+        ) from error
+    evidence = execute(request)
+    if not evidence.verified:
+        raise CommandExecutionError(f"{operation} produced an unverified artifact")
+    record = AssetRecord(
+        asset_id=output_id,
+        media_kind="audio",
+        content_sha256=evidence.sha256,
+        duration_us=evidence.duration_us,
+        parent_asset_ids=tuple(parent.asset_id for parent in parents),
+        provenance={
+            "processor": "omega.stage_b.v1",
+            "operation": operation,
+            "source_hashes": request.source_hashes,
+            "parameters": evidence.parameters,
+            "artifact_path": evidence.output_path,
+            "artifact_verified": True,
+            "passport_id": evidence.passport_id,
+            "passport_signed": bool(evidence.passport_signature),
+            "measured_integrated_lufs": evidence.integrated_lufs,
+            "measured_true_peak_dbtp": evidence.true_peak_dbtp,
+        },
+    )
+    return OperationOutcome(
+        project.model_copy(update={"assets": [*project.assets, record]}),
+        context.history,
+        {
+            "asset_id": output_id,
+            "execution_status": EXECUTION_STATUS_READY,
+            "derivation": "rendered_artifact",
+            "artifact_verified": True,
+            "content_sha256": evidence.sha256,
+            "artifact_path": evidence.output_path,
+            "passport_id": evidence.passport_id,
+            "passport_signed": bool(evidence.passport_signature),
+            "measured_integrated_lufs": evidence.integrated_lufs,
+            "measured_true_peak_dbtp": evidence.true_peak_dbtp,
+            "reused_existing": evidence.reused_existing,
+            "parameters": evidence.parameters,
+        },
+    )
+
+
 def register_audio_operations(registry: CapabilityRegistry) -> None:
     """Register all audio studio operations with the capability registry."""
     registry.register_operation(
@@ -1093,6 +1177,26 @@ def register_audio_operations(registry: CapabilityRegistry) -> None:
             deterministic=True,
         ),
     )
+
+    for operation, description in (
+        (OPERATION_SPATIALIZE, "K1 ACN/SN3D spatial rotation, binaural head model and passive FDN"),
+        (OPERATION_RESTORE_VOICE, "K2 constrained declipping, MMSE-LSA and delayed WPE"),
+        (OPERATION_SYNC_FOLEY, "K3 measured sub-frame A/V alignment and sample-exact modal Foley"),
+        (OPERATION_BARK_MASTER, "K4 masking-aware three-stem -24 LKFS / -1 dBTP master"),
+    ):
+        registry.register_operation(
+            DOMAIN,
+            operation.split(".", 1)[1],
+            OperationSpec(
+                operation_id=operation,
+                description=description,
+                permission_level=PermissionLevel.REVERSIBLE,
+                input_model=STAGE_B_INPUT_MODELS[operation],
+                handler=_execute_stage_b,
+                required_packs=(AUDIO_PACKAGE_ID,),
+                deterministic=True,
+            ),
+        )
 
 
 def build_audio_registry() -> CapabilityRegistry:

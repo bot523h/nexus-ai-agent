@@ -44,7 +44,32 @@ not. Analytic HRTFs are not measured/personalized, and synthetic restoration
 results are not natural-speech/listening validation. The reproducible N=3
 benchmark reports timing spread and whole-process peak RSS with explicit scope.
 
-The full implementation/evidence and outstanding B3–B4 work are in
+B2 was pushed at `e6880216069f4c873489cd7276315342011a66c4`; its clean-tree
+pack gate was **ACCEPTED** (audio 99.58%, total 97.52%).
+
+B3 implements K3 linear GCC-PHAT/sub-bin visual-envelope sync, six contact-driven
+modal Foley materials, K4 24-band asymmetric Bark masking and measured three-stem
+-24 LKFS / <=-1 dBTP mastering. K1–K4 are exposed as typed native pack operations
+and have real CommandBus/private signed-passport tests. Whole-signal inputs are
+bounded to min(10 seconds, configured analysis bound), with signing key/id
+required; no silent truncation or production DB/AssetVersion wiring is claimed.
+The user authorized the minimal legacy inventory/canonical-target and generated
+truth compatibility updates; forbidden zones remain untouched.
+
+B3 combined: **1014 passed, 1 skipped**. K1–K4 **100%** lines each; all engine
+modules/slideshow above 95% unrounded. Mypy **384 / strict 20**; Ruff **831**;
+docs/truth/activation **155 passed**. N=3 measured corrected-PCM sync residuals
+at 24/29.970/60 fps have maximum absolute **0.07177 ms**. Foley starts exactly
+at sample 123 for all six materials; synthetic master **-24.000 LKFS**,
+**-15.9205 dBTP**, active masker margin **5.99964 dB**.
+
+The inherited mutation runner's loudnorm-rate mutant was discovered to be
+invalid syntax, not a genuine assertion kill. It is now a valid semantic mutant
+and the original test still kills it (post-format legacy run 77/77). **B4 must
+replace "any nonzero means killed" with clean controls and call-phase evidence**,
+then add 33 probes for 110 total. Historical logs are retained, not relabelled.
+
+The full implementation/evidence and outstanding B4 work are in
 [AUDIO_ENGINE_REMEDIATION_LEDGER.md](AUDIO_ENGINE_REMEDIATION_LEDGER.md).
 The lineage bridge deliberately uses host-supplied canonical fencing and an
 append-only AssetVersion writer; it does **not** claim cross-zone DB/CommandBus

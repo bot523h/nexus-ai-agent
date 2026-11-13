@@ -15,18 +15,21 @@ One run, end to end (``normalize_loudness``):
 3. **measure** with the ``loudnorm`` first pass (``-14/-23`` targets are
    profile-driven; no hard-coded numbers);
 4. **encode** into the run's staging directory under the canonical stream lock;
-5. **publish** atomically (``os.link`` + ``os.rename``), refusing to replace the
-   input;
-6. **verify** the *published* bytes: hash, full decode, fresh ``ebur128``
+5. **verify** the *private rendered* bytes: hash, full decode, fresh ``ebur128``
    measurement against the target, canonical shape, acoustic signature, and
-   finally an Ed25519-signed :class:`ArtifactPassport`;
+   an Ed25519-signed :class:`ArtifactPassport` when a signing key is configured;
+6. **publish** verified bytes atomically (``os.link`` + ``os.rename``), refusing
+   to replace the input;
 7. **report** measured evidence (and only measured evidence).
 
 Any failure removes the run directory and publishes nothing.
 
-Bounded memory: the only in-memory audio is the analysis window
-(``max_analysis_seconds``) and the beat-analysis window
-(``max_beat_analysis_seconds``); everything else is streamed through files.
+Bounded memory: legacy analysis uses ``max_analysis_seconds`` and
+``max_beat_analysis_seconds`` windows; encoding streams through files. The
+STAGE-B NumPy kernels process a whole clip, so they refuse inputs longer than
+min(10 seconds, configured analysis bound), never silently truncate them.
+STAGE-B additionally requires a signing key/id and re-verifies the canonical
+passport on private bytes, including an independent BS.1770 meter comparison.
 """
 
 from __future__ import annotations
@@ -36,12 +39,17 @@ import re
 import tempfile
 import time
 import uuid
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from nexus_ai_agent.creative.audio_engine import ambisonics_binaural_fdn as k1
+from nexus_ai_agent.creative.audio_engine import av_subframe_foley_sync as k3
+from nexus_ai_agent.creative.audio_engine import psychoacoustic_bark_mastering as k4
+from nexus_ai_agent.creative.audio_engine import spectral_voice_restoration as k2
 from nexus_ai_agent.creative.audio_engine.continuity import (
     AssemblyProof,
     ContinuityError,
@@ -76,7 +84,13 @@ from nexus_ai_agent.creative.audio_engine.recipe import recipe_identity
 from nexus_ai_agent.creative.audio_engine.verify import (
     ArtifactPassport,
     PassportError,
+    PassportKeyring,
     build_passport,
+    check_loudness_target,
+    cross_verify_loudness,
+    decode_for_analysis,
+    sign_passport,
+    verify_passport,
 )
 from nexus_ai_agent.creative.audio_engine.workspace import (
     PublishResult,
@@ -84,6 +98,17 @@ from nexus_ai_agent.creative.audio_engine.workspace import (
     WorkspaceBoundaryError,
     hash_file,
     safe_file_name,
+)
+from nexus_ai_agent.creative.packs.audio.models import (
+    MAX_STAGE_B_SECONDS,
+    OPERATION_BARK_MASTER,
+    STAGE_B_INPUT_MODELS,
+    BarkMasterInput,
+    RestoreVoiceInput,
+    SpatializeInput,
+    StageBAudioRequest,
+    SyncFoleyInput,
+    kernel_source_ids,
 )
 from nexus_ai_agent.creative.slideshow.audio import (
     PcmAudio,
@@ -133,6 +158,16 @@ AUDIO_SUFFIXES = frozenset(
         ".mp4",
         ".mov",
     }
+)
+
+
+_BARK_MASTER_PROFILE = LoudnessProfile(
+    profile_id="custom",
+    target_lufs=-24,
+    true_peak_dbtp=-1,
+    target_lra_lu=50,
+    standard="ITU-R BS.1770 (-24 LKFS delivery target)",
+    processing_mode="DYNAMIC_ALLOWED",
 )
 
 
@@ -427,6 +462,10 @@ class NativeAudioEngine:
                     "audio.remove_noise": unavailable.model_copy(
                         update={"name": "audio.remove_noise"}
                     ),
+                    **{
+                        name: unavailable.model_copy(update={"name": name})
+                        for name in STAGE_B_INPUT_MODELS
+                    },
                 }
             )
         probe = self._transcoder.governor.run(
@@ -460,6 +499,24 @@ class NativeAudioEngine:
                         "detail": "highpass + afftdn spectral denoise (static noise)",
                     }
                 ),
+                **{
+                    name: EngineCapability(
+                        name=name,
+                        status="AVAILABLE"
+                        if self._settings.signing_key is not None
+                        and self._settings.signer_key_id is not None
+                        else "UNAVAILABLE",
+                        code=None
+                        if self._settings.signing_key is not None
+                        and self._settings.signer_key_id is not None
+                        else "requires_passport_signing_key",
+                        detail=(
+                            "offline NumPy kernel; private canonical encode + "
+                            "signed passport verification"
+                        ),
+                    )
+                    for name in STAGE_B_INPUT_MODELS
+                },
             },
         )
 
@@ -896,6 +953,247 @@ class NativeAudioEngine:
             cancel=cancel,
         )
 
+    # -- STAGE-B: the pure pack's injected classical-kernel port ----------- #
+    def _stage_b_keyring(self) -> PassportKeyring:
+        from nexus_ai_agent.creative.audio_engine.ed25519_sign import derive_public_key
+
+        if self._settings.signing_key is None or self._settings.signer_key_id is None:
+            raise EngineRejected(
+                "Stage-B publication requires a configured passport signing key/id"
+            )
+        return PassportKeyring(
+            {self._settings.signer_key_id: derive_public_key(self._settings.signing_key)}
+        )
+
+    def execute_stage_b(
+        self, request: StageBAudioRequest, *, cancel: CancelToken | None = None
+    ) -> ArtifactEvidence:
+        """Bound all source bytes, canonicalize privately, run K1..K4, verify/publish.
+
+        Whole-signal kernels are bounded to at most ten seconds (or the smaller
+        configured analysis bound); oversized media is refused, never truncated.
+        Every auxiliary stem/noise hash participates in reuse identity. No host
+        fence/AssetVersion persistence is invented here; the B1 adapter owns that
+        optional, host-supplied seam.
+        """
+        request = StageBAudioRequest.model_validate(request.model_dump())
+        self._stage_b_keyring()
+        if cancel is not None and cancel.cancelled:
+            raise _cancelled_before_start(cancel)
+        limit = min(MAX_STAGE_B_SECONDS, self._settings.max_analysis_seconds)
+        sources = kernel_source_ids(request.payload)
+        for asset_id in sources:
+            checked = self.precheck(
+                SourceRequest(asset_id=asset_id, expected_sha256=request.source_hashes[asset_id])
+            )
+            if (
+                not checked.readable
+                or checked.duration_us is None
+                or not 0 < checked.duration_us <= limit * 1_000_000
+            ):
+                raise EngineInputError(
+                    f"Stage-B source {asset_id!r} is unreadable or exceeds "
+                    f"the {limit:g}s whole-signal bound"
+                )
+        parameters: dict[str, object] = {
+            "kernel_contract": "omega.stage_b.v1",
+            "payload": request.payload.model_dump(mode="json", exclude={"output_asset_id"}),
+            "source_hashes": dict(sorted(request.source_hashes.items())),
+            "maximum_input_seconds": limit,
+            "alignment": "same time zero; zero-pad shorter stem ends",
+        }
+        stream = CanonicalStreamProfile()
+
+        def builder(
+            staged: Path, workspace: RuntimeWorkspace, token: CancelToken | None, run_dir: Path
+        ) -> RenderOutcome:
+            decoded: dict[str, np.ndarray] = {}
+            for index, asset_id in enumerate(sources):
+                source = (
+                    staged
+                    if asset_id == request.payload.audio_asset_id
+                    else workspace.stage_input(
+                        self._path(asset_id), expected_sha256=request.source_hashes[asset_id]
+                    )
+                )
+                if hash_file(source) != request.source_hashes[asset_id]:
+                    raise EngineInputError("Stage-B input bytes changed after precheck")
+                canonical = run_dir / f"input-{index}.flac"
+                self._transcoder.render(
+                    source=source,
+                    destination=canonical,
+                    audio_filters=(),
+                    profile_args=stream.format_arguments(),
+                    container_hint="flac",
+                    cancel=token,
+                )
+                pcm = run_dir / f"input-{index}.s32le"
+                _outcome, frames = self._transcoder.decode_all(
+                    canonical, pcm_path=pcm, channels=2, cancel=token
+                )
+                if frames > round(limit * stream.sample_rate):
+                    raise EngineInputError(
+                        "Stage-B actual decoded duration exceeds the whole-signal bound"
+                    )
+                decoded[asset_id] = np.ascontiguousarray(decode_s32le(pcm, channels=2).T)
+            # Stop at both sides of a whole-signal CPU kernel. Cancellation is
+            # cooperative between kernels, not a promise of mid-NumPy preemption.
+            if token is not None and token.cancelled:
+                raise _cancelled_before_start(token)
+            try:
+                output, measurements, source_crest = self._process_stage_b(request, decoded)
+            except ValueError as error:
+                raise EngineRejected(f"Stage-B kernel refused: {error}") from error
+            if token is not None and token.cancelled:
+                raise _cancelled_before_start(token)
+            if (
+                output.ndim != 2
+                or output.shape[0] != 2
+                or output.shape[1] == 0
+                or not np.isfinite(output).all()
+            ):
+                raise EngineRejected("Stage-B kernel produced invalid or nonfinite stereo PCM")
+            peak = float(np.max(np.abs(output)))
+            post_gain = min(1.0, 0.999 / max(peak, 1e-20))
+            output = output * post_gain
+            measurements["encoding_headroom_gain_db"] = float(20 * np.log10(post_gain))
+            parameters["kernel_measurements"] = measurements
+            wav_path = run_dir / "processed.wav"
+            with wave.open(str(wav_path), "wb") as writer:
+                writer.setnchannels(2)
+                writer.setsampwidth(4)
+                writer.setframerate(stream.sample_rate)
+                writer.writeframes((output.T * 2147483647).astype("<i4").tobytes())
+            destination = run_dir / "processed.flac"
+            self._transcoder.render(
+                source=wav_path,
+                destination=destination,
+                audio_filters=(),
+                profile_args=stream.format_arguments(),
+                container_hint="flac",
+                cancel=token,
+            )
+            return RenderOutcome(path=destination, source_crest_factor_db=source_crest)
+
+        return self._derive(
+            request_id=request.request_id,
+            operation=request.operation,
+            source_asset_id=request.payload.audio_asset_id,
+            output_asset_id=request.output_asset_id,
+            expected_source_sha256=request.source_hashes[request.payload.audio_asset_id],
+            parameters=parameters,
+            loudness_profile=_BARK_MASTER_PROFILE
+            if isinstance(request.payload, BarkMasterInput)
+            else None,
+            transaction_id=request.transaction_id,
+            continuity_lock_hash=None,
+            builder=builder,
+            cancel=cancel,
+        )
+
+    def _process_stage_b(
+        self, request: StageBAudioRequest, decoded: dict[str, np.ndarray]
+    ) -> tuple[np.ndarray, dict[str, object], float | None]:
+        payload = request.payload
+        data = decoded[payload.audio_asset_id]
+        fs = 48000
+        measurements: dict[str, object] = {}
+        source_crest: float | None = None
+        if isinstance(payload, SpatializeInput):
+            mono = np.mean(data, axis=0)
+            encoded = k1.encode_ambisonics(
+                mono, azimuth=payload.azimuth, elevation=payload.elevation, order=payload.order
+            )
+            turned = k1.rotate_ambisonics(
+                encoded, yaw=payload.yaw, pitch=payload.pitch, roll=payload.roll
+            )
+            output = k1.binaural_decode(turned, sample_rate=fs)
+            measurements["rotation_norm_error"] = float(
+                abs(np.linalg.norm(turned) - np.linalg.norm(encoded))
+            )
+            if payload.room_wet > 0:
+                room = k1.FdnRoom(
+                    payload.volume_m3,
+                    payload.surface_area_m2,
+                    payload.rt60_low,
+                    payload.rt60_mid,
+                    payload.rt60_high,
+                )
+                wet = k1.fdn_reverb(
+                    mono, sample_rate=fs, room=room, tail_seconds=payload.tail_seconds
+                )
+                output = (
+                    np.pad(output, ((0, 0), (0, wet.samples.shape[1] - output.shape[1])))
+                    * (1 - payload.room_wet)
+                    + wet.samples * payload.room_wet
+                )
+                measurements["prime_delays_samples"] = list(wet.delays)
+        elif isinstance(payload, RestoreVoiceInput):
+            restored = []
+            for channel in range(data.shape[0]):
+                unclipped = k2.consistent_declip(
+                    data[channel],
+                    sample_rate=fs,
+                    threshold=payload.clipping_threshold,
+                    bandwidth_hz=payload.bandwidth_hz,
+                )
+                reference = (
+                    None
+                    if payload.noise_asset_id is None
+                    else decoded[payload.noise_asset_id][channel]
+                )
+                denoised = k2.mmse_lsa_denoise(
+                    unclipped.samples,
+                    sample_rate=fs,
+                    noise_reference=reference,
+                    strength=payload.strength,
+                )
+                restored.append(denoised.samples)
+            output = np.stack(restored)
+            if payload.dereverberate:
+                dereverbed = k2.wpe_dereverberate(output, sample_rate=fs, taps=payload.wpe_taps)
+                output = dereverbed.samples
+                measurements["wpe_prediction_delay_ms"] = dereverbed.prediction_delay_ms
+        elif isinstance(payload, SyncFoleyInput):
+            sync = k3.synchronize_audio_to_visual(
+                data, np.array(payload.visual_motion), sample_rate=fs, frame_rate=payload.frame_rate
+            )
+            if abs(sync.residual_offset_ms) > 0.5:
+                raise EngineRejected("Stage-B corrected A/V residual exceeds 0.5 ms")
+            collisions = tuple(
+                k3.FoleyCollision(**collision.model_dump()) for collision in payload.collisions
+            )
+            foley = k3.render_collision_foley(
+                collisions, length_samples=data.shape[1], sample_rate=fs
+            )
+            output = sync.samples + payload.foley_gain * foley[None, :]
+            measurements.update(
+                input_offset_ms=sync.input_offset_ms,
+                residual_offset_ms=sync.residual_offset_ms,
+                collision_samples=[c.sample_index for c in collisions],
+            )
+        else:
+            stems = [data, decoded[payload.music_asset_id], decoded[payload.sfx_foley_asset_id]]
+            length = max(stem.shape[1] for stem in stems)
+            stems = [np.pad(stem, ((0, 0), (0, length - stem.shape[1]))) for stem in stems]
+            master = k4.master_dialogue_music_sfx(*stems, sample_rate=fs)
+            output = master.samples
+            from nexus_ai_agent.creative.audio_engine.loudness_bs1770 import measure_bs1770_numpy
+
+            before = measure_bs1770_numpy(
+                master.masking.dialogue + master.masking.music + master.masking.sfx_foley,
+                sample_rate=fs,
+            )
+            if before.lufs is not None and before.true_peak_dbtp is not None:
+                source_crest = before.true_peak_dbtp - before.lufs
+            measurements.update(
+                masking_margin_reached=master.masking.margin_reached,
+                limiter_passes=master.limiter_passes,
+                measured_lkfs=master.measurement.lufs,
+                measured_true_peak_dbtp=master.measurement.true_peak_dbtp,
+            )
+        return np.asarray(output, dtype=np.float64), measurements, source_crest
+
     # -- the shared derive pipeline --------------------------------------- #
     def _derive(
         self,
@@ -1186,7 +1484,7 @@ class NativeAudioEngine:
         source_crest_factor_db: float | None = None,
     ) -> ArtifactPassport:
         try:
-            return build_passport(
+            passport = build_passport(
                 operation=operation,
                 asset_id=asset_id,
                 path=path,
@@ -1204,8 +1502,65 @@ class NativeAudioEngine:
                 cancel=cancel,
                 source_crest_factor_db=source_crest_factor_db,
             )
+            if operation in STAGE_B_INPUT_MODELS:
+                passport = self._verify_stage_b(
+                    passport, path=path, cancel=cancel, source_crest=source_crest_factor_db
+                )
+            return passport
         except (PassportError, MediaContractError, WorkspaceBoundaryError) as error:
             raise EngineRejected(f"{operation} verification could not complete: {error}") from error
+
+    def _verify_stage_b(
+        self,
+        passport: ArtifactPassport,
+        *,
+        path: Path,
+        cancel: CancelToken | None,
+        source_crest: float | None,
+    ) -> ArtifactPassport:
+        keyring = self._stage_b_keyring()
+        if passport.operation == OPERATION_BARK_MASTER and passport.loudness is not None:
+            tight = check_loudness_target(
+                _BARK_MASTER_PROFILE,
+                passport.loudness,
+                integrated_tolerance_lu=0.1,
+                true_peak_tolerance_db=0,
+                input_crest_factor_db=source_crest,
+            )
+            passport = passport.model_copy(
+                update={"loudness_target": tight, "verified": passport.verified and tight.passed}
+            )
+            # The tighter policy is part of the canonical signed payload, not a
+            # detached boolean. Any post-encode miss refuses before publication.
+            assert self._settings.signing_key is not None
+            passport = sign_passport(
+                passport,
+                signing_key=self._settings.signing_key,
+                key_id=self._settings.signer_key_id,
+            )
+        report = verify_passport(
+            passport,
+            path=path,
+            engine=self._transcoder,
+            keyring=keyring,
+            require_signature=True,
+            cross_check=False,
+            cancel=cancel,
+        )
+        samples, rate, channels = decode_for_analysis(self._transcoder, path, cancel=cancel)
+        measurement = passport.loudness
+        if measurement is None:
+            raise EngineRejected("Stage-B output has no loudness measurement")
+        code, detail = cross_verify_loudness(
+            samples,
+            sample_rate=rate,
+            channels=channels,
+            ffmpeg_measurement=measurement,
+            cancel=cancel,
+        )
+        if not report.passed or code is not None or not passport.verified:
+            raise EngineRejected(f"Stage-B private passport refused: {report.codes}; {detail}")
+        return passport
 
     def _evidence(
         self,

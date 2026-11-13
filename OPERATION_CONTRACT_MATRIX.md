@@ -7,11 +7,12 @@ nine-stage pipeline for every operation of the universe (catalogue ∪ runtime).
 Statuses: `MISSING` / `PARTIAL` (design-only or wired-unproven) / `PRESENT`
 (static fact) / `PROVEN` (backed by executable evidence).
 
-Universe: **80** operations — catalogue 70, runtime 57, overlap 47, missing 23, runtime-only 10, surface-reachable 12.
+Universe: **84** operations — catalogue 70, runtime 61, overlap 47, missing 23, runtime-only 14, surface-reachable 12.
 
 | operation | id | flag | product | contract | registry | capability | | surface | command | execution | artifact | proof | L | UX modes | pack | | locality | registrar |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | audio.align_music | T49 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
+| audio.bark_master | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.beat_sync_cut | T42 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.deess | T48 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.detect_beats | T41 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_PREFERRED | nexus.audio.studio |
@@ -20,6 +21,9 @@ Universe: **80** operations — catalogue 70, runtime 57, overlap 47, missing 23
 | audio.normalize_loudness | T46 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.remove_noise | T43 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_PREFERRED | nexus.audio.studio |
 | audio.remove_vocal | T44 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_PREFERRED | nexus.audio.studio |
+| audio.restore_voice | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
+| audio.spatialize | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
+| audio.sync_foley | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.time_stretch | T50 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | caption.align_words | T52 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_PREFERRED | nexus.language.caption |
 | caption.burn_in | T60 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.language.caption |

@@ -213,6 +213,10 @@ def test_motion_and_audio_domains_are_complete_against_the_tdd_table() -> None:
         "audio.deess",
         "audio.align_music",
         "audio.time_stretch",
+        "audio.spatialize",
+        "audio.restore_voice",
+        "audio.sync_foley",
+        "audio.bark_master",
     }
     assert {op for op in edit if op.startswith("timeline.")} >= {
         "timeline.trim",

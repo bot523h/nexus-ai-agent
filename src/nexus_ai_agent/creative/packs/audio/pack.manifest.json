@@ -14,7 +14,11 @@
     "audio.eq_voice",
     "audio.time_stretch",
     "audio.remove_vocal",
-    "audio.align_music"
+    "audio.align_music",
+    "audio.spatialize",
+    "audio.restore_voice",
+    "audio.sync_foley",
+    "audio.bark_master"
   ],
   "runtime": {
     "native": {

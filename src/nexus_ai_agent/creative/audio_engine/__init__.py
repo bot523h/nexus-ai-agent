@@ -45,6 +45,21 @@ Layout — each module owns exactly one concern:
 
 from __future__ import annotations
 
+from nexus_ai_agent.creative.audio_engine.ambisonics_binaural_fdn import (
+    FdnRoom,
+    binaural_decode,
+    encode_ambisonics,
+    fdn_reverb,
+    rotate_ambisonics,
+)
+from nexus_ai_agent.creative.audio_engine.av_subframe_foley_sync import (
+    FoleyCollision,
+    estimate_av_offset,
+    gcc_phat,
+    render_collision_foley,
+    synchronize_audio_to_visual,
+    synthesize_modal_foley,
+)
 from nexus_ai_agent.creative.audio_engine.continuity import (
     AssemblyProof,
     ContinuityReport,
@@ -68,6 +83,15 @@ from nexus_ai_agent.creative.audio_engine.models import (
     MediaProbe,
     SpectralSignature,
 )
+from nexus_ai_agent.creative.audio_engine.psychoacoustic_bark_mastering import (
+    carve_speech_masking,
+    master_dialogue_music_sfx,
+)
+from nexus_ai_agent.creative.audio_engine.spectral_voice_restoration import (
+    consistent_declip,
+    mmse_lsa_denoise,
+    wpe_dereverberate,
+)
 from nexus_ai_agent.creative.audio_engine.verify import (
     ArtifactPassport,
     PassportKeyring,
@@ -76,6 +100,22 @@ from nexus_ai_agent.creative.audio_engine.verify import (
 )
 
 __all__ = [
+    "FdnRoom",
+    "FoleyCollision",
+    "binaural_decode",
+    "carve_speech_masking",
+    "consistent_declip",
+    "encode_ambisonics",
+    "estimate_av_offset",
+    "fdn_reverb",
+    "gcc_phat",
+    "master_dialogue_music_sfx",
+    "mmse_lsa_denoise",
+    "render_collision_foley",
+    "rotate_ambisonics",
+    "synchronize_audio_to_visual",
+    "synthesize_modal_foley",
+    "wpe_dereverberate",
     "AssemblyProof",
     "ArtifactPassport",
     "AudioExecutionSettings",
