@@ -13,6 +13,18 @@ from .contracts import KernelError
 
 FloatArray = NDArray[np.float64]
 
+D65_WHITE_XY = (0.31270, 0.32900)
+D65_WHITE_XYZ = (0.95047, 1.0, 1.08883)
+BRADFORD_MATRIX = np.array(
+    [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]],
+    dtype=np.float64,
+)
+
+
+def canonical_d65_xyz() -> FloatArray:
+    """Return the contract's canonical CIE 1931 2-degree D65 XYZ white."""
+    return np.asarray(D65_WHITE_XYZ, dtype=np.float64)
+
 
 def srgb_decode(value: FloatArray) -> FloatArray:
     x = np.asarray(value, dtype=np.float64)
@@ -37,13 +49,20 @@ def bt709_encode(value: FloatArray) -> FloatArray:
 
 
 def bradford_adaptation(source_xyz: FloatArray, target_xyz: FloatArray) -> FloatArray:
-    matrix = np.array(
-        [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]]
-    )
-    src, dst = matrix @ source_xyz, matrix @ target_xyz
+    """Adapt CIE XYZ whites with the canonical Bradford cone-response matrix."""
+    source = np.asarray(source_xyz, dtype=np.float64)
+    target = np.asarray(target_xyz, dtype=np.float64)
+    if source.shape != (3,) or target.shape != (3,) or not np.all(np.isfinite(source + target)):
+        raise KernelError("Bradford adaptation requires finite XYZ triples")
+    if np.array_equal(source, target):
+        return np.eye(3, dtype=np.float64)
+    src, dst = BRADFORD_MATRIX @ source, BRADFORD_MATRIX @ target
     if np.any(np.abs(src) < 1e-12):
         raise KernelError("singular source white")
-    return np.linalg.solve(matrix, np.diag(dst / src) @ matrix)
+    return np.asarray(
+        np.linalg.solve(BRADFORD_MATRIX, np.diag(dst / src) @ BRADFORD_MATRIX),
+        dtype=np.float64,
+    )
 
 
 def preserve_structure(
@@ -78,7 +97,7 @@ def rgb_to_lab(rgb: FloatArray) -> FloatArray:
             [0.1804375, 0.0721750, 0.9503041],
         ]
     )
-    ratio = xyz / np.array([0.95047, 1.0, 1.08883])
+    ratio = xyz / canonical_d65_xyz()
     delta = 6 / 29
     f = np.where(ratio > delta**3, np.cbrt(ratio), ratio / (3 * delta**2) + 4 / 29)
     return np.stack(
@@ -143,8 +162,8 @@ def _png_chunk(kind: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
 
 
-def write_rgb8_png(path: str | Path, rgb_u8: NDArray[np.uint8]) -> None:
-    """Write a standards-compliant filter-zero RGB PNG using only stdlib."""
+def encode_rgb8_png(rgb_u8: NDArray[np.uint8]) -> bytes:
+    """Encode a filter-zero RGB PNG in memory for contained workspace writes."""
     image = np.asarray(rgb_u8)
     if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
         raise KernelError("PNG input must be uint8 with shape (height, width, 3)")
@@ -154,8 +173,12 @@ def write_rgb8_png(path: str | Path, rgb_u8: NDArray[np.uint8]) -> None:
     header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     raw = b"".join(b"\x00" + row.tobytes() for row in image)
     content = b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", header)
-    content += _png_chunk(b"IDAT", zlib.compress(raw, level=6)) + _png_chunk(b"IEND", b"")
-    Path(path).write_bytes(content)
+    return content + _png_chunk(b"IDAT", zlib.compress(raw, level=6)) + _png_chunk(b"IEND", b"")
+
+
+def write_rgb8_png(path: str | Path, rgb_u8: NDArray[np.uint8]) -> None:
+    """Write a standards-compliant filter-zero RGB PNG using only stdlib."""
+    Path(path).write_bytes(encode_rgb8_png(rgb_u8))
 
 
 def read_rgb8_png(path: str | Path) -> NDArray[np.uint8]:

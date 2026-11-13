@@ -27,17 +27,19 @@ from nexus_ai_agent.creative.chronos import (
     geometry,
     identity_lock,
     merkle_ledger,
+    real_media_continuity,
     scene_portrait_ops,
     temporal_optics,
     timeline,
     weather_and_grading,
 )
-from nexus_ai_agent.creative.chronos.contracts import RationalTimestamp
+from nexus_ai_agent.creative.chronos.contracts import KernelError, RationalTimestamp
 from nexus_ai_agent.creative.studio.chronos_port import (
     ChronosCommand,
     ChronosExecutionReceipt,
     ChronosPort,
 )
+from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
 
 
 @dataclass(frozen=True)
@@ -234,7 +236,7 @@ def test_all_default_handler_names_are_registered_and_dispatchable() -> None:
     }
 
 
-def test_chronos_mutation_campaign_kills_40_of_40(tmp_path: Path) -> None:
+def test_chronos_mutation_campaign_kills_55_of_55(tmp_path: Path) -> None:
     points, k, observed = _identity_fixture()
     image = np.zeros((5, 5, 3), dtype=np.float64)
     image[2, 2] = 1.0
@@ -292,6 +294,30 @@ def test_chronos_mutation_campaign_kills_40_of_40(tmp_path: Path) -> None:
         return timeline.assemble_pcm_wav_stream_copy(
             [source_a, source_b], output, tmp_path / f"timeline-stage-{time_token()}"
         )
+
+    canonical_3d = np.array(
+        [
+            [-0.06, -0.05, 0.0],
+            [0.06, -0.05, 0.0],
+            [-0.05, 0.05, 0.0],
+            [0.05, 0.05, 0.0],
+            [-0.025, 0.0, 0.015],
+            [0.025, 0.0, -0.015],
+        ],
+        dtype=np.float64,
+    )
+    observed_3d = canonical_3d * 1.03 + np.array([0.01, -0.02, 0.03])
+    observed_3d[-1] += np.array([0.08, -0.06, 0.05])
+    rgb_test_frames = np.full((1, 6, 6, 3), (0.1, 0.2, 0.3), dtype=np.float64)
+    rgb_test_frames[:, 4:, 4:, :] *= 1.5
+    rgb_reference_patch = (0.1, 0.2, 0.3)
+
+    def _assert_raises_kernel_error(call: Callable[[], Any], message: str) -> None:
+        try:
+            call()
+        except KernelError:
+            return
+        raise AssertionError(message)
 
     cases: list[MutationCase] = [
         MutationCase(
@@ -940,8 +966,258 @@ def test_chronos_mutation_campaign_kills_40_of_40(tmp_path: Path) -> None:
                 "untampered episode manifest leaves pass every inclusion-proof check",
             ),
         ),
+        MutationCase(
+            "41 canonical CIE D65 white XYZ",
+            color_science,
+            "canonical_d65_xyz",
+            "return np.asarray(D65_WHITE_XYZ, dtype=np.float64)",
+            "return np.asarray((0.95045, 1.0, 1.08905), dtype=np.float64)",
+            lambda: _assert_result(
+                color_science.canonical_d65_xyz,
+                lambda result: np.array_equal(result, [0.95047, 1.0, 1.08883]),
+                "D65 Lab reference white uses the canonical XYZ tristimulus",
+            ),
+        ),
+        MutationCase(
+            "42 exact same-white Bradford identity",
+            color_science,
+            "bradford_adaptation",
+            "if np.array_equal(source, target):\n        return np.eye(3, dtype=np.float64)",
+            "if np.array_equal(source, target):\n        return 2.0 * np.eye(3, dtype=np.float64)",
+            lambda: _assert_result(
+                lambda: color_science.bradford_adaptation(
+                    np.array([0.95047, 1.0, 1.08883]), np.array([0.95047, 1.0, 1.08883])
+                ),
+                lambda result: np.allclose(result, np.eye(3), atol=1e-15, rtol=0.0),
+                "Bradford adaptation of an unchanged white is identity within 1e-15",
+            ),
+        ),
+        MutationCase(
+            "43 Bradford source-to-target cone ratio direction",
+            color_science,
+            "bradford_adaptation",
+            "np.diag(dst / src) @ BRADFORD_MATRIX",
+            "np.diag(src / dst) @ BRADFORD_MATRIX",
+            lambda: _assert_result(
+                lambda: (
+                    color_science.bradford_adaptation(
+                        np.array([0.95047, 1.0, 1.08883]), np.array([0.96422, 1.0, 0.82521])
+                    )
+                    @ np.array([0.95047, 1.0, 1.08883])
+                ),
+                lambda result: np.allclose(result, [0.96422, 1.0, 0.82521], atol=1e-12),
+                "Bradford CAT maps source-white XYZ to target-white XYZ",
+            ),
+        ),
+        MutationCase(
+            "44 real-media exposure-drift direction",
+            real_media_continuity,
+            "apply_illuminant_exposure_drift",
+            "(drifted_xyz @ _XYZ_TO_RGB.T) * exposure_multiplier",
+            "(drifted_xyz @ _XYZ_TO_RGB.T) / exposure_multiplier",
+            lambda: _assert_result(
+                lambda: real_media_continuity.apply_illuminant_exposure_drift(
+                    np.full((1, 5, 5, 3), (0.1, 0.2, 0.3)),
+                    source_illuminant_kelvin=6500.0,
+                    drifted_illuminant_kelvin=6500.0,
+                    exposure_multiplier=1.5,
+                ),
+                lambda result: np.allclose(
+                    result, np.full((1, 5, 5, 3), (0.15, 0.3, 0.45)), atol=1e-12
+                ),
+                "injected exposure drift multiplies every real linear-RGB pixel",
+            ),
+        ),
+        MutationCase(
+            "45 real-media anchored exposure inverse",
+            real_media_continuity,
+            "_remove_known_color_drift",
+            "(xyz @ inverse_cat.T) / exposure_multiplier",
+            "(xyz @ inverse_cat.T) * exposure_multiplier",
+            lambda: _assert_result(
+                lambda: real_media_continuity._remove_known_color_drift(
+                    real_media_continuity.apply_illuminant_exposure_drift(
+                        rgb_test_frames,
+                        source_illuminant_kelvin=6500.0,
+                        drifted_illuminant_kelvin=6500.0,
+                        exposure_multiplier=1.5,
+                    ),
+                    drifted_illuminant_kelvin=6500.0,
+                    reference_illuminant_kelvin=6500.0,
+                    exposure_multiplier=1.5,
+                ),
+                lambda result: np.allclose(
+                    result, rgb_test_frames @ real_media_continuity._RGB_TO_XYZ.T, atol=1e-12
+                ),
+                "Show-Bible anchored restoration inverses exposure in scene-linear XYZ",
+            ),
+        ),
+        MutationCase(
+            "46 real-media Bradford patch closure ratio",
+            real_media_continuity,
+            "restore_anchored_color_frames",
+            "reference_cone[None, :] / measured_cone",
+            "measured_cone / reference_cone[None, :]",
+            lambda: _assert_result(
+                lambda: real_media_continuity.measure_patch_delta_e00_by_frame(
+                    real_media_continuity.restore_anchored_color_frames(
+                        real_media_continuity.apply_illuminant_exposure_drift(
+                            rgb_test_frames,
+                            source_illuminant_kelvin=6500.0,
+                            drifted_illuminant_kelvin=6500.0,
+                            exposure_multiplier=1.5,
+                        ),
+                        drifted_illuminant_kelvin=6500.0,
+                        reference_illuminant_kelvin=6500.0,
+                        exposure_multiplier=1.5,
+                        reference_patch_linear_rgb=(0.2, 0.2, 0.3),
+                        calibration_roi=(0, 4, 0, 4),
+                    ),
+                    (0.2, 0.2, 0.3),
+                    (0, 4, 0, 4),
+                ),
+                lambda result: max(result) < 1e-10,
+                "Bradford cone correction closes calibrated real pixels to the Show Bible",
+            ),
+        ),
+        MutationCase(
+            "47 real-media worst-pixel Delta-E measurement",
+            real_media_continuity,
+            "measure_patch_delta_e00_by_frame",
+            "np.max(delta, axis=(1, 2))",
+            "np.mean(delta, axis=(1, 2))",
+            lambda: _assert_result(
+                lambda: real_media_continuity.measure_patch_delta_e00_by_frame(
+                    np.array(
+                        [[[[0.1, 0.2, 0.3], [0.1, 0.2, 0.3]], [[0.1, 0.2, 0.3], [0.8, 0.1, 0.1]]]],
+                        dtype=np.float64,
+                    ),
+                    rgb_reference_patch,
+                    (0, 2, 0, 2),
+                )[0],
+                lambda result: result > 20.0,
+                "continuity reports worst-pixel rather than spatially averaged Delta-E",
+            ),
+        ),
+        MutationCase(
+            "48 rational sample horizon floor",
+            real_media_continuity,
+            "canonical_sample_horizon",
+            "frame_count * sample_rate_hz * frame_rate_den // frame_rate_num",
+            "math.ceil(frame_count * sample_rate_hz * frame_rate_den / frame_rate_num)",
+            lambda: _assert_result(
+                lambda: real_media_continuity.canonical_sample_horizon(
+                    1, sample_rate_hz=48_000, frame_rate_num=24_001, frame_rate_den=1001
+                ),
+                lambda result: result == 2001 and isinstance(result, int),
+                "rational horizon uses deterministic integer floor, not a floating ceiling",
+            ),
+        ),
+        MutationCase(
+            "49 Bresenham rational remainder carry",
+            real_media_continuity,
+            "bresenham_sample_counts",
+            "remainder + frame_count * numerator_per_frame",
+            "frame_count * numerator_per_frame",
+            lambda: _assert_result(
+                lambda: real_media_continuity.bresenham_sample_counts(
+                    [1, 1, 1, 1], sample_rate_hz=44_100, frame_rate_num=24, frame_rate_den=1
+                ),
+                lambda result: result == (1837, 1838, 1837, 1838),
+                "Bresenham PCM slices carry each rational remainder into the next shot",
+            ),
+        ),
+        MutationCase(
+            "50 PCM Bresenham source slice order",
+            real_media_continuity,
+            "align_pcm_to_sample_count",
+            "output[:copied] = audio[:copied]",
+            "output[:copied] = audio[:copied][::-1]",
+            lambda: _assert_result(
+                lambda: real_media_continuity.align_pcm_to_sample_count(
+                    np.array([0.1, 0.2, 0.3]), 2
+                )[0],
+                lambda result: np.array_equal(result, [0.1, 0.2]),
+                "PCM trimming preserves chronological Bresenham sample order",
+            ),
+        ),
+        MutationCase(
+            "51 PCM Bresenham zero-pad count",
+            real_media_continuity,
+            "align_pcm_to_sample_count",
+            "max(0, expected_samples - len(audio))",
+            "max(0, expected_samples - len(audio) + 1)",
+            lambda: _assert_result(
+                lambda: real_media_continuity.align_pcm_to_sample_count(np.array([0.1]), 3)[2],
+                lambda result: result == 2,
+                "PCM reconciliation reports the exact zero-padded sample slice count",
+            ),
+        ),
+        MutationCase(
+            "52 real-media non-finite pixel buffer rejection",
+            real_media_continuity,
+            "_validate_frames",
+            "or np.any(~np.isfinite(frames))",
+            "or False",
+            lambda: _assert_raises_kernel_error(
+                lambda: real_media_continuity._validate_frames(
+                    np.full((1, 5, 5, 3), np.nan, dtype=np.float64)
+                ),
+                "real-media frame validation rejects NaN pixel buffers",
+            ),
+        ),
+        MutationCase(
+            "53 optional FFmpeg mux absence handling",
+            real_media_continuity,
+            "_mux_shot_if_available",
+            "if ffmpeg_binary is None:\n        return None",
+            'if ffmpeg_binary is None:\n        return "missing-ffmpeg"',
+            lambda: _assert_result(
+                lambda: real_media_continuity._mux_shot_if_available(
+                    WorkspaceFilesystem(tmp_path / "optional-mux"),
+                    None,
+                    (),
+                    "unused.wav",
+                    "unused.mkv",
+                    frame_count=1,
+                    frame_rate_num=24_000,
+                    frame_rate_den=1001,
+                ),
+                lambda result: result is None,
+                "FFmpeg is optional when the executable cannot be discovered",
+            ),
+        ),
+        MutationCase(
+            "54 RFC 6962 internal-node domain prefix",
+            merkle_ledger,
+            "node_hash",
+            'hashlib.sha256(b"\\x01" + left + right).digest()',
+            'hashlib.sha256(b"\\x00" + left + right).digest()',
+            lambda: _assert_result(
+                lambda: merkle_ledger.node_hash(b"a" * 32, b"b" * 32),
+                lambda result: result == hashlib.sha256(b"\x01" + b"a" * 32 + b"b" * 32).digest(),
+                "RFC 6962 internal nodes use the 0x01 domain prefix",
+            ),
+        ),
+        MutationCase(
+            "55 robust 3D landmark outlier restoration",
+            identity_lock,
+            "restore_cranial_landmarks_to_anchor",
+            "restored[outliers] = reference[outliers]",
+            "restored[outliers] = observed[outliers]",
+            lambda: _assert_result(
+                lambda: identity_lock.restore_cranial_landmarks_to_anchor(
+                    canonical_3d, observed_3d, huber_delta_m=0.005
+                ),
+                lambda result: (
+                    np.allclose(result.restored_landmarks_m, canonical_3d, atol=1e-10)
+                    and result.downweighted_landmark_count == 1
+                ),
+                "robust identity restoration snaps a corrupted 3D landmark to its metric anchor",
+            ),
+        ),
     ]
-    assert len(cases) == 40
+    assert len(cases) == 55
     killed: list[str] = []
     for case in cases:
         # Prove the oracle accepts the unmutated production function before mutation.
@@ -961,10 +1237,10 @@ def test_chronos_mutation_campaign_kills_40_of_40(tmp_path: Path) -> None:
                 raise AssertionError(f"surviving mutant: {case.label}")
         finally:
             setattr(parent, attribute, original)
-    assert len(killed) == 40, (
+    assert len(killed) == 55, (
         f"surviving mutants: {sorted(set(c.label for c in cases) - set(killed))}"
     )
-    assert len(set(killed)) == 40
+    assert len(set(killed)) == 55
 
 
 def _assert_registry_conflict_refused(

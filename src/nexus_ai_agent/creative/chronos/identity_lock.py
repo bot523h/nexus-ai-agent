@@ -48,6 +48,124 @@ class CranialBaselineReceipt:
     within_tolerance: bool
 
 
+@dataclass(frozen=True, slots=True)
+class CranialIdentityRestorationReceipt:
+    restored_landmarks_m: Array
+    rotation_so3: Array
+    fitted_scale: float
+    scale_drift_before: float
+    scale_drift_after: float
+    downweighted_landmark_count: int
+    max_fit_residual_m: float
+
+
+def restore_cranial_landmarks_to_anchor(
+    canonical_landmarks_m: Array,
+    observed_landmarks_m: Array,
+    *,
+    left_index: int = 0,
+    right_index: int = 1,
+    huber_delta_m: float = 0.005,
+    iterations: int = 8,
+) -> CranialIdentityRestorationReceipt:
+    """Robust Umeyama/Kabsch fit and inverse-map 3D landmarks to a metric anchor.
+
+    Grossly corrupted landmarks are identified by their final Huber influence and
+    snapped to the canonical anchor after the global similarity correction.
+    """
+    reference = np.asarray(canonical_landmarks_m, dtype=np.float64)
+    observed = np.asarray(observed_landmarks_m, dtype=np.float64)
+    if (
+        reference.ndim != 2
+        or reference.shape[1] != 3
+        or len(reference) < 4
+        or observed.shape != reference.shape
+        or not 0 <= left_index < len(reference)
+        or not 0 <= right_index < len(reference)
+        or left_index == right_index
+        or not np.isfinite(huber_delta_m)
+        or huber_delta_m <= 0
+        or iterations < 1
+        or np.any(~np.isfinite(reference))
+        or np.any(~np.isfinite(observed))
+    ):
+        raise KernelError("invalid 3D identity anchor or restoration controls")
+    reference_baseline = float(np.linalg.norm(reference[left_index] - reference[right_index]))
+    if reference_baseline <= 1e-12:
+        raise KernelError("canonical cranial baseline must be nonzero")
+    observed_baseline = float(np.linalg.norm(observed[left_index] - observed[right_index]))
+    scale_drift_before = abs(observed_baseline - reference_baseline) / reference_baseline
+    weights = np.ones(len(reference), dtype=np.float64)
+    rotation = np.eye(3, dtype=np.float64)
+    scale = 1.0
+    translation = np.zeros(3, dtype=np.float64)
+    residual_lengths = np.zeros(len(reference), dtype=np.float64)
+    for _ in range(iterations):
+        total_weight = float(weights.sum())
+        reference_center = np.sum(reference * weights[:, None], axis=0) / total_weight
+        observed_center = np.sum(observed * weights[:, None], axis=0) / total_weight
+        reference_zero = reference - reference_center
+        observed_zero = observed - observed_center
+        covariance = (reference_zero * weights[:, None]).T @ observed_zero
+        try:
+            u, singular, vt = np.linalg.svd(covariance)
+        except np.linalg.LinAlgError as exc:
+            raise KernelError("3D identity SVD failed") from exc
+        correction = np.eye(3, dtype=np.float64)
+        correction[-1, -1] = 1.0 if np.linalg.det(u @ vt) >= 0 else -1.0
+        rotation = u @ correction @ vt
+        denominator = float(np.sum(weights[:, None] * reference_zero**2))
+        if denominator <= 1e-20:
+            raise KernelError("canonical landmarks have degenerate scale")
+        scale = float(np.sum(singular * np.diag(correction)) / denominator)
+        if not np.isfinite(scale) or scale <= 0:
+            raise KernelError("3D identity fit produced a non-positive scale")
+        translation = observed_center - scale * reference_center @ rotation
+        fitted = scale * reference @ rotation + translation
+        residual_lengths = np.linalg.norm(observed - fitted, axis=1)
+        weights = np.minimum(1.0, huber_delta_m / np.maximum(residual_lengths, 1e-12))
+
+    outliers = residual_lengths > max(4.0 * huber_delta_m, 1e-8)
+    if np.any(outliers):
+        weights[outliers] = 0.0
+        total_weight = float(weights.sum())
+        reference_center = np.sum(reference * weights[:, None], axis=0) / total_weight
+        observed_center = np.sum(observed * weights[:, None], axis=0) / total_weight
+        reference_zero = reference - reference_center
+        observed_zero = observed - observed_center
+        covariance = (reference_zero * weights[:, None]).T @ observed_zero
+        try:
+            u, singular, vt = np.linalg.svd(covariance)
+        except np.linalg.LinAlgError as exc:
+            raise KernelError("3D identity inlier refit failed") from exc
+        correction = np.eye(3, dtype=np.float64)
+        correction[-1, -1] = 1.0 if np.linalg.det(u @ vt) >= 0 else -1.0
+        rotation = u @ correction @ vt
+        denominator = float(np.sum(weights[:, None] * reference_zero**2))
+        if denominator <= 1e-20:
+            raise KernelError("too few non-outlier landmarks for identity refit")
+        scale = float(np.sum(singular * np.diag(correction)) / denominator)
+        translation = observed_center - scale * reference_center @ rotation
+        residual_lengths = np.linalg.norm(
+            observed - (scale * reference @ rotation + translation), axis=1
+        )
+
+    restored = (observed - translation) @ rotation.T / scale
+    outliers = residual_lengths > max(4.0 * huber_delta_m, 1e-8)
+    restored[outliers] = reference[outliers]
+    restored_baseline = float(np.linalg.norm(restored[left_index] - restored[right_index]))
+    scale_drift_after = abs(restored_baseline - reference_baseline) / reference_baseline
+    return CranialIdentityRestorationReceipt(
+        restored,
+        rotation,
+        scale,
+        scale_drift_before,
+        scale_drift_after,
+        int(np.count_nonzero(outliers)),
+        float(np.max(residual_lengths)),
+    )
+
+
 def verify_cranial_baseline(
     reference_landmarks_m: Array,
     observed_landmarks_m: Array,

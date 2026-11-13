@@ -6,6 +6,20 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from .contracts import Continuity, KernelError, RationalTimestamp
+from .real_media_continuity import (
+    CharacterIdentityAnchor,
+    RealMediaSeasonReceipt,
+    RealMediaShot,
+    RealMediaShotReceipt,
+    align_pcm_to_sample_count,
+    apply_illuminant_exposure_drift,
+    bresenham_sample_counts,
+    canonical_sample_horizon,
+    discover_ffmpeg_executable,
+    execute_real_media_season_continuity,
+    measure_patch_delta_e00_by_frame,
+    restore_anchored_color_frames,
+)
 
 
 def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
@@ -665,4 +679,21 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
     }
 
 
-__all__ = ["Continuity", "KernelError", "RationalTimestamp", "build_default_chronos_handlers"]
+__all__ = [
+    "CharacterIdentityAnchor",
+    "Continuity",
+    "KernelError",
+    "RationalTimestamp",
+    "RealMediaSeasonReceipt",
+    "RealMediaShot",
+    "RealMediaShotReceipt",
+    "align_pcm_to_sample_count",
+    "apply_illuminant_exposure_drift",
+    "bresenham_sample_counts",
+    "build_default_chronos_handlers",
+    "canonical_sample_horizon",
+    "discover_ffmpeg_executable",
+    "execute_real_media_season_continuity",
+    "measure_patch_delta_e00_by_frame",
+    "restore_anchored_color_frames",
+]
