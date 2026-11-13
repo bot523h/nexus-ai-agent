@@ -98,7 +98,7 @@ def _coerce_audio(
         x = np.asarray(audio, dtype=np.float32)
         if x.ndim == 2:
             x = x.mean(axis=1)
-        return x.reshape(-1), int(sample_rate or VADConfig.sample_rate)
+        return x.reshape(-1), int(VADConfig.sample_rate if sample_rate is None else sample_rate)
     return read_wav(audio)
 
 
@@ -115,7 +115,11 @@ def detect_voice(
 ) -> VADResult:
     cfg = config or VADConfig()
     x, rate = _coerce_audio(audio, sample_rate)
-    if rate <= 0 or x.size == 0:
+    if rate <= 0:
+        raise ValueError("sample_rate must be a positive integer")
+    if x.size and not bool(np.all(np.isfinite(x))):
+        raise ValueError("audio samples must be finite (no NaN or Inf)")
+    if x.size == 0:
         return VADResult((), rate, np.zeros(0, dtype=bool), np.zeros(0), np.zeros(0), 0.0)
     frame = max(1, round(rate * cfg.frame_ms / 1000))
     hop = max(1, round(rate * cfg.hop_ms / 1000))
@@ -127,8 +131,10 @@ def detect_voice(
     energy_db = 20 * np.log10(rms + 1e-9)
     entropy = np.array([_entropy(f) for f in frames])
     raw = (energy_db >= cfg.energy_threshold_db) & (entropy <= cfg.entropy_threshold)
-    width = max(1, int(cfg.smoothing_frames))
-    smooth = np.convolve(raw.astype(np.int8), np.ones(width, dtype=np.int8), mode="same") >= (
+    # The window must not exceed the frame count: np.convolve(mode="same") returns
+    # max(len(raw), width) elements, which desynchronises the mask from the frames.
+    width = min(max(1, int(cfg.smoothing_frames)), int(raw.size))
+    smooth = np.convolve(raw.astype(np.int32), np.ones(width, dtype=np.int32), mode="same") >= (
         width / 2
     )
     # Hysteresis-like cleanup: reject short speech islands and fill short gaps.
@@ -141,7 +147,10 @@ def detect_voice(
                 j = i
                 while j < len(smooth) and bool(smooth[j]) == value:
                     j += 1
-                if j - i < minimum:
+                # Fill only silence bounded by speech on both sides.  A short leading or
+                # trailing silence (or a whole short clip) must not be promoted to speech.
+                bounded = i > 0 and j < len(smooth)
+                if j - i < minimum and (value or bounded):
                     smooth[i:j] = not value
                 i = j
             else:

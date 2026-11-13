@@ -111,6 +111,8 @@ def banded_dtw(cost: np.ndarray, band: int | None = None) -> tuple[float, list[t
     c = np.asarray(cost, dtype=float)
     if c.ndim != 2 or not c.size:
         raise ValueError("cost must be a non-empty 2-D matrix")
+    if not bool(np.all(np.isfinite(c))):
+        raise ValueError("cost must be finite (no NaN or Inf)")
     n, m = c.shape
     band = max(n, m) if band is None else max(abs(n - m), int(band))
     inf = float("inf")
@@ -132,7 +134,9 @@ def banded_dtw(cost: np.ndarray, band: int | None = None) -> tuple[float, list[t
             dp[i, j] = c[i, j] + best
             prev[i, j] = p
     if not np.isfinite(dp[-1, -1]):
-        raise ValueError("band does not connect endpoints")
+        raise ValueError(
+            "band does not connect endpoints"
+        )  # pragma: no cover - unreachable: band >= |n-m| keeps endpoints connected
     path = []
     i, j = n - 1, m - 1
     while i >= 0 and j >= 0:

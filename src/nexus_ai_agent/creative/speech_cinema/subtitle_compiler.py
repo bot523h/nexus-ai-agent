@@ -105,26 +105,43 @@ def serialize_ass(cues: list[SubtitleCue] | tuple[SubtitleCue, ...]) -> str:
     return head + "\n".join(lines) + ("\n" if cues else "")
 
 
-def parse_srt(text: str) -> tuple[SubtitleCue, ...]:
+_STAMP = re.compile(r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})")
+
+
+def _seconds(stamp: str) -> float:
+    m = _STAMP.fullmatch(stamp.strip())
+    if m is None:
+        raise ValueError(f"invalid subtitle timestamp: {stamp!r}")
+    hours, minutes, seconds, fraction = m.groups()
+    whole = int(hours or 0) * 3600 + int(minutes) * 60 + int(seconds)
+    return float(whole) + int(fraction) / float(10 ** len(fraction))
+
+
+def _parse_cues(text: str) -> tuple[SubtitleCue, ...]:
+    """Parse SRT or WebVTT.  Cue identifiers are optional; header/NOTE blocks are skipped."""
     out: list[SubtitleCue] = []
-    for block in re.split(r"\n\s*\n", text.strip()):
-        lines = block.splitlines()
-        if len(lines) < 3:
+    for block in re.split(r"\n\s*\n", text.replace("\r\n", "\n").strip()):
+        lines = [line for line in block.splitlines() if line.strip()]
+        arrow = next((i for i, line in enumerate(lines) if "-->" in line), None)
+        if arrow is None:
             continue
-        m = re.search(r"([\d:,]+)\s*-->\s*([\d:,]+)", lines[1])
-        if not m:
-            continue
-
-        def p(x: str) -> float:
-            h, mi, sec = x.replace(",", ".").split(":")
-            return int(h) * 3600 + int(mi) * 60 + float(sec)
-
-        out.append(SubtitleCue(p(m.group(1)), p(m.group(2)), " ".join(lines[2:]), len(out) + 1))
+        head, _, tail = lines[arrow].partition("-->")
+        fields = tail.split()
+        if not fields:
+            raise ValueError("cue timing line has no end timestamp")
+        start, end = _seconds(head), _seconds(fields[0])
+        if end <= start:
+            raise ValueError(f"cue ends before it starts: {start} -> {end}")
+        out.append(SubtitleCue(start, end, " ".join(lines[arrow + 1 :]), len(out) + 1))
     return tuple(out)
 
 
+def parse_srt(text: str) -> tuple[SubtitleCue, ...]:
+    return _parse_cues(text)
+
+
 def parse_vtt(text: str) -> tuple[SubtitleCue, ...]:
-    return parse_srt(text.replace(".", ","))
+    return _parse_cues(text)
 
 
 def subtitle_sha256(data: str | bytes) -> str:

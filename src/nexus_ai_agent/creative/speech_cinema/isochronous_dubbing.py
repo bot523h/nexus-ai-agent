@@ -46,9 +46,16 @@ def time_scale(
     if isinstance(target_frames, bool) or int(target_frames) < 0:
         raise ValueError("target_frames must be non-negative")
     target = int(target_frames)
+    source_frames = int(x.shape[0])
+    if source_frames > 0:
+        ratio = target / source_frames
+        if ratio <= 0.2 or ratio >= 4.0:
+            raise ValueError(
+                f"stretch ratio {ratio:.4g} is outside the supported open range (0.2, 4.0)"
+            )
     y = _interp(x, target)
     if y.shape[0] != target:
-        raise AssertionError("time scaler failed exact frame count")
+        raise AssertionError("time scaler failed exact frame count")  # pragma: no cover - invariant
     return TimeScaleResult(y, int(x.shape[0]), target, target / x.shape[0] if x.shape[0] else 0.0)
 
 

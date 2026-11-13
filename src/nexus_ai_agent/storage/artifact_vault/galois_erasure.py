@@ -113,6 +113,8 @@ def encode(data: bytes | bytearray | memoryview, k: int, m: int) -> list[Erasure
     if k < 1 or m < 1 or k + m > 255:
         raise ValueError("require 1 <= k and 1 <= m with k+m <= 255")
     raw = bytes(data)
+    if not raw:
+        raise ValueError("payload must be non-empty")
     size = max(1, (len(raw) + k - 1) // k)
     padded = raw.ljust(size * k, b"\0")
     data_arrays = [

@@ -133,7 +133,13 @@ def hdr_to_sdr_filmic_tonemap(hdr: Array, *, exposure: float = 0.0, white: float
     # Normalize by the asymptote so SDR output stays bounded at extreme HDR.
     mapped: Array = curve(x) / (a / c)
     scale: Array = np.divide(mapped, lum, out=np.zeros_like(mapped), where=lum > 0)
-    return np.asarray(arr * scale[..., None], dtype=np.float64)
+    out: Array = np.asarray(arr * scale[..., None], dtype=np.float64)
+    # Saturated highlights can push one channel above 1 even though luminance
+    # is bounded.  Scale such pixels down uniformly, which preserves hue and
+    # keeps every output channel inside the SDR range [0, 1].
+    peak: Array = np.max(out, axis=-1, keepdims=True)
+    headroom: Array = np.minimum(1.0, 1.0 / np.maximum(peak, np.finfo(np.float64).tiny))
+    return np.asarray(out * headroom, dtype=np.float64)
 
 
 def validate_spd_covariance(covariance: object, *, tolerance: float = 1e-10) -> Array:
