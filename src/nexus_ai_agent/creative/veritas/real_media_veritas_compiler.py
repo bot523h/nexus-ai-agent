@@ -27,6 +27,10 @@ import numpy.typing as npt
 from nexus_ai_agent.creative.veritas.homography_diegetic_typography import (
     render_homography_locked_diegetic_text,
 )
+from nexus_ai_agent.creative.veritas.media_carriers import (
+    extract_disjoint_viseme_badge,
+    render_disjoint_viseme_badge,
+)
 from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
     _bilinear,
     apply_acoustic_doppler_shift,
@@ -37,6 +41,8 @@ from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
     synthesize_rotary_subframes,
 )
 from nexus_ai_agent.creative.veritas.reality_auditor import (
+    LAW_11_INTERPRETATION,
+    LAW_IDENTIFIERS,
     CinemaShot,
     VeritasRealityAuditor,
     build_corrupted_15_law_cinema_shot,
@@ -345,7 +351,14 @@ def _empirical_continuity_profile(
     temporal source to the unchanged continuity residual. The profile is a
     radiance transport diagnostic, not measured quantum matter or optical flow.
     """
-    profiles = np.mean(luminance, axis=1)
+    # Exact RGB8 rational sums avoid manufacturing an inverse potential from
+    # summation-order roundoff in a perfectly column-conservative raster.
+    integer = np.rint(luminance * 255).astype(np.int64)
+    profiles = (
+        integer.sum(axis=1) / (255 * luminance.shape[1])
+        if np.array_equal(luminance, integer / 255)
+        else np.mean(luminance, axis=1)
+    )
     width = profiles.shape[1]
     derivative = np.gradient(np.eye(width), axis=0)
     selected = 0
@@ -381,7 +394,10 @@ def extract_cinema_shot_from_media(
     fps: float = 24.0,
     sample_rate_hz: int = 48_000,
     vocal_viseme_carrier: bool = False,
+    disjoint_viseme_badge: bool = False,
     fluid_carrier: bool = False,
+    regularized_rotary_flow: bool = False,
+    rotary_subframes_measured: bool = False,
     doppler_velocity_m_s: float | None = None,
     known_angular_velocity_rad_s: float | None = None,
 ) -> CinemaShot:
@@ -407,8 +423,16 @@ def extract_cinema_shot_from_media(
         raise ValueError("audio must be a finite non-empty mono waveform")
     if not np.isfinite(fps) or fps <= 0 or sample_rate_hz <= 0:
         raise ValueError("frame and sample rates must be positive")
+    badge_observation = None
+    if disjoint_viseme_badge:
+        badge_observation = extract_disjoint_viseme_badge(rgb, pcm, fps, sample_rate_hz)
+        rgb = rgb[:, :-8]
     count, height, width = rgb.shape[:3]
-    luminance = rgb @ np.array([0.2126, 0.7152, 0.0722])
+    luminance = (
+        rgb[..., 1].copy()
+        if np.array_equal(rgb[..., 0], rgb[..., 1]) and np.array_equal(rgb[..., 1], rgb[..., 2])
+        else rgb @ np.array([0.2126, 0.7152, 0.0722])
+    )
     previous = np.concatenate([luminance[:1], luminance[:-1]], axis=0)
     # A spatial edge orientation is NOT a temporal velocity potential. Estimate
     # only a horizontal marginal transport model, using the SAME finite gradient
@@ -418,6 +442,13 @@ def extract_cinema_shot_from_media(
     temporal = (luminance - previous) * fps
     inverse = -temporal / (gx * gx + gy * gy + 1e-6)
     velocity = np.stack([inverse * gx, inverse * gy], axis=-1)
+    if regularized_rotary_flow:
+        if known_angular_velocity_rad_s is None:
+            raise ValueError("regularized rotary flow requires a bound known-motion model")
+        # Nondimensional spatial coordinates: the longest image side is one
+        # unit. The gradient-constraint velocity above is in pixels/second.
+        velocity = velocity / max(height, width)
+        velocity = enforce_helmholtz_fluid_conservation(velocity, luminance).solenoidal_velocity
     roi = luminance[:, height // 2 :, width // 4 : max(width // 4 + 1, 3 * width // 4)]
     jaw = np.clip(np.std(roi, axis=(1, 2)) * 2, 0, 1)
     stretch = (
@@ -440,12 +471,25 @@ def extract_cinema_shot_from_media(
             if band.size:
                 destination[index] = frequencies[band[np.argmax(spectrum[band])]]
     return CinemaShot(
+        observation_provenance={
+            LAW_IDENTIFIERS[10]: "ESTIMATED_PROXY",
+            LAW_IDENTIFIERS[11]: "MEASURED_MEDIA",
+            LAW_IDENTIFIERS[12]: "MEASURED_MEDIA" if disjoint_viseme_badge else "ESTIMATED_PROXY",
+            LAW_IDENTIFIERS[13]: "ESTIMATED_PROXY",
+            LAW_IDENTIFIERS[14]: "MEASURED_MEDIA"
+            if rotary_subframes_measured
+            else "MODEL_SUPPLIED",
+        },
         phase=(density, potential, previous_density),
         phase_dt=1 / fps,
         anamorphic=rgb[-1].copy(),
-        viseme=(jaw, stretch, f1, energy, np.clip(1 - stretch, 0, 1), f2)
-        if vocal_viseme_carrier
-        else None,
+        viseme=badge_observation
+        if badge_observation is not None
+        else (
+            (jaw, stretch, f1, energy, np.clip(1 - stretch, 0, 1), f2)
+            if vocal_viseme_carrier
+            else None
+        ),
         doppler=(pcm.copy(), doppler_velocity_m_s) if doppler_velocity_m_s is not None else None,
         fluid=(velocity, luminance.copy()) if fluid_carrier else None,
         rotor=(luminance[-1].copy(), known_angular_velocity_rad_s, fps)
@@ -467,6 +511,7 @@ def compile_and_heal_real_media_shot(
     mux_mp4: bool = True,
     fps: float = 24.0,
     angular_harmonic_m: int = 1,
+    vocal_viseme_carrier: bool = False,
     use_synthetic_corrupted_shot: bool = False,
 ) -> RealMediaVeritasBundle:
     """Heal real media through all fifteen laws, write it, and seal the receipts."""
@@ -506,7 +551,11 @@ def compile_and_heal_real_media_shot(
         active_shot = build_corrupted_15_law_cinema_shot(height=frame_h, width=frame_w)
     else:
         active_shot = extract_cinema_shot_from_media(
-            frames, pcm, sample_rate_hz=sample_rate_hz, fps=fps
+            frames,
+            pcm,
+            sample_rate_hz=sample_rate_hz,
+            fps=fps,
+            vocal_viseme_carrier=vocal_viseme_carrier,
         )
 
     input_frames_u8 = np.asarray(np.round(np.clip(frames, 0.0, 1.0) * 255.0), dtype=np.uint8)
@@ -576,12 +625,14 @@ def compile_and_heal_real_media_shot(
             fps=fps,
             source_frame_count=frame_count,
             angular_harmonic_m=angular_harmonic_m,
+            stabilize_radiance=True,
         )
         healed = sequence.frames
         output_fps = sequence.output_fps
         frame_count = len(healed)
         evidence = {
             "kind": "known-velocity-model-render",
+            "radiance_stabilized": sequence.radiance_stabilized,
             "angular_harmonic_m": angular_harmonic_m,
             "reference_rgb_u8": reference_u8.tolist(),
             "timestamps_s": sequence.timestamps_s.tolist(),
@@ -623,6 +674,22 @@ def compile_and_heal_real_media_shot(
                 viseme.au26_healed,
             )
             healed_audio_pcm = np.asarray(healed_audio_pcm * (0.5 + 0.5 * gate))
+
+    # One authoritative timeline: trim/pad PCM to the full HFR video duration.
+    expected_samples = max(1, int(round(frame_count / output_fps * sample_rate_hz)))
+    healed_audio_pcm = np.pad(
+        healed_audio_pcm[:expected_samples], (0, max(0, expected_samples - len(healed_audio_pcm)))
+    )
+
+    has_disjoint_badge = vocal_viseme_carrier or active_shot.viseme is not None
+    if has_disjoint_badge:
+        # Drive the badge from the EXACT quantized PCM which the WAV will contain.
+        reference_pcm = np.round(np.clip(healed_audio_pcm, -1, 1) * 32767) / 32767
+        composite = render_disjoint_viseme_badge(
+            healed_frames.astype(np.float64) / 255, reference_pcm, output_fps, sample_rate_hz
+        )
+        healed_frames = np.rint(composite * 255).astype(np.uint8)
+        frame_h = healed_frames.shape[1]
 
     png_paths: list[Path] = []
     for index in range(frame_count):
@@ -723,6 +790,23 @@ def compile_and_heal_real_media_shot(
     if not np.array_equal(decoded_audio, expected_audio):
         raise ValueError("WAV disk round-trip mismatch")
 
+    mp4_verification_receipt: dict[str, float] = {}
+    if mp4_path is not None:
+        from nexus_ai_agent.creative.veritas.veritas_spine_adapter import _verify_mp4_stream
+
+        assert binary is not None
+        mp4_verification_receipt = _verify_mp4_stream(
+            binary,
+            Path(mp4_path),
+            len(decoded_frames),
+            frame_h,
+            frame_w,
+            output_fps,
+            decoded_frames.astype(np.float64) / 255,
+            decoded_audio.astype(np.float64) / 32767,
+            sample_rate_hz,
+        )
+
     # Keep scene claims separate from measurements obtainable from the media.
     disk_report = VeritasRealityAuditor().audit_and_heal(
         extract_cinema_shot_from_media(
@@ -731,15 +815,38 @@ def compile_and_heal_real_media_shot(
             fps=output_fps,
             sample_rate_hz=sample_rate_hz,
             known_angular_velocity_rad_s=omega if rotary_evidence_sha256 else None,
+            disjoint_viseme_badge=has_disjoint_badge,
+            fluid_carrier=active_shot.fluid is not None,
+            regularized_rotary_flow=bool(rotary_evidence_sha256),
+            rotary_subframes_measured=bool(rotary_evidence_sha256),
         ),
         heal=False,
     )
     product_manifest: dict[str, Any] = {
-        "schema": "veritas-observability-1",
-        "pre_audit": observation_summary(passport.law_statuses),
-        "post_audit": observation_summary(passport.post_law_statuses),
+        "schema": "veritas-observability-2",
+        "disjoint_viseme_badge": has_disjoint_badge,
+        "fluid_carrier": active_shot.fluid is not None,
+        "rotary_motion_parameter_provenance": "MODEL_SUPPLIED"
+        if rotary_evidence_sha256
+        else "UNOBSERVED",
+        "rotary_boundary_model": "reference-green-column-conservative-rgb8"
+        if rotary_evidence_sha256
+        else None,
+        "rotary_flow_model": "Helmholtz-Hodge minimum-norm brightness proxy"
+        if rotary_evidence_sha256
+        else None,
+        "badge_height_rows": 8 if has_disjoint_badge else 0,
+        "mp4_verification_receipt": mp4_verification_receipt,
+        "law_observation_provenance": disk_report.law_observation_provenance,
+        "law_11_interpretation": LAW_11_INTERPRETATION,
+        "pre_audit": observation_summary(
+            passport.law_statuses, passport.law_observation_provenance
+        ),
+        "post_audit": observation_summary(
+            passport.post_law_statuses, passport.law_observation_provenance
+        ),
         "disk_re_audit": {
-            **observation_summary(disk_report.law_statuses),
+            **observation_summary(disk_report.law_statuses, disk_report.law_observation_provenance),
             "total_violations": disk_report.total_violations,
         },
         "radiometric_calibration_certificate": None,
@@ -838,7 +945,14 @@ def compile_and_heal_real_media_shot(
     return bundle
 
 
+# Compatibility terminology used by the production integration contract.
+compile_real_media_veritas_bundle = compile_and_heal_real_media_shot
+extract_media_observations = extract_cinema_shot_from_media
+
+
 __all__ = [
+    "compile_real_media_veritas_bundle",
+    "extract_media_observations",
     "COMPILER_VERSION",
     "LAW_COUNT",
     "LawReceipt",

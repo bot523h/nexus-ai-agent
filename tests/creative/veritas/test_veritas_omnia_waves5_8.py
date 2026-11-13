@@ -173,7 +173,8 @@ def test_disk_content_digests_and_rgb_preservation(tmp_path: Path) -> None:
     assert merkle_root_from_payloads(bundle.leaf_payloads) == bundle.merkle_root
     # Unobserved vocal carriers no longer cause artificial PCM gating.
     assert bundle.output_frames_content_sha256 != bundle.input_frames_content_sha256
-    assert not bundle.media_changed
+    # PCM is now padded to the authoritative video timeline, without fake vocal gating.
+    assert bundle.media_changed
     assert not replace(
         bundle, output_frames_content_sha256=bundle.input_frames_content_sha256
     ).media_changed

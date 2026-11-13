@@ -26,10 +26,12 @@ from typing import Any, Protocol
 
 import numpy as np
 
+from nexus_ai_agent.creative.veritas.coupled_rotary_transport import verify_balanced_radiance
 from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
     RotarySubframeSequence,
     _fringe_metric,
     chromatic_rms,
+    synthesize_rotary_subframes,
     validate_rotary_subframes,
 )
 from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
@@ -43,6 +45,7 @@ from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
 from nexus_ai_agent.creative.veritas.reality_auditor import (
     LAW_IDENTIFIERS,
     CinemaShot,
+    ObservationProvenance,
     VeritasRealityAuditor,
     observation_summary,
 )
@@ -58,6 +61,10 @@ class VeritasSpineVerificationError(VeritasMediaVerificationError):
 
 class VeritasStaleFencingTokenError(VeritasSpineVerificationError):
     """The caller's lease is no longer active."""
+
+
+class VeritasAuthorizationRefusalError(VeritasSpineVerificationError):
+    """Production publication requires actual caller-supplied authority."""
 
 
 def _canonical_digest(payload: dict[str, Any]) -> str:
@@ -88,8 +95,16 @@ def _verify_inclusion(leaf: bytes, index: int, size: int, proof: list[str], root
 
 
 def _verify_mp4_stream(
-    binary: str, path: Path, count: int, height: int, width: int, fps: float
-) -> None:
+    binary: str,
+    path: Path,
+    count: int,
+    height: int,
+    width: int,
+    fps: float,
+    reference_frames: FloatArray | None = None,
+    reference_audio: FloatArray | None = None,
+    sample_rate_hz: int = 48000,
+) -> dict[str, float]:
     # showinfo observes decoded frame timestamps before any output-rate conversion.
     completed = subprocess.run(
         [
@@ -136,6 +151,91 @@ def _verify_mp4_stream(
         or not np.allclose(times, np.arange(count) / fps, rtol=0, atol=1e-5)
     ):
         raise ValueError("MP4 frame rate or duration mismatch")
+    if reference_frames is None or reference_audio is None:
+        return {}  # compatibility clock-only helper; publication ALWAYS supplies references
+    decoded = np.frombuffer(completed.stdout, dtype=np.uint8).reshape(count, height, width, 3)
+    difference = decoded.astype(np.float64) / 255 - reference_frames
+    mad = np.mean(np.abs(difference), axis=(1, 2, 3))
+    mse = np.mean(difference**2, axis=(1, 2, 3))
+    psnr = -10 * np.log10(np.maximum(mse, 1e-12))  # exact matches have a finite 120 dB cap
+    if np.max(mad) > 0.08 or np.min(psnr) < 22:
+        raise ValueError("MP4 semantic video fidelity mismatch")
+    audio = subprocess.run(
+        [
+            binary,
+            "-v",
+            "info",
+            "-xerror",
+            "-copyts",
+            "-i",
+            str(path),
+            "-map",
+            "0:a:0",
+            "-af",
+            "ashowinfo",
+            "-t",
+            str(reference_audio.size / sample_rate_hz + 1),
+            "-f",
+            "s16le",
+            "-ac",
+            "1",
+            "-ar",
+            str(sample_rate_hz),
+            "-",
+        ],
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    if audio.returncode or not audio.stdout or len(audio.stdout) % 2:
+        raise ValueError("MP4 audio stream missing or undecodable")
+    pcm = np.frombuffer(audio.stdout, dtype="<i2").astype(np.float64) / 32767
+    audio_log = audio.stderr.decode(errors="replace")
+    audio_times = [float(value) for value in re.findall(r"\bpts_time:([\d.eE+\-]+)", audio_log)]
+    audio_sizes = [int(value) for value in re.findall(r"\bnb_samples:(\d+)", audio_log)]
+    if not audio_times or len(audio_times) != len(audio_sizes):
+        raise ValueError("MP4 audio timestamps missing")
+    if not np.allclose(
+        np.diff(audio_times),
+        np.asarray(audio_sizes[:-1]) / sample_rate_hz,
+        rtol=0,
+        atol=2 / sample_rate_hz,
+    ):
+        raise ValueError("MP4 audio timestamp discontinuity")
+    audio_start = audio_times[0]
+    audio_duration = len(pcm) / sample_rate_hz
+    reference_duration = len(reference_audio) / sample_rate_hz
+    video_duration = count / fps
+    drift = max(
+        abs(audio_duration - video_duration),
+        abs(audio_duration - reference_duration),
+        abs(reference_duration - video_duration),
+        abs(audio_start),
+        abs(audio_start + audio_duration - video_duration),
+    )
+    if drift > max(1.5 / fps, 0.065):
+        raise ValueError("MP4 audio/video synchronization mismatch")
+    common = min(len(pcm), len(reference_audio))
+    observed, expected = pcm[:common], reference_audio[:common]
+    rms = float(np.sqrt(np.mean(observed**2)))
+    reference_rms = float(np.sqrt(np.mean(expected**2)))
+    delta = abs(rms - reference_rms)
+    correlation = float(
+        np.dot(observed, expected) / max(np.linalg.norm(observed) * np.linalg.norm(expected), 1e-15)
+    )
+    if (reference_rms <= 1e-5 and rms > 0.005) or (
+        reference_rms > 1e-5 and (delta > max(0.015, 0.2 * reference_rms) or correlation < 0.8)
+    ):
+        raise ValueError("MP4 semantic audio fidelity mismatch")
+    return {
+        "mp4_video_max_mad": float(np.max(mad)),
+        "mp4_video_min_psnr_db": float(np.min(psnr)),
+        "mp4_audio_duration_s": audio_duration,
+        "mp4_audio_start_s": audio_start,
+        "mp4_av_sync_drift_s": drift,
+        "mp4_audio_rms_delta": delta,
+        "mp4_audio_waveform_correlation": correlation,
+    }
 
 
 def _verify_rotary_coordinates(sequence: RotarySubframeSequence) -> None:
@@ -193,7 +293,21 @@ def _verify_observation_ledgers(product: dict[str, Any]) -> None:
             status not in ("PASS", "VIOLATED", "UNOBSERVED") for status in statuses.values()
         ):
             raise ValueError("invalid observability status")
-        expected = observation_summary(statuses)
+        provenance = ledger["law_observation_provenance"]
+        if set(provenance) != set(statuses) or any(
+            value
+            not in (
+                "MEASURED_MEDIA",
+                "ESTIMATED_PROXY",
+                "MODEL_SUPPLIED",
+                "SYNTHETIC_FIXTURE",
+                "UNOBSERVED",
+            )
+            or (value == "UNOBSERVED") != (statuses[law] == "UNOBSERVED")
+            for law, value in provenance.items()
+        ):
+            raise ValueError("invalid observation provenance")
+        expected = observation_summary(statuses, provenance)
         if any(json.loads(json.dumps(value)) != ledger[key] for key, value in expected.items()):
             raise ValueError("observability accounting mismatch")
     for law, status in product["pre_audit"]["law_statuses"].items():
@@ -210,6 +324,15 @@ def _verify_radiometric_certificate(product: dict[str, Any], frames: FloatArray)
     sigma = 1 / (255 * np.sqrt(12))
     if (
         certificate["calibration_mode"] != "MODEL_RELATIVE_GREEN"
+        or certificate["uncalibrated_prior_bias_status"] != "UNBOUNDED_WITHOUT_REFERENCE_CHART"
+        or certificate["rss_interpretation"]
+        != (
+            "diagnostic bound under an assumed independence model; "
+            "not GUM combined standard uncertainty"
+        )
+        or certificate["type_b_quantization_sigma"] != sigma
+        or certificate["empirical_chromatic_rms_residual"] != residual
+        or certificate["rss_diagnostic_bound"] != float(np.hypot(sigma, residual))
         or certificate["reference_channel"] != "G"
         or certificate["prior_bias_bounded"] is not False
         or not all(
@@ -290,9 +413,19 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
             if decoder is None:
                 imageio_ffmpeg = importlib.import_module("imageio_ffmpeg")
                 decoder = imageio_ffmpeg.get_ffmpeg_exe()
-            _verify_mp4_stream(
-                decoder, mp4, len(pngs), frames.shape[1], frames.shape[2], bundle.output_fps
+            mp4_receipt = _verify_mp4_stream(
+                decoder,
+                mp4,
+                len(pngs),
+                frames.shape[1],
+                frames.shape[2],
+                bundle.output_fps,
+                frames.astype(np.float64) / 255,
+                pcm.astype(np.float64) / 32767,
+                manifest["sample_rate_hz"],
             )
+        else:
+            mp4_receipt = {}
         product_path = artifact("veritas_manifest.json")
         product_digest = hashlib.sha256(product_path.read_bytes()).hexdigest()
         if (
@@ -301,6 +434,8 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
         ):
             raise ValueError("product manifest digest mismatch")
         product = json.loads(product_path.read_text())
+        if product["mp4_verification_receipt"] != mp4_receipt:
+            raise ValueError("MP4 verification receipt mismatch")
         _verify_observation_ledgers(product)
         _verify_radiometric_certificate(product, frames.astype(np.float64) / 255)
         expected_names = {path.name for path in pngs} | {
@@ -318,7 +453,8 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
             sequence = RotarySubframeSequence(
                 np.asarray(evidence["reference_rgb_u8"], dtype=np.float64) / 255,
-                frames.astype(np.float64) / 255,
+                (frames[:, :-8] if product["disjoint_viseme_badge"] else frames).astype(np.float64)
+                / 255,
                 np.asarray(evidence["timestamps_s"], dtype=np.float64),
                 np.asarray(evidence["phases_rad"], dtype=np.float64),
                 np.asarray(evidence["exposure_offsets_s"], dtype=np.float64),
@@ -328,8 +464,22 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
                 evidence["source_frame_count"],
                 evidence["shutter_angle_deg"],
                 evidence["angular_harmonic_m"],
+                evidence["radiance_stabilized"],
             )
-            _verify_rotary_coordinates(sequence)
+            if sequence.radiance_stabilized:
+                raw_sequence = synthesize_rotary_subframes(
+                    sequence.reference,
+                    angular_velocity_rad_s=sequence.angular_velocity_rad_s,
+                    fps=sequence.source_fps,
+                    source_frame_count=sequence.source_frame_count,
+                    shutter_angle_deg=sequence.shutter_angle_deg,
+                    angular_harmonic_m=sequence.angular_harmonic_m,
+                    samples=len(sequence.exposure_offsets_s),
+                )
+                _verify_rotary_coordinates(raw_sequence)
+                verify_balanced_radiance(sequence.frames, sequence.reference)
+            else:
+                _verify_rotary_coordinates(sequence)
             if (
                 validate_rotary_subframes(sequence, quantized=True)
                 or sequence.output_fps != manifest["fps"]
@@ -382,16 +532,23 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
             pcm.astype(np.float64) / 32767.0,
             fps=manifest["fps"],
             sample_rate_hz=manifest["sample_rate_hz"],
+            disjoint_viseme_badge=product["disjoint_viseme_badge"],
+            fluid_carrier=product["fluid_carrier"],
+            regularized_rotary_flow=bool(temporal_digest),
+            rotary_subframes_measured=bool(temporal_digest),
             known_angular_velocity_rad_s=sequence.angular_velocity_rad_s
             if temporal_digest
             else None,
         )
         audit = VeritasRealityAuditor().audit_and_heal_cinema_shot(shot)
         expected_disk = {
-            **observation_summary(audit.law_statuses),
+            **observation_summary(audit.law_statuses, audit.law_observation_provenance),
             "total_violations": audit.total_violations,
         }
-        if json.loads(json.dumps(expected_disk)) != product["disk_re_audit"]:
+        if (
+            json.loads(json.dumps(expected_disk)) != product["disk_re_audit"]
+            or product["law_observation_provenance"] != audit.law_observation_provenance
+        ):
             raise ValueError("decoded observability ledger mismatch")
         for law, status in product["pre_audit"]["law_statuses"].items():
             if status != "UNOBSERVED" and audit.law_statuses[law] == "UNOBSERVED":
@@ -429,6 +586,7 @@ class VeritasSpinePublishRequest:
     sample_rate_hz: int = 48000
     fps: int = 24
     angular_harmonic_m: int = 1
+    vocal_viseme_carrier: bool = False
 
 
 @dataclass(frozen=True)
@@ -468,6 +626,7 @@ class VeritasArtifactPassportRecord:
     observed_law_count: int = 0
     unobserved_law_count: int = 15
     law_statuses: dict[str, str] = field(default_factory=dict)
+    law_observation_provenance: dict[str, ObservationProvenance] = field(default_factory=dict)
 
 
 class VeritasLineageRepository(Protocol):
@@ -528,7 +687,9 @@ class VeritasLineageStore:
             (
                 r
                 for r in relevant
-                if r["attempt_id"] == asset.attempt_id and r["fencing_token"] == asset.fencing_token
+                if r["revision_id"] == asset.revision_id
+                and r["attempt_id"] == asset.attempt_id
+                and r["fencing_token"] == asset.fencing_token
             ),
             None,
         )
@@ -554,6 +715,16 @@ class VeritasLineageStore:
         pointer.symlink_to(generation.relative_to(self.published_root), target_is_directory=True)
         os.replace(pointer, self.published_root / "_lineage")
         _fsync_directory(self.published_root)
+
+
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_name("." + path.name + "." + uuid.uuid4().hex)
+    with temporary.open("w") as handle:
+        json.dump(payload, handle, sort_keys=True, allow_nan=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    _fsync_directory(path.parent)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -606,10 +777,35 @@ class VeritasStagedSpineAdapter:
     pre_publish_tamper_hook: Callable[[Path], None] | None = None
     lineage_store: VeritasLineageRepository | None = None
     command_bus_authorizer: Callable[[VeritasSpinePublishRequest], bool] | None = None
+    require_authorizer: bool = False
+
+    @classmethod
+    def for_production(
+        cls,
+        active_fencing_token_getter: Callable[[], int],
+        *,
+        command_bus_authorizer: Callable[[VeritasSpinePublishRequest], bool] | None = None,
+        lineage_store: VeritasLineageRepository | None = None,
+    ) -> VeritasStagedSpineAdapter:
+        if command_bus_authorizer is None:
+            raise VeritasAuthorizationRefusalError("production CommandBus authorizer is mandatory")
+        return cls(
+            active_fencing_token_getter,
+            lineage_store=lineage_store,
+            command_bus_authorizer=command_bus_authorizer,
+            require_authorizer=True,
+        )
 
     def execute(self, request: VeritasSpinePublishRequest) -> VeritasSpinePublishResult:
-        if self.command_bus_authorizer is not None and not self.command_bus_authorizer(request):
-            raise VeritasSpineVerificationError("CommandBus authorization refused")
+        if self.require_authorizer and self.command_bus_authorizer is None:
+            raise VeritasAuthorizationRefusalError("production CommandBus authorizer is mandatory")
+        if self.command_bus_authorizer is not None:
+            try:
+                authorized = self.command_bus_authorizer(request)
+            except Exception as exc:
+                raise VeritasAuthorizationRefusalError("CommandBus authorization raised") from exc
+            if authorized is not True:
+                raise VeritasAuthorizationRefusalError("CommandBus authorization refused")
         for value in (request.project_id, request.revision_id, request.shot_id, request.attempt_id):
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value):
                 raise VeritasSpineVerificationError("invalid identifier")
@@ -668,6 +864,7 @@ class VeritasStagedSpineAdapter:
                 sample_rate_hz=request.sample_rate_hz,
                 fps=float(request.fps),
                 angular_harmonic_m=request.angular_harmonic_m,
+                vocal_viseme_carrier=request.vocal_viseme_carrier,
             )
             if self.pre_publish_tamper_hook is not None:
                 self.pre_publish_tamper_hook(stage)
@@ -684,7 +881,27 @@ class VeritasStagedSpineAdapter:
                     "output_mp4_sha256": bundle.output_mp4_sha256,
                 }
             )
-            target = published / request.shot_id
+            target = (
+                published
+                / request.project_id
+                / request.revision_id
+                / request.shot_id
+                / request.attempt_id
+            )
+            for component in (target, *target.parents):
+                if component == published:
+                    break
+                if component.is_symlink():
+                    raise VeritasSpineVerificationError("symlink version boundary")
+            legacy = published / request.shot_id
+            if (
+                legacy.exists()
+                and not legacy.is_symlink()
+                and legacy != published / request.project_id
+            ):
+                raise VeritasSpineVerificationError("publication already exists at legacy path")
+            if legacy.is_symlink() and not legacy.resolve().is_relative_to(published):
+                raise VeritasSpineVerificationError("unsafe legacy publication pointer")
             retry = next((r for r in assets if r["asset_version_id"] == asset_id), None)
             if (target.exists() or target.is_symlink()) and retry is None:
                 raise VeritasSpineVerificationError("publication already exists")
@@ -734,6 +951,7 @@ class VeritasStagedSpineAdapter:
                 observed_law_count=disk_ledger["observed_law_count"],
                 unobserved_law_count=disk_ledger["unobserved_law_count"],
                 law_statuses=disk_ledger["law_statuses"],
+                law_observation_provenance=disk_ledger["law_observation_provenance"],
             )
             if retry is not None:
                 if retry != asdict(record):
@@ -742,13 +960,30 @@ class VeritasStagedSpineAdapter:
                 store.commit(record, passport)
                 shutil.rmtree(stage)  # successful exact retry ONLY, never a failed attempt
             else:
-                published.mkdir(parents=True, exist_ok=True)
+                target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(stage, target)
                 try:
                     store.commit(record, passport)
                 except Exception:
                     os.replace(target, stage)
+                    parent = target.parent
+                    while parent != published:
+                        try:
+                            parent.rmdir()
+                        except OSError:
+                            break
+                        parent = parent.parent
                     raise
+            # Legacy lookup points at the latest successfully committed version.
+            # On a project/shot root-name collision the canonical version path is
+            # authoritative; a JSON lookup remains available without overwriting it.
+            lookup = published / "_shot_lookup"
+            lookup.mkdir(exist_ok=True)
+            _atomic_json(lookup / f"{request.shot_id}.json", {"published_dir": str(target)})
+            if not legacy.exists() or legacy.is_symlink():
+                pointer = published / (".shot-" + uuid.uuid4().hex)
+                pointer.symlink_to(target.relative_to(published), target_is_directory=True)
+                os.replace(pointer, legacy)
             return VeritasSpinePublishResult(record, relocated, True, target, passport)
         except Exception as exc:
             if stage.exists():

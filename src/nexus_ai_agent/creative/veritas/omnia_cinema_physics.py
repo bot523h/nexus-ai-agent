@@ -17,6 +17,8 @@ from typing import Literal
 import numpy as np
 import numpy.typing as npt
 
+from nexus_ai_agent.creative.veritas.coupled_rotary_transport import balance_rotary_radiance
+
 FloatArray = npt.NDArray[np.float64]
 ComplexArray = npt.NDArray[np.complex128]
 
@@ -63,6 +65,16 @@ class RadiometricCalibrationCertificate:
     combined_uncertainty_bound: float
     post_calibration_chromatic_rms: float
     prior_bias_bounded: bool = False
+    type_b_quantization_sigma: float = float(1 / (255 * np.sqrt(12)))
+    empirical_chromatic_rms_residual: float = 0.0
+    rss_diagnostic_bound: float = float(1 / (255 * np.sqrt(12)))
+    uncalibrated_prior_bias_status: Literal[
+        "UNBOUNDED_WITHOUT_REFERENCE_CHART", "BOUNDED_BY_REFERENCE_CHART"
+    ] = "UNBOUNDED_WITHOUT_REFERENCE_CHART"
+    rss_interpretation: str = (
+        "diagnostic bound under an assumed independence model; "
+        "not GUM combined standard uncertainty"
+    )
 
 
 def chromatic_rms(image: FloatArray) -> float:
@@ -86,6 +98,9 @@ def radiometric_certificate(
         sigma,
         float(np.hypot(sigma, residual)),
         residual,
+        type_b_quantization_sigma=sigma,
+        empirical_chromatic_rms_residual=residual,
+        rss_diagnostic_bound=float(np.hypot(sigma, residual)),
     )
 
 
@@ -782,6 +797,7 @@ class RotarySubframeSequence:
     source_frame_count: int
     shutter_angle_deg: float
     angular_harmonic_m: int = 1
+    radiance_stabilized: bool = False
 
 
 def synthesize_rotary_subframes(
@@ -793,6 +809,7 @@ def synthesize_rotary_subframes(
     shutter_angle_deg: float = 180.0,
     samples: int = 16,
     angular_harmonic_m: int = 1,
+    stabilize_radiance: bool = False,
 ) -> RotarySubframeSequence:
     """Render a known rigid-rotation model on a genuinely expanded timeline.
 
@@ -843,6 +860,10 @@ def synthesize_rotary_subframes(
             for phase in phases
         ]
     )
+    if stabilize_radiance:
+        if patch.ndim != 3 or patch.shape[-1] != 3:
+            raise StroboscopicAliasingError("column-conservative model requires RGB reference")
+        frames = balance_rotary_radiance(frames, patch)
     return RotarySubframeSequence(
         patch.copy(),
         frames,
@@ -855,6 +876,7 @@ def synthesize_rotary_subframes(
         source_frame_count,
         shutter,
         angular_harmonic_m,
+        stabilize_radiance,
     )
 
 
@@ -911,6 +933,8 @@ def validate_rotary_subframes(
                 ),
                 axis=0,
             )
+            if sequence.radiance_stabilized:
+                predicted = balance_rotary_radiance(predicted[None], sequence.reference)[0]
             matches = (
                 np.array_equal(
                     np.rint(np.clip(sequence.frames[index], 0, 1) * 255),

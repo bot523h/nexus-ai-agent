@@ -325,9 +325,10 @@ The disk verifier regenerates RGB8 samples from that evidence.
 
 The complete synthetic state fixture now closes from twenty violations to zero;
 re-auditing the healed state gives zero/zero. State closure is **not** a decoded
-pixel certificate. A flat-field HFR fixture passes staged verification, while a
-textured corrupted fixture still fails decoded Laws 11–14 and is refused.
-Never publish the latter merely because state receipts report zero residuals.
+pixel certificate. At checkpoint 040a8eb the textured fixture still failed
+its decoded predicates. The declared coupled boundary/carrier model below now
+closes the five observed laws for the tested textured HFR fixture. Other missing
+scene carriers remain refused even when state receipts report zero residuals.
 The mutation suite contains 66 internal source mutants (M72–M137), separate
 from the fifteen disabled-handler mutants and fifty-six fault probes.
 
@@ -339,7 +340,8 @@ The declared harmonic is in the hashed temporal evidence. The verifier checks
 harmonic Nyquist and phase increments and independently evaluates scalar
 trigonometric inverse coordinates and convex pixel bounds, in addition to full
 RGB8 renderer replay. This does not infer the highest harmonic of arbitrary
-texture or close the existing multi-law textured observation gap.
+texture. The coupled boundary/carrier model below supplies the additional
+radiance, flow and audio-carrier constraints needed by the textured fixture.
 
 MP4 verification decodes raw RGB24 without output frame-rate conversion, checks
 frame byte count, the input stream rate and every decoded presentation timestamp.
@@ -368,8 +370,8 @@ The ledger pointer and media directory promotion are separate filesystem
 operations: caught commit failures roll media back into quarantine, but a process
 crash between those two operations can leave unindexed public media. Recovery
 of that crash window is not claimed as a fully transactional publication system.
-The branch remains hardened but **not 100% complete** while textured HFR output
-still fails the unchanged decoded Laws 11–14 predicates.
+This crash-window limitation remains explicit; passing the bounded media
+contract is not a claim of distributed transactional publication.
 
 ### Observability and radiometric uncertainty — explicit scientific limits
 
@@ -402,9 +404,9 @@ Vocal/viseme and fluid-height carriers require explicit extractor opt-in;
 unrelated wheel pixels do not establish a mouth or a fluid surface. A standalone
 PCM waveform does not identify source radial velocity, and unknown rotor speed
 is not fabricated as zero. The explicitly opted-in mouth ROI remains a simple
-lower-central proxy; a disjoint rendered vocal badge synchronized to WAV is
-**not implemented**. The coupled, observed Laws 11–15 textured HFR closure remains
-unfinished, including post-synthesis radiance/flow composition.
+lower-central proxy for legacy explicitly opted-in observations. New compiled
+vocal scenes instead use the disjoint raster badge and coupled radiance/flow
+composition described below; no real human mouth detection is claimed.
 
 Law 12 emits a frozen `RadiometricCalibrationCertificate`. Its default mode is
 `MODEL_RELATIVE_GREEN`, never `MEASURED_COLORCHART` without chart observations.
@@ -427,3 +429,75 @@ clean flat-field pixels. The old flat-field HFR smoke fixture now declares only
 its actual mechanical carrier; it no longer stands in for a full fifteen-carrier
 scene. A validated known-rotation sidecar supplies the rotor observation; its
 velocity remains a declared, checked model parameter rather than inferred truth.
+
+
+### Production media contract: coupled textured HFR and explicit carriers
+
+The known-motion re-render now declares `reference-green-column-conservative-rgb8`.
+After geometric/radiometric correction and actual harmonic-aware rotary exposure
+sampling, a bounded least-change water-filling projection conserves each reference
+G-channel column's integer radiance. Largest-remainder rounding makes this exact
+in the written RGB8 PNGs. The output is explicitly achromatic/reference-green:
+this is a lossy model-relative diagnostic rendering, not recovery of original
+scene colors. There is no frame copying, spatial flat-fielding or invented
+contrast floor. A textured reference whose output contrast drops below 0.08 is
+refused by the independent boundary oracle.
+
+Horizontal marginal continuity uses exact integer sums for RGB8 grayscale data,
+so roundoff alone cannot manufacture a nonzero inverse potential and a false
+boiling violation. The full 2-D texture still moves. The minimum-norm brightness
+flow proxy uses nondimensional coordinates (longest side = one) and an explicit
+Helmholtz-Hodge projection. Its provenance is `ESTIMATED_PROXY`, not measured fluid
+velocity; zero divergence certifies this regularized diagnostic model only.
+The verifier separately checks the unregularized rotary geometry with scalar
+trigonometry, integer column conservation, achromaticity and contrast, and then
+replays the complete declared model. A mass-conservative row teleport can satisfy
+conservation alone but still fails the full frame/phase model comparison.
+
+An eight-row badge is appended OUTSIDE the mechanical image. Its three measured
+apertures encode vertical jaw opening, horizontal lip spread and vertical lip
+rounding, driven by per-frame WAV spectral peaks/RMS at the exact output sample
+clock. Complementary panel halves conserve its radiance as it changes aperture.
+The WAV is trimmed/padded to the video timeline before rendering the badge from
+its exact int16 values. The extractor checks the actual raster geometry and its
+synchronization against the decoded WAV; no mechanical pixel enters the badge
+ROI. This is a synthetic diagnostic articulation carrier, not reconstructed
+human physiology or speech recognition.
+
+The coupled fixture corrupts all five observed Laws 11–15, includes a four-spoke
+high-contrast texture and 200 rad/s velocity, and publishes 26 frames at 312 fps
+under this model with all five decoded statuses PASS. The other ten laws remain
+UNOBSERVED. The tests require mechanical-body contrast >=0.08 and real inter-frame
+change. Tampered badge, audio, RGB, mass and dropped-frame attempts are quarantined.
+
+Observation provenance is carried in reports, the hash-bound product manifest,
+and ArtifactPassport. Direct raster/audio/carrier observations are MEASURED_MEDIA;
+empirical transport/regularized flow remain ESTIMATED_PROXY; explicit caller states
+are MODEL_SUPPLIED and the demo fixture is SYNTHETIC_FIXTURE. The decoded rotary
+trajectory is measured against the bound renderer, while its angular velocity is
+separately declared MODEL_SUPPLIED. Law 11 explicitly disclaims RGB measurement
+of a physical quantum wavefunction.
+
+Law 12 now separates Type B quantization standard uncertainty from empirical
+chromatic RMS residual. The legacy RSS field is retained as `rss_diagnostic_bound`
+under an explicit independence assumption, NOT relabeled as a GUM combined
+standard uncertainty. Prior bias is UNBOUNDED_WITHOUT_REFERENCE_CHART; a measured
+chart mode is never invented without chart observations.
+
+MP4 verification compares EVERY indexed decoded frame to its PNG reference
+(MAD <=0.08, PSNR >=22 dB). Exact matches use a finite 120 dB reporting cap. AAC
+verification requires an actual stream, contiguous audio timestamps, bounded
+reference/video duration drift, RMS agreement and waveform correlation (>=0.8 for
+non-silent references). Waveform correlation is stricter than envelope-only
+matching for unrelated tones with equal RMS. The hash-bound verification receipt
+records video extrema, audio duration/start, A/V drift, RMS delta and correlation.
+This is bounded codec fidelity, not universal perceptual/scene-semantic truth.
+
+Publication is versioned at `published/project/revision/shot/attempt` with a legacy
+shot symlink and `_shot_lookup` for name-collision-safe lookup. Revisions and
+attempts never overwrite prior media. Local CAS remains scoped to project/shot;
+exact retries include revision identity. `for_production` requires an authorizer
+and refuses absent, false or throwing authority before staging. The default
+constructor remains available for explicit non-production compatibility. A hook
+is not itself a fabricated canonical CommandBus implementation or a merge into
+main; repository registration remains the owning application's responsibility.

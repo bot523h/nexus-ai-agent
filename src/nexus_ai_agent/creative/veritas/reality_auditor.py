@@ -128,7 +128,16 @@ class CinemaShot:
     rotor: tuple[FloatArray, float, float] | None = None
     rotor_samples: RotarySubframeSequence | None = None
     phase_dt: float = 1.0
+    observation_provenance: dict[str, ObservationProvenance] = field(default_factory=dict)
 
+
+ObservationProvenance = Literal[
+    "MEASURED_MEDIA", "ESTIMATED_PROXY", "MODEL_SUPPLIED", "SYNTHETIC_FIXTURE", "UNOBSERVED"
+]
+LAW_11_INTERPRETATION = (
+    "Discrete empirical radiance-transport continuity under a Madelung-regularized "
+    "diagnostic model; never a physical quantum wavefunction measurement from RGB video."
+)
 
 LawAuditStatus = Literal["PASS", "VIOLATED", "UNOBSERVED"]
 
@@ -183,9 +192,23 @@ def law_status_ledger(shot: CinemaShot, scores: dict[int, int]) -> dict[str, Law
     }
 
 
-def observation_summary(statuses: dict[str, LawAuditStatus]) -> dict[str, Any]:
+def observation_provenance_ledger(
+    shot: CinemaShot, statuses: dict[str, LawAuditStatus]
+) -> dict[str, ObservationProvenance]:
+    return {
+        law: "UNOBSERVED"
+        if status == "UNOBSERVED"
+        else shot.observation_provenance.get(law, "MODEL_SUPPLIED")
+        for law, status in statuses.items()
+    }
+
+
+def observation_summary(
+    statuses: dict[str, LawAuditStatus], provenance: dict[str, ObservationProvenance] | None = None
+) -> dict[str, Any]:
     unobserved = tuple(key for key in LAW_IDENTIFIERS if statuses[key] == "UNOBSERVED")
     return {
+        **({"law_observation_provenance": provenance} if provenance is not None else {}),
         "law_statuses": statuses,
         "observed_law_count": 15 - len(unobserved),
         "passed_law_count": sum(value == "PASS" for value in statuses.values()),
@@ -214,6 +237,7 @@ class VeritasRealityPassport:
     digest: str
     law_statuses: dict[str, LawAuditStatus] = field(default_factory=dict)
     post_law_statuses: dict[str, LawAuditStatus] = field(default_factory=dict)
+    law_observation_provenance: dict[str, ObservationProvenance] = field(default_factory=dict)
 
     @property
     def observed_law_count(self) -> int:
@@ -262,8 +286,14 @@ class VeritasRealityPassport:
             },
             "details_before": {str(k): list(v) for k, v in sorted(self.details_before.items())},
             "details_after": {str(k): list(v) for k, v in sorted(self.details_after.items())},
-            "pre_audit": observation_summary(self.law_statuses) if self.law_statuses else {},
-            "post_audit": observation_summary(self.post_law_statuses)
+            "law_observation_provenance": self.law_observation_provenance,
+            "law_11_interpretation": LAW_11_INTERPRETATION,
+            "pre_audit": observation_summary(self.law_statuses, self.law_observation_provenance)
+            if self.law_statuses
+            else {},
+            "post_audit": observation_summary(
+                self.post_law_statuses, self.law_observation_provenance
+            )
             if self.post_law_statuses
             else {},
             "pre_audit_violations": self.pre_audit_violations,
@@ -882,6 +912,9 @@ class VeritasRealityAuditor:
             post_heal_violations=int(sum(after_scores.values())),
             digest="",
             law_statuses=law_status_ledger(shot, before_scores),
+            law_observation_provenance=observation_provenance_ledger(
+                shot, law_status_ledger(shot, before_scores)
+            ),
             post_law_statuses=law_status_ledger(shot, after_scores),
         )
         digest = _rfc6962_digest(passport.as_dict())
@@ -999,6 +1032,7 @@ def build_corrupted_15_law_cinema_shot(*, height: int = 16, width: int = 16) -> 
     rotor_patch[height // 4 : 3 * height // 4, width // 2 - 1 : width // 2 + 1] = 1.0
     rotor = (rotor_patch, 200.0, 24.0)
     return CinemaShot(
+        observation_provenance={law: "SYNTHETIC_FIXTURE" for law in LAW_IDENTIFIERS},
         hand=hand,
         eyes=eyes,
         mirror=mirror,
