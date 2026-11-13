@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from nexus_ai_agent.creative.composition import computational_cinematography as cine
 from nexus_ai_agent.creative.composition import radiative_relighting as relight
 from nexus_ai_agent.creative.composition import scene_imaging as kernels
 from nexus_ai_agent.creative.packs.scene.errors import InvalidImageError
@@ -27,6 +28,7 @@ from nexus_ai_agent.creative.packs.scene.models import (
     HorizonLevelInput,
     InsertObjectInput,
     LensDistortionInput,
+    OpticalFlowRetimeInput,
     OutpaintInput,
     RadiativeTransferHarmonizeInput,
     ReflectionInput,
@@ -204,6 +206,16 @@ def _harmonize_radiative_transfer(project: Project, context: OperationContext) -
     return _out(project, context, result)
 
 
+def _retime_optical_flow(project: Project, context: OperationContext) -> OperationOutcome:
+    """Flow-based interpolation of a frame between two keyframes (variable frame rate)."""
+    data, store = _split(context)
+    p = OpticalFlowRetimeInput.model_validate(data)
+    image_a = _require(store, p.image_a_id)
+    image_b = _require(store, p.image_b_id)
+    result = cine.interpolate_frame(image_a, image_b, p.t)
+    return _out(project, context, result)
+
+
 SCENE_HANDLERS: dict[str, Any] = {
     "insert_object_with_shadow": (
         _insert_object,
@@ -255,6 +267,11 @@ SCENE_HANDLERS: dict[str, Any] = {
         _harmonize_radiative_transfer,
         RadiativeTransferHarmonizeInput,
         "L2 spherical-harmonics radiative-transfer relight of a composite.",
+    ),
+    "retime_optical_flow": (
+        _retime_optical_flow,
+        OpticalFlowRetimeInput,
+        "Flow-based interpolation of a frame between two keyframes (VFR retime).",
     ),
 }
 

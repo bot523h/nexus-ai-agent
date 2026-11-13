@@ -21,6 +21,9 @@ OPERATION_REFLECTION_WATER_GLASS = "scene.reflection_water_glass_synth"
 #: Wave 9 addition (not one of the ten catalogue operations).
 OPERATION_HARMONIZE_RADIATIVE_TRANSFER = "scene.harmonize_radiative_transfer"
 
+#: Wave 10 addition (not one of the ten catalogue operations).
+OPERATION_RETIME_OPTICAL_FLOW = "scene.retime_optical_flow"
+
 #: The ten catalogue scene operations this pack implements.
 SCENE_OPERATIONS: tuple[str, ...] = (
     OPERATION_INSERT_OBJECT_WITH_SHADOW,
@@ -117,6 +120,14 @@ class RadiativeTransferHarmonizeInput(_Strict):
     specular_strength: float = Field(default=0.25, ge=0.0, le=1.0)
 
 
+class OpticalFlowRetimeInput(_Strict):
+    """Flow-based temporal interpolation of one frame between two keyframes (Wave 10)."""
+
+    image_a_id: str = Field(min_length=1, max_length=128)
+    image_b_id: str = Field(min_length=1, max_length=128)
+    t: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 __all__ = [
     "SCENE_PACKAGE_ID",
     "DOMAIN",
@@ -132,4 +143,5 @@ __all__ = [
     "SkyRelitInput",
     "ReflectionInput",
     "RadiativeTransferHarmonizeInput",
+    "OpticalFlowRetimeInput",
 ]

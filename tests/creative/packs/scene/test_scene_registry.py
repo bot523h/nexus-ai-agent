@@ -206,3 +206,27 @@ def test_wave9_radiative_transfer_handler_relights() -> None:
     )
     assert out["image"].shape == img.shape
     assert np.isfinite(out["image"]).all()
+
+
+def test_wave10_optical_flow_retime_op_registered() -> None:
+    from nexus_ai_agent.creative.packs.scene import OpticalFlowRetimeInput
+
+    reg = build_scene_registry()
+    spec = reg.get_spec("scene.retime_optical_flow")
+    assert spec.input_model is OpticalFlowRetimeInput
+
+
+def test_wave10_optical_flow_retime_interpolates() -> None:
+    size = 32
+    y, x = np.mgrid[0:size, 0:size].astype(np.float64)
+    a = (0.5 + 0.3 * np.sin(0.3 * x) + 0.2 * np.cos(0.4 * y)).astype(np.float32)
+    shift = 2.0
+    b = np.roll(a, int(shift), axis=1)
+    out = _run(
+        "scene.retime_optical_flow",
+        {"image_a_id": "a", "image_b_id": "b", "t": 0.5, "_images": {"a": a, "b": b}},
+    )
+    assert out["image"].shape == a.shape
+    assert np.isfinite(out["image"]).all()
+    assert float(out["image"].min()) >= 0.0
+    assert float(out["image"].max()) <= 1.0

@@ -251,3 +251,78 @@ singular normal-fit systems all raise typed errors.
   radiometric measurement; no GUM uncertainty budget is claimed for it.
 - No scipy/cv2/torch/cloud-AI dependency is used; everything is NumPy + stdlib.
 
+
+---
+
+## 13. Wave 10 — Optical-flow computational cinematography
+
+Module: `src/nexus_ai_agent/creative/composition/computational_cinematography.py`
+(import alias `cine` / `cc`). Deterministic, offline, NumPy + stdlib only; no
+network, no cloud AI, no project state. Registry operation:
+`scene.retime_optical_flow` (additive, outside the ten catalogue operations, same
+pattern as Wave 9's `scene.harmonize_radiative_transfer`).
+
+### 13.1 Sign convention
+
+`flow[p]` is the displacement that carries the point at `p` in `img_a` to its
+position in `img_b`, i.e. `a(p) ~ b(p + flow(p))`. `warp_by_flow(img, flow)`
+samples `img(x + flow_x, y + flow_y)`, so aligning `b` onto `a` is
+`warp_by_flow(b, flow_ab)` and aligning `a` onto `b` is `warp_by_flow(a, -flow_ab)`.
+
+### 13.2 Coarse-to-fine Lucas–Kanade
+
+At each pyramid level the windowed structure tensor `G` and residual
+`[Σ Ix It, Σ Iy It]` give the per-pixel increment
+`df = -(G + ridge·I)^{-1} [Σ Ix It, Σ Iy It]` with
+`ridge = 0.05 · trace(G)/2`. Two robustness devices keep the estimate stable:
+a relative Levenberg–Marquardt ridge so a near-flat window is damped rather than
+amplified, and a per-increment magnitude cap of one pixel so a bad linearisation
+cannot overshoot. A 3×3 median filter after each level removes isolated outliers.
+The estimator is deterministic and local; it is **not** a global-optimality claim.
+Pyramid depth is bounded so each level is at least 16 px on its short side.
+
+### 13.3 Horn–Schunck and consistency
+
+`horn_schunck_flow` is the classic global-smoothness iterative scheme
+(`u = ū − Ix·(Ix·ū + Iy·v̄ + It)/(α² + Ix² + Iy²)`, symmetric for `v`). It is
+included as an independent estimator; Lucas–Kanade is the higher-accuracy path.
+
+`forward_backward_consistency(flow_ab, flow_ba, threshold)` marks a pixel
+consistent when the forward–backward endpoint error `|d_ab(p) + d_ba(p + d_ab)|`
+is `<= threshold`. An occlusion (a hole in the backward flow) is marked
+inconsistent; a constant, agreeing field is fully consistent.
+
+### 13.4 Flow-based frame interpolation
+
+`interpolate_frame(a, b, t)` warps `a` backwards along `-t·flow_ab` and `b`
+forwards along `-(1−t)·flow_ba`, then blends with occlusion-aware weights
+(`(1−t)·consistent_ab`, `t·consistent_ba`), falling back to a linear mix where
+neither direction is consistent, and clips to `[0, 1]`. On a synthetic
+translation the interpolated frame matches the analytic ground truth to
+`MAE < 0.02`.
+
+### 13.5 Bounds and refusals
+
+`MAX_FLOW_PIXELS = 4 194 304` (2048×2048) bounds every entry point; NaN/Inf,
+wrong channel count, shape mismatch, non-odd window `< 3`, `iters < 1`,
+`levels < 1`, `alpha <= 0`, non-positive consistency threshold and `t` outside
+`[0, 1]` all raise `FlowError`.
+
+### 13.6 Evidence
+
+- `tests/creative/composition/test_computational_cinematography.py`: 42
+  real-computation and adversarial tests (analytic-translation recovery,
+  ramp/texture single-level exactness, warp alignment, FBC occlusion, EPE
+  closed-form value, endpoint exactness, bounded output, every refusal path).
+- `tests/creative/packs/scene/test_scene_registry.py`: Wave-10 registry tests.
+- Coverage: `computational_cinematography.py` at **100% line + branch**
+  (measured with the `coverage` CLI, since the in-process `pytest-cov` tracer
+  cannot reload NumPy in this environment).
+
+### 13.7 Scope limits (honest)
+
+- The flow field is a local, brightness-constancy estimator: large motion,
+  occlusion, specular highlights and brightness changes degrade it.
+- The retimed frame is an *editorial* interpolation, not a recovered physical
+  sample; no radiometric or GUM uncertainty budget is claimed.
+- No learned optical-flow model, no scipy/cv2/torch, no cloud service is used.
