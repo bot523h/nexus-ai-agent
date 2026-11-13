@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -22,7 +23,10 @@ def rotation_matrix_from_axis_angle(axis: FloatArray, angle_rad: float) -> Float
         raise KernelError("axis-angle rotation requires a nonzero axis")
     x, y, z = vector / magnitude
     skew = np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]], dtype=np.float64)
-    return np.eye(3) + np.sin(angle_rad) * skew + (1.0 - np.cos(angle_rad)) * (skew @ skew)
+    return cast(
+        FloatArray,
+        np.eye(3) + np.sin(angle_rad) * skew + (1.0 - np.cos(angle_rad)) * (skew @ skew),
+    )
 
 
 def intrinsics(

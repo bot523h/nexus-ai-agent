@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -87,7 +87,7 @@ def _function_ast_mutant(
             namespace[attribute] = prior_binding
     if mutated is original:
         raise AssertionError("AST mutation did not replace the function object")
-    return mutated
+    return cast(Callable[..., Any], mutated)
 
 
 def _assert_result(call: Callable[[], Any], predicate: Callable[[Any], bool], message: str) -> None:
@@ -257,7 +257,10 @@ def test_chronos_mutation_campaign_kills_40_of_40(tmp_path: Path) -> None:
     _write_wav(clip_path, wet_signal)
     bible = episode_pipeline.ShowBibleCharacterBible(
         "mira",
-        tuple(tuple(float(x) for x in row) for row in points),
+        cast(
+            tuple[tuple[float, float, float], ...],
+            tuple(tuple(float(x) for x in row) for row in points),
+        ),
         1.8,
         (0.1, 0.2),
         (55.0, 15.0, 20.0),
@@ -713,8 +716,14 @@ def test_chronos_mutation_campaign_kills_40_of_40(tmp_path: Path) -> None:
             "27 stance foot-lock transition weight bounds",
             biomechanics_motion,
             "enforce_stance_foot_lock",
-            "                weight = 3 * t**2 - 2 * t**3\n                result[frame, :2] = (1 - weight) * anchor",
-            "                weight = 2.0\n                result[frame, :2] = (1 - weight) * anchor",
+            (
+                "                weight = 3 * t**2 - 2 * t**3\n"
+                "                result[frame, :2] = (1 - weight) * anchor"
+            ),
+            (
+                "                weight = 2.0\n"
+                "                result[frame, :2] = (1 - weight) * anchor"
+            ),
             lambda: _assert_result(
                 lambda: (
                     biomechanics_motion.enforce_stance_foot_lock(
