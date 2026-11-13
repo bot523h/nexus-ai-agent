@@ -9,6 +9,10 @@ unrecognisable shape *refuses* rather than becoming a plausible number.
 The failure mode this prevents is silent and specific: a regex that misses
 returns a wrong loudness, and a wrong loudness is what lets an artifact report
 that it hit a target it missed.
+
+Pack evidence for ``creative.packs.audio``: the pack's loudness and stream
+reports are only as trustworthy as these parses, so this suite is measured as
+part of the pack rather than treated as host-layer.
 """
 
 from __future__ import annotations

@@ -78,6 +78,17 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         # evidence for every pack that zone serves; it is registered against
         # audio, the pack it is written for.
         "tests/unit/test_omega_wave2_py310_compat.py",
+        # WAVE-B1: the label-dependent parse fixes are load-bearing for the pack
+        # (a missed loudness line is how an artifact claims a target it missed),
+        # so the hardening suite is pack evidence rather than host-layer.
+        "tests/unit/test_omega_wave2_banner_hardening.py",
+        # WAVE-B1: staged publication is the audio artifact's lineage surface —
+        # the Merkle root and both per-segment hashes are what the pack reports
+        # as its evidence, so this suite measures the pack.
+        "tests/unit/test_audio_engine_spine_lineage.py",
+        # WAVE-B1: the tempo estimator's refusal paths decide whether the pack
+        # may report a tempo at all, so their coverage is pack evidence.
+        "tests/unit/test_audio_engine_slideshow_degenerate.py",
         "tests/architecture/test_audio_pack_boundary.py",
     ),
     "caption": (

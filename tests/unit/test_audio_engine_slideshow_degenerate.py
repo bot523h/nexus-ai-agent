@@ -6,6 +6,9 @@ answers that must be an explicit refusal rather than a plausible number.
 
 Every test here builds the input directly, so the branch is reached without
 depending on what a particular recording happens to contain.
+
+Pack evidence for ``creative.packs.audio``: whether the pack may report a tempo
+is decided by these refusals, so this suite is measured as pack evidence.
 """
 
 from __future__ import annotations
