@@ -1228,3 +1228,18 @@ Only red check = the #234 flake (task-264, issue #237).
 - **Board evidence:** `record-pr-merge` verified all 4 merges against live main; `agent_board.py check` = no
   overlap. Report: `docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md` on branch
   `openhands/nagar-one-final-closeout-20261107` (NEVER push to main).
+
+## AETHEL Waves 10-12 + env facts (durable, 2026-11-12)
+- `creative/composition/` now also has `computational_cinematography.py` (Wave 10),
+  `hdr_tonemapping.py` (Wave 11), `film_emulation.py` (Wave 12); ops `scene.retime_optical_flow`,
+  `scene.tonemap_hdr`, `scene.film_emulation` (additive, outside the 10 catalogue ops).
+  Branch `arena/atlas-episodic-causality-lab`; commits `bd75916e`/`f18c6fcb`/`f80721c5`.
+- **Shared `.venv` is missing optional extras** (`telegram`, `fastapi`) → the FULL suite has 54
+  collection errors until `pip install -e ".[dev]"`. Always install extras before a full run.
+- **Pre-existing red test** (NOT from my work, fails at base `6acf079e` too):
+  `tests/unit/test_pack_coverage_contract.py::test_canonical_mapping_is_exactly_the_runtime_composition`
+  — `scene`/`portrait` packs lack `pack.manifest.json` + canonical test targets. Fixing needs
+  `packs/runtime.py` (shared authority, out of zone).
+- **mypy `--strict` numpy gotcha**: `return np.clip(x, ...).astype(np.float32)` triggers
+  `no-any-return`; assign to a typed local (`clipped: np.ndarray = ...`) then `return clipped`.
+- Full suite (extras installed): **7158 passed, 44 skipped, 1 pre-existing failure**.
