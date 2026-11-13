@@ -38,4 +38,4 @@ def test_studio_api_exposes_only_get_route() -> None:
     assert "@router.get(" in source
     assert "@router.post(" not in source
     assert "from nexus_ai_agent.product.studio_read import" in source
-    assert "from nexus_ai_agent.api.dashboard import require_dashboard_token" in source
+    assert "from nexus_ai_agent.api.studio_session import authenticate_studio_caller" in source
