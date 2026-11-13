@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-12T23:07:44Z",
+  "updated_at": "2026-11-10T12:08:41Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1236,22 +1236,6 @@
         "tests/integration/test_durable_project_revision_pinning.py",
         "tests/unit/test_durable_project_state.py",
         "tests/unit/test_nagar_cognition_queue_handoff.py"
-      ]
-    },
-    {
-      "id": "episode-causality-lab",
-      "description": "NAGAR ATLAS + AETHEL: offline deterministic episodic narrative-continuity, edit-planning, temporal composition and director compiler (advisory layer; owns no project state). Phase-2 zone expansion authorized by the coordinator.",
-      "paths": [
-        "src/nexus_ai_agent/creative/episode_causality_lab/",
-        "src/nexus_ai_agent/creative/director/",
-        "src/nexus_ai_agent/creative/composition/",
-        "src/nexus_ai_agent/creative/packs/scene/",
-        "src/nexus_ai_agent/creative/packs/portrait/",
-        "tests/creative/episode_causality_lab/",
-        "tests/creative/director/",
-        "tests/creative/composition/",
-        "tests/creative/packs/scene/",
-        "tests/creative/packs/portrait/"
       ]
     }
   ],
@@ -8537,7 +8521,7 @@
       "title_fa": "اسلایس ۲ تسک-۲۸۲: اتصال آرتیفکت به Revision پذیرفته‌شده به‌صورت AssetVersion",
       "zone": "durable-project-state-lifecycle",
       "priority": "P1",
-      "status": "expired",
+      "status": "active",
       "scope": "Bind the artifact produced for a pinned revision to that exact revision as an AssetVersion and re-verify the same bytes; reuse creative/assets/ (on main via #210) and the existing verification owner. No parallel artifact authority.",
       "prerequisites": [
         {
@@ -8575,8 +8559,7 @@
         "REVIEW CLOSE-OUT (2026-11-09): all 14 Sourcery review threads on PR #325 are replied to and resolved (remediation commit e5c92d56; truthful audit table docs/audits/NAGAR_F1_LIVE_TRUTH_2026-11-08.md section 3a). F1-F4 and F6-F14 fixed; F5 (cross-job completed-job provenance loss) recorded OPEN as an owner design decision (R4). PR #325 body updated with the close-out matrix and honest residuals. Targeted gates re-run on head f4176790: ruff check clean, ruff format --check clean, mypy src clean (361 files), tests/unit/test_mutation_harness_anchors.py + test_pg_integration_safety.py + test_agent_board.py 160 passed; tests/integration/test_durable_project_revision_pinning.py + tests/architecture/test_durable_project_state_boundary.py 48 passed; test_in_process_job_queue.py + test_creative_execution_recovery.py + test_canonical_creative_execution.py 35 passed."
       ],
       "note": "",
-      "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done.",
-      "release_reason": "auto-released by gc at 2026-11-12T22:18:42Z (stale active lease)"
+      "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done."
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -8624,7 +8607,7 @@
       "title_fa": "تعمیر PR #324 (بستن نهایی P0): فهرست‌کردن گزارش ممیزی جدید و رفع یافته‌های گزارش/شواهد تخته",
       "zone": "docs-architecture",
       "priority": "P0",
-      "status": "expired",
+      "status": "active",
       "scope": "Repair the open docs-only PR #324 on its existing branch openhands/nagar-one-final-closeout-20261107. Root cause of the 5 red test/python-parity checks: docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md is not indexed in docs/README.md (TRUTH010). Also close the 5 unresolved review threads on the report and the memory note. No runtime change; no merge.",
       "scope_fa": "تعمیر PR مستندات‌محور باز #324 روی همان شاخه. علت ریشهٔ ۵ چک قرمز: گزارش ممیزی در docs/README.md فهرست نشده (TRUTH010). همچنین بستن ۵ ترد بازبینی روی گزارش و یادداشت حافظه. بدون تغییر runtime و بدون ادغام.",
       "acceptance_criteria": [
@@ -8648,53 +8631,6 @@
       "claimed_at": "2026-11-08T08:42:47Z",
       "ttl_hours": 24,
       "gates_owner": false,
-      "generation": 1,
-      "release_reason": "auto-released by gc at 2026-11-12T22:18:42Z (stale active lease)"
-    },
-    {
-      "task": "task-atlas-episodic-causality-lab",
-      "title": "NAGAR ATLAS: episodic narrative-continuity and edit-planning compiler",
-      "title_fa": "نقشهٔ اطلس: کامپایلر تداوم روایی و برنامه‌ریزی تدوین اپیزودیک",
-      "zone": "episode-causality-lab",
-      "priority": "P2",
-      "status": "active",
-      "scope": "Offline, deterministic, executable episodic narrative-continuity and edit-planning compiler. A proposal/analysis layer only: typed versioned story input, three-valued causal state, exact Simple Temporal Network consistency with negative-cycle witnesses, bounded deterministic edit-plan solver, incremental == full recomputation, advisory repair suggestions, and a real-disk handoff through existing staging/filesystem facilities. No parallel AssetVersion/Revision/passport/CommandBus/database/queue/audio-DSP/Chronos authority.",
-      "prerequisites": [],
-      "acceptance_criteria": [
-        "Typed, versioned, bounded story input with three-valued (TRUE/FALSE/UNKNOWN) causal state and typed errors; absence of data never becomes PASS.",
-        "Exact integer Simple Temporal Network consistency with a real negative-cycle witness and honest RESOURCE_LIMIT when node/edge/relaxation limits are hit.",
-        "Bounded deterministic edit-plan solver: PROVEN_OPTIMAL only for the fully enumerated finite case; FEASIBLE_NOT_PROVEN_OPTIMAL or RESOURCE_LIMIT otherwise; stable tie-breaking.",
-        "incremental_result == full_recomputation_result for the same input, including findings and statuses; incomplete dependency info falls back to full recomputation.",
-        "Advisory repair suggestions are labelled as suggestions and never rewrite canonical story or project state.",
-        "Real artifact produced on disk and independently re-opened and hash-verified; no new passport/authority minted.",
-        "At least 20 adversarial input/refusal cases; aggregate line coverage >= 95% for the new package.",
-        "No edits outside the two exclusive paths; multi-source agent_board.py check on the changed paths exits 0."
-      ],
-      "evidence_required": [
-        "pytest -q tests/creative/episode_causality_lab --cov=nexus_ai_agent.creative.episode_causality_lab --cov-fail-under=95",
-        "ruff check + ruff format --check + mypy on the new package; exit 0",
-        "pytest tests/architecture -q (367 passed) unchanged",
-        "python scripts/agent_board.py check --files <changed> --branch arena/atlas-episodic-causality-lab",
-        "Exact commands, result counts, exit codes, and tested SHA recorded in the zone handoff note."
-      ],
-      "exclusive_paths": [
-        "src/nexus_ai_agent/creative/episode_causality_lab/",
-        "src/nexus_ai_agent/creative/director/",
-        "src/nexus_ai_agent/creative/composition/",
-        "src/nexus_ai_agent/creative/packs/scene/",
-        "src/nexus_ai_agent/creative/packs/portrait/",
-        "tests/creative/episode_causality_lab/",
-        "tests/creative/director/",
-        "tests/creative/composition/",
-        "tests/creative/packs/scene/",
-        "tests/creative/packs/portrait/"
-      ],
-      "owner_hint": "",
-      "agent_branch": "arena/atlas-episodic-causality-lab",
-      "claimed_at": "2026-11-12T22:24:48Z",
-      "ttl_hours": 24,
-      "gates_owner": false,
-      "note": "Phase-2 (AETHEL) zone expansion authorized 2026-11-12 by the coordinator: adds creative/director, creative/composition, creative/packs/scene, creative/packs/portrait and their tests. No overlap with Alpha (audio), Beta (chronos) or Manus (storage/speech/color). Docs stay inside the owned package dirs (no docs/README.md or docs/architecture edits).",
       "generation": 1
     }
   ],

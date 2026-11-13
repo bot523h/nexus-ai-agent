@@ -1148,30 +1148,6 @@ Only red check = the #234 flake (task-264, issue #237).
   base `5ed6d4e1` and claims `.agents/board.json`; whichever PR merges second must
   union-merge the board (per `merge_resolution_note`).
 
-## NEXUS post-merge closure (durable, 2026-11-11)
-- Branch `fix/postmerge-barrier-pg-20261111` (base main `c3aa7c85`); NOT pushed. Commits
-  `15e73fe0` (barrier + PG) and `768f0c77` (TRUTH043). See `2026-11-11.md` for detail.
-- **Do NOT rebuild merge verification** — it already lives in `scripts/agent_board.py`
-  (`_merge_still_verified`/`_verify_pr_merge`, re-derives against live GitHub main via the
-  compare API; harness `scripts/board_referee_mutations.py`). It only covers
-  `completion_records`/typed prerequisites, NOT a claim's `status`. `SATISFIED_STATUSES =
-  {"done","completed_merged"}` → a `completed_merged` claim can open a prerequisite.
-- **New truth check `TRUTH043`** (`diagnostics/truth.py`): a claim in `MERGED_STATUSES`
-  (`{completed_merged}`) must carry a 40-hex `merge_commit_sha` + positive int
-  `delivered_pr`. Structural-only (runs in shallow, network-less CI). Locked to the board
-  CLI's `SATISFIED_STATUSES` by `test_merged_statuses_are_a_satisfied_subset_of_the_board_cli`.
-- **A squash merge's commit has ONE parent** — never assert `>=2 parents` to mean "merged".
-- **This worktree is a SHALLOW clone** → `git merge-base --is-ancestor <sha> HEAD` is
-  unreliable; verify ancestry with `gh api repos/O/R/compare/main...<sha> --jq .status`
-  (`behind` = ancestor).
-- **PG available locally**: `NEXUS_DATABASE_URL=postgresql://pg:pg@localhost:5432/nexus`,
-  destructive tests need `NEXUS_PG_TEST_DESTRUCTIVE=1`. Full suite (env -u NEXUS_DATABASE_URL
-  -u NEXUS_PG_TEST_DESTRUCTIVE, `PYTHONPATH=/tmp/pm-wt/src`): **6474 passed / 45 skipped**.
-- `.agents/board.json` is schema-2, indent=2, trailing newline, insertion-ordered — edit with
-  `json.load(object_pairs_hook=OrderedDict)` + `json.dump(indent=2, ensure_ascii=False)`.
-- `main` CI green; only red is the scheduled `maintenance`/`backup-db` job (missing
-  `NEXUS_DATABASE_URL` secret, fail-closed, owner-side).
-
 
 ## F1 live-truth correction (durable, 2026-11-08)
 - **A board note LIED about a merge.** slice-2 claimed the F1 fence
@@ -1228,57 +1204,3 @@ Only red check = the #234 flake (task-264, issue #237).
 - **Board evidence:** `record-pr-merge` verified all 4 merges against live main; `agent_board.py check` = no
   overlap. Report: `docs/audits/NAGAR_ONE_P0_FINAL_CLOSEOUT_2026-11-07.md` on branch
   `openhands/nagar-one-final-closeout-20261107` (NEVER push to main).
-
-## AETHEL Waves 10-12 + env facts (durable, 2026-11-12)
-- `creative/composition/` now also has `computational_cinematography.py` (Wave 10),
-  `hdr_tonemapping.py` (Wave 11), `film_emulation.py` (Wave 12); ops `scene.retime_optical_flow`,
-  `scene.tonemap_hdr`, `scene.film_emulation` (additive, outside the 10 catalogue ops).
-  Branch `arena/atlas-episodic-causality-lab`; commits `bd75916e`/`f18c6fcb`/`f80721c5`.
-- **Shared `.venv` is missing optional extras** (`telegram`, `fastapi`) → the FULL suite has 54
-  collection errors until `pip install -e ".[dev]"`. Always install extras before a full run.
-- **Pre-existing red test** (NOT from my work, fails at base `6acf079e` too):
-  `tests/unit/test_pack_coverage_contract.py::test_canonical_mapping_is_exactly_the_runtime_composition`
-  — `scene`/`portrait` packs lack `pack.manifest.json` + canonical test targets. Fixing needs
-  `packs/runtime.py` (shared authority, out of zone).
-- **mypy `--strict` numpy gotcha**: `return np.clip(x, ...).astype(np.float32)` triggers
-  `no-any-return`; assign to a typed local (`clipped: np.ndarray = ...`) then `return clipped`.
-- Full suite (extras installed): **7158 passed, 44 skipped, 1 pre-existing failure**.
-
-## NAGAR TITAN Waves 13-20 (durable, 2026-11-12/13)
-- New package `src/nexus_ai_agent/creative/atlas/` (9 modules) + `tests/creative/atlas/`:
-  Wave13 portal metrics, Wave14 atmosphere, Wave15 eikonal+crowd, Wave16 voronoi fracture+ledger,
-  Wave17 Seidel/anamorphic optics, Wave18 Riccati/Pontryagin pacing, Wave19 feature-film compiler,
-  Wave20 staged spine + falsification + `TITAN_CONTINUITY_DOCTRINE.md`. Branch
-  `arena/atlas-episodic-causality-lab`; commits `492f9eab c763cce2 961282e6 c0b06059 e8a378fe
-  3813dbde 5773edb1 d524ddf1`. 310 tests, **100% line+branch coverage**, mypy --strict clean.
-- **Doc-placement rule (reusable)**: the shared `docs/README.md` index is often off-limits and
-  `tests/unit/test_docs_integrity.py` requires EVERY `docs/*.md` to be indexed there — so a new
-  architecture page written under `docs/architecture/` BREAKS the gate. Put doctrine docs inside the
-  owned source zone and record the move-to-docs handoff.
-- **Real-disk verify pattern**: `WorkspaceFilesystem.write_bytes(rel, raw, create_parents=True)`
-  then `read_bytes(rel, max_bytes=...)`; export functions re-open and re-hash the bytes.
-  Two-phase publish via `AttemptStaging(root, job_id=, attempt_id=, final_root=)`.
-- **TITAN APIs are all `_Strict`/dataclass validated, bounded, fail-closed** — e.g.
-  `TemporalConstraint` fields are `a`/`b` (NOT `node_a`/`node_b`); `CrowdResult` has
-  `max_overlap`/`min_separation` (no `.steps`); `AnamorphicLens` PSF `size` must be ODD.
-
-## NAGAR OLYMPUS Waves 21-30 (durable, 2026-11-12)
-- Branch `arena/atlas-episodic-causality-lab` pushed: **d4adf131 → e24ef47f**.
-  Waves 25-30 added (21-24 pre-existed): `botanical_modal_wind`, `aces_hald_film_optic`,
-  `diegetic_modal_foley`, `showrunner_bible`, `media_sine`, `olympus_master`.
-- **`media_sine.py` is the ATLAS zone's ONLY external-binary boundary.** Real ffmpeg
-  7.0.2-static: argument-list invocation (never `shell=True`), bounded timeout,
-  `WorkspaceFilesystem` path safety; re-probes with ffprobe (`-count_frames`) and
-  asserts codec/wh/`nb_read_frames`/pix_fmt. Missing binary → `MediaSineUnavailable`
-  (BLOCKED), never a fake success. `require_binary`/`run_process` are public (Wave 30 reuses).
-- `olympus_master.render_master` wires continuity+SDF-AO+JONSWAP+blackbody+foley+ACES into
-  a deterministic pipeline, writes a real 16-bit WAV, real H.264 encode, and a canonical
-  digest-protected ledger; per-stage `COMPUTED`/`BLOCKED`.
-- **ATLAS zone tests = `tests/creative/atlas`** (NOT `tests/creative/composition`).
-  Full atlas suite: **709 passed**, 99% aggregate branch coverage; architecture **367 passed**.
-- **`tests/unit/test_pack_coverage_contract.py::test_canonical_mapping_is_exactly_the_runtime_composition`
-  FAILS at base `d4adf131` too** — pre-existing, unrelated (pack manifests vs canonical test
-  targets under `creative/packs`); NOT caused by atlas work. Do not "fix" it in the atlas zone.
-- **Push:** git credential-helper `GITHUB_TOKEN` → 403 on this repo; use
-  `https://x-access-token:${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/bot523h/nexus-ai-agent.git`.
-- Full suite (non-slow): **7867 passed / 44 skipped / 1 pre-existing fail** in ~13 min.
