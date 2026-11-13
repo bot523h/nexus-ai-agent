@@ -74,7 +74,7 @@ def test_propagation_validation() -> None:
     with pytest.raises(ObjectPermanenceError):
         propagate_occluded_object(_state(), 0.1, steps=-1)
     with pytest.raises(ObjectPermanenceError):
-        propagate_occluded_object(_state(), 0.1, gravity=(0.0, 0.0))
+        propagate_occluded_object(_state(), 0.1, gravity=np.zeros(2))
 
 
 def test_teleport_is_detected_and_repaired() -> None:

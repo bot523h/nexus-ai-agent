@@ -97,7 +97,41 @@ def test_cloth_validation_errors() -> None:
     with pytest.raises(ClothSimulationError):
         step_xpbd_cloth_simulation(positions, velocities, np.array([[0.0, 0.0]]))
     with pytest.raises(ClothSimulationError):
-        step_xpbd_cloth_simulation(positions, velocities, edges, gravity=(0.0, 0.0))
+        step_xpbd_cloth_simulation(positions, velocities, edges, gravity=np.zeros(2))
+    with pytest.raises(ClothSimulationError):
+        step_xpbd_cloth_simulation(
+            positions, velocities, edges, rest_lengths=np.zeros(edges.shape[0])
+        )
+
+
+def test_cloth_branch_coverage_for_capsules_and_rest_lengths() -> None:
+    """Exercise capsule rejection, edge-shape, gravity and rest-length guards."""
+    positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
+    velocities = np.zeros_like(positions)
+    edges = np.array([[0, 1], [1, 2], [2, 3]])
+
+    with pytest.raises(ClothSimulationError):
+        step_xpbd_cloth_simulation(positions, velocities, np.zeros((2, 3)))
+
+    with pytest.raises(ClothSimulationError):
+        step_xpbd_cloth_simulation(
+            positions,
+            velocities,
+            edges,
+            capsules=[(np.zeros(2), np.ones(3), 0.1)],
+        )
+
+    with pytest.raises(ClothSimulationError):
+        step_xpbd_cloth_simulation(
+            positions,
+            velocities,
+            edges,
+            capsules=[(np.zeros(3), np.zeros(3), 0.1)],
+        )
+
+    with pytest.raises(ClothSimulationError):
+        step_xpbd_cloth_simulation(positions, velocities, edges, gravity=np.zeros(2))
+
     with pytest.raises(ClothSimulationError):
         step_xpbd_cloth_simulation(
             positions, velocities, edges, rest_lengths=np.zeros(edges.shape[0])

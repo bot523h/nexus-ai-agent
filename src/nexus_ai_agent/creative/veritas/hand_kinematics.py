@@ -191,8 +191,11 @@ def _joint_violations(angles: FloatArray) -> bool:
 
 
 def _ratio_violations(rays: tuple[tuple[int, ...], ...], lengths: FloatArray) -> bool:
+    count = int(lengths.shape[0])
     for finger, ray in enumerate(rays[:5]):
         if len(ray) != 5:
+            return True
+        if max(ray[2], ray[3], ray[4]) >= count:
             return True
         segment = np.array([lengths[ray[2]], lengths[ray[3]], lengths[ray[4]]], dtype=np.float64)
         total = float(segment.sum())
@@ -356,6 +359,9 @@ def audit_and_project_hand_skeleton(
         raise HandTopologyError("bone_lengths must have shape (N,)")
     if not np.all(np.isfinite(skeleton.joints)):
         raise HandTopologyError("joint positions must be finite")
+    for ray in skeleton.rays:
+        if any(index >= skeleton.joint_count for index in ray):
+            raise HandTopologyError("ray references a joint outside the skeleton")
 
     violations_before = _collect_violations(skeleton, grip_active=grip_active, sdf=target_sdf)
 

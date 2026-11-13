@@ -143,7 +143,10 @@ class TestLaw1Hand:
         base = canonical_hand_skeleton()
 
         def sdf(points: np.ndarray) -> np.ndarray:
-            return np.linalg.norm(points - np.array([0.0, 0.7, 0.0]), axis=-1) - 0.15
+            return np.asarray(
+                np.linalg.norm(points - np.array([0.0, 0.7, 0.0]), axis=-1) - 0.15,
+                dtype=np.float64,
+            )
 
         result = audit_and_project_hand_skeleton(base, target_sdf=sdf, grip_active=True)
         tips = np.array([result.skeleton.joints[ray[-1]] for ray in result.skeleton.rays])

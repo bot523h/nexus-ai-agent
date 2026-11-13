@@ -25,7 +25,7 @@ def test_spatial_entropy_extremes() -> None:
 
 def test_spatial_entropy_batch_and_validation() -> None:
     batch = np.stack([np.ones((3, 3)), np.eye(3)])
-    entropies = spatial_entropy(batch)
+    entropies = np.asarray(spatial_entropy(batch), dtype=np.float64)
     assert entropies.shape == (2,)
     assert entropies[0] > entropies[1]
     with pytest.raises(ThermodynamicError):
@@ -55,7 +55,7 @@ def test_fourier_validation() -> None:
     with pytest.raises(ThermodynamicError):
         fourier_advection_diffusion(np.ones(4), (0.0, 0.0), 0.1, 0.01, 1.0)
     with pytest.raises(ThermodynamicError):
-        fourier_advection_diffusion(field, (0.0,), 0.1, 0.01, 1.0)
+        fourier_advection_diffusion(field, np.zeros(3), 0.1, 0.01, 1.0)
     with pytest.raises(ThermodynamicError):
         fourier_advection_diffusion(field, (0.0, 0.0), -0.1, 0.01, 1.0)
     with pytest.raises(ThermodynamicError):

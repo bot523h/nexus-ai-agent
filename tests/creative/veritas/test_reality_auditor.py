@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from nexus_ai_agent.creative.veritas.hand_kinematics import (
     HandSkeleton,
@@ -204,7 +205,7 @@ def test_violating_shot_exercises_healing_paths() -> None:
     assert passport.healed
 
 
-def test_auditor_records_every_violation_string(monkeypatch) -> None:
+def test_auditor_records_every_violation_string(monkeypatch: pytest.MonkeyPatch) -> None:
     """The auditor must faithfully aggregate each law's violation strings."""
     import types
 
