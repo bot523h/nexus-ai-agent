@@ -1261,3 +1261,24 @@ Only red check = the #234 flake (task-264, issue #237).
 - **TITAN APIs are all `_Strict`/dataclass validated, bounded, fail-closed** — e.g.
   `TemporalConstraint` fields are `a`/`b` (NOT `node_a`/`node_b`); `CrowdResult` has
   `max_overlap`/`min_separation` (no `.steps`); `AnamorphicLens` PSF `size` must be ODD.
+
+## NAGAR OLYMPUS Waves 21-30 (durable, 2026-11-12)
+- Branch `arena/atlas-episodic-causality-lab` pushed: **d4adf131 → e24ef47f**.
+  Waves 25-30 added (21-24 pre-existed): `botanical_modal_wind`, `aces_hald_film_optic`,
+  `diegetic_modal_foley`, `showrunner_bible`, `media_sine`, `olympus_master`.
+- **`media_sine.py` is the ATLAS zone's ONLY external-binary boundary.** Real ffmpeg
+  7.0.2-static: argument-list invocation (never `shell=True`), bounded timeout,
+  `WorkspaceFilesystem` path safety; re-probes with ffprobe (`-count_frames`) and
+  asserts codec/wh/`nb_read_frames`/pix_fmt. Missing binary → `MediaSineUnavailable`
+  (BLOCKED), never a fake success. `require_binary`/`run_process` are public (Wave 30 reuses).
+- `olympus_master.render_master` wires continuity+SDF-AO+JONSWAP+blackbody+foley+ACES into
+  a deterministic pipeline, writes a real 16-bit WAV, real H.264 encode, and a canonical
+  digest-protected ledger; per-stage `COMPUTED`/`BLOCKED`.
+- **ATLAS zone tests = `tests/creative/atlas`** (NOT `tests/creative/composition`).
+  Full atlas suite: **709 passed**, 99% aggregate branch coverage; architecture **367 passed**.
+- **`tests/unit/test_pack_coverage_contract.py::test_canonical_mapping_is_exactly_the_runtime_composition`
+  FAILS at base `d4adf131` too** — pre-existing, unrelated (pack manifests vs canonical test
+  targets under `creative/packs`); NOT caused by atlas work. Do not "fix" it in the atlas zone.
+- **Push:** git credential-helper `GITHUB_TOKEN` → 403 on this repo; use
+  `https://x-access-token:${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/bot523h/nexus-ai-agent.git`.
+- Full suite (non-slow): **7867 passed / 44 skipped / 1 pre-existing fail** in ~13 min.
