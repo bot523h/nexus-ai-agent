@@ -45,12 +45,12 @@ def test_even_rounds_down_and_validates() -> None:
 def test_require_raises_when_binary_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(m.shutil, "which", lambda _name: None)
     with pytest.raises(m.MediaSineUnavailable):
-        m._require("ffmpeg")
+        m.require_binary("ffmpeg")
 
 
 def test_run_rejects_nonpositive_timeout() -> None:
     with pytest.raises(m.MediaSineError):
-        m._run(["true"], timeout=0.0)
+        m.run_process(["true"], timeout=0.0)
 
 
 def test_synthesise_refuses_missing_binary(

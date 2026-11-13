@@ -33,6 +33,8 @@ __all__ = [
     "MediaProbe",
     "MediaSineResult",
     "ffmpeg_available",
+    "require_binary",
+    "run_process",
     "synthesise_test_clip",
     "probe_media",
     "MAX_DIMENSION",
@@ -74,7 +76,7 @@ class MediaSineResult:
     probe: MediaProbe
 
 
-def _require(binary: str) -> str:
+def require_binary(binary: str) -> str:
     path = shutil.which(binary)
     if path is None:
         raise MediaSineUnavailable(f"required binary {binary!r} is not on PATH")
@@ -86,7 +88,7 @@ def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
 
-def _run(argv: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+def run_process(argv: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
     if timeout <= 0.0:
         raise MediaSineError("timeout must be positive")
     return subprocess.run(  # noqa: S603 - argument list, never shell=True
@@ -123,7 +125,7 @@ def synthesise_test_clip(
     frames are visually distinct. The result is probed after encoding and the
     observed geometry is asserted against the request.
     """
-    ffmpeg = _require("ffmpeg")
+    ffmpeg = require_binary("ffmpeg")
     if not isinstance(frames, int) or isinstance(frames, bool) or frames < 1:
         raise MediaSineError("frames must be a positive int")
     if frames > MAX_FRAMES:
@@ -156,7 +158,7 @@ def synthesise_test_clip(
         "yuv420p",
         str(target),
     ]
-    proc = _run(argv, timeout=timeout)
+    proc = run_process(argv, timeout=timeout)
     if proc.returncode != 0:
         raise MediaSineError(f"ffmpeg failed ({proc.returncode}): {proc.stderr.strip()[:400]}")
     if not target.is_file():
@@ -176,7 +178,7 @@ def probe_media(
     filesystem: WorkspaceFilesystem, relative_path: str, *, timeout: float = DEFAULT_TIMEOUT
 ) -> MediaProbe:
     """Probe a media file with ``ffprobe`` and return its verified geometry."""
-    ffprobe = _require("ffprobe")
+    ffprobe = require_binary("ffprobe")
     target = filesystem.resolve(relative_path)
     if not target.is_file():
         raise MediaSineError(f"{relative_path!r} is not a regular file")
@@ -194,7 +196,7 @@ def probe_media(
         "json",
         str(target),
     ]
-    proc = _run(argv, timeout=timeout)
+    proc = run_process(argv, timeout=timeout)
     if proc.returncode != 0:
         raise MediaSineError(f"ffprobe failed ({proc.returncode}): {proc.stderr.strip()[:400]}")
     try:
