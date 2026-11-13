@@ -66,6 +66,27 @@ def _dt(value: datetime | str | None) -> datetime | None:
     return value
 
 
+async def _execute(session: Any, statement: Any, params: Any = None) -> Any:
+    """Execute Core SQL via the connection, avoiding SQLModel legacy warnings.
+
+    Lightweight test doubles expose only ``execute``; real SQLModel sessions use
+    their SQLAlchemy AsyncConnection directly.
+    """
+    connection_method = getattr(session, "connection", None)
+    if connection_method is not None:
+        connection = await connection_method()
+        return (
+            await connection.execute(statement, params)
+            if params is not None
+            else await connection.execute(statement)
+        )
+    return (
+        await session.execute(statement, params)
+        if params is not None
+        else await session.execute(statement)
+    )
+
+
 class SqlConnectionStore:
     """Async CRUD and rotation operations over ``get_session()``.
 
@@ -186,7 +207,7 @@ class SqlConnectionStore:
         )
         try:
             async with self._session() as session:
-                await session.execute(query, params)
+                await _execute(session, query, params)
                 await session.commit()
         except IntegrityError as exc:
             raise ConnectionPersistenceError("CONNECT connection already exists") from exc
@@ -194,7 +215,8 @@ class SqlConnectionStore:
 
     async def get(self, connection_id: str) -> PersistedConnection | None:
         async with self._session() as session:
-            result = await session.execute(
+            result = await _execute(
+                session,
                 text(f"SELECT * FROM {_TABLE} WHERE connection_id = :connection_id"),
                 {"connection_id": connection_id},
             )
@@ -232,7 +254,8 @@ class SqlConnectionStore:
             raise ConnectionPersistenceError("CONNECT secret authentication failed") from exc
         used_at = datetime.now(timezone.utc)
         async with self._session() as session:
-            result = await session.execute(
+            result = await _execute(
+                session,
                 text(
                     f"UPDATE {_TABLE} SET last_used_at = :last_used_at, "
                     "row_version = row_version + 1, updated_at = :updated_at "
@@ -254,7 +277,8 @@ class SqlConnectionStore:
     async def revoke(self, connection_id: str, *, expected_version: int) -> PersistedConnection:
         now = datetime.now(timezone.utc)
         async with self._session() as session:
-            result = await session.execute(
+            result = await _execute(
+                session,
                 text(
                     f"UPDATE {_TABLE} SET connection_state = :state, revoked_at = :revoked_at, "
                     "row_version = row_version + 1, updated_at = :updated_at "
@@ -279,14 +303,15 @@ class SqlConnectionStore:
 
     async def rewrap_all(self) -> int:
         async with self._session() as session:
-            result = await session.execute(text(f"SELECT * FROM {_TABLE}"))
+            result = await _execute(session, text(f"SELECT * FROM {_TABLE}"))
             rows = [self._from_row(row) for row in result.mappings().all()]
             changed = 0
             for row in rows:
                 rotated = self._cipher.rewrap(row.envelope)
                 if rotated == row.envelope:
                     continue
-                update_result = await session.execute(
+                update_result = await _execute(
+                    session,
                     text(
                         f"UPDATE {_TABLE} SET kek_id = :kek_id, wrapped_dek = :wrapped_dek, "
                         "wrap_nonce = :wrap_nonce, row_version = row_version + 1, "

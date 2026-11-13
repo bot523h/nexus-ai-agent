@@ -30,6 +30,7 @@ JCS_NAMES = {"jcs", "canonical_bytes", "canonical_text", "jcs_digest", "JcsError
 ALLOWED_JCS_IMPORTERS = {
     Path("provenance/jcs.py"),
     Path("provenance/__init__.py"),
+    Path("provenance/canonicalization.py"),
 }
 
 #: Frozen legacy modules whose hashes must not move.
