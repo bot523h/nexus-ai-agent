@@ -307,3 +307,37 @@ def test_negative_budget_is_rejected() -> None:
 def test_defaults_are_positive() -> None:
     assert DEFAULT_MAX_STATES > 0
     assert DEFAULT_MAX_TRANSITIONS > 0
+
+
+def test_true_status_without_evidence_ref_is_not_verified() -> None:
+    # evidence_status TRUE but an EMPTY evidence_ref must still be unverified:
+    # the check is `status is TRUE AND ref non-empty`, never `or`.
+    req = PlanRequest(
+        beats=("b1",),
+        candidates=(fx.shot("s1", ("b1",), 10, verified=False),),
+        frame_budget=100,
+        require_verified_evidence=True,
+    )
+    result = plan_edit(req)
+    assert result.status is SolverStatus.INFEASIBLE
+    assert any(r.candidate_id == "s1" for r in result.rejected)
+
+
+def test_true_status_with_empty_ref_is_rejected_under_require() -> None:
+    from nexus_ai_agent.creative.episode_causality_lab import ShotCandidate, SourceRef, TriValue
+
+    cand = ShotCandidate(
+        id="s1",
+        asset_ref="asset://s1",
+        covers_beats=("b1",),
+        frames=10,
+        evidence_status=TriValue.TRUE,
+        evidence_ref="",  # TRUE but no reference -> unverified
+        source=SourceRef(path="ep1/sc1"),
+    )
+    req = PlanRequest(
+        beats=("b1",), candidates=(cand,), frame_budget=100, require_verified_evidence=True
+    )
+    result = plan_edit(req)
+    assert result.status is SolverStatus.INFEASIBLE
+    assert any(r.candidate_id == "s1" for r in result.rejected)

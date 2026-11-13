@@ -321,3 +321,32 @@ def test_homography_singular_det_refused() -> None:
 def test_fog_depth_shape_mismatch() -> None:
     with pytest.raises(InvalidImageError):
         k.add_volumetric_fog_haze(image(1), np.zeros((5, 5), np.float32))
+
+
+def test_fog_matches_koschmieder_analytic() -> None:
+    # Recompute the documented formula independently: transmittance = exp(-beta*d),
+    # atmosphere = 0.9*(1-transmittance), out = clip(img*T + atmosphere*phase).
+    img = image(21, size=16)
+    d = np.full((16, 16), 2.0, dtype=np.float32)
+    beta, g = 0.4, 0.6
+    out = k.add_volumetric_fog_haze(img, d, beta=beta, g=g)
+    phase = (1 - g**2) / (4 * np.pi * (1 + g**2 - 2 * g) ** 1.5)
+    t = np.exp(-beta * d)
+    atmosphere = 0.9 * (1 - t)
+    expected = np.clip(img * t[..., None] + atmosphere[..., None] * phase, 0.0, 1.0)
+    assert np.allclose(out, expected, atol=1e-6)
+
+
+def test_dynamic_range_expansion_matches_pipeline() -> None:
+    # Recompute the documented pipeline with the same bloom stage so a sign or
+    # operator change in `expanded = linear * gain` is observable.
+    img = np.full((16, 16, 3), 0.9, dtype=np.float32)  # bright -> triggers bloom
+    img[0, 0] = 0.2
+    gain = 3.0
+    out = k.dynamic_range_expansion(img, gain=gain)
+    linear = img**2.2
+    expanded = linear * gain
+    bloom = k.gaussian_blur(np.clip(expanded - 1.0, 0.0, None), 6.0)
+    raw = expanded + bloom
+    expected = raw / max(float(raw.max()), 1e-9)
+    assert np.allclose(out, expected, atol=1e-6)

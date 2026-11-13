@@ -181,3 +181,16 @@ def test_temporal_result_type_is_stable() -> None:
     result = check_consistency(())
     assert isinstance(result, TemporalResult)
     assert result.consistent
+
+
+def test_witness_zero_weight_is_not_valid() -> None:
+    # A zero-weight cycle is NOT a negative cycle: is_valid must be False, so a
+    # "< 0" bound can never be relaxed into "<= 0".
+    from nexus_ai_agent.creative.episode_causality_lab.temporal import NegativeCycleWitness
+
+    zero = NegativeCycleWitness(nodes=("a", "b"), constraint_ids=("c1",), total_weight=0)
+    assert zero.is_valid() is False
+    neg = NegativeCycleWitness(nodes=("a", "b"), constraint_ids=("c1",), total_weight=-1)
+    assert neg.is_valid() is True
+    empty = NegativeCycleWitness(nodes=(), constraint_ids=(), total_weight=-1)
+    assert empty.is_valid() is False

@@ -234,3 +234,16 @@ def test_three_valued_negation_and_kleene_ops() -> None:
 def test_trivalue_is_not_a_boolean() -> None:
     with pytest.raises(TypeError):
         bool(TriValue.TRUE)
+
+
+def test_unknown_knowledge_reveal_is_needs_review_not_fail() -> None:
+    # An actor who is NOT declared to know the fact reveals it; the state is
+    # UNKNOWN -> NEEDS_REVIEW (not FAIL, not PASS).
+    key = FactKey(subject_id="alice", relation=FactRelation.KNOWS, target_id="secret")
+    doc = fx.base_doc(
+        events=(fx.event("e1", EventKind.REVEAL_FACT, actor="alice", fact_key=key),),
+    )
+    report = CausalEngine().analyze(doc)
+    assert report.findings_for(CausalFindingCode.KNOWLEDGE_UNKNOWN)
+    assert report.status is Status.NEEDS_REVIEW
+    assert not report.findings_for(CausalFindingCode.KNOWLEDGE_PREREQUISITE_UNMET)

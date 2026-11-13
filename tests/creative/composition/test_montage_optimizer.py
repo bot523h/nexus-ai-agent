@@ -332,3 +332,29 @@ def test_render_spec_track_only_node() -> None:
     spec = compile_dag_to_render_spec(dag)
     assert spec["video_tracks"] == []
     assert spec["audio_tracks"] == []
+
+
+def test_first_jump_cost_is_ignored_but_later_ones_are_charged() -> None:
+    # C_jump[0] has no predecessor and must be ignored; every later entry is
+    # charged exactly once (the term is applied only for i > 0).
+    base = MontageRequest(
+        clips=(ClipCandidate("a", 4, 4), ClipCandidate("b", 4, 4)),
+        tension=(Fraction(0), Fraction(0)),
+        pace_target=(4, 4),
+        weights=MontageWeights(beat=Fraction(0), pace=Fraction(0), continuity=Fraction(1)),
+    )
+    zero = optimize_rhythmic_montage(base)
+
+    def with_jump(j0: int, j1: int) -> Fraction:
+        return optimize_rhythmic_montage(
+            MontageRequest(
+                clips=base.clips,
+                tension=base.tension,
+                pace_target=base.pace_target,
+                jump_cost=(Fraction(j0), Fraction(j1)),
+                weights=base.weights,
+            )
+        ).total_cost
+
+    assert with_jump(7, 0) == zero.total_cost  # jump[0] ignored
+    assert with_jump(0, 7) - zero.total_cost == Fraction(7)  # jump[1] charged

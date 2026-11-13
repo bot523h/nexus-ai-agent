@@ -165,3 +165,22 @@ def test_bokeh_kernel_shape() -> None:
     k = p._bokeh_kernel(6, 6)
     assert k.shape == (13, 13)
     assert float(k.max()) == 1.0
+
+
+def test_skintone_output_lies_within_canonical_locus() -> None:
+    # After harmonization the masked region's L* must lie within SKIN_L_RANGE,
+    # so a widened/narrowed locus constant is observable.
+    from nexus_ai_agent.creative.composition.portrait_imaging import (
+        SKIN_L_RANGE,
+        lab_to_srgb,
+        srgb_to_lab,
+    )
+
+    img = image(9, size=32)
+    m = np.zeros((32, 32), dtype=np.float32)
+    m[8:24, 8:24] = 1.0
+    out = p.skintone_harmonization(img, m, strength=1.0)
+    lab = srgb_to_lab(lab_to_srgb(srgb_to_lab(out)))  # idempotent round trip
+    region_l = lab[8:24, 8:24, 0]
+    assert float(region_l.min()) >= SKIN_L_RANGE[0] - 1e-3
+    assert float(region_l.max()) <= SKIN_L_RANGE[1] + 1e-3

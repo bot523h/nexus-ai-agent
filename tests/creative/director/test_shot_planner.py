@@ -178,3 +178,20 @@ def test_axis_violation_is_detected(monkeypatch) -> None:
     monkeypatch.setattr(sp, "_camera_for", broken)
     with pytest.raises(AxisViolationError):
         plan_shot_sequence(ShotPlanRequest(0, (a, b), ("mara", "ivo"), axis_side=1))
+
+
+def test_jump_cut_between_ten_and_thirty_degrees() -> None:
+    # A 20-degree change is below the 30-degree threshold and, with no focal
+    # change, must be reported as a jump cut (so the threshold constant matters).
+    subject = ActorPlacement("a", 0.0, 0.0)
+    # cameras 20 degrees apart on a 1 m radius
+    import math
+
+    r = 1.0
+    a1 = (r * math.cos(math.radians(0)), r * math.sin(math.radians(0)))
+    a2 = (r * math.cos(math.radians(20)), r * math.sin(math.radians(20)))
+    prev = CameraSetup("s1", ShotSize.MEDIUM, "a", a1[0], a1[1], 50, 1)
+    nxt = CameraSetup("s2", ShotSize.MEDIUM, "a", a2[0], a2[1], 50, 1)
+    assert camera_angle_deg(subject, a1, a2) == pytest.approx(20.0, abs=1e-6)
+    with pytest.raises(JumpCutError):
+        check_jump_cut(prev, nxt, subject)
