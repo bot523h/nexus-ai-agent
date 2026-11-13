@@ -1,4 +1,8 @@
-"""Pure NumPy/Pillow color operations for Hyperion Phase 3.
+"""Pure NumPy/Pillow color kernels for Hyperion Phase 3.
+
+These kernels live behind the speech_cinema adapter boundary because they touch
+pixel buffers and PNG codecs.  The capability-pack substrate in
+``creative/packs/color`` only carries the data contract and must stay NumPy-free.
 
 All transforms operate on floating-point RGB arrays and are deterministic.  They
 never silently clip floating-point results; PNG export is the explicit boundary
@@ -11,18 +15,19 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
+from numpy.typing import NDArray
 from PIL import Image
 
-Array = np.ndarray
+Array = NDArray[np.float64]
 
 # Bradford cone-response matrix (ICC/CIE convention).
-_BRADFORD = np.array(
+_BRADFORD: Array = np.array(
     [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]],
     dtype=np.float64,
 )
-_BRADFORD_INV = np.linalg.inv(_BRADFORD)
-_D65 = np.array([0.95047, 1.0, 1.08883], dtype=np.float64)
-_RGB_TO_XYZ = np.array(
+_BRADFORD_INV: Array = np.asarray(np.linalg.inv(_BRADFORD), dtype=np.float64)
+_D65: Array = np.array([0.95047, 1.0, 1.08883], dtype=np.float64)
+_RGB_TO_XYZ: Array = np.array(
     [
         [0.4124564, 0.3575761, 0.1804375],
         [0.2126729, 0.7151522, 0.0721750],
@@ -30,14 +35,15 @@ _RGB_TO_XYZ = np.array(
     ],
     dtype=np.float64,
 )
-_XYZ_TO_RGB = np.linalg.inv(_RGB_TO_XYZ)
+_XYZ_TO_RGB: Array = np.asarray(np.linalg.inv(_RGB_TO_XYZ), dtype=np.float64)
+_LUMA_WEIGHTS: Array = np.array([0.2126, 0.7152, 0.0722], dtype=np.float64)
 
 
-def _rgb(image: Array, *, name: str = "image") -> Array:
-    arr = np.asarray(image, dtype=np.float64)
+def _rgb(image: object, *, name: str = "image") -> Array:
+    arr: Array = np.asarray(image, dtype=np.float64)
     if arr.ndim < 2 or arr.shape[-1] != 3:
         raise ValueError(f"{name} must have a final RGB dimension of length 3")
-    if not np.all(np.isfinite(arr)):
+    if not bool(np.all(np.isfinite(arr))):
         raise ValueError(f"{name} must contain only finite values")
     return arr
 
@@ -62,7 +68,7 @@ def _temperature_white_point(kelvin: float) -> Array:
 
 def _rgb_to_xyz_white(rgb: Array) -> Array:
     # sRGB/D65 matrix, used only to obtain a chromaticity estimate.
-    return _RGB_TO_XYZ @ rgb
+    return np.asarray(_RGB_TO_XYZ @ rgb, dtype=np.float64)
 
 
 def white_balance_chromatic_adaptation(
@@ -86,19 +92,21 @@ def white_balance_chromatic_adaptation(
     if kelvin is not None and method == "gray_world":
         method = "kelvin"
     if method == "kelvin":
+        if kelvin is None:  # pragma: no cover - guarded above; narrows the type
+            raise ValueError("kelvin is required when method='kelvin'")
         source_xyz = _temperature_white_point(float(kelvin))
     else:
-        means = np.mean(arr.reshape(-1, 3), axis=0)
-        if np.any(means <= 0):
+        means: Array = np.mean(arr.reshape(-1, 3), axis=0)
+        if bool(np.any(means <= 0)):
             raise ValueError("gray-world channel means must be strictly positive")
-        source_xyz = _rgb_to_xyz_white(means / np.mean(means))
-    source_lms = _BRADFORD @ source_xyz
-    target_lms = _BRADFORD @ _D65
-    if np.any(np.abs(source_lms) < np.finfo(float).eps):
+        source_xyz = _rgb_to_xyz_white(means / float(np.mean(means)))
+    source_lms: Array = np.asarray(_BRADFORD @ source_xyz, dtype=np.float64)
+    target_lms: Array = np.asarray(_BRADFORD @ _D65, dtype=np.float64)
+    if bool(np.any(np.abs(source_lms) < np.finfo(float).eps)):
         raise ValueError("source white point is unsuitable for Bradford adaptation")
     adaptation_xyz = _BRADFORD_INV @ np.diag(target_lms / source_lms) @ _BRADFORD
-    adaptation_rgb = _XYZ_TO_RGB @ adaptation_xyz @ _RGB_TO_XYZ
-    return arr @ adaptation_rgb.T
+    adaptation_rgb: Array = np.asarray(_XYZ_TO_RGB @ adaptation_xyz @ _RGB_TO_XYZ, dtype=np.float64)
+    return np.asarray(arr @ adaptation_rgb.T, dtype=np.float64)
 
 
 def hdr_to_sdr_filmic_tonemap(hdr: Array, *, exposure: float = 0.0, white: float = 11.2) -> Array:
@@ -108,42 +116,44 @@ def hdr_to_sdr_filmic_tonemap(hdr: Array, *, exposure: float = 0.0, white: float
     luminance ratio, which avoids hue shifts and retains highlight detail.
     """
     arr = _rgb(hdr, name="hdr")
-    if np.any(arr < 0):
+    if bool(np.any(arr < 0)):
         raise ValueError("hdr must be nonnegative")
     if not np.isfinite(exposure) or not np.isfinite(white) or white <= 0:
         raise ValueError("exposure must be finite and white must be positive")
-    lum = np.sum(arr * np.array([0.2126, 0.7152, 0.0722]), axis=-1)
-    x = lum * (2.0**exposure)
+    lum: Array = np.asarray(np.sum(arr * _LUMA_WEIGHTS, axis=-1), dtype=np.float64)
+    x: Array = lum * (2.0**exposure)
     # Hable/Uncharted-style rational filmic mapping; strictly increasing on x>=0.
     a, b, c, d, e = 0.22, 0.30, 0.10, 0.20, 0.01
 
     def curve(value: Array) -> Array:
-        return (value * (a * value + b)) / (value * (c * value + d) + e)
+        return np.asarray(
+            (value * (a * value + b)) / (value * (c * value + d) + e), dtype=np.float64
+        )
 
     # Normalize by the asymptote so SDR output stays bounded at extreme HDR.
-    mapped = curve(x) / (a / c)
-    scale = np.divide(mapped, lum, out=np.zeros_like(mapped), where=lum > 0)
-    return arr * scale[..., None]
+    mapped: Array = curve(x) / (a / c)
+    scale: Array = np.divide(mapped, lum, out=np.zeros_like(mapped), where=lum > 0)
+    return np.asarray(arr * scale[..., None], dtype=np.float64)
 
 
-def validate_spd_covariance(covariance: Array, *, tolerance: float = 1e-10) -> Array:
+def validate_spd_covariance(covariance: object, *, tolerance: float = 1e-10) -> Array:
     """Validate and return a symmetric positive-definite 3x3 covariance."""
-    cov = np.asarray(covariance, dtype=np.float64)
-    if cov.shape != (3, 3) or not np.all(np.isfinite(cov)):
+    cov: Array = np.asarray(covariance, dtype=np.float64)
+    if cov.shape != (3, 3) or not bool(np.all(np.isfinite(cov))):
         raise ValueError("covariance must be a finite 3x3 matrix")
     cov = (cov + cov.T) / 2.0
-    eigenvalues = np.linalg.eigvalsh(cov)
-    if np.min(eigenvalues) <= tolerance:
+    eigenvalues: Array = np.linalg.eigvalsh(cov)
+    if float(np.min(eigenvalues)) <= tolerance:
         raise ValueError("covariance must be symmetric positive definite")
     return cov
 
 
-def matrix_sqrt_spd(matrix: Array, *, inverse: bool = False) -> Array:
+def matrix_sqrt_spd(matrix: object, *, inverse: bool = False) -> Array:
     """Compute a symmetric (inverse) square root of an SPD 3x3 matrix."""
     mat = validate_spd_covariance(matrix)
     values, vectors = np.linalg.eigh(mat)
-    powers = values ** (-0.5 if inverse else 0.5)
-    return (vectors * powers) @ vectors.T
+    powers: Array = np.asarray(values ** (-0.5 if inverse else 0.5), dtype=np.float64)
+    return np.asarray((vectors * powers) @ vectors.T, dtype=np.float64)
 
 
 def shot_to_shot_color_match_ot(source: Array, reference: Array, *, alpha: float = 1.0) -> Array:
@@ -156,23 +166,27 @@ def shot_to_shot_color_match_ot(source: Array, reference: Array, *, alpha: float
     ref = _rgb(reference, name="reference")
     if not 0.0 <= alpha <= 1.0 or not np.isfinite(alpha):
         raise ValueError("alpha must be finite and in the range 0..1")
-    src_flat, ref_flat = src.reshape(-1, 3), ref.reshape(-1, 3)
+    src_flat: Array = src.reshape(-1, 3)
+    ref_flat: Array = ref.reshape(-1, 3)
     if len(src_flat) < 2 or len(ref_flat) < 2:
         raise ValueError("source and reference require at least two RGB samples")
-    src_mean, ref_mean = src_flat.mean(axis=0), ref_flat.mean(axis=0)
+    src_mean: Array = src_flat.mean(axis=0)
+    ref_mean: Array = ref_flat.mean(axis=0)
     src_cov = validate_spd_covariance(np.cov(src_flat, rowvar=False, bias=True))
     ref_cov = validate_spd_covariance(np.cov(ref_flat, rowvar=False, bias=True))
-    transform = matrix_sqrt_spd(ref_cov) @ matrix_sqrt_spd(src_cov, inverse=True)
-    centered = src_flat - src_mean
-    matched = centered @ transform.T + ref_mean
-    result = (1.0 - alpha) * src_flat + alpha * matched
-    return result.reshape(src.shape)
+    transform: Array = np.asarray(
+        matrix_sqrt_spd(ref_cov) @ matrix_sqrt_spd(src_cov, inverse=True), dtype=np.float64
+    )
+    centered: Array = src_flat - src_mean
+    matched: Array = np.asarray(centered @ transform.T + ref_mean, dtype=np.float64)
+    result: Array = (1.0 - alpha) * src_flat + alpha * matched
+    return np.asarray(result.reshape(src.shape), dtype=np.float64)
 
 
 def save_color_png(image: Array, path: str | Path) -> None:
     """Persist RGB data as an 8-bit PNG (the only operation that clips)."""
     arr = _rgb(image)
-    if np.any((arr < 0) | (arr > 1)):
+    if bool(np.any((arr < 0) | (arr > 1))):
         raise ValueError("PNG helper expects normalized RGB values in 0..1")
     Image.fromarray(np.rint(arr * 255.0).astype(np.uint8), mode="RGB").save(path, format="PNG")
 

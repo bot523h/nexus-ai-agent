@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from nexus_ai_agent.creative.packs.color import (
+from nexus_ai_agent.creative.speech_cinema.color_imaging import (
     hdr_to_sdr_filmic_tonemap,
     load_color_png,
     matrix_sqrt_spd,

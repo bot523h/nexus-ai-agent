@@ -1,35 +1,27 @@
-"""Hyperion Phase 3 color processing pack."""
+"""Hyperion Phase 3 color capability pack: pure data contract.
 
-from .operations import (
-    color_match_ot,
-    hdr_to_sdr_filmic_tonemap,
-    load_color_png,
-    load_png,
-    matrix_sqrt_spd,
-    save_color_png,
-    save_png,
-    shot_to_shot_color_match_ot,
-    tonemap_hdr_to_sdr,
-    validate_spd_covariance,
-    verify_color_png,
-    verify_png,
-    white_balance,
-    white_balance_chromatic_adaptation,
-)
+This package is part of the capability-pack substrate, which is NumPy-free and
+import-restricted by ``tests/architecture``.  It only declares *which* color
+operations exist.  The kernels live in
+``nexus_ai_agent.creative.speech_cinema.color_imaging`` and are bound to these
+names by ``nexus_ai_agent.creative.speech_cinema.color_ops``.
+"""
 
-__all__ = [
+from __future__ import annotations
+
+from typing import Final
+
+OPERATIONS: Final[tuple[str, ...]] = (
     "white_balance_chromatic_adaptation",
-    "white_balance",
     "hdr_to_sdr_filmic_tonemap",
-    "tonemap_hdr_to_sdr",
     "shot_to_shot_color_match_ot",
-    "color_match_ot",
     "validate_spd_covariance",
     "matrix_sqrt_spd",
     "save_color_png",
     "load_color_png",
     "verify_color_png",
-    "save_png",
-    "load_png",
-    "verify_png",
-]
+)
+
+KELVIN_RANGE: Final[tuple[float, float]] = (2000.0, 15000.0)
+
+__all__ = ["KELVIN_RANGE", "OPERATIONS"]

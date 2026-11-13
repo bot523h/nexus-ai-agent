@@ -26,10 +26,10 @@ def _interp(x: np.ndarray, n: int) -> np.ndarray:
     lo = np.floor(pos).astype(int)
     hi = np.minimum(lo + 1, len(x) - 1)
     a = (pos - lo).astype(np.float32)
-    return (
-        x[lo] * (1 - a).reshape((-1,) + (1,) * (x.ndim - 1))
-        + x[hi] * a.reshape((-1,) + (1,) * (x.ndim - 1))
-    ).astype(np.float32)
+    blended = x[lo] * (1 - a).reshape((-1,) + (1,) * (x.ndim - 1)) + x[hi] * a.reshape(
+        (-1,) + (1,) * (x.ndim - 1)
+    )
+    return np.asarray(blended, dtype=np.float32)
 
 
 def time_scale(
@@ -52,8 +52,22 @@ def time_scale(
     return TimeScaleResult(y, int(x.shape[0]), target, target / x.shape[0] if x.shape[0] else 0.0)
 
 
-def scale_audio(audio: np.ndarray, target_frames: int, **kwargs) -> np.ndarray:
-    return time_scale(audio, target_frames, **kwargs).audio
+def scale_audio(
+    audio: np.ndarray,
+    target_frames: int,
+    sample_rate: int | None = None,
+    *,
+    window_size: int = 1024,
+    hop_size: int | None = None,
+) -> np.ndarray:
+    result = time_scale(
+        audio,
+        target_frames,
+        sample_rate,
+        window_size=window_size,
+        hop_size=hop_size,
+    )
+    return result.audio
 
 
 def validate_frame_count(audio: np.ndarray, expected: int) -> bool:

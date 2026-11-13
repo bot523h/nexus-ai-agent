@@ -1,5 +1,7 @@
 """Hyperion Phase 2 speech-cinema primitives."""
 
+from .color_ops import HANDLERS as COLOR_HANDLERS
+from .color_ops import bind_operations as bind_color_operations
 from .forced_aligner import (
     AcousticFeatures,
     AlignmentResult,
@@ -56,4 +58,6 @@ __all__ = [
     "parse_srt",
     "parse_vtt",
     "subtitle_sha256",
+    "COLOR_HANDLERS",
+    "bind_color_operations",
 ]

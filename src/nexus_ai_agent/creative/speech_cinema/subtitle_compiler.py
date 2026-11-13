@@ -40,10 +40,10 @@ def partition_cues(
 ) -> tuple[SubtitleCue, ...]:
     ws = list(words)
     cuts = sorted(float(x) for x in shot_cuts)
-    out = []
-    group = []
+    out: list[SubtitleCue] = []
+    group: list[AlignedWord] = []
 
-    def flush():
+    def flush() -> None:
         if group:
             out.append(
                 SubtitleCue(
@@ -76,12 +76,12 @@ def serialize_srt(cues: list[SubtitleCue] | tuple[SubtitleCue, ...]) -> str:
     ) + ("\n" if cues else "")
 
 
-def serialize_vtt(cues):
+def serialize_vtt(cues: list[SubtitleCue] | tuple[SubtitleCue, ...]) -> str:
     body = "\n\n".join(f"{_stamp(c.start, True)} --> {_stamp(c.end, True)}\n{c.text}" for c in cues)
     return "WEBVTT\n\n" + body + ("\n" if body else "")
 
 
-def serialize_ass(cues):
+def serialize_ass(cues: list[SubtitleCue] | tuple[SubtitleCue, ...]) -> str:
     head = (
         "[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
@@ -94,7 +94,7 @@ def serialize_ass(cues):
         "Effect, Text\n"
     )
 
-    def a(t):
+    def a(t: float) -> str:
         return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}"
 
     lines = (
@@ -106,7 +106,7 @@ def serialize_ass(cues):
 
 
 def parse_srt(text: str) -> tuple[SubtitleCue, ...]:
-    out = []
+    out: list[SubtitleCue] = []
     for block in re.split(r"\n\s*\n", text.strip()):
         lines = block.splitlines()
         if len(lines) < 3:
@@ -115,7 +115,7 @@ def parse_srt(text: str) -> tuple[SubtitleCue, ...]:
         if not m:
             continue
 
-        def p(x):
+        def p(x: str) -> float:
             h, mi, sec = x.replace(",", ".").split(":")
             return int(h) * 3600 + int(mi) * 60 + float(sec)
 
