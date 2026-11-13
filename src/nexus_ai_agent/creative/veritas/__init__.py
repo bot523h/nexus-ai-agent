@@ -141,7 +141,10 @@ from nexus_ai_agent.creative.veritas.thermodynamic_arrow_of_time import (
     verify_retarded_causality,
 )
 from nexus_ai_agent.creative.veritas.veritas_spine_adapter import (
+    VeritasArtifactPassportRecord,
     VeritasAssetVersionRecord,
+    VeritasLineageRepository,
+    VeritasLineageStore,
     VeritasMediaVerificationError,
     VeritasSpinePublishRequest,
     VeritasSpinePublishResult,
@@ -163,7 +166,10 @@ __all__ = [
     "validate_rotary_subframes",
     "VeritasHealingRefusalError",
     "heal_cinema_shot",
+    "VeritasArtifactPassportRecord",
     "VeritasAssetVersionRecord",
+    "VeritasLineageRepository",
+    "VeritasLineageStore",
     "VeritasMediaVerificationError",
     "VeritasSpinePublishRequest",
     "VeritasSpinePublishResult",

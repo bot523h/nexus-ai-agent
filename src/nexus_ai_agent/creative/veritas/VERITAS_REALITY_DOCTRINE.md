@@ -330,3 +330,43 @@ textured corrupted fixture still fails decoded Laws 11–14 and is refused.
 Never publish the latter merely because state receipts report zero residuals.
 The mutation suite contains 66 internal source mutants (M72–M137), separate
 from the fifteen disabled-handler mutants and fifty-six fault probes.
+
+### Live-audit remediation: local forensic and lineage contracts
+
+Rotary rendering now accepts a positive integer `angular_harmonic_m` and uses
+`ceil(m * abs(omega) / (0.85 * pi * source_fps))` for the oversampling factor.
+The declared harmonic is in the hashed temporal evidence. The verifier checks
+harmonic Nyquist and phase increments and independently evaluates scalar
+trigonometric inverse coordinates and convex pixel bounds, in addition to full
+RGB8 renderer replay. This does not infer the highest harmonic of arbitrary
+texture or close the existing multi-law textured observation gap.
+
+MP4 verification decodes raw RGB24 without output frame-rate conversion, checks
+frame byte count, the input stream rate and every decoded presentation timestamp.
+A newly hashed but wrong-rate/wrong-count container is still refused. Decode is
+bounded to one frame beyond the expected count, sufficient to reject excess.
+
+Failed staged verification and pre-promotion fencing retain the attempt under
+`.quarantine/<attempt>_<token>/` with a deterministic receipt containing the
+failure reason and observed regular-file SHA-256 digests. Colliding forensic
+identities retain later failures under unique retry subdirectories. Existing
+published bytes are not touched by these failures. Early invalid/unauthorized
+requests, for which no stage exists, do not fabricate media evidence.
+
+The default local lineage store holds a POSIX interprocess lock across disk CAS
+checks, verification and publication. Immutable, fsynced generation directories
+contain both AssetVersion and ArtifactPassport tables; an atomic `_lineage`
+symlink swap makes both tables visible together. Snapshot readers resolve that
+pointer once. The lock lives outside `published_root`; stale tokens and failed
+verification cannot mutate the public ledger. Exact deterministic compilation
+retries verify existing public media and reuse the record; conflicting retries
+are refused. Repository injection and a pre-staging authorization hook permit
+canonical integration by the caller, without claiming a distributed transaction
+or an actual canonical CommandBus implementation inside this ownership scope.
+
+The ledger pointer and media directory promotion are separate filesystem
+operations: caught commit failures roll media back into quarantine, but a process
+crash between those two operations can leave unindexed public media. Recovery
+of that crash window is not claimed as a fully transactional publication system.
+The branch remains hardened but **not 100% complete** while textured HFR output
+still fails the unchanged decoded Laws 11–14 predicates.

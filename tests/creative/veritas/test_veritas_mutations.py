@@ -429,8 +429,8 @@ CLOSURE_MUTATIONS = [
     (
         "M110",
         omnia,
-        "np.ceil(abs(angular_velocity_rad_s) / (0.85 * np.pi * fps))",
-        "np.floor(abs(angular_velocity_rad_s) / (0.85 * np.pi * fps))",
+        "np.ceil(angular_harmonic_m * base_ratio)",
+        "np.floor(angular_harmonic_m * base_ratio)",
     ),
     ("M111", omnia, "output_fps = fps * factor", "output_fps = fps + factor"),
     (

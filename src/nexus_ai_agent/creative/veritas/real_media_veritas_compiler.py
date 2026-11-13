@@ -411,9 +411,12 @@ def compile_and_heal_real_media_shot(
     sample_rate_hz: int = 48000,
     mux_mp4: bool = True,
     fps: float = 24.0,
+    angular_harmonic_m: int = 1,
     use_synthetic_corrupted_shot: bool = False,
 ) -> RealMediaVeritasBundle:
     """Heal real media through all fifteen laws, write it, and seal the receipts."""
+    if type(angular_harmonic_m) is not int or angular_harmonic_m < 1:
+        raise ValueError("angular harmonic must be a positive integer")
     if num_frames < 1 or height < 2 or width < 2:
         raise ValueError("num_frames must be >= 1 and frame dimensions >= 2")
     if sample_rate_hz <= 0:
@@ -513,7 +516,7 @@ def compile_and_heal_real_media_shot(
 
     output_fps = fps
     rotary_evidence_sha256 = ""
-    if abs(omega) / fps >= np.pi:
+    if angular_harmonic_m * abs(omega) / fps >= np.pi:
         # Explicit known-velocity model re-render, not inferred recovery of an
         # arbitrary aliased recording. Render every new timestamp from a bound
         # canonical reference, and persist that reference plus exposure model.
@@ -523,12 +526,14 @@ def compile_and_heal_real_media_shot(
             angular_velocity_rad_s=omega,
             fps=fps,
             source_frame_count=frame_count,
+            angular_harmonic_m=angular_harmonic_m,
         )
         healed = sequence.frames
         output_fps = sequence.output_fps
         frame_count = len(healed)
         evidence = {
             "kind": "known-velocity-model-render",
+            "angular_harmonic_m": angular_harmonic_m,
             "reference_rgb_u8": reference_u8.tolist(),
             "timestamps_s": sequence.timestamps_s.tolist(),
             "phases_rad": sequence.phases_rad.tolist(),

@@ -720,6 +720,7 @@ class RotarySubframeSequence:
     angular_velocity_rad_s: float
     source_frame_count: int
     shutter_angle_deg: float
+    angular_harmonic_m: int = 1
 
 
 def synthesize_rotary_subframes(
@@ -730,9 +731,13 @@ def synthesize_rotary_subframes(
     source_frame_count: int = 2,
     shutter_angle_deg: float = 180.0,
     samples: int = 16,
+    angular_harmonic_m: int = 1,
 ) -> RotarySubframeSequence:
     """Render a known rigid-rotation model on a genuinely expanded timeline.
 
+    The caller declares the highest retained angular spatial harmonic (spoke
+    count); the clock bounds harmonic times angular velocity. This declaration
+    is not a spectral-bandwidth estimator for arbitrary textures.
     Frames are generated from a supplied reference and known velocity. This does
     not infer ambiguous motion from an arbitrary aliased recording. Pixel
     regeneration is intentionally explicit; no source-frame interpolation is
@@ -749,7 +754,11 @@ def synthesize_rotary_subframes(
         )
     if not np.isfinite(shutter_angle_deg) or not 0 < shutter_angle_deg <= 360:
         raise StroboscopicAliasingError("invalid shutter angle")
-    factor = max(1, int(np.ceil(abs(angular_velocity_rad_s) / (0.85 * np.pi * fps))))
+    if type(angular_harmonic_m) is not int or angular_harmonic_m < 1:
+        raise StroboscopicAliasingError("angular harmonic must be a positive integer")
+    # Keep the base bound explicit; scale its numerator for higher spatial harmonics.
+    base_ratio = abs(angular_velocity_rad_s) / (0.85 * np.pi * fps)
+    factor = max(1, int(np.ceil(angular_harmonic_m * base_ratio)))
     count = source_frame_count * factor
     if count > 4096 or count * patch.size * samples > 50_000_000:
         raise StroboscopicAliasingError("temporal synthesis exceeds local resource budget")
@@ -784,6 +793,7 @@ def synthesize_rotary_subframes(
         angular_velocity_rad_s,
         source_frame_count,
         shutter,
+        angular_harmonic_m,
     )
 
 
@@ -808,7 +818,12 @@ def validate_rotary_subframes(
     expected_phases = sequence.angular_velocity_rad_s * sequence.timestamps_s
     if not np.allclose(sequence.phases_rad, expected_phases, rtol=0, atol=1e-12):
         violations.append("phase_discontinuity")
-    if abs(sequence.angular_velocity_rad_s) / sequence.output_fps >= np.pi:
+    if type(sequence.angular_harmonic_m) is not int or sequence.angular_harmonic_m < 1:
+        violations.append("invalid_angular_harmonic")
+    if (
+        sequence.angular_harmonic_m * abs(sequence.angular_velocity_rad_s) / sequence.output_fps
+        >= np.pi
+    ):
         violations.append("nyquist_rotary_aliasing")
     expected_exposure = sequence.shutter_angle_deg / (360 * sequence.output_fps)
     nodes = sequence.exposure_offsets_s
