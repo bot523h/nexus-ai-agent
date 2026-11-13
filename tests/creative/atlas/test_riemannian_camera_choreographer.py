@@ -30,7 +30,8 @@ def _rotation(axis: list[float], angle: float) -> np.ndarray:
     a = np.array(axis, dtype=np.float64)
     a = a / np.linalg.norm(a)
     k = rcc._skew(a)
-    return np.eye(3) + math.sin(angle) * k + (1.0 - math.cos(angle)) * (k @ k)
+    result: np.ndarray = np.eye(3) + math.sin(angle) * k + (1.0 - math.cos(angle)) * (k @ k)
+    return result
 
 
 # --- minimum-snap position trajectory --------------------------------------------
