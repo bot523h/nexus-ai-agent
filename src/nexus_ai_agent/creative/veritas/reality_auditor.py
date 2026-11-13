@@ -155,6 +155,14 @@ class VeritasRealityPassport:
         }
 
 
+class VeritasHealingRefusalError(ValueError):
+    """A projected shot still violates raw observations; no clean state returned."""
+
+    def __init__(self, passport: VeritasRealityPassport) -> None:
+        self.passport = passport
+        super().__init__(f"physical projection not clean: {passport.details_before}")
+
+
 def _rfc6962_digest(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     leaf = b"\x00" + encoded
@@ -177,7 +185,10 @@ class VeritasRealityAuditor:
             target_sdf=shot.hand_sdf,
             grip_active=shot.hand_grip_active,
         )
-        return result.violations_before, result.violations_after
+        recheck = audit_and_project_hand_skeleton(
+            result.skeleton, target_sdf=shot.hand_sdf, grip_active=shot.hand_grip_active
+        )
+        return result.violations_before, recheck.violations_before
 
     def _check_eyes(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         before: list[str] = []
@@ -244,7 +255,8 @@ class VeritasRealityAuditor:
         if shot.objects is None:
             return (), ()
         audit = audit_object_permanence(shot.objects, impulse_bound=self.impulse_bound)
-        return audit.violations_before, audit.violations_after
+        recheck = audit_object_permanence(audit.repaired_states, impulse_bound=self.impulse_bound)
+        return audit.violations_before, recheck.violations_before
 
     def _check_typography(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         if shot.typography is None:
@@ -299,7 +311,10 @@ class VeritasRealityAuditor:
         if penetrated:
             before.append("cloth_penetration")
         after: list[str] = []
-        if result.min_sdf < -1e-6:
+        if result.min_sdf < -1e-6 or any(
+            float(np.min(capsule_sdf(result.positions, start, end, radius))) < -1e-6
+            for start, end, radius in capsules
+        ):
             after.append("cloth_penetration")
         return tuple(before), tuple(after)
 
@@ -311,11 +326,23 @@ class VeritasRealityAuditor:
                 shot.scalar_frames, tolerance=self.entropy_tolerance
             )
             before.extend(audit.violations_before)
-            after.extend(audit.violations_after)
+            recheck = audit_and_enforce_thermodynamic_arrow(
+                audit.healed_frames, tolerance=self.entropy_tolerance
+            )
+            after.extend(recheck.violations_before)
         if shot.wave is not None:
             wave, source, impact, speed = shot.wave
             if not verify_retarded_causality(wave, source, impact, speed):
                 before.append("acausal_wavefront")
+                y, x = np.indices(wave.shape[1:])
+                radius = np.hypot(y - source[0], x - source[1])
+                elapsed = np.arange(wave.shape[0]) - impact
+                support = (elapsed[:, None, None] >= 0) & (
+                    radius[None] <= speed * elapsed[:, None, None]
+                )
+                repaired_wave = np.where(support, wave, 0.0)
+                if not verify_retarded_causality(repaired_wave, source, impact, speed):
+                    after.append("acausal_wavefront")
         return tuple(before), tuple(after)
 
     def _check_face(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -357,15 +384,22 @@ class VeritasRealityAuditor:
         result = stabilize_madelung_phase_coherence(
             density, phase, previous_density=previous_density
         )
-        return tuple(result.violations), tuple(result.violations_after)
+        recheck = stabilize_madelung_phase_coherence(
+            result.density, result.phase, previous_density=previous_density
+        )
+        return tuple(result.violations), tuple(recheck.violations)
 
     def _law_anamorphic(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         if shot.anamorphic is None:
             return (), ()
         result = rectify_anamorphic_dioptric_optics(shot.anamorphic)
-        before = tuple(result.violations)
+        # Squeeze and the lens's cos^4 map are configuration, not evidence of
+        # a defect in an otherwise flat decoded image. Only observed defects
+        # belong in the shot audit (kernel receipts still expose lens settings).
+        before = tuple(v for v in result.violations if v == "lateral_chromatic_aberration")
         after: list[str] = []
-        if result.fringe_after >= result.fringe_before:
+        recheck = rectify_anamorphic_dioptric_optics(result.healed_image)
+        if recheck.fringe_before > 1e-6:
             after.append("lateral_chromatic_aberration")
         if result.vignette_residual_after > result.vignette_residual_before:
             after.append("cos4_off_axis_vignetting")
@@ -385,7 +419,15 @@ class VeritasRealityAuditor:
                 f2_hz=shot.viseme[5] if len(shot.viseme) == 6 else None,
             )
             before.extend(result.violations_before)
-            after.extend(result.violations_after)
+            recheck = audit_and_heal_viseme_formant_sync(
+                result.au26_healed,
+                result.au20_healed,
+                f1_hz=formant1,
+                rms_energy=energy,
+                au18_lip_pucker=result.au18_lip_pucker_healed,
+                f2_hz=shot.viseme[5] if len(shot.viseme) == 6 else None,
+            )
+            after.extend(recheck.violations_before)
         if shot.doppler is not None:
             signal, velocity = shot.doppler
             shifted = apply_acoustic_doppler_shift(signal, 48000.0, velocity)
@@ -403,6 +445,10 @@ class VeritasRealityAuditor:
         after: list[str] = []
         if result.divergence_after >= 1e-12:
             after.append("non_solenoidal_velocity")
+        recheck = enforce_helmholtz_fluid_conservation(
+            result.solenoidal_velocity, result.healed_height
+        )
+        after.extend(recheck.violations)
         target = float(result.volume_before[0])
         if not bool(np.allclose(result.volume_after, target, rtol=1e-10, atol=1e-12)):
             after.append("free_surface_volume_drift")
@@ -415,8 +461,10 @@ class VeritasRealityAuditor:
         result = rectify_stroboscopic_wagon_wheel(patch, angular_velocity_rad_s=omega, fps=fps)
         before = tuple(result.violations)
         after: list[str] = []
-        if abs(omega) > 0.0 and abs(result.blur_arc_rad) <= 0.0:
-            after.append("nyquist_rotary_aliasing")
+        recheck = rectify_stroboscopic_wagon_wheel(
+            result.healed_patch, angular_velocity_rad_s=omega, fps=fps
+        )
+        after.extend(recheck.violations)
         return before, tuple(after)
 
     def _heal_geometric_observations(self, shot: CinemaShot) -> CinemaShot:
@@ -546,6 +594,106 @@ class VeritasRealityAuditor:
         healed = self._heal_geometric_observations(shot) if before else shot
         after, _ = self._check_collision(healed)
         return before, after
+
+    def heal_cinema_shot(self, shot: CinemaShot) -> CinemaShot:
+        """Return projected observations only if a fresh RAW audit is clean.
+
+        Some operators are regularizers, not exact projections. In particular,
+        a shutter blur cannot change the Nyquist limit of an unchanged frame
+        rate, and chromatic resampling need not eliminate a measured fringe.
+        Refuse rather than erase observations, falsify motion metadata, or label
+        an intermediate state as physically clean.
+        """
+        healed = self._heal_geometric_observations(shot)
+        if shot.hand is not None:
+            hand = audit_and_project_hand_skeleton(
+                shot.hand, target_sdf=shot.hand_sdf, grip_active=shot.hand_grip_active
+            )
+            healed = replace(healed, hand=hand.skeleton)
+        if shot.objects is not None:
+            objects = audit_object_permanence(shot.objects, impulse_bound=self.impulse_bound)
+            healed = replace(healed, objects=objects.repaired_states)
+        if shot.cloth is not None:
+            positions, velocities, edges, capsules = shot.cloth
+            cloth = step_xpbd_cloth_simulation(positions, velocities, edges, capsules=capsules)
+            healed = replace(
+                healed, cloth=(cloth.positions, cloth.velocities, edges.copy(), capsules)
+            )
+        if shot.scalar_frames is not None:
+            arrow = audit_and_enforce_thermodynamic_arrow(
+                shot.scalar_frames, tolerance=self.entropy_tolerance
+            )
+            healed = replace(healed, scalar_frames=arrow.healed_frames)
+        if shot.wave is not None:
+            wave, source, impact, speed = shot.wave
+            y, x = np.indices(wave.shape[1:])
+            distance = np.hypot(y - source[0], x - source[1])
+            elapsed = np.arange(wave.shape[0]) - impact
+            support = (elapsed[:, None, None] >= 0) & (
+                distance[None, :, :] <= speed * elapsed[:, None, None]
+            )
+            healed = replace(healed, wave=(np.where(support, wave, 0.0), source, impact, speed))
+        if shot.facs is not None:
+            facs = enforce_facs_synergy_manifold(shot.facs, f0_envelope=shot.f0_envelope)
+            healed = replace(healed, facs=facs.action_units)
+        if shot.phase is not None:
+            rho, phi = shot.phase[:2]
+            previous = shot.phase[2] if len(shot.phase) == 3 else None
+            phase = stabilize_madelung_phase_coherence(rho, phi, previous_density=previous)
+            state = (
+                (phase.density, phase.phase)
+                if previous is None
+                else (phase.density, phase.phase, previous.copy())
+            )
+            healed = replace(healed, phase=state)
+        if shot.anamorphic is not None:
+            optics = rectify_anamorphic_dioptric_optics(shot.anamorphic)
+            healed = replace(healed, anamorphic=optics.healed_image)
+        if shot.viseme is not None:
+            jaw, stretch, f1, energy = shot.viseme[:4]
+            viseme = audit_and_heal_viseme_formant_sync(
+                jaw,
+                stretch,
+                f1_hz=f1,
+                rms_energy=energy,
+                au18_lip_pucker=shot.viseme[4] if len(shot.viseme) == 6 else None,
+                f2_hz=shot.viseme[5] if len(shot.viseme) == 6 else None,
+            )
+            if len(shot.viseme) == 6:
+                assert viseme.au18_lip_pucker_healed is not None
+                healed = replace(
+                    healed,
+                    viseme=(
+                        viseme.au26_healed,
+                        viseme.au20_healed,
+                        f1.copy(),
+                        energy.copy(),
+                        viseme.au18_lip_pucker_healed,
+                        shot.viseme[5].copy(),
+                    ),
+                )
+            else:
+                healed = replace(
+                    healed,
+                    viseme=(viseme.au26_healed, viseme.au20_healed, f1.copy(), energy.copy()),
+                )
+        if shot.doppler is not None:
+            signal, speed = shot.doppler
+            doppler = apply_acoustic_doppler_shift(signal, 48000, speed)
+            # Consumed source-motion correction is represented in the waveform;
+            # the resulting listener-space observation has zero radial velocity.
+            healed = replace(healed, doppler=(doppler.shifted_signal, 0.0))
+        if shot.fluid is not None:
+            fluid = enforce_helmholtz_fluid_conservation(*shot.fluid)
+            healed = replace(healed, fluid=(fluid.solenoidal_velocity, fluid.healed_height))
+        if shot.rotor is not None:
+            patch, omega, fps = shot.rotor
+            rotor = rectify_stroboscopic_wagon_wheel(patch, angular_velocity_rad_s=omega, fps=fps)
+            healed = replace(healed, rotor=(rotor.healed_patch, omega, fps))
+        recheck = self.audit_and_heal_cinema_shot(healed)
+        if recheck.pre_audit_violations or recheck.post_heal_violations:
+            raise VeritasHealingRefusalError(recheck)
+        return healed
 
     def _dispatch(self, law: int, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         handlers = {
@@ -723,3 +871,8 @@ def build_corrupted_15_law_cinema_shot(*, height: int = 16, width: int = 16) -> 
         fluid=fluid,
         rotor=rotor,
     )
+
+
+def heal_cinema_shot(shot: CinemaShot) -> CinemaShot:
+    """Project and independently re-audit a shot, refusing residual violations."""
+    return VeritasRealityAuditor().heal_cinema_shot(shot)

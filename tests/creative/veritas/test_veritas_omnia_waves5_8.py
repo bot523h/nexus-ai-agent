@@ -334,3 +334,64 @@ def test_geometric_healing_preserves_observations_and_reaudits() -> None:
         np.sum(healed.collision[2][:, None] * healed.collision[0], axis=0),
         np.sum(shot.collision[2][:, None] * shot.collision[0], axis=0),
     )
+
+
+def test_full_shot_refuses_false_zero_zero_certificate() -> None:
+    from nexus_ai_agent.creative.veritas import (
+        VeritasHealingRefusalError,
+        build_corrupted_15_law_cinema_shot,
+        heal_cinema_shot,
+    )
+
+    shot = build_corrupted_15_law_cinema_shot()
+    with pytest.raises(VeritasHealingRefusalError) as refusal:
+        heal_cinema_shot(shot)
+    residual = refusal.value.passport
+    assert residual.details_before[12] == ("lateral_chromatic_aberration",)
+    assert residual.details_before[15] == ("nyquist_rotary_aliasing",)
+    assert all(not values for law, values in residual.details_before.items() if law not in (12, 15))
+    assert shot.rotor is not None and shot.rotor[1:] == (200.0, 24.0)
+
+
+def test_representable_clean_optics_and_sampling_round_trip() -> None:
+    from dataclasses import replace
+
+    from nexus_ai_agent.creative.veritas import (
+        VeritasRealityAuditor,
+        build_corrupted_15_law_cinema_shot,
+        heal_cinema_shot,
+        retarded_wavefront,
+    )
+
+    shot = build_corrupted_15_law_cinema_shot()
+    assert shot.phase is not None and shot.viseme is not None and shot.rotor is not None
+    wave = retarded_wavefront((8, 8), (3.0, 3.0), 1.0, 1.0)
+    wave[0, 0, 0] = 1
+    shot = replace(
+        shot,
+        anamorphic=np.zeros((16, 16, 3)),
+        rotor=(shot.rotor[0], 20, 24),
+        phase=(shot.phase[0], shot.phase[1], shot.phase[0] * 0.5),
+        wave=(wave, (3.0, 3.0), 1.0, 1.0),
+        viseme=(*shot.viseme, np.zeros(3), np.full(3, 800.0)),
+    )
+    healed = heal_cinema_shot(shot)
+    report = VeritasRealityAuditor().audit_and_heal_cinema_shot(healed)
+    assert report.pre_audit_violations == report.post_heal_violations == 0
+    assert healed.hand is not None and shot.hand is not None
+    assert healed.objects is not None and shot.objects is not None
+    assert healed.cloth is not None and shot.cloth is not None
+    assert healed.scalar_frames is not None and shot.scalar_frames is not None
+    assert healed.facs is not None and shot.facs is not None
+    assert healed.fluid is not None and shot.fluid is not None
+    assert len(healed.objects) == len(shot.objects)
+    assert healed.cloth[0].shape == shot.cloth[0].shape
+    assert healed.scalar_frames.shape == shot.scalar_frames.shape
+    assert healed.facs.shape == shot.facs.shape
+    assert healed.fluid[0].shape == shot.fluid[0].shape
+
+
+def test_empty_shot_projection_is_clean() -> None:
+    from nexus_ai_agent.creative.veritas import CinemaShot, heal_cinema_shot
+
+    assert heal_cinema_shot(CinemaShot()) == CinemaShot()

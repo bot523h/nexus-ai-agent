@@ -214,17 +214,60 @@ are not semantic face tracking or ground-truth optical flow. Synthetic corruptio
 can still be explicitly requested. Caller RGB channels are retained by the
 rotary filter and caller frames receive no VERITAS text overlay.
 
-**Not yet closure-verified:** independent physical re-audit of decoded artifacts,
-full per-frame application of Laws 11/14/15, and independently checked inclusion
-proofs. Content integrity is not a proof of physical validity. No
-`post_disk_verified=True` physical certificate is issued by this implementation.
+## Independent disk verification and staged local publication
 
-## NEXUS staged execution spine: required contract (pending implementation)
+The compiler writes `veritas_merkle_bundle.json` with all fifteen payloads and
+index-dependent inclusion proofs. The tree now uses the actual RFC 6962 split
+at the largest power of two below the number of leaves, not odd-leaf duplication.
+The independent verifier anchors that manifest to the compile result, decodes
+PNG/WAV, checks sample clocks, recomputes content/file hashes and verifies every
+inclusion path. Present MP4s must also decode using local FFmpeg. Unexpected
+files, symlinks, invalid paths and raw decoded physical violations are refused.
+A second hypothetical healing pass is not enough to certify the on-disk pixels.
 
-Intent/recipe -> private attempt staging -> fifteen-law render -> independent
-post-disk verifier -> fenced atomic publish -> AssetVersion/passport lineage.
-The adapter must bind recipe identity and input content, reject path traversal,
-verify disk hashes and all fifteen Merkle inclusion proofs, check the active
-fencing token, and refuse publication on any mismatch. Atomic promotion must
-publish only verified artifacts; a failed attempt must publish no bytes.
-This contract is a target, not a claim that the adapter currently exists.
+The local staged adapter checks identifiers and the active token before staging,
+uses an exclusively created private attempt directory, verifies disk evidence,
+checks the token again and atomically renames the directory on the same filesystem.
+Failed verification cleans only the attempt it created and writes no published
+files. Existing publication directories are refused, not overwritten. Records
+bind project, revision, shot, attempt, token, Merkle root and MP4 digest; published
+bundle paths are relocated. The return record is local lineage, not a persisted
+canonical NEXUS database AssetVersion. Recipe canonicalization currently uses
+Python sorted compact JSON, not a full RFC 8785 number implementation.
+
+**Concurrency boundary:** a callback token getter plus `os.replace` cannot
+provide a distributed atomic compare-and-swap against arbitrary external lease
+changes. Integrators must serialize lease mutation and publication externally.
+This adapter is not a claim of canonical database-spine transaction integration.
+
+## Honest healing boundary: not a final 15-law closure
+
+`heal_cinema_shot` constructs repaired observations and re-audits them from raw
+state, refusing via `VeritasHealingRefusalError` if any violation remains. The
+original simultaneous-corruption fixture still has measured fringe under Law
+12 and above-Nyquist motion under Law 15. The current optical resampler reduces
+but does not eliminate that fringe, and rotary blur does not change angular
+velocity or acquisition frame rate. The method does NOT erase those observations,
+change the reported fps to hide aliasing, or return a false 0/0 certificate.
+
+The previous compiler tests that asserted complete restoration of this fixture
+were corrected to require visible residual violations. A separate round-trip
+test uses already-compliant optics and sampling while exercising actual repairs
+of the remaining observations, preserving observation shapes/counts. That test
+must not be described as a simultaneous fifteen-law-corruption 0/0 proof.
+
+Frame application now uses consecutive density per frame, RGB optics, spectral
+velocity projection applied as backward RGB warps and supplied rotor exposure
+integration across every RGB channel/frame. Unobserved angular velocity is not
+invented. Clean PCM is not given a fabricated Doppler source or viseme envelope.
+These operators remain model-based proxies: the independent verifier may refuse
+media they cannot make compliant. Plain compile results default to
+`post_disk_verified=False`; only independently verified staged results set it True.
+
+## Mutation evidence classification
+
+M72--M81 are ten actual isolated source/operator changes, each rejected by the
+same oracle that first passes on the baseline. The fifteen existing handler-disable
+mutants are retained. The fifty-six historical fault-injection probes are retained
+but are not source-code mutants. Thus the 81 checks consist of 25 runtime/source
+mutants and 56 input probes, NOT 81 independent mathematical code mutants.

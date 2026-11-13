@@ -104,9 +104,11 @@ from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
 from nexus_ai_agent.creative.veritas.reality_auditor import (
     LAW_NAMES,
     CinemaShot,
+    VeritasHealingRefusalError,
     VeritasRealityAuditor,
     VeritasRealityPassport,
     build_corrupted_15_law_cinema_shot,
+    heal_cinema_shot,
 )
 from nexus_ai_agent.creative.veritas.se3_object_permanence import (
     ObjectState,
@@ -134,6 +136,16 @@ from nexus_ai_agent.creative.veritas.thermodynamic_arrow_of_time import (
     spatial_entropy,
     verify_retarded_causality,
 )
+from nexus_ai_agent.creative.veritas.veritas_spine_adapter import (
+    VeritasAssetVersionRecord,
+    VeritasMediaVerificationError,
+    VeritasSpinePublishRequest,
+    VeritasSpinePublishResult,
+    VeritasSpineVerificationError,
+    VeritasStagedSpineAdapter,
+    VeritasStaleFencingTokenError,
+    verify_compiled_veritas_bundle_on_disk,
+)
 from nexus_ai_agent.creative.veritas.xpbd_cloth_drape import (
     XpbdResult,
     capsule_sdf,
@@ -141,6 +153,16 @@ from nexus_ai_agent.creative.veritas.xpbd_cloth_drape import (
 )
 
 __all__ = [
+    "VeritasHealingRefusalError",
+    "heal_cinema_shot",
+    "VeritasAssetVersionRecord",
+    "VeritasMediaVerificationError",
+    "VeritasSpinePublishRequest",
+    "VeritasSpinePublishResult",
+    "VeritasSpineVerificationError",
+    "VeritasStagedSpineAdapter",
+    "VeritasStaleFencingTokenError",
+    "verify_compiled_veritas_bundle_on_disk",
     "CANONICAL_JOINT_COUNT",
     "CANONICAL_RAYS",
     "ArrowAudit",

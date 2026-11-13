@@ -30,8 +30,10 @@ from nexus_ai_agent.creative.veritas.homography_diegetic_typography import (
     render_homography_locked_diegetic_text,
 )
 from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
+    _bilinear,
     apply_acoustic_doppler_shift,
     audit_and_heal_viseme_formant_sync,
+    enforce_helmholtz_fluid_conservation,
     rectify_anamorphic_dioptric_optics,
     rectify_stroboscopic_wagon_wheel,
 )
@@ -88,6 +90,7 @@ class RealMediaVeritasBundle:
     input_audio_content_sha256: str
     output_audio_content_sha256: str
     output_mp4_sha256: str
+    post_disk_verified: bool = False
 
     @property
     def healed(self) -> bool:
@@ -281,15 +284,26 @@ def _synthesize_frames(num_frames: int, height: int, width: int) -> FloatArray:
 
 
 def _merkle_root(leaves: list[str]) -> str:
-    level = [bytes.fromhex(leaf) for leaf in leaves]
-    while len(level) > 1:
-        if len(level) % 2 == 1:
-            level.append(level[-1])
-        level = [
-            hashlib.sha256(b"\x01" + level[i] + level[i + 1]).digest()
-            for i in range(0, len(level), 2)
-        ]
-    return level[0].hex()
+    """RFC 6962 MTH: split at largest power of two strictly below n."""
+    if not leaves:
+        return hashlib.sha256(b"").hexdigest()
+    if len(leaves) == 1:
+        return leaves[0]
+    split = 1 << ((len(leaves) - 1).bit_length() - 1)
+    return hashlib.sha256(
+        b"\x01"
+        + bytes.fromhex(_merkle_root(leaves[:split]))
+        + bytes.fromhex(_merkle_root(leaves[split:]))
+    ).hexdigest()
+
+
+def _inclusion_proof(leaves: list[str], index: int) -> list[str]:
+    if len(leaves) == 1:
+        return []
+    split = 1 << ((len(leaves) - 1).bit_length() - 1)
+    if index < split:
+        return _inclusion_proof(leaves[:split], index) + [_merkle_root(leaves[split:])]
+    return _inclusion_proof(leaves[split:], index - split) + [_merkle_root(leaves[:split])]
 
 
 def _leaf_digest(payload: dict[str, Any]) -> str:
@@ -433,34 +447,56 @@ def compile_and_heal_real_media_shot(
 
     passport = VeritasRealityAuditor().audit_and_heal_cinema_shot(active_shot)
 
-    # --- Law 11: Bohmian-gated phase stabilisation of the luminance stack. ---
-    density = np.asarray(frames.mean(axis=3), dtype=np.float64)
-    phase = np.asarray(
-        np.arctan2(frames[:, :, :, 2] - 0.5, frames[:, :, :, 0] - 0.5), dtype=np.float64
-    )
-    coherence = stabilize_madelung_phase_coherence(density, phase)
-    weight = (
-        np.ones_like(density)
-        if coherence.bohmian_weight is None
-        else np.asarray(coherence.bohmian_weight, dtype=np.float64)
-    )
+    # Apply temporal continuity to each RGB frame using its actual predecessor.
+    # These are model-based restorations, not inferred ground-truth scene motion;
+    # only a separate decoded audit can authorize physical publication.
     healed = np.array(frames, copy=True)
-    healed += (
-        0.02
-        * weight[:, :, :, None]
-        * (np.cos(coherence.phase)[:, :, :, None] - np.cos(phase)[:, :, :, None])
-    )
-
-    # --- Law 12: anamorphic chromatic and cos^4 vignette rectification. ---
+    previous_density: FloatArray | None = None
     for index in range(frame_count):
+        density = np.asarray(healed[index] @ np.array([0.2126, 0.7152, 0.0722]))
+        gy, gx = np.gradient(density)
+        phase = np.arctan2(gy, gx)
+        coherence = stabilize_madelung_phase_coherence(
+            density, phase, previous_density=previous_density, dt=1.0 / 24.0
+        )
+        if coherence.violations:
+            ratio = np.divide(
+                coherence.density, density, out=np.ones_like(density), where=density > 1e-12
+            )
+            healed[index] *= ratio[:, :, None]
+        previous_density = np.asarray(healed[index] @ np.array([0.2126, 0.7152, 0.0722]))
         optics = rectify_anamorphic_dioptric_optics(np.clip(healed[index], 0.0, 1.0))
-        healed[index] = optics.healed_image
+        if optics.fringe_before > 1e-6:
+            healed[index] = optics.healed_image
 
-    # --- Law 15: anti-stroboscopic rotary-shutter motion blur on frame zero. ---
-    rotor = rectify_stroboscopic_wagon_wheel(
-        healed[0], angular_velocity_rad_s=200.0, fps=24.0, shutter_angle_deg=180.0
-    )
-    healed[0] = rotor.healed_patch
+    # Project the measured inter-frame velocity and apply the correction as
+    # a backward RGB warp. A clean, static sequence has exactly zero correction.
+    observed = extract_cinema_shot_from_media(np.clip(healed, 0, 1), pcm)
+    assert observed.fluid is not None
+    velocity, height_field = observed.fluid
+    fluid = enforce_helmholtz_fluid_conservation(velocity, height_field)
+    correction = (fluid.solenoidal_velocity - velocity) / 24.0
+    yy, xx = np.meshgrid(np.arange(frame_h), np.arange(frame_w), indexing="ij")
+    for index in range(1, frame_count):
+        for channel in range(3):
+            healed[index, :, :, channel] = _bilinear(
+                healed[index, :, :, channel],
+                xx - correction[index, :, :, 0],
+                yy - correction[index, :, :, 1],
+            )
+    # Do not invent a 200 rad/s rotor in caller media. Apply exposure integration
+    # over all frames and channels only when such motion was actually supplied.
+    omega = active_shot.rotor[1] if active_shot.rotor is not None else 0.0
+    if abs(omega) > 0:
+        for index in range(frame_count):
+            for channel in range(3):
+                rotor = rectify_stroboscopic_wagon_wheel(
+                    healed[index, :, :, channel],
+                    angular_velocity_rad_s=omega,
+                    fps=24.0,
+                    shutter_angle_deg=180.0,
+                )
+                healed[index, :, :, channel] = rotor.healed_patch
 
     # --- Law 6: homography-locked diegetic typography composite. ---
     quad = np.array(
@@ -476,23 +512,28 @@ def compile_and_heal_real_media_shot(
 
     healed_frames = np.asarray(np.round(np.clip(healed, 0.0, 1.0) * 255.0), dtype=np.uint8)
 
-    # --- Law 13: acoustic Doppler plus viseme-gated speech envelope. ---
-    doppler = apply_acoustic_doppler_shift(pcm, float(sample_rate_hz), 12.0)
-    au26 = np.asarray(
-        np.clip(frames[:, :, :, 1].mean(axis=(1, 2)) * 1.6, 0.0, 1.0), dtype=np.float64
-    )
-    viseme = audit_and_heal_viseme_formant_sync(
-        au26,
-        np.full(frame_count, 0.85),
-        f1_hz=np.full(frame_count, 780.0),
-        rms_energy=np.full(frame_count, 0.05),
-    )
-    gate = np.interp(
-        np.linspace(0.0, 1.0, pcm.size),
-        np.linspace(0.0, 1.0, viseme.au26_healed.size),
-        viseme.au26_healed,
-    )
-    healed_audio_pcm = np.asarray(doppler.shifted_signal * (0.5 + 0.5 * gate), dtype=np.float64)
+    # Preserve clean PCM. No fixed moving source or synthetic viseme envelope
+    # is injected into a caller's audio.
+    speed = active_shot.doppler[1] if active_shot.doppler is not None else 0.0
+    doppler = apply_acoustic_doppler_shift(pcm, float(sample_rate_hz), speed)
+    healed_audio_pcm = doppler.shifted_signal
+    if active_shot.viseme is not None:
+        jaw, stretch, f1, energy = active_shot.viseme[:4]
+        viseme = audit_and_heal_viseme_formant_sync(
+            jaw,
+            stretch,
+            f1_hz=f1,
+            rms_energy=energy,
+            au18_lip_pucker=active_shot.viseme[4] if len(active_shot.viseme) == 6 else None,
+            f2_hz=active_shot.viseme[5] if len(active_shot.viseme) == 6 else None,
+        )
+        if viseme.violations_before:
+            gate = np.interp(
+                np.linspace(0, 1, pcm.size),
+                np.linspace(0, 1, viseme.au26_healed.size),
+                viseme.au26_healed,
+            )
+            healed_audio_pcm = np.asarray(healed_audio_pcm * (0.5 + 0.5 * gate))
 
     png_paths: list[Path] = []
     for index in range(frame_count):
@@ -618,7 +659,7 @@ def compile_and_heal_real_media_shot(
     pre = int(passport.pre_audit_violations)
     post = int(passport.post_heal_violations)
 
-    return RealMediaVeritasBundle(
+    bundle = RealMediaVeritasBundle(
         output_dir=str(directory),
         png_paths=tuple(str(path) for path in png_paths),
         wav_path=str(wav_path),
@@ -642,6 +683,23 @@ def compile_and_heal_real_media_shot(
         output_audio_content_sha256=output_audio_content_sha256,
         output_mp4_sha256=mp4_sha256 or "",
     )
+
+    manifest = bundle.as_dict()
+    manifest.update(
+        {
+            "png_names": [Path(path).name for path in bundle.png_paths],
+            "wav_name": Path(bundle.wav_path).name,
+            "mp4_name": Path(bundle.mp4_path).name if bundle.mp4_path else "",
+            "leaf_payloads": payloads,
+            "inclusion_proofs": [_inclusion_proof(leaves, i) for i in range(LAW_COUNT)],
+            "sample_rate_hz": sample_rate_hz,
+            "fps": 24.0,
+        }
+    )
+    (directory / "veritas_merkle_bundle.json").write_text(
+        json.dumps(manifest, sort_keys=True, allow_nan=False), encoding="utf-8"
+    )
+    return bundle
 
 
 __all__ = [
