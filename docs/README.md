@@ -63,6 +63,9 @@ placeholder text.
 | [architecture/TRUST_CONTROL_PLANE.md](architecture/TRUST_CONTROL_PLANE.md) | Trust/truth domains A–E: interfaces, authorities, non-bypass guards, honest status. |
 | [architecture/SEC4_EGRESS_GATE_DESIGN.md](architecture/SEC4_EGRESS_GATE_DESIGN.md) | SEC-4 unified provider-egress gate — DESIGN ONLY: the ungated `/ai`→Gemini path (evidence), the full first-party egress inventory, the single-authority `EgressGate` architecture, a staged migration plan, adversarial test definitions, and the five OPEN owner decisions. No runtime change. |
 | [architecture/TRUTH_DOCTOR.md](architecture/TRUTH_DOCTOR.md) | The repo-truth authority (law R16): one pure-stdlib scanner for version lock-step, docs index/link integrity, boundary-law→test resolution, documentation claim witnesses, and truthy-default verdict reads — with its finding codes and honest limits. |
+| [architecture/NAGAR_CONNECT_API_CONTRACT_20261111.md](architecture/NAGAR_CONNECT_API_CONTRACT_20261111.md) | NAGAR Connect transport/API contract and authorization boundaries. |
+| [architecture/NAGAR_CONNECT_FOUNDATION_20261111.md](architecture/NAGAR_CONNECT_FOUNDATION_20261111.md) | NAGAR Connect domain foundation and lifecycle contract. |
+| [architecture/NAGAR_CONNECT_THREAT_MODEL_20261111.md](architecture/NAGAR_CONNECT_THREAT_MODEL_20261111.md) | NAGAR Connect threat model and security controls. |
 
 ## Product (living view — updated in place)
 

@@ -1,4 +1,4 @@
-.PHONY: setup lint types deps audit test migrate smoke run dev-bootstrap hooks version-check board-check mutations
+.PHONY: setup lint types deps audit test migrate smoke run dev-bootstrap hooks version-check board-check truth-check mutations
 
 setup:
 	pip install -e ".[dev]"
@@ -14,6 +14,10 @@ version-check:
 
 board-check:
 	python scripts/check_board_integrity.py
+
+# Fail early when generated operation truth is stale.
+truth-check:
+	python -m nexus_ai_agent.nagar --check
 
 lint:
 	ruff check . && ruff format --check .

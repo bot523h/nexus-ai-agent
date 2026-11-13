@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Integer, UniqueConstraint
+from sqlalchemy import BigInteger, Integer, LargeBinary, Text, UniqueConstraint
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.types import TypeDecorator, TypeEngine
 from sqlmodel import Field, SQLModel
@@ -74,6 +74,42 @@ class ToolRun(SQLModel, table=True):
     error: str | None = Field(default=None)
     duration_ms: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class NexusConnectCredential(SQLModel, table=True):
+    """Encrypted NAGAR CONNECT credential envelope.
+
+    The model intentionally contains no plaintext secret or KEK. It lives in
+    the canonical storage metadata so Alembic, SQLite bootstrap, and runtime
+    all observe one schema authority.
+    """
+
+    __tablename__ = "nexus_connect_credential"
+    __table_args__ = (UniqueConstraint("credential_id", name="uq_nexus_connect_credential_id"),)
+
+    connection_id: str = Field(primary_key=True, max_length=128)
+    principal_kind: str = Field(max_length=16)
+    principal_id: str = Field(index=True, max_length=128)
+    project_ids_json: str = Field(sa_type=Text)
+    scopes_json: str = Field(sa_type=Text)
+    credential_id: str = Field(max_length=128)
+    credential_state: str = Field(max_length=16)
+    connection_state: str = Field(index=True, max_length=16)
+    credential_expires_at: datetime | None = Field(default=None)
+    connection_expires_at: datetime | None = Field(default=None)
+    created_at: datetime
+    last_used_at: datetime | None = Field(default=None)
+    rotated_from: str | None = Field(default=None, max_length=128)
+    kek_id: str = Field(index=True, max_length=128)
+    wrapped_dek: bytes = Field(sa_type=LargeBinary)
+    wrap_nonce: bytes = Field(sa_type=LargeBinary)
+    data_nonce: bytes = Field(sa_type=LargeBinary)
+    ciphertext: bytes = Field(sa_type=LargeBinary)
+    aad: bytes = Field(sa_type=LargeBinary)
+    schema_version: int
+    row_version: int = Field(default=1)
+    revoked_at: datetime | None = Field(default=None)
+    updated_at: datetime = Field(index=True)
 
 
 # ── v1.2.0 models ────────────────────────────────────────────────────
