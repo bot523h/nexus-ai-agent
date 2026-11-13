@@ -184,3 +184,70 @@ into a linear `v1` `TimelineDAG`.
 | 8 | No bypass of policy/CommandBus/staging | handoff is inert (`build_handoff` sets `authority: advisory`); export uses `WorkspaceFilesystem`/`AttemptStaging` |
 | 9 | Artifacts reopened and verified | `export_report` re-reads and digest-checks; `test_episodic_e2e_stress.py` |
 | 10 | Docs match code | this document; `tests/creative/**` |
+
+## 12. Wave 9 — radiative-transfer relighting (transcendental computational cinematography)
+
+Wave 9 adds `creative/composition/radiative_relighting.py`: an order-2
+**spherical-harmonics** lighting solver, a **Frankot–Chellappa** integrable
+normal-field reconstructor, and a **Cook–Torrance** GGX specular term, all in
+pure NumPy over scene-linear float radiance. It exposes two pack operations
+(`scene.harmonize_radiative_transfer`, `portrait.relight_spherical_harmonics`)
+that are *additive* to the ten-operation catalogue and do not change it.
+
+### 12.1 Spherical-harmonics irradiance
+
+Real SH basis up to degree 2 (`Y_00..Y_22`), orthonormal on the sphere:
+
+```
+Y00  = 0.2820947917738781            A0 = pi
+Y1x  = 0.4886025119029199 * {y, z, x}  A1 = 2*pi/3
+Y2x  = {1.0925484305920792, 0.3153915652525200, 0.5462742152960396} (mixed)  A2 = pi/4
+```
+
+Lambertian irradiance is `E_c(n) = sum_lm A_l L_lm Y_lm(n)`. The transfer
+weights `(pi, 2 pi/3, pi/4)` are the *exact* cosine-lobe convolution coefficients,
+so a constant radiance `c` gives `E = pi c` (verified to `2e-3` by an
+equirectangular quadrature whose solid-angle weights are normalised to exactly
+`4 pi`). The equivalent 4x4 per-band matrix `M_c` satisfies
+`n~^T M_c n~ == E_c` to `< 1e-9`. Key-light direction is the normalised `l = 1`
+dipole; a zero dipole (ambient-only) returns `(0, 0, 1)`.
+
+### 12.2 Integrable normal-field reconstruction (Frankot–Chellappa)
+
+Given gradients `(p, q)`, the surface is reconstructed in the Fourier domain,
+projecting onto the integrable subspace; the residual discrete curl
+`d(dz/dx)/dy - d(dz/dy)/dx` is `< 1e-10` on an integrable field. The resulting
+normal map is unit length by construction. A non-integrable input is projected,
+not rejected (the projection is real and finite).
+
+### 12.3 Relighting
+
+`relight_subject_to_environment` performs an intrinsic split
+(`shading = luminance`, `albedo = subject / shading`, so `albedo * shading ==
+subject` exactly), scales by the target/source irradiance ratio, adds an optional
+Cook–Torrance GGX highlight driven by the target key-light direction, and blends
+through the mask. An identical probe with `specular_strength = 0` is a numerical
+identity. All inputs are bounded (`MAX_RELIGHT_PIXELS = 4 194 304`) and validated;
+NaN/Inf, non-unit normals, degenerate masks, out-of-range roughness/specular and
+singular normal-fit systems all raise typed errors.
+
+### 12.4 Evidence
+
+- `tests/creative/composition/test_radiative_relighting.py`: 47 real-computation
+  and adversarial tests (Monte-Carlo orthonormality, closed-form ambient
+  irradiance, matrix-vs-sum equivalence, discrete-curl integrability, refusal
+  cases).
+- Registry tests in `tests/creative/packs/{scene,portrait}/`.
+- Coverage: `radiative_relighting.py`, `scene_ops.py`, `portrait_ops.py` at
+  **100% line + branch** (measured with the `coverage` CLI under `--timid`, since
+  the in-process `pytest-cov` tracer cannot reload NumPy in this environment).
+
+### 12.5 Scope limits (honest)
+
+- The SH fit is a **Tikhonov-regularised least squares** over the supplied
+  normals, not a physically-unique decomposition; albedo and illumination are
+  not separable in general.
+- The relighting result is an *editorial* lighting match, not a calibrated
+  radiometric measurement; no GUM uncertainty budget is claimed for it.
+- No scipy/cv2/torch/cloud-AI dependency is used; everything is NumPy + stdlib.
+

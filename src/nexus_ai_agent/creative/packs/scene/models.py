@@ -18,6 +18,9 @@ OPERATION_PERSPECTIVE_HORIZON_LEVEL = "scene.perspective_horizon_level"
 OPERATION_SKY_REPLACEMENT_RELIT = "scene.sky_replacement_relit"
 OPERATION_REFLECTION_WATER_GLASS = "scene.reflection_water_glass_synth"
 
+#: Wave 9 addition (not one of the ten catalogue operations).
+OPERATION_HARMONIZE_RADIATIVE_TRANSFER = "scene.harmonize_radiative_transfer"
+
 #: The ten catalogue scene operations this pack implements.
 SCENE_OPERATIONS: tuple[str, ...] = (
     OPERATION_INSERT_OBJECT_WITH_SHADOW,
@@ -103,6 +106,17 @@ class ReflectionInput(_Strict):
     waves: float = Field(default=0.0, ge=0.0, le=8.0)
 
 
+class RadiativeTransferHarmonizeInput(_Strict):
+    """Relight a composited foreground to a target SH environment (Wave 9)."""
+
+    image_id: str = Field(min_length=1, max_length=128)
+    normal_id: str = Field(min_length=1, max_length=128)
+    mask_id: str = Field(min_length=1, max_length=128)
+    target_ambient: float = Field(default=0.3, ge=0.0, le=8.0)
+    roughness: float = Field(default=0.35, gt=0.0, le=1.0)
+    specular_strength: float = Field(default=0.25, ge=0.0, le=1.0)
+
+
 __all__ = [
     "SCENE_PACKAGE_ID",
     "DOMAIN",
@@ -117,4 +131,5 @@ __all__ = [
     "HorizonLevelInput",
     "SkyRelitInput",
     "ReflectionInput",
+    "RadiativeTransferHarmonizeInput",
 ]

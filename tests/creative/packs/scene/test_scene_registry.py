@@ -175,3 +175,34 @@ def test_models_forbid_extra_fields() -> None:
             "scene.lens_distortion_correct",
             {"image_id": "i", "bogus": 1, "_images": {"i": image(1)}},
         )
+
+
+def test_wave9_radiative_transfer_op_registered() -> None:
+    from nexus_ai_agent.creative.packs.scene import RadiativeTransferHarmonizeInput
+
+    reg = build_scene_registry()
+    spec = reg.get_spec("scene.harmonize_radiative_transfer")
+    assert spec.input_model is RadiativeTransferHarmonizeInput
+
+
+def test_wave9_radiative_transfer_handler_relights() -> None:
+    size = 24
+    y, x = np.mgrid[0:size, 0:size]
+    nx = (x - size / 2) / (size / 2)
+    ny = (y - size / 2) / (size / 2)
+    nz = np.sqrt(np.clip(1.0 - nx * nx - ny * ny, 0.05, None))
+    normals = np.stack([nx, ny, nz], axis=-1)
+    normals = normals / np.linalg.norm(normals, axis=-1, keepdims=True)
+    img = np.clip(normals[..., 2:3] * np.array([0.8, 0.7, 0.6]), 0.0, 1.0).astype(np.float32)
+    out = _run(
+        "scene.harmonize_radiative_transfer",
+        {
+            "image_id": "i",
+            "normal_id": "n",
+            "mask_id": "m",
+            "target_ambient": 0.6,
+            "_images": {"i": img, "n": normals, "m": mask(size=size, box=(0, 0, size, size))},
+        },
+    )
+    assert out["image"].shape == img.shape
+    assert np.isfinite(out["image"]).all()

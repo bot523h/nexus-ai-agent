@@ -19,12 +19,14 @@ from nexus_ai_agent.creative.packs.scene.models import (
     DOMAIN,
     SCENE_OPERATIONS,
     SCENE_PACKAGE_ID,
+    RadiativeTransferHarmonizeInput,
 )
 
 __all__ = [
     "DOMAIN",
     "SCENE_OPERATIONS",
     "SCENE_PACKAGE_ID",
+    "RadiativeTransferHarmonizeInput",
     "DegenerateGeometryError",
     "InvalidImageError",
     "InvalidMaskError",

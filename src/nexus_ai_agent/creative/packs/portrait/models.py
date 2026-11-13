@@ -18,6 +18,9 @@ OPERATION_HEAD_REPOSE_3D = "portrait.head_repose_3d"
 OPERATION_DOF_BOKEH = "portrait.depth_of_field_bokeh"
 OPERATION_AGING_DEAGING = "portrait.aging_deaging_geometry"
 
+#: Wave 9 addition (not one of the ten catalogue operations).
+OPERATION_RELIGHT_SPHERICAL_HARMONICS = "portrait.relight_spherical_harmonics"
+
 #: The ten catalogue portrait operations this pack implements.
 PORTRAIT_OPERATIONS: tuple[str, ...] = (
     OPERATION_GAZE_REDIRECTION,
@@ -102,6 +105,17 @@ class AgingInput(_Strict):
     strength: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
+class SphericalHarmonicsRelightInput(_Strict):
+    """Relight a portrait with a target SH environment (Wave 9)."""
+
+    image_id: str = Field(min_length=1, max_length=128)
+    normal_id: str = Field(min_length=1, max_length=128)
+    mask_id: str = Field(min_length=1, max_length=128)
+    target_ambient: float = Field(default=0.3, ge=0.0, le=8.0)
+    roughness: float = Field(default=0.35, gt=0.0, le=1.0)
+    specular_strength: float = Field(default=0.25, ge=0.0, le=1.0)
+
+
 __all__ = [
     "PORTRAIT_PACKAGE_ID",
     "DOMAIN",
@@ -116,4 +130,5 @@ __all__ = [
     "HeadReposeInput",
     "DepthOfFieldBokehInput",
     "AgingInput",
+    "SphericalHarmonicsRelightInput",
 ]

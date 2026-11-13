@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from portrait_fixtures import depth, image, make_context, make_project, region
 from pydantic import ValidationError
@@ -133,3 +134,36 @@ def test_models_enforce_numeric_bounds() -> None:
             "portrait.head_repose_3d",
             {"image_id": "i", "yaw_deg": 40.0, "_images": {"i": image(1)}},
         )
+
+
+def test_wave9_sh_relight_op_registered() -> None:
+    from nexus_ai_agent.creative.packs.portrait import SphericalHarmonicsRelightInput
+
+    reg = build_portrait_registry()
+    spec = reg.get_spec("portrait.relight_spherical_harmonics")
+    assert spec.input_model is SphericalHarmonicsRelightInput
+
+
+def test_wave9_sh_relight_handler_relights() -> None:
+    size = 24
+    y, x = np.mgrid[0:size, 0:size]
+    nx = (x - size / 2) / (size / 2)
+    ny = (y - size / 2) / (size / 2)
+    nz = np.sqrt(np.clip(1.0 - nx * nx - ny * ny, 0.05, None))
+    normals = np.stack([nx, ny, nz], axis=-1)
+    normals = normals / np.linalg.norm(normals, axis=-1, keepdims=True)
+    img = np.clip(normals[..., 2:3] * np.array([0.8, 0.7, 0.6]), 0.0, 1.0).astype(np.float32)
+    reg = build_portrait_registry()
+    spec = reg.get_spec("portrait.relight_spherical_harmonics")
+    ctx = make_context(
+        {
+            "image_id": "i",
+            "normal_id": "n",
+            "mask_id": "m",
+            "target_ambient": 0.6,
+            "_images": {"i": img, "n": normals, "m": region(size=size, box=(0, 0, size, size))},
+        }
+    )
+    out = spec.handler(make_project(), ctx).output
+    assert out["image"].shape == img.shape
+    assert np.isfinite(out["image"]).all()

@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from nexus_ai_agent.creative.composition import portrait_imaging as kernels
+from nexus_ai_agent.creative.composition import radiative_relighting as relight
 from nexus_ai_agent.creative.packs.portrait.errors import InvalidImageError
 from nexus_ai_agent.creative.packs.portrait.models import (
     DOMAIN,
@@ -29,6 +30,7 @@ from nexus_ai_agent.creative.packs.portrait.models import (
     HeadReposeInput,
     MicroExpressionInput,
     SkintoneInput,
+    SphericalHarmonicsRelightInput,
     TeethWhiteningInput,
 )
 from nexus_ai_agent.creative.studio.capabilities import (
@@ -186,6 +188,27 @@ def _aging(project: Project, context: OperationContext) -> OperationOutcome:
     )
 
 
+def _relight_spherical_harmonics(project: Project, context: OperationContext) -> OperationOutcome:
+    """Relight a portrait to a declared ambient SH environment."""
+    data, store = _split(context)
+    p = SphericalHarmonicsRelightInput.model_validate(data)
+    image = _require(store, p.image_id)
+    normals = _require(store, p.normal_id)
+    mask = _require(store, p.mask_id)
+    source = relight.estimate_sh_from_subject_normals(image, normals, mask)
+    target = relight.ambient_probe(p.target_ambient)
+    result = relight.relight_subject_to_environment(
+        image,
+        normals,
+        mask,
+        source_probe=source,
+        target_probe=target,
+        roughness=p.roughness,
+        specular_strength=p.specular_strength,
+    )
+    return _out(project, context, result)
+
+
 PORTRAIT_HANDLERS: dict[str, Any] = {
     "gaze_redirection": (_gaze, GazeRedirectionInput, "Redirect the gaze inside the eye mask."),
     "eyeblink_synthesis": (_blink, EyeblinkInput, "Deterministic sin^2 blink closure."),
@@ -224,6 +247,11 @@ PORTRAIT_HANDLERS: dict[str, Any] = {
         _aging,
         AgingInput,
         "Metric landmark displacement for aging/de-aging.",
+    ),
+    "relight_spherical_harmonics": (
+        _relight_spherical_harmonics,
+        SphericalHarmonicsRelightInput,
+        "L2 spherical-harmonics radiative-transfer portrait relight.",
     ),
 }
 

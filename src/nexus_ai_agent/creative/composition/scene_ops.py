@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from nexus_ai_agent.creative.composition import radiative_relighting as relight
 from nexus_ai_agent.creative.composition import scene_imaging as kernels
 from nexus_ai_agent.creative.packs.scene.errors import InvalidImageError
 from nexus_ai_agent.creative.packs.scene.models import (
@@ -27,6 +28,7 @@ from nexus_ai_agent.creative.packs.scene.models import (
     InsertObjectInput,
     LensDistortionInput,
     OutpaintInput,
+    RadiativeTransferHarmonizeInput,
     ReflectionInput,
     RemoveObjectInput,
     SkyRelitInput,
@@ -181,6 +183,27 @@ def _reflection(project: Project, context: OperationContext) -> OperationOutcome
     )
 
 
+def _harmonize_radiative_transfer(project: Project, context: OperationContext) -> OperationOutcome:
+    """Relight a composited foreground to a declared ambient SH environment."""
+    data, store = _split(context)
+    p = RadiativeTransferHarmonizeInput.model_validate(data)
+    image = _require(store, p.image_id)
+    normals = _require(store, p.normal_id)
+    mask = _require(store, p.mask_id)
+    source = relight.estimate_sh_from_subject_normals(image, normals, mask)
+    target = relight.ambient_probe(p.target_ambient)
+    result = relight.relight_subject_to_environment(
+        image,
+        normals,
+        mask,
+        source_probe=source,
+        target_probe=target,
+        roughness=p.roughness,
+        specular_strength=p.specular_strength,
+    )
+    return _out(project, context, result)
+
+
 SCENE_HANDLERS: dict[str, Any] = {
     "insert_object_with_shadow": (
         _insert_object,
@@ -227,6 +250,11 @@ SCENE_HANDLERS: dict[str, Any] = {
         _reflection,
         ReflectionInput,
         "Flat mirror reflection with Fresnel and ripples.",
+    ),
+    "harmonize_radiative_transfer": (
+        _harmonize_radiative_transfer,
+        RadiativeTransferHarmonizeInput,
+        "L2 spherical-harmonics radiative-transfer relight of a composite.",
     ),
 }
 

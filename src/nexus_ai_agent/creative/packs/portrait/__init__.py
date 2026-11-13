@@ -18,12 +18,14 @@ from nexus_ai_agent.creative.packs.portrait.models import (
     DOMAIN,
     PORTRAIT_OPERATIONS,
     PORTRAIT_PACKAGE_ID,
+    SphericalHarmonicsRelightInput,
 )
 
 __all__ = [
     "DOMAIN",
     "PORTRAIT_OPERATIONS",
     "PORTRAIT_PACKAGE_ID",
+    "SphericalHarmonicsRelightInput",
     "DegenerateWarpError",
     "InvalidImageError",
     "InvalidRegionError",
