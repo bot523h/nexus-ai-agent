@@ -1,0 +1,12 @@
+{
+  "schema": "nexus-p0-benchmark/v1",
+  "generated_at": "2026-11-12T07:14:13.561482+00:00",
+  "rows": 20000,
+  "artifact_bytes": 5538253,
+  "dump_seconds": 0.077,
+  "restore_seconds": 0.94,
+  "verify_seconds": 0.011,
+  "restored_rows": 20000,
+  "row_count_matches": true,
+  "throughput_rows_per_s_restore": 21269.6
+}

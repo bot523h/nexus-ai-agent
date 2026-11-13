@@ -20,7 +20,7 @@ from nexus_ai_agent.storage.checkpoint_lifecycle_adapter import (
 from nexus_ai_agent.storage.checkpoint_lifecycle_pg_store import PostgresCheckpointLifecycleStore
 from nexus_ai_agent.storage.checkpoint_lifecycle_store import SQLiteCheckpointLifecycleStore
 from nexus_ai_agent.storage.checkpoint_reconciler import lifecycle_db_path
-from nexus_ai_agent.storage.db import normalize_database_url, resolve_database_url
+from nexus_ai_agent.storage.db import normalize_database_url
 
 # Factory returning the underlying saver plus the pool that owns its
 # connection (``None`` when the saver manages its own connection).
@@ -271,9 +271,14 @@ def get_checkpointer(
     by the store.  See ``docs/ops/NEON_LIFECYCLE_RUNBOOK.md``.
     """
     from nexus_ai_agent.config.settings import get_settings
+    from nexus_ai_agent.storage.db import enforce_postgres_policy
 
     settings = get_settings()
-    database_url = resolve_database_url()
+    # F-005: consult the policy, not the raw URL. ``enforce_postgres_policy``
+    # raises when PostgreSQL is required but unconfigured, so a production
+    # deployment can never silently checkpoint into a local SQLite file — the
+    # ``REQUIRE_POSTGRES=true → SQLite`` bypass this finding names.
+    database_url = enforce_postgres_policy()
     if database_url is not None:
         pg_saver = PostgresCheckpointer(database_url)
         if not settings.lifecycle_hooks_enabled:

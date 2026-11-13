@@ -702,6 +702,13 @@ jobs:
       # (job_id, attempt) retracts, and two racing token advances never leave
       # the lower token (task-282 slice-2 F1).
       - run: pytest -q tests/integration/test_artifact_binding_postgres_concurrency.py
+      # Persistence/durability on the real backend (mission P0): migrations are
+      # idempotent, a row survives a full engine rebuild, backend is postgresql.
+      - run: pytest -q tests/integration/test_postgres_persistence.py
+      # F-002 restore atomicity: a failed restore rolls back (the sentinel row
+      # survives) and the full NEXUS dump applies under --single-transaction.
+      # Runs against a disposable database it creates and drops per run.
+      - run: pytest -q tests/integration/test_postgres_restore_atomicity.py
       # Shared read-only adapter contract, PG leg (incl. golden stability
       # and the f4a9c2e71b08 lifecycle table).
       - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py

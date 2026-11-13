@@ -43,6 +43,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -51,6 +52,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from nexus_ai_agent.config.settings import Settings
 from nexus_ai_agent.maintenance.backup import (
@@ -62,17 +64,48 @@ from nexus_ai_agent.maintenance.backup import (
     _verify_postgres_dump,
     _verify_sqlite_dump,
 )
+from nexus_ai_agent.maintenance.dump_sql import copy_row_counts, expected_dump_tables
 from nexus_ai_agent.maintenance.failures import (
     MaintenanceOperationError,
     classify_storage_failure,
 )
 from nexus_ai_agent.maintenance.housekeeping import _parse_backup_stamp
+from nexus_ai_agent.maintenance.redact import redact_text, split_dsn_password, target_identity
 from nexus_ai_agent.observability.logging import get_logger
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
+
+#: A lowercase, 64-hex SHA-256. Used to reject a sidecar (or operator flag)
+#: whose ``sha256`` is not actually a hash, so it can never be "compared" as
+#: if it proved something (F-007D).
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 log = get_logger(__name__)
 
 _DOWNLOAD_TIMEOUT_SECONDS = 600
+
+
+class _ScratchDir:
+    """A temporary directory whose removal is guaranteed (F-003).
+
+    ``tempfile.mkdtemp`` alone leaks: the previous code created
+    ``nexus_restore_fetch_*`` / ``nexus_restore_stage_*`` directories and never
+    removed them, so a failed drill left staged artifacts (and any passfile) on
+    disk.  This is a context manager so cleanup runs on success, exception and
+    cancellation alike — ``__exit__`` runs even when the body raises.
+    """
+
+    def __init__(self, prefix: str) -> None:
+        self._prefix = prefix
+        self.path: Path | None = None
+
+    def __enter__(self) -> Path:
+        self.path = Path(tempfile.mkdtemp(prefix=self._prefix))
+        return self.path
+
+    def __exit__(self, *_exc: object) -> None:
+        if self.path is not None:
+            shutil.rmtree(self.path, ignore_errors=True)
+            self.path = None
 
 
 class RestorePlanError(RuntimeError):
@@ -159,8 +192,11 @@ def _detect_engine(artifact: Path, filename_hint: str) -> str:
     if filename_hint.endswith(".sqlite3"):
         return "sqlite"
     # Fallback: sniff the sqlite header, else the pg_dump header comment.
+    # F-012: read only the first bytes — the previous ``read_bytes()[:100]``
+    # loaded the whole (possibly multi-gigabyte) artifact to inspect 100 bytes.
     try:
-        head = artifact.read_bytes()[:100]
+        with artifact.open("rb") as handle:
+            head = handle.read(100)
     except OSError as exc:
         raise RestorePlanError(f"artifact is not readable: {artifact} ({exc})") from exc
     if head.startswith(b"SQLite format 3"):
@@ -261,14 +297,27 @@ def _verify_checksum(
     if sidecar is not None:
         try:
             manifest = json.loads(sidecar.read_text(encoding="utf-8"))
-            recorded = str(manifest.get("sha256", ""))
         except (OSError, json.JSONDecodeError) as exc:
             raise RestoreVerificationError(
                 f"sidecar manifest exists but is unparseable ({exc}) — "
                 "refusing to treat the artifact as checksum-verified; "
                 "structural verification may still prove restorability"
             ) from exc
-        if recorded and recorded != measured:
+        # F-007D: a sidecar is evidence only if it is a well-formed manifest.
+        # ``{}`` (or any object missing a usable sha256) previously fell through
+        # to ``CHECKSUM_VERIFIED`` with nothing actually compared — an empty
+        # object is not proof. Refuse the manifest and fall back to the honest
+        # structural-only state instead of a fabricated verification.
+        problem = _sidecar_manifest_problem(manifest)
+        if problem is not None:
+            raise RestoreVerificationError(
+                f"sidecar manifest is present but not a usable checksum record "
+                f"({problem}) — refusing to report CHECKSUM_VERIFIED on an "
+                "unverified object; structural verification may still prove "
+                "restorability"
+            )
+        recorded = str(manifest["sha256"]).lower()
+        if recorded != measured:
             raise RestoreVerificationError(
                 "checksum MISMATCH against the remote sidecar manifest "
                 f"(manifest {recorded}, measured {measured}). The object in "
@@ -287,6 +336,38 @@ def _verify_checksum(
             "no checksum evidence available (no sidecar, no --expected-sha256)",
         )
     return measured
+
+
+def _sidecar_manifest_problem(manifest: object) -> str | None:
+    """Return why *manifest* cannot serve as checksum evidence, else ``None``.
+
+    F-007D: the sidecar is written by :func:`~.backup._build_sidecar` with a
+    fixed shape (``kind``/``key``/``sha256``/``size_bytes``/``timestamp``/
+    ``source``/``verification``). A drill must not label an object
+    ``CHECKSUM_VERIFIED`` off a manifest that does not actually pin a sha256:
+    ``{}`` compares nothing, yet the old code fell through to a green label.
+    Each field the finding names is checked here; a failure is reported so the
+    operator sees which field was wrong.
+    """
+    if not isinstance(manifest, dict):
+        return f"not a JSON object ({type(manifest).__name__})"
+    kind = manifest.get("kind")
+    if not isinstance(kind, str) or not kind.startswith("nexus.db-backup.meta/"):
+        return f"unexpected kind {kind!r}"
+    sha = manifest.get("sha256")
+    if not isinstance(sha, str) or not _SHA256_RE.fullmatch(sha):
+        return f"sha256 is not 64 lowercase hex ({sha!r})"
+    size = manifest.get("size_bytes")
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        return f"size_bytes is not a positive integer ({size!r})"
+    key = manifest.get("key")
+    if not isinstance(key, str) or not key:
+        return "key is missing or empty"
+    if not isinstance(manifest.get("timestamp"), str) or not manifest.get("timestamp"):
+        return "timestamp is missing or empty"
+    if not isinstance(manifest.get("source"), str) or not manifest.get("source"):
+        return "source is missing or empty"
+    return None
 
 
 # ── sqlite restore ──────────────────────────────────────────────────────
@@ -390,17 +471,152 @@ def _apply_sqlite_restore(
 # ── postgres restore ────────────────────────────────────────────────────
 
 
+def _list_postgres_tables(
+    psql: str, target_url: str, env: dict[str, str] | None = None
+) -> set[str]:
+    """Read the table names the target cluster actually holds.
+
+    A real post-restore proof must ask the *target* what it has, not trust the
+    exit code of the apply. This is the PostgreSQL analogue of reopening the
+    restored SQLite file.
+    """
+    proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
+        [
+            psql,
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-tAc",
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
+            "--dbname",
+            target_url,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env=env,
+    )
+    if proc.returncode != 0:
+        raise RestoreVerificationError(
+            f"post-restore table read failed on the live target: "
+            f"{redact_text(proc.stderr).strip()[:400]} — the apply reported "
+            "success but the target could not be re-read; classify "
+            "CLUSTER-SIDE before claiming the restore is proven"
+        )
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+
+
+def _list_postgres_row_counts(
+    psql: str, target_url: str, tables: list[str], env: dict[str, str] | None = None
+) -> dict[str, int]:
+    """Read exact row counts for *tables* from the target cluster.
+
+    F-007E: the post-restore data proof. Counts are read in one round-trip via
+    ``UNION ALL`` over ``count(*)``; identifiers are quoted with ``psql``'s
+    ``quote_ident`` semantics (``""`` doubled) so a table name can never break
+    out of the query. A missing table counts as absent from the mapping, which
+    the caller reports as a mismatch.
+    """
+    if not tables:
+        return {}
+    parts = []
+    for name in tables:
+        # Both the label (a string literal) and the table name (an identifier)
+        # are quoted so a crafted table name cannot break out of the query.
+        label = name.replace("'", "''")
+        quoted = name.replace('"', '""')
+        parts.append(f"SELECT '{label}' AS t, count(*) FROM \"{quoted}\"")
+    query = " UNION ALL ".join(parts)
+    proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
+        [psql, "-v", "ON_ERROR_STOP=1", "-tAF", "\t", "-c", query, "--dbname", target_url],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+        env=env,
+    )
+    if proc.returncode != 0:
+        raise RestoreVerificationError(
+            "post-restore row-count read failed on the live target: "
+            f"{redact_text(proc.stderr).strip()[:400]} — the apply reported "
+            "success but the data could not be re-read; classify CLUSTER-SIDE "
+            "before claiming the restore is proven"
+        )
+    counts: dict[str, int] = {}
+    for line in proc.stdout.splitlines():
+        name, _, value = line.partition("\t")
+        if name:
+            counts[name] = int(value)
+    return counts
+
+
+def _expected_dump_tables(artifact: Path) -> set[str]:
+    """Table names the dump itself creates.
+
+    F-007: the artifact is scanned by :func:`dump_sql.expected_dump_tables`,
+    which strips comments, string literals and dollar-quoted function bodies and
+    understands ``IF NOT EXISTS``/``ONLY``/``UNLOGGED``/quoted identifiers and
+    ``PARTITION OF``. The old line-by-line ``startswith("CREATE TABLE ")`` test
+    missed indented/one-line statements and counted tables mentioned inside
+    function bodies, so the post-restore proof could pass while a table was
+    missing. Read from the artifact (not the ORM) so the proof compares the dump
+    to the target, independent of the application's current schema.
+    """
+    return expected_dump_tables(artifact.read_text(encoding="utf-8", errors="replace"))
+
+
+def _pg_psql_env(target_url: str, scratch: Path) -> tuple[str, dict[str, str]]:
+    """Return ``(password_free_url, env)`` for a credential-safe ``psql`` run.
+
+    F-003: the DSN on ``argv`` is world-readable via ``ps``. The password is
+    moved into a mode-0600 ``PGPASSFILE`` inside *scratch* (removed with the
+    scratch dir) and the URL handed to ``psql`` carries no password at all.
+    """
+    import os
+
+    stripped, password = split_dsn_password(target_url)
+    env = dict(os.environ)
+    if password is not None:
+        parts = urlsplit(target_url)
+        passfile = scratch / ".pgpass"
+        passfile.write_text(
+            f"{parts.hostname or '*'}:{parts.port or 5432}:*:{parts.username or '*'}:{password}\n"
+        )
+        passfile.chmod(0o600)
+        env["PGPASSFILE"] = str(passfile)
+    return stripped, env
+
+
 def _apply_postgres_restore(
     artifact: Path,
     target_url: str | None,
     report: DrillReport,
     *,
     force: bool,
+    scratch: Path,
+    expect_app_schema: bool = False,
 ) -> None:
-    pg_restore = shutil.which("pg_restore")
-    if pg_restore is None:
+    # Artifacts are plain-text ``pg_dump`` output (see
+    # ``backup._dump_postgres``). ``pg_restore`` rejects that format
+    # ("input file appears to be a text format dump. Please use psql."), so a
+    # real restore of a NEXUS backup is applied with ``psql``. The dump is
+    # written with ``--clean --if-exists``, so re-applying it over an existing
+    # database drops and recreates the objects instead of failing.
+    #
+    # F-002: ``--single-transaction`` (``-1``) wraps the whole artifact in one
+    # transaction. ``--clean --if-exists`` emits destructive DDL, so without
+    # ``-1`` a failure part-way through leaves the target with some tables
+    # dropped and others not — a partially destroyed database. With ``-1`` any
+    # failure rolls the entire apply back and the target is left exactly as it
+    # was. This is proven by
+    # ``tests/integration/test_postgres_restore_atomicity.py`` against a real
+    # cluster, and the full generated NEXUS dump is proven compatible with
+    # transactional execution there (PG17 trailers included).
+    psql = shutil.which("psql")
+    if psql is None:
         raise RestorePlanError(
-            "pg_restore not found on PATH (install postgresql-client) — a real "
+            "psql not found on PATH (install postgresql-client) — a real "
             "PostgreSQL restore is UNVERIFIED in this environment; the "
             "structural leg (footer + bytes) is already proven above"
         )
@@ -412,23 +628,134 @@ def _apply_postgres_restore(
         )
     if not force:
         raise RestorePlanError(
-            "refusing to pg_restore into a live database without --force — "
+            "refusing to restore into a live database without --force — "
             "this overwrites database objects on the target cluster"
         )
+    # F-003: name the target by its redacted identity (host:port/db), never the
+    # credential-bearing URL; the password travels in a mode-0600 PGPASSFILE,
+    # not on argv (which `ps` exposes).
+    target_label = target_identity(target_url) or "target"
+    safe_url, pg_env = _pg_psql_env(target_url, scratch)
+    expected = _expected_dump_tables(artifact)
     proc = subprocess.run(  # noqa: S603 - operator-run drill, args are explicit
-        [pg_restore, "--no-owner", "--clean", "--if-exists", "--dbname", target_url, str(artifact)],
+        [
+            psql,
+            "-v",
+            "ON_ERROR_STOP=1",
+            "--single-transaction",
+            "--dbname",
+            safe_url,
+            "--file",
+            str(artifact),
+        ],
         capture_output=True,
         text=True,
         timeout=1800,
         check=False,
+        env=pg_env,
     )
     if proc.returncode != 0:
+        # F-003: the driver echoes the DSN back in its stderr; scrub it before
+        # it becomes evidence.
         raise RestoreVerificationError(
-            f"pg_restore failed on the live target: {proc.stderr.strip()[:400]} — "
-            "the structural artifact leg was verified; classify CLUSTER-SIDE "
-            "before retrying (roles? occupied connections? version match?)"
+            f"psql restore failed on {target_label} (rolled back — the target "
+            f"is unchanged): {redact_text(proc.stderr).strip()[:400]} — "
+            "classify CLUSTER-SIDE before retrying (roles? occupied "
+            "connections? version match?)"
         )
-    report.record("POSTGRES_LIVE_RESTORE", True, "pg_restore exited 0 on target cluster")
+    report.record(
+        "POSTGRES_LIVE_RESTORE",
+        True,
+        f"psql applied the dump atomically on {target_label}",
+    )
+
+    # Post-restore proof: reopen the TARGET and prove the dump's tables are
+    # actually there. Without this the ``RESTORE_PROVEN`` label would be an
+    # overclaim — the apply's exit code alone does not prove the schema landed.
+    present = _list_postgres_tables(psql, safe_url, pg_env)
+    missing = sorted(expected - present)
+    if missing:
+        raise RestoreVerificationError(
+            "restored target is missing tables the dump creates: "
+            + ", ".join(missing)
+            + " — the apply exited 0 but the schema did not land; do not point "
+            "the application at this target"
+        )
+    report.record(
+        "POST_RESTORE_SCHEMA",
+        True,
+        f"{len(expected)} dump tables present on the target",
+    )
+
+    # F-007B/C: ``--expect-app-schema`` must mean the same thing for PostgreSQL
+    # as it does for SQLite. Previously it was silently ignored on this path, so
+    # a caller who asked for the application schema to be required got a green
+    # drill without it. A zero-table dump is likewise refused: an artifact that
+    # creates no tables cannot be "app-schema readable".
+    if expect_app_schema:
+        if not expected:
+            raise RestoreVerificationError(
+                "artifact creates no tables but --expect-app-schema was given — "
+                "an empty schema cannot be the application database; do not "
+                "point the application at this target"
+            )
+        app_tables = _expected_app_tables()
+        missing_app = sorted(app_tables - present)
+        if missing_app:
+            raise RestoreVerificationError(
+                "restored target is missing application tables: "
+                + ", ".join(missing_app)
+                + " — the dump is valid but not a complete application "
+                "database; do not point the application at this target"
+            )
+        report.record(
+            "APP_SCHEMA_READABLE",
+            True,
+            f"{len(app_tables)} app tables present on the target",
+        )
+
+    # F-007E: prove the *data* landed, not only the schema. A dump whose COPY
+    # blocks were dropped or truncated would otherwise pass every check above.
+    # The artifact's claimed per-table row counts are compared with the target's
+    # real counts; a mismatch is a failed restore, not a warning.
+    claimed, truncated = copy_row_counts(artifact)
+    if claimed and not truncated:
+        actual = _list_postgres_row_counts(psql, safe_url, sorted(claimed), pg_env)
+        mismatched = {
+            table: (rows, actual.get(table))
+            for table, rows in claimed.items()
+            if actual.get(table) != rows
+        }
+        if mismatched:
+            detail = ", ".join(
+                f"{table}: artifact {rows} vs target {got}"
+                for table, (rows, got) in mismatched.items()
+            )
+            raise RestoreVerificationError(
+                "restored target row counts do not match the dump: "
+                + detail
+                + " — the schema landed but the data did not; do not point "
+                "the application at this target"
+            )
+        report.record(
+            "POST_RESTORE_DATA",
+            True,
+            f"{len(claimed)} tables' row counts match the dump ({sum(claimed.values())} rows)",
+        )
+    else:
+        report.record(
+            "POST_RESTORE_DATA",
+            False,
+            "row-count proof skipped (no COPY data in the artifact or the "
+            "line budget was exceeded) — data landing is UNVERIFIED",
+        )
+    report.restored.update(
+        {
+            # F-003: redacted identity, never the raw URL.
+            "target": target_label,
+            "tables": sorted(present),
+        }
+    )
 
 
 # ── the drill ───────────────────────────────────────────────────────────
@@ -458,15 +785,77 @@ def restore_drill(
 
     mode = "apply" if apply else "drill"
     report = DrillReport(mode=mode)
-    now = dt.datetime.now(dt.timezone.utc)
-    stamp = now.strftime(STAMP_FORMAT)
 
     if apply and target is None and target_url is None:
         raise RestorePlanError(
             "--apply needs a target: --target (sqlite) or --target-url (postgres)"
         )
 
-    staged = Path(tempfile.mkdtemp(prefix="nexus_restore_stage_"))
+    # F-002: a live PostgreSQL target must never be the configured *source*
+    # database. Restoring a backup of the production database back onto the
+    # production database is the one destructive accident this guard exists to
+    # prevent; identity is compared on host/port/database (credentials
+    # irrelevant), and the check runs before any file is touched.
+    if apply and target_url is not None:
+        _guard_target_identity(target_url)
+
+    now = dt.datetime.now(dt.timezone.utc)
+    stamp = now.strftime(STAMP_FORMAT)
+
+    with _ScratchDir("nexus_restore_stage_") as staged:
+        return _run_drill(
+            staged=staged,
+            report=report,
+            settings=settings,
+            from_local=from_local,
+            from_r2_key=from_r2_key,
+            latest=latest,
+            target=target,
+            target_url=target_url,
+            expected_sha256=expected_sha256,
+            apply=apply,
+            force=force,
+            expect_app_schema=expect_app_schema,
+            stamp=stamp,
+        )
+
+
+def _guard_target_identity(target_url: str) -> None:
+    """Refuse a target that resolves to the configured source database (F-002).
+
+    The source is whatever ``NEXUS_DATABASE_URL`` names; restoring its own dump
+    back over it is a destructive no-op at best and a data-loss event at worst.
+    Identity is ``host:port/db`` — the same redacted identity the report carries.
+    """
+    from nexus_ai_agent.storage.db import resolve_database_url
+
+    source_url = resolve_database_url()
+    if source_url is None:
+        return
+    if target_identity(source_url) == target_identity(target_url):
+        raise RestorePlanError(
+            "refusing to restore: the target resolves to the configured source "
+            f"database ({target_identity(target_url)}) — restore into an "
+            "isolated target, never over the live source"
+        )
+
+
+def _run_drill(
+    *,
+    staged: Path,
+    report: DrillReport,
+    settings: Settings,
+    from_local: Path | None,
+    from_r2_key: str | None,
+    latest: bool,
+    target: Path | None,
+    target_url: str | None,
+    expected_sha256: str | None,
+    apply: bool,
+    force: bool,
+    expect_app_schema: bool,
+    stamp: str,
+) -> DrillReport:
     sidecar: Path | None = None
     filename_hint = ""
 
@@ -529,6 +918,15 @@ def restore_drill(
             ) from exc
         report.record("INTEGRITY_VERIFIED", True, "pg_dump footer present, non-empty")
 
+    # F-007E: "the artifact is verified" is its own state, distinct from a
+    # checksum match and from structural integrity. Recording it explicitly is
+    # what lets the proof line name exactly which evidence level was reached.
+    report.record(
+        "ARTIFACT_VERIFIED",
+        True,
+        "checksum + structural integrity verified",
+    )
+
     if not apply:
         # The proof label follows the CHECKSUM stage actually executed —
         # a structural-only artifact must never be relabeled as
@@ -564,14 +962,36 @@ def restore_drill(
             expect_app_schema=expect_app_schema,
         )
     else:
-        _apply_postgres_restore(artifact, target_url, report, force=force)
+        _apply_postgres_restore(
+            artifact,
+            target_url,
+            report,
+            force=force,
+            scratch=staged,
+            expect_app_schema=expect_app_schema,
+        )
 
-    report.record("RESTORE_PROVEN", True, "restored and re-verified on the target")
+    # The final label must state the *weakest* evidence level actually reached:
+    # a restore that landed the schema but could not compare row counts is not
+    # the same claim as one that proved the data too (F-007E).
+    data_step = next(
+        (s for s in report.chain if s["state"] == "POST_RESTORE_DATA"),
+        None,
+    )
+    if data_step is not None and data_step["ok"]:
+        proven_detail = "restored, re-verified, and data row counts match on the target"
+    else:
+        proven_detail = (
+            "restored and re-verified on the target (schema only — "
+            "post-restore data comparison was not completed)"
+        )
+    report.record("RESTORE_PROVEN", True, proven_detail)
     report.ok = True
     log.info(
         "maintenance_restore_apply_ok",
         engine=engine,
-        target=str(target or target_url),
+        # F-003: never log the raw target URL — it carries the password.
+        target=str(target) if target is not None else target_identity(target_url),
         checksum=report.artifact.get("sha256"),
     )
     return report

@@ -291,21 +291,52 @@ async def _database_readiness(timeout: float = 2.5) -> tuple[bool, str]:
     """
     from sqlalchemy import text
 
-    from nexus_ai_agent.storage.db import resolve_database_url, to_asyncpg_url
+    from nexus_ai_agent.maintenance.redact import redact_text
+    from nexus_ai_agent.storage.db import (
+        BackendPolicyError,
+        enforce_postgres_policy,
+        postgres_required,
+        to_asyncpg_url,
+    )
 
-    db_url = resolve_database_url()
+    try:
+        db_url = enforce_postgres_policy()
+    except BackendPolicyError as exc:
+        # PostgreSQL is required but unconfigured: report the *intended*
+        # backend so a broken production deployment is never presented as a
+        # healthy SQLite one.
+        return False, f"postgresql (required): {exc}"[:200]
+    except ValueError as exc:
+        # F-008: a malformed URL (unsupported scheme, missing host, empty value
+        # the policy did not catch) raised a bare ``ValueError`` out of the
+        # endpoint, which FastAPI turned into an HTTP 500 — a crash page for a
+        # readiness probe. It is a *not ready* condition, not a server fault, so
+        # it must be a structured 503. The message is sanitised because a URL
+        # parser error can quote the credential-bearing URL back.
+        return False, f"postgresql (invalid configuration): {redact_text(str(exc))}"[:200]
 
     async def _probe() -> tuple[bool, str]:
         if db_url is not None:
             from sqlalchemy.ext.asyncio import create_async_engine
 
-            engine = create_async_engine(to_asyncpg_url(db_url))
+            from nexus_ai_agent.storage.db import resolve_asyncpg_connect_args
+
+            # F-001/F-008: the same resolver the application engine uses — a
+            # Neon URL (``?sslmode=require``) must not fail here with
+            # "unexpected keyword argument 'sslmode'", and a parameter asyncpg
+            # cannot honour must surface as a structured 503, not a 500.
+            async_url, connect_args = resolve_asyncpg_connect_args(to_asyncpg_url(db_url))
+            engine = create_async_engine(async_url, connect_args=connect_args)
             try:
                 async with engine.connect() as conn:
                     await conn.execute(text("SELECT 1"))
             finally:
                 await engine.dispose()
             return True, "postgresql"
+        if postgres_required():
+            # Unreachable after enforce_postgres_policy, kept as a belt-and-
+            # braces guard so a future refactor cannot report SQLite here.
+            return False, "postgresql (required) but NEXUS_DATABASE_URL is empty"
         db_path = Path(get_settings().db_path).expanduser()
         if not db_path.is_file():
             return False, f"sqlite database file missing: {db_path}"
@@ -335,7 +366,12 @@ async def _database_readiness(timeout: float = 2.5) -> tuple[bool, str]:
     try:
         return await asyncio.wait_for(_probe(), timeout=timeout)
     except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"[:200]
+        # F-001 #10: connection failures must produce *sanitised* diagnostics.
+        # The ValueError branch above redacts because a URL parser error can
+        # quote the credential-bearing URL back; a driver error can do the same
+        # (asyncpg reports an invalid DSN verbatim). Redact here too so no
+        # failure path can echo a password into /readyz.
+        return False, f"{type(exc).__name__}: {redact_text(str(exc))}"[:200]
 
 
 @app.get("/readyz")
@@ -357,13 +393,24 @@ async def readyz() -> JSONResponse:
     startup_state = startup.get("state")
     startup_ok = startup_state == "ready"
     identity = _deployment_identity()
+    # The backend the process *intends* to use, independent of whether the
+    # probe succeeded: a PostgreSQL deployment that cannot connect must report
+    # "postgresql", never a healthy "sqlite" (mission §14). F-008: a malformed
+    # URL must not turn this into an HTTP 500 either — report the intended
+    # backend and let the failed probe drive the 503.
+    from nexus_ai_agent.storage.db import selected_backend
+
+    try:
+        backend = selected_backend()
+    except ValueError:
+        backend = "postgresql"
     payload: dict[str, object] = {
         "status": "ready" if db_ok and startup_ok else "not_ready",
         "version": identity["version"],
         "deploy_git_sha": identity["deploy_git_sha"],
         "db": {
             "ok": db_ok,
-            "backend": db_detail if db_ok else None,
+            "backend": backend,
             "detail": None if db_ok else db_detail,
         },
         "startup": {
