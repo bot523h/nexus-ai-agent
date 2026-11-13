@@ -14,11 +14,12 @@ from typing import Any
 try:  # pragma: no cover - environment dependent
     import structlog as _real  # noqa: F401
 except ModuleNotFoundError:
+
     class _Logger:
         def __init__(self, name: str) -> None:
             self._log = logging.getLogger(name)
 
-        def bind(self, **_: Any) -> "_Logger":
+        def bind(self, **_: Any) -> _Logger:
             return self
 
         def __getattr__(self, item: str) -> Any:
@@ -40,7 +41,13 @@ except ModuleNotFoundError:
     stdlib = types.ModuleType("structlog.stdlib")
     stdlib.LoggerFactory = _passthrough  # type: ignore[attr-defined]
     processors = types.ModuleType("structlog.processors")
-    for name in ("format_exc_info", "add_log_level", "TimeStamper", "StackInfoRenderer", "JSONRenderer"):
+    for name in (
+        "format_exc_info",
+        "add_log_level",
+        "TimeStamper",
+        "StackInfoRenderer",
+        "JSONRenderer",
+    ):
         setattr(processors, name, _passthrough)
     shim.contextvars = contextvars  # type: ignore[attr-defined]
     shim.stdlib = stdlib  # type: ignore[attr-defined]

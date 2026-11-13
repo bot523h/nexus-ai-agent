@@ -50,11 +50,53 @@ def merkle_proof(leaves: list[bytes] | tuple[bytes, ...], index: int) -> list[tu
     return proof
 
 
-def verify_merkle_proof(leaf: bytes, index: int, proof: list[tuple[str, str]], root: str) -> bool:
+def verify_merkle_proof(
+    leaf: bytes,
+    index: int,
+    proof: list[tuple[str, str]],
+    root: str,
+    *,
+    total_leaves: int | None = None,
+) -> bool:
+    """Verify an RFC 6962 inclusion proof, binding the leaf position to ``index``.
+
+    When ``total_leaves`` is given, the exact tree shape is replayed.  A trailing odd
+    node is promoted without a proof step, a ``"left"`` sibling requires an odd index
+    (right child), a ``"right"`` sibling requires an even index (left child), and the
+    proof must consume exactly the steps that topology requires.  Without
+    ``total_leaves`` the promotion levels are unknown, so only index sign and step
+    labels are checked, and the parity rule is not applied.
+    """
+    if index < 0 or (total_leaves is not None and not 0 <= index < total_leaves):
+        return False
     current = _leaf(bytes(leaf))
+    idx = index
+    count = total_leaves
     for side, sibling_hex in proof:
+        if count is not None:
+            while count > 1 and idx == count - 1 and count % 2 == 1:
+                idx //= 2
+                count = (count + 1) // 2  # promoted: no sibling, no proof step
+            if count <= 1 or (idx + 1 if idx % 2 == 0 else idx - 1) >= count:
+                return False
+            count = (count + 1) // 2
+        if side not in ("left", "right"):
+            return False
+        if count is not None and (
+            (side == "left" and idx % 2 == 0) or (side == "right" and idx % 2 == 1)
+        ):
+            return False
         sibling = bytes.fromhex(sibling_hex)
         current = _node(sibling, current) if side == "left" else _node(current, sibling)
+        idx //= 2
+    if count is not None:
+        while count > 1:
+            if not (idx == count - 1 and count % 2 == 1):
+                return False
+            idx //= 2
+            count = (count + 1) // 2
+        if idx != 0:
+            return False
     return current.hex() == root
 
 

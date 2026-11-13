@@ -103,9 +103,7 @@ def _generator(k: int, m: int) -> np.ndarray:
         vandermonde[point, 0] = 1
         for col in range(1, k):
             vandermonde[point, col] = gf_multiply(int(vandermonde[point, col - 1]), point)
-    return np.asarray(
-        _matrix_multiply(vandermonde, matrix_invert(vandermonde[:k])), dtype=np.uint8
-    )
+    return np.asarray(_matrix_multiply(vandermonde, matrix_invert(vandermonde[:k])), dtype=np.uint8)
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +176,19 @@ def reconstruct(
             if coefficient:
                 output ^= _gf_scale(selected_arrays[col], int(coefficient))
         recovered.append(bytes(output))
+    # Redundant shards beyond k must agree with the decoded codeword; any disagreement
+    # means at least one supplied shard is corrupt, so reconstruction fails closed.
+    data_arrays = [np.frombuffer(row, dtype=np.uint8) for row in recovered]
+    for extra in list(selected.values())[k:]:
+        expected = np.zeros(size, dtype=np.uint8)
+        for col in range(k):
+            coefficient = int(generator[extra.index, col])
+            if coefficient:
+                expected ^= _gf_scale(data_arrays[col], coefficient)
+        if bytes(expected) != extra.data:
+            raise ValueError(
+                f"inconsistent codeword: shard {extra.index} disagrees with the other shards"
+            )
     result = b"".join(recovered)
     if original_size is None:
         return result

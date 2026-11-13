@@ -48,9 +48,9 @@ MUTANTS: list[tuple[str, str, str, str]] = [
     ),
     (
         "storage/artifact_vault/galois_erasure.py",
-        "gf_multiply(matrix[row, col - 1], base)",
-        "gf_multiply(matrix[row, col - 1], base + 1)",
-        "M04 Vandermonde parity base off-by-one",
+        "        vandermonde[point, 0] = 1\n",
+        "        vandermonde[point, 0] = 0\n",
+        "M04 Vandermonde seed column 1->0 (singular top block)",
     ),
     (
         "storage/artifact_vault/galois_erasure.py",
