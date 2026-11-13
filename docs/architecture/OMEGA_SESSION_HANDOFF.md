@@ -16,11 +16,11 @@ and every guard is held by a mutation probe.
 |---|---|
 | branch | `arena/288ef95e-nexus-ai-agent` |
 | base | `c3aa7c8` (`main` merge point) |
-| head | see §10 — the closure commit, which cannot name itself |
+| head | `2f9561f` (closure commit — a file cannot contain its own hash, so this line was added by the commit after it) |
 | PR | [#337](https://github.com/bot523h/nexus-ai-agent/pull/337) — **open, unmerged, deliberately** |
 | status string | `HARDENED_BUT_NOT_COMPLETE` |
-| commits | 25 |
-| CI | 24/24 jobs `success` on the pre-closure head; the closure commit re-polls (§10) |
+| commits | 26 (`git rev-list --count c3aa7c8..HEAD`) |
+| CI | **24/24 jobs `success`** — run `43403965714` on `2f9561f` |
 
 The PR is held for Phase-2 integration of four parallel agent branches. It is
 **not** waiting on a defect.
@@ -55,7 +55,8 @@ The PR is held for Phase-2 integration of four parallel agent branches. It is
 | 22 | `fba5e0e` | Wave-2.1: every module ≥95%, **the duplicated failure**, the 1:1 stereo case |
 | 23 | `4b17b52` | record Wave-2.1 and the two defects it found |
 | 24 | `75bd152` | cite run `43393070087` |
-| 25 | *(closure)* | **this commit**: FFmpeg banner portability, 3.10 guard, this handoff |
+| 25 | `2f9561f` | **closure**: FFmpeg banner portability across 4.x–9.x, the 3.10 guard, `mypy --strict`, this handoff |
+| 26 | *(docs follow-up)* | records run `43403965714` in this file; the SHA is `git log -1 2f9561f..HEAD` |
 
 ---
 
@@ -292,12 +293,24 @@ Filled in by the closure commit; the SHA is in the commit subject and in the PR
 body, because a document cannot contain its own hash.
 
 ```
-ruff check .                 clean
-ruff format --check .        clean
-mypy src                     Success: no issues found
-mypy --strict audio_engine   Success: no issues found (15 files)
+ruff check .                 All checks passed (1017 files)
+ruff format --check .        1017 files already formatted
+mypy src                     Success: no issues found in 379 source files
+mypy --strict audio_engine   Success: no issues found in 15 source files
 campaign                     77/77 KILLED
-full suite                   see the closure commit message
-pack_coverage.py             verdict: ACCEPTED (clean tree, post-commit)
-CI                           poll to 24/24 on the final SHA
+full suite                   6386 passed, 14 skipped, 0 failed (494.36 s)
+pack_coverage.py             verdict: ACCEPTED (clean tree at 2f9561f)
+CI run 43403965714           24/24 success on 2f9561f
 ```
+
+The 24 jobs, for reference: `lint`, `lint-fast`, `test (pytest -m "not slow")`,
+`python-parity (3.10|3.11|3.12)`, `continuum-evidence (3.10|3.11|3.12)`,
+`extras-matrix (core|pdf|speech|translate)`, `migrate-postgres`,
+`dependency-audit`, `merge-base-guard`, `release-lineage`, `trust-mutations`,
+`governance-mutations`, `temporal-mutations`, `execution-core-mutations`,
+`api-gate-mutations`, `remote-key-mutations`, `b2-blob-tier-mutations`.
+
+**`python-parity (3.10)` and `continuum-evidence (3.10)` are green.** That is real
+evidence that the code runs on 3.10 — from a runner this session could not
+reproduce (§7.5). It does not make the local claim true, and §5 keeps the tier at
+`UNVERIFIED_LOCALLY`.
