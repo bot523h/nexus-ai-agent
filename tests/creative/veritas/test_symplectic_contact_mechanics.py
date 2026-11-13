@@ -88,3 +88,33 @@ def test_collision_validation() -> None:
         resolve_rigid_body_collision(POSITIONS, VELOCITIES, MASSES, RADII, friction=-1.0)
     with pytest.raises(MechanicsViolationError):
         resolve_rigid_body_collision(POSITIONS, VELOCITIES, MASSES, RADII, iterations=0)
+
+
+def test_body_validation_branches() -> None:
+    with pytest.raises(MechanicsViolationError):
+        total_angular_momentum(np.zeros((2, 3)), np.zeros((3, 3)), np.ones(2))
+    with pytest.raises(MechanicsViolationError):
+        total_angular_momentum(np.zeros((2, 3)), np.zeros((2, 3)), np.ones(3))
+    bad = np.zeros((2, 3))
+    bad[0, 0] = np.nan
+    with pytest.raises(MechanicsViolationError):
+        total_angular_momentum(bad, np.zeros((2, 3)), np.ones(2))
+
+
+def test_non_overlapping_bodies_are_skipped() -> None:
+    positions = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]])
+    velocities = np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])
+    masses = np.array([1.0, 1.0])
+    result = resolve_rigid_body_collision(positions, velocities, masses, np.array([1.0, 1.0]))
+    assert np.allclose(result.velocities, velocities)
+
+
+def test_friction_impulse_on_tangential_contact() -> None:
+    positions = np.array([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]])
+    velocities = np.array([[1.0, 1.0, 0.0], [-1.0, -1.0, 0.0]])
+    masses = np.array([1.0, 1.0])
+    result = resolve_rigid_body_collision(
+        positions, velocities, masses, np.array([1.0, 1.0]), restitution=0.5, friction=0.5
+    )
+    assert np.allclose(result.momentum_after, result.momentum_before, atol=1e-12)
+    assert np.any(np.abs(result.impulses) > 0.0)

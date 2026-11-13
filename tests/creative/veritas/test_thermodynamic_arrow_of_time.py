@@ -111,3 +111,43 @@ def test_audit_validation() -> None:
         audit_and_enforce_thermodynamic_arrow(np.ones((2, 2, 2)), buoyancy=-1.0)
     with pytest.raises(ThermodynamicError):
         audit_and_enforce_thermodynamic_arrow(np.ones((2, 2, 2)), tolerance=-1.0)
+
+
+def test_frame_validation_branches() -> None:
+    with pytest.raises(ThermodynamicError):
+        audit_and_enforce_thermodynamic_arrow(np.zeros((0, 2, 2)))
+    bad = np.ones((2, 2, 2))
+    bad[0, 0, 0] = np.nan
+    with pytest.raises(ThermodynamicError):
+        audit_and_enforce_thermodynamic_arrow(bad)
+    with pytest.raises(ThermodynamicError):
+        audit_and_enforce_thermodynamic_arrow(-np.ones((2, 2, 2)))
+
+
+def test_fourier_and_wave_validation_branches() -> None:
+    bad = np.ones((4, 4))
+    bad[0, 0] = np.nan
+    with pytest.raises(ThermodynamicError):
+        fourier_advection_diffusion(bad, (0.0, 0.0), 0.1, 0.01, 1.0)
+    with pytest.raises(ThermodynamicError):
+        retarded_wavefront((4, 4), (0.0, 0.0), 0.0, 1.0, frames=0)
+    with pytest.raises(ThermodynamicError):
+        retarded_wavefront((4, 4), (0.0, 0.0), -1.0, 1.0)
+    with pytest.raises(ThermodynamicError):
+        verify_retarded_causality(np.zeros((2, 4, 4)), (0.0, 0.0), 0.0, -1.0)
+
+
+def test_acausal_before_impact_is_rejected() -> None:
+    wave = np.zeros((3, 6, 6))
+    wave[0, 0, 0] = 1.0  # amplitude before impact time
+    assert not verify_retarded_causality(wave, (0.0, 0.0), 5.0, 1.0)
+
+
+def test_buoyancy_reversal_and_shift() -> None:
+    frames = np.zeros((3, 6, 6))
+    frames[0, 0, 0] = 1.0  # blob at the top
+    frames[1, 4, 0] = 1.0  # blob sinks downward -> centre of mass rises
+    frames[2, 5, 0] = 1.0
+    audit = audit_and_enforce_thermodynamic_arrow(frames, buoyancy=1.0)
+    assert "buoyancy_reversal" in audit.violations_before
+    assert audit.healed_frames.shape == frames.shape

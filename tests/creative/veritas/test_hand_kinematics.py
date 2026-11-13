@@ -140,3 +140,54 @@ def test_invalid_skeleton_shapes_raise() -> None:
         )
     with pytest.raises(HandTopologyError):
         audit_and_project_hand_skeleton(base, tendon_epsilon=0.0)
+
+
+def test_healed_property_and_isolated_violations() -> None:
+    base = canonical_hand_skeleton()
+    clean = audit_and_project_hand_skeleton(base)
+    assert clean.healed
+
+    # Abduction-only violation (flexion stays inside its cone).
+    angles = np.array(base.joint_angles, copy=True)
+    angles[5, 1] = 60.0
+    abd = audit_and_project_hand_skeleton(
+        HandSkeleton(base.joints, base.rays, angles, base.bone_lengths)
+    )
+    assert "joint_limits" in abd.violations_before
+
+    # PIP-only violation (MCP stays inside its cone).
+    angles = np.array(base.joint_angles, copy=True)
+    angles[6, 0] = 130.0
+    pip = audit_and_project_hand_skeleton(
+        HandSkeleton(base.joints, base.rays, angles, base.bone_lengths)
+    )
+    assert "joint_limits" in pip.violations_before
+
+
+def test_ratio_violations_short_ray_and_zero_segment() -> None:
+    base = canonical_hand_skeleton()
+    short_rays = ((0, 1, 2, 3),) + base.rays[1:]
+    short = HandSkeleton(base.joints, short_rays, base.joint_angles, base.bone_lengths)
+    assert hand_violation_score(short) >= 1
+
+    lengths = np.array(base.bone_lengths, copy=True)
+    ray = base.rays[0]
+    lengths[list(ray[2:5])] = 0.0
+    zero = HandSkeleton(base.joints, base.rays, base.joint_angles, lengths)
+    assert hand_violation_score(zero) >= 1
+
+
+def test_grip_sdf_edge_branches() -> None:
+    base = canonical_hand_skeleton()
+
+    def on_surface(points: np.ndarray) -> np.ndarray:
+        return np.zeros(np.asarray(points).shape[:-1])
+
+    result = audit_and_project_hand_skeleton(base, target_sdf=on_surface, grip_active=True)
+    assert result.grip_penetration == pytest.approx(0.0)
+
+    def flat_field(points: np.ndarray) -> np.ndarray:
+        return np.full(np.asarray(points).shape[:-1], 0.5)
+
+    # Zero-gradient SDF cannot be projected; the audit still returns cleanly.
+    audit_and_project_hand_skeleton(base, target_sdf=flat_field, grip_active=True)
