@@ -62,7 +62,7 @@ The remaining misses are defensive guards that are unreachable by construction (
 | Kelvin range 1000-40000 K | Resolved: 1000-40000 K implemented, `KELVIN_RANGE` updated | Chromaticity is finite across the range but the Kim-type fit is published for about 1667-25000 K; the outer bands are extrapolation. |
 | `auto_heal_artifact` / `WorkspaceFilesystem` | `ArtifactVault.verify_and_heal_artifact` over a root directory | Probes 11 and 13 test the real API. |
 | CPS, shot-cut snap and in-point guard | Implemented: `max_cps=20`, `fps=25`, `SubtitleCue.flagged` | Probes p24, p25, p26 pass. p25 setup corrected (see below). |
-| Bradford `T_src -> T_dst` identity | Implemented: `bradford_adapt`, `target_kelvin=6500` | Probes p29, p30 pass. |
+| Bradford `T_src -> T_dst` identity | Implemented: `bradford_adapt`; default destination is exact CIE D65, explicit `target_kelvin` selects a black-body white | Probes p29 (equal temperatures, explicit target), p30 pass. |
 
 ### Defects found by falsification and fixed in this phase
 
@@ -116,5 +116,5 @@ Alpha (`audio_engine`, `packs/audio`, `slideshow/audio.py`), Beta (`chronos`), O
 * **Probe 31 bounds moved.** The refusal set is now `999, 40001, 0, NaN` because 1000-40000 K is the implemented range. Previously `1999` and `15001` were refused.
 * **Probe 25 setup corrected.** The word now ends at 0.97 s with a cut at 0.98 s, expected end 0.90 s. The old setup ended at 1.00 s, which straddled the cut and tested the separate straddle rule covered by p26.
 * **KAT subtitle timing adjusted.** The 42-character fit case now spans 2.5 s (16.8 CPS) instead of 1.0 s (42 CPS), so the character-limit assertion is not undercut by the new CPS rule.
-* **Kelvin default target changed.** `white_balance_chromatic_adaptation(kelvin=...)` now maps to `target_kelvin=6500` on the black-body locus, not to D65. Gray-world still targets D65.
+* **Default target is exact CIE D65.** `white_balance_chromatic_adaptation(kelvin=...)` and `bradford_adapt` now map to D65 (`x=0.312727, y=0.329023`) when no target is given. The previous default, the black-body 6500 K point, sits about 0.005 in y away from D65 (x 0.31349, y 0.32366) and tinted sRGB output. An explicit `target_kelvin` still selects the black-body locus, and gray-world already targeted D65.
 * **Pack test updated.** `packs/color` `test_kelvin_range_and_alias_validation` refuses 40001 K instead of 15001 K.

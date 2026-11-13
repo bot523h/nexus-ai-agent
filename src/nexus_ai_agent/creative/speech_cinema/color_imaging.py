@@ -26,7 +26,6 @@ _BRADFORD: Array = np.array(
     dtype=np.float64,
 )
 _BRADFORD_INV: Array = np.asarray(np.linalg.inv(_BRADFORD), dtype=np.float64)
-_D65: Array = np.array([0.95047, 1.0, 1.08883], dtype=np.float64)
 _RGB_TO_XYZ: Array = np.array(
     [
         [0.4124564, 0.3575761, 0.1804375],
@@ -36,6 +35,10 @@ _RGB_TO_XYZ: Array = np.array(
     dtype=np.float64,
 )
 _XYZ_TO_RGB: Array = np.asarray(np.linalg.inv(_RGB_TO_XYZ), dtype=np.float64)
+# sRGB defines its white as D65, so D65 is taken as the XYZ of (1,1,1) under this matrix,
+# normalised to Y=1.  The 7-digit matrix then makes the sRGB white neutral to ~1e-16.
+_D65_RAW: Array = np.asarray(_RGB_TO_XYZ @ np.ones(3), dtype=np.float64)
+_D65: Array = np.asarray(_D65_RAW / _D65_RAW[1], dtype=np.float64)
 _LUMA_WEIGHTS: Array = np.array([0.2126, 0.7152, 0.0722], dtype=np.float64)
 
 
@@ -50,7 +53,8 @@ def _rgb(image: object, *, name: str = "image") -> Array:
 
 KELVIN_MIN: float = 1000.0
 KELVIN_MAX: float = 40000.0
-DEFAULT_TARGET_KELVIN: float = 6500.0
+#: CIE standard illuminant D65 chromaticity implied by ``_D65`` (x=0.312727, y=0.329023).
+D65_XY: tuple[float, float] = (0.312727, 0.329023)
 
 
 def _temperature_white_point(kelvin: float) -> Array:
@@ -87,16 +91,16 @@ def white_balance_chromatic_adaptation(
     kelvin: float | None = None,
     *,
     method: Literal["gray_world", "kelvin"] = "gray_world",
-    target_kelvin: float = DEFAULT_TARGET_KELVIN,
+    target_kelvin: float | None = None,
 ) -> Array:
     """White-balance RGB data using Bradford LMS chromatic adaptation.
 
     ``gray_world`` estimates the scene illuminant from channel means and maps it
     to neutral D65.  With ``kelvin`` (or ``method='kelvin'``), the black-body white
-    point at ``kelvin`` is mapped to the black-body white point at ``target_kelvin``
-    (default 6500 K), using the same locus function for both ends.  Equal
-    temperatures therefore give the identity.  Results are floating point and
-    intentionally not clipped.
+    point at ``kelvin`` is mapped to exact CIE D65 by default.  When ``target_kelvin``
+    is given, the black-body white at ``target_kelvin`` is used instead, with the same
+    locus function at both ends, so equal temperatures give the identity.  Results are
+    floating point and intentionally not clipped.
     """
     arr = _rgb(image)
     if method not in {"gray_world", "kelvin"}:
@@ -109,7 +113,9 @@ def white_balance_chromatic_adaptation(
         if kelvin is None:  # pragma: no cover - guarded above; narrows the type
             raise ValueError("kelvin is required when method='kelvin'")
         source_xyz = _temperature_white_point(float(kelvin))
-        target_xyz = _temperature_white_point(float(target_kelvin))
+        target_xyz = (
+            _D65 if target_kelvin is None else _temperature_white_point(float(target_kelvin))
+        )
     else:
         means: Array = np.mean(arr.reshape(-1, 3), axis=0)
         if bool(np.any(means <= 0)):
@@ -131,13 +137,15 @@ def _adaptation_rgb(source_xyz: Array, target_xyz: Array) -> Array:
 
 
 def bradford_adapt(
-    image: object, src_kelvin: float, dst_kelvin: float = DEFAULT_TARGET_KELVIN
+    image: object, src_kelvin: float, dst_kelvin: float | None = None
 ) -> Array:
-    """Bradford-adapt linear RGB from the ``src_kelvin`` to the ``dst_kelvin`` black-body white."""
+    """Bradford-adapt linear RGB from the ``src_kelvin`` black-body white.
+
+    The destination is exact CIE D65 unless ``dst_kelvin`` is given (then its black-body white).
+    """
     arr = _rgb(image)
-    matrix = _adaptation_rgb(
-        _temperature_white_point(float(src_kelvin)), _temperature_white_point(float(dst_kelvin))
-    )
+    target = _D65 if dst_kelvin is None else _temperature_white_point(float(dst_kelvin))
+    matrix = _adaptation_rgb(_temperature_white_point(float(src_kelvin)), target)
     return np.asarray(arr @ matrix.T, dtype=np.float64)
 
 

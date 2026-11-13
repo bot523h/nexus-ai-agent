@@ -276,7 +276,7 @@ def test_p28_inverted_or_zero_length_timestamps_are_refused(text: str) -> None:
 
 def test_p29_bradford_at_equal_temperatures_is_identity() -> None:
     image = np.full((4, 4, 3), 0.5)
-    result = ci.white_balance_chromatic_adaptation(image, kelvin=6500)
+    result = ci.white_balance_chromatic_adaptation(image, kelvin=6500, target_kelvin=6500)
     assert np.max(np.abs(result - image)) < 1e-6
 
 
