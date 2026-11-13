@@ -31,11 +31,7 @@ should still run the migration before first use. This slice has no API or MCP
 wiring; callers must resolve the canonical principal and `ProjectAccess` before
 exposing a connection operation.
 
-The shared `pyproject.toml` is currently owned by another active Claim, so the
-direct `cryptography` dependency declaration is intentionally deferred rather
-than changed out-of-band. The next packaging owner must add
-`cryptography>=43,<48` before release and run the dependency audit; the code
-fails explicitly at import time if the approved AEAD library is absent.
+The `cryptography>=43,<48` runtime dependency is declared directly in `pyproject.toml`; it is required by the AES-GCM envelope implementation. Connect persistence is implemented through the storage adapter and migration, while API/MCP caller wiring remains outside this module.
 
 ## Research basis
 

@@ -9,7 +9,7 @@ to the canonical CommandBus.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import Enum
 from re import fullmatch
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -30,13 +30,13 @@ def _optional_opaque_identifier(value: str | None) -> str | None:
     return _opaque_identifier(value)
 
 
-class ConnectionState(StrEnum):
+class ConnectionState(str, Enum):
     ACTIVE = "active"
     REVOKED = "revoked"
     EXPIRED = "expired"
 
 
-class CredentialState(StrEnum):
+class CredentialState(str, Enum):
     ACTIVE = "active"
     ROTATING = "rotating"
     REVOKED = "revoked"

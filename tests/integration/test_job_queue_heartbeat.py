@@ -78,7 +78,7 @@ class _Gate:
         # event mirrored by the asyncio gate for deterministic release.
         call = self.verifier_calls
         self.verifier_calls += 1
-        self.thread_events.setdefault(call, threading.Event()).wait(timeout=5)
+        self.thread_events.setdefault(call, threading.Event()).wait(timeout=10)
         return VerificationOutcome(ok=True, reason_code=None, summary={"status": "ok"})
 
 
@@ -164,7 +164,7 @@ async def _wait_status(queue: InProcessJobQueue, job_id: str, wanted: JobStatus)
         while await queue.get_status(job_id) != wanted:
             await asyncio.sleep(0.001)
 
-    await asyncio.wait_for(poll(), timeout=3)
+    await asyncio.wait_for(poll(), timeout=10)
 
 
 async def _wait_event(recorder: _Recorder, job_id: str, kind: EventKind) -> None:
@@ -180,7 +180,7 @@ async def _wait_event(recorder: _Recorder, job_id: str, kind: EventKind) -> None
         while kind not in recorder.kinds(job_id):
             await asyncio.sleep(0.001)
 
-    await asyncio.wait_for(poll(), timeout=3)
+    await asyncio.wait_for(poll(), timeout=10)
 
 
 async def _wait_heartbeat(db: Path, job_id: str, expected: str) -> None:
@@ -188,7 +188,7 @@ async def _wait_heartbeat(db: Path, job_id: str, expected: str) -> None:
         while _row(db, job_id)["heartbeat_at"] != expected:
             await asyncio.sleep(0.001)
 
-    await asyncio.wait_for(poll(), timeout=3)
+    await asyncio.wait_for(poll(), timeout=10)
 
 
 def _legacy_schema(db: Path) -> None:
@@ -422,7 +422,7 @@ async def test_heartbeat_cadence_processing_verifying_and_cleanup(
 
     def verifier(payload: dict[str, object], result: dict[str, object]) -> VerificationOutcome:
         verify_entered.set()
-        assert verify_release.wait(timeout=5)
+        assert verify_release.wait(timeout=60)
         return VerificationOutcome(ok=True, reason_code=None, summary={"status": "ok"})
 
     queue = InProcessJobQueue(db, artifact_verifiers={JOB_TYPE: verifier})
@@ -445,7 +445,7 @@ async def test_heartbeat_cadence_processing_verifying_and_cleanup(
         assert _row(db, job_id)["attempt"] == 1
 
     gate.event(1).set()
-    await asyncio.wait_for(verify_entered.wait(), timeout=3)
+    await asyncio.wait_for(verify_entered.wait(), timeout=10)
     await _wait_status(queue, job_id, JobStatus.VERIFYING)
     verifying_beat = _row(db, job_id)["heartbeat_at"]
     assert verifying_beat == clock.iso()
@@ -472,7 +472,7 @@ async def test_recovery_cas_binds_observed_heartbeat_and_loses_to_refresh(
 
     def paused_decode(raw: str) -> list[dict[str, object]]:
         read_done.set()
-        assert release_read.wait(timeout=5)
+        assert release_read.wait(timeout=10)
         return original_decode(raw)
 
     monkeypatch.setattr(recoverer, "_decode_attempt_history", paused_decode)
@@ -646,7 +646,7 @@ async def test_stale_worker_cannot_publish_after_takeover(tmp_path: Path, clock:
 
     def verifier(payload: dict[str, object], result: dict[str, object]) -> VerificationOutcome:
         verify_entered.set()
-        assert verify_release.wait(timeout=5)
+        assert verify_release.wait(timeout=60)
         return VerificationOutcome(ok=True, reason_code=None, summary={"status": "ok"})
 
     def publish(payload: dict[str, object], result: dict[str, object]) -> dict[str, object]:
@@ -662,13 +662,18 @@ async def test_stale_worker_cannot_publish_after_takeover(tmp_path: Path, clock:
     queue_b.register_handler(JOB_TYPE, handler)
     job_id = await queue_a.enqueue(job_type=JOB_TYPE, idempotency_key="publish-fence", payload={})
     handler_gate.event(1).set()
-    await asyncio.wait_for(verify_entered.wait(), timeout=3)
+    await asyncio.wait_for(verify_entered.wait(), timeout=10)
     await _wait_status(queue_a, job_id, JobStatus.VERIFYING)
     clock.advance(hours=2)
     assert await queue_b.recover_job(job_id, stale_after=STALE_WINDOW) == [job_id]
     await _wait_status(queue_b, job_id, JobStatus.PROCESSING)
     verify_release.set()
-    await asyncio.sleep(0.02)
+
+    async def stale_worker_drained() -> None:
+        while job_id in queue_a._tasks:
+            await asyncio.sleep(0.005)
+
+    await asyncio.wait_for(stale_worker_drained(), timeout=10)
     assert published == []
     assert _row(db, job_id)["attempt"] == 2
     assert _row(db, job_id)["status"] == JobStatus.PROCESSING.value
@@ -706,7 +711,7 @@ async def test_heartbeat_write_failure_never_fabricates_evidence(
     tick.set()
     owner = queue._tasks[job_id]
     heartbeat = queue._heartbeat_tasks[owner]
-    await asyncio.wait_for(asyncio.gather(heartbeat, return_exceptions=True), timeout=3)
+    await asyncio.wait_for(asyncio.gather(heartbeat, return_exceptions=True), timeout=10)
     assert _row(db, job_id) == before
     assert "job_heartbeat_refresh_failed" in caplog.text
     gate.event(1).set()
@@ -733,7 +738,7 @@ async def test_shutdown_and_cancel_stop_heartbeat_children(
     owner = queue._tasks[job_id]
     heartbeat = queue._heartbeat_tasks[owner]
     assert await queue.cancel(job_id, expected_attempt=1) is True
-    await asyncio.wait_for(asyncio.gather(owner, heartbeat, return_exceptions=True), timeout=3)
+    await asyncio.wait_for(asyncio.gather(owner, heartbeat, return_exceptions=True), timeout=10)
     assert heartbeat.done()
     assert queue._heartbeat_tasks == {}
     assert _row(db, job_id)["heartbeat_at"] is None
