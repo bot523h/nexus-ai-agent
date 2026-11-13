@@ -1,4 +1,4 @@
-# NAGAR VERITAS — The Ten-Law Neuro-Physical Reality & Anti-Hallucination Doctrine
+# NAGAR VERITAS — Fifteen-Law Neuro-Physical Cinema Doctrine (`VERITAS OMNIA v2.0`)
 
 ## Preamble: Why a Physics Court for Synthetic Cinema
 
@@ -159,3 +159,58 @@ Water in a shot must be incompressible, and the Helmholtz-Hodge decomposition is
 ## Law 15 — The Nyquist Rotary-Shutter Anti-Stroboscopic Wagon-Wheel Eliminator
 
 A wheel that spins backward on screen is not a stylistic choice but a sampling failure, and the criterion is exact: the per-frame angular advance is ω/fps, its wrapped apparent value is ((Δφ + π) mod 2π) − π, and aliasing occurs whenever the true advance exceeds π radians or when the wrapped advance reverses sign relative to the true advance. Detecting the failure is only half the law, because the physical camera does not sample an instant; it integrates the rotary shutter's exposure arc Δφ·θ/360°, and reproducing that arc is what makes a fast rotor read as a blurred disc rather than a set of frozen spokes. The rectification therefore performs a vectorised angular quadrature over the exposure arc, accumulating rotated copies of the prop patch and averaging them, which restores the motion-blur signature that the human visual system expects. Shutter angles outside (0°, 360°] and non-positive frame rates fail closed, so the law cannot be silently misconfigured.
+# Fifteen-Law Neuro-Physical Cinema Doctrine (`VERITAS OMNIA v2.0`)
+
+The deterministic NumPy implementation makes no paid AI API calls. Its physical
+predicates validate supplied observations; they do not establish that arbitrary
+pixels depict physically valid scenes. Passing synthetic fixtures is not proof
+of real-media reconstruction.
+
+## Law inventory
+
+1. Twenty-one-joint hand topology, tendon coupling and anatomical bounds.
+2. Binocular vergence, saccadic main sequence and pupil light response.
+3. Planar Householder reflection and Fresnel reflectance.
+4. Projective shadows, penumbrae and contact geometry.
+5. SE(3) object permanence and bounded motion under occlusion.
+6. Projective diegetic typography and glyph spacing.
+7. Impulse-momentum contact mechanics and friction.
+8. XPBD cloth constraints and capsule collision.
+9. Thermodynamic entropy and retarded acoustic causality.
+10. Facial coactivation, asymmetric blink and subsurface scattering.
+11. Madelung density/phase coherence and Bohmian edge-weighted smoothing.
+    The stabilizer accepts previous density and time step, measures
+    `(rho - rho_previous)/dt + div(rho grad(phase))` before and after healing,
+    and reports residual violations explicitly. Continuity backtracking may
+    change density as well as phase; it is a regularizer, not an inference of
+    ground-truth motion. A zero iteration budget leaves failures visible.
+12. Catadioptric dispersion and natural vignetting.
+13. Acoustic Doppler and independent AU26/AU20/AU18 articulatory channels.
+    Lip-pucker repair must not overwrite lip-stretch, and all channels are
+    checked after repair.
+14. Spectral Helmholtz-Hodge fluid projection and volume conservation.
+15. Rotary-shutter integration and stroboscopic aliasing.
+
+Detailed equations for the implemented kernels appear above.
+
+## Media compiler and evidence boundary
+
+The existing local compiler writes PNG, WAV and optionally FFmpeg MP4 and
+constructs a fifteen-leaf RFC 6962 Merkle tree. Domain separation uses a zero
+prefix for leaf hashes and a one prefix for internal node hashes. A valid
+inclusion proof establishes membership, not physical truth.
+
+**Not yet closure-verified:** canonical same-domain input/output content digests,
+independent decoding and physical re-audit of disk artifacts, and binding all
+content plus PNG/WAV/MP4 file digests into every leaf. The current compiler
+must not be described as providing these stronger guarantees.
+
+## NEXUS staged execution spine: required contract (pending implementation)
+
+Intent/recipe -> private attempt staging -> fifteen-law render -> independent
+post-disk verifier -> fenced atomic publish -> AssetVersion/passport lineage.
+The adapter must bind recipe identity and input content, reject path traversal,
+verify disk hashes and all fifteen Merkle inclusion proofs, check the active
+fencing token, and refuse publication on any mismatch. Atomic promotion must
+publish only verified artifacts; a failed attempt must publish no bytes.
+This contract is a target, not a claim that the adapter currently exists.

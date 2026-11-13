@@ -82,7 +82,7 @@ class PhaseCoherenceResult:
     wavefunction:
         The regularised complex wavefunction ``psi = sqrt(rho) exp(i Phi)``.
     density:
-        The (unchanged) non-negative density field.
+        The non-negative density field, adjusted if continuity requires it.
     phase:
         The healed optical phase field.
     quantum_potential:
@@ -105,6 +105,8 @@ class PhaseCoherenceResult:
     violations: tuple[str, ...]
     violations_after: tuple[str, ...] = ()
     bohmian_weight: FloatArray | None = None
+    continuity_residual_before: float = 0.0
+    continuity_residual_after: float = 0.0
 
     @property
     def healed(self) -> bool:
@@ -260,6 +262,9 @@ def stabilize_madelung_phase_coherence(
     boiling_threshold: float = 0.35,
     max_iterations: int = 8,
     smoothing_cutoff: int = 2,
+    previous_density: FloatArray | None = None,
+    dt: float = 1.0 / 24.0,
+    continuity_residual_max: float = 0.25,
 ) -> PhaseCoherenceResult:
     """Detect and heal high-frequency phase boiling in a Madelung fluid.
 
@@ -298,7 +303,16 @@ def stabilize_madelung_phase_coherence(
     if smoothing_cutoff < 1:
         raise ValueError("smoothing_cutoff must be at least one")
 
+    if not np.isfinite(continuity_residual_max) or continuity_residual_max <= 0.0:
+        raise ValueError("continuity_residual_max must be finite and positive")
+    if not np.isfinite(dt):
+        raise ValueError("dt must be finite")
+    if previous_density is not None and np.any(np.asarray(previous_density) < 0.0):
+        raise ValueError("previous_density must be non-negative")
+    res_before = madelung_continuity_residual(rho, phi, dt=dt, previous_density=previous_density)
     violations: list[str] = []
+    if res_before > continuity_residual_max:
+        violations.append("madelung_continuity_residual_exceeded")
 
     unwrapped = phi
     for axis in range(phi.ndim):
@@ -325,11 +339,31 @@ def stabilize_madelung_phase_coherence(
         previous_metric = metric
         iterations += 1
 
+    # Backtrack toward the stationary previous-density/constant-phase solution.
+    # Both temporal transport and spatial flux then vanish; no residual is hidden.
+    res_after = madelung_continuity_residual(rho, current, dt=dt, previous_density=previous_density)
+    if res_after > continuity_residual_max and max_iterations > 0:
+        target_density = rho if previous_density is None else np.asarray(previous_density)
+        target_phase = np.full_like(current, float(np.mean(current)))
+        original_density = rho
+        original_phase = current
+        for exponent in range(1, 61):
+            fraction = 0.5**exponent
+            rho = target_density + fraction * (original_density - target_density)
+            current = target_phase + fraction * (original_phase - target_phase)
+            res_after = madelung_continuity_residual(
+                rho, current, dt=dt, previous_density=previous_density
+            )
+            if res_after <= continuity_residual_max:
+                break
+    metric = _high_frequency_ratio(current)
     amplitude = np.sqrt(np.clip(rho, 0.0, None))
     wavefunction = amplitude * np.exp(1j * current)
     quantum_potential = bohmian_quantum_potential(rho, hbar_eff=hbar_eff)
 
     violations_after: list[str] = []
+    if res_after > continuity_residual_max:
+        violations_after.append("madelung_continuity_residual_exceeded")
     if _high_frequency_ratio(current) > boiling_threshold:
         violations_after.append("temporal_phase_boiling")
     recheck = current
@@ -349,6 +383,8 @@ def stabilize_madelung_phase_coherence(
         violations=tuple(violations),
         violations_after=tuple(violations_after),
         bohmian_weight=weight,
+        continuity_residual_before=res_before,
+        continuity_residual_after=res_after,
     )
 
 

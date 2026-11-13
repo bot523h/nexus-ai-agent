@@ -266,6 +266,7 @@ class VisemeFormantResult:
     violations_before: tuple[str, ...]
     violations_after: tuple[str, ...]
     max_desync: float
+    au18_lip_pucker_healed: FloatArray | None = None
 
     @property
     def healed(self) -> bool:
@@ -353,6 +354,7 @@ def audit_and_heal_viseme_formant_sync(
 
     healed_jaw = np.array(jaw, copy=True)
     healed_lips = np.array(lips, copy=True)
+    healed_pucker = None if pucker is None else np.array(pucker, copy=True)
     violations: list[str] = []
 
     if bool(np.any(silent & (jaw > 1e-6))):
@@ -370,12 +372,12 @@ def audit_and_heal_viseme_formant_sync(
         violations.append("bilabial_formant_conflict")
         healed_lips[conflict] = 0.7
 
-    if pucker is not None and formant2 is not None:
+    if pucker is not None and healed_pucker is not None and formant2 is not None:
         required_pucker = np.clip(kappa2 * (1200.0 - formant2) / 500.0, 0.0, 1.0)
         rounded = (~silent) & (formant2 < 1200.0) & (pucker < required_pucker - 1e-9)
         if bool(np.any(rounded)):
             violations.append("lip_rounding_underarticulation")
-            healed_lips[rounded] = np.maximum(healed_lips[rounded], required_pucker[rounded])
+            healed_pucker[rounded] = np.maximum(healed_pucker[rounded], required_pucker[rounded])
 
     residual = np.abs(healed_jaw - required)
     residual[silent] = 0.0
@@ -385,6 +387,13 @@ def audit_and_heal_viseme_formant_sync(
     if bool(np.any(silent & (healed_jaw > 1e-6))):
         violations_after.append("ventriloquist_zombie_mouth")
 
+    if bool(np.any((~silent) & (healed_lips > 0.7) & (formant1 > 600.0))):
+        violations_after.append("bilabial_formant_conflict")
+    if healed_pucker is not None and formant2 is not None:
+        required_pucker = np.clip(kappa2 * (1200.0 - formant2) / 500.0, 0.0, 1.0)
+        if bool(np.any((~silent) & (formant2 < 1200.0) & (healed_pucker < required_pucker - 1e-9))):
+            violations_after.append("lip_rounding_underarticulation")
+
     return VisemeFormantResult(
         au26_healed=np.asarray(np.clip(healed_jaw, 0.0, 1.0), dtype=np.float64),
         au20_healed=np.asarray(np.clip(healed_lips, 0.0, 1.0), dtype=np.float64),
@@ -392,6 +401,7 @@ def audit_and_heal_viseme_formant_sync(
         violations_before=tuple(violations),
         violations_after=tuple(violations_after),
         max_desync=float(np.max(residual)) if residual.size else 0.0,
+        au18_lip_pucker_healed=healed_pucker,
     )
 
 

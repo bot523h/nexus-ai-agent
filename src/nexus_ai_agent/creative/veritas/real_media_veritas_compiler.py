@@ -15,6 +15,7 @@ import shutil
 import struct
 import wave
 import zlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -213,7 +214,7 @@ def _leaf_digest(payload: dict[str, Any]) -> str:
     return hashlib.sha256(b"\x00" + json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def merkle_root_from_payloads(payloads: list[dict[str, Any]]) -> str:
+def merkle_root_from_payloads(payloads: Sequence[dict[str, Any]]) -> str:
     """Recompute the RFC 6962 root from leaf payloads (tamper detection)."""
     return _merkle_root([_leaf_digest(payload) for payload in payloads])
 

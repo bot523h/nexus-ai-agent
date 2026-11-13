@@ -112,9 +112,13 @@ class CinemaShot:
     cloth: tuple[FloatArray, FloatArray, FloatArray, list[Capsule]] | None = None
     scalar_frames: FloatArray | None = None
     wave: tuple[FloatArray, tuple[float, float], float, float] | None = None
-    phase: tuple[FloatArray, FloatArray] | None = None
+    phase: tuple[FloatArray, FloatArray] | tuple[FloatArray, FloatArray, FloatArray] | None = None
     anamorphic: FloatArray | None = None
-    viseme: tuple[FloatArray, FloatArray, FloatArray, FloatArray] | None = None
+    viseme: (
+        tuple[FloatArray, FloatArray, FloatArray, FloatArray]
+        | tuple[FloatArray, FloatArray, FloatArray, FloatArray, FloatArray, FloatArray]
+        | None
+    ) = None
     doppler: tuple[FloatArray, float] | None = None
     fluid: tuple[FloatArray, FloatArray] | None = None
     rotor: tuple[FloatArray, float, float] | None = None
@@ -159,7 +163,7 @@ def _rfc6962_digest(payload: dict[str, Any]) -> str:
 
 @dataclass
 class VeritasRealityAuditor:
-    """Runs all ten laws and returns a hashed restoration passport."""
+    """Runs all fifteen laws and returns a hashed restoration passport."""
 
     impulse_bound: float = 0.5
     entropy_tolerance: float = 1e-9
@@ -336,8 +340,11 @@ class VeritasRealityAuditor:
     def _law_phase(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         if shot.phase is None:
             return (), ()
-        density, phase = shot.phase
-        result = stabilize_madelung_phase_coherence(density, phase)
+        density, phase = shot.phase[:2]
+        previous_density = shot.phase[2] if len(shot.phase) == 3 else None
+        result = stabilize_madelung_phase_coherence(
+            density, phase, previous_density=previous_density
+        )
         return tuple(result.violations), tuple(result.violations_after)
 
     def _law_anamorphic(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -356,9 +363,14 @@ class VeritasRealityAuditor:
         before: list[str] = []
         after: list[str] = []
         if shot.viseme is not None:
-            au26, au20, formant1, energy = shot.viseme
+            au26, au20, formant1, energy = shot.viseme[:4]
             result = audit_and_heal_viseme_formant_sync(
-                au26, au20, f1_hz=formant1, rms_energy=energy
+                au26,
+                au20,
+                f1_hz=formant1,
+                rms_energy=energy,
+                au18_lip_pucker=shot.viseme[4] if len(shot.viseme) == 6 else None,
+                f2_hz=shot.viseme[5] if len(shot.viseme) == 6 else None,
             )
             before.extend(result.violations_before)
             after.extend(result.violations_after)
