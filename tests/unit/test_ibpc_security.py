@@ -1192,7 +1192,7 @@ def test_composition_factory_wires_explicit_key_provider(service_env) -> None:
 
 
 def test_composition_factory_rejects_provider_with_missing_active_key(service_env) -> None:
-    from nexus_ai_agent.connect.key_provider import KeyProviderError
+    from nexus_ai_agent.nagar.ibpc.approval_mac import KeyProviderError
     from nexus_ai_agent.nagar.ibpc.composition import build_ibpc_service
 
     service, _queue, _clip, _revision, _authority = service_env

@@ -5,16 +5,90 @@ This is an HMAC (shared-secret authenticator), not an asymmetric signature.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
+import json
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Protocol
 
-from nexus_ai_agent.connect.key_provider import KeyProvider, KeyProviderError
 from nexus_ai_agent.provenance import canonicalization
 from nexus_ai_agent.provenance.canonicalization import CanonicalizationScheme
 
 DOMAIN = b"NAGAR/IBPC/APPROVAL/v1\x00"
+
+
+class KeyProviderError(ValueError):
+    """Approval key configuration is missing, malformed, or unknown."""
+
+
+@dataclass(frozen=True)
+class ApprovalKey:
+    key_id: str
+    material: bytes
+
+    def __post_init__(self) -> None:
+        if not self.key_id or len(self.material) != 32:
+            raise KeyProviderError("approval keys require an id and exactly 256 bits")
+
+
+class KeyProvider(Protocol):
+    @property
+    def active_key_id(self) -> str: ...
+
+    def key(self, key_id: str) -> ApprovalKey: ...
+
+
+class StaticKeyRing:
+    """Local, rotation-capable approval key ring; no CONNECT dependency."""
+
+    def __init__(self, keys: Mapping[str, bytes], *, active_key_id: str) -> None:
+        if not keys:
+            raise KeyProviderError("at least one approval key is required")
+        self._keys = {
+            key_id: ApprovalKey(key_id, bytes(material)) for key_id, material in keys.items()
+        }
+        if active_key_id not in self._keys:
+            raise KeyProviderError("active approval key is not present in the key ring")
+        self._active_key_id = active_key_id
+
+    @property
+    def active_key_id(self) -> str:
+        return self._active_key_id
+
+    def key(self, key_id: str) -> ApprovalKey:
+        try:
+            return self._keys[key_id]
+        except KeyError as exc:
+            raise KeyProviderError("approval key id is unknown") from exc
+
+    @classmethod
+    def from_environment(cls, environ: Mapping[str, str] | None = None) -> StaticKeyRing:
+        env = os.environ if environ is None else environ
+        raw = env.get("NEXUS_IBPC_APPROVAL_KEY_RING", "")
+        active = env.get("NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID", "")
+        if not raw or not active:
+            raise KeyProviderError(
+                "NEXUS_IBPC_APPROVAL_KEY_RING and NEXUS_IBPC_APPROVAL_ACTIVE_KEY_ID are required"
+            )
+        try:
+            encoded = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise KeyProviderError("approval key ring must be valid JSON") from exc
+        if not isinstance(encoded, dict) or not encoded:
+            raise KeyProviderError("approval key ring must be a non-empty object")
+        keys: dict[str, bytes] = {}
+        for key_id, value in encoded.items():
+            if not isinstance(key_id, str) or not isinstance(value, str):
+                raise KeyProviderError("approval key ring entries must be strings")
+            try:
+                keys[key_id] = base64.b64decode(value, validate=True)
+            except (ValueError, TypeError) as exc:
+                raise KeyProviderError("approval key ring contains invalid base64") from exc
+        return cls(keys, active_key_id=active)
 
 
 @dataclass(frozen=True)

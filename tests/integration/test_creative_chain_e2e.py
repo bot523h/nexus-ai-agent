@@ -273,6 +273,21 @@ async def test_unexpected_crash_is_durable_failed_and_safe(
 # ---------------------------------------------------------------------------
 
 
+def _fenced_test_result(result: dict[str, object]) -> dict[str, object]:
+    """Supply queue-minted publication context for direct callback contract tests."""
+    return {
+        **result,
+        "_queue_job_id": result.get(
+            "_queue_job_id",
+            __import__("hashlib")
+            .sha256(str(result.get("workspace_dir", "")).encode())
+            .hexdigest()[:16],
+        ),
+        "_queue_attempt": result.get("_queue_attempt", 1),
+        "_queue_fence_check": result.get("_queue_fence_check", lambda: True),
+    }
+
+
 async def test_creative_render_publication_stages_and_publishes(tmp_path: Path) -> None:
     """The publication callback stages the artifact and atomically publishes it."""
     from nexus_ai_agent.creative.render_jobs import (
@@ -294,7 +309,7 @@ async def test_creative_render_publication_stages_and_publishes(tmp_path: Path) 
     payload: dict[str, object] = {}
 
     publication = build_creative_render_publication(artifact_root)
-    patch = publication.publish(payload, result)
+    patch = publication.publish(payload, _fenced_test_result(result))
 
     published_raw = patch["artifact_path"]
     assert isinstance(published_raw, str)
@@ -324,24 +339,18 @@ async def test_creative_render_publication_keeps_previous_as_backup(tmp_path: Pa
     # First publication
     artifact.write_bytes(b"version 1")
     result1 = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
-    patch1 = publication.publish({}, result1)
+    patch1 = publication.publish({}, _fenced_test_result(result1))
     published1 = Path(patch1["artifact_path"])
     assert published1.read_bytes() == b"version 1"
 
     # Second publication (same workspace, same attempt_id)
     artifact.write_bytes(b"version 2")
-    result2 = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
-    patch2 = publication.publish({}, result2)
+    result2 = {"artifact_path": str(artifact), "workspace_dir": str(workspace), "_queue_attempt": 2}
+    patch2 = publication.publish({}, _fenced_test_result(result2))
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"version 2"
-
-    # Previous is kept as .prev, inside the publishing job's namespace
-    # (task-283: the published namespace is job-scoped, so two jobs that emit
-    # the same file name can neither overwrite each other's artifact nor share
-    # one .prev backup).
-    backup = published2.parent / ".output.mp4.prev"
-    assert backup.exists()
-    assert backup.read_bytes() == b"version 1"
+    assert published1.read_bytes() == b"version 1"
+    assert published1 != published2
 
 
 async def test_creative_render_retract_restores_previous(tmp_path: Path) -> None:
@@ -364,14 +373,15 @@ async def test_creative_render_retract_restores_previous(tmp_path: Path) -> None
     artifact.write_bytes(b"good version")
     identity = {"_queue_job_id": "job-retract", "_queue_attempt": 1}
     result = {"artifact_path": str(artifact), "workspace_dir": str(workspace), **identity}
-    patch = publication.publish({}, result)
+    patch = publication.publish({}, _fenced_test_result(result))
     published = Path(patch["artifact_path"])
     assert published.read_bytes() == b"good version"
 
     # Second publication (creates .prev backup)
     artifact.write_bytes(b"bad version")
-    result2 = {"artifact_path": str(artifact), "workspace_dir": str(workspace), **identity}
-    patch2 = publication.publish({}, result2)
+    identity2 = {"_queue_job_id": "job-retract", "_queue_attempt": 2}
+    result2 = {"artifact_path": str(artifact), "workspace_dir": str(workspace), **identity2}
+    patch2 = publication.publish({}, _fenced_test_result(result2))
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"bad version"
 
@@ -379,14 +389,11 @@ async def test_creative_render_retract_restores_previous(tmp_path: Path) -> None
     post_publish_result = {
         "artifact_path": str(published2),
         "workspace_dir": str(workspace),
-        **identity,
+        **identity2,
     }
     publication.retract({}, post_publish_result)
-    # After retract, the previous artifact is restored from .prev
-    backup = published2.parent / ".output.mp4.prev"
-    published_path = published2
-    assert not backup.exists(), "backup should be consumed by retract"
-    assert published_path.read_bytes() == b"good version"
+    assert not published2.exists()
+    assert published.read_bytes() == b"good version"
 
 
 async def test_creative_render_finalize_cleans_staging(tmp_path: Path) -> None:
@@ -405,14 +412,14 @@ async def test_creative_render_finalize_cleans_staging(tmp_path: Path) -> None:
 
     publication = build_creative_render_publication(artifact_root)
     result = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
-    patch = publication.publish({}, result)
+    patch = publication.publish({}, _fenced_test_result(result))
     published = Path(patch["artifact_path"])
     assert published.exists()
 
     staging_dir = artifact_root / "staging"
     assert staging_dir.exists()
 
-    publication.finalize({}, result)
+    publication.finalize({}, _fenced_test_result(result))
     # Finalize is best-effort; staging dir should be removed
     staging_job_dirs = list(staging_dir.glob("*/*")) if staging_dir.exists() else []
     assert not staging_job_dirs, "staging directory should be cleaned up"
@@ -435,8 +442,8 @@ async def test_creative_render_publication_is_idempotent(tmp_path: Path) -> None
     publication = build_creative_render_publication(artifact_root)
     result = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
 
-    patch1 = publication.publish({}, result)
-    patch2 = publication.publish({}, result)
+    patch1 = publication.publish({}, _fenced_test_result(result))
+    patch2 = publication.publish({}, _fenced_test_result(result))
 
     assert patch1["artifact_path"] == patch2["artifact_path"]
     assert Path(patch1["artifact_path"]).read_bytes() == b"stable bytes"
@@ -488,8 +495,8 @@ async def test_creative_render_publication_attempt_isolation(tmp_path: Path) -> 
     result_a = {"artifact_path": str(artifact_a), "workspace_dir": str(ws_a)}
     result_b = {"artifact_path": str(artifact_b), "workspace_dir": str(ws_b)}
 
-    patch_a = publication.publish({}, result_a)
-    patch_b = publication.publish({}, result_b)
+    patch_a = publication.publish({}, _fenced_test_result(result_a))
+    patch_b = publication.publish({}, _fenced_test_result(result_b))
 
     published_a = Path(patch_a["artifact_path"])
     published_b = Path(patch_b["artifact_path"])
@@ -525,7 +532,7 @@ async def test_creative_render_publication_crash_recovery_states(tmp_path: Path)
     artifact.write_bytes(b"crash recovery bytes")
 
     result = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
-    patch = publication.publish({}, result)
+    patch = publication.publish({}, _fenced_test_result(result))
 
     published = Path(patch["artifact_path"])
     assert published.exists(), "published artifact must exist"
@@ -540,7 +547,7 @@ async def test_creative_render_publication_crash_recovery_states(tmp_path: Path)
     assert not backup.exists(), "no backup on first publication"
 
     # After finalize, staging is cleaned up
-    publication.finalize({}, result)
+    publication.finalize({}, _fenced_test_result(result))
     staging_job_dirs = list(staging_dir.glob("*/*")) if staging_dir.exists() else []
     assert not staging_job_dirs, "finalize must clean staging"
 
@@ -559,7 +566,7 @@ async def test_creative_render_publication_no_unsafe_direct_write(tmp_path: Path
     artifact.write_bytes(b"staged then published")
 
     result = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
-    patch = publication.publish({}, result)
+    patch = publication.publish({}, _fenced_test_result(result))
 
     published = Path(patch["artifact_path"])
     assert published.exists()
@@ -595,7 +602,7 @@ async def test_creative_render_publication_concurrent_publishers(tmp_path: Path)
     result_2 = {"artifact_path": str(artifact_2), "workspace_dir": str(ws_2)}
 
     async def _publish(result):
-        return await asyncio.to_thread(publication.publish, {}, result)
+        return await asyncio.to_thread(publication.publish, {}, _fenced_test_result(result))
 
     patch_1, patch_2 = await asyncio.gather(
         _publish(result_1),
@@ -625,14 +632,14 @@ async def test_creative_render_publication_retry_after_ambiguous_crash(tmp_path:
     result = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
 
     # First attempt: publish but simulate crash before finalize
-    patch1 = publication.publish({}, result)
+    patch1 = publication.publish({}, _fenced_test_result(result))
     published1 = Path(patch1["artifact_path"])
     assert published1.exists()
     # Simulate crash: staging still exists
     assert (artifact_root / "staging").exists()
 
     # Retry: publish again (simulates recovery re-running publication)
-    patch2 = publication.publish({}, result)
+    patch2 = publication.publish({}, _fenced_test_result(result))
     published2 = Path(patch2["artifact_path"])
     assert published2.exists()
     assert published2.read_bytes() == b"ambiguous crash bytes"
@@ -732,8 +739,14 @@ async def test_creative_render_publication_callback_atomic_rename(
 
     monkeypatch.setattr(AttemptStaging, "write", _capture_write)
 
-    result = {"artifact_path": str(artifact), "workspace_dir": str(workspace)}
-    patch = publication.publish({}, result)
+    result = {
+        "artifact_path": str(artifact),
+        "workspace_dir": str(workspace),
+        "_queue_job_id": "atomic-job",
+        "_queue_attempt": 1,
+        "_queue_fence_check": lambda: True,
+    }
+    patch = publication.publish({}, _fenced_test_result(result))
 
     published = Path(patch["artifact_path"])
     published_inode = published.stat().st_ino
@@ -911,7 +924,7 @@ async def test_integration_two_attempts_same_artifact_name(tmp_path: Path) -> No
         "_queue_job_id": "job-collision",
         "_queue_attempt": 1,
     }
-    patch1 = publication.publish({}, result1)
+    patch1 = publication.publish({}, _fenced_test_result(result1))
     published1 = Path(patch1["artifact_path"])
     assert published1.read_bytes() == b"attempt 1 bytes"
 
@@ -923,15 +936,14 @@ async def test_integration_two_attempts_same_artifact_name(tmp_path: Path) -> No
         "_queue_job_id": "job-collision",
         "_queue_attempt": 2,
     }
-    patch2 = publication.publish({}, result2)
+    patch2 = publication.publish({}, _fenced_test_result(result2))
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"attempt 2 bytes"
 
-    # The .prev backup has attempt 1's bytes (same job namespace, so the two
-    # attempts of ONE job legitimately share the destination and its backup).
+    # Each attempt owns an immutable output path: the first remains available.
+    assert published1.read_bytes() == b"attempt 1 bytes"
     backup = published2.parent / ".output.mp4.prev"
-    assert backup.exists()
-    assert backup.read_bytes() == b"attempt 1 bytes"
+    assert not backup.exists()
 
     # Sidecar records the *complete* identity of the owner: job + attempt
     # (task-283 — an attempt number alone cannot distinguish two different
@@ -964,8 +976,8 @@ async def test_integration_two_attempts_same_artifact_name(tmp_path: Path) -> No
         "_queue_attempt": 2,
     }
     publication.retract({}, post_publish_result2)
-    assert not backup.exists(), "backup consumed by attempt 2 retract"
-    assert published2.read_bytes() == b"attempt 1 bytes", "prev restored"
+    assert not backup.exists()
+    assert not published2.exists()
 
 
 async def test_integration_older_attempt_cannot_retract_newer(tmp_path: Path) -> None:
@@ -988,7 +1000,7 @@ async def test_integration_older_attempt_cannot_retract_newer(tmp_path: Path) ->
         "_queue_job_id": "job-fencing",
         "_queue_attempt": 1,
     }
-    patch1 = publication.publish({}, result1)
+    patch1 = publication.publish({}, _fenced_test_result(result1))
     published1 = Path(patch1["artifact_path"])
     assert published1.read_bytes() == b"attempt 1 published"
 
@@ -1000,7 +1012,7 @@ async def test_integration_older_attempt_cannot_retract_newer(tmp_path: Path) ->
         "_queue_job_id": "job-fencing",
         "_queue_attempt": 2,
     }
-    patch2 = publication.publish({}, result2)
+    patch2 = publication.publish({}, _fenced_test_result(result2))
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"attempt 2 published"
 
@@ -1051,13 +1063,13 @@ async def test_integration_retry_after_ambiguous_crash(tmp_path: Path) -> None:
     }
 
     # First publish (simulates publish done, crash before finalize)
-    patch1 = publication.publish({}, result)
+    patch1 = publication.publish({}, _fenced_test_result(result))
     published1 = Path(patch1["artifact_path"])
     assert published1.exists()
     assert (artifact_root / "staging").exists()  # crash before finalize
 
     # Retry with same attempt identity — idempotent
-    patch2 = publication.publish({}, result)
+    patch2 = publication.publish({}, _fenced_test_result(result))
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"retry bytes"
     assert published1.read_bytes() == published2.read_bytes()
@@ -1088,28 +1100,28 @@ async def test_integration_backup_restoration_correctness(tmp_path: Path) -> Non
         "_queue_job_id": "job-backup",
         "_queue_attempt": 1,
     }
-    patch1 = publication.publish({}, result)
+    patch1 = publication.publish({}, _fenced_test_result(result))
     assert Path(patch1["artifact_path"]).read_bytes() == b"version 1"
 
-    # Publish version 2 (creates .prev backup with version 1)
+    # Attempt 2 publishes into its own immutable namespace. Attempt 1 remains
+    # untouched and recoverable, and retracting attempt 2 cannot replace it.
     artifact.write_bytes(b"version 2")
-    patch2 = publication.publish({}, result)
+    result2 = {**result, "_queue_attempt": 2}
+    patch2 = publication.publish({}, _fenced_test_result(result2))
     published2 = Path(patch2["artifact_path"])
     assert published2.read_bytes() == b"version 2"
+    published1 = Path(patch1["artifact_path"])
+    assert published1.read_bytes() == b"version 1"
 
-    backup = published2.parent / ".render.mp4.prev"
-    assert backup.exists()
-    assert backup.read_bytes() == b"version 1", "backup must contain version 1"
-
-    # Retract restores version 1 from backup
     post_publish_result = {
         "artifact_path": str(published2),
         "workspace_dir": str(workspace),
         "_queue_job_id": "job-backup",
-        "_queue_attempt": 1,
+        "_queue_attempt": 2,
     }
     publication.retract({}, post_publish_result)
-    assert published2.read_bytes() == b"version 1", "retract restores version 1"
+    assert not published2.exists()
+    assert published1.read_bytes() == b"version 1"
 
 
 # ── Phase 3: flock-based queue ownership ──────────────────────────────
@@ -1275,3 +1287,63 @@ async def test_safe_retry_boundary_unknown_blocks_recovery(tmp_path: Path) -> No
     assert not queue.is_unknown(job_id), "UNKNOWN marker should be removed"
 
     await queue.shutdown()
+
+
+async def test_creative_render_publish_fence_refusal_preserves_prior_artifacts(
+    tmp_path: Path,
+) -> None:
+    from nexus_ai_agent.creative.render_jobs import build_creative_render_publication
+
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "movie.mp4"
+    source.write_bytes(b"staged bytes")
+    publication = build_creative_render_publication(artifact_root)
+    stale_result = _fenced_test_result(
+        {
+            "artifact_path": str(source),
+            "workspace_dir": str(workspace),
+            "_queue_job_id": "fence-job",
+            "_queue_attempt": 2,
+            "_queue_fence_check": lambda: False,
+        }
+    )
+    with pytest.raises(Exception, match="fencing token"):
+        publication.publish({}, stale_result)
+    assert not list((artifact_root / "published").rglob("movie.mp4"))
+
+
+async def test_creative_render_publish_rejects_corrupted_private_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus_ai_agent.creative.render_jobs import build_creative_render_publication
+    from nexus_ai_agent.execution.staging import AttemptStaging, StagedArtifactError
+
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "movie.mp4"
+    source.write_bytes(b"expected render")
+    publication = build_creative_render_publication(artifact_root)
+    original_write = AttemptStaging.write
+
+    def corrupt_after_staging(self, name, data):
+        staged = original_write(self, name, data)
+        staged.write_bytes(b"corrupted render")
+        return staged
+
+    monkeypatch.setattr(AttemptStaging, "write", corrupt_after_staging)
+    result = _fenced_test_result(
+        {
+            "artifact_path": str(source),
+            "workspace_dir": str(workspace),
+            "_queue_job_id": "corrupt-job",
+            "_queue_attempt": 1,
+        }
+    )
+    with pytest.raises(StagedArtifactError, match="digest"):
+        publication.publish({}, result)
+    assert not list((artifact_root / "published").rglob("movie.mp4"))

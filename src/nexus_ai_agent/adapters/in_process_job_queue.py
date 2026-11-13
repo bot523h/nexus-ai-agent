@@ -2238,6 +2238,11 @@ class InProcessJobQueue:
         publish_context = dict(result)
         publish_context["_queue_job_id"] = claim.job_id
         publish_context["_queue_attempt"] = claim.attempt
+        # The publication adapter performs this authoritative CAS read at the
+        # last responsible moment, after it has staged and hashed private bytes.
+        publish_context["_queue_fence_check"] = lambda: self._owns_execution(
+            claim, JobStatus.VERIFYING
+        )
         try:
             patch = await self._publish_in_thread(publication, payload, publish_context)
         except Exception as exc:  # noqa: BLE001 - publication failure is a refusal

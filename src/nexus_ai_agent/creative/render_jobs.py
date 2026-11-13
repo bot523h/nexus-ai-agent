@@ -1462,21 +1462,21 @@ def _resolved_within(child: Path, parent: Path) -> bool:
 def _publication_layout(staging: AttemptStaging, staged_name: str) -> tuple[Path, Path, Path, Path]:
     """Return ``(job_dir, published, backup, sidecar)`` for this publication.
 
-    The published namespace is **job-scoped** (``published/<job_id>/<name>``).
-    A flat namespace let two different jobs that produce the same file name
-    overwrite each other's artifact *and* share one ``.prev`` backup, so one
-    job's rollback could restore another job's bytes.
+    The published namespace is immutable and attempt-scoped
+    (``published/<job_id>/<attempt_id>/<name>``). A stale attempt can therefore
+    never overwrite a newer attempt's bytes, even if it loses the durable queue
+    CAS after its filesystem rename.
     """
     final_root = staging.final_root
     if final_root is None:  # pragma: no cover - guarded by callers
         raise RuntimeError("publication requires a declared final_root")
     job_id = staging.job_id
-    job_dir = Path(final_root) / job_id
+    attempt_dir = Path(final_root) / job_id / staging.attempt_id
     return (
-        job_dir,
-        job_dir / staged_name,
-        job_dir / f".{staged_name}.prev",
-        job_dir / f".{staged_name}.owner",
+        attempt_dir,
+        attempt_dir / staged_name,
+        attempt_dir / f".{staged_name}.prev",
+        attempt_dir / f".{staged_name}.owner",
     )
 
 
@@ -1584,8 +1584,10 @@ def creative_render_publication_callback(
         raise RuntimeError("publish: result has no workspace_dir")
     workspace = Path(workspace_raw)
 
-    _qjid = payload.get("_queue_job_id") or result.get("_queue_job_id")
-    _qatt = payload.get("_queue_attempt") or result.get("_queue_attempt")
+    # Queue-minted result context wins; caller/provider payload cannot select a
+    # different attempt namespace.
+    _qjid = result.get("_queue_job_id") or payload.get("_queue_job_id")
+    _qatt = result.get("_queue_attempt") or payload.get("_queue_attempt")
     staging = _creative_render_staging(
         artifact_root,
         workspace,
@@ -1596,33 +1598,46 @@ def creative_render_publication_callback(
     assert staging.final_root is not None, "staging requires final_root"
     staging.prepare()
 
-    # 1) Stage the artifact into this attempt's tree.
+    # Queue-injected identity and current-row CAS checker are mandatory for
+    # production publication. Direct/unfenced callbacks must fail closed.
+    fence_check = result.get("_queue_fence_check")
+    if not callable(fence_check):
+        raise RuntimeError("publish: authoritative queue fence checker is required")
+
+    # 1) Stage and independently hash the exact bytes copied from the worker
+    # result. The staging boundary re-hashes the on-disk copy before promotion.
     staged_name = artifact_path.name
     staged_path = staging.stage_path(staged_name)
     data = artifact_path.read_bytes()
+    expected_digest = hashlib.sha256(data).hexdigest()
     staging.write(staged_name, data)
 
     job_dir, published_path, backup_path, sidecar_path = _publication_layout(staging, staged_name)
     try:
         job_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise RuntimeError(f"publish: job namespace unavailable: {exc}") from exc
+        raise RuntimeError(f"publish: attempt namespace unavailable: {exc}") from exc
 
     attempt_component = str(_qatt) if isinstance(_qatt, (int, str)) else None
+    if attempt_component is None:
+        raise RuntimeError("publish: queue fencing token is required")
 
-    # 2) Claim the destination before touching it.
+    # Attempt-specific immutable destinations eliminate the fence-check to
+    # rename race: a losing attempt can only ever write its own namespace.
     _write_sidecar(sidecar_path, job_id=staging.job_id, attempt=attempt_component)
-
-    # 3) Keep the previous bytes recoverable.
-    if published_path.exists():
-        published_path.rename(backup_path)
-
-    # 4) Atomic publish: staging → final destination (inside the job namespace).
-    resolved = staging.publish(staged_path, f"{staging.job_id}/{staged_name}")
-
+    resolved, artifact_sha256 = staging.publish_verified(
+        staged_path,
+        f"{staging.job_id}/{staging.attempt_id}/{staged_name}",
+        fence_is_current=fence_check,
+        expected_sha256=expected_digest,
+    )
     return {
         "artifact_path": str(resolved),
-        "artifact_backup": str(backup_path) if backup_path.exists() else None,
+        "artifact_backup": None,
+        "artifact_sha256": artifact_sha256,
+        "artifact_size_bytes": len(data),
+        "_queue_job_id": _qjid,
+        "_queue_attempt": _qatt,
     }
 
 
@@ -1656,8 +1671,8 @@ def creative_render_retract_callback(
         return
     workspace = Path(workspace_raw)
 
-    _qjid = payload.get("_queue_job_id") or result.get("_queue_job_id")
-    _qatt = payload.get("_queue_attempt") or result.get("_queue_attempt")
+    _qjid = result.get("_queue_job_id") or payload.get("_queue_job_id")
+    _qatt = result.get("_queue_attempt") or payload.get("_queue_attempt")
     staging = _creative_render_staging(
         artifact_root,
         workspace,

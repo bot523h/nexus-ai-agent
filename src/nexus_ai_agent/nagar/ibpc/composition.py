@@ -6,7 +6,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import replace
 
-from nexus_ai_agent.connect.key_provider import (
+from nexus_ai_agent.nagar.ibpc.approval_mac import (
     KeyProvider,
     KeyProviderError,
     StaticKeyRing,

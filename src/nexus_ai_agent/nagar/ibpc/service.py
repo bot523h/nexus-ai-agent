@@ -38,11 +38,16 @@ from typing import Any, Literal, Protocol
 from nexus_ai_agent.application.creative_intent import CanonicalCreativeIntent
 from nexus_ai_agent.application.ports.caption_engine import CaptionEnginePort
 from nexus_ai_agent.application.ports.job_queue import JobQueuePort, JobStatus
-from nexus_ai_agent.connect.key_provider import KeyProvider, KeyProviderError
 from nexus_ai_agent.creative.slideshow.ffmpeg import RenderError, sha256_file
 from nexus_ai_agent.creative.studio.capabilities import CapabilityRegistry
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError, ApprovalIdentity, ApprovalLedger
-from nexus_ai_agent.nagar.ibpc.approval_mac import ApprovalEnvelope, issue_envelope, verify_envelope
+from nexus_ai_agent.nagar.ibpc.approval_mac import (
+    ApprovalEnvelope,
+    KeyProvider,
+    KeyProviderError,
+    issue_envelope,
+    verify_envelope,
+)
 from nexus_ai_agent.nagar.ibpc.authority import (
     CanonicalAuthorityError,
     CanonicalAuthorityPort,
@@ -778,7 +783,7 @@ class IBPCService:
             )
         try:
             provider.key(provider.active_key_id)
-        except (KeyProviderError, AttributeError) as exc:
+        except (ValueError, AttributeError) as exc:
             raise ApprovalError(
                 "approval_key_unavailable", "configured approval key is invalid"
             ) from exc
