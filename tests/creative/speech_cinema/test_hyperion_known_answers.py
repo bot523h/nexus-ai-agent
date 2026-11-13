@@ -8,6 +8,8 @@ These pin constants and boundaries that behavioural properties alone cannot see.
 
 from __future__ import annotations
 
+import itertools
+
 import hashlib
 
 import numpy as np
@@ -35,11 +37,13 @@ def test_kat_rfc6962_two_leaf_root_uses_0x00_and_0x01_domain_prefixes() -> None:
     assert vm.merkle_root([a, b]) == expected
 
 
-def test_kat_reed_solomon_parity_row_follows_the_vandermonde_recurrence() -> None:
-    # Row k+r holds powers of base=r+1 with the first column equal to 1.
+def test_kat_reed_solomon_generator_is_systematic_and_mds() -> None:
+    # The generator is a systematic Vandermonde code: identity on the first k rows, and every
+    # k rows invertible (MDS).  The previous powers-of-(r+1) recurrence was not MDS.
     gen = gf._generator(3, 2)
-    assert gen[3].tolist() == [1, gf.gf_multiply(1, 1), gf.gf_multiply(1, 1)]
-    assert gen[4, 1] == gf.gf_multiply(gen[4, 0], 2)
+    assert gen[:3].tolist() == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    for keep in itertools.combinations(range(5), 3):
+        gf.matrix_invert(gen[list(keep)])  # raises if singular
 
 
 def test_golden_master_cdc_chunk_boundaries_are_frozen() -> None:

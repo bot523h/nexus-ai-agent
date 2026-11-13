@@ -113,13 +113,9 @@ def white_balance_chromatic_adaptation(
         if kelvin is None:  # pragma: no cover - guarded above; narrows the type
             raise ValueError("kelvin is required when method='kelvin'")
         source_xyz = _temperature_white_point(float(kelvin))
-        if target_kelvin is None:
-            if abs(float(kelvin) - 6500.0) < 1e-9:
-                # 6500 K -> 6500 K is the exact identity, not a 6500 K -> D65 shift.
-                return np.asarray(arr @ np.eye(3).T, dtype=np.float64)
-            target_xyz = _D65
-        else:
-            target_xyz = _temperature_white_point(float(target_kelvin))
+        target_xyz = (
+            _D65 if target_kelvin is None else _temperature_white_point(float(target_kelvin))
+        )
     else:
         means: Array = np.mean(arr.reshape(-1, 3), axis=0)
         if bool(np.any(means <= 0)):

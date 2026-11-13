@@ -94,14 +94,18 @@ invert_matrix = matrix_invert
 
 
 def _generator(k: int, m: int) -> np.ndarray:
+    """Systematic MDS generator: a Vandermonde matrix over distinct points, times the inverse
+    of its top k x k block.  Any k rows are invertible, so any m erasures are recoverable.
+    """
     rows = k + m
-    matrix = np.zeros((rows, k), dtype=np.uint8)
-    matrix[:k] = np.eye(k, dtype=np.uint8)
-    for row in range(k, rows):
-        base = row - k + 1
-        for col in range(k):
-            matrix[row, col] = 1 if col == 0 else gf_multiply(matrix[row, col - 1], base)
-    return matrix
+    vandermonde = np.zeros((rows, k), dtype=np.uint8)
+    for point in range(rows):
+        vandermonde[point, 0] = 1
+        for col in range(1, k):
+            vandermonde[point, col] = gf_multiply(int(vandermonde[point, col - 1]), point)
+    return np.asarray(
+        _matrix_multiply(vandermonde, matrix_invert(vandermonde[:k])), dtype=np.uint8
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +156,11 @@ def reconstruct(
     k, m = first.data_shards, first.parity_shards
     if len(shards) < k or any(s.total != k + m for s in shards):
         raise ValueError("need at least k compatible shards")
-    selected = {s.index: s for s in shards}
+    selected: dict[int, ErasureShard] = {}
+    for shard in shards:
+        previous = selected.setdefault(shard.index, shard)
+        if previous.data != shard.data:
+            raise ValueError(f"conflicting shards claim index {shard.index}")
     if len(selected) < k or any(not 0 <= i < k + m for i in selected):
         raise ValueError("invalid or duplicate shard indexes")
     selected_items = list(selected.values())[:k]
@@ -171,7 +179,11 @@ def reconstruct(
                 output ^= _gf_scale(selected_arrays[col], int(coefficient))
         recovered.append(bytes(output))
     result = b"".join(recovered)
-    return result if original_size is None else result[:original_size]
+    if original_size is None:
+        return result
+    if not 0 <= original_size <= len(result):
+        raise ValueError("original_size exceeds the reconstructed payload")
+    return result[:original_size]
 
 
 encode_shards = encode
