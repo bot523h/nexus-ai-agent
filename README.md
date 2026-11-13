@@ -4,6 +4,8 @@
 
 > **Version: v3.13.0** (see `VERSION` and [the changelog](CHANGELOG.md)). Nagar Wave 2.5 and Wave 3 image generation; local upscaling remains deferred.
 
+NEXUS is the AI execution platform and NAGAR is its creative operating system. The production architecture centers on the canonical `CommandBus`, capability packs, FFmpeg rendering lane, `AssetLibrary`, content-addressed/fenced job queue, independent artifact verifier, cryptographic `ArtifactPassport`, IBPC intent/approval workflow, and fail-closed PostgreSQL recovery policy. Optional connectors and model providers remain behind explicit authorization and configuration boundaries.
+
 ---
 
 ## Features
