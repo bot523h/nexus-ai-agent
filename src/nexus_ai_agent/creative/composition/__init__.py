@@ -41,6 +41,16 @@ from .errors import (
     TimeWarpError,
     UnknownNodeError,
 )
+from .film_emulation import (
+    MAX_FILM_PIXELS,
+    FilmEmulationError,
+    apply_film_emulation,
+    film_grain,
+    gate_weave,
+    halation,
+    psnr,
+    ssim,
+)
 from .hdr_tonemapping import (
     MAX_TONEMAP_PIXELS,
     DegenerateToneCurveError,
@@ -166,6 +176,7 @@ __all__ = [
     "linear_to_srgb",
     "srgb_to_linear",
     "IRRADIANCE_TRANSFER",
+    "MAX_FILM_PIXELS",
     "MAX_TONEMAP_PIXELS",
     "MAX_RELIGHT_PIXELS",
     "SH_BASIS_SIZE",
@@ -202,4 +213,11 @@ __all__ = [
     "luminance",
     "reinhard_tonemap",
     "uncharted2_tonemap",
+    "FilmEmulationError",
+    "apply_film_emulation",
+    "film_grain",
+    "gate_weave",
+    "halation",
+    "psnr",
+    "ssim",
 ]

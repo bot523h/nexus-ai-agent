@@ -383,3 +383,65 @@ all raise `TonemapError` (with `DegenerateToneCurveError` as a subclass).
 - These are *editorial* tone and white-balance operators, not a calibrated
   display transform; no GUM uncertainty budget or reference-monitor claim.
 - No ACES CTL / OCIO, no scipy/cv2/torch, no cloud service is used.
+
+---
+
+## 15. Wave 12 — photochemical film emulation and objective metrics
+
+Module: `src/nexus_ai_agent/creative/composition/film_emulation.py` (import
+alias `film`). Registry operation: `scene.film_emulation` (additive, outside the
+ten catalogue operations). Pure NumPy + stdlib, offline, seeded and bounded.
+
+### 15.1 Halation
+
+Light that passes the emulsion scatters off the anti-halation backing and
+re-exposes the layer; red light penetrates furthest, so the glow is a
+large-radius, red-weighted bleed. Pixels above `threshold` are isolated,
+Gaussian-blurred (separable, edge-clamped) and added back with the red channel
+scaled by `red_bias`. `strength = 0` is an exact identity.
+
+### 15.2 Film grain
+
+Luminance-dependent, seeded Gaussian grain. The weight is a triangular mid-tone
+function `1 − |2·clamp(Y) − 1|` (zero at pure black and white) and the RMS is
+`sigma / sqrt(area)`, so a larger `area` gives finer grain. Identical
+`(seed, shape)` always produce identical grain; `sigma = 0` is an identity.
+
+### 15.3 Gate weave
+
+Deterministic sub-pixel projector-gate jitter: a smooth low-frequency drift
+(`sin(2π f/23)`, `sin(2π f/31 + 1)`) plus a small seeded high-frequency term,
+resampled bilinearly with edge clamp. `amplitude = 0` is an exact identity.
+
+### 15.4 Objective metrics
+
+- **PSNR** `10 log10(peak² / MSE)`, `inf` for identical inputs.
+- **SSIM** (Wang et al. 2004) on the Rec.709 luma with a Gaussian window,
+  `C1 = (0.01·peak)²`, `C2 = (0.03·peak)²`; the mean of the local SSIM map.
+  Identical inputs give exactly `1.0`. These metrics are the honest verification
+  for the other Waves' operators (they quantify signal destruction, they do not
+  certify artistic quality).
+
+### 15.5 Bounds and refusals
+
+`MAX_FILM_PIXELS = 4 194 304`; NaN/Inf, negative radiance, wrong channel count,
+empty input, over-budget size, non-positive `sigma`/`truncate`/`peak`, negative
+`strength`/`seed`/`frame_index`/`amplitude`, `area < 1` and mismatched shapes
+all raise `FilmEmulationError`.
+
+### 15.6 Evidence
+
+- `tests/creative/composition/test_film_emulation.py`: determinism, identity
+  cases, the `1/sqrt(area)` grain law, mid-tone grain weighting, halation
+  red-dominance, the closed-form PSNR value, SSIM identity/monotonicity/symmetry,
+  and every refusal path.
+- `tests/creative/packs/scene/test_scene_registry.py`: Wave-12 registry tests.
+- Coverage: `film_emulation.py` at **100% line + branch** (via the `coverage` CLI).
+
+### 15.7 Scope limits (honest)
+
+- These are *editorial* artefacts, not a physical emulsion simulation; no
+  density-curve or granularity (Selwyn) model and no GUM budget are claimed.
+- PSNR/SSIM are full-reference signal metrics; they do not measure perceptual or
+  artistic quality.
+- No OpenCV/scipy/torch, no film-scan LUT, no cloud service is used.

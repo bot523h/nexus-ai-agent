@@ -27,6 +27,9 @@ OPERATION_RETIME_OPTICAL_FLOW = "scene.retime_optical_flow"
 #: Wave 11 addition (not one of the ten catalogue operations).
 OPERATION_TONEMAP_HDR = "scene.tonemap_hdr"
 
+#: Wave 12 addition (not one of the ten catalogue operations).
+OPERATION_FILM_EMULATION = "scene.film_emulation"
+
 #: The ten catalogue scene operations this pack implements.
 SCENE_OPERATIONS: tuple[str, ...] = (
     OPERATION_INSERT_OBJECT_WITH_SHADOW,
@@ -143,6 +146,17 @@ class HdrTonemapInput(_Strict):
     adapt_temperature_k: float | None = Field(default=None, ge=1667.0, le=25000.0)
 
 
+class FilmEmulationInput(_Strict):
+    """Photochemical film emulation: gate weave, halation and grain (Wave 12)."""
+
+    image_id: str = Field(min_length=1, max_length=128)
+    frame_index: int = Field(default=0, ge=0, le=1_000_000)
+    seed: int = Field(default=0, ge=0, le=2**31 - 1)
+    grain_sigma: float = Field(default=0.03, ge=0.0, le=1.0)
+    halation_strength: float = Field(default=0.4, ge=0.0, le=4.0)
+    weave_amplitude: float = Field(default=1.5, ge=0.0, le=32.0)
+
+
 __all__ = [
     "SCENE_PACKAGE_ID",
     "DOMAIN",
@@ -160,4 +174,5 @@ __all__ = [
     "RadiativeTransferHarmonizeInput",
     "OpticalFlowRetimeInput",
     "HdrTonemapInput",
+    "FilmEmulationInput",
 ]

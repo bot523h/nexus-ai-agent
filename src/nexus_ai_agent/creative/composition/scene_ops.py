@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from nexus_ai_agent.creative.composition import computational_cinematography as cine
+from nexus_ai_agent.creative.composition import film_emulation as film
 from nexus_ai_agent.creative.composition import hdr_tonemapping as hdr
 from nexus_ai_agent.creative.composition import radiative_relighting as relight
 from nexus_ai_agent.creative.composition import scene_imaging as kernels
@@ -25,6 +26,7 @@ from nexus_ai_agent.creative.packs.scene.models import (
     SCENE_PACKAGE_ID,
     ChromaticAberrationInput,
     DepthOfFieldInput,
+    FilmEmulationInput,
     FogHazeInput,
     HdrTonemapInput,
     HorizonLevelInput,
@@ -233,6 +235,22 @@ def _tonemap_hdr(project: Project, context: OperationContext) -> OperationOutcom
     return _out(project, context, result)
 
 
+def _film_emulation(project: Project, context: OperationContext) -> OperationOutcome:
+    """Apply photochemical gate weave, halation and grain to a frame."""
+    data, store = _split(context)
+    p = FilmEmulationInput.model_validate(data)
+    image = _require(store, p.image_id)
+    result = film.apply_film_emulation(
+        image,
+        frame_index=p.frame_index,
+        seed=p.seed,
+        grain_sigma=p.grain_sigma,
+        halation_strength=p.halation_strength,
+        weave_amplitude=p.weave_amplitude,
+    )
+    return _out(project, context, result)
+
+
 def _retime_optical_flow(project: Project, context: OperationContext) -> OperationOutcome:
     """Flow-based interpolation of a frame between two keyframes (variable frame rate)."""
     data, store = _split(context)
@@ -304,6 +322,11 @@ SCENE_HANDLERS: dict[str, Any] = {
         _tonemap_hdr,
         HdrTonemapInput,
         "Scene-linear HDR tone mapping with optional white-point adaptation.",
+    ),
+    "film_emulation": (
+        _film_emulation,
+        FilmEmulationInput,
+        "Photochemical gate weave, halation and film grain.",
     ),
 }
 

@@ -266,3 +266,25 @@ def test_wave11_tonemap_hdr_adapts_temperature() -> None:
         },
     )
     assert float(out["image"][..., 0].mean()) > float(out["image"][..., 2].mean())
+
+
+def test_wave12_film_emulation_op_registered() -> None:
+    from nexus_ai_agent.creative.packs.scene import FilmEmulationInput
+
+    reg = build_scene_registry()
+    spec = reg.get_spec("scene.film_emulation")
+    assert spec.input_model is FilmEmulationInput
+
+
+def test_wave12_film_emulation_is_deterministic() -> None:
+    size = 24
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+    img = np.stack([xs / (size - 1), ys / (size - 1), np.full((size, size), 0.5)], -1).astype(
+        np.float32
+    )
+    payload = {"image_id": "i", "frame_index": 3, "seed": 11, "_images": {"i": img}}
+    out1 = _run("scene.film_emulation", payload)
+    out2 = _run("scene.film_emulation", payload)
+    assert np.array_equal(out1["image"], out2["image"])
+    assert float(out1["image"].min()) >= 0.0
+    assert float(out1["image"].max()) <= 1.0
