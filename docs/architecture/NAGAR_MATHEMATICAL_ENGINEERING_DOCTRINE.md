@@ -237,3 +237,88 @@ It does not claim the engine's output is *good*. Loudness, crest factor and
 spectral centroid are measurable properties, not judgements about whether a mix
 sounds right. A claim about quality **MUST** come from a listening test with a
 stated protocol, and until then the honest word is "measured", not "good".
+
+---
+
+## 11. Phase-2 handoff contracts (out-of-zone items, stated so they are 1-line plug-ins)
+
+OMEGA Wave-2 works inside `creative/audio_engine/**`, `creative/packs/audio/**`,
+`creative/studio/audio_engine.py`, `creative/studio/evidence.py`,
+`creative/slideshow/audio.py`, `scripts/mutate_omega_audio.py` and the audio
+tests. Two forward items cannot be closed from inside that zone. They are
+specified here rather than silently dropped, and each one names the **exact**
+signature the out-of-zone owner must provide, so integration is a call site and
+not a redesign.
+
+### 11.1 `AssetVersion` persistence (task-282 `DB` schema)
+
+**What the engine already produces.** `ArtifactEvidence` (in
+`creative/studio/audio_engine.py`) carries every field a version row needs, and
+`build_passport` already returns a signed `ArtifactPassport` whose
+`payload_sha256` is a stable identity for the measured artifact.
+
+**What Phase-2 must add.** A persistence adapter with this signature:
+
+```python
+def record_asset_version(
+    *,
+    session: AsyncSession,
+    asset_id: str,
+    evidence: ArtifactEvidence,      # creative.studio.audio_engine
+    passport: ArtifactPassport,      # creative.audio_engine.verify
+    parent_version_id: str | None = None,
+) -> str:                            # returns the new version id
+```
+
+**Invariants the adapter must preserve**, in this order:
+
+1. **Append-only.** A version row is never updated. A re-render produces a new
+   row with a new `parent_version_id`; it never mutates its ancestor.
+2. **The passport is stored verbatim**, not re-derived. Rebuilding it at read
+   time would let a schema migration silently change what was signed.
+3. **`passport.payload_sha256` is the uniqueness key**, not the file's
+   `sha256` alone: two renders of identical bytes under different profiles are
+   different versions, and both facts must survive.
+4. **A row is only written when `passport` verifies.** The adapter must call
+   `verify_passport` and refuse on `report.passed is False`; storing an
+   unverified passport converts a refusal into a historical fact.
+
+**Why this is not being done here:** it requires a schema migration and a
+Postgres test fixture outside the audio zone. The engine side is complete and
+covered; the gap is entirely persistence.
+
+### 11.2 `studio/bus.py` — publishing an audio artifact
+
+**What the engine already guarantees.** `RuntimeWorkspace.publish(staged,
+destination, *, replace=False, protected=())` performs an atomic, no-symlink,
+no-overwrite rename that returns a `PublishResult` carrying `sha256`,
+`size_bytes` and the resolved path. It refuses to publish over a run input by
+both path and inode identity.
+
+**What Phase-2 must add.** The bus side of that contract:
+
+```python
+async def publish_audio_artifact(
+    *,
+    workspace: RuntimeWorkspace,
+    staged: Path,
+    destination_key: str,            # bus-owned logical key, not a filesystem path
+    replace: bool = False,
+) -> PublishResult:
+```
+
+**Invariants the caller must preserve:**
+
+1. **The bus resolves the key; the engine never does.** Passing a bus key as a
+   path would reintroduce the path-traversal surface the workspace exists to
+   remove.
+2. **`replace=False` is the default and a retry must reuse the same key.** A
+   publish that fails and is retried with a fresh key leaves two artifacts and
+   only one of them verified.
+3. **The bus must not call `publish` before the passport verifies.** Publication
+   is the *last* step: verify → publish → record. Reordering any two of those
+   makes the artifact's existence a claim rather than a fact.
+
+**Why this is not being done here:** `studio/bus.py` is another agent's zone in
+the Phase-2 convergence, and editing it from this branch would create the
+overlapping-zone conflict the board guard exists to prevent.

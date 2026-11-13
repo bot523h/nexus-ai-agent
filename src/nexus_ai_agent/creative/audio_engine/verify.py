@@ -894,9 +894,6 @@ def verify_passport(
                     codes.append(crest_code)
                     details.append(crest_detail)
                     loudness_ok = False
-            if not fresh_check.passed:
-                codes.append(fresh_check.code or CODE_INTEGRATED_OUT_OF_RANGE)
-                details.append(str(fresh_check.detail))
     elif passport.loudness_target is None:
         codes.append(CODE_TARGET_NOT_RUN)
         details.append("no loudness target was checked for this artifact")

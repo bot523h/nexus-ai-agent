@@ -403,6 +403,21 @@ PROBES: tuple[Probe, ...] = (
         test="test_loudness_pass_one_measures_the_canonical_channel_count",
     ),
     Probe(
+        name="stereo-source-crest-tainted-by-the-upmix-term",
+        gate="crest-measured",
+        path=f"{AUDIO}/execution.py",
+        old='        source_crest_db = measurement["input_tp"] - measurement["input_i"]\n',
+        # The 3.0103 dB dual-mono term belongs to a mono source measured before
+        # an up-mix. Applying it unconditionally taints the 1:1 stereo case with
+        # phantom crest reduction that no processing performed.
+        new=(
+            "        source_crest_db = (\n"
+            '            measurement["input_tp"] - measurement["input_i"] + 3.0103\n'
+            "        )\n"
+        ),
+        test="test_dynamic_allowed_on_a_stereo_source_measures_the_1_to_1_case",
+    ),
+    Probe(
         name="crest-reduction-always-none",
         gate="crest-measured",
         path=f"{AUDIO}/verify.py",

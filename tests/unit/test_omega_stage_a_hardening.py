@@ -1842,6 +1842,113 @@ def test_the_crest_reduction_is_arithmetic_on_the_measured_file(
 
 
 @requires_ffmpeg
+def test_dynamic_allowed_on_a_stereo_source_measures_the_1_to_1_case(
+    engine: NativeAudioEngine, media_dir: Path
+) -> None:
+    """Forward task 6: the crest arithmetic must hold when no up-mix happens.
+
+    Every earlier DYNAMIC_ALLOWED test drives a **mono** programme into a stereo
+    master, so the source crest is measured in a different channel domain from
+    the output and the 3.0103 dB up-mix term is the interesting part.  The 1:1
+    case — a stereo source rendered to a stereo master — has no such term, and
+    is the only shape in which ``crest_reduction_db`` can be compared to the
+    output crest with nothing else in between.
+
+    If the engine special-cased the mono up-mix rather than measuring the
+    canonical shape, this test would report 3.01 dB of phantom reduction.
+    """
+    import math
+    import wave
+
+    from nexus_ai_agent.application.ports.audio_engine import LoudnessRequest
+
+    rate = 48_000
+    seconds = 12.0
+    count = int(rate * seconds)
+    rng = np.random.default_rng(13)
+    # A *correlated* stereo programme: the percussive shape of the mono fixture,
+    # but with independent per-channel noise so the channels are not identical.
+    # The bed is quieter than the mono fixture's: summing two channels adds
+    # +3.01 dB of energy to the noise but the (correlated) hits do not double,
+    # so the same bed/click ratio lands 5 dB lower in crest on stereo.
+    # Measured: bed=0.02 click=0.5 gives 18.50 dB, matching the mono fixture's
+    # 18.7 dB programme shape.
+    left = 0.02 * rng.standard_normal(count)
+    right = 0.02 * rng.standard_normal(count)
+    period = 60.0 / 96.0
+    length = int(0.05 * rate)
+    envelope = np.exp(-np.linspace(0.0, 12.0, length))
+    for beat, onset in enumerate(np.arange(0.0, seconds, period)):
+        start = int(onset * rate)
+        if start + length < count:
+            hit = (
+                0.5
+                * envelope
+                * np.sin(
+                    2.0 * np.pi * (180.0 if beat % 4 == 0 else 320.0) * np.arange(length) / rate
+                )
+            )
+            pan_left = 0.7 if beat % 2 == 0 else 0.3
+            left[start : start + length] += hit * pan_left
+            right[start : start + length] += hit * (1.0 - pan_left)
+    stereo = np.stack([np.clip(left, -1.0, 1.0), np.clip(right, -1.0, 1.0)], axis=1)
+    path = media_dir / "stereo_percussive.wav"
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(2)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes((stereo * 32767).astype("<i2").tobytes())
+
+    assert engine.probe(path).channels == 2, "the fixture must be stereo for the 1:1 case"
+
+    evidence = engine.normalize_loudness(
+        LoudnessRequest(
+            request_id="d10-stereo-1to1",
+            source_asset_id="stereo_percussive",
+            output_asset_id="stereo_percussive_out",
+            profile_id="nagar_streaming_preset",
+            target_lufs=-14.0,
+            true_peak_dbtp=-1.0,
+            target_lra_lu=11.0,
+        )
+    )
+    assert evidence.loudness_passed is True
+    assert evidence.channels == 2, "a stereo source must stay stereo"
+    assert evidence.crest_reduction_db is not None
+    output_crest = evidence.true_peak_dbtp - evidence.integrated_lufs
+
+    # The source is measured by the engine's own loudnorm pass, in the source's
+    # own 2-channel domain — the same domain as the output, so the identity is
+    # exact and there is no up-mix term to add or subtract.
+    from nexus_ai_agent.creative.audio_engine.models import NAGAR_STREAMING_PRESET
+
+    first_pass = engine._transcoder.measure_loudnorm_pass(path, NAGAR_STREAMING_PRESET)
+    assert first_pass is not None
+    stereo_crest = first_pass["input_tp"] - first_pass["input_i"]
+    assert 17.0 < stereo_crest < 22.0, (
+        f"fixture crest {stereo_crest:.2f} dB is not the realistic programme this test needs"
+    )
+    assert evidence.crest_reduction_db == pytest.approx(stereo_crest - output_crest, abs=1e-2), (
+        "the 1:1 crest reduction does not reconstruct from the measured files: "
+        "either the up-mix term leaked in or the source was measured in another domain"
+    )
+
+    if evidence.processing_mode == "DYNAMIC_ALLOWED":
+        assert evidence.crest_reduction_db > 0.0, (
+            "the dynamic path ran but reported no crest reduction"
+        )
+    else:
+        assert abs(evidence.crest_reduction_db) < 1.0, (
+            "a linear render removed crest factor; the mode label is a lie"
+        )
+    # No phantom 3.0103 dB term: nothing was up-mixed, so the up-mix term cannot
+    # be what the reported reduction consists of.
+    assert abs(evidence.crest_reduction_db - 10.0 * math.log10(2.0)) > 1e-3, (
+        "the mono up-mix term leaked into a 1:1 render"
+    )
+
+
+@requires_ffmpeg
 def test_a_linear_render_claims_no_crest_reduction(
     engine: NativeAudioEngine, media_dir: Path
 ) -> None:
