@@ -488,7 +488,7 @@ jobs:
   # otherwise an isolated worktree would import the editable-installed package
   # and every probe would "survive" while the mutated bytes never ran.
   execution-core-mutations:
-    name: execution-core-mutations (V1 execution core 25)
+    name: execution-core-mutations (V1 execution core 27)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -503,7 +503,7 @@ jobs:
       - run: bash scripts/ci_install.sh ".[dev]"
       - name: isolated worktree for the campaign
         run: git worktree add --detach "$RUNNER_TEMP/mutation-worktree" HEAD
-      - name: execution-core mutations (25/25 must be killed)
+      - name: execution-core mutations (27/27 must be killed)
         working-directory: ${{ runner.temp }}/mutation-worktree
         run: python scripts/execution_core_mutations.py
       - name: the worktree and the checkout must be unchanged after mutation testing
