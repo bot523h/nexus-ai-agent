@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -179,7 +179,7 @@ class VeritasRealityAuditor:
         )
         return result.violations_before, result.violations_after
 
-    def _law_eyes(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    def _check_eyes(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         before: list[str] = []
         after: list[str] = []
         if shot.eyes is not None:
@@ -201,7 +201,7 @@ class VeritasRealityAuditor:
                 before.append("pupil_out_of_range")
         return tuple(before), tuple(after)
 
-    def _law_reflection(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    def _check_reflection(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         before: list[str] = []
         after: list[str] = []
         if shot.mirror is not None:
@@ -223,7 +223,7 @@ class VeritasRealityAuditor:
                 before.append("brewster_violation")
         return tuple(before), tuple(after)
 
-    def _law_shadow(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    def _check_shadow(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         before: list[str] = []
         after: list[str] = []
         if shot.shadow is not None:
@@ -246,7 +246,7 @@ class VeritasRealityAuditor:
         audit = audit_object_permanence(shot.objects, impulse_bound=self.impulse_bound)
         return audit.violations_before, audit.violations_after
 
-    def _law_typography(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    def _check_typography(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         if shot.typography is None:
             return (), ()
         text, quad, canvas = shot.typography
@@ -258,7 +258,7 @@ class VeritasRealityAuditor:
             before.append("text_invisible")
         return tuple(before), ()
 
-    def _law_collision(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    def _check_collision(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         if shot.collision is None:
             return (), ()
         positions, velocities, masses, radii, restitution, friction = shot.collision
@@ -318,7 +318,7 @@ class VeritasRealityAuditor:
                 before.append("acausal_wavefront")
         return tuple(before), tuple(after)
 
-    def _law_face(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    def _check_face(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         before: list[str] = []
         after: list[str] = []
         if shot.facs is not None:
@@ -336,6 +336,18 @@ class VeritasRealityAuditor:
             if composite.shape != diffuse.shape:
                 before.append("sss_shape")
         return tuple(before), tuple(after)
+
+    def _law_face(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        before, _ = self._check_face(shot)
+        healed = shot
+        if shot.facs is not None:
+            result = enforce_facs_synergy_manifold(shot.facs, f0_envelope=shot.f0_envelope)
+            healed = replace(healed, facs=result.action_units)
+        # Blink and skin observations are model inputs, not measured peak velocity
+        # or RGB scattering widths. Recheck their actual validators; do not invent
+        # unrepresented measurements merely to obtain an empty after list.
+        after, _ = self._check_face(healed)
+        return before, after
 
     def _law_phase(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         if shot.phase is None:
@@ -403,9 +415,137 @@ class VeritasRealityAuditor:
         result = rectify_stroboscopic_wagon_wheel(patch, angular_velocity_rad_s=omega, fps=fps)
         before = tuple(result.violations)
         after: list[str] = []
-        if result.blur_arc_rad <= 0.0:
+        if abs(omega) > 0.0 and abs(result.blur_arc_rad) <= 0.0:
             after.append("nyquist_rotary_aliasing")
         return before, tuple(after)
+
+    def _heal_geometric_observations(self, shot: CinemaShot) -> CinemaShot:
+        """Project geometry onto admissible states without dropping observations."""
+        healed = shot
+        if shot.eyes is not None:
+            left, right, target = shot.eyes
+            midpoint = (left + right) / 2.0
+            direction = target - midpoint
+            distance = float(np.linalg.norm(direction))
+            if distance < 1e-12:
+                direction = np.array([0.0, 0.0, 1.0])
+            else:
+                direction = direction / distance
+            fixation = midpoint + direction * np.clip(distance, 250.0, 25000.0)
+            healed = replace(healed, eyes=(left.copy(), right.copy(), fixation))
+        if shot.saccade is not None:
+            amplitude, duration, velocity = shot.saccade
+            if abs(amplitude) <= 1e-12:
+                amplitude = 0.1
+            healed = replace(healed, saccade=(amplitude, duration, velocity))
+        if shot.mirror is not None:
+            normal, offset, camera, landmark = shot.mirror
+            unit = normal / float(np.linalg.norm(normal))
+            side_camera = float(unit @ camera + offset)
+            side_landmark = float(unit @ landmark + offset)
+            point = landmark.copy()
+            if side_camera * side_landmark > 0.0:
+                point -= 2.0 * side_landmark * unit
+            healed = replace(healed, mirror=(normal.copy(), offset, camera.copy(), point))
+        if shot.shadow is not None:
+            vertices, light, plane = shot.shadow
+            unit = plane[:3] / float(np.linalg.norm(plane[:3]))
+            heights = vertices @ unit + plane[3]
+            projected = vertices + np.maximum(0.0, 0.05 - heights)[:, None] * unit
+            healed = replace(healed, shadow=(projected, light.copy(), plane.copy()))
+        if shot.typography is not None:
+            text, quad, canvas = shot.typography
+            height, width = canvas
+            projected_quad = np.column_stack(
+                [
+                    np.clip(quad[:, 0], 0.05 * width, 0.95 * width),
+                    np.clip(quad[:, 1], 0.05 * height, 0.95 * height),
+                ]
+            )
+            area = float(
+                np.sum(
+                    projected_quad[:, 0] * np.roll(projected_quad[:, 1], -1)
+                    - projected_quad[:, 1] * np.roll(projected_quad[:, 0], -1)
+                )
+            )
+            if area <= 1e-9:
+                projected_quad = np.array(
+                    [
+                        [0.05 * width, 0.05 * height],
+                        [0.95 * width, 0.05 * height],
+                        [0.95 * width, 0.95 * height],
+                        [0.05 * width, 0.95 * height],
+                    ]
+                )
+            healed = replace(healed, typography=(text, projected_quad, canvas))
+        if shot.collision is not None:
+            positions, velocities, masses, radii, restitution, friction = shot.collision
+            collision = resolve_rigid_body_collision(
+                positions, velocities, masses, radii, restitution=restitution, friction=friction
+            )
+            separated = positions.copy()
+            # Coupled contacts need repeated inverse-mass-weighted projection.
+            for _ in range(128):
+                largest_overlap = 0.0
+                for i in range(len(separated)):
+                    for j in range(i + 1, len(separated)):
+                        delta = separated[j] - separated[i]
+                        distance = float(np.linalg.norm(delta))
+                        overlap = float(radii[i] + radii[j]) - distance
+                        largest_overlap = max(largest_overlap, overlap)
+                        if overlap > 0.0:
+                            normal = (
+                                delta / distance if distance > 1e-12 else np.array([1.0, 0.0, 0.0])
+                            )
+                            correction = (
+                                (overlap + 1e-10) * normal / (1 / masses[i] + 1 / masses[j])
+                            )
+                            separated[i] -= correction / masses[i]
+                            separated[j] += correction / masses[j]
+                if largest_overlap <= 1e-9:
+                    break
+            healed = replace(
+                healed,
+                collision=(
+                    separated,
+                    collision.velocities,
+                    masses.copy(),
+                    radii.copy(),
+                    restitution,
+                    friction,
+                ),
+            )
+        return healed
+
+    def _law_eyes(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        before, _ = self._check_eyes(shot)
+        healed = self._heal_geometric_observations(shot) if before else shot
+        after, _ = self._check_eyes(healed)
+        return before, after
+
+    def _law_reflection(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        before, _ = self._check_reflection(shot)
+        healed = self._heal_geometric_observations(shot) if before else shot
+        after, _ = self._check_reflection(healed)
+        return before, after
+
+    def _law_shadow(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        before, _ = self._check_shadow(shot)
+        healed = self._heal_geometric_observations(shot) if before else shot
+        after, _ = self._check_shadow(healed)
+        return before, after
+
+    def _law_typography(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        before, _ = self._check_typography(shot)
+        healed = self._heal_geometric_observations(shot) if before else shot
+        after, _ = self._check_typography(healed)
+        return before, after
+
+    def _law_collision(self, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        before, _ = self._check_collision(shot)
+        healed = self._heal_geometric_observations(shot) if before else shot
+        after, _ = self._check_collision(healed)
+        return before, after
 
     def _dispatch(self, law: int, shot: CinemaShot) -> tuple[tuple[str, ...], tuple[str, ...]]:
         handlers = {

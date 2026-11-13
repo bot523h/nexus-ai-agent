@@ -98,6 +98,7 @@ from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
     LawReceipt,
     RealMediaVeritasBundle,
     compile_and_heal_real_media_shot,
+    extract_cinema_shot_from_media,
     merkle_root_from_payloads,
 )
 from nexus_ai_agent.creative.veritas.reality_auditor import (
@@ -233,6 +234,7 @@ __all__ = [
     "LawReceipt",
     "RealMediaVeritasBundle",
     "compile_and_heal_real_media_shot",
+    "extract_cinema_shot_from_media",
     "omnia_cinema_physics",
     "real_media_veritas_compiler",
     "bohmian_edge_weight",

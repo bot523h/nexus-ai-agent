@@ -1327,3 +1327,14 @@ def test_compiler_writes_healed_media_and_binds_merkle_digests(tmp_path: Path) -
         assert payload["output_audio_sha256"] == bundle.output_audio_sha256
     assert merkle_root_from_payloads(bundle.leaf_payloads) == bundle.merkle_root
     assert bundle.healed is True
+
+
+def test_caller_media_is_not_assigned_synthetic_anatomy(tmp_path: Path) -> None:
+    bundle = compile_and_heal_real_media_shot(
+        tmp_path,
+        input_frames=np.ones((2, 8, 8, 3)) * 0.4,
+        input_audio_pcm=np.zeros(128),
+        mux_mp4=False,
+    )
+    for receipt in bundle.receipts[:10]:
+        assert not receipt.violations_before

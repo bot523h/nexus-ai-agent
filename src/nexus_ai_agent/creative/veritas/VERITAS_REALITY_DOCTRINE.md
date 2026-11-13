@@ -200,10 +200,24 @@ constructs a fifteen-leaf RFC 6962 Merkle tree. Domain separation uses a zero
 prefix for leaf hashes and a one prefix for internal node hashes. A valid
 inclusion proof establishes membership, not physical truth.
 
-**Not yet closure-verified:** canonical same-domain input/output content digests,
-independent decoding and physical re-audit of disk artifacts, and binding all
-content plus PNG/WAV/MP4 file digests into every leaf. The current compiler
-must not be described as providing these stronger guarantees.
+The compiler now decodes its written RGB8/filter-zero PNG and mono PCM16 WAV
+files and verifies that their canonical content matches the generated buffers.
+PNG chunk CRCs, dimensions, stream lengths and supported encoding are checked.
+Canonical input/output array digests are in the same domain; the output digests
+are computed from decoded disk content. Every leaf also binds PNG/WAV file
+hashes and the MP4 hash (empty when no mux was produced).
+
+Caller media uses deterministic observed luminance, spatial gradients,
+brightness-constraint velocity, fixed lower-central ROI energy and audio
+spectral proxies, not the corrupted synthetic anatomy fixture. These proxies
+are not semantic face tracking or ground-truth optical flow. Synthetic corruption
+can still be explicitly requested. Caller RGB channels are retained by the
+rotary filter and caller frames receive no VERITAS text overlay.
+
+**Not yet closure-verified:** independent physical re-audit of decoded artifacts,
+full per-frame application of Laws 11/14/15, and independently checked inclusion
+proofs. Content integrity is not a proof of physical validity. No
+`post_disk_verified=True` physical certificate is issued by this implementation.
 
 ## NEXUS staged execution spine: required contract (pending implementation)
 

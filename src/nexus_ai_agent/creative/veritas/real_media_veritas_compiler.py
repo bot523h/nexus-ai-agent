@@ -83,16 +83,21 @@ class RealMediaVeritasBundle:
     output_audio_sha256: str
     healed_frames: UInt8Array
     healed_audio_pcm: FloatArray
+    input_frames_content_sha256: str
+    output_frames_content_sha256: str
+    input_audio_content_sha256: str
+    output_audio_content_sha256: str
+    output_mp4_sha256: str
 
     @property
     def healed(self) -> bool:
-        return self.pre_audit_violations >= LAW_COUNT and self.post_heal_violations == 0
+        return self.pre_audit_violations > 0 and self.post_heal_violations == 0
 
     @property
     def media_changed(self) -> bool:
         return (
-            self.output_frames_sha256 != self.input_frames_sha256
-            and self.output_audio_sha256 != self.input_audio_sha256
+            self.output_frames_content_sha256 != self.input_frames_content_sha256
+            and self.output_audio_content_sha256 != self.input_audio_content_sha256
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -110,6 +115,11 @@ class RealMediaVeritasBundle:
             "input_audio_sha256": self.input_audio_sha256,
             "output_frames_sha256": self.output_frames_sha256,
             "output_audio_sha256": self.output_audio_sha256,
+            "input_frames_content_sha256": self.input_frames_content_sha256,
+            "output_frames_content_sha256": self.output_frames_content_sha256,
+            "input_audio_content_sha256": self.input_audio_content_sha256,
+            "output_audio_content_sha256": self.output_audio_content_sha256,
+            "output_mp4_sha256": self.output_mp4_sha256,
             "laws": [
                 {
                     "law": receipt.law,
@@ -141,6 +151,78 @@ def _write_png(path: Path, rgb: UInt8Array) -> None:
         + chunk(b"IDAT", zlib.compress(raw, 9))
         + chunk(b"IEND", b"")
     )
+
+
+def _read_png_rgb(path: Path) -> UInt8Array:
+    """Decode and CRC-check the RGB8/filter-zero PNG dialect emitted here.
+
+    This is deliberately not a general PNG decoder. Unsupported encodings,
+    truncated data, corrupt chunks and trailing data fail closed.
+    """
+    data = path.read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("invalid PNG signature")
+    offset = 8
+    width = height = 0
+    compressed = bytearray()
+    ended = False
+    while offset < len(data):
+        if offset + 12 > len(data):
+            raise ValueError("truncated PNG chunk")
+        length = struct.unpack_from(">I", data, offset)[0]
+        end = offset + 12 + length
+        if end > len(data):
+            raise ValueError("truncated PNG payload")
+        tag = data[offset + 4 : offset + 8]
+        payload = data[offset + 8 : end - 4]
+        crc = struct.unpack_from(">I", data, end - 4)[0]
+        if zlib.crc32(tag + payload) & 0xFFFFFFFF != crc:
+            raise ValueError("PNG CRC mismatch")
+        if tag == b"IHDR":
+            if offset != 8 or length != 13:
+                raise ValueError("invalid PNG header")
+            width, height, depth, color, compression, filtering, interlace = struct.unpack(
+                ">IIBBBBB", payload
+            )
+            if (depth, color, compression, filtering, interlace) != (8, 2, 0, 0, 0):
+                raise ValueError("unsupported PNG encoding")
+            if width < 1 or height < 1:
+                raise ValueError("invalid PNG dimensions")
+        elif tag == b"IDAT":
+            if not width:
+                raise ValueError("PNG data before header")
+            compressed.extend(payload)
+        elif tag == b"IEND":
+            if length or end != len(data):
+                raise ValueError("invalid PNG end")
+            ended = True
+            break
+        else:
+            raise ValueError("unsupported PNG chunk")
+        offset = end
+    if not ended or not compressed:
+        raise ValueError("incomplete PNG")
+    decoder = zlib.decompressobj()
+    expected = height * (1 + width * 3)
+    raw = decoder.decompress(bytes(compressed), expected + 1)
+    if len(raw) != expected or not decoder.eof or decoder.unused_data:
+        raise ValueError("invalid PNG image stream")
+    rows = np.frombuffer(raw, dtype=np.uint8).reshape(height, 1 + width * 3)
+    if np.any(rows[:, 0] != 0):
+        raise ValueError("unsupported PNG row filter")
+    return rows[:, 1:].reshape(height, width, 3).copy()
+
+
+def _read_wav_mono_16bit(path: Path) -> npt.NDArray[np.int16]:
+    """Decode the on-disk canonical little-endian signed mono PCM samples."""
+    with wave.open(str(path), "rb") as handle:
+        if handle.getnchannels() != 1 or handle.getsampwidth() != 2:
+            raise ValueError("WAV must be mono PCM16")
+        count = handle.getnframes()
+        raw = handle.readframes(count)
+        if len(raw) != 2 * count:
+            raise ValueError("truncated WAV data")
+    return np.frombuffer(raw, dtype="<i2").astype(np.int16, copy=True)
 
 
 def _write_wav(path: Path, pcm: FloatArray, sample_rate_hz: int) -> None:
@@ -230,6 +312,72 @@ def _digest_files(paths: list[Path]) -> str:
     return accumulator.hexdigest()
 
 
+def extract_cinema_shot_from_media(
+    frames: FloatArray,
+    audio_pcm: FloatArray,
+    *,
+    fps: float = 24.0,
+    sample_rate_hz: int = 48_000,
+) -> CinemaShot:
+    """Extract deterministic image/audio observations, not semantic ground truth.
+
+    Mouth-region energy is a fixed lower-central ROI proxy, not a face detector
+    or measured FACS. Optical velocity is the minimum-norm brightness-constraint
+    estimate (the aperture problem remains). Audio peaks are spectral proxies,
+    not a speech recognizer. Unobserved laws remain absent rather than receiving
+    fabricated anatomy, mirrors, contacts or a corrupted demo fixture.
+    """
+    rgb = np.asarray(frames, dtype=np.float64)
+    pcm = np.asarray(audio_pcm, dtype=np.float64)
+    if rgb.ndim != 4 or rgb.shape[-1] != 3 or min(rgb.shape[:3]) < 1:
+        raise ValueError("frames must be non-empty TxHxWx3")
+    if min(rgb.shape[1:3]) < 2 or not np.all(np.isfinite(rgb)):
+        raise ValueError("frames must be finite with spatial dimensions >= 2")
+    if np.any(rgb < 0) or np.any(rgb > 1):
+        raise ValueError("frames must lie in [0, 1]")
+    if pcm.ndim != 1 or not pcm.size or not np.all(np.isfinite(pcm)):
+        raise ValueError("audio must be a finite non-empty mono waveform")
+    if not np.isfinite(fps) or fps <= 0 or sample_rate_hz <= 0:
+        raise ValueError("frame and sample rates must be positive")
+    count, height, width = rgb.shape[:3]
+    luminance = rgb @ np.array([0.2126, 0.7152, 0.0722])
+    previous = np.concatenate([luminance[:1], luminance[:-1]], axis=0)
+    gy, gx = np.gradient(luminance, axis=(1, 2))
+    phase = np.arctan2(gy, gx)
+    temporal = (luminance - previous) * fps
+    inverse = -temporal / (gx * gx + gy * gy + 1e-6)
+    velocity = np.stack([inverse * gx, inverse * gy], axis=-1)
+    roi = luminance[:, height // 2 :, width // 4 : max(width // 4 + 1, 3 * width // 4)]
+    jaw = np.clip(np.std(roi, axis=(1, 2)) * 2, 0, 1)
+    stretch = (
+        np.clip(np.mean(np.abs(np.diff(roi, axis=1)), axis=(1, 2)), 0, 1)
+        if roi.shape[1] > 1
+        else np.zeros(count)
+    )
+    energy = np.empty(count)
+    f1 = np.full(count, 300.0)
+    f2 = np.full(count, 1200.0)
+    for index in range(count):
+        start = min(int(index * sample_rate_hz / fps), pcm.size - 1)
+        end = min(max(start + 2, int((index + 1) * sample_rate_hz / fps)), pcm.size)
+        segment = pcm[start:end]
+        energy[index] = float(np.sqrt(np.mean(segment**2)))
+        frequencies = np.fft.rfftfreq(segment.size, d=1 / sample_rate_hz)
+        spectrum = np.abs(np.fft.rfft(segment))
+        for lower, upper, destination in ((300, 1000, f1), (1000, 2500, f2)):
+            band = np.flatnonzero((frequencies >= lower) & (frequencies <= upper))
+            if band.size:
+                destination[index] = frequencies[band[np.argmax(spectrum[band])]]
+    return CinemaShot(
+        phase=(luminance[-1], phase[-1], previous[-1]),
+        anamorphic=rgb[-1].copy(),
+        viseme=(jaw, stretch, f1, energy, np.clip(1 - stretch, 0, 1), f2),
+        doppler=(pcm.copy(), 0.0),
+        fluid=(velocity, luminance.copy()),
+        rotor=(luminance[-1].copy(), 0.0, fps),
+    )
+
+
 def compile_and_heal_real_media_shot(
     output_dir: str | Path,
     *,
@@ -241,6 +389,7 @@ def compile_and_heal_real_media_shot(
     width: int = 16,
     sample_rate_hz: int = 48000,
     mux_mp4: bool = True,
+    use_synthetic_corrupted_shot: bool = False,
 ) -> RealMediaVeritasBundle:
     """Heal real media through all fifteen laws, write it, and seal the receipts."""
     if num_frames < 1 or height < 2 or width < 2:
@@ -269,9 +418,12 @@ def compile_and_heal_real_media_shot(
     if pcm.size == 0:
         raise ValueError("input_audio_pcm must be non-empty")
 
-    active_shot = (
-        build_corrupted_15_law_cinema_shot(height=frame_h, width=frame_w) if shot is None else shot
-    )
+    if shot is not None:
+        active_shot = shot
+    elif use_synthetic_corrupted_shot or (input_frames is None and input_audio_pcm is None):
+        active_shot = build_corrupted_15_law_cinema_shot(height=frame_h, width=frame_w)
+    else:
+        active_shot = extract_cinema_shot_from_media(frames, pcm, sample_rate_hz=sample_rate_hz)
 
     input_frames_u8 = np.asarray(np.round(np.clip(frames, 0.0, 1.0) * 255.0), dtype=np.uint8)
     input_frames_sha256 = _digest_array(input_frames_u8)
@@ -306,9 +458,9 @@ def compile_and_heal_real_media_shot(
 
     # --- Law 15: anti-stroboscopic rotary-shutter motion blur on frame zero. ---
     rotor = rectify_stroboscopic_wagon_wheel(
-        healed[0].mean(axis=2), angular_velocity_rad_s=200.0, fps=24.0, shutter_angle_deg=180.0
+        healed[0], angular_velocity_rad_s=200.0, fps=24.0, shutter_angle_deg=180.0
     )
-    healed[0] = np.repeat(rotor.healed_patch[:, :, None], 3, axis=2)
+    healed[0] = rotor.healed_patch
 
     # --- Law 6: homography-locked diegetic typography composite. ---
     quad = np.array(
@@ -317,7 +469,7 @@ def compile_and_heal_real_media_shot(
     try:
         render = render_homography_locked_diegetic_text("VERITAS", quad, (frame_h, frame_w))
         mask = np.asarray(render.mask, dtype=np.float64)
-        if mask.shape == (frame_h, frame_w):
+        if input_frames is None and mask.shape == (frame_h, frame_w):
             healed = np.maximum(healed, mask[:, :, None] * 0.9)
     except Exception:  # pragma: no cover - typography is best-effort overlay
         pass
@@ -390,23 +542,6 @@ def compile_and_heal_real_media_shot(
         for receipt in receipts
     ]
 
-    payloads = [
-        {
-            "compiler_version": COMPILER_VERSION,
-            "input_audio_sha256": input_audio_sha256,
-            "input_frames_sha256": input_frames_sha256,
-            "law": receipt.law,
-            "name": receipt.name,
-            "output_audio_sha256": output_audio_sha256,
-            "output_frames_sha256": output_frames_sha256,
-            "violations_after": list(receipt.violations_after),
-            "violations_before": list(receipt.violations_before),
-        }
-        for receipt in receipts
-    ]
-    leaves = [_leaf_digest(payload) for payload in payloads]
-    merkle = _merkle_root(leaves)
-
     mp4_path: str | None = None
     mp4_sha256: str | None = None
     if mux_mp4:
@@ -448,6 +583,38 @@ def compile_and_heal_real_media_shot(
                 mp4_path = str(target)
                 mp4_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
 
+    decoded_frames = np.stack([_read_png_rgb(path) for path in png_paths])
+    decoded_audio = _read_wav_mono_16bit(wav_path)
+    output_frames_content_sha256 = _digest_array(decoded_frames)
+    output_audio_content_sha256 = _digest_array(decoded_audio)
+    if not np.array_equal(decoded_frames, healed_frames):
+        raise ValueError("PNG disk round-trip mismatch")
+    expected_audio = np.asarray(np.round(np.clip(healed_audio_pcm, -1, 1) * 32767), dtype=np.int16)
+    if not np.array_equal(decoded_audio, expected_audio):
+        raise ValueError("WAV disk round-trip mismatch")
+
+    payloads = [
+        {
+            "compiler_version": COMPILER_VERSION,
+            "input_frames_content_sha256": input_frames_sha256,
+            "output_frames_content_sha256": output_frames_content_sha256,
+            "input_audio_content_sha256": input_audio_sha256,
+            "output_audio_content_sha256": output_audio_content_sha256,
+            "output_mp4_sha256": mp4_sha256 or "",
+            "input_audio_sha256": input_audio_sha256,
+            "input_frames_sha256": input_frames_sha256,
+            "law": receipt.law,
+            "name": receipt.name,
+            "output_audio_sha256": output_audio_sha256,
+            "output_frames_sha256": output_frames_sha256,
+            "violations_after": list(receipt.violations_after),
+            "violations_before": list(receipt.violations_before),
+        }
+        for receipt in receipts
+    ]
+    leaves = [_leaf_digest(payload) for payload in payloads]
+    merkle = _merkle_root(leaves)
+
     pre = int(passport.pre_audit_violations)
     post = int(passport.post_heal_violations)
 
@@ -469,6 +636,11 @@ def compile_and_heal_real_media_shot(
         output_audio_sha256=output_audio_sha256,
         healed_frames=healed_frames,
         healed_audio_pcm=healed_audio_pcm,
+        input_frames_content_sha256=input_frames_sha256,
+        output_frames_content_sha256=output_frames_content_sha256,
+        input_audio_content_sha256=input_audio_sha256,
+        output_audio_content_sha256=output_audio_content_sha256,
+        output_mp4_sha256=mp4_sha256 or "",
     )
 
 
@@ -479,4 +651,5 @@ __all__ = [
     "RealMediaVeritasBundle",
     "compile_and_heal_real_media_shot",
     "merkle_root_from_payloads",
+    "extract_cinema_shot_from_media",
 ]

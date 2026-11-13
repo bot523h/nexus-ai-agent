@@ -247,6 +247,7 @@ def test_auditor_records_every_violation_string(monkeypatch: pytest.MonkeyPatch)
         ra,
         "resolve_rigid_body_collision",
         lambda *a, **k: types.SimpleNamespace(
+            velocities=np.zeros((1, 3)),
             momentum_before=np.zeros(3),
             momentum_after=np.array([1.0, 0.0, 0.0]),
             energy_before=1.0,
@@ -298,3 +299,12 @@ def test_auditor_records_every_violation_string(monkeypatch: pytest.MonkeyPatch)
         "sss_shape",
     ):
         assert expected in flat, expected
+
+    # A permanently broken validation kernel must remain visible after healing.
+    assert "pupil_out_of_range" in passport.details_after[2]
+    assert "reflection_inconsistent" in passport.details_after[3]
+    assert "floating_shadow" in passport.details_after[4]
+    assert "homography_not_sl3" in passport.details_after[6]
+    assert "momentum_nonconservation" in passport.details_after[7]
+    assert "blink_overclosure" in passport.details_after[10]
+    assert "sss_shape" in passport.details_after[10]
