@@ -301,7 +301,8 @@ def cfl_number(state: SWEState, dt: float) -> float:
 
 def _flux_rusanov(ql: np.ndarray, qr: np.ndarray, c: np.ndarray) -> np.ndarray:
     """Rusanov (local Lax-Friedrichs) numerical flux for the SWE system."""
-    return 0.5 * (ql + qr) - 0.5 * c * (qr - ql)
+    out: np.ndarray = 0.5 * (ql + qr) - 0.5 * c * (qr - ql)
+    return out
 
 
 def swe_step_1d(state: SWEState, dt: float, *, cfl_limit: float = 0.9) -> SWEState:
