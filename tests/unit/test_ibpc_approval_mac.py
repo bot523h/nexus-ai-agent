@@ -34,6 +34,16 @@ def test_approval_envelope_is_keyed_and_scope_bound() -> None:
     )
 
 
+def test_malformed_envelope_metadata_fails_closed() -> None:
+    ring = StaticKeyRing({"known": b"k" * 32}, active_key_id="known")
+    envelope = _issue(ring, "a-1", {"x": 1})
+    assert not verify_envelope(
+        ring, replace(envelope, version="unknown"), {"x": 1}, now="2026-11-13T00:01:00Z"
+    )
+    assert not verify_envelope(ring, envelope, {"x": 1}, now="not-a-timestamp")
+    assert not verify_envelope(ring, envelope, {"x": 1}, now="2026-11-13T00:01:00")
+
+
 def test_unknown_key_and_expiry_fail_closed() -> None:
     ring = StaticKeyRing({"known": b"k" * 32}, active_key_id="known")
     envelope = _issue(ring, "a-1", {"x": 1})

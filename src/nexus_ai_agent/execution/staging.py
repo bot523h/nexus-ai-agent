@@ -77,6 +77,14 @@ class StagingBoundaryError(ValueError):
     """A staging path cannot be proven to remain inside its boundary."""
 
 
+class StagedArtifactError(StagingBoundaryError):
+    """Staged artifact bytes are absent, empty, or do not match their digest."""
+
+
+class StaleAttemptError(StagingBoundaryError):
+    """Attempt lost its fence before publication."""
+
+
 def _safe_component(value: str, *, field_name: str) -> str:
     if not isinstance(value, str) or not value:
         raise StagingBoundaryError(f"{field_name} must be a non-empty string")
@@ -210,6 +218,38 @@ class AttemptStaging:
         return self.staging_dir / component
 
     # -- publication ----------------------------------------------------- #
+    def publish_verified(
+        self,
+        staged: str | Path,
+        target_rel: str,
+        *,
+        fence_is_current: Callable[[], bool],
+        expected_sha256: str | None = None,
+    ) -> tuple[Path, str]:
+        """Verify private bytes, re-check the attempt fence, then atomically publish.
+
+        Nothing in the destination namespace is touched until both checks pass.
+        ``fence_is_current`` must consult the authoritative queue/store, not a
+        value copied into the render payload.
+        """
+        source_rel = self._source_relative(staged)
+        try:
+            actual_sha256, size = self._fs.hash_file(source_rel)
+        except (FilesystemBoundaryError, OSError) as exc:
+            raise StagedArtifactError("staged artifact is missing or unreadable") from exc
+        if size <= 0:
+            raise StagedArtifactError("staged artifact must not be empty")
+        if expected_sha256 is not None and actual_sha256 != expected_sha256.removeprefix("sha256:"):
+            raise StagedArtifactError("staged artifact digest does not match expected SHA-256")
+        try:
+            current = fence_is_current()
+        except Exception as exc:
+            raise StaleAttemptError("could not verify current attempt fence") from exc
+        if not current:
+            raise StaleAttemptError("attempt fencing token is no longer current")
+        destination = self.publish(staged, target_rel)
+        return destination, actual_sha256
+
     def publish(self, staged: str | Path, target_rel: str) -> Path:
         """Atomically move a staged file to a contained final location.
 

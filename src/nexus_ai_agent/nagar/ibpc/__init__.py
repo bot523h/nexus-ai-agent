@@ -31,6 +31,7 @@ from nexus_ai_agent.nagar.ibpc import (  # noqa: F401 — reachability (law R20)
     authority,
     canonical,
     compiler,
+    composition,
     delta,
     footprint,
     intent,
@@ -51,6 +52,7 @@ from nexus_ai_agent.nagar.ibpc.authority import (
     PrincipalFacts,
 )
 from nexus_ai_agent.nagar.ibpc.compiler import CompilationRefused, compile_ast
+from nexus_ai_agent.nagar.ibpc.composition import build_ibpc_service, create_default_key_provider
 from nexus_ai_agent.nagar.ibpc.intent import (
     Clarification,
     IntentAST,
@@ -129,8 +131,10 @@ __all__ = [
     "approval",
     "authority",
     "build_preview",
+    "build_ibpc_service",
     "canonical",
     "compile_ast",
+    "create_default_key_provider",
     "compiler",
     "delta",
     "evaluate_proof_gate",

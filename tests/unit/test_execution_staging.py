@@ -634,3 +634,38 @@ def test_retention_never_deletes_through_a_symlinked_tree(tmp_path: Path) -> Non
     retention.prune()
     assert (outside / "marker").read_bytes() == b"outside", "the symlink target is untouched"
     assert not tree.exists(), "the real tree is removed"
+
+
+def test_publish_verified_rejects_stale_fence_without_overwriting(tmp_path: Path) -> None:
+    from nexus_ai_agent.execution.staging import StaleAttemptError
+
+    root, final = tmp_path / "staging", tmp_path / "final"
+    staging = AttemptStaging(root, job_id="job-verified", attempt_id="attempt-1", final_root=final)
+    staged = staging.write("render.mp4", b"private-render")
+    target = final / "job-verified" / "render.mp4"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"prior-published")
+    with pytest.raises(StaleAttemptError):
+        staging.publish_verified(staged, "job-verified/render.mp4", fence_is_current=lambda: False)
+    assert target.read_bytes() == b"prior-published"
+    assert staged.read_bytes() == b"private-render"
+
+
+def test_publish_verified_rejects_empty_or_digest_mismatch(tmp_path: Path) -> None:
+    from nexus_ai_agent.execution.staging import StagedArtifactError
+
+    staging = AttemptStaging(
+        tmp_path / "staging",
+        job_id="job-verified",
+        attempt_id="attempt-1",
+        final_root=tmp_path / "final",
+    )
+    staged = staging.write("render.mp4", b"")
+    with pytest.raises(StagedArtifactError, match="empty"):
+        staging.publish_verified(staged, "render.mp4", fence_is_current=lambda: True)
+    staged.write_bytes(b"valid bytes")
+    with pytest.raises(StagedArtifactError, match="digest"):
+        staging.publish_verified(
+            staged, "render.mp4", fence_is_current=lambda: True, expected_sha256="0" * 64
+        )
+    assert not (tmp_path / "final" / "render.mp4").exists()

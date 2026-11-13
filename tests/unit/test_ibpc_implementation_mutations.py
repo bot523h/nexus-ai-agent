@@ -13,7 +13,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
+
+# Keep NumPy's native extension resident while mutant subprocesses import the
+# copied package under coverage instrumentation.
+_NUMPY_EXTENSION_KEEPALIVE = np
 
 REPO = Path(__file__).resolve().parents[2]
 PACKAGE = REPO / "src" / "nexus_ai_agent"
