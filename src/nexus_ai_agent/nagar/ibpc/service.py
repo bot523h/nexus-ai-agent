@@ -158,6 +158,8 @@ class PipelineResult:
     plan: CompiledPlan
     preview: PreviewManifest
     readback: Readback
+    shadow_manifest: Any = None
+    media_signature: Any = None
 
 
 @dataclass(frozen=True)
@@ -288,6 +290,7 @@ class IBPCService:
         duration_us = info.duration_us
         source_asset_digest = sha256_file(src)
 
+        parsed: IntentAST | DeltaIntentAST | Clarification | Refusal
         base_scope = None
         base_binding = None
         if base_approval_id is not None:
@@ -404,6 +407,8 @@ class IBPCService:
             plan=plan,
             preview=preview,
             readback=readback,
+            shadow_manifest=shadow_manifest,
+            media_signature=media_signature,
         )
 
     async def submit_voice_intent(
@@ -731,9 +736,6 @@ class IBPCService:
             identity=identity,
             turn_is_active=lambda: self._sessions.turn_is_active(session_id, turn_id),
         )
-        ctx = self._contexts.get(approval_id)
-        if ctx is None:
-            raise ApprovalError("missing_context", "approval context disappeared")
         ctx.scope_signature = self._scope_signature(ctx, identity)
         try:
             issued_at = self._deps.now()

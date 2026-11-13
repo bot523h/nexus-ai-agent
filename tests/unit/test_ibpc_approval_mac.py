@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 from nexus_ai_agent.connect.key_provider import StaticKeyRing
-from nexus_ai_agent.nagar.ibpc.approval_mac import issue_envelope, verify_envelope
+from nexus_ai_agent.nagar.ibpc.approval_mac import ApprovalEnvelope, issue_envelope, verify_envelope
 
 
-def _issue(ring: StaticKeyRing, approval_id: str, payload: object):
+def _issue(ring: StaticKeyRing, approval_id: str, payload: object) -> ApprovalEnvelope:
     return issue_envelope(
         ring,
         approval_id=approval_id,

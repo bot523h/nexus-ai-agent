@@ -187,6 +187,63 @@ async def test_scope_signature_tamper_refuses_before_queue_admission(
 
 
 @pytest.mark.asyncio
+async def test_media_evidence_and_keyed_approval_fail_closed(harness, tmp_path: Path) -> None:
+    service, queue, _root, _journal, principal = harness
+    source = tmp_path / "evidence-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    proposal = service.submit_text_intent(
+        sid,
+        "evidence-turn",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(proposal, PipelineResult)
+    assert proposal.shadow_manifest is not None
+    assert proposal.shadow_manifest.keyframes
+    assert proposal.media_signature is not None
+    assert proposal.media_signature.sample_frames > 0
+    service.approve(sid, "evidence-turn", proposal.approval_id, principal_id=principal)
+    context = service._contexts[proposal.approval_id]
+    assert context.approval_envelope is not None
+    context.approval_envelope = context.approval_envelope.__class__(
+        **{**context.approval_envelope.__dict__, "mac": "0" * 64}
+    )
+    outcome = await service.execute(
+        sid, "evidence-turn", proposal.approval_id, principal_id=principal
+    )
+    assert outcome.status == "refused"
+    assert "approval_mac_invalid" in outcome.detail
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_same_path_source_mutation_after_approval_refuses(harness, tmp_path: Path) -> None:
+    service, queue, _root, _journal, principal = harness
+    source = tmp_path / "mutable-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    proposal = service.submit_text_intent(
+        sid,
+        "mutated-source",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(proposal, PipelineResult)
+    service.approve(sid, "mutated-source", proposal.approval_id, principal_id=principal)
+    source.write_bytes(source.read_bytes() + b"mutated")
+    outcome = await service.execute(
+        sid, "mutated-source", proposal.approval_id, principal_id=principal
+    )
+    assert outcome.status == "refused"
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
 async def test_scope_signature_transplant_between_proposals_is_refused(
     harness, tmp_path: Path
 ) -> None:
