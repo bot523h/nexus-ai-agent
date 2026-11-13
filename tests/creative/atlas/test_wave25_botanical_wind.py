@@ -313,7 +313,6 @@ def test_divergence_guard_flags_instability() -> None:
 
 
 def test_refuse_too_many_steps() -> None:
-    stem = _stem()
     g = b.davenport_gusts(n_samples=64, seed=0)
     # Forge a gust field with more samples than MAX_STEPS is impractical; the
     # guard is exercised via a monkeypatched size is unnecessary because the

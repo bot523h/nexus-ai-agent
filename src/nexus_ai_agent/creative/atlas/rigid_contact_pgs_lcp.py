@@ -220,8 +220,6 @@ def solve_contacts_pgs(
             raise ContactError("a contact cannot reference the same body twice")
 
     n_c = len(contacts)
-    normals = np.array([c.normal for c in contacts]) if n_c else np.zeros((0, 2))
-    tangents = np.array([c.tangent() for c in contacts]) if n_c else np.zeros((0, 2))
     k_n = np.array(
         [_effective_mass(bodies[c.a], bodies[c.b], c.r_a, c.r_b, c.normal) for c in contacts]
     )
