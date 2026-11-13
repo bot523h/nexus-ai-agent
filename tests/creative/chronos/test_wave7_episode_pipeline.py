@@ -10,13 +10,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from nexus_ai_agent.creative.chronos.contracts import Continuity, RationalTimestamp
+import nexus_ai_agent.creative.chronos.acoustics_lipsync as acoustics_lipsync
+import nexus_ai_agent.creative.chronos.merkle_ledger as merkle_ledger
+import nexus_ai_agent.creative.chronos.weather_and_grading as weather_and_grading
+from nexus_ai_agent.creative.chronos import episode_pipeline as episode_module
+from nexus_ai_agent.creative.chronos.contracts import Continuity, KernelError, RationalTimestamp
 from nexus_ai_agent.creative.chronos.episode_pipeline import (
     ContinuityRefusal,
     EpisodeShotInput,
     ShotDAG,
     ShowBibleCharacterBible,
+    ShowBibleRegistry,
     ShowBibleShotObservation,
+    _read_mono_pcm16,
     run_verified_episode_continuity_pipeline,
     verify_cross_episode_show_bible,
 )
@@ -94,6 +100,24 @@ def _shot(tmp_path: Path, shot_index: int, focal_px: float = 400.0) -> EpisodeSh
     )
 
 
+def test_show_bible_registry_conflict_and_invalid_wav_inputs(tmp_path: Path) -> None:
+    bible = _bible()
+    registry = ShowBibleRegistry()
+    registry.register(bible)
+    registry.register(bible)
+    assert registry.get("mira") == bible
+    with pytest.raises(ContinuityRefusal, match="conflicting show-bible"):
+        registry.register(replace(bible, metric_height_m=1.7))
+    with pytest.raises(ContinuityRefusal, match="unknown show-bible"):
+        registry.get("unknown")
+    with pytest.raises(ContinuityRefusal, match="invalid WAV"):
+        _read_mono_pcm16(tmp_path / "missing.wav")
+    empty = tmp_path / "empty.wav"
+    _write_mono_wav(empty, np.array([]))
+    with pytest.raises(ContinuityRefusal, match="empty or truncated"):
+        _read_mono_pcm16(empty)
+
+
 def test_show_bible_cross_episode_metrics_and_typed_refusal() -> None:
     bible = _bible()
     observation = ShowBibleShotObservation(
@@ -139,6 +163,77 @@ def test_shotdag_delta_transitive_invalidation_and_refusal() -> None:
     for state in (Continuity.UNKNOWN, Continuity.FAIL):
         with pytest.raises(ContinuityRefusal):
             replace(dag, continuity=state).evaluate_delta()
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("ik-error", "effector IK rejected"),
+        ("ik-unreachable", "effector IK residual"),
+        ("foot-slip", "stance foot slip"),
+        ("color-qc", "broadcast color QC"),
+        ("png-shape", "PNG persistence verification"),
+        ("sample-rate", "sample rates differ"),
+        ("timbre", "cepstral timbre consistency"),
+        ("jaw-lag", "jaw-viseme timing drift"),
+        ("merkle", "Merkle inclusion proof failed"),
+    ],
+)
+def test_episode_pipeline_downstream_refusal_branches(
+    fault: str, message: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    shots = [_shot(tmp_path, 0), _shot(tmp_path, 1)]
+    if fault == "ik-error":
+        monkeypatch.setattr(
+            episode_module,
+            "solve_two_bone_or_chain_ik",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(KernelError("bad IK")),
+        )
+    elif fault == "ik-unreachable":
+        monkeypatch.setattr(
+            episode_module,
+            "solve_two_bone_or_chain_ik",
+            lambda *_args, **_kwargs: SimpleNamespace(reachable=False),
+        )
+    elif fault == "foot-slip":
+        monkeypatch.setattr(
+            episode_module,
+            "enforce_stance_foot_lock",
+            lambda *_args, **_kwargs: SimpleNamespace(max_foot_slip_mm_after=1.0),
+        )
+    elif fault == "color-qc":
+        monkeypatch.setattr(
+            weather_and_grading,
+            "legalize_broadcast_rgb_ebu_r103",
+            lambda image: SimpleNamespace(
+                illegal_pixel_fraction_after=1.0, sobel_structure_correlation=1.0, image=image
+            ),
+        )
+    elif fault == "png-shape":
+        monkeypatch.setattr(episode_module, "read_rgb8_png", lambda _path: np.zeros((1, 1, 3)))
+    elif fault == "sample-rate":
+        voice = 0.2 * np.sin(2 * np.pi * 180 * np.arange(4096) / 16_000)
+        _write_mono_wav(shots[1].dialogue_wav_path, voice, sample_rate=16_000)
+        _write_mono_wav(shots[1].ambience_wav_path, voice * 0.1, sample_rate=16_000)
+    elif fault == "timbre":
+        monkeypatch.setattr(
+            acoustics_lipsync,
+            "measure_cepstral_timbre_consistency",
+            lambda *_args, **_kwargs: SimpleNamespace(status="REFUSED", mean_distance_db=None),
+        )
+    elif fault == "jaw-lag":
+        monkeypatch.setattr(
+            acoustics_lipsync,
+            "solve_jaw_trajectory",
+            lambda *_args, **_kwargs: SimpleNamespace(peak_lag_frames=4.0),
+        )
+    elif fault == "merkle":
+        monkeypatch.setattr(merkle_ledger, "verify_inclusion_proof", lambda *_args: False)
+
+    with pytest.raises(ContinuityRefusal, match=message):
+        run_verified_episode_continuity_pipeline(9, shots, _bible(), tmp_path / f"fault-{fault}")
 
 
 def test_verified_episode_pipeline_real_png_wav_and_merkle(tmp_path: Path) -> None:

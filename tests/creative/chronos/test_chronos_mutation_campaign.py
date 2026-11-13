@@ -1799,10 +1799,9 @@ def test_phase17_ast_mutation_campaign_kills_10_of_10(tmp_path: Path) -> None:
 
     def assert_fence_current() -> None:
         try:
-            result = adapter._require_current_fence(attempt, lambda _project, _attempt: 5)
+            adapter._require_current_fence(attempt, lambda _project, _attempt: 5)
         except adapter.ChronosVerificationRefusalError as exc:
             raise AssertionError("current fence was refused") from exc
-        assert result is None
 
     def assert_recipe_parameters_bind() -> None:
         changed = replace(

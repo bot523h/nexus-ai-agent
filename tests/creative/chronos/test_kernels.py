@@ -1,13 +1,18 @@
+import subprocess
 from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from nexus_ai_agent.creative.chronos import compositor_25d, identity_lock
+from nexus_ai_agent.creative.chronos import timeline as timeline_module
 from nexus_ai_agent.creative.chronos.acoustics_lipsync import (
+    _voiced_envelopes,
     fractional_impulse,
     jaw_aperture,
     measure_cepstral_timbre_consistency,
+    measure_rir_acoustics,
     render_spatial_dialogue,
     sabine_rt60,
     shoebox_rir,
@@ -36,6 +41,9 @@ from nexus_ai_agent.creative.chronos.geometry import (
 from nexus_ai_agent.creative.chronos.timeline import (
     ShotDAG,
     StreamSignature,
+    _wav_signature,
+    assemble_pcm_wav_stream_copy,
+    concat_copy,
     content_hash,
     ffprobe_signature,
     require_compatible,
@@ -60,6 +68,79 @@ def test_rational_and_dag() -> None:
     old = dag.digest("2")
     assert dag.mutate("2", b"changed") == ("1", "2", "3")
     assert dag.digest("2") != old
+
+
+def test_timeline_pcm_assembly_refuses_invalid_inputs(tmp_path: Path) -> None:
+    with pytest.raises(KernelError, match="invalid WAV reader"):
+        _wav_signature(object())
+    source = tmp_path / "bad.wav"
+    source.write_bytes(b"not a wave")
+    with pytest.raises(KernelError, match="invalid input WAV"):
+        assemble_pcm_wav_stream_copy([source, source], tmp_path / "out.wav", tmp_path / "stage")
+    with pytest.raises(KernelError, match="at least two WAV shots"):
+        assemble_pcm_wav_stream_copy([], tmp_path / "empty.wav", tmp_path / "stage")
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("stream-count", "assembled stream count mismatch"),
+        ("signature", "assembled stream signature mismatch"),
+        ("packets", "packet conservation failed"),
+        ("duration", "duration conservation failed"),
+    ],
+)
+def test_timeline_concat_copy_verifies_final_output(
+    fault: str, message: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    inputs = [tmp_path / "a.mp4", tmp_path / "b.mp4"]
+    for path in inputs:
+        path.write_bytes(b"source")
+    stream = {
+        "codec_type": "video",
+        "codec_name": "h264",
+        "profile": "High",
+        "pix_fmt": "yuv420p",
+        "width": 16,
+        "height": 16,
+        "r_frame_rate": "24/1",
+        "time_base": "1/24",
+        "extradata_hash": "sha256:codec",
+    }
+    packet = {"stream_index": 0, "pts": 0, "dts": 0}
+    source_data = {"format": {"duration": "1"}, "streams": [stream], "packets": [packet]}
+    output_streams = [dict(stream)]
+    output_packets = [dict(packet), dict(packet)]
+    duration = "2"
+    if fault == "stream-count":
+        output_streams.append(dict(stream))
+    elif fault == "signature":
+        output_streams[0]["codec_name"] = "different"
+    elif fault == "packets":
+        output_packets = []
+    elif fault == "duration":
+        duration = "3"
+    output_data = {
+        "format": {"duration": duration},
+        "streams": output_streams,
+        "packets": output_packets,
+    }
+    probes = iter((source_data, source_data, output_data))
+    monkeypatch.setattr(timeline_module, "_probe", lambda *_args, **_kwargs: next(probes))
+    calls = 0
+
+    def fake_run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            Path(command[-1]).write_bytes(b"staged media")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(KernelError, match=message):
+        concat_copy(inputs, tmp_path / "assembled.mp4")
 
 
 def test_stream_compatibility_fails_closed() -> None:
@@ -99,6 +180,110 @@ def test_color_transfers_bradford_ot_and_ciede() -> None:
     assert np.all(np.isfinite(rgb_to_lab(np.array([[0.2, 0.3, 0.4]]))))
 
 
+def test_acoustics_lipsync_refusal_and_edge_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _voiced_envelopes(np.zeros(2048), 8000) == []
+    assert _voiced_envelopes(np.random.default_rng(1).normal(size=2048), 8000) == []
+    with pytest.raises(KernelError, match="nonzero direct"):
+        measure_rir_acoustics(np.zeros(128), 8000)
+    with pytest.raises(KernelError, match="nonzero direct"):
+        measure_rir_acoustics(np.r_[1.0, np.zeros(127)], 8000)
+    abrupt_tail = np.zeros(128)
+    abrupt_tail[0], abrupt_tail[50] = 1.0, 0.01
+    with pytest.raises(KernelError, match="too short"):
+        measure_rir_acoustics(abrupt_tail, 8000)
+    monkeypatch.setattr(np, "polyfit", lambda *_args, **_kwargs: np.array([0.0, 1.0]))
+    signal = np.r_[1.0, np.zeros(31), np.exp(-np.arange(1, 129) / 15)]
+    with pytest.raises(KernelError, match="negative slope"):
+        measure_rir_acoustics(signal, 8000)
+
+    zero_path = shoebox_rir(
+        np.array([1.0, 1.0, 1.0]),
+        np.array([1.0, 1.0, 1.0]),
+        np.array([4.0, 5.0, 3.0]),
+        0.2,
+        8000,
+        order=0,
+    )
+    assert not np.any(zero_path)
+    with pytest.raises(KernelError, match="camera right vector"):
+        synthesize_stereo_room_ir(
+            np.array([4.0, 5.0, 3.0]),
+            np.array([2.0, 2.0, 1.0]),
+            np.array([1.0, 1.0, 1.0]),
+            np.array([0.0, 0.0, 0.0]),
+            8000,
+            0.2,
+        )
+    with pytest.raises(KernelError, match="invalid dry signal"):
+        render_spatial_dialogue(np.array([]), np.ones((2, 2)))
+
+
+def test_identity_lock_degenerate_geometry_and_svd_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = np.array(
+        [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.0, 0.1, 0.0], [0.0, 0.0, 0.1]],
+        dtype=np.float64,
+    )
+    degenerate = reference.copy()
+    degenerate[1] = degenerate[0]
+    with pytest.raises(KernelError, match="canonical cranial baseline"):
+        identity_lock.restore_cranial_landmarks_to_anchor(
+            degenerate, degenerate, left_index=0, right_index=1
+        )
+    with pytest.raises(KernelError, match="reference cranial baseline"):
+        identity_lock.verify_cranial_baseline(degenerate, reference, left_index=0, right_index=1)
+    assert identity_lock._brown_conrady_jacobian(0.1, -0.2, (0.01, 0, 0, 0, 0)).shape == (2, 2)
+
+    def fail_svd(*_args: object, **_kwargs: object) -> None:
+        raise np.linalg.LinAlgError("forced decomposition failure")
+
+    monkeypatch.setattr(np.linalg, "svd", fail_svd)
+    with pytest.raises(KernelError, match="SVD failed"):
+        identity_lock.restore_cranial_landmarks_to_anchor(reference, reference)
+
+
+def test_verifier_and_compositor_refusal_branches(tmp_path: Path) -> None:
+    constant = np.ones((4, 4), dtype=np.float64)
+    changed = np.full((4, 4), 2.0, dtype=np.float64)
+    assert gradient_correlation(constant, constant) == 1.0
+    assert gradient_correlation(constant, changed) == 0.0
+    with pytest.raises(KernelError, match="identical non-empty shape"):
+        gradient_correlation(np.empty((0, 0)), np.empty((0, 0)))
+    with pytest.raises(KernelError, match="identical non-empty shape"):
+        gradient_correlation(constant, np.ones((2, 2)))
+
+    haze = np.zeros((4, 4, 3), dtype=np.float64)
+    layer = np.ones_like(haze)
+    alpha = np.ones((4, 4), dtype=np.float64)
+    focus = (2.0, 50.0, 2.8, 36.0, 4)
+    with pytest.raises(KernelError, match="layers required"):
+        compositor_25d._composite([], haze, 0.1, focus)
+    with pytest.raises(KernelError, match="shapes must match"):
+        compositor_25d._composite([(layer, alpha, 1.0)], np.zeros((4, 4)), 0.1, focus)
+    with pytest.raises(KernelError, match="extinction"):
+        compositor_25d._composite([(layer, alpha, 1.0)], haze, -0.1, focus)
+    with pytest.raises(KernelError, match="invalid 2.5D layer"):
+        compositor_25d._composite([(layer, alpha, -1.0)], haze, 0.1, focus)
+    with pytest.raises(KernelError, match="tile size"):
+        compositor_25d.render_25d_multiplane_composite(
+            [(layer, alpha, 1.0)],
+            haze,
+            tmp_path / "invalid.png",
+            beta=0.1,
+            focus=focus,
+            tile_size_px=0,
+        )
+    with pytest.raises(KernelError, match="haze must be RGB"):
+        compositor_25d.render_25d_multiplane_composite(
+            [(layer, alpha, 1.0)],
+            np.zeros((4, 4, 1)),
+            tmp_path / "invalid-haze.png",
+            beta=0.1,
+            focus=focus,
+        )
+
+
 def test_acoustics_visemes_and_verifier() -> None:
     impulse = fractional_impulse(12.25, 64)
     assert np.argmax(impulse) in (12, 13)
@@ -118,6 +303,8 @@ def test_acoustics_visemes_and_verifier() -> None:
     a = np.arange(100, dtype=float).reshape(10, 10)
     assert gradient_correlation(a, a) == pytest.approx(1)
     verify_structure(a, a)
+    with pytest.raises(KernelError, match="structural verification failed"):
+        verify_structure(a, -a)
     assert continuity_gate(Continuity.OK) and not continuity_gate(Continuity.UNKNOWN)
     with pytest.raises(KernelError):
         verify_structure(a, np.zeros_like(a))

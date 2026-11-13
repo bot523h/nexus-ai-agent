@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from nexus_ai_agent.creative.chronos import multicam_epipolar_matching as multicam
 from nexus_ai_agent.creative.chronos.multicam_epipolar_matching import (
     audit_and_project_epipolar_correspondences,
     compensate_focus_breathing_frame,
@@ -71,6 +72,43 @@ def test_epipolar_refuses_invalid_geometry_and_unconverged_projection() -> None:
         audit_and_project_epipolar_correspondences(
             np.zeros((1, 2)), np.ones((1, 2)), _horizontal_epipolar_matrix(), max_iterations=0
         )
+
+
+def test_epipolar_and_sensor_calibration_refuse_degenerate_numeric_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    intrinsics = np.eye(3)
+    with monkeypatch.context() as patch:
+        patch.setattr(np.linalg, "svd", lambda *_args, **_kwargs: np.array([1.0, 0.0, 0.0]))
+        with pytest.raises(ValueError, match="essential matrix failed"):
+            compute_fundamental_matrix_from_rig(
+                intrinsics, intrinsics, np.eye(3), np.array([1.0, 0.0, 0.0])
+            )
+    with monkeypatch.context() as patch:
+        patch.setattr(np.linalg, "solve", lambda *_args, **_kwargs: np.full((3, 3), np.nan))
+        with pytest.raises(ValueError, match="non-finite"):
+            compute_fundamental_matrix_from_rig(
+                intrinsics, intrinsics, np.eye(3), np.array([1.0, 0.0, 0.0])
+            )
+    with monkeypatch.context() as patch:
+        patch.setattr(multicam, "_validate_lens_domain", lambda *_args, **_kwargs: None)
+        with pytest.raises(ValueError, match="breathing scale"):
+            multicam._breathing_scale(50.0, 51.0, 49.0)
+
+    source = np.array([[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0], [1 / 3] * 3])
+    with pytest.raises(ValueError, match="independent affine offset"):
+        harmonize_multicam_sensor_color(source, source, np.ones((2, 2, 3)) * 0.2)
+    random_source = np.random.default_rng(2).uniform(0.1, 0.6, (8, 3))
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            np.linalg,
+            "lstsq",
+            lambda *_args, **_kwargs: (np.full((4, 3), np.nan), None, None, None),
+        )
+        with pytest.raises(ValueError, match="ASC-CDL coefficients"):
+            harmonize_multicam_sensor_color(
+                random_source, random_source * 0.9, np.ones((2, 2, 3)) * 0.2
+            )
 
 
 def test_focus_breathing_and_physical_circle_of_confusion() -> None:

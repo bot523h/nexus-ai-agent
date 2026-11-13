@@ -526,7 +526,7 @@ def test_phase5_typed_refusal_probe_ledger_is_60_of_60(tmp_path: Path) -> None:
             (
                 "spine rejects unsupported recipe operation",
                 lambda: compute_chronos_recipe_identity(
-                    replace(spine_attempt, operation_name="unknown")
+                    replace(spine_attempt, operation_name="unknown")  # type: ignore[arg-type]
                 ),
                 ChronosSpineExecutionError,
             ),

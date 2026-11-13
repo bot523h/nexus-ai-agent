@@ -19,6 +19,7 @@ from .nexus_spine_adapter import (
     ArtifactPassportSink,
     ChronosAssetVersionStore,
     ChronosCommandBus,
+    ChronosLineageRepositoryProtocol,
     ChronosSpineAttempt,
     ChronosSpineExecutionReceipt,
     FencingTokenReader,
@@ -42,6 +43,7 @@ def dispatch_chronos_spine_operation(
     command_actor: ActorIdentity | None = None,
     asset_version_store: ChronosAssetVersionStore | None = None,
     passport_sink: ArtifactPassportSink | None = None,
+    lineage_repository: ChronosLineageRepositoryProtocol | None = None,
 ) -> ChronosSpineExecutionReceipt:
     """Dispatch only the registered staged operation and fail closed on denial."""
     if operation_name not in CHRONOS_SPINE_OPERATIONS:
@@ -55,6 +57,7 @@ def dispatch_chronos_spine_operation(
         command_actor=command_actor,
         asset_version_store=asset_version_store,
         passport_sink=passport_sink,
+        lineage_repository=lineage_repository,
     )
 
 
@@ -68,6 +71,7 @@ def build_chronos_staged_spine_handler(
     command_actor: ActorIdentity | None = None,
     asset_version_store: ChronosAssetVersionStore | None = None,
     passport_sink: ArtifactPassportSink | None = None,
+    lineage_repository: ChronosLineageRepositoryProtocol | None = None,
 ) -> ChronosHandler:
     """Bind one immutable attempt to the dependency-injected :class:`ChronosPort`.
 
@@ -102,6 +106,7 @@ def build_chronos_staged_spine_handler(
             command_actor=command_actor,
             asset_version_store=asset_version_store,
             passport_sink=passport_sink,
+            lineage_repository=lineage_repository,
         )
         if receipt.recipe_identity.recipe_digest != identity.recipe_digest:
             raise ValueError("executed Chronos recipe differs from the port's bound identity")

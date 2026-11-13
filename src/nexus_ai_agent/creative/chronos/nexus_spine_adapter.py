@@ -9,20 +9,23 @@ namespace.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import math
+import os
 import re
 import secrets
 import subprocess
 import wave
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from threading import RLock
-from typing import Any, Literal, Protocol, TypeAlias, cast
+from typing import Any, Literal, Protocol, TypeAlias, cast, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -285,8 +288,14 @@ class ChronosSpineExecutionReceipt:
     engine_summary: Mapping[str, object]
 
 
-class ChronosAssetVersionStore(Protocol):
-    """Transactional store contract for the immutable asset/passport pair."""
+@runtime_checkable
+class ChronosLineageRepositoryProtocol(Protocol):
+    """Atomic repository contract for one asset-version/passport lineage pair.
+
+    Database adapters may implement these methods directly; the execution
+    boundary always performs a read-back after commit and checks the active
+    fence again before returning success.
+    """
 
     def get_pair(
         self, asset_version_id: str, /
@@ -303,22 +312,12 @@ class ChronosAssetVersionStore(Protocol):
     def discard_pair(self, asset_version_id: str, *, fencing_token: int) -> None: ...
 
 
-class ArtifactPassportSink(Protocol):
-    """The passport side of the same atomic asset/passport transaction."""
-
-    def get_pair(
-        self, asset_version_id: str, /
-    ) -> tuple[ChronosAssetVersionRecord, ChronosArtifactPassport] | None: ...
-
-    def commit_pair(
-        self,
-        asset_version: ChronosAssetVersionRecord,
-        passport: ChronosArtifactPassport,
-        *,
-        active_fencing_token: FencingTokenReader,
-    ) -> None: ...
-
-    def discard_pair(self, asset_version_id: str, *, fencing_token: int) -> None: ...
+# Compatibility names retained for existing composition roots. Asset and
+# passport writes are one paired repository transaction, never separate sinks.
+ChronosAssetVersionStore = ChronosLineageRepositoryProtocol
+ArtifactPassportSink = ChronosLineageRepositoryProtocol
+AssetVersionRecord = ChronosAssetVersionRecord
+ArtifactPassportRecord = ChronosArtifactPassport
 
 
 class ChronosCommandBus(Protocol):
@@ -471,8 +470,6 @@ def _record_from_dict(value: object) -> ChronosAssetVersionRecord:
             value["published_path"],
         )
     except (KeyError, TypeError, ValueError) as exc:
-        if isinstance(exc, ChronosLedgerError):
-            raise
         raise ChronosLedgerError("persisted asset-version record is malformed") from exc
 
 
@@ -530,8 +527,6 @@ def _passport_from_dict(value: object) -> ChronosArtifactPassport:
             value["passport_digest"],
         )
     except (KeyError, TypeError, ValueError) as exc:
-        if isinstance(exc, ChronosLedgerError):
-            raise
         raise ChronosLedgerError("persisted artifact passport is malformed") from exc
 
 
@@ -576,15 +571,58 @@ class InMemoryChronosLedger:
             del self._records[asset_version_id]
 
 
-class FileChronosLedger:
-    """Atomic JCS-backed local store for canonical Chronos asset/passport pairs."""
+class ChronosDurableLineageStore:
+    """Atomic JCS file repository with thread and interprocess serialization."""
 
     def __init__(self, workspace_root: str | Path) -> None:
         root = Path(workspace_root).expanduser().resolve(strict=False)
+        root.mkdir(parents=True, exist_ok=True)
         self._fs = WorkspaceFilesystem(root)
         key = str(root)
         with _FILE_LEDGER_LOCK_GUARD:
             self._lock = _FILE_LEDGER_LOCKS.setdefault(key, RLock())
+
+    @contextmanager
+    def _repository_lock(self) -> Iterator[None]:
+        """Serialize local threads and other processes on a safe lock file."""
+        with self._lock:
+            try:
+                self._fs.ensure_directory(".chronos-ledger")
+                with self._fs._parent_fd((".chronos-ledger", ".writer.lock"), create=True) as (
+                    parent_fd,
+                    lock_name,
+                ):
+                    assert lock_name is not None
+                    flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW
+                    lock_fd = os.open(lock_name, flags, 0o600, dir_fd=parent_fd)
+                    with os.fdopen(lock_fd, "r+b") as lock_handle:
+                        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                        try:
+                            yield
+                        finally:
+                            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except (FilesystemBoundaryError, OSError) as exc:
+                raise ChronosLedgerError("canonical Chronos repository lock failed") from exc
+
+    def _atomic_replace(self, temporary: str, destination: str) -> None:
+        """Swap a JCS file using os.replace while pinning both parent dirs."""
+        source_parts = tuple(temporary.split("/"))
+        destination_parts = tuple(destination.split("/"))
+        try:
+            with self._fs._parent_fd(source_parts) as (source_fd, source_name):
+                with self._fs._parent_fd(destination_parts, create=True) as (
+                    destination_fd,
+                    destination_name,
+                ):
+                    assert source_name is not None and destination_name is not None
+                    os.replace(
+                        source_name,
+                        destination_name,
+                        src_dir_fd=source_fd,
+                        dst_dir_fd=destination_fd,
+                    )
+        except (FilesystemBoundaryError, OSError) as exc:
+            raise ChronosLedgerError("canonical Chronos ledger atomic replace failed") from exc
 
     def _write_all(
         self,
@@ -603,8 +641,8 @@ class FileChronosLedger:
         temporary = f".chronos-ledger/asset-passport-ledger.{secrets.token_hex(8)}.tmp"
         try:
             self._fs.write_text(temporary, jcs_canonical_json(payload))
-            self._fs.rename_within(temporary, _LEDGER_RELATIVE_PATH)
-        except (FilesystemBoundaryError, OSError) as exc:
+            self._atomic_replace(temporary, _LEDGER_RELATIVE_PATH)
+        except (ChronosLedgerError, FilesystemBoundaryError, OSError) as exc:
             try:
                 self._fs.unlink(temporary)
             except (FilesystemBoundaryError, OSError):
@@ -649,7 +687,7 @@ class FileChronosLedger:
     def get_pair(
         self, asset_version_id: str, /
     ) -> tuple[ChronosAssetVersionRecord, ChronosArtifactPassport] | None:
-        with self._lock:
+        with self._repository_lock():
             return self._read_all().get(asset_version_id)
 
     def commit_pair(
@@ -662,18 +700,19 @@ class FileChronosLedger:
         _require_record_fence(asset_version, active_fencing_token)
         if not _pair_is_well_formed(asset_version, passport):
             raise ChronosLedgerError("asset/passport pair does not reconcile")
-        with self._lock:
+        with self._repository_lock():
             records = self._read_all()
             prior = records.get(asset_version.asset_version_id)
             if prior is not None:
                 if prior == (asset_version, passport):
                     return
                 raise ChronosLedgerConflictError("asset-version id is already registered")
+            _require_record_fence(asset_version, active_fencing_token)
             records[asset_version.asset_version_id] = (asset_version, passport)
             self._write_all(records)
 
     def discard_pair(self, asset_version_id: str, *, fencing_token: int) -> None:
-        with self._lock:
+        with self._repository_lock():
             records = self._read_all()
             prior = records.get(asset_version_id)
             if prior is None:
@@ -682,6 +721,10 @@ class FileChronosLedger:
                 raise ChronosLedgerConflictError("cannot roll back another fence's ledger entry")
             del records[asset_version_id]
             self._write_all(records)
+
+
+# Historical public name retained; the durable implementation is canonical.
+FileChronosLedger = ChronosDurableLineageStore
 
 
 def _require_record_fence(
@@ -698,8 +741,6 @@ def _require_record_fence(
 def _component(value: object, name: str) -> str:
     if not isinstance(value, str) or not _COMPONENT_RE.fullmatch(value):
         raise ChronosSpineExecutionError(f"{name} must be a safe, non-empty path component")
-    if value in {".", ".."}:
-        raise ChronosSpineExecutionError(f"{name} must not be a traversal component")
     return value
 
 
@@ -928,9 +969,7 @@ def _normalized_parameters(parameters: Mapping[str, object]) -> tuple[str, dict[
     try:
         canonical = jcs_canonical_json(parameters)
         parsed = json.loads(canonical)
-    except (TypeError, ValueError, json.JSONDecodeError) as exc:
-        if isinstance(exc, ChronosSpineExecutionError):
-            raise
+    except (TypeError, ValueError) as exc:
         raise ChronosSpineExecutionError("render parameters are not canonical JSON") from exc
     if not isinstance(parsed, dict):
         raise ChronosSpineExecutionError("render parameters must be a JSON object")
@@ -1905,17 +1944,23 @@ def execute_chronos_staged_attempt(
     command_actor: ActorIdentity | None = None,
     asset_version_store: ChronosAssetVersionStore | None = None,
     passport_sink: ArtifactPassportSink | None = None,
+    lineage_repository: ChronosLineageRepositoryProtocol | None = None,
 ) -> ChronosSpineExecutionReceipt:
     """Stage, render, independently verify, and atomically publish one attempt."""
     if not callable(active_fencing_token):
         raise ChronosSpineExecutionError("an authoritative active fencing-token reader is required")
-    if (
-        asset_version_store is not None
-        and passport_sink is not None
-        and asset_version_store is not passport_sink
-    ):
+    repositories = tuple(
+        repository
+        for repository in (lineage_repository, asset_version_store, passport_sink)
+        if repository is not None
+    )
+    if repositories and any(repository is not repositories[0] for repository in repositories[1:]):
         raise ChronosLedgerError(
             "asset-version and passport sinks must share one atomic transaction coordinator"
+        )
+    if repositories and not isinstance(repositories[0], ChronosLineageRepositoryProtocol):
+        raise ChronosLedgerError(
+            "injected lineage repository violates the paired transaction protocol"
         )
     snapshot = _snapshot_attempt(attempt)
     stable_attempt = snapshot.attempt
@@ -1964,18 +2009,19 @@ def execute_chronos_staged_attempt(
     root = Path(workspace_root).expanduser().resolve(strict=False)
     root.mkdir(parents=True, exist_ok=True)
     fs = WorkspaceFilesystem(root)
-    ledger: ChronosAssetVersionStore | ArtifactPassportSink = (
-        asset_version_store
-        if asset_version_store is not None
-        else passport_sink
-        if passport_sink is not None
-        else FileChronosLedger(root)
+    ledger: ChronosLineageRepositoryProtocol = (
+        repositories[0] if repositories else ChronosDurableLineageStore(root)
     )
     stage_name = f"{stable_attempt.attempt_id}_{stable_attempt.fencing_token}"
     stage_rel = f".staging/{stage_name}"
+    quarantine_rel = f".quarantine/{stage_name}"
     owns_stage = False
     published_by_attempt: str | None = None
     try:
+        if _directory_exists(fs, quarantine_rel):
+            raise ChronosSpineExecutionError(
+                "forensic quarantine already exists for this attempt and fence"
+            )
         fs.ensure_directory(".staging")
         if _directory_exists(fs, stage_rel):
             raise ChronosSpineExecutionError("private attempt staging path already exists")
@@ -2121,29 +2167,29 @@ def execute_chronos_staged_attempt(
             passport,
             dict(engine_summary),
         )
-    except ChronosVerificationRefusalError:
+    except ChronosVerificationRefusalError as exc:
         if published_by_attempt is not None:
             _remove_new_publication(fs, published_by_attempt)
         if owns_stage:
-            _quarantine_stage(fs, stage_rel, stage_name)
+            _quarantine_stage(fs, stage_rel, quarantine_rel, stable_attempt, exc)
         raise
-    except ChronosSpineExecutionError:
+    except ChronosSpineExecutionError as exc:
         if published_by_attempt is not None:
             _remove_new_publication(fs, published_by_attempt)
         if owns_stage:
-            _quarantine_stage(fs, stage_rel, stage_name)
+            _quarantine_stage(fs, stage_rel, quarantine_rel, stable_attempt, exc)
         raise
     except (FilesystemBoundaryError, OSError, ValueError, TypeError) as exc:
         if published_by_attempt is not None:
             _remove_new_publication(fs, published_by_attempt)
         if owns_stage:
-            _quarantine_stage(fs, stage_rel, stage_name)
+            _quarantine_stage(fs, stage_rel, quarantine_rel, stable_attempt, exc)
         raise ChronosSpineExecutionError("Chronos staged attempt failed closed") from exc
     except Exception as exc:  # noqa: BLE001 - hooks and renderer failures also quarantine
         if published_by_attempt is not None:
             _remove_new_publication(fs, published_by_attempt)
         if owns_stage:
-            _quarantine_stage(fs, stage_rel, stage_name)
+            _quarantine_stage(fs, stage_rel, quarantine_rel, stable_attempt, exc)
         raise ChronosSpineExecutionError("Chronos staged attempt failed closed") from exc
 
 
@@ -2160,23 +2206,81 @@ def _directory_exists(fs: WorkspaceFilesystem, relative: str) -> bool:
     return True
 
 
-def _quarantine_stage(fs: WorkspaceFilesystem, stage_rel: str, stage_name: str) -> None:
-    quarantine_rel = f".staging/_quarantine/{stage_name}.{secrets.token_hex(8)}.refused"
+def _quarantine_refusal_code(refusal: BaseException) -> str:
+    if isinstance(refusal, ChronosVerificationRefusalError):
+        return "CHRONOS_VERIFICATION_REFUSED"
+    if isinstance(refusal, ChronosCommandAuthorizationError):
+        return "CHRONOS_AUTHORIZATION_REFUSED"
+    if isinstance(refusal, ChronosLedgerError):
+        return "CHRONOS_LINEAGE_PERSISTENCE_REFUSED"
+    if isinstance(refusal, (FilesystemBoundaryError, OSError)):
+        return "CHRONOS_FILESYSTEM_REFUSED"
+    return "CHRONOS_EXECUTION_REFUSED"
+
+
+def serialize_chronos_execution_error(error: BaseException) -> dict[str, str]:
+    """Return a stable, bounded error payload for CLI and API adapters."""
+    return {"code": _quarantine_refusal_code(error), "message": str(error)[:512]}
+
+
+def _stage_digest_evidence(stage_path: Path) -> tuple[dict[str, dict[str, object]], str | None]:
+    stage_fs = WorkspaceFilesystem(stage_path)
+    evidence: dict[str, dict[str, object]] = {}
     try:
-        if not _directory_exists(fs, stage_rel):
-            return
-        fs.ensure_directory(".staging/_quarantine")
-        fs.rename_within(stage_rel, quarantine_rel, create_parents=True)
-    except (ChronosSpineExecutionError, FilesystemBoundaryError, OSError):
-        try:
-            fs.remove_tree(stage_rel)
-        except (FilesystemBoundaryError, OSError):
-            pass
+        for file_path in stage_fs.iter_files():
+            relative = file_path.relative_to(stage_fs.root).as_posix()
+            digest, size = stage_fs.hash_file(relative)
+            evidence[relative] = {"sha256": digest, "size_bytes": size}
+    except (FilesystemBoundaryError, OSError, ValueError) as exc:
+        return evidence, type(exc).__name__
+    return evidence, None
+
+
+def _quarantine_stage(
+    fs: WorkspaceFilesystem,
+    stage_rel: str,
+    quarantine_rel: str,
+    attempt: ChronosSpineAttempt,
+    refusal: BaseException,
+) -> None:
+    """Preserve rejected bytes and an independently useful forensic receipt."""
+    if not _directory_exists(fs, stage_rel):
+        return
+    stage_path = fs.resolve(stage_rel)
+    stage_fs = WorkspaceFilesystem(stage_path)
+    digests, digest_error = _stage_digest_evidence(stage_path)
+    error_payload = serialize_chronos_execution_error(refusal)
+    receipt: dict[str, object] = {
+        "schema": "chronos-quarantine-receipt-v1",
+        "attempt_id": attempt.attempt_id,
+        "fencing_token": attempt.fencing_token,
+        "refusal_code": error_payload["code"],
+        "refusal_message": error_payload["message"],
+        "stage_digests": digests,
+        "stage_digest_error": digest_error,
+    }
+    # A render hook cannot make us overwrite evidence using the reserved name.
+    if stage_fs.exists("quarantine_receipt.json"):
+        conflict = f"quarantine_receipt.preexisting.{secrets.token_hex(4)}.json"
+        stage_fs.rename_within("quarantine_receipt.json", conflict, create_parents=False)
+    stage_fs.write_text("quarantine_receipt.json", jcs_canonical_json(receipt))
+    if _directory_exists(fs, quarantine_rel):
+        # Preserve both attempts: leave this receipt with its original stage
+        # rather than replacing an earlier forensic record for this fence.
+        raise ChronosLedgerConflictError("forensic quarantine destination already exists")
+    fs.ensure_directory(".quarantine")
+    fs.rename_within(stage_rel, quarantine_rel, create_parents=True)
 
 
 __all__ = [
+    "ArtifactPassportRecord",
+    "ArtifactPassportSink",
+    "AssetVersionRecord",
     "ChronosArtifactPassport",
     "ChronosAssetVersionRecord",
+    "ChronosAssetVersionStore",
+    "ChronosDurableLineageStore",
+    "ChronosLineageRepositoryProtocol",
     "ChronosFileVerification",
     "ChronosRecipeIdentity",
     "ChronosSpineAttempt",
@@ -2192,5 +2296,6 @@ __all__ = [
     "compute_chronos_recipe_identity",
     "execute_chronos_staged_attempt",
     "jcs_canonical_json",
+    "serialize_chronos_execution_error",
     "verify_staged_chronos_artifacts",
 ]
