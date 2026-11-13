@@ -19,6 +19,7 @@ from nexus_ai_agent.creative.packs.scene.models import (
     DOMAIN,
     SCENE_OPERATIONS,
     SCENE_PACKAGE_ID,
+    HdrTonemapInput,
     OpticalFlowRetimeInput,
     RadiativeTransferHarmonizeInput,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "DOMAIN",
     "SCENE_OPERATIONS",
     "SCENE_PACKAGE_ID",
+    "HdrTonemapInput",
     "OpticalFlowRetimeInput",
     "RadiativeTransferHarmonizeInput",
     "DegenerateGeometryError",

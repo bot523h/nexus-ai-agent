@@ -41,6 +41,22 @@ from .errors import (
     TimeWarpError,
     UnknownNodeError,
 )
+from .hdr_tonemapping import (
+    MAX_TONEMAP_PIXELS,
+    DegenerateToneCurveError,
+    TonemapError,
+    aces_filmic_tonemap,
+    apply_vignette,
+    auto_exposure_scale,
+    bradford_adapt,
+    gamma_decode,
+    gamma_encode,
+    hejl_burgess_tonemap,
+    kelvin_to_xy,
+    luminance,
+    reinhard_tonemap,
+    uncharted2_tonemap,
+)
 from .montage_optimizer import (
     DEFAULT_MAX_STATES as MONTAGE_DEFAULT_MAX_STATES,
 )
@@ -150,6 +166,7 @@ __all__ = [
     "linear_to_srgb",
     "srgb_to_linear",
     "IRRADIANCE_TRANSFER",
+    "MAX_TONEMAP_PIXELS",
     "MAX_RELIGHT_PIXELS",
     "SH_BASIS_SIZE",
     "SH_L0",
@@ -172,4 +189,17 @@ __all__ = [
     "relight_subject_to_environment",
     "sh_basis",
     "sh_irradiance",
+    "DegenerateToneCurveError",
+    "TonemapError",
+    "aces_filmic_tonemap",
+    "apply_vignette",
+    "auto_exposure_scale",
+    "bradford_adapt",
+    "gamma_decode",
+    "gamma_encode",
+    "hejl_burgess_tonemap",
+    "kelvin_to_xy",
+    "luminance",
+    "reinhard_tonemap",
+    "uncharted2_tonemap",
 ]

@@ -326,3 +326,60 @@ wrong channel count, shape mismatch, non-odd window `< 3`, `iters < 1`,
 - The retimed frame is an *editorial* interpolation, not a recovered physical
   sample; no radiometric or GUM uncertainty budget is claimed.
 - No learned optical-flow model, no scipy/cv2/torch, no cloud service is used.
+
+---
+
+## 14. Wave 11 — HDR tone mapping and colour science
+
+Module: `src/nexus_ai_agent/creative/composition/hdr_tonemapping.py` (import alias
+`hdr`). Registry operation: `scene.tonemap_hdr` (additive, outside the ten
+catalogue operations). Pure NumPy + stdlib, offline and deterministic.
+
+### 14.1 Tone curves
+
+Scene-linear radiance may exceed 1.0; four monotone, `f(0)=0`, `[0,1]`-bounded
+curves map it to display range, all with a shared `exposure` scale `x = e·L`:
+
+- **Extended Reinhard** `L_d = x (1 + x/white²) / (1 + x)`; `white` is the input
+  that maps to 1.0, `white = 1` gives plain Reinhard.
+- **ACES (Narkowicz 2015 fit)** `(2.51 x² + 0.03 x) / (2.43 x² + 0.59 x + 0.14)`.
+- **Hejl–Burgess** on `max(0, x − 0.004)`: `(6.2 x² + 0.5 x) / (6.2 x² + 1.7 x + 0.06)`.
+- **Uncharted 2 (Hable)** `f(x)/f(11.2)` with the published constants.
+
+### 14.2 Exposure and transfer
+
+`auto_exposure_scale` is Reinhard's log-average key:
+`key / exp(mean(log(Y + ε)))`, with `ε` a floor so a black frame stays finite.
+`gamma_encode`/`gamma_decode` are the pure power law `x^(1/γ)` / `x^γ`; the exact
+IEC 61966-2-1 sRGB pair already lives in `compositor_2d` and is not duplicated.
+
+### 14.3 White balance
+
+`kelvin_to_xy` is the Kim et al. (2002) cubic fit of the Planckian locus, valid
+over 1667–25000 K (outside that range it refuses rather than extrapolating).
+`bradford_adapt` converts linear-sRGB → XYZ, applies the Bradford cone-response
+adaptation `diag(cone_dst/cone_src)` between the source and destination white
+points, and converts back; `src == dst` is a numerical no-op. A source white on
+the Bradford cone null raises a typed error instead of dividing by ~0.
+
+### 14.4 Bounds and refusals
+
+`MAX_TONEMAP_PIXELS = 4 194 304`; NaN/Inf, negative radiance, wrong channel
+count, empty input, over-budget size, non-positive exposure/`white`/`gamma`/`key`/
+`epsilon`, unknown temperature out of range, and a degenerate adaptation white
+all raise `TonemapError` (with `DegenerateToneCurveError` as a subclass).
+
+### 14.5 Evidence
+
+- `tests/creative/composition/test_hdr_tonemapping.py`: closed-form curve values,
+  monotonicity/boundedness, exposure key identity, Kelvin↔xy range and direction,
+  Bradford identity and warm-shift, sRGB↔XYZ round-trip, vignette identity and
+  corner darkening, and every refusal path.
+- `tests/creative/packs/scene/test_scene_registry.py`: Wave-11 registry tests.
+- Coverage: `hdr_tonemapping.py` at **100% line + branch** (via the `coverage` CLI).
+
+### 14.6 Scope limits (honest)
+
+- These are *editorial* tone and white-balance operators, not a calibrated
+  display transform; no GUM uncertainty budget or reference-monitor claim.
+- No ACES CTL / OCIO, no scipy/cv2/torch, no cloud service is used.

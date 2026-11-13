@@ -24,6 +24,9 @@ OPERATION_HARMONIZE_RADIATIVE_TRANSFER = "scene.harmonize_radiative_transfer"
 #: Wave 10 addition (not one of the ten catalogue operations).
 OPERATION_RETIME_OPTICAL_FLOW = "scene.retime_optical_flow"
 
+#: Wave 11 addition (not one of the ten catalogue operations).
+OPERATION_TONEMAP_HDR = "scene.tonemap_hdr"
+
 #: The ten catalogue scene operations this pack implements.
 SCENE_OPERATIONS: tuple[str, ...] = (
     OPERATION_INSERT_OBJECT_WITH_SHADOW,
@@ -128,6 +131,18 @@ class OpticalFlowRetimeInput(_Strict):
     t: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
+class HdrTonemapInput(_Strict):
+    """HDR tone mapping and optional white-balance adaptation (Wave 11)."""
+
+    image_id: str = Field(min_length=1, max_length=128)
+    curve: str = Field(default="aces", pattern="^(reinhard|aces|hejl|uncharted)$")
+    exposure: float = Field(default=1.0, gt=0.0, le=64.0)
+    white: float = Field(default=4.0, gt=0.0, le=64.0)
+    auto_exposure: bool = Field(default=False)
+    key: float = Field(default=0.18, gt=0.0, le=1.0)
+    adapt_temperature_k: float | None = Field(default=None, ge=1667.0, le=25000.0)
+
+
 __all__ = [
     "SCENE_PACKAGE_ID",
     "DOMAIN",
@@ -144,4 +159,5 @@ __all__ = [
     "ReflectionInput",
     "RadiativeTransferHarmonizeInput",
     "OpticalFlowRetimeInput",
+    "HdrTonemapInput",
 ]

@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from nexus_ai_agent.creative.composition import computational_cinematography as cine
+from nexus_ai_agent.creative.composition import hdr_tonemapping as hdr
 from nexus_ai_agent.creative.composition import radiative_relighting as relight
 from nexus_ai_agent.creative.composition import scene_imaging as kernels
 from nexus_ai_agent.creative.packs.scene.errors import InvalidImageError
@@ -25,6 +26,7 @@ from nexus_ai_agent.creative.packs.scene.models import (
     ChromaticAberrationInput,
     DepthOfFieldInput,
     FogHazeInput,
+    HdrTonemapInput,
     HorizonLevelInput,
     InsertObjectInput,
     LensDistortionInput,
@@ -206,6 +208,31 @@ def _harmonize_radiative_transfer(project: Project, context: OperationContext) -
     return _out(project, context, result)
 
 
+def _tonemap_hdr(project: Project, context: OperationContext) -> OperationOutcome:
+    """Tone-map scene-linear HDR radiance and optionally adapt the white point."""
+    data, store = _split(context)
+    p = HdrTonemapInput.model_validate(data)
+    image = _require(store, p.image_id)
+    working = image
+    if p.adapt_temperature_k is not None:
+        working = hdr.bradford_adapt(
+            image,
+            src_white_xy=(0.3127, 0.3290),
+            dst_white_xy=hdr.kelvin_to_xy(p.adapt_temperature_k),
+        )
+    exposure = p.exposure
+    if p.auto_exposure:
+        exposure *= hdr.auto_exposure_scale(working, key=p.key)
+    curves = {
+        "reinhard": lambda x: hdr.reinhard_tonemap(x, white=p.white, exposure=exposure),
+        "aces": lambda x: hdr.aces_filmic_tonemap(x, exposure=exposure),
+        "hejl": lambda x: hdr.hejl_burgess_tonemap(x, exposure=exposure),
+        "uncharted": lambda x: hdr.uncharted2_tonemap(x, exposure=exposure),
+    }
+    result = curves[p.curve](working)
+    return _out(project, context, result)
+
+
 def _retime_optical_flow(project: Project, context: OperationContext) -> OperationOutcome:
     """Flow-based interpolation of a frame between two keyframes (variable frame rate)."""
     data, store = _split(context)
@@ -272,6 +299,11 @@ SCENE_HANDLERS: dict[str, Any] = {
         _retime_optical_flow,
         OpticalFlowRetimeInput,
         "Flow-based interpolation of a frame between two keyframes (VFR retime).",
+    ),
+    "tonemap_hdr": (
+        _tonemap_hdr,
+        HdrTonemapInput,
+        "Scene-linear HDR tone mapping with optional white-point adaptation.",
     ),
 }
 

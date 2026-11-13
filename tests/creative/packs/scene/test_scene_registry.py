@@ -230,3 +230,39 @@ def test_wave10_optical_flow_retime_interpolates() -> None:
     assert np.isfinite(out["image"]).all()
     assert float(out["image"].min()) >= 0.0
     assert float(out["image"].max()) <= 1.0
+
+
+def test_wave11_tonemap_hdr_op_registered() -> None:
+    from nexus_ai_agent.creative.packs.scene import HdrTonemapInput
+
+    reg = build_scene_registry()
+    spec = reg.get_spec("scene.tonemap_hdr")
+    assert spec.input_model is HdrTonemapInput
+
+
+def test_wave11_tonemap_hdr_compresses_hdr() -> None:
+    size = 16
+    ys, xs = np.mgrid[0:size, 0:size].astype(np.float64)
+    hdr_img = (
+        np.stack([xs / (size - 1), ys / (size - 1), np.full((size, size), 0.5)], -1) * 4.0
+    ).astype(np.float32)
+    out = _run("scene.tonemap_hdr", {"image_id": "i", "curve": "aces", "_images": {"i": hdr_img}})
+    assert out["image"].shape == hdr_img.shape
+    assert float(out["image"].min()) >= 0.0
+    assert float(out["image"].max()) <= 1.0
+
+
+def test_wave11_tonemap_hdr_adapts_temperature() -> None:
+    size = 8
+    neutral = np.full((size, size, 3), 0.5, dtype=np.float32)
+    out = _run(
+        "scene.tonemap_hdr",
+        {
+            "image_id": "i",
+            "curve": "reinhard",
+            "white": 1.0,
+            "adapt_temperature_k": 3000.0,
+            "_images": {"i": neutral},
+        },
+    )
+    assert float(out["image"][..., 0].mean()) > float(out["image"][..., 2].mean())
