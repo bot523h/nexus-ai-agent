@@ -1,7 +1,7 @@
 # OMEGA audio engine — hardening report
 
 Branch `arena/288ef95e-nexus-ai-agent`, PR #337. Base `c3aa7c8`.
-Head at time of writing `fba5e0e`. **Status: `HARDENED_BUT_NOT_COMPLETE`.**
+Head at time of writing `4b17b52`. **Status: `HARDENED_BUT_NOT_COMPLETE`.**
 
 Everything below is a measurement taken in this repository, on this tree, with
 the commands shown. Numbers that were not re-measured are labelled as carried
@@ -214,9 +214,9 @@ imports a pack but is absent from `PACK_TEST_TARGETS` **breaks the whole suite**
 
 ## 7. CI
 
-Run `43387872963` on the final head `fba5e0e`: **24/24 jobs `success`**.
-Earlier runs `43328253118` (`14f2fa9`) and `43322843064` (`ced3680`) were also
-24/24.
+Run `43393070087` on the final head `4b17b52`: **24/24 jobs `success`**.
+Earlier runs `43387872963` (`fba5e0e`), `43328253118` (`14f2fa9`) and
+`43322843064` (`ced3680`) were also 24/24.
 
 ```
 lint (ruff + mypy + version lockstep)          success
@@ -272,7 +272,7 @@ This is why the status is `HARDENED_BUT_NOT_COMPLETE` and not `DONE`.
    (`total=97.52`, every pack ≥95%), the *provenance* was not. Registering the
    module in `pack_coverage.py` fixed all three groups at once.
 
-   **CI is green on the final head `fba5e0e`:** 24/24 jobs `success`, including
+   **CI is green on the final head `4b17b52`:** 24/24 jobs `success`, including
    all three Python versions for both `continuum-evidence` and `python-parity`.
 
 ---
@@ -303,3 +303,4 @@ This is why the status is `HARDENED_BUT_NOT_COMPLETE` and not `DONE`.
 | `14f2fa9` | the ledger was stale — §4.7 was already done |
 | `8a88383` | cite the final green run |
 | `fba5e0e` | Wave-2.1: every module ≥95%, the duplicated failure, the 1:1 stereo case |
+| `4b17b52` | record Wave-2.1 and the two defects it found |
