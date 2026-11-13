@@ -20,7 +20,7 @@ import uuid
 import wave
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,6 +28,8 @@ import numpy as np
 
 from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
     RotarySubframeSequence,
+    _fringe_metric,
+    chromatic_rms,
     validate_rotary_subframes,
 )
 from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
@@ -38,7 +40,12 @@ from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
     compile_and_heal_real_media_shot,
     extract_cinema_shot_from_media,
 )
-from nexus_ai_agent.creative.veritas.reality_auditor import CinemaShot, VeritasRealityAuditor
+from nexus_ai_agent.creative.veritas.reality_auditor import (
+    LAW_IDENTIFIERS,
+    CinemaShot,
+    VeritasRealityAuditor,
+    observation_summary,
+)
 
 
 class VeritasMediaVerificationError(ValueError):
@@ -178,6 +185,55 @@ def _verify_rotary_coordinates(sequence: RotarySubframeSequence) -> None:
                 raise ValueError("independent rotary coordinate check refused")
 
 
+def _verify_observation_ledgers(product: dict[str, Any]) -> None:
+    for scope in ("pre_audit", "post_audit", "disk_re_audit"):
+        ledger = product[scope]
+        statuses = ledger["law_statuses"]
+        if set(statuses) != set(LAW_IDENTIFIERS) or any(
+            status not in ("PASS", "VIOLATED", "UNOBSERVED") for status in statuses.values()
+        ):
+            raise ValueError("invalid observability status")
+        expected = observation_summary(statuses)
+        if any(json.loads(json.dumps(value)) != ledger[key] for key, value in expected.items()):
+            raise ValueError("observability accounting mismatch")
+    for law, status in product["pre_audit"]["law_statuses"].items():
+        if status != "UNOBSERVED" and product["post_audit"]["law_statuses"][law] != "PASS":
+            raise ValueError("observation erasure or unresolved scene violation")
+
+
+def _verify_radiometric_certificate(product: dict[str, Any], frames: FloatArray) -> None:
+    certificate = product["radiometric_calibration_certificate"]
+    if certificate is None:
+        return  # unidentifiable calibration emits no measured-color claim
+    frame = frames[product["radiometric_output_frame_index"]]
+    residual = chromatic_rms(frame)
+    sigma = 1 / (255 * np.sqrt(12))
+    if (
+        certificate["calibration_mode"] != "MODEL_RELATIVE_GREEN"
+        or certificate["reference_channel"] != "G"
+        or certificate["prior_bias_bounded"] is not False
+        or not all(
+            np.isfinite(certificate[key]) and certificate[key] > 0
+            for key in ("estimated_gain_r_to_g", "estimated_gain_b_to_g")
+        )
+        or certificate["cauchy_B_um2"] != 0.0042
+        or not np.isfinite(certificate["edge_fringe_p90_before"])
+        or certificate["edge_fringe_p90_before"] < 0
+        or not np.allclose(
+            [
+                certificate["uint8_quantization_sigma"],
+                certificate["post_calibration_chromatic_rms"],
+                certificate["edge_fringe_p90_after"],
+                certificate["combined_uncertainty_bound"],
+            ],
+            [sigma, residual, _fringe_metric(frame), np.hypot(sigma, residual)],
+            rtol=0,
+            atol=1e-15,
+        )
+    ):
+        raise ValueError("radiometric uncertainty certificate inconsistent")
+
+
 def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bool:
     """Verify anchored disk evidence AND require zero RAW decoded violations.
 
@@ -237,7 +293,21 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
             _verify_mp4_stream(
                 decoder, mp4, len(pngs), frames.shape[1], frames.shape[2], bundle.output_fps
             )
-        expected_names = {path.name for path in pngs} | {wav.name, manifest_path.name}
+        product_path = artifact("veritas_manifest.json")
+        product_digest = hashlib.sha256(product_path.read_bytes()).hexdigest()
+        if (
+            product_digest != bundle.product_manifest_sha256
+            or manifest["product_manifest_sha256"] != product_digest
+        ):
+            raise ValueError("product manifest digest mismatch")
+        product = json.loads(product_path.read_text())
+        _verify_observation_ledgers(product)
+        _verify_radiometric_certificate(product, frames.astype(np.float64) / 255)
+        expected_names = {path.name for path in pngs} | {
+            wav.name,
+            manifest_path.name,
+            product_path.name,
+        }
         temporal_digest = ""
         if bundle.rotary_evidence_sha256:
             evidence_path = artifact("rotary_subframes.json")
@@ -284,6 +354,7 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
             "source_fps": bundle.source_fps,
             "output_frame_count": len(pngs),
             "rotary_evidence_sha256": temporal_digest,
+            "product_manifest_sha256": product_digest,
         }
         if manifest["rotary_evidence_sha256"] != temporal_digest:
             raise ValueError("manifest rotary digest mismatch")
@@ -311,8 +382,20 @@ def verify_compiled_veritas_bundle_on_disk(bundle: RealMediaVeritasBundle) -> bo
             pcm.astype(np.float64) / 32767.0,
             fps=manifest["fps"],
             sample_rate_hz=manifest["sample_rate_hz"],
+            known_angular_velocity_rad_s=sequence.angular_velocity_rad_s
+            if temporal_digest
+            else None,
         )
         audit = VeritasRealityAuditor().audit_and_heal_cinema_shot(shot)
+        expected_disk = {
+            **observation_summary(audit.law_statuses),
+            "total_violations": audit.total_violations,
+        }
+        if json.loads(json.dumps(expected_disk)) != product["disk_re_audit"]:
+            raise ValueError("decoded observability ledger mismatch")
+        for law, status in product["pre_audit"]["law_statuses"].items():
+            if status != "UNOBSERVED" and audit.law_statuses[law] == "UNOBSERVED":
+                raise ValueError(f"observed scene carrier absent from decoded media: {law}")
         if audit.pre_audit_violations or audit.post_heal_violations:
             raise ValueError(
                 f"decoded physical observations are not compliant: {audit.details_before}"
@@ -380,8 +463,11 @@ class VeritasArtifactPassportRecord:
     merkle_root_sha256: str
     rotary_evidence_sha256: str
     output_mp4_sha256: str
-    law_pass_count: int = 15
+    law_pass_count: int = 0
     post_disk_verified: bool = True
+    observed_law_count: int = 0
+    unobserved_law_count: int = 15
+    law_statuses: dict[str, str] = field(default_factory=dict)
 
 
 class VeritasLineageRepository(Protocol):
@@ -631,6 +717,8 @@ class VeritasStagedSpineAdapter:
                 relocated.wav_path,
                 str(target / "veritas_merkle_bundle.json"),
             )
+            product = json.loads((stage / "veritas_manifest.json").read_text())
+            disk_ledger = product["disk_re_audit"]
             passport = VeritasArtifactPassportRecord(
                 record.passport_id,
                 asset_id,
@@ -642,6 +730,10 @@ class VeritasStagedSpineAdapter:
                 bundle.merkle_root,
                 bundle.rotary_evidence_sha256,
                 bundle.output_mp4_sha256,
+                law_pass_count=disk_ledger["passed_law_count"],
+                observed_law_count=disk_ledger["observed_law_count"],
+                unobserved_law_count=disk_ledger["unobserved_law_count"],
+                law_statuses=disk_ledger["law_statuses"],
             )
             if retry is not None:
                 if retry != asdict(record):

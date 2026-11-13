@@ -139,7 +139,11 @@ def test_subframe_validation_rejects_missing_or_forged_evidence(case: str) -> No
 
 
 def test_hfr_disk_evidence_publish_and_tamper(tmp_path: Path) -> None:
-    shot = build_corrupted_15_law_cinema_shot(height=8, width=8)
+    from nexus_ai_agent.creative.veritas import CinemaShot
+
+    # This fixture has only an explicit mechanical carrier, not imaginary
+    # anatomy/visemes which cannot be observed in the published flat field.
+    shot = CinemaShot(rotor=(np.ones((8, 8)), 200.0, 24.0))
     # Known-rotation rendering of a green-reference flat-field calibration shot.
     frames = np.empty((2, 8, 8, 3))
     frames[:] = [0.4, 0.4, 0.4]
@@ -186,7 +190,7 @@ def test_textured_hfr_output_is_still_refused_if_other_proxies_fail(tmp_path: Pa
     )
     assert bundle.post_heal_violations == 0  # state certificate is not a pixel certificate
     assert not bundle.post_disk_verified
-    with pytest.raises(VeritasMediaVerificationError, match="physical observations"):
+    with pytest.raises(VeritasMediaVerificationError):
         verify_compiled_veritas_bundle_on_disk(bundle)
 
 

@@ -118,7 +118,9 @@ def test_ledger_restart_exact_retry_and_stale_cas(tmp_path: Path) -> None:
     assert json.loads((root / "artifact_passports.json").read_text()) == [
         asdict(result.artifact_passport)
     ]
-    assert result.artifact_passport.law_pass_count == 15
+    assert result.artifact_passport.law_pass_count == 2
+    assert result.artifact_passport.observed_law_count == 2
+    assert result.artifact_passport.unobserved_law_count == 13
     # A brand new adapter and store read committed disk state, not an in-memory cache.
     retry = spine.VeritasStagedSpineAdapter(lambda: 7).execute(req)
     assert retry.asset_version == result.asset_version
@@ -285,3 +287,210 @@ def test_mp4_last_frame_hold_is_not_accepted_as_nominal_rate(
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: completed)
     with pytest.raises(ValueError, match="frame duration"):
         spine._verify_mp4_stream("ffmpeg", Path("video.mp4"), 2, 8, 8, 24)
+
+
+def test_three_way_observability_and_backward_report_fields() -> None:
+    from nexus_ai_agent.creative.veritas import (
+        CinemaShot,
+        VeritasAuditReport,
+        VeritasRealityAuditor,
+    )
+    from nexus_ai_agent.creative.veritas.reality_auditor import LAW_IDENTIFIERS
+
+    auditor = VeritasRealityAuditor()
+    empty = auditor.audit_and_heal(CinemaShot(), heal=False)
+    assert isinstance(empty, VeritasAuditReport)
+    assert empty.observed_law_count == empty.passed_law_count == 0
+    assert empty.unobserved_law_count == 15
+    assert empty.unobserved_laws == LAW_IDENTIFIERS
+    assert set(empty.law_statuses.values()) == {"UNOBSERVED"}
+    assert empty.total_violations == 0 and empty.is_reality_consistent
+    assert len(empty.violations) == len(empty.receipts) == 15
+    clean = auditor.audit_and_heal(CinemaShot(anamorphic=np.ones((4, 4, 3)) * 0.5), heal=False)
+    assert clean.observed_law_count == clean.passed_law_count == 1
+    assert clean.unobserved_law_count == 14
+    bad = np.ones((4, 4, 3)) * 0.5
+    bad[..., 0] = 0.9
+    violated = auditor.audit_and_heal(CinemaShot(anamorphic=bad), heal=False)
+    assert violated.law_statuses[LAW_IDENTIFIERS[11]] == "VIOLATED"
+    assert violated.passed_law_count == 0 and violated.observed_law_count == 1
+    assert not violated.is_reality_consistent
+    assert violated.as_dict()["pre_audit"]["observed_law_count"] == 1
+
+
+def test_observation_erasure_is_refused_by_healer_and_compiler(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nexus_ai_agent.creative.veritas import CinemaShot, VeritasRealityAuditor
+
+    bad = np.ones((4, 4, 3)) * 0.5
+    bad[..., 0] = 0.9
+    shot = CinemaShot(anamorphic=bad, eyes=(np.zeros(3), np.ones(3), np.ones(3) * 2))
+    monkeypatch.setattr(
+        VeritasRealityAuditor,
+        "_heal_geometric_observations",
+        lambda self, source: replace(source, eyes=None),
+    )
+    with pytest.raises(ValueError, match="observation erasure"):
+        VeritasRealityAuditor().heal_cinema_shot(shot)
+    monkeypatch.setattr(
+        VeritasRealityAuditor, "heal_cinema_shot", lambda self, source: CinemaShot()
+    )
+    with pytest.raises(ValueError, match="observation erasure"):
+        compile_and_heal_real_media_shot(
+            tmp_path,
+            shot=CinemaShot(anamorphic=bad),
+            input_frames=np.ones((2, 4, 4, 3)) * 0.5,
+            input_audio_pcm=np.zeros(100),
+            mux_mp4=False,
+        )
+
+
+def test_no_fabricated_mouth_fluid_or_rotor_on_mechanical_texture() -> None:
+    from nexus_ai_agent.creative.veritas import VeritasRealityAuditor
+    from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
+        extract_cinema_shot_from_media,
+    )
+    from nexus_ai_agent.creative.veritas.reality_auditor import LAW_IDENTIFIERS
+
+    rng = np.random.default_rng(84)
+    reference = rng.random((8, 8, 3))
+    shot = extract_cinema_shot_from_media(np.stack([reference] * 2), np.zeros(100))
+    assert shot.viseme is None and shot.doppler is None
+    assert shot.fluid is None and shot.rotor is None
+    assert shot.phase is not None
+    np.testing.assert_array_equal(shot.phase[1], 0)
+    report = VeritasRealityAuditor().audit_and_heal(shot, heal=False)
+    assert report.law_statuses[LAW_IDENTIFIERS[10]] == "PASS"
+    assert report.law_statuses[LAW_IDENTIFIERS[12]] == "UNOBSERVED"
+    explicit = extract_cinema_shot_from_media(
+        np.stack([reference] * 2),
+        np.zeros(100),
+        vocal_viseme_carrier=True,
+        fluid_carrier=True,
+        doppler_velocity_m_s=0,
+    )
+    assert (
+        explicit.viseme is not None and explicit.fluid is not None and explicit.doppler is not None
+    )
+
+
+def test_empirical_profile_dt_and_flicker_are_not_erased() -> None:
+    from nexus_ai_agent.creative.veritas import VeritasRealityAuditor
+    from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
+        extract_cinema_shot_from_media,
+    )
+
+    frames = np.ones((3, 4, 8, 3)) * 0.3
+    frames[1] = 0.8  # not merely the final transition is checked
+    for fps in (24, 96, 312):
+        shot = extract_cinema_shot_from_media(frames, np.zeros(100), fps=fps)
+        assert shot.phase_dt == 1 / fps
+        assert shot.phase is not None
+        np.testing.assert_array_equal(shot.phase[1], 0)
+        report = VeritasRealityAuditor().audit_and_heal(shot, heal=False)
+        assert "madelung_continuity_residual_exceeded" in report.details_before[11]
+
+
+def test_radiometric_certificate_quantization_and_unknown_prior_bias() -> None:
+    from nexus_ai_agent.creative.veritas import calibrate_catadioptric_optics
+
+    image = np.ones((8, 8, 3)) * 0.4
+    image[..., 0] *= 1.2
+    image[..., 2] *= 0.8
+    result = calibrate_catadioptric_optics(image)
+    certificate = result.calibration_certificate
+    assert certificate is not None
+    assert certificate.calibration_mode == "MODEL_RELATIVE_GREEN"
+    assert certificate.reference_channel == "G"
+    assert not certificate.prior_bias_bounded
+    assert certificate.uint8_quantization_sigma == 1 / (255 * np.sqrt(12))
+    assert certificate.combined_uncertainty_bound == np.hypot(
+        certificate.uint8_quantization_sigma, certificate.post_calibration_chromatic_rms
+    )
+    assert certificate.estimated_gain_r_to_g > 0 and certificate.estimated_gain_b_to_g > 0
+
+
+def test_product_manifest_ledger_certificate_and_all_leaf_binding(tmp_path: Path) -> None:
+    bundle = compile_and_heal_real_media_shot(
+        tmp_path,
+        input_frames=np.ones((2, 8, 8, 3)) * 0.4,
+        input_audio_pcm=np.zeros(100),
+        mux_mp4=False,
+    )
+    path = tmp_path / "veritas_manifest.json"
+    product = json.loads(path.read_text())
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == bundle.product_manifest_sha256
+    assert all(leaf["product_manifest_sha256"] == digest for leaf in bundle.leaf_payloads)
+    for scope in ("pre_audit", "post_audit", "disk_re_audit"):
+        ledger = product[scope]
+        assert ledger["observed_law_count"] == ledger["passed_law_count"] == 2
+        assert ledger["unobserved_law_count"] == len(ledger["unobserved_laws"]) == 13
+    assert spine.verify_compiled_veritas_bundle_on_disk(bundle)
+    product["radiometric_calibration_certificate"]["combined_uncertainty_bound"] = 0
+    with pytest.raises(ValueError, match="uncertainty"):
+        spine._verify_radiometric_certificate(product, bundle.healed_frames.astype(float) / 255)
+    product["post_audit"]["law_statuses"]["law_12_catadioptric_optics"] = "UNOBSERVED"
+    with pytest.raises(ValueError, match="accounting"):
+        spine._verify_observation_ledgers(product)
+    from nexus_ai_agent.creative.veritas.reality_auditor import observation_summary
+
+    product["post_audit"] = json.loads(
+        json.dumps(observation_summary(product["post_audit"]["law_statuses"]))
+    )
+    with pytest.raises(ValueError, match="observation erasure"):
+        spine._verify_observation_ledgers(product)
+    path.write_text(json.dumps(product))
+    with pytest.raises(spine.VeritasMediaVerificationError, match="product manifest digest"):
+        spine.verify_compiled_veritas_bundle_on_disk(bundle)
+
+
+def test_illegal_status_enum_cannot_masquerade_as_pass() -> None:
+    product = {"pre_audit": {"law_statuses": {"invented": "PASS"}}}
+    with pytest.raises(ValueError, match="observability status"):
+        spine._verify_observation_ledgers(product)
+
+
+def test_empirical_potential_uses_temporal_flux_not_spatial_edge_angle() -> None:
+    from nexus_ai_agent.creative.veritas import VeritasRealityAuditor
+    from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
+        extract_cinema_shot_from_media,
+    )
+
+    width, fps = 16, 96
+    phase = np.zeros(width)
+    phase[4:12] = np.sin(np.linspace(0, np.pi, 8)) * 0.01
+    derivative = np.gradient(np.eye(width), axis=0)
+    density = np.ones(width) * 0.5
+    previous = density + derivative @ (density * (derivative @ phase)) / fps
+    frames = np.stack([np.tile(previous, (4, 1)), np.tile(density, (4, 1))])
+    rgb = np.repeat(frames[..., None], 3, axis=-1)
+    shot = extract_cinema_shot_from_media(rgb, np.zeros(100), fps=fps)
+    assert shot.phase is not None
+    assert np.max(np.abs(shot.phase[1])) > 0
+    report = VeritasRealityAuditor().audit_and_heal(shot, heal=False)
+    assert report.law_violations_before[11] == 0
+
+
+def test_absent_unidentifiable_calibration_makes_no_measured_claim() -> None:
+    spine._verify_radiometric_certificate(
+        {"radiometric_calibration_certificate": None}, np.zeros((2, 4, 4, 3))
+    )
+
+
+def test_scene_carrier_missing_on_disk_is_not_a_pass(tmp_path: Path) -> None:
+    from nexus_ai_agent.creative.veritas import CinemaShot
+
+    shot = CinemaShot(viseme=(np.zeros(2), np.zeros(2), np.ones(2) * 300, np.zeros(2)))
+    bundle = compile_and_heal_real_media_shot(
+        tmp_path,
+        shot=shot,
+        input_frames=np.ones((2, 8, 8, 3)) * 0.4,
+        input_audio_pcm=np.zeros(100),
+        mux_mp4=False,
+    )
+    assert bundle.post_heal_violations == 0
+    with pytest.raises(spine.VeritasMediaVerificationError, match="scene carrier absent"):
+        spine.verify_compiled_veritas_bundle_on_disk(bundle)

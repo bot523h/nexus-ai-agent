@@ -17,16 +17,13 @@ import struct
 import wave
 import zlib
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 
-from nexus_ai_agent.creative.veritas.continuum_and_quantum_mechanics import (
-    stabilize_madelung_phase_coherence,
-)
 from nexus_ai_agent.creative.veritas.homography_diegetic_typography import (
     render_homography_locked_diegetic_text,
 )
@@ -36,12 +33,15 @@ from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
     audit_and_heal_viseme_formant_sync,
     calibrate_catadioptric_optics,
     enforce_helmholtz_fluid_conservation,
+    radiometric_certificate,
     synthesize_rotary_subframes,
 )
 from nexus_ai_agent.creative.veritas.reality_auditor import (
     CinemaShot,
     VeritasRealityAuditor,
     build_corrupted_15_law_cinema_shot,
+    observation_summary,
+    require_observation_preservation,
 )
 
 FloatArray = npt.NDArray[np.float64]
@@ -95,6 +95,7 @@ class RealMediaVeritasBundle:
     output_fps: float = 24.0
     source_fps: float = 24.0
     rotary_evidence_sha256: str = ""
+    product_manifest_sha256: str = ""
 
     @property
     def healed(self) -> bool:
@@ -113,6 +114,7 @@ class RealMediaVeritasBundle:
             "fps": self.output_fps,
             "source_fps": self.source_fps,
             "rotary_evidence_sha256": self.rotary_evidence_sha256,
+            "product_manifest_sha256": self.product_manifest_sha256,
             "output_dir": self.output_dir,
             "png_count": len(self.png_paths),
             "wav_path": self.wav_path,
@@ -333,16 +335,61 @@ def _digest_files(paths: list[Path]) -> str:
     return accumulator.hexdigest()
 
 
+def _empirical_continuity_profile(
+    luminance: FloatArray, fps: float
+) -> tuple[FloatArray, FloatArray, FloatArray]:
+    """Worst observed horizontal-profile transition; dt is seconds, not frame index.
+
+    A minimum-norm inverse of D diag(rho) D estimates a transport potential.
+    Under mass creation/destruction the potential remains zero, exposing the
+    temporal source to the unchanged continuity residual. The profile is a
+    radiance transport diagnostic, not measured quantum matter or optical flow.
+    """
+    profiles = np.mean(luminance, axis=1)
+    width = profiles.shape[1]
+    derivative = np.gradient(np.eye(width), axis=0)
+    selected = 0
+    worst = -1.0
+    potentials = []
+    for index, profile in enumerate(profiles):
+        previous = profiles[max(0, index - 1)]
+        change = (profile - previous) * fps
+        potential = np.zeros(width)
+        if abs(float(np.mean(change))) < 1e-12 and np.min(profile) > 1e-12:
+            operator = derivative @ np.diag(profile) @ derivative
+            candidate = np.linalg.lstsq(operator, -change, rcond=None)[0]
+            # Do not explain arbitrary discontinuous teleportation by an
+            # unbounded inverse solution: at most one image width per frame.
+            if np.max(np.abs(derivative @ candidate)) <= width * fps:
+                potential = candidate
+        residual = change + derivative @ (profile * (derivative @ potential))
+        score = float(np.sqrt(np.mean(residual**2)))
+        potentials.append(potential)
+        if score >= worst:
+            selected, worst = index, score
+    return (
+        np.tile(profiles[selected], (2, 1)),
+        np.tile(potentials[selected], (2, 1)),
+        np.tile(profiles[max(0, selected - 1)], (2, 1)),
+    )
+
+
 def extract_cinema_shot_from_media(
     frames: FloatArray,
     audio_pcm: FloatArray,
     *,
     fps: float = 24.0,
     sample_rate_hz: int = 48_000,
+    vocal_viseme_carrier: bool = False,
+    fluid_carrier: bool = False,
+    doppler_velocity_m_s: float | None = None,
+    known_angular_velocity_rad_s: float | None = None,
 ) -> CinemaShot:
     """Extract deterministic image/audio observations, not semantic ground truth.
 
-    Mouth-region energy is a fixed lower-central ROI proxy, not a face detector
+    Explicit opt-in is required for a vocal/viseme or fluid carrier; pixels alone
+    do not establish a mouth or a fluid height field. The opt-in ROI is still a
+    fixed lower-central proxy, not an automatic face detector
     or measured FACS. Optical velocity is the minimum-norm brightness-constraint
     estimate (the aperture problem remains). Audio peaks are spectral proxies,
     not a speech recognizer. Unobserved laws remain absent rather than receiving
@@ -363,8 +410,11 @@ def extract_cinema_shot_from_media(
     count, height, width = rgb.shape[:3]
     luminance = rgb @ np.array([0.2126, 0.7152, 0.0722])
     previous = np.concatenate([luminance[:1], luminance[:-1]], axis=0)
+    # A spatial edge orientation is NOT a temporal velocity potential. Estimate
+    # only a horizontal marginal transport model, using the SAME finite gradient
+    # discretizer as the continuity predicate. Never subtract a global mass jump.
+    density, potential, previous_density = _empirical_continuity_profile(luminance, fps)
     gy, gx = np.gradient(luminance, axis=(1, 2))
-    phase = np.arctan2(gy, gx)
     temporal = (luminance - previous) * fps
     inverse = -temporal / (gx * gx + gy * gy + 1e-6)
     velocity = np.stack([inverse * gx, inverse * gy], axis=-1)
@@ -390,12 +440,17 @@ def extract_cinema_shot_from_media(
             if band.size:
                 destination[index] = frequencies[band[np.argmax(spectrum[band])]]
     return CinemaShot(
-        phase=(luminance[-1], phase[-1], previous[-1]),
+        phase=(density, potential, previous_density),
+        phase_dt=1 / fps,
         anamorphic=rgb[-1].copy(),
-        viseme=(jaw, stretch, f1, energy, np.clip(1 - stretch, 0, 1), f2),
-        doppler=(pcm.copy(), 0.0),
-        fluid=(velocity, luminance.copy()),
-        rotor=(luminance[-1].copy(), 0.0, fps),
+        viseme=(jaw, stretch, f1, energy, np.clip(1 - stretch, 0, 1), f2)
+        if vocal_viseme_carrier
+        else None,
+        doppler=(pcm.copy(), doppler_velocity_m_s) if doppler_velocity_m_s is not None else None,
+        fluid=(velocity, luminance.copy()) if fluid_carrier else None,
+        rotor=(luminance[-1].copy(), known_angular_velocity_rad_s, fps)
+        if known_angular_velocity_rad_s is not None
+        else None,
     )
 
 
@@ -461,32 +516,26 @@ def compile_and_heal_real_media_shot(
     )
 
     passport = VeritasRealityAuditor().audit_and_heal_cinema_shot(active_shot)
+    if passport.post_heal_violations == 0:
+        projected_state = VeritasRealityAuditor().heal_cinema_shot(active_shot)
+        require_observation_preservation(active_shot, projected_state)
+    calibration_receipts = []
 
-    # Apply temporal continuity to each RGB frame using its actual predecessor.
-    # These are model-based restorations, not inferred ground-truth scene motion;
-    # only a separate decoded audit can authorize physical publication.
+    # Optical calibration is an achromatic prior, not a quantum-phase estimator.
+    # In particular, never feed atan2(grad_y, grad_x) into Madelung restoration.
     healed = np.array(frames, copy=True)
-    previous_density: FloatArray | None = None
     for index in range(frame_count):
-        density = np.asarray(healed[index] @ np.array([0.2126, 0.7152, 0.0722]))
-        gy, gx = np.gradient(density)
-        phase = np.arctan2(gy, gx)
-        coherence = stabilize_madelung_phase_coherence(
-            density, phase, previous_density=previous_density, dt=1.0 / fps
-        )
-        if coherence.violations:
-            ratio = np.divide(
-                coherence.density, density, out=np.ones_like(density), where=density > 1e-12
-            )
-            healed[index] *= ratio[:, :, None]
-        previous_density = np.asarray(healed[index] @ np.array([0.2126, 0.7152, 0.0722]))
         optics = calibrate_catadioptric_optics(np.clip(healed[index], 0.0, 1.0))
+        if optics.calibration_certificate is not None:
+            calibration_receipts.append(optics.calibration_certificate)
         if optics.fringe_before > 1e-6:
             healed[index] = optics.healed_image
 
     # Project the measured inter-frame velocity and apply the correction as
     # a backward RGB warp. A clean, static sequence has exactly zero correction.
-    observed = extract_cinema_shot_from_media(np.clip(healed, 0, 1), pcm, fps=fps)
+    observed = extract_cinema_shot_from_media(
+        np.clip(healed, 0, 1), pcm, fps=fps, fluid_carrier=True
+    )
     assert observed.fluid is not None
     velocity, height_field = observed.fluid
     fluid = enforce_helmholtz_fluid_conservation(velocity, height_field)
@@ -674,9 +723,47 @@ def compile_and_heal_real_media_shot(
     if not np.array_equal(decoded_audio, expected_audio):
         raise ValueError("WAV disk round-trip mismatch")
 
+    # Keep scene claims separate from measurements obtainable from the media.
+    disk_report = VeritasRealityAuditor().audit_and_heal(
+        extract_cinema_shot_from_media(
+            decoded_frames.astype(np.float64) / 255,
+            decoded_audio.astype(np.float64) / 32767,
+            fps=output_fps,
+            sample_rate_hz=sample_rate_hz,
+            known_angular_velocity_rad_s=omega if rotary_evidence_sha256 else None,
+        ),
+        heal=False,
+    )
+    product_manifest: dict[str, Any] = {
+        "schema": "veritas-observability-1",
+        "pre_audit": observation_summary(passport.law_statuses),
+        "post_audit": observation_summary(passport.post_law_statuses),
+        "disk_re_audit": {
+            **observation_summary(disk_report.law_statuses),
+            "total_violations": disk_report.total_violations,
+        },
+        "radiometric_calibration_certificate": None,
+        "radiometric_uncertainty_scope": "model-relative; unknown prior bias is unbounded",
+    }
+    if calibration_receipts:
+        initial = calibration_receipts[0]
+        certificate = radiometric_certificate(
+            decoded_frames[-1].astype(np.float64) / 255,
+            gains=(initial.estimated_gain_r_to_g, initial.estimated_gain_b_to_g),
+            fringe_before=initial.edge_fringe_p90_before,
+        )
+        product_manifest["radiometric_calibration_certificate"] = asdict(certificate)
+        product_manifest["radiometric_output_frame_index"] = len(decoded_frames) - 1
+    product_path = directory / "veritas_manifest.json"
+    product_path.write_text(
+        json.dumps(product_manifest, sort_keys=True, allow_nan=False), encoding="utf-8"
+    )
+    product_manifest_sha256 = hashlib.sha256(product_path.read_bytes()).hexdigest()
+
     payloads = [
         {
             "compiler_version": COMPILER_VERSION,
+            "product_manifest_sha256": product_manifest_sha256,
             "input_frames_content_sha256": input_frames_sha256,
             "output_frames_content_sha256": output_frames_content_sha256,
             "input_audio_content_sha256": input_audio_sha256,
@@ -729,6 +816,7 @@ def compile_and_heal_real_media_shot(
         output_fps=output_fps,
         source_fps=fps,
         rotary_evidence_sha256=rotary_evidence_sha256,
+        product_manifest_sha256=product_manifest_sha256,
     )
 
     manifest = bundle.as_dict()

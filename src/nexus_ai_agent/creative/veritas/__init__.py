@@ -76,6 +76,7 @@ from nexus_ai_agent.creative.veritas.omnia_cinema_physics import (
     FluidConservationError,
     FluidConservationResult,
     OmniaOpticsError,
+    RadiometricCalibrationCertificate,
     RotarySubframeSequence,
     StroboscopicAliasingError,
     StroboscopicResult,
@@ -108,9 +109,12 @@ from nexus_ai_agent.creative.veritas.real_media_veritas_compiler import (
 from nexus_ai_agent.creative.veritas.reality_auditor import (
     LAW_NAMES,
     CinemaShot,
+    LawAuditStatus,
+    VeritasAuditReport,
     VeritasHealingRefusalError,
     VeritasRealityAuditor,
     VeritasRealityPassport,
+    VeritasSceneState,
     build_corrupted_15_law_cinema_shot,
     heal_cinema_shot,
 )
@@ -162,6 +166,7 @@ from nexus_ai_agent.creative.veritas.xpbd_cloth_drape import (
 __all__ = [
     "calibrate_catadioptric_optics",
     "RotarySubframeSequence",
+    "RadiometricCalibrationCertificate",
     "synthesize_rotary_subframes",
     "validate_rotary_subframes",
     "VeritasHealingRefusalError",
@@ -203,6 +208,9 @@ __all__ = [
     "VergenceSolution",
     "VeritasRealityAuditor",
     "VeritasRealityPassport",
+    "VeritasAuditReport",
+    "VeritasSceneState",
+    "LawAuditStatus",
     "XpbdResult",
     "apply_dermal_subsurface_scattering",
     "audit_and_enforce_thermodynamic_arrow",

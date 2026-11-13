@@ -370,3 +370,60 @@ crash between those two operations can leave unindexed public media. Recovery
 of that crash window is not claimed as a fully transactional publication system.
 The branch remains hardened but **not 100% complete** while textured HFR output
 still fails the unchanged decoded Laws 11–14 predicates.
+
+### Observability and radiometric uncertainty — explicit scientific limits
+
+All fifteen canonical identifiers now have separate `PASS`, `VIOLATED` and
+`UNOBSERVED` states. A carrier's absence is never a successful measurement.
+`VeritasAuditReport`/`VeritasSceneState` are compatibility aliases for the
+existing passport/shot API. Raw report status accounting refers to its input;
+the projected status ledger is separate. `is_reality_consistent` means no
+observed violation, NOT that all fifteen laws were measured and passed.
+
+The hashed `veritas_manifest.json` separates scene `pre_audit`/`post_audit`
+receipts from `disk_re_audit`, which includes only observations obtainable from
+pixels/audio under the implemented carrier contract. Its SHA-256 is anchored in
+the bundle and every Merkle leaf. Both state healing and compilation reject
+observations erased by setting a previously populated carrier to `None`.
+ArtifactPassport counts now describe actually decoded observed/pass statuses,
+not an unconditional fifteen passes. Fifteen Merkle leaves do not imply fifteen
+observed physical carriers.
+
+The media extractor no longer treats spatial gradient angle as a quantum
+potential. Its horizontal marginal transport diagnostic uses a minimum-norm
+inverse of the same discrete `D diag(rho) D` operator used by the continuity
+predicate, with `dt=1/fps`. Global mass changes are NOT subtracted; a zero
+potential exposes their source residual. Every transition is considered and
+the worst residual is retained. This is an empirical radiance-transport model,
+not a unique quantum-state reconstruction or a complete teleportation detector.
+The optical calibration stage no longer uses spatial gradient angle either.
+
+Vocal/viseme and fluid-height carriers require explicit extractor opt-in;
+unrelated wheel pixels do not establish a mouth or a fluid surface. A standalone
+PCM waveform does not identify source radial velocity, and unknown rotor speed
+is not fabricated as zero. The explicitly opted-in mouth ROI remains a simple
+lower-central proxy; a disjoint rendered vocal badge synchronized to WAV is
+**not implemented**. The coupled, observed Laws 11–15 textured HFR closure remains
+unfinished, including post-synthesis radiance/flow composition.
+
+Law 12 emits a frozen `RadiometricCalibrationCertificate`. Its default mode is
+`MODEL_RELATIVE_GREEN`, never `MEASURED_COLORCHART` without chart observations.
+The PNG output certificate binds measured post-output chromatic RMS and edge
+fringe, the exact quantization sigma `1/(255*sqrt(12))`, and their RSS budget.
+Estimated gains are historical model estimates, not independently measured
+chart gains. The uncertainty bound is conditional on the achromatic prior;
+unknown prior bias is explicitly unbounded (`prior_bias_bounded=false`). Thus
+this RSS number must not be sold as absolute colorimetric accuracy. The verifier
+recomputes the output-dependent quantities and rejects mathematical mismatch.
+
+No all-input textured closure or dual-branch synchronization is claimed. The
+session may push only its active branch; mirror synchronization must be done
+outside this single-branch session.
+
+Publication additionally requires every observed scene carrier to remain observed
+in the decoded-media ledger, not just in the projected scene receipt. A source
+viseme without a rendered identifiable carrier is refused, even for otherwise
+clean flat-field pixels. The old flat-field HFR smoke fixture now declares only
+its actual mechanical carrier; it no longer stands in for a full fifteen-carrier
+scene. A validated known-rotation sidecar supplies the rotor observation; its
+velocity remains a declared, checked model parameter rather than inferred truth.

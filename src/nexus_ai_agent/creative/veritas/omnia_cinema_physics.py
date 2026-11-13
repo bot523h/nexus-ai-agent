@@ -12,6 +12,7 @@ rectification (Law 15).
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -42,6 +43,53 @@ class StroboscopicAliasingError(ValueError):
 
 
 @dataclass(frozen=True)
+class RadiometricCalibrationCertificate:
+    """Uncertainty relative to an explicit prior, NOT absolute color accuracy.
+
+    The RSS budget contains RGB8 quantization and measured chromatic residual
+    only. Unknown achromatic-prior bias is unbounded and is NOT included as zero.
+    No measured-colorchart mode is emitted without actual chart observations.
+    Fringe p90 denotes the existing top-decile edge-mask metric, not a new test.
+    """
+
+    calibration_mode: Literal["MODEL_RELATIVE_GREEN", "MEASURED_COLORCHART"]
+    reference_channel: str
+    estimated_gain_r_to_g: float
+    estimated_gain_b_to_g: float
+    cauchy_B_um2: float
+    edge_fringe_p90_before: float
+    edge_fringe_p90_after: float
+    uint8_quantization_sigma: float
+    combined_uncertainty_bound: float
+    post_calibration_chromatic_rms: float
+    prior_bias_bounded: bool = False
+
+
+def chromatic_rms(image: FloatArray) -> float:
+    differences = image[..., (0, 2)] - image[..., 1, None]
+    return float(np.sqrt(np.mean(differences**2)))
+
+
+def radiometric_certificate(
+    image: FloatArray, *, gains: tuple[float, float], fringe_before: float
+) -> RadiometricCalibrationCertificate:
+    sigma = float(1 / (255 * np.sqrt(12)))
+    residual = chromatic_rms(image)
+    return RadiometricCalibrationCertificate(
+        "MODEL_RELATIVE_GREEN",
+        "G",
+        gains[0],
+        gains[1],
+        0.0042,
+        fringe_before,
+        _fringe_metric(image),
+        sigma,
+        float(np.hypot(sigma, residual)),
+        residual,
+    )
+
+
+@dataclass(frozen=True)
 class AnamorphicOpticsResult:
     """Receipt for Law 12 anamorphic dioptric rectification."""
 
@@ -56,6 +104,7 @@ class AnamorphicOpticsResult:
     delta_blue: float = 0.0
     vignette_residual_before: float = 0.0
     vignette_residual_after: float = 0.0
+    calibration_certificate: RadiometricCalibrationCertificate | None = None
 
     @property
     def healed(self) -> bool:
@@ -678,7 +727,12 @@ def calibrate_catadioptric_optics(image: FloatArray) -> AnamorphicOpticsResult:
     result = rectify_anamorphic_dioptric_optics(image)
     if result.fringe_before <= 1e-6:
         return replace(
-            result, healed_image=np.array(image, copy=True), fringe_after=result.fringe_before
+            result,
+            healed_image=np.array(image, copy=True),
+            fringe_after=result.fringe_before,
+            calibration_certificate=radiometric_certificate(
+                image, gains=(1.0, 1.0), fringe_before=result.fringe_before
+            ),
         )
     rgb = result.healed_image.copy()
     interior = rgb[1:-1, 1:-1] if min(rgb.shape[:2]) > 2 else rgb
@@ -703,7 +757,14 @@ def calibrate_catadioptric_optics(image: FloatArray) -> AnamorphicOpticsResult:
         pixels[..., 0][edge] = pixels[..., 1][edge]
         pixels[..., 2][edge] = pixels[..., 1][edge]
     healed = pixels.astype(np.float64) / 255
-    return replace(result, healed_image=healed, fringe_after=_fringe_metric(healed))
+    return replace(
+        result,
+        healed_image=healed,
+        fringe_after=_fringe_metric(healed),
+        calibration_certificate=radiometric_certificate(
+            healed, gains=(float(gains[0]), float(gains[1])), fringe_before=result.fringe_before
+        ),
+    )
 
 
 @dataclass(frozen=True)

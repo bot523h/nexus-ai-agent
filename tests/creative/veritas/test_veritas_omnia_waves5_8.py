@@ -171,7 +171,9 @@ def test_disk_content_digests_and_rgb_preservation(tmp_path: Path) -> None:
     assert decoded.shape == (2, 8, 8, 3)
     assert np.all(decoded[..., 1] > 0)
     assert merkle_root_from_payloads(bundle.leaf_payloads) == bundle.merkle_root
-    assert bundle.media_changed
+    # Unobserved vocal carriers no longer cause artificial PCM gating.
+    assert bundle.output_frames_content_sha256 != bundle.input_frames_content_sha256
+    assert not bundle.media_changed
     assert not replace(
         bundle, output_frames_content_sha256=bundle.input_frames_content_sha256
     ).media_changed
@@ -304,7 +306,7 @@ def test_media_extraction_tracks_consecutive_luminance_and_copies_audio() -> Non
     frames = np.ones((2, 2, 2, 3)) * 0.4
     frames[1] *= 2
     audio = np.array([0.2])
-    shot = extract_cinema_shot_from_media(frames, audio)
+    shot = extract_cinema_shot_from_media(frames, audio, doppler_velocity_m_s=0.0)
     assert shot.phase is not None and len(shot.phase) == 3
     np.testing.assert_allclose(shot.phase[0], 0.8)
     np.testing.assert_allclose(shot.phase[2], 0.4)

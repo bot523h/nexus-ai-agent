@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -127,6 +127,78 @@ class CinemaShot:
     fluid: tuple[FloatArray, FloatArray] | None = None
     rotor: tuple[FloatArray, float, float] | None = None
     rotor_samples: RotarySubframeSequence | None = None
+    phase_dt: float = 1.0
+
+
+LawAuditStatus = Literal["PASS", "VIOLATED", "UNOBSERVED"]
+
+# Carrier presence is separate from the outcome of its physical predicate.
+LAW_CARRIERS: dict[int, tuple[str, ...]] = {
+    1: ("hand",),
+    2: ("eyes", "saccade", "pupil"),
+    3: ("mirror", "fresnel"),
+    4: ("shadow",),
+    5: ("objects",),
+    6: ("typography",),
+    7: ("collision",),
+    8: ("cloth",),
+    9: ("scalar_frames", "wave"),
+    10: ("facs", "blink", "skin"),
+    11: ("phase",),
+    12: ("anamorphic",),
+    13: ("viseme", "doppler"),
+    14: ("fluid",),
+    15: ("rotor", "rotor_samples"),
+}
+LAW_IDENTIFIERS = (
+    "law_01_hand_kinematics",
+    "law_02_ocular_biophysics",
+    "law_03_catoptric_reflection",
+    "law_04_shadow_transport",
+    "law_05_object_permanence",
+    "law_06_diegetic_typography",
+    "law_07_contact_mechanics",
+    "law_08_cloth_drape",
+    "law_09_thermodynamic_arrow",
+    "law_10_neuro_facial",
+    "law_11_madelung_continuity",
+    "law_12_catadioptric_optics",
+    "law_13_doppler_viseme",
+    "law_14_helmholtz_fluid",
+    "law_15_rotary_shutter",
+)
+
+
+def law_status_ledger(shot: CinemaShot, scores: dict[int, int]) -> dict[str, LawAuditStatus]:
+    return {
+        identifier: (
+            "UNOBSERVED"
+            if law not in scores
+            or not any(getattr(shot, name) is not None for name in LAW_CARRIERS[law])
+            else "VIOLATED"
+            if scores[law]
+            else "PASS"
+        )
+        for law, identifier in enumerate(LAW_IDENTIFIERS, 1)
+    }
+
+
+def observation_summary(statuses: dict[str, LawAuditStatus]) -> dict[str, Any]:
+    unobserved = tuple(key for key in LAW_IDENTIFIERS if statuses[key] == "UNOBSERVED")
+    return {
+        "law_statuses": statuses,
+        "observed_law_count": 15 - len(unobserved),
+        "passed_law_count": sum(value == "PASS" for value in statuses.values()),
+        "unobserved_law_count": len(unobserved),
+        "unobserved_laws": unobserved,
+    }
+
+
+def require_observation_preservation(before: CinemaShot, after: CinemaShot) -> None:
+    for fields in LAW_CARRIERS.values():
+        for name in fields:
+            if getattr(before, name) is not None and getattr(after, name) is None:
+                raise ValueError(f"illegal observation erasure: {name}")
 
 
 @dataclass(frozen=True)
@@ -140,6 +212,41 @@ class VeritasRealityPassport:
     pre_audit_violations: int
     post_heal_violations: int
     digest: str
+    law_statuses: dict[str, LawAuditStatus] = field(default_factory=dict)
+    post_law_statuses: dict[str, LawAuditStatus] = field(default_factory=dict)
+
+    @property
+    def observed_law_count(self) -> int:
+        return sum(status != "UNOBSERVED" for status in self.law_statuses.values())
+
+    @property
+    def passed_law_count(self) -> int:
+        return sum(status == "PASS" for status in self.law_statuses.values())
+
+    @property
+    def unobserved_law_count(self) -> int:
+        return len(self.unobserved_laws)
+
+    @property
+    def unobserved_laws(self) -> tuple[str, ...]:
+        return tuple(key for key in LAW_IDENTIFIERS if self.law_statuses.get(key) == "UNOBSERVED")
+
+    @property
+    def total_violations(self) -> int:
+        return self.pre_audit_violations
+
+    @property
+    def is_reality_consistent(self) -> bool:
+        """No observed violation; NOT a claim that unobserved laws passed."""
+        return self.total_violations == 0
+
+    @property
+    def violations(self) -> dict[int, tuple[str, ...]]:
+        return self.details_before
+
+    @property
+    def receipts(self) -> dict[int, tuple[str, ...]]:
+        return self.details_after
 
     @property
     def healed(self) -> bool:
@@ -155,6 +262,10 @@ class VeritasRealityPassport:
             },
             "details_before": {str(k): list(v) for k, v in sorted(self.details_before.items())},
             "details_after": {str(k): list(v) for k, v in sorted(self.details_after.items())},
+            "pre_audit": observation_summary(self.law_statuses) if self.law_statuses else {},
+            "post_audit": observation_summary(self.post_law_statuses)
+            if self.post_law_statuses
+            else {},
             "pre_audit_violations": self.pre_audit_violations,
             "post_heal_violations": self.post_heal_violations,
         }
@@ -387,10 +498,10 @@ class VeritasRealityAuditor:
         density, phase = shot.phase[:2]
         previous_density = shot.phase[2] if len(shot.phase) == 3 else None
         result = stabilize_madelung_phase_coherence(
-            density, phase, previous_density=previous_density
+            density, phase, previous_density=previous_density, dt=shot.phase_dt
         )
         recheck = stabilize_madelung_phase_coherence(
-            result.density, result.phase, previous_density=previous_density
+            result.density, result.phase, previous_density=previous_density, dt=shot.phase_dt
         )
         return tuple(result.violations), tuple(recheck.violations)
 
@@ -652,7 +763,9 @@ class VeritasRealityAuditor:
         if shot.phase is not None:
             rho, phi = shot.phase[:2]
             previous = shot.phase[2] if len(shot.phase) == 3 else None
-            phase = stabilize_madelung_phase_coherence(rho, phi, previous_density=previous)
+            phase = stabilize_madelung_phase_coherence(
+                rho, phi, previous_density=previous, dt=shot.phase_dt
+            )
             state = (
                 (phase.density, phase.phase)
                 if previous is None
@@ -708,6 +821,7 @@ class VeritasRealityAuditor:
                     rotor=(sequence.frames[0], omega, sequence.output_fps),
                     rotor_samples=sequence,
                 )
+        require_observation_preservation(shot, healed)
         recheck = self.audit_and_heal_cinema_shot(healed)
         if recheck.pre_audit_violations or recheck.post_heal_violations:
             raise VeritasHealingRefusalError(recheck)
@@ -742,6 +856,7 @@ class VeritasRealityAuditor:
             report,
             law_violations_after=report.law_violations_before.copy(),
             details_after=report.details_before.copy(),
+            post_law_statuses=report.law_statuses.copy(),
             post_heal_violations=report.pre_audit_violations,
         )
         return replace(raw, digest=_rfc6962_digest(raw.as_dict()))
@@ -766,17 +881,16 @@ class VeritasRealityAuditor:
             pre_audit_violations=int(sum(before_scores.values())),
             post_heal_violations=int(sum(after_scores.values())),
             digest="",
+            law_statuses=law_status_ledger(shot, before_scores),
+            post_law_statuses=law_status_ledger(shot, after_scores),
         )
         digest = _rfc6962_digest(passport.as_dict())
-        return VeritasRealityPassport(
-            law_violations_before=before_scores,
-            law_violations_after=after_scores,
-            details_before=details_before,
-            details_after=details_after,
-            pre_audit_violations=passport.pre_audit_violations,
-            post_heal_violations=passport.post_heal_violations,
-            digest=digest,
-        )
+        return replace(passport, digest=digest)
+
+
+# Compatibility names for consumers using report/state terminology.
+VeritasAuditReport = VeritasRealityPassport
+VeritasSceneState = CinemaShot
 
 
 def build_corrupted_15_law_cinema_shot(*, height: int = 16, width: int = 16) -> CinemaShot:
