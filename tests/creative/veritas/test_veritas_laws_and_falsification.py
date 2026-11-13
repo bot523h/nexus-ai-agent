@@ -115,8 +115,8 @@ def _skeleton(**overrides: object) -> HandSkeleton:
     return HandSkeleton(
         joints=overrides.get("joints", base.joints.copy()),  # type: ignore[arg-type]
         rays=overrides.get("rays", base.rays),  # type: ignore[arg-type]
-        joint_angles=overrides.get("joint_angles", base.joint_angles.copy()),  # type: ignore[arg-type]
-        bone_lengths=overrides.get("bone_lengths", base.bone_lengths.copy()),  # type: ignore[arg-type]
+        joint_angles=overrides.get("joint_angles", base.joint_angles.copy()),  # type: ignore[arg-type]  # noqa: E501
+        bone_lengths=overrides.get("bone_lengths", base.bone_lengths.copy()),  # type: ignore[arg-type]  # noqa: E501
     )
 
 
@@ -1055,3 +1055,214 @@ def test_real_media_compiler_end_to_end(tmp_path: Path) -> None:
     if bundle.mp4_path is not None:
         assert bundle.mp4_sha256 is not None
         assert len(bundle.mp4_sha256) == 64
+
+
+def _valid_frame() -> np.ndarray:
+    return np.full((8, 8, 3), 0.5)
+
+
+def _omnia_invalid_calls() -> list[tuple[str, Callable[[], object], type[BaseException]]]:
+    return [
+        (
+            "image_nan",
+            lambda: rectify_anamorphic_dioptric_optics(np.full((8, 8, 3), np.nan)),
+            OmniaOpticsError,
+        ),
+        (
+            "image_2d",
+            lambda: rectify_anamorphic_dioptric_optics(np.zeros((8, 8))),
+            OmniaOpticsError,
+        ),
+        (
+            "image_range",
+            lambda: rectify_anamorphic_dioptric_optics(np.full((8, 8, 3), 1.5)),
+            OmniaOpticsError,
+        ),
+        (
+            "cauchy_negative",
+            lambda: rectify_anamorphic_dioptric_optics(_valid_frame(), cauchy_b_coefficient=-1.0),
+            OmniaOpticsError,
+        ),
+        (
+            "sensor_zero",
+            lambda: rectify_anamorphic_dioptric_optics(_valid_frame(), sensor_width_mm=0.0),
+            OmniaOpticsError,
+        ),
+        (
+            "focal_zero",
+            lambda: rectify_anamorphic_dioptric_optics(_valid_frame(), focal_length_mm=0.0),
+            OmniaOpticsError,
+        ),
+        (
+            "squeeze_high",
+            lambda: rectify_anamorphic_dioptric_optics(_valid_frame(), squeeze_factor=3.0),
+            OmniaOpticsError,
+        ),
+        (
+            "viseme_shape",
+            lambda: audit_and_heal_viseme_formant_sync(np.zeros(2), np.zeros(3), f1_hz=np.zeros(2)),
+            BioAcousticSyncError,
+        ),
+        (
+            "viseme_nan",
+            lambda: audit_and_heal_viseme_formant_sync(
+                np.array([np.nan]), np.zeros(1), f1_hz=np.zeros(1)
+            ),
+            BioAcousticSyncError,
+        ),
+        (
+            "viseme_jaw_range",
+            lambda: audit_and_heal_viseme_formant_sync(
+                np.array([2.0]), np.zeros(1), f1_hz=np.zeros(1)
+            ),
+            BioAcousticSyncError,
+        ),
+        (
+            "viseme_lip_range",
+            lambda: audit_and_heal_viseme_formant_sync(
+                np.zeros(1), np.array([2.0]), f1_hz=np.zeros(1)
+            ),
+            BioAcousticSyncError,
+        ),
+        (
+            "viseme_kappa",
+            lambda: audit_and_heal_viseme_formant_sync(
+                np.zeros(1), np.zeros(1), f1_hz=np.zeros(1), kappa1=0.0
+            ),
+            BioAcousticSyncError,
+        ),
+        (
+            "viseme_rms_shape",
+            lambda: audit_and_heal_viseme_formant_sync(
+                np.zeros(1), np.zeros(1), f1_hz=np.zeros(1), rms_energy=np.zeros(2)
+            ),
+            BioAcousticSyncError,
+        ),
+        (
+            "viseme_rms_nan",
+            lambda: audit_and_heal_viseme_formant_sync(
+                np.zeros(1), np.zeros(1), f1_hz=np.zeros(1), rms_energy=np.array([np.nan])
+            ),
+            BioAcousticSyncError,
+        ),
+        (
+            "viseme_f2_shape",
+            lambda: audit_and_heal_viseme_formant_sync(
+                np.zeros(1), np.zeros(1), f1_hz=np.zeros(1), f2_hz=np.zeros(2)
+            ),
+            BioAcousticSyncError,
+        ),
+        (
+            "viseme_f2_nan",
+            lambda: audit_and_heal_viseme_formant_sync(
+                np.zeros(1), np.zeros(1), f1_hz=np.zeros(1), f2_hz=np.array([np.nan])
+            ),
+            BioAcousticSyncError,
+        ),
+        (
+            "doppler_empty",
+            lambda: apply_acoustic_doppler_shift(np.zeros(0), 48000.0, 1.0),
+            BioAcousticSyncError,
+        ),
+        (
+            "doppler_nan",
+            lambda: apply_acoustic_doppler_shift(np.array([np.nan]), 48000.0, 1.0),
+            BioAcousticSyncError,
+        ),
+        (
+            "doppler_sound_speed",
+            lambda: apply_acoustic_doppler_shift(np.zeros(8), 48000.0, 1.0, sound_speed_m_s=0.0),
+            BioAcousticSyncError,
+        ),
+        (
+            "fluid_vel_ndim",
+            lambda: enforce_helmholtz_fluid_conservation(np.zeros((4, 4, 2)), np.ones((4, 4))),
+            FluidConservationError,
+        ),
+        (
+            "fluid_height_ndim",
+            lambda: enforce_helmholtz_fluid_conservation(np.zeros((2, 4, 4, 2)), np.ones((4, 4))),
+            FluidConservationError,
+        ),
+        (
+            "fluid_nan",
+            lambda: enforce_helmholtz_fluid_conservation(
+                np.full((2, 4, 4, 2), np.nan), np.ones((2, 4, 4))
+            ),
+            FluidConservationError,
+        ),
+        (
+            "strobe_ndim",
+            lambda: rectify_stroboscopic_wagon_wheel(
+                np.zeros(8), angular_velocity_rad_s=1.0, fps=24.0
+            ),
+            StroboscopicAliasingError,
+        ),
+        (
+            "strobe_nan",
+            lambda: rectify_stroboscopic_wagon_wheel(
+                np.full((8, 8), np.nan), angular_velocity_rad_s=1.0, fps=24.0
+            ),
+            StroboscopicAliasingError,
+        ),
+        (
+            "strobe_samples",
+            lambda: rectify_stroboscopic_wagon_wheel(
+                np.zeros((8, 8)), angular_velocity_rad_s=1.0, fps=24.0, samples=0
+            ),
+            StroboscopicAliasingError,
+        ),
+        (
+            "strobe_omega_nan",
+            lambda: rectify_stroboscopic_wagon_wheel(
+                np.zeros((8, 8)), angular_velocity_rad_s=float("nan"), fps=24.0
+            ),
+            StroboscopicAliasingError,
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("label", "call", "error"),
+    _omnia_invalid_calls(),
+    ids=[entry[0] for entry in _omnia_invalid_calls()],
+)
+def test_omnia_validation_fails_closed(
+    label: str, call: Callable[[], object], error: type[BaseException]
+) -> None:
+    with pytest.raises(error):
+        call()
+
+
+def test_omnia_receipts_expose_healing_properties() -> None:
+    optics = rectify_anamorphic_dioptric_optics(_fringed_frame())
+    assert isinstance(optics.healed, bool)
+    viseme = audit_and_heal_viseme_formant_sync(
+        np.array([0.9]),
+        np.array([0.1]),
+        f1_hz=np.array([900.0]),
+        f2_hz=np.array([1500.0]),
+        rms_energy=np.array([0.3]),
+    )
+    assert viseme.healed is True
+    doppler = apply_acoustic_doppler_shift(np.zeros(8), 48000.0, 1.0)
+    assert doppler.healed is True
+    fluid = enforce_helmholtz_fluid_conservation(np.zeros((2, 4, 4, 2)), np.ones((2, 4, 4)))
+    assert isinstance(fluid.healed, bool)
+    strobe = rectify_stroboscopic_wagon_wheel(
+        np.zeros((8, 8)), angular_velocity_rad_s=1.0, fps=24.0
+    )
+    assert strobe.healed is True
+
+
+def test_compiler_rejects_invalid_configuration(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        compile_and_heal_real_media_shot(tmp_path / "a", num_frames=0)
+    with pytest.raises(ValueError):
+        compile_and_heal_real_media_shot(tmp_path / "b", sample_rate_hz=0)
+    bundle = compile_and_heal_real_media_shot(
+        tmp_path / "c", num_frames=2, height=8, width=8, mux_mp4=False
+    )
+    payload = bundle.as_dict()
+    assert payload["png_count"] == 2
+    assert len(payload["laws"]) == 15
