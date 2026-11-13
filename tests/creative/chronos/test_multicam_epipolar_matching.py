@@ -100,18 +100,30 @@ def test_focus_breathing_and_physical_circle_of_confusion() -> None:
 
 def test_focus_breathing_and_coc_refusals() -> None:
     frame = np.ones((4, 4, 3))
-    controls = dict(
-        focal_length_mm=50.0,
-        reference_focus_distance_mm=1000.0,
-        focus_distance_mm=1000.0,
-        principal_point_px=(1.5, 1.5),
-    )
     with pytest.raises(ValueError):
-        compensate_focus_breathing_frame(frame, **{**controls, "focal_length_mm": -1.0})
+        compensate_focus_breathing_frame(
+            frame,
+            focal_length_mm=-1.0,
+            reference_focus_distance_mm=1000.0,
+            focus_distance_mm=1000.0,
+            principal_point_px=(1.5, 1.5),
+        )
     with pytest.raises(ValueError):
-        compensate_focus_breathing_frame(frame, **{**controls, "principal_point_px": (5.0, 1.0)})
+        compensate_focus_breathing_frame(
+            frame,
+            focal_length_mm=50.0,
+            reference_focus_distance_mm=1000.0,
+            focus_distance_mm=1000.0,
+            principal_point_px=(5.0, 1.0),
+        )
     with pytest.raises(ValueError):
-        compensate_focus_breathing_frame(np.full((4, 4, 2), np.nan), **controls)
+        compensate_focus_breathing_frame(
+            np.full((4, 4, 2), np.nan),
+            focal_length_mm=50.0,
+            reference_focus_distance_mm=1000.0,
+            focus_distance_mm=1000.0,
+            principal_point_px=(1.5, 1.5),
+        )
     with pytest.raises(ValueError):
         compute_physical_circle_of_confusion_mm(0.0, 1000.0, 50.0, 2.8)
     with pytest.raises(ValueError):

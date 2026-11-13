@@ -6,6 +6,11 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from .contracts import Continuity, KernelError, RationalTimestamp
+from .multicamera_mastering import (
+    MultiCameraMasteringReceipt,
+    MultiCameraShotInput,
+    execute_multicamera_mastering,
+)
 from .real_media_continuity import (
     CharacterIdentityAnchor,
     RealMediaSeasonReceipt,
@@ -381,6 +386,33 @@ def build_default_chronos_handlers() -> dict[str, Callable[..., Any]]:
                 {"shots": str(result.observations_checked)},
             )
         if op == "episode.run_verified":
+            continuity_engine = p.get("continuity_engine", "episode")
+            if continuity_engine == "multicamera_mastering":
+                if not command.inputs:
+                    raise KernelError("multicamera mastering requires a JSON manifest input")
+                workspace = p.get("staging_dir")
+                if not isinstance(workspace, str) or not workspace:
+                    raise KernelError("multicamera mastering requires a staging_dir workspace")
+                from .multicamera_mastering import execute_multicamera_mastering_manifest
+
+                mastering = execute_multicamera_mastering_manifest(command.inputs[0], workspace)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(
+                    json.dumps(mastering.summary(), sort_keys=True, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                return file_receipt(
+                    command,
+                    output,
+                    "MULTICAMERA_MASTERING_CONTINUITY",
+                    {
+                        "merkle_root_sha256": mastering.persisted_season.merkle_root_sha256,
+                        "shots": str(mastering.shot_count),
+                        "audio_sample_count": str(mastering.persisted_season.sample_count),
+                    },
+                )
+            if continuity_engine != "episode":
+                raise KernelError("unsupported episode continuity_engine selector")
             from dataclasses import asdict
             from fractions import Fraction
 
@@ -683,6 +715,8 @@ __all__ = [
     "CharacterIdentityAnchor",
     "Continuity",
     "KernelError",
+    "MultiCameraMasteringReceipt",
+    "MultiCameraShotInput",
     "RationalTimestamp",
     "RealMediaSeasonReceipt",
     "RealMediaShot",
@@ -693,6 +727,7 @@ __all__ = [
     "build_default_chronos_handlers",
     "canonical_sample_horizon",
     "discover_ffmpeg_executable",
+    "execute_multicamera_mastering",
     "execute_real_media_season_continuity",
     "measure_patch_delta_e00_by_frame",
     "restore_anchored_color_frames",

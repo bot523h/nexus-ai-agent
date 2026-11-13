@@ -1,8 +1,8 @@
-# Chronos Real-Media Continuity Doctrine (Waves 11–12)
+# Chronos Continuity Doctrine (Waves 11–16)
 
 ## Scope and evidence boundary
 
-This doctrine specifies the continuity proof performed by `real_media_continuity.py` and records the measured engineering evidence from the Wave 11–12 test run. The proof processes NumPy RGB frame arrays, metric 3D landmark arrays, and mono PCM arrays; writes PNG/WAV (and optional FFmpeg mux) files under a contained workspace; hashes the files; and verifies portable RFC 6962 inclusion bundles.
+This doctrine specifies the real-media continuity proof performed by `real_media_continuity.py` and the integrated camera/acoustic/motion mastering proof performed by `multicamera_mastering.py`. It records measured engineering evidence from Waves 11–16. The pipelines process NumPy RGB frame arrays, metric 3D landmark arrays, and mono or stereo PCM arrays; write PNG/WAV (and optional FFmpeg mux) files under a contained workspace; hash the files; and verify portable RFC 6962 inclusion bundles.
 
 The acceptance run uses reproducibly generated test buffers and a separate test with caller-supplied buffers. It is evidence for these measured buffers and persisted artifacts only. It is **not** validation of production footage, human identity, a production codec pipeline, or perceptual quality in uncontrolled media.
 
@@ -62,9 +62,9 @@ These are single-sandbox measurements, not a service-level latency guarantee. Wi
 
 ## Regression gates
 
-The test suite includes a 55-case AST mutation campaign. Each case first checks its unmodified oracle, installs one function mutant, asserts the mutant is killed, and restores the original function in `finally`. Coverage includes real pixel/landmark/PCM paths, D65/Bradford identity and direction, RFC 6962 leaf and internal-node domains, and rational PCM slicing/remainder carry.
+The baseline campaign has 55 AST mutants; the Phase 4 extension adds 20 calibrated-camera, color, acoustic, kinetic-cut, and stereo-persistence mutants. Each case first checks its unmodified oracle, installs one function mutant, asserts the mutant is killed, and restores the original function in `finally`. Coverage includes real pixel/landmark/PCM paths, D65/Bradford identity and direction, RFC 6962 leaf and internal-node domains, rational PCM slicing/remainder carry, camera calibration and correction, room acoustics, subpixel/rolling-shutter geometry, global cut costs, and stereo WAV channel persistence.
 
-The scoped Wave 11–12 gates are Ruff check and formatting, strict mypy over all Chronos sources/tests, the 367-test architecture suite, and the complete Chronos suite with aggregate coverage at least 96%, each module at least 95%, and all 55 mutants killed. Exact command outcomes are recorded in the task completion summary after the final gate run.
+The Wave 16 regression gates are Ruff check and formatting, strict mypy over all 21 Chronos source modules and 16 Chronos test modules, the 367-test architecture suite, and the complete Chronos suite with aggregate coverage at least 96%, each module at least 95%, typed refusal probes, and AST mutation campaigns. The original 55-case campaign plus the 20 Phase 4 mutants all pass (75/75 killed); the typed Phase 4 ledger refuses 50/50 malformed-input probes. On 2026-11-12, architecture passed 367 tests, the full Chronos suite passed 113 tests at 97% aggregate coverage with every module at or above 95%, Ruff check/format passed, and strict mypy passed for all 37 Chronos source/test files.
 
 ## Phase 4 — Wave 13 calibrated multicamera continuity
 
@@ -105,3 +105,17 @@ The Wave 15 N=3 benchmark uses 256×320 phase-correlation frames, 256×320×3 ro
 | N | Median | Minimum | Maximum | Cut matrix | Hermite samples | Selected pair |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 3 | 24.910 ms | 24.723 ms | 24.957 ms | 32×32 | 12 | (21, 1) |
+
+## Phase 4 — Wave 16 integrated multicamera mastering
+
+`multicamera_mastering.py` composes calibrated epipolar repair, sensor-chart color harmonization, focus-breathing correction, rolling-shutter rectification, subpixel phase alignment, room-specific binaural RIR synthesis and dialogue convolution, and the global kinetic cut optimizer. It enforces a complete, ordered, one-based episode/shot grid and a fixed 48 kHz rational PCM horizon. The resulting stereo PCM and mastered RGB are passed through the established contained PNG/WAV persistence path; receipts and portable RFC 6962 proofs are summarized by the deterministic Chronos `episode.run_verified` bridge. A JSON manifest loader exposes the same workflow while normalizing filesystem/JSON failures to input-validation errors.
+
+`test_multicamera_mastering.py` exercises direct API and manifest execution, bridge dispatch and output hash, repeated-run root stability, two-channel WAV persistence, per-shot camera/acoustic receipts, action-cut continuity, episode boundaries, and malformed schema/grid/media refusals. Real-media E2E additionally verifies stereo alignment/padding, channel-aware WAV metadata, manifest receipts and Merkle proofs, and rejection of conflicting mono-plus-stereo inputs.
+
+The Wave 16 N=3 benchmark ran the two-shot integration fixture three times, including camera/acoustic/cut processing, four persisted RGB frames, two 4,004-sample stereo WAVs, optional FFmpeg NUT muxes, SHA-256 receipts, and Merkle proofs. The measured mux count was two per run; all three runs produced the same season root.
+
+| N | Median | Minimum | Maximum | Shots / RGB frames | Samples | Muxes per run |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3 | 57.098 ms | 55.459 ms | 72.556 ms | 2 / 4 | 8,008 | 2 |
+
+Measured season root: `802e8ba599d7e2a4f23aca3ae2f57922a8e723e1260a92ee4196d2436233c45d` (same-environment N=3). This is a small deterministic integration benchmark, not a production throughput claim.

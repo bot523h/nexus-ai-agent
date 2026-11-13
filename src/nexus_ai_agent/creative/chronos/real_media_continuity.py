@@ -53,13 +53,14 @@ class CharacterIdentityAnchor:
 
 @dataclass(frozen=True, slots=True)
 class RealMediaShot:
-    """Optional captured input buffers; omitted components are synthesized reproducibly."""
+    """Optional RGB, landmark, and mono/stereo PCM buffers; omitted data is reproducible."""
 
     episode_index: int
     shot_index: int
     frames_linear_rgb: FloatArray | None = None
     cranial_landmarks_m: FloatArray | None = None
     audio_pcm_float: FloatArray | None = None
+    audio_pcm_stereo_float: FloatArray | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,7 @@ class RealMediaShotReceipt:
     shot_index: int
     frame_count: int
     audio_samples: int
+    audio_channel_count: int
     input_audio_samples: int
     audio_trimmed_samples: int
     audio_padded_samples: int
@@ -155,6 +157,24 @@ def align_pcm_to_sample_count(
     if expected_samples < 0 or np.any(~np.isfinite(audio)):
         raise KernelError("audio alignment requires finite PCM and a non-negative target")
     output = np.zeros(expected_samples, dtype=np.float64)
+    copied = min(len(audio), expected_samples)
+    output[:copied] = audio[:copied]
+    return output, max(0, len(audio) - expected_samples), max(0, expected_samples - len(audio))
+
+
+def _align_stereo_pcm_to_sample_count(
+    audio_pcm_stereo_float: FloatArray, expected_samples: int
+) -> tuple[FloatArray, int, int]:
+    """Align stereo float PCM on its sample axis without flattening its channels."""
+    audio = np.asarray(audio_pcm_stereo_float, dtype=np.float64)
+    if (
+        audio.ndim != 2
+        or audio.shape[1] != 2
+        or expected_samples < 0
+        or np.any(~np.isfinite(audio))
+    ):
+        raise KernelError("stereo alignment requires finite N×2 PCM and a non-negative target")
+    output = np.zeros((expected_samples, 2), dtype=np.float64)
     copied = min(len(audio), expected_samples)
     output[:copied] = audio[:copied]
     return output, max(0, len(audio) - expected_samples), max(0, expected_samples - len(audio))
@@ -317,13 +337,22 @@ def _synthesize_audio(start_sample: int, sample_count: int, rate: int) -> FloatA
 
 
 def _wav_pcm16_bytes(samples: FloatArray, sample_rate_hz: int) -> bytes:
-    audio = np.asarray(samples, dtype=np.float64).reshape(-1)
+    audio = np.asarray(samples, dtype=np.float64)
+    if audio.ndim == 1:
+        audio = audio[:, None]
+    if (
+        audio.ndim != 2
+        or audio.shape[1] not in (1, 2)
+        or sample_rate_hz <= 0
+        or np.any(~np.isfinite(audio))
+    ):
+        raise KernelError("WAV persistence requires finite mono/stereo PCM and a positive rate")
     pcm = np.rint(np.clip(audio, -1.0, 0.999969482421875) * 32768.0).astype("<i2")
     from io import BytesIO
 
     stream = BytesIO()
     with wave.open(stream, "wb") as writer:
-        writer.setnchannels(1)
+        writer.setnchannels(audio.shape[1])
         writer.setsampwidth(2)
         writer.setframerate(sample_rate_hz)
         writer.writeframes(pcm.tobytes())
@@ -435,8 +464,8 @@ def execute_real_media_season_continuity(
     When ``shots`` is omitted, reproducible multi-frame RGB, metric cranial
     landmarks, and float PCM buffers are synthesized. Supplied media tensors are
     accepted per ``RealMediaShot`` and are validated before processing. Each
-    resulting RGB frame is written as PNG, PCM is written as 48 kHz WAV, and a
-    bitexact FFV1/PCM NUT mux is made when FFmpeg is available (or explicitly given).
+    resulting RGB frame is written as PNG, mono or stereo PCM is written as a
+    48 kHz WAV, and a bitexact FFV1/PCM NUT mux is made when FFmpeg is available.
     """
     if (
         episode_count <= 0
@@ -549,14 +578,28 @@ def execute_real_media_season_continuity(
         source_shots, raw_frames, sample_counts, sample_starts, sample_ends, strict=True
     ):
         frame_n = frame_counts[global_shot_index]
-        if source_shot.audio_pcm_float is None:
-            input_audio = _synthesize_audio(sample_start, shot_sample_count, sample_rate_hz)
+        if source_shot.audio_pcm_stereo_float is not None:
+            if source_shot.audio_pcm_float is not None:
+                raise KernelError("a shot must provide either mono or stereo source PCM, not both")
+            input_audio = np.asarray(source_shot.audio_pcm_stereo_float, dtype=np.float64)
+            aligned_audio, trimmed, padded = _align_stereo_pcm_to_sample_count(
+                input_audio, shot_sample_count
+            )
+            naive_count = round(frame_n * sample_rate_hz / naive_frame_rate_fps)
+            naive_audio, _, _ = _align_stereo_pcm_to_sample_count(input_audio, naive_count)
         else:
-            input_audio = np.asarray(source_shot.audio_pcm_float, dtype=np.float64).reshape(-1)
-        aligned_audio, trimmed, padded = align_pcm_to_sample_count(input_audio, shot_sample_count)
-        naive_count = round(frame_n * sample_rate_hz / naive_frame_rate_fps)
-        naive_audio, _, _ = align_pcm_to_sample_count(input_audio, naive_count)
+            input_audio = (
+                _synthesize_audio(sample_start, shot_sample_count, sample_rate_hz)
+                if source_shot.audio_pcm_float is None
+                else np.asarray(source_shot.audio_pcm_float, dtype=np.float64).reshape(-1)
+            )
+            aligned_audio, trimmed, padded = align_pcm_to_sample_count(
+                input_audio, shot_sample_count
+            )
+            naive_count = round(frame_n * sample_rate_hz / naive_frame_rate_fps)
+            naive_audio, _, _ = align_pcm_to_sample_count(input_audio, naive_count)
         naive_audio_sample_count += len(naive_audio)
+        audio_channels = 2 if aligned_audio.ndim == 2 else 1
 
         drift_step = global_shot_index + 1
         drift_kelvin = anchor.reference_illuminant_kelvin + drift_kelvin_per_shot * drift_step
@@ -642,6 +685,7 @@ def execute_real_media_season_continuity(
             "shot_index": source_shot.shot_index,
             "frame_count": frame_n,
             "audio_sample_count": shot_sample_count,
+            "audio_channel_count": audio_channels,
             "sample_start": sample_start,
             "sample_end": sample_end,
             "frame_sha256s": frame_hashes,
@@ -655,6 +699,7 @@ def execute_real_media_season_continuity(
                 source_shot.shot_index,
                 frame_n,
                 shot_sample_count,
+                audio_channels,
                 len(input_audio),
                 trimmed,
                 padded,

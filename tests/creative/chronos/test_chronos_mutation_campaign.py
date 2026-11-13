@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from nexus_ai_agent.creative.chronos import (
+    acoustic_space_continuity,
     acoustics_lipsync,
     audio_continuity,
     biomechanics_motion,
@@ -26,7 +27,9 @@ from nexus_ai_agent.creative.chronos import (
     episode_pipeline,
     geometry,
     identity_lock,
+    kinetic_match_cut_engine,
     merkle_ledger,
+    multicam_epipolar_matching,
     real_media_continuity,
     scene_portrait_ops,
     temporal_optics,
@@ -1241,6 +1244,436 @@ def test_chronos_mutation_campaign_kills_55_of_55(tmp_path: Path) -> None:
         f"surviving mutants: {sorted(set(c.label for c in cases) - set(killed))}"
     )
     assert len(set(killed)) == 55
+
+
+def test_phase4_ast_mutation_campaign_kills_20_of_20() -> None:
+    """Extend the Wave 11–12 55-case campaign with 20 Phase 4 mutants."""
+    intrinsics_a = np.array([[800.0, 0.0, 320.0], [0.0, 800.0, 240.0], [0.0, 0.0, 1.0]])
+    intrinsics_b = np.array([[620.0, 0.0, 300.0], [0.0, 640.0, 200.0], [0.0, 0.0, 1.0]])
+    translation = np.array([0.7, 0.1, 0.2])
+    horizontal_f = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+    points_a = np.array([[100.0, 40.0]])
+    points_b = np.array([[100.0, 44.0]])
+    room = acoustic_space_continuity.AcousticRoomSpec(
+        "mutation-room", (12.0, 10.0, 4.0), (0.25,) * 6
+    )
+    source = np.array([3.0, 5.0, 2.0])
+    cameras = (
+        ("near", np.array([4.0, 5.0, 2.0]), np.eye(3)),
+        ("far", np.array([5.0, 5.0, 2.0]), np.eye(3)),
+    )
+    rng = np.random.default_rng(20261112)
+    chart = rng.uniform(0.05, 0.55, size=(32, 3))
+    sensor_matrix = np.array([[0.90, 0.06, 0.02], [0.03, 0.88, 0.04], [0.02, 0.05, 0.86]])
+    reference_chart = chart @ sensor_matrix + np.array([0.015, 0.02, 0.01])
+    frame_rgb = np.full((8, 8, 3), 0.25, dtype=np.float64)
+
+    def rig() -> multicam_epipolar_matching.EpipolarRigReceipt:
+        return multicam_epipolar_matching.compute_fundamental_matrix_from_rig(
+            intrinsics_a, intrinsics_b, np.eye(3), translation
+        )
+
+    def sampson_projection() -> multicam_epipolar_matching.CorrespondenceAuditReceipt:
+        return multicam_epipolar_matching.audit_and_project_epipolar_correspondences(
+            points_a, points_b, horizontal_f
+        )
+
+    cases: list[MutationCase] = [
+        MutationCase(
+            "56 Phase 4 essential cross-product sign",
+            multicam_epipolar_matching,
+            "compute_fundamental_matrix_from_rig",
+            "essential = _skew(translation) @ rotation",
+            "essential = -_skew(translation) @ rotation",
+            lambda: _assert_result(
+                lambda: (
+                    multicam_epipolar_matching.compute_fundamental_matrix_from_rig(
+                        np.eye(3), np.eye(3), np.eye(3), np.array([1.0, 0.0, 0.0])
+                    ).essential_matrix
+                ),
+                lambda result: np.allclose(
+                    result,
+                    np.array([[0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]]),
+                ),
+                "E=[t]×R preserves calibrated relative-pose sign",
+            ),
+        ),
+        MutationCase(
+            "57 Phase 4 fundamental intrinsics transpose",
+            multicam_epipolar_matching,
+            "compute_fundamental_matrix_from_rig",
+            "np.linalg.solve(camera_b.T, essential)",
+            "np.linalg.solve(camera_b, essential)",
+            lambda: _assert_result(
+                lambda: rig().fundamental_matrix,
+                lambda result: np.allclose(
+                    result,
+                    np.linalg.inv(intrinsics_b).T
+                    @ (np.array([[0.0, -0.2, 0.1], [0.2, 0.0, -0.7], [-0.1, 0.7, 0.0]]))
+                    @ np.linalg.inv(intrinsics_a),
+                    atol=1e-12,
+                ),
+                "F=K_B^-T E K_A^-1 uses inverse-transposed target intrinsics",
+            ),
+        ),
+        MutationCase(
+            "58 Phase 4 Sampson two-image gradient denominator",
+            multicam_epipolar_matching,
+            "_sampson_terms",
+            "np.sum(gradient_a**2, axis=1) + np.sum(gradient_b**2, axis=1)",
+            "np.sum(gradient_a**2, axis=1)",
+            lambda: _assert_result(
+                lambda: multicam_epipolar_matching.sampson_epipolar_distance_squared(
+                    points_a, points_b, horizontal_f
+                )[0],
+                lambda result: result == pytest.approx(8.0),
+                "Sampson error normalizes by both image-space gradients",
+            ),
+        ),
+        MutationCase(
+            "59 Phase 4 Sampson correction direction",
+            multicam_epipolar_matching,
+            "audit_and_project_epipolar_correspondences",
+            "repaired_a -= correction_scale[:, None] * gradient_a",
+            "repaired_a += correction_scale[:, None] * gradient_a",
+            lambda: _assert_result(
+                lambda: sampson_projection().sampson_distance_squared_after,
+                lambda result: bool(np.all(result < 1e-10)),
+                "Sampson projection iteratively reduces reprojection residual",
+            ),
+        ),
+        MutationCase(
+            "60 Phase 4 thin-lens focus-breathing scale",
+            multicam_epipolar_matching,
+            "_breathing_scale",
+            "reference_distance_mm\n        * (focus_distance_mm - focal_length_mm)",
+            "reference_distance_mm\n        * (reference_distance_mm - focal_length_mm)",
+            lambda: _assert_result(
+                lambda: multicam_epipolar_matching._breathing_scale(50.0, 1000.0, 2000.0),
+                lambda result: result == pytest.approx(2000.0 * 950.0 / (1000.0 * 1950.0)),
+                "thin-lens breathing compensation uses the focus-dependent image distance",
+            ),
+        ),
+        MutationCase(
+            "61 Phase 4 physical CoC focal-length power",
+            multicam_epipolar_matching,
+            "compute_physical_circle_of_confusion_mm",
+            "* focal_length_mm**2",
+            "* focal_length_mm**3",
+            lambda: _assert_result(
+                lambda: multicam_epipolar_matching.compute_physical_circle_of_confusion_mm(
+                    1500.0, 3000.0, 50.0, 2.8
+                ),
+                lambda result: (
+                    result
+                    == pytest.approx(abs(1500.0 - 3000.0) / 1500.0 * 50.0**2 / (2.8 * 2950.0))
+                ),
+                "physical circle of confusion scales with focal length squared",
+            ),
+        ),
+        MutationCase(
+            "62 Phase 4 ridge RGB sensor matrix orientation",
+            multicam_epipolar_matching,
+            "harmonize_multicam_sensor_color",
+            "sensor_matrix = affine_coefficients[:3]",
+            "sensor_matrix = affine_coefficients[:3].T",
+            lambda: _assert_result(
+                lambda: (
+                    multicam_epipolar_matching.harmonize_multicam_sensor_color(
+                        chart,
+                        reference_chart,
+                        frame_rgb,
+                        ridge=1e-10,
+                    ).sensor_matrix_b_to_a
+                ),
+                lambda result: np.allclose(result, sensor_matrix, atol=1e-6),
+                "ridge calibration maps row RGB observations into reference RGB columns",
+            ),
+        ),
+        MutationCase(
+            "63 Phase 4 Sabine-Eyring logarithmic absorption",
+            acoustic_space_continuity,
+            "compute_room_acoustic_invariants",
+            "-surface * np.log1p(-mean_absorption)",
+            "surface * mean_absorption",
+            lambda: _assert_result(
+                lambda: (
+                    acoustic_space_continuity.compute_room_acoustic_invariants(room).rt60_seconds
+                ),
+                lambda result: (
+                    result == pytest.approx(0.161 * 480.0 / (-surface_area() * np.log1p(-0.25)))
+                ),
+                "Eyring RT60 uses the logarithmic equivalent absorption area",
+            ),
+        ),
+        MutationCase(
+            "64 Phase 4 critical-distance room invariant",
+            acoustic_space_continuity,
+            "compute_room_acoustic_invariants",
+            "0.057 * float(np.sqrt(volume / rt60))",
+            "0.05 * float(np.sqrt(volume / rt60))",
+            lambda: _assert_result(
+                lambda: acoustic_space_continuity.compute_room_acoustic_invariants(room),
+                lambda result: (
+                    result.critical_distance_m
+                    == pytest.approx(0.057 * np.sqrt(result.volume_m3 / result.rt60_seconds))
+                ),
+                "critical distance remains tied to Sabine-Eyring RT60",
+            ),
+        ),
+        MutationCase(
+            "65 Phase 4 27-cell shoebox image-source budget",
+            acoustic_space_continuity,
+            "synthesize_binaural_room_impulse_response",
+            "axis_radius = max_order - 1",
+            "axis_radius = max_order",
+            lambda: _assert_result(
+                lambda: (
+                    acoustic_space_continuity.synthesize_binaural_room_impulse_response(
+                        room, source, cameras[0][1], np.eye(3), sample_rate_hz=8000, max_order=2
+                    ).path_count
+                ),
+                lambda result: result == 27,
+                "second-order shoebox neighborhood enumerates 27 virtual rooms",
+            ),
+        ),
+        MutationCase(
+            "66 Phase 4 wall absorption reflection attenuation",
+            acoustic_space_continuity,
+            "_axis_reflection_gain",
+            "product_gain *= 1.0 - float(absorption[wall_index])",
+            "product_gain *= 1.0 + float(absorption[wall_index])",
+            lambda: _assert_result(
+                lambda: (
+                    acoustic_space_continuity.synthesize_binaural_room_impulse_response(
+                        room, source, cameras[0][1], np.eye(3), sample_rate_hz=8000, max_order=2
+                    ).drr_db
+                ),
+                lambda result: result == pytest.approx(8.666154009471397, abs=1e-10),
+                "reflected pressure paths attenuate according to wall absorption",
+            ),
+        ),
+        MutationCase(
+            "67 Phase 4 exact-length FFT audio horizon",
+            acoustic_space_continuity,
+            "convolve_shot_dialogue_with_room_acoustics",
+            "full[: dialogue.size]",
+            "full",
+            lambda: _assert_result(
+                lambda: (
+                    acoustic_space_continuity.convolve_shot_dialogue_with_room_acoustics(
+                        np.ones(8), np.zeros((5, 2))
+                    ).output_sample_count
+                ),
+                lambda result: result == 8,
+                "FFT room convolution returns the exact input PCM horizon",
+            ),
+        ),
+        MutationCase(
+            "68 Phase 4 cross-shot distance-ordered DRR",
+            acoustic_space_continuity,
+            "audit_cross_shot_acoustic_continuity",
+            "farther.drr_db <= nearer.drr_db + 1e-9",
+            "farther.drr_db >= nearer.drr_db + 1e-9",
+            lambda: _assert_result(
+                lambda: (
+                    acoustic_space_continuity.audit_cross_shot_acoustic_continuity(
+                        room, source, cameras, sample_rate_hz=8000
+                    ).drr_monotonic_with_proximity
+                ),
+                lambda result: result is True,
+                "farther camera positions retain lower DRR than close-ups",
+            ),
+        ),
+        MutationCase(
+            "69 Phase 4 subpixel phase-correlation direction",
+            kinetic_match_cut_engine,
+            "estimate_subpixel_phase_translation",
+            "reference_luminance, moving_luminance, epsilon=epsilon",
+            "moving_luminance, reference_luminance, epsilon=epsilon",
+            lambda: _assert_result(
+                lambda: (
+                    kinetic_match_cut_engine.estimate_subpixel_phase_translation(
+                        _phase_fixture()[0], _phase_fixture()[1]
+                    ).translation_x_px
+                ),
+                lambda result: result == pytest.approx(1.25, abs=0.05),
+                "phase correlation reports the reference-to-moving subpixel shift",
+            ),
+        ),
+        MutationCase(
+            "70 Phase 4 rolling-shutter frame-period unit conversion",
+            kinetic_match_cut_engine,
+            "rectify_rolling_shutter_frame",
+            "float(velocity[0] / frame_period_s), float(velocity[1] / frame_period_s)",
+            "float(velocity[0] * frame_period_s), float(velocity[1] * frame_period_s)",
+            lambda: _assert_result(
+                lambda: (
+                    kinetic_match_cut_engine.rectify_rolling_shutter_frame(
+                        np.ones((20, 24)), (4.0, 0.0), readout_fraction=0.5, frame_period_s=0.1
+                    ).max_warp_px
+                ),
+                lambda result: result == pytest.approx(1.0),
+                "rolling-shutter readout converts frame displacement into pixels per second",
+            ),
+        ),
+        MutationCase(
+            "71 Phase 4 Hermite start-pose endpoint basis",
+            kinetic_match_cut_engine,
+            "_hermite_bridge",
+            "h00 = 2 * tau**3 - 3 * tau**2 + 1",
+            "h00 = 2 * tau**3 - 3 * tau**2",
+            lambda: _assert_result(
+                lambda: kinetic_match_cut_engine._hermite_bridge(
+                    np.array([[2.0, 1.0, 0.0]]),
+                    np.zeros((1, 3)),
+                    np.array([[4.0, 1.0, 0.0]]),
+                    np.zeros((1, 3)),
+                    duration_s=0.2,
+                    sample_count=5,
+                )[0][0],
+                lambda result: np.allclose(result, [[2.0, 1.0, 0.0]]),
+                "match-cut Hermite bridge begins at the exact outgoing 3D pose",
+            ),
+        ),
+        MutationCase(
+            "72 Phase 4 pose-weighted global cut matrix",
+            kinetic_match_cut_engine,
+            "optimize_match_on_action_cut",
+            "pose_weight * pose_cost + velocity_weight * velocity_cost + speed_weight * speed_cost",
+            "velocity_weight * velocity_cost + speed_weight * speed_cost",
+            lambda: _assert_result(
+                lambda: (
+                    lambda receipt: (receipt.outgoing_frame_index, receipt.incoming_frame_index)
+                )(
+                    kinetic_match_cut_engine.optimize_match_on_action_cut(
+                        np.array([[[10.0, 0.0, 0.0]], [[0.0, 0.0, 0.0]]]),
+                        np.zeros((2, 1, 2)),
+                        np.array([[[0.0, 0.0, 0.0]], [[10.0, 0.0, 0.0]]]),
+                        np.zeros((2, 1, 2)),
+                        pose_weight=1.0,
+                        velocity_weight=0.0,
+                        speed_weight=0.0,
+                    )
+                ),
+                lambda result: result == (0, 1),
+                "global cut optimization includes the complete 3D pose cost",
+            ),
+        ),
+        MutationCase(
+            "73 Phase 4 global cost minimizer",
+            kinetic_match_cut_engine,
+            "optimize_match_on_action_cut",
+            "int(np.argmin(costs))",
+            "int(np.argmax(costs))",
+            lambda: _assert_result(
+                lambda: (
+                    lambda receipt: receipt.selected_cost == float(np.min(receipt.cost_matrix))
+                )(
+                    kinetic_match_cut_engine.optimize_match_on_action_cut(
+                        np.array([[[0.0, 0.0, 0.0]], [[10.0, 0.0, 0.0]]]),
+                        np.zeros((2, 1, 2)),
+                        np.array([[[0.0, 0.0, 0.0]], [[10.0, 0.0, 0.0]]]),
+                        np.zeros((2, 1, 2)),
+                        velocity_weight=0.0,
+                        speed_weight=0.0,
+                    )
+                ),
+                lambda result: result is True,
+                "the chosen global handoff is the minimum weighted pose/velocity cost",
+            ),
+        ),
+        MutationCase(
+            "74 Phase 4 global screen-speed matching term",
+            kinetic_match_cut_engine,
+            "optimize_match_on_action_cut",
+            "speed_cost = (outgoing_speed[:, None] - incoming_speed[None, :]) ** 2",
+            "speed_cost = np.zeros((len(outgoing_speed), len(incoming_speed)))",
+            lambda: _assert_result(
+                lambda: (
+                    lambda receipt: (receipt.outgoing_frame_index, receipt.incoming_frame_index)
+                )(
+                    kinetic_match_cut_engine.optimize_match_on_action_cut(
+                        np.zeros((2, 1, 3)),
+                        np.array([[[10.0, 0.0]], [[2.0, 0.0]]]),
+                        np.zeros((2, 1, 3)),
+                        np.array([[[9.0, 0.0]], [[10.0, 0.0]]]),
+                        pose_weight=0.0,
+                        velocity_weight=0.0,
+                        speed_weight=1.0,
+                    )
+                ),
+                lambda result: result == (0, 1),
+                "the speed term globally matches outgoing and incoming action velocity",
+            ),
+        ),
+        MutationCase(
+            "75 Phase 4 persisted stereo WAV channel receipt",
+            real_media_continuity,
+            "_wav_pcm16_bytes",
+            "writer.setnchannels(audio.shape[1])",
+            "writer.setnchannels(1)",
+            lambda: _assert_result(
+                lambda: _wav_channel_count(
+                    real_media_continuity._wav_pcm16_bytes(
+                        np.zeros((8, 2), dtype=np.float64), 48_000
+                    )
+                ),
+                lambda result: result == 2,
+                "persisted stereo acoustic PCM is written as a two-channel WAV",
+            ),
+        ),
+    ]
+
+    assert len(cases) == 20
+    killed: list[str] = []
+    for case in cases:
+        case.assertion_check()
+        parent, attribute = _resolve_target(case.module, case.function_name)
+        original = getattr(parent, attribute)
+        try:
+            mutant = _function_ast_mutant(
+                case.module, case.function_name, case.original_fragment, case.mutant_fragment
+            )
+            setattr(parent, attribute, mutant)
+            try:
+                case.assertion_check()
+            except AssertionError:
+                killed.append(case.label)
+            else:
+                raise AssertionError(f"surviving Phase 4 mutant: {case.label}")
+        finally:
+            setattr(parent, attribute, original)
+    assert len(killed) == 20, (
+        f"surviving Phase 4 mutants: {sorted(set(c.label for c in cases) - set(killed))}"
+    )
+    assert len(set(killed)) == 20
+
+
+def surface_area() -> float:
+    dimensions = (12.0, 10.0, 4.0)
+    return 2.0 * (
+        dimensions[0] * dimensions[1]
+        + dimensions[0] * dimensions[2]
+        + dimensions[1] * dimensions[2]
+    )
+
+
+def _phase_fixture() -> tuple[np.ndarray, np.ndarray]:
+    reference = np.random.default_rng(904).normal(size=(48, 64))
+    fx = np.fft.fftfreq(reference.shape[1])[None, :]
+    fy = np.fft.fftfreq(reference.shape[0])[:, None]
+    moving = np.fft.ifft2(
+        np.fft.fft2(reference) * np.exp(-2j * np.pi * (fx * 1.25 + fy * -0.6))
+    ).real
+    return reference, moving
+
+
+def _wav_channel_count(data: bytes) -> int:
+    from io import BytesIO
+
+    with wave.open(BytesIO(data), "rb") as reader:
+        return reader.getnchannels()
 
 
 def _assert_registry_conflict_refused(

@@ -119,6 +119,75 @@ def test_explicit_real_buffers_are_restored_and_pcm_is_exactly_sliced(tmp_path: 
     assert shot_receipt.restored_scale_drift < 1e-9
 
 
+def test_real_media_stereo_pcm_persistence_is_sample_exact_and_merkle_bound(
+    tmp_path: Path,
+) -> None:
+    anchor = CharacterIdentityAnchor(
+        "stereo-character",
+        np.array(
+            [
+                [-0.06, -0.05, 0.0],
+                [0.06, -0.05, 0.0],
+                [-0.05, 0.05, 0.0],
+                [0.05, 0.05, 0.0],
+                [-0.025, 0.0, 0.015],
+                [0.025, 0.0, -0.015],
+            ]
+        ),
+    )
+    frames = np.full((2, 8, 8, 3), (0.24, 0.34, 0.42), dtype=np.float64)
+    stereo = np.column_stack((np.linspace(-0.1, 0.1, 3998), np.linspace(0.1, -0.1, 3998)))
+    result = execute_real_media_season_continuity(
+        tmp_path / "stereo-input",
+        shots=[
+            RealMediaShot(
+                1,
+                1,
+                frames,
+                anchor.cranial_landmarks_m,
+                audio_pcm_stereo_float=stereo,
+            )
+        ],
+        show_bible_anchor=anchor,
+        episode_count=1,
+        shots_per_episode=1,
+        frame_count_per_shot=2,
+        frame_size=(8, 8),
+        ffmpeg_path=None,
+    )
+    receipt = result.shots[0]
+    assert receipt.audio_channel_count == 2
+    assert receipt.input_audio_samples == 3998
+    assert receipt.audio_padded_samples == 6
+    assert receipt.audio_trimmed_samples == 0
+    with wave.open(str(tmp_path / "stereo-input" / receipt.audio_path), "rb") as reader:
+        assert reader.getnchannels() == 2
+        assert reader.getnframes() == receipt.audio_samples == result.exact_sample_horizon
+    manifest = json.loads((tmp_path / "stereo-input" / result.manifest_path).read_text())
+    assert manifest["receipts"][0]["audio_channel_count"] == 2
+    assert merkle_ledger.verify_rfc6962_bundle(receipt.inclusion_bundle)
+    with pytest.raises(KernelError, match="either mono or stereo"):
+        execute_real_media_season_continuity(
+            tmp_path / "conflicting-audio-input",
+            shots=[
+                RealMediaShot(
+                    1,
+                    1,
+                    frames,
+                    anchor.cranial_landmarks_m,
+                    np.zeros(4004),
+                    stereo,
+                )
+            ],
+            show_bible_anchor=anchor,
+            episode_count=1,
+            shots_per_episode=1,
+            frame_count_per_shot=2,
+            frame_size=(8, 8),
+            ffmpeg_path=None,
+        )
+
+
 def test_bresenham_clock_conserves_remainders_and_pcm_alignment_reports_trim_pad() -> None:
     counts = bresenham_sample_counts(
         [1, 1, 1, 1], sample_rate_hz=44_100, frame_rate_num=24, frame_rate_den=1
