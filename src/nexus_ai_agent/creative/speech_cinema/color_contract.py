@@ -1,10 +1,10 @@
-"""Hyperion Phase 3 color capability pack: pure data contract.
+"""Hyperion color operation contract (pure data).
 
-This package is part of the capability-pack substrate, which is NumPy-free and
-import-restricted by ``tests/architecture``.  It only declares *which* color
-operations exist.  The kernels live in
-``nexus_ai_agent.creative.speech_cinema.color_imaging`` and are bound to these
-names by ``nexus_ai_agent.creative.speech_cinema.color_ops``.
+Declares which color operations exist and the Kelvin range they accept.  The
+NumPy kernels live in ``color_imaging`` and are bound to these names by
+``color_ops``.  The contract sits here, not under ``creative/packs/``, because
+the pack substrate is NumPy-free and import-restricted by ``tests/architecture``
+and cannot host kernel bindings.
 """
 
 from __future__ import annotations

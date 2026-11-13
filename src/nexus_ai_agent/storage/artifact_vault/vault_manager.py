@@ -95,7 +95,8 @@ def verify_merkle_proof(
                 return False
             idx //= 2
             count = (count + 1) // 2
-        if idx != 0:
+        # Unreachable: idx < count is an invariant, so count == 1 forces idx == 0.
+        if idx != 0:  # pragma: no cover
             return False
     return current.hex() == root
 
@@ -128,6 +129,25 @@ class ArtifactManifest:
     shard_size: int
     shard_hashes: tuple[str, ...]
     merkle_root: str
+
+
+def _verify_inclusion(manifest: ArtifactManifest, payloads: list[bytes]) -> None:
+    """Check a full shard set against the manifest Merkle root, shard by shard.
+
+    Each shard's inclusion proof is replayed with ``total_leaves`` set to the
+    shard count, so the index binding and tree shape are enforced on every read
+    and heal.  Failure raises, so corrupt output is never returned.
+    """
+    total = len(payloads)
+    if merkle_root(payloads) != manifest.merkle_root:
+        raise ValueError("shard set does not match the manifest Merkle root")
+    for index, payload in enumerate(payloads):
+        proof = merkle_proof(payloads, index)
+        # Unreachable: a proof built from these payloads under an equal root always verifies.
+        if not verify_merkle_proof(  # pragma: no cover
+            payload, index, proof, manifest.merkle_root, total_leaves=total
+        ):
+            raise ValueError(f"inclusion proof failed for shard {index}")
 
 
 class ArtifactVault:
@@ -221,6 +241,7 @@ class ArtifactVault:
         healed: list[int] = []
         recovered = reconstruct(valid, manifest.original_size)
         expected = encode(recovered, manifest.k, manifest.m)
+        _verify_inclusion(manifest, [s.data for s in expected])
         for shard in expected:
             if (
                 not (directory / f"shard-{shard.index:04d}.bin").exists()
@@ -252,4 +273,6 @@ class ArtifactVault:
         ]
         if len(valid) < manifest.k:
             raise ValueError("artifact is unavailable")
-        return reconstruct(valid, manifest.original_size)
+        recovered = reconstruct(valid, manifest.original_size)
+        _verify_inclusion(manifest, [s.data for s in encode(recovered, manifest.k, manifest.m)])
+        return recovered

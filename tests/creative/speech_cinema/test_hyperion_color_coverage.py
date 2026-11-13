@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from nexus_ai_agent.creative.packs.color import OPERATIONS
 from nexus_ai_agent.creative.speech_cinema import color_imaging as ci
 from nexus_ai_agent.creative.speech_cinema import color_ops
+from nexus_ai_agent.creative.speech_cinema.color_contract import OPERATIONS
 
 
 def test_rgb_guard_rejects_non_finite_and_wrong_channel_count() -> None:

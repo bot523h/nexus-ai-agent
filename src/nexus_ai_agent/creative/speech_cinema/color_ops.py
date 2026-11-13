@@ -10,8 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Final
 
-from nexus_ai_agent.creative.packs.color import OPERATIONS
 from nexus_ai_agent.creative.speech_cinema import color_imaging
+from nexus_ai_agent.creative.speech_cinema.color_contract import OPERATIONS
 
 Handler = Callable[..., object]
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -121,3 +122,26 @@ def test_vault_refuses_fail_closed_when_m_plus_one_shards_are_corrupted(tmp_path
         vault.verify_and_heal_artifact("art")
     with pytest.raises(ValueError):
         vault.read_artifact("art")
+
+
+def test_vault_read_refuses_a_manifest_whose_merkle_root_no_longer_matches(tmp_path: Path) -> None:
+    data = os.urandom(512)
+    vault = vm.ArtifactVault(tmp_path)
+    vault.store_artifact("art", data, 4, 2)
+    manifest_path = vault._dir("art") / "manifest.json"
+    raw = json.loads(manifest_path.read_text())
+    raw["merkle_root"] = "00" * 32
+    manifest_path.write_text(json.dumps(raw, sort_keys=True, separators=(",", ":")))
+    with pytest.raises(ValueError, match="Merkle root"):
+        vault.read_artifact("art")
+    with pytest.raises(ValueError, match="Merkle root"):
+        vault.verify_and_heal_artifact("art")
+
+
+def test_merkle_proof_with_missing_trailing_step_is_refused_when_size_is_known() -> None:
+    leaves = _leaves(3)
+    root = vm.merkle_root(leaves)
+    full = vm.merkle_proof(leaves, 2)
+    assert vm.verify_merkle_proof(leaves[2], 2, full, root, total_leaves=3)
+    assert not vm.verify_merkle_proof(leaves[2], 2, [], root, total_leaves=3)
+    assert not vm.verify_merkle_proof(leaves[2], 2, [], root, total_leaves=1)

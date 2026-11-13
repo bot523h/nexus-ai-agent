@@ -2,7 +2,7 @@
 
 These kernels live behind the speech_cinema adapter boundary because they touch
 pixel buffers and PNG codecs.  The capability-pack substrate in
-``creative/packs/color`` only carries the data contract and must stay NumPy-free.
+``color_contract`` only carries the data contract and must stay NumPy-free.
 
 All transforms operate on floating-point RGB arrays and are deterministic.  They
 never silently clip floating-point results; PNG export is the explicit boundary
