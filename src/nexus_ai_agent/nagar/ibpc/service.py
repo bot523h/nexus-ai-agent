@@ -198,6 +198,8 @@ class _TurnContext:
     shadow_manifest: Any = None
     media_signature: Any = None
     approval_envelope: ApprovalEnvelope | None = None
+    parent_proposal_id: str | None = None
+    parent_scope_digest: str | None = None
 
 
 class IBPCService:
@@ -293,6 +295,9 @@ class IBPCService:
         parsed: IntentAST | DeltaIntentAST | Clarification | Refusal
         base_scope = None
         base_binding = None
+        base_ctx: _TurnContext | None = None
+        parent_proposal_id: str | None = None
+        parent_scope_digest: str | None = None
         if base_approval_id is not None:
             try:
                 base_binding = self._approvals.get(base_approval_id)
@@ -300,10 +305,20 @@ class IBPCService:
             except (ApprovalError, KeyError):
                 self._sessions.mark_failed(session_id, turn_id)
                 return Refusal("unknown_base_proposal", "Delta base proposal is unavailable")
+            assert base_binding is not None and base_ctx is not None
+            if (
+                base_ctx.source_asset_digest != source_asset_digest
+                or base_ctx.ast.asset_id != asset_id
+            ):
+                self._sessions.mark_failed(session_id, turn_id)
+                return Refusal(
+                    "delta_source_mismatch", "Delta must refine the exact base asset bytes"
+                )
             if (
                 base_binding.session_id != session_id
                 or base_binding.principal_id != session.principal_id
                 or base_binding.project_id != session.project_id
+                or base_binding.source_revision != revision
                 or base_binding.state is not ApprovalState.PENDING
             ):
                 self._sessions.mark_failed(session_id, turn_id)
@@ -311,6 +326,8 @@ class IBPCService:
                     "stale_base_proposal", "Delta requires the current unapproved proposal"
                 )
             base_scope = base_ctx.ast.scope
+            parent_proposal_id = base_ctx.ast.ast_id
+            parent_scope_digest = base_ctx.ast.scope.scope_digest
             parsed = parse_delta_intent(
                 text,
                 current_scope=base_scope,
@@ -394,6 +411,8 @@ class IBPCService:
                 verified_identity=verified,
                 shadow_manifest=shadow_manifest,
                 media_signature=media_signature,
+                parent_proposal_id=parent_proposal_id,
+                parent_scope_digest=parent_scope_digest,
             ),
         )
         self._sessions.mark_intent_parsed(session_id, turn_id, intent_digest=parsed.intent_digest)
@@ -698,7 +717,8 @@ class IBPCService:
                 else None,
                 "proposal_id": ctx.ast.ast_id,
                 "proposal_revision": ctx.ast.source_revision,
-                "parent_scope_digest": ctx.ast.scope.scope_digest,
+                "parent_proposal_id": ctx.parent_proposal_id,
+                "parent_scope_digest": ctx.parent_scope_digest,
                 "source_asset": {
                     "asset_id": ctx.ast.asset_id,
                     "sha256": ctx.source_asset_digest,

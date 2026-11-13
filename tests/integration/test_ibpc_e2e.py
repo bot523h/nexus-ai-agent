@@ -219,6 +219,53 @@ async def test_media_evidence_and_keyed_approval_fail_closed(harness, tmp_path: 
     assert queue.job_ids() == []
 
 
+def test_missing_approval_key_refuses_approval(harness, tmp_path: Path) -> None:
+    service, queue, _root, _journal, principal = harness
+    source = tmp_path / "missing-key-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    proposal = service.submit_text_intent(
+        sid,
+        "missing-key",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(proposal, PipelineResult)
+    service._deps.approval_key_provider = None
+    with pytest.raises(ApprovalError, match="approval_key_unavailable"):
+        service.approve(sid, "missing-key", proposal.approval_id, principal_id=principal)
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_shadow_manifest_tamper_refuses_before_admission(harness, tmp_path: Path) -> None:
+    service, queue, _root, _journal, principal = harness
+    source = tmp_path / "shadow-tamper-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    proposal = service.submit_text_intent(
+        sid,
+        "shadow-tamper",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(proposal, PipelineResult)
+    service.approve(sid, "shadow-tamper", proposal.approval_id, principal_id=principal)
+    context = service._contexts[proposal.approval_id]
+    context.shadow_manifest = context.shadow_manifest.model_copy(
+        update={"composite_digest": "sha256:" + "0" * 64}
+    )
+    outcome = await service.execute(
+        sid, "shadow-tamper", proposal.approval_id, principal_id=principal
+    )
+    assert outcome.status == "refused"
+    assert queue.job_ids() == []
+
+
 @pytest.mark.asyncio
 async def test_same_path_source_mutation_after_approval_refuses(harness, tmp_path: Path) -> None:
     service, queue, _root, _journal, principal = harness
@@ -313,6 +360,9 @@ async def test_canonical_delta_refinement_updates_scope_and_replaces_proposal(
     assert isinstance(refined, PipelineResult)
     assert refined.ast.scope.start_us == base.ast.scope.start_us
     assert refined.ast.scope.end_us == base.ast.scope.end_us - 200_000
+    refined_context = service._contexts[refined.approval_id]
+    assert refined_context.parent_proposal_id == base.ast.ast_id
+    assert refined_context.parent_scope_digest == base.ast.scope.scope_digest
     assert base.approval_id not in service._contexts
 
 

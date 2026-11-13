@@ -1,6 +1,6 @@
 # NAGAR IBPC — Intent-Bound Proof Capsules for live editing (mission NAGAR-IBPC-LIVE-EDITING-01)
 
-Status: **M0–M2 implemented, M3–M5 in progress on branch `arena/7622c61d-nexus-ai-agent`** (Draft PR).
+Status: **M2 implementation in progress** on `arena/ad22cc3c-nexus-ai-agent`. Checkpoints `27a8b5c` and `91b9034` are pushed; the full M2 adversarial/mutation matrix and final gates are not yet complete. M3–M5 are deferred.
 Audit basis: [NAGAR_LIVE_EDITING_LIVE_AUDIT.md](NAGAR_LIVE_EDITING_LIVE_AUDIT.md) (M0 — 21-component inventory, real execution path, calibration).
 
 The slice adds **proof-carrying live editing** on top of the existing canonical chain. It adds no new
@@ -15,7 +15,10 @@ intent text / voice audio            (untrusted input; stored only as sha256 dig
   -> nagar.ibpc.models.TypedCreativeAST   frozen typed contract, ast_digest
   -> nagar.ibpc.compiler             validates against the LIVE injected CapabilityRegistry
   -> CompiledPlan                    plan_digest binds capability + input-schema digest
-  -> nagar.ibpc.preview              plan_derived PreviewManifest + Readback (typed fields only)
+  -> nagar.ibpc.preview              metadata plan-preview + Readback (typed fields only)
+  -> nagar.ibpc.shadow               real FFmpeg keyframes + ShadowPreviewManifest
+  -> nagar.ibpc.signature            real-media perceptual ScopeSignature
+  -> nagar.ibpc.approval_mac         JCS scope digest + domain-separated keyed HMAC envelope
   -> nagar.ibpc.approval             single-use ApprovalBinding: principal + revision + all digests
   -> nagar.ibpc.session              fenced turn (sequence, revision, transcript state machine)
   -> nagar.ibpc.service.execute      re-validates everything, consumes the approval ONCE,
@@ -78,7 +81,8 @@ Logs/records carry transcripts and audio as digests only (`redact_mapping`).
 | `intent.py` | deterministic en/fa trim parser; Clarification/Refusal; digest-only intent |
 | `compiler.py` | AST → registry-validated CompiledPlan (fail-closed gates) |
 | `preview.py` | plan-derived PreviewManifest + Readback |
-| `approval.py` | single-use digest-bound ApprovalLedger |
+| `approval.py` | single-use identity-bound ApprovalLedger |
+| `approval_mac.py` | JCS scope digest and versioned domain-separated HMAC-SHA256 approval envelope |
 | `session.py` | LiveSessionManager + VoiceTurn fencing |
 | `privacy.py` | modes, consent, redaction |
 | `footprint.py` | the ONLY subprocess owner for verification: read-only decode + content-matched verification |
@@ -125,6 +129,37 @@ translated and never crosses the public boundary.
 **Testing.** Deterministic units in `tests/unit/test_ibpc_{delta,shadow,signature}.py`; real-FFmpeg
 integration in `tests/integration/test_ibpc_{shadow,signature}_ffmpeg.py` (skipped — never passed —
 when FFmpeg is absent); architecture/security in `tests/architecture/test_ibpc_boundary.py`.
+
+## Wired M2 proposal evidence and authenticated approval (implementation status: partial)
+
+The canonical `IBPCService.submit_text_intent` path now invokes `build_shadow_preview` and
+`compute_scope_signature` against the authorized source file after compiling the plan. `PipelineResult`
+returns those as separate evidence objects; the metadata `PreviewManifest.preview_digest` is never
+represented as the visual Shadow digest. `base_approval_id` selects the Delta path: the service loads
+the base proposal from its in-process context, checks matching session/principal/project and PENDING
+state, invokes `parse_delta_intent`, compiles the resolved AST, and revokes/removes the superseded
+base approval after successful refinement. Supported Delta grammar is the parser grammar (for example,
+“trim 0.2 seconds from the end”); unsupported requests clarify/refuse, with no inferred no-op.
+
+Approval scope is serialized through the versioned provenance canonicalization surface using RFC 8785
+JCS. The scope digest covers identity, AST/plan, asset id/exact SHA-256/length, metadata preview,
+Shadow manifest, perceptual signature, proposal id/revision, and scope. `approval_mac.py` issues a
+`NAGAR/IBPC/APPROVAL/v1` domain-separated HMAC-SHA256 envelope using the existing injected
+`KeyProvider`/`StaticKeyRing` contract (32-byte key material and explicit key id). Envelopes have an
+explicit version and 10-minute expiry; unknown key IDs, absent providers, modified scope/MAC, and
+expired envelopes fail closed. The MAC is a shared-key authenticator, not a public-key signature.
+Legacy raw digests do not qualify as authenticated approvals; an approval must be issued through the
+new configured path. Planning can proceed without the key provider, but approval and execution cannot.
+
+Execution re-hashes the source during identity resolution, stages through the existing guarded
+workspace, hashes staged bytes, and refuses if the staged digest differs. Existing in-process locking
+and `ApprovalLedger` CAS allow at most one concurrent consume per service instance; queue/job retry
+semantics remain those of the injected queue. Sessions, contexts, bindings, HMAC envelope state, and
+replay fencing are in-memory: **no cross-process, crash-safe, or distributed exactly-once guarantee**.
+The current signature and Shadow manifest are cached evidence; the final M2 gate still requires
+revalidation of actual media/evidence and a broader race/adversarial matrix before the pipeline may be
+called complete. Host/root compromise or compromise of key provider/staging storage is outside the
+protection claim.
 
 ## Status enum (final report will use)
 
@@ -206,9 +241,6 @@ mypy are not installed and pip is blocked). The draft PR has not been opened.
   composite, but `verify_shadow_manifest` requires them to equal the deterministic
   sampling schedule. A retimed keyframe is refused as `timestamp_off_schedule`;
   `test_in_scope_retimestamp_is_refused_by_the_schedule` records it.
-- Shadow Preview and Scope Signature are not connected to the approval pipeline
-  (`NOT_WIRED`). The mission keeps this boundary.
-- Lint (`ruff`) and type checks (`mypy`) are not executed in this environment.
-- Full-suite failures are identical on baseline `5fe94512` and on this branch
-  (243 failed, 141 errors in both). They come from environment gaps: `pytest-asyncio`,
-  `pydantic_settings`, `sqlalchemy`.
+- Shadow Preview and Scope Signature are connected to the canonical text/voice proposal pipeline. Delta refinement is available through `submit_text_intent(..., base_approval_id=...)`; only an unapproved pending base proposal can be refined. The returned proposal carries distinct metadata preview, real Shadow manifest, and media signature evidence.
+- Ruff and strict mypy have run on the changed IBPC production modules and the new approval-MAC unit test. Strict mypy on the entire inherited integration test module still reports pre-existing untyped-fixture/type errors; this is not a green result for that test module.
+- Final M2 acceptance remains pending: source/Shadow artifact revalidation matrix, independent verifier tamper case, mutation harness, coverage measurement, and the complete non-slow suite have not yet been run on the final M2 code.
