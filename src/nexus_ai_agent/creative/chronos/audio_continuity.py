@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import wave
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,55 @@ from .contracts import KernelError
 from .timeline import _wav_signature
 
 FloatArray = NDArray[np.float64]
+
+
+@dataclass(frozen=True, slots=True)
+class AudioPhaseHandoverReceipt:
+    samples: FloatArray
+    polarity_inverted: bool
+    correlation_before: float
+    correlation_after: float
+
+
+def align_audio_phase_handover(
+    previous_tail: FloatArray,
+    next_chunk: FloatArray,
+    *,
+    window_frames: int = 64,
+    minimum_correlation: float = 0.5,
+) -> AudioPhaseHandoverReceipt:
+    """Propagate phase polarity across a shot boundary when correlation is decisive.
+
+    This conservative handover only corrects a whole-chunk polarity inversion;
+    it does not claim sample-level time warping or general phase reconstruction.
+    """
+    previous = np.asarray(previous_tail, dtype=np.float64)
+    current = np.asarray(next_chunk, dtype=np.float64)
+    if (
+        previous.ndim not in (1, 2)
+        or current.ndim != previous.ndim
+        or previous.shape[1:] != current.shape[1:]
+        or len(previous) == 0
+        or len(current) == 0
+        or window_frames < 2
+        or not 0 <= minimum_correlation <= 1
+        or np.any(~np.isfinite(previous))
+        or np.any(~np.isfinite(current))
+    ):
+        raise KernelError("invalid audio phase-handover buffers or controls")
+    count = min(window_frames, len(previous), len(current))
+    left, right = previous[-count:].reshape(-1), current[:count].reshape(-1)
+    denominator = float(np.linalg.norm(left) * np.linalg.norm(right))
+    correlation = float(np.dot(left, right) / denominator) if denominator > 1e-15 else 0.0
+    inverted = correlation <= -minimum_correlation
+    aligned = -current if inverted else current.copy()
+    after_denominator = float(np.linalg.norm(left) * np.linalg.norm(aligned[:count].reshape(-1)))
+    after = (
+        float(np.dot(left, aligned[:count].reshape(-1)) / after_denominator)
+        if after_denominator > 1e-15
+        else 0.0
+    )
+    return AudioPhaseHandoverReceipt(aligned, inverted, correlation, after)
 
 
 def _decode_pcm(data: bytes, width: int) -> FloatArray:

@@ -40,6 +40,46 @@ class IdentityVerificationReceipt:
     image_space_span_px: float = 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class CranialBaselineReceipt:
+    reference_baseline_m: float
+    observed_baseline_m: float
+    relative_drift: float
+    within_tolerance: bool
+
+
+def verify_cranial_baseline(
+    reference_landmarks_m: Array,
+    observed_landmarks_m: Array,
+    *,
+    left_index: int,
+    right_index: int,
+    relative_tolerance: float = 0.05,
+) -> CranialBaselineReceipt:
+    """Measure an explicitly indexed cranial/inter-pupillary baseline in metres."""
+    reference = np.asarray(reference_landmarks_m, dtype=np.float64)
+    observed = np.asarray(observed_landmarks_m, dtype=np.float64)
+    if (
+        reference.ndim != 2
+        or reference.shape[1] != 3
+        or observed.shape != reference.shape
+        or not 0 <= left_index < len(reference)
+        or not 0 <= right_index < len(reference)
+        or left_index == right_index
+        or not np.isfinite(relative_tolerance)
+        or relative_tolerance < 0
+        or np.any(~np.isfinite(reference))
+        or np.any(~np.isfinite(observed))
+    ):
+        raise KernelError("invalid cranial baseline landmarks, indices, or tolerance")
+    reference_m = float(np.linalg.norm(reference[left_index] - reference[right_index]))
+    observed_m = float(np.linalg.norm(observed[left_index] - observed[right_index]))
+    if reference_m <= 1e-12:
+        raise KernelError("reference cranial baseline must be nonzero")
+    drift = abs(observed_m - reference_m) / reference_m
+    return CranialBaselineReceipt(reference_m, observed_m, drift, drift <= relative_tolerance)
+
+
 def _brown_conrady_jacobian(
     x: float, y: float, distortion: tuple[float, float, float, float, float]
 ) -> Array:

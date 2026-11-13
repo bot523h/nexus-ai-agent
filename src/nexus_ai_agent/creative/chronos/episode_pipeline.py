@@ -49,6 +49,31 @@ class ShowBibleCharacterBible:
     skin_tone_lab: tuple[float, float, float]
 
 
+class ShowBibleRegistry:
+    """Immutable-per-character show-bible registry with conflict refusal."""
+
+    def __init__(self) -> None:
+        self._characters: dict[str, ShowBibleCharacterBible] = {}
+
+    def register(self, bible: ShowBibleCharacterBible) -> None:
+        if not bible.character_id:
+            raise ContinuityRefusal(("show-bible character_id must not be empty",))
+        existing = self._characters.get(bible.character_id)
+        if existing is not None and existing != bible:
+            raise ContinuityRefusal((f"conflicting show-bible registration: {bible.character_id}",))
+        self._characters[bible.character_id] = bible
+
+    def get(self, character_id: str) -> ShowBibleCharacterBible:
+        try:
+            return self._characters[character_id]
+        except KeyError as exc:
+            raise ContinuityRefusal((f"unknown show-bible character: {character_id}",)) from exc
+
+    @property
+    def character_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self._characters))
+
+
 @dataclass(frozen=True, slots=True)
 class ShowBibleShotObservation:
     episode_index: int
@@ -428,6 +453,7 @@ def run_verified_episode_continuity_pipeline(
     reference_voice: FloatArray | None = None
     jaw_lags: list[float] = []
     duck_gains_db: list[float] = []
+    phase_state: FloatArray | None = None
     for shot in ordered:
         dry, sample_rate = _read_mono_pcm16(shot.dialogue_wav_path)
         ambience, ambience_rate = _read_mono_pcm16(shot.ambience_wav_path)
@@ -463,6 +489,10 @@ def run_verified_episode_continuity_pipeline(
             max_order=1,
         )
         spatial, _ = acoustics_lipsync.render_spatial_dialogue(mono_mix, stereo_ir)
+        if phase_state is not None:
+            handover = audio_continuity.align_audio_phase_handover(phase_state, spatial)
+            spatial = handover.samples
+        phase_state = spatial[-min(64, len(spatial)) :].copy()
         output_wav = stage / f"episode-{episode_index}-shot-{shot.shot_index}-spatial.wav"
         _write_stereo_pcm16(output_wav, spatial, sample_rate)
         rendered_paths.append(output_wav)

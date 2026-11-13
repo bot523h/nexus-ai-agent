@@ -12,6 +12,19 @@ from .contracts import KernelError
 FloatArray = NDArray[np.float64]
 
 
+def rotation_matrix_from_axis_angle(axis: FloatArray, angle_rad: float) -> FloatArray:
+    """Construct a proper SO(3) rotation with Rodrigues' formula."""
+    vector = np.asarray(axis, dtype=np.float64)
+    if vector.shape != (3,) or not np.all(np.isfinite(vector)) or not np.isfinite(angle_rad):
+        raise KernelError("axis-angle rotation requires a finite 3-vector and angle")
+    magnitude = float(np.linalg.norm(vector))
+    if magnitude <= 1e-15:
+        raise KernelError("axis-angle rotation requires a nonzero axis")
+    x, y, z = vector / magnitude
+    skew = np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]], dtype=np.float64)
+    return np.eye(3) + np.sin(angle_rad) * skew + (1.0 - np.cos(angle_rad)) * (skew @ skew)
+
+
 def intrinsics(
     f_mm: float, width_px: int, height_px: int, sx_mm: float, sy_mm: float
 ) -> FloatArray:
