@@ -157,6 +157,34 @@ def _open_session(service: IBPCService, principal_id: str) -> str:
 
 
 @pytest.mark.asyncio
+async def test_scope_signature_tamper_refuses_before_queue_admission(
+    harness, tmp_path: Path
+) -> None:
+    service, queue, _creative_root, _journal, principal = harness
+    source = tmp_path / "tamper-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "tamper-turn",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "tamper-turn", result.approval_id, principal_id=principal)
+    context = service._contexts[result.approval_id]
+    assert context.scope_signature is not None
+    context.scope_signature = "sha256:" + "0" * 64
+
+    outcome = await service.execute(sid, "tamper-turn", result.approval_id, principal_id=principal)
+    assert outcome.status == "refused"
+    assert "scope_signature_mismatch" in outcome.detail
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
 async def test_full_chain_text_intent_to_verified_capsule(harness, tmp_path: Path) -> None:
     service, queue, creative_root, journal, principal = harness
     source = tmp_path / "source.mp4"

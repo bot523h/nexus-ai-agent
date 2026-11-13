@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -44,6 +45,7 @@ from nexus_ai_agent.nagar.ibpc.authority import (
     CanonicalAuthorityError,
     CanonicalAuthorityPort,
 )
+from nexus_ai_agent.nagar.ibpc.canonical import digest_of
 from nexus_ai_agent.nagar.ibpc.compiler import CompilationRefused, compile_ast
 from nexus_ai_agent.nagar.ibpc.footprint import FootprintVerifyError, probe_media, verify_keep
 from nexus_ai_agent.nagar.ibpc.intent import (
@@ -83,6 +85,13 @@ SURFACE_OPERATION = "trim"
 CANONICAL_OPERATION: Literal["timeline.trim"] = "timeline.trim"
 WORKSPACE_PREFIX = "creative_"
 DRAIN_TIMEOUT_S = 300.0
+
+
+class ScopeSignatureMismatchError(ApprovalError):
+    """Approved execution scope changed after the human approval boundary."""
+
+    def __init__(self) -> None:
+        super().__init__("scope_signature_mismatch", "approved execution scope changed")
 
 
 def utc_now() -> str:
@@ -171,6 +180,7 @@ class _TurnContext:
     #: insertion order in the context store — the eviction recency key. Only
     #: terminal contexts are evicted, oldest first.
     created_order: int = 0
+    scope_signature: str | None = None
 
 
 class IBPCService:
@@ -597,6 +607,21 @@ class IBPCService:
         )
         return session, turn, ctx, identity
 
+    @staticmethod
+    def _scope_signature(ctx: _TurnContext, identity: ApprovalIdentity) -> str:
+        """Sign the canonical approval scope using the frozen IBPC digest form."""
+        return digest_of(
+            {
+                "identity": identity.as_dict(),
+                "intent_id": ctx.ast.ast_id,
+                "normalized_plan": ctx.plan.model_dump(mode="json"),
+                "target_asset_refs": [ctx.ast.asset_id, ctx.source_asset_digest],
+                "capability_set": [CANONICAL_OPERATION],
+                "parameter_digest": digest_of(ctx.ast.params),
+                "shadow_preview_digest": ctx.preview.preview_digest,
+            }
+        )
+
     def approve(
         self, session_id: str, turn_id: str, approval_id: str, *, principal_id: str
     ) -> ApprovalBinding:
@@ -614,6 +639,10 @@ class IBPCService:
             identity=identity,
             turn_is_active=lambda: self._sessions.turn_is_active(session_id, turn_id),
         )
+        ctx = self._contexts.get(approval_id)
+        if ctx is None:
+            raise ApprovalError("missing_context", "approval context disappeared")
+        ctx.scope_signature = self._scope_signature(ctx, identity)
         self._sessions.mark_approved(session_id, turn_id)
         return binding
 
@@ -792,6 +821,11 @@ class IBPCService:
                 )
             except (ApprovalError, SessionError) as exc:
                 return ExecutionOutcome(status="refused", detail=f"{exc.reason}: {exc.detail}")
+            if ctx.scope_signature is None or not hmac.compare_digest(
+                ctx.scope_signature, self._scope_signature(ctx, identity)
+            ):
+                error = ScopeSignatureMismatchError()
+                return ExecutionOutcome(status="refused", detail=f"{error.reason}: {error.detail}")
             try:
                 self._approvals.consume(approval_id, identity=identity)
             except ApprovalError as exc:
