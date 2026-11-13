@@ -260,7 +260,8 @@ def test_a_leaf_from_a_real_file_hashes_its_bytes(tmp_path) -> None:
 
 def test_a_merkle_proof_round_trips_through_hex() -> None:
     leaves = [_leaf(f"seg{index}.wav").canonical_bytes() for index in range(6)]
-    hashed = [merkle_leaf_hash(payload) for payload in leaves]
+    # Build with the size binding, matching what `MerkleProof.verify` requires.
+    hashed = [merkle_leaf_hash(payload, total_leaves=6) for payload in leaves]
     root = merkle_root(hashed)
     index = 4
     proof = MerkleProof(
@@ -638,7 +639,11 @@ def test_a_passport_tampered_after_the_fact_no_longer_verifies(tmp_path) -> None
 
     # A verifier holding only the passport can re-derive the root from the
     # leaves and prove each one; nothing needs the original ordering.
-    hashed = [merkle_leaf_hash(leaf.canonical_bytes()) for leaf in receipt.passport.leaves]
+    total = receipt.passport.total_leaves
+    hashed = [
+        merkle_leaf_hash(leaf.canonical_bytes(), total_leaves=total)
+        for leaf in receipt.passport.leaves
+    ]
     assert merkle_root(hashed).hex() == receipt.passport.root_hex
 
     # Replace one leaf's file hash: the root no longer matches its own leaves.
@@ -651,5 +656,91 @@ def test_a_passport_tampered_after_the_fact_no_longer_verifies(tmp_path) -> None
         )
         for leaf in receipt.passport.leaves
     ]
-    tampered_root = merkle_root([merkle_leaf_hash(leaf.canonical_bytes()) for leaf in tampered])
+    tampered_root = merkle_root(
+        [merkle_leaf_hash(leaf.canonical_bytes(), total_leaves=total) for leaf in tampered]
+    )
     assert tampered_root.hex() != receipt.passport.root_hex
+
+
+# --------------------------------------------------------------------------- #
+# Size binding: the malleability case
+# --------------------------------------------------------------------------- #
+
+
+def test_a_proof_cannot_be_replayed_at_a_smaller_tree_size() -> None:
+    """An audit path of length k is valid for *every* size whose path is also k.
+
+    This was a live defect in this module. For an 8-leaf tree, leaf 0's path has
+    3 nodes — and so does leaf 0's path in 5-, 6- and 7-leaf trees. Folding the
+    8-leaf path reproduces the same root at all four sizes, so the claim "this
+    leaf is index 0 of an N-leaf tree" had N unpinned: a shorter history could
+    be passed off as a longer one.
+
+    The fix is to commit the tree size into the leaf domain on both the build
+    and the verify side.
+    """
+    total = 8
+    leaves = [merkle_leaf_hash(bytes([index]), total_leaves=total) for index in range(total)]
+    root = merkle_root(leaves)
+    proof = merkle_inclusion_proof(leaves, 0)
+    assert len(proof) == 3
+
+    assert verify_merkle_inclusion(
+        leaf=bytes([0]),
+        index=0,
+        total_leaves=total,
+        proof=proof,
+        root=root,
+        bind_tree_size=True,
+    )
+    for smaller in (5, 6, 7):
+        assert not verify_merkle_inclusion(
+            leaf=bytes([0]),
+            index=0,
+            total_leaves=smaller,
+            proof=proof,
+            root=root,
+            bind_tree_size=True,
+        ), f"an {total}-leaf proof verified at total_leaves={smaller}"
+
+
+def test_the_unbound_primitive_stays_plain_rfc_6962() -> None:
+    """Without the flag the leaf commitment is exactly SHA-256(0x00 || leaf)."""
+    import hashlib
+
+    assert merkle_leaf_hash(b"payload") == hashlib.sha256(b"\x00payload").digest()
+    bound = merkle_leaf_hash(b"payload", total_leaves=4)
+    assert bound != merkle_leaf_hash(b"payload")
+    assert bound == merkle_leaf_hash(b"payload", total_leaves=4)
+    assert bound != merkle_leaf_hash(b"payload", total_leaves=5)
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_binding_to_a_nonsensical_size_is_refused(bad: int) -> None:
+    with pytest.raises(LineageError, match="must be positive"):
+        merkle_leaf_hash(b"payload", total_leaves=bad)
+
+
+def test_a_published_passport_is_bound_to_its_own_size(tmp_path) -> None:
+    """The end-to-end path uses the binding: a published proof is not replayable."""
+    staging = tmp_path / "staging"
+    segments = _stage(staging, 3)
+    fence = PublicationFence(tmp_path / "fence.json")
+    token = fence.claim("test")
+    receipt = StagedAudioPublication(
+        staging,
+        tmp_path / "out" / "artifact",
+        fence=fence,
+        authorizer=CommandBusAuthorizer(production=False),
+    ).publish(segments, token=token)
+    leaf = receipt.passport.leaves[0]
+    proof = receipt.proof_for(leaf.name)
+    assert proof.verify(leaf)
+    # Replaying the same audit path at a different declared size must fail.
+    forged = MerkleProof(
+        index=proof.index,
+        total_leaves=2,
+        root_hex=proof.root_hex,
+        audit_path=proof.audit_path,
+    )
+    assert not forged.verify(leaf)

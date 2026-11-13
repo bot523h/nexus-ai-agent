@@ -80,9 +80,24 @@ class LineageQuarantineError(LineageError):
 # --------------------------------------------------------------------------- #
 
 
-def merkle_leaf_hash(leaf: bytes) -> bytes:
-    """``SHA-256(0x00 || leaf)`` — the RFC 6962 leaf commitment."""
-    return hashlib.sha256(_LEAF_PREFIX + leaf).digest()
+def merkle_leaf_hash(leaf: bytes, *, total_leaves: int | None = None) -> bytes:
+    """``SHA-256(0x00 || leaf)`` — the RFC 6962 leaf commitment.
+
+    ``total_leaves`` optionally binds the tree size into the commitment. It is
+    off by default so the primitive stays the plain RFC 6962 function, and it is
+    switched on by the publication path, which needs the binding: an audit path
+    of length *k* otherwise verifies against **every** tree size whose own path
+    for that index is also length *k*. Measured on this module before the fix,
+    an 8-leaf proof for index 0 (path length 3) also verified at
+    ``total_leaves`` 5, 6 and 7 — all four sizes produce a 3-node path that
+    folds to the same root, so the size claim was unpinned.
+    """
+    if total_leaves is None:
+        return hashlib.sha256(_LEAF_PREFIX + leaf).digest()
+    if total_leaves < 1:
+        raise LineageError(f"total_leaves must be positive, got {total_leaves}")
+    bound = leaf + b"\x00n=" + str(total_leaves).encode("ascii")
+    return hashlib.sha256(_LEAF_PREFIX + bound).digest()
 
 
 def merkle_node_hash(left: bytes, right: bytes) -> bytes:
@@ -146,6 +161,7 @@ def verify_merkle_inclusion(
     total_leaves: int,
     proof: Sequence[bytes],
     root: bytes,
+    bind_tree_size: bool = False,
 ) -> bool:
     """Recompute the root from ``leaf`` and check it against ``root``.
 
@@ -157,9 +173,20 @@ def verify_merkle_inclusion(
     loop verifies the endpoints of the tree and rejects everything in the
     middle — which is exactly the bug this replaced.
 
-    ``total_leaves`` is load-bearing: the folding order depends on where the
-    power-of-two split falls at each level, which is a function of the tree
-    size. A verifier that ignores it accepts a proof from a different tree.
+    ``total_leaves`` is load-bearing in two ways, and only one of them is
+    obvious.
+
+    The first is the folding order: the power-of-two split depends on the tree
+    size at every level.
+
+    The second is *malleability*, and it is not obvious at all. An 8-leaf tree
+    and a 5-, 6- or 7-leaf tree all give leaf 0 a three-node audit path, and
+    folding that path reproduces the same root — so the naive check accepts
+    ``total_leaves = 6`` for a proof issued over 8 leaves. The claim "this leaf
+    is at index 0 of a tree of N" then has N unpinned, and a shorter tree can be
+    passed off as a longer one. The standard defence is to commit the tree size
+    into the leaf domain, so a leaf hashed for one size cannot be reused at
+    another.
     """
     if total_leaves <= 0 or not 0 <= index < total_leaves:
         return False
@@ -167,7 +194,7 @@ def verify_merkle_inclusion(
         return False
     fn = index
     sn = total_leaves - 1
-    current = merkle_leaf_hash(leaf)
+    current = merkle_leaf_hash(leaf, total_leaves=total_leaves if bind_tree_size else None)
     for sibling in proof:
         if sn == 0:
             return False
@@ -276,7 +303,14 @@ class LineageLeaf:
 
 @dataclass(frozen=True)
 class MerkleProof:
-    """An inclusion proof plus everything needed to interpret it."""
+    """An inclusion proof plus everything needed to interpret it.
+
+    ``total_leaves`` is duplicated here *and* committed inside the leaf hash
+    domain (see :func:`merkle_root`), and the duplication is deliberate: the
+    field is what a human reads, and the commitment is what makes it
+    unforgeable. Relying on the field alone is the malleability bug documented
+    on :func:`verify_merkle_inclusion`.
+    """
 
     index: int
     total_leaves: int
@@ -290,6 +324,7 @@ class MerkleProof:
             total_leaves=self.total_leaves,
             proof=tuple(bytes.fromhex(node) for node in self.audit_path),
             root=bytes.fromhex(self.root_hex),
+            bind_tree_size=True,
         )
 
 
@@ -515,7 +550,11 @@ class StagedAudioPublication:
         if not leaves:
             raise LineageError("cannot publish an artifact with no segments")
 
-        hashed = tuple(merkle_leaf_hash(leaf.canonical_bytes()) for leaf in leaves)
+        # Build the tree over leaves that commit to the tree size, so the
+        # published proof cannot be replayed at a different `total_leaves`.
+        hashed = tuple(
+            merkle_leaf_hash(leaf.canonical_bytes(), total_leaves=len(leaves)) for leaf in leaves
+        )
         root = merkle_root(hashed)
         proofs = tuple(
             MerkleProof(

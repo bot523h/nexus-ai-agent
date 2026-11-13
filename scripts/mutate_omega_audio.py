@@ -37,6 +37,12 @@ AUDIO = "src/nexus_ai_agent/creative/audio_engine"
 SLIDESHOW = "src/nexus_ai_agent/creative/slideshow/audio.py"
 TEST_FILE = "tests/unit/test_omega_stage_a_hardening.py"
 ENGINE_PORT = "src/nexus_ai_agent/creative/studio/audio_engine.py"
+KERNELS = "src/nexus_ai_agent/creative/audio_engine/cinema_kernels.py"
+LINEAGE = "src/nexus_ai_agent/creative/audio_engine/spine_lineage.py"
+KERNEL_TESTS = "tests/creative/audio_engine/test_cinema_kernels.py"
+LINEAGE_TESTS = "tests/unit/test_audio_engine_spine_lineage.py"
+DEGENERATE_TESTS = "tests/unit/test_audio_engine_slideshow_degenerate.py"
+BANNER_TESTS = "tests/unit/test_omega_wave2_banner_hardening.py"
 
 
 @dataclass(frozen=True)
@@ -872,6 +878,432 @@ PROBES: tuple[Probe, ...] = (
         new="""    return None""",
         test="test_a_6_1_1_banner_is_no_longer_none",
         test_file="tests/unit/test_omega_wave2_ffmpeg_banner_versions.py",
+    ),
+    # ------------------------------------------------------------------ #
+    # WAVE-B1: spine_lineage — RFC 6962 Merkle lineage
+    # ------------------------------------------------------------------ #
+    Probe(
+        name="merkle-leaf-prefix-swapped-to-node",
+        gate="the leaf commitment must use 0x00, not 0x01",
+        path=LINEAGE,
+        old='_LEAF_PREFIX = b"\\x00"',
+        # Swapping the domains makes a leaf hash indistinguishable from an
+        # interior node: the second-preimage weakness RFC 6962 2.1 prevents.
+        new='_LEAF_PREFIX = b"\\x01"',
+        test="test_leaves_and_nodes_are_domain_separated",
+        test_file=LINEAGE_TESTS,
+    ),
+    Probe(
+        name="merkle-node-prefix-dropped",
+        gate="interior nodes must be domain-separated by 0x01",
+        path=LINEAGE,
+        old="    return hashlib.sha256(_NODE_PREFIX + left + right).digest()",
+        new="    return hashlib.sha256(left + right).digest()",
+        test="test_leaves_and_nodes_are_domain_separated",
+        test_file=LINEAGE_TESTS,
+    ),
+    Probe(
+        name="merkle-split-uses-half-instead-of-power-of-two",
+        gate="RFC 6962 splits at the largest power of two below n",
+        path=LINEAGE,
+        old="    return 1 << ((width - 1).bit_length() - 1)",
+        # n // 2 agrees with the RFC on power-of-two trees and is wrong on
+        # every other size: the defect that made every odd tree unprovable.
+        new="    return width // 2",
+        test="test_every_leaf_of_every_tree_size_proves_inclusion",
+        test_file=LINEAGE_TESTS,
+    ),
+    Probe(
+        name="merkle-proof-length-ignores-the-index",
+        gate="the audit-path length depends on the index, not just the size",
+        path=LINEAGE,
+        old="    if len(proof) != _proof_length(index, total_leaves):",
+        new="    if len(proof) != _proof_length(0, total_leaves):",
+        test="test_every_leaf_of_every_tree_size_proves_inclusion",
+        test_file=LINEAGE_TESTS,
+    ),
+    Probe(
+        name="merkle-proof-not-bound-to-its-tree-size",
+        gate="a proof must not replay at a different total_leaves",
+        path=LINEAGE,
+        old=(
+            "    current = merkle_leaf_hash("
+            "leaf, total_leaves=total_leaves if bind_tree_size else None)"
+        ),
+        # An audit path of length k is valid for every tree size whose own path
+        # for that index is also k: an 8-leaf proof for index 0 verified at
+        # total_leaves 5, 6 and 7 before the size was bound into the leaf domain.
+        new="    current = merkle_leaf_hash(leaf)",
+        test="test_a_proof_cannot_be_replayed_at_a_smaller_tree_size",
+        test_file=LINEAGE_TESTS,
+    ),
+    Probe(
+        name="leaf-drops-the-on-disk-hash",
+        gate="a leaf must commit to both the PCM and the WAV hash",
+        path=LINEAGE,
+        old=(
+            '            "pcm_sha256": self.pcm_sha256,\n            "wav_sha256": self.wav_sha256,'
+        ),
+        # A tree over only the PCM hash cannot detect a re-encode whose bytes
+        # changed while the samples did not.
+        new='            "pcm_sha256": self.pcm_sha256,',
+        test="test_a_leaf_commits_to_both_hashes",
+        test_file=LINEAGE_TESTS,
+    ),
+    Probe(
+        name="leaf-accepts-an-uppercase-digest",
+        gate="content identity is lowercase hex, exactly 64 characters",
+        path=LINEAGE,
+        old=(
+            "            if len(value) != 64 or any("
+            'character not in "0123456789abcdef" for character in value):'
+        ),
+        new="            if len(value) != 64:",
+        test="test_a_malformed_digest_is_refused",
+        test_file=LINEAGE_TESTS,
+    ),
+    Probe(
+        name="stale-fence-is-accepted",
+        gate="a superseded render must not publish",
+        path=LINEAGE,
+        old="        if not self.fence.is_current(token):",
+        new="        if False:",
+        test="test_a_stale_fence_quarantines_and_retains_the_artifact",
+        test_file=LINEAGE_TESTS,
+    ),
+    Probe(
+        name="quarantine-deletes-instead-of-retaining",
+        gate="tamper evidence is retained, never deleted",
+        path=LINEAGE,
+        old="            shutil.move(str(self.staging_dir), str(target))",
+        # Deleting the loser makes "two renders raced" indistinguishable from
+        # "one render happened".
+        new="            shutil.rmtree(self.staging_dir, ignore_errors=True)",
+        test="test_a_stale_fence_quarantines_and_retains_the_artifact",
+        test_file=LINEAGE_TESTS,
+    ),
+    Probe(
+        name="production-authorizer-fails-open",
+        gate="an unconfigured production authorizer must refuse",
+        path=LINEAGE,
+        old='            return False, "no authorizer configured for production publication"',
+        new='            return True, "no authorizer configured"',
+        test="test_production_without_an_authorizer_fails_closed",
+        test_file=LINEAGE_TESTS,
+    ),
+    # ------------------------------------------------------------------ #
+    # WAVE-B1: slideshow/audio — decoding and refusal arithmetic
+    # ------------------------------------------------------------------ #
+    Probe(
+        name="24-bit-sample-not-sign-extended",
+        gate="a negative 24-bit sample must stay negative",
+        path=SLIDESHOW,
+        old="        signed[signed >= 0x800000] -= 0x1000000",
+        # Without this the top half of the range reads as positive: every
+        # negative sample becomes a large positive one.
+        new="        pass",
+        test="test_a_24_bit_wav_sign_extends_and_normalises",
+        test_file=DEGENERATE_TESTS,
+    ),
+    Probe(
+        name="24-bit-sample-scaled-wrongly",
+        gate="24-bit normalises by 2**23, not 2**24",
+        path=SLIDESHOW,
+        old="        data = signed.astype(np.float32) / 8388608.0",
+        new="        data = signed.astype(np.float32) / 16777216.0",
+        test="test_a_24_bit_wav_sign_extends_and_normalises",
+        test_file=DEGENERATE_TESTS,
+    ),
+    Probe(
+        name="8-bit-wav-treated-as-signed",
+        gate="8-bit WAV is unsigned and must be recentred",
+        path=SLIDESHOW,
+        old=(
+            "        data = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0"
+        ),
+        new="        data = np.frombuffer(raw, dtype=np.int8).astype(np.float32) / 128.0",
+        test="test_an_8_bit_wav_is_unsigned_and_recentred",
+        test_file=DEGENERATE_TESTS,
+    ),
+    Probe(
+        name="playback-duration-loses-its-rate-guard",
+        gate="a zero or negative rate has no duration",
+        path=SLIDESHOW,
+        old="        if self.sample_rate <= 0:\n            return 0",
+        new="        if False:\n            return 0",
+        test="test_a_non_positive_rate_has_no_duration",
+        test_file=DEGENERATE_TESTS,
+    ),
+    Probe(
+        name="beat-grid-returns-milliseconds",
+        gate="the beat grid is in microseconds",
+        path=SLIDESHOW,
+        old=(
+            "        int(round(value * MICROSECONDS_PER_SECOND)) for value in times"
+            " if value <= duration_seconds"
+        ),
+        new="        int(round(value * 1000.0)) for value in times if value <= duration_seconds",
+        test="test_a_normal_period_yields_a_clipped_grid",
+        test_file=DEGENERATE_TESTS,
+    ),
+    Probe(
+        name="beat-grid-accepts-an-impossible-period",
+        gate="a non-positive period yields no beats",
+        path=SLIDESHOW,
+        old="    if period <= 0:\n        return ()",
+        new="    if False:\n        return ()",
+        test="test_an_impossible_period_yields_no_beats",
+        test_file=DEGENERATE_TESTS,
+    ),
+    Probe(
+        name="tempo-window-guard-removed",
+        gate="an impossible tempo window must be refused",
+        path=SLIDESHOW,
+        old="    if min_bpm <= 0 or max_bpm <= min_bpm:",
+        new="    if False:",
+        test="test_an_impossible_tempo_window_is_refused",
+        test_file=DEGENERATE_TESTS,
+    ),
+    # ------------------------------------------------------------------ #
+    # WAVE-B1: ffmpeg_ops — label-dependent parsing
+    # ------------------------------------------------------------------ #
+    Probe(
+        name="summary-reader-accepts-the-wrong-unit",
+        gate="a value whose unit does not match its label must be refused",
+        path="src/nexus_ai_agent/creative/audio_engine/ffmpeg_ops.py",
+        old="    if accepted is not None and unit not in accepted:",
+        # Threshold appears under both the integrated and LRA section; a
+        # unit-blind read of the wrong block yields a plausible number under
+        # the wrong name.
+        new="    if False:",
+        test="test_a_wrong_unit_for_the_label_refuses_rather_than_guessing",
+        test_file=BANNER_TESTS,
+    ),
+    # ------------------------------------------------------------------ #
+    # WAVE-B2: cinema_kernels K1 — HOA3 and the FDN
+    # ------------------------------------------------------------------ #
+    Probe(
+        name="hoa3-omni-channel-is-root-two",
+        gate="SN3D leaves Y_0^0 = 1.0 (N3D would give sqrt(2))",
+        path=KERNELS,
+        old="            delta = 1.0 if m == 0 else 0.0",
+        new="            delta = 0.0 if m == 0 else 1.0",
+        test="test_the_omnidirectional_channel_is_exactly_one",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="hoa3-double-counts-the-horizontal-taper",
+        gate="P_l^m already carries cos(el)^m",
+        path=KERNELS,
+        old="            values.append(normalisation * legendre * angular)",
+        # Multiplying by cos_el^|m| again squares the taper and the encoded
+        # energy falls with elevation: the source fades as it rises.
+        new=(
+            "            values.append(normalisation * legendre * angular "
+            "* (math.cos(elevation) ** abs(m)))"
+        ),
+        test="test_the_directional_energy_norm_is_direction_invariant",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="householder-factor-is-two-over-m-minus-one",
+        gate="H = I - (2/M)11^T is the unitary choice",
+        path=KERNELS,
+        old="    return np.eye(channels, dtype=np.float64) - (2.0 / channels) * ones",
+        new="    return np.eye(channels, dtype=np.float64) - (2.0 / (channels - 1)) * ones",
+        test="test_the_householder_factor_is_two_over_m",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="fdn-delay-lengths-share-a-factor",
+        gate="FDN delay lengths must be pairwise coprime",
+        path=KERNELS,
+        old="            delays.append(candidate)",
+        # Common factors make the modes reinforce at shared periods: a
+        # metallic ring instead of a diffuse tail.
+        new="            delays.append(candidate + 1)",
+        test="test_the_fdn_delay_lengths_are_pairwise_coprime",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="sabine-constant-is-wrong",
+        gate="Sabine is 0.161 V / (S alpha)",
+        path=KERNELS,
+        old="    return 0.161 * volume_m3 / (surface_m2 * absorption)",
+        new="    return 0.6 * volume_m3 / (surface_m2 * absorption)",
+        test="test_the_sabine_constant_is_the_published_one",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="early-reflection-mirrors-the-wrong-sign",
+        gate="an image source is mirrored through its wall",
+        path=KERNELS,
+        old="        (2 * lx - sx, sy, sz),",
+        new="        (lx + sx, sy, sz),",
+        test="test_the_six_early_reflections_arrive_after_the_direct_sound",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="woodworth-itd-drops-the-theta-term",
+        gate="ITD = (a/c)(sin t + t), not (a/c) sin t",
+        path=KERNELS,
+        old="    return (HEAD_RADIUS_M / SPEED_OF_SOUND_M_S) * (math.sin(azimuth) + azimuth)",
+        new="    return (HEAD_RADIUS_M / SPEED_OF_SOUND_M_S) * math.sin(azimuth)",
+        test="test_the_woodworth_maximum_matches_the_head_geometry",
+        test_file=KERNEL_TESTS,
+    ),
+    # ------------------------------------------------------------------ #
+    # WAVE-B2: cinema_kernels K2 — restoration
+    # ------------------------------------------------------------------ #
+    Probe(
+        name="wiener-gain-floor-removed",
+        gate="the Wiener gain is floored, never allowed to reach zero",
+        path=KERNELS,
+        old="        current = np.maximum(xi / (1.0 + xi), floor)",
+        new="        current = xi / (1.0 + xi)",
+        test="test_the_wiener_gain_never_falls_below_its_floor",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="declipper-overwrites-clean-samples",
+        gate="unclipped samples are measured values and stay exact",
+        path=KERNELS,
+        old="        work[clean_mask] = mono[clean_mask]",
+        # The inverse mutation: instead of *not* restoring the measured values,
+        # actively smooth every sample. (`pass` in place of the clamp is a
+        # no-op — clean samples are never written by the loop above, so removing
+        # the clamp changes nothing and that probe measured nothing.)
+        new='        work = np.convolve(work, np.ones(3) / 3.0, mode="same")',
+        test="test_the_declipper_preserves_unclipped_samples",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="declipper-inverts-the-peak-polarity",
+        gate="a peak's polarity is measured, not inferred",
+        path=KERNELS,
+        old="                sign = 1.0 if mono[index] >= 0.0 else -1.0",
+        new="                sign = 1.0",
+        test="test_the_declipper_preserves_the_measured_sign",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="stft-frame-count-truncates-the-tail",
+        gate="the STFT must cover the signal exactly",
+        path=KERNELS,
+        old="    frames = 1 + int(np.ceil(max(0, needed - size) / hop))",
+        new="    frames = 1 + (max(0, needed - size)) // hop",
+        test="test_the_stft_round_trip_is_lossless_on_any_length",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="click-detector-treats-silence-as-clicks",
+        gate="a degenerate MAD must not flag everything",
+        path=KERNELS,
+        old="    if sigma <= 1e-9 * peak_second:",
+        # Digital silence gives a nonzero but ~1e-16 MAD; an unguarded
+        # threshold * sigma bar sits below every sample and the whole file
+        # is reported as clicks.
+        new="    if False:",
+        test="test_digital_silence_is_not_reported_as_a_recording_full_of_clicks",
+        test_file=KERNEL_TESTS,
+    ),
+    # ------------------------------------------------------------------ #
+    # WAVE-B2: cinema_kernels K3 — modal foley
+    # ------------------------------------------------------------------ #
+    Probe(
+        name="hertzian-amplitude-uses-linear-mass",
+        gate="Hertzian amplitude scales as m^0.6, not m",
+        path=KERNELS,
+        old="    return float((effective_mass_kg**0.6) * (rel_velocity_m_s**1.2))",
+        new="    return float(effective_mass_kg * (rel_velocity_m_s**1.2))",
+        test="test_hertzian_amplitude_is_sublinear_in_velocity",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="modal-event-lets-an-alias-through",
+        gate="a partial above Nyquist is skipped, not aliased",
+        path=KERNELS,
+        old="        if partial >= sample_rate / 2.0:",
+        new="        if partial >= sample_rate * 4.0:",
+        test="test_a_partial_above_nyquist_is_skipped_not_aliased",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="modal-event-decay-has-the-wrong-sign",
+        gate="modes decay, they do not grow",
+        path=KERNELS,
+        old=(
+            "        out += weight * amplitude * np.exp(-decay * time)"
+            " * np.sin(2.0 * math.pi * partial * time)"
+        ),
+        new=(
+            "        out += weight * amplitude * np.exp(decay * time)"
+            " * np.sin(2.0 * math.pi * partial * time)"
+        ),
+        test="test_every_material_syncs_within_one_millisecond",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="foley-onset-measured-by-global-peak",
+        gate="onset is where the event starts, not where it is loudest",
+        path=KERNELS,
+        old="            crossing = np.flatnonzero(envelope >= 0.5 * peak_level)",
+        new="            crossing = np.flatnonzero(envelope >= peak_level)",
+        test="test_every_material_syncs_within_one_millisecond",
+        test_file=KERNEL_TESTS,
+    ),
+    # ------------------------------------------------------------------ #
+    # WAVE-B2: cinema_kernels K4 — Bark and mastering
+    # ------------------------------------------------------------------ #
+    Probe(
+        name="zwicker-scale-loses-its-second-arctangent",
+        gate="the Zwicker scale is the sum of two arctangents",
+        path=KERNELS,
+        old="    return 13.0 * math.atan(0.00076 * frequency_hz) + 3.5 * math.atan(",
+        new="    return 13.0 * math.atan(0.00076 * frequency_hz) + 0.0 * math.atan(",
+        test="test_the_zwicker_scale_matches_published_values",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="spreading-slopes-are-symmetric",
+        gate="masking spreads +27 dB/Bark down and -12 dB/Bark up",
+        path=KERNELS,
+        old=(
+            "    if delta_bark >= 0.0:\n        return -12.0 * delta_bark"
+            "\n    return -27.0 * abs(delta_bark)"
+        ),
+        new="    return -12.0 * abs(delta_bark)",
+        test="test_the_spreading_slopes_are_asymmetric",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="limiter-clamps-samples-instead-of-true-peaks",
+        gate="the ceiling is a true-peak ceiling",
+        path=KERNELS,
+        old="    peak = true_peak_dbtp(stereo, oversample=oversample)",
+        new="    peak = 20.0 * math.log10(max(float(np.max(np.abs(stereo))), 1e-12))",
+        test="test_the_limiter_uses_the_oversampled_true_peak_not_the_sample_peak",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="limiter-applies-one-global-scale-factor",
+        gate="the limiter must be time-varying or it destroys loudness",
+        path=KERNELS,
+        old="    limited = stereo * smoothed[:, None]",
+        # A single scalar ratio measured 35 dB of reduction on a signal that
+        # needed a few dB on a handful of peaks.
+        new="    limited = stereo * float(smoothed.min())",
+        test="test_the_limiter_preserves_most_of_the_signal_energy",
+        test_file=KERNEL_TESTS,
+    ),
+    Probe(
+        name="speech-band-range-is-wrong",
+        gate="presence compensation is bounded to the speech bands",
+        path=KERNELS,
+        old="SPEECH_BANDS: Final[tuple[int, ...]] = tuple(range(4, 17))",
+        new="SPEECH_BANDS: Final[tuple[int, ...]] = tuple(range(0, 24))",
+        test="test_presence_compensation_is_bounded",
+        test_file=KERNEL_TESTS,
     ),
 )
 

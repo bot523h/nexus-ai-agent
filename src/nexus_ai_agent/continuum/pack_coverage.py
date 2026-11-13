@@ -89,6 +89,10 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         # WAVE-B1: the tempo estimator's refusal paths decide whether the pack
         # may report a tempo at all, so their coverage is pack evidence.
         "tests/unit/test_audio_engine_slideshow_degenerate.py",
+        # WAVE-B2/B3: the K1-K4 cinema kernels are the pack's cinema-audio
+        # surface (HOA3 rooms, restoration, foley, Bark mastering), so their
+        # physical-invariant suite is pack evidence.
+        "tests/creative/audio_engine/test_cinema_kernels.py",
         "tests/architecture/test_audio_pack_boundary.py",
     ),
     "caption": (
