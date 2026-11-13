@@ -10,6 +10,7 @@ input and output media digests.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import shutil
 import struct
@@ -589,7 +590,7 @@ def compile_and_heal_real_media_shot(
         binary = shutil.which("ffmpeg")
         if binary is None:
             try:  # pragma: no cover - optional dependency
-                import imageio_ffmpeg  # type: ignore[import-not-found]
+                imageio_ffmpeg = importlib.import_module("imageio_ffmpeg")
 
                 binary = imageio_ffmpeg.get_ffmpeg_exe()
             except Exception:
