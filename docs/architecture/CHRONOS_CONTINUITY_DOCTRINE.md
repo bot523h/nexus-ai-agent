@@ -93,3 +93,15 @@ The Wave 14 N=3 benchmark includes three camera RIRs at 48 kHz, the continuity a
 | N | Median | Minimum | Maximum | Output samples | RT60 spread | Sample drift |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 3 | 9.728 ms | 9.653 ms | 10.105 ms | 48,000 | 0.0 s | 0 |
+
+## Phase 4 — Wave 15 kinetic match-cut continuity
+
+`kinetic_match_cut_engine.py` exposes the existing Hann-windowed FFT phase-correlation kernel and scanline rolling-shutter inverse warp through a unit-explicit boundary. It converts camera velocity from pixels/frame to pixels/second and applies a normalized sensor readout fraction. Its match-on-action optimizer evaluates the complete outgoing×incoming frame-pair matrix with weighted 3D landmark-pose, 2D screen-velocity, and speed costs; finite-overflow costs are refused. The globally selected handoff carries a cubic-Hermite 3D landmark trajectory and analytic velocity samples with exact endpoint poses.
+
+`test_kinetic_match_cut_engine.py` covers subpixel Fourier shifts, rolling-shutter units and readout, global cut selection, endpoint/tangent fallbacks, Hermite receipts, and malformed/overflow refusal paths. Scoped module coverage was 100%.
+
+The Wave 15 N=3 benchmark uses 256×320 phase-correlation frames, 256×320×3 rolling-shutter frames, and a global 32×32 cut search over 24 tracked 3D landmarks, producing a 12-sample Hermite bridge. Estimated translation, warp bound, selected cut indices, and bridge checksum matched across all runs.
+
+| N | Median | Minimum | Maximum | Cut matrix | Hermite samples | Selected pair |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3 | 24.910 ms | 24.723 ms | 24.957 ms | 32×32 | 12 | (21, 1) |
