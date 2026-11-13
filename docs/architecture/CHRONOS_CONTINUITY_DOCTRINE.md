@@ -65,3 +65,19 @@ These are single-sandbox measurements, not a service-level latency guarantee. Wi
 The test suite includes a 55-case AST mutation campaign. Each case first checks its unmodified oracle, installs one function mutant, asserts the mutant is killed, and restores the original function in `finally`. Coverage includes real pixel/landmark/PCM paths, D65/Bradford identity and direction, RFC 6962 leaf and internal-node domains, and rational PCM slicing/remainder carry.
 
 The scoped Wave 11–12 gates are Ruff check and formatting, strict mypy over all Chronos sources/tests, the 367-test architecture suite, and the complete Chronos suite with aggregate coverage at least 96%, each module at least 95%, and all 55 mutants killed. Exact command outcomes are recorded in the task completion summary after the final gate run.
+
+## Phase 4 — Wave 13 calibrated multicamera continuity
+
+`multicam_epipolar_matching.py` derives the essential matrix `E=[t]×R` and fundamental matrix `F=K_B⁻ᵀ E K_A⁻¹` from a validated calibrated rig. It records the rank-2/equal-nonzero-singular-value audit and uses squared-pixel Sampson distance for correspondence receipts. Projection iterates first-order corrections until every correspondence falls below the declared tolerance; it refuses degenerate gradients and non-convergence.
+
+The optical continuity path uses a thin-lens image-distance ratio around the principal point for focus breathing and reports physical image-plane circle-of-confusion diameter in millimetres. The color path ridge-fits an affine RGB sensor transform (regularized 3×3 matrix with an independently fitted offset), then uses the shared ASC-CDL primitive for channel trims. It reports maximum CIEDE2000 before and after from measured chart patches; the metric is not a substitute for uncontrolled-scene perceptual evaluation.
+
+Wave 13 regression evidence is in `test_multicam_epipolar_matching.py`; its measured module coverage was 96% in the scoped run. The tests exercise calibrated F/E, Sampson projection, lens and CoC domains, ridge sensor fit, ASC-CDL, and typed refusal cases.
+
+The Wave 13 N=3 microbenchmark processes 256 noisy correspondences, a 128×128 focus-breathing image, a 64-patch RGB sensor chart, and a 128×128×3 frame. One warm-up precedes the three measured calls; all three calibrated chart ΔE00 and output-frame checksums were identical.
+
+| N | Median | Minimum | Maximum | Maximum calibrated-chart ΔE00 |
+| ---: | ---: | ---: | ---: | ---: |
+| 3 | 5.263 ms | 5.086 ms | 7.088 ms | 9.318×10⁻⁸ |
+
+The consolidated refusal and mutation ledgers are recorded after the Phase 4 final gate run.

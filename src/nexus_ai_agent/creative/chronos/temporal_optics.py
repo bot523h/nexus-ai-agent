@@ -70,8 +70,8 @@ def estimate_subpixel_translation_phase_corr(
     a, b = _luminance(first), _luminance(second)
     height, width = a.shape
     window = np.hanning(height)[:, None] * np.hanning(width)[None, :]
-    a = (a - np.mean(a)) * window
-    b = (b - np.mean(b)) * window
+    a = np.asarray((a - np.mean(a)) * window, dtype=np.float64)
+    b = np.asarray((b - np.mean(b)) * window, dtype=np.float64)
     fa, fb = np.fft.fft2(a), np.fft.fft2(b)
     cross_spectrum = fa * np.conj(fb)
     cross = cross_spectrum / (np.abs(cross_spectrum) + epsilon)

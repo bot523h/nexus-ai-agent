@@ -214,7 +214,7 @@ def restore_anchored_color_frames(
 ) -> FloatArray:
     """Undo known drift, then Bradford-close each frame's patch to the Show Bible."""
     frames = _validate_frames(drifted_frames_linear_rgb)
-    y0, y1, x0, x1 = _validate_roi(calibration_roi, frames.shape[1:3])
+    y0, y1, x0, x1 = _validate_roi(calibration_roi, (int(frames.shape[1]), int(frames.shape[2])))
     reference_patch = np.asarray(reference_patch_linear_rgb, dtype=np.float64)
     if reference_patch.shape != (3,) or np.any(~np.isfinite(reference_patch)):
         raise KernelError("Show-Bible patch must be a finite linear-RGB triple")
@@ -251,7 +251,7 @@ def measure_patch_delta_e00_by_frame(
 ) -> tuple[float, ...]:
     """Measure worst pixel-wise CIEDE2000 error in the calibrated ROI per frame."""
     frames = _validate_frames(frames_linear_rgb)
-    y0, y1, x0, x1 = _validate_roi(calibration_roi, frames.shape[1:3])
+    y0, y1, x0, x1 = _validate_roi(calibration_roi, (int(frames.shape[1]), int(frames.shape[2])))
     reference = np.asarray(reference_patch_linear_rgb, dtype=np.float64)
     if reference.shape != (3,) or np.any(~np.isfinite(reference)):
         raise KernelError("reference patch must be a finite linear-RGB triple")
