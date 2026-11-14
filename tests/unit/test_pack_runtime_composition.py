@@ -51,6 +51,8 @@ MANIFEST_PATHS = sorted(PACKS_DIR.glob("*/pack.manifest.json"))
 #: The frozen Wave-1 catalog is the floor of every composition.
 WAVE1 = build_wave1_registry().list_operations()
 
+#: ATLAS integration appends the AETHEL lanes (portrait, scene) after the
+#: original six, so the frozen order is the six plus the two additions.
 EXPECTED_PACKAGE_IDS = (
     "nexus.slideshow.compose",
     "nexus.language.caption",
@@ -58,6 +60,8 @@ EXPECTED_PACKAGE_IDS = (
     "nexus.motion.graphics",
     "nexus.audio.studio",
     "nexus.color.delivery",
+    "nexus.portrait.refine",
+    "nexus.scene.imaging",
 )
 
 
@@ -86,7 +90,7 @@ def test_composition_package_ids_match_the_manifests() -> None:
         )
 
 
-def test_composition_order_is_the_documented_six_pack_order() -> None:
+def test_composition_order_is_the_documented_pack_order() -> None:
     assert tuple(entry.package_id for entry in COMPOSITION) == EXPECTED_PACKAGE_IDS
 
 

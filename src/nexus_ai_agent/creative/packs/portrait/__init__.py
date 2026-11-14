@@ -1,9 +1,11 @@
 """Declarative contracts for the AETHEL ``nexus.portrait.refine`` pack (Wave 4).
 
-This package holds only typed input models and typed errors (no numpy, no I/O).
-The executable registrar and NumPy kernels live in the composition layer:
-``nexus_ai_agent.creative.composition.portrait_ops`` and
-``nexus_ai_agent.creative.composition.portrait_imaging``.
+This package holds only declarative contracts (no numpy, no I/O, no
+cross-package imports beyond ``creative.packs``/``creative.studio``): typed
+input models, typed errors, the manifest, and ``operations.py`` — the
+declarative registrar (spec table + fail-closed delegates). The NumPy kernels
+live in the composition zone (``creative/composition/``), behind the
+``context.portrait_kernel`` contract from ``creative.studio``.
 """
 
 from __future__ import annotations

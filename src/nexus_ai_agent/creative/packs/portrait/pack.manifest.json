@@ -1,0 +1,71 @@
+{
+  "manifest_schema": "nexus.capability-pack.v1",
+  "package_id": "nexus.portrait.refine",
+  "version": "1.0.0",
+  "display_name": "Local portrait refinement: gaze, blinks, relighting, skin and aging geometry",
+  "download_size_mb": 5.0,
+  "capabilities": [
+    "portrait.gaze_redirection",
+    "portrait.eyeblink_synthesis",
+    "portrait.facial_relighting_gradient",
+    "portrait.skintone_harmonization",
+    "portrait.micro_expression_morph",
+    "portrait.teeth_whitening",
+    "portrait.facial_hair_continuity",
+    "portrait.head_repose_3d",
+    "portrait.depth_of_field_bokeh",
+    "portrait.aging_deaging_geometry",
+    "portrait.relight_spherical_harmonics"
+  ],
+  "runtime": {
+    "native": {
+      "adapter_id": "nagar.local.portrait.refine.v1",
+      "sandbox": "process_isolated",
+      "network_required": false
+    },
+    "browser": {
+      "preferred": "onnx_webgpu",
+      "fallback": "onnx_wasm_simd",
+      "worker_required": true
+    }
+  },
+  "permissions": [
+    "read_project_images",
+    "write_portrait_layers",
+    "write_timeline_layers"
+  ],
+  "network_policy": {
+    "upload_media": false,
+    "runtime_network": false,
+    "pack_update": "optional_signed_download"
+  },
+  "hardware_requirements": {
+    "minimum_ram_mb": 2048,
+    "recommended_ram_mb": 4096,
+    "minimum_cpu_threads": 2,
+    "gpu": {
+      "optional": true,
+      "webgpu": true
+    },
+    "disk_free_mb": 500
+  },
+  "artifacts": [],
+  "resource_budget": {
+    "max_resident_model_mb": 150,
+    "max_audio_minutes_in_memory": 5.0,
+    "max_preview_resolution": "1920x1080"
+  },
+  "compatibility": {
+    "min_nagar_version": "3.10.0",
+    "protocol_version": "nagar.command.v1",
+    "state_schema": "nagar.state.v1"
+  },
+  "security": {
+    "signature_algorithm": "ed25519",
+    "signature": "base64:placeholder-portrait-signature",
+    "trusted_publisher": "nagar-core",
+    "allow_arbitrary_native_code": false,
+    "allow_arbitrary_wasm_imports": false
+  },
+  "external_binaries": []
+}

@@ -1,4 +1,4 @@
-"""Registrars for the ten missing ``portrait.*`` catalogue operations (Wave 4).
+"""Registrars for the eleven ``portrait.*`` catalogue operations.
 
 Each operation is a pure, deterministic image transform implemented in
 :mod:`nexus_ai_agent.creative.composition.portrait_imaging`. The handlers adapt a
@@ -7,7 +7,7 @@ typed payload plus a caller-supplied in-memory image store into an
 command, and never own project state: the caller supplies the images.
 
 The ``portrait.refine`` pack is *additive*: ``register_portrait_operations``
-adds the ten operations to any :class:`CapabilityRegistry` the caller passes,
+adds the eleven operations to any :class:`CapabilityRegistry` the caller passes,
 and ``build_portrait_registry`` builds one on top of the base wave-1 registry.
 """
 
@@ -33,15 +33,21 @@ from nexus_ai_agent.creative.packs.portrait.models import (
     SphericalHarmonicsRelightInput,
     TeethWhiteningInput,
 )
+from nexus_ai_agent.creative.packs.portrait.operations import PORTRAIT_SPECS
 from nexus_ai_agent.creative.studio.capabilities import (
     CapabilityRegistry,
     OperationContext,
     OperationOutcome,
     OperationSpec,
 )
-from nexus_ai_agent.creative.studio.models import PermissionLevel, Project
+from nexus_ai_agent.creative.studio.models import CommandValidationError, PermissionLevel, Project
 
-__all__ = ["register_portrait_operations", "build_portrait_registry", "PORTRAIT_HANDLERS"]
+__all__ = [
+    "register_portrait_operations",
+    "build_portrait_registry",
+    "PORTRAIT_HANDLERS",
+    "NativePortraitKernel",
+]
 
 
 def _split(context: OperationContext) -> tuple[dict[str, object], dict[str, Any]]:
@@ -209,55 +215,47 @@ def _relight_spherical_harmonics(project: Project, context: OperationContext) ->
     return _out(project, context, result)
 
 
+PORTRAIT_KERNELS: dict[str, Any] = {
+    "gaze_redirection": _gaze,
+    "eyeblink_synthesis": _blink,
+    "facial_relighting_gradient": _relight,
+    "skintone_harmonization": _skintone,
+    "micro_expression_morph": _morph,
+    "teeth_whitening": _teeth,
+    "facial_hair_continuity": _beard,
+    "head_repose_3d": _repose,
+    "depth_of_field_bokeh": _bokeh,
+    "aging_deaging_geometry": _aging,
+    "relight_spherical_harmonics": _relight_spherical_harmonics,
+}
+
 PORTRAIT_HANDLERS: dict[str, Any] = {
-    "gaze_redirection": (_gaze, GazeRedirectionInput, "Redirect the gaze inside the eye mask."),
-    "eyeblink_synthesis": (_blink, EyeblinkInput, "Deterministic sin^2 blink closure."),
-    "facial_relighting_gradient": (
-        _relight,
-        FacialRelightingInput,
-        "Lambertian re-lighting from an estimated normal.",
-    ),
-    "skintone_harmonization": (
-        _skintone,
-        SkintoneInput,
-        "Constrain the skin region to the CIE L*a*b* skin locus.",
-    ),
-    "micro_expression_morph": (
-        _morph,
-        MicroExpressionInput,
-        "Thin-plate-spline micro-expression warp.",
-    ),
-    "teeth_whitening": (
-        _teeth,
-        TeethWhiteningInput,
-        "Adaptive desaturation inside the teeth mask.",
-    ),
-    "facial_hair_continuity": (
-        _beard,
-        FacialHairInput,
-        "Gabor-filtered stubble density held across shots.",
-    ),
-    "head_repose_3d": (_repose, HeadReposeInput, "Weak-perspective head re-pose (+/-15 deg)."),
-    "depth_of_field_bokeh": (
-        _bokeh,
-        DepthOfFieldBokehInput,
-        "Depth-driven polygonal-aperture bokeh.",
-    ),
-    "aging_deaging_geometry": (
-        _aging,
-        AgingInput,
-        "Metric landmark displacement for aging/de-aging.",
-    ),
-    "relight_spherical_harmonics": (
-        _relight_spherical_harmonics,
-        SphericalHarmonicsRelightInput,
-        "L2 spherical-harmonics radiative-transfer portrait relight.",
-    ),
+    name: (PORTRAIT_KERNELS[name], model, description)
+    for name, (model, description) in PORTRAIT_SPECS.items()
 }
 
 
+class NativePortraitKernel:
+    """Portrait kernel for the application composition root.
+
+    Implements the :class:`nexus_ai_agent.creative.studio.portrait_kernel.PortraitKernel`
+    contract by dispatching to the in-memory NumPy handlers above; injected as
+    ``context.portrait_kernel`` so pack-delegated operations execute honestly.
+    """
+
+    def execute(
+        self, operation_id: str, project: Project, context: OperationContext
+    ) -> OperationOutcome:
+        local = operation_id.split(".", 1)[1] if "." in operation_id else operation_id
+        try:
+            handler = PORTRAIT_KERNELS[local]
+        except KeyError as exc:
+            raise CommandValidationError(f"unknown portrait operation: {operation_id!r}") from exc
+        return handler(project, context)
+
+
 def register_portrait_operations(registry: CapabilityRegistry) -> CapabilityRegistry:
-    """Register the ten ``portrait.*`` operations on ``registry`` (idempotent)."""
+    """Register the eleven ``portrait.*`` operations on ``registry`` (idempotent)."""
     for name, (handler, model, description) in PORTRAIT_HANDLERS.items():
         operation_id = f"{DOMAIN}.{name}"
         try:

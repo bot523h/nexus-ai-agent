@@ -1,4 +1,4 @@
-"""Registrars for the ten missing ``scene.*`` catalogue operations (Wave 3).
+"""Registrars for the fourteen ``scene.*`` catalogue operations.
 
 Each operation is a pure, deterministic image transform implemented in
 :mod:`kernels`. The handlers here adapt a typed payload plus a caller-supplied
@@ -7,7 +7,7 @@ network, never dispatch a command, and never own project state: the caller
 supplies the images.
 
 The ``scene.imaging`` pack is *additive*: ``register_scene_operations`` adds the
-ten operations to any :class:`CapabilityRegistry` the caller passes, and
+fourteen operations to any :class:`CapabilityRegistry` the caller passes, and
 ``build_scene_registry`` builds one on top of the base wave-1 registry.
 """
 
@@ -39,15 +39,21 @@ from nexus_ai_agent.creative.packs.scene.models import (
     RemoveObjectInput,
     SkyRelitInput,
 )
+from nexus_ai_agent.creative.packs.scene.operations import SCENE_SPECS
 from nexus_ai_agent.creative.studio.capabilities import (
     CapabilityRegistry,
     OperationContext,
     OperationOutcome,
     OperationSpec,
 )
-from nexus_ai_agent.creative.studio.models import PermissionLevel, Project
+from nexus_ai_agent.creative.studio.models import CommandValidationError, PermissionLevel, Project
 
-__all__ = ["register_scene_operations", "build_scene_registry", "SCENE_HANDLERS"]
+__all__ = [
+    "register_scene_operations",
+    "build_scene_registry",
+    "SCENE_HANDLERS",
+    "NativeSceneKernel",
+]
 
 
 def _split(context: OperationContext) -> tuple[dict[str, object], dict[str, Any]]:
@@ -261,78 +267,50 @@ def _retime_optical_flow(project: Project, context: OperationContext) -> Operati
     return _out(project, context, result)
 
 
+SCENE_KERNELS: dict[str, Any] = {
+    "insert_object_with_shadow": _insert_object,
+    "remove_object_inpaint": _remove_object,
+    "outpaint_canvas_expand": _outpaint,
+    "synthesize_depth_of_field": _dof,
+    "add_volumetric_fog_haze": _fog,
+    "lens_distortion_correct": _lens,
+    "chromatic_aberration_control": _chromatic,
+    "perspective_horizon_level": _horizon,
+    "sky_replacement_relit": _sky_relit,
+    "reflection_water_glass_synth": _reflection,
+    "harmonize_radiative_transfer": _harmonize_radiative_transfer,
+    "retime_optical_flow": _retime_optical_flow,
+    "tonemap_hdr": _tonemap_hdr,
+    "film_emulation": _film_emulation,
+}
+
 SCENE_HANDLERS: dict[str, Any] = {
-    "insert_object_with_shadow": (
-        _insert_object,
-        InsertObjectInput,
-        "Insert a premultiplied-alpha object with a contact shadow.",
-    ),
-    "remove_object_inpaint": (
-        _remove_object,
-        RemoveObjectInput,
-        "Remove an object with multiscale harmonic inpainting.",
-    ),
-    "outpaint_canvas_expand": (
-        _outpaint,
-        OutpaintInput,
-        "Expand the canvas with a mirrored Laplacian-pyramid border.",
-    ),
-    "synthesize_depth_of_field": (
-        _dof,
-        DepthOfFieldInput,
-        "Depth-driven circle-of-confusion defocus.",
-    ),
-    "add_volumetric_fog_haze": (
-        _fog,
-        FogHazeInput,
-        "Koschmieder atmospheric scattering with HG phase.",
-    ),
-    "lens_distortion_correct": (_lens, LensDistortionInput, "Brown-Conrady radial undistortion."),
-    "chromatic_aberration_control": (
-        _chromatic,
-        ChromaticAberrationInput,
-        "Per-channel radial magnification for lateral CA.",
-    ),
-    "perspective_horizon_level": (
-        _horizon,
-        HorizonLevelInput,
-        "Estimate and level the dominant horizon.",
-    ),
-    "sky_replacement_relit": (
-        _sky_relit,
-        SkyRelitInput,
-        "Replace the sky and re-light the foreground.",
-    ),
-    "reflection_water_glass_synth": (
-        _reflection,
-        ReflectionInput,
-        "Flat mirror reflection with Fresnel and ripples.",
-    ),
-    "harmonize_radiative_transfer": (
-        _harmonize_radiative_transfer,
-        RadiativeTransferHarmonizeInput,
-        "L2 spherical-harmonics radiative-transfer relight of a composite.",
-    ),
-    "retime_optical_flow": (
-        _retime_optical_flow,
-        OpticalFlowRetimeInput,
-        "Flow-based interpolation of a frame between two keyframes (VFR retime).",
-    ),
-    "tonemap_hdr": (
-        _tonemap_hdr,
-        HdrTonemapInput,
-        "Scene-linear HDR tone mapping with optional white-point adaptation.",
-    ),
-    "film_emulation": (
-        _film_emulation,
-        FilmEmulationInput,
-        "Photochemical gate weave, halation and film grain.",
-    ),
+    name: (SCENE_KERNELS[name], model, description)
+    for name, (model, description) in SCENE_SPECS.items()
 }
 
 
+class NativeSceneKernel:
+    """Scene kernel for the application composition root.
+
+    Implements the :class:`nexus_ai_agent.creative.studio.scene_kernel.SceneKernel`
+    contract by dispatching to the in-memory NumPy handlers above; injected as
+    ``context.scene_kernel`` so pack-delegated operations execute honestly.
+    """
+
+    def execute(
+        self, operation_id: str, project: Project, context: OperationContext
+    ) -> OperationOutcome:
+        local = operation_id.split(".", 1)[1] if "." in operation_id else operation_id
+        try:
+            handler = SCENE_KERNELS[local]
+        except KeyError as exc:
+            raise CommandValidationError(f"unknown scene operation: {operation_id!r}") from exc
+        return handler(project, context)
+
+
 def register_scene_operations(registry: CapabilityRegistry) -> CapabilityRegistry:
-    """Register the ten ``scene.*`` operations on ``registry`` (idempotent)."""
+    """Register the fourteen ``scene.*`` operations on ``registry`` (idempotent)."""
     for name, (handler, model, description) in SCENE_HANDLERS.items():
         operation_id = f"{DOMAIN}.{name}"
         try:
