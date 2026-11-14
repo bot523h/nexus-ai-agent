@@ -227,9 +227,7 @@ class SelfHealingLinearLedger:
             if _sha256(entry.shards[i]) == digest
         }
         if len(good) < self._k:
-            raise LedgerError(
-                f"record {seq} has only {len(good)} readable shards; need {self._k}"
-            )
+            raise LedgerError(f"record {seq} has only {len(good)} readable shards; need {self._k}")
         return decode_shards(good, k=self._k, n=self._n)[: entry.length]
 
     def _entry(self, seq: int) -> LedgerEntry:
