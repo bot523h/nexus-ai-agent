@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "f9f2863a94b5bd8d0963eab0130b36aefc97a531",
-    "generated_at": "2026-11-14T08:44:57Z",
+    "source_revision": "0e6fabc3397502709079f25e7c5918a8ce77c645",
+    "generated_at": "2026-11-14T13:58:38Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -64,11 +64,11 @@
   "l4_unavailable_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
   "reconciliation": {
     "catalog_count": 70,
-    "runtime_count": 82,
+    "runtime_count": 88,
     "overlap_count": 47,
     "missing_count": 23,
-    "runtime_only_count": 35,
-    "universe_count": 105,
+    "runtime_only_count": 41,
+    "universe_count": 111,
     "surface_count": 12,
     "suite_executed_count": 82,
     "missing_by_category": {
@@ -77,6 +77,8 @@
       "scene": 10
     },
     "runtime_only_by_category": {
+      "audio": 1,
+      "cinema": 5,
       "media": 2,
       "portrait": 11,
       "scene": 14,
@@ -110,6 +112,12 @@
       "scene.track_object"
     ],
     "runtime_only": [
+      "audio.omega_verify_media",
+      "cinema.atlas_verify_media",
+      "cinema.chronos_verify_media",
+      "cinema.hyperion_verify_media",
+      "cinema.morpheus_verify_media",
+      "cinema.veritas_verify_media",
       "media.pause",
       "media.play",
       "portrait.aging_deaging_geometry",
@@ -148,8 +156,8 @@
     ]
   },
   "declaration_parity": {
-    "declared_count": 82,
-    "registered_count": 82,
+    "declared_count": 88,
+    "registered_count": 88,
     "declared_not_registered": [],
     "registered_not_declared": []
   },
@@ -1109,6 +1117,7 @@
           "tests/unit/test_creative_render_jobs.py",
           "tests/unit/test_edit_pack.py",
           "tests/unit/test_ibpc_canonical_models.py",
+          "tests/unit/test_ibpc_delta.py",
           "tests/unit/test_ibpc_intent_compiler.py",
           "tests/unit/test_job_lifecycle.py",
           "tests/unit/test_nagar_cognition_queue_handoff.py",
@@ -2304,6 +2313,56 @@
       "registrar_pack": "nexus.audio.studio"
     },
     {
+      "operation_id": "audio.omega_verify_media",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "audio",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "MISSING"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [],
+        "suite_reference_files": [],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.engine_capabilities.EngineVerifyInput",
+        "handler": "_verify_with_omega_engine",
+        "permission_level": "A"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
       "operation_id": "audio.remove_noise",
       "identity": {
         "t_id": "T43",
@@ -3017,6 +3076,256 @@
       },
       "owner": "NOT_AVAILABLE",
       "registrar_pack": "nexus.language.caption"
+    },
+    {
+      "operation_id": "cinema.atlas_verify_media",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "cinema",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "MISSING"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [],
+        "suite_reference_files": [],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.engine_capabilities.EngineVerifyInput",
+        "handler": "_verify_with_atlas_engine",
+        "permission_level": "A"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
+      "operation_id": "cinema.chronos_verify_media",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "cinema",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "MISSING"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [],
+        "suite_reference_files": [],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.engine_capabilities.EngineVerifyInput",
+        "handler": "_verify_with_chronos_engine",
+        "permission_level": "A"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
+      "operation_id": "cinema.hyperion_verify_media",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "cinema",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "MISSING"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [],
+        "suite_reference_files": [],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.engine_capabilities.EngineVerifyInput",
+        "handler": "_verify_with_hyperion_engine",
+        "permission_level": "A"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
+      "operation_id": "cinema.morpheus_verify_media",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "cinema",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "MISSING"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [],
+        "suite_reference_files": [],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.engine_capabilities.EngineVerifyInput",
+        "handler": "_verify_with_morpheus_engine",
+        "permission_level": "A"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
+    },
+    {
+      "operation_id": "cinema.veritas_verify_media",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "cinema",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "MISSING"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [],
+        "suite_reference_files": [],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.studio.engine_capabilities.EngineVerifyInput",
+        "handler": "_verify_with_veritas_engine",
+        "permission_level": "A"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus_ai_agent.creative.studio.capabilities.build_wave1_registry()"
     },
     {
       "operation_id": "color.adjust_exposure",
@@ -4285,7 +4594,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.AgingInput",
-        "handler": "_aging",
+        "handler": "handle_aging_deaging_geometry",
         "permission_level": "B"
       },
       "source": {
@@ -4433,7 +4742,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.DepthOfFieldBokehInput",
-        "handler": "_bokeh",
+        "handler": "handle_depth_of_field_bokeh",
         "permission_level": "B"
       },
       "source": {
@@ -4581,7 +4890,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.EyeblinkInput",
-        "handler": "_blink",
+        "handler": "handle_eyeblink_synthesis",
         "permission_level": "B"
       },
       "source": {
@@ -4635,7 +4944,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.FacialHairInput",
-        "handler": "_beard",
+        "handler": "handle_facial_hair_continuity",
         "permission_level": "B"
       },
       "source": {
@@ -4689,7 +4998,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.FacialRelightingInput",
-        "handler": "_relight",
+        "handler": "handle_facial_relighting_gradient",
         "permission_level": "B"
       },
       "source": {
@@ -4743,7 +5052,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.GazeRedirectionInput",
-        "handler": "_gaze",
+        "handler": "handle_gaze_redirection",
         "permission_level": "B"
       },
       "source": {
@@ -4797,7 +5106,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.HeadReposeInput",
-        "handler": "_repose",
+        "handler": "handle_head_repose_3d",
         "permission_level": "B"
       },
       "source": {
@@ -4898,7 +5207,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.MicroExpressionInput",
-        "handler": "_morph",
+        "handler": "handle_micro_expression_morph",
         "permission_level": "B"
       },
       "source": {
@@ -4999,7 +5308,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.SphericalHarmonicsRelightInput",
-        "handler": "_relight_spherical_harmonics",
+        "handler": "handle_relight_spherical_harmonics",
         "permission_level": "B"
       },
       "source": {
@@ -5100,7 +5409,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.SkintoneInput",
-        "handler": "_skintone",
+        "handler": "handle_skintone_harmonization",
         "permission_level": "B"
       },
       "source": {
@@ -5248,7 +5557,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.portrait.models.TeethWhiteningInput",
-        "handler": "_teeth",
+        "handler": "handle_teeth_whitening",
         "permission_level": "B"
       },
       "source": {
@@ -5349,7 +5658,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.FogHazeInput",
-        "handler": "_fog",
+        "handler": "handle_add_volumetric_fog_haze",
         "permission_level": "B"
       },
       "source": {
@@ -5450,7 +5759,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.ChromaticAberrationInput",
-        "handler": "_chromatic",
+        "handler": "handle_chromatic_aberration_control",
         "permission_level": "B"
       },
       "source": {
@@ -5551,7 +5860,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.FilmEmulationInput",
-        "handler": "_film_emulation",
+        "handler": "handle_film_emulation",
         "permission_level": "B"
       },
       "source": {
@@ -5652,7 +5961,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.RadiativeTransferHarmonizeInput",
-        "handler": "_harmonize_radiative_transfer",
+        "handler": "handle_harmonize_radiative_transfer",
         "permission_level": "B"
       },
       "source": {
@@ -5706,7 +6015,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.InsertObjectInput",
-        "handler": "_insert_object",
+        "handler": "handle_insert_object_with_shadow",
         "permission_level": "B"
       },
       "source": {
@@ -5760,7 +6069,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.LensDistortionInput",
-        "handler": "_lens",
+        "handler": "handle_lens_distortion_correct",
         "permission_level": "B"
       },
       "source": {
@@ -5814,7 +6123,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.OutpaintInput",
-        "handler": "_outpaint",
+        "handler": "handle_outpaint_canvas_expand",
         "permission_level": "B"
       },
       "source": {
@@ -5868,7 +6177,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.HorizonLevelInput",
-        "handler": "_horizon",
+        "handler": "handle_perspective_horizon_level",
         "permission_level": "B"
       },
       "source": {
@@ -5922,7 +6231,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.ReflectionInput",
-        "handler": "_reflection",
+        "handler": "handle_reflection_water_glass_synth",
         "permission_level": "B"
       },
       "source": {
@@ -6117,7 +6426,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.RemoveObjectInput",
-        "handler": "_remove_object",
+        "handler": "handle_remove_object_inpaint",
         "permission_level": "B"
       },
       "source": {
@@ -6218,7 +6527,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.OpticalFlowRetimeInput",
-        "handler": "_retime_optical_flow",
+        "handler": "handle_retime_optical_flow",
         "permission_level": "B"
       },
       "source": {
@@ -6319,7 +6628,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.SkyRelitInput",
-        "handler": "_sky_relit",
+        "handler": "handle_sky_replacement_relit",
         "permission_level": "B"
       },
       "source": {
@@ -6373,7 +6682,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.DepthOfFieldInput",
-        "handler": "_dof",
+        "handler": "handle_synthesize_depth_of_field",
         "permission_level": "B"
       },
       "source": {
@@ -6427,7 +6736,7 @@
         "production_like_evidence": "NOT_AVAILABLE",
         "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
         "input_model": "nexus_ai_agent.creative.packs.scene.models.HdrTonemapInput",
-        "handler": "_tonemap_hdr",
+        "handler": "handle_tonemap_hdr",
         "permission_level": "B"
       },
       "source": {
@@ -7589,6 +7898,7 @@
           "tests/unit/test_creative_render_jobs.py",
           "tests/unit/test_edit_pack.py",
           "tests/unit/test_ibpc_canonical_models.py",
+          "tests/unit/test_ibpc_delta.py",
           "tests/unit/test_ibpc_intent_compiler.py",
           "tests/unit/test_job_lifecycle.py",
           "tests/unit/test_nagar_cognition_queue_handoff.py",

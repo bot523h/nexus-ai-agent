@@ -247,6 +247,13 @@ def build_runtime_registry(
     registry = build_wave1_registry()
     for entry in compositions if compositions is not None else COMPOSITION:
         entry.register(registry)
+    # Wave 5: the six NAGAR creative engines are capabilities too. They are
+    # registered on every runtime registry (so the bus admits or *refuses* them
+    # explicitly) but stay EXPERIMENTAL opt-ins in the render lane, and their
+    # handlers answer with a typed refusal when the engine port is uncomposed.
+    from nexus_ai_agent.creative.studio.engine_capabilities import register_engine_operations
+
+    register_engine_operations(registry)
     return registry
 
 

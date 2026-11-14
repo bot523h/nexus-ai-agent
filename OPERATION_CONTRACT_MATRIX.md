@@ -7,7 +7,7 @@ nine-stage pipeline for every operation of the universe (catalogue ∪ runtime).
 Statuses: `MISSING` / `PARTIAL` (design-only or wired-unproven) / `PRESENT`
 (static fact) / `PROVEN` (backed by executable evidence).
 
-Universe: **105** operations — catalogue 70, runtime 82, overlap 47, missing 23, runtime-only 35, surface-reachable 12.
+Universe: **111** operations — catalogue 70, runtime 88, overlap 47, missing 23, runtime-only 41, surface-reachable 12.
 
 | operation | id | flag | product | contract | registry | capability | | surface | command | execution | artifact | proof | L | UX modes | pack | | locality | registrar |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -18,6 +18,7 @@ Universe: **105** operations — catalogue 70, runtime 82, overlap 47, missing 2
 | audio.duck_music | T45 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.eq_voice | T47 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
 | audio.normalize_loudness | T46 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
+| audio.omega_verify_media | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | BUILT-IN | LOCAL_ONLY | nexus_ai_agent.creative.studio.capabilities.build_wave1_registry() |
 | audio.remove_noise | T43 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_PREFERRED | nexus.audio.studio |
 | audio.remove_vocal | T44 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_PREFERRED | nexus.audio.studio |
 | audio.time_stretch | T50 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.audio.studio |
@@ -31,6 +32,11 @@ Universe: **105** operations — catalogue 70, runtime 82, overlap 47, missing 2
 | caption.style_vazirmatn | T57 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.language.caption |
 | caption.transcribe | T51 | OPERATIONAL | PRESENT | PRESENT | PRESENT | PRESENT | PRESENT | PRESENT | PROVEN | PRESENT | PROVEN | L3 | all three | LOCAL PACK | LOCAL_PREFERRED | nexus.language.caption |
 | caption.translate_local | T54 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.language.caption |
+| cinema.atlas_verify_media | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | BUILT-IN | LOCAL_ONLY | nexus_ai_agent.creative.studio.capabilities.build_wave1_registry() |
+| cinema.chronos_verify_media | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | BUILT-IN | LOCAL_ONLY | nexus_ai_agent.creative.studio.capabilities.build_wave1_registry() |
+| cinema.hyperion_verify_media | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | BUILT-IN | LOCAL_ONLY | nexus_ai_agent.creative.studio.capabilities.build_wave1_registry() |
+| cinema.morpheus_verify_media | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | BUILT-IN | LOCAL_ONLY | nexus_ai_agent.creative.studio.capabilities.build_wave1_registry() |
+| cinema.veritas_verify_media | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | MISSING | L1 | moment+manual | BUILT-IN | LOCAL_ONLY | nexus_ai_agent.creative.studio.capabilities.build_wave1_registry() |
 | color.adjust_exposure | T62 | OPERATIONAL | PRESENT | PRESENT | PRESENT | PRESENT | PRESENT | PRESENT | PROVEN | PRESENT | PROVEN | L3 | all three | LOCAL PACK | LOCAL_ONLY | nexus.color.delivery |
 | color.apply_lut | T65 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.color.delivery |
 | color.auto_balance | T61 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.color.delivery |

@@ -100,6 +100,29 @@ EXPERIMENTAL_OPT_IN_OPERATIONS: frozenset[str] = frozenset(
     }
 )
 
+#: Operations that are answered by an engine *port* rather than by an engine
+#: instance owned by this module. Composing the port is the composition root's
+#: job; an operation whose engine cannot be built is refused by the capability
+#: layer with EngineNotComposedError, never simulated here.
+ENGINE_PORT_OPERATIONS: dict[str, str] = {
+    "audio.omega_verify_media": "omega",
+    "cinema.veritas_verify_media": "veritas",
+    "cinema.chronos_verify_media": "chronos",
+    "cinema.atlas_verify_media": "atlas",
+    "cinema.morpheus_verify_media": "morpheus",
+    "cinema.hyperion_verify_media": "hyperion",
+}
+
+#: The engine-verification capabilities, as an opt-in set of their own.
+#:
+#: They are deliberately NOT merged into ``EXPERIMENTAL_OPT_IN_OPERATIONS``:
+#: that set is pinned to *exactly* the surface operations whose packs are
+#: EXPERIMENTAL (least privilege, no gap — see
+#: ``tests/unit/test_creative_render_jobs.py``). These are a different axis:
+#: read-only engine verifications that the bus may run, but only when the
+#: composition root opted in. Union of the two is what the bus is handed.
+ENGINE_VERIFICATION_OPERATIONS: frozenset[str] = frozenset(ENGINE_PORT_OPERATIONS)
+
 #: Typed failure codes surfaced to users via ``creative.failed.<code>``.
 ERROR_CODES: frozenset[str] = frozenset(
     {
@@ -517,6 +540,22 @@ AUDIO_ENGINE_OPERATIONS = frozenset(
 )
 
 
+def _engine_ports_for(operation: str | None) -> dict[str, Any]:
+    """Compose the engine ports an operation needs (Wave 5).
+
+    Only the port for the operation's own engine is built: a verification
+    command must not drag five engines (and their native dependencies) into a
+    worker just because they exist. An engine that cannot be composed is simply
+    absent, and the capability layer answers with a typed refusal.
+    """
+    engine = ENGINE_PORT_OPERATIONS.get(operation or "")
+    if engine is None:
+        return {}
+    from nexus_ai_agent.creative.engine_ports import build_engine_ports
+
+    return build_engine_ports([engine])
+
+
 def _audio_engine_for(operation: str | None) -> Any:  # noqa: ANN401
     """Compose the audio engine for an engine-backed operation (else ``None``).
 
@@ -539,6 +578,7 @@ def build_job_bus(
     operation: str | None = None,
     authorizer: Any = None,  # noqa: ANN401
     audio_engine: Any = None,  # noqa: ANN401
+    engine_ports: dict[str, Any] | None = None,
 ) -> Any:  # noqa: ANN401
     """The canonical, server-policy bus factory for job-side callers.
 
@@ -568,9 +608,14 @@ def build_job_bus(
     return CommandBus(
         state=project,
         registry=build_runtime_registry(),
-        allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
+        # Read at call time on purpose: the two sets are module-level policy, and
+        # a test (or an operator tool) must be able to withdraw the opt-in by
+        # rebinding them without rebuilding the module.
+        allow_experimental=operation
+        in (EXPERIMENTAL_OPT_IN_OPERATIONS | ENGINE_VERIFICATION_OPERATIONS),
         authorizer=authorizer,
         audio_engine=audio_engine,
+        engine_ports=engine_ports,
     )
 
 
@@ -702,6 +747,7 @@ def _dispatch(
         operation=operation,
         authorizer=authorizer,
         audio_engine=_audio_engine_for(operation),
+        engine_ports=_engine_ports_for(operation),
     )
     schema_version: Literal[1, 2] = 2 if canonical is not None else 1
     command = TypedCommand(
