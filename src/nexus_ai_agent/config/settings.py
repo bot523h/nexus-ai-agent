@@ -28,6 +28,15 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("NEXUS_DATABASE_URL", "DATABASE_URL"),
     )
+    # Production policy: when true, the application refuses the SQLite
+    # fallback and requires a real ``NEXUS_DATABASE_URL``. Development, tests
+    # and CI leave it false (the default) so they keep using SQLite. It is
+    # enforced at every backend-resolution point (see storage.db), not merely
+    # documented.
+    require_postgres: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("NEXUS_REQUIRE_POSTGRES", "REQUIRE_POSTGRES"),
+    )
     checkpoint_path: str = Field(
         default="data/langgraph.sqlite",
         validation_alias=AliasChoices("NEXUS_CHECKPOINT_PATH", "CHECKPOINT_PATH"),

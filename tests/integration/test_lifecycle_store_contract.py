@@ -23,12 +23,18 @@ from nexus_ai_agent.storage.checkpoint_lifecycle_store import (
 )
 
 PG_URL = os.getenv("NEXUS_DATABASE_URL")
+#: The PG leg writes to whatever ``NEXUS_DATABASE_URL`` names, so it needs the
+#: same explicit opt-in as the other PostgreSQL-writing modules (F-011.6).  The
+#: guard sits on the PG leg, not the module: the SQLite leg must keep running in
+#: the default ``test`` job, which has no database.
+DESTRUCTIVE_OPT_IN = "NEXUS_PG_TEST_DESTRUCTIVE"
+PG_ENABLED = bool(PG_URL) and os.getenv(DESTRUCTIVE_OPT_IN) == "1"
 
 NOW = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
 LATER = datetime(2026, 3, 2, 12, 0, 0, tzinfo=timezone.utc)
 
 
-@pytest.fixture(params=["sqlite"] + (["postgres"] if PG_URL else []))
+@pytest.fixture(params=["sqlite"] + (["postgres"] if PG_ENABLED else []))
 def store(request: pytest.FixtureRequest, tmp_path: Path):
     if request.param == "sqlite":
         s = SQLiteCheckpointLifecycleStore(str(tmp_path / "lg.lifecycle"))
@@ -100,7 +106,7 @@ def test_schema_fingerprint_is_deterministic(store, tmp_path: Path) -> None:
     assert store.schema_fingerprint() == first
 
 
-@pytest.mark.skipif(not PG_URL, reason="requires PostgreSQL")
+@pytest.mark.skipif(not PG_ENABLED, reason=f"requires PostgreSQL + {DESTRUCTIVE_OPT_IN}=1")
 def test_postgres_read_only_store_is_server_enforced() -> None:
     """read_only=True is enforced by the server (SQLSTATE 25006)."""
     import psycopg
