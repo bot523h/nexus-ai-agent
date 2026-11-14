@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "b8d3a690d0618cc5de71e7c24ac4319fccbd764c",
-    "generated_at": "2026-11-14T15:29:22Z",
+    "source_revision": "946e48ee1bd753dd90406e864355df070f5c7b39",
+    "generated_at": "2026-11-14T19:51:16Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
