@@ -51,7 +51,7 @@ nexus = "nexus_ai_agent.cli:app"
 
 [project.optional-dependencies]
 pdf = [
-  "pypdf>=5.1",  # D3: real PDF text extraction (clear error when missing)
+  "pypdf>=6.21.4",  # D3: real PDF text extraction (clear error when missing)
 ]
 speech = [
   "faster-whisper>=1.0,<2",  # Wave 9: local CTranslate2 ASR (int8 CPU, no torch)
@@ -64,7 +64,7 @@ dev = [
   "pytest-asyncio>=0.23",
   "ruff>=0.4",
   "mypy>=1.10",
-  "pypdf>=5.1",  # keep the pdf-extraction test path real, not mocked
+  "pypdf>=6.21.4",  # keep the pdf-extraction test path real, not mocked
   "imageio-ffmpeg>=0.5",  # bundles a static FFmpeg: the render test runs a real encode
   "deptry>=0.20",  # declared-vs-imported dependency gate (`make deps`, CI lint job)
   "pip-audit>=2.7",  # known-vulnerability gate (`make audit`, CI dependency-audit job)
