@@ -50,7 +50,12 @@ dependencies = [
     # and no second key ladder: the libraries are the crypto/canonicalization
     # authority, imported lazily where the fail-closed error must be typed.
     "rfc8785==0.1.4",
-    "cryptography>=43,<48",
+    # Cap widened 48 -> 51 (2026-11-14): 47.0.0 carries four unaccepted advisories
+    # (PYSEC-2026-3552/3553/3554, GHSA-537c-gmf6-5ccf) whose fixes are 48.0.1/49.0.0/
+    # 50.0.0, so a `<48` cap could never resolve to a clean release and reddened
+    # `scripts/dependency_audit.py` on every run. Only the stable HMAC/AES-GCM
+    # surface is used (connect/crypto.py).
+    "cryptography>=43,<51",
   ]
 
 [project.scripts]

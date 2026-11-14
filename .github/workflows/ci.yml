@@ -382,6 +382,12 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
+      # `cryptography`/`rfc8785` (run 43634497488, red): the mutation suites import
+      # them through the package, not through the scripts — `test_ibpc_security.py`
+      # imports `nexus_ai_agent.connect`, whose package __init__ imports
+      # `connect.crypto` (AES-GCM secret envelopes) and whose provenance path
+      # canonicalises with rfc8785.  Without them the collection error makes pytest
+      # exit 2, which the harness correctly refuses to read as a kill.
       # Disk-budget fix (run 41174187587, job 124458465961, Errno 28): install
       # ONLY the exact dependency set the mutation suites import (proven in a
       # scratch venv: 28 small packages instead of the full .[dev] closure),
@@ -396,6 +402,7 @@ jobs:
           structlog httpx numpy pillow
           "sqlalchemy==2.0.54" "sqlmodel==0.0.42" "aiosqlite==0.22.1"
           "imageio-ffmpeg>=0.5"
+          "cryptography>=43,<51" "rfc8785==0.1.4"
       - run: pip install --no-cache-dir --no-deps -e .
       - name: disk after install
         run: df -h /
@@ -780,8 +787,10 @@ jobs:
       # idempotent re-run must be a no-op (revision already at head).
       - run: nexus migrate
       # Confirm the migration stamp on a real Postgres.
-      # Head is 20261109contentowner (content-address ownership identity,
-      # task-282 slice-2 F1 cross-project), which revises 20261108perjobbind
+      # Head is 20261112connect (nagar connect credential persistence,
+      # task nagar-connect-persistence-01), which revises 20261109contentowner
+      # (content-address ownership identity, task-282 slice-2 F1 cross-project),
+      # which revises 20261108perjobbind
       # (per-job artifact binding identity, task-282
       # slice-2 F5/R4), which revises 20261107bindfence (artifact-binding ownership
       # fence, task-282 slice-2 F1) -> 20261106artbind (artifact→revision binding,
@@ -791,7 +800,7 @@ jobs:
       # (telegram_ids_bigint, audit A-17) -> e575469d90b9 (nagar asset library v1)
       # -> 7c2f9d41e8a3 (ai_memory_consent, P0-7) -> f4a9c2e71b08 lifecycle table.
       - run: |
-          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q 20261109contentowner
+          PGPASSWORD=nexus psql -h localhost -U nexus -d nexus -tAc "SELECT version_num FROM alembic_version" | grep -q 20261112connect
   # ── Merge-base guard (incident #143, fail-closed) ───────────────────────────
   # PR #143 was merged with base = a *feature* branch, not `main`; GitHub called
   # it MERGEABLE because the merge was valid against its own wrong base.  This
