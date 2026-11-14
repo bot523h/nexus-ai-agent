@@ -140,6 +140,7 @@ placeholder text.
 | [audits/STORAGE_RESILIENCE_CHECKUP_2026-09-21.md](audits/STORAGE_RESILIENCE_CHECKUP_2026-09-21.md) | Storage-resilience ten-step checkup and delivery record backing PR#43 (branch arena/01a0c58a). Archived from the repository root in the task-162 wave. |
 | [audits/REPO_HYGIENE_2026-09-22.md](audits/REPO_HYGIENE_2026-09-22.md) | Janitorial wave (task-162): merged-branch deletion evidence, dated root-doc archival, zero-drift diagnostics — with reproduction commands. |
 | [audits/ARCHITECTURE_DOCS_2026-09-21.md](audits/ARCHITECTURE_DOCS_2026-09-21.md) | Architecture-documentation pass (task-131): what was written, verified, and enforced. |
+| [audits/WAVE1_6_VERIFICATION_LEDGER.md](audits/WAVE1_6_VERIFICATION_LEDGER.md) | Waves 1–6 verification ledger for PR #343: per-wave revisions, measured gate results (coverage ACCEPTED, mypy/ruff clean) and the two honest gaps (P0 evidence needs Postgres; PR head branch differs from the session branch). |
 | [audits/WAVE5_ACTIVATION_2026-09-21.md](audits/WAVE5_ACTIVATION_2026-09-21.md) | Wave-5 activation audit: unified runtime, six packs active, coverage harness, honest 10-task forward network. |
 | [audits/FORENSIC_PR40_CI_2026-09-21.md](audits/FORENSIC_PR40_CI_2026-09-21.md) | Forensic CI analysis of the red PR#40 wave-4 batch (root cause + A/B proof). |
 | [audits/SESSION_PLAN_2026-09-21_01a0c506.md](audits/SESSION_PLAN_2026-09-21_01a0c506.md) | Session plan record (agent 01a0c506): wave-4 hardening batch planning. |
