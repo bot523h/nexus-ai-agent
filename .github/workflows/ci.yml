@@ -82,7 +82,10 @@ jobs:
   test:
     name: test (pytest -m "not slow")
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Waves 2-3 added ~700 media-spine tests that encode real MP4s; the suite
+    # no longer fits a 30-minute cap on the runner (it hit the cap with zero
+    # failing tests). 45 keeps headroom without masking a genuine hang.
+    timeout-minutes: 45
     # task-113: deliberately NOT `needs: lint`.  A broken-lint push must never be able to
     # turn the test suite red, and the `lint-fast` rail below already reports lint and
     # version drift in seconds.  tests/unit/test_ci_lint_parity.py enforces this.
@@ -222,7 +225,7 @@ jobs:
   python-parity:
     name: python-parity (${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45  # see the test job: the integrated suite outgrew 30
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     strategy:
