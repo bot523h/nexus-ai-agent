@@ -73,6 +73,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import structlog
@@ -350,6 +351,23 @@ class _EnqueueOutcome:
     status: str
     status_known: bool
     rejected: bool = False
+
+
+#: Namespace of the execution metadata the *queue* writes into a handler result
+#: (job id, attempt, fence check, post-publish marker). A handler runs untrusted
+#: code, so these keys are stripped before any verification reads the result —
+#: otherwise a handler could impersonate queue context and, for example, tell the
+#: verifier that a publication already happened.
+QUEUE_METADATA_PREFIX = "_queue_"
+
+
+def handler_result_view(result: Mapping[str, Any]) -> dict[str, Any]:
+    """The handler's own claims: everything the queue did not write itself."""
+    return {
+        str(key): value
+        for key, value in result.items()
+        if not str(key).startswith(QUEUE_METADATA_PREFIX)
+    }
 
 
 def default_artifact_verifiers() -> dict[str, ArtifactVerifier]:
@@ -1868,7 +1886,7 @@ class InProcessJobQueue:
                     occurred_at=_now(),
                 )
             )
-            outcome = await self._verify_safely(verifier, payload, result)
+            outcome = await self._verify_safely(verifier, payload, handler_result_view(result))
             published = False
             if outcome.ok and publication is not None:
                 # Stage → verify → **publish atomically** → **re-probe** →
@@ -2270,7 +2288,14 @@ class InProcessJobQueue:
                 False,
             )
         published = {**result, **patch}
-        reprobed = await self._verify_safely(verifier, payload, published)
+        # The re-probe answers a different question than the pre-publish check:
+        # "do the bytes now on disk still satisfy the claim?" The artifact no
+        # longer lives at its workspace name (the publication renamed it into
+        # the fenced job namespace), so the queue — which performed that
+        # rename — tells the verifier that this is a post-publish probe. The
+        # marker is added here, after the handler's own claim was stripped.
+        reprobe_view = {**handler_result_view(result), **patch, "_queue_post_publish": True}
+        reprobed = await self._verify_safely(verifier, payload, reprobe_view)
         if not reprobed.ok:
             reason = reprobed.reason_code or "reprobe_failed"
             return (

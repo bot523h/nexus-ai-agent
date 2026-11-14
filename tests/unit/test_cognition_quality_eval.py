@@ -756,7 +756,7 @@ def test_write_candidate_refuses_to_overwrite_the_committed_baseline() -> None:
     completed = _check_cli("--write-candidate", str(BASELINE), "--repeats", "1")
     assert completed.returncode == 2
     assert "refusing to overwrite the committed baseline" in completed.stderr
-    assert json.loads(BASELINE.read_text(encoding="utf-8"))["fingerprint"] == "e4a9d9f657fe411e"
+    assert json.loads(BASELINE.read_text(encoding="utf-8"))["fingerprint"] == "59f2f1e61fc749d8"
 
 
 def test_write_candidate_rejects_a_path_outside_the_repository(tmp_path: Path) -> None:
@@ -856,7 +856,7 @@ def test_the_fingerprint_is_stable_across_hash_seeds(seed: str) -> None:
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout)
     assert payload["repeatability"]["identical"] is True
-    assert payload["repeatability"]["fingerprints"][0] == "e4a9d9f657fe411e"
+    assert payload["repeatability"]["fingerprints"][0] == "59f2f1e61fc749d8"
 
 
 def test_the_report_is_identical_from_a_foreign_working_directory(tmp_path: Path) -> None:

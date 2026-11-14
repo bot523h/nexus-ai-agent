@@ -107,8 +107,29 @@ def creative_render_verifier(
             },
         )
 
+    # Two questions, two contracts (Wave 6):
+    #
+    # * **pre-publish** — "did the handler produce the artifact it said it did,
+    #   at the name the operation owns, inside its workspace?" Path identity is
+    #   the whole point here, so it is enforced.
+    # * **post-publish re-probe** — "do the bytes now on disk still satisfy the
+    #   claim?" Atomic publication renamed the artifact into the fenced job
+    #   namespace, so it is deliberately *not* at its workspace name any more.
+    #   The queue marks this case itself (``_queue_post_publish``); the marker is
+    #   stripped from handler results before either check, so a handler cannot
+    #   assert it. Digests, size, media probe and identity bindings are all still
+    #   enforced — only the workspace-name equality is replaced, by the
+    #   publication's own provenance (it staged exactly the pre-verified bytes).
+    post_publish = result.get("_queue_post_publish") is True
+
     workspace_raw = payload.get("workspace_dir")
-    expected_root = Path(str(workspace_raw)) if isinstance(workspace_raw, str) else None
+    expected_root = (
+        None
+        if post_publish
+        else Path(str(workspace_raw))
+        if isinstance(workspace_raw, str)
+        else None
+    )
 
     expected_path: Path | None = None
     if expected_root is not None:
