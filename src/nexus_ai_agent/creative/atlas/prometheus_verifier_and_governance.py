@@ -493,6 +493,15 @@ def verify_prometheus_playground_bundle_from_disk(
     wav_raw = filesystem.read_bytes(receipt.wav_path, max_bytes=1 << 26)
     file_digests[receipt.wav_path] = hashlib.sha256(wav_raw).hexdigest()
     leaf_payloads.append(bytes.fromhex(file_digests[receipt.wav_path]))
+    wav_matches = receipt.wav_sha256 == "" or file_digests[receipt.wav_path] == receipt.wav_sha256
+    ledger.record(
+        Observation(
+            claim="wav_file_digest",
+            state=LedgerState.PASS if wav_matches else LedgerState.VIOLATED,
+            provenance=ObservationProvenance.MEASURED_MEDIA,
+            note="on-disk WAV SHA-256 matches the recorded digest",
+        )
+    )
     reference_audio = _read_wav_pcm(wav_raw)
     content_digests["reference_wav_pcm"] = hashlib.sha256(reference_audio.tobytes()).hexdigest()
 
@@ -845,4 +854,8 @@ def default_lineage_store(filesystem: WorkspaceFilesystem) -> AtlasLineageStore:
     return AtlasLineageStore(filesystem)
 
 
-__all__ += ["default_lineage_store", "AtlasGovernanceRefusalError"]
+__all__ += [
+    "default_lineage_store",
+    "AtlasGovernanceRefusalError",
+    "quarantine_failed_attempt",
+]

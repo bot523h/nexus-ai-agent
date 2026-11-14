@@ -157,9 +157,7 @@ def _proxemic_energy(poses: np.ndarray, problem: DramaticStagingProblem) -> floa
 
 
 def _lighting_energy(poses: np.ndarray, problem: DramaticStagingProblem) -> float:
-    camera_angle = math.atan2(
-        float(problem.camera_position[1]), float(problem.camera_position[0])
-    )
+    camera_angle = math.atan2(float(problem.camera_position[1]), float(problem.camera_position[0]))
     energy = 0.0
     for actor in range(poses.shape[0]):
         yaw = poses[actor, 2]
