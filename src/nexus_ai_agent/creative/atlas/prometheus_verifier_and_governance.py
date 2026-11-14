@@ -493,13 +493,20 @@ def verify_prometheus_playground_bundle_from_disk(
     wav_raw = filesystem.read_bytes(receipt.wav_path, max_bytes=1 << 26)
     file_digests[receipt.wav_path] = hashlib.sha256(wav_raw).hexdigest()
     leaf_payloads.append(bytes.fromhex(file_digests[receipt.wav_path]))
-    wav_matches = receipt.wav_sha256 == "" or file_digests[receipt.wav_path] == receipt.wav_sha256
+    if receipt.wav_sha256 == "":
+        # Fail closed: an empty recorded digest can never vouch for the bytes.
+        wav_state = LedgerState.VIOLATED
+        wav_note = "no recorded WAV SHA-256 to verify against — refusing to pass"
+    else:
+        wav_matches = file_digests[receipt.wav_path] == receipt.wav_sha256
+        wav_state = LedgerState.PASS if wav_matches else LedgerState.VIOLATED
+        wav_note = "on-disk WAV SHA-256 matches the recorded digest"
     ledger.record(
         Observation(
             claim="wav_file_digest",
-            state=LedgerState.PASS if wav_matches else LedgerState.VIOLATED,
+            state=wav_state,
             provenance=ObservationProvenance.MEASURED_MEDIA,
-            note="on-disk WAV SHA-256 matches the recorded digest",
+            note=wav_note,
         )
     )
     reference_audio = _read_wav_pcm(wav_raw)
@@ -535,13 +542,19 @@ def verify_prometheus_playground_bundle_from_disk(
         mp4_raw = filesystem.read_bytes(receipt.mp4_path, max_bytes=1 << 27)
         file_digests[receipt.mp4_path] = hashlib.sha256(mp4_raw).hexdigest()
         expected = expected_mp4_sha256 or receipt.mp4_sha256
-        matches = expected == "" or file_digests[receipt.mp4_path] == expected
+        if expected == "":
+            mp4_state = LedgerState.VIOLATED
+            mp4_note = "no recorded MP4 SHA-256 to verify against — refusing to pass"
+        else:
+            mp4_matches = file_digests[receipt.mp4_path] == expected
+            mp4_state = LedgerState.PASS if mp4_matches else LedgerState.VIOLATED
+            mp4_note = "on-disk MP4 SHA-256 matches the recorded digest"
         ledger.record(
             Observation(
                 claim="mp4_file_digest",
-                state=LedgerState.PASS if matches else LedgerState.VIOLATED,
+                state=mp4_state,
                 provenance=ObservationProvenance.MEASURED_MEDIA,
-                note="on-disk MP4 SHA-256 matches the recorded digest",
+                note=mp4_note,
             )
         )
     else:
