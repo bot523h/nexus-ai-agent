@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-12T15:52:33Z",
+  "updated_at": "2026-11-13T06:20:28Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1236,6 +1236,17 @@
         "tests/integration/test_durable_project_revision_pinning.py",
         "tests/unit/test_durable_project_state.py",
         "tests/unit/test_nagar_cognition_queue_handoff.py"
+      ]
+    },
+    {
+      "id": "hyperion-vault-speech-color",
+      "description": "Hyperion erasure vault, offline speech-cinema, and deterministic color operations",
+      "paths": [
+        "src/nexus_ai_agent/storage/artifact_vault/",
+        "src/nexus_ai_agent/creative/speech_cinema/",
+        "tests/storage/artifact_vault/",
+        "tests/creative/speech_cinema/",
+        "tests/creative/packs/color/"
       ]
     },
     {
@@ -8579,7 +8590,7 @@
       ],
       "note": "",
       "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done.",
-      "release_reason": "auto-released by gc at 2026-11-12T15:52:33Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-11-13T06:20:08Z (stale active lease)"
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -8652,7 +8663,41 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
-      "release_reason": "auto-released by gc at 2026-11-12T15:52:33Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-11-13T06:20:08Z (stale active lease)"
+    },
+    {
+      "task": "task-hyperion-vault-speech-color",
+      "title": "Hyperion artifact vault, speech cinema, and color pack completion",
+      "title_fa": "تکمیل خزانهٔ آرتیفکت، سینمای گفتار و پک رنگ هایپریون",
+      "zone": "hyperion-vault-speech-color",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Rescue and complete the Hyperion implementation and its focused gates.",
+      "scope_fa": "نجات و تکمیل پیاده‌سازی هایپریون و گیت‌های متمرکز آن.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "All Hyperion files remain within the exclusive paths.",
+        "Focused tests, lint, formatting, and diff checks pass.",
+        "Remote branch contains the completed commits."
+      ],
+      "evidence_required": [
+        "Exact commands and observed results in the delivery report.",
+        "Remote branch SHA verification."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/artifact_vault/",
+        "src/nexus_ai_agent/creative/speech_cinema/",
+        "tests/storage/artifact_vault/",
+        "tests/creative/speech_cinema/",
+        "tests/creative/packs/color/"
+      ],
+      "owner_hint": "arena/hyperion-vault-speech-color",
+      "agent_branch": "arena/hyperion-vault-speech-color",
+      "claimed_at": "2026-11-13T06:20:28Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "Registered for the Hyperion branch rescue and completion work."
     },
     {
       "task": "task-330-omega-forensic-hardening-stage-a",

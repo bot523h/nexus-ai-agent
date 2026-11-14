@@ -109,7 +109,10 @@ def _sqlite_inventory(path: Path, conn: sqlite3.Connection) -> dict[str, int]:
     ]
     counts: dict[str, int] = {}
     for table in user_tables:
-        counts[table] = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+        # Identifier from sqlite_master: quote it (embedded quotes doubled) so a
+        # hostile table name such as ``a"b`` cannot break out of the statement.
+        quoted = '"' + table.replace('"', '""') + '"'
+        counts[table] = conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]  # nosec B608
     return counts
 
 
