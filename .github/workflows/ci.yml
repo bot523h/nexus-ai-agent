@@ -46,10 +46,33 @@ jobs:
       - run: bash scripts/ci_install.sh ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy src
+      # mypy's output is the only way to see what a clean 3.12 runner disagrees
+      # about with a dev checkout (logs are not reachable from every reviewer
+      # environment), so errors are also surfaced as check annotations — same
+      # pattern as the pytest job.
+      - name: mypy src (fail with annotations)
+        run: |
+          set -o pipefail
+          if ! mypy src 2>&1 | tee mypy.log; then
+            grep -E ': error:' mypy.log | head -n 10 | while IFS= read -r line; do
+              printf '::error title=mypy::%s\n' "$line"
+            done
+            printf '::warning title=mypy::%s error line(s) in total\n' "$(grep -cE ': error:' mypy.log || true)"
+            exit 1
+          fi
       # Dependency truth (audit A-05): undeclared imports / unused declarations
       # are a red build. Optional integrations are allow-listed in pyproject.
-      - run: deptry src
+      # Same annotation treatment as mypy.
+      - name: deptry src (fail with annotations)
+        run: |
+          set -o pipefail
+          if ! deptry src 2>&1 | tee deptry.log; then
+            grep -E 'DEP[0-9]+' deptry.log | head -n 10 | while IFS= read -r line; do
+              printf '::error title=deptry::%s\n' "$line"
+            done
+            printf '::warning title=deptry::%s dependency issue(s) in total\n' "$(grep -cE 'DEP[0-9]+' deptry.log || true)"
+            exit 1
+          fi
       # Version-lockstep guard: VERSION == pyproject.toml == latest CHANGELOG
       # heading.  Fails fast with a human-readable message; the same check
       # also lives in tests/unit/test_version_command.py so ``make test``
