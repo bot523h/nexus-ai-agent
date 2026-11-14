@@ -409,6 +409,12 @@ are mutually comparable.
   ledger **heals**; if it does not, the bytes were rewritten and the ledger
   **refuses** and reports a tamper — it never launders a forgery into a pass. A
   record with fewer than `k` readable shards is *unreadable*, never guessed.
+  Each entry digest binds its **position** and its **predecessor** digest, so a
+  record cannot be replayed at another index or lifted onto another chain. The
+  public classes are `LinearEvidenceLedger` and `HealingReport`: the older
+  `Self…` spellings are avoided because the repository's 3.10 compatibility
+  guard (`tests/unit/test_omega_wave2_py310_compat.py`) flags the bare token
+  `Self`, which `typing.Self` needs and the class name merely resembled.
 * **Wave 32** (`twin_taxonomy_provisioner.py`) — a capability counts as
   delivered only when it is reachable *and* proven, so the atlas keeps two
   taxonomies that must mirror each other: the source operators under
@@ -476,5 +482,9 @@ manifests and registering them in `creative/packs/runtime.COMPOSITION` +
 `continuum/pack_coverage.PACK_TEST_TARGETS`, or removing the two pack packages.
 Both touch files outside `creative/atlas/**`, so the fix is deliberately **not**
 applied here; Wave 33 instead ships the seal that binds whatever measurement the
-rail produces. Recorded so the next owner can act with the exact evidence.
+rail produces. The fix is already owned by open PR **#97** ("feat(vision):
+complete portrait and scene Vision packs"), which adds both
+`pack.manifest.json` files and the matching `runtime.COMPOSITION` /
+`PACK_TEST_TARGETS` entries — so this branch must not duplicate that work.
+Recorded so the next owner can act with the exact evidence.
 
