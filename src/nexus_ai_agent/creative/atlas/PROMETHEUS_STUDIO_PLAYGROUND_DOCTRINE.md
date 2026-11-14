@@ -342,7 +342,8 @@ All numbers below are reproducible from the tree; commands are run with
 |---|---|
 | `pytest tests/creative/atlas/test_prometheus_mutations_120.py -q` | **124 passed** (120 mutants + 4 harness tests) in 1166 s |
 | `pytest tests/creative/atlas/test_titan_olympus_mutations.py -q` | **84 passed** (80 mutants + 4 harness tests) in 343 s |
-| `pytest tests/creative/atlas -q` (with `--cov`) | **1299 passed** in 86 s |
+| `pytest tests/creative/atlas -q` (FFmpeg on PATH) | **1507 passed** in 1274 s |
+| `pytest tests/creative/atlas --cov=… --cov-branch -q` (FFmpeg absent) | **1299 passed** in 86 s |
 | `pytest tests/architecture tests/unit/test_docs_integrity.py -q` | **476 passed** (367 architecture + 109 docs integrity) |
 | `pytest tests/creative/atlas --cov=… --cov-branch` | ATLAS **99%** line / branch; every new module ≥ 96% line and ≥ 95% branch |
 | `ruff check src/nexus_ai_agent/creative/atlas tests/creative/atlas` | All checks passed |
