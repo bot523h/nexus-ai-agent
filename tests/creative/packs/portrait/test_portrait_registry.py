@@ -167,3 +167,54 @@ def test_wave9_sh_relight_handler_relights() -> None:
     out = spec.handler(make_project(), ctx).output
     assert out["image"].shape == img.shape
     assert np.isfinite(out["image"]).all()
+
+
+class _StubKernel:
+    """Records the delegation; returns a sentinel outcome."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object, object]] = []
+
+    def execute(self, operation_id, project, context):  # noqa: ANN001, ANN201
+        from nexus_ai_agent.creative.studio.capabilities import OperationOutcome
+
+        self.calls.append((operation_id, project, context))
+        return OperationOutcome(project=project, history=context.history, output={"sentinel": True})
+
+
+def test_pack_registry_registers_eleven_and_is_idempotent() -> None:
+    from nexus_ai_agent.creative.packs.portrait.operations import build_portrait_registry as pack_build
+    from nexus_ai_agent.creative.packs.portrait.operations import register_portrait_operations
+
+    reg = pack_build()
+    portrait_ops = sorted(op for op in reg.list_operations() if op.startswith("portrait."))
+    assert len(portrait_ops) == 11
+    before = len(reg._index)
+    register_portrait_operations(reg)
+    assert len(reg._index) == before
+
+
+def test_pack_delegate_fails_closed_without_kernel() -> None:
+    from nexus_ai_agent.creative.packs.portrait.operations import (
+        CODE_REQUIRES_PORTRAIT_KERNEL,
+        build_portrait_registry as pack_build,
+    )
+    from nexus_ai_agent.creative.studio.models import CommandValidationError
+
+    reg = pack_build()
+    spec = reg.get_spec("portrait.gaze_redirection")
+    payload = {"image_id": "i", "eye_mask_id": "m", "target_x": 0.2, "_images": {}}
+    with pytest.raises(CommandValidationError, match=CODE_REQUIRES_PORTRAIT_KERNEL):
+        spec.handler(make_project(), make_context(payload))
+
+
+def test_pack_delegate_delegates_to_injected_kernel() -> None:
+    from nexus_ai_agent.creative.packs.portrait.operations import build_portrait_registry as pack_build
+
+    reg = pack_build()
+    spec = reg.get_spec("portrait.eyeblink_synthesis")
+    kernel = _StubKernel()
+    ctx = make_context({"image_id": "i", "eye_mask_id": "m", "phase": 0.5, "_images": {}}, portrait_kernel=kernel)
+    out = spec.handler(make_project(), ctx)
+    assert out.output == {"sentinel": True}
+    assert kernel.calls and kernel.calls[0][0] == "portrait.eyeblink_synthesis"

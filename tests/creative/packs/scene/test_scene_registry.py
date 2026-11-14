@@ -288,3 +288,61 @@ def test_wave12_film_emulation_is_deterministic() -> None:
     assert np.array_equal(out1["image"], out2["image"])
     assert float(out1["image"].min()) >= 0.0
     assert float(out1["image"].max()) <= 1.0
+
+
+class _StubSceneKernel:
+    """Records the delegation; returns a sentinel outcome."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object, object]] = []
+
+    def execute(self, operation_id, project, context):  # noqa: ANN001, ANN201
+        from nexus_ai_agent.creative.studio.capabilities import OperationOutcome
+
+        self.calls.append((operation_id, project, context))
+        return OperationOutcome(project=project, history=context.history, output={"sentinel": True})
+
+
+def test_pack_registry_registers_fourteen_and_is_idempotent() -> None:
+    from nexus_ai_agent.creative.packs.scene.operations import build_scene_registry as pack_build
+    from nexus_ai_agent.creative.packs.scene.operations import register_scene_operations
+
+    reg = pack_build()
+    scene_ops = sorted(op for op in reg.list_operations() if op.startswith("scene."))
+    assert len(scene_ops) == 14
+    before = len(reg._index)
+    register_scene_operations(reg)
+    assert len(reg._index) == before
+
+
+def test_pack_delegate_fails_closed_without_kernel() -> None:
+    from nexus_ai_agent.creative.packs.scene.operations import (
+        CODE_REQUIRES_SCENE_KERNEL,
+        build_scene_registry as pack_build,
+    )
+    from nexus_ai_agent.creative.studio.models import CommandValidationError
+
+    reg = pack_build()
+    spec = reg.get_spec("scene.lens_distortion_correct")
+    payload = {"image_id": "i", "_images": {}}
+    with pytest.raises(CommandValidationError, match=CODE_REQUIRES_SCENE_KERNEL):
+        spec.handler(make_project(), make_context(payload))
+
+
+def test_pack_delegate_delegates_to_injected_kernel() -> None:
+    from nexus_ai_agent.creative.packs.scene.operations import build_scene_registry as pack_build
+
+    reg = pack_build()
+    spec = reg.get_spec("scene.lens_distortion_correct")
+    project = make_project()
+    kernel = _StubSceneKernel()
+    ctx = make_context({"image_id": "i", "_images": {}})
+    ctx = type(ctx)(
+        command=ctx.command,
+        input_data=ctx.input_data,
+        history=ctx.history,
+        scene_kernel=kernel,
+    )
+    out = spec.handler(project, ctx)
+    assert out.output == {"sentinel": True}
+    assert kernel.calls and kernel.calls[0][0] == "scene.lens_distortion_correct"

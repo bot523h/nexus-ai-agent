@@ -30,9 +30,10 @@ def make_project(project_id: str = "p1") -> Project:
     )
 
 
-def make_context(payload: dict) -> OperationContext:
+def make_context(payload: dict, portrait_kernel=None) -> OperationContext:  # noqa: ANN001, ANN201
     return OperationContext(
         command=TypedCommand(command_id="c1", operation="portrait.test", input={}),
         input_data=payload,
         history=(),
+        portrait_kernel=portrait_kernel,
     )
