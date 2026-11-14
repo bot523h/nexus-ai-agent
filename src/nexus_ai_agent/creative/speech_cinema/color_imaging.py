@@ -186,7 +186,7 @@ def validate_spd_covariance(covariance: object, *, tolerance: float = 1e-10) -> 
     if cov.shape != (3, 3) or not bool(np.all(np.isfinite(cov))):
         raise ValueError("covariance must be a finite 3x3 matrix")
     cov = (cov + cov.T) / 2.0
-    eigenvalues: Array = np.linalg.eigvalsh(cov)
+    eigenvalues = np.linalg.eigvalsh(cov)
     if float(np.min(eigenvalues)) <= tolerance:
         raise ValueError("covariance must be symmetric positive definite")
     return cov

@@ -669,7 +669,10 @@ class MorpheusDurableLineageStore(MorpheusLineageRepositoryProtocol):
         if not self.ledger_file.is_file():
             return {}
         try:
-            return json.loads(self.ledger_file.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+            loaded: object = json.loads(self.ledger_file.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                return {}
+            return {str(k): v for k, v in loaded.items() if isinstance(v, dict)}
         except Exception:
             return {}
 
