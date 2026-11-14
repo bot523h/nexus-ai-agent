@@ -11,8 +11,12 @@ evidence so the recorded gap cannot silently drift:
    NO independent artifact verification (the documented risk);
 3. production surface — the deployed container runs the bot, not the API
    app, so the lane is code-reachable but not on the deployed surface;
-4. isolation — the lane never touches the canonical job queue, so the
-   task-178/180 verification contract cannot leak in (or be bypassed) here.
+4. unification — Wave 1 sealed GAP-D: the lane's POST now enqueues into the
+   canonical ``InProcessJobQueue`` (attempt fencing, canonical statuses,
+   verifier-gated completion) instead of an ownerless background task writing
+   done into the legacy registry. This file PINS the unified wiring: any
+   regression re-introducing the legacy registry import in the API surface is
+   a visible, intentional diff.
 
 The remediation owner, dependency and acceptance criteria live in
 ``docs/audits/VERIFICATION_GAP_REPORT_2026-09-24.md`` (GAP-D entry).
@@ -77,9 +81,19 @@ def test_legacy_lane_is_not_on_the_deployed_production_surface() -> None:
     assert not any("run-api" in line or "uvicorn" in line for line in cmd_lines)
 
 
-def test_legacy_lane_never_touches_the_canonical_job_queue() -> None:
-    """Q4 isolation: no import path from the legacy lane into the contract."""
+def test_legacy_lane_is_unified_into_the_canonical_job_queue() -> None:
+    """Q4 unification: the legacy route can only reach the canonical queue.
+
+    Wave 1 (Grand Convergence) removed dual job authority: the HTTP
+    ``/creative`` lane is a thin read/write adapter over the same
+    ``InProcessJobQueue`` the bot and CLI drain. The legacy
+    ``creative/job_registry`` module must have no import path into the API
+    surface, and no ownerless ``BackgroundTasks`` may exist there either.
+    """
     source = _app_source()
-    assert "in_process_job_queue" not in source
-    assert "jobs.lifecycle" not in source
-    assert "artifact_verifiers" not in source
+    assert "nexus_ai_agent.creative.job_registry" not in source
+    assert "creative.job_registry" not in source
+    assert "BackgroundTasks" not in source
+    # The canonical sidecar is the one job authority the API builds.
+    assert "in_process_job_queue" in source
+    assert "get_creative_registry" in source

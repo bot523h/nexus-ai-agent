@@ -50,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import os
 import re
 import sqlite3
 import time
@@ -570,14 +571,24 @@ def _multipart_upload(field: str, filename: str, payload: bytes) -> tuple[bytes,
     return body, f"multipart/form-data; boundary={boundary}"
 
 
-def _creative_job_ids(creative_dir: Path) -> list[str]:
-    """The job ids the legacy creative registry holds (empty when unused)."""
-    db_file = creative_dir / "creative_jobs.sqlite3"
-    if not db_file.exists():
+def _creative_job_ids(_creative_dir: Path, db_path: Path | None = None) -> list[str]:
+    """The job ids held by the canonical in-process queue (empty when unused).
+
+    Wave 1 unified the legacy creative registry into ``InProcessJobQueue``,
+    so the durable truth now lives in ``{NEXUS_DB_PATH}.jobs.sqlite3`` as
+    ``nexus_job_queue`` — the legacy ``creative_jobs.sqlite3`` no longer
+    exists and must not be consulted.
+    """
+    queue_file = (
+        Path(f"{db_path}.jobs.sqlite3")
+        if db_path is not None
+        else Path(f"{os.environ.get('NEXUS_DB_PATH', '')}.jobs.sqlite3")
+    )
+    if not queue_file.exists():
         return []
-    with sqlite3.connect(db_file) as connection:
+    with sqlite3.connect(queue_file) as connection:
         try:
-            rows = connection.execute("SELECT id FROM creative_jobs").fetchall()
+            rows = connection.execute("SELECT id FROM nexus_job_queue").fetchall()
         except sqlite3.OperationalError:
             return []
     return sorted(str(row[0]) for row in rows)
@@ -1089,7 +1100,7 @@ def test_a_rejected_creative_request_creates_no_job_and_persists_no_upload(
 
     registry = get_creative_registry()
     _run_async(registry.create_job("video_edit", {"project_id": AUTHORIZED_PROJECT}))
-    before = _creative_job_ids(api_env.creative_dir)
+    before = _creative_job_ids(api_env.creative_dir, api_env.db_path)
     assert before, "the creative registry is empty — the assertion below has no teeth"
 
     body, content_type = _multipart_upload("file", "probe.mp4", b"not-a-real-video")
@@ -1106,7 +1117,7 @@ def test_a_rejected_creative_request_creates_no_job_and_persists_no_upload(
     assert "invalid signature" in response.json()["detail"]
 
     # No new job row, and no upload file left behind.
-    assert _creative_job_ids(api_env.creative_dir) == before
+    assert _creative_job_ids(api_env.creative_dir, api_env.db_path) == before
     assert list(api_env.creative_dir.glob("creative-upload-*")) == []
 
 

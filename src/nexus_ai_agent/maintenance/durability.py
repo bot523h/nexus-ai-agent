@@ -179,16 +179,34 @@ STORE_AUDIT: tuple[StoreAudit, ...] = (
         name="Creative job registry",
         owner="creative/job_registry.py",
         classification=Durability.EPHEMERAL_CACHE,
-        path_hint="settings.creative_temp_dir / creative_jobs.sqlite3",
+        path_hint="settings.creative_temp_dir / creative_jobs.sqlite3 (legacy)",
+        production_depends=False,
+        survives_scale_to_zero=False,
+        external_authority="Superseded by the in-process job queue (Wave 1)",
+        rationale=(
+            "The legacy creative job registry is no longer written by the "
+            "API: Wave 1 unified it into the in-process job queue sidecar "
+            "({db_path}.jobs.sqlite3). The module remains for the historical "
+            "boundary tests and for the removal tracked by the creative ADR; "
+            "nothing in the request path reads or writes it anymore."
+        ),
+    ),
+    StoreAudit(
+        name="In-process job queue sidecar",
+        owner="adapters/in_process_job_queue.py",
+        classification=Durability.EPHEMERAL_CACHE,
+        path_hint="{db_path}.jobs.sqlite3 (next to NEXUS_DB_PATH)",
         production_depends=False,
         survives_scale_to_zero=False,
         external_authority=None,
         rationale=(
-            "Tracks in-flight creative jobs for status reporting. The store "
-            "lives under the creative temp directory (which the store map "
-            "already classes as ephemeral), so a redeploy clears it; that is "
-            "acceptable only while the authoritative project state is "
-            "elsewhere."
+            "The canonical durable job ledger: job rows, attempts, fencing "
+            "tokens and results. It lives next to the application database "
+            "and is authoritative for job truth — but, like every local "
+            "sidecar, a redeploy without a persistent volume loses it, so a "
+            "deployment that must not lose jobs mounts a durable volume. "
+            "Wave 1 unified the legacy creative_jobs.sqlite3 registry into "
+            "this single queue."
         ),
     ),
 )

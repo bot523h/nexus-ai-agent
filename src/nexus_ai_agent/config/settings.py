@@ -427,7 +427,7 @@ class Settings(BaseSettings):
     )
     creative_temp_dir: str = Field(
         # Under the persistent data directory, next to ``db_path``: the
-        # creative job registry (creative_jobs.sqlite3) and in-flight
+        # in-flight creative workspaces and the legacy registry marker
         # workspaces live here, so a world-writable, reboot-cleared /tmp path
         # (bandit B108; audit A-12) was the wrong default. Override with
         # CREATIVE_TEMP_DIR to keep a custom location.

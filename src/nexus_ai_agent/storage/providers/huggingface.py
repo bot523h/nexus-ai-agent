@@ -61,5 +61,7 @@ class HuggingFaceProvider:
             await asyncio.to_thread(local_path.write_bytes, r.content)
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
-        _ = prefix
-        return []
+        raise ProviderUnavailable(
+            "HuggingFace listing is not implemented for arbitrary artifact storage; "
+            "this provider is read-only for pinned model files (hf://repo@rev/file)"
+        )

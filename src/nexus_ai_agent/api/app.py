@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -22,19 +22,79 @@ from nexus_ai_agent.config.settings import get_settings
 from nexus_ai_agent.core.ssrf_guard import SafeAsyncTransport, SSRFBlockError, validate_url
 from nexus_ai_agent.creative import image_post
 from nexus_ai_agent.creative.ffmpeg_executor import execute_ffmpeg_commands
-from nexus_ai_agent.creative.job_registry import JobRegistry
 from nexus_ai_agent.creative.video_director import analyze_video_with_gemini
+from nexus_ai_agent.product.queue_job_read import QueueJobReadAdapter
+from nexus_ai_agent.worker import default_job_handlers, job_queue_db_path
 
 CREATIVE_IMAGE_POST_AVAILABLE = hasattr(image_post, "generate_image_post")
-_creative_registry: JobRegistry | None = None
+_creative_registry: QueueJobReadAdapter | None = None
 
 
-def get_creative_registry() -> JobRegistry:
-    global _creative_registry
+async def _video_edit_job_handler(payload: dict[str, object]) -> dict[str, object]:
+    """Canonical queue handler for the legacy video_edit lane.
+
+    Runs what the old in-process background task ran (Gemini plan ->
+    FFmpeg execution), but under the durable queue's fencing: the row is
+    the job record, the attempt fencing token is monotonic, and the
+    result — not a status write — is what completes the job.
+    """
+    import os as _os
+
+    data = dict(payload)
     settings = get_settings()
-    registry_path = Path(settings.creative_temp_dir) / "creative_jobs.sqlite3"
-    if _creative_registry is None or _creative_registry._db_path != registry_path:
-        _creative_registry = JobRegistry(registry_path)
+    _cleanup = data.get("cleanup_path")
+    cleanup_path = _cleanup if isinstance(_cleanup, str) else None
+    local_input_path = cleanup_path
+    _source = data.get("source")
+    source = _source if isinstance(_source, str) else None
+    try:
+        if source and source.startswith(("http://", "https://")):
+            local_input_path = await _download_video_to_temp(source)
+        if local_input_path is None or not _os.path.exists(local_input_path):
+            raise RuntimeError("No local video source available for processing")
+        plan = await analyze_video_with_gemini(
+            local_input_path,
+            settings.creative_gemini_api_key or "",
+        )
+        from uuid import uuid4 as _uuid4
+
+        output_path = str(Path(settings.creative_temp_dir) / f"video-edit-{_uuid4().hex}.mp4")
+        result = await execute_ffmpeg_commands(plan, local_input_path, output_path)
+        if not result.success:
+            raise RuntimeError(result.error_message or "FFmpeg execution failed")
+        return result.model_dump()
+    finally:
+        if local_input_path:
+            Path(local_input_path).unlink(missing_ok=True)
+
+
+def get_creative_registry() -> QueueJobReadAdapter:
+    """The single job authority for the HTTP API.
+
+    Returns a thin read adapter over the *same* durable ``InProcessJobQueue``
+    sidecar (``{NEXUS_DB_PATH}.jobs.sqlite3``) that the bot and CLI drain —
+    no second job database exists in this process.  The canonical creative
+    handlers are registered so enqueued jobs are picked up on this process's
+    event loop, and the legacy ``video_edit`` lane is registered here too
+    (it previously ran as an ownerless background task).
+    """
+    global _creative_registry
+    from nexus_ai_agent.adapters.in_process_job_queue import InProcessJobQueue
+    from nexus_ai_agent.creative.render_jobs import build_creative_render_publication
+
+    settings = get_settings()
+    db_path = job_queue_db_path(settings.db_path)
+    if _creative_registry is None or _creative_registry.queue.db_path != db_path:
+        queue = InProcessJobQueue(db_path)
+        handlers = default_job_handlers()
+        handlers["video_edit"] = _video_edit_job_handler
+        for job_type, handler in handlers.items():
+            queue.register_handler(job_type, handler)
+        queue.register_artifact_publication(
+            "creative_render",
+            build_creative_render_publication(Path(f"{db_path}.artifacts")),
+        )
+        _creative_registry = QueueJobReadAdapter(queue)
     return _creative_registry
 
 
@@ -493,41 +553,6 @@ async def _download_video_to_temp(video_url: str) -> str:
     return temp_path
 
 
-async def _process_video_edit_job(
-    job_id: str,
-    source: str,
-    cleanup_path: str | None = None,
-) -> None:
-    local_input_path = cleanup_path
-    registry = get_creative_registry()
-    try:
-        await registry.update_job_status(job_id, "processing")
-        if source.startswith(("http://", "https://")):
-            local_input_path = await _download_video_to_temp(source)
-        if local_input_path is None:
-            raise RuntimeError("No local video source available for processing")
-
-        settings = get_settings()
-        plan = await analyze_video_with_gemini(
-            local_input_path,
-            settings.creative_gemini_api_key or "",
-        )
-        output_path = str(Path(settings.creative_temp_dir) / f"{job_id}.mp4")
-        result = await execute_ffmpeg_commands(plan, local_input_path, output_path)
-        if not result.success:
-            raise RuntimeError(result.error_message or "FFmpeg execution failed")
-        await registry.update_job_status(
-            job_id,
-            "done",
-            result=result.model_dump(),
-        )
-    except Exception as exc:
-        await registry.update_job_status(job_id, "failed", error=str(exc))
-    finally:
-        if local_input_path:
-            Path(local_input_path).unlink(missing_ok=True)
-
-
 # Legacy lane (ADR 0006): the canonical media path is the Telegram creative
 # surface → durable job queue → packs registry → render lane. These two
 # routes are frozen (tests/architecture/test_legacy_creative_boundary.py) and
@@ -535,7 +560,6 @@ async def _process_video_edit_job(
 @app.post("/creative/video-edit", deprecated=True)
 async def create_video_edit_job(
     request: Request,
-    background_tasks: BackgroundTasks,
 ) -> dict[str, str]:
     # Fail-closed HMAC gate runs BEFORE any form parsing so the raw body is
     # read exactly once here (starlette caches it in request._body, and the
@@ -587,8 +611,8 @@ async def create_video_edit_job(
             "content_type": None,
         }
 
+    input_data = {**input_data, "source": source, "cleanup_path": cleanup_path}
     job_id = await get_creative_registry().create_job("video_edit", input_data)
-    background_tasks.add_task(_process_video_edit_job, job_id, source, cleanup_path)
     return {"job_id": job_id, "status": "pending"}
 
 
