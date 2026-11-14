@@ -1064,7 +1064,7 @@ def test_p52_corotational_pk1_stress_objectivity_pure_rotation() -> None:
 
 
 def test_p53_newton_third_law_nodal_force_equilibrium() -> None:
-    """P53: Nodal force sum sum_{a=0}^3 f_a == 0 (< 1e-12) under arbitrary deformation."""
+    """P53: Nodal force sum sum_{a=0}^3 f_a == 0 (machine precision) under arbitrary deformation."""
     verts = np.array(
         [
             [0.0, 0.0, 0.0],
@@ -1087,7 +1087,21 @@ def test_p53_newton_third_law_nodal_force_equilibrium() -> None:
     )
     res = compute_corotational_pk1_stress(tet, deformed, mat)
     f_sum = np.sum(res.nodal_forces, axis=0)
-    assert np.all(np.abs(f_sum) < 1e-12)
+    # Mechanical equilibrium is exact in exact arithmetic. In floating
+    # point, forces of ~5e4 magnitude cancel with a rounding-error bound on
+    # the order of ulp(5e4) * n (~1e-11), so the residual must stay below
+    # ~1e-10 absolute — still ~2e-15 relative to the force scale, i.e.
+    # machine precision. The previous 1e-12 bound sat below the possible
+    # rounding-error envelope for this deformation and failed on some
+    # LAPACK/BLAS builds while passing on others.
+    force_scale = float(np.linalg.norm(res.nodal_forces))
+    if force_scale == 0.0:  # pragma: no cover - degenerate input guard
+        force_scale = 1.0
+    relative_residual = float(np.abs(f_sum).max()) / force_scale
+    assert relative_residual < 1e-14, (
+        f"Nodal force residual {np.abs(f_sum).max():.3e} vs force scale "
+        f"{force_scale:.3e} (relative {relative_residual:.3e})"
+    )
 
 
 def test_p54_uniaxial_stretch_restoring_force() -> None:
