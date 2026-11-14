@@ -15,7 +15,7 @@ Callers should preserve sample rate metadata and treat times as seconds unless d
 ### Architecture boundary
 
 * The NumPy/Pillow colour kernels live in `speech_cinema/color_imaging.py` (adapter side).
-* `creative/packs/color/` is a pure data contract (`OPERATIONS`, `KELVIN_RANGE`) with no sibling imports and no NumPy or Pillow.
+* `creative/speech_cinema/color_contract.py` (moved out of `creative/packs/color/`, ADR-001) is a pure data contract (`OPERATIONS`, `KELVIN_RANGE`) with no sibling imports and no NumPy or Pillow.
 * `speech_cinema/color_ops.py` binds the contract to the kernels and fails closed on any missing or extra operation.
 * `tests/architecture`: **367 passed, 0 failed**.
 
@@ -23,7 +23,7 @@ Callers should preserve sample rate metadata and treat times as seconds unless d
 
 | Gate | Result |
 |---|---|
-| `mypy --strict` (artifact_vault, speech_cinema, packs/color) | **0 issues in 12 files** |
+| `mypy --strict` (artifact_vault, speech_cinema) | **0 issues in 12 files** |
 | `ruff check` / `ruff format --check` | clean |
 | `pytest --cov-fail-under=95` (zone, `-m "not slow"`) | **99.65 % total**, **every file >= 99 %** |
 | Falsification ledger | **40 probes**: 40 pass, 0 xfail (60 collected items, including parametrised cases) |
@@ -34,7 +34,7 @@ Callers should preserve sample rate metadata and treat times as seconds unless d
 
 | File | Stmts | Miss | Cover |
 |---|---:|---:|---:|
-| `creative/packs/color/__init__.py` | 5 | 0 | 100 % |
+| `creative/speech_cinema/color_contract.py` | 5 | 0 | 100 % |
 | `creative/speech_cinema/color_imaging.py` | 127 | 1 | 99 % |
 | `creative/speech_cinema/color_ops.py` | 16 | 0 | 100 % |
 | `creative/speech_cinema/forced_aligner.py` | 122 | 1 | 99 % |
@@ -105,7 +105,7 @@ Golden masters and KATs are labelled as such in `test_hyperion_known_answers.py`
 | `6d2cd4f` | Stage 1: boundary fix (367/367) and `mypy --strict` zero |
 | this commit | Vectorised GF(2^8) RS (10.5 s to about 5 ms), Bradford `bradford_adapt` with 1000-40000 K range, CPS and shot-cut guards, 40/40 probes passing, doctrine |
 
-Known blocker outside the zone: `tests/unit/test_pack_coverage_contract.py` fails at `02c983b` as well, because `creative/packs/color` has no `pack.manifest.json` and no entry in `continuum/pack_coverage.py::PACK_TEST_TARGETS`. Those files are not in the authorised zone.
+Resolved: the pack-coverage blocker was closed by moving the contract into `speech_cinema/color_contract.py` (the pack substrate forbids NumPy and kernel bindings, so a color pack could not be registered). `creative/packs/color/` no longer exists.
 
 ### Out of scope (not changed)
 

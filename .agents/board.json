@@ -1244,7 +1244,6 @@
       "paths": [
         "src/nexus_ai_agent/storage/artifact_vault/",
         "src/nexus_ai_agent/creative/speech_cinema/",
-        "src/nexus_ai_agent/creative/packs/color/",
         "tests/storage/artifact_vault/",
         "tests/creative/speech_cinema/",
         "tests/creative/packs/color/"
@@ -8669,7 +8668,6 @@
       "exclusive_paths": [
         "src/nexus_ai_agent/storage/artifact_vault/",
         "src/nexus_ai_agent/creative/speech_cinema/",
-        "src/nexus_ai_agent/creative/packs/color/",
         "tests/storage/artifact_vault/",
         "tests/creative/speech_cinema/",
         "tests/creative/packs/color/"
