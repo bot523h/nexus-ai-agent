@@ -1239,16 +1239,59 @@ async def creative_render_binding_confirm(payload: dict[str, Any], result: dict[
         )
     store = SqlArtifactBindingStore()
     try:
-        await store.bind(
-            project_id=str(intent["project_id"]),
-            revision_id=str(intent["revision_id"]),
-            artifact_id=measured,
-            job_id=str(result.get("_queue_job_id") or ""),
-            artifact_kind=str(intent.get("artifact_kind") or "binary"),
-            size_bytes=int(intent.get("size_bytes") or 0),
-            artifact_version_id=intent.get("artifact_version_id") or None,
-            attempt=int(result.get("_queue_attempt") or 0),
-        )
+        project_id = str(intent["project_id"])
+        revision_id = str(intent["revision_id"])
+        job_id = str(result.get("_queue_job_id") or "")
+        fencing_token = int(result.get("_queue_attempt") or 0)
+        published_size = Path(raw_path).stat().st_size
+        passport_digest = result.get("artifact_passport_digest")
+        fence_check = result.get("_queue_fence_check")
+        if isinstance(passport_digest, str) and callable(fence_check):
+            import mimetypes
+
+            verifier_facts = result.get("artifact_verification")
+            if verifier_facts is None:
+                raise CreativeRenderError(
+                    "artifact_binding_failed", "verified publication has no verifier evidence"
+                )
+            verifier_digest = (
+                "sha256:"
+                + hashlib.sha256(
+                    json.dumps(verifier_facts, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+            )
+            media_type = mimetypes.guess_type(raw_path)[0] or "application/octet-stream"
+            registration = await store.register_verified_asset_version(
+                project_id=project_id,
+                revision_id=revision_id,
+                job_id=job_id,
+                attempt_id=str(result.get("_queue_attempt_id") or f"{job_id}:{fencing_token}"),
+                fencing_token=fencing_token,
+                content_sha256=measured,
+                size_bytes=published_size,
+                media_type=media_type,
+                storage_uri=raw_path,
+                verifier_digest=verifier_digest,
+                passport_id=str(result.get("artifact_passport_id") or ""),
+                passport_digest=passport_digest,
+                fence_check=fence_check,
+            )
+            result["asset_version_id"] = registration.asset_version_id
+            intent["artifact_version_id"] = registration.asset_version_id
+        else:
+            # Compatibility for older payload schemas without a persisted
+            # ArtifactPassport; those retain the established revision binding
+            # path and are not presented as first-class AssetVersion lineage.
+            await store.bind(
+                project_id=project_id,
+                revision_id=revision_id,
+                artifact_id=measured,
+                job_id=job_id,
+                artifact_kind=str(intent.get("artifact_kind") or "binary"),
+                size_bytes=published_size,
+                artifact_version_id=intent.get("artifact_version_id") or None,
+                attempt=fencing_token,
+            )
     except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
         raise CreativeRenderError(
             "artifact_binding_failed", f"{type(exc).__name__}: {exc}"

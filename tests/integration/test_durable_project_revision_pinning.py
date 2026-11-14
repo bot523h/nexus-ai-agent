@@ -1216,7 +1216,9 @@ async def test_crash_after_confirm_before_completed_recovers_honestly(pin_env: P
     binding = await _binding_store().resolve(PROJECT_ID, artifact_id)
     assert binding.revision_id == revision.revision_id
     assert await queue.get_status(job_id) is not JobStatus.COMPLETED
-    published = pin_env / "artifacts" / "published" / job_id / "render.mp4"
+    # Publications are namespaced by both job and attempt so stale output
+    # cannot clobber bytes from a newer execution.
+    published = pin_env / "artifacts" / "published" / job_id / "1" / "render.mp4"
     assert published.exists()
 
     # Startup recovery takes the unfinished row over and re-runs it.
@@ -2549,3 +2551,111 @@ async def test_concurrent_binds_cannot_attribute_one_content_address_to_two_proj
         f"the database must hold bindings for exactly the winning project: {owners!r}"
     )
     assert refusals[0].args  # the refusal carries a human-readable reason
+
+
+def test_verified_asset_registration_is_transactional_idempotent_and_fenced(
+    pin_env: Path,
+) -> None:
+    from sqlalchemy import select
+
+    from nexus_ai_agent.creative.project_state.models import (
+        ArtifactBindingError,
+        ArtifactRevisionMismatch,
+    )
+    from nexus_ai_agent.creative.project_state.store import SqlArtifactBindingStore
+    from nexus_ai_agent.storage import models as orm
+    from nexus_ai_agent.storage.db import get_session
+
+    revision = asyncio.run(
+        _commit(SqlProjectRevisionStore(), _project("asset-lineage"), parent=None)
+    )
+    published = pin_env / "published.mp4"
+    published.write_bytes(b"verified published bytes")
+    store = SqlArtifactBindingStore()
+    registration_kwargs = {
+        "project_id": PROJECT_ID,
+        "revision_id": revision.revision_id,
+        "job_id": "job-lineage",
+        "attempt_id": "job-lineage:attempt-1",
+        "fencing_token": 1,
+        "content_sha256": __import__("hashlib").sha256(published.read_bytes()).hexdigest(),
+        "size_bytes": published.stat().st_size,
+        "media_type": "video/mp4",
+        "storage_uri": str(published),
+        "verifier_digest": "sha256:" + "1" * 64,
+        "passport_id": "passport-lineage",
+        "passport_digest": "sha256:" + "2" * 64,
+        "fence_check": lambda: True,
+    }
+    registered = asyncio.run(store.register_verified_asset_version(**registration_kwargs))
+    replay = asyncio.run(store.register_verified_asset_version(**registration_kwargs))
+    assert replay.asset_version_id == registered.asset_version_id
+    assert replay.binding.passport_id == "passport-lineage"
+    assert replay.binding.attempt_id == "job-lineage:attempt-1"
+
+    async def assert_rows() -> None:
+        async with get_session() as session:
+            version = await session.get(orm.AssetVersion, registered.asset_version_id)
+            assert version is not None
+            assert version.content_sha256 == registration_kwargs["content_sha256"]
+            assert version.size_bytes == registration_kwargs["size_bytes"]
+            link = await session.execute(
+                select(orm.ProjectAssetLink).where(
+                    orm.ProjectAssetLink.project_id == PROJECT_ID,
+                    orm.ProjectAssetLink.version_id == registered.asset_version_id,
+                )
+            )
+            assert link.scalar_one_or_none() is not None
+            binding = await session.get(
+                orm.ProjectArtifactBinding,
+                ("sha256:" + registration_kwargs["content_sha256"], "job-lineage"),
+            )
+            assert binding is not None
+            assert binding.artifact_version_id == registered.asset_version_id
+
+    asyncio.run(assert_rows())
+    with pytest.raises(ArtifactRevisionMismatch, match="digest or size"):
+        asyncio.run(
+            store.bind(
+                project_id=PROJECT_ID,
+                revision_id=revision.revision_id,
+                artifact_id="sha256:" + registration_kwargs["content_sha256"],
+                job_id="job-wrong-size",
+                size_bytes=registration_kwargs["size_bytes"] + 1,
+                artifact_version_id=registered.asset_version_id,
+            )
+        )
+    with pytest.raises(ArtifactBindingError, match="fence"):
+        asyncio.run(
+            store.register_verified_asset_version(
+                **{**registration_kwargs, "fencing_token": 2, "fence_check": lambda: False}
+            )
+        )
+
+    published.write_bytes(b"tampered on disk")
+    with pytest.raises(ArtifactRevisionMismatch, match="digest or size"):
+        asyncio.run(store.register_verified_asset_version(**registration_kwargs))
+
+
+def test_binding_refuses_nonexistent_asset_version_reference(pin_env: Path) -> None:
+    from nexus_ai_agent.creative.project_state.models import ArtifactBindingError
+
+    revision = asyncio.run(
+        _commit(SqlProjectRevisionStore(), _project("missing-version"), parent=None)
+    )
+    artifact = pin_env / "missing-version.bin"
+    artifact.write_bytes(b"asset bytes")
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    with pytest.raises(ArtifactBindingError, match="no AssetVersion"):
+        asyncio.run(
+            _binding_store().bind(
+                project_id=PROJECT_ID,
+                revision_id=revision.revision_id,
+                artifact_id=content_address_of_file(artifact),
+                job_id="job-no-version",
+                size_bytes=artifact.stat().st_size,
+                artifact_version_id="does-not-exist",
+                require_asset_version=True,
+            )
+        )

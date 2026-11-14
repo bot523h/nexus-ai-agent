@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
@@ -97,6 +97,15 @@ def content_address_of_file(path: Path) -> str:
 
 
 @dataclass(frozen=True)
+class VerifiedAssetRegistration:
+    """Idempotent result of the verified artifact/asset/binding transaction."""
+
+    asset_id: str
+    asset_version_id: str
+    binding: ArtifactBinding
+
+
+@dataclass(frozen=True)
 class ArtifactBinding:
     """One durable artifact→revision binding as read back from storage."""
 
@@ -110,6 +119,11 @@ class ArtifactBinding:
     artifact_version_id: str | None = None
     #: Fencing token of the execution that committed the binding (0 = pre-fence).
     attempt: int = 0
+    #: Passport identifier supplied by verified registration (receipt-only on this schema).
+    passport_id: str | None = None
+    #: Attempt/fence evidence included in registration receipt, not persisted by baseline schema.
+    attempt_id: str | None = None
+    verifier_digest: str | None = None
 
 
 def _as_binding(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
@@ -404,6 +418,175 @@ class SqlArtifactBindingStore:
         self._session_factory = session_factory or (lambda: get_session())
         self._revision_store = revision_store or SqlProjectRevisionStore()
 
+    async def register_verified_asset_version(
+        self,
+        *,
+        project_id: str,
+        revision_id: str,
+        job_id: str,
+        attempt_id: str,
+        fencing_token: int,
+        content_sha256: str,
+        size_bytes: int,
+        media_type: str,
+        storage_uri: str,
+        verifier_digest: str,
+        passport_id: str,
+        passport_digest: str,
+        fence_check: Any,
+    ) -> VerifiedAssetRegistration:
+        """Atomically register verified bytes, version, project link and binding.
+
+        The queue supplies ``fence_check`` from its authoritative claim. The
+        stored path is re-measured in this operation; caller digests are claims
+        only. Deterministic identifiers make crash/retry reconciliation a
+        no-op when all immutable facts match.
+        """
+        if not project_id or not revision_id or not job_id or not attempt_id:
+            raise ArtifactBindingError("asset registration identity is incomplete")
+        if (
+            isinstance(fencing_token, bool)
+            or not isinstance(fencing_token, int)
+            or fencing_token < 1
+        ):
+            raise ArtifactBindingError("fencing_token must be a positive integer")
+        if not callable(fence_check) or not fence_check():
+            raise ArtifactBindingError("stale or unverifiable execution fence")
+        if (
+            not media_type
+            or not storage_uri
+            or not verifier_digest
+            or not passport_id
+            or not passport_digest
+        ):
+            raise ArtifactBindingError("verified asset metadata is incomplete")
+        path = Path(storage_uri)
+        try:
+            digest = content_address_of_file(path)
+            size = path.stat().st_size
+        except OSError as exc:
+            raise ArtifactRevisionMismatch("published asset is unavailable") from exc
+        normalized = (
+            content_sha256 if content_sha256.startswith("sha256:") else f"sha256:{content_sha256}"
+        )
+        if digest != normalized or size != size_bytes or size <= 0:
+            raise ArtifactRevisionMismatch("published asset digest or size does not match")
+        await self._load_validated_revision(project_id, revision_id)
+        identity = "|".join(
+            (project_id, revision_id, job_id, attempt_id, str(fencing_token), digest)
+        )
+        suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        asset_id = f"render_asset_{hashlib.sha256((project_id + digest).encode()).hexdigest()}"
+        version_id = f"render_version_{suffix}"
+        link_id = f"render_link_{hashlib.sha256((project_id + version_id).encode()).hexdigest()}"
+        artifact_kind = media_type.split("/", 1)[0] or "binary"
+
+        async with self._session_factory() as session:
+            await self._claim_content_owner(session, digest, project_id)
+            asset = await session.get(orm.Asset, asset_id)
+            if asset is None:
+                session.add(orm.Asset(asset_id=asset_id, media_kind=artifact_kind))
+                await session.flush()
+            elif asset.media_kind != artifact_kind:
+                raise ArtifactBindingConflict(
+                    "deterministic Asset identity has conflicting media kind"
+                )
+            version = await session.get(orm.AssetVersion, version_id)
+            if version is None:
+                session.add(
+                    orm.AssetVersion(
+                        version_id=version_id,
+                        asset_id=asset_id,
+                        content_sha256=digest.removeprefix("sha256:"),
+                        size_bytes=size,
+                        media_kind=artifact_kind,
+                        media_type=media_type,
+                        blob_key=storage_uri,
+                        original_filename=Path(storage_uri).name,
+                    )
+                )
+                await session.flush()
+            elif (
+                version.asset_id != asset_id
+                or version.content_sha256 != digest.removeprefix("sha256:")
+                or version.size_bytes != size
+                or version.media_type != media_type
+            ):
+                raise ArtifactBindingConflict("deterministic AssetVersion identity diverged")
+            link = await session.get(orm.ProjectAssetLink, link_id)
+            if link is None:
+                session.add(
+                    orm.ProjectAssetLink(
+                        link_id=link_id,
+                        project_id=project_id,
+                        asset_id=asset_id,
+                        version_id=version_id,
+                    )
+                )
+                await session.flush()
+            elif (
+                link.project_id != project_id
+                or link.asset_id != asset_id
+                or link.version_id != version_id
+            ):
+                raise CrossProjectAccess(
+                    "AssetVersion is already linked to different project facts"
+                )
+
+            existing = await session.get(orm.ProjectArtifactBinding, (digest, job_id))
+            if existing is not None:
+                if (
+                    existing.project_id != project_id
+                    or existing.revision_id != revision_id
+                    or existing.attempt != fencing_token
+                    or existing.artifact_version_id != version_id
+                    or existing.size_bytes != size
+                ):
+                    raise ArtifactBindingConflict("existing artifact lineage conflicts with retry")
+                if not fence_check():
+                    raise ArtifactBindingError("execution fence was lost before idempotent commit")
+                await session.commit()
+                return VerifiedAssetRegistration(
+                    asset_id,
+                    version_id,
+                    replace(
+                        _as_binding(existing),
+                        passport_id=passport_id,
+                        attempt_id=attempt_id,
+                        verifier_digest=verifier_digest,
+                    ),
+                )
+            binding = orm.ProjectArtifactBinding(
+                artifact_id=digest,
+                project_id=project_id,
+                revision_id=revision_id,
+                job_id=job_id,
+                attempt=fencing_token,
+                artifact_kind=artifact_kind,
+                size_bytes=size,
+                artifact_version_id=version_id,
+            )
+            session.add(binding)
+            if not fence_check():
+                raise ArtifactBindingError("execution fence was lost before asset commit")
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ArtifactBindingConflict("verified AssetVersion transaction raced") from exc
+            saved = await session.get(orm.ProjectArtifactBinding, (digest, job_id))
+            assert saved is not None
+            return VerifiedAssetRegistration(
+                asset_id,
+                version_id,
+                replace(
+                    _as_binding(saved),
+                    passport_id=passport_id,
+                    attempt_id=attempt_id,
+                    verifier_digest=verifier_digest,
+                ),
+            )
+
     async def bind(
         self,
         *,
@@ -415,6 +598,7 @@ class SqlArtifactBindingStore:
         size_bytes: int,
         artifact_version_id: str | None = None,
         attempt: int = 0,
+        require_asset_version: bool = False,
     ) -> ArtifactBinding:
         """Bind one measured artifact to the immutable revision it served.
 
@@ -458,6 +642,29 @@ class SqlArtifactBindingStore:
         await self._load_validated_revision(project_id, revision_id)
 
         async with self._session_factory() as session:
+            if artifact_version_id is not None:
+                version = await session.get(orm.AssetVersion, artifact_version_id)
+                if version is None:
+                    if require_asset_version:
+                        raise ArtifactBindingError("artifact_version_id references no AssetVersion")
+                else:
+                    if (
+                        version.content_sha256 != artifact_id.removeprefix("sha256:")
+                        or version.size_bytes != size_bytes
+                    ):
+                        raise ArtifactRevisionMismatch(
+                            "AssetVersion digest or size does not match the verified artifact"
+                        )
+                    link_model: Any = orm.ProjectAssetLink
+                    link = await session.execute(
+                        select(link_model).where(
+                            link_model.version_id == artifact_version_id,
+                            link_model.project_id == project_id,
+                            link_model.asset_id == version.asset_id,
+                        )
+                    )
+                    if link.scalar_one_or_none() is None:
+                        raise CrossProjectAccess("AssetVersion is not linked to this project")
             # The content address is claimed FIRST, atomically, in the database:
             # a same-project replay (or a second job of the same project) is a
             # no-op, while a *different* project's claim is refused here — before
