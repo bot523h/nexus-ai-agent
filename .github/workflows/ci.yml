@@ -697,8 +697,15 @@ jobs:
   # real PostgreSQL before any Neon URL is provided.  Zero cloud credentials:
   # a local service container plays the part of Neon.  When NEXUS_DATABASE_URL
   # is later set to Neon, the exact same `nexus migrate` path runs against it.
+  # Pinned to ubuntu-24.04: its postgresql-client is PG16, matching the
+  # pgvector/pgvector:pg16 service container. ubuntu-latest is mid-migration
+  # to Ubuntu 26 (whose client is PG18); same commit/workflow went green at
+  # 14:52Z and red at 15:55Z+16:50Z at this exact step in between. Matching
+  # client major to server major is the safe state for the restore-atomicity
+  # proof. Relax to ubuntu-latest once the migrated image's client is PG16+
+  # again or the test job's dependency story settles.
   migrate-postgres:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
       postgres:
@@ -749,7 +756,22 @@ jobs:
       # F-002 restore atomicity: a failed restore rolls back (the sentinel row
       # survives) and the full NEXUS dump applies under --single-transaction.
       # Runs against a disposable database it creates and drops per run.
-      - run: pytest -q tests/integration/test_postgres_restore_atomicity.py
+      - run: |
+          set -o pipefail
+          psql --version | tee psql-version.log
+          pg_dump --version | tee -a psql-version.log
+          pytest -q --tb=short tests/integration/test_postgres_restore_atomicity.py 2>&1 | tee restore.log
+      # Raw logs are not reachable from every reviewer environment; surface the
+      # failing assertion(s) as check annotations on failure (same convention
+      # as the pytest/parity jobs).
+      - name: failing tests as annotations
+        if: failure()
+        run: |
+          cat psql-version.log || true
+          grep -E '^(FAILED|ERROR) ' restore.log | head -n 10 | while IFS= read -r line; do
+            printf '::error title=pytest restore-atomicity::%s\n' "$line"
+          done
+          printf '::warning title=pytest restore-atomicity::%s failing test id(s) in total (first 10 annotated)\n' "$(grep -cE '^(FAILED|ERROR) ' restore.log || true)"
       # Shared read-only adapter contract, PG leg (incl. golden stability
       # and the f4a9c2e71b08 lifecycle table).
       - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py
