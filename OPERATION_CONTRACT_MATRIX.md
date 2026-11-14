@@ -7,7 +7,7 @@ nine-stage pipeline for every operation of the universe (catalogue ∪ runtime).
 Statuses: `MISSING` / `PARTIAL` (design-only or wired-unproven) / `PRESENT`
 (static fact) / `PROVEN` (backed by executable evidence).
 
-Universe: **80** operations — catalogue 70, runtime 57, overlap 47, missing 23, runtime-only 10, surface-reachable 12.
+Universe: **105** operations — catalogue 70, runtime 82, overlap 47, missing 23, runtime-only 35, surface-reachable 12.
 
 | operation | id | flag | product | contract | registry | capability | | surface | command | execution | artifact | proof | L | UX modes | pack | | locality | registrar |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -53,24 +53,49 @@ Universe: **80** operations — catalogue 70, runtime 57, overlap 47, missing 23
 | motion.keyframe_transform | T32 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.motion.graphics |
 | motion.stabilize | T37 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.motion.graphics |
 | motion.warp | T38 | REGISTERED | PRESENT | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | all three | LOCAL PACK | LOCAL_ONLY | nexus.motion.graphics |
+| portrait.aging_deaging_geometry | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
 | portrait.background_blur | T19 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_ONLY | NOT_AVAILABLE |
 | portrait.correct_gaze | T16 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | manual | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
+| portrait.depth_of_field_bokeh | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
 | portrait.detect_landmarks | T11 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
 | portrait.enhance_eyes | T17 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_ONLY | NOT_AVAILABLE |
+| portrait.eyeblink_synthesis | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
+| portrait.facial_hair_continuity | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
+| portrait.facial_relighting_gradient | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
+| portrait.gaze_redirection | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
+| portrait.head_repose_3d | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
 | portrait.mask_hair | T18 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
+| portrait.micro_expression_morph | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
 | portrait.relight_face | T14 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
+| portrait.relight_spherical_harmonics | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
 | portrait.retouch_blemish | T13 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
+| portrait.skintone_harmonization | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
 | portrait.smooth_skin | T12 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
 | portrait.stabilize_face | T20 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_ONLY | NOT_AVAILABLE |
+| portrait.teeth_whitening | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.portrait.refine |
 | portrait.whiten_teeth | T15 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
+| scene.add_volumetric_fog_haze | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
 | scene.auto_reframe_subject | T30 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_ONLY | NOT_AVAILABLE |
+| scene.chromatic_aberration_control | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
 | scene.detect_shot_boundaries | T27 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_ONLY | NOT_AVAILABLE |
+| scene.film_emulation | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
 | scene.find_subject_moment | T28 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_ONLY | NOT_AVAILABLE |
+| scene.harmonize_radiative_transfer | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
+| scene.insert_object_with_shadow | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
+| scene.lens_distortion_correct | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
+| scene.outpaint_canvas_expand | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
+| scene.perspective_horizon_level | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
+| scene.reflection_water_glass_synth | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
 | scene.remove_background | T24 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
 | scene.remove_logo | T29 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | manual | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
 | scene.remove_object | T22 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
+| scene.remove_object_inpaint | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
 | scene.replace_sky | T23 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
+| scene.retime_optical_flow | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
 | scene.segment_subject | T21 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_PREFERRED | NOT_AVAILABLE |
+| scene.sky_replacement_relit | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
+| scene.synthesize_depth_of_field | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
+| scene.tonemap_hdr | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | MISSING | MISSING | MISSING | MISSING | PROVEN | L1 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.scene.imaging |
 | scene.track_face | T26 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_ONLY | NOT_AVAILABLE |
 | scene.track_object | T25 | REGISTERED | PRESENT | PARTIAL | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | MISSING | L0 | all three | LOCAL PACK NEEDED | LOCAL_ONLY | NOT_AVAILABLE |
 | slideshow.compose | NOT_AVAILABLE | RUNTIME_ONLY | MISSING | PRESENT | PRESENT | PRESENT | PRESENT | PRESENT | PROVEN | PRESENT | PROVEN | L3 | moment+manual | LOCAL PACK | LOCAL_ONLY | nexus.slideshow.compose |

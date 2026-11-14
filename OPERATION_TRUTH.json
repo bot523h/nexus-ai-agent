@@ -25,8 +25,8 @@
       }
     ],
     "generation_command": "python -m nexus_ai_agent.nagar",
-    "source_revision": "2f9561f7fd8e8dbae377207c5cec55435c2273d4",
-    "generated_at": "2026-11-13T10:25:49Z",
+    "source_revision": "f9f2863a94b5bd8d0963eab0130b36aefc97a531",
+    "generated_at": "2026-11-14T08:44:57Z",
     "deterministic_fields": [
       "reconciliation",
       "operations[*].pipeline",
@@ -64,13 +64,13 @@
   "l4_unavailable_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
   "reconciliation": {
     "catalog_count": 70,
-    "runtime_count": 57,
+    "runtime_count": 82,
     "overlap_count": 47,
     "missing_count": 23,
-    "runtime_only_count": 10,
-    "universe_count": 80,
+    "runtime_only_count": 35,
+    "universe_count": 105,
     "surface_count": 12,
-    "suite_executed_count": 57,
+    "suite_executed_count": 82,
     "missing_by_category": {
       "color": 3,
       "portrait": 10,
@@ -78,6 +78,8 @@
     },
     "runtime_only_by_category": {
       "media": 2,
+      "portrait": 11,
+      "scene": 14,
       "slideshow": 6,
       "system": 1,
       "timeline": 1
@@ -110,6 +112,31 @@
     "runtime_only": [
       "media.pause",
       "media.play",
+      "portrait.aging_deaging_geometry",
+      "portrait.depth_of_field_bokeh",
+      "portrait.eyeblink_synthesis",
+      "portrait.facial_hair_continuity",
+      "portrait.facial_relighting_gradient",
+      "portrait.gaze_redirection",
+      "portrait.head_repose_3d",
+      "portrait.micro_expression_morph",
+      "portrait.relight_spherical_harmonics",
+      "portrait.skintone_harmonization",
+      "portrait.teeth_whitening",
+      "scene.add_volumetric_fog_haze",
+      "scene.chromatic_aberration_control",
+      "scene.film_emulation",
+      "scene.harmonize_radiative_transfer",
+      "scene.insert_object_with_shadow",
+      "scene.lens_distortion_correct",
+      "scene.outpaint_canvas_expand",
+      "scene.perspective_horizon_level",
+      "scene.reflection_water_glass_synth",
+      "scene.remove_object_inpaint",
+      "scene.retime_optical_flow",
+      "scene.sky_replacement_relit",
+      "scene.synthesize_depth_of_field",
+      "scene.tonemap_hdr",
       "slideshow.compose",
       "slideshow.render",
       "slideshow.scan_assets",
@@ -121,8 +148,8 @@
     ]
   },
   "declaration_parity": {
-    "declared_count": 57,
-    "registered_count": 57,
+    "declared_count": 82,
+    "registered_count": 82,
     "declared_not_registered": [],
     "registered_not_declared": []
   },
@@ -632,6 +659,206 @@
         "files": [
           "tests/unit/creative_ir_testkit.py",
           "tests/unit/test_opgap_wave5.py"
+        ]
+      },
+      "portrait.aging_deaging_geometry": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "portrait.depth_of_field_bokeh": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "portrait.eyeblink_synthesis": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "portrait.facial_hair_continuity": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "portrait.facial_relighting_gradient": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "portrait.gaze_redirection": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "portrait.head_repose_3d": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "portrait.micro_expression_morph": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "portrait.relight_spherical_harmonics": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "portrait.skintone_harmonization": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "portrait.teeth_whitening": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ]
+      },
+      "scene.add_volumetric_fog_haze": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.chromatic_aberration_control": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.film_emulation": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.harmonize_radiative_transfer": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.insert_object_with_shadow": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.lens_distortion_correct": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.outpaint_canvas_expand": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.perspective_horizon_level": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.reflection_water_glass_synth": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.remove_object_inpaint": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.retime_optical_flow": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.sky_replacement_relit": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.synthesize_depth_of_field": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ]
+      },
+      "scene.tonemap_hdr": {
+        "kinds": [
+          "handler"
+        ],
+        "files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
         ]
       },
       "slideshow.compose": {
@@ -4016,6 +4243,60 @@
       "registrar_pack": "nexus.motion.graphics"
     },
     {
+      "operation_id": "portrait.aging_deaging_geometry",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.AgingInput",
+        "handler": "_aging",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
+    },
+    {
       "operation_id": "portrait.background_blur",
       "identity": {
         "t_id": "T19",
@@ -4108,6 +4389,60 @@
       },
       "owner": "NOT_AVAILABLE",
       "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.depth_of_field_bokeh",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.DepthOfFieldBokehInput",
+        "handler": "_bokeh",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
     },
     {
       "operation_id": "portrait.detect_landmarks",
@@ -4204,6 +4539,276 @@
       "registrar_pack": "NOT_AVAILABLE"
     },
     {
+      "operation_id": "portrait.eyeblink_synthesis",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.EyeblinkInput",
+        "handler": "_blink",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
+    },
+    {
+      "operation_id": "portrait.facial_hair_continuity",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.FacialHairInput",
+        "handler": "_beard",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
+    },
+    {
+      "operation_id": "portrait.facial_relighting_gradient",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.FacialRelightingInput",
+        "handler": "_relight",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
+    },
+    {
+      "operation_id": "portrait.gaze_redirection",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.GazeRedirectionInput",
+        "handler": "_gaze",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
+    },
+    {
+      "operation_id": "portrait.head_repose_3d",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.HeadReposeInput",
+        "handler": "_repose",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
+    },
+    {
       "operation_id": "portrait.mask_hair",
       "identity": {
         "t_id": "T18",
@@ -4249,6 +4854,60 @@
       },
       "owner": "NOT_AVAILABLE",
       "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.micro_expression_morph",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.MicroExpressionInput",
+        "handler": "_morph",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
     },
     {
       "operation_id": "portrait.relight_face",
@@ -4298,6 +4957,60 @@
       "registrar_pack": "NOT_AVAILABLE"
     },
     {
+      "operation_id": "portrait.relight_spherical_harmonics",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.SphericalHarmonicsRelightInput",
+        "handler": "_relight_spherical_harmonics",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
+    },
+    {
       "operation_id": "portrait.retouch_blemish",
       "identity": {
         "t_id": "T13",
@@ -4343,6 +5056,60 @@
       },
       "owner": "NOT_AVAILABLE",
       "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "portrait.skintone_harmonization",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.SkintoneInput",
+        "handler": "_skintone",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
     },
     {
       "operation_id": "portrait.smooth_skin",
@@ -4439,6 +5206,60 @@
       "registrar_pack": "NOT_AVAILABLE"
     },
     {
+      "operation_id": "portrait.teeth_whitening",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "portrait",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/portrait/test_portrait_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.portrait.models.TeethWhiteningInput",
+        "handler": "_teeth",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.portrait.refine"
+    },
+    {
       "operation_id": "portrait.whiten_teeth",
       "identity": {
         "t_id": "T15",
@@ -4484,6 +5305,60 @@
       },
       "owner": "NOT_AVAILABLE",
       "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.add_volumetric_fog_haze",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.FogHazeInput",
+        "handler": "_fog",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
     },
     {
       "operation_id": "scene.auto_reframe_subject",
@@ -4533,6 +5408,60 @@
       "registrar_pack": "NOT_AVAILABLE"
     },
     {
+      "operation_id": "scene.chromatic_aberration_control",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.ChromaticAberrationInput",
+        "handler": "_chromatic",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
       "operation_id": "scene.detect_shot_boundaries",
       "identity": {
         "t_id": "T27",
@@ -4580,6 +5509,60 @@
       "registrar_pack": "NOT_AVAILABLE"
     },
     {
+      "operation_id": "scene.film_emulation",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.FilmEmulationInput",
+        "handler": "_film_emulation",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
       "operation_id": "scene.find_subject_moment",
       "identity": {
         "t_id": "T28",
@@ -4625,6 +5608,330 @@
       },
       "owner": "NOT_AVAILABLE",
       "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.harmonize_radiative_transfer",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.RadiativeTransferHarmonizeInput",
+        "handler": "_harmonize_radiative_transfer",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
+      "operation_id": "scene.insert_object_with_shadow",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.InsertObjectInput",
+        "handler": "_insert_object",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
+      "operation_id": "scene.lens_distortion_correct",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.LensDistortionInput",
+        "handler": "_lens",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
+      "operation_id": "scene.outpaint_canvas_expand",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.OutpaintInput",
+        "handler": "_outpaint",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
+      "operation_id": "scene.perspective_horizon_level",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.HorizonLevelInput",
+        "handler": "_horizon",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
+      "operation_id": "scene.reflection_water_glass_synth",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.ReflectionInput",
+        "handler": "_reflection",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
     },
     {
       "operation_id": "scene.remove_background",
@@ -4768,6 +6075,60 @@
       "registrar_pack": "NOT_AVAILABLE"
     },
     {
+      "operation_id": "scene.remove_object_inpaint",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.RemoveObjectInput",
+        "handler": "_remove_object",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
       "operation_id": "scene.replace_sky",
       "identity": {
         "t_id": "T23",
@@ -4815,6 +6176,60 @@
       "registrar_pack": "NOT_AVAILABLE"
     },
     {
+      "operation_id": "scene.retime_optical_flow",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.OpticalFlowRetimeInput",
+        "handler": "_retime_optical_flow",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
       "operation_id": "scene.segment_subject",
       "identity": {
         "t_id": "T21",
@@ -4860,6 +6275,168 @@
       },
       "owner": "NOT_AVAILABLE",
       "registrar_pack": "NOT_AVAILABLE"
+    },
+    {
+      "operation_id": "scene.sky_replacement_relit",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.SkyRelitInput",
+        "handler": "_sky_relit",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
+      "operation_id": "scene.synthesize_depth_of_field",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.DepthOfFieldInput",
+        "handler": "_dof",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
+    },
+    {
+      "operation_id": "scene.tonemap_hdr",
+      "identity": {
+        "t_id": "NOT_AVAILABLE",
+        "category": "scene",
+        "catalog_line": null,
+        "permission_level_catalog": "NOT_AVAILABLE",
+        "engine_catalog": "NOT_AVAILABLE",
+        "pack_id": "NOT_AVAILABLE",
+        "status_flag": "RUNTIME_ONLY"
+      },
+      "pipeline": {
+        "product": "MISSING",
+        "contract": "PRESENT",
+        "registry": "PRESENT",
+        "capability": "PRESENT",
+        "surface": "MISSING",
+        "command": "MISSING",
+        "execution": "MISSING",
+        "artifact": "MISSING",
+        "proof": "PROVEN"
+      },
+      "maturity": {
+        "level": 1,
+        "token": "L1",
+        "definition": "code: registered in build_runtime_registry() and domain-ready (typed input model with extra=\"forbid\", a named non-lambda handler, deterministic=True)"
+      },
+      "evidence": {
+        "suite_execution_kinds": [
+          "handler"
+        ],
+        "suite_reference_files": [
+          "tests/creative/packs/scene/test_scene_registry.py"
+        ],
+        "recorded_execution_proof": false,
+        "recorded_artifact_proof": false,
+        "recorded_proofs": [],
+        "gate4_runtime_verdict": "NOT_AVAILABLE",
+        "artifact_kind": "unspecified",
+        "surface_entrypoint": "NOT_AVAILABLE",
+        "production_like_evidence": "NOT_AVAILABLE",
+        "production_like_reason": "no repository source defines or measures a production-like level; recording L4 would be an unsourced claim",
+        "input_model": "nexus_ai_agent.creative.packs.scene.models.HdrTonemapInput",
+        "handler": "_tonemap_hdr",
+        "permission_level": "B"
+      },
+      "source": {
+        "defined_in": null,
+        "registered_in": "build_runtime_registry()",
+        "surface_probe": null
+      },
+      "owner": "NOT_AVAILABLE",
+      "registrar_pack": "nexus.scene.imaging"
     },
     {
       "operation_id": "scene.track_face",

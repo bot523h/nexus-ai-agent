@@ -1,0 +1,92 @@
+{
+  "schema": "nexus-p0-evidence/v1",
+  "mission": "NEXUS P0 database recovery / durability",
+  "source_revision": "dd35cb001451d5f348045b39b688f1cfa1c09820",
+  "generated_at": "2026-11-14T10:18:54.795667+00:00",
+  "environment": {
+    "python": "3.11.2",
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
+    "postgres_url": "postgresql://postgres:***@127.0.0.1:5433/nexus"
+  },
+  "checks": {
+    "migrations": {
+      "command": "/usr/bin/python3 -m nexus_ai_agent.cli migrate",
+      "exit_code": 0,
+      "stdout_tail": [
+        "\u2713 Database migrated to head"
+      ],
+      "stderr_tail": [
+        "INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.",
+        "INFO  [alembic.runtime.migration] Will assume transactional DDL."
+      ]
+    },
+    "persistence_tests": {
+      "command": "/usr/bin/python3 -m pytest -q -p no:randomly tests/integration/test_postgres_persistence.py",
+      "exit_code": 0,
+      "stdout_tail": [
+        "          ```",
+        "          ",
+        "    current = (await session.execute(text(\"SELECT current_database()\"))).scalar_one()",
+        "",
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "3 passed, 2 warnings in 0.77s"
+      ],
+      "stderr_tail": []
+    },
+    "dr_proof": {
+      "command": "/usr/bin/python3 scripts/dr_proof.py",
+      "exit_code": 0,
+      "stdout_tail": [
+        "[dump] artifact=nexus-pg.sql bytes=5530421 sha256=8ca04c8304a9227c762bddcda2fe39d4e7301e47140dfd480e8421d74b81f6fc",
+        "[verify] {'engine': 'postgres', 'footer': 'present'}",
+        "2026-11-14 10:18:59 [info     ] maintenance_restore_apply_ok   checksum=8ca04c8304a9227c762bddcda2fe39d4e7301e47140dfd480e8421d74b81f6fc engine=postgres target=127.0.0.1:5433/nexus_restore_target",
+        "[restore] ok=True engine=postgres chain=[{'state': 'FETCHED', 'ok': True, 'detail': 'local:/tmp/dr_proof_urpssdjm/nexus-pg.sql'}, {'state': 'CHECKSUM_STRUCTURAL_ONLY', 'ok': True, 'detail': 'no checksum evidence available (no sidecar, no --expected-sha256)'}, {'state': 'INTEGRITY_VERIFIED', 'ok': True, 'detail': 'pg_dump footer present, non-empty'}, {'state': 'ARTIFACT_VERIFIED', 'ok': True, 'detail': 'checksum + structural integrity verified'}, {'state': 'POSTGRES_LIVE_RESTORE', 'ok': True, 'detail': 'psql applied the dump atomically on 127.0.0.1:5433/nexus_restore_target'}, {'state': 'POST_RESTORE_SCHEMA', 'ok': True, 'detail': '46 dump tables present on the target'}, {'state': 'POST_RESTORE_DATA', 'ok': True, 'detail': \"46 tables' row counts match the dump (20002 rows)\"}, {'state': 'RESTORE_PROVEN', 'ok': True, 'detail': 'restored, re-verified, and data row counts match on the target'}]",
+        "[check] restored row = 'hello-durability-42'",
+        "DR-PROOF-OK: dump -> verify -> restore -> row preserved"
+      ],
+      "stderr_tail": [
+        "[pg-safety] dr_proof source (DROP/CREATE/INSERT) \u2192 target 127.0.0.1:5433/nexus (destructive opt-in ARMED)",
+        "[pg-safety] dr_proof target (DROP + restore) \u2192 target 127.0.0.1:5433/nexus_restore_target (destructive opt-in ARMED)"
+      ]
+    },
+    "backend_policy": {
+      "command": "/usr/bin/python3 -m pytest -q -p no:randomly tests/unit/test_backend_policy.py",
+      "exit_code": 0,
+      "stdout_tail": [
+        "..................                                                       [100%]",
+        "18 passed in 0.73s"
+      ],
+      "stderr_tail": []
+    },
+    "truth_gate": {
+      "command": "/usr/bin/python3 -m nexus_ai_agent.nagar --check",
+      "exit_code": 0,
+      "stdout_tail": [
+        "TRUTH GATE: GREEN \u2014 projection and generated docs match the sources"
+      ],
+      "stderr_tail": []
+    },
+    "benchmark": {
+      "command": "/usr/bin/python3 scripts/p0_benchmark.py --rows 20000",
+      "exit_code": 0,
+      "stdout_tail": [
+        "  \"verify_seconds\": 0.006,",
+        "  \"restored_rows\": 20000,",
+        "  \"row_count_matches\": true,",
+        "  \"throughput_rows_per_s_restore\": 49951.9",
+        "}",
+        "wrote docs/evidence/p0/benchmark.json"
+      ],
+      "stderr_tail": [
+        "[pg-safety] p0_benchmark source (DROP/CREATE/INSERT) \u2192 target 127.0.0.1:5433/nexus (destructive opt-in ARMED)",
+        "[pg-safety] p0_benchmark target (DROP + restore) \u2192 target 127.0.0.1:5433/nexus_restore_target (destructive opt-in ARMED)"
+      ]
+    }
+  },
+  "fixed_sites": {
+    "src/nexus_ai_agent/maintenance/backup.py": "f3f6400d4ced4decd857933e4ad41a1c33a91f8a4a185308bc3118fddbe24485",
+    "src/nexus_ai_agent/maintenance/restore.py": "63d0d45e6e9635ef94327d1f6fa028de8803dabb6d81392a36cc3979ed6d686e",
+    "src/nexus_ai_agent/storage/db.py": "ba85ae2a1e7c4b90cf3970e2c41c8e379afa846dfbe2fdff9a79cc1aa6f25a24"
+  },
+  "all_checks_passed": true
+}

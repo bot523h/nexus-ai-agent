@@ -60,6 +60,13 @@ unbound identity (`job_id` without a token) holds no cancellation authority at
 all — `job_id` alone is never sufficient. A stale token is rejected at the
 queue's fenced CAS and can never cancel a newer attempt.
 
+A **not-yet-owned** (`pending`) row is a typed refusal, not a dequeue: it was
+never reserved, so it holds no attempt and no fencing token and there is nothing
+for `cancel` to fence. `cancel` returns `False` and mutates nothing — the same
+refusal a terminal row receives — so the row's later, independent reservation is
+unaffected. The contract never dequeues an unowned request. Proved by
+`tests/integration/test_execution_native_backend.py::test_cancel_never_owned_pending_row_is_a_typed_refusal`.
+
 `reconcile` never takes over a live peer by default. A takeover requires that
 the backend was constructed with an explicit `stale_after` window, and even then
 it is **job-scoped**: `recover_job` can only touch `identity.job_id`, so an

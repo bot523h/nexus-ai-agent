@@ -4,11 +4,11 @@
   "author": "Agent B — Operation Truth & Wave Planning Mission",
   "summary": {
     "catalog_total": 70,
-    "runtime_registry_total": 57,
+    "runtime_registry_total": 82,
     "reconciled_overlap": 47,
     "missing_gaps": 23,
-    "runtime_extras": 10,
-    "universe_total": 80
+    "runtime_extras": 35,
+    "universe_total": 105
   },
   "operations": [
     {

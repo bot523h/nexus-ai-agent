@@ -159,6 +159,25 @@ PACK_LIFECYCLE: dict[str, PackLifecycle] = {
         state=LifecycleState.EXPERIMENTAL,
         reason="deterministic spec derivation pinned; zero pixel paths",
     ),
+    # ATLAS integration (Wave 3): the AETHEL packs ship as builtins. Their
+    # kernels execute real in-memory image math under adversarial test, but no
+    # artifact has been re-decoded through a verifier yet, so the honest ceiling
+    # is IMPLEMENTED (matching the evidence ladder, not the kernel test count).
+    # Dispatch through the runtime requires an injected native kernel
+    # (context.portrait_kernel / context.scene_kernel) and fails closed without
+    # one; nothing here is production-corroborated.
+    "nexus.portrait.refine": PackLifecycle(
+        pack_id="nexus.portrait.refine",
+        state=LifecycleState.EXPERIMENTAL,
+        reason="deterministic in-memory kernels under test; no verifier-corroborated "
+        "artifact yet; runtime dispatch fails closed without an injected portrait kernel",
+    ),
+    "nexus.scene.imaging": PackLifecycle(
+        pack_id="nexus.scene.imaging",
+        state=LifecycleState.EXPERIMENTAL,
+        reason="deterministic in-memory kernels under test; no verifier-corroborated "
+        "artifact yet; runtime dispatch fails closed without an injected scene kernel",
+    ),
 }
 
 
@@ -182,6 +201,8 @@ PACK_EVIDENCE: dict[str, OperationEvidenceState] = {
     "nexus.color.delivery": OperationEvidenceState.EXECUTION_PROVEN,
     "nexus.vision.portrait": OperationEvidenceState.IMPLEMENTED,
     "nexus.vision.scene": OperationEvidenceState.IMPLEMENTED,
+    "nexus.portrait.refine": OperationEvidenceState.IMPLEMENTED,
+    "nexus.scene.imaging": OperationEvidenceState.IMPLEMENTED,
 }
 
 

@@ -96,13 +96,15 @@ def test_gate_names_the_first_refusal() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_table_covers_exactly_the_eight_manifest_packs() -> None:
+def test_table_covers_exactly_the_ten_manifest_packs() -> None:
     assert sorted(PACK_LIFECYCLE) == [
         "nexus.audio.studio",
         "nexus.color.delivery",
         "nexus.edit.timeline",
         "nexus.language.caption",
         "nexus.motion.graphics",
+        "nexus.portrait.refine",
+        "nexus.scene.imaging",
         "nexus.slideshow.compose",
         "nexus.vision.portrait",
         "nexus.vision.scene",

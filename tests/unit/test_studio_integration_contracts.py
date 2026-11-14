@@ -315,7 +315,7 @@ class TestNineCategoryMatrix:
 
 class TestAgent3RuntimeContract:
     def test_shipped_runtime_truth_law4_on_real_packs(self) -> None:
-        """The real six-pack composition projected through Law 4."""
+        """The real eight-pack composition projected through Law 4."""
         from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 
         registry = build_runtime_registry()

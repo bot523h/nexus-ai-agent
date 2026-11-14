@@ -66,19 +66,25 @@ class OperationOutcome:
 class OperationContext:
     """What a handler sees: the command, its validated input, and the history.
 
-    ``audio_engine`` is the composition-root-supplied execution seam
-    (:class:`nexus_ai_agent.creative.studio.audio_engine.AudioEnginePort`).
-    It is typed ``Any`` on purpose: the studio core must not import any pack,
+    ``audio_engine`` / ``portrait_kernel`` / ``scene_kernel`` are the
+    composition-root-supplied execution seams
+    (:class:`nexus_ai_agent.creative.studio.audio_engine.AudioEnginePort` and the
+    ``context.portrait_kernel`` / ``context.scene_kernel`` kernel contracts).
+    They are typed ``Any`` on purpose: the studio core must not import any pack,
     engine or adapter module (a fitness test pins that), so the *shape* of this
-    seam is declared by the pack that uses it and enforced by
-    :mod:`nexus_ai_agent.creative.audio_engine`.  A handler that needs an engine
-    and finds ``None`` must refuse loudly; it may never simulate the result.
+    seam is declared by the pack that uses it and enforced by the native
+    implementations (:mod:`nexus_ai_agent.creative.audio_engine` and
+    ``creative.composition.{portrait_ops,scene_ops}``).  A handler that needs an
+    engine/kernel and finds ``None`` must refuse loudly; it may never simulate
+    the result.
     """
 
     command: TypedCommand
     input_data: dict[str, Any]
     history: tuple[EditTransaction, ...]
     audio_engine: Any = None
+    portrait_kernel: Any = None
+    scene_kernel: Any = None
 
 
 OperationHandler = Callable[[Project, OperationContext], OperationOutcome]

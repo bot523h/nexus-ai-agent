@@ -17,13 +17,14 @@ Usage::
     python scripts/mutate_omega_audio.py --json     # machine-readable
 
 Exit status: 0 when every probe was KILLED (the suite caught the mutation),
-1 when any probe SURVIVED, 2 on a setup problem (unreadable file, missing
-anchor) — never 0 by accident.
+1 when any probe SURVIVED or INFRA_ERROR'd (an unmeasurable mutant is a
+failure, never a kill), 2 on a setup problem — never 0 by accident.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import shutil
 import subprocess
@@ -1334,8 +1335,19 @@ def _run_probe(probe: Probe) -> dict[str, object]:
                 shutil.copytree(origin, work / name, ignore=shutil.ignore_patterns("__pycache__"))
             else:
                 shutil.copy2(origin, work / name)
+        mutated_source = source.replace(probe.old, probe.new)
+        try:
+            ast.parse(mutated_source, filename=probe.path)
+        except SyntaxError as exc:
+            return {
+                "name": probe.name,
+                "gate": probe.gate,
+                "verdict": "INFRA_ERROR",
+                "detail": f"mutant does not parse ({exc.msg}, line {exc.lineno}); "
+                "an unparseable mutation proves nothing",
+            }
         mutated = work / probe.path
-        mutated.write_text(source.replace(probe.old, probe.new), encoding="utf-8")
+        mutated.write_text(mutated_source, encoding="utf-8")
         environment = {
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "PYTHONPATH": f"{work / 'src'}:{work / 'tests' / 'unit'}",
@@ -1360,11 +1372,20 @@ def _run_probe(probe: Probe) -> dict[str, object]:
             env=environment,
             timeout=600,
         )
-    killed = completed.returncode != 0
+    # A mutant that pytest rejected with an assertion failure (exit 1) is
+    # KILLED.  Exit 0 means the suite passed — the gate is not enforced.
+    # Exit >= 2 (collection, import, syntax, internal error) is an
+    # INFRA_ERROR: it must never be counted as a kill.
+    if completed.returncode == 0:
+        verdict = "SURVIVED"
+    elif completed.returncode == 1:
+        verdict = "KILLED"
+    else:
+        verdict = "INFRA_ERROR"
     return {
         "name": probe.name,
         "gate": probe.gate,
-        "verdict": "KILLED" if killed else "SURVIVED",
+        "verdict": verdict,
         "exit_code": completed.returncode,
         "tail": (completed.stdout or completed.stderr or "").strip().splitlines()[-3:],
     }
@@ -1382,10 +1403,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     results = [_run_probe(probe) for probe in selected]
-    survived = [r for r in results if r["verdict"] != "KILLED"]
+    survived = [r for r in results if r["verdict"] == "SURVIVED"]
+    infra = [r for r in results if r["verdict"] == "INFRA_ERROR"]
 
     if args.json:
-        print(json.dumps({"probes": results, "survived": len(survived)}, indent=2))
+        print(
+            json.dumps(
+                {"probes": results, "survived": len(survived), "infra_errors": len(infra)},
+                indent=2,
+            )
+        )
     else:
         width = max(len(str(r["name"])) for r in results)
         for result in results:
@@ -1393,8 +1420,16 @@ def main(argv: list[str] | None = None) -> int:
             if result["verdict"] != "KILLED":
                 print(f"      {result['detail'] if 'detail' in result else result.get('tail')}")
         print()
-        print(f"{len(results) - len(survived)}/{len(results)} mutations killed")
+        killed = sum(1 for r in results if r["verdict"] == "KILLED")
+        print(f"{killed}/{len(results)} mutations killed ({len(infra)} INFRA_ERROR)")
 
+    if infra:
+        print(
+            f"INFRA_ERROR: {len(infra)} mutation(s) could not be measured "
+            "(collection/import/syntax failure or unparseable mutant) — not counted as kills",
+            file=sys.stderr,
+        )
+        return 1
     if survived:
         print(
             f"FAIL: {len(survived)} mutation(s) survived — the gate they attack is not "

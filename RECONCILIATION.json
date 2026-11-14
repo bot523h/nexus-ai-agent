@@ -1,14 +1,14 @@
 {
   "schema_version": "nagar.reconciliation.v1",
-  "timestamp": "2026-09-24T16:35:00Z",
-  "reconciliation_rule": "Catalog (70) != Runtime Registry (57) != Executable Surface (9)",
+  "timestamp": "2026-11-14T00:00:00Z",
+  "reconciliation_rule": "Catalog (70) != Runtime Registry (82) != Executable Surface (9)",
   "audit_baseline": {
     "product_catalog_count": 70,
-    "runtime_registry_count": 57,
+    "runtime_registry_count": 82,
     "overlap_count": 47,
     "missing_gaps_count": 23,
-    "runtime_extras_count": 10,
-    "universe_count": 80
+    "runtime_extras_count": 35,
+    "universe_count": 105
   },
   "classification": {
     "missing_breakdown": {
@@ -20,7 +20,9 @@
     "runtime_extras_breakdown": {
       "wave_1_core": 4,
       "slideshow_pack": 6,
-      "total_extras": 10
+      "aeth_el_portrait_pack": 11,
+      "aeth_el_scene_pack": 14,
+      "total_extras": 35
     }
   },
   "missing_gaps": {

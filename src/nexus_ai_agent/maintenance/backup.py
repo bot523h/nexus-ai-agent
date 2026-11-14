@@ -40,7 +40,7 @@ from nexus_ai_agent.maintenance.failures import (
     classify_storage_failure,
 )
 from nexus_ai_agent.observability.logging import get_logger
-from nexus_ai_agent.storage.db import resolve_database_url
+from nexus_ai_agent.storage.db import enforce_postgres_policy
 from nexus_ai_agent.storage.providers.b2 import B2Provider
 from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageError
 from nexus_ai_agent.storage.providers.r2 import R2Provider
@@ -68,8 +68,11 @@ def _dump_postgres(database_url: str, dest: Path) -> None:
     pg_dump = shutil.which("pg_dump")
     if pg_dump is None:
         raise RuntimeError("pg_dump not found on PATH (install postgresql-client)")
+    # ``--clean --if-exists`` makes the artifact self-contained for recovery:
+    # a restore drops and recreates the objects instead of failing on an
+    # existing schema (the plain-text format is applied with ``psql``).
     proc = subprocess.run(
-        [pg_dump, "--no-owner", "--file", str(dest), database_url],
+        [pg_dump, "--no-owner", "--clean", "--if-exists", "--file", str(dest), database_url],
         capture_output=True,
         text=True,
         timeout=1800,
@@ -109,7 +112,10 @@ def _sqlite_inventory(path: Path, conn: sqlite3.Connection) -> dict[str, int]:
     ]
     counts: dict[str, int] = {}
     for table in user_tables:
-        counts[table] = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+        # Identifier from sqlite_master: quote it (embedded quotes doubled) so a
+        # hostile table name such as ``a"b`` cannot break out of the statement.
+        quoted = '"' + table.replace('"', '""') + '"'
+        counts[table] = conn.execute(f"SELECT COUNT(*) FROM {quoted}").fetchone()[0]  # nosec B608
     return counts
 
 
@@ -143,20 +149,69 @@ def _verify_sqlite_dump(dump_path: Path) -> dict[str, Any]:
     return verification
 
 
+def _last_meaningful_line(data: bytes) -> bytes:
+    """The last line that is not PG17 trailer noise.
+
+    PostgreSQL 17 appends a ``\\unrestrict <token>`` line (and a ``--`` marker)
+    AFTER pg_dump's completion footer, so the footer is not the final bytes.
+    Strip only that trailer — trailing blanks, ``--`` markers and ``\\unrestrict``
+    lines — so the footer must be the last *content* line. A truncated dump
+    whose data merely *contains* the footer string is still rejected.
+    """
+    lines = data.splitlines()
+    idx = len(lines) - 1
+    while idx >= 0:
+        line = lines[idx].strip()
+        if line and line != b"--" and not line.startswith(b"\\unrestrict"):
+            break
+        idx -= 1
+    return lines[idx].strip() if idx >= 0 else b""
+
+
+#: How much of a dump's tail to read to find its last meaningful line. The
+#: completion footer plus PG17's ``\unrestrict``/``--`` trailer is a few dozen
+#: bytes; 256 KiB is a generous bound that keeps the check O(1) in file size.
+_TAIL_WINDOW_BYTES = 256 * 1024
+
+
+def _last_meaningful_line_of_file(path: Path, window: int = _TAIL_WINDOW_BYTES) -> bytes:
+    """Streaming ``_last_meaningful_line`` over a file (F-012).
+
+    The previous implementation did ``path.read_bytes()`` and then searched the
+    result — a multi-gigabyte dump was loaded entirely into memory just to read
+    its final line, which can OOM the backup host. The footer is always at the
+    very end, so only the last ``window`` bytes are needed; this reads at most
+    that many regardless of file size.
+
+    A file smaller than the window is read whole (cheap, and the only correct
+    way to find a ``\\unrestrict`` trailer that spans the whole file).
+    """
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        if size > window:
+            handle.seek(size - window)
+        data = handle.read()
+    return _last_meaningful_line(data)
+
+
 def _verify_postgres_dump(dump_path: Path) -> dict[str, Any]:
     """Structural verification for a plain-text pg_dump artifact.
 
     A real ``pg_restore`` verification needs a live target cluster; the
     nightly job has none, so we verify what is locally decidable and record
     it as typed evidence (the strongest honest claim available):
-    non-empty + pg_dump completion footer present.
+    non-empty + pg_dump completion footer present as the last content line.
     """
-    data = dump_path.read_bytes()
-    if not data:
+    # F-012: bounded-memory — only the tail is read, never the whole artifact.
+    if dump_path.stat().st_size == 0:
         raise RuntimeError("pg_dump artifact is empty")
-    if not data.rstrip().endswith(_PG_DUMP_FOOTER.encode()):
+    # The footer must be the last meaningful line, not merely present
+    # somewhere: a truncated dump whose *data* contains the footer string
+    # must still be rejected (a plain containment check is a false positive).
+    if _last_meaningful_line_of_file(dump_path) != _PG_DUMP_FOOTER.encode():
         raise RuntimeError(
-            f"pg_dump artifact is truncated or failed mid-run (missing footer {_PG_DUMP_FOOTER!r})"
+            f"pg_dump artifact is truncated or failed mid-run (last meaningful "
+            f"line is not the footer {_PG_DUMP_FOOTER!r})"
         )
     return {"engine": "postgres", "footer": "present"}
 
@@ -255,7 +310,10 @@ def create_backup(*, settings: Settings, dry_run: bool = False) -> dict[str, Any
     """
     now = dt.datetime.now(dt.timezone.utc)
     stamp = now.strftime(STAMP_FORMAT)
-    database_url = resolve_database_url()
+    # F-005: consult the policy, not the raw URL. With ``NEXUS_REQUIRE_POSTGRES=true``
+    # and no URL this raises instead of silently taking a local SQLite backup of a
+    # production deployment that was supposed to be on PostgreSQL.
+    database_url = enforce_postgres_policy()
 
     if database_url:
         filename = f"nexus-pg-{stamp}.sql"

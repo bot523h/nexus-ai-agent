@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "updated_at": "2026-11-12T15:52:33Z",
+  "updated_at": "2026-11-13T09:01:59Z",
   "protocol": {
     "protocol_version": 2,
     "manifesto_fa": "پیروی از این پروتکل ۱۰۰٪ الزامی است. هر عامل باید بدون حتی یک میلی‌متر تداخل با حوزه‌های انحصاری دیگران، با بالاترین کیفیت مهندسی، بدون پس‌رفت و بدون باگ کار کند؛ پیش از کدنویسی claim بگیرد و claim را همان لحظه push کند.",
@@ -1255,6 +1255,17 @@
         "tests/unit/test_audio_pack_evidence_paths.py",
         "tests/unit/omega_media.py",
         "docs/architecture/NAGAR_MATHEMATICAL_ENGINEERING_DOCTRINE.md"
+      ]
+    },
+    {
+      "id": "hyperion-vault-speech-color",
+      "description": "Hyperion erasure vault, offline speech-cinema, and deterministic color operations",
+      "paths": [
+        "src/nexus_ai_agent/storage/artifact_vault/",
+        "src/nexus_ai_agent/creative/speech_cinema/",
+        "tests/storage/artifact_vault/",
+        "tests/creative/speech_cinema/",
+        "tests/creative/packs/color/"
       ]
     }
   ],
@@ -4442,6 +4453,92 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 0
+    },
+    {
+      "task": "task-257-queued-cancel-semantics",
+      "title": "Define cancellation semantics for not-yet-owned (pending) requests",
+      "title_fa": "تعریف معنای لغو برای درخواست‌های در صف (بدون مالک)",
+      "zone": "execution-core",
+      "priority": "P2",
+      "status": "active",
+      "scope": "لغو امروز فقط attempt در حال پرواز را می‌بندد؛ ردیف pending اصلاً cancellable نیست و این باید قرارداد صریح شود.",
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "acceptance_criteria": [
+        "explicit contract: cancel(pending) is either a typed refusal or a fenced dequeue — one documented choice",
+        "idempotency + duplicate-cancel matrix extended; no authority bypass",
+        "I1-I10 table updated if a new invariant is introduced"
+      ],
+      "evidence_required": [
+        "explicit contract: cancel(pending) is either a typed refusal or a fenced dequeue — one documented choice, not both",
+        "idempotency + duplicate-cancel matrix extended; no authority bypass (a bare job_id still cancels nothing)",
+        "I1-I10 table updated if a new invariant is introduced",
+        "exact commands + observed results in the PR body; each agent runs its own lint/types/test gates"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/execution/contract.py",
+        "src/nexus_ai_agent/adapters/native_local_backend.py"
+      ],
+      "owner_hint": "arena/task-257-queued-cancel-semantics is the exclusive implementation branch",
+      "note": "DELIVERED via PR #338 (base main c3aa7c85, head e308b7ff); CI running, no failures. Slice: state+prove the pending-refusal choice (code was already correct via layered guards). Gates run: ruff check (pass), ruff format --check (pass), mypy src (361 files, pass), pytest targeted 396 passed. NOT_PROVEN: full suite + execution_core_mutations campaign (30-min budget). No new pinned mutation probe (refusal is over-determined by independent guards).",
+      "agent_branch": "arena/task-257-queued-cancel-semantics",
+      "claimed_at": "2026-11-13T08:43:46Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "evidence": {
+        "pr": 338,
+        "head_sha": "e308b7ff",
+        "base_main": "c3aa7c85"
+      }
+    },
+    {
+      "task": "task-262-quarantine-retention",
+      "title": "Bounded retention for _quarantine forensic trees",
+      "title_fa": "نگهداری محدود برای درخت‌های پزشکی قانونی _quarantine",
+      "why_fa": "quarantine داده را برای همیشه نگه می‌دارد؛ در تولید رشد بدون حد می‌شود.",
+      "zone": "execution-core",
+      "priority": "P3",
+      "status": "active_in_review",
+      "scope": "Bound the _quarantine forensic trees so a long-running sidecar cannot grow without limit. Add an explicit, opt-in operator retention policy (default: keep everything) that prunes quarantine trees by age and/or total size, reusing the ONE filesystem security boundary (WorkspaceFilesystem) for every deletion and refusing symlinked or escaping paths, and journaling each prune decision (kept/removed) so a deletion is auditable and never silent.",
+      "acceptance_criteria": [
+        "age/size-bounded retention with an explicit operator switch (default: keep)",
+        "deletion is boundary-safe (same WorkspaceFilesystem rules) and journaled",
+        "tests: malicious retention paths cannot escape the root"
+      ],
+      "evidence_required": [
+        "tests/unit/test_execution_staging.py covers: default keep (no policy), age bound, size bound, combined bounds, symlinked quarantine tree refusal, and a journal of kept/removed decisions",
+        "exact commands + observed results in the PR body; `python scripts/agent_board.py check --files <changed> --branch <branch>` exits 0 with every source readable",
+        "mutation probe: disabling the operator switch (or the boundary check) turns the new test RED, restoring it returns GREEN with the tree byte-identical"
+      ],
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/execution/staging.py",
+        "tests/unit/test_execution_staging.py"
+      ],
+      "agent_branch": "arena/task-262-quarantine-retention",
+      "claimed_at": "2026-11-12T08:43:33Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "note": "",
+      "pr": 336,
+      "evidence": {
+        "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/336",
+        "head_sha": "34a093fb",
+        "commands": [
+          "python3 -m ruff check . -> All checks passed!",
+          "python3 -m ruff format --check . -> 973 files already formatted",
+          "python3 -m mypy src -> 6 pre-existing environmental import-not-found errors, 0 in changed files",
+          "PYTHONPATH=src python3 -m pytest -q tests/unit/test_execution_staging.py -> 62 passed",
+          "python3 scripts/execution_core_mutations.py -> 27/27 mutations caught",
+          "python3 scripts/agent_board.py check --files <changed> --branch arena/task-262-quarantine-retention -> exit 0"
+        ],
+        "not_proven": "full suite (pytest -q -m 'not slow') not run in this 30-min window; execution-core-mutations CI job not yet green on this head"
+      }
     },
     {
       "task": "task-269-cognition-quality-evaluation",
@@ -8579,7 +8676,7 @@
       ],
       "note": "",
       "previous_release_reason": "released 2026-11-08: Slice 2 Stage 1 delivered via PR #319 (merged 65c020cf); the F1 ownership fence is delivered by an open PR (not merged) and the 'as an AssetVersion' producer wiring remains open, so the slice is completed_released (non-terminal), never done.",
-      "release_reason": "auto-released by gc at 2026-11-12T15:52:33Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-11-13T06:20:08Z (stale active lease)"
     },
     {
       "task": "task-282-slice-3-provenance-passport-link",
@@ -8652,7 +8749,7 @@
       "ttl_hours": 24,
       "gates_owner": false,
       "generation": 1,
-      "release_reason": "auto-released by gc at 2026-11-12T15:52:33Z (stale active lease)"
+      "release_reason": "auto-released by gc at 2026-11-13T06:20:08Z (stale active lease)"
     },
     {
       "task": "task-330-omega-forensic-hardening-stage-a",
@@ -8695,6 +8792,40 @@
       "gates_owner": false,
       "delivered": [],
       "note": "Board has no create command, so the claim is registered directly by appending a schema-2 claim record."
+    },
+    {
+      "task": "task-hyperion-vault-speech-color",
+      "title": "Hyperion artifact vault, speech cinema, and color pack completion",
+      "title_fa": "تکمیل خزانهٔ آرتیفکت، سینمای گفتار و پک رنگ هایپریون",
+      "zone": "hyperion-vault-speech-color",
+      "priority": "P1",
+      "status": "active",
+      "scope": "Rescue and complete the Hyperion implementation and its focused gates.",
+      "scope_fa": "نجات و تکمیل پیاده‌سازی هایپریون و گیت‌های متمرکز آن.",
+      "prerequisites": [],
+      "acceptance_criteria": [
+        "All Hyperion files remain within the exclusive paths.",
+        "Focused tests, lint, formatting, and diff checks pass.",
+        "Remote branch contains the completed commits."
+      ],
+      "evidence_required": [
+        "Exact commands and observed results in the delivery report.",
+        "Remote branch SHA verification."
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/storage/artifact_vault/",
+        "src/nexus_ai_agent/creative/speech_cinema/",
+        "tests/storage/artifact_vault/",
+        "tests/creative/speech_cinema/",
+        "tests/creative/packs/color/"
+      ],
+      "owner_hint": "arena/hyperion-vault-speech-color",
+      "agent_branch": "arena/hyperion-vault-speech-color",
+      "claimed_at": "2026-11-13T06:20:28Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "Registered for the Hyperion branch rescue and completion work."
     }
   ],
   "deferred_log": [

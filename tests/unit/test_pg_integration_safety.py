@@ -34,12 +34,57 @@ INTEGRATION_MODULE = REPO_ROOT / "tests" / "integration" / "test_postgres_single
 #: Every module that writes to the ``NEXUS_DATABASE_URL`` database must obey the
 #: same data-safety contract: an explicit destructive opt-in and only
 #: nonce-scoped writes.  The fence module (task-282 slice-2 F1) is the second
-#: such module.
+#: such module; the persistence/durability module (mission P0) is the third.
 PG_WRITING_MODULES = (
     INTEGRATION_MODULE,
     REPO_ROOT / "tests" / "integration" / "test_artifact_binding_postgres_concurrency.py",
+    REPO_ROOT / "tests" / "integration" / "test_postgres_persistence.py",
+)
+
+#: Modules that exercise PostgreSQL against a **disposable target they create and
+#: drop themselves** (a per-run database or schema) rather than writing rows to
+#: ``NEXUS_DATABASE_URL``.  They carry the same destructive opt-in, but their
+#: safety property is "the configured database is only read, never mutated",
+#: so the nonce-scoped-``DELETE`` contract above does not apply.  They still must
+#: be *run* by CI (a registered-but-uninvoked proof is a silent hole) and they
+#: still may not write to the configured database — both enforced below.
+PG_DISPOSABLE_TARGET_MODULES = (
+    REPO_ROOT / "tests" / "integration" / "test_postgres_restore_atomicity.py",
+)
+
+#: F-011.6: modules that write rows to ``NEXUS_DATABASE_URL`` **through the ORM**
+#: rather than through ``text()`` SQL.  They carry the same destructive opt-in
+#: and the same per-run-nonce scoping obligation, but their writes are not
+#: ``DELETE`` literals, so the text()-based scoped-``DELETE`` guard cannot see
+#: them — hence a distinct category with its own guard below.
+PG_ORM_WRITING_MODULES = (
+    REPO_ROOT / "tests" / "integration" / "test_knowledge_retrieval_postgres.py",
+)
+
+#: F-011.6: hybrid modules whose PG leg writes to ``NEXUS_DATABASE_URL`` but whose
+#: SQLite leg must keep running everywhere (including the default ``test`` job,
+#: which has no database).  They therefore may NOT use a module-level ``skipif``:
+#: the guard has to sit on the PG leg itself (a ``pytest.skip`` inside the fixture
+#: or a per-test ``skipif``), so that ``NEXUS_DATABASE_URL`` alone never arms a
+#: write while the SQLite contract still executes without a database.  Guarded by
+#: ``test_hybrid_pg_modules_guard_the_pg_leg_not_the_module`` below.
+PG_HYBRID_MODULES = (
+    REPO_ROOT / "tests" / "integration" / "test_checkpoint_adapter_contract.py",
+    REPO_ROOT / "tests" / "integration" / "test_lifecycle_store_contract.py",
+    REPO_ROOT / "tests" / "integration" / "test_checkpoint_composition.py",
 )
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+#: F-011.6: the writer inventory above is hand-maintained, so a new module that
+#: writes to ``NEXUS_DATABASE_URL`` — through ``text()`` SQL *or* through the ORM
+#: (``.delete()`` / ``.insert()`` / ``.commit()``) — could silently escape every
+#: guard.  This scan discovers candidates mechanically and fails when one is not
+#: registered in ``PG_WRITING_MODULES`` or ``PG_DISPOSABLE_TARGET_MODULES``.
+_INTEGRATION_DIR = REPO_ROOT / "tests" / "integration"
+_SQL_WRITE = re.compile(r"\b(DELETE|INSERT|UPDATE|DROP|CREATE|TRUNCATE|ALTER)\b", re.IGNORECASE)
+_ORM_WRITE = re.compile(
+    r"\.(delete|insert|update|upsert|upsert_ingested|add|add_all|commit|flush)\s*\("
+)
 
 #: Columns every scoped ``DELETE`` must filter on: the per-run nonce ids a
 #: module itself generated (a chat id, the nonce used as a ``telegram_id``, or
@@ -329,13 +374,120 @@ def test_the_module_runs_when_both_variables_are_set(monkeypatch: pytest.MonkeyP
         assert not _skip_fired(module), f"{module_path.name} skips even with both variables set"
 
 
+def _writes_to_the_configured_database(source: str) -> bool:
+    """True when *source* both reads ``NEXUS_DATABASE_URL`` and mutates rows.
+
+    Reads must be *direct* (``os.environ[...]``/``os.getenv``) rather than merely
+    mentioning the variable in prose, so a module that only documents the DSN is
+    not misclassified.  A mutation is either a ``text()`` DDL/DML literal or an
+    ORM write call.
+    """
+    reads_dsn = 'os.environ["NEXUS_DATABASE_URL"]' in source or (
+        "os.environ['NEXUS_DATABASE_URL']" in source or 'os.getenv("NEXUS_DATABASE_URL"' in source
+    )
+    if not reads_dsn:
+        return False
+    if any(_SQL_WRITE.search(sql) for sql in _sql_literals(source)):
+        return True
+    return bool(_ORM_WRITE.search(source))
+
+
+def test_every_module_writing_the_configured_database_is_registered() -> None:
+    """F-011.6: mechanical discovery of writer modules, not a hand-kept list.
+
+    ``PG_WRITING_MODULES`` is maintained by hand. A new integration module that
+    writes to ``NEXUS_DATABASE_URL`` would therefore escape the scoped-DELETE,
+    no-DDL, and destructive-opt-in guards without anything going red. This scan
+    reads every integration module and fails if a writer is not registered.
+    """
+    registered = {
+        m.name
+        for m in PG_WRITING_MODULES
+        + PG_DISPOSABLE_TARGET_MODULES
+        + PG_ORM_WRITING_MODULES
+        + PG_HYBRID_MODULES
+    }
+    discovered = {
+        path.name
+        for path in sorted(_INTEGRATION_DIR.glob("test_*.py"))
+        if _writes_to_the_configured_database(path.read_text(encoding="utf-8"))
+    }
+    unregistered = sorted(discovered - registered)
+    assert unregistered == [], (
+        "these integration modules write to NEXUS_DATABASE_URL but are not in "
+        "PG_WRITING_MODULES / PG_DISPOSABLE_TARGET_MODULES / PG_ORM_WRITING_MODULES, "
+        f"so no guard covers them: {unregistered}"
+    )
+    # The scan must not go blind: every registered *direct* writer must still be
+    # found.  ``PG_DISPOSABLE_TARGET_MODULES`` is deliberately excluded — those
+    # modules create and drop their own throwaway database, so they never write
+    # to ``NEXUS_DATABASE_URL`` and the scan is *right* not to match them.
+    direct_writers = {
+        m.name for m in PG_WRITING_MODULES + PG_ORM_WRITING_MODULES + PG_HYBRID_MODULES
+    }
+    assert direct_writers <= discovered, (
+        "the discovery scan no longer finds every registered direct writer — it "
+        f"has gone blind and would miss a new one: {sorted(direct_writers - discovered)}"
+    )
+
+
 def _skip_fired(module: ModuleType) -> bool:
     """True iff at least one module-level ``skipif`` condition is currently true."""
     return any(
         bool(mark.args[0])
-        for mark in module.pytestmark
+        for mark in getattr(module, "pytestmark", [])
         if getattr(mark, "name", "") == "skipif" and mark.args
     )
+
+
+def _pg_leg_guard_present(module_path: Path) -> bool:
+    """True iff ``PG_ENABLED`` is literally ``DSN and opt-in == "1"``.
+
+    A hybrid module keeps its SQLite leg running everywhere, so its opt-in
+    cannot be a module-level ``skipif``.  The guard must instead be a conjunction
+    that the PG leg keys off — ``PG_ENABLED = bool(PG_URL) and os.getenv(
+    "NEXUS_PG_TEST_DESTRUCTIVE") == "1"``.  Requiring the *shape* (an ``and``
+    whose operands mention both the DSN and the opt-in) is what makes this
+    mutation-sensitive: weakening it to ``bool(PG_URL)`` alone must fail here,
+    not merely drop a string.
+    """
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(getattr(t, "id", "") == "PG_ENABLED" for t in node.targets):
+            continue
+        value = node.value
+        if not isinstance(value, ast.BoolOp) or not isinstance(value.op, ast.And):
+            return False
+        rendered = ast.unparse(value)
+        return "PG_URL" in rendered and "DESTRUCTIVE_OPT_IN" in rendered
+    return False
+
+
+def test_hybrid_pg_modules_guard_the_pg_leg_not_the_module() -> None:
+    """F-011.6: a hybrid module's PG leg must require the explicit opt-in.
+
+    ``test_checkpoint_adapter_contract``, ``test_lifecycle_store_contract`` and
+    ``test_checkpoint_composition`` each write to ``NEXUS_DATABASE_URL`` on
+    their PG leg while their SQLite leg runs with no database at all.  They
+    cannot use a module-level ``skipif`` (that would disable the SQLite
+    contract), so the guard has to sit on the PG leg — and nothing forced it
+    to.  Before this test, ``NEXUS_DATABASE_URL`` alone ran their writes, which
+    is the exact hazard D-0028 forbids.
+    """
+    for module_path in PG_HYBRID_MODULES:
+        assert _pg_leg_guard_present(module_path), (
+            f"{module_path.name} writes to NEXUS_DATABASE_URL on its PG leg but "
+            "does not gate that leg on NEXUS_PG_TEST_DESTRUCTIVE=1"
+        )
+        # …and the SQLite leg must NOT be gated by a module-level skipif, or the
+        # default no-database `test` job would silently lose that coverage.
+        module = _load_module(module_path)
+        assert not _skip_fired(module), (
+            f"{module_path.name} carries a module-level skipif; its SQLite leg "
+            "would stop running in the database-less `test` job"
+        )
 
 
 def _migrate_postgres_job() -> dict[str, Any]:
@@ -357,11 +509,34 @@ def test_the_ci_postgres_job_sets_the_destructive_opt_in() -> None:
 def test_every_pg_writing_module_is_actually_run_by_ci() -> None:
     """A module registered as a writer but never invoked is a silent hole."""
     runs = " ".join(str(step.get("run", "")) for step in _migrate_postgres_job().get("steps", []))
-    missing = [module.name for module in PG_WRITING_MODULES if module.name not in runs]
+    registered = PG_WRITING_MODULES + PG_DISPOSABLE_TARGET_MODULES + PG_ORM_WRITING_MODULES
+    missing = [module.name for module in registered if module.name not in runs]
     assert missing == [], (
-        "these PostgreSQL-writing modules are never run by the migrate-postgres "
+        "these PostgreSQL modules are never run by the migrate-postgres "
         f"job, so their live proof is silently absent: {missing}"
     )
+
+
+def test_disposable_target_modules_never_write_to_the_configured_database() -> None:
+    """A disposable-target module must derive its target, not write to the DSN.
+
+    These modules are allowed to run destructive SQL, but only against a
+    database they created and drop themselves.  They must therefore derive that
+    target (``make_url(...).set(database=...)``) rather than mutate whatever
+    ``NEXUS_DATABASE_URL`` names — otherwise the destructive opt-in would
+    authorise damage to a real database.
+    """
+    problems: list[str] = []
+    for module in PG_DISPOSABLE_TARGET_MODULES:
+        source = module.read_text(encoding="utf-8")
+        if "make_url(" not in source or "set(database=" not in source:
+            problems.append(
+                f"{module.name}: does not derive a disposable database via "
+                "make_url(...).set(database=...)"
+            )
+        if "NEXUS_DATABASE_URL" not in source:
+            problems.append(f"{module.name}: never reads NEXUS_DATABASE_URL (unexpected)")
+    assert not problems, "\n".join(problems)
 
 
 def test_the_ci_postgres_job_still_uses_a_disposable_service_container() -> None:

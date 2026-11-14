@@ -46,10 +46,33 @@ jobs:
       - run: bash scripts/ci_install.sh ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy src
+      # mypy's output is the only way to see what a clean 3.12 runner disagrees
+      # about with a dev checkout (logs are not reachable from every reviewer
+      # environment), so errors are also surfaced as check annotations — same
+      # pattern as the pytest job.
+      - name: mypy src (fail with annotations)
+        run: |
+          set -o pipefail
+          if ! mypy src 2>&1 | tee mypy.log; then
+            grep -E ': error:' mypy.log | head -n 10 | while IFS= read -r line; do
+              printf '::error title=mypy::%s\n' "$line"
+            done
+            printf '::warning title=mypy::%s error line(s) in total\n' "$(grep -cE ': error:' mypy.log || true)"
+            exit 1
+          fi
       # Dependency truth (audit A-05): undeclared imports / unused declarations
       # are a red build. Optional integrations are allow-listed in pyproject.
-      - run: deptry src
+      # Same annotation treatment as mypy.
+      - name: deptry src (fail with annotations)
+        run: |
+          set -o pipefail
+          if ! deptry src 2>&1 | tee deptry.log; then
+            grep -E 'DEP[0-9]+' deptry.log | head -n 10 | while IFS= read -r line; do
+              printf '::error title=deptry::%s\n' "$line"
+            done
+            printf '::warning title=deptry::%s dependency issue(s) in total\n' "$(grep -cE 'DEP[0-9]+' deptry.log || true)"
+            exit 1
+          fi
       # Version-lockstep guard: VERSION == pyproject.toml == latest CHANGELOG
       # heading.  Fails fast with a human-readable message; the same check
       # also lives in tests/unit/test_version_command.py so ``make test``
@@ -59,7 +82,10 @@ jobs:
   test:
     name: test (pytest -m "not slow")
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Waves 2-3 added ~700 media-spine tests that encode real MP4s; the suite
+    # no longer fits a 30-minute cap on the runner (it hit the cap with zero
+    # failing tests). 45 keeps headroom without masking a genuine hang.
+    timeout-minutes: 45
     # task-113: deliberately NOT `needs: lint`.  A broken-lint push must never be able to
     # turn the test suite red, and the `lint-fast` rail below already reports lint and
     # version drift in seconds.  tests/unit/test_ci_lint_parity.py enforces this.
@@ -70,6 +96,11 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
+      - name: Install FFmpeg (the declared external binary of the media spine)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg
+          ffmpeg -version | head -n 1
       - run: bash scripts/ci_install.sh ".[dev]"
       # The dependency-vulnerability gate runs inside this REQUIRED job so a
       # blocking advisory genuinely cannot be merged: a failure here reds `test`,
@@ -194,7 +225,7 @@ jobs:
   python-parity:
     name: python-parity (${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45  # see the test job: the integrated suite outgrew 30
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     strategy:
@@ -206,6 +237,11 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install FFmpeg (the declared external binary of the media spine)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg
+          ffmpeg -version | head -n 1
       - run: bash scripts/ci_install.sh ".[dev]"
       - run: |
           set -o pipefail
@@ -260,6 +296,11 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install FFmpeg (the declared external binary of the media spine)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg
+          ffmpeg -version | head -n 1
       - run: bash scripts/ci_install.sh ".[dev]"
       - name: Evidence is for the commit under test
         run: |
@@ -488,7 +529,7 @@ jobs:
   # otherwise an isolated worktree would import the editable-installed package
   # and every probe would "survive" while the mutated bytes never ran.
   execution-core-mutations:
-    name: execution-core-mutations (V1 execution core 25)
+    name: execution-core-mutations (V1 execution core 27)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -503,7 +544,7 @@ jobs:
       - run: bash scripts/ci_install.sh ".[dev]"
       - name: isolated worktree for the campaign
         run: git worktree add --detach "$RUNNER_TEMP/mutation-worktree" HEAD
-      - name: execution-core mutations (25/25 must be killed)
+      - name: execution-core mutations (27/27 must be killed)
         working-directory: ${{ runner.temp }}/mutation-worktree
         run: python scripts/execution_core_mutations.py
       - name: the worktree and the checkout must be unchanged after mutation testing
@@ -702,6 +743,13 @@ jobs:
       # (job_id, attempt) retracts, and two racing token advances never leave
       # the lower token (task-282 slice-2 F1).
       - run: pytest -q tests/integration/test_artifact_binding_postgres_concurrency.py
+      # Persistence/durability on the real backend (mission P0): migrations are
+      # idempotent, a row survives a full engine rebuild, backend is postgresql.
+      - run: pytest -q tests/integration/test_postgres_persistence.py
+      # F-002 restore atomicity: a failed restore rolls back (the sentinel row
+      # survives) and the full NEXUS dump applies under --single-transaction.
+      # Runs against a disposable database it creates and drops per run.
+      - run: pytest -q tests/integration/test_postgres_restore_atomicity.py
       # Shared read-only adapter contract, PG leg (incl. golden stability
       # and the f4a9c2e71b08 lifecycle table).
       - run: pytest -q tests/integration/test_checkpoint_adapter_contract.py

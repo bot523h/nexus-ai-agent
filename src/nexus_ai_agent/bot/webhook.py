@@ -92,7 +92,7 @@ def build_webhook_bind() -> tuple[str, int]:
     to be reached from outside a container; ``DASHBOARD_HOST`` may override
     it.  Port priority: ``PORT`` > ``DASHBOARD_PORT`` > ``8000``.
     """
-    host = os.environ.get("DASHBOARD_HOST", "").strip() or "0.0.0.0"
+    host = os.environ.get("DASHBOARD_HOST", "").strip() or "0.0.0.0"  # nosec B104 - intentional: container-facing webhook
     return host, resolve_webhook_port()
 
 
