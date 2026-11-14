@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -126,6 +127,36 @@ def read_wav_pcm16(path: str | Path) -> tuple[np.ndarray, int]:
 
 # ── Deterministic FFmpeg MP4 Container Muxing ─────────────────────────────────
 
+#: The printf-style index in a frame pattern (``frame_%04d.png``, ``f%d.png``).
+_FRAME_INDEX = re.compile(r"%0?\d*d")
+
+
+def frame_files(frame_pattern: str | Path) -> list[Path]:
+    """The frame files a printf-style pattern names, sorted, on disk.
+
+    FFmpeg takes the pattern, not a list, so "are there frames?" has to be
+    answered by expanding the pattern the same way FFmpeg would.  An empty
+    result is a *caller* error and is reported as one (see
+    :func:`mux_mp4_ffmpeg`); it must never reach the encoder, where it surfaces
+    as an opaque non-zero exit after the process has already been spawned.
+    """
+    pattern = Path(frame_pattern)
+    if not str(frame_pattern).strip():
+        return []
+    glob = _FRAME_INDEX.sub("[0-9]*", pattern.name)
+    parent = pattern.parent if str(pattern.parent) else Path()
+    if not parent.is_dir():
+        return []
+    return sorted(parent.glob(glob))
+
+
+def _describe_missing_frames(frame_pattern: str | Path) -> str:
+    pattern = Path(frame_pattern)
+    return (
+        f"No frames match the pattern: {pattern} "
+        f"(expected files like {_FRAME_INDEX.sub('[0-9]*', pattern.name)!r} in {pattern.parent})"
+    )
+
 
 def mux_mp4_ffmpeg(
     frame_pattern: str,
@@ -149,12 +180,23 @@ def mux_mp4_ffmpeg(
     would bypass that ladder and turn a deployment that ships only the wheel
     into a ``FileNotFoundError`` from ``subprocess`` instead of a resolved
     encoder.
+
+    **Input validation comes before encoder resolution.**  A caller that hands
+    over an audio path that does not exist, or a frame pattern matching nothing,
+    has made an input error; reporting "no FFmpeg binary found" for it would send
+    the reader to the deployment's environment instead of to the call that is
+    wrong.  Resolution (which can raise :class:`FfmpegUnavailableError`) therefore
+    runs only once both inputs are known to be present.  The two input checks
+    keep their historical order — audio first, then frames — so an existing
+    caller's error contract does not move.
     """
-    resolved_bin = resolve_ffmpeg_bin(ffmpeg_bin)
     wav_p = Path(audio_path)
     out_p = Path(output_mp4)
     if not wav_p.is_file():
         raise FileNotFoundError(f"Audio WAV missing: {wav_p}")
+    if not frame_files(frame_pattern):
+        raise FileNotFoundError(_describe_missing_frames(frame_pattern))
+    resolved_bin = resolve_ffmpeg_bin(ffmpeg_bin)
     out_p.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
