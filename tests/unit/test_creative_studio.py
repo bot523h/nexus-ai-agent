@@ -159,6 +159,8 @@ def test_background_task_flow(
 
     monkeypatch.setenv("NEXUS_CREATIVE_GEMINI_API_KEY", "creative-key")
     monkeypatch.setenv("CREATIVE_TEMP_DIR", str(tmp_path / "creative"))
+    # Isolate the durable queue sidecar for this test (never the repo default).
+    monkeypatch.setenv("NEXUS_DB_PATH", str(tmp_path / "app.sqlite"))
     # The endpoint is fail-closed: without a signing key it answers 503.
     monkeypatch.setenv("NEXUS_API_HMAC_KEY", "test-signing-key")
     settings_module.get_settings.cache_clear()
@@ -221,6 +223,27 @@ def test_background_task_flow(
     payload = response.json()
     assert payload["status"] == "pending"
 
+    # The legacy lane is a durable-queue job now: a worker (the bot/CLI
+    # composition roots, or this process's own queue tasks) executes it.
+    # Drain deterministically instead of racing the background task.
+    import asyncio as _asyncio
+
+    async def _wait_for_terminal() -> str:
+        registry = app_module._creative_registry
+        assert registry is not None
+        queue = registry.queue
+        terminal = {"completed", "failed_retryable", "failed_terminal", "cancelled"}
+        # Claim anything still pending (the operator path), then wait.
+        await queue.resume_pending_jobs()
+        for _ in range(500):
+            facts = await queue.get_job_facts_async(payload["job_id"])
+            if facts is not None and str(facts.status) in terminal:
+                return str(facts.status)
+            await _asyncio.sleep(0.02)
+        raise AssertionError("video_edit job did not reach a terminal state in time")
+
+    assert _asyncio.run(_wait_for_terminal()) == "completed"
+
     # GET is the same HMAC gate as the POST (task-165): timestamp over an
     # empty body, constant-time verified by the app.
     read_timestamp = str(int(time.time()))
@@ -239,5 +262,7 @@ def test_background_task_flow(
     assert job_response.status_code == 200
     job = job_response.json()
     assert job["status"] == "done"
-    assert job["result"]["output_path"].endswith(f"{payload['job_id']}.mp4")
+    output_path = job["result"]["output_path"]
+    assert output_path.endswith(".mp4")
+    assert Path(output_path).exists()
     assert not Path(job["input_data"]["path"]).exists()
