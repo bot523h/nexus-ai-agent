@@ -39,7 +39,7 @@ from sqlmodel import SQLModel
 import nexus_ai_agent.storage.db  # noqa: F401  (registers every SQLModel table)
 
 #: Chain head — migrations/versions/20261109_artifact_content_owner.py.
-_HEAD = "20261109contentowner"
+_HEAD = "20261112connect"
 
 _WORKERS = 4
 _TIMEOUT_SECONDS = 180

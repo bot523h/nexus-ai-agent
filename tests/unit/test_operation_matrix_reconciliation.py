@@ -2,10 +2,12 @@
 
 Mission: Agent B — Operation Truth & Wave Planning Mission.
 Verifies:
-1. Product Catalog (70) != Runtime Registry (82) != Executable Surface (9).
+1. Product Catalog (70) != Runtime Registry (88) != Executable Surface (9).
    (Registry grew 57 -> 82 when the AETHEL portrait/scene packs were composed in
-   Wave 3; the 25 AETHEL operations are NOT part of the 70-op product catalog, so
-   overlap (47) and the 23 catalog gaps are unchanged.)
+   Wave 3, and 82 -> 88 in Wave 6 when the six NAGAR creative engines each
+   registered one read-only ``verify_media`` capability. Neither group is part of
+   the 70-op product catalog, so overlap (47) and the 23 catalog gaps are
+   unchanged — the registry grows, the catalogue does not.)
 2. Exactly 23 operations are missing and preserved as EvidenceClass.MISSING / L0 / NOT_IMPLEMENTED.
 3. No fake or stub implementations exist to artificially inflate the registry.
 4. Error taxonomy and contract violations (unknown op, missing cap, schema error, duplicate op).
@@ -66,8 +68,13 @@ def test_reconciliation_numbers_invariant() -> None:
     catalog_ops = [op for op in matrix_data["operations"] if op["product_defined"]]
     assert len(catalog_ops) == 70, f"Expected 70 catalog operations, got {len(catalog_ops)}"
 
-    # 57 pre-Wave-3 + 25 AETHEL (portrait.refine 11 + scene.imaging 14) = 82.
-    assert len(runtime_ops) == 82, f"Expected 82 registered operations, got {len(runtime_ops)}"
+    # 57 pre-Wave-3 + 25 AETHEL (portrait.refine 11 + scene.imaging 14) = 82,
+    # + 6 engine verifications (audio.omega + cinema.{veritas,chronos,atlas,morpheus,hyperion})
+    # = 88. The engine capabilities are not product-catalog operations, so the
+    # overlap and gap counts below must NOT move.
+    assert len(runtime_ops) == 88, f"Expected 88 registered operations, got {len(runtime_ops)}"
+    engine_ops = {op for op in runtime_ops if op.endswith("_verify_media")}
+    assert len(engine_ops) == 6, sorted(engine_ops)
 
     overlap = set(op["operation_id"] for op in catalog_ops) & runtime_ops
     assert len(overlap) == 47, f"Expected 47 overlapping operations, got {len(overlap)}"
@@ -100,7 +107,7 @@ def test_three_layers_are_strictly_decoupled() -> None:
     # 1. Catalog != Registry
     assert catalog_ops != runtime_ops
     assert len(catalog_ops) == 70
-    assert len(runtime_ops) == 82
+    assert len(runtime_ops) == 88
 
     # 2. Registry != Executable Surface
     assert runtime_ops != surface_ops

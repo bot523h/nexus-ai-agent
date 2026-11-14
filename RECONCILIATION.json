@@ -1,14 +1,14 @@
 {
   "schema_version": "nagar.reconciliation.v1",
   "timestamp": "2026-11-14T00:00:00Z",
-  "reconciliation_rule": "Catalog (70) != Runtime Registry (82) != Executable Surface (9)",
+  "reconciliation_rule": "Catalog (70) != Runtime Registry (88) != Executable Surface (9)",
   "audit_baseline": {
     "product_catalog_count": 70,
-    "runtime_registry_count": 82,
+    "runtime_registry_count": 88,
     "overlap_count": 47,
     "missing_gaps_count": 23,
-    "runtime_extras_count": 35,
-    "universe_count": 105
+    "runtime_extras_count": 41,
+    "universe_count": 111
   },
   "classification": {
     "missing_breakdown": {

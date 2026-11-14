@@ -23,6 +23,7 @@ Proven by these tests:
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ from nexus_ai_agent.adapters.sql_application_directory import (
 from nexus_ai_agent.application.ports.job_queue import JobStatus
 from nexus_ai_agent.application.principal import ChannelBinding
 from nexus_ai_agent.config import settings as settings_module
+from nexus_ai_agent.connect.key_provider import StaticKeyRing
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.creative.slideshow.ffmpeg import (
     FfmpegUnavailableError,
@@ -139,6 +141,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             attempt_provider=queue.get_attempt_history,
             authority=DirectoryAuthority(directory),
             channel_binding_ref=channel_binding_id(binding),
+            approval_key_provider=StaticKeyRing({"test-v1": b"t" * 32}, active_key_id="test-v1"),
         )
     )
     yield service, queue, creative_root, journal, str(principal)
@@ -154,6 +157,239 @@ def _open_session(service: IBPCService, principal_id: str) -> str:
         chat_id=4242,
         current_revision=REVISION,
     )
+
+
+@pytest.mark.asyncio
+async def test_scope_signature_tamper_refuses_before_queue_admission(
+    harness, tmp_path: Path
+) -> None:
+    service, queue, _creative_root, _journal, principal = harness
+    source = tmp_path / "tamper-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    result = service.submit_text_intent(
+        sid,
+        "tamper-turn",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(result, PipelineResult)
+    service.approve(sid, "tamper-turn", result.approval_id, principal_id=principal)
+    context = service._contexts[result.approval_id]
+    assert context.scope_signature is not None
+    context.scope_signature = "sha256:" + "0" * 64
+
+    outcome = await service.execute(sid, "tamper-turn", result.approval_id, principal_id=principal)
+    assert outcome.status == "refused"
+    assert "scope_signature_mismatch" in outcome.detail
+    assert queue.job_ids() == []
+
+
+def test_scope_digest_explicitly_binds_proposal_revision(harness, tmp_path: Path) -> None:
+    service, _queue, _root, _journal, principal = harness
+    source = tmp_path / "revision-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    proposal = service.submit_text_intent(
+        sid,
+        "revision-binding",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(proposal, PipelineResult)
+    _session, _turn, context, identity = service._resolve_identity(
+        sid, "revision-binding", proposal.approval_id, principal_id=principal
+    )
+    original = service._scope_signature(context, identity)
+    changed_ast = context.ast.model_copy(
+        update={"source_revision": context.ast.source_revision + 1}
+    )
+    changed_context = replace(context, ast=changed_ast)
+    assert service._scope_signature(changed_context, identity) != original
+
+
+@pytest.mark.asyncio
+async def test_media_evidence_and_keyed_approval_fail_closed(harness, tmp_path: Path) -> None:
+    service, queue, _root, _journal, principal = harness
+    source = tmp_path / "evidence-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    proposal = service.submit_text_intent(
+        sid,
+        "evidence-turn",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(proposal, PipelineResult)
+    assert proposal.shadow_manifest is not None
+    assert proposal.shadow_manifest.keyframes
+    assert proposal.media_signature is not None
+    assert proposal.media_signature.sample_frames > 0
+    service.approve(sid, "evidence-turn", proposal.approval_id, principal_id=principal)
+    context = service._contexts[proposal.approval_id]
+    assert context.approval_envelope is not None
+    context.approval_envelope = context.approval_envelope.__class__(
+        **{**context.approval_envelope.__dict__, "mac": "0" * 64}
+    )
+    outcome = await service.execute(
+        sid, "evidence-turn", proposal.approval_id, principal_id=principal
+    )
+    assert outcome.status == "refused"
+    assert "approval_mac_invalid" in outcome.detail
+    assert queue.job_ids() == []
+
+
+def test_missing_approval_key_refuses_approval(harness, tmp_path: Path) -> None:
+    service, queue, _root, _journal, principal = harness
+    source = tmp_path / "missing-key-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    proposal = service.submit_text_intent(
+        sid,
+        "missing-key",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(proposal, PipelineResult)
+    service._deps.approval_key_provider = None
+    with pytest.raises(ApprovalError, match="approval_key_unavailable"):
+        service.approve(sid, "missing-key", proposal.approval_id, principal_id=principal)
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_shadow_manifest_tamper_refuses_before_admission(harness, tmp_path: Path) -> None:
+    service, queue, _root, _journal, principal = harness
+    source = tmp_path / "shadow-tamper-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    proposal = service.submit_text_intent(
+        sid,
+        "shadow-tamper",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(proposal, PipelineResult)
+    service.approve(sid, "shadow-tamper", proposal.approval_id, principal_id=principal)
+    context = service._contexts[proposal.approval_id]
+    context.shadow_manifest = context.shadow_manifest.model_copy(
+        update={"composite_digest": "sha256:" + "0" * 64}
+    )
+    outcome = await service.execute(
+        sid, "shadow-tamper", proposal.approval_id, principal_id=principal
+    )
+    assert outcome.status == "refused"
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_same_path_source_mutation_after_approval_refuses(harness, tmp_path: Path) -> None:
+    service, queue, _root, _journal, principal = harness
+    source = tmp_path / "mutable-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    proposal = service.submit_text_intent(
+        sid,
+        "mutated-source",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(proposal, PipelineResult)
+    service.approve(sid, "mutated-source", proposal.approval_id, principal_id=principal)
+    source.write_bytes(source.read_bytes() + b"mutated")
+    outcome = await service.execute(
+        sid, "mutated-source", proposal.approval_id, principal_id=principal
+    )
+    assert outcome.status == "refused"
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_scope_signature_transplant_between_proposals_is_refused(
+    harness, tmp_path: Path
+) -> None:
+    service, queue, _creative_root, _journal, principal = harness
+    source = tmp_path / "transplant-source.mp4"
+    _clip(source)
+    sessions = [_open_session(service, principal), _open_session(service, principal)]
+    results = []
+    for index, (session_id, text) in enumerate(
+        zip(
+            sessions, ("trim from 0.5 to 1.5 seconds", "trim from 0.2 to 1.2 seconds"), strict=True
+        ),
+        start=1,
+    ):
+        result = service.submit_text_intent(
+            session_id,
+            f"transplant-{index}",
+            sequence_number=1,
+            text=text,
+            asset_id="src",
+            source_path=str(source),
+        )
+        assert isinstance(result, PipelineResult)
+        service.approve(
+            session_id, f"transplant-{index}", result.approval_id, principal_id=principal
+        )
+        results.append(result)
+
+    first_ctx = service._contexts[results[0].approval_id]
+    second_ctx = service._contexts[results[1].approval_id]
+    assert first_ctx.scope_signature and second_ctx.scope_signature
+    second_ctx.scope_signature = first_ctx.scope_signature
+    refused = await service.execute(
+        sessions[1], "transplant-2", results[1].approval_id, principal_id=principal
+    )
+    assert refused.status == "refused"
+    assert "scope_signature_mismatch" in refused.detail
+    assert queue.job_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_canonical_delta_refinement_updates_scope_and_replaces_proposal(
+    harness, tmp_path: Path
+) -> None:
+    service, _queue, _root, _journal, principal = harness
+    source = tmp_path / "delta-source.mp4"
+    _clip(source)
+    sid = _open_session(service, principal)
+    base = service.submit_text_intent(
+        sid,
+        "delta-base",
+        sequence_number=1,
+        text="trim from 0.5 to 1.5 seconds",
+        asset_id="src",
+        source_path=str(source),
+    )
+    assert isinstance(base, PipelineResult)
+    refined = service.submit_text_intent(
+        sid,
+        "delta-revision",
+        sequence_number=2,
+        text="trim 0.2 seconds from the end",
+        asset_id="src",
+        source_path=str(source),
+        base_approval_id=base.approval_id,
+    )
+    assert isinstance(refined, PipelineResult)
+    assert refined.ast.scope.start_us == base.ast.scope.start_us
+    assert refined.ast.scope.end_us == base.ast.scope.end_us - 200_000
+    refined_context = service._contexts[refined.approval_id]
+    assert refined_context.parent_proposal_id == base.ast.ast_id
+    assert refined_context.parent_scope_digest == base.ast.scope.scope_digest
+    assert base.approval_id not in service._contexts
 
 
 @pytest.mark.asyncio
@@ -421,6 +657,7 @@ async def test_voice_turn_flows_through_the_same_pipeline(harness, tmp_path: Pat
         authority=service._deps.authority,
         channel_binding_ref=service._deps.channel_binding_ref,
         caption_engine=_FakeCaptionEngine("trim from 0.5 to 1.5 seconds"),
+        approval_key_provider=service._deps.approval_key_provider,
     )
     sid = _open_session(service, principal)
     result = await service.submit_voice_intent(

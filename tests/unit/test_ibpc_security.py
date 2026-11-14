@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from nexus_ai_agent.connect.key_provider import StaticKeyRing
 from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
 from nexus_ai_agent.nagar.ibpc.approval import ApprovalError
 from nexus_ai_agent.nagar.ibpc.privacy import PrivacyPolicy
@@ -378,6 +379,44 @@ def service_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "probe_media",
         lambda path, *, binary=None: (types.SimpleNamespace(duration_us=2_000_000), 30.0),
     )
+
+    def fake_shadow(path, scope, plan_digest, **kwargs):
+        payload = {
+            "plan_digest": plan_digest,
+            "scope_digest": scope.scope_digest,
+            "source_duration_us": 2_000_000,
+            "scope_start_us": scope.start_us,
+            "scope_end_us": scope.end_us,
+            "keyframes": [],
+            "composite_digest": "sha256:" + "0" * 64,
+        }
+        return types.SimpleNamespace(
+            plan_digest=plan_digest,
+            scope_digest=scope.scope_digest,
+            keyframes=(),
+            model_dump=lambda **_kw: payload,
+        )
+
+    def fake_signature(path, scope, **kwargs):
+        payload = {
+            "scope_digest": scope.scope_digest,
+            "asset_id": scope.asset_id,
+            "start_us": scope.start_us,
+            "end_us": scope.end_us,
+            "color_histogram": [0.0] * 64,
+            "motion_magnitude": 0.0,
+            "sample_frames": 1,
+            "computed_at": "2026-10-31T00:00:00Z",
+            "signature_digest": "sha256:" + "0" * 64,
+        }
+        return types.SimpleNamespace(
+            signature_digest=payload["signature_digest"],
+            scope_digest=scope.scope_digest,
+            model_dump=lambda **_kw: payload,
+        )
+
+    monkeypatch.setattr(service_mod, "build_shadow_preview", fake_shadow)
+    monkeypatch.setattr(service_mod, "compute_scope_signature", fake_signature)
     clip = tmp_path / "src.mp4"
     _fake_asset(clip)
     queue = _RecordingQueue()
@@ -391,6 +430,7 @@ def service_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             revision_provider=lambda: revision["current"],
             authority=authority,
             channel_binding_ref=BINDING_REF,
+            approval_key_provider=StaticKeyRing({"unit": b"u" * 32}, active_key_id="unit"),
         )
     )
     return service, queue, clip, revision, authority
@@ -757,3 +797,413 @@ def test_staging_binds_content_identity(service_env, tmp_path: Path) -> None:
     staged = service._stage_source(clip, workspace)
     assert staged.read_bytes() == clip.read_bytes()
     assert service._sha256_fd(staged) == service._sha256_fd(clip)
+
+
+def _open_service_session(service: IBPCService) -> str:
+    return service.open_session(
+        tenant_id="ten",
+        project_id="p",
+        principal_id="user-1",
+        user_id=1,
+        chat_id=1,
+        current_revision=7,
+    )
+
+
+def test_submit_missing_source_is_typed_refusal(service_env, tmp_path: Path) -> None:
+    service, queue, _clip, _revision, _authority = service_env
+    sid = _open_service_session(service)
+    result = service.submit_text_intent(
+        sid,
+        "missing-source",
+        sequence_number=1,
+        text="trim from 0.2 to 0.6 seconds",
+        asset_id="src",
+        source_path=str(tmp_path / "absent.mp4"),
+    )
+    from nexus_ai_agent.nagar.ibpc.intent import Refusal
+
+    assert isinstance(result, Refusal) and result.reason == "missing_source"
+    assert queue.enqueued == []
+
+
+def test_submit_unknown_base_and_changed_delta_source_refuse(service_env, tmp_path: Path) -> None:
+    service, queue, clip, _revision, _authority = service_env
+    sid = _open_service_session(service)
+    from nexus_ai_agent.nagar.ibpc.intent import Refusal
+
+    unknown = service.submit_text_intent(
+        sid,
+        "delta-unknown",
+        sequence_number=1,
+        text="trim 1 second from the end",
+        asset_id="src",
+        source_path=str(clip),
+        base_approval_id="missing",
+    )
+    assert isinstance(unknown, Refusal) and unknown.reason == "unknown_base_proposal"
+    base = _submit(service, sid, "delta-base", 2, clip)
+    changed = tmp_path / "different.mp4"
+    _fake_asset(changed)
+    changed.write_bytes(changed.read_bytes() + b"distinct")
+    result = service.submit_text_intent(
+        sid,
+        "delta-changed-source",
+        sequence_number=3,
+        text="trim 0.1 seconds from the end",
+        asset_id="src",
+        source_path=str(changed),
+        base_approval_id=base.approval_id,
+    )
+    assert isinstance(result, Refusal) and result.reason == "delta_source_mismatch"
+    assert queue.enqueued == []
+
+
+def test_approved_base_cannot_be_refined(service_env) -> None:
+    service, queue, clip, _revision, _authority = service_env
+    sid = _open_service_session(service)
+    base = _submit(service, sid, "approved-base", 1, clip)
+    service.approve(sid, "approved-base", base.approval_id, principal_id="user-1")
+    from nexus_ai_agent.nagar.ibpc.intent import Refusal
+
+    result = service.submit_text_intent(
+        sid,
+        "refine-approved",
+        sequence_number=2,
+        text="trim 0.1 seconds from the end",
+        asset_id="src",
+        source_path=str(clip),
+        base_approval_id=base.approval_id,
+    )
+    assert isinstance(result, Refusal) and result.reason == "stale_base_proposal"
+    assert queue.enqueued == []
+
+
+def test_compilation_and_media_evidence_failures_refuse(service_env, monkeypatch) -> None:
+    import nexus_ai_agent.nagar.ibpc.service as service_mod
+    from nexus_ai_agent.nagar.ibpc.compiler import CompilationRefused
+    from nexus_ai_agent.nagar.ibpc.intent import Refusal
+
+    service, queue, clip, _revision, _authority = service_env
+    sid = _open_service_session(service)
+    original_compile = service_mod.compile_ast
+    monkeypatch.setattr(
+        service_mod,
+        "compile_ast",
+        lambda *a, **k: (_ for _ in ()).throw(CompilationRefused("test_refusal")),
+    )
+    compiled = service.submit_text_intent(
+        sid,
+        "compile-fail",
+        sequence_number=1,
+        text="trim from 0.2 to 0.6 seconds",
+        asset_id="src",
+        source_path=str(clip),
+    )
+    assert isinstance(compiled, Refusal) and compiled.reason == "test_refusal"
+    monkeypatch.setattr(service_mod, "compile_ast", original_compile)
+    sid2 = _open_service_session(service)
+    monkeypatch.setattr(
+        service_mod,
+        "build_shadow_preview",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("ffmpeg down")),
+    )
+    evidence = service.submit_text_intent(
+        sid2,
+        "shadow-fail",
+        sequence_number=1,
+        text="trim from 0.2 to 0.6 seconds",
+        asset_id="src",
+        source_path=str(clip),
+    )
+    assert isinstance(evidence, Refusal) and evidence.reason == "media_evidence_unavailable"
+    assert queue.enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_voice_configuration_and_transcription_fail_closed(service_env, monkeypatch) -> None:
+    import types
+
+    from nexus_ai_agent.nagar.ibpc.intent import Refusal
+
+    service, queue, clip, _revision, _authority = service_env
+    sid = _open_service_session(service)
+    service._deps.caption_engine = None
+    unavailable = await service.submit_voice_intent(
+        sid, "voice-no-engine", sequence_number=1, audio=b"x", asset_id="src", source_path=str(clip)
+    )
+    assert isinstance(unavailable, Refusal) and unavailable.reason == "caption_profile_unavailable"
+
+    service._deps.caption_engine = types.SimpleNamespace(is_available=lambda: True)
+
+    async def fail_audio(*args, **kwargs):
+        raise RuntimeError("decoder failure")
+
+    monkeypatch.setattr(service._sessions, "submit_audio", fail_audio)
+    failed = await service.submit_voice_intent(
+        sid, "voice-fail", sequence_number=2, audio=b"x", asset_id="src", source_path=str(clip)
+    )
+    assert isinstance(failed, Refusal) and failed.reason == "transcription_failed"
+    assert queue.enqueued == []
+
+
+def test_missing_channel_binding_is_a_typed_refusal(service_env) -> None:
+    service, queue, clip, _revision, _authority = service_env
+    service._deps.channel_binding_ref = None
+    sid = _open_service_session(service)
+    result = service.submit_text_intent(
+        sid,
+        "no-binding",
+        sequence_number=1,
+        text="trim from 0.2 to 0.6 seconds",
+        asset_id="src",
+        source_path=str(clip),
+    )
+    from nexus_ai_agent.nagar.ibpc.intent import Refusal
+
+    assert isinstance(result, Refusal) and result.reason == "unauthorized_principal"
+    assert queue.enqueued == []
+
+
+def test_approval_provider_and_clock_fail_closed(service_env) -> None:
+    from nexus_ai_agent.connect.key_provider import KeyProviderError
+    from nexus_ai_agent.nagar.ibpc.approval import ApprovalError
+
+    service, _queue, clip, _revision, _authority = service_env
+    sid = _open_service_session(service)
+    proposal = _submit(service, sid, "invalid-provider", 1, clip)
+
+    class BrokenKeyProvider:
+        active_key_id = "broken"
+
+        def key(self, key_id: str):
+            raise KeyProviderError("missing configured key")
+
+    service._deps.approval_key_provider = BrokenKeyProvider()  # type: ignore[assignment]
+    with pytest.raises(ApprovalError, match="approval_key_unavailable"):
+        service.approve(sid, "invalid-provider", proposal.approval_id, principal_id="user-1")
+
+    service._deps.approval_key_provider = StaticKeyRing({"unit": b"u" * 32}, active_key_id="unit")
+    sid2 = _open_service_session(service)
+    second = _submit(service, sid2, "naive-clock", 1, clip)
+    service._deps.now = lambda: "2026-10-31T00:00:00"
+    with pytest.raises(ApprovalError, match="approval_key_unavailable"):
+        service.approve(sid2, "naive-clock", second.approval_id, principal_id="user-1")
+
+
+def test_execute_enqueue_failure_and_missing_attempt_evidence(service_env, monkeypatch) -> None:
+    import asyncio
+
+    import nexus_ai_agent.nagar.ibpc.service as service_mod
+
+    monkeypatch.setattr(service_mod, "verify_shadow_manifest", lambda _manifest: None)
+    service, queue, clip, _revision, _authority = service_env
+    sid = _open_service_session(service)
+    proposal = _submit(service, sid, "no-result", 1, clip)
+    service.approve(sid, "no-result", proposal.approval_id, principal_id="user-1")
+    outcome = asyncio.run(
+        service.execute(sid, "no-result", proposal.approval_id, principal_id="user-1")
+    )
+    assert outcome.status == "failed"
+    assert len(queue.enqueued) == 1
+    assert (
+        asyncio.run(service._attempt_identity("job-without-attempts"))
+        == "job-without-attempts:attempt?"
+    )
+    assert service._provenance_reference("job-without-evidence") == {
+        "job_id": "job-without-evidence",
+        "journal": None,
+        "passport": None,
+    }
+
+
+def test_missing_or_deleted_approval_context_is_terminal(service_env) -> None:
+    service, _queue, _clip, _revision, _authority = service_env
+    assert service._is_terminal_context("not-in-ledger") is True
+    assert service._provenance_reference("unrecorded-job")["journal"] is None
+
+
+@pytest.mark.asyncio
+async def test_voice_pipeline_refusal_branches(service_env, tmp_path: Path, monkeypatch) -> None:
+    import nexus_ai_agent.nagar.ibpc.service as service_mod
+    from nexus_ai_agent.creative.slideshow.ffmpeg import RenderError
+    from nexus_ai_agent.nagar.ibpc.intent import Refusal
+
+    service, queue, clip, _revision, authority = service_env
+
+    async def run_voice(turn_id: str, engine: _RecordingEngine, source: Path = clip):
+        sid = _open_service_session(service)
+        service._deps.caption_engine = engine
+        return await service.submit_voice_intent(
+            sid,
+            turn_id,
+            sequence_number=1,
+            audio=b"audio",
+            asset_id="src",
+            source_path=str(source),
+            audio_dir=tmp_path / f"audio-{turn_id}",
+        )
+
+    authority.revoked = True
+    denied = await run_voice("voice-authority", _RecordingEngine())
+    assert isinstance(denied, Refusal) and denied.reason == "unauthorized_principal"
+    authority.revoked = False
+
+    missing = await run_voice("voice-missing", _RecordingEngine(), tmp_path / "absent.mp4")
+    assert isinstance(missing, Refusal) and missing.reason == "missing_source"
+
+    ambiguous = await run_voice("voice-ambiguous", _RecordingEngine("trim it a bit"))
+    assert isinstance(ambiguous, (Refusal,)) or hasattr(ambiguous, "questions")
+
+    sid = _open_service_session(service)
+    service._deps.caption_engine = _RecordingEngine()
+    original_probe = service_mod.probe_media
+    monkeypatch.setattr(
+        service_mod, "probe_media", lambda *a, **k: (_ for _ in ()).throw(RenderError("bad media"))
+    )
+    unreadable = await service.submit_voice_intent(
+        sid,
+        "voice-unreadable",
+        sequence_number=1,
+        audio=b"audio",
+        asset_id="src",
+        source_path=str(clip),
+        audio_dir=tmp_path / "audio-unreadable",
+    )
+    assert isinstance(unreadable, Refusal) and unreadable.reason == "unreadable_source"
+    monkeypatch.setattr(service_mod, "probe_media", original_probe)
+
+    sid2 = _open_service_session(service)
+    original_compile = service_mod.compile_ast
+    monkeypatch.setattr(
+        service_mod,
+        "compile_ast",
+        lambda *a, **k: (_ for _ in ()).throw(service_mod.CompilationRefused("voice_compile")),
+    )
+    compile_refusal = await service.submit_voice_intent(
+        sid2,
+        "voice-compile",
+        sequence_number=1,
+        audio=b"audio",
+        asset_id="src",
+        source_path=str(clip),
+        audio_dir=tmp_path / "audio-compile",
+    )
+    assert isinstance(compile_refusal, Refusal) and compile_refusal.reason == "voice_compile"
+    monkeypatch.setattr(service_mod, "compile_ast", original_compile)
+
+    sid3 = _open_service_session(service)
+    original_shadow = service_mod.build_shadow_preview
+    monkeypatch.setattr(
+        service_mod,
+        "build_shadow_preview",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("shadow")),
+    )
+    media_refusal = await service.submit_voice_intent(
+        sid3,
+        "voice-shadow",
+        sequence_number=1,
+        audio=b"audio",
+        asset_id="src",
+        source_path=str(clip),
+        audio_dir=tmp_path / "audio-shadow",
+    )
+    assert (
+        isinstance(media_refusal, Refusal) and media_refusal.reason == "media_evidence_unavailable"
+    )
+    monkeypatch.setattr(service_mod, "build_shadow_preview", original_shadow)
+    assert queue.enqueued == []
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "reason"),
+    [
+        ("sequence_number", 7, "identity_mismatch_sequence_number"),
+        ("tenant_id", "other-tenant", "identity_mismatch_tenant_id"),
+        ("project_id", "other-project", "identity_mismatch_project_id"),
+    ],
+)
+def test_binding_identity_field_tamper_is_refused(
+    service_env, field: str, replacement: object, reason: str
+) -> None:
+    service, _queue, clip, _revision, _authority = service_env
+    sid = _open_service_session(service)
+    proposal = _submit(service, sid, f"binding-{field}", 1, clip)
+    binding = service.approvals.get(proposal.approval_id)
+    service.approvals._bindings[proposal.approval_id] = binding.model_copy(
+        update={field: replacement}
+    )
+    with pytest.raises(ApprovalError, match=reason):
+        service.approve(sid, f"binding-{field}", proposal.approval_id, principal_id="user-1")
+
+
+def test_context_binding_ast_and_plan_tampering_are_refused(service_env) -> None:
+    service, _queue, clip, _revision, _authority = service_env
+    sid = _open_service_session(service)
+    proposal = _submit(service, sid, "context-tamper", 1, clip)
+    ctx = service._contexts[proposal.approval_id]
+    original_session, original_binding = ctx.session_id, ctx.binding_ref
+    ctx.session_id = "another-session"
+    with pytest.raises(ApprovalError, match="context_mismatch"):
+        service.approve(sid, "context-tamper", proposal.approval_id, principal_id="user-1")
+    ctx.session_id = original_session
+    ctx.binding_ref = "cbn_" + "b" * 64
+    with pytest.raises(ApprovalError, match="binding_mismatch"):
+        service.approve(sid, "context-tamper", proposal.approval_id, principal_id="user-1")
+    ctx.binding_ref = original_binding
+    ctx.ast = ctx.ast.model_copy(update={"ast_id": "tampered-ast"})
+    with pytest.raises(ApprovalError, match="ast_mismatch"):
+        service.approve(sid, "context-tamper", proposal.approval_id, principal_id="user-1")
+
+
+def test_plan_tamper_and_asset_unreadable_are_refused(service_env) -> None:
+    service, _queue, clip, _revision, _authority = service_env
+    sid = _open_service_session(service)
+    proposal = _submit(service, sid, "plan-tamper", 1, clip)
+    ctx = service._contexts[proposal.approval_id]
+    ctx.plan = ctx.plan.model_copy(update={"plan_id": "tampered-plan"})
+    with pytest.raises(ApprovalError, match="plan_mismatch"):
+        service.approve(sid, "plan-tamper", proposal.approval_id, principal_id="user-1")
+
+    sid2 = _open_service_session(service)
+    proposal2 = _submit(service, sid2, "asset-unreadable", 1, clip)
+    clip.unlink()
+    with pytest.raises(ApprovalError, match="asset_unreadable"):
+        service.approve(sid2, "asset-unreadable", proposal2.approval_id, principal_id="user-1")
+
+
+def test_attempt_identity_reads_latest_sync_history(service_env) -> None:
+    service, _queue, _clip, _revision, _authority = service_env
+    service._deps.attempt_provider = lambda job_id: [{"attempt": 1}, {"attempt": 4}]
+    import asyncio
+
+    assert asyncio.run(service._attempt_identity("job-1")) == "job-1:attempt4"
+
+
+def test_composition_factory_wires_explicit_key_provider(service_env) -> None:
+    from nexus_ai_agent.connect.key_provider import StaticKeyRing
+    from nexus_ai_agent.nagar.ibpc.composition import build_ibpc_service
+
+    service, _queue, _clip, _revision, _authority = service_env
+    ring = StaticKeyRing({"old": b"o" * 32, "active": b"a" * 32}, active_key_id="active")
+    composed = build_ibpc_service(service._deps, key_provider=ring)
+    assert composed._deps.approval_key_provider is ring
+    assert composed._deps.approval_key_provider.key("old").material == b"o" * 32
+
+
+def test_composition_factory_rejects_provider_with_missing_active_key(service_env) -> None:
+    from nexus_ai_agent.nagar.ibpc.approval_mac import KeyProviderError
+    from nexus_ai_agent.nagar.ibpc.composition import build_ibpc_service
+
+    service, _queue, _clip, _revision, _authority = service_env
+
+    class MissingActiveKey:
+        @property
+        def active_key_id(self) -> str:
+            return "missing"
+
+        def key(self, key_id: str):
+            raise KeyProviderError("unknown key")
+
+    with pytest.raises(KeyProviderError, match="not configured correctly"):
+        build_ibpc_service(service._deps, key_provider=MissingActiveKey())  # type: ignore[arg-type]

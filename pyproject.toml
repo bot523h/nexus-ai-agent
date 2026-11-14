@@ -153,6 +153,11 @@ ignore_missing_imports = true
 [tool.deptry]
 known_first_party = ["nexus_ai_agent"]
 pep621_dev_dependency_groups = ["dev"]
+# llama-cpp-python's distribution name and its import name (`llama_cpp`) are not
+# derivable from one another, so deptry needs the explicit mapping to see the
+# optional local-LLM backend as "declared and used" rather than reported twice
+# (DEP002 on the distribution, DEP001 on the module).
+package_module_name_map = { "llama-cpp-python" = ["llama_cpp"] }
 
 [tool.deptry.per_rule_ignores]
 # DEP001 — imported but not declared: *optional* integrations that are probed

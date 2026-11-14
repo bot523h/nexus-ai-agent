@@ -190,7 +190,13 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "artifact_binding_skips_revision_validation",
         STORE,
-        "        await self._load_validated_revision(project_id, revision_id)",
+        # The literal call is now shared by the verified-registration path and the
+        # binding path, so the anchor carries the binding site's own comment: a
+        # mutation must hit *this* validation, not whichever one is first in the
+        # file (a duplicated anchor silently mutates only the first occurrence).
+        """        # The revision is the authority: load it (this re-validates its bytes,
+        # refusing tampered/re-homed rows) before any binding row is written.
+        await self._load_validated_revision(project_id, revision_id)""",
         "        pass  # mutated: binding no longer validates the revision exists",
         "Slice 2: an artifact must only bind to a revision that exists and validates; "
         "skipping the load lets an artifact bind to a vanished/tampered revision",
@@ -282,7 +288,9 @@ MUTATIONS: tuple[Mutation, ...] = (
                     ):
                         self._log_rejected(job_id, claim, JobStatus.COMPLETED)
                         return
-                    confirm_error = await self._confirm_safely(publication, payload, result, claim)""",
+                    confirm_error = await self._confirm_safely(
+                        publication, payload, final_result, claim
+                    )""",
         "                    confirm_error = await self._confirm_safely(publication, payload, result, claim)",
         "the durable binding is a side effect: ownership must be re-read at the "
         "commit boundary, else an attempt superseded during the re-probe window "
