@@ -444,3 +444,92 @@ def test_verify_collect_returns_bundle(tmp_path: object) -> None:
     bundle = pvg._collect(filesystem, "d")
     assert set(bundle) == {"a.bin", "sub__b.bin"}
     assert pvg._collect(filesystem, "missing") == {}
+
+
+# --------------------------------------------------------------------------- #
+# Media absence is never a silent pass (Wave 3 residual fail-open closure)
+# --------------------------------------------------------------------------- #
+
+
+def test_missing_mp4_with_expected_digest_is_violated_without_require_media(
+    tmp_path: object,
+) -> None:
+    """A supplied ``expected_mp4_sha256`` pins the bytes: their absence is VIOLATED.
+
+    ``require_media=False`` relaxes the *decode* requirement only. Before this
+    fix the missing-file branch returned UNOBSERVED whenever ``require_media``
+    was false, so a caller that had pinned a digest could be told "verified"
+    while the MP4 it pinned did not exist.
+    """
+    _playground, filesystem, compilation, _root = _compile(tmp_path)
+    filesystem.resolve(compilation.mp4_path).unlink(missing_ok=True)
+    report = pvg.verify_prometheus_playground_bundle_from_disk(
+        filesystem,
+        compilation,
+        expected_mp4_sha256="a" * 64,
+        require_media=False,
+    )
+    assert report.verified is False
+    assert report.ledger.state_of("mp4_file_digest") is pvg.LedgerState.VIOLATED
+
+
+def test_missing_mp4_with_recorded_digest_is_violated_without_require_media(
+    tmp_path: object,
+) -> None:
+    """The receipt's own recorded digest is an expectation too."""
+    _playground, filesystem, compilation, _root = _compile(tmp_path)
+    if not compilation.mp4_sha256:
+        pytest.skip("this runner produced no encoded MP4, so there is no recorded digest to pin")
+    filesystem.resolve(compilation.mp4_path).unlink(missing_ok=True)
+    report = pvg.verify_prometheus_playground_bundle_from_disk(
+        filesystem, compilation, require_media=False
+    )
+    assert report.verified is False
+    assert report.ledger.state_of("mp4_file_digest") is pvg.LedgerState.VIOLATED
+
+
+def test_missing_mp4_with_no_expectation_stays_unobserved(tmp_path: object) -> None:
+    """With nothing expecting the bytes, absence is honestly UNOBSERVED."""
+    _playground, filesystem, compilation, _root = _compile(tmp_path)
+    filesystem.resolve(compilation.mp4_path).unlink(missing_ok=True)
+    bare = (
+        compilation.model_copy(update={"mp4_sha256": ""})
+        if hasattr(compilation, "model_copy")
+        else compilation
+    )
+    if getattr(bare, "mp4_sha256", "") != "":
+        pytest.skip("receipt cannot be re-stated without a recorded MP4 digest")
+    report = pvg.verify_prometheus_playground_bundle_from_disk(
+        filesystem, bare, require_media=False
+    )
+    assert report.ledger.state_of("mp4_file_digest") is pvg.LedgerState.UNOBSERVED
+
+
+def test_missing_wav_with_expected_digest_is_violated(tmp_path: object) -> None:
+    """A missing WAV is a falsified claim, not an exception and not a pass."""
+    _playground, filesystem, compilation, _root = _compile(tmp_path)
+    filesystem.resolve(compilation.wav_path).unlink(missing_ok=True)
+    report = pvg.verify_prometheus_playground_bundle_from_disk(
+        filesystem,
+        compilation,
+        expected_wav_sha256="b" * 64,
+        require_media=False,
+    )
+    assert report.verified is False
+    assert report.ledger.state_of("wav_file_digest") is pvg.LedgerState.VIOLATED
+
+
+def test_missing_wav_records_merkle_and_audio_claims_honestly(tmp_path: object) -> None:
+    """The WAV leaf leaves the tree and equivalence is never claimed."""
+    _playground, filesystem, compilation, _root = _compile(tmp_path)
+    filesystem.resolve(compilation.wav_path).unlink(missing_ok=True)
+    report = pvg.verify_prometheus_playground_bundle_from_disk(
+        filesystem,
+        compilation,
+        expected_wav_sha256="b" * 64,
+        require_media=False,
+    )
+    assert compilation.wav_path not in report.file_digests
+    assert report.audio_equivalent is False
+    assert all(proof.verified for proof in report.merkle_proofs)
+    assert report.ledger.state_of("wav_file_digest") is pvg.LedgerState.VIOLATED

@@ -45,6 +45,12 @@ dependencies = [
     "psutil>=5.9",
     "litellm>=1.74,<2",  # multi-provider routing chain (Ollama/Groq/Gemini/OpenRouter)
     "boto3==1.43.98",  # pinned: Cloudflare R2 blob tier (v3.9.0, latest on PyPI 2026-09-20)
+    # Wave 4 (PR #333/#334): RFC 8785 canonicalization authority and the
+    # AES-GCM credential envelopes of NAGAR CONNECT. No hand-rolled primitives
+    # and no second key ladder: the libraries are the crypto/canonicalization
+    # authority, imported lazily where the fail-closed error must be typed.
+    "rfc8785==0.1.4",
+    "cryptography>=43,<48",
   ]
 
 [project.scripts]
@@ -79,6 +85,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "nexus_ai_agent.creative.packs.caption" = ["fonts/*.ttf", "fonts/OFL.txt"]
+"nexus_ai_agent.web" = ["static/*"]  # Studio PWA shell (Wave 4 / PR #328)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

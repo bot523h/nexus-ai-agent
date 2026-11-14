@@ -17,6 +17,10 @@ dist/
 # CI audit artifacts (per-run evidence lives in GitHub Actions artifacts, not the tree)
 ci-artifacts/
 
+# Agent scratchpads (memories, campaign findings) are working notes, not
+# evidence: they never belong in the tree or in a review diff.
+.openhands/memory/
+
 # Board mutation lock (inter-process flock; transient, never committed)
 .agents/board.lock
 .agents/board.verify-cache.json

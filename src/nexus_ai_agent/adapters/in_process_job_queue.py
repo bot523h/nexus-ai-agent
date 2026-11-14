@@ -62,6 +62,7 @@ automatically) and the queue's own lifecycle lines name it explicitly.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -1921,6 +1922,12 @@ class InProcessJobQueue:
                             self._log_rejected(job_id, claim, JobStatus.VERIFYING)
                             return
                         final_result["artifact_passport_id"] = archived.passport.passport_id
+                        # The verified-asset registration binds the *durable* passport
+                        # bytes, not the in-memory object: digests of the stored JSON are
+                        # what a later reader can independently re-derive.
+                        final_result["artifact_passport_digest"] = (
+                            "sha256:" + hashlib.sha256(stored_passport.encode("utf-8")).hexdigest()
+                        )
                     except Exception as exc:  # noqa: BLE001 - evidence persistence fails closed
                         logger.warning(
                             "creative_passport_persistence_failed job_id=%s reason=%s",
@@ -1965,7 +1972,9 @@ class InProcessJobQueue:
                     ):
                         self._log_rejected(job_id, claim, JobStatus.COMPLETED)
                         return
-                    confirm_error = await self._confirm_safely(publication, payload, result, claim)
+                    confirm_error = await self._confirm_safely(
+                        publication, payload, final_result, claim
+                    )
                     if confirm_error is not None:
                         # The confirmation may have COMMITTED the binding and
                         # then raised (a partial failure: the row is durable but
@@ -2238,6 +2247,11 @@ class InProcessJobQueue:
         publish_context = dict(result)
         publish_context["_queue_job_id"] = claim.job_id
         publish_context["_queue_attempt"] = claim.attempt
+        # The publication adapter performs this authoritative CAS read at the
+        # last responsible moment, after it has staged and hashed private bytes.
+        publish_context["_queue_fence_check"] = lambda: self._owns_execution(
+            claim, JobStatus.VERIFYING
+        )
         try:
             patch = await self._publish_in_thread(publication, payload, publish_context)
         except Exception as exc:  # noqa: BLE001 - publication failure is a refusal
@@ -2318,6 +2332,10 @@ class InProcessJobQueue:
         confirm_context = dict(result)
         confirm_context["_queue_job_id"] = claim.job_id
         confirm_context["_queue_attempt"] = claim.attempt
+        confirm_context["_queue_attempt_id"] = creative_attempt_id(claim.job_id, claim.attempt)
+        confirm_context["_queue_fence_check"] = lambda: self._owns_execution(
+            claim, JobStatus.VERIFYING
+        )
         try:
             await publication.confirm(payload, confirm_context)
         except Exception as exc:  # noqa: BLE001 - an unconfirmed success must fail closed

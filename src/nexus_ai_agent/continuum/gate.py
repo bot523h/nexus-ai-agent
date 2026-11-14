@@ -49,6 +49,12 @@ _FIXED_GIT_ENVIRONMENT = {
     "GIT_CONFIG_NOSYSTEM": "1",
 }
 _TIMEOUT_SECONDS = 900
+#: Every local ``git`` invocation is bounded: a wedged index lock or a git that
+#: is waiting on a credential prompt must fail the gate, never hang a worker.
+_GIT_TIMEOUT_SECONDS = 30
+#: A fresh interpreter importing the package must answer quickly; a hang
+#: here means the clone cannot be probed, not that the gate may block.
+_IMPORT_PROBE_TIMEOUT_SECONDS = 120
 
 
 class GateSetupError(RuntimeError):
@@ -82,7 +88,12 @@ class Workspace:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
+        except subprocess.TimeoutExpired as exc:
+            raise GateSetupError(
+                f"git {' '.join(arguments)} exceeded the {_GIT_TIMEOUT_SECONDS}s budget"
+            ) from exc
         except OSError as exc:
             raise GateSetupError(f"cannot execute git: {exc}") from exc
         if outcome.returncode != 0:
@@ -506,14 +517,21 @@ def run_cli(
 
 def _imports_from(root: Path) -> Path:
     environment = provenance.isolated_python_environment(root)
-    completed = subprocess.run(
-        [sys.executable, "-c", "import nexus_ai_agent; print(nexus_ai_agent.__file__)"],
-        cwd=root,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", "import nexus_ai_agent; print(nexus_ai_agent.__file__)"],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_IMPORT_PROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GateSetupError(
+            f"importing nexus_ai_agent from the clone exceeded the "
+            f"{_IMPORT_PROBE_TIMEOUT_SECONDS}s budget"
+        ) from exc
     if completed.returncode != 0:
         raise GateSetupError(f"cannot import nexus_ai_agent from the clone: {completed.stderr}")
     return Path(completed.stdout.strip()).resolve()

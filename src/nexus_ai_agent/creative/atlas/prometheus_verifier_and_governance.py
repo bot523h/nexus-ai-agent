@@ -462,6 +462,7 @@ def verify_prometheus_playground_bundle_from_disk(
     receipt: _playground.QuadrantCompilationReceipt,
     *,
     expected_mp4_sha256: str | None = None,
+    expected_wav_sha256: str | None = None,
     timeout: float = 120.0,
     require_media: bool = True,
 ) -> BundleVerificationReport:
@@ -469,6 +470,13 @@ def verify_prometheus_playground_bundle_from_disk(
 
     When ``require_media`` is true the MP4 must exist and be decodable; a missing
     or undecodable MP4 is a ``VIOLATED`` observation rather than a silent pass.
+
+    A caller-supplied expectation outranks ``require_media``: if an
+    ``expected_mp4_sha256``/``expected_wav_sha256`` is supplied (or the receipt
+    records a digest for media it claims to have encoded) and that file is
+    missing on disk, the observation is ``VIOLATED`` and the bundle is not
+    ``verified`` even when ``require_media`` is false.  Media absence can only
+    be ``UNOBSERVED`` when nothing expected the bytes to exist.
     """
     ledger = EpistemicLedger()
     content_digests: dict[str, str] = {}
@@ -490,10 +498,23 @@ def verify_prometheus_playground_bundle_from_disk(
         leaf_payloads.append(bytes.fromhex(digest))
         reference_frames.append(_read_png_rgb(raw))
 
-    wav_raw = filesystem.read_bytes(receipt.wav_path, max_bytes=1 << 26)
-    file_digests[receipt.wav_path] = hashlib.sha256(wav_raw).hexdigest()
-    leaf_payloads.append(bytes.fromhex(file_digests[receipt.wav_path]))
-    if receipt.wav_sha256 == "":
+    expected_wav = expected_wav_sha256 or receipt.wav_sha256
+    wav_present = _file_exists(filesystem, receipt.wav_path)
+    wav_raw = b""
+    if wav_present:
+        wav_raw = filesystem.read_bytes(receipt.wav_path, max_bytes=1 << 26)
+        file_digests[receipt.wav_path] = hashlib.sha256(wav_raw).hexdigest()
+        leaf_payloads.append(bytes.fromhex(file_digests[receipt.wav_path]))
+    if not wav_present:
+        # A supplied (or receipt-recorded) digest is a claim that the bytes
+        # exist: their absence falsifies it, whatever `require_media` says.
+        wav_state = LedgerState.VIOLATED if expected_wav else LedgerState.UNOBSERVED
+        wav_note = (
+            "WAV absent on disk — the supplied digest cannot be verified"
+            if expected_wav
+            else "WAV absent on disk and nothing expected it — not measured"
+        )
+    elif receipt.wav_sha256 == "":
         # Fail closed: an empty recorded digest can never vouch for the bytes.
         wav_state = LedgerState.VIOLATED
         wav_note = "no recorded WAV SHA-256 to verify against — refusing to pass"
@@ -505,12 +526,15 @@ def verify_prometheus_playground_bundle_from_disk(
         Observation(
             claim="wav_file_digest",
             state=wav_state,
-            provenance=ObservationProvenance.MEASURED_MEDIA,
+            provenance=ObservationProvenance.MEASURED_MEDIA
+            if wav_present
+            else ObservationProvenance.SYNTHETIC_FIXTURE,
             note=wav_note,
         )
     )
-    reference_audio = _read_wav_pcm(wav_raw)
-    content_digests["reference_wav_pcm"] = hashlib.sha256(reference_audio.tobytes()).hexdigest()
+    reference_audio = _read_wav_pcm(wav_raw) if wav_present else np.zeros(0, dtype="<i2")
+    if wav_present:
+        content_digests["reference_wav_pcm"] = hashlib.sha256(reference_audio.tobytes()).hexdigest()
 
     leaves = leaf_payloads
     root = merkle_root(leaves)
@@ -558,15 +582,25 @@ def verify_prometheus_playground_bundle_from_disk(
             )
         )
     else:
-        state = (
-            LedgerState.VIOLATED if (require_media and receipt.encoded) else LedgerState.UNOBSERVED
-        )
+        expected_mp4 = expected_mp4_sha256 or (receipt.mp4_sha256 if receipt.encoded else "")
+        if require_media and receipt.encoded:
+            state = LedgerState.VIOLATED
+            note = "MP4 absent on disk — required media is missing"
+        elif expected_mp4:
+            # Fail closed: a digest was supplied/recorded, so the bytes were
+            # expected. `require_media=False` relaxes the *decode* requirement,
+            # never the existence of media the caller pinned a digest for.
+            state = LedgerState.VIOLATED
+            note = "MP4 absent on disk — the supplied digest cannot be verified"
+        else:
+            state = LedgerState.UNOBSERVED
+            note = "MP4 absent on disk and nothing expected it — not measured"
         ledger.record(
             Observation(
                 claim="mp4_file_digest",
                 state=state,
                 provenance=ObservationProvenance.SYNTHETIC_FIXTURE,
-                note="MP4 absent on disk",
+                note=note,
             )
         )
 
@@ -630,7 +664,19 @@ def verify_prometheus_playground_bundle_from_disk(
                     note=str(exc)[:200],
                 )
             )
-        if decoded_audio.size > 0:
+        if decoded_audio.size > 0 and reference_audio.size == 0:
+            # The MP4 carries audio but the reference WAV is gone: equivalence is
+            # not provable either way, so the claim stays UNOBSERVED (the missing
+            # WAV is already recorded as VIOLATED above).
+            ledger.record(
+                Observation(
+                    claim="mp4_audio_equivalence",
+                    state=LedgerState.UNOBSERVED,
+                    provenance=ObservationProvenance.SYNTHETIC_FIXTURE,
+                    note="reference WAV absent on disk; equivalence not measured",
+                )
+            )
+        elif decoded_audio.size > 0:
             content_digests["decoded_audio_pcm"] = hashlib.sha256(
                 decoded_audio.tobytes()
             ).hexdigest()

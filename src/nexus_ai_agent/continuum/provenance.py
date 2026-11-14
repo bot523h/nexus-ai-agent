@@ -38,6 +38,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
+#: A ``git`` that hangs (index lock, credential prompt, wedged FS) must
+#: surface as a provenance failure instead of blocking the caller forever.
+_GIT_TIMEOUT_SECONDS = 30
+
 #: Paths whose drift invalidates Continuum evidence (relative to the checkout).
 EVIDENCE_SOURCE_PATHS: tuple[str, ...] = (
     "src",
@@ -71,7 +75,12 @@ def _run_git(
             capture_output=True,
             text=True,
             check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"{description}: git exceeded the {_GIT_TIMEOUT_SECONDS}s budget"
+        ) from exc
     except OSError as exc:
         raise RuntimeError(f"{description}: cannot execute git ({exc})") from exc
 

@@ -1240,7 +1240,9 @@ async def _bind_published_artifact(
     return result
 
 
-async def creative_render_binding_confirm(payload: dict[str, Any], result: dict[str, Any]) -> None:
+async def creative_render_binding_confirm(
+    payload: dict[str, Any], result: dict[str, Any], *, blob_store_root: Path | None = None
+) -> None:
     """Queue confirm hook: durably commit the artifact→revision binding.
 
     Runs after the queue independently verified and atomically published the
@@ -1275,18 +1277,77 @@ async def creative_render_binding_confirm(payload: dict[str, Any], result: dict[
             "artifact_binding_failed",
             "published artifact bytes do not match the measured binding digest",
         )
-    store = SqlArtifactBindingStore()
+    from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
+
+    configured_root = blob_store_root
+    if configured_root is None:
+        context_root = result.get("_blob_store_root")
+        if isinstance(context_root, str) and context_root:
+            configured_root = Path(context_root)
+    blob_store = (
+        LocalContentAddressedBlobStore(configured_root) if configured_root is not None else None
+    )
+    store = SqlArtifactBindingStore(blob_store=blob_store)
     try:
-        await store.bind(
-            project_id=str(intent["project_id"]),
-            revision_id=str(intent["revision_id"]),
-            artifact_id=measured,
-            job_id=str(result.get("_queue_job_id") or ""),
-            artifact_kind=str(intent.get("artifact_kind") or "binary"),
-            size_bytes=int(intent.get("size_bytes") or 0),
-            artifact_version_id=intent.get("artifact_version_id") or None,
-            attempt=int(result.get("_queue_attempt") or 0),
-        )
+        project_id = str(intent["project_id"])
+        revision_id = str(intent["revision_id"])
+        job_id = str(result.get("_queue_job_id") or "")
+        fencing_token = int(result.get("_queue_attempt") or 0)
+        published_size = Path(raw_path).stat().st_size
+        passport_digest = result.get("artifact_passport_digest")
+        fence_check = result.get("_queue_fence_check")
+        if isinstance(passport_digest, str) and callable(fence_check):
+            # Verified lineage (Wave 4): the published bytes become a
+            # content-addressed AssetVersion in the blob store, and the
+            # ProjectArtifactBinding advances monotonically under the attempt
+            # fence. The verifier evidence is folded into one digest so the
+            # registration receipt is re-derivable from durable facts only.
+            import mimetypes
+
+            verifier_facts = result.get("artifact_verification")
+            if verifier_facts is None:
+                raise CreativeRenderError(
+                    "artifact_binding_failed", "verified publication has no verifier evidence"
+                )
+            verifier_digest = (
+                "sha256:"
+                + hashlib.sha256(
+                    json.dumps(verifier_facts, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+            )
+            media_type = mimetypes.guess_type(raw_path)[0] or "application/octet-stream"
+            registration = await store.register_verified_asset_version(
+                project_id=project_id,
+                revision_id=revision_id,
+                job_id=job_id,
+                attempt_id=str(result.get("_queue_attempt_id") or f"{job_id}:{fencing_token}"),
+                fencing_token=fencing_token,
+                content_sha256=measured,
+                size_bytes=published_size,
+                media_type=media_type,
+                storage_uri=raw_path,
+                verifier_digest=verifier_digest,
+                passport_id=str(result.get("artifact_passport_id") or ""),
+                passport_digest=passport_digest,
+                fence_check=fence_check,
+            )
+            result["asset_version_id"] = registration.asset_version_id
+            intent["artifact_version_id"] = registration.asset_version_id
+            intent["derived_receipt_ref"] = registration.binding.derived_receipt_ref
+        else:
+            # Compatibility for payload schemas that carry no persisted
+            # ArtifactPassport: those keep the established revision binding and
+            # are never presented as first-class AssetVersion lineage.
+            await store.bind(
+                project_id=project_id,
+                revision_id=revision_id,
+                artifact_id=measured,
+                job_id=job_id,
+                artifact_kind=str(intent.get("artifact_kind") or "binary"),
+                size_bytes=int(intent.get("size_bytes") or 0),
+                artifact_version_id=intent.get("artifact_version_id") or None,
+                attempt=fencing_token,
+            )
     except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
         raise CreativeRenderError(
             "artifact_binding_failed", f"{type(exc).__name__}: {exc}"
@@ -1800,7 +1861,9 @@ def build_creative_render_publication(artifact_root: Path) -> ArtifactPublicatio
         creative_render_finalize_callback(payload, result, artifact_root)
 
     async def _confirm(payload: dict[str, object], result: dict[str, object]) -> None:
-        await creative_render_binding_confirm(payload, result)
+        await creative_render_binding_confirm(
+            payload, result, blob_store_root=artifact_root / "asset-library"
+        )
 
     async def _retract_confirmation(payload: dict[str, object], result: dict[str, object]) -> None:
         await creative_render_binding_retract(payload, result)

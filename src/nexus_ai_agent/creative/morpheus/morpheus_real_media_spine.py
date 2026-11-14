@@ -131,8 +131,15 @@ def mux_mp4_ffmpeg(
     output_mp4: str | Path,
     fps: int = 24,
     ffmpeg_bin: str = "ffmpeg",
+    timeout: float = 120.0,
 ) -> None:
-    """Deterministic, constant frame-rate MP4 container muxing using FFmpeg."""
+    """Deterministic, constant frame-rate MP4 container muxing using FFmpeg.
+
+    ``timeout`` bounds the child process (seconds): a hung encoder is a typed
+    :class:`SpineError`, never an indefinitely blocked worker.  Rendering jobs
+    run inside a fenced attempt, so a stuck FFmpeg must fail the attempt rather
+    than hold the fence open forever.
+    """
     wav_p = Path(audio_path)
     out_p = Path(output_mp4)
     if not wav_p.is_file():
@@ -166,7 +173,10 @@ def mux_mp4_ffmpeg(
         "+faststart",
         str(out_p),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise SpineError(f"FFmpeg mux exceeded the {timeout:g}s budget for {out_p}") from exc
     if proc.returncode != 0:
         raise SpineError(f"FFmpeg mux failed with code {proc.returncode}:\n{proc.stderr}")
     if not out_p.is_file() or out_p.stat().st_size == 0:
