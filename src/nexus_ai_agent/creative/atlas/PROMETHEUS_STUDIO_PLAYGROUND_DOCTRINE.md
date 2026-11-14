@@ -1,4 +1,4 @@
-# NAGAR PROMETHEUS-ATLAS — Counterfactual Time-Travel Studio Doctrine (Waves 18-29)
+# NAGAR PROMETHEUS-ATLAS — Counterfactual Time-Travel Studio Doctrine (Waves 18-33)
 
 Status: **living** (updated with the code in the same PR).
 Owner zone: `src/nexus_ai_agent/creative/atlas/**`, `tests/creative/atlas/**`.
@@ -382,3 +382,96 @@ the `docs/` zone should (1) move this file to `docs/architecture/` (or keep it i
 place and add a stub link), (2) index it in `docs/README.md`, and (3) add the
 module-boundary rows to `docs/architecture/MODULE_MAP.md` §3. None of that is
 performed here because `docs/README.md` is off-limits in this mission.
+
+## 11. Waves 30-33 — the durable-evidence substrate
+
+Waves 18-29 produce evidence (a rendered bundle, a coverage table, a set of
+proved equations). Waves 30-33 make that evidence *durable*: an equation store
+that survives lost shards, a ledger that survives bit-rot without laundering a
+tamper, a provisioner that refuses to bless an untested capability, and a seal
+that binds a coverage measurement so it cannot be edited after the fact. All
+four reuse one JCS canonicaliser (`atlas_spine_governance.jcs_canonical_bytes`)
+and one RFC 6962 leaf convention (`0x00` leaf, `0x01` node), so their digests
+are mutually comparable.
+
+* **Wave 30** (`holographic_equation_vault.py`) — a holographic equation vault
+  over **GF(2⁸)** (primitive polynomial `0x11D`). A systematic MDS generator
+  `[I_k | P]` is built from a Vandermonde matrix, so **every** `k`-row subset is
+  invertible and any `k` of the `n = k + parity` shards reconstruct the payload
+  exactly. `audit()` proves four invariants: the MDS property, any-`k`
+  reconstruction, refusal below `k` shards, and tamper detection through the
+  shard Merkle root. Receipt schema `atlas.holographic-equation-vault/1`.
+* **Wave 31** (`self_healing_linear_ledger.py`) — an append-only evidence ledger
+  where each record is both a link in a SHA-256 hash chain and a Wave-30 MDS
+  shard set. Each shard carries its own digest, so a damaged shard is *erased*
+  rather than trusted. The seal is the discriminator: if the rebuilt record
+  hashes back to the digest already in the chain the damage was random and the
+  ledger **heals**; if it does not, the bytes were rewritten and the ledger
+  **refuses** and reports a tamper — it never launders a forgery into a pass. A
+  record with fewer than `k` readable shards is *unreadable*, never guessed.
+* **Wave 32** (`twin_taxonomy_provisioner.py`) — a capability counts as
+  delivered only when it is reachable *and* proven, so the atlas keeps two
+  taxonomies that must mirror each other: the source operators under
+  `creative/atlas/` and the evidence modules under `tests/creative/atlas/`. The
+  provisioner pairs them by the `test_<stem>` convention (with explicit
+  overrides) and refuses to bless a tree in which a source has no twin test (an
+  unproven capability) or a test names no known source (a test with nothing to
+  prove). The canonical taxonomy can be sealed into the Wave-30 vault and
+  appended to the Wave-31 ledger.
+* **Wave 33** (`pack_coverage_seal.py`) — a coverage measurement is evidence
+  only when it is *bound*: a percentage in a log can be edited after the fact.
+  The seal binds the shipped pack set, the per-pack percentages, the threshold
+  and the provenance into one canonical JCS document with a per-pack Merkle root
+  and a whole-document digest. `evaluate_pack_coverage` is the pure decision —
+  accepted only when every shipped pack has a manifest, a canonical target and
+  coverage at or above the threshold — and it preserves every refusal reason.
+  An unmeasured shipped pack is recorded at `0.0`, never dropped.
+
+### Measured evidence (Waves 30-33)
+
+| Module | Tests | Line coverage | Branch coverage |
+|---|---|---|---|
+| `holographic_equation_vault.py` | 41 | 99.3% | 95.1% |
+| `self_healing_linear_ledger.py` | 22 | 100% | 100% |
+| `twin_taxonomy_provisioner.py` | 15 | 100% | 100% |
+| `pack_coverage_seal.py` | 17 | 100% | 100% |
+
+Reproduce (from the repository root, `PYTHONPATH=src`):
+
+```bash
+COVERAGE_FILE=/tmp/.coverage_atlas pytest tests/creative/atlas \
+  --cov=nexus_ai_agent.creative.atlas --cov-branch --cov-report=term-missing -q
+```
+
+### Verification ledger (Waves 30-33)
+
+| Claim | Enforcing test | Observed |
+|---|---|---|
+| Every `k`-subset of shards reconstructs the payload (MDS) | `test_holographic_equation_vault.py` | pass |
+| Below `k` shards is refused, never guessed | `test_holographic_equation_vault.py` | pass |
+| Shard tamper is detected via the Merkle root | `test_holographic_equation_vault.py` | pass |
+| Bit-rot (≤ `parity` shards) is detected and healed | `test_self_healing_linear_ledger.py` | pass |
+| A rewrite is refused, never laundered into a pass | `test_self_healing_linear_ledger.py` | pass |
+| Fewer than `k` readable shards is unreadable | `test_self_healing_linear_ledger.py` | pass |
+| An untested source is refused | `test_twin_taxonomy_provisioner.py` | pass |
+| Orphan tests and over-provisioning are reported | `test_twin_taxonomy_provisioner.py` | pass |
+| The taxonomy seals into the vault and ledger | `test_twin_taxonomy_provisioner.py` | pass |
+| Coverage below threshold / missing manifest is refused | `test_pack_coverage_seal.py` | pass |
+| One changed pack changes the Merkle root and digest | `test_pack_coverage_seal.py` | pass |
+| The seal appends to the ledger and vault | `test_pack_coverage_seal.py` | pass |
+
+### Deferred (out-of-zone) — the pack-coverage evidence rail
+
+The `continuum-evidence` CI job measures the shipped capability packs and the
+required `test` check runs `tests/unit/test_pack_coverage_contract.py`. On this
+branch that rail is red for a reason **outside this mission's zone**: the
+branch carries `creative/packs/portrait/` and `creative/packs/scene/` (added by
+the Aethel Waves 3/4/9) with Python modules but **no `pack.manifest.json`** and
+no canonical test target, so `pack_mapping_issues` reports four findings and the
+per-pack coverage for both is `0.00%`. Fixing it means either shipping the two
+manifests and registering them in `creative/packs/runtime.COMPOSITION` +
+`continuum/pack_coverage.PACK_TEST_TARGETS`, or removing the two pack packages.
+Both touch files outside `creative/atlas/**`, so the fix is deliberately **not**
+applied here; Wave 33 instead ships the seal that binds whatever measurement the
+rail produces. Recorded so the next owner can act with the exact evidence.
+
