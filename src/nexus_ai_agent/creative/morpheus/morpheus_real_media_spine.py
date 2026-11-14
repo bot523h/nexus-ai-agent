@@ -112,7 +112,11 @@ def read_wav_pcm16(path: str | Path) -> tuple[np.ndarray, int]:
         n_frames = wf.getnframes()
         raw_bytes = wf.readframes(n_frames)
 
-    arr = np.frombuffer(raw_bytes, dtype=np.int16)
+    # Annotate explicitly: the inferred shape type of np.frombuffer differs
+    # between typeshed/numpy stub resolutions (the CI runner infers a 1-d
+    # shape, dev checkouts infer tuple[Any, ...]), and the reshape right below
+    # must type-check consistently on both.
+    arr: np.ndarray = np.frombuffer(raw_bytes, dtype=np.int16)
     if channels > 1:
         arr = arr.reshape(-1, channels)
     return arr, sample_rate
