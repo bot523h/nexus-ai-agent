@@ -2832,3 +2832,44 @@ is defined on `(project_id, artifact_id)` — never the job. Migrations
 `attempt` column, F1); architecture page
 `docs/architecture/DURABLE_PROJECT_STATE.md`; boundary law R29 in
 `docs/architecture/MODULE_MAP.md` §3.
+
+## D-0039 — `cancel` refuses a not-yet-owned (pending) row: a typed refusal, never a dequeue (task-257)
+
+**Date:** 2026-11-13 · **Status:** accepted · **Task:** `task-257-queued-cancel-semantics`
+
+**Context.** The execution contract already made `cancel` **attempt-scoped**:
+it carries the identity's fencing token and can only affect the attempt that
+token names, an unbound identity holds no cancellation authority, and a stale
+token is rejected at the queue's fenced CAS (D-0037 lineage; invariants I3/I4).
+One case was implicit rather than stated: a row that was **never reserved**
+(`pending`, `attempt = 0`) holds no attempt and therefore no fencing token. Two
+readings were possible — a typed refusal (nothing to fence, return `False`) or a
+dequeue of the unowned request — and the contract named neither.
+
+**Decision.** A not-yet-owned (`pending`) row is a **typed refusal, not a
+dequeue**. `cancel` returns `False` and mutates nothing, the same refusal a
+terminal row receives; the contract never dequeues an unowned request. The
+refusal is **idempotent** and leaves the row byte-for-byte intact (status
+`pending`, `attempt = 0`), so the row's later, independent reservation is
+unaffected and a subsequent `cancel` of *that* bound attempt behaves normally.
+This is enforced by layered guards, all already present: the backend refuses an
+unbound identity outright; a bound token must name a live attempt
+(`expected_attempt >= 1` and `attempt == expected_attempt`); and the queue's
+fenced CAS only resets `processing`/`verifying` rows.
+
+**Rejected alternatives.** (a) Cancelling a pending row by deleting it — rejected:
+cancellation must never destroy durable state or make a request vanish; a
+business request is completed or failed, never silently dequeued, and deletion
+would also break the single-authority law (only the queue's fenced CAS may
+mutate a row's lifecycle). (b) Cancelling a pending row by resetting it in place
+— rejected: the reset is a no-op for a row that is already `pending`, so it adds
+authority surface (a bare `job_id` path) with no behaviour change.
+
+**Evidence.** `tests/integration/test_execution_native_backend.py::test_cancel_never_owned_pending_row_is_a_typed_refusal`
+(an unbound identity and a bound identity with a token the row never minted both
+get `False`; the refusal is idempotent; the row is still exactly one `pending`
+row with `attempt = 0`), alongside the standing cancel matrix
+(`test_repeated_cancel_is_safe_and_idempotent`, `test_cancel_terminal_job_is_refused`,
+`test_cancel_running_job_is_fenced_and_recoverable`,
+`test_cancel_without_a_fencing_token_is_refused`). Architecture page
+`docs/architecture/EXECUTION_CORE.md` §2 states the choice and names the test.

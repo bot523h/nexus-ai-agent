@@ -170,12 +170,21 @@ class NativeLocalBackend:
         return ExecutionObservation(identity=bound, state=state, result=result, failure=failure)
 
     async def cancel(self, identity: ExecutionIdentity) -> bool:
-        # Cancellation authority is the fencing token, never a bare ``job_id``:
-        # an unbound identity (no token) is refused outright — it cannot name
-        # the execution it speaks for, so it must not mutate anything.  A
-        # bound identity cancels only its own attempt: a stale token (older
-        # attempt) is rejected at the queue's fenced CAS and can never cancel
-        # the current attempt.
+        """Cancel the in-flight attempt the identity's fencing token names.
+
+        Cancellation authority is the fencing token, never a bare ``job_id``:
+        an unbound identity (no token) is refused outright — it cannot name
+        the execution it speaks for, so it must not mutate anything.  A bound
+        identity cancels only its own attempt: a stale token (older attempt) is
+        rejected at the queue's fenced CAS and can never cancel the current
+        attempt.
+
+        A **not-yet-owned** (``pending``) row is a typed refusal, not a
+        dequeue: it holds no attempt and no fencing token, so there is nothing
+        to fence and this returns ``False`` without mutating the row (see
+        :meth:`ExecutionBackend.cancel`).  A bound token still requires a
+        *live* attempt — the queue refuses a terminal or never-reserved row.
+        """
         if identity.fencing_token is None:
             return False  # fail closed: job_id alone is not cancellation authority
         return await self._queue.cancel(identity.job_id, expected_attempt=identity.fencing_token)
