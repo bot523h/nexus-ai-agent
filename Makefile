@@ -1,4 +1,4 @@
-.PHONY: setup lint types deps audit test migrate smoke run dev-bootstrap hooks version-check board-check truth-check mutations
+.PHONY: setup lint types deps audit test test-parity migrate smoke run dev-bootstrap hooks version-check board-check truth-check mutations
 
 setup:
 	pip install -e ".[dev]"
@@ -46,6 +46,14 @@ audit:
 
 test:
 	pytest -q -m "not slow"
+
+# The same selection as `make test`/CI, run in chunks that fit on a small disk:
+# pytest's temporary root is reclaimed between chunks, and a chunk that cannot
+# fit is reported instead of poisoning the ones after it.  Use this when
+# `make test` dies with "No space left on device" — that failure mode shows up
+# as hundreds of phantom red tests, not as one.
+test-parity:
+	python scripts/ci_parity.py
 
 # Adversarial proof for the capability-pack trust plane (ADR 0006) and the
 # remote-key ingress/cache boundary: every mutation must turn its suite red.
