@@ -25,13 +25,14 @@ it reports each reason it refused, never a silent pass.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Final
 
 from nexus_ai_agent.creative.atlas.atlas_spine_governance import jcs_canonical_bytes
 from nexus_ai_agent.creative.atlas.holographic_equation_vault import HolographicEquationVault
-from nexus_ai_agent.creative.atlas.self_healing_linear_ledger import SelfHealingLinearLedger
+from nexus_ai_agent.creative.atlas.self_healing_linear_ledger import LinearEvidenceLedger
 
 __all__ = [
     "SEAL_SCHEMA",
@@ -44,6 +45,9 @@ __all__ = [
     "evaluate_pack_coverage",
     "seal_pack_coverage",
     "build_entries",
+    "entries_from_report",
+    "seal_pack_coverage_from_report",
+    "measure_pack_coverage_seal",
 ]
 
 SEAL_SCHEMA: Final[str] = "atlas.pack-coverage-seal/1"
@@ -178,7 +182,7 @@ class PackCoverageSeal:
     def digest(self) -> str:
         return _sha256(self.canonical_bytes())
 
-    def append_to_ledger(self, ledger: SelfHealingLinearLedger) -> None:
+    def append_to_ledger(self, ledger: LinearEvidenceLedger) -> None:
         ledger.append(self.canonical_bytes())
 
     def seal_into_vault(self, vault: HolographicEquationVault) -> None:
@@ -227,3 +231,97 @@ def build_entries(
         for pack in sorted(set(shipped_packs))
     ]
     return tuple(entries)
+
+
+def _shipped_pack_directories(pack_root: Path) -> tuple[str, ...]:
+    """Directories directly under ``pack_root`` that ship a ``pack.manifest.json``."""
+    return tuple(
+        sorted(
+            entry.name
+            for entry in pack_root.iterdir()
+            if entry.is_dir() and (entry / PACK_MANIFEST).is_file()
+        )
+    )
+
+
+def entries_from_report(
+    report: Any, *, pack_root: Path | None = None
+) -> tuple[PackCoverageEntry, ...]:
+    """Turn a live :class:`~nexus_ai_agent.continuum.pack_coverage.CoverageReport`
+    into seal entries, so the seal reflects a *measured* number, not a claimed one.
+
+    The shipped pack set, the manifest presence and the canonical-target presence
+    are read from the real pack tree; the per-pack percentage comes from the
+    report. A shipped pack the report did not measure is recorded at ``0.0`` and
+    refused by :func:`evaluate_pack_coverage`.
+    """
+    from nexus_ai_agent.continuum import pack_coverage as continuum
+
+    root = (pack_root or continuum.DEFAULT_PACK_ROOT).resolve()
+    shipped = _shipped_pack_directories(root)
+    measured = {pack.pack: pack.percent for pack in report.packs}
+    manifests = shipped
+    canonical_targets = tuple(continuum.PACK_TEST_TARGETS)
+    return build_entries(
+        shipped,
+        measured,
+        manifests=manifests,
+        canonical_targets=canonical_targets,
+    )
+
+
+def seal_pack_coverage_from_report(
+    report: Any,
+    *,
+    git_commit: str,
+    threshold: float = DEFAULT_COVERAGE_THRESHOLD,
+    pack_root: Path | None = None,
+) -> PackCoverageSeal:
+    """Seal a *measured* coverage report (see :func:`entries_from_report`).
+
+    The report's own acceptance is not trusted: the seal is built from the
+    measured per-pack numbers and re-evaluated against the contract, so a report
+    that was tampered with (or produced against the wrong tree) cannot yield an
+    accepted seal.
+    """
+    if not git_commit:
+        raise PackCoverageError("git_commit must be a non-empty revision")
+    entries = entries_from_report(report, pack_root=pack_root)
+    return seal_pack_coverage(entries, git_commit=git_commit, threshold=threshold)
+
+
+def measure_pack_coverage_seal(
+    *,
+    git_commit: str | None = None,
+    threshold: float = DEFAULT_COVERAGE_THRESHOLD,
+    pack_root: Path | None = None,
+    tests: Sequence[str] | None = None,
+    packs: Sequence[str] | None = None,
+    runner: Callable[..., Any] | None = None,
+) -> PackCoverageSeal:
+    """Run a real pack-coverage measurement and seal the result.
+
+    ``runner`` defaults to :func:`nexus_ai_agent.continuum.pack_coverage.measure`
+    (which runs pytest in an isolated child process); tests inject a runner so the
+    sealing path is exercised without spawning a subprocess. The commit defaults
+    to the live ``HEAD`` of the repository.
+    """
+    from nexus_ai_agent.continuum import pack_coverage as continuum
+
+    root = (pack_root or continuum.DEFAULT_PACK_ROOT).resolve()
+    measure = runner or continuum.measure
+    kwargs: dict[str, Any] = {"pack_root": root, "threshold": threshold}
+    if tests is not None:
+        kwargs["tests"] = list(tests)
+    if packs is not None:
+        kwargs["packs"] = list(packs)
+    report = measure(**kwargs)
+    commit = git_commit
+    if commit is None:
+        provenance = getattr(report, "provenance", None)
+        commit = getattr(provenance, "git_commit", None)
+    if not commit:
+        raise PackCoverageError("the measurement is not bound to a commit")
+    return seal_pack_coverage_from_report(
+        report, git_commit=str(commit), threshold=threshold, pack_root=root
+    )

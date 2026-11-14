@@ -21,12 +21,12 @@ The distinction is the seal:
   damage was random — **heal**;
 * if it does not, the bytes were rewritten — **refuse**, and report a tamper.
 
-The public surface is :class:`SelfHealingLinearLedger` with
-:meth:`~SelfHealingLinearLedger.append`,
-:meth:`~SelfHealingLinearLedger.verify` and
-:meth:`~SelfHealingLinearLedger.heal`, plus the deterministic fault-injection
-seams :meth:`~SelfHealingLinearLedger.inject_shard_fault` and
-:meth:`~SelfHealingLinearLedger.inject_tamper` used by the falsification wave.
+The public surface is :class:`LinearEvidenceLedger` with
+:meth:`~LinearEvidenceLedger.append`,
+:meth:`~LinearEvidenceLedger.verify` and
+:meth:`~LinearEvidenceLedger.heal`, plus the deterministic fault-injection
+seams :meth:`~LinearEvidenceLedger.inject_shard_fault` and
+:meth:`~LinearEvidenceLedger.inject_tamper` used by the falsification wave.
 Pure Python + stdlib, offline, deterministic.
 """
 
@@ -57,9 +57,9 @@ __all__ = [
     "LedgerError",
     "LedgerEntry",
     "LedgerIntegrityReport",
-    "SelfHealingReport",
+    "HealingReport",
     "LedgerAnchor",
-    "SelfHealingLinearLedger",
+    "LinearEvidenceLedger",
 ]
 
 LEDGER_SCHEMA: Final[str] = "atlas.self-healing-linear-ledger/1"
@@ -138,7 +138,7 @@ class LedgerEntry:
 
 @dataclass(frozen=True)
 class LedgerIntegrityReport:
-    """What :meth:`SelfHealingLinearLedger.verify` found, without changing it."""
+    """What :meth:`LinearEvidenceLedger.verify` found, without changing it."""
 
     entry_count: int
     chain_intact: bool
@@ -167,7 +167,7 @@ class LedgerIntegrityReport:
 
 
 @dataclass(frozen=True)
-class SelfHealingReport:
+class HealingReport:
     """The outcome of a heal pass over the ledger."""
 
     healed_seqs: tuple[int, ...]
@@ -225,7 +225,7 @@ class LedgerAnchor:
         return cls(seq_count=count, head_digest=head)
 
 
-class SelfHealingLinearLedger:
+class LinearEvidenceLedger:
     """An append-only hash-chained ledger whose records rebuild from parity.
 
     Construct with ``k`` data shards and ``parity`` extra shards; the ledger
@@ -371,7 +371,7 @@ class SelfHealingLinearLedger:
 
     # --- healing --------------------------------------------------------------
 
-    def heal(self, *, anchor: LedgerAnchor | None = None) -> SelfHealingReport:
+    def heal(self, *, anchor: LedgerAnchor | None = None) -> HealingReport:
         """Repair every bit-rotted record that still has ``k`` readable shards.
 
         Tampered records are refused, never laundered: a record whose readable
@@ -402,7 +402,7 @@ class SelfHealingLinearLedger:
                 seq=entry.seq, data=rebuilt, prev_digest=entry.prev_digest
             )
             healed.append(entry.seq)
-        return SelfHealingReport(
+        return HealingReport(
             healed_seqs=tuple(healed),
             tampered_seqs=tuple(tampered),
             unreadable_seqs=tuple(unreadable),
@@ -478,7 +478,7 @@ class SelfHealingLinearLedger:
         return _sha256(self.canonical_bytes())
 
     @classmethod
-    def from_dict(cls, document: dict[str, Any]) -> SelfHealingLinearLedger:
+    def from_dict(cls, document: dict[str, Any]) -> LinearEvidenceLedger:
         if document.get("schema") != LEDGER_SCHEMA:
             raise LedgerError(f"unknown ledger schema {document.get('schema')!r}")
         ledger = cls(k=int(document["k"]), parity=int(document["parity"]))
@@ -508,7 +508,7 @@ class SelfHealingLinearLedger:
     @classmethod
     def load_from_disk(
         cls, log_path: str | Path, anchor_path: str | Path | None = None
-    ) -> SelfHealingLinearLedger:
+    ) -> LinearEvidenceLedger:
         """Reload a ledger from its JSONL log and, if given, verify the anchor."""
         log = Path(log_path)
         if not log.is_file():

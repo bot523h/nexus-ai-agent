@@ -21,6 +21,7 @@ as the equations themselves.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -29,18 +30,20 @@ from typing import Any, Final
 
 from nexus_ai_agent.creative.atlas.atlas_spine_governance import jcs_canonical_bytes
 from nexus_ai_agent.creative.atlas.holographic_equation_vault import HolographicEquationVault
-from nexus_ai_agent.creative.atlas.self_healing_linear_ledger import SelfHealingLinearLedger
+from nexus_ai_agent.creative.atlas.self_healing_linear_ledger import LinearEvidenceLedger
 
 __all__ = [
     "TAXONOMY_SCHEMA",
     "SOURCE_KIND",
     "TEST_KIND",
     "DEFAULT_MAX_TESTS_PER_SOURCE",
+    "SOURCE_MODULE_PACKAGE",
     "TaxonomyError",
     "Taxon",
     "TwinPair",
     "TwinTaxonomy",
     "TwinTaxonomyReport",
+    "SemanticTwinReport",
     "TwinTaxonomyProvisioner",
     "scan_python_taxonomy",
 ]
@@ -50,6 +53,8 @@ SOURCE_KIND: Final[str] = "source"
 TEST_KIND: Final[str] = "test"
 #: A source covered by more than this many tests is flagged as over-provisioned.
 DEFAULT_MAX_TESTS_PER_SOURCE: Final[int] = 4
+#: The dotted package the source taxonomy lives in; a twin test must import it.
+SOURCE_MODULE_PACKAGE: Final[str] = "nexus_ai_agent.creative.atlas"
 
 
 class TaxonomyError(ValueError):
@@ -136,6 +141,59 @@ class TwinTaxonomyReport:
 
 
 @dataclass(frozen=True)
+class SemanticTwinReport:
+    """The AST-level verdict: does each twin test *actually exercise* its source?
+
+    A file-name match (``test_x.py`` for ``x.py``) is a naming convention, not
+    evidence. This report parses each paired test module and requires it to
+    import the source's module (``from nexus_ai_agent.creative.atlas import x``
+    or an ``import nexus_ai_agent.creative.atlas.x``), so a hollow test that
+    proves nothing is refused rather than blessed.
+    """
+
+    checked_pairs: int
+    non_exercising_tests: tuple[str, ...]
+    unreadable_tests: tuple[str, ...]
+
+    @property
+    def semantic_ok(self) -> bool:
+        return not self.non_exercising_tests and not self.unreadable_tests
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "checked_pairs": self.checked_pairs,
+            "non_exercising_tests": list(self.non_exercising_tests),
+            "unreadable_tests": list(self.unreadable_tests),
+            "semantic_ok": self.semantic_ok,
+        }
+
+
+def _imported_atlas_modules(source: ast.Module) -> set[str]:
+    """The atlas submodule stems a test module imports (directly or via ``from``)."""
+    found: set[str] = set()
+    for node in ast.walk(source):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if node.module == SOURCE_MODULE_PACKAGE:
+                found.update(alias.name for alias in node.names)
+            elif node.module.startswith(SOURCE_MODULE_PACKAGE + "."):
+                found.add(node.module[len(SOURCE_MODULE_PACKAGE) + 1 :].split(".")[0])
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith(SOURCE_MODULE_PACKAGE + "."):
+                    found.add(alias.name[len(SOURCE_MODULE_PACKAGE) + 1 :].split(".")[0])
+    return found
+
+
+def _exercises_source(test_path: Path, source_stem: str) -> bool:
+    """Whether the test module at ``test_path`` imports the ``source_stem`` module."""
+    try:
+        source = ast.parse(test_path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return False
+    return source_stem in _imported_atlas_modules(source)
+
+
+@dataclass(frozen=True)
 class TwinTaxonomy:
     """The provisioned twin taxonomy: canonical bytes, digest and sealing helpers."""
 
@@ -161,7 +219,7 @@ class TwinTaxonomy:
             statement = "->".join([pair.source.taxon_id, *(t.taxon_id for t in pair.tests)])
             vault.seal(f"twin:{pair.source.taxon_id}", 32, statement)
 
-    def append_to_ledger(self, ledger: SelfHealingLinearLedger) -> None:
+    def append_to_ledger(self, ledger: LinearEvidenceLedger) -> None:
         """Append the canonical taxonomy to a self-healing ledger."""
         ledger.append(self.canonical_bytes())
 
@@ -193,6 +251,33 @@ class TwinTaxonomyProvisioner:
         self._overrides: dict[str, tuple[str, ...]] = {}
         for source, extra in (overrides or {}).items():
             self._overrides[_stem(source)] = _as_sorted_unique(extra)
+
+    @classmethod
+    def from_workspace(
+        cls,
+        source_dir: str | Path,
+        test_dir: str | Path,
+        *,
+        overrides: Mapping[str, Sequence[str]] | None = None,
+        max_tests_per_source: int = DEFAULT_MAX_TESTS_PER_SOURCE,
+    ) -> TwinTaxonomyProvisioner:
+        """Provision a twin taxonomy for a real workspace directory pair.
+
+        Scans ``source_dir`` and ``test_dir`` for their module stems (skipping
+        ``__init__`` and private helpers) and returns a provisioner bound to the
+        *actual* tree, so the taxonomy reflects the shipped files rather than a
+        caller-supplied name list.
+        """
+        sources = scan_python_taxonomy(source_dir)
+        tests = scan_python_taxonomy(test_dir)
+        return cls(
+            sources,
+            tests,
+            overrides=overrides,
+            max_tests_per_source=max_tests_per_source,
+            source_root=str(source_dir),
+            test_root=str(test_dir),
+        )
 
     @property
     def sources(self) -> tuple[str, ...]:
@@ -254,6 +339,31 @@ class TwinTaxonomyProvisioner:
             untested_sources=tuple(sorted(untested)),
             orphan_tests=orphan,
             overprovisioned_sources=tuple(sorted(overprovisioned)),
+        )
+
+    def verify_semantic(self) -> SemanticTwinReport:
+        """AST-verify that every paired twin test actually imports its source.
+
+        Reads each paired test file under ``test_root`` and requires it to import
+        the source module; a name-only pairing that never touches the source is
+        reported as non-exercising, so the twin taxonomy cannot be satisfied by
+        an empty test file that merely shares a stem.
+        """
+        taxonomy = self.provision()
+        non_exercising: list[str] = []
+        unreadable: list[str] = []
+        for pair in taxonomy.pairs:
+            for test in pair.tests:
+                test_path = Path(self._test_root) / f"{test.taxon_id}.py"
+                if not test_path.is_file():
+                    unreadable.append(test.taxon_id)
+                    continue
+                if not _exercises_source(test_path, pair.source.taxon_id):
+                    non_exercising.append(test.taxon_id)
+        return SemanticTwinReport(
+            checked_pairs=len(taxonomy.pairs),
+            non_exercising_tests=tuple(sorted(non_exercising)),
+            unreadable_tests=tuple(sorted(unreadable)),
         )
 
 

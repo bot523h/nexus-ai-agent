@@ -120,7 +120,7 @@ def test_seal_validates_git_commit() -> None:
 
 def test_seal_appends_to_the_ledger() -> None:
     seal = pcs.seal_pack_coverage(_clean(), git_commit="abc123")
-    ledger = shl.SelfHealingLinearLedger(k=2, parity=1)
+    ledger = shl.LinearEvidenceLedger(k=2, parity=1)
     seal.append_to_ledger(ledger)
     assert ledger.payload(0) == seal.canonical_bytes()
     assert ledger.verify().intact is True
@@ -167,3 +167,99 @@ def test_verdict_serialises() -> None:
 def test_public_surface_matches_declared_exports() -> None:
     for name in pcs.__all__:
         assert hasattr(pcs, name), name
+
+
+# --- live measurement sealing (Wave 34 hardening) ----------------------------------
+
+from nexus_ai_agent.continuum import pack_coverage as continuum  # noqa: E402
+
+
+class _FakePack:
+    def __init__(self, pack: str, percent: float) -> None:
+        self.pack = pack
+        self.percent = percent
+
+
+class _FakeProvenance:
+    def __init__(self, commit: str | None) -> None:
+        self.git_commit = commit
+
+
+class _FakeReport:
+    def __init__(self, packs: list[tuple[str, float]], commit: str | None = "deadbeef") -> None:
+        self.packs = tuple(_FakePack(name, percent) for name, percent in packs)
+        self.provenance = _FakeProvenance(commit)
+
+
+def test_entries_from_report_reads_the_real_pack_tree() -> None:
+    report = _FakeReport([("slideshow", 99.0), ("caption", 98.0)])
+    entries = pcs.entries_from_report(report)
+    shipped = {entry.pack for entry in entries}
+    # the real tree ships exactly the six builtin packs (portrait/scene have no manifest)
+    assert "slideshow" in shipped and "caption" in shipped
+    assert all(entry.has_manifest for entry in entries)
+    by_pack = {entry.pack: entry for entry in entries}
+    assert by_pack["slideshow"].coverage_percent == 99.0
+    assert by_pack["slideshow"].has_canonical_target is True
+
+
+def test_entries_from_report_zeroes_an_unmeasured_shipped_pack() -> None:
+    report = _FakeReport([("slideshow", 99.0)])  # caption/audio/... unmeasured
+    entries = pcs.entries_from_report(report)
+    by_pack = {entry.pack: entry for entry in entries}
+    assert by_pack["audio"].coverage_percent == 0.0
+
+
+def test_seal_from_report_refuses_a_tampered_report() -> None:
+    # a report claiming acceptance with sub-threshold packs must not yield a pass
+    report = _FakeReport([("slideshow", 10.0), ("caption", 10.0), ("audio", 10.0)])
+    seal = pcs.seal_pack_coverage_from_report(report, git_commit="abc123")
+    assert seal.to_dict()["accepted"] is False
+    assert any("audio" in reason for reason in seal.to_dict()["reasons"])
+
+
+def test_seal_from_report_is_canonical_for_a_clean_measurement() -> None:
+    packs = [(name, 99.0) for name in continuum.PACK_TEST_TARGETS]
+    report = _FakeReport(packs)
+    seal = pcs.seal_pack_coverage_from_report(report, git_commit="abc123")
+    assert seal.to_dict()["accepted"] is True
+    assert seal.git_commit == "abc123"
+
+
+def test_seal_from_report_validates_the_commit() -> None:
+    with pytest.raises(pcs.PackCoverageError):
+        pcs.seal_pack_coverage_from_report(_FakeReport([("slideshow", 99.0)]), git_commit="")
+
+
+def test_measure_pack_coverage_seal_uses_the_injected_runner() -> None:
+    packs = [(name, 99.0) for name in continuum.PACK_TEST_TARGETS]
+    calls: dict[str, object] = {}
+
+    def runner(**kwargs: object) -> _FakeReport:
+        calls.update(kwargs)
+        return _FakeReport(packs)
+
+    seal = pcs.measure_pack_coverage_seal(runner=runner)
+    assert seal.to_dict()["accepted"] is True
+    assert seal.git_commit == "deadbeef"  # taken from the report provenance
+    assert calls["threshold"] == pcs.DEFAULT_COVERAGE_THRESHOLD
+
+
+def test_measure_pack_coverage_seal_forwards_tests_and_packs() -> None:
+    calls: dict[str, object] = {}
+
+    def runner(**kwargs: object) -> _FakeReport:
+        calls.update(kwargs)
+        return _FakeReport([("slideshow", 99.0)])
+
+    pcs.measure_pack_coverage_seal(runner=runner, tests=["tests/x.py"], packs=["slideshow"])
+    assert calls["tests"] == ["tests/x.py"]
+    assert calls["packs"] == ["slideshow"]
+
+
+def test_measure_pack_coverage_seal_refuses_an_unbound_report() -> None:
+    def runner(**kwargs: object) -> _FakeReport:
+        return _FakeReport([("slideshow", 99.0)], commit=None)
+
+    with pytest.raises(pcs.PackCoverageError):
+        pcs.measure_pack_coverage_seal(runner=runner)

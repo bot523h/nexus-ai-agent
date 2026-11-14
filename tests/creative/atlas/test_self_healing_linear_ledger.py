@@ -16,8 +16,8 @@ import pytest
 from nexus_ai_agent.creative.atlas import self_healing_linear_ledger as shl
 
 
-def _ledger(k: int = 4, parity: int = 2, count: int = 5) -> shl.SelfHealingLinearLedger:
-    ledger = shl.SelfHealingLinearLedger(k=k, parity=parity)
+def _ledger(k: int = 4, parity: int = 2, count: int = 5) -> shl.LinearEvidenceLedger:
+    ledger = shl.LinearEvidenceLedger(k=k, parity=parity)
     for i in range(count):
         ledger.append(f"evidence-record-{i}")
     return ledger
@@ -28,13 +28,13 @@ def _ledger(k: int = 4, parity: int = 2, count: int = 5) -> shl.SelfHealingLinea
 
 def test_construction_validates_parameters() -> None:
     with pytest.raises(shl.LedgerError):
-        shl.SelfHealingLinearLedger(k=0)
+        shl.LinearEvidenceLedger(k=0)
     with pytest.raises(shl.LedgerError):
-        shl.SelfHealingLinearLedger(k=2, parity=0)
+        shl.LinearEvidenceLedger(k=2, parity=0)
 
 
 def test_empty_ledger_is_intact() -> None:
-    ledger = shl.SelfHealingLinearLedger()
+    ledger = shl.LinearEvidenceLedger()
     report = ledger.verify()
     assert report.entry_count == 0
     assert report.intact is True
@@ -55,14 +55,14 @@ def test_append_builds_a_hash_chain() -> None:
 
 
 def test_append_accepts_bytes_and_str() -> None:
-    ledger = shl.SelfHealingLinearLedger(k=2)
+    ledger = shl.LinearEvidenceLedger(k=2)
     entry = ledger.append(b"\x00\x01\x02")
     assert entry.length == 3
     assert ledger.append("text") is ledger.entries[1]
 
 
 def test_append_refuses_non_bytes() -> None:
-    ledger = shl.SelfHealingLinearLedger()
+    ledger = shl.LinearEvidenceLedger()
     with pytest.raises(shl.LedgerError):
         ledger.append(42)  # type: ignore[arg-type]
 
@@ -198,7 +198,7 @@ def test_canonical_bytes_and_head_digest_are_deterministic() -> None:
 def test_round_trip_through_dict() -> None:
     ledger = _ledger()
     ledger.inject_shard_fault(1, 2, bit=4)
-    restored = shl.SelfHealingLinearLedger.from_dict(ledger.to_dict())
+    restored = shl.LinearEvidenceLedger.from_dict(ledger.to_dict())
     assert restored.head_digest == ledger.head_digest
     assert restored.k == ledger.k
     assert restored.n == ledger.n
@@ -209,12 +209,12 @@ def test_from_dict_refuses_unknown_schema_and_disorder() -> None:
     document = _ledger(count=2).to_dict()
     document["schema"] = "nope"
     with pytest.raises(shl.LedgerError):
-        shl.SelfHealingLinearLedger.from_dict(document)
+        shl.LinearEvidenceLedger.from_dict(document)
 
     document = _ledger(count=2).to_dict()
     document["entries"].reverse()
     with pytest.raises(shl.LedgerError):
-        shl.SelfHealingLinearLedger.from_dict(document)
+        shl.LinearEvidenceLedger.from_dict(document)
 
 
 def test_entry_dict_round_trip() -> None:
@@ -288,7 +288,7 @@ def test_verify_with_anchor_detects_a_full_history_rewrite() -> None:
     anchor = shl.LedgerAnchor(seq_count=4, head_digest=ledger.head_digest)
     # an attacker rewrites the whole chain from genesis and recalculates every
     # prev_digest and digest so the internal chain still "verifies"
-    rewritten = shl.SelfHealingLinearLedger(k=4, parity=2)
+    rewritten = shl.LinearEvidenceLedger(k=4, parity=2)
     for i in range(4):
         rewritten.append(f"forged-record-{i}")
     assert rewritten.verify().chain_intact is True  # internally consistent
@@ -300,7 +300,7 @@ def test_verify_with_anchor_detects_a_full_history_rewrite() -> None:
 def test_verify_with_anchor_detects_truncation() -> None:
     ledger = _ledger(count=5)
     anchor = shl.LedgerAnchor(seq_count=5, head_digest=ledger.head_digest)
-    truncated = shl.SelfHealingLinearLedger(k=4, parity=2)
+    truncated = shl.LinearEvidenceLedger(k=4, parity=2)
     for i in range(3):
         truncated.append(f"evidence-record-{i}")
     assert truncated.verify(anchor=anchor).intact is False
@@ -309,7 +309,7 @@ def test_verify_with_anchor_detects_truncation() -> None:
 def test_heal_with_anchor_reports_not_intact_after_a_rewrite() -> None:
     ledger = _ledger(count=3)
     anchor = shl.LedgerAnchor(seq_count=3, head_digest=ledger.head_digest)
-    forged = shl.SelfHealingLinearLedger(k=4, parity=2)
+    forged = shl.LinearEvidenceLedger(k=4, parity=2)
     for i in range(3):
         forged.append(f"forged-{i}")
     report = forged.heal(anchor=anchor)
@@ -341,7 +341,7 @@ def test_save_and_load_from_disk_round_trips(tmp_path: Path) -> None:
     anchor_path = tmp_path / "ledger.anchor.json"
     anchor = ledger.save_to_disk(log, anchor_path)
     assert log.is_file() and anchor_path.is_file()
-    restored = shl.SelfHealingLinearLedger.load_from_disk(log, anchor_path)
+    restored = shl.LinearEvidenceLedger.load_from_disk(log, anchor_path)
     assert restored.head_digest == ledger.head_digest
     assert anchor.head_digest == ledger.head_digest
     assert restored.payload(2) == b"evidence-record-2"
@@ -353,33 +353,33 @@ def test_load_from_disk_refuses_a_ledger_that_disagrees_with_the_anchor(tmp_path
     anchor_path = tmp_path / "ledger.anchor.json"
     ledger.save_to_disk(log, anchor_path)
     # forge a shorter ledger and re-anchor the log, but keep the original anchor
-    forged = shl.SelfHealingLinearLedger(k=4, parity=2)
+    forged = shl.LinearEvidenceLedger(k=4, parity=2)
     for i in range(3):
         forged.append(f"evidence-record-{i}")
     log.write_text(json.dumps(forged.to_dict()), encoding="utf-8")
     with pytest.raises(shl.LedgerError):
-        shl.SelfHealingLinearLedger.load_from_disk(log, anchor_path)
+        shl.LinearEvidenceLedger.load_from_disk(log, anchor_path)
 
 
 def test_load_from_disk_refuses_missing_files(tmp_path: Path) -> None:
     with pytest.raises(shl.LedgerError):
-        shl.SelfHealingLinearLedger.load_from_disk(tmp_path / "missing.jsonl")
+        shl.LinearEvidenceLedger.load_from_disk(tmp_path / "missing.jsonl")
     ledger = _ledger(count=2)
     log = tmp_path / "ledger.jsonl"
     ledger.save_to_disk(log, tmp_path / "a.json")
     with pytest.raises(shl.LedgerError):
-        shl.SelfHealingLinearLedger.load_anchor(tmp_path / "missing.anchor.json")
+        shl.LinearEvidenceLedger.load_anchor(tmp_path / "missing.anchor.json")
 
 
 def test_load_from_disk_refuses_a_non_json_log(tmp_path: Path) -> None:
     log = tmp_path / "ledger.jsonl"
     log.write_text("{not json", encoding="utf-8")
     with pytest.raises(shl.LedgerError):
-        shl.SelfHealingLinearLedger.load_from_disk(log)
+        shl.LinearEvidenceLedger.load_from_disk(log)
 
 
 def test_load_anchor_refuses_a_non_json_anchor(tmp_path: Path) -> None:
     anchor_path = tmp_path / "ledger.anchor.json"
     anchor_path.write_text("{not json", encoding="utf-8")
     with pytest.raises(shl.LedgerError):
-        shl.SelfHealingLinearLedger.load_anchor(anchor_path)
+        shl.LinearEvidenceLedger.load_anchor(anchor_path)

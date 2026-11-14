@@ -8,6 +8,8 @@ directory scanner.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from nexus_ai_agent.creative.atlas import holographic_equation_vault as hv
@@ -136,7 +138,7 @@ def test_taxonomy_seals_into_the_vault() -> None:
 
 def test_taxonomy_appends_to_the_ledger() -> None:
     taxonomy = _provisioner().provision()
-    ledger = shl.SelfHealingLinearLedger(k=2, parity=1)
+    ledger = shl.LinearEvidenceLedger(k=2, parity=1)
     taxonomy.append_to_ledger(ledger)
     assert len(ledger) == 1
     assert ledger.payload(0) == taxonomy.canonical_bytes()
@@ -162,3 +164,91 @@ def test_report_and_pair_serialise() -> None:
 def test_public_surface_matches_declared_exports() -> None:
     for name in tt.__all__:
         assert hasattr(tt, name), name
+
+
+# --- semantic (AST) twin verification (Wave 34 hardening) ---------------------------
+
+
+def _write_pair(root: Path, source_stem: str, test_body: str) -> None:
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    (root / "tests").mkdir(parents=True, exist_ok=True)
+    (root / "src" / f"{source_stem}.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (root / "tests" / f"test_{source_stem}.py").write_text(test_body, encoding="utf-8")
+
+
+def test_verify_semantic_accepts_a_test_that_imports_its_source(tmp_path: Path) -> None:
+    body = (
+        "from nexus_ai_agent.creative.atlas import alpha\n\n\n"
+        "def test_x():\n    assert alpha.VALUE == 1\n"
+    )
+    _write_pair(tmp_path, "alpha", body)
+    provisioner = tt.TwinTaxonomyProvisioner.from_workspace(tmp_path / "src", tmp_path / "tests")
+    report = provisioner.verify_semantic()
+    assert report.semantic_ok is True
+    assert report.checked_pairs == 1
+
+
+def test_verify_semantic_refuses_a_hollow_name_only_test(tmp_path: Path) -> None:
+    _write_pair(tmp_path, "alpha", "def test_nothing():\n    assert True\n")
+    provisioner = tt.TwinTaxonomyProvisioner.from_workspace(tmp_path / "src", tmp_path / "tests")
+    report = provisioner.verify_semantic()
+    assert report.semantic_ok is False
+    assert report.non_exercising_tests == ("test_alpha",)
+
+
+def test_verify_semantic_accepts_a_dotted_import(tmp_path: Path) -> None:
+    _write_pair(
+        tmp_path,
+        "beta",
+        "import nexus_ai_agent.creative.atlas.beta as beta\n",
+    )
+    provisioner = tt.TwinTaxonomyProvisioner.from_workspace(tmp_path / "src", tmp_path / "tests")
+    assert provisioner.verify_semantic().semantic_ok is True
+
+
+def test_verify_semantic_reports_an_unreadable_test(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_alpha.py").write_text(
+        "from nexus_ai_agent.creative.atlas import alpha\n", encoding="utf-8"
+    )
+    provisioner = tt.TwinTaxonomyProvisioner(
+        ["alpha"], ["test_alpha"], test_root=str(tmp_path / "missing")
+    )
+    report = provisioner.verify_semantic()
+    assert report.semantic_ok is False
+    assert report.unreadable_tests == ("test_alpha",)
+
+
+def test_imported_atlas_modules_ignores_unrelated_imports() -> None:
+    import ast
+
+    module = ast.parse("import os\nfrom collections import OrderedDict\n")
+    assert tt._imported_atlas_modules(module) == set()
+
+
+def test_semantic_twin_report_serialises() -> None:
+    report = tt.SemanticTwinReport(
+        checked_pairs=2, non_exercising_tests=("test_x",), unreadable_tests=()
+    )
+    assert report.to_dict() == {
+        "checked_pairs": 2,
+        "non_exercising_tests": ["test_x"],
+        "unreadable_tests": [],
+        "semantic_ok": False,
+    }
+
+
+# --- workspace provisioning (Wave 34 hardening) ------------------------------------
+
+
+def test_from_workspace_scans_the_real_directories(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "src" / "alpha.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "src" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "src" / "_private.py").write_text("y = 1\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_alpha.py").write_text("x = 1\n", encoding="utf-8")
+    provisioner = tt.TwinTaxonomyProvisioner.from_workspace(tmp_path / "src", tmp_path / "tests")
+    assert provisioner.sources == ("alpha",)
+    assert provisioner.tests == ("test_alpha",)
+    assert provisioner.report().provisioned is True
