@@ -40,6 +40,7 @@ dependencies = [
     "arabic-reshaper>=3.0",
     "python-bidi>=0.4",
     "pillow>=10.0",
+    "av>=14,<19",  # Wave 4/14: post-disk PyAV verification of media artifacts (spine)
     "beautifulsoup4>=4.12",
     "psutil>=5.9",
     "litellm>=1.74,<2",  # multi-provider routing chain (Ollama/Groq/Gemini/OpenRouter)

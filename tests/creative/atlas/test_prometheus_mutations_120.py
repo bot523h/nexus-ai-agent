@@ -733,7 +733,7 @@ MUTANTS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "nexus_ai_agent/creative/atlas/prometheus_verifier_and_governance.py",
-        'mp4_matches = file_digests[receipt.mp4_path] == expected',
+        "mp4_matches = file_digests[receipt.mp4_path] == expected",
         "mp4_matches = True",
         "tests/creative/atlas/test_prometheus_verifier_and_governance.py",
     ),

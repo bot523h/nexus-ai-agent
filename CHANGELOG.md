@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fix — integrated-tree CI closure (session `arena/750b78f5-nexus-ai-agent`)
+
+- **MORPHEUS's media spine needed its PyAV dependency declared.** The Wave-4/14
+  spine (`morpheus_real_media_spine.py`) imports `av` unconditionally at module
+  scope, but PyAV was declared nowhere — a bare `.`/`.[dev]` install therefore
+  red'd collection of the two MORPHEUS campaign test files (exit 2) on every
+  clean runner, while local checkouts that happened to carry a transitive `av`
+  stayed green. `av>=14,<19` is now a core dependency (wheels are self-contained),
+  and `deptry src` passes with no ignores. Also: ruff `I001`/`E501` findings in
+  the Wave-3 AETHEL registry tests fixed, and the prometheus mutation campaign's
+  MP4-digest anchor re-pointed at the renamed `mp4_matches` local after the
+  Wave-3 empty-digest fail-closed change removed the original anchor.
+
 ### Fix — artifact-binding ownership fence (task-282 Slice 2, F1; session `fix/binding-ownership-fence-20261107`)
 
 - **A superseded execution could leave orphan durable provenance.** The

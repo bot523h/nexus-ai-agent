@@ -318,6 +318,8 @@ def test_pack_registry_registers_fourteen_and_is_idempotent() -> None:
 def test_pack_delegate_fails_closed_without_kernel() -> None:
     from nexus_ai_agent.creative.packs.scene.operations import (
         CODE_REQUIRES_SCENE_KERNEL,
+    )
+    from nexus_ai_agent.creative.packs.scene.operations import (
         build_scene_registry as pack_build,
     )
     from nexus_ai_agent.creative.studio.models import CommandValidationError

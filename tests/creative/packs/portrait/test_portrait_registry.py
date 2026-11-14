@@ -183,7 +183,9 @@ class _StubKernel:
 
 
 def test_pack_registry_registers_eleven_and_is_idempotent() -> None:
-    from nexus_ai_agent.creative.packs.portrait.operations import build_portrait_registry as pack_build
+    from nexus_ai_agent.creative.packs.portrait.operations import (
+        build_portrait_registry as pack_build,
+    )
     from nexus_ai_agent.creative.packs.portrait.operations import register_portrait_operations
 
     reg = pack_build()
@@ -197,6 +199,8 @@ def test_pack_registry_registers_eleven_and_is_idempotent() -> None:
 def test_pack_delegate_fails_closed_without_kernel() -> None:
     from nexus_ai_agent.creative.packs.portrait.operations import (
         CODE_REQUIRES_PORTRAIT_KERNEL,
+    )
+    from nexus_ai_agent.creative.packs.portrait.operations import (
         build_portrait_registry as pack_build,
     )
     from nexus_ai_agent.creative.studio.models import CommandValidationError
@@ -209,12 +213,17 @@ def test_pack_delegate_fails_closed_without_kernel() -> None:
 
 
 def test_pack_delegate_delegates_to_injected_kernel() -> None:
-    from nexus_ai_agent.creative.packs.portrait.operations import build_portrait_registry as pack_build
+    from nexus_ai_agent.creative.packs.portrait.operations import (
+        build_portrait_registry as pack_build,
+    )
 
     reg = pack_build()
     spec = reg.get_spec("portrait.eyeblink_synthesis")
     kernel = _StubKernel()
-    ctx = make_context({"image_id": "i", "eye_mask_id": "m", "phase": 0.5, "_images": {}}, portrait_kernel=kernel)
+    ctx = make_context(
+        {"image_id": "i", "eye_mask_id": "m", "phase": 0.5, "_images": {}},
+        portrait_kernel=kernel,
+    )
     out = spec.handler(make_project(), ctx)
     assert out.output == {"sentinel": True}
     assert kernel.calls and kernel.calls[0][0] == "portrait.eyeblink_synthesis"
