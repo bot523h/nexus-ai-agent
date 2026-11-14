@@ -31,6 +31,11 @@ Isolation guarantees (each is tested in
   (an atomic rename) crosses into ``final_root``.
 * **Cleanup / quarantine** — a finished or failed attempt is removed or moved
   aside, never left to be mistaken for a published artifact.
+* **Bounded retention** — the ``_quarantine`` forensic trees are kept by
+  default; an operator may opt into an age/size bound
+  (:class:`QuarantineRetentionPolicy`) and :class:`QuarantineRetention` prunes
+  them through the same :class:`WorkspaceFilesystem` boundary, journaling every
+  decision and refusing a symlinked tree rather than following it.
 
 The mutation primitives (create/rename/remove) are the additive, generic
 capabilities of :class:`nexus_ai_agent.tools.filesystem_policy.WorkspaceFilesystem`;
@@ -45,11 +50,23 @@ from __future__ import annotations
 import os
 import re
 import stat
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from nexus_ai_agent.tools.filesystem_policy import FilesystemBoundaryError, WorkspaceFilesystem
 
-__all__ = ["AttemptStaging", "StagingBoundaryError"]
+__all__ = [
+    "AttemptStaging",
+    "QuarantineDecision",
+    "QuarantineRetention",
+    "QuarantineRetentionPolicy",
+    "StagingBoundaryError",
+]
+
+#: The single reserved sub-directory name quarantine trees live under.
+_QUARANTINE_DIR = "_quarantine"
 
 #: A single path component must be a conservative token: no separators, no
 #: traversal, no NUL.  This is deliberately stricter than a filesystem allows.
@@ -287,3 +304,189 @@ class AttemptStaging:
         except (FilesystemBoundaryError, OSError) as exc:
             raise StagingBoundaryError(str(exc)) from exc
         return self.root / "_quarantine" / self.job_id / f"{self.attempt_id}.{component}"
+
+
+# --------------------------------------------------------------------------- #
+# Bounded retention for the _quarantine forensic trees
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class QuarantineRetentionPolicy:
+    """An operator-declared bound on the ``_quarantine`` trees.
+
+    **Keep is the default.**  With no bound declared (``max_age_seconds`` and
+    ``max_total_bytes`` both ``None``) nothing is ever removed — quarantine is
+    forensic evidence, and silently deleting it would be worse than growth.
+
+    ``max_age_seconds`` bounds a tree by the age of its *newest* entry (so an
+    actively-quarantined tree is not pruned mid-write); ``max_total_bytes``
+    bounds the aggregate size of the whole quarantine namespace, pruning
+    oldest-first until the total is within budget.  A tree is removed when it
+    breaches *either* bound.  The policy is inert unless explicitly constructed
+    and passed to :class:`QuarantineRetention` — there is no ambient default.
+    """
+
+    max_age_seconds: float | None = None
+    max_total_bytes: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.max_age_seconds is not None and self.max_age_seconds < 0:
+            raise ValueError("max_age_seconds must be non-negative")
+        if self.max_total_bytes is not None and self.max_total_bytes < 0:
+            raise ValueError("max_total_bytes must be non-negative")
+
+    @property
+    def enabled(self) -> bool:
+        return self.max_age_seconds is not None or self.max_total_bytes is not None
+
+
+@dataclass(frozen=True)
+class QuarantineDecision:
+    """One journaled retention decision for a single quarantine tree."""
+
+    job_id: str
+    tree: str
+    size_bytes: int
+    age_seconds: float
+    removed: bool
+    reason: str
+
+
+def _default_clock() -> float:
+    return time.time()
+
+
+class QuarantineRetention:
+    """Prune the ``_quarantine`` trees under a staging root, boundary-safely.
+
+    Every deletion goes through the ONE filesystem security boundary
+    (:class:`WorkspaceFilesystem`): a symlinked quarantine root, job directory,
+    or tree is *refused* (``StagingBoundaryError``), never followed, so a
+    retention sweep can never delete a byte outside the declared staging root.
+    Each visited tree yields exactly one :class:`QuarantineDecision`, so a
+    removal is never silent.
+    """
+
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        policy: QuarantineRetentionPolicy | None = None,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        self.root = Path(root).expanduser().resolve(strict=False)
+        self.policy = policy if policy is not None else QuarantineRetentionPolicy()
+        self._clock = clock if clock is not None else _default_clock
+        self._fs = WorkspaceFilesystem(self.root)
+
+    def _tree_entries(self) -> list[tuple[str, str, int, float]]:
+        """Return ``(job_id, tree_name, size_bytes, newest_mtime)`` per tree.
+
+        Absence of the quarantine root is not an error (nothing to prune); a
+        symlinked component anywhere in the path is refused.
+        """
+        if not self.root.exists():
+            return []
+        if not (self.root / _QUARANTINE_DIR).exists():
+            return []
+        # The quarantine root itself must not be a symlink.
+        _assert_no_symlink_components(self.root, (_QUARANTINE_DIR,))
+        try:
+            job_ids = self._fs.list_names(_QUARANTINE_DIR)
+        except FilesystemBoundaryError as exc:
+            raise StagingBoundaryError(str(exc)) from exc
+        trees: list[tuple[str, str, int, float]] = []
+        for job_id in job_ids:
+            _safe_component(job_id, field_name="quarantine job_id")
+            job_rel = f"{_QUARANTINE_DIR}/{job_id}"
+            _assert_no_symlink_components(self.root, (_QUARANTINE_DIR, job_id))
+            try:
+                tree_names = self._fs.list_names(job_rel)
+            except FilesystemBoundaryError as exc:
+                raise StagingBoundaryError(str(exc)) from exc
+            for name in tree_names:
+                _safe_component(name, field_name="quarantine tree")
+                tree_rel = f"{job_rel}/{name}"
+                _assert_no_symlink_components(self.root, (_QUARANTINE_DIR, job_id, name))
+                size, newest = self._measure(tree_rel)
+                trees.append((job_id, name, size, newest))
+        return trees
+
+    def _measure(self, tree_rel: str) -> tuple[int, float]:
+        """Sum sizes and find the newest mtime of a tree, without following symlinks."""
+        total = 0
+        newest = 0.0
+        base = self.root / tree_rel
+        pending = [base]
+        while pending:
+            directory = pending.pop()
+            try:
+                entries = list(os.scandir(directory))
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    if entry.is_symlink():
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                    newest = max(newest, info.st_mtime)
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        total += info.st_size
+                except OSError:
+                    continue
+        if newest == 0.0 and base.exists():
+            newest = base.stat().st_mtime
+        return total, newest
+
+    def prune(self) -> list[QuarantineDecision]:
+        """Apply the policy and return one journaled decision per tree."""
+        trees = self._tree_entries()
+        now = self._clock()
+        decisions: list[QuarantineDecision] = []
+        # Age bound: a tree whose newest entry is older than the bound is removed.
+        survivors: list[tuple[str, str, int, float]] = []
+        for job_id, name, size, newest in trees:
+            age = max(0.0, now - newest)
+            if self.policy.max_age_seconds is not None and age > self.policy.max_age_seconds:
+                self._remove(job_id, name)
+                decisions.append(QuarantineDecision(job_id, name, size, age, True, "age_exceeded"))
+            else:
+                survivors.append((job_id, name, size, newest))
+        # Size bound: prune oldest-first until the aggregate is within budget.
+        if self.policy.max_total_bytes is not None:
+            total = sum(size for _job, _name, size, _newest in survivors)
+            # Oldest = smallest newest-mtime.
+            for job_id, name, size, newest in sorted(survivors, key=lambda t: t[3]):
+                if total <= self.policy.max_total_bytes:
+                    break
+                age = max(0.0, now - newest)
+                self._remove(job_id, name)
+                total -= size
+                decisions.append(
+                    QuarantineDecision(job_id, name, size, age, True, "size_budget_exceeded")
+                )
+        # Every surviving tree gets an explicit keep decision (never silent).
+        removed = {(d.job_id, d.tree) for d in decisions if d.removed}
+        for job_id, name, size, newest in trees:
+            if (job_id, name) in removed:
+                continue
+            decisions.append(
+                QuarantineDecision(job_id, name, size, max(0.0, now - newest), False, "retained")
+            )
+        return decisions
+
+    def _remove(self, job_id: str, name: str) -> None:
+        tree_rel = f"{_QUARANTINE_DIR}/{job_id}/{name}"
+        _assert_no_symlink_components(self.root, (_QUARANTINE_DIR, job_id, name))
+        try:
+            self._fs.remove_tree(tree_rel)
+        except FilesystemBoundaryError as exc:
+            raise StagingBoundaryError(str(exc)) from exc
+        # A removed tree leaves an empty job directory behind; prune it too so
+        # the namespace does not accumulate empty directories.
+        try:
+            if not self._fs.list_names(f"{_QUARANTINE_DIR}/{job_id}"):
+                self._fs.remove_tree(f"{_QUARANTINE_DIR}/{job_id}")
+        except FilesystemBoundaryError:
+            pass

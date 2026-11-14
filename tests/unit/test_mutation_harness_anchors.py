@@ -164,7 +164,9 @@ def test_execution_core_mutations_anchor_exactly_once(
             if count != 1:
                 drift[f"{probe.name}:{Path(target).name}"] = count
     assert drift == {}, f"execution-core anchors must occur exactly once: {drift}"
-    assert len(execution_core["PROBES"]) == 25
+    # 27 after the task-262 quarantine-retention probes (operator-bound switch +
+    # journal completeness) joined the M1–M25 execution-core closure (was 25).
+    assert len(execution_core["PROBES"]) == 27
 
 
 def test_execution_core_pins_pythonpath_to_the_tree_under_mutation(

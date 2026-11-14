@@ -4483,6 +4483,53 @@
       }
     },
     {
+      "task": "task-262-quarantine-retention",
+      "title": "Bounded retention for _quarantine forensic trees",
+      "title_fa": "نگهداری محدود برای درخت‌های پزشکی قانونی _quarantine",
+      "why_fa": "quarantine داده را برای همیشه نگه می‌دارد؛ در تولید رشد بدون حد می‌شود.",
+      "zone": "execution-core",
+      "priority": "P3",
+      "status": "active_in_review",
+      "scope": "Bound the _quarantine forensic trees so a long-running sidecar cannot grow without limit. Add an explicit, opt-in operator retention policy (default: keep everything) that prunes quarantine trees by age and/or total size, reusing the ONE filesystem security boundary (WorkspaceFilesystem) for every deletion and refusing symlinked or escaping paths, and journaling each prune decision (kept/removed) so a deletion is auditable and never silent.",
+      "acceptance_criteria": [
+        "age/size-bounded retention with an explicit operator switch (default: keep)",
+        "deletion is boundary-safe (same WorkspaceFilesystem rules) and journaled",
+        "tests: malicious retention paths cannot escape the root"
+      ],
+      "evidence_required": [
+        "tests/unit/test_execution_staging.py covers: default keep (no policy), age bound, size bound, combined bounds, symlinked quarantine tree refusal, and a journal of kept/removed decisions",
+        "exact commands + observed results in the PR body; `python scripts/agent_board.py check --files <changed> --branch <branch>` exits 0 with every source readable",
+        "mutation probe: disabling the operator switch (or the boundary check) turns the new test RED, restoring it returns GREEN with the tree byte-identical"
+      ],
+      "prerequisites": [
+        "task-254-execution-core-v1"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/execution/staging.py",
+        "tests/unit/test_execution_staging.py"
+      ],
+      "agent_branch": "arena/task-262-quarantine-retention",
+      "claimed_at": "2026-11-12T08:43:33Z",
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "generation": 1,
+      "note": "",
+      "pr": 336,
+      "evidence": {
+        "pr_url": "https://github.com/bot523h/nexus-ai-agent/pull/336",
+        "head_sha": "34a093fb",
+        "commands": [
+          "python3 -m ruff check . -> All checks passed!",
+          "python3 -m ruff format --check . -> 973 files already formatted",
+          "python3 -m mypy src -> 6 pre-existing environmental import-not-found errors, 0 in changed files",
+          "PYTHONPATH=src python3 -m pytest -q tests/unit/test_execution_staging.py -> 62 passed",
+          "python3 scripts/execution_core_mutations.py -> 27/27 mutations caught",
+          "python3 scripts/agent_board.py check --files <changed> --branch arena/task-262-quarantine-retention -> exit 0"
+        ],
+        "not_proven": "full suite (pytest -q -m 'not slow') not run in this 30-min window; execution-core-mutations CI job not yet green on this head"
+      }
+    },
+    {
       "task": "task-269-cognition-quality-evaluation",
       "title": "Cognition quality evaluation harness",
       "title_fa": "هارنس ارزیابی کیفیت شناخت Nagar",

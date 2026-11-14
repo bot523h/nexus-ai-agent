@@ -18,12 +18,18 @@ Attempt ids are the real ``attempt_<hex>`` form minted by
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import pytest
 
 from nexus_ai_agent.execution import staging as staging_module
-from nexus_ai_agent.execution.staging import AttemptStaging, StagingBoundaryError
+from nexus_ai_agent.execution.staging import (
+    AttemptStaging,
+    QuarantineRetention,
+    QuarantineRetentionPolicy,
+    StagingBoundaryError,
+)
 
 ATTEMPT_1 = "attempt_1a2b3c"
 ATTEMPT_2 = "attempt_9f8e7d"
@@ -489,3 +495,142 @@ def test_publish_after_cleanup_wraps_missing_source_parent_as_staging_error(
     with pytest.raises(StagingBoundaryError):
         staging.publish(staging.staging_dir / "missing.bin", "artifact.bin")
     assert not (final / "artifact.bin").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Bounded retention for the _quarantine trees (task-262)
+#
+# Keep is the default; an operator opts into an age and/or size bound, and every
+# sweep goes through the same WorkspaceFilesystem boundary, refusing a symlinked
+# tree rather than following it, and journaling one decision per tree.
+# --------------------------------------------------------------------------- #
+def _quarantine_tree(root: Path, job_id: str, attempt: str, payload: bytes) -> Path:
+    staging = AttemptStaging(root, job_id=job_id, attempt_id=attempt)
+    staging.write("a.bin", payload)
+    return staging.quarantine("failed")
+
+
+def _aged_tree(root: Path, job_id: str, attempt: str, *, age_seconds: float) -> Path:
+    """Quarantine a tree, then backdate its mtime by ``age_seconds``."""
+    tree = _quarantine_tree(root, job_id, attempt, b"forensic-bytes")
+    old = time.time() - age_seconds
+    for path in [tree, *tree.rglob("*")]:
+        os.utime(path, (old, old))
+    return tree
+
+
+def test_retention_defaults_to_keep_everything(tmp_path: Path) -> None:
+    """No policy => nothing is removed, and every tree is journaled as retained."""
+    root = tmp_path / "staging_root"
+    tree = _aged_tree(root, "job-1", ATTEMPT_1, age_seconds=10**7)
+    decisions = QuarantineRetention(root).prune()
+    assert [(d.job_id, d.tree, d.removed, d.reason) for d in decisions] == [
+        ("job-1", f"{ATTEMPT_1}.failed", False, "retained")
+    ]
+    assert tree.exists(), "the default policy must never delete forensic evidence"
+
+
+def test_retention_policy_is_inert_without_a_bound() -> None:
+    policy = QuarantineRetentionPolicy()
+    assert policy.enabled is False
+    assert QuarantineRetentionPolicy(max_age_seconds=1).enabled is True
+    assert QuarantineRetentionPolicy(max_total_bytes=1).enabled is True
+    with pytest.raises(ValueError):
+        QuarantineRetentionPolicy(max_age_seconds=-1)
+    with pytest.raises(ValueError):
+        QuarantineRetentionPolicy(max_total_bytes=-1)
+
+
+def test_retention_age_bound_removes_only_the_old_tree(tmp_path: Path) -> None:
+    root = tmp_path / "staging_root"
+    old = _aged_tree(root, "job-old", ATTEMPT_1, age_seconds=10_000)
+    fresh = _aged_tree(root, "job-fresh", ATTEMPT_2, age_seconds=1)
+    decisions = QuarantineRetention(
+        root, policy=QuarantineRetentionPolicy(max_age_seconds=100)
+    ).prune()
+    by_job = {d.job_id: d for d in decisions}
+    assert by_job["job-old"].removed is True
+    assert by_job["job-old"].reason == "age_exceeded"
+    assert by_job["job-fresh"].removed is False
+    assert not old.exists() and fresh.exists()
+    # the pruned job directory is cleaned up too (no empty dir accumulates)
+    assert not (root / "_quarantine" / "job-old").exists()
+
+
+def test_retention_size_bound_prunes_oldest_first(tmp_path: Path) -> None:
+    root = tmp_path / "staging_root"
+    old = _aged_tree(root, "job-old", ATTEMPT_1, age_seconds=10_000)
+    fresh = _aged_tree(root, "job-fresh", ATTEMPT_2, age_seconds=1)
+    one = sum(p.stat().st_size for p in old.rglob("*") if p.is_file())
+    # A budget that fits exactly one tree forces the oldest out and keeps the rest.
+    decisions = QuarantineRetention(
+        root, policy=QuarantineRetentionPolicy(max_total_bytes=one)
+    ).prune()
+    removed = {d.job_id for d in decisions if d.removed}
+    assert removed == {"job-old"}, "the oldest tree is pruned first"
+    assert not old.exists() and fresh.exists()
+
+
+def test_retention_size_bound_keeps_everything_within_budget(tmp_path: Path) -> None:
+    root = tmp_path / "staging_root"
+    tree = _aged_tree(root, "job-1", ATTEMPT_1, age_seconds=5)
+    size = sum(p.stat().st_size for p in tree.rglob("*") if p.is_file())
+    decisions = QuarantineRetention(
+        root, policy=QuarantineRetentionPolicy(max_total_bytes=size + 1000)
+    ).prune()
+    assert [d.removed for d in decisions] == [False]
+    assert tree.exists()
+
+
+def test_retention_journal_records_every_tree_removed_or_kept(tmp_path: Path) -> None:
+    root = tmp_path / "staging_root"
+    _aged_tree(root, "job-old", ATTEMPT_1, age_seconds=10_000)
+    _aged_tree(root, "job-fresh", ATTEMPT_2, age_seconds=1)
+    decisions = QuarantineRetention(
+        root, policy=QuarantineRetentionPolicy(max_age_seconds=100)
+    ).prune()
+    assert len(decisions) == 2, "one decision per tree: removal is never silent"
+    assert {d.reason for d in decisions} == {"age_exceeded", "retained"}
+    assert all(isinstance(d.size_bytes, int) and d.size_bytes > 0 for d in decisions)
+
+
+def test_retention_on_a_root_without_quarantine_is_a_noop(tmp_path: Path) -> None:
+    root = tmp_path / "staging_root"
+    root.mkdir()
+    assert QuarantineRetention(root).prune() == []
+    assert QuarantineRetention(tmp_path / "absent").prune() == []
+
+
+def test_retention_refuses_a_symlinked_quarantine_root(tmp_path: Path) -> None:
+    """A symlinked ``_quarantine`` is refused, never followed (nothing escapes)."""
+    outside = _outside(tmp_path)
+    root = tmp_path / "staging_root"
+    root.mkdir()
+    os.symlink(outside, root / "_quarantine")
+    retention = QuarantineRetention(root, policy=QuarantineRetentionPolicy(max_age_seconds=0))
+    with pytest.raises(StagingBoundaryError):
+        retention.prune()
+    assert (outside / "marker").read_bytes() == b"outside"
+
+
+def test_retention_refuses_a_symlinked_quarantine_job_directory(tmp_path: Path) -> None:
+    outside = _outside(tmp_path)
+    root = tmp_path / "staging_root"
+    (root / "_quarantine").mkdir(parents=True)
+    os.symlink(outside, root / "_quarantine" / "job-1")
+    retention = QuarantineRetention(root, policy=QuarantineRetentionPolicy(max_age_seconds=0))
+    with pytest.raises(StagingBoundaryError):
+        retention.prune()
+    assert (outside / "marker").read_bytes() == b"outside"
+
+
+def test_retention_never_deletes_through_a_symlinked_tree(tmp_path: Path) -> None:
+    """A symlinked tree leaf is skipped by measurement and refused on removal."""
+    outside = _outside(tmp_path)
+    root = tmp_path / "staging_root"
+    tree = _aged_tree(root, "job-1", ATTEMPT_1, age_seconds=10_000)
+    os.symlink(outside, tree / "escape")  # a symlink planted inside the tree
+    retention = QuarantineRetention(root, policy=QuarantineRetentionPolicy(max_age_seconds=0))
+    retention.prune()
+    assert (outside / "marker").read_bytes() == b"outside", "the symlink target is untouched"
+    assert not tree.exists(), "the real tree is removed"
