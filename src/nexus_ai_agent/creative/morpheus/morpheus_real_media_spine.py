@@ -25,6 +25,8 @@ import av
 import numpy as np
 from PIL import Image
 
+from nexus_ai_agent.creative.slideshow.ffmpeg import resolve_ffmpeg_bin
+
 # 13 Canonical Morpheus Omnia Physical Waves / Laws
 MORPHEUS_OMNIA_WAVES: Final[tuple[str, ...]] = (
     "WAVE_01_3DMM_SUBSPACE_LOCK",
@@ -130,7 +132,7 @@ def mux_mp4_ffmpeg(
     audio_path: str | Path,
     output_mp4: str | Path,
     fps: int = 24,
-    ffmpeg_bin: str = "ffmpeg",
+    ffmpeg_bin: str | None = None,
     timeout: float = 120.0,
 ) -> None:
     """Deterministic, constant frame-rate MP4 container muxing using FFmpeg.
@@ -139,7 +141,16 @@ def mux_mp4_ffmpeg(
     :class:`SpineError`, never an indefinitely blocked worker.  Rendering jobs
     run inside a fenced attempt, so a stuck FFmpeg must fail the attempt rather
     than hold the fence open forever.
+
+    ``ffmpeg_bin`` is *resolved*, never assumed: the encoder comes from
+    :func:`nexus_ai_agent.creative.slideshow.ffmpeg.resolve_ffmpeg_bin`, the
+    one place that owns the ladder (explicit argument → ``NEXUS_FFMPEG_BIN`` →
+    ``PATH`` → the ``imageio-ffmpeg`` wheel).  A literal ``"ffmpeg"`` default
+    would bypass that ladder and turn a deployment that ships only the wheel
+    into a ``FileNotFoundError`` from ``subprocess`` instead of a resolved
+    encoder.
     """
+    resolved_bin = resolve_ffmpeg_bin(ffmpeg_bin)
     wav_p = Path(audio_path)
     out_p = Path(output_mp4)
     if not wav_p.is_file():
@@ -147,7 +158,7 @@ def mux_mp4_ffmpeg(
     out_p.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        ffmpeg_bin,
+        resolved_bin,
         "-y",
         "-loglevel",
         "error",
