@@ -119,6 +119,8 @@ placeholder text.
 | [ops/b2-storage.md](ops/b2-storage.md) | Backblaze B2 blob tier (preferred for DB backups): setup, scoped key, fail-closed rules, rotation. |
 | [ops/COLOR_LANE.md](ops/COLOR_LANE.md) | Color/exposure lane runbook: EV→filter mapping, hard contracts, FFmpeg-free validation, troubleshooting. |
 | [ops/PACK_RUNTIME.md](ops/PACK_RUNTIME.md) | Unified pack runtime (wave 5): composition, activation gate, op-gap ledger, composition checklist for new packs. |
+| [ops/CREATIVE_RUNTIME.md](ops/CREATIVE_RUNTIME.md) | Creative runtime truth (session 2): execution semantics, multi-segment assembly, availability, OTIO status, perf baseline. |
+| [ops/COLOR_DELIVERY_HANDOFF_2026-09-24.md](ops/COLOR_DELIVERY_HANDOFF_2026-09-24.md) | Handoff: color.3 + export_otio delegation patches, blocked on PR#33 (prepare-only). |
 | [ops/RUNBOOK_HARDENING.md](ops/RUNBOOK_HARDENING.md) | Runbook hardening pass (wave-4 step 8): boundary conditions, failure modes, operator knobs. |
 | [ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md](ops/KNOWLEDGE_RETRIEVAL_RUNBOOK.md) | Knowledge retrieval runbook: configuration, status meanings, recovery (corrupt store, interrupted run, root rotation), safety notes. |
 

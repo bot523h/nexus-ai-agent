@@ -1,0 +1,72 @@
+{
+  "manifest_schema": "nexus.capability-pack.v1",
+  "package_id": "nexus.vision.portrait",
+  "version": "1.0.0",
+  "display_name": "Local portrait analysis and beauty retouch operations (contract substrate)",
+  "download_size_mb": 180.0,
+  "capabilities": [
+    "portrait.detect_landmarks",
+    "portrait.smooth_skin",
+    "portrait.retouch_blemish",
+    "portrait.relight_face",
+    "portrait.whiten_teeth",
+    "portrait.correct_gaze",
+    "portrait.enhance_eyes",
+    "portrait.mask_hair",
+    "portrait.background_blur",
+    "portrait.stabilize_face"
+  ],
+  "runtime": {
+    "native": {
+      "adapter_id": "nagar.local.onnx.portrait.v1",
+      "sandbox": "process_isolated",
+      "network_required": false
+    },
+    "browser": {
+      "preferred": "onnx_webgpu",
+      "fallback": "onnx_wasm_simd",
+      "worker_required": true
+    }
+  },
+  "permissions": [
+    "read_project_video_frames",
+    "write_timeline_layers",
+    "write_derived_video_assets",
+    "write_derived_mask_assets"
+  ],
+  "network_policy": {
+    "upload_media": false,
+    "runtime_network": false,
+    "pack_update": "optional_signed_download"
+  },
+  "hardware_requirements": {
+    "minimum_ram_mb": 2048,
+    "recommended_ram_mb": 4096,
+    "minimum_cpu_threads": 2,
+    "gpu": {
+      "optional": true,
+      "webgpu": true,
+      "features": ["shader-f16"]
+    },
+    "disk_free_mb": 500
+  },
+  "artifacts": [],
+  "resource_budget": {
+    "max_resident_model_mb": 250,
+    "max_audio_minutes_in_memory": 0.5,
+    "max_preview_resolution": "1280x720"
+  },
+  "compatibility": {
+    "min_nagar_version": "3.10.0",
+    "protocol_version": "nagar.command.v1",
+    "state_schema": "nagar.state.v1"
+  },
+  "security": {
+    "signature_algorithm": "ed25519",
+    "signature": "base64:placeholder-signed-manifest",
+    "trusted_publisher": "nagar-core",
+    "allow_arbitrary_native_code": false,
+    "allow_arbitrary_wasm_imports": false
+  },
+  "external_binaries": []
+}
