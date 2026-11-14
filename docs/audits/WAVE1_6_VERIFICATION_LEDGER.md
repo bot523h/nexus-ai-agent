@@ -359,16 +359,29 @@ against it too: 44 + 11 passed. One module
 shared database and passes alone (5 passed) — order-sensitivity of a shared-database
 test, recorded here rather than hidden.
 
-**6.3.2 What is still red, and why it is not this branch.** After the fixes the audit
-reported 3 blocking advisories, all in `soupsieve 2.10` (a transitive of
+**6.3.2 Two discrepancies this closeout does not explain away.**
+
+*Soupsieve.* Locally, after the cryptography fix, `scripts/dependency_audit.py`
+reports 3 blocking advisories in `soupsieve 2.10` (a transitive of
 `beautifulsoup4`): `CVE-2026-126190/126191/126193`. They cannot be honestly accepted —
 the gate's `no-fix-released` path requires an empty `fix_versions` list and pip-audit
-reports 3.0.2/4.0.0, while the index still tops out at 2.10 (verified with
-`pip index versions soupsieve`), so no installed version fixes them and no acceptable
-one exists. The dependency closure for `soupsieve` is **identical** to `main`'s and to
-PR #343's (no pin for it changed on this branch), so these advisories red any run made
-today, including on `main`. Accepting them would need a security review, which this
-closeout does not perform — so they are documented, not silenced.
+reports 3.0.2/4.0.0, while the index tops out at 2.10 (`pip index versions soupsieve`).
+**The CI job nevertheless went green** on `a0eb95b` with the same `pyproject.toml`, so
+CI's advisory view and this sandbox's `pip-audit 2.10.1` disagree about those three
+entries; the closure is identical (no `soupsieve` pin changed on this branch), so
+neither run is evidence about this branch's code. Recorded as an unresolved
+discrepancy — the local result is *not* presented as a fix, and no allow-list entry was
+added on the strength of either run.
+
+*The fifth harness job.* The same run turned `trust-mutations` red at a step the first
+run never reached: `scripts/durable_project_state_mutations.py` reported
+`33/34 killed`, with `retraction_not_token_scoped` surviving. Reproduced locally, and
+the cause is `299e931` adding a **second** enforcement point for the fencing token (a
+pre-read guard next to the delete predicate). Either point alone stops the attack, so
+the single-point mutant became *equivalent* to the original — no honest test can kill
+it. The mutant now removes both points (the harness grew multi-edit support for
+exactly this case, and says why), and the campaign is **34/34 killed** with the
+baseline green before and after.
 
 **6.3.3 The CircleCI status is unchanged by all this** (§6.1): the fixes above affect
 GitHub Actions only.
@@ -417,10 +430,11 @@ proven identical to CI's, the tests really ran, and the environment is *not* CI'
 `ci.yml` not run). It is a substitute for nothing; it is the best local signal
 available while §6.2 holds.
 
-**8.4 Three `soupsieve` advisories remain blocking.** §6.3.2: no installed version
-fixes them, the closure is identical to `main`'s, and accepting them is a security
-review this closeout does not perform. Until a fixed release exists, the
-`dependency-audit` job stays red on every branch, including `main`.
+**8.4 The local dependency audit and CI disagree about three `soupsieve`
+advisories.** §6.3.2: locally blocking, green in CI on the same `pyproject.toml`, and
+the closure is identical to `main`'s. No allow-list entry was added on the strength of
+either run — an acceptance needs a security review this closeout does not perform — so
+the discrepancy is documented as open instead of being closed by assertion.
 
 **8.5 Branch protection could not be read.** `gh api
 repos/bot523h/nexus-ai-agent/branches/main/protection` returns HTTP 403 ("Resource
