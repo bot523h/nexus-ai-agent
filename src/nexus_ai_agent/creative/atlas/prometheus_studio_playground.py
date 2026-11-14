@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-import shutil
 import subprocess
 import wave
 from dataclasses import dataclass, field
@@ -48,6 +47,7 @@ from nexus_ai_agent.creative.atlas import (
 from nexus_ai_agent.creative.atlas import (
     wasserstein_schrodinger_bridge as _wass,
 )
+from nexus_ai_agent.creative.atlas.atlas_ffmpeg import ffmpeg_binary
 from nexus_ai_agent.creative.atlas.atlas_spine_governance import jcs_canonical_bytes
 
 __all__ = [
@@ -533,7 +533,7 @@ class PrometheusStudioPlayground:
 
 
 def _ffmpeg_path() -> str | None:
-    return shutil.which("ffmpeg")
+    return ffmpeg_binary()
 
 
 def _write_stereo_wav(path: str, left: np.ndarray, right: np.ndarray, rate: int) -> int:

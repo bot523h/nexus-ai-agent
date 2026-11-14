@@ -36,7 +36,6 @@ fail-closed ATLAS governance:
 from __future__ import annotations
 
 import hashlib
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
@@ -44,6 +43,7 @@ from typing import Any, Final
 
 import numpy as np
 
+from nexus_ai_agent.creative.atlas import atlas_ffmpeg
 from nexus_ai_agent.creative.atlas import prometheus_studio_playground as _playground
 from nexus_ai_agent.creative.atlas.atlas_spine_governance import (
     AtlasArtifactPassportRecord,
@@ -304,11 +304,11 @@ class BundleVerificationReport:
 
 
 def _ffmpeg_path() -> str | None:
-    return shutil.which("ffmpeg")
+    return atlas_ffmpeg.ffmpeg_binary()
 
 
 def _ffprobe_path() -> str | None:
-    return shutil.which("ffprobe")
+    return atlas_ffmpeg.ffprobe_binary()
 
 
 def _decode_mp4_yuv420p(mp4: str, timeout: float) -> bytes:
