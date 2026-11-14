@@ -513,5 +513,10 @@ def test_verifier_ledger_require_media_violation(tmp_path: object) -> None:
     report = pvg.verify_prometheus_playground_bundle_from_disk(
         filesystem, receipt, require_media=True
     )
+    if not receipt.encoded:
+        # No encoder on this runner (or encode failed): there is no media to be
+        # missing, and the verifier correctly reports UNOBSERVED — the VIOLATED
+        # claim requires `encoded=True` (see the verifier's missing-MP4 branch).
+        pytest.skip("encoded MP4 unavailable (no FFmpeg on this runner); nothing to tamper with")
     assert report.ledger.state_of("mp4_file_digest") is pvg.LedgerState.VIOLATED
     assert report.verified is False

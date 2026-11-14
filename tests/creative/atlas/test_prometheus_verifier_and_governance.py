@@ -261,6 +261,11 @@ def test_verify_reports_unobserved_without_media(tmp_path: object) -> None:
 
 def test_verify_rejects_wrong_expected_mp4_digest(tmp_path: object) -> None:
     _playground, filesystem, compilation, _root = _compile(tmp_path)
+    # `_compile` only encodes the MP4 when FFmpeg is on PATH; on a runner without
+    # it there is no file to hash, so the wrong-digest rejection path is never
+    # exercised (the check records UNOBSERVED, not VIOLATED) and this test fails
+    # for environment reasons. Pin bytes in place so the assertion holds everywhere.
+    filesystem.write_bytes(compilation.mp4_path, b"not-the-real-mp4", create_parents=True)
     report = pvg.verify_prometheus_playground_bundle_from_disk(
         filesystem,
         compilation,
