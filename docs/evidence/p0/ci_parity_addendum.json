@@ -2,6 +2,7 @@
   "schema": "nexus-ci-parity-addendum/v1",
   "mission": "Wave 7 closeout — CI parity, benchmark discipline, and the gates on the final tree",
   "source_revision": "9da46192e472885aeab0317cf076d2e0641ec3a5",
+  "parity_run_revision": "ce46a62407175045f52cee2507ad1b368968400c",
   "measured_at_utc": "2026-11-14T19:51:00Z",
   "verification_label": "CHUNKED_SUITE_VERIFICATION_WITH_COLLECTION_EQUIVALENCE",
   "selection_marker": "not slow",
@@ -710,7 +711,8 @@
     "tests/creative/atlas was not executed here (needs ~18 GiB, 8.2 GiB free); its sources and tests are byte-identical to 4bcee33, where 1491 passed / 21 skipped / 120 mutants were killed",
     "no GitHub Actions run exists for this branch: ci.yml triggers on push only for main and v* tags, so a working branch is covered by pull_request only",
     "the CircleCI status on pushed commits is a stale external webhook; .circleci/ has never existed in any ref of this repository",
-    "branch protection could not be read with this token (HTTP 403), so the required-check policy is unverified"
+    "branch protection could not be read with this token (HTTP 403), so the required-check policy is unverified",
+    "the parity run predates the CI-run follow-up (pyproject cap, ci.yml install line and head grep, schema golden): it is bound to parity_run_revision, and the follow-up's own evidence — real PostgreSQL 16.2 contract runs and the re-run unit/architecture suites — is recorded in docs/audits/WAVE1_6_VERIFICATION_LEDGER.md §6.3"
   ],
   "honesty": {
     "fabricated_fields": [],

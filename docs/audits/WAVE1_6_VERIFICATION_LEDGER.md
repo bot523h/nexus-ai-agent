@@ -152,10 +152,13 @@ identical/rolled inputs.
 
 ## 4. Gates at the final tree
 
-Measured at `ce46a62` unless a different revision is named. The delta from
-`ce46a62` to this document's commit is **`pyproject.toml` (deptry configuration) and
-documentation only** — `git diff --stat ce46a62 <this commit> -- src tests scripts`
-is empty, so every suite result below applies to the tree as committed.
+These were the gates **before** this branch's first CI run; §6.3 then records what
+that run found and what changed. Measured at `ce46a62` unless a different revision is
+named; at that point the only delta to the ledger commit was `pyproject.toml` (deptry
+configuration) and documentation, so the suites below applied to the tree as committed.
+The CI-run follow-up in §6.3 changed `pyproject.toml`, `.github/workflows/ci.yml`, the
+PostgreSQL schema golden and one architecture sentence, and re-ran the unit and
+architecture suites — see §6.3.4 for those numbers.
 
 | Gate | Command | Result |
 |------|---------|--------|
@@ -327,6 +330,54 @@ it with a local, collection-equivalence-proven run.
 
 ---
 
+### 6.3 The first CI run on this branch: four red jobs, root-caused and fixed
+
+PR #344's first run (`43634497488`, head `85b3101`) opened the machine-checked half of
+this ledger: `main` (`deab2b3e`) and PR #343's head (`7189a8a`, run `43618529837`) were
+both fully green, so the four red jobs were **this branch's**, not pre-existing. Each
+was reproduced locally before being touched.
+
+| Job | Failing step | Root cause | Fix |
+|---|---|---|---|
+| `test (pytest -m "not slow")` | `dependency audit` | `cryptography` is a new dependency of this branch, capped `<48`; 47.0.0 carries four unaccepted advisories whose fixes are 48.0.1/49.0.0/50.0.0, so the cap could never resolve to a clean release | cap widened to `<51` (`pyproject.toml`), installed 50.0.2, 70 connect/crypto/studio tests green |
+| `dependency-audit` | same audit | same | same |
+| `trust-mutations` | `python scripts/ibpc_security_mutations.py` exit 2 | the job installs a hand-curated *minimal* set; `299e931` added `nexus_ai_agent.connect`, whose package `__init__` imports `connect.crypto` (`cryptography`) and whose provenance path canonicalises with `rfc8785`. Reproduced in a clean venv from that exact install line: `ModuleNotFoundError: No module named 'cryptography'` → collection error → pytest exit 2 → the harness correctly refused to read it as a kill | the two packages added to that install line |
+| `migrate-postgres` | `pytest tests/integration/test_checkpoint_adapter_contract.py` | `299e931` added migration `20261112connect`, which moved the Alembic head; `postgres.langgraph.json` embeds the head, so the committed golden was stale (`expected=71176645… actual=61188263…`). The same job's last step also still grepped for the old head | golden regenerated with the **human-only** CLI against a real PostgreSQL 16.2 at `20261112connect`; the stale head reference and grep in `ci.yml` updated; `docs/architecture/DATA_AND_STORAGE.md` now names the head the golden was regenerated at |
+
+**6.3.1 A real PostgreSQL was used, so one limitation shrank.** The regeneration was
+performed with `nexus checkpoints golden update --backend postgres --yes` against a
+PostgreSQL 16.2 instance (the same major version as CI's `pgvector/pgvector:pg16`
+service), created with the `pgserver` wheel because this sandbox has no Docker. The
+result is not a guessed hash: on a **fresh** database, `nexus migrate` to
+`20261112connect` followed by the contract module gave **26 passed**, including
+`test_committed_postgres_golden_matches_pg16_in_ci`; the four other PostgreSQL legs of
+the job (`test_postgres_create_all_race`, `test_postgres_single_engine`,
+`test_lifecycle_store_contract`, `test_postgres_persistence`,
+`test_knowledge_retrieval_postgres`, `test_postgres_restore_atomicity`) were run
+against it too: 44 + 11 passed. One module
+(`test_artifact_binding_postgres_concurrency`) fails when run **after** the others on a
+shared database and passes alone (5 passed) — order-sensitivity of a shared-database
+test, recorded here rather than hidden.
+
+**6.3.2 What is still red, and why it is not this branch.** After the fixes the audit
+reported 3 blocking advisories, all in `soupsieve 2.10` (a transitive of
+`beautifulsoup4`): `CVE-2026-126190/126191/126193`. They cannot be honestly accepted —
+the gate's `no-fix-released` path requires an empty `fix_versions` list and pip-audit
+reports 3.0.2/4.0.0, while the index still tops out at 2.10 (verified with
+`pip index versions soupsieve`), so no installed version fixes them and no acceptable
+one exists. The dependency closure for `soupsieve` is **identical** to `main`'s and to
+PR #343's (no pin for it changed on this branch), so these advisories red any run made
+today, including on `main`. Accepting them would need a security review, which this
+closeout does not perform — so they are documented, not silenced.
+
+**6.3.3 The CircleCI status is unchanged by all this** (§6.1): the fixes above affect
+GitHub Actions only.
+
+**6.3.4 Re-run after the fixes.** Unit + architecture suites were re-run on the patched
+tree (see the commit that carries this paragraph for the numbers), and the same gates
+listed in §4 were re-verified: ruff, `ruff format --check`, `mypy src`, `deptry .` and
+the truth doctor.
+
 ## 7. Where this work is published
 
 Pushed to `origin/arena/fd837e50-nexus-ai-agent` (the only branch this session may
@@ -353,9 +404,11 @@ And collection equivalence still *counts* its 1512 ids against the CI selection,
 the numbers in §4.2 are not silently short: the missing piece is execution, not
 coverage of the selection.
 
-**8.2 No live PostgreSQL.** `docs/evidence/p0/evidence.json` is untouched: its
-probes need a live PostgreSQL instance and this environment has none. No value in
-it was fabricated to close the gap.
+**8.2 No PostgreSQL for the P0 bundle.** `docs/evidence/p0/evidence.json` is
+untouched: its probes need a live PostgreSQL and no value was fabricated. The gap
+narrowed during §6.3 — a real PostgreSQL 16.2 (`pgserver`) was used for the schema
+golden and the `migrate-postgres` legs — but that instance is scratch-space and is
+not the P0 bundle's database, so the bundle still needs a Postgres-backed run.
 
 **8.3 The parity run is not GitHub Actions.**
 `CHUNKED_SUITE_VERIFICATION_WITH_COLLECTION_EQUIVALENCE` means: the *selection* is
@@ -364,7 +417,12 @@ proven identical to CI's, the tests really ran, and the environment is *not* CI'
 `ci.yml` not run). It is a substitute for nothing; it is the best local signal
 available while §6.2 holds.
 
-**8.4 Branch protection could not be read.** `gh api
+**8.4 Three `soupsieve` advisories remain blocking.** §6.3.2: no installed version
+fixes them, the closure is identical to `main`'s, and accepting them is a security
+review this closeout does not perform. Until a fixed release exists, the
+`dependency-audit` job stays red on every branch, including `main`.
+
+**8.5 Branch protection could not be read.** `gh api
 repos/bot523h/nexus-ai-agent/branches/main/protection` returns HTTP 403 ("Resource
 not accessible by integration") for this token, so the required-check policy is
 **not verified** here — and it is not modified either, per the directive.
