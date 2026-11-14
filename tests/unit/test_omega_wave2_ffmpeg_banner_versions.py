@@ -184,3 +184,51 @@ def test_the_stereo_layout_name_is_preserved_verbatim() -> None:
 def test_no_stream_line_parses_to_nothing() -> None:
     assert probe_banner_channels("no audio here") is None
     assert _AUDIO_STREAM_RE.search("Input #0, wav, from 'x.wav':") is None
+
+
+# --------------------------------------------------------------------------- #
+# The JSON path must agree with the banner path
+# --------------------------------------------------------------------------- #
+
+
+def test_json_channel_count_prefers_the_documented_field() -> None:
+    from nexus_ai_agent.creative.audio_engine.ffmpeg_ops import _json_channel_count
+
+    assert _json_channel_count({"channels": 1, "channel_layout": "mono"}) == 1
+    assert _json_channel_count({"channels": "2", "channel_layout": "stereo"}) == 2
+    assert _json_channel_count({"channels": 6}) == 6
+
+
+@pytest.mark.parametrize(
+    ("layout", "expected"),
+    [("mono", 1), ("stereo", 2), ("1 channels", 1), ("2 channels", 2), ("5.1(side)", 6)],
+)
+def test_json_channel_count_derives_from_the_layout_token(layout: str, expected: int) -> None:
+    """A build that omits ``channels`` must still produce a verdict."""
+    from nexus_ai_agent.creative.audio_engine.ffmpeg_ops import _json_channel_count
+
+    assert _json_channel_count({"channel_layout": layout}) == expected
+
+
+@pytest.mark.parametrize(
+    "stream",
+    [{}, {"channels": 0}, {"channels": -2}, {"channels": "many"}, {"channel_layout": "martian"}],
+)
+def test_json_channel_count_refuses_an_unprovable_shape(stream: dict) -> None:
+    from nexus_ai_agent.creative.audio_engine.ffmpeg_ops import (
+        AudioProbeError,
+        _json_channel_count,
+    )
+
+    with pytest.raises(AudioProbeError):
+        _json_channel_count(stream)
+
+
+def test_banner_and_json_agree_on_every_published_layout() -> None:
+    """Cross-probe parity: both parsers answer the same question identically."""
+    from nexus_ai_agent.creative.audio_engine.ffmpeg_ops import _json_channel_count
+
+    for token in ("mono", "stereo", "1 channels", "2 channels", "quad", "5.1", "7.1.4"):
+        banner = parse_audio_stream_channels(token)
+        assert banner is not None, token
+        assert _json_channel_count({"channel_layout": token}) == banner, token
