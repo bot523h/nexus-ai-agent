@@ -361,10 +361,44 @@ def sky_replacement_harmonization(img: np.ndarray, mask: np.ndarray, sky: np.nda
     return result.astype(np.float32)
 
 
+def _window_mean(arr: np.ndarray, window: int) -> np.ndarray:
+    """Mean of every ``window x window`` patch, via an integral image.
+
+    Two cumulative sums turn "sum the patch at every centre" into four
+    lookups per centre, so the cost is linear in the image and independent of
+    the window size (a strided ``sliding_window_view`` would re-read every
+    pixel ``window**2`` times).
+    """
+    rows, cols = arr.shape
+    if rows < window or cols < window:
+        return np.empty((0, 0), dtype=np.float32)
+    cumulative = np.cumsum(np.cumsum(arr, axis=0, dtype=np.float64), axis=1, dtype=np.float64)
+    padded = np.zeros((rows + 1, cols + 1), dtype=np.float64)
+    padded[1:, 1:] = cumulative
+
+    total = (
+        padded[window:, window:]
+        - padded[:-window, window:]
+        - padded[window:, :-window]
+        + padded[:-window, :-window]
+    )
+    return (total / float(window * window)).astype(np.float32)
+
+
 def motion_vector_flow(
     img_a: np.ndarray, img_b: np.ndarray, *, window: int = 5, max_shift: int = 8
 ) -> np.ndarray:
-    """Dense optical flow by block matching (forward search)."""
+    """Dense optical flow by block matching (forward search).
+
+    The search is the same exhaustive one — every shift in
+    ``[-max_shift, max_shift]^2`` is scored by the mean squared error of the
+    window, ties keep the first shift in ``(dy, dx)`` order, and a patch whose
+    shifted counterpart falls outside the image is not scored — but it is
+    evaluated **per shift over the whole region** instead of per pixel in Python.
+    For a 32x32 frame with ``window=5`` and ``max_shift=4`` that is 81 vectorised
+    passes instead of 81 x 1024 interpreted ones: the same result, ~2 orders of
+    magnitude fewer interpreter dispatches.
+    """
     a = validate_image(img_a)
     b = validate_image(img_b)
     if a.shape != b.shape:
@@ -374,21 +408,42 @@ def motion_vector_flow(
     h, w = ga.shape
     flow = np.zeros((h, w, 2), dtype=np.float32)
     half = window // 2
-    for y in range(half, h - half):
-        for x in range(half, w - half):
-            best: tuple[float, int, int] | None = None
-            patch_a = ga[y - half : y + half + 1, x - half : x + half + 1]
-            for dy in range(-max_shift, max_shift + 1):
-                for dx in range(-max_shift, max_shift + 1):
-                    ny, nx = y + dy, x + dx
-                    if not (half <= ny < h - half and half <= nx < w - half):
-                        continue
-                    patch_b = gb[ny - half : ny + half + 1, nx - half : nx + half + 1]
-                    err = float(np.mean((patch_a - patch_b) ** 2))
-                    if best is None or err < best[0]:
-                        best = (err, dx, dy)
-            if best is not None:
-                flow[y, x] = (best[1], best[2])
+    if h <= 2 * half or w <= 2 * half or window < 1:
+        return flow
+    # float64 while comparing: the patch means are accumulated in float64 by the
+    # integral image, and widening once here is cheaper than narrowing 81 times.
+    best_err = np.full((h, w), np.inf, dtype=np.float64)
+    for dy in range(-max_shift, max_shift + 1):
+        for dx in range(-max_shift, max_shift + 1):
+            # The centres whose own patch *and* whose shifted counterpart both sit
+            # fully inside the image.
+            y0, y1 = max(half, half - dy), min(h - half, h - half - dy)
+            x0, x1 = max(half, half - dx), min(w - half, w - half - dx)
+            if y1 <= y0 or x1 <= x0:
+                continue
+            # ``y0..y1-1`` are the *centres*; the difference array has to cover
+            # the full patch extent around them.
+            top, bottom = y0 - half, y1 + half
+            left, right = x0 - half, x1 + half
+            difference = (
+                ga[top:bottom, left:right] - gb[top + dy : bottom + dy, left + dx : right + dx]
+            )
+            err = _window_mean(difference * difference, window)
+            # The window that starts at the region's first row is centred on
+            # ``y0`` itself (the region begins a half-window *above* it).
+            centres_y = slice(y0, y0 + err.shape[0])
+            centres_x = slice(x0, x0 + err.shape[1])
+            previous = best_err[centres_y, centres_x]
+            better = err < previous
+            if not better.any():
+                continue
+            # Shifts are visited in (dy, dx) order and a later shift must be
+            # *strictly* better, which reproduces the exhaustive search's
+            # tie-break exactly.
+            best_err[centres_y, centres_x] = np.where(better, err, previous)
+            region = flow[centres_y, centres_x]
+            region[..., 0] = np.where(better, np.float32(dx), region[..., 0])
+            region[..., 1] = np.where(better, np.float32(dy), region[..., 1])
     return flow
 
 
