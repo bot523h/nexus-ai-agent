@@ -151,7 +151,13 @@ ignore_missing_imports = true
 # `deptry src` is part of `make lint` and the CI lint job: every import must be
 # a declared dependency, and every declared runtime dependency must be used.
 [tool.deptry]
-known_first_party = ["nexus_ai_agent"]
+# ``scripts/`` is deliberately not an installed namespace
+# (tests/architecture/test_scripts_import_boundary.py): each file there is a thin
+# CLI that may import its *sibling* helper modules by bare name, because a script
+# is executed from the repository root.  Those helpers are first-party files, not
+# distributions, so the two that are imported that way are declared here — the
+# alternative (a distribution per helper) would ship operator tooling as product.
+known_first_party = ["nexus_ai_agent", "security_mutation_support", "omega_media"]
 pep621_dev_dependency_groups = ["dev"]
 # llama-cpp-python's distribution name and its import name (`llama_cpp`) are not
 # derivable from one another, so deptry needs the explicit mapping to see the
@@ -182,4 +188,17 @@ DEP002 = ["asyncpg", "python-multipart", "duckduckgo-search", "langsmith"]
 # DEP003 — transitive packages imported directly, each owned by a declared
 # dependency: starlette (fastapi), httpcore (httpx), botocore (boto3),
 # psycopg_pool (psycopg[pool]).
-DEP003 = ["starlette", "httpcore", "botocore", "psycopg_pool"]
+#   packaging / yaml / langsmith → `scripts/` only (pip-audit, kubernetes and
+#   langchain-core respectively).  `deptry .` scans the whole tree; those CLIs are
+#   never imported by the shipped package, so the libraries stay transitive and
+#   the reason is recorded here instead of the paths being silently ignored.
+DEP003 = [
+    "starlette",
+    "httpcore",
+    "botocore",
+    "psycopg_pool",
+    "packaging",
+    "yaml",
+    "langsmith",
+]
+
