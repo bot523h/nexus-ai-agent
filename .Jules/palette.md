@@ -1,0 +1,3 @@
+## 2026-10-27 - Explicit Callback Pattern Handling for Telegram Inline Keyboards
+**Learning:** In python-telegram-bot, registering `CallbackQueryHandler(menu_callback, pattern=r"^lang_")` without matching `data.startswith("lang_")` inside `menu_callback` causes inline button taps to silently answer the query without editing the message or taking action. Every pattern registered to a callback handler must have a corresponding explicit branch that provides immediate visual confirmation to the user.
+**Action:** When inspecting or adding `CallbackQueryHandler` patterns, ensure `menu_callback` or equivalent handler contains explicit branch logic that updates state and edits the message with visual feedback.
