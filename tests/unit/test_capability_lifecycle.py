@@ -177,7 +177,25 @@ def test_bus_passes_experimental_pack_with_opt_in() -> None:
             ]
         }
     )
-    bus = CommandBus(project, registry=build_audio_registry(), allow_experimental=True)  # type: ignore[arg-type]
+
+    # The lifecycle gate is what this test pins: with the opt-in the command
+    # reaches the handler.  The handler then needs a real engine (audio is no
+    # longer simulated), so a minimal double is composed — the gate itself is
+    # not bypassed or weakened by that.
+    class _Engine:
+        def precheck(self, request):  # noqa: ANN001, ANN202 - test double
+            from nexus_ai_agent.application.ports.audio_engine import SourcePrecheck
+
+            return SourcePrecheck(
+                asset_id=request.asset_id, exists=False, readable=False, detail="no bytes"
+            )
+
+    bus = CommandBus(  # type: ignore[arg-type]
+        project,
+        registry=build_audio_registry(),
+        allow_experimental=True,
+        audio_engine=_Engine(),
+    )
     result = bus.dispatch(
         TypedCommand(
             command_id="c1",
@@ -186,6 +204,7 @@ def test_bus_passes_experimental_pack_with_opt_in() -> None:
         )
     )
     assert result.status == "applied"
+    assert result.output["execution_status"] == "UNAVAILABLE"
 
 
 def test_bus_passes_available_pack_without_opt_in() -> None:

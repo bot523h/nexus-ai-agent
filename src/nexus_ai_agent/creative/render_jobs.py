@@ -508,11 +508,37 @@ def _build_project(*, payload: CreativeRenderPayload, duration_us: int, sha256: 
     return project.model_copy(update={"assets": [src]})
 
 
+#: Operations whose handler calls the native audio engine.  A job that runs one
+#: of these is *given* an engine by this module (the composition root); nothing
+#: else constructs one for a dispatch, so the media root and signing key have
+#: exactly one owner.
+AUDIO_ENGINE_OPERATIONS = frozenset(
+    {"audio.detect_beats", "audio.normalize_loudness", "audio.remove_noise"}
+)
+
+
+def _audio_engine_for(operation: str | None) -> Any:  # noqa: ANN401
+    """Compose the audio engine for an engine-backed operation (else ``None``).
+
+    ``None`` is deliberate for every other operation: a state-only handler must
+    never be handed a process-spawning engine it does not need, and a caller
+    cannot smuggle one in.  When the operation *does* need an engine the engine
+    is built here; if FFmpeg is missing the engine reports ``UNAVAILABLE`` and
+    the handler answers honestly (``UNAVAILABLE``), it does not crash the job.
+    """
+    if operation not in AUDIO_ENGINE_OPERATIONS:
+        return None
+    from nexus_ai_agent.creative.audio_engine.execution import build_native_audio_engine
+
+    return build_native_audio_engine(workspace_root="", media_root="")
+
+
 def build_job_bus(
     project: Any,  # noqa: ANN401
     *,
     operation: str | None = None,
     authorizer: Any = None,  # noqa: ANN401
+    audio_engine: Any = None,  # noqa: ANN401
 ) -> Any:  # noqa: ANN401
     """The canonical, server-policy bus factory for job-side callers.
 
@@ -529,6 +555,12 @@ def build_job_bus(
     ``authorizer`` is optional: a caller that needs authority (the cognition
     slice) supplies its own trusted ``ProjectAuthorizer``; the render lane
     leaves it unset and keeps the bus's legacy no-authorizer semantics.
+
+    ``audio_engine`` is the OMEGA-02 execution seam.  It is a parameter so tests
+    and adapters can hand in a double without patching a module global, but the
+    *only* production caller (:func:`_dispatch`) passes
+    :func:`_audio_engine_for`, i.e. a real engine for the operations that need
+    one and ``None`` otherwise.
     """
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
     from nexus_ai_agent.creative.studio.bus import CommandBus
@@ -538,6 +570,7 @@ def build_job_bus(
         registry=build_runtime_registry(),
         allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
         authorizer=authorizer,
+        audio_engine=audio_engine,
     )
 
 
@@ -664,7 +697,12 @@ def _dispatch(
             ),
         )
 
-    bus = build_job_bus(project, operation=operation, authorizer=authorizer)
+    bus = build_job_bus(
+        project,
+        operation=operation,
+        authorizer=authorizer,
+        audio_engine=_audio_engine_for(operation),
+    )
     schema_version: Literal[1, 2] = 2 if canonical is not None else 1
     command = TypedCommand(
         schema_version=schema_version,
