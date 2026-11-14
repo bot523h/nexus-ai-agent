@@ -34,6 +34,33 @@ OPERATION_TIME_STRETCH = "audio.time_stretch"
 OPERATION_REMOVE_VOCAL = "audio.remove_vocal"
 OPERATION_ALIGN_MUSIC = "audio.align_music"
 
+#: The canonical audio stream lock every derived artifact is produced under, and
+#: the loudness targets the studio ships.  These are *contract constants* (data,
+#: no DSP): the engine and the pack must agree on them, and naming one here is
+#: how a pure handler can reject an unimplementable request before any process
+#: starts.  ``custom`` is not listed — a custom target must be stated in full.
+CANONICAL_STREAM_PROFILE_ID = "nagar.canonical_audio.v1"
+SUPPORTED_SAMPLE_RATES: tuple[int, ...] = (44_100, 48_000, 88_200, 96_000, 192_000)
+CANONICAL_SAMPLE_RATE = 48_000
+LOUDNESS_PROFILES: dict[str, tuple[float, float, float]] = {
+    # profile id -> (integrated LUFS, true peak dBTP, loudness range LU)
+    "ebu_r128_broadcast": (-23.0, -1.0, 11.0),
+    "nagar_streaming_preset": (-14.0, -1.0, 11.0),
+}
+#: Upper bound on the analysis a pure handler may ask for; the engine clamps to
+#: its own (bounded-memory) window, and this constant is documented there too.
+MAX_ANALYSIS_SECONDS = 600.0
+
+
+#: The outcome codes an execution-backed operation may return.  ``*_READY`` is
+#: reserved for a verified artifact; an engine that is not installed answers
+#: ``UNAVAILABLE`` with ``REQUIRES_LOCAL_MODEL``, never a fabricated success.
+EXECUTION_STATUS_READY = "READY"
+EXECUTION_STATUS_UNAVAILABLE = "UNAVAILABLE"
+CODE_REQUIRES_LOCAL_MODEL = "REQUIRES_LOCAL_MODEL"
+CODE_REQUIRES_AUDIO_ENGINE = "REQUIRES_AUDIO_ENGINE"
+CODE_REQUIRES_MEDIA_BYTES = "REQUIRES_MEDIA_BYTES"
+
 #: Stem layouts for ``audio.remove_vocal``: the source-separation policy decides
 #: how many derived stem assets the operation derives.
 StemPolicy = Literal["two_stem", "four_stem"]
@@ -97,13 +124,18 @@ class BeatGridRef(BaseModel):
 
 
 class DetectBeatsInput(BaseModel):
-    """Input payload for ``audio.detect_beats`` (Level A)."""
+    """Input payload for ``audio.detect_beats`` (Level A).
+
+    Beat detection is a *measurement*: without decoded media there is no tempo
+    to report, so the operation returns ``UNAVAILABLE`` rather than a default
+    BPM.  ``min_bpm``/``max_bpm`` bound the search window the analyser uses.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     audio_asset_id: str = Field(min_length=1)
-    min_bpm: float = Field(default=60.0, gt=0.0)
-    max_bpm: float = Field(default=200.0, gt=0.0)
+    min_bpm: float = Field(default=40.0, gt=0.0, le=300.0)
+    max_bpm: float = Field(default=240.0, gt=0.0, le=300.0)
     sensitivity: float = Field(default=0.5, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
@@ -114,21 +146,79 @@ class DetectBeatsInput(BaseModel):
 
 
 class NormalizeLoudnessInput(BaseModel):
-    """Input payload for ``audio.normalize_loudness`` (Level C)."""
+    """Input payload for ``audio.normalize_loudness`` (Level C).
+
+    The target is a **profile first**: ``nagar_streaming_preset`` (-14 LUFS) or
+    ``ebu_r128_broadcast`` (-23 LUFS), each with its true-peak ceiling and LRA.
+    -14 LUFS is a *delivery preset*, not a broadcast standard — the name says so
+    because a caller reading "streaming_master" would reasonably believe some
+    body mandates it.  Nothing does.
+    A locked profile ignores the numeric fields (a caller that pins R128 and
+    asks for -14 LUFS has stated a contradiction, and the engine refuses it);
+    ``custom`` requires all three numbers explicitly.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     audio_asset_id: str = Field(min_length=1)
-    target_lufs: float = Field(
-        default=-14.0, ge=-70.0, le=0.0, description="Target integrated loudness in LUFS."
+    profile: Literal["nagar_streaming_preset", "ebu_r128_broadcast", "custom"] = Field(
+        default="nagar_streaming_preset",
+        description="Locked loudness profile, or 'custom' with all three numbers stated.",
     )
-    true_peak_db: float = Field(
-        default=-1.0, ge=-20.0, le=0.0, description="Maximum allowed true peak in dBFS."
+    target_lufs: float | None = Field(
+        default=None, ge=-70.0, le=0.0, description="Integrated loudness (custom profile)."
+    )
+    true_peak_db: float | None = Field(
+        default=None, ge=-20.0, le=0.0, description="True peak ceiling (custom profile)."
+    )
+    target_lra_lu: float | None = Field(
+        default=None, ge=0.0, le=50.0, description="Loudness range ceiling (custom profile)."
+    )
+    two_pass: bool = Field(
+        default=True,
+        description="Two-pass loudnorm (measure, then apply). Single pass is refused.",
     )
     output_asset_id: str | None = None
     confirmed: bool = Field(
         default=False, description="Explicit user confirmation required for Level C execution."
     )
+
+    @model_validator(mode="after")
+    def _resolve_profile_numbers(self) -> NormalizeLoudnessInput:
+        """Fill the target triple from the locked profile; refuse contradictions."""
+        if self.profile != "custom":
+            locked_lufs, locked_peak, locked_lra = LOUDNESS_PROFILES[self.profile]
+            for name, given, locked in (
+                ("target_lufs", self.target_lufs, locked_lufs),
+                ("true_peak_db", self.true_peak_db, locked_peak),
+                ("target_lra_lu", self.target_lra_lu, locked_lra),
+            ):
+                if given is not None and abs(given - locked) > 1e-9:
+                    raise ValueError(
+                        f"profile {self.profile!r} locks {name}={locked:g}; "
+                        f"request asked for {given:g}"
+                    )
+            object.__setattr__(self, "target_lufs", locked_lufs)
+            object.__setattr__(self, "true_peak_db", locked_peak)
+            object.__setattr__(self, "target_lra_lu", locked_lra)
+        else:
+            missing = [
+                name
+                for name, value in (
+                    ("target_lufs", self.target_lufs),
+                    ("true_peak_db", self.true_peak_db),
+                    ("target_lra_lu", self.target_lra_lu),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError("profile 'custom' requires " + ", ".join(missing) + " explicitly")
+        if not self.two_pass:
+            raise ValueError(
+                "single-pass loudness normalization is refused: a single pass cannot "
+                "prove the output reached the target"
+            )
+        return self
 
 
 class DuckMusicInput(BaseModel):
@@ -243,3 +333,54 @@ class AlignMusicInput(BaseModel):
     target_start_us: int = Field(default=0, ge=0)
     anchor: MusicAnchor = "first_beat"
     max_shift_us: int = Field(default=500_000, ge=0, le=10_000_000)
+
+
+# ---------------------------------------------------------------------------
+# Real-analysis memory (in-process, per bus composition)
+# ---------------------------------------------------------------------------
+
+
+class DetectedBeatGrid(BaseModel):
+    """A beat grid measured from decoded media, remembered for later operations.
+
+    ``audio.beat_sync_cut`` needs a tempo.  Before OMEGA-02 it used a constant
+    (120 BPM); both the honest fix and the compatible fix is to *measure once*
+    and reuse the measurement, which is what this record is.  It is deliberately
+    not persisted in the project state: it is analysis of bytes that already
+    exist, and re-running the analysis on a new process must yield the same
+    answer for the same bytes (pinned by a test).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    audio_asset_id: str = Field(min_length=1)
+    content_sha256: str | None = None
+    tempo_bpm: float = Field(gt=0.0)
+    beat_period_us: int = Field(gt=0)
+    first_beat_us: int = Field(ge=0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    onset_count: int = Field(ge=0)
+    min_bpm: float = Field(gt=0.0)
+    max_bpm: float = Field(gt=0.0)
+    analyzer: str = "nagar.audio.beat.v2"
+
+
+def record_beat_analysis(grid: DetectedBeatGrid) -> None:
+    """Remember a measured grid for the *next* dispatch in this process."""
+    _BEAT_MEMORY[grid.audio_asset_id] = grid
+
+
+def last_beat_analysis(asset_id: str) -> DetectedBeatGrid | None:
+    """The most recent measured grid for ``asset_id`` (``None`` when unknown)."""
+    return _BEAT_MEMORY.get(asset_id)
+
+
+def clear_beat_analysis(asset_id: str | None = None) -> None:
+    """Forget one asset's (or every) remembered analysis (tests, re-ingest)."""
+    if asset_id is None:
+        _BEAT_MEMORY.clear()
+    else:
+        _BEAT_MEMORY.pop(asset_id, None)
+
+
+_BEAT_MEMORY: dict[str, DetectedBeatGrid] = {}

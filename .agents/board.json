@@ -1248,6 +1248,25 @@
         "tests/creative/speech_cinema/",
         "tests/creative/packs/color/"
       ]
+    },
+    {
+      "id": "nagar-omega-audio-engine",
+      "description": "OMEGA native audio execution plane: engine (process/workspace/ffprobe/DSP/verify/continuity), the studio port it implements, the audio pack handlers that call it, and the evidence-based lifecycle axis.",
+      "paths": [
+        "src/nexus_ai_agent/creative/audio_engine/",
+        "src/nexus_ai_agent/creative/studio/audio_engine.py",
+        "src/nexus_ai_agent/creative/studio/evidence.py",
+        "src/nexus_ai_agent/creative/studio/lifecycle.py",
+        "src/nexus_ai_agent/creative/slideshow/audio.py",
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "tests/unit/test_omega_native_engine.py",
+        "tests/unit/test_omega_audio_bus.py",
+        "tests/unit/test_omega_evidence_ladder.py",
+        "tests/unit/test_omega_continuity_assembly.py",
+        "tests/unit/test_audio_pack_evidence_paths.py",
+        "tests/unit/omega_media.py",
+        "docs/architecture/NAGAR_MATHEMATICAL_ENGINEERING_DOCTRINE.md"
+      ]
     }
   ],
   "claims": [
@@ -8679,6 +8698,48 @@
       "gates_owner": false,
       "delivered": [],
       "note": "Registered for the Hyperion branch rescue and completion work."
+    },
+    {
+      "task": "task-330-omega-forensic-hardening-stage-a",
+      "title": "OMEGA STAGE-A forensic hardening of 6915d32: verify-before-publish, recipe identity, cancellation, ffprobe JSON, lag-k tempo, loudness ordering",
+      "zone": "nagar-omega-audio-engine",
+      "priority": "P0",
+      "status": "active",
+      "scope": "Close the P0/P1 defects an independent forensic audit of commit 6915d32 found in the audio execution plane: (1) _derive published the artifact BEFORE verifying it; (2) the artifact-reuse cache keyed only on output_asset_id so a different recipe (strength 0.2 vs 0.9) returned the earlier file with reused_existing=True; (3) _derive hard-coded cancel=None into the builder so cancellation never reached FFmpeg; (4) probe parsed `ffmpeg -i` stderr instead of fail-closed ffprobe JSON; (5) _interval_candidates used np.diff(x, n=k) (a k-th finite difference, always 0 for even onsets) instead of the mean k-lag gap (t[i+k]-t[i])/k, leaving steps 2..4 dead code and octave ambiguity unmanaged; (6) loudness pass-1 measured the source before canonical channel conversion. No parallel authority is introduced: RuntimeWorkspace stays the single workspace for the engine, and DB/attempt fencing stays owned by task-282.",
+      "acceptance_criteria": [
+        "A published-but-unverified byte sequence can never be observed at the final path: verify runs on staged bytes and the destination is only created by an atomic rename after the verifier agrees.",
+        "Reusing an existing artifact requires a recipe-identity match (source hash + operation + parameters + profiles + engine version), proved by a mutation test that fails if the key drops any component.",
+        "Cancellation reaches the FFmpeg process group end to end; a cancelled run leaves no staging residue and publishes nothing.",
+        "Probe evidence comes from ffprobe JSON with fail-closed handling of missing fields and corruption markers.",
+        "The k-lag tempo candidate uses (t[i+k]-t[i])/k and its octave handling is pinned by a test that fails on the np.diff(n=k) form.",
+        "Loudness pass 1 measures the canonical stream shape, not the source layout.",
+        "ruff, mypy, architecture gates and the full unit+architecture suite stay green with only the pre-existing local-environment failures."
+      ],
+      "evidence_required": [
+        "Adversarial tests reproducing each defect before the fix",
+        "Mutation probes proving each new gate is load-bearing",
+        "Exact commands, exit codes and tested SHA"
+      ],
+      "exclusive_paths": [
+        "src/nexus_ai_agent/creative/audio_engine/",
+        "src/nexus_ai_agent/creative/slideshow/audio.py",
+        "src/nexus_ai_agent/creative/studio/audio_engine.py",
+        "src/nexus_ai_agent/creative/studio/evidence.py",
+        "src/nexus_ai_agent/creative/studio/lifecycle.py",
+        "src/nexus_ai_agent/creative/packs/audio/",
+        "tests/unit/test_omega_native_engine.py",
+        "tests/unit/test_omega_audio_bus.py",
+        "tests/unit/test_audio_pack_evidence_paths.py",
+        "docs/architecture/NAGAR_MATHEMATICAL_ENGINEERING_DOCTRINE.md"
+      ],
+      "owner_hint": "Stage-A of the MPE-CHRONOS-OMEGA mission; render_jobs.py changes are covered by the task-282-slice-2 claim and were cleared by the referee.",
+      "agent_branch": "arena/288ef95e-nexus-ai-agent",
+      "claimed_at": "2026-11-12T00:00:00Z",
+      "generation": 0,
+      "ttl_hours": 24,
+      "gates_owner": false,
+      "delivered": [],
+      "note": "Board has no create command, so the claim is registered directly by appending a schema-2 claim record."
     }
   ],
   "deferred_log": [

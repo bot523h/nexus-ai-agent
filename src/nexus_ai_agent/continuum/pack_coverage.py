@@ -55,6 +55,44 @@ from nexus_ai_agent.continuum import provenance
 PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
     "audio": (
         "tests/unit/test_audio_pack.py",
+        # OMEGA-02: the audio handlers now execute real DSP through an injected
+        # engine port, so their refusal/degenerate branches (unreadable source,
+        # no measurable tempo, an artifact that fails verification, a replayed
+        # request) are pack evidence and are measured here.
+        "tests/unit/test_audio_pack_evidence_paths.py",
+        # STAGE-A: the engine-level hardening suite drives the same pack
+        # handlers through refusal, cancellation and recipe-identity paths, so
+        # it is pack evidence and must be measured (not host-layer).
+        "tests/unit/test_omega_stage_a_hardening.py",
+        # WAVE-2: the stereo/HPSS/QC/de-esser suite drives the pack's
+        # `audio.remove_vocal` refusal and the QC surface the pack reports, so it
+        # is pack evidence.  Registering it here is what the contract requires
+        # rather than exempting it as host-layer — the exemption list is for
+        # modules that are evidence for a *host* layer, and this one is not.
+        "tests/unit/test_omega_wave2_stereo_forensic.py",
+        # WAVE-2.1: the FFmpeg banner parser decides whether the pack can read a
+        # stream at all.  On a 6.1.1 host a `None` channel count made every
+        # artifact fail closed, so this suite is pack evidence.
+        "tests/unit/test_omega_wave2_ffmpeg_banner_versions.py",
+        # The 3.10 compatibility guard covers the whole OMEGA zone, so it is
+        # evidence for every pack that zone serves; it is registered against
+        # audio, the pack it is written for.
+        "tests/unit/test_omega_wave2_py310_compat.py",
+        # WAVE-B1: the label-dependent parse fixes are load-bearing for the pack
+        # (a missed loudness line is how an artifact claims a target it missed),
+        # so the hardening suite is pack evidence rather than host-layer.
+        "tests/unit/test_omega_wave2_banner_hardening.py",
+        # WAVE-B1: staged publication is the audio artifact's lineage surface —
+        # the Merkle root and both per-segment hashes are what the pack reports
+        # as its evidence, so this suite measures the pack.
+        "tests/unit/test_audio_engine_spine_lineage.py",
+        # WAVE-B1: the tempo estimator's refusal paths decide whether the pack
+        # may report a tempo at all, so their coverage is pack evidence.
+        "tests/unit/test_audio_engine_slideshow_degenerate.py",
+        # WAVE-B2/B3: the K1-K4 cinema kernels are the pack's cinema-audio
+        # surface (HOA3 rooms, restoration, foley, Bark mastering), so their
+        # physical-invariant suite is pack evidence.
+        "tests/creative/audio_engine/test_cinema_kernels.py",
         "tests/architecture/test_audio_pack_boundary.py",
     ),
     "caption": (
@@ -109,6 +147,10 @@ HOST_LAYER_PACK_IMPORTERS: Mapping[str, str] = {
     "tests/unit/test_ibpc_security.py": (
         "IBPC security closure (nagar.ibpc, host layer): adversarial audio staging + approval "
         "identity isolation; mutation-attacked by scripts/ibpc_security_mutations.py"
+    ),
+    "tests/unit/test_omega_audio_bus.py": (
+        "OMEGA audio pack end-to-end through CommandBus with the real engine (host layer): the "
+        "pack's own handler coverage stays in its canonical targets"
     ),
 }
 
