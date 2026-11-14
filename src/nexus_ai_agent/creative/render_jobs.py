@@ -1202,7 +1202,9 @@ async def _bind_published_artifact(
     return result
 
 
-async def creative_render_binding_confirm(payload: dict[str, Any], result: dict[str, Any]) -> None:
+async def creative_render_binding_confirm(
+    payload: dict[str, Any], result: dict[str, Any], *, blob_store_root: Path | None = None
+) -> None:
     """Queue confirm hook: durably commit the artifact→revision binding.
 
     Runs after the queue independently verified and atomically published the
@@ -1237,7 +1239,12 @@ async def creative_render_binding_confirm(payload: dict[str, Any], result: dict[
             "artifact_binding_failed",
             "published artifact bytes do not match the measured binding digest",
         )
-    store = SqlArtifactBindingStore()
+    from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
+
+    blob_store = (
+        LocalContentAddressedBlobStore(blob_store_root) if blob_store_root is not None else None
+    )
+    store = SqlArtifactBindingStore(blob_store=blob_store)
     try:
         project_id = str(intent["project_id"])
         revision_id = str(intent["revision_id"])
@@ -1820,7 +1827,9 @@ def build_creative_render_publication(artifact_root: Path) -> ArtifactPublicatio
         creative_render_finalize_callback(payload, result, artifact_root)
 
     async def _confirm(payload: dict[str, object], result: dict[str, object]) -> None:
-        await creative_render_binding_confirm(payload, result)
+        await creative_render_binding_confirm(
+            payload, result, blob_store_root=artifact_root / "asset-library"
+        )
 
     async def _retract_confirmation(payload: dict[str, object], result: dict[str, object]) -> None:
         await creative_render_binding_retract(payload, result)

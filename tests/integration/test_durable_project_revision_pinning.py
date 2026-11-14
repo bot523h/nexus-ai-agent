@@ -2570,7 +2570,9 @@ def test_verified_asset_registration_is_transactional_idempotent_and_fenced(
         _commit(SqlProjectRevisionStore(), _project("asset-lineage"), parent=None)
     )
     published = pin_env / "published.mp4"
-    published.write_bytes(b"verified published bytes")
+    published.write_bytes(
+        bytes.fromhex("00000018667479706d703432000000006d70343269736f6d") + b"payload"
+    )
     store = SqlArtifactBindingStore()
     registration_kwargs = {
         "project_id": PROJECT_ID,
@@ -2590,10 +2592,14 @@ def test_verified_asset_registration_is_transactional_idempotent_and_fenced(
     registered = asyncio.run(store.register_verified_asset_version(**registration_kwargs))
     replay = asyncio.run(store.register_verified_asset_version(**registration_kwargs))
     assert replay.asset_version_id == registered.asset_version_id
-    assert replay.binding.passport_id == "passport-lineage"
-    assert replay.binding.attempt_id == "job-lineage:attempt-1"
+    assert replay.binding.passport_id == registered.binding.passport_id
+    assert replay.binding.attempt_id == registered.binding.attempt_id
+    assert replay.binding.verifier_digest is None
+    assert replay.binding.derived_receipt_ref == registered.binding.derived_receipt_ref
 
     async def assert_rows() -> None:
+        from nexus_ai_agent.creative.project_state.store import derive_persisted_lineage_receipt
+
         async with get_session() as session:
             version = await session.get(orm.AssetVersion, registered.asset_version_id)
             assert version is not None
@@ -2612,17 +2618,98 @@ def test_verified_asset_registration_is_transactional_idempotent_and_fenced(
             )
             assert binding is not None
             assert binding.artifact_version_id == registered.asset_version_id
+            receipt = await derive_persisted_lineage_receipt(
+                session,
+                artifact_id="sha256:" + registration_kwargs["content_sha256"],
+                job_id="job-lineage",
+            )
+            assert receipt.passport_id == registered.binding.passport_id
+            assert receipt.attempt_id == registered.binding.attempt_id
+            assert receipt.verifier_digest is None
+            assert receipt.derived_receipt_ref == registered.binding.derived_receipt_ref
 
     asyncio.run(assert_rows())
+
+    async def assert_blob_readback() -> None:
+        from pathlib import Path
+
+        from nexus_ai_agent.creative.assets.authz import (
+            GrantTableAuthorizer,
+            StudioAuthorizationSeam,
+        )
+        from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
+        from nexus_ai_agent.creative.assets.service import AssetLibraryService
+
+        async with get_session() as session:
+            version = await session.get(orm.AssetVersion, registered.asset_version_id)
+            assert version is not None
+            assert version.blob_key.startswith("blobs/")
+            assert not Path(version.blob_key).is_absolute()
+            blob_key = version.blob_key
+        service = AssetLibraryService(
+            blob_store=LocalContentAddressedBlobStore(pin_env / ".asset-library"),
+            authorizer=StudioAuthorizationSeam(
+                GrantTableAuthorizer({("user-1", PROJECT_ID): frozenset({"project:read"})})
+            ),
+        )
+        content = await service.read_content(
+            actor_kind="user",
+            actor_id="user-1",
+            project_id=PROJECT_ID,
+            asset_id=registered.asset_id,
+        )
+        assert content == published.read_bytes()
+        assert (
+            __import__("hashlib").sha256(content).hexdigest()
+            == registration_kwargs["content_sha256"]
+        )
+        assert blob_key.startswith("blobs/")
+
+    asyncio.run(assert_blob_readback())
+    identical_retry = asyncio.run(
+        store.register_verified_asset_version(
+            **{**registration_kwargs, "fencing_token": 2, "attempt_id": "retry-2"}
+        )
+    )
+    assert identical_retry.asset_version_id == registered.asset_version_id
+    assert identical_retry.binding.attempt == 2
+    with pytest.raises(ArtifactBindingError, match="stale"):
+        asyncio.run(store.register_verified_asset_version(**registration_kwargs))
+
+    updated_path = pin_env / "updated.mp4"
+    updated_path.write_bytes(bytes.fromhex("0000001866747970") + b"mp42" + b"updated-bytes")
+    changed_retry = asyncio.run(
+        store.register_verified_asset_version(
+            **{
+                **registration_kwargs,
+                "attempt_id": "retry-3",
+                "fencing_token": 3,
+                "storage_uri": str(updated_path),
+                "content_sha256": __import__("hashlib")
+                .sha256(updated_path.read_bytes())
+                .hexdigest(),
+                "size_bytes": updated_path.stat().st_size,
+            }
+        )
+    )
+    assert changed_retry.asset_version_id != registered.asset_version_id
+    assert changed_retry.binding.attempt == 3
+
+    async def assert_predecessor_released() -> None:
+        async with get_session() as session:
+            assert await session.get(orm.AssetVersion, registered.asset_version_id) is None
+
+    asyncio.run(assert_predecessor_released())
     with pytest.raises(ArtifactRevisionMismatch, match="digest or size"):
         asyncio.run(
             store.bind(
                 project_id=PROJECT_ID,
                 revision_id=revision.revision_id,
-                artifact_id="sha256:" + registration_kwargs["content_sha256"],
+                artifact_id="sha256:"
+                + __import__("hashlib").sha256(updated_path.read_bytes()).hexdigest(),
                 job_id="job-wrong-size",
-                size_bytes=registration_kwargs["size_bytes"] + 1,
-                artifact_version_id=registered.asset_version_id,
+                size_bytes=updated_path.stat().st_size + 1,
+                artifact_version_id=changed_retry.asset_version_id,
             )
         )
     with pytest.raises(ArtifactBindingError, match="fence"):
@@ -2632,6 +2719,31 @@ def test_verified_asset_registration_is_transactional_idempotent_and_fenced(
             )
         )
 
+    async def assert_retraction() -> None:
+        assert not await store.retract(
+            artifact_id=changed_retry.binding.artifact_id, job_id="job-lineage", attempt=2
+        )
+        assert await store.retract(
+            artifact_id=changed_retry.binding.artifact_id, job_id="job-lineage", attempt=3
+        )
+        async with get_session() as session:
+            assert (
+                await session.get(
+                    orm.ProjectArtifactBinding,
+                    (changed_retry.binding.artifact_id, "job-lineage"),
+                )
+                is None
+            )
+            assert await session.get(orm.AssetVersion, changed_retry.asset_version_id) is None
+            assert await session.get(orm.Asset, changed_retry.asset_id) is None
+            links = await session.execute(
+                select(orm.ProjectAssetLink).where(
+                    orm.ProjectAssetLink.version_id == changed_retry.asset_version_id
+                )
+            )
+            assert links.scalar_one_or_none() is None
+
+    asyncio.run(assert_retraction())
     published.write_bytes(b"tampered on disk")
     with pytest.raises(ArtifactRevisionMismatch, match="digest or size"):
         asyncio.run(store.register_verified_asset_version(**registration_kwargs))

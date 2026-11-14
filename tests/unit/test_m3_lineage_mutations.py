@@ -16,6 +16,34 @@ PACKAGE = REPO / "src" / "nexus_ai_agent"
 
 _MUTANTS = (
     (
+        "M1_retraction_token_validation",
+        Path("creative/project_state/store.py"),
+        "if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:",
+        "if False:",
+        "tests/integration/test_durable_project_revision_pinning.py::test_retract_requires_a_real_fencing_token",
+    ),
+    (
+        "M2_old_version_cleanup",
+        Path("creative/project_state/store.py"),
+        "if remaining_links == 0:",
+        "if False:",
+        "tests/integration/test_durable_project_revision_pinning.py::test_verified_asset_registration_is_transactional_idempotent_and_fenced",
+    ),
+    (
+        "M3_link_cleanup",
+        Path("creative/project_state/store.py"),
+        "await session.execute(delete(links).where(link_table.c.link_id == link_id))",
+        "pass",
+        "tests/integration/test_durable_project_revision_pinning.py::test_verified_asset_registration_is_transactional_idempotent_and_fenced",
+    ),
+    (
+        "M4_asset_cleanup",
+        Path("creative/project_state/store.py"),
+        "if remaining_versions == 0:",
+        "if False:",
+        "tests/integration/test_durable_project_revision_pinning.py::test_verified_asset_registration_is_transactional_idempotent_and_fenced",
+    ),
+    (
         "M5_fence_bypass",
         Path("creative/project_state/store.py"),
         "if not callable(fence_check) or not fence_check():",
@@ -71,6 +99,9 @@ def test_m3_source_mutants_are_killed(tmp_path: Path) -> None:
             check=False,
         )
         output = result.stdout + result.stderr
-        assert result.returncode != 0, f"{name} survived:\n{output[-3000:]}"
+        assert result.returncode == 1, (
+            f"{name} did not fail on an assertion (pytest exit {result.returncode}):\n"
+            f"{output[-3000:]}"
+        )
         assert "FAILED" in output, f"{name} failed before assertions:\n{output[-3000:]}"
         assert "ERROR collecting" not in output and "ImportError" not in output, output[-3000:]
