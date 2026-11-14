@@ -416,8 +416,11 @@ are mutually comparable.
   provisioner pairs them by the `test_<stem>` convention (with explicit
   overrides) and refuses to bless a tree in which a source has no twin test (an
   unproven capability) or a test names no known source (a test with nothing to
-  prove). The canonical taxonomy can be sealed into the Wave-30 vault and
-  appended to the Wave-31 ledger.
+  prove). The pairing is checked *semantically*, not by file name alone: a twin
+  counts only when its module actually imports the source module it claims to
+  cover (`verify_semantic`), and `TwinTaxonomyProvisioner.from_workspace` runs
+  that check over the real tree. The canonical taxonomy can be sealed into the
+  Wave-30 vault and appended to the Wave-31 ledger.
 * **Wave 33** (`pack_coverage_seal.py`) — a coverage measurement is evidence
   only when it is *bound*: a percentage in a log can be edited after the fact.
   The seal binds the shipped pack set, the per-pack percentages, the threshold
@@ -431,10 +434,10 @@ are mutually comparable.
 
 | Module | Tests | Line coverage | Branch coverage |
 |---|---|---|---|
-| `holographic_equation_vault.py` | 41 | 99.3% | 95.1% |
-| `self_healing_linear_ledger.py` | 22 | 100% | 100% |
-| `twin_taxonomy_provisioner.py` | 15 | 100% | 100% |
-| `pack_coverage_seal.py` | 17 | 100% | 100% |
+| `holographic_equation_vault.py` | 57 | 97.1% | 95.2% |
+| `self_healing_linear_ledger.py` | 36 | 100% | 100% |
+| `twin_taxonomy_provisioner.py` | 25 | 100% | 100% |
+| `pack_coverage_seal.py` | 27 | 100% | 100% |
 
 Reproduce (from the repository root, `PYTHONPATH=src`):
 

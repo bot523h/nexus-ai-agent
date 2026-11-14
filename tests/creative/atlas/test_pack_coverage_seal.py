@@ -263,3 +263,19 @@ def test_measure_pack_coverage_seal_refuses_an_unbound_report() -> None:
 
     with pytest.raises(pcs.PackCoverageError):
         pcs.measure_pack_coverage_seal(runner=runner)
+
+
+def test_measure_pack_coverage_seal_uses_the_report_commit_when_absent() -> None:
+    def runner(**kwargs: object) -> _FakeReport:
+        return _FakeReport([("slideshow", 99.0)], commit="feedface")
+
+    seal = pcs.measure_pack_coverage_seal(runner=runner)
+    assert seal.git_commit == "feedface"
+
+
+def test_measure_pack_coverage_seal_honours_an_explicit_commit() -> None:
+    def runner(**kwargs: object) -> _FakeReport:
+        return _FakeReport([("slideshow", 99.0)], commit="feedface")
+
+    seal = pcs.measure_pack_coverage_seal(runner=runner, git_commit="abc123")
+    assert seal.git_commit == "abc123"

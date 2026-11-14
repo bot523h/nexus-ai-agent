@@ -383,3 +383,22 @@ def test_load_anchor_refuses_a_non_json_anchor(tmp_path: Path) -> None:
     anchor_path.write_text("{not json", encoding="utf-8")
     with pytest.raises(shl.LedgerError):
         shl.LinearEvidenceLedger.load_anchor(anchor_path)
+
+
+def test_load_from_disk_without_anchor_returns_the_ledger(tmp_path: Path) -> None:
+    ledger = _ledger(count=3)
+    log = tmp_path / "ledger.jsonl"
+    ledger.save_to_disk(log, tmp_path / "a.json")
+    restored = shl.LinearEvidenceLedger.load_from_disk(log)
+    assert restored.head_digest == ledger.head_digest
+
+
+def test_atomic_write_cleans_up_when_the_replace_fails(tmp_path: Path, monkeypatch: object) -> None:
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(shl.os, "replace", boom)  # type: ignore[attr-defined]
+    with pytest.raises(OSError):
+        shl._atomic_write(tmp_path / "out.bin", b"payload")
+    # no stray temp files are left behind in the directory
+    assert [p.name for p in tmp_path.iterdir()] == []

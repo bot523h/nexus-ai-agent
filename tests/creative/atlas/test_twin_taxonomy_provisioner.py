@@ -252,3 +252,20 @@ def test_from_workspace_scans_the_real_directories(tmp_path: Path) -> None:
     assert provisioner.sources == ("alpha",)
     assert provisioner.tests == ("test_alpha",)
     assert provisioner.report().provisioned is True
+
+
+def test_imported_atlas_modules_reads_a_dotted_from_import() -> None:
+    import ast
+
+    module = ast.parse("from nexus_ai_agent.creative.atlas.alpha.beta import thing\n")
+    assert tt._imported_atlas_modules(module) == {"alpha"}
+
+
+def test_exercises_source_returns_false_for_unparsable_source(tmp_path: Path) -> None:
+    broken = tmp_path / "test_broken.py"
+    broken.write_text("def oops(:\n", encoding="utf-8")
+    assert tt._exercises_source(broken, "broken") is False
+
+
+def test_exercises_source_returns_false_for_a_missing_file(tmp_path: Path) -> None:
+    assert tt._exercises_source(tmp_path / "nope.py", "nope") is False
