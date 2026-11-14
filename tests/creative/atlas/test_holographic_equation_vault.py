@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import itertools
 import random
+from pathlib import Path
 
 import pytest
 
@@ -332,3 +333,170 @@ def test_audit_flags_an_undetected_tamper(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(vault, "reconstruct", lambda eid, shards: statement)
     audit = vault.audit()
     assert audit.tamper_is_detected is False
+
+
+# --- shard Merkle root (Wave 34 hardening) -----------------------------------------
+
+
+def test_shard_merkle_root_is_domain_separated_and_position_bound() -> None:
+    shards = hv.encode_shards(b"positional", k=2, n=4)
+    root = hv.shard_merkle_root(shards)
+    # the root changes if a shard moves position (even with identical bytes)
+    swapped = (shards[1], shards[0], shards[2], shards[3])
+    assert hv.shard_merkle_root(swapped) != root
+    # and if any shard's bytes change
+    mutated = (bytes([shards[0][0] ^ 0xFF]) + shards[0][1:], *shards[1:])
+    assert hv.shard_merkle_root(mutated) != root
+
+
+def test_shard_leaf_refuses_an_out_of_range_index() -> None:
+    with pytest.raises(hv.VaultError):
+        hv.shard_leaf(shard_index=4, total_shards=4, shard=b"x")
+    with pytest.raises(hv.VaultError):
+        hv.shard_leaf(shard_index=-1, total_shards=4, shard=b"x")
+
+
+def test_shard_set_exposes_and_serialises_its_merkle_root() -> None:
+    vault = hv.HolographicEquationVault(k=2, parity=2)
+    shard_set = vault.seal("E", 30, "statement")
+    assert shard_set.shard_merkle_root == hv.shard_merkle_root(shard_set.shards)
+    assert shard_set.shard_merkle_root == vault.shard_merkle_root("E")
+    assert shard_set.to_dict()["shard_merkle_root"] == shard_set.shard_merkle_root
+    assert shard_set.shard_digests == tuple(
+        __import__("hashlib").sha256(s).hexdigest() for s in shard_set.shards
+    )
+
+
+def test_reconstruct_refuses_a_shard_moved_to_another_index() -> None:
+    vault = hv.HolographicEquationVault(k=3, parity=2)
+    vault.seal("E", 30, "the statement")
+    shard_set = vault.shard_set("E")
+    # shard 0 placed at index 4 fails its inclusion proof even though the bytes
+    # are a genuine sealed shard.
+    with pytest.raises(hv.VaultError):
+        vault.reconstruct(
+            "E", {4: shard_set.shards[0], 1: shard_set.shards[1], 2: shard_set.shards[2]}
+        )
+
+
+def test_reconstruct_refuses_a_corrupted_shard_set_merkle_root() -> None:
+    vault = hv.HolographicEquationVault(k=2, parity=1)
+    shard_set = vault.seal("E", 30, "statement")
+    vault._shards["E"] = hv.ShardSet(
+        equation_id="E",
+        k=shard_set.k,
+        n=shard_set.n,
+        length=shard_set.length,
+        shards=shard_set.shards,
+        shard_merkle_root="0" * 64,
+    )
+    with pytest.raises(hv.VaultError):
+        vault.reconstruct("E", shard_set.available((0, 1)))
+
+
+def test_reconstruct_refuses_an_out_of_range_shard_index() -> None:
+    vault = hv.HolographicEquationVault(k=2, parity=1)
+    vault.seal("E", 30, "statement")
+    with pytest.raises(hv.VaultError):
+        vault.reconstruct("E", {0: b"x", 9: b"y"})
+
+
+# --- audit combinatorial guard (Wave 34 hardening) ---------------------------------
+
+
+def test_audit_refuses_an_astronomically_large_combination() -> None:
+    vault = hv.HolographicEquationVault(k=127, parity=128)
+    with pytest.raises(hv.VaultAuditComplexityError):
+        vault.audit()
+
+
+def test_vault_audit_complexity_error_is_a_vault_error() -> None:
+    assert issubclass(hv.VaultAuditComplexityError, hv.VaultError)
+
+
+def test_audit_runs_within_the_combinatorial_bound() -> None:
+    # comb(5, 3) = 10 <= 10_000: a small vault still audits.
+    assert _sealed_vault(k=3, parity=2).audit().all_verified is True
+
+
+# --- disk persistence (Wave 34 hardening) ------------------------------------------
+
+
+def test_vault_saves_and_reloads_from_disk(tmp_path: Path) -> None:
+    vault = _sealed_vault(k=3, parity=2)
+    vault.save_to_disk(tmp_path)
+    assert (tmp_path / "vault.json").is_file()
+    restored = hv.HolographicEquationVault.load_from_disk(tmp_path)
+    assert [r.equation_id for r in restored.equations] == [e[0] for e in EQUATIONS]
+    for equation_id, _wave, statement in EQUATIONS:
+        shard_set = restored.shard_set(equation_id)
+        assert restored.reconstruct(equation_id, shard_set.available((0, 1, 2))) == statement
+        assert restored.shard_merkle_root(equation_id) == vault.shard_merkle_root(equation_id)
+
+
+def test_load_from_disk_repairs_corrupted_shard_files(tmp_path: Path) -> None:
+    vault = hv.HolographicEquationVault(k=3, parity=2)
+    shard_set = vault.seal("E", 30, "a recoverable statement")
+    vault.save_to_disk(tmp_path)
+    # damage two shards (n - k = 2 erasures tolerated)
+    for index in (0, 1):
+        path = tmp_path / hv._shard_filename("E", index)
+        path.write_bytes(b"\x00" * len(path.read_bytes()))
+    restored = hv.HolographicEquationVault.load_from_disk(tmp_path)
+    assert restored.reconstruct("E", restored.shard_set("E").available((2, 3, 4))) == (
+        "a recoverable statement"
+    )
+    # the repaired files match the sealed digests again
+    for index in range(vault.n):
+        raw = (tmp_path / hv._shard_filename("E", index)).read_bytes()
+        assert hv._sha256(raw) == shard_set.shard_digests[index]
+
+
+def test_load_from_disk_repairs_missing_shard_files(tmp_path: Path) -> None:
+    vault = hv.HolographicEquationVault(k=2, parity=2)
+    vault.seal("E", 30, "a statement")
+    vault.save_to_disk(tmp_path)
+    (tmp_path / hv._shard_filename("E", 0)).unlink()
+    restored = hv.HolographicEquationVault.load_from_disk(tmp_path)
+    assert restored.reconstruct("E", restored.shard_set("E").available((0, 1))) == "a statement"
+
+
+def test_load_from_disk_refuses_too_many_erasures(tmp_path: Path) -> None:
+    vault = hv.HolographicEquationVault(k=3, parity=1)
+    vault.seal("E", 30, "statement")
+    vault.save_to_disk(tmp_path)
+    for index in range(2):  # 2 missing > n - k = 1
+        (tmp_path / hv._shard_filename("E", index)).unlink()
+    with pytest.raises(hv.VaultError):
+        hv.HolographicEquationVault.load_from_disk(tmp_path)
+
+
+def test_load_from_disk_refuses_a_tampered_manifest_digest(tmp_path: Path) -> None:
+    import json
+
+    vault = hv.HolographicEquationVault(k=2, parity=2)
+    vault.seal("E", 30, "statement")
+    vault.save_to_disk(tmp_path)
+    manifest = json.loads((tmp_path / "vault.json").read_text(encoding="utf-8"))
+    manifest["equations"][0]["digest"] = "0" * 64
+    (tmp_path / "vault.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(hv.VaultError):
+        hv.HolographicEquationVault.load_from_disk(tmp_path)
+
+
+def test_load_from_disk_refuses_missing_manifest_and_bad_schema(tmp_path: Path) -> None:
+    with pytest.raises(hv.VaultError):
+        hv.HolographicEquationVault.load_from_disk(tmp_path)
+    (tmp_path / "vault.json").write_text('{"schema": "nope"}', encoding="utf-8")
+    with pytest.raises(hv.VaultError):
+        hv.HolographicEquationVault.load_from_disk(tmp_path)
+    (tmp_path / "vault.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(hv.VaultError):
+        hv.HolographicEquationVault.load_from_disk(tmp_path)
+
+
+def test_vault_to_dict_round_trips_through_disk(tmp_path: Path) -> None:
+    vault = _sealed_vault(k=3, parity=2)
+    vault.save_to_disk(tmp_path)
+    restored = hv.HolographicEquationVault.load_from_disk(tmp_path)
+    assert restored.to_dict() == vault.to_dict()

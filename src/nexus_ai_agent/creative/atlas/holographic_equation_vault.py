@@ -29,25 +29,35 @@ returning a wrong answer.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Final
 
 from nexus_ai_agent.creative.atlas.atlas_spine_governance import jcs_canonical_bytes
 
 __all__ = [
     "VAULT_SCHEMA",
+    "SHARD_LEAF_SCHEMA",
+    "SHARD_LEAF_DOMAIN",
+    "MAX_EXHAUSTIVE_COMBINATIONS",
     "GF256_PRIMITIVE_POLY",
     "GF256_GENERATOR",
     "MAX_SHARDS",
     "MAX_EQUATIONS",
     "DEFAULT_PARITY",
     "VaultError",
+    "VaultAuditComplexityError",
     "gf256_add",
     "gf256_mul",
     "gf256_inv",
     "mds_generator",
     "encode_shards",
     "decode_shards",
+    "shard_leaf",
+    "shard_merkle_root",
     "EquationRecord",
     "ShardSet",
     "HolographicVaultReceipt",
@@ -56,6 +66,13 @@ __all__ = [
 ]
 
 VAULT_SCHEMA: Final[str] = "atlas.holographic-equation-vault/1"
+#: The record schema written into the on-disk JCS vault manifest.
+SHARD_LEAF_SCHEMA: Final[str] = "atlas.shard-leaf/1"
+#: Domain separator for a shard Merkle leaf (RFC 6962 leaf prefix is separate).
+SHARD_LEAF_DOMAIN: Final[bytes] = b"NAGAR_SHARD_V1\x00"
+#: ``audit()`` enumerates ``comb(n, k)`` submatrices; above this it refuses
+#: rather than hanging (``comb(255, 127)`` is astronomical).
+MAX_EXHAUSTIVE_COMBINATIONS: Final[int] = 10_000
 #: x^8 + x^4 + x^3 + x^2 + 1, the AES field polynomial (irreducible over GF(2)).
 GF256_PRIMITIVE_POLY: Final[int] = 0x11D
 GF256_GENERATOR: Final[int] = 0x02
@@ -68,6 +85,10 @@ DEFAULT_PARITY: Final[int] = 2
 
 class VaultError(ValueError):
     """Raised for a malformed vault parameter, payload or shard set."""
+
+
+class VaultAuditComplexityError(VaultError):
+    """Raised when ``audit()`` would enumerate more than the bounded maximum."""
 
 
 # --- GF(2^8) arithmetic ------------------------------------------------------------
@@ -265,9 +286,18 @@ class ShardSet:
     n: int
     length: int
     shards: tuple[bytes, ...]
+    shard_merkle_root: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.shard_merkle_root:
+            object.__setattr__(self, "shard_merkle_root", shard_merkle_root(self.shards))
 
     def available(self, indices: tuple[int, ...]) -> dict[int, bytes]:
         return {i: self.shards[i] for i in indices}
+
+    @property
+    def shard_digests(self) -> tuple[str, ...]:
+        return tuple(_sha256(s) for s in self.shards)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -275,7 +305,8 @@ class ShardSet:
             "k": self.k,
             "n": self.n,
             "length": self.length,
-            "shard_digests": [_sha256(s) for s in self.shards],
+            "shard_digests": list(self.shard_digests),
+            "shard_merkle_root": self.shard_merkle_root,
         }
 
 
@@ -349,6 +380,35 @@ def _merkle_root(leaves: list[bytes]) -> str:
     return level[0]
 
 
+def shard_leaf(*, shard_index: int, total_shards: int, shard: bytes) -> bytes:
+    """The canonical, domain-separated leaf for one encoded shard.
+
+    The leaf commits to the shard's *position* (``shard_index`` of
+    ``total_shards``) as well as its bytes, so a shard cannot be moved to another
+    index and still verify against the Merkle root.
+    """
+    if not 0 <= shard_index < total_shards:
+        raise VaultError(f"shard index {shard_index} out of range for {total_shards} shards")
+    return jcs_canonical_bytes(
+        {
+            "schema": SHARD_LEAF_SCHEMA,
+            "shard_index": shard_index,
+            "total_shards": total_shards,
+            "shard_sha256": _sha256(shard),
+            "shard_length": len(shard),
+        }
+    )
+
+
+def shard_merkle_root(shards: tuple[bytes, ...]) -> str:
+    """RFC 6962 size-bound Merkle root over the actual encoded shards."""
+    leaves = [
+        SHARD_LEAF_DOMAIN + shard_leaf(shard_index=index, total_shards=len(shards), shard=shard)
+        for index, shard in enumerate(shards)
+    ]
+    return _merkle_root(leaves)
+
+
 class HolographicEquationVault:
     """A holographic store of doctrine equations with MDS redundancy.
 
@@ -415,20 +475,64 @@ class HolographicEquationVault:
             raise VaultError(f"no equation {equation_id!r} in the vault") from None
 
     def reconstruct(self, equation_id: str, shards: dict[int, bytes]) -> str:
-        """Rebuild the equation from any ``k`` of its shards; verify byte-exact."""
+        """Rebuild the equation from any ``k`` of its shards; verify byte-exact.
+
+        Every supplied shard must pass its Merkle inclusion proof against the
+        sealed :attr:`ShardSet.shard_merkle_root` before it is trusted, so a
+        shard moved to another index or edited after the seal is refused rather
+        than decoded into a wrong answer.
+        """
         record = self._records.get(equation_id)
         if record is None:
             raise VaultError(f"no equation {equation_id!r} in the vault")
+        self._verify_shard_inclusion(self._shards[equation_id], shards)
         payload = decode_shards(shards, k=self._k, n=self._n)[: len(record.payload)]
         if payload != record.payload:
             raise VaultError(f"reconstructed equation {equation_id!r} does not match its seal")
         return payload.decode("utf-8")
 
+    def _verify_shard_inclusion(self, shard_set: ShardSet, shards: dict[int, bytes]) -> None:
+        """Refuse any shard subset that is not the sealed shard set.
+
+        Recomputes the RFC 6962 shard Merkle root over the sealed leaves with the
+        supplied shards substituted at their indices; a mismatch means at least
+        one shard fails its inclusion proof.
+        """
+        if shard_merkle_root(shard_set.shards) != shard_set.shard_merkle_root:
+            raise VaultError("the stored shard set does not match its sealed Merkle root")
+        for index in shards:
+            if not 0 <= index < shard_set.n:
+                raise VaultError(f"shard index {index} out of range for {shard_set.n} shards")
+        leaves = [
+            SHARD_LEAF_DOMAIN
+            + shard_leaf(
+                shard_index=index,
+                total_shards=shard_set.n,
+                shard=shards.get(index, shard_set.shards[index]),
+            )
+            for index in range(shard_set.n)
+        ]
+        if _merkle_root(leaves) != shard_set.shard_merkle_root:
+            raise VaultError("shard Merkle inclusion proof failed: the shards are not the seal")
+
     def audit(self) -> HolographicVaultAudit:
-        """Prove the vault's four invariants against the sealed equations."""
+        """Prove the vault's four invariants against the sealed equations.
+
+        Refuses (:class:`VaultAuditComplexityError`) rather than hanging when the
+        MDS sweep would enumerate more than :data:`MAX_EXHAUSTIVE_COMBINATIONS`
+        submatrices — e.g. ``comb(255, 127)``.
+        """
+        from itertools import combinations
+        from math import comb
+
+        if comb(self._n, self._k) > MAX_EXHAUSTIVE_COMBINATIONS:
+            raise VaultAuditComplexityError(
+                f"audit would enumerate comb({self._n}, {self._k}) > "
+                f"{MAX_EXHAUSTIVE_COMBINATIONS} submatrices; request a bounded "
+                "algebraic verification instead"
+            )
         mds = True
         generator = mds_generator(self._k, self._n)
-        from itertools import combinations
 
         for combo in combinations(range(self._n), self._k):
             _gf256_mat_inv([list(generator[r]) for r in combo])
@@ -490,6 +594,92 @@ class HolographicEquationVault:
         leaves = [bytes.fromhex(r.digest) for r in self._records.values()]
         return _merkle_root(leaves)
 
+    def shard_merkle_root(self, record_id: str) -> str:
+        """The sealed RFC 6962 shard Merkle root of one equation's shards."""
+        return self.shard_set(record_id).shard_merkle_root
+
+    # --- disk persistence -----------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        """The canonical on-disk vault document (JCS-serialisable)."""
+        return {
+            "schema": VAULT_SCHEMA,
+            "k": self._k,
+            "n": self._n,
+            "equations": [
+                {
+                    "equation_id": record.equation_id,
+                    "wave": record.wave,
+                    "statement": record.statement,
+                    "digest": record.digest,
+                    "length": self._shards[record.equation_id].length,
+                    "shard_digests": list(self._shards[record.equation_id].shard_digests),
+                    "shard_merkle_root": self._shards[record.equation_id].shard_merkle_root,
+                }
+                for record in self._records.values()
+            ],
+        }
+
+    def save_to_disk(self, vault_dir: str | Path) -> Path:
+        """Persist the vault to ``vault_dir`` atomically and return the directory.
+
+        Writes one binary shard file per ``(equation_id, shard_index)`` plus a
+        canonical JCS ``vault.json`` manifest; every file is written through a
+        temp file, ``os.fsync``-ed, then ``os.replace``-d into place, so a crash
+        can never leave a half-written shard or manifest.
+        """
+        directory = Path(vault_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        for record in self._records.values():
+            shard_set = self._shards[record.equation_id]
+            for index, shard in enumerate(shard_set.shards):
+                _atomic_write(directory / _shard_filename(record.equation_id, index), shard)
+        _atomic_write(directory / "vault.json", jcs_canonical_bytes(self.to_dict()))
+        return directory
+
+    @classmethod
+    def load_from_disk(cls, vault_dir: str | Path) -> HolographicEquationVault:
+        """Reload a vault from disk, verifying and repairing shard files.
+
+        Every shard file is checked against its Merkle leaf; missing or corrupted
+        files (up to ``n - k`` per equation) are reconstructed from the surviving
+        shards and written back, so the vault restores across process restarts
+        and heals disk damage without trusting a damaged byte.
+        """
+        directory = Path(vault_dir)
+        manifest_path = directory / "vault.json"
+        if not manifest_path.is_file():
+            raise VaultError(f"no vault.json under {directory}")
+        try:
+            document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise VaultError(f"vault.json is not valid JSON: {exc}") from exc
+        if document.get("schema") != VAULT_SCHEMA:
+            raise VaultError(f"unknown vault schema {document.get('schema')!r}")
+        vault = cls(k=int(document["k"]), parity=int(document["n"]) - int(document["k"]))
+        for record_document in document["equations"]:
+            equation_id = str(record_document["equation_id"])
+            statement = str(record_document["statement"])
+            record = EquationRecord(
+                equation_id=equation_id,
+                wave=int(record_document["wave"]),
+                statement=statement,
+            )
+            if record.digest != str(record_document["digest"]):
+                raise VaultError(f"equation {equation_id!r} on disk does not match its digest")
+            shards = _read_and_repair_shards(
+                directory, record, k=vault._k, n=vault._n, length=int(record_document["length"])
+            )
+            vault._records[equation_id] = record
+            vault._shards[equation_id] = ShardSet(
+                equation_id=equation_id,
+                k=vault._k,
+                n=vault._n,
+                length=len(record.payload),
+                shards=shards,
+            )
+        return vault
+
     def receipt(self) -> HolographicVaultReceipt:
         document = {
             "schema": VAULT_SCHEMA,
@@ -506,3 +696,72 @@ class HolographicEquationVault:
             merkle_root=self.merkle_root(),
             vault_digest=_sha256(jcs_canonical_bytes(document)),
         )
+
+
+def _atomic_write(path: Path, payload: bytes) -> None:
+    """Write ``payload`` to ``path`` atomically (temp file + fsync + os.replace)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, path)
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
+
+
+def _shard_filename(equation_id: str, index: int) -> str:
+    """The deterministic, filesystem-safe shard file name for one shard."""
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in equation_id)
+    return f"{safe}.shard.{index}.bin"
+
+
+def _manifest_shard_digests(directory: Path, record: EquationRecord) -> list[str]:
+    """The per-shard digests the on-disk manifest sealed for ``record``."""
+    try:
+        document = json.loads((directory / "vault.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    for entry in document.get("equations", []):
+        if str(entry.get("equation_id")) == record.equation_id:
+            digests = entry.get("shard_digests")
+            return [str(d) for d in digests] if isinstance(digests, list) else []
+    return []
+
+
+def _read_and_repair_shards(
+    directory: Path, record: EquationRecord, *, k: int, n: int, length: int
+) -> tuple[bytes, ...]:
+    """Read the shard files, repair missing/corrupt ones from the survivors.
+
+    A shard file is trusted only if its bytes hash to the digest the on-disk
+    manifest sealed at that index; damaged or absent files (up to ``n - k`` per
+    equation) are reconstructed from any ``k`` readable shards, verified against
+    the record's seal, and rewritten atomically.
+    """
+    manifest_digests = _manifest_shard_digests(directory, record)
+    good: dict[int, bytes] = {}
+    for index in range(n):
+        path = directory / _shard_filename(record.equation_id, index)
+        if not path.is_file():
+            continue
+        raw = path.read_bytes()
+        if index < len(manifest_digests) and _sha256(raw) == manifest_digests[index]:
+            good[index] = raw
+    if len(good) < k:
+        raise VaultError(
+            f"equation {record.equation_id!r} has only {len(good)} readable shards; need {k}"
+        )
+    rebuilt = decode_shards(good, k=k, n=n)[:length]
+    if rebuilt != record.payload:
+        raise VaultError(f"equation {record.equation_id!r} on disk does not match its seal")
+    fresh = encode_shards(rebuilt, k=k, n=n)
+    for index in range(n):
+        if index not in good:
+            _atomic_write(directory / _shard_filename(record.equation_id, index), fresh[index])
+    return fresh

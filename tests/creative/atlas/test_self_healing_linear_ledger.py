@@ -8,6 +8,9 @@ round-trip persistence.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from nexus_ai_agent.creative.atlas import self_healing_linear_ledger as shl
@@ -246,3 +249,137 @@ def test_report_serialisation() -> None:
 def test_public_surface_matches_declared_exports() -> None:
     for name in shl.__all__:
         assert hasattr(shl, name), name
+
+
+# --- predecessor-bound digest (Wave 34 hardening) ----------------------------------
+
+
+def test_entry_digest_commits_to_position_and_predecessor() -> None:
+    base = shl._entry_digest(seq=0, prev_digest=shl.GENESIS, data=b"payload")
+    # a different sequence number changes the digest even with identical bytes
+    assert shl._entry_digest(seq=1, prev_digest=shl.GENESIS, data=b"payload") != base
+    # a different predecessor link changes the digest
+    assert shl._entry_digest(seq=0, prev_digest="a" * 64, data=b"payload") != base
+    # a different payload changes the digest
+    assert shl._entry_digest(seq=0, prev_digest=shl.GENESIS, data=b"payloae") != base
+
+
+def test_entry_digest_is_domain_separated() -> None:
+    assert shl.ENTRY_DOMAIN  # a non-empty domain separator is present
+    # the digest is not a bare sha256 of the payload
+    import hashlib
+
+    assert shl._entry_digest(seq=0, prev_digest=shl.GENESIS, data=b"x") != (
+        hashlib.sha256(b"x").hexdigest()
+    )
+
+
+# --- external witness anchor (Wave 34 hardening) -----------------------------------
+
+
+def test_verify_with_matching_anchor_is_intact() -> None:
+    ledger = _ledger(count=4)
+    anchor = shl.LedgerAnchor(seq_count=4, head_digest=ledger.head_digest)
+    assert ledger.verify(anchor=anchor).intact is True
+
+
+def test_verify_with_anchor_detects_a_full_history_rewrite() -> None:
+    ledger = _ledger(count=4)
+    anchor = shl.LedgerAnchor(seq_count=4, head_digest=ledger.head_digest)
+    # an attacker rewrites the whole chain from genesis and recalculates every
+    # prev_digest and digest so the internal chain still "verifies"
+    rewritten = shl.SelfHealingLinearLedger(k=4, parity=2)
+    for i in range(4):
+        rewritten.append(f"forged-record-{i}")
+    assert rewritten.verify().chain_intact is True  # internally consistent
+    report = rewritten.verify(anchor=anchor)
+    assert report.chain_intact is False
+    assert report.intact is False
+
+
+def test_verify_with_anchor_detects_truncation() -> None:
+    ledger = _ledger(count=5)
+    anchor = shl.LedgerAnchor(seq_count=5, head_digest=ledger.head_digest)
+    truncated = shl.SelfHealingLinearLedger(k=4, parity=2)
+    for i in range(3):
+        truncated.append(f"evidence-record-{i}")
+    assert truncated.verify(anchor=anchor).intact is False
+
+
+def test_heal_with_anchor_reports_not_intact_after_a_rewrite() -> None:
+    ledger = _ledger(count=3)
+    anchor = shl.LedgerAnchor(seq_count=3, head_digest=ledger.head_digest)
+    forged = shl.SelfHealingLinearLedger(k=4, parity=2)
+    for i in range(3):
+        forged.append(f"forged-{i}")
+    report = forged.heal(anchor=anchor)
+    assert report.intact_after is False
+
+
+def test_anchor_round_trips_and_validates() -> None:
+    anchor = shl.LedgerAnchor(seq_count=7, head_digest="a" * 64)
+    restored = shl.LedgerAnchor.from_dict(anchor.to_dict())
+    assert restored == anchor
+    with pytest.raises(shl.LedgerError):
+        shl.LedgerAnchor.from_dict({"schema": "nope", "seq_count": 1, "head_digest": "a" * 64})
+    with pytest.raises(shl.LedgerError):
+        shl.LedgerAnchor.from_dict(
+            {"schema": "atlas.ledger-anchor/1", "seq_count": 1, "head_digest": "short"}
+        )
+    with pytest.raises(shl.LedgerError):
+        shl.LedgerAnchor.from_dict(
+            {"schema": "atlas.ledger-anchor/1", "seq_count": -1, "head_digest": "a" * 64}
+        )
+
+
+# --- on-disk persistence (Wave 34 hardening) ---------------------------------------
+
+
+def test_save_and_load_from_disk_round_trips(tmp_path: Path) -> None:
+    ledger = _ledger(count=5)
+    log = tmp_path / "ledger.jsonl"
+    anchor_path = tmp_path / "ledger.anchor.json"
+    anchor = ledger.save_to_disk(log, anchor_path)
+    assert log.is_file() and anchor_path.is_file()
+    restored = shl.SelfHealingLinearLedger.load_from_disk(log, anchor_path)
+    assert restored.head_digest == ledger.head_digest
+    assert anchor.head_digest == ledger.head_digest
+    assert restored.payload(2) == b"evidence-record-2"
+
+
+def test_load_from_disk_refuses_a_ledger_that_disagrees_with_the_anchor(tmp_path: Path) -> None:
+    ledger = _ledger(count=4)
+    log = tmp_path / "ledger.jsonl"
+    anchor_path = tmp_path / "ledger.anchor.json"
+    ledger.save_to_disk(log, anchor_path)
+    # forge a shorter ledger and re-anchor the log, but keep the original anchor
+    forged = shl.SelfHealingLinearLedger(k=4, parity=2)
+    for i in range(3):
+        forged.append(f"evidence-record-{i}")
+    log.write_text(json.dumps(forged.to_dict()), encoding="utf-8")
+    with pytest.raises(shl.LedgerError):
+        shl.SelfHealingLinearLedger.load_from_disk(log, anchor_path)
+
+
+def test_load_from_disk_refuses_missing_files(tmp_path: Path) -> None:
+    with pytest.raises(shl.LedgerError):
+        shl.SelfHealingLinearLedger.load_from_disk(tmp_path / "missing.jsonl")
+    ledger = _ledger(count=2)
+    log = tmp_path / "ledger.jsonl"
+    ledger.save_to_disk(log, tmp_path / "a.json")
+    with pytest.raises(shl.LedgerError):
+        shl.SelfHealingLinearLedger.load_anchor(tmp_path / "missing.anchor.json")
+
+
+def test_load_from_disk_refuses_a_non_json_log(tmp_path: Path) -> None:
+    log = tmp_path / "ledger.jsonl"
+    log.write_text("{not json", encoding="utf-8")
+    with pytest.raises(shl.LedgerError):
+        shl.SelfHealingLinearLedger.load_from_disk(log)
+
+
+def test_load_anchor_refuses_a_non_json_anchor(tmp_path: Path) -> None:
+    anchor_path = tmp_path / "ledger.anchor.json"
+    anchor_path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(shl.LedgerError):
+        shl.SelfHealingLinearLedger.load_anchor(anchor_path)

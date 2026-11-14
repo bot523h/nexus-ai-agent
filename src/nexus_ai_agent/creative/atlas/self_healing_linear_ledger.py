@@ -33,7 +33,12 @@ Pure Python + stdlib, offline, deterministic.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import struct
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Final
 
 from nexus_ai_agent.creative.atlas.atlas_spine_governance import jcs_canonical_bytes
@@ -47,10 +52,13 @@ from nexus_ai_agent.creative.atlas.holographic_equation_vault import (
 __all__ = [
     "LEDGER_SCHEMA",
     "DEFAULT_DATA_SHARDS",
+    "GENESIS",
+    "ENTRY_DOMAIN",
     "LedgerError",
     "LedgerEntry",
     "LedgerIntegrityReport",
     "SelfHealingReport",
+    "LedgerAnchor",
     "SelfHealingLinearLedger",
 ]
 
@@ -58,6 +66,8 @@ LEDGER_SCHEMA: Final[str] = "atlas.self-healing-linear-ledger/1"
 DEFAULT_DATA_SHARDS: Final[int] = 4
 #: The genesis link, so record 0 has a well-defined ``prev_digest``.
 GENESIS: Final[str] = "0" * 64
+#: Domain separator for the predecessor-bound entry digest.
+ENTRY_DOMAIN: Final[bytes] = b"NAGAR_LEDGER_V1\x00"
 
 
 class LedgerError(ValueError):
@@ -66,6 +76,23 @@ class LedgerError(ValueError):
 
 def _sha256(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
+
+
+def _entry_digest(*, seq: int, prev_digest: str, data: bytes) -> str:
+    """The predecessor-bound entry digest.
+
+    Every entry's digest cryptographically commits to its position (``seq``), its
+    predecessor link (``prev_digest``) and its payload, so recomputing or
+    mutating any predecessor link or sequence number invalidates ``digest_i`` and
+    every subsequent ``digest_j`` (``j > i``).
+    """
+    return _sha256(
+        ENTRY_DOMAIN
+        + struct.pack(">Q", seq)
+        + bytes.fromhex(prev_digest)
+        + struct.pack(">Q", len(data))
+        + data
+    )
 
 
 def _payload_bytes(payload: bytes | bytearray | str) -> bytes:
@@ -162,6 +189,42 @@ class SelfHealingReport:
         }
 
 
+@dataclass(frozen=True)
+class LedgerAnchor:
+    """An independent external witness for the ledger head.
+
+    Written to a *separate* file (``anchor_path``) from the ledger JSONL, so an
+    attacker who can rewrite the whole ledger from genesis cannot also update the
+    witness — verification against the anchor refuses a full-history rewrite.
+    """
+
+    seq_count: int
+    head_digest: str
+    schema: str = "atlas.ledger-anchor/1"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": self.schema,
+            "seq_count": self.seq_count,
+            "head_digest": self.head_digest,
+        }
+
+    def canonical_bytes(self) -> bytes:
+        return jcs_canonical_bytes(self.to_dict())
+
+    @classmethod
+    def from_dict(cls, document: dict[str, Any]) -> LedgerAnchor:
+        if document.get("schema") != "atlas.ledger-anchor/1":
+            raise LedgerError(f"unknown ledger anchor schema {document.get('schema')!r}")
+        head = str(document["head_digest"])
+        if len(head) != 64:
+            raise LedgerError("anchor head_digest must be a 64-hex digest")
+        count = int(document["seq_count"])
+        if count < 0:
+            raise LedgerError("anchor seq_count must be non-negative")
+        return cls(seq_count=count, head_digest=head)
+
+
 class SelfHealingLinearLedger:
     """An append-only hash-chained ledger whose records rebuild from parity.
 
@@ -212,7 +275,7 @@ class SelfHealingLinearLedger:
         return LedgerEntry(
             seq=seq,
             length=len(data),
-            digest=_sha256(data),
+            digest=_entry_digest(seq=seq, prev_digest=prev_digest, data=data),
             prev_digest=prev_digest,
             shards=shards,
             shard_digests=tuple(_sha256(s) for s in shards),
@@ -237,12 +300,40 @@ class SelfHealingLinearLedger:
 
     # --- verification ---------------------------------------------------------
 
-    def verify(self) -> LedgerIntegrityReport:
-        """Classify every record without modifying the ledger."""
+    def _rebuilt_matches_seal(self, entry: LedgerEntry, rebuilt: bytes) -> bool:
+        """Whether ``rebuilt`` reproduces the entry's predecessor-bound digest."""
+        return _entry_digest(seq=entry.seq, prev_digest=entry.prev_digest, data=rebuilt) == (
+            entry.digest
+        )
+
+    def _anchor_conflict(self, anchor: LedgerAnchor | None) -> str | None:
+        """Return a refusal reason when the ledger disagrees with its witness."""
+        if anchor is None:
+            return None
+        if anchor.seq_count != len(self._entries):
+            return (
+                f"external witness records {anchor.seq_count} entries but the ledger has "
+                f"{len(self._entries)} (a rewrite truncated or extended the history)"
+            )
+        if anchor.head_digest != self.head_digest:
+            return (
+                "ledger head digest does not match the external witness anchor "
+                "(a rewrite recalculated the chain from genesis)"
+            )
+        return None
+
+    def verify(self, *, anchor: LedgerAnchor | None = None) -> LedgerIntegrityReport:
+        """Classify every record without modifying the ledger.
+
+        When ``anchor`` (an independent external witness) is supplied, the
+        computed head digest and entry count are compared against it; a mismatch
+        marks the chain broken so a full-history rewrite is refused even when the
+        attacker recalculated every ``prev_digest`` and ``digest`` value.
+        """
         damaged: list[int] = []
         tampered: list[int] = []
         unreadable: list[int] = []
-        chain_intact = True
+        chain_intact = self._anchor_conflict(anchor) is None
         expected_prev = GENESIS
         for entry in self._entries:
             if entry.prev_digest != expected_prev:
@@ -265,7 +356,7 @@ class SelfHealingLinearLedger:
                 k=self._k,
                 n=self._n,
             )[: entry.length]
-            if _sha256(rebuilt) == entry.digest:
+            if self._rebuilt_matches_seal(entry, rebuilt):
                 if readable < self._n:
                     damaged.append(entry.seq)
             else:
@@ -280,11 +371,14 @@ class SelfHealingLinearLedger:
 
     # --- healing --------------------------------------------------------------
 
-    def heal(self) -> SelfHealingReport:
+    def heal(self, *, anchor: LedgerAnchor | None = None) -> SelfHealingReport:
         """Repair every bit-rotted record that still has ``k`` readable shards.
 
         Tampered records are refused, never laundered: a record whose readable
-        shards do not hash back to the sealed digest is left exactly as found.
+        shards do not rebuild to the sealed predecessor-bound digest is left
+        exactly as found. When ``anchor`` is supplied the final integrity check
+        is made against the external witness, so healing can never silently bless
+        a rewritten history.
         """
         healed: list[int] = []
         tampered: list[int] = []
@@ -299,7 +393,7 @@ class SelfHealingLinearLedger:
                 unreadable.append(entry.seq)
                 continue
             rebuilt = decode_shards(readable, k=self._k, n=self._n)[: entry.length]
-            if _sha256(rebuilt) != entry.digest:
+            if not self._rebuilt_matches_seal(entry, rebuilt):
                 tampered.append(entry.seq)
                 continue
             if len(readable) == self._n:
@@ -312,7 +406,7 @@ class SelfHealingLinearLedger:
             healed_seqs=tuple(healed),
             tampered_seqs=tuple(tampered),
             unreadable_seqs=tuple(unreadable),
-            intact_after=self.verify().intact,
+            intact_after=self.verify(anchor=anchor).intact,
         )
 
     # --- fault-injection seams (used by tests and the falsification wave) -----
@@ -394,3 +488,67 @@ class SelfHealingLinearLedger:
                 raise LedgerError(f"entry {entry.seq} is out of order (expected {expected})")
         ledger._entries = entries
         return ledger
+
+    # --- on-disk persistence (JSONL log + external witness anchor) -------------
+
+    def save_to_disk(self, log_path: str | Path, anchor_path: str | Path) -> LedgerAnchor:
+        """Persist the ledger as an append-only JSONL log plus a witness anchor.
+
+        The log is rewritten atomically (temp + fsync + ``os.replace``); the
+        anchor is written to a *separate* file so it is an independent witness of
+        the head. Returns the :class:`LedgerAnchor` written.
+        """
+        log = Path(log_path)
+        lines = [json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)]
+        _atomic_write(log, ("\n".join(lines) + "\n").encode("utf-8"))
+        anchor = LedgerAnchor(seq_count=len(self._entries), head_digest=self.head_digest)
+        _atomic_write(Path(anchor_path), anchor.canonical_bytes())
+        return anchor
+
+    @classmethod
+    def load_from_disk(
+        cls, log_path: str | Path, anchor_path: str | Path | None = None
+    ) -> SelfHealingLinearLedger:
+        """Reload a ledger from its JSONL log and, if given, verify the anchor."""
+        log = Path(log_path)
+        if not log.is_file():
+            raise LedgerError(f"no ledger log at {log}")
+        try:
+            document = json.loads(log.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise LedgerError(f"ledger log is not valid JSON: {exc}") from exc
+        ledger = cls.from_dict(document)
+        if anchor_path is not None:
+            anchor = cls.load_anchor(anchor_path)
+            conflict = ledger._anchor_conflict(anchor)
+            if conflict is not None:
+                raise LedgerError(conflict)
+        return ledger
+
+    @staticmethod
+    def load_anchor(anchor_path: str | Path) -> LedgerAnchor:
+        path = Path(anchor_path)
+        if not path.is_file():
+            raise LedgerError(f"no ledger anchor at {path}")
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise LedgerError(f"ledger anchor is not valid JSON: {exc}") from exc
+        return LedgerAnchor.from_dict(document)
+
+
+def _atomic_write(path: Path, payload: bytes) -> None:
+    """Write ``payload`` to ``path`` atomically (temp file + fsync + os.replace)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, path)
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
