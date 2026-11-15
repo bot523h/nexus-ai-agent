@@ -398,10 +398,19 @@ baseline green before and after.
 **6.3.3 The CircleCI status is unchanged by all this** (§6.1): the fixes above affect
 GitHub Actions only.
 
-**6.3.4 Re-run after the fixes.** Unit + architecture suites were re-run on the patched
-tree (see the commit that carries this paragraph for the numbers), and the same gates
-listed in §4 were re-verified: ruff, `ruff format --check`, `mypy src`, `deptry .` and
-the truth doctor.
+**6.3.4 The green run.** After the four fixes above, run `43674349207` (head
+`303129c`) completed **success with every job green** — `test (pytest -m "not slow")`,
+`migrate-postgres`, `trust-mutations`, `dependency-audit`, `lint`, `lint-fast`,
+`merge-base-guard`, `release-lineage`, the four mutation jobs, `python-parity` on
+3.10/3.11/3.12, `continuum-evidence` on 3.10/3.11/3.12 and the `extras-matrix` legs.
+That is the real GitHub Actions verification this ledger's local numbers could not
+provide, and it is on the same content as §4 (the only commits after `ce46a62` are the
+fixes in §6.3, `1e1201d`, `aaf3ff8`, `303129c` and documentation).
+
+Locally on that tree: `tests/unit` + `tests/architecture` 7239 passed (15 skipped),
+ruff and `ruff format --check` clean, `mypy src` 552 files clean, `deptry .` clean,
+truth doctor `OK — no findings`, and `scripts/durable_project_state_mutations.py`
+34/34 killed.
 
 ## 7. Where this work is published
 
