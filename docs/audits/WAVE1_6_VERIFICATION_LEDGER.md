@@ -36,14 +36,18 @@ Two separate inaccuracies, both stated here rather than smoothed over:
 ### 2.1 Size, measured (not estimated)
 
 ```bash
-git rev-list --count deab2b3e..HEAD                  # 1503
-git rev-list --count --first-parent deab2b3e..HEAD   # 50
-git rev-list --count da3e5ed7..HEAD                  # 27
+git rev-list --count deab2b3e..HEAD                  # 1507
+git rev-list --count --first-parent deab2b3e..HEAD   # 54
+git rev-list --count da3e5ed7..HEAD                  # 31
 ```
 
-(Measured at `6793bf2`; the sentence is self-referential — every later
-documentation commit adds one to the total and to the window, and none adds behaviour.
-19 of the 27 are the pre-closeout waves, 8 are this closeout.)
+(Measured at the commit that carries this sentence: every later documentation commit
+adds one to the total and to the window, and none adds behaviour. 19 of the 31 are the
+pre-closeout waves, 12 are this closeout.)
+
+The **diff** is smaller than the history and easier to review:
+`git diff --stat deab2b3e..HEAD` reports **512 files, +124 220 / −2 841**. §2.4 is a
+reading guide for exactly those files.
 
 The directive issued for this closeout expected **161 commits**. No measurement
 reproduces that figure: not the total (1503), not the first-parent count (50), not
@@ -69,7 +73,7 @@ reset, rebased or force-pushed to make room: `d1fb569`, `4bcee33`, `40cf83c`.
 
 ### 2.3 The wave window, commit by commit
 
-`483403d..HEAD` — 27 commits. Everything in §3–§7 is one of these.
+`483403d..HEAD` — 31 commits. Everything in §3–§7 is one of these.
 
 | # | SHAs (oldest first) | Wave | What it is |
 |---|---|---|---|
@@ -100,9 +104,13 @@ reset, rebased or force-pushed to make room: `d1fb569`, `4bcee33`, `40cf83c`.
 | 25 | `aaf3ff8` | 8 | the fencing-token mutant now removes both enforcement points (§6.3.2) |
 | 26 | `303129c` | 8 | the reconciler CLI test off the process-global engine (§6.3.2) |
 | 27 | `6793bf2` | 8 | the green run recorded (§6.3.4) |
+| 28 | `cff0e69` | 8 | chain counts corrected to the final tree (docs only) |
+| 29 | `80c8ea6` | 8 | the chain-count sentence made self-referential and true (docs only) |
+| 30 | `8fa032e` | 8 | ATLAS split into six proven sub-chunks; PG concurrency module made order-independent |
+| 31 | `22e761a` | 8 | the P0 bundle regenerated on a real PostgreSQL 16.2 |
 
-Commits after `6793bf2` are documentation only — this row's table stops where the
-behaviour stops.
+Commits 28–29 are documentation only; 30–31 are behaviour and evidence, and §4 is
+measured at 31.
 
 
 Integrity: no `rebase`, no `reset --hard` on an existing commit, no force-push was
@@ -110,6 +118,45 @@ used at any point. The only history edit was `git commit --amend` on `ce46a62`
 seconds after it was created and **before any push**, to replace a commit message
 that a shell heredoc had truncated to a single `Co-authored-by:` line; its tree was
 not touched.
+
+### 2.4 Human review guide — 512 files, in the order that costs least
+
+A 512-file diff is not reviewed alphabetically. This is the map: what changed, where it
+is, and what a reviewer can settle without reading it. Counts are
+`git diff --name-status deab2b3e..HEAD` grouped by area (`A` added, `M` modified,
+`D` deleted).
+
+| Area | Files | A / M / D | What it is | Review weight |
+|---|---:|---|---|---|
+| `src/nexus_ai_agent/creative/**` | 170 | 163 / 7 / 0 | the six engines (VERITAS, CHRONOS, HYPERION, MORPHEUS, ATLAS, AETHEL) and their studio/product/web surfaces | **read** — this is the behaviour |
+| `tests/creative/**` | 133 | 133 / 0 / 0 | their falsification, mutation and law suites (the only proof of most of it) | **read** the mutation/falsification files |
+| `tests/unit/**` | 55 | 37 / 18 / 0 | unit coverage for the new seams and the chunked runner | skim |
+| `tests/integration/**` | 13 | 3 / 10 / 0 | PostgreSQL durability, Studio submission, spaced-repetition of the PG legs | skim; §4.2 has the counts |
+| `tests/architecture/**` | 10 | 6 / 4 / 0 | the invariants that stop the surface drifting (route inventory, capability axis) | **read** — they are contracts |
+| `tests/storage/**` | 3 | 3 / 0 / 0 | schema-golden and backup legs | skim |
+| `src/nexus_ai_agent/` — everything else | 70 | 41 / 29 / 0 | `storage` 12, `nagar` 10, `maintenance` 7, `connect` 6, `api` 4, `continuum`/`execution`/`provenance` 3 each, `adapters` 2, `bot`/`config`/`jobs`/`cli` 4 | skim; `src/storage` and `src/nagar` first |
+| `scripts/**` | 14 | 8 / 6 / 0 | `ci_parity.py` (chunked runner), `pack_coverage.py`, `p0_*`, mutation drivers | **read** `ci_parity.py` |
+| `.github/workflows/**` | 2 | 0 / 2 / 0 | `ci.yml` (timeout 45 m, annotations, FFmpeg, PyAV) and `migrate-postgres.yml` | **read** §6.2 first — few lines change |
+| `migrations/**` | 1 | 1 / 0 / 0 | the `20261112connect` migration head | skim |
+| repo root (15) | 15 | 1 / 14 / 0 | `pyproject.toml` (deps + deptry config), `CONTRIBUTING.md`, `Makefile`, `README`, `CHANGELOG` | skim |
+| `docs/**` | 13 | 6 / 7 / 0 | this ledger, the P0 evidence bundle, the addendum, `OPERATION_TRUTH.json`, `DECISION_LOG`, `README` index | **read** this file first |
+| `.openhands/memory/**` (10, all `D`) | 10 | 0 / 0 / 10 | **deletions only** — a mission-zone reset that restores the branch baseline; no product file is removed | skip |
+| `.agents/**`, `.github/DEPENDENCY_MATRIX.md`, `tests/fixtures/**` | 3 | 0 / 3 / 0 | one agent policy line, one matrix row, one fixture pointer | skip |
+| **total** | **512** | **402 / 100 / 10** | | |
+
+Three properties make the review cheaper than its size:
+
+1. **402 of the 512 are additions.** The 100 modified files are, in order of risk:
+   `.github/workflows/ci.yml`, `pyproject.toml`, `src/storage/*`, `src/nagar/*`, the
+   truth tooling, and the ten `docs/**` files. The ten deletions are all
+   `.openhands/memory/**` plus one fixture — nothing shipped is removed.
+2. **The behaviour is concentrated.** 170 of 512 files are one package tree
+   (`creative/`); every one of its engines carries its own falsification suite in
+   `tests/creative/**`, so a reviewer who reads a source file can jump straight to the
+   test that is meant to break it.
+3. **Nothing here is unreviewed-by-assertion.** Each claim in §3–§7 names the command
+   that produced it, and §9 reproduces them. Where a claim could not be measured, §8
+   says so instead of hedging.
 
 ---
 
@@ -166,13 +213,15 @@ identical/rolled inputs.
 
 ## 4. Gates at the final tree
 
-These were the gates **before** this branch's first CI run; §6.3 then records what
-that run found and what changed. Measured at `ce46a62` unless a different revision is
-named; at that point the only delta to the ledger commit was `pyproject.toml` (deptry
-configuration) and documentation, so the suites below applied to the tree as committed.
-The CI-run follow-up in §6.3 changed `pyproject.toml`, `.github/workflows/ci.yml`, the
-PostgreSQL schema golden and one architecture sentence, and re-ran the unit and
-architecture suites — see §6.3.4 for those numbers.
+**Correction.** An earlier revision of this section said that between the measured
+revision and the ledger commit "the only delta was `pyproject.toml` and documentation".
+That sentence was false and is retracted: the diff against `deab2b3e` is **512 files,
+240 of them under `src/`** (§2.4). Two numbers were carried forward on the strength of
+it. Everything below was therefore **re-measured at `f574e48`**, the last commit whose
+tree carries the suites, and every row names the revision it belongs to when it is not
+that one. Two rows are still tied to earlier revisions and say so: the mutation count
+(`aaf3ff8`/§6.3.2) and the pack-coverage verdict (`9da4619`) — neither tree component
+changed since.
 
 | Gate | Command | Result |
 |------|---------|--------|
@@ -182,9 +231,10 @@ architecture suites — see §6.3.4 for those numbers.
 | Dependencies | `deptry .` | `Success! No dependency issues found.` (whole tree, `9da4619`) |
 | Dependencies (gate scope) | `deptry src` | `Success! No dependency issues found.` |
 | Operation truth | `python -m nexus_ai_agent.diagnostics.truth --root .` | `OK — no findings` (version-lockstep, docs-index, law-test-resolution, law-numbering, claim-witnesses, fail-open-defaults, board-truth) |
+| Dependency audit | `python scripts/dependency_audit.py` | **exit 1** — 21 advisories: 18 accepted, **3 blocking (`soupsieve`)** — §8.4; CI's own `dependency-audit` job is green (§6.3.2) |
 | Pack coverage | `python scripts/pack_coverage.py` | **ACCEPTED**, `9da4619`, 9/9 packs ≥ 95%, source `sha256:8289dab0…` |
-| Chunked parity | `python scripts/ci_parity.py` | **exit 0**, 14/15 chunks green, 1 skipped for space, collection equivalence proven at 11 837 = 11 837 |
-| Mutation harnesses | `pytest -k "mutation or mutant or kill"` | **486 killed**, 1 skipped, 0 survived |
+| Chunked parity | `python scripts/ci_parity.py` | **exit 0**, **20/20 chunks green, none skipped**, collection equivalence proven at **11 842 = 11 842** |
+| Mutation harnesses | `pytest -k "mutation or mutant or kill"` + the ATLAS campaigns | **486 killed** repo-wide (§6.3.2) **and 120/120 inside `atlas#mutation-120`** (§8.1); 0 survived |
 | Benchmarks | `pytest tests/creative/packs` | 155 passed; medians 1.6–65.5 ms against 2000–3000 ms budgets |
 
 ### 4.1 Pack coverage (ACCEPTED at `9da4619`)
@@ -209,29 +259,42 @@ holds no `.coverage*` file.
 ### 4.2 Chunked parity — per-chunk results
 
 Collection proof (before execution):
-`collection: CI 11837 ids, union 11837 ids, missing 0, duplicated 0, unexpected 0`
-→ `collection equivalence proven: the chunks are exactly the CI selection`.
+
+```
+collection: CI 11842 ids, union 11842 ids, missing 0, duplicated 0, unexpected 0
+collection equivalence proven: the chunks are exactly the CI selection
+```
+
+Twenty chunks, every one green, **nothing skipped for space**:
 
 | Chunk | Result | Collected | Wall |
 |---|---|---:|---:|
-| `tests/architecture` | 406 passed | 406 | 63.2 s |
-| `tests/bench` | 3 passed | 3 | 2.2 s |
-| `tests/creative/audio_engine` | 163 passed | 163 | 5.8 s |
-| `tests/creative/chronos` | 240 passed | 240 | 12.9 s |
-| `tests/creative/composition` | 306 passed | 306 | 81.7 s |
-| `tests/creative/director` | 68 passed | 68 | 1.7 s |
-| `tests/creative/episode_causality_lab` | 183 passed | 183 | 6.7 s |
-| `tests/creative/morpheus` | 281 passed | 281 | 4.0 s |
-| `tests/creative/packs` | 155 passed | 155 | 7.6 s |
-| `tests/creative/speech_cinema` | 284 passed, 4 deselected | 284 | 33.3 s |
-| `tests/creative/veritas` | 648 passed | 648 | 17.7 s |
-| `tests/integration` | 661 passed, 36 skipped | 697 | 241.4 s |
-| `tests/storage` | 43 passed | 43 | 1.8 s |
-| `tests/unit` | 6833 passed, 15 skipped | 6848 | 640.1 s |
-| `tests/creative/atlas` | **not run** (space) | 1512 | — |
+| `tests/architecture` | 406 passed | 406 | 64.9 s |
+| `tests/bench` | 3 passed | 3 | 0.8 s |
+| `tests/creative/atlas#mutation-120` | **124 passed** (the 120-mutant receipt) | 124 | 711.9 s |
+| `tests/creative/atlas#falsification-160` | 190 passed | 190 | 10.2 s |
+| `tests/creative/atlas#titan-mutations` | 97 passed, 3 skipped | 100 | 197.1 s |
+| `tests/creative/atlas#prometheus-governance` | 164 passed, 9 skipped | 173 | 13.3 s |
+| `tests/creative/atlas#waves-13-22` | 406 passed, 1 skipped | 407 | 10.9 s |
+| `tests/creative/atlas#waves-23-30-and-solvers` | 510 passed, 8 skipped | 518 | 13.2 s |
+| `tests/creative/audio_engine` | 163 passed | 163 | 4.4 s |
+| `tests/creative/chronos` | 240 passed | 240 | 13.1 s |
+| `tests/creative/composition` | 306 passed | 306 | 85.7 s |
+| `tests/creative/director` | 68 passed | 68 | 0.9 s |
+| `tests/creative/episode_causality_lab` | 183 passed | 183 | 7.6 s |
+| `tests/creative/morpheus` | 281 passed | 281 | 4.4 s |
+| `tests/creative/packs` | 155 passed | 155 | 7.9 s |
+| `tests/creative/speech_cinema` | 284 passed, 4 deselected | 284 | 32.2 s |
+| `tests/creative/veritas` | 648 passed | 648 | 18.2 s |
+| `tests/integration` | 661 passed, 36 skipped | 697 | 260.2 s |
+| `tests/storage` | 43 passed | 43 | 0.8 s |
+| `tests/unit` | 6838 passed, 15 skipped | 6853 | 673.5 s |
 
-**Totals: 10 274 passed, 51 skipped, 4 deselected, 0 failed, 0 errors.** The one
-chunk that did not run is §8.1.
+**Totals: 11 770 passed, 72 skipped, 4 deselected (outside the CI marker selection),
+0 failed, 0 errors — 11 842 executed = 11 842 in the CI selection, ~36 min of wall
+time.** The skips are environmental and self-describing: FFmpeg/ffprobe absent on this
+machine (the ATLAS media mutants say so in their own skip reason), the core-only
+optional-extras legs, and the CI-leg validation that is inert off CI.
 
 ### 4.3 Benchmarks — raw samples, median, MAD
 
@@ -266,22 +329,29 @@ regenerated truth:
 
 | Fact | Value |
 |---|---|
-| `source_revision` | the commit the file was regenerated at (recorded in the file itself) |
+| `source_revision` | `f574e48` (recorded in the file itself; the two non-deterministic fields are `generated_at` and this one) |
 | catalog operations | 70 |
 | runtime registry | 88 |
 | overlap | 47 · gaps 23 · extras 41 |
 | universe | 111 |
-| executable surface | 9 |
+| executable surface | **12** operations (rose from 9 with the Wave-5/6 Studio lanes) |
+| suite-executed operations | **82** of the 111 (the other 29 are referenced-only or missing; §8 has no hidden ones) |
 | migration head | `20261112connect` |
-| truth doctor | `OK — no findings` |
+| truth doctor | `OK — no findings` (version-lockstep, docs-index, law-test-resolution, law-numbering, claim-witnesses, fail-open-defaults, board-truth) |
 
-The suite-executed count in the truth file comes from the same resolution pass the
-doctor re-checks (`law-test-resolution`), so it cannot drift from the tree.
+Two counts measure different things and are both given deliberately: **82** is the
+number of *operations* the truth engine proves are executed by the suite (from the same
+AST resolution pass the doctor re-checks, so it cannot drift from the tree); **11 770**
+is the number of *tests* the chunked parity run executed (§4.2). The regeneration moved
+only `source_revision` 946e48e → f574e48 and `generated_at`: every measured field is
+unchanged, which is what a tree without registry changes should produce.
 
-`docs/evidence/p0/ci_parity_addendum.json` records this wave's commands, exit
-codes, timings, the SHA-256 of the parity record and of the coverage artifact, and
-the two limitations of §8. It contains no invented output: every field was captured
-from a run (see §9 for the generator).
+`docs/evidence/p0/ci_parity_addendum.json` records the closeout's commands, exit
+codes, timings, the SHA-256 of the parity record and of the coverage artifact, and the
+limitations that survived §8. It contains no invented output: every field was captured
+from a run. It is not a substitute for the P0 bundle — that file is now the script's own
+output on a live PostgreSQL (§8.2), and the addendum says so instead of standing in for
+it.
 
 ---
 
@@ -428,35 +498,63 @@ truth doctor `OK — no findings`, and `scripts/durable_project_state_mutations.
 
 ## 7. Where this work is published
 
-Pushed to `origin/arena/fd837e50-nexus-ai-agent` (the only branch this session may
-push to). A pull request to `main` from this branch carries the Run ID and the
-per-chunk CI results; PR #343 remains a separate, untouched branch (§1).
+| Thing | Value |
+|---|---|
+| Branch pushed | `origin/arena/fd837e50-nexus-ai-agent` (the only branch this session may push to; no force-push, no rebase) |
+| Pull request | **#344** — https://github.com/bot523h/nexus-ai-agent/pull/344, base `main`, `OPEN` / `MERGEABLE` |
+| PR #344 title | "Waves 1–7 closeout: bounded CI parity, median benchmarks, traced history (not PR #343)" |
+| PR #343 | **superseded and closed** with a comment pointing at #344, its three unique commits cherry-picked (§2.2); its branch `arena/750b78f5-nexus-ai-agent` is preserved, nothing was force-pushed or deleted |
+| CI on the final SHA | recorded in §6.3.5 once the run on the pushed head finishes; §6.3.4 has the earlier green run (24/24) |
+
+PR #343's title advertises "Waves 2–3 integration" and its branch carries Waves 4–6 plus
+the I1/I2 checkpoint — the retraction in §1 stands: this branch is not that PR, and this
+PR is not that work.
 
 ---
 
 ## 8. Honest gaps
 
-**8.1 The ATLAS chunk did not run here — 1512 tests, reported as not run.**
-`tests/creative/atlas` needs ~18 GiB of temporary space; this machine had 8.2 GiB
-free, and the runner says so instead of silently dropping it
-(`skipped_for_space: [{"path": "tests/creative/atlas", "needs_bytes": 19327352832}]`).
-Its sources and tests are **byte-identical** to `4bcee33`, where the campaign last
-ran to completion (1491 passed, 21 skipped, 120/120 mutants killed):
+**8.1 The ATLAS campaign now runs here — 1512 ids in six sub-chunks, 1491 passed /
+21 skipped, 120/120 mutants killed.** This replaces the earlier entry that reported the
+tree as *not run* for want of ~18 GiB. Two things were wrong with that picture, and both
+are now measured rather than argued:
 
-```bash
-git diff --stat 4bcee33 HEAD -- tests/creative/atlas src/nexus_ai_agent/creative/atlas
-# (empty)
-```
+* the footprint was **per process, not per chunk** — one test builds the whole kill
+  ledger and never frees a tree. Splitting the tree into chunks therefore did not bound
+  it; suppressing bytecode did (§8.1.1);
+* the split is only worth anything if it is proven, so `SUB_CHUNKS` is checked against
+  the CI selection before execution (`11842 = 11842`, §4.2) and by a unit test that pins
+  the sub-chunks as disjoint and exhaustive.
 
-And collection equivalence still *counts* its 1512 ids against the CI selection, so
-the numbers in §4.2 are not silently short: the missing piece is execution, not
-coverage of the selection.
+Result of the whole tree, in §4.2: **1491 passed, 21 skipped** over the six sub-chunks
+(`124 + 190 + 97 + 164 + 406 + 510`), with the 120-mutant campaign itself at
+**124 passed in 711.9 s** — the same numbers the tree produced last time it ran
+completely at `4bcee33`. The 21 skips are FFmpeg/ffprobe absence and are *not* counted
+as kills; three of them say so explicitly ("mutant is only killed by a real-ffmpeg test
+that skips without ffmpeg/ffprobe on PATH (NOT a kill)").
 
-**8.2 No PostgreSQL for the P0 bundle.** `docs/evidence/p0/evidence.json` is
-untouched: its probes need a live PostgreSQL and no value was fabricated. The gap
-narrowed during §6.3 — a real PostgreSQL 16.2 (`pgserver`) was used for the schema
-golden and the `migrate-postgres` legs — but that instance is scratch-space and is
-not the P0 bundle's database, so the bundle still needs a Postgres-backed run.
+**8.1.1 What made it fit — a measured number, not a bigger disk.**
+With bytecode writing on, each mutant tree cost ~53 MB and the campaign died at mutant
+115 of 120 with `OSError: [Errno 28]`. `chunk_env` now exports
+`PYTHONDONTWRITEBYTECODE=1`, so a copy carries sources only: measured 1.35 GiB at 70
+trees and 1.75 GiB at 91, i.e. ≈19 MB per tree and ≈2.3 GiB for all 120. The budget in
+`SPACE_BUDGETS` is that measurement (3 GiB, down from a defensive 8 GiB) and the run
+completed with no space skip. Nothing about the tests changed — only whether Python
+caches bytecode in a directory that lives for one chunk.
+
+**8.2 The P0 bundle is regenerated — on a real PostgreSQL, not by hand.**
+`docs/evidence/p0/evidence.json` now carries `all_checks_passed: True` from
+`scripts/p0_evidence.py` against PostgreSQL 16.2 at migration head `20261112connect`:
+migrate 0, persistence 0, **DR proof 0** (dump → verify → restore → row preserved),
+backend policy 0, truth gate 0, and the 20 000-row restore benchmark 0. The earlier
+bundle was carried forward as a gap because this environment had no PostgreSQL; the
+number in the file is the script's own output and no field was edited.
+
+Two environment facts are worth recording because they cost time and are not bugs:
+`dr_proof.py` and `p0_benchmark.py` both target `nexus_restore_target` by default, so
+that database must exist before the bundle runs; and the pgserver socket URI
+(`?host=/socket`) is rejected by `storage/db.py:205`, so the cluster must be started on
+a TCP port.
 
 **8.3 The parity run is not GitHub Actions.**
 `CHUNKED_SUITE_VERIFICATION_WITH_COLLECTION_EQUIVALENCE` means: the *selection* is
@@ -465,11 +563,41 @@ proven identical to CI's, the tests really ran, and the environment is *not* CI'
 `ci.yml` not run). It is a substitute for nothing; it is the best local signal
 available while §6.2 holds.
 
-**8.4 The local dependency audit and CI disagree about three `soupsieve`
-advisories.** §6.3.2: locally blocking, green in CI on the same `pyproject.toml`, and
-the closure is identical to `main`'s. No allow-list entry was added on the strength of
-either run — an acceptance needs a security review this closeout does not perform — so
-the discrepancy is documented as open instead of being closed by assertion.
+**8.4 The local dependency audit is red on exactly three advisories, and cannot
+honestly be made green.** `python scripts/dependency_audit.py` reports 21 advisories:
+18 accepted by the reviewed allow-list (with the reasons the gate re-derives itself) and
+**3 blocking, all `soupsieve` 2.10**:
+
+| advisory | aliases | declared fix |
+|---|---|---|
+| `CVE-2026-126190` | `GHSA-mmhr-3c5m-f64f` | `4.0.0` |
+| `CVE-2026-126193` | `GHSA-7g44-g9rc-x53w` | `3.0.2` |
+| `CVE-2026-126191` | `GHSA-6655-6qjp-jx7x` | `3.0.2` |
+
+**Every declared fix version is unpublished**, which is the whole problem:
+
+```
+$ python -m pip index versions soupsieve
+soupsieve (2.10)
+Available versions: 2.10, 2.9.2, 2.9.1, 2.9, 2.8.4, … 0.4
+  INSTALLED: 2.10
+  LATEST:    2.10
+$ python -m pip install -U soupsieve      # → still 2.10, "already satisfied"
+```
+
+The package's entire published history is 2.x; there is no 3.0.2 and no 4.0.0 to install,
+so `pip install -U` cannot clear the advisory and a version pin cannot either. The two
+acceptance reasons the gate understands cannot express this either — `no-fix-released`
+self-expires the moment pip-audit reports a non-empty fix list (it does: `4.0.0`/`3.0.2`),
+and `transitive-cap` needs a real capping requirement (beautifulsoup4 requires
+`soupsieve>1.2`, with no upper bound). **No allow-list entry was invented to silence
+it**; the gate's design earns its keep here by refusing an automatic acceptance and
+leaving a human decision where a human decision belongs. Separately: seven `pip`
+advisories that appeared in the first local run were the sandbox's own `pip 23.0.1` and
+disappeared after upgrading it to 26.3 — an environment artefact, not a repository one.
+CI's `dependency-audit` job is green on the same `pyproject.toml` (§6.3.2); the honest
+statement is that the two environments resolve different advisory sets, not that one of
+them is wrong.
 
 **8.5 Branch protection could not be read.** `gh api
 repos/bot523h/nexus-ai-agent/branches/main/protection` returns HTTP 403 ("Resource
