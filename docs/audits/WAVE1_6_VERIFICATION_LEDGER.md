@@ -373,6 +373,18 @@ neither run is evidence about this branch's code. Recorded as an unresolved
 discrepancy — the local result is *not* presented as a fix, and no allow-list entry was
 added on the strength of either run.
 
+*The `test` job.* It failed on `aaf3ff8` at
+`tests/unit/test_reconciler_cli_and_verified_registration.py::test_cli_is_a_dry_run_by_default`
+with `ResourceClosedError: This Connection is closed` and "Event loop is closed".
+The test drove `reconciler._run` with `--database-path` absent, so the CLI used the
+**process-global** `storage.db.get_session` engine — which belongs to whichever event
+loop created it first. In a single-process suite that engine can be retired or bound
+to a closed loop by an earlier module, which is exactly what happened; run alone, the
+module is green. The test now substitutes that one function with a session factory over
+its own engine: the CLI keeps its real path, the engine is never global, and the
+reconciliation now runs against the rows the test itself wrote (a stronger assertion
+than "whatever `data/app.sqlite` held").
+
 *The fifth harness job.* The same run turned `trust-mutations` red at a step the first
 run never reached: `scripts/durable_project_state_mutations.py` reported
 `33/34 killed`, with `retraction_not_token_scoped` surviving. Reproduced locally, and

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from sqlmodel import SQLModel
 from nexus_ai_agent.creative.project_state.store import SqlProjectRevisionStore
 from nexus_ai_agent.creative.studio.models import Timeline, compute_state_hash, new_project
 from nexus_ai_agent.maintenance import reconciler
+from nexus_ai_agent.storage import db as storage_db
 from nexus_ai_agent.storage import models as orm
 
 JOB_ID = "job-cli-1"
@@ -50,6 +52,30 @@ class _Ctx:
 
     async def __aexit__(self, *exc: object) -> bool:
         return False
+
+
+@pytest.fixture()
+def isolated_cli_session(monkeypatch: pytest.MonkeyPatch, session_factory: Any) -> Any:
+    """Point the CLI at *this test's* database, not the process-global engine.
+
+    ``reconciler._run`` reaches the application session through
+    ``nexus_ai_agent.storage.db.get_session`` when ``--database-path`` is absent —
+    a process-global engine plus its cache. That is correct for an operator and
+    toxic for a test: in the full suite another module can dispose the engine
+    while this one holds a connection, which surfaces here as
+    ``sqlalchemy.exc.ResourceClosedError: This Connection is closed`` (CI run
+    43643889942, ``test (pytest -m "not slow")``).  Substituting the fixture's
+    engine keeps the CLI on its real code path *and* reconciles it against the
+    rows the test actually wrote.
+    """
+
+    @asynccontextmanager
+    async def _get_session(_db_path: str | None = None) -> Any:
+        async with session_factory() as session:
+            yield session
+
+    monkeypatch.setattr(storage_db, "get_session", _get_session)
+    return session_factory
 
 
 @pytest.fixture()
@@ -121,7 +147,9 @@ def _passport() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-async def test_cli_is_a_dry_run_by_default(tmp_path: Path, session_factory: Any, capsys) -> None:
+async def test_cli_is_a_dry_run_by_default(
+    tmp_path: Path, session_factory: Any, isolated_cli_session: Any, capsys
+) -> None:
     revision = await _commit_revision(session_factory)
     artifact = _write_published(tmp_path, "out.mp4", b"orphan-bytes" * 8, 1)
     # The CLI opens its own queue; this row exists so the scan has real facts
