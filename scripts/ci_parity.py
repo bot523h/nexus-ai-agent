@@ -164,12 +164,18 @@ SUB_CHUNKS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
 #: Space each sub-chunk is assumed to need.  The two campaign files copy and run
 #: the tree once per mutant, which is where the gigabytes come from; the wave and
 #: solver groups are ordinary test modules.
-#: ``atlas#mutation-120`` is the measured peak: one of its tests builds the whole
-#: kill ledger in a single pytest process (120 mutant trees, ~53 MB each ≈ 6.6 GB),
-#: which no module split can carve up — the peak is per *process*.  The budget says
-#: so, and the runner skips that sub-chunk (loudly) on a machine without the room.
+#:
+#: ``atlas#mutation-120`` is the only one measured rather than estimated.  One of its
+#: tests builds the whole kill ledger inside a single pytest process and never frees a
+#: tree, so the peak is per *process* and no module split carves it up — with bytecode
+#: writing on (the default) it was ~53 MB per mutant and ran the machine out of disk at
+#: mutant 115 of 120.  ``chunk_env`` now sets ``PYTHONDONTWRITEBYTECODE=1``, which takes
+#: the same campaign to ~19 MB per mutant (measured at 1.35 GiB for 70 trees and
+#: 1.75 GiB for 91, i.e. ~2.3 GiB at 120) — and it completes.  The budget is that
+#: measurement with room to spare for the repository copy; the runner still refuses the
+#: sub-chunk (loudly) on a machine without the room.
 SPACE_BUDGETS: dict[str, int] = {
-    f"{ATLAS}#mutation-120": 8 * 1024**3,
+    f"{ATLAS}#mutation-120": 3 * 1024**3,
     f"{ATLAS}#falsification-160": 3 * 1024**3,
     f"{ATLAS}#titan-mutations": 3 * 1024**3,
     f"{ATLAS}#prometheus-governance": 2 * 1024**3,
