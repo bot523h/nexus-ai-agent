@@ -82,11 +82,100 @@ NOT_REPRODUCED: tuple[str, ...] = (
 #: the space; everything else is chunked per top-level directory.
 SPLIT_ONE_LEVEL: tuple[str, ...] = ("tests/creative",)
 
-#: Free space a chunk is assumed to need, in bytes.  ``tests/creative/atlas`` is
-#: the outlier (it peaked at ~17 GB here); everything else stays in the low
-#: hundreds of MB, so the default only has to clear that comfortably.
+#: Free space a chunk is assumed to need, in bytes.  The ATLAS campaigns are the
+#: outliers (one directory-wide run peaked at ~17 GB here); everything else stays
+#: in the low hundreds of MB, so the default only has to clear that comfortably.
 DEFAULT_BUDGET_BYTES = 4 * 1024**3
-SPACE_BUDGETS: dict[str, int] = {"tests/creative/atlas": 18 * 1024**3}
+
+#: Trees that are one logical chunk but too heavy to run as one directory.  Each
+#: entry lists **disjoint, exhaustive** groups of test modules: disjoint so no test
+#: is counted twice, exhaustive so no test is left out.  Exhaustiveness is not a
+#: promise made here — ``compare_collections`` proves it before anything runs, so a
+#: module added to the tree and forgotten here turns the run red (exit 2) instead of
+#: silently dropping out of the local reproduction.
+ATLAS = "tests/creative/atlas"
+SUB_CHUNKS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    ATLAS: (
+        (
+            "mutation-120",
+            (f"{ATLAS}/test_prometheus_mutations_120.py",),
+        ),
+        (
+            "falsification-160",
+            (f"{ATLAS}/test_prometheus_falsification_160.py",),
+        ),
+        (
+            "titan-mutations",
+            (
+                f"{ATLAS}/test_titan_olympus_mutations.py",
+                f"{ATLAS}/test_titan_olympus_mutation_killers.py",
+            ),
+        ),
+        (
+            "prometheus-governance",
+            (
+                f"{ATLAS}/test_atlas_spine_governance.py",
+                f"{ATLAS}/test_prometheus_coverage_edges.py",
+                f"{ATLAS}/test_prometheus_playground_e2e.py",
+                f"{ATLAS}/test_prometheus_studio_playground.py",
+                f"{ATLAS}/test_prometheus_verifier_and_governance.py",
+                f"{ATLAS}/test_studio_render_adapter.py",
+            ),
+        ),
+        (
+            "waves-13-22",
+            (
+                f"{ATLAS}/test_wave13_portal_metrics.py",
+                f"{ATLAS}/test_wave14_atmospheric_scattering.py",
+                f"{ATLAS}/test_wave15_eikonal_crowd.py",
+                f"{ATLAS}/test_wave16_voronoi_fracture.py",
+                f"{ATLAS}/test_wave17_anamorphic_optics.py",
+                f"{ATLAS}/test_wave18_pontryagin_pacing.py",
+                f"{ATLAS}/test_wave19_feature_film_compiler.py",
+                f"{ATLAS}/test_wave20_adversarial.py",
+                f"{ATLAS}/test_wave20_staged_spine.py",
+                f"{ATLAS}/test_wave21_30_benchmarks.py",
+                f"{ATLAS}/test_wave21_sdf_gi.py",
+                f"{ATLAS}/test_wave22_spectral_ocean.py",
+            ),
+        ),
+        (
+            "waves-23-30-and-solvers",
+            (
+                f"{ATLAS}/test_adjoint_inverse_cinema_solver.py",
+                f"{ATLAS}/test_anamorphic_scattering_renderer.py",
+                f"{ATLAS}/test_nash_dramatic_staging_solver.py",
+                f"{ATLAS}/test_port_hamiltonian_world_solver.py",
+                f"{ATLAS}/test_riemannian_camera_choreographer.py",
+                f"{ATLAS}/test_wasserstein_schrodinger_bridge.py",
+                f"{ATLAS}/test_wave23_pyro_blackbody.py",
+                f"{ATLAS}/test_wave24_rigid_contact_pgs.py",
+                f"{ATLAS}/test_wave25_botanical_wind.py",
+                f"{ATLAS}/test_wave26_film_optic.py",
+                f"{ATLAS}/test_wave27_modal_foley.py",
+                f"{ATLAS}/test_wave28_showrunner_bible.py",
+                f"{ATLAS}/test_wave29_media_sine.py",
+                f"{ATLAS}/test_wave30_olympus_master.py",
+            ),
+        ),
+    ),
+}
+
+#: Space each sub-chunk is assumed to need.  The two campaign files copy and run
+#: the tree once per mutant, which is where the gigabytes come from; the wave and
+#: solver groups are ordinary test modules.
+#: ``atlas#mutation-120`` is the measured peak: one of its tests builds the whole
+#: kill ledger in a single pytest process (120 mutant trees, ~53 MB each ≈ 6.6 GB),
+#: which no module split can carve up — the peak is per *process*.  The budget says
+#: so, and the runner skips that sub-chunk (loudly) on a machine without the room.
+SPACE_BUDGETS: dict[str, int] = {
+    f"{ATLAS}#mutation-120": 8 * 1024**3,
+    f"{ATLAS}#falsification-160": 3 * 1024**3,
+    f"{ATLAS}#titan-mutations": 3 * 1024**3,
+    f"{ATLAS}#prometheus-governance": 2 * 1024**3,
+    f"{ATLAS}#waves-13-22": 2 * 1024**3,
+    f"{ATLAS}#waves-23-30-and-solvers": 2 * 1024**3,
+}
 
 #: Prefix of the per-chunk temporary directory.  The runner deletes only
 #: directories it created with this prefix — never a shared path.
@@ -120,16 +209,32 @@ def workflow_marker() -> str:
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class Chunk:
-    """One directory pytest is pointed at."""
+    """One pytest invocation: a directory, or a named group of modules inside it."""
 
+    #: The test tree this chunk belongs to.  Filtering and the collection proof use
+    #: it; for sub-chunks it is the *tree*, not the module list.
     path: str
     #: Free space this chunk is expected to need (see ``SPACE_BUDGETS``).
     budget_bytes: int = DEFAULT_BUDGET_BYTES
+    #: Modules pytest is pointed at.  Empty means "the whole ``path`` tree".
+    targets: tuple[str, ...] = ()
+    #: Human-readable name for a sub-chunk (``tests/…/atlas#mutation-120``).
+    label: str = ""
 
     @property
     def estimated_bytes(self) -> int:
         """The footprint this chunk is expected to need."""
         return self.budget_bytes
+
+    @property
+    def name(self) -> str:
+        """How this chunk is named in the report (sub-chunks carry their label)."""
+        return self.label or self.path
+
+    @property
+    def argv_targets(self) -> tuple[str, ...]:
+        """The paths handed to pytest: the module group, or the whole tree."""
+        return self.targets or (self.path,)
 
 
 def _has_tests(directory: Path) -> bool:
@@ -150,6 +255,18 @@ def discover_chunks(tests_root: Path = TESTS_ROOT) -> list[Chunk]:
     """
     chunks: list[Chunk] = []
 
+    def _sub_chunks(tree: str) -> list[Chunk]:
+        """The named module groups of *tree* (see :data:`SUB_CHUNKS`)."""
+        return [
+            Chunk(
+                tree,
+                SPACE_BUDGETS.get(f"{tree}#{suffix}", DEFAULT_BUDGET_BYTES),
+                targets=modules,
+                label=f"{tree}#{suffix}",
+            )
+            for suffix, modules in SUB_CHUNKS[tree]
+        ]
+
     def _chunk(path: Path) -> Chunk:
         relative = (
             path.relative_to(REPO_ROOT).as_posix()
@@ -166,7 +283,14 @@ def discover_chunks(tests_root: Path = TESTS_ROOT) -> list[Chunk]:
         )
         if relative in SPLIT_ONE_LEVEL:
             children = sorted(child for child in directory.iterdir() if child.is_dir())
-            chunks.extend(_chunk(child) for child in children if _has_tests(child))
+            for child in children:
+                if not _has_tests(child):
+                    continue
+                child_relative = _relative(child)
+                if child_relative in SUB_CHUNKS:
+                    chunks.extend(_sub_chunks(child_relative))
+                    continue
+                chunks.append(_chunk(child))
             continue
         if _has_tests(directory):
             chunks.append(_chunk(directory))
@@ -182,13 +306,21 @@ def filter_chunks(chunks: Iterable[Chunk], requested: Sequence[str]) -> list[Chu
     selected = [
         chunk
         for chunk in every
-        if any(chunk.path == path or chunk.path.startswith(f"{path}/") for path in wanted)
+        if any(
+            chunk.path == path
+            or chunk.path.startswith(f"{path}/")
+            or chunk.name == path
+            or path in chunk.targets
+            for path in wanted
+        )
     ]
     missing = [
         path
         for path in wanted
         if not any(
             path == chunk.path
+            or path == chunk.name
+            or path in chunk.targets
             or path.startswith(f"{chunk.path}/")
             or chunk.path.startswith(f"{path}/")
             for chunk in every
@@ -305,6 +437,29 @@ def collect_node_ids(
 # --------------------------------------------------------------------------- #
 # space and isolation
 # --------------------------------------------------------------------------- #
+def collection_scope(requested: Sequence[str], chunks: Sequence[Chunk]) -> list[str]:
+    """The paths the CI selection is collected over for this run.
+
+    A run is scoped to what was asked for: the whole ``tests`` tree by default, a
+    requested tree, a requested module — or, when a *chunk name* is requested
+    (``tests/creative/atlas#mutation-120``), that chunk's own targets.  Handing
+    pytest the chunk name itself would fail ("file or directory not found"), and
+    handing it the parent tree would collect far more than was asked for.
+    """
+    if not requested:
+        return ["tests"]
+    scope: list[str] = []
+    for path in requested:
+        if (REPO_ROOT / path).exists():
+            scope.append(path)
+            continue
+        matched = [chunk for chunk in chunks if chunk.name == path]
+        scope.extend(target for chunk in matched for target in chunk.argv_targets)
+        if not matched:
+            scope.append(path)  # let pytest report the bad path
+    return list(dict.fromkeys(scope))
+
+
 def free_bytes(path: Path | None = None) -> int:
     """Free space on the filesystem holding *path* (``/tmp`` by default)."""
     target = path or Path(tempfile.gettempdir())
@@ -332,16 +487,26 @@ def isolated_tempdir(prefix: str = TEMP_PREFIX) -> Iterator[Path]:
 
 
 def chunk_env(tmpdir: Path, base: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The environment of one chunk: every temp variable points into *tmpdir*."""
+    """The environment of one chunk: every temp variable points into *tmpdir*.
+
+    ``PYTHONDONTWRITEBYTECODE=1`` is set for the same reason the temp directory is
+    isolated.  The ATLAS campaign copies the whole tree once per mutant and runs
+    pytest inside each copy; without this, every copy also grows its own
+    ``__pycache__`` (and inherits the repository's), which is pure waste in a
+    directory that lives for one chunk.  Measured on this machine: the campaign
+    went from "ran out of disk at mutant 115 of 120" to completing inside the same
+    budget.  It changes nothing about what runs, only whether bytecode is cached.
+    """
     env = dict(os.environ if base is None else base)
     env.pop("PYTEST_ADDOPTS", None)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     for name in ("TMPDIR", "TEMP", "TMP"):
         env[name] = str(tmpdir)
     return env
 
 
 def pytest_argv(chunk: Chunk, *, tmp_root: Path, marker: str) -> list[str]:
-    """The pytest command line for *chunk*: the CI selection, one directory."""
+    """The pytest command line for *chunk*: the CI selection, one tree or module group."""
     return [
         sys.executable,
         "-m",
@@ -355,7 +520,7 @@ def pytest_argv(chunk: Chunk, *, tmp_root: Path, marker: str) -> list[str]:
         str(tmp_root),
         "-p",
         "no:cacheprovider",
-        chunk.path,
+        *chunk.argv_targets,
     ]
 
 
@@ -412,7 +577,7 @@ def run_chunk(
             # path such as /tmp/pytest-of-<user>.
             shutil.rmtree(tmpdir, ignore_errors=True)
     return Result(
-        chunk=chunk.path,
+        chunk=chunk.name,
         exit_code=completed.returncode,
         summary=_summary(output),
         collected=collected,
@@ -451,7 +616,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         chunks = [Chunk(chunk.path, budget) for chunk in chunks]
     if args.list:
         for chunk in chunks:
-            print(chunk.path)
+            print(chunk.name)
         return 0
 
     proof: CollectionEquivalence | None = None
@@ -459,11 +624,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("[ci_parity] collection proof skipped on request — parity is NOT proven")
     else:
         print(f"[ci_parity] collecting the CI selection (-m {marker!r}) …", flush=True)
+        # The proof is scoped to what was asked for: a run over one tree must prove
+        # that *this tree's* chunks are exactly its slice of the CI selection, not
+        # that they cover the other trees too.
+        scope = collection_scope(list(args.paths), chunks)
         with isolated_tempdir() as tmpdir:
             env = chunk_env(tmpdir)
-            ci_ids = collect_node_ids(["tests"], marker=marker, env=env)
+            ci_ids = collect_node_ids(scope, marker=marker, env=env)
             per_chunk = {
-                chunk.path: collect_node_ids([chunk.path], marker=marker, env=env)
+                chunk.name: collect_node_ids(list(chunk.argv_targets), marker=marker, env=env)
                 for chunk in chunks
             }
         proof = compare_collections(ci_ids, per_chunk)
@@ -489,13 +658,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not fits(chunk, available):
             skipped.append(chunk)
             print(
-                f"=== {chunk.path}: SKIPPED (needs ~{chunk.estimated_bytes / 1024**3:.0f} GiB,"
+                f"=== {chunk.name}: SKIPPED (needs ~{chunk.estimated_bytes / 1024**3:.0f} GiB,"
                 f" {available / 1024**3:.1f} GiB free)",
                 flush=True,
             )
             continue
-        collected = len(proof.per_chunk.get(chunk.path, ())) if proof else 0
-        print(f"=== {chunk.path}", flush=True)
+        collected = len(proof.per_chunk.get(chunk.name, ())) if proof else 0
+        print(f"=== {chunk.name}", flush=True)
         results.append(
             run_chunk(chunk, marker=marker, keep_temp=args.keep_temp, collected=collected)
         )
@@ -508,7 +677,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"  [{result.collected} collected, {result.duration_seconds:.1f}s]"
         )
     for chunk in skipped:
-        print(f"SPACE  {chunk.path:<40} not run (free space below the budget)")
+        print(f"SPACE  {chunk.name:<40} not run (free space below the budget)")
 
     if args.json_out:
         record: dict[str, object] = {
@@ -530,7 +699,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for result in results
             ],
             "skipped_for_space": [
-                {"path": chunk.path, "needs_bytes": chunk.estimated_bytes} for chunk in skipped
+                {"path": chunk.name, "needs_bytes": chunk.estimated_bytes} for chunk in skipped
             ],
         }
         Path(args.json_out).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")

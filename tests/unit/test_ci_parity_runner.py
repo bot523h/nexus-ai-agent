@@ -194,6 +194,95 @@ def test_every_test_directory_is_covered_by_a_chunk() -> None:
     )
 
 
+def test_the_heaviest_tree_is_split_into_disjoint_exhaustive_sub_chunks() -> None:
+    """ATLAS runs as sub-chunks; together they are exactly its test modules.
+
+    The runner refuses to start when the union of the chunks differs from the CI
+    selection, so this test guards the other half: that the split is *exhaustive*
+    over the tree (a new module cannot silently fall out) and *disjoint* (no module
+    runs twice).
+    """
+    runner = _load_runner()
+    chunks = runner.discover_chunks()
+    atlas = [chunk for chunk in chunks if chunk.path == runner.ATLAS]
+
+    assert len(atlas) >= 4, "tests/creative/atlas must be split, not run as one directory"
+    assert all(chunk.targets for chunk in atlas), "a sub-chunk must name its modules"
+    assert len({chunk.name for chunk in atlas}) == len(atlas), "sub-chunk names collide"
+
+    listed = [module for chunk in atlas for module in chunk.targets]
+    assert len(listed) == len(set(listed)), (
+        "a module is listed by two sub-chunks — it would run twice"
+    )
+
+    on_disk = sorted(
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in (REPO_ROOT / runner.ATLAS).rglob("test_*.py")
+    )
+    assert sorted(listed) == on_disk, (
+        "the sub-chunks must name every module in the tree exactly once; "
+        f"missing={sorted(set(on_disk) - set(listed))} "
+        f"stale={sorted(set(listed) - set(on_disk))}"
+    )
+    for module in listed:
+        assert (REPO_ROOT / module).is_file(), f"{module} does not exist"
+
+
+def test_a_sub_chunk_runs_only_its_own_modules(tmp_path: Path) -> None:
+    """Each sub-chunk is a separate pytest invocation with its own temp root."""
+    runner = _load_runner()
+    sub_chunks = [chunk for chunk in runner.discover_chunks() if chunk.label]
+    assert sub_chunks
+    for chunk in sub_chunks:
+        argv = runner.pytest_argv(chunk, tmp_root=tmp_path, marker="not slow")
+        assert argv[-len(chunk.targets) :] == list(chunk.targets)
+        assert argv[argv.index("--basetemp") + 1] == str(tmp_path)
+        # The tree itself is never handed over — that would re-run the whole thing.
+        assert chunk.path not in argv
+
+
+def test_a_requested_module_selects_its_sub_chunk() -> None:
+    """Naming one module runs the sub-chunk that owns it, not the whole tree."""
+    runner = _load_runner()
+    chunks = runner.discover_chunks()
+    atlas = next(chunk for chunk in chunks if chunk.label)
+    module = atlas.targets[0]
+
+    selected = runner.filter_chunks(chunks, [runner.ATLAS])
+    assert {chunk.name for chunk in selected} == {
+        chunk.name for chunk in chunks if chunk.path == runner.ATLAS
+    }, "naming the tree must select every sub-chunk of it"
+
+    one = runner.filter_chunks(chunks, [module])
+    assert [chunk.name for chunk in one] == [atlas.name]
+
+
+def test_the_collection_scope_follows_the_request() -> None:
+    """A chunk name is collected as its own targets, never as a bad path."""
+    runner = _load_runner()
+    chunks = runner.discover_chunks()
+    atlas = next(chunk for chunk in chunks if chunk.label)
+
+    assert runner.collection_scope([], chunks) == ["tests"]
+    assert runner.collection_scope(["tests/unit"], chunks) == ["tests/unit"]
+    assert runner.collection_scope([atlas.name], chunks) == list(atlas.targets)
+    module = atlas.targets[0]
+    assert runner.collection_scope([module], chunks) == [module]
+    # An unknown path is handed to pytest, which reports it, instead of vanishing.
+    assert runner.collection_scope(["tests/not-a-tree"], chunks) == ["tests/not-a-tree"]
+
+
+def test_the_space_budget_covers_every_sub_chunk() -> None:
+    """No sub-chunk silently inherits the default budget meant for small trees."""
+    runner = _load_runner()
+    for chunk in runner.discover_chunks():
+        if chunk.label:
+            assert chunk.name in runner.SPACE_BUDGETS, f"{chunk.name} has no explicit space budget"
+            assert chunk.estimated_bytes < 18 * 1024**3, (
+                "a sub-chunk that still needs the whole tree's budget is not a split"
+            )
+
+
 def test_a_requested_subtree_selects_its_chunks_and_nothing_else() -> None:
     """``ci_parity.py tests/creative`` runs the engine chunks only."""
     runner = _load_runner()
@@ -242,6 +331,7 @@ def test_the_chunk_environment_points_every_temp_variable_into_the_isolated_dir(
     assert env["TMPDIR"] == env["TEMP"] == env["TMP"] == str(tmp_path)
     assert "PYTEST_ADDOPTS" not in env, "a stray pytest option could change the selection"
     assert env["PATH"] == "/bin", "the rest of the environment must survive"
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1", "bytecode in a per-mutant tree copy is pure waste"
 
 
 def test_a_chunk_that_does_not_fit_is_skipped_not_started() -> None:
