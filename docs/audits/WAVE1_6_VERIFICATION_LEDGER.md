@@ -36,18 +36,21 @@ Two separate inaccuracies, both stated here rather than smoothed over:
 ### 2.1 Size, measured (not estimated)
 
 ```bash
-git rev-list --count deab2b3e..HEAD                  # 1507
-git rev-list --count --first-parent deab2b3e..HEAD   # 54
-git rev-list --count da3e5ed7..HEAD                  # 31
+git rev-list --count deab2b3e..HEAD                  # 1511
+git rev-list --count --first-parent deab2b3e..HEAD   # 58
+git rev-list --count da3e5ed7..HEAD                  # 35
 ```
 
-(Measured at the commit that carries this sentence: every later documentation commit
-adds one to the total and to the window, and none adds behaviour. 19 of the 31 are the
-pre-closeout waves, 12 are this closeout.)
+Measured with `HEAD` at `2ff8b30`, the last commit whose tree carries code. Every commit
+after it is documentation or evidence and adds exactly one to all three counts, so the
+commit that carries this table reads **1512 / 59 / 36** — read them off `git` rather than
+trusting a number copied into prose, which is how the earlier revision of this file
+drifted. 19 of the 35 are the pre-closeout waves, 16 are this closeout.
 
 The **diff** is smaller than the history and easier to review:
-`git diff --stat deab2b3e..HEAD` reports **512 files, +124 220 / −2 841**. §2.4 is a
-reading guide for exactly those files.
+`git diff --shortstat deab2b3e..2ff8b30` reports **512 files, +123 972 / −2 841** (the
+insertion count moves by a few hundred with each documentation commit; the file and
+deletion counts do not). §2.4 is a reading guide for exactly those files.
 
 The directive issued for this closeout expected **161 commits**. No measurement
 reproduces that figure: not the total (1503), not the first-parent count (50), not
@@ -73,7 +76,7 @@ reset, rebased or force-pushed to make room: `d1fb569`, `4bcee33`, `40cf83c`.
 
 ### 2.3 The wave window, commit by commit
 
-`483403d..HEAD` — 31 commits. Everything in §3–§7 is one of these.
+`483403d..HEAD` — 35 commits at `2ff8b30`. Everything in §3–§7 is one of these.
 
 | # | SHAs (oldest first) | Wave | What it is |
 |---|---|---|---|
@@ -108,9 +111,13 @@ reset, rebased or force-pushed to make room: `d1fb569`, `4bcee33`, `40cf83c`.
 | 29 | `80c8ea6` | 8 | the chain-count sentence made self-referential and true (docs only) |
 | 30 | `8fa032e` | 8 | ATLAS split into six proven sub-chunks; PG concurrency module made order-independent |
 | 31 | `22e761a` | 8 | the P0 bundle regenerated on a real PostgreSQL 16.2 |
+| 32 | `f574e48` | 4 | the mutation budget replaced by the measured peak (3 GiB) — **the revision §4 is measured at** |
+| 33 | `f395487` | 8 | the ledger re-measured, §2.4 review guide, §7/#343 supersession |
+| 34 | `f1dbaf0` | 8 | one stray blank line at EOF in `pyproject.toml` |
+| 35 | `2ff8b30` | 8 | §8.6 diff-check residue + the ATLAS reproduction line |
 
-Commits 28–29 are documentation only; 30–31 are behaviour and evidence, and §4 is
-measured at 31.
+Commits 28–29 are documentation only; 30–32 are behaviour, evidence and budgets; §4 is
+measured at `f574e48` (32).
 
 
 Integrity: no `rebase`, no `reset --hard` on an existing commit, no force-push was
@@ -496,6 +503,37 @@ ruff and `ruff format --check` clean, `mypy src` 552 files clean, `deptry .` cle
 truth doctor `OK — no findings`, and `scripts/durable_project_state_mutations.py`
 34/34 killed.
 
+**6.3.5 The run on the pushed head — 24/24 SUCCESS.**
+Run [`43746293967`](https://github.com/bot523h/nexus-ai-agent/actions/runs/43746293967) on
+`2ff8b30` (`pull_request`, 18:21 → 20:42 UTC) finished with **every job green**:
+
+```
+test (pytest -m "not slow")           python-parity (3.10) (3.11) (3.12)   migrate-postgres
+lint (ruff + mypy + lockstep)         lint-fast (lockstep + pinned ruff)   dependency-audit
+continuum-evidence (3.10/3.11/3.12)   extras-matrix (core/speech/translate/pdf)
+merge-base-guard (base == main)       release-lineage
+trust-mutations   temporal-mutations   governance-mutations
+execution-core-mutations   api-gate-mutations   remote-key-mutations   b2-blob-tier-mutations
+```
+
+Two honest notes rather than a clean sweep of the story:
+
+* `python-parity (3.10)` needed **two reruns**. The first attempt was killed by the runner
+  ~4 minutes in and never finalised a log, so it is not diagnosable from here; the second
+  ran into the job's own 45-minute ceiling; the third finished green at ~43 minutes. The leg
+  is an order of magnitude slower than 3.11/3.12 (~7 min) on the same selection — worth a
+  look in a future wave — and **its timeout was not raised to make it pass**.
+* The **CI** `dependency-audit` job is green on the same `pyproject.toml` while the same
+  script run locally is red on three `soupsieve` advisories (§8.4). The two environments
+  resolve different advisory sets; neither result was massaged and no allow-list entry was
+  added.
+
+**6.3.6 What this run does not prove.** It is the `pull_request` run on this branch, not a
+run on `main` after a merge; the CircleCI status of §6.1 is unaffected by it; and the
+branch-protection policy of §8.5 remains unread.
+
+---
+
 ## 7. Where this work is published
 
 | Thing | Value |
@@ -504,7 +542,7 @@ truth doctor `OK — no findings`, and `scripts/durable_project_state_mutations.
 | Pull request | **#344** — https://github.com/bot523h/nexus-ai-agent/pull/344, base `main`, `OPEN` / `MERGEABLE` |
 | PR #344 title | "Waves 1–7 closeout: bounded CI parity, median benchmarks, traced history (not PR #343)" |
 | PR #343 | **superseded and closed** with a comment pointing at #344, its three unique commits cherry-picked (§2.2); its branch `arena/750b78f5-nexus-ai-agent` is preserved, nothing was force-pushed or deleted |
-| CI on the final SHA | recorded in §6.3.5 once the run on the pushed head finishes; §6.3.4 has the earlier green run (24/24) |
+| CI on `2ff8b30` | **run `43746293967` — 24/24 jobs SUCCESS** (§6.3.5); the documentation commits after it carry their own run, recorded in the PR body |
 
 PR #343's title advertises "Waves 2–3 integration" and its branch carries Waves 4–6 plus
 the I1/I2 checkpoint — the retraction in §1 stands: this branch is not that PR, and this
