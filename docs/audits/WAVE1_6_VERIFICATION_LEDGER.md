@@ -36,15 +36,18 @@ Two separate inaccuracies, both stated here rather than smoothed over:
 ### 2.1 Size, measured (not estimated)
 
 ```bash
-git rev-list --count deab2b3e..HEAD              # 1495
-git rev-list --count --first-parent deab2b3e..HEAD   # 42
-git rev-list --count da3e5ed7..HEAD               # 21
+git rev-list --count deab2b3e..HEAD                  # 1503
+git rev-list --count --first-parent deab2b3e..HEAD   # 50
+git rev-list --count da3e5ed7..HEAD                  # 27
 ```
 
+(19 of the 27 are the pre-closeout waves; 8 are this closeout — `9da4619` … the
+commit that carries this paragraph.)
+
 The directive issued for this closeout expected **161 commits**. No measurement
-reproduces that figure: not the total (1495), not the first-parent count (42), not
-the wave window (21). The three real counts are given above; 161 is not quoted
-anywhere else in this file. The 1495 is dominated by 1453 commits that a previous
+reproduces that figure: not the total (1503), not the first-parent count (50), not
+the wave window (27). The three real counts are given above; 161 is not quoted
+anywhere else in this file. The 1503 is dominated by 1453 commits that a previous
 session merged in from parallel branches — they are part of the branch's history and
 are not re-litigated here.
 
@@ -65,7 +68,7 @@ reset, rebased or force-pushed to make room: `d1fb569`, `4bcee33`, `40cf83c`.
 
 ### 2.3 The wave window, commit by commit
 
-`483403d..HEAD` — 21 commits. Everything in §3–§7 is one of these.
+`483403d..HEAD` — 27 commits. Everything in §3–§7 is one of these.
 
 | # | SHAs (oldest first) | Wave | What it is |
 |---|---|---|---|
@@ -89,7 +92,13 @@ reset, rebased or force-pushed to make room: `d1fb569`, `4bcee33`, `40cf83c`.
 | 18 | `c55a8a0` | 3 | scene flow block matching evaluated per shift, not per pixel |
 | 19 | `ce46a62` | 3 | pack benchmarks: warm-up, N=5, median + MAD |
 | 20 | `9da4619` | 4 | whole-tree `deptry` made honest about `scripts/` |
-| 21 | *(this file's commit)* | 5 | this ledger + `docs/evidence/p0/ci_parity_addendum.json` |
+| 21 | `946e48e` | 5 | this ledger (rewritten) + `docs/evidence/p0/ci_parity_addendum.json` |
+| 22 | `85b3101` | 5 | operation truth regenerated at the docs commit |
+| 23 | `1e1201d` | 8 | the four red CI jobs of the first run, fixed (§6.3) |
+| 24 | `a0eb95b` | 8 | the ledger records that run |
+| 25 | `aaf3ff8` | 8 | the fencing-token mutant now removes both enforcement points (§6.3.2) |
+| 26 | `303129c` | 8 | the reconciler CLI test off the process-global engine (§6.3.2) |
+| 27 | `6793bf2` + *(this file's commit)* | 8 | the green run recorded (§6.3.4) |
 
 Integrity: no `rebase`, no `reset --hard` on an existing commit, no force-push was
 used at any point. The only history edit was `git commit --amend` on `ce46a62`
