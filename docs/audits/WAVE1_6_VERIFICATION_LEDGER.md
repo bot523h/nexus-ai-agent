@@ -41,8 +41,9 @@ git rev-list --count --first-parent deab2b3e..HEAD   # 50
 git rev-list --count da3e5ed7..HEAD                  # 27
 ```
 
-(19 of the 27 are the pre-closeout waves; 8 are this closeout — `9da4619` … the
-commit that carries this paragraph.)
+(Measured at `6793bf2`; the sentence is self-referential — every later
+documentation commit adds one to the total and to the window, and none adds behaviour.
+19 of the 27 are the pre-closeout waves, 8 are this closeout.)
 
 The directive issued for this closeout expected **161 commits**. No measurement
 reproduces that figure: not the total (1503), not the first-parent count (50), not
@@ -98,7 +99,11 @@ reset, rebased or force-pushed to make room: `d1fb569`, `4bcee33`, `40cf83c`.
 | 24 | `a0eb95b` | 8 | the ledger records that run |
 | 25 | `aaf3ff8` | 8 | the fencing-token mutant now removes both enforcement points (§6.3.2) |
 | 26 | `303129c` | 8 | the reconciler CLI test off the process-global engine (§6.3.2) |
-| 27 | `6793bf2` + *(this file's commit)* | 8 | the green run recorded (§6.3.4) |
+| 27 | `6793bf2` | 8 | the green run recorded (§6.3.4) |
+
+Commits after `6793bf2` are documentation only — this row's table stops where the
+behaviour stops.
+
 
 Integrity: no `rebase`, no `reset --hard` on an existing commit, no force-push was
 used at any point. The only history edit was `git commit --amend` on `ce46a62`
