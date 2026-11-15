@@ -604,6 +604,13 @@ repos/bot523h/nexus-ai-agent/branches/main/protection` returns HTTP 403 ("Resour
 not accessible by integration") for this token, so the required-check policy is
 **not verified** here — and it is not modified either, per the directive.
 
+**8.6 `git diff --check` is clean except three intentional Markdown line breaks.**
+`git diff --check deab2b3e..HEAD` used to report four findings; the one that was dirt — a
+stray blank line at the end of `pyproject.toml` — is fixed in `f1dbaf0`. The three that
+remain are the two-space hard line breaks in `MORPHEUS_3DGS_CRANIAL_DOCTRINE.md`, which are
+Markdown syntax and would change the rendered document if stripped. They are named here
+instead of being quietly rewritten.
+
 ---
 
 ## 9. Reproducing this ledger
@@ -620,7 +627,9 @@ python -m venv /home/user/.venv && /home/user/.venv/bin/pip install -e ".[dev]"
 COVERAGE_FILE=/tmp/.coverage_arena /home/user/.venv/bin/python scripts/pack_coverage.py
 COVERAGE_FILE=/tmp/.coverage_arena /home/user/.venv/bin/python scripts/ci_parity.py --json-out /tmp/parity.json
 /home/user/.venv/bin/python -m pytest -q -m "not slow" -k "mutation or mutant or kill" \
-    --ignore=tests/creative/atlas                        # 486 killed
+    --ignore=tests/creative/atlas                        # 486 killed, §6.3.2
+/home/user/.venv/bin/python scripts/ci_parity.py "tests/creative/atlas#mutation-120"
+                                                         # 124 passed, 120/120 mutants
 /home/user/.venv/bin/python -m pytest tests/creative/packs   # benchmarks, median + MAD
 ```
 
