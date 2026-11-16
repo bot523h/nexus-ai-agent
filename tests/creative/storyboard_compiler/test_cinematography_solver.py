@@ -827,3 +827,86 @@ def test_f7_live_axis_trace_replay_rejects_forged_original_position_distance_and
         ).compliant
         is False
     )
+
+
+def test_wave4_angular_jerk_clearance_spoof_move_type_and_rain_establishing() -> None:
+    # 1. Verify exact analytical angular_jerk == (d3s_dtau3 / T**3) * (R_0 @ omega_rel)
+    #    and central finite-difference agreement with angular_acceleration.
+    start = build_look_at_pose((-1.2, -2.8, 1.6), (0.0, 0.0, 1.6))
+    end = build_look_at_pose((-0.3, -2.0, 1.9), (0.6, 0.1, 1.5))
+    duration = 2.5
+    omega_world = start.rotation_matrix @ so3_log(start.rotation_matrix.T @ end.rotation_matrix)
+    for tau in (0.0, 0.25, 0.5, 0.75, 1.0):
+        smp = evaluate_trajectory_at(start, end, tau, duration_sec=duration, crane_arc_m=0.12)
+        expected_aj = (smp.d3s_dtau3 / (duration**3)) * omega_world
+        assert np.allclose(smp.angular_jerk, expected_aj, atol=1e-12)
+
+    h = 1e-5
+    smp_mid = evaluate_trajectory_at(start, end, 0.4, duration_sec=duration)
+    smp_p = evaluate_trajectory_at(start, end, 0.4 + h, duration_sec=duration)
+    smp_m = evaluate_trajectory_at(start, end, 0.4 - h, duration_sec=duration)
+    fd_aj = (np.array(smp_p.angular_acceleration) - np.array(smp_m.angular_acceleration)) / (
+        2.0 * h * duration
+    )
+    assert np.allclose(smp_mid.angular_jerk, fd_aj, rtol=1e-7, atol=1e-8)
+
+    # 2. Clearance-zone original_position spoofing & move_type spoofing in verify_180_degree_rule:
+    #    Even when solve_scene_cinematography produced a clamped shot via camera_overrides,
+    #    calling standalone verify_180_degree_rule (without overrides) rejects non-canonical
+    #    original_position inside the clearance zone, AND spoofing move_type is rejected.
+    axis = AxisOfAction(p1=(-1.0, 0.0, 1.6), p2=(1.0, 0.0, 1.6), initial_side=1)
+    parsed = parse_bilingual_script(
+        "EXT. ALLEY - NIGHT - RAIN\n"
+        "REZA waits quietly under the wet awning.\n\n"
+        "REZA\nNo.\n\n"
+        "SARA\n(angrily)\nGet back inside right now!"
+    )
+    rain_plan = solve_scene_cinematography(parsed.scenes[0], axis=axis)
+    assert rain_plan.axis_report.compliant is True
+
+    # Relabeling STATIC shot 1 as DOLLY (to switch end_clearance from 0.55 to 0.50) fails.
+    sh_static = rain_plan.shots[1]
+    assert sh_static.trajectory.move_type == CameraMoveType.STATIC
+    spoofed_move_shot = dataclasses.replace(
+        sh_static,
+        trajectory=dataclasses.replace(sh_static.trajectory, move_type=CameraMoveType.DOLLY),
+    )
+    assert (
+        verify_180_degree_rule(
+            (rain_plan.shots[0], spoofed_move_shot, rain_plan.shots[2]), axis
+        ).compliant
+        is False
+    )
+
+    # Override shot 2 inside clearance zone (-0.12m -> clamped to -0.55m), then spoof
+    # original_position to a DIFFERENT clearance-zone point (-0.25m) that maps to the
+    # exact same adjusted_position (-0.55m)!
+    clamped_plan = solve_scene_cinematography(
+        parsed.scenes[0],
+        axis=axis,
+        camera_overrides={2: (0.10, -0.12, 1.60)},
+    )
+    assert clamped_plan.axis_report.compliant is True
+    # Standalone verify_180_degree_rule without overrides rejects the overridden shot.
+    assert verify_180_degree_rule(clamped_plan.shots, axis).compliant is False
+    # Even WITH the original override supplied, spoofing original_position to (0.10, -0.25, 1.60)
+    # (which enforce_axis_of_action_with_trace ALSO clamps to (0.10, -0.55, 1.60)!) is caught!
+    _, spoofed_trace = enforce_axis_of_action_with_trace(
+        (0.10, -0.25, 1.60), axis, required_side=1, min_clearance_m=0.55
+    )
+    sh2_spoofed = dataclasses.replace(
+        clamped_plan.shots[2],
+        start_axis_trace=spoofed_trace,
+        start_original_axis_side=spoofed_trace.original_axis_side,
+        start_was_reflected=spoofed_trace.was_axis_reflected,
+        original_axis_side=spoofed_trace.original_axis_side,
+        was_axis_reflected=True,
+    )
+    assert (
+        verify_180_degree_rule(
+            (clamped_plan.shots[0], clamped_plan.shots[1], sh2_spoofed),
+            axis,
+            camera_overrides={2: (0.10, -0.12, 1.60)},
+        ).compliant
+        is False
+    )

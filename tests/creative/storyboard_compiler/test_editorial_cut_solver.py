@@ -624,7 +624,8 @@ def _reseal_with_recomputed_reports(
         dataclasses.replace(plan, axis_report=sb.verify_180_degree_rule(plan.shots, plan.axis))
         for plan in manifest.cinematography
     )
-    live_edit = verify_editorial_timeline(manifest.editorial)
+    all_shots = [sh for plan in rebuilt_plans for sh in plan.shots]
+    live_edit = verify_editorial_timeline(manifest.editorial, shots=all_shots)
     rebuilt_editorial = dataclasses.replace(manifest.editorial, verification=live_edit)
     updated = dataclasses.replace(
         manifest,
@@ -815,6 +816,218 @@ def test_f10_manifest_rejects_shot_to_event_and_trajectory_duration_mismatch() -
     desync_p0 = dataclasses.replace(p0, shots=(desync_traj_sh0, *p0.shots[1:]))
     tampered_traj_dur = dataclasses.replace(manifest, cinematography=(desync_p0, p1))
     assert verify_manifest_integrity(_reseal_tampered_manifest(tampered_traj_dur)) is False
+
+
+def test_wave4_f8_radial_projection_eyeline_and_camera_framing_binding() -> None:
+    # 1. Radial projection forgery: compile with tight r_max=0.22 so reframe_applied=True,
+    #    then move adjusted_entry_focus_uv INSIDE the allowed ball (to exit_focus_uv, eff=0.0)
+    #    with consistent effective_saccade_uv, vertical_eyeline_delta, continuity_score, and
+    #    events[k+1].entry_focus_uv! Exact radial projection check MUST reject!
+    tight_manifest = compile_storyboard(
+        DIALOGUE_AND_REACTION_SCRIPT,
+        config=StoryboardCompilerConfig(max_eye_trace_saccade=0.22),
+    )
+    assert verify_manifest_integrity(tight_manifest) is True
+    ed = tight_manifest.editorial
+    ref_idx = next(i for i, tr in enumerate(ed.transitions) if tr.eye_trace.reframe_applied)
+    ref_tr = ed.transitions[ref_idx]
+    exit_pt = ref_tr.eye_trace.exit_focus_uv
+
+    # Forge adjusted_entry_focus_uv = exit_focus_uv (distance 0.0 <= 0.22, inside ball!).
+    forged_inside_et = dataclasses.replace(
+        ref_tr.eye_trace,
+        adjusted_entry_focus_uv=exit_pt,
+        effective_saccade_uv=0.0,
+        vertical_eyeline_delta=0.0,
+        continuity_score=1.0,
+    )
+    evs_inside = list(ed.events)
+    evs_inside[ref_idx + 1] = dataclasses.replace(
+        evs_inside[ref_idx + 1],
+        entry_focus_uv=exit_pt,
+    )
+    trs_inside = list(ed.transitions)
+    trs_inside[ref_idx] = dataclasses.replace(ref_tr, eye_trace=forged_inside_et)
+    mean_eye_inside = round(
+        sum(t.eye_trace.continuity_score for t in trs_inside) / len(trs_inside), 6
+    )
+    ed_inside = dataclasses.replace(
+        ed,
+        events=tuple(evs_inside),
+        transitions=tuple(trs_inside),
+        mean_eye_trace_score=mean_eye_inside,
+    )
+    rep_inside = verify_editorial_timeline(ed_inside)
+    assert rep_inside.compliant is False
+    assert rep_inside.eye_trace_valid is False
+    tampered_inside = dataclasses.replace(tight_manifest, editorial=ed_inside)
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered_inside)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered_inside)) is False
+
+    # 2. Independent eyeline_matched re-computation:
+    #    (a) Flip eyeline_matched alone; (b) also spoof event.look_direction to try to match it!
+    base = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    base_ed = base.editorial
+    tr0 = base_ed.transitions[0]
+    flipped_et = dataclasses.replace(
+        tr0.eye_trace,
+        eyeline_matched=not tr0.eye_trace.eyeline_matched,
+    )
+    ed_flip = dataclasses.replace(
+        base_ed,
+        transitions=(dataclasses.replace(tr0, eye_trace=flipped_et), *base_ed.transitions[1:]),
+    )
+    rep_flip = verify_editorial_timeline(ed_flip)
+    assert rep_flip.compliant is False
+    assert rep_flip.eye_trace_valid is False
+    assert (
+        verify_manifest_integrity(
+            _reseal_with_recomputed_reports(dataclasses.replace(base, editorial=ed_flip))
+        )
+        is False
+    )
+
+    # Even if attacker ALSO mutates EditorialShotEvent.look_direction to match flipped_et,
+    # cross-verification against CameraShotSpec.framing.look_direction rejects it!
+    spoof_evs = list(base_ed.events)
+    spoof_evs[1] = dataclasses.replace(spoof_evs[1], look_direction=spoof_evs[0].look_direction)
+    ed_spoof_look = dataclasses.replace(ed_flip, events=tuple(spoof_evs))
+    all_base_shots = [sh for p in base.cinematography for sh in p.shots]
+    assert verify_editorial_timeline(ed_spoof_look, shots=all_base_shots).compliant is False
+    assert (
+        verify_manifest_integrity(
+            _reseal_with_recomputed_reports(dataclasses.replace(base, editorial=ed_spoof_look))
+        )
+        is False
+    )
+
+    # 3. Decoupling editorial focus UVs from CameraShotSpec.framing (projected_start_uv / end_uv):
+    #    Keep editorial timeline 100% internally valid, but decouple raw_entry_focus_uv (and
+    #    events[0].entry_focus_uv) from shot.framing.projected_start_uv!
+    fake_raw_in = (0.45, 0.34)
+    recomputed_tr0_et = solve_eye_trace_transition(
+        transition_index=0,
+        from_shot_index=0,
+        to_shot_index=1,
+        exit_focus_uv=base_ed.events[0].exit_focus_uv,
+        entry_focus_uv=fake_raw_in,
+        out_look=all_base_shots[0].framing.look_direction,
+        in_look=all_base_shots[1].framing.look_direction,
+        axis_jumped=all_base_shots[1].intentional_axis_jump,
+        max_saccade_uv=base_ed.max_eye_trace_saccade_limit,
+    )
+    evs_decoupled = list(base_ed.events)
+    evs_decoupled[1] = dataclasses.replace(
+        evs_decoupled[1], entry_focus_uv=recomputed_tr0_et.adjusted_entry_focus_uv
+    )
+    trs_decoupled = (
+        dataclasses.replace(tr0, eye_trace=recomputed_tr0_et),
+        *base_ed.transitions[1:],
+    )
+    mean_decoupled = round(
+        sum(t.eye_trace.continuity_score for t in trs_decoupled) / len(trs_decoupled), 6
+    )
+    ed_decoupled = dataclasses.replace(
+        base_ed,
+        events=tuple(evs_decoupled),
+        transitions=trs_decoupled,
+        mean_eye_trace_score=mean_decoupled,
+    )
+    ed_decoupled = dataclasses.replace(
+        ed_decoupled,
+        verification=verify_editorial_timeline(ed_decoupled, shots=all_base_shots),
+    )
+    assert ed_decoupled.verification.compliant is True
+    assert (
+        verify_manifest_integrity(
+            _reseal_with_recomputed_reports(dataclasses.replace(base, editorial=ed_decoupled))
+        )
+        is False
+    )
+
+    # Also test decoupling events[0].entry_focus_uv from shots[0].framing.projected_start_uv.
+    evs_first_decoupled = list(base_ed.events)
+    evs_first_decoupled[0] = dataclasses.replace(evs_first_decoupled[0], entry_focus_uv=(0.5, 0.5))
+    ed_first_decoupled = dataclasses.replace(base_ed, events=tuple(evs_first_decoupled))
+    assert (
+        verify_manifest_integrity(
+            _reseal_with_recomputed_reports(dataclasses.replace(base, editorial=ed_first_decoupled))
+        )
+        is False
+    )
+
+
+def test_wave4_f9_and_f7_scalar_derivatives_angular_jerk_totals_and_move_spoof() -> None:
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    p0, p1 = manifest.cinematography[0], manifest.cinematography[1]
+    # Pick a shot and tamper ONLY scalar derivatives / jerk / aggregate trajectory metrics
+    # WITHOUT touching any SE(3) pose!
+    sh = p0.shots[0]
+    samples = list(sh.trajectory.samples)
+    mid = len(samples) // 2
+    s_mid = samples[mid]
+
+    sample_mutations = [
+        dataclasses.replace(s_mid, ds_dtau=s_mid.ds_dtau + 0.15),
+        dataclasses.replace(s_mid, d2s_dtau2=s_mid.d2s_dtau2 + 0.25),
+        dataclasses.replace(s_mid, d3s_dtau3=s_mid.d3s_dtau3 + 1.50),
+        dataclasses.replace(
+            s_mid,
+            linear_jerk=(
+                s_mid.linear_jerk[0] + 0.20,
+                s_mid.linear_jerk[1],
+                s_mid.linear_jerk[2],
+            ),
+        ),
+        dataclasses.replace(
+            s_mid,
+            angular_jerk=(
+                s_mid.angular_jerk[0],
+                s_mid.angular_jerk[1],
+                s_mid.angular_jerk[2] + 0.20,
+            ),
+        ),
+    ]
+    for bad_smp in sample_mutations:
+        mut_samples = list(samples)
+        mut_samples[mid] = bad_smp
+        bad_sh = dataclasses.replace(
+            sh,
+            trajectory=dataclasses.replace(sh.trajectory, samples=tuple(mut_samples)),
+        )
+        bad_p0 = dataclasses.replace(p0, shots=(bad_sh, *p0.shots[1:]))
+        tampered = dataclasses.replace(manifest, cinematography=(bad_p0, p1))
+        assert verify_manifest_integrity(_reseal_tampered_manifest(tampered)) is False
+        assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
+
+    # Tamper total_translation_m and total_rotation_deg without changing poses or samples.
+    for bad_traj in (
+        dataclasses.replace(
+            sh.trajectory, total_translation_m=sh.trajectory.total_translation_m + 0.05
+        ),
+        dataclasses.replace(
+            sh.trajectory, total_rotation_deg=sh.trajectory.total_rotation_deg + 0.50
+        ),
+    ):
+        bad_sh = dataclasses.replace(sh, trajectory=bad_traj)
+        bad_p0 = dataclasses.replace(p0, shots=(bad_sh, *p0.shots[1:]))
+        tampered = dataclasses.replace(manifest, cinematography=(bad_p0, p1))
+        assert verify_manifest_integrity(_reseal_tampered_manifest(tampered)) is False
+        assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
+
+    # F7 move_type spoofing at manifest level even with recomputed reports & 4 SHA-256s.
+    alt_move = (
+        sb.CameraMoveType.STATIC
+        if sh.trajectory.move_type != sb.CameraMoveType.STATIC
+        else sb.CameraMoveType.DOLLY
+    )
+    spoof_move_sh = dataclasses.replace(
+        sh,
+        trajectory=dataclasses.replace(sh.trajectory, move_type=alt_move),
+    )
+    spoof_p0 = dataclasses.replace(p0, shots=(spoof_move_sh, *p0.shots[1:]))
+    tampered_move = dataclasses.replace(manifest, cinematography=(spoof_p0, p1))
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered_move)) is False
 
 
 def test_end_to_end_compilation_of_english_persian_and_bilingual_scripts() -> None:

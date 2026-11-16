@@ -75,6 +75,7 @@ __all__ = [
     "enforce_axis_of_action",
     "enforce_axis_of_action_with_trace",
     "evaluate_trajectory_at",
+    "expected_shot_move_type",
     "generate_minimum_jerk_trajectory",
     "horizontal_axis_cross",
     "is_valid_se3",
@@ -842,6 +843,7 @@ class TrajectorySample:
     linear_jerk: Vec3Tuple
     angular_velocity: Vec3Tuple
     angular_acceleration: Vec3Tuple
+    angular_jerk: Vec3Tuple = (0.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)
@@ -948,10 +950,11 @@ def evaluate_trajectory_at(
     lin_jerk = d3pos_dtau3 * inv_t3
 
     rot = r0 @ so3_exp(s * omega_rel)
-    # World-frame angular velocity/acceleration along the geodesic axis R0 @ omega_rel.
+    # World-frame angular velocity/acceleration/jerk along the geodesic axis R0 @ omega_rel.
     omega_world = r0 @ omega_rel
     ang_vel = (ds * inv_t) * omega_world
     ang_acc = (d2s * inv_t2) * omega_world
+    ang_jerk = (d3s * inv_t3) * omega_world
 
     return TrajectorySample(
         tau=float(tau),
@@ -966,6 +969,7 @@ def evaluate_trajectory_at(
         linear_jerk=_to_vec3_tuple(lin_jerk),
         angular_velocity=_to_vec3_tuple(ang_vel),
         angular_acceleration=_to_vec3_tuple(ang_acc),
+        angular_jerk=_to_vec3_tuple(ang_jerk),
     )
 
 
@@ -1129,11 +1133,154 @@ def _axis_trace_matches_geometry(
     )
 
 
+def expected_shot_move_type(shot: CameraShotSpec) -> CameraMoveType:
+    """Return the canonical ``CameraMoveType`` prescribed by shot grammar."""
+    is_establishing = (
+        shot.shot_kind == ShotKind.ACTION
+        and shot.shot_in_scene == 0
+        and shot.dramatic_tension < 0.45
+    )
+    return _choose_camera_move(
+        shot_kind=shot.shot_kind,
+        is_establishing=is_establishing,
+        emotion=shot.emotion,
+        dramatic_tension=shot.dramatic_tension,
+        duration_sec=shot.duration_sec,
+        shot_in_scene=shot.shot_in_scene,
+    )
+
+
+def _canonical_shot_geometry_valid(
+    shot: CameraShotSpec,
+    axis: AxisOfAction,
+    *,
+    expected_side: int,
+    start_override: Sequence[float] | FloatArray | None = None,
+    end_override: Sequence[float] | FloatArray | None = None,
+    tol: float = 1e-6,
+) -> bool:
+    """Verify move_type, clearance policy, pinhole framing, and pre-reflection positions."""
+    base_move = expected_shot_move_type(shot)
+    expected_move = (
+        CameraMoveType.DOLLY
+        if end_override is not None and base_move in (CameraMoveType.STATIC, CameraMoveType.PAN)
+        else base_move
+    )
+    dist = _LENS_NOMINAL_DISTANCE_M.get(shot.lens.focal_length_mm, 0.0)
+    look = shot.framing.look_direction
+    slot = (
+        (0 if ((look == ScreenLookDirection.RIGHT) == (expected_side == 1)) else 1)
+        if look != ScreenLookDirection.CENTER
+        else (0 if all(abs(shot.subject_position[i] - axis.p1[i]) <= tol for i in range(3)) else 2)
+    )
+    d_xy = axis.axis_vector[:2] / axis.horizontal_length
+    n_plus = np.array([d_xy[1], -d_xy[0]], dtype=np.float64)
+    cam_normal = float(expected_side) * n_plus
+    variation = 0.06 * ((shot.shot_in_scene % 3) - 1)
+    azimuth = (
+        math.radians(52.0) + variation
+        if slot == 0
+        else (
+            math.radians(-52.0) + variation
+            if slot == 1
+            else math.radians(10.0 * ((shot.shot_in_scene % 3) - 1))
+        )
+    )
+    horiz_offset = dist * (math.sin(azimuth) * d_xy + math.cos(azimuth) * cam_normal)
+    z_offset = (
+        0.45
+        if shot.lens.focal_length_mm == 24
+        else (-0.08 if shot.dramatic_tension >= 0.82 else 0.0)
+    )
+    canonical_start: Vec3Tuple = (
+        shot.subject_position[0] + float(horiz_offset[0]),
+        shot.subject_position[1] + float(horiz_offset[1]),
+        shot.subject_position[2] + z_offset,
+    )
+    expected_raw_start = (
+        _to_vec3_tuple(_as_vec3(start_override, name="camera_override"))
+        if start_override is not None
+        else canonical_start
+    )
+
+    push_frac = 0.14 + 0.10 * shot.dramatic_tension
+    canonical_dolly_end: Vec3Tuple = (
+        shot.pose.translation[0]
+        + push_frac * (shot.subject_position[0] - shot.pose.translation[0]),
+        shot.pose.translation[1]
+        + push_frac * (shot.subject_position[1] - shot.pose.translation[1]),
+        shot.pose.translation[2]
+        + push_frac * (shot.subject_position[2] - shot.pose.translation[2]),
+    )
+    vertical = -0.30 if shot.lens.focal_length_mm == 24 else 0.32
+    canonical_crane_end: Vec3Tuple = (
+        shot.pose.translation[0] + 0.35 * float(d_xy[0]),
+        shot.pose.translation[1] + 0.35 * float(d_xy[1]),
+        shot.pose.translation[2] + vertical,
+    )
+    canonical_end = (
+        expected_raw_start
+        if expected_move in (CameraMoveType.STATIC, CameraMoveType.PAN)
+        else (canonical_dolly_end if expected_move == CameraMoveType.DOLLY else canonical_crane_end)
+    )
+    expected_raw_end = (
+        _to_vec3_tuple(_as_vec3(end_override, name="end_camera_override"))
+        if end_override is not None
+        and expected_move in (CameraMoveType.DOLLY, CameraMoveType.CRANE)
+        else canonical_end
+    )
+
+    expected_crane_arc = 0.12 if expected_move == CameraMoveType.CRANE else 0.0
+    subj_vec = np.asarray(shot.subject_position, dtype=np.float64)
+    poses_projectable = (
+        dist > 0.0
+        and is_valid_se3(shot.pose.matrix)
+        and is_valid_se3(shot.end_pose.matrix)
+        and float((shot.pose.rotation_matrix.T @ (subj_vec - shot.pose.translation_vector))[2])
+        > 1e-6
+        and float(
+            (shot.end_pose.rotation_matrix.T @ (subj_vec - shot.end_pose.translation_vector))[2]
+        )
+        > 1e-6
+    )
+    proj_ok = poses_projectable and (
+        lambda ps, pe: (
+            abs(shot.framing.projected_start_uv[0] - ps[0]) <= tol
+            and abs(shot.framing.projected_start_uv[1] - ps[1]) <= tol
+            and abs(shot.framing.projected_end_uv[0] - pe[0]) <= tol
+            and abs(shot.framing.projected_end_uv[1] - pe[1]) <= tol
+        )
+    )(
+        project_world_point(shot.pose, shot.subject_position, float(shot.lens.focal_length_mm)),
+        project_world_point(shot.end_pose, shot.subject_position, float(shot.lens.focal_length_mm)),
+    )
+    return (
+        shot.trajectory.move_type == expected_move
+        and abs(shot.trajectory.crane_arc_m - expected_crane_arc) <= tol
+        and all(
+            abs(shot.start_axis_trace.original_position[i] - expected_raw_start[i]) <= tol
+            for i in range(3)
+        )
+        and all(
+            abs(shot.end_axis_trace.original_position[i] - expected_raw_end[i]) <= tol
+            for i in range(3)
+        )
+        and (
+            shot.end_axis_trace == shot.start_axis_trace
+            if expected_move in (CameraMoveType.STATIC, CameraMoveType.PAN)
+            else True
+        )
+        and proj_ok
+    )
+
+
 def verify_180_degree_rule(
     shots: Sequence[CameraShotSpec],
     axis: AxisOfAction,
     *,
     se3_tol: float = 1e-9,
+    camera_overrides: Mapping[int, Sequence[float] | FloatArray] | None = None,
+    end_camera_overrides: Mapping[int, Sequence[float] | FloatArray] | None = None,
 ) -> AxisVerificationReport:
     """Verify 180-degree axis compliance and ``SE(3)`` membership for all shots & samples."""
     expected_side = axis.initial_side
@@ -1163,6 +1310,16 @@ def verify_180_degree_rule(
                 f"end_cross_z={end_c_z:.6f}, end_sign={end_sign}, expected={expected_side})"
             )
 
+        start_ovr = (
+            camera_overrides[shot.shot_in_scene]
+            if camera_overrides is not None and shot.shot_in_scene in camera_overrides
+            else None
+        )
+        end_ovr = (
+            end_camera_overrides[shot.shot_in_scene]
+            if end_camera_overrides is not None and shot.shot_in_scene in end_camera_overrides
+            else None
+        )
         end_clearance = 0.50 if shot.trajectory.move_type == CameraMoveType.DOLLY else 0.55
         traces_consistent = (
             shot.axis_side == expected_side
@@ -1181,6 +1338,13 @@ def verify_180_degree_rule(
                 expected_side=expected_side,
                 min_clearance_m=end_clearance,
                 pose_translation=shot.end_pose.translation,
+            )
+            and _canonical_shot_geometry_valid(
+                shot,
+                axis,
+                expected_side=expected_side,
+                start_override=start_ovr,
+                end_override=end_ovr,
             )
             and shot.start_original_axis_side == shot.start_axis_trace.original_axis_side
             and shot.end_original_axis_side == shot.end_axis_trace.original_axis_side
@@ -1627,7 +1791,12 @@ def solve_scene_cinematography(
             )
         )
 
-    axis_report = verify_180_degree_rule(shots, resolved_axis)
+    axis_report = verify_180_degree_rule(
+        shots,
+        resolved_axis,
+        camera_overrides=camera_overrides,
+        end_camera_overrides=end_camera_overrides,
+    )
     staged_pairs = tuple((name, _to_vec3_tuple(vec)) for name, (_, vec) in char_map.items())
     return SceneCinematographyPlan(
         scene_index=scene.scene_index,
