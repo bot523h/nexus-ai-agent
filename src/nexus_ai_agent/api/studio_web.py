@@ -170,10 +170,13 @@ CAPABILITIES: tuple[dict[str, str], ...] = (
     },
     {
         "id": "intent_submit",
-        "status": "DEFERRED",
-        "reason": "No preview/approval session API: IBPC sessions and approvals are "
-        "in-process (Stage 3 of NAGAR-ONE).",
-        "evidence": "docs/engineering/NAGAR_ONE_TRUTH_MATRIX.md",
+        "status": "VERIFIED_WITH_LIMITATIONS",
+        "reason": "POST /api/studio/projects/{id}/renders admits one render intent into the "
+        "canonical queue and answers 202. Limitations: the body must be HMAC-signed with the "
+        "deployment key, only the configured projects are accepted (NEXUS_STUDIO_PROJECT_IDS), "
+        "and there is no preview/approval session — IBPC approval stays in-process "
+        "(Stage 3 of NAGAR-ONE).",
+        "evidence": "src/nexus_ai_agent/api/studio.py",
     },
     {
         "id": "approvals",

@@ -254,3 +254,84 @@ def test_authorizer_still_runs_before_the_engine() -> None:
     with pytest.raises((AuthorizationError, Exception)):
         bus.dispatch(_command(verify_operation_id("atlas"), artifact_path="/tmp/x.mp4"))
     assert verifier.calls == []
+
+
+# --------------------------------------------------------------------------- #
+# the production composition root: no caller has to remember to wire an engine
+# --------------------------------------------------------------------------- #
+
+
+def test_every_verification_operation_resolves_to_exactly_its_own_engine() -> None:
+    """The mapping is the contract the root composes from — one engine, no more.
+
+    Composing all six would drag every native dependency into every worker; the
+    audit finding was the opposite failure, a caller composing *none*.
+    """
+    from nexus_ai_agent.creative.render_jobs import ENGINE_PORT_OPERATIONS, _engine_ports_for
+
+    for engine, attribute in ENGINE_PORT_ATTRIBUTES.items():
+        operation = verify_operation_id(engine)
+        assert ENGINE_PORT_OPERATIONS[operation] == engine
+        assert set(_engine_ports_for(operation)) == {attribute}
+    assert _engine_ports_for(None) == {}
+    assert _engine_ports_for("timeline.trim") == {}
+
+
+def test_the_job_bus_root_composes_the_engine_port_without_being_asked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``build_job_bus`` supplies the real adapter; the caller only names the operation.
+
+    Before this, only ``_dispatch`` passed ``engine_ports``.  Every other
+    construction site — a new surface, an operator CLI, a test harness — got a
+    bus that answered ``EngineNotComposedError`` for an engine the deployment
+    had in fact composed, i.e. a verification that fails for no reason.
+    """
+    import nexus_ai_agent.creative.engine_ports as engine_ports_module
+    from nexus_ai_agent.creative.render_jobs import build_job_bus
+
+    verifier = _FakeVerifier()
+    requested: list[list[str] | None] = []
+
+    def fake_build(engines: list[str] | None = None) -> dict[str, Any]:
+        requested.append(engines)
+        return {"veritas_engine": verifier}
+
+    monkeypatch.setattr(engine_ports_module, "build_engine_ports", fake_build)
+
+    bus = build_job_bus(_project(), operation=verify_operation_id("veritas"))
+    result = bus.dispatch(
+        _command(
+            verify_operation_id("veritas"), artifact_path="/tmp/x.mp4", expected_sha256="b" * 64
+        )
+    )
+    assert requested == [["veritas"]], "the root composes only the operation's engine"
+    assert result.output["verified"] is True
+    assert verifier.calls == [("/tmp/x.mp4", "b" * 64)]
+
+
+def test_an_explicit_engine_port_mapping_still_wins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tests and withholding callers must be able to override the default."""
+    import nexus_ai_agent.creative.engine_ports as engine_ports_module
+    from nexus_ai_agent.creative.render_jobs import build_job_bus
+
+    def exploding_build(engines: list[str] | None = None) -> dict[str, Any]:
+        raise AssertionError("the root must not compose over an explicit mapping")
+
+    monkeypatch.setattr(engine_ports_module, "build_engine_ports", exploding_build)
+
+    verifier = _FakeVerifier()
+    bus = build_job_bus(
+        _project(),
+        operation=verify_operation_id("atlas"),
+        engine_ports={"atlas_engine": verifier},
+    )
+    assert (
+        bus.dispatch(_command(verify_operation_id("atlas"), artifact_path="/tmp/y.mp4")).output[
+            "verified"
+        ]
+        is True
+    )
+    assert verifier.calls == [("/tmp/y.mp4", None)]

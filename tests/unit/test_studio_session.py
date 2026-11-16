@@ -171,7 +171,13 @@ def test_overview_requires_auth_and_is_scoped_to_deployment_policy(client: TestC
     assert body["projects"] == ["project-a"]
     by_id = {c["id"]: c for c in body["capabilities"]}
     assert by_id["user_identity"]["status"] == "BLOCKED"
-    assert by_id["intent_submit"]["status"] == "DEFERRED"
+    # The signed render route is live, so the overview must say so; it used to
+    # report DEFERRED with "No preview/approval session API" long after
+    # `POST /api/studio/projects/{id}/renders` shipped.  The limitations that
+    # *are* real (signature, project scope, no approval session) are named.
+    assert by_id["intent_submit"]["status"] == "VERIFIED_WITH_LIMITATIONS"
+    assert "/renders" in by_id["intent_submit"]["reason"]
+    assert "HMAC" in by_id["intent_submit"]["reason"]
     assert {c["status"] for c in body["capabilities"]} <= {
         "VERIFIED",
         "VERIFIED_WITH_LIMITATIONS",
@@ -187,3 +193,19 @@ def test_studio_api_responses_are_never_cacheable(client: TestClient) -> None:
         response = client.get(path)
         assert response.headers["cache-control"] == "no-store", path
         assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_the_intent_submit_capability_names_a_route_that_really_exists(
+    client: TestClient,
+) -> None:
+    """A capability row must not outlive the truth it describes.
+
+    ``intent_submit`` said DEFERRED while the route below was live; the reverse
+    drift (a VERIFIED row naming a route nobody mounted) would be worse, so the
+    claim is checked against the app's own route table rather than a comment.
+    """
+    # The OpenAPI schema is the mounted contract (FastAPI keeps included routers
+    # lazy in ``app.routes``), so it is what the claim is checked against.
+    paths = client.app.openapi()["paths"]
+    assert "/api/studio/projects/{project_id}/renders" in paths
+    assert "post" in paths["/api/studio/projects/{project_id}/renders"]

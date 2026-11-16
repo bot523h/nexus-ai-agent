@@ -601,9 +601,22 @@ def build_job_bus(
     *only* production caller (:func:`_dispatch`) passes
     :func:`_audio_engine_for`, i.e. a real engine for the operations that need
     one and ``None`` otherwise.
+
+    ``engine_ports`` is composed *here* when the caller does not supply it.
+    A bus with no port for the operation's engine can only answer
+    ``EngineNotComposedError`` — the capability exists, the handler runs, and
+    every Studio/queue invocation of ``cinema.*_verify_media`` is refused for a
+    reason that has nothing to with the artifact.  Leaving that to each caller
+    means the one that forgets (a new surface, a CLI, a test harness) turns a
+    verification into a false negative, so the root supplies the real adapter
+    for the operation being run and an explicit mapping still wins (tests need
+    doubles, and a caller may deliberately withhold an engine).
     """
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
     from nexus_ai_agent.creative.studio.bus import CommandBus
+
+    if engine_ports is None:
+        engine_ports = _engine_ports_for(operation)
 
     return CommandBus(
         state=project,
@@ -742,12 +755,15 @@ def _dispatch(
             ),
         )
 
+    # The bus root composes the engine port for ``operation`` itself (see
+    # ``build_job_bus``): passing it here as well would be the same value twice
+    # and would leave the default path — the one every other caller takes —
+    # untested in production.
     bus = build_job_bus(
         project,
         operation=operation,
         authorizer=authorizer,
         audio_engine=_audio_engine_for(operation),
-        engine_ports=_engine_ports_for(operation),
     )
     schema_version: Literal[1, 2] = 2 if canonical is not None else 1
     command = TypedCommand(
