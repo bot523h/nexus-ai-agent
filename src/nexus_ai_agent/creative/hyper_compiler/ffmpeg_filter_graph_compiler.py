@@ -235,6 +235,45 @@ class ColorGradeEqOp(FilterOp):
 
 
 @dataclass(frozen=True)
+class ColorGradeLutRgbOp(FilterOp):
+    """Brightness / contrast via ``lutrgb`` — RGB-domain, CPU-equivalent.
+
+    ``eq`` grades in YUV, so an RGB input is round-tripped through YUV and back,
+    which perturbs pixels by up to a few levels.  ``lutrgb`` applies a per-channel
+    lookup directly in the RGB domain, which reproduces the CPU engine's
+    ``clip((f - 128) * contrast + 128 + brightness*255, 0, 255)`` exactly, so the
+    two engines can be held to a byte-level equivalence.
+    """
+
+    kind: ClassVar[StreamKind] = StreamKind.VIDEO
+
+    in_pad: str
+    out_pad: str
+    brightness: float
+    contrast: float
+
+    def __post_init__(self) -> None:
+        _check_label(self.in_pad, what="input pad")
+        _check_label(self.out_pad, what="output pad")
+        _check_range(self.brightness, -1.0, 1.0, what="brightness")
+        _check_range(self.contrast, 0.0, 4.0, what="contrast")
+
+    def input_pads(self) -> tuple[str, ...]:
+        return (self.in_pad,)
+
+    def output_pads(self) -> tuple[str, ...]:
+        return (self.out_pad,)
+
+    def render(self) -> str:
+        # ``clip((val-128)*c+128+b*255, 0, 255)`` with the constants rendered by
+        # the same canonical, finite-checked formatter as every other operand.
+        expr = (
+            f"clip((val-128)*{_num(self.contrast)}+128+{_num(self.brightness * 255.0)}\\,0\\,255)"
+        )
+        return f"lutrgb=r='{expr}':g='{expr}':b='{expr}'"
+
+
+@dataclass(frozen=True)
 class LUT3DOp(FilterOp):
     """Apply a 3D LUT cube file."""
 
@@ -572,6 +611,7 @@ class FFmpegFilterGraphCompiler:
 
 __all__ = [
     "ColorGradeEqOp",
+    "ColorGradeLutRgbOp",
     "CompiledFilterGraph",
     "CrossfadeAudioOp",
     "CrossfadeVideoOp",

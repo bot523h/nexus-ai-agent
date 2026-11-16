@@ -6,6 +6,7 @@ import dataclasses
 import hashlib
 import io
 import subprocess
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -346,7 +347,10 @@ def test_build_ffmpeg_command_without_trim() -> None:
     runner = BoundedMemoryPipeRunner()
     command = runner.build_ffmpeg_command(spec())
     assert "trim=" not in " ".join(command)
-    assert "eq=" in " ".join(command)
+    # F5: the tone map is RGB-domain ``lutrgb`` (not ``eq``) so it reproduces the
+    # CPU engine's arithmetic exactly instead of round-tripping through YUV.
+    assert "lutrgb=" in " ".join(command)
+    assert "eq=" not in " ".join(command)
 
 
 def test_build_ffmpeg_command_with_open_ended_trim() -> None:
@@ -457,6 +461,130 @@ def test_run_ffmpeg_stream_reports_missing_binary() -> None:
     runner = BoundedMemoryPipeRunner(ffmpeg_bin="/nonexistent/ffmpeg-binary-xyz")
     with pytest.raises(PipeExecutionError):
         runner.run_ffmpeg_stream([frames(1)], spec())
+
+
+def test_runner_rejects_invalid_timeout() -> None:
+    # F2: the watchdog window must be finite and positive.
+    for bad in (0.0, -1.0, float("nan"), float("inf")):
+        with pytest.raises(PipeExecutionError):
+            BoundedMemoryPipeRunner(timeout_seconds=bad)
+
+
+def test_run_ffmpeg_pipe_kills_and_reports_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # F2: a child that makes no progress is killed by the watchdog and the call
+    # fails closed with a clear error.
+    killed = threading.Event()
+
+    class BlockingStdout:
+        def read(self, size: int) -> bytes:
+            killed.wait()
+            return b""
+
+        def close(self) -> None:
+            pass
+
+    class SlowProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = io.BytesIO()
+            self.stdout = BlockingStdout()
+            self.stderr = io.BytesIO(b"")
+            self._dead = False
+
+        def poll(self) -> int | None:
+            return 0 if self._dead else None
+
+        def kill(self) -> None:
+            self._dead = True
+            killed.set()
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", SlowProc)
+    runner = BoundedMemoryPipeRunner(timeout_seconds=0.05)
+    with pytest.raises(PipeExecutionError, match="timed out"):
+        runner.run_ffmpeg_stream([], spec())
+    assert killed.is_set()
+
+
+def test_run_ffmpeg_stream_kills_real_wedged_process() -> None:
+    # F2 (live truth): a real child that ignores stdin EOF and never exits is
+    # killed by the watchdog; no process outlives the call.  ``sleep`` is such a
+    # child: it never reads stdin and never writes stdout.
+    import shutil
+
+    sleeper = shutil.which("sleep")
+    if sleeper is None:
+        pytest.skip("no 'sleep' on PATH")
+    runner = BoundedMemoryPipeRunner(timeout_seconds=0.3)
+    with pytest.raises(PipeExecutionError, match="timed out"):
+        runner._run_ffmpeg_pipe([sleeper, "30"], [], spec(), None)
+
+
+def test_run_ffmpeg_stream_peak_tracks_measured_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # F3b: the reported peak reflects the *measured* in-flight bytes, and with a
+    # small read chunk it can be far below the frame size — i.e. it is not a
+    # static floor mislabelled as a measurement.
+    class FakeProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = io.BytesIO()
+            # One whole 8x8x3 frame so the output frame-count check passes.
+            self.stdout = io.BytesIO(b"\x00" * 192)
+            self.stderr = io.BytesIO(b"")
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(bmpr, "_CHUNK_BYTES", 8)
+    runner = BoundedMemoryPipeRunner()
+    outcome = runner.run_ffmpeg_stream([], spec())
+    # The peak is exactly the 8-byte drain chunk: neither the 64 KiB default nor
+    # the CPU working set floor.
+    assert outcome.peak_buffer_bytes == 8
+    assert outcome.peak_buffer_bytes < bmpr.cpu_working_set_bytes(spec())
+
+
+def _ffmpeg_exe() -> str | None:
+    try:
+        import imageio_ffmpeg  # type: ignore[import-untyped]
+
+        return str(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:  # noqa: BLE001 - fall back to a system binary
+        import shutil
+
+        return shutil.which("ffmpeg")
+
+
+FFMPEG = _ffmpeg_exe()
+
+
+@pytest.mark.skipif(FFMPEG is None, reason="no FFmpeg available")
+def test_cpu_and_ffmpeg_engines_are_byte_identical() -> None:
+    # F5: the two engines must agree byte-for-byte for the shared knob set
+    # (trim + tone).  This is the differential guard that pins ``lutrgb`` (RGB
+    # domain) rather than ``eq`` (which round-trips through YUV and drifts by a
+    # few levels on nearly every pixel).
+    assert FFMPEG is not None
+    spec_ = spec(brightness=0.1, contrast=1.3, trim_start=1, trim_end=5)
+    rng = np.random.default_rng(1234)
+    source = [rng.integers(0, 256, (8, 8, 3), dtype=np.uint8) for _ in range(6)]
+
+    cpu_out = io.BytesIO()
+    cpu_result = BoundedMemoryPipeRunner().stream_many([source], spec_, sink=cpu_out)
+    cpu_body = cpu_out.getvalue()[cpu_result.container_size - cpu_result.body_size :]
+
+    ff_out = io.BytesIO()
+    ff_result = BoundedMemoryPipeRunner(ffmpeg_bin=FFMPEG).run_ffmpeg_stream(
+        [source], spec_, sink=ff_out
+    )
+    assert ff_result.frames_processed == cpu_result.frames_processed == 4
+    assert ff_out.getvalue() == cpu_body
 
 
 def test_run_ffmpeg_stream_kills_wedged_child(monkeypatch: pytest.MonkeyPatch) -> None:

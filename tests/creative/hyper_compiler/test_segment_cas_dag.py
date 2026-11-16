@@ -15,6 +15,7 @@ from nexus_ai_agent.creative.hyper_compiler import segment_cas_dag as dag
 from nexus_ai_agent.creative.hyper_compiler.errors import (
     HyperCompilerError,
     SegmentIntegrityError,
+    SegmentTamperError,
 )
 from nexus_ai_agent.creative.hyper_compiler.segment_cas_dag import (
     PlannedSegment,
@@ -279,8 +280,9 @@ def test_commit_stream_rejects_negative_size(tmp_path: Path) -> None:
 
 def test_verify_and_open_rejects_content_hash_mismatch(tmp_path: Path) -> None:
     planner = SegmentCASPlanner(tmp_path)
-    key = "d" * 64
-    planner.write_segment_artifact(key, b"payload")
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"payload")
     # Corrupt the body without touching the manifest: the recomputed content
     # hash must disagree with the header hash.
     artifact = planner.artifact_path(key)
@@ -291,10 +293,24 @@ def test_verify_and_open_rejects_content_hash_mismatch(tmp_path: Path) -> None:
         planner.read_segment_artifact(key)
 
 
+def test_verify_and_open_rejects_artifact_key_mismatch(tmp_path: Path) -> None:
+    # The artifact on disk is valid for a *different* key while the manifest
+    # still re-derives this key: the embedded key mismatch must be refused.
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"payload")
+    other = dag._encode_artifact("b" * 64, b"payload")
+    planner.artifact_path(key).write_bytes(other)
+    with pytest.raises(SegmentIntegrityError):
+        planner.read_segment_artifact(key)
+
+
 def test_verify_and_open_rejects_file_hash_mismatch(tmp_path: Path) -> None:
     planner = SegmentCASPlanner(tmp_path)
-    key = "f" * 64
-    planner.write_segment_artifact(key, b"payload")
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"payload")
     manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
     manifest["file_sha256"] = "0" * 64
     planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
@@ -304,8 +320,9 @@ def test_verify_and_open_rejects_file_hash_mismatch(tmp_path: Path) -> None:
 
 def test_verify_and_open_rejects_length_mismatch(tmp_path: Path) -> None:
     planner = SegmentCASPlanner(tmp_path)
-    key = "e" * 64
-    planner.write_segment_artifact(key, b"payload")
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"payload")
     artifact = planner.artifact_path(key)
     raw = bytearray(artifact.read_bytes())
     raw[dag._CONTENT_SHA_OFFSET - 8 : dag._CONTENT_SHA_OFFSET] = struct.pack(">Q", 999)
@@ -439,7 +456,13 @@ def test_planner_pipeline_digest_change_forces_render(tmp_path: Path) -> None:
     timeline = make_timeline(3)
     digests = ["pipe-a"] * 3
     for spec in timeline:
-        planner.write_segment_artifact(planner.cas_key(spec, pipeline_digest="pipe-a"), b"p")
+        planner.write_segment_artifact(
+            planner.cas_key(spec, pipeline_digest="pipe-a"),
+            b"p",
+            mode="deterministic_cpu_mux",
+            pipeline_digest="pipe-a",
+            spec=spec,
+        )
     assert planner.plan(timeline, pipeline_digests=digests).cache_hits == 3
     flipped = ["pipe-a", "pipe-b", "pipe-a"]
     plan = planner.plan(timeline, pipeline_digests=flipped)
@@ -455,7 +478,12 @@ def test_planner_mux_mode_separates_engine_caches(tmp_path: Path) -> None:
     cpu_key = planner.cas_key(spec, mux_mode="deterministic_cpu_mux")
     ffmpeg_key = planner.cas_key(spec, mux_mode="ffmpeg_subprocess_pipe")
     assert cpu_key != ffmpeg_key
-    planner.write_segment_artifact(cpu_key, b"cpu-body", mode="deterministic_cpu_mux")
+    planner.write_segment_artifact(
+        cpu_key,
+        b"cpu-body",
+        mode="deterministic_cpu_mux",
+        spec=spec,
+    )
 
     cpu_plan = planner.plan([spec], mux_modes=["deterministic_cpu_mux"])
     assert cpu_plan.cache_hits == 1
@@ -492,6 +520,162 @@ def test_verify_rejects_incompatible_renderer_version(tmp_path: Path) -> None:
     planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(SegmentIntegrityError):
         planner.verify_segment_artifact(key)
+
+
+def test_verify_rejects_none_renderer_version(tmp_path: Path) -> None:
+    # F1a: a manifest whose renderer_version is null/empty must be refused, not
+    # waved through by an ``is not None`` guard.
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest["renderer_version"] = None
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key)
+
+
+def test_verify_rejects_unknown_manifest_mode(tmp_path: Path) -> None:
+    # F1b: a manifest naming a mode the engine does not know is refused.
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest["mode"] = "not-a-real-engine"
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key)
+
+
+def test_verify_rejects_missing_manifest_mode(tmp_path: Path) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest.pop("mode")
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key)
+
+
+def test_verify_rejects_mode_mismatch_with_request(tmp_path: Path) -> None:
+    # F1c: the manifest's mode must equal the requested mode.
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key, expected_mode="ffmpeg_subprocess_pipe")
+
+
+def test_verify_rejects_pipeline_digest_mismatch(tmp_path: Path) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key, expected_pipeline_digest="other")
+
+
+def test_verify_rejects_non_string_pipeline_digest(tmp_path: Path) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest["pipeline_digest"] = 123
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key)
+
+
+def test_verify_rejects_forged_mode_in_unsigned_manifest(tmp_path: Path) -> None:
+    # F1d: the strongest case — an attacker flips a *single-segment* manifest's
+    # mode on disk (no hmac_key).  The key cannot be re-derived from the forged
+    # mode, so verification fails closed instead of minting a false receipt.
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec, mux_mode="deterministic_cpu_mux")
+    planner.write_segment_artifact(key, b"cpu-body", mode="deterministic_cpu_mux", spec=spec)
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest["mode"] = "ffmpeg_subprocess_pipe"
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key)
+
+
+def test_verify_rejects_spec_not_matching_key(tmp_path: Path) -> None:
+    # F1d: tampering the recorded spec so it no longer hashes to the key fails.
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest["spec"]["segment_id"] = "forged"
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key)
+
+
+def test_verify_rejects_missing_spec_binding(tmp_path: Path) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest["spec"] = None
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key)
+
+
+def test_verify_rejects_wrong_spec_fields(tmp_path: Path) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest["spec"] = {"segment_id": "only-one-field"}
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key)
+
+
+def test_verify_rejects_invalid_spec_values(tmp_path: Path) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest["spec"]["fps"] = 0.0
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SegmentTamperError):
+        planner.verify_segment_artifact(key)
+
+
+def test_tamper_error_is_a_segment_integrity_error() -> None:
+    # The fail-closed hierarchy: existing callers catching SegmentIntegrityError
+    # (or HyperCompilerError) keep working.
+    assert issubclass(SegmentTamperError, SegmentIntegrityError)
+    assert SegmentTamperError("x").code == "segment_tamper"
+
+
+def test_planner_plan_ignores_artifact_with_forged_mode(tmp_path: Path) -> None:
+    # F1 end-to-end: a forged-mode artifact cannot satisfy a plan; it is treated
+    # as RENDER_REQUIRED instead of a cache hit.
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec, mux_mode="deterministic_cpu_mux")
+    planner.write_segment_artifact(key, b"cpu-body", mode="deterministic_cpu_mux", spec=spec)
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest["mode"] = "ffmpeg_subprocess_pipe"
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    plan = planner.plan([spec], mux_modes=["deterministic_cpu_mux"])
+    assert plan.cache_hits == 0
+    assert plan.segments[0].status is SegmentStatus.RENDER_REQUIRED
 
 
 def test_read_manifest_rejects_oversized_file(tmp_path: Path) -> None:
@@ -694,12 +878,15 @@ def test_commit_stream_rejects_hash_mismatch(tmp_path: Path) -> None:
 
 def test_commit_stream_roundtrips_and_verifies(tmp_path: Path) -> None:
     planner = SegmentCASPlanner(tmp_path)
-    key = "c" * 64
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
     planner.commit_stream(
         key,
         io.BytesIO(b"chunked-body"),
         size=12,
         digest=hashlib.sha256(b"chunked-body").hexdigest(),
+        mode="deterministic_cpu_mux",
+        spec=spec,
     )
     assert planner.read_segment_artifact(key) == b"chunked-body"
 

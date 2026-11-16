@@ -38,6 +38,21 @@ class SegmentIntegrityError(HyperCompilerError):
     code = "segment_integrity"
 
 
+class SegmentTamperError(SegmentIntegrityError):
+    """A cached segment manifest is missing, forged or internally inconsistent.
+
+    Raised when a manifest's *provenance* — its renderer version, engine mode,
+    pipeline digest or content-addressed key — cannot be re-derived from the
+    requested spec, so the artifact cannot be trusted even if its bytes hash
+    correctly.  It is a :class:`SegmentIntegrityError` (and therefore a
+    :class:`HyperCompilerError`) so existing fail-closed callers keep catching it,
+    while a caller that wants to distinguish tampering from a plain digest
+    mismatch can.
+    """
+
+    code = "segment_tamper"
+
+
 class MemoryBudgetExceededError(HyperCompilerError):
     """The bounded pipe would exceed its configured memory ceiling."""
 
@@ -56,4 +71,5 @@ __all__ = [
     "MemoryBudgetExceededError",
     "PipeExecutionError",
     "SegmentIntegrityError",
+    "SegmentTamperError",
 ]

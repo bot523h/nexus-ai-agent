@@ -36,8 +36,9 @@ import struct
 import subprocess
 import tempfile
 import threading
+import time
 from collections import deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -51,7 +52,7 @@ from nexus_ai_agent.creative.hyper_compiler.errors import (
     PipeExecutionError,
 )
 from nexus_ai_agent.creative.hyper_compiler.ffmpeg_filter_graph_compiler import (
-    ColorGradeEqOp,
+    ColorGradeLutRgbOp,
     CompiledFilterGraph,
     FFmpegFilterGraphCompiler,
     FilterOp,
@@ -244,10 +245,22 @@ class RingBufferFrameStore:
 
 
 def apply_tone(frame: Frame, *, brightness: float, contrast: float) -> Frame:
-    """Deterministic brightness/contrast mapping (``brightness`` in [-1, 1])."""
-    data = frame.astype(np.float32)
-    data = (data - 128.0) * contrast + 128.0 + brightness * 255.0
-    return np.clip(data, 0.0, 255.0).astype(np.uint8)
+    """Deterministic brightness/contrast mapping (``brightness`` in [-1, 1]).
+
+    The float32 work is done *in place* on a single buffer so at most one
+    ``float32`` temporary and one ``uint8`` output coexist with the input frame
+    (instead of the several simultaneous temporaries a chained-expression form
+    would allocate).  This keeps the peak in step with the working-set budget in
+    :func:`cpu_working_set_bytes`.  The arithmetic is byte-identical to
+    ``clip((f - 128) * contrast + 128 + brightness*255, 0, 255)``.
+    """
+    buf = frame.astype(np.float32, copy=True)
+    np.subtract(buf, np.float32(128.0), out=buf)
+    np.multiply(buf, np.float32(contrast), out=buf)
+    np.add(buf, np.float32(128.0), out=buf)
+    np.add(buf, np.float32(brightness * 255.0), out=buf)
+    np.clip(buf, 0.0, 255.0, out=buf)
+    return buf.astype(np.uint8)
 
 
 def dissolve(first: Frame, second: Frame, alpha: float) -> Frame:
@@ -261,6 +274,19 @@ def dissolve(first: Frame, second: Frame, alpha: float) -> Frame:
 def frame_bytes(spec: FramePipelineSpec) -> int:
     """Raw byte size of one ``rgb24`` frame at ``spec``'s geometry."""
     return spec.width * spec.height * 3
+
+
+def _fsync_directory(path: Path) -> None:
+    """Best-effort ``fsync`` of a directory so a rename is durable.
+
+    Ignored on platforms that refuse to open a directory for reading.
+    """
+    with contextlib.suppress(OSError):
+        dir_fd = os.open(str(path), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
 
 def cpu_working_set_bytes(spec: FramePipelineSpec) -> int:
@@ -288,11 +314,17 @@ class BoundedMemoryPipeRunner:
         *,
         max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
         ffmpeg_bin: str = "ffmpeg",
+        timeout_seconds: float = 30.0,
     ) -> None:
         if max_buffer_bytes <= 0:
             raise MemoryBudgetExceededError(f"max_buffer_bytes must be > 0, got {max_buffer_bytes}")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0.0:
+            raise PipeExecutionError(
+                f"timeout_seconds must be finite and > 0, got {timeout_seconds!r}"
+            )
         self.max_buffer_bytes = max_buffer_bytes
         self.ffmpeg_bin = ffmpeg_bin
+        self.timeout_seconds = timeout_seconds
 
     # -- validation & CPU frame math ---------------------------------------
     def validate_frame(self, frame: Frame, spec: FramePipelineSpec) -> None:
@@ -480,6 +512,9 @@ class BoundedMemoryPipeRunner:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp_path, path)
+            # The rename itself must be durable too: fsync the parent directory so
+            # the new directory entry survives a crash (matches segment_cas_dag).
+            _fsync_directory(path.parent)
         except BaseException:
             tmp_path.unlink(missing_ok=True)
             raise
@@ -491,7 +526,9 @@ class BoundedMemoryPipeRunner:
 
         The filter chain mirrors the CPU engine exactly: a closed trim becomes
         ``trim=start_frame:s``/``end_frame``, an open-ended ``trim_start`` becomes
-        ``trim=start_frame=s`` (never dropped), and the tone map is ``eq``.
+        ``trim=start_frame=s`` (never dropped), and the tone map is ``lutrgb``
+        (RGB-domain, so it reproduces the CPU arithmetic instead of ``eq``'s
+        YUV round-trip).
 
         A ``dissolve`` is refused: FFmpeg's ``tblend`` aligns and blends frames
         differently from the CPU engine's per-frame ``(1-a)*prev + a*cur`` (its
@@ -521,13 +558,11 @@ class BoundedMemoryPipeRunner:
             ops.append(TrimStartOp(in_pad="v0", out_pad="v1", start_frame=spec.trim_start))
             eq_in = "v1"
         ops.append(
-            ColorGradeEqOp(
+            ColorGradeLutRgbOp(
                 in_pad=eq_in,
                 out_pad="vout",
                 brightness=spec.brightness,
                 contrast=spec.contrast,
-                saturation=1.0,
-                gamma=1.0,
             )
         )
         compiler = FFmpegFilterGraphCompiler()
@@ -566,15 +601,30 @@ class BoundedMemoryPipeRunner:
         frames are never collected in memory as a single blob.
 
         The in-flight resident bytes (the frame being written plus the output
-        chunk being drained) are checked against ``max_buffer_bytes`` before each
-        write, so a frame too large for the budget is refused with
-        :class:`MemoryBudgetExceededError`.  A wedged or failing child is always
-        killed and reaped in ``finally``, so no FFmpeg process outlives the call.
+        chunk being drained) are measured and checked against ``max_buffer_bytes``,
+        so a frame too large for the budget is refused with
+        :class:`MemoryBudgetExceededError`.  A child that makes no progress for
+        ``timeout_seconds`` is killed and the call fails with
+        :class:`PipeExecutionError`; a wedged or failing child is always killed
+        and reaped in ``finally``, so no FFmpeg process outlives the call.
         """
-        command = self.build_ffmpeg_command(spec)
+        return self._run_ffmpeg_pipe(self.build_ffmpeg_command(spec), segments, spec, sink)
+
+    def _run_ffmpeg_pipe(
+        self,
+        command: Sequence[str],
+        segments: Iterable[Iterable[Frame]],
+        spec: FramePipelineSpec,
+        sink: ByteSink | None,
+    ) -> StreamOutcome:
+        """Spawn ``command`` and pump frames through it under the memory ceiling.
+
+        Split out from :meth:`run_ffmpeg_stream` so the pipe watchdog can be
+        exercised with a real, deliberately-wedged child process.
+        """
         try:
             proc: subprocess.Popen[bytes] = subprocess.Popen(
-                command,
+                list(command),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -587,7 +637,32 @@ class BoundedMemoryPipeRunner:
         stderr_pipe = proc.stderr
         assert stdin is not None and stdout is not None and stderr_pipe is not None
         writer_error: list[BaseException] = []
-        peak_inflight = [_CHUNK_BYTES]
+        # F3b: track the *measured* live in-flight bytes (the frame the writer
+        # holds plus the chunk the reader holds), starting from zero, instead of
+        # seeding the peak with a static working-set floor.
+        peak_inflight = [0]
+        live_frame = [0]
+        # F2: a wedged child that never makes progress must not block forever.
+        timed_out = [False]
+        last_activity = [time.monotonic()]
+        activity_lock = threading.Lock()
+        finished = threading.Event()
+
+        def mark_activity() -> None:
+            with activity_lock:
+                last_activity[0] = time.monotonic()
+
+        def watchdog() -> None:
+            poll = max(min(self.timeout_seconds, 0.1), 0.01)
+            while not finished.wait(timeout=poll):
+                with activity_lock:
+                    idle = time.monotonic() - last_activity[0]
+                if idle > self.timeout_seconds:
+                    timed_out[0] = True
+                    # Killing an already-dead child is a no-op (suppressed).
+                    with contextlib.suppress(OSError):
+                        proc.kill()
+                    return
 
         def feed() -> None:
             try:
@@ -604,11 +679,15 @@ class BoundedMemoryPipeRunner:
                                 f"{_CHUNK_BYTES} B exceeds max_buffer_bytes "
                                 f"{self.max_buffer_bytes}"
                             )
-                        peak_inflight[0] = max(peak_inflight[0], inflight)
+                        live_frame[0] = len(raw)
+                        peak_inflight[0] = max(peak_inflight[0], len(raw))
                         stdin.write(raw)
+                        live_frame[0] = 0
+                        mark_activity()
             except BaseException as exc:  # noqa: BLE001 - relayed to the main thread
                 writer_error.append(exc)
             finally:
+                live_frame[0] = 0
                 try:
                     stdin.close()
                 except OSError:
@@ -616,12 +695,14 @@ class BoundedMemoryPipeRunner:
 
         def drain_stderr() -> None:
             while stderr_pipe.read(_CHUNK_BYTES):
-                pass
+                mark_activity()
 
         writer = threading.Thread(target=feed, daemon=True)
         stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        watchdog_thread = threading.Thread(target=watchdog, daemon=True)
         writer.start()
         stderr_thread.start()
+        watchdog_thread.start()
         container_hasher = hashlib.sha256()
         total = 0
         try:
@@ -629,14 +710,18 @@ class BoundedMemoryPipeRunner:
                 chunk = stdout.read(_CHUNK_BYTES)
                 if not chunk:
                     break
+                # The writer's live frame and this chunk are resident together.
+                peak_inflight[0] = max(peak_inflight[0], live_frame[0] + len(chunk))
                 if sink is not None:
                     sink.write(chunk)
                 container_hasher.update(chunk)
                 total += len(chunk)
+                mark_activity()
             writer.join()
             stderr_thread.join()
             returncode = proc.wait()
         finally:
+            finished.set()
             # Never let a wedged child or a stuck writer outlive the call.
             if proc.poll() is None:
                 proc.kill()
@@ -644,11 +729,14 @@ class BoundedMemoryPipeRunner:
                     proc.wait(timeout=_KILL_TIMEOUT_SECONDS)
             writer.join(timeout=_KILL_TIMEOUT_SECONDS)
             stderr_thread.join(timeout=_KILL_TIMEOUT_SECONDS)
+            watchdog_thread.join(timeout=_KILL_TIMEOUT_SECONDS)
             for pipe in (stdout, stderr_pipe):
                 try:
                     pipe.close()
                 except OSError:
                     pass
+        if timed_out[0]:
+            raise PipeExecutionError("FFmpeg subprocess timed out")
         if writer_error:
             writer_exc = writer_error[0]
             if isinstance(writer_exc, MemoryBudgetExceededError):

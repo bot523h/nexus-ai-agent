@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -24,6 +25,7 @@ from nexus_ai_agent.creative.hyper_compiler.segment_cas_dag import (
 )
 from nexus_ai_agent.creative.hyper_compiler.shot_orchestrator import (
     HyperTimelineOrchestrator,
+    _resolve_receipt_mode,
     default_pipe_spec,
 )
 
@@ -120,6 +122,41 @@ def test_orchestrator_95_percent_cache_recovery(tmp_path: Path) -> None:
     assert second.receipt.rendered_segments == 1
     rendered = [seg for seg in second.segments if not seg.from_cache]
     assert [seg.segment_id for seg in rendered] == ["seg7"]
+
+    # The reused-cache output is bit-identical to a full from-scratch render of
+    # the same changed timeline in a fresh cache: 19 cached segments + 1 render
+    # must produce exactly the bytes of 20 renders.
+    scratch = HyperTimelineOrchestrator(tmp_path / "scratch", max_buffer_bytes=1024 * 1024)
+    full = scratch.execute(changed, frame_factory=frame_factory())
+    assert full.receipt.rendered_segments == 20
+    assert second.output_digest == full.output_digest
+    assert second.output_size == full.output_size
+
+
+def test_orchestrator_rejects_forged_cache_and_rerenders(tmp_path: Path) -> None:
+    # F1 end-to-end: if a cached artifact's manifest is tampered (forged engine
+    # mode), the orchestrator must not trust it — it re-renders and emits an
+    # honest receipt rather than minting a false cache hit.
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    timeline = [make_spec(0)]
+    first = orch.execute(timeline, frame_factory=frame_factory())
+    assert first.receipt.cache_hits == 0
+
+    spec = timeline[0]
+    key = orch.planner.cas_key(
+        spec,
+        pipeline_digest=default_pipe_spec(spec).fingerprint(),
+        mux_mode=MuxMode.DETERMINISTIC_CPU_MUX.value,
+    )
+    manifest_path = orch.planner.manifest_path(key)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["mode"] = "ffmpeg_subprocess_pipe"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    second = orch.execute(timeline, frame_factory=frame_factory())
+    assert second.plan.cache_hits == 0
+    assert second.plan.render_required == 1
+    assert second.receipt.rendered_segments == 1
 
 
 def test_orchestrator_unchanged_segments_are_not_rewritten(tmp_path: Path) -> None:
@@ -347,36 +384,22 @@ def test_orchestrator_cpu_cache_hit_reports_cpu_mode(tmp_path: Path) -> None:
     assert second.segments[0].mode == "deterministic_cpu_mux"
 
 
-def test_orchestrator_rejects_mixed_engine_modes(tmp_path: Path) -> None:
-    # If a manifest's recorded mode disagrees with another segment's, the run is
-    # refused rather than emitting a receipt that lies about the engine.
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
-    spec0 = make_spec(0)
-    key0 = orch.planner.cas_key(
-        spec0,
-        pipeline_digest=default_pipe_spec(spec0).fingerprint(),
-        mux_mode=MuxMode.DETERMINISTIC_CPU_MUX.value,
-    )
-    # A cached artifact whose manifest claims the FFmpeg engine.
-    orch.planner.write_segment_artifact(key0, b"body", mode="ffmpeg_subprocess_pipe")
-    # seg1 is uncached and will be rendered by the CPU engine.
+def test_orchestrator_rejects_mixed_engine_modes() -> None:
+    # Defence in depth: a run that somehow mixes engines is refused rather than
+    # emitting a receipt that lies about how the bytes were produced.  (The mode
+    # is part of the cache key, so this is not reachable through the public API;
+    # the guard is exercised directly.)
     with pytest.raises(HyperCompilerError, match="mixed engine modes"):
-        orch.execute([spec0, make_spec(1)], frame_factory=frame_factory())
+        _resolve_receipt_mode(
+            {"deterministic_cpu_mux", "ffmpeg_subprocess_pipe"}, MuxMode.DETERMINISTIC_CPU_MUX
+        )
 
 
-def test_orchestrator_rejects_unknown_manifest_mode(tmp_path: Path) -> None:
-    # A tampered manifest with a bogus mode must fail closed, not raise a bare
-    # ValueError when the receipt tries to parse it.
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
-    spec0 = make_spec(0)
-    key0 = orch.planner.cas_key(
-        spec0,
-        pipeline_digest=default_pipe_spec(spec0).fingerprint(),
-        mux_mode=MuxMode.DETERMINISTIC_CPU_MUX.value,
-    )
-    orch.planner.write_segment_artifact(key0, b"body", mode="not-a-real-engine")
+def test_orchestrator_rejects_unknown_manifest_mode() -> None:
+    # A tampered manifest that names a mode the enum does not know must fail
+    # closed rather than be trusted for the receipt.
     with pytest.raises(HyperCompilerError, match="unknown engine mode"):
-        orch.execute([spec0], frame_factory=frame_factory())
+        _resolve_receipt_mode({"not-a-real-engine"}, MuxMode.DETERMINISTIC_CPU_MUX)
 
 
 def test_orchestrator_empty_timeline_receipt_mode(tmp_path: Path) -> None:

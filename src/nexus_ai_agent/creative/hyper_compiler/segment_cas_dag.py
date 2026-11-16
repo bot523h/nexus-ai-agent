@@ -45,6 +45,7 @@ from typing import BinaryIO, Protocol
 from nexus_ai_agent.creative.hyper_compiler.errors import (
     HyperCompilerError,
     SegmentIntegrityError,
+    SegmentTamperError,
 )
 
 
@@ -71,6 +72,27 @@ _CHUNK_BYTES = 64 * 1024
 #: A manifest is tiny JSON; anything larger is hostile or corrupt.
 _MAX_MANIFEST_BYTES = 1024 * 1024
 _CAS_KEY_RE = re.compile(r"[0-9a-f]{64}")
+#: The engine modes a manifest may honestly record.  Mirrors :class:`MuxMode`
+#: in ``bounded_memory_pipe_runner`` but kept here so this module stays
+#: stdlib-only; a manifest that names anything else is tampered.
+_KNOWN_ENGINE_MODES = frozenset({"deterministic_cpu_mux", "ffmpeg_subprocess_pipe"})
+#: Default engine recorded when the caller does not name one explicitly.
+DEFAULT_MUX_MODE = "deterministic_cpu_mux"
+#: The fields of :class:`TimelineSegmentSpec`, used to (de)serialise the spec
+#: binding a manifest carries so its content-addressed key can be re-derived.
+_SPEC_FIELDS = (
+    "segment_id",
+    "start_frame",
+    "end_frame",
+    "fps",
+    "width",
+    "height",
+    "shot_dna_digest",
+    "camera_digest",
+    "lighting_digest",
+    "audio_digest",
+    "audio_filter_digest",
+)
 
 
 def _length_prefixed(tag: bytes, payload: bytes) -> bytes:
@@ -194,6 +216,30 @@ def segment_cas_key(
     if hmac_key is not None:
         return hmac.new(hmac_key, data, hashlib.sha256).hexdigest()
     return hashlib.sha256(data).hexdigest()
+
+
+def _spec_to_dict(spec: TimelineSegmentSpec) -> dict[str, object]:
+    """Serialise every field of ``spec`` so its key can be re-derived later."""
+    return {field: getattr(spec, field) for field in _SPEC_FIELDS}
+
+
+def _spec_from_dict(data: object) -> TimelineSegmentSpec:
+    """Rebuild a :class:`TimelineSegmentSpec` from a manifest's spec binding.
+
+    Fail-closed: a missing field, an extra field, a wrong type or a value the
+    spec itself rejects all surface as :class:`SegmentTamperError`, so a forged
+    manifest can never smuggle an unvalidated spec past verification.
+    """
+    if not isinstance(data, dict):
+        raise SegmentTamperError("manifest spec binding is not an object")
+    if set(data) != set(_SPEC_FIELDS):
+        raise SegmentTamperError(
+            f"manifest spec binding has the wrong fields: {sorted(data)} != {sorted(_SPEC_FIELDS)}"
+        )
+    try:
+        return TimelineSegmentSpec(**data)
+    except (HyperCompilerError, TypeError) as exc:
+        raise SegmentTamperError(f"manifest spec binding is invalid: {exc}") from exc
 
 
 # ── RFC 6962 Merkle tree ────────────────────────────────────────────────────
@@ -381,7 +427,7 @@ class SegmentCASPlanner:
             spec,
             hmac_key=self._hmac_key,
             pipeline_digest=pipeline_digest,
-            mux_mode=mux_mode,
+            mux_mode=mux_mode or DEFAULT_MUX_MODE,
         )
 
     def _safe_cache_path(self, name: str) -> Path:
@@ -420,8 +466,14 @@ class SegmentCASPlanner:
             path = self.artifact_path(key)
             try:
                 # Bounded, streaming verification: a whole segment is never
-                # materialised just to decide cache-hit vs re-render.
-                verified = self.verify_segment_artifact(key)
+                # materialised just to decide cache-hit vs re-render.  The
+                # manifest must prove the *requested* engine mode and pipeline
+                # digest, so a forged manifest can never satisfy the wrong plan.
+                verified = self.verify_segment_artifact(
+                    key,
+                    expected_mode=mode or None,
+                    expected_pipeline_digest=digest,
+                )
             except HyperCompilerError:
                 status = SegmentStatus.RENDER_REQUIRED
                 content_sha = ""
@@ -462,6 +514,8 @@ class SegmentCASPlanner:
         file_sha: str,
         size: int,
         mode: str,
+        pipeline_digest: str,
+        spec: TimelineSegmentSpec | None,
     ) -> None:
         manifest: dict[str, object] = {
             "cas_key": cas_key,
@@ -470,6 +524,11 @@ class SegmentCASPlanner:
             "size": size,
             "mode": mode,
             "renderer_version": RENDERER_VERSION,
+            "pipeline_digest": pipeline_digest,
+            # The spec binding lets verification re-derive the content-addressed
+            # key from the manifest alone, so a forged mode / renderer / spec in
+            # an unsigned manifest is detected instead of trusted.
+            "spec": _spec_to_dict(spec) if spec is not None else None,
         }
         if self._hmac_key is not None:
             sealed = json.dumps(manifest, sort_keys=True).encode("utf-8")
@@ -513,7 +572,15 @@ class SegmentCASPlanner:
         return manifest
 
     # -- artifact lifecycle -------------------------------------------------
-    def write_segment_artifact(self, cas_key: str, payload: bytes, *, mode: str = "") -> Path:
+    def write_segment_artifact(
+        self,
+        cas_key: str,
+        payload: bytes,
+        *,
+        mode: str = "",
+        pipeline_digest: str = "",
+        spec: TimelineSegmentSpec | None = None,
+    ) -> Path:
         """Atomically persist ``payload`` under ``cas_key`` plus its manifest."""
         path = self.artifact_path(cas_key)
         raw = _encode_artifact(cas_key, payload)
@@ -523,13 +590,29 @@ class SegmentCASPlanner:
             content_sha=hashlib.sha256(payload).hexdigest(),
             file_sha=hashlib.sha256(raw).hexdigest(),
             size=len(raw),
-            mode=mode,
+            mode=mode or DEFAULT_MUX_MODE,
+            pipeline_digest=pipeline_digest,
+            spec=spec,
         )
         return path
 
-    def commit_segment(self, spec: TimelineSegmentSpec, payload: bytes) -> Path:
+    def commit_segment(
+        self,
+        spec: TimelineSegmentSpec,
+        payload: bytes,
+        *,
+        mode: str = "",
+        pipeline_digest: str = "",
+    ) -> Path:
         """Render-and-cache a single segment; returns the artifact path."""
-        return self.write_segment_artifact(self.cas_key(spec), payload)
+        key = self.cas_key(spec, pipeline_digest=pipeline_digest, mux_mode=mode)
+        return self.write_segment_artifact(
+            key,
+            payload,
+            mode=mode,
+            pipeline_digest=pipeline_digest,
+            spec=spec,
+        )
 
     def commit_stream(
         self,
@@ -539,6 +622,8 @@ class SegmentCASPlanner:
         size: int,
         digest: str,
         mode: str = "",
+        pipeline_digest: str = "",
+        spec: TimelineSegmentSpec | None = None,
     ) -> Path:
         """Atomically persist a payload streamed from ``source`` (bounded RAM).
 
@@ -591,26 +676,61 @@ class SegmentCASPlanner:
             content_sha=digest,
             file_sha=file_hasher.hexdigest(),
             size=SEGMENT_HEADER_LEN + body_len,
-            mode=mode,
+            mode=mode or DEFAULT_MUX_MODE,
+            pipeline_digest=pipeline_digest,
+            spec=spec,
         )
         return path
 
-    def verify_segment_artifact(self, cas_key: str, path: Path | None = None) -> VerifiedSegment:
+    def verify_segment_artifact(
+        self,
+        cas_key: str,
+        path: Path | None = None,
+        *,
+        expected_mode: str | None = None,
+        expected_pipeline_digest: str | None = None,
+    ) -> VerifiedSegment:
         """Verify the artifact and return its proven metadata (never its body).
 
-        The *content* hash (recomputed over the body) and the *on-disk file* hash
-        (recomputed over the whole artifact and compared to the manifest) are
+        Verification is two-stage and fail-closed.  First the manifest's
+        *provenance* is proven: its renderer version must be the current one, its
+        engine mode must be a known mode (and, when ``expected_mode`` is given,
+        exactly that mode), and the content-addressed key must be re-derivable
+        from the spec, mode, pipeline digest and renderer version the manifest
+        itself records.  A forged ``mode``/``renderer_version``/``spec`` in an
+        unsigned manifest therefore fails here, *before* any bytes are trusted.
+
+        Then the *content* hash (recomputed over the body) and the *on-disk file*
+        hash (recomputed over the whole artifact and compared to the manifest) are
         both checked while streaming in fixed-size chunks, so verifying a large
-        artifact never materialises it in RAM.  Fail-closed: any mismatch raises
-        :class:`SegmentIntegrityError`.
+        artifact never materialises it in RAM.  Any mismatch raises
+        :class:`SegmentIntegrityError` (provenance failures raise its
+        :class:`SegmentTamperError` subclass).
         """
-        handle, verified = self._open_verified(cas_key, path)
+        handle, verified = self._open_verified(
+            cas_key,
+            path,
+            expected_mode=expected_mode,
+            expected_pipeline_digest=expected_pipeline_digest,
+        )
         handle.close()
         return verified
 
-    def read_segment_artifact(self, cas_key: str, path: Path | None = None) -> bytes:
+    def read_segment_artifact(
+        self,
+        cas_key: str,
+        path: Path | None = None,
+        *,
+        expected_mode: str | None = None,
+        expected_pipeline_digest: str | None = None,
+    ) -> bytes:
         """Return the verified payload of ``cas_key`` (fail-closed)."""
-        handle, _ = self._open_verified(cas_key, path)
+        handle, _ = self._open_verified(
+            cas_key,
+            path,
+            expected_mode=expected_mode,
+            expected_pipeline_digest=expected_pipeline_digest,
+        )
         try:
             chunks: list[bytes] = []
             while True:
@@ -622,13 +742,25 @@ class SegmentCASPlanner:
             handle.close()
         return b"".join(chunks)
 
-    def stream_segment_body(self, cas_key: str, sink: ByteSink) -> VerifiedSegment:
+    def stream_segment_body(
+        self,
+        cas_key: str,
+        sink: ByteSink,
+        *,
+        expected_mode: str | None = None,
+        expected_pipeline_digest: str | None = None,
+    ) -> VerifiedSegment:
         """Verify ``cas_key`` and copy its body to ``sink`` in fixed-size chunks.
 
         The body is never held in memory as a whole, so assembling a final
         timeline from many cached segments stays bounded regardless of length.
         """
-        handle, verified = self._open_verified(cas_key, None)
+        handle, verified = self._open_verified(
+            cas_key,
+            None,
+            expected_mode=expected_mode,
+            expected_pipeline_digest=expected_pipeline_digest,
+        )
         try:
             while True:
                 chunk = handle.read(_CHUNK_BYTES)
@@ -639,12 +771,71 @@ class SegmentCASPlanner:
             handle.close()
         return verified
 
-    def _open_verified(self, cas_key: str, path: Path | None) -> tuple[BinaryIO, VerifiedSegment]:
+    def _prove_manifest_provenance(
+        self,
+        validated: str,
+        manifest: dict[str, object],
+        *,
+        expected_mode: str | None,
+        expected_pipeline_digest: str | None,
+    ) -> str:
+        """Re-derive the content-addressed key from the manifest itself.
+
+        Returns the (proven) engine mode.  Fail-closed: a manifest that omits its
+        renderer version or mode, names an unknown mode, disagrees with the
+        requested mode/pipeline digest, or whose recorded spec no longer hashes
+        to ``validated`` is refused with :class:`SegmentTamperError`.
+        """
+        renderer_version = manifest.get("renderer_version")
+        if not isinstance(renderer_version, str) or renderer_version != RENDERER_VERSION:
+            raise SegmentTamperError(
+                f"segment manifest renderer version is not {RENDERER_VERSION!r}: "
+                f"{renderer_version!r}"
+            )
+        stored_mode = manifest.get("mode")
+        if not isinstance(stored_mode, str) or stored_mode not in _KNOWN_ENGINE_MODES:
+            raise SegmentTamperError(f"segment manifest engine mode is unknown: {stored_mode!r}")
+        if expected_mode is not None and stored_mode != expected_mode:
+            raise SegmentTamperError(
+                f"segment manifest mode {stored_mode!r} != requested mode {expected_mode!r}"
+            )
+        pipeline_digest = manifest.get("pipeline_digest", "")
+        if not isinstance(pipeline_digest, str):
+            raise SegmentTamperError("segment manifest pipeline digest is not a string")
+        if expected_pipeline_digest is not None and pipeline_digest != expected_pipeline_digest:
+            raise SegmentTamperError(
+                f"segment manifest pipeline digest {pipeline_digest!r} != requested "
+                f"{expected_pipeline_digest!r}"
+            )
+        spec = _spec_from_dict(manifest.get("spec"))
+        derived = segment_cas_key(
+            spec,
+            hmac_key=self._hmac_key,
+            pipeline_digest=pipeline_digest,
+            mux_mode=stored_mode,
+            renderer_version=renderer_version,
+        )
+        if derived != validated:
+            raise SegmentTamperError(
+                f"segment manifest does not re-derive its own key: {derived} != {validated}"
+            )
+        return stored_mode
+
+    def _open_verified(
+        self,
+        cas_key: str,
+        path: Path | None,
+        *,
+        expected_mode: str | None = None,
+        expected_pipeline_digest: str | None = None,
+    ) -> tuple[BinaryIO, VerifiedSegment]:
         """Verify ``cas_key`` fully, then return an open handle positioned at the body.
 
         An explicit ``path`` must still resolve inside ``cache_dir`` — the same
         containment rule as every derived path, so a caller cannot be tricked
-        into reading or trusting a file outside the store.
+        into reading or trusting a file outside the store.  The manifest's
+        provenance is proven (mode, renderer version, re-derived key) before a
+        single byte of the artifact body is trusted.
         """
         validated = validate_cas_key(cas_key)
         if path is not None:
@@ -656,12 +847,12 @@ class SegmentCASPlanner:
         if not artifact.is_file():
             raise SegmentIntegrityError(f"segment artifact missing: {artifact}")
         manifest = self.read_manifest(validated)
-        if manifest.get("renderer_version") not in (None, RENDERER_VERSION):
-            raise SegmentIntegrityError(
-                f"segment rendered by an incompatible renderer: "
-                f"{manifest.get('renderer_version')!r}"
-            )
-        stored_mode = manifest.get("mode", "")
+        stored_mode = self._prove_manifest_provenance(
+            validated,
+            manifest,
+            expected_mode=expected_mode,
+            expected_pipeline_digest=expected_pipeline_digest,
+        )
         handle = artifact.open("rb")
         try:
             header = handle.read(SEGMENT_HEADER_LEN)
@@ -701,12 +892,13 @@ class SegmentCASPlanner:
             cas_key=validated,
             content_sha=content_sha.hex(),
             body_size=body_len,
-            mode=stored_mode if isinstance(stored_mode, str) else "",
+            mode=stored_mode,
         )
         return handle, verified
 
 
 __all__ = [
+    "DEFAULT_MUX_MODE",
     "RENDERER_VERSION",
     "SEGMENT_HEADER_LEN",
     "PlannedSegment",

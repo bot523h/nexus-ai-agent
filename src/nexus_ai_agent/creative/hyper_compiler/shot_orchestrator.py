@@ -70,6 +70,24 @@ def default_pipe_spec(spec: TimelineSegmentSpec) -> FramePipelineSpec:
     return FramePipelineSpec(width=spec.width, height=spec.height, fps=spec.fps)
 
 
+def _resolve_receipt_mode(segment_modes: set[str], fallback: MuxMode) -> MuxMode:
+    """Derive the receipt's engine mode from the modes actually observed.
+
+    The mode is part of the cache key, so every segment in one run shares the
+    requested engine; this stays a defence in depth — a run that somehow mixes
+    engines, or names an engine the enum does not know, is refused rather than
+    allowed to emit a receipt that lies about how the bytes were produced.
+    """
+    if not segment_modes:
+        return fallback
+    if len(segment_modes) > 1:
+        raise HyperCompilerError(f"timeline mixed engine modes in one run: {sorted(segment_modes)}")
+    try:
+        return MuxMode(next(iter(segment_modes)))
+    except ValueError as exc:
+        raise HyperCompilerError(f"unknown engine mode in manifest: {exc}") from exc
+
+
 class _HashingWriter:
     """Binary sink that tracks the SHA-256 and byte count of everything written."""
 
@@ -197,6 +215,8 @@ class HyperTimelineOrchestrator:
                     size=outcome.container_size,
                     digest=outcome.output_digest,
                     mode=outcome.mode.value,
+                    pipeline_digest=spec.fingerprint(),
+                    spec=planned.spec,
                 )
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -237,8 +257,15 @@ class HyperTimelineOrchestrator:
                         writer.write(planned.cas_key.encode("ascii"))
                         writer.write(struct.pack(">Q", planned.body_size))
                         writer.write(bytes.fromhex(planned.content_sha))
-                        # One verified, streamed copy straight from the cache.
-                        self.planner.stream_segment_body(planned.cas_key, writer)
+                        # One verified, streamed copy straight from the cache. The
+                        # manifest must re-prove the requested engine mode and the
+                        # pipeline digest the plan keyed on (fail-closed).
+                        self.planner.stream_segment_body(
+                            planned.cas_key,
+                            writer,
+                            expected_mode=planned.mode or mode.value,
+                            expected_pipeline_digest=planned.pipeline_digest,
+                        )
                         segments.append(
                             SegmentRender(
                                 segment_id=planned.spec.segment_id,
@@ -278,6 +305,8 @@ class HyperTimelineOrchestrator:
                                 size=outcome.container_size,
                                 digest=outcome.output_digest,
                                 mode=outcome.mode.value,
+                                pipeline_digest=spec.fingerprint(),
+                                spec=planned.spec,
                             )
                     finally:
                         tmp_path.unlink(missing_ok=True)
@@ -306,17 +335,7 @@ class HyperTimelineOrchestrator:
         # Every segment shares one mode (the mode is part of the cache key), so
         # the receipt reports the engine that actually produced the bytes.
         segment_modes = {seg.mode for seg in segments if seg.mode}
-        if len(segment_modes) > 1:
-            raise HyperCompilerError(
-                f"timeline mixed engine modes in one run: {sorted(segment_modes)}"
-            )
-        if segment_modes:
-            try:
-                receipt_mode = MuxMode(next(iter(segment_modes)))
-            except ValueError as exc:
-                raise HyperCompilerError(f"unknown engine mode in manifest: {exc}") from exc
-        else:
-            receipt_mode = executed_mode or mode
+        receipt_mode = _resolve_receipt_mode(segment_modes, executed_mode or mode)
         receipt = self.runner.build_receipt(
             timeline_merkle_root=plan.merkle_root,
             total_segments=plan.total_leaves,
@@ -364,7 +383,11 @@ class HyperTimelineOrchestrator:
         plan = self.plan(timeline, pipe_spec_factory=pipe_spec_factory, mode=mode)
         for planned in plan.segments:
             if planned.status is SegmentStatus.CACHE_HIT:
-                self.planner.verify_segment_artifact(planned.cas_key)
+                self.planner.verify_segment_artifact(
+                    planned.cas_key,
+                    expected_mode=planned.mode or mode.value,
+                    expected_pipeline_digest=planned.pipeline_digest,
+                )
         return plan.merkle_root
 
 

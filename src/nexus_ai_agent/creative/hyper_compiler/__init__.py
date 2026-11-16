@@ -26,9 +26,11 @@ from nexus_ai_agent.creative.hyper_compiler.errors import (
     MemoryBudgetExceededError,
     PipeExecutionError,
     SegmentIntegrityError,
+    SegmentTamperError,
 )
 from nexus_ai_agent.creative.hyper_compiler.ffmpeg_filter_graph_compiler import (
     ColorGradeEqOp,
+    ColorGradeLutRgbOp,
     CompiledFilterGraph,
     CrossfadeAudioOp,
     CrossfadeVideoOp,
@@ -45,6 +47,7 @@ from nexus_ai_agent.creative.hyper_compiler.ffmpeg_filter_graph_compiler import 
     VignetteOp,
 )
 from nexus_ai_agent.creative.hyper_compiler.segment_cas_dag import (
+    DEFAULT_MUX_MODE,
     RENDERER_VERSION,
     PlannedSegment,
     SegmentCASPlanner,
@@ -68,8 +71,10 @@ from nexus_ai_agent.creative.hyper_compiler.shot_orchestrator import (
 
 __all__ = [
     "DEFAULT_MAX_BUFFER_BYTES",
+    "DEFAULT_MUX_MODE",
     "BoundedMemoryPipeRunner",
     "ColorGradeEqOp",
+    "ColorGradeLutRgbOp",
     "CompileExecutionReceipt",
     "CompiledFilterGraph",
     "CrossfadeAudioOp",
@@ -96,6 +101,7 @@ __all__ = [
     "SegmentPlan",
     "SegmentRender",
     "SegmentStatus",
+    "SegmentTamperError",
     "StreamKind",
     "StreamOutcome",
     "TimelineExecution",
