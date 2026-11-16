@@ -2,14 +2,18 @@
 
 :class:`PersonalCloudVaultManager` coordinates client-side chunk encryption,
 content-addressed deduplication across consecutive project edits, optimistic
-concurrency verification via ``parent_snapshot_id``, fail-closed verification
-before file reconstruction, and unreferenced chunk garbage collection.
+concurrency verification via ``parent_snapshot_id``, multi-layered race-free
+in-flight chunk protection against concurrent garbage collection, fail-closed
+verification before file reconstruction, and unreferenced chunk cleanup.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import secrets
+import threading
+import time
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,10 +25,12 @@ from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import (
 )
 from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
     DEFAULT_CHUNK_SIZE,
+    MIN_PBKDF2_ITERATIONS,
     PBKDF2_ITERATIONS,
     EncryptedChunkEnvelope,
     VaultChunkRef,
     VaultFileEntry,
+    VaultKeyMaterial,
     VaultSnapshotManifest,
     build_snapshot_manifest,
     compute_chunk_id,
@@ -36,6 +42,7 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
     normalize_relative_vault_path,
     split_into_chunks,
     validate_chunk_size,
+    validate_pad_block_size,
     verify_manifest_integrity,
 )
 from nexus_ai_agent.storage.personal_cloud_vault.errors import (
@@ -151,16 +158,23 @@ class PersonalCloudVaultManager:
         *,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         kdf_iterations: int = PBKDF2_ITERATIONS,
+        pad_to_block_size: int = 1,
     ) -> None:
         validate_chunk_size(chunk_size)
-        if kdf_iterations < PBKDF2_ITERATIONS:
+        validate_pad_block_size(pad_to_block_size)
+        if kdf_iterations < MIN_PBKDF2_ITERATIONS:
             raise PersonalVaultError(
-                f"kdf_iterations must be at least {PBKDF2_ITERATIONS}, got {kdf_iterations}"
+                f"kdf_iterations must be at least {MIN_PBKDF2_ITERATIONS}, got {kdf_iterations}"
             )
         self._driver = driver
         self._chunk_size = chunk_size
         self._kdf_iterations = kdf_iterations
+        self._pad_to_block_size = pad_to_block_size
+        self._lock = threading.RLock()
         self._known_chunk_ids: set[str] = set()
+        self._in_flight_chunks: set[str] = set()
+        self._in_flight_refcounts: dict[str, int] = {}
+        self._chunk_seen_at: dict[str, float] = {}
 
     @property
     def driver(self) -> BYOSStorageDriver:
@@ -170,9 +184,91 @@ class PersonalCloudVaultManager:
     def chunk_size(self) -> int:
         return self._chunk_size
 
-    def record_orphan_candidate_chunk(self, chunk_id: str) -> None:
+    @property
+    def in_flight_chunks(self) -> frozenset[str]:
+        """Return a thread-safe snapshot of chunk IDs currently being pushed."""
+        with self._lock:
+            return frozenset(self._in_flight_chunks)
+
+    def record_orphan_candidate_chunk(
+        self,
+        chunk_id: str,
+        *,
+        recorded_at: float | None = None,
+    ) -> None:
         """Register a chunk ID in the local sync journal for future GC inspection."""
-        self._known_chunk_ids.add(chunk_id)
+        ts = time.time() if recorded_at is None else recorded_at
+        with self._lock:
+            self._known_chunk_ids.add(chunk_id)
+            self._chunk_seen_at[chunk_id] = ts
+
+    def _acquire_in_flight_chunks(self, chunk_ids: Iterable[str]) -> tuple[str, ...]:
+        unique_ids = tuple(sorted(set(chunk_ids)))
+        now = time.time()
+        with self._lock:
+            for cid in unique_ids:
+                self._in_flight_refcounts[cid] = self._in_flight_refcounts.get(cid, 0) + 1
+                self._in_flight_chunks.add(cid)
+                self._known_chunk_ids.add(cid)
+                self._chunk_seen_at[cid] = now
+        return unique_ids
+
+    def _release_in_flight_chunks(self, acquired_ids: Iterable[str]) -> None:
+        with self._lock:
+            for cid in acquired_ids:
+                remaining = self._in_flight_refcounts.get(cid, 0) - 1
+                if remaining <= 0:
+                    self._in_flight_refcounts.pop(cid, None)
+                    self._in_flight_chunks.discard(cid)
+                else:
+                    self._in_flight_refcounts[cid] = remaining
+
+    def _encrypt_and_upload_chunk(
+        self,
+        chunk_id: str,
+        chunk_plain: bytes,
+        key_material: VaultKeyMaterial,
+    ) -> int:
+        envelope = encrypt_chunk(
+            chunk_plain,
+            key_material,
+            chunk_index=0,
+            pad_to_block_size=self._pad_to_block_size,
+        )
+        wire_bytes = envelope.to_bytes()
+        self._driver.put_chunk(chunk_id, wire_bytes)
+        with self._lock:
+            self._known_chunk_ids.add(chunk_id)
+            self._chunk_seen_at[chunk_id] = time.time()
+        return len(wire_bytes)
+
+    def _verify_and_heal_manifest_chunks(
+        self,
+        chunk_plaintexts: Mapping[str, bytes],
+        key_material: VaultKeyMaterial,
+        *,
+        stage: str,
+        rollback_snapshot_id: str | None = None,
+    ) -> tuple[int, int]:
+        """Verify every manifest chunk exists on storage; heal if evicted or fail closed."""
+        healed_count = 0
+        healed_bytes = 0
+        for cid in sorted(chunk_plaintexts):
+            if self._driver.has_chunk(cid):
+                continue
+            written = self._encrypt_and_upload_chunk(cid, chunk_plaintexts[cid], key_material)
+            healed_count += 1
+            healed_bytes += written
+            if not self._driver.has_chunk(cid):
+                if rollback_snapshot_id is not None:
+                    delete_manifest_fn = getattr(self._driver, "delete_manifest", None)
+                    if callable(delete_manifest_fn):
+                        with contextlib.suppress(Exception):
+                            delete_manifest_fn(rollback_snapshot_id)
+                raise VaultTransportError(
+                    f"Fail-closed ({stage}): chunk {cid} missing from storage after re-upload"
+                )
+        return healed_count, healed_bytes
 
     def _load_project_manifests(
         self,
@@ -183,7 +279,8 @@ class PersonalCloudVaultManager:
         for sid in sorted(all_ids):
             raw = self._driver.get_manifest(sid)
             manifest = VaultSnapshotManifest.from_json_bytes(raw)
-            self._known_chunk_ids.update(manifest.referenced_chunk_ids())
+            with self._lock:
+                self._known_chunk_ids.update(manifest.referenced_chunk_ids())
             if manifest.project_id == project_id:
                 project_manifests[sid] = manifest
         return all_ids, project_manifests
@@ -261,33 +358,19 @@ class PersonalCloudVaultManager:
 
         source_files = _collect_source_files(source)
         file_entries: list[VaultFileEntry] = []
-        uploaded_in_batch: set[str] = set()
+        chunk_plaintexts_by_id: dict[str, bytes] = {}
+        prepared_files: list[tuple[str, bytes, list[VaultChunkRef], list[tuple[str, bytes]]]] = []
 
         total_chunks = 0
-        uploaded_chunks = 0
-        deduplicated_chunks = 0
-        uploaded_bytes = 0
-        saved_plaintext_bytes = 0
-
         for rel_path, file_bytes in source_files.items():
             raw_chunks = split_into_chunks(file_bytes, chunk_size=self._chunk_size)
             chunk_refs: list[VaultChunkRef] = []
+            chunk_pairs: list[tuple[str, bytes]] = []
             for idx, chunk_plain in enumerate(raw_chunks):
                 total_chunks += 1
                 chunk_id = compute_chunk_id(chunk_plain, key_material)
-                self._known_chunk_ids.add(chunk_id)
-
-                if chunk_id in uploaded_in_batch or self._driver.has_chunk(chunk_id):
-                    deduplicated_chunks += 1
-                    saved_plaintext_bytes += len(chunk_plain)
-                else:
-                    envelope = encrypt_chunk(chunk_plain, key_material, chunk_index=0)
-                    wire_bytes = envelope.to_bytes()
-                    self._driver.put_chunk(chunk_id, wire_bytes)
-                    uploaded_in_batch.add(chunk_id)
-                    uploaded_chunks += 1
-                    uploaded_bytes += len(wire_bytes)
-
+                chunk_plaintexts_by_id[chunk_id] = chunk_plain
+                chunk_pairs.append((chunk_id, chunk_plain))
                 chunk_refs.append(
                     VaultChunkRef(
                         chunk_index=idx,
@@ -295,34 +378,75 @@ class PersonalCloudVaultManager:
                         plaintext_len=len(chunk_plain),
                     )
                 )
+            prepared_files.append((rel_path, file_bytes, chunk_refs, chunk_pairs))
 
-            file_mac_hex = compute_file_mac(rel_path, file_bytes, key_material)
-            file_entries.append(
-                VaultFileEntry(
-                    rel_path=rel_path,
-                    total_size=len(file_bytes),
-                    file_mac_hex=file_mac_hex,
-                    chunks=tuple(chunk_refs),
+        # Lease all snapshot chunks in `_in_flight_chunks` BEFORE any upload begins.
+        acquired_ids = self._acquire_in_flight_chunks(chunk_plaintexts_by_id.keys())
+        try:
+            uploaded_in_batch: set[str] = set()
+            uploaded_chunks = 0
+            deduplicated_chunks = 0
+            uploaded_bytes = 0
+            saved_plaintext_bytes = 0
+
+            for rel_path, file_bytes, chunk_refs, chunk_pairs in prepared_files:
+                for chunk_id, chunk_plain in chunk_pairs:
+                    if chunk_id in uploaded_in_batch or self._driver.has_chunk(chunk_id):
+                        deduplicated_chunks += 1
+                        saved_plaintext_bytes += len(chunk_plain)
+                    else:
+                        written = self._encrypt_and_upload_chunk(
+                            chunk_id, chunk_plain, key_material
+                        )
+                        uploaded_in_batch.add(chunk_id)
+                        uploaded_chunks += 1
+                        uploaded_bytes += written
+
+                file_mac_hex = compute_file_mac(rel_path, file_bytes, key_material)
+                file_entries.append(
+                    VaultFileEntry(
+                        rel_path=rel_path,
+                        total_size=len(file_bytes),
+                        file_mac_hex=file_mac_hex,
+                        chunks=tuple(chunk_refs),
+                    )
                 )
+
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            effective_snapshot_id = (
+                f"snap-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-"
+                f"{secrets.token_hex(6)}"
+                if snapshot_id is None
+                else snapshot_id
+            )
+            manifest = build_snapshot_manifest(
+                project_id=project_id,
+                snapshot_id=effective_snapshot_id,
+                parent_snapshot_id=parent_snapshot_id,
+                created_at_utc=now_iso,
+                chunk_size=self._chunk_size,
+                files=file_entries,
+                key_material=key_material,
+                metadata=metadata,
             )
 
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        effective_snapshot_id = (
-            f"snap-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(6)}"
-            if snapshot_id is None
-            else snapshot_id
-        )
-        manifest = build_snapshot_manifest(
-            project_id=project_id,
-            snapshot_id=effective_snapshot_id,
-            parent_snapshot_id=parent_snapshot_id,
-            created_at_utc=now_iso,
-            chunk_size=self._chunk_size,
-            files=file_entries,
-            key_material=key_material,
-            metadata=metadata,
-        )
-        self._driver.put_manifest(manifest.snapshot_id, manifest.to_json_bytes())
+            # Pre-manifest check: heal any chunk evicted concurrently by external actors.
+            self._verify_and_heal_manifest_chunks(
+                chunk_plaintexts_by_id,
+                key_material,
+                stage="pre-manifest",
+            )
+            self._driver.put_manifest(manifest.snapshot_id, manifest.to_json_bytes())
+
+            # Post-manifest check: ensure every chunk remains committed after manifest write.
+            self._verify_and_heal_manifest_chunks(
+                chunk_plaintexts_by_id,
+                key_material,
+                stage="post-manifest",
+                rollback_snapshot_id=manifest.snapshot_id,
+            )
+        finally:
+            self._release_in_flight_chunks(acquired_ids)
 
         dedup_ratio = (deduplicated_chunks / total_chunks) if total_chunks > 0 else 0.0
         return SnapshotPushReport(
@@ -399,7 +523,8 @@ class PersonalCloudVaultManager:
                         f"Decrypted chunk size {len(plaintext)} != manifest {ref.plaintext_len}"
                     )
                 verified_chunks[ref.chunk_id] = plaintext
-                self._known_chunk_ids.add(ref.chunk_id)
+                with self._lock:
+                    self._known_chunk_ids.add(ref.chunk_id)
 
         restored_files: dict[str, bytes] = {}
         total_bytes = 0
@@ -423,13 +548,44 @@ class PersonalCloudVaultManager:
             total_restored_bytes=total_bytes,
         )
 
+    def _is_younger_than_min_age(
+        self,
+        chunk_id: str,
+        *,
+        min_age_seconds: float,
+        now_epoch: float,
+        seen_snapshot: Mapping[str, float],
+    ) -> bool:
+        if min_age_seconds <= 0.0:
+            return False
+        recorded_ts = seen_snapshot.get(chunk_id)
+        if recorded_ts is None:
+            mtime_fn = getattr(self._driver, "get_chunk_mtime", None)
+            if callable(mtime_fn):
+                mtime_val = mtime_fn(chunk_id)
+                if isinstance(mtime_val, (int, float)):
+                    recorded_ts = float(mtime_val)
+        if recorded_ts is None:
+            return False
+        return (now_epoch - recorded_ts) < min_age_seconds
+
     def garbage_collect_unreferenced_chunks(
         self,
         *,
         active_snapshot_ids: Collection[str] | None = None,
         candidate_chunk_ids: Iterable[str] | None = None,
+        protected_chunk_ids: Collection[str] = (),
+        min_age_seconds: float = 0.0,
     ) -> GarbageCollectionReport:
-        """Delete orphan chunks not referenced by any active snapshot manifest."""
+        """Delete orphan chunks not referenced by active manifests or in-flight pushes."""
+        if min_age_seconds < 0.0:
+            raise PersonalVaultError(f"min_age_seconds must be non-negative, got {min_age_seconds}")
+
+        with self._lock:
+            initial_in_flight = set(self._in_flight_chunks)
+            known_snapshot = set(self._known_chunk_ids)
+            seen_snapshot = dict(self._chunk_seen_at)
+
         stored_manifest_ids = set(self._driver.list_manifests())
         if active_snapshot_ids is None:
             active_ids = stored_manifest_ids
@@ -452,7 +608,8 @@ class PersonalCloudVaultManager:
             else:
                 superseded_chunks.update(chunks_in_manifest)
 
-        discovered_candidates: set[str] = set(self._known_chunk_ids) | superseded_chunks
+        protected_all = referenced_chunks | set(protected_chunk_ids) | initial_in_flight
+        discovered_candidates: set[str] = known_snapshot | superseded_chunks
         if candidate_chunk_ids is not None:
             discovered_candidates.update(candidate_chunk_ids)
         list_chunks_fn = getattr(self._driver, "list_chunks", None)
@@ -461,14 +618,26 @@ class PersonalCloudVaultManager:
             if isinstance(listed, Iterable):
                 discovered_candidates.update(str(cid) for cid in listed)
 
+        now_epoch = time.time()
         deleted: list[str] = []
         for chunk_id in sorted(discovered_candidates):
-            if chunk_id in referenced_chunks:
+            if chunk_id in protected_all:
                 continue
-            if self._driver.has_chunk(chunk_id):
-                self._driver.delete_chunk(chunk_id)
-                deleted.append(chunk_id)
-            self._known_chunk_ids.discard(chunk_id)
+            if self._is_younger_than_min_age(
+                chunk_id,
+                min_age_seconds=min_age_seconds,
+                now_epoch=now_epoch,
+                seen_snapshot=seen_snapshot,
+            ):
+                continue
+            with self._lock:
+                if chunk_id in self._in_flight_chunks:
+                    continue
+                if self._driver.has_chunk(chunk_id):
+                    self._driver.delete_chunk(chunk_id)
+                    deleted.append(chunk_id)
+                self._known_chunk_ids.discard(chunk_id)
+                self._chunk_seen_at.pop(chunk_id, None)
 
         return GarbageCollectionReport(
             deleted_chunk_ids=tuple(deleted),

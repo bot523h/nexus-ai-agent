@@ -75,9 +75,11 @@ def test_local_device_vault_atomic_crud_and_quota(tmp_path: Path) -> None:
     cid_1 = "a" * 64
     cid_2 = "b" * 64
     assert not driver.has_chunk(cid_1)
+    assert driver.get_chunk_mtime(cid_1) is None
 
     driver.put_chunk(cid_1, b"x" * 100)
     assert driver.has_chunk(cid_1)
+    assert isinstance(driver.get_chunk_mtime(cid_1), float)
     assert driver.get_chunk(cid_1) == b"x" * 100
     assert driver.list_chunks() == [cid_1]
     assert driver.used_bytes() == 100
@@ -409,11 +411,44 @@ def test_s3_config_xml_security_and_urllib_transport_guards(
     with pytest.raises(VaultAuthenticationError):
         S3SigV4Config("https://ok.example.com", "bucket", "auto", "", "s")
 
-    # XXE DOCTYPE / ENTITY defense and malformed XML
-    with pytest.raises(VaultTamperDetectedError):
+    # XXE DOCTYPE / ENTITY / CDATA / padded-comment bypass defense (Finding F2)
+    with pytest.raises(VaultTransportError):
         _parse_s3_list_xml(b'<!DOCTYPE foo [<!ENTITY xxe "bad">]><ListBucketResult/>')
     with pytest.raises(VaultTransportError):
         _parse_s3_list_xml(b"<unclosed")
+
+    # Regression for F2: >2,000 bytes of XML comment padding before <!DOCTYPE / <!ENTITY
+    comment_padding = b"<!-- " + (b"P" * 2400) + b" -->\n"
+    padded_xxe_payload = (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        + comment_padding
+        + b'<!DoCtYpE ListBucketResult [<!eNtItY boom "expanded">]>\n'
+        + b"<ListBucketResult><Contents><Key>&boom;</Key></Contents></ListBucketResult>"
+    )
+    assert len(comment_padding) > 2000
+    with pytest.raises(VaultTransportError):
+        _parse_s3_list_xml(padded_xxe_payload)
+
+    # Padded CDATA, standalone custom entity ref, and NUL byte are also rejected
+    with pytest.raises(VaultTransportError):
+        _parse_s3_list_xml(
+            comment_padding
+            + b"<ListBucketResult><Contents><Key><![CDATA[x]]></Key></Contents></ListBucketResult>"
+        )
+    with pytest.raises(VaultTransportError):
+        _parse_s3_list_xml(
+            comment_padding
+            + b"<ListBucketResult><Contents><Key>&custom_ent;</Key></Contents></ListBucketResult>"
+        )
+    with pytest.raises(VaultTransportError):
+        _parse_s3_list_xml(b"<ListBucketResult>\x00</ListBucketResult>")
+
+    # Standard predefined XML character entity (&amp;) continues to work cleanly
+    keys_ok, tok_ok = _parse_s3_list_xml(
+        b"<ListBucketResult><Contents><Key>p/a&amp;b.json</Key></Contents></ListBucketResult>"
+    )
+    assert keys_ok == ["p/a&b.json"]
+    assert tok_ok is None
 
     # Default urllib transport unit tests (offline via monkeypatch)
     with pytest.raises(VaultTransportError):

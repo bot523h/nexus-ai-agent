@@ -11,6 +11,8 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     DEFAULT_CHUNK_SIZE,
     MAX_CHUNK_SIZE,
     MAX_DEFAULT_CHUNK_SIZE,
+    MIN_PBKDF2_ITERATIONS,
+    PBKDF2_ITERATIONS,
     EncryptedChunkEnvelope,
     PersonalVaultError,
     VaultAuthenticationError,
@@ -36,6 +38,7 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     sha256_ctr_crypt,
     split_into_chunks,
     validate_chunk_size,
+    validate_pad_block_size,
     verify_manifest_integrity,
 )
 
@@ -49,24 +52,165 @@ def _flip_byte_bit(buf: bytes, byte_idx: int, bit_mask: int = 0x01) -> bytes:
 def test_key_derivation_pbkdf2_hkdf_domain_separation_and_secret_redaction() -> None:
     assert DEFAULT_CHUNK_SIZE == 1_048_576
     assert MAX_DEFAULT_CHUNK_SIZE == 4_194_304
+    assert PBKDF2_ITERATIONS == 600_000
+    assert MIN_PBKDF2_ITERATIONS == 100_000
 
     salt = generate_vault_salt()
     assert len(salt) == 32
 
+    # Default call uses OWASP 600,000 PBKDF2-HMAC-SHA256 iterations
     km_str = derive_vault_keys("correct-horse-battery-staple", salt)
     km_bytes = derive_vault_keys(b"correct-horse-battery-staple", salt)
     assert km_str == km_bytes
+    assert km_str.iterations == 600_000
     assert len(km_str.enc_key) == 32
     assert len(km_str.mac_key) == 32
     assert len(km_str.chunk_id_key) == 32
     assert len(km_str.key_id) == 16
     assert len({km_str.enc_key, km_str.mac_key, km_str.chunk_id_key}) == 3
 
+    # Explicit minimum 100,000 iterations remains supported
+    km_min = derive_vault_keys("correct-horse-battery-staple", salt, iterations=100_000)
+    assert km_min.iterations == 100_000
+    assert km_min.enc_key != km_str.enc_key
+
     rendered = repr(km_str)
     assert km_str.enc_key.hex() not in rendered
     assert km_str.mac_key.hex() not in rendered
     assert "enc_key=" not in rendered
     assert "mac_key=" not in rendered
+
+
+def test_known_answer_vector_kat_sha256_ctr_and_etm_hmac() -> None:
+    """Immutable Known-Answer Test (KAT) locking byte-for-byte CTR + EtM HMAC outputs."""
+    enc_key = bytes.fromhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    mac_key = bytes.fromhex("202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f")
+    cid_key = bytes.fromhex("404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f")
+    key_id = bytes.fromhex("606162636465666768696a6b6c6d6e6f")
+    salt = bytes.fromhex("707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f")
+    nonce = bytes.fromhex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")
+    plaintext = b"NAGAR-PCV-KAT-v1: deterministic stream & EtM vector"
+
+    km = VaultKeyMaterial(
+        enc_key=enc_key,
+        mac_key=mac_key,
+        chunk_id_key=cid_key,
+        key_id=key_id,
+        salt=salt,
+        iterations=600_000,
+    )
+    env = encrypt_chunk(plaintext, km, chunk_index=7, nonce=nonce)
+
+    expected_cid = "f0049d9c4018daaadc9022e05f15decf7f1de6702c8127f42af28c8e8ce3ec51"
+    expected_hdr = "4e5043560100f0049d9c4018daaadc9022e05f15decf7f1de6702c8127f42af28c8e8ce3ec51"
+    expected_ct = (
+        "52f23a68d23ea92330ac6c61cb38b65e7589e7d26efe19e3a12360d7c053e046"
+        "bdfa76273185d0a45bc60209fe4c17a91eac11"
+    )
+    expected_mac = "8ff987a85decb64cb4705165086932110194b45e3d1d096bda9768630699a186"
+
+    assert env.chunk_id == expected_cid
+    assert env.header.hex() == expected_hdr
+    assert env.ciphertext.hex() == expected_ct
+    assert env.mac_tag.hex() == expected_mac
+    assert sha256_ctr_crypt(enc_key, nonce, plaintext).hex() == expected_ct
+    assert (
+        decrypt_chunk(
+            EncryptedChunkEnvelope.from_bytes(env.to_bytes()),
+            km,
+            expected_chunk_index=7,
+        )
+        == plaintext
+    )
+
+    # KDF + HKDF KAT lock
+    km_kdf = derive_vault_keys(
+        "nagar-kat-passphrase",
+        b"0123456789abcdef0123456789abcdef",
+        iterations=100_000,
+    )
+    assert km_kdf.enc_key.hex() == (
+        "5ae6947133de9492ef0c72eee0cd8d2b17e8fd76b667f460d940fc69f7d7781b"
+    )
+    assert km_kdf.mac_key.hex() == (
+        "70413441af86b7d126b093eeadfad4490a4a79fbb8fc59d871a54015837235c4"
+    )
+    assert km_kdf.key_id.hex() == "b504f12bf4c67829be1e78149c84944e"
+
+
+def test_optional_pad_to_block_size_length_hiding_and_tamper_guards() -> None:
+    km = derive_vault_keys("pad-secret", b"P" * 32, iterations=100_000)
+
+    assert validate_pad_block_size(4096) == 4096
+    with pytest.raises(PersonalVaultError):
+        validate_pad_block_size(True)
+    with pytest.raises(PersonalVaultError):
+        validate_pad_block_size(0)
+    with pytest.raises(PersonalVaultError):
+        validate_pad_block_size(MAX_CHUNK_SIZE + 1)
+
+    cases = [
+        (b"", 64, 0, 64),
+        (b"short-17-bytes!!!", 64, 17, 64),
+        (b"A" * 64, 64, 64, 64),
+        (b"A" * 65, 64, 65, 128),
+    ]
+    for sample, block_sz, expected_plain_len, expected_ct_len in cases:
+        env = encrypt_chunk(sample, km, chunk_index=2, pad_to_block_size=block_sz)
+        assert env.plaintext_len == expected_plain_len
+        assert len(env.ciphertext) == expected_ct_len
+        assert len(env.ciphertext) % block_sz == 0
+        parsed = EncryptedChunkEnvelope.from_bytes(env.to_bytes())
+        assert decrypt_chunk(parsed, km, expected_chunk_index=2) == sample
+
+    # Stream encryption with block padding preserves exact payload length upon reassembly
+    stream_payload = b"stream-data-" * 15  # 180 bytes
+    padded_stream = encrypt_stream_chunks(stream_payload, km, chunk_size=100, pad_to_block_size=64)
+    assert [len(e.ciphertext) for e in padded_stream] == [128, 128]
+    assert [e.plaintext_len for e in padded_stream] == [100, 80]
+    assert decrypt_stream_chunks(padded_stream, km) == stream_payload
+
+    # Tamper 1 bit in encrypted padding tail -> VaultTamperDetectedError
+    padded_env = encrypt_chunk(b"hello", km, pad_to_block_size=64)
+    tampered_tail = replace(padded_env, ciphertext=_flip_byte_bit(padded_env.ciphertext, 63, 0x01))
+    with pytest.raises(VaultTamperDetectedError):
+        decrypt_chunk(tampered_tail, km)
+
+    # Truncated padded wire envelope where flags=_FLAG_PADDED but len(ciphertext) <= plaintext_len
+    raw_padded = bytearray(padded_env.to_bytes())
+    with pytest.raises(VaultTamperDetectedError):
+        EncryptedChunkEnvelope.from_bytes(bytes(raw_padded[:-60]))
+
+    # Forged non-zero decrypted padding tail signed with valid key -> VaultTamperDetectedError
+    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+        _FLAG_PADDED,
+        _build_envelope_header,
+        _compute_etm_mac,
+    )
+
+    bad_padded_plain = b"hello" + (b"\xff" * 59)
+    bad_ct = sha256_ctr_crypt(km.enc_key, padded_env.nonce, bad_padded_plain)
+    hdr = _build_envelope_header(padded_env.chunk_id, flags=_FLAG_PADDED)
+    forged_mac = _compute_etm_mac(
+        km.mac_key,
+        header=hdr,
+        nonce=padded_env.nonce,
+        ciphertext=bad_ct,
+        chunk_index=0,
+        plaintext_len=5,
+    )
+    forged_pad_env = EncryptedChunkEnvelope(
+        chunk_id=padded_env.chunk_id,
+        chunk_index=0,
+        plaintext_len=5,
+        header=hdr,
+        nonce=padded_env.nonce,
+        ciphertext=bad_ct,
+        mac_tag=forged_mac,
+        key_id=km.key_id,
+    )
+    with pytest.raises(VaultTamperDetectedError):
+        decrypt_chunk(forged_pad_env, km)
 
 
 def test_rfc5869_hkdf_test_vector_and_validation_guards() -> None:

@@ -196,6 +196,13 @@ class LocalDeviceVaultDriver:
         path = self._chunk_path(chunk_id)
         return path.is_file() and not path.is_symlink()
 
+    def get_chunk_mtime(self, chunk_id: str) -> float | None:
+        """Return POSIX modification timestamp of ``chunk_id``, or ``None`` if absent."""
+        path = self._chunk_path(chunk_id)
+        if path.is_symlink() or not path.is_file():
+            return None
+        return path.stat().st_mtime
+
     def put_manifest(self, snapshot_id: str, data: bytes) -> None:
         path = self._manifest_path(snapshot_id)
         self._enforce_quota(path, len(data))
@@ -454,11 +461,33 @@ def _default_urllib_transport(request: S3HttpRequest, *, timeout: float) -> S3Ht
         raise VaultTransportError(f"S3 HTTP transport error: {exc}") from exc
 
 
+_XML_ENTITY_REF_RE = re.compile(rb"&([a-zA-Z_][a-zA-Z0-9._-]*);")
+_ALLOWED_XML_ENTITIES = frozenset({b"amp", b"lt", b"gt", b"quot", b"apos"})
+_FORBIDDEN_XML_TOKENS = (
+    b"<!doctype",
+    b"<!entity",
+    b"<!element",
+    b"<!attlist",
+    b"<!notation",
+    b"<![cdata[",
+)
+
+
 def _parse_s3_list_xml(xml_bytes: bytes) -> tuple[list[str], str | None]:
-    """Safely parse S3 ``ListObjectsV2`` XML response without DTD/entity expansion."""
-    upper_head = xml_bytes[:1024].upper()
-    if b"<!DOCTYPE" in upper_head or b"<!ENTITY" in upper_head:
-        raise VaultTamperDetectedError("Forbidden XML DOCTYPE/ENTITY in S3 ListObjectsV2 response")
+    """Safely parse S3 ``ListObjectsV2`` XML response without DTD/entity/CDATA constructs."""
+    if b"\x00" in xml_bytes:
+        raise VaultTransportError("NUL byte forbidden in S3 ListObjectsV2 XML response")
+    lowered = xml_bytes.lower()
+    for token in _FORBIDDEN_XML_TOKENS:
+        if token in lowered:
+            raise VaultTransportError(
+                f"Forbidden XML construct {token.decode('ascii')!r} in S3 ListObjectsV2 response"
+            )
+    for match in _XML_ENTITY_REF_RE.finditer(lowered):
+        if match.group(1) not in _ALLOWED_XML_ENTITIES:
+            raise VaultTransportError(
+                "Forbidden custom XML entity reference in S3 ListObjectsV2 response"
+            )
     try:
         root = ET.fromstring(xml_bytes.decode("utf-8"))
     except (UnicodeDecodeError, ET.ParseError) as exc:

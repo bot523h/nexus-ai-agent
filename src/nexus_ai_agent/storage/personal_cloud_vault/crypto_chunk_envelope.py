@@ -2,9 +2,10 @@
 
 All primitives in this module rely exclusively on the Python standard library:
 
-* **Key derivation**: ``PBKDF2-HMAC-SHA256`` (``iterations=100_000``, ``dklen=64``)
-  followed by RFC 5869 ``HKDF-SHA256`` domain separation for ``K_enc``, ``K_mac``,
-  convergent ``K_chunk_id``, and non-secret ``key_id``.
+* **Key derivation**: ``PBKDF2-HMAC-SHA256`` (default ``iterations=600_000`` per
+  OWASP 2026 guidance, minimum enforced ``MIN_PBKDF2_ITERATIONS=100_000``,
+  ``dklen=64``) followed by RFC 5869 ``HKDF-SHA256`` domain separation for
+  ``K_enc``, ``K_mac``, convergent ``K_chunk_id``, and non-secret ``key_id``.
 * **Encrypt-then-MAC (EtM)**: SHA-256 CTR stream cipher
   (``SHA256(K_enc || nonce || counter_be64)``) paired with ``HMAC-SHA256`` over
   ``(header || nonce || ciphertext || chunk_index_be64 || plaintext_len_be64)``
@@ -12,6 +13,22 @@ All primitives in this module rely exclusively on the Python standard library:
 * **RFC 6962 Merkle tree**: domain-separated leaf prefix ``0x00``, interior node
   prefix ``0x01`` without odd-node duplication (immune to CVE-2012-2459), and
   length-bound root envelope ``SHA256(0x02 || total_leaves_be64 || raw_root)``.
+
+Threat Model
+------------
+* **Untrusted storage provider**: Cloud buckets and portable media are treated as
+  adversarial (read/modify/reorder/replay/truncate). Confidentiality is provided by
+  128-bit random-nonce SHA-256-CTR; integrity and ordering are enforced fail-closed
+  via per-chunk EtM HMAC-SHA256, per-file HMAC-SHA256, and signed RFC 6962 Merkle
+  snapshot manifests before any plaintext is emitted to disk.
+* **Cross-user deduplication leakage**: ``chunk_id`` is keyed with ``K_chunk_id``
+  (HMAC-SHA256), preventing cross-vault confirmation-of-file attacks while
+  preserving intra-vault deduplication across edits.
+* **Ciphertext length leakage**: Stream ciphers preserve plaintext length by
+  default (``pad_to_block_size=1``). Callers requiring length-hiding against size
+  fingerprinting may set ``pad_to_block_size`` (e.g. ``4096`` or ``65536``) to
+  round ``len(ciphertext)`` up to a block multiple while preserving the exact
+  authenticated ``plaintext_len``.
 """
 
 from __future__ import annotations
@@ -37,7 +54,8 @@ DEFAULT_CHUNK_SIZE = 1_048_576  # 1 MiB
 MAX_DEFAULT_CHUNK_SIZE = 4_194_304  # 4 MiB
 MAX_CHUNK_SIZE = 16_777_216  # 16 MiB
 
-PBKDF2_ITERATIONS = 100_000
+MIN_PBKDF2_ITERATIONS = 100_000
+PBKDF2_ITERATIONS = 600_000  # OWASP recommendation for PBKDF2-HMAC-SHA256
 PBKDF2_DKLEN = 64
 MIN_SALT_BYTES = 16
 DEFAULT_SALT_BYTES = 32
@@ -49,6 +67,8 @@ SHA256_BLOCK_BYTES = 32
 
 ENVELOPE_MAGIC = b"NPCV"
 ENVELOPE_VERSION = 1
+_FLAG_NONE = 0x00
+_FLAG_PADDED = 0x01
 _WIRE_FIXED_STRUCT = struct.Struct(">H")
 _WIRE_META_STRUCT = struct.Struct(">16s16sQQ32s")
 
@@ -63,6 +83,18 @@ def validate_chunk_size(chunk_size: int) -> int:
             f"got {chunk_size}"
         )
     return chunk_size
+
+
+def validate_pad_block_size(pad_to_block_size: int) -> int:
+    """Validate ``pad_to_block_size`` bounds (``1`` = unpadded stream length)."""
+    if isinstance(pad_to_block_size, bool) or not isinstance(pad_to_block_size, int):
+        raise PersonalVaultError("pad_to_block_size must be an integer")
+    if pad_to_block_size < 1 or pad_to_block_size > MAX_CHUNK_SIZE:
+        raise PersonalVaultError(
+            f"pad_to_block_size must be between 1 and {MAX_CHUNK_SIZE} bytes, "
+            f"got {pad_to_block_size}"
+        )
+    return pad_to_block_size
 
 
 def normalize_relative_vault_path(rel_path: str) -> str:
@@ -139,9 +171,9 @@ def derive_vault_keys(
         raise VaultAuthenticationError(
             f"salt must be at least {MIN_SALT_BYTES} bytes, got {len(salt)}"
         )
-    if iterations < PBKDF2_ITERATIONS:
+    if iterations < MIN_PBKDF2_ITERATIONS:
         raise VaultAuthenticationError(
-            f"PBKDF2 iterations must be at least {PBKDF2_ITERATIONS}, got {iterations}"
+            f"PBKDF2 iterations must be at least {MIN_PBKDF2_ITERATIONS}, got {iterations}"
         )
 
     ikm = hashlib.pbkdf2_hmac(
@@ -220,9 +252,9 @@ def sha256_ctr_crypt(enc_key: bytes, nonce: bytes, payload: bytes) -> bytes:
     return xored_int.to_bytes(total_len, "big")
 
 
-def _build_envelope_header(chunk_id: str) -> bytes:
+def _build_envelope_header(chunk_id: str, *, flags: int = _FLAG_NONE) -> bytes:
     """Build deterministic authenticated header binding protocol magic, version, and chunk ID."""
-    return ENVELOPE_MAGIC + bytes([ENVELOPE_VERSION, 0]) + bytes.fromhex(chunk_id)
+    return ENVELOPE_MAGIC + bytes([ENVELOPE_VERSION, flags]) + bytes.fromhex(chunk_id)
 
 
 def _compute_etm_mac(
@@ -287,7 +319,13 @@ class EncryptedChunkEnvelope:
             raw, meta_offset
         )
         ciphertext = raw[cipher_offset:]
-        if len(ciphertext) != plaintext_len:
+        flags = header[5]
+        if flags == _FLAG_PADDED:
+            if len(ciphertext) <= plaintext_len:
+                raise VaultTamperDetectedError(
+                    f"Padded ciphertext length {len(ciphertext)} must exceed {plaintext_len}"
+                )
+        elif len(ciphertext) != plaintext_len:
             raise VaultTamperDetectedError(
                 f"Ciphertext length {len(ciphertext)} does not match declared {plaintext_len}"
             )
@@ -310,18 +348,38 @@ def encrypt_chunk(
     *,
     chunk_index: int = 0,
     nonce: bytes | None = None,
+    pad_to_block_size: int = 1,
 ) -> EncryptedChunkEnvelope:
-    """Encrypt one chunk using SHA-256 CTR + Encrypt-then-MAC (HMAC-SHA256)."""
+    """Encrypt one chunk using SHA-256 CTR + Encrypt-then-MAC (HMAC-SHA256).
+
+    When ``pad_to_block_size > 1``, ``ciphertext`` is zero-padded prior to CTR
+    encryption so ``len(ciphertext)`` is rounded up to a positive multiple of
+    ``pad_to_block_size`` without altering ``plaintext_len``.
+    """
     if chunk_index < 0:
         raise PersonalVaultError(f"chunk_index must be non-negative, got {chunk_index}")
+    validate_pad_block_size(pad_to_block_size)
     effective_nonce = secrets.token_bytes(NONCE_BYTES) if nonce is None else bytes(nonce)
     if len(effective_nonce) != NONCE_BYTES:
         raise PersonalVaultError(f"nonce must be {NONCE_BYTES} bytes, got {len(effective_nonce)}")
 
-    chunk_id = compute_chunk_id(plaintext, key_material)
-    header = _build_envelope_header(chunk_id)
-    ciphertext = sha256_ctr_crypt(key_material.enc_key, effective_nonce, plaintext)
     plaintext_len = len(plaintext)
+    if pad_to_block_size == 1:
+        padded_len = plaintext_len
+    elif plaintext_len == 0:
+        padded_len = pad_to_block_size
+    else:
+        padded_len = (
+            (plaintext_len + pad_to_block_size - 1) // pad_to_block_size
+        ) * pad_to_block_size
+
+    pad_len = padded_len - plaintext_len
+    flags = _FLAG_PADDED if pad_len > 0 else _FLAG_NONE
+    padded_plaintext = plaintext if pad_len == 0 else (plaintext + (b"\x00" * pad_len))
+
+    chunk_id = compute_chunk_id(plaintext, key_material)
+    header = _build_envelope_header(chunk_id, flags=flags)
+    ciphertext = sha256_ctr_crypt(key_material.enc_key, effective_nonce, padded_plaintext)
     mac_tag = _compute_etm_mac(
         key_material.mac_key,
         header=header,
@@ -373,20 +431,29 @@ def decrypt_chunk(
 
     if (
         len(envelope.nonce) != NONCE_BYTES
-        or len(envelope.ciphertext) != envelope.plaintext_len
+        or len(envelope.ciphertext) < envelope.plaintext_len
         or len(envelope.chunk_id) != 64
     ):
         raise VaultTamperDetectedError("Malformed envelope geometry")
 
+    expected_flags = (
+        _FLAG_PADDED if len(envelope.ciphertext) > envelope.plaintext_len else _FLAG_NONE
+    )
     try:
-        expected_header = _build_envelope_header(envelope.chunk_id)
+        expected_header = _build_envelope_header(envelope.chunk_id, flags=expected_flags)
     except ValueError as exc:
         raise VaultTamperDetectedError("Invalid hex chunk_id in envelope") from exc
 
     if not hmac.compare_digest(envelope.header, expected_header):
         raise VaultTamperDetectedError("Envelope header does not match chunk_id binding")
 
-    plaintext = sha256_ctr_crypt(key_material.enc_key, envelope.nonce, envelope.ciphertext)
+    decrypted_full = sha256_ctr_crypt(key_material.enc_key, envelope.nonce, envelope.ciphertext)
+    if expected_flags == _FLAG_PADDED:
+        pad_tail = decrypted_full[envelope.plaintext_len :]
+        if not hmac.compare_digest(pad_tail, b"\x00" * len(pad_tail)):
+            raise VaultTamperDetectedError("Corrupted non-zero padding bytes in chunk envelope")
+    plaintext = decrypted_full[: envelope.plaintext_len]
+
     recomputed_id = compute_chunk_id(plaintext, key_material)
     if not hmac.compare_digest(recomputed_id, envelope.chunk_id):
         raise VaultTamperDetectedError("Decrypted chunk content does not match chunk_id")
@@ -398,11 +465,19 @@ def encrypt_stream_chunks(
     key_material: VaultKeyMaterial,
     *,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
+    pad_to_block_size: int = 1,
 ) -> tuple[EncryptedChunkEnvelope, ...]:
     """Split ``data`` into chunks and encrypt each with sequential ``chunk_index``."""
+    validate_pad_block_size(pad_to_block_size)
     raw_chunks = split_into_chunks(data, chunk_size=chunk_size)
     return tuple(
-        encrypt_chunk(chunk, key_material, chunk_index=idx) for idx, chunk in enumerate(raw_chunks)
+        encrypt_chunk(
+            chunk,
+            key_material,
+            chunk_index=idx,
+            pad_to_block_size=pad_to_block_size,
+        )
+        for idx, chunk in enumerate(raw_chunks)
     )
 
 
@@ -796,6 +871,7 @@ __all__ = [
     "MAX_CHUNK_SIZE",
     "MAX_DEFAULT_CHUNK_SIZE",
     "MIN_CHUNK_SIZE",
+    "MIN_PBKDF2_ITERATIONS",
     "MIN_SALT_BYTES",
     "NONCE_BYTES",
     "PBKDF2_DKLEN",
@@ -821,5 +897,6 @@ __all__ = [
     "sha256_ctr_crypt",
     "split_into_chunks",
     "validate_chunk_size",
+    "validate_pad_block_size",
     "verify_manifest_integrity",
 ]

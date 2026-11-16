@@ -35,6 +35,7 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
     MAX_CHUNK_SIZE,
     MAX_DEFAULT_CHUNK_SIZE,
     MIN_CHUNK_SIZE,
+    MIN_PBKDF2_ITERATIONS,
     MIN_SALT_BYTES,
     NONCE_BYTES,
     PBKDF2_DKLEN,
@@ -61,6 +62,7 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
     sha256_ctr_crypt,
     split_into_chunks,
     validate_chunk_size,
+    validate_pad_block_size,
     verify_manifest_integrity,
 )
 from nexus_ai_agent.storage.personal_cloud_vault.errors import (
@@ -96,6 +98,7 @@ __all__ = [
     "MAX_CHUNK_SIZE",
     "MAX_DEFAULT_CHUNK_SIZE",
     "MIN_CHUNK_SIZE",
+    "MIN_PBKDF2_ITERATIONS",
     "MIN_SALT_BYTES",
     "NONCE_BYTES",
     "PBKDF2_DKLEN",
@@ -138,5 +141,6 @@ __all__ = [
     "sha256_ctr_crypt",
     "split_into_chunks",
     "validate_chunk_size",
+    "validate_pad_block_size",
     "verify_manifest_integrity",
 ]

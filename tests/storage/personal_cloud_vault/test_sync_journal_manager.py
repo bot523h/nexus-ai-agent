@@ -588,3 +588,293 @@ def test_manager_deep_tamper_and_io_defense_in_depth_branches(
             source=unreadable_src,
             master_secret=secret,
         )
+
+
+def test_f1_regression_concurrent_gc_right_before_put_manifest_preserves_all_chunks(
+    tmp_path: Path,
+) -> None:
+    """Auditor F1 reproduction: GC right before put_manifest in push #2 must not break pull."""
+    import threading
+    from collections.abc import Callable
+
+    class _RaceHookDriver:
+        def __init__(self, inner: LocalDeviceVaultDriver) -> None:
+            self.inner = inner
+            self.before_put_manifest: Callable[[str], None] | None = None
+            self.after_put_manifest_once: Callable[[str], None] | None = None
+
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            self.inner.put_chunk(chunk_id, data)
+
+        def get_chunk(self, chunk_id: str) -> bytes:
+            return self.inner.get_chunk(chunk_id)
+
+        def has_chunk(self, chunk_id: str) -> bool:
+            return self.inner.has_chunk(chunk_id)
+
+        def put_manifest(self, snapshot_id: str, data: bytes) -> None:
+            if self.before_put_manifest is not None:
+                self.before_put_manifest(snapshot_id)
+            self.inner.put_manifest(snapshot_id, data)
+            if self.after_put_manifest_once is not None:
+                hook = self.after_put_manifest_once
+                self.after_put_manifest_once = None
+                hook(snapshot_id)
+
+        def get_manifest(self, snapshot_id: str) -> bytes:
+            return self.inner.get_manifest(snapshot_id)
+
+        def list_manifests(self) -> list[str]:
+            return self.inner.list_manifests()
+
+        def list_chunks(self) -> list[str]:
+            return self.inner.list_chunks()
+
+        def delete_chunk(self, chunk_id: str) -> None:
+            self.inner.delete_chunk(chunk_id)
+
+        def delete_manifest(self, snapshot_id: str) -> None:
+            self.inner.delete_manifest(snapshot_id)
+
+    base_local = LocalDeviceVaultDriver(tmp_path / "f1_race_vault")
+    hook_driver = _RaceHookDriver(base_local)
+    mgr = PersonalCloudVaultManager(
+        hook_driver,
+        chunk_size=64,
+        kdf_iterations=100_000,
+        pad_to_block_size=128,
+    )
+    secret = "f1-race-secret"
+
+    # Push #1 commits initial snapshot (default OWASP 600k verified separately; 100k here for speed)
+    v1_data = {"timeline.bin": b"A" * 64 + b"B" * 64}
+    r1 = mgr.push_project_snapshot(
+        project_id="proj-f1",
+        source=v1_data,
+        master_secret=secret,
+        snapshot_id="snap-1",
+    )
+    assert mgr.in_flight_chunks == frozenset()
+
+    # Plant a real unreferenced orphan chunk
+    real_orphan = "9" * 64
+    base_local.put_chunk(real_orphan, b"true-orphan")
+
+    gc_reports_from_thread: list[tuple[str, ...]] = []
+
+    def _race_before_manifest(snap_id: str) -> None:
+        assert snap_id == "snap-2"
+        # All chunks of snap-2 are leased in `_in_flight_chunks` right now!
+        assert len(mgr.in_flight_chunks) == 3
+
+        def _bg_gc() -> None:
+            rep = mgr.garbage_collect_unreferenced_chunks()
+            gc_reports_from_thread.append(rep.deleted_chunk_ids)
+
+        worker = threading.Thread(target=_bg_gc)
+        worker.start()
+        worker.join(timeout=5.0)
+        assert not worker.is_alive()
+
+    hook_driver.before_put_manifest = _race_before_manifest
+
+    v2_data = {"timeline.bin": b"A" * 64 + b"C" * 64 + b"D" * 40}
+    r2 = mgr.push_project_snapshot(
+        project_id="proj-f1",
+        source=v2_data,
+        master_secret=secret,
+        parent_snapshot_id=r1.snapshot_id,
+        snapshot_id="snap-2",
+    )
+    assert gc_reports_from_thread == [(real_orphan,)]
+    assert mgr.in_flight_chunks == frozenset()
+
+    # Pull of snap-2 succeeds cleanly with zero missing chunks (padded chunks restore exact size)!
+    pulled_v2 = mgr.pull_project_snapshot(
+        project_id="proj-f1",
+        master_secret=secret,
+        snapshot_id=r2.snapshot_id,
+    )
+    assert pulled_v2.files == v2_data
+
+    # Layer 3 proof: even if an external process deletes new chunks pre- AND post-manifest,
+    # `_verify_and_heal_manifest_chunks` automatically re-uploads them before returning!
+    hook_driver.before_put_manifest = None
+    external_evicted: list[str] = []
+
+    class _ExternalSweepBeforeManifestDriver(_RaceHookDriver):
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            super().put_chunk(chunk_id, data)
+            # Simulate rogue external sweeper deleting the new chunk right after initial upload
+            if chunk_id not in r2.manifest.referenced_chunk_ids() and not external_evicted:
+                external_evicted.append(chunk_id)
+                self.inner.delete_chunk(chunk_id)
+
+    sweep_driver = _ExternalSweepBeforeManifestDriver(base_local)
+
+    def _evict_once_after_manifest(_snap_id: str) -> None:
+        if external_evicted:
+            base_local.delete_chunk(external_evicted[0])
+
+    sweep_driver.after_put_manifest_once = _evict_once_after_manifest
+    mgr_heal = PersonalCloudVaultManager(sweep_driver, chunk_size=64, kdf_iterations=100_000)
+
+    v3_data = {"timeline.bin": b"A" * 64 + b"E" * 64}
+    r3 = mgr_heal.push_project_snapshot(
+        project_id="proj-f1",
+        source=v3_data,
+        master_secret=secret,
+        parent_snapshot_id=r2.snapshot_id,
+        snapshot_id="snap-3",
+    )
+    assert len(external_evicted) == 1
+    assert base_local.has_chunk(external_evicted[0])
+
+    pulled_v3 = mgr_heal.pull_project_snapshot(
+        project_id="proj-f1",
+        master_secret=secret,
+        snapshot_id=r3.snapshot_id,
+    )
+    assert pulled_v3.files == v3_data
+
+
+def test_f1_protected_chunks_min_age_refcounts_and_fail_closed_rollback(
+    tmp_path: Path,
+) -> None:
+    import os
+    import time
+
+    vault = LocalDeviceVaultDriver(tmp_path / "f1_guards")
+    default_mgr = PersonalCloudVaultManager(vault, chunk_size=64)
+    # Verify default manager uses OWASP 600,000 iterations
+    init_rep = default_mgr.push_project_snapshot(
+        project_id="owasp-check",
+        source={"k.txt": b"owasp"},
+        master_secret="owasp-pass",
+    )
+    assert init_rep.manifest.kdf_iterations == 600_000
+
+    mgr = PersonalCloudVaultManager(vault, chunk_size=64, kdf_iterations=100_000)
+    with pytest.raises(PersonalVaultError):
+        mgr.garbage_collect_unreferenced_chunks(min_age_seconds=-0.5)
+
+    # Overlapping in-flight refcount acquire/release test (shared chunk across concurrent pushes)
+    shared_cid = "a" * 64
+    mgr._acquire_in_flight_chunks([shared_cid])
+    mgr._acquire_in_flight_chunks([shared_cid])
+    assert shared_cid in mgr.in_flight_chunks
+    mgr._release_in_flight_chunks([shared_cid])
+    assert shared_cid in mgr.in_flight_chunks  # still leased by second push!
+    mgr._release_in_flight_chunks([shared_cid])
+    assert shared_cid not in mgr.in_flight_chunks
+
+    # protected_chunk_ids and min_age_seconds protection
+    c_protected = "1" * 64
+    c_young_mem = "2" * 64
+    c_young_disk = "3" * 64
+    c_old_disk = "4" * 64
+    for cid in (c_protected, c_young_mem, c_young_disk, c_old_disk):
+        vault.put_chunk(cid, b"orphan-payload")
+
+    mgr.record_orphan_candidate_chunk(c_young_mem, recorded_at=time.time())
+    old_ts = time.time() - 3600.0
+    os.utime(vault.root_dir / "chunks" / f"{c_old_disk}.chk", (old_ts, old_ts))
+
+    gc_age = mgr.garbage_collect_unreferenced_chunks(
+        protected_chunk_ids=[c_protected],
+        min_age_seconds=300.0,
+    )
+    assert gc_age.deleted_chunk_ids == (c_old_disk,)
+    assert vault.has_chunk(c_protected)
+    assert vault.has_chunk(c_young_mem)
+    assert vault.has_chunk(c_young_disk)
+
+    # Minimal driver without get_chunk_mtime falls back gracefully when timestamp unknown
+    spy = _SpyDriverWrapper(vault)
+    mgr_spy = PersonalCloudVaultManager(spy, chunk_size=64, kdf_iterations=100_000)
+    gc_unknown_ts = mgr_spy.garbage_collect_unreferenced_chunks(
+        candidate_chunk_ids=[c_young_disk],
+        min_age_seconds=300.0,
+    )
+    assert gc_unknown_ts.deleted_chunk_ids == (c_young_disk,)
+
+    # Fail-closed when broken storage loses chunks after re-upload (pre- and post-manifest)
+    class _BlackholeChunkDriver:
+        def __init__(self, inner: LocalDeviceVaultDriver, *, fail_post: bool) -> None:
+            self.inner = inner
+            self.fail_post = fail_post
+            self.manifest_written = False
+            self.deleted_manifests: list[str] = []
+
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            if not self.fail_post:
+                return  # pre-manifest blackhole: silently drops every chunk write
+            if not self.manifest_written:
+                self.inner.put_chunk(chunk_id, data)
+
+        def get_chunk(self, chunk_id: str) -> bytes:
+            return self.inner.get_chunk(chunk_id)
+
+        def has_chunk(self, chunk_id: str) -> bool:
+            if self.fail_post and self.manifest_written:
+                return False
+            return self.inner.has_chunk(chunk_id)
+
+        def put_manifest(self, snapshot_id: str, data: bytes) -> None:
+            self.inner.put_manifest(snapshot_id, data)
+            self.manifest_written = True
+
+        def get_manifest(self, snapshot_id: str) -> bytes:
+            return self.inner.get_manifest(snapshot_id)
+
+        def list_manifests(self) -> list[str]:
+            return self.inner.list_manifests()
+
+        def delete_chunk(self, chunk_id: str) -> None:
+            self.inner.delete_chunk(chunk_id)
+
+        def delete_manifest(self, snapshot_id: str) -> None:
+            self.deleted_manifests.append(snapshot_id)
+            self.inner.delete_manifest(snapshot_id)
+
+    bh_pre = _BlackholeChunkDriver(LocalDeviceVaultDriver(tmp_path / "bh_pre"), fail_post=False)
+    mgr_bh_pre = PersonalCloudVaultManager(bh_pre, chunk_size=64, kdf_iterations=100_000)
+    with pytest.raises(VaultTransportError, match="pre-manifest"):
+        mgr_bh_pre.push_project_snapshot(
+            project_id="bh",
+            source={"a.bin": b"data"},
+            master_secret="secret",
+            snapshot_id="snap-bh-pre",
+        )
+    assert bh_pre.list_manifests() == []
+
+    bh_post = _BlackholeChunkDriver(LocalDeviceVaultDriver(tmp_path / "bh_post"), fail_post=True)
+    mgr_bh_post = PersonalCloudVaultManager(bh_post, chunk_size=64, kdf_iterations=100_000)
+    with pytest.raises(VaultTransportError, match="post-manifest"):
+        mgr_bh_post.push_project_snapshot(
+            project_id="bh",
+            source={"a.bin": b"data"},
+            master_secret="secret",
+            snapshot_id="snap-bh-post",
+        )
+    assert bh_post.deleted_manifests == ["snap-bh-post"]
+    assert bh_post.list_manifests() == []
+
+    # Mid-GC TOCTOU guard: a push starting *after* GC begins still protects its newly leased chunk
+    late_cid = "8" * 64
+    vault.put_chunk(late_cid, b"late-in-flight")
+
+    class _MidGcLeaseDriver(_SpyDriverWrapper):
+        def list_chunks(self) -> list[str]:
+            mgr_late._acquire_in_flight_chunks([late_cid])
+            return [late_cid]
+
+    mgr_late = PersonalCloudVaultManager(
+        _MidGcLeaseDriver(vault),
+        chunk_size=64,
+        kdf_iterations=100_000,
+    )
+    gc_late = mgr_late.garbage_collect_unreferenced_chunks()
+    assert gc_late.deleted_chunk_ids == ()
+    assert vault.has_chunk(late_cid)
+    mgr_late._release_in_flight_chunks([late_cid])
