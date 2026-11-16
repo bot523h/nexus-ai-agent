@@ -122,7 +122,7 @@ def test_so3_exp_and_log_roundtrip_and_orthogonality(omega: tuple[float, float, 
 
     recovered = so3_log(rot)
     re_exp = so3_exp(recovered)
-    assert float(np.linalg.norm(re_exp - rot)) < 1e-10
+    assert float(np.linalg.norm(re_exp - rot)) < 1e-13
 
     k = skew_symmetric(omega)
     assert np.allclose(k.T, -k, atol=1e-15)
@@ -159,7 +159,7 @@ def test_so3_log_machine_precision_near_and_at_pi(
     rot = so3_exp(theta * unit)
     recovered = so3_log(rot)
     roundtrip_err = float(np.linalg.norm(so3_exp(recovered) - rot))
-    assert roundtrip_err < 1e-10, f"near-pi roundtrip error {roundtrip_err:.3e} >= 1e-10"
+    assert roundtrip_err < 1e-13, f"near-pi roundtrip error {roundtrip_err:.3e} >= 1e-13"
 
 
 def test_se3_pose_group_closure_inverse_and_refusals() -> None:
@@ -381,22 +381,70 @@ def test_enforce_axis_of_action_and_violation_detector() -> None:
             strict_axis=True,
         )
 
+    end_overrides = {
+        3: (0.15, 1.90, 1.60),  # valid start (+1), illegal end (-1)
+        4: (0.00, 0.00, 1.60),  # DOLLY shot whose end sits right on the 180-degree line (0)
+        8: (-0.20, 1.75, 1.60),  # PAN shot upgraded to DOLLY with reflected end (-1)
+    }
     traced_plan = solve_scene_cinematography(
         multi_parsed.scenes[0],
         axis=axis,
         camera_overrides=overrides,
+        end_camera_overrides=end_overrides,
     )
     assert traced_plan.axis_report.compliant is True
-    assert traced_plan.axis_report.reflected_shot_indices == (2, 5, 7)
+    assert traced_plan.axis_report.reflected_shot_indices == (2, 3, 4, 5, 7, 8)
+    assert traced_plan.shots[8].trajectory.move_type == CameraMoveType.DOLLY
+    assert traced_plan.shots[8].start_was_reflected is False
+    assert traced_plan.shots[8].end_was_reflected is True
+    assert traced_plan.shots[8].end_original_axis_side == -1
     assert isinstance(traced_plan.shots[2], ShotCameraPlan)
     assert traced_plan.shots[0].was_axis_reflected is False
     assert traced_plan.shots[0].original_axis_side == 1
+    assert traced_plan.shots[0].start_was_reflected is False
+    assert traced_plan.shots[0].end_was_reflected is False
+
+    # F2-R1: Shot 3 & Shot 4 had valid start (+1, unreflected) and reflected end (-1 / 0).
+    assert traced_plan.shots[3].start_was_reflected is False
+    assert traced_plan.shots[3].start_original_axis_side == 1
+    assert traced_plan.shots[3].end_was_reflected is True
+    assert traced_plan.shots[3].end_original_axis_side == -1
+    assert traced_plan.shots[3].was_axis_reflected is True
+    assert traced_plan.shots[3].end_axis_trace.original_axis_side == -1
+
+    assert traced_plan.shots[4].start_was_reflected is False
+    assert traced_plan.shots[4].start_original_axis_side == 1
+    assert traced_plan.shots[4].end_was_reflected is True
+    assert traced_plan.shots[4].end_original_axis_side == 0
+
     assert traced_plan.shots[2].was_axis_reflected is True
     assert traced_plan.shots[2].original_axis_side == -1
+    assert traced_plan.shots[2].start_was_reflected is True
     assert traced_plan.shots[5].was_axis_reflected is True
     assert traced_plan.shots[5].original_axis_side == 0
     assert traced_plan.shots[7].was_axis_reflected is True
     assert traced_plan.shots[7].original_axis_side == 1
+
+    # Also test end_camera_overrides on an establishing CRANE shot.
+    crane_parsed = parse_bilingual_script(
+        "EXT. COURTYARD - DAY\nSunlight stretches slowly across the silent stone fountain."
+    )
+    crane_plan = solve_scene_cinematography(
+        crane_parsed.scenes[0],
+        axis=axis,
+        end_camera_overrides={0: (0.0, 2.1, 2.0)},
+    )
+    assert crane_plan.axis_report.compliant is True
+    assert crane_plan.shots[0].trajectory.move_type == CameraMoveType.CRANE
+    assert crane_plan.shots[0].start_was_reflected is False
+    assert crane_plan.shots[0].end_was_reflected is True
+    assert crane_plan.shots[0].end_original_axis_side == -1
+
+    # Forging an inconsistent trace flag alone is also caught by verify_180_degree_rule.
+    bad_trace_shot = dataclasses.replace(traced_plan.shots[0], end_was_reflected=True)
+    trace_rep = verify_180_degree_rule((bad_trace_shot,), axis)
+    assert trace_rep.compliant is False
+    assert any("trace inconsistent" in v for v in trace_rep.violations)
 
     # Forging an illegal crossing and an invalid rotation triggers verify_180_degree_rule.
     parsed = parse_bilingual_script("INT. ROOM - NIGHT\nREZA\nOne.\n\nSARA\nTwo.")

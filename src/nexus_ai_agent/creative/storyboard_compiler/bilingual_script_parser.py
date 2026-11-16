@@ -120,7 +120,7 @@ class DeliveryMode(str, Enum):
     OFF_SCREEN = "OFF_SCREEN"
 
 
-#: Baseline conversational Persian speech rate (syllables / second).
+#: Deterministic heuristic estimator (4.4 syl/s) for Persian pre-production speech timing.
 BASE_FA_SYLLABLES_PER_SEC: Final[float] = 4.4
 """Deterministic heuristic estimator (4.4 syl/s) for Persian pre-production timing.
 
@@ -128,7 +128,7 @@ Calibrated for zero-API offline storyboard and animatic duration planning rather
 than speaker-specific acoustic measurement or corpus-trained prosody prediction.
 """
 
-#: Baseline conversational English speech rate (syllables / second).
+#: Deterministic heuristic estimator (4.2 syl/s) for English pre-production speech timing.
 BASE_EN_SYLLABLES_PER_SEC: Final[float] = 4.2
 """Deterministic heuristic estimator (4.2 syl/s) for English pre-production timing.
 
@@ -140,7 +140,7 @@ than speaker-specific acoustic measurement or corpus-trained prosody prediction.
 _BASE_FA_WORDS_PER_SEC: Final[float] = 2.25
 _BASE_EN_WORDS_PER_SEC: Final[float] = 2.50
 
-#: Emotion-conditioned speech-rate multipliers (>1 faster, <1 slower).
+#: Deterministic heuristic speech-rate multipliers (>1 faster, <1 slower) for pre-production.
 EMOTION_SPEECH_RATE: Final[dict[EmotionTag, float]] = {
     EmotionTag.URGENT: 1.28,
     EmotionTag.ANGRY: 1.18,
@@ -982,29 +982,88 @@ _PERSIAN_COLON_ACTION_ENDINGS: Final[tuple[str, ...]] = (
 #: Third-person singular English stage-direction lead verbs for unquoted colon actions.
 _ENGLISH_COLON_ACTION_LEADS: Final[frozenset[str]] = frozenset(
     {
-        "looks",
-        "stares",
-        "glances",
-        "sits",
-        "stands",
-        "rises",
-        "walks",
-        "enters",
-        "exits",
-        "leaves",
-        "turns",
-        "steps",
-        "pauses",
-        "sighs",
-        "nods",
-        "shakes",
-        "smiles",
-        "frowns",
-        "weeps",
-        "slams",
-        "opens",
+        "approaches",
+        "backs",
+        "blinks",
+        "breathes",
         "closes",
+        "crosses",
+        "drops",
+        "enters",
+        "exhales",
+        "exits",
+        "flinches",
+        "freezes",
+        "frowns",
+        "gazes",
+        "gestures",
+        "glances",
+        "grabs",
+        "hesitates",
+        "inhales",
+        "kneels",
+        "leans",
+        "leaves",
+        "looks",
+        "moves",
+        "murmurs",
+        "mutters",
+        "nods",
+        "opens",
+        "pauses",
+        "picks",
+        "points",
+        "puts",
+        "reaches",
         "remains",
+        "retreats",
+        "rises",
+        "runs",
+        "rushes",
+        "sets",
+        "shakes",
+        "shrugs",
+        "sighs",
+        "sits",
+        "slams",
+        "smiles",
+        "stands",
+        "stares",
+        "steps",
+        "turns",
+        "waits",
+        "walks",
+        "watches",
+        "weeps",
+        "whispers",
+    }
+)
+
+#: Common non-``-ly`` English manner/aspect adverbs preceding 3rd-person stage verbs.
+_ENGLISH_STAGE_ADVERBS: Final[frozenset[str]] = frozenset(
+    {
+        "again",
+        "almost",
+        "already",
+        "always",
+        "back",
+        "barely",
+        "ever",
+        "fast",
+        "hard",
+        "hardly",
+        "just",
+        "merely",
+        "nearly",
+        "never",
+        "now",
+        "often",
+        "right",
+        "simply",
+        "soon",
+        "still",
+        "straight",
+        "then",
     }
 )
 
@@ -1596,6 +1655,11 @@ def _try_parse_colon_dialogue(line: str) -> tuple[str, DeliveryMode, list[str], 
     return char_name, delivery, parens, right
 
 
+def _is_english_stage_adverb(token: str) -> bool:
+    """Return True if ``token`` is an ``-ly`` manner adverb or common stage adverb."""
+    return token in _ENGLISH_STAGE_ADVERBS or (len(token) >= 4 and token.endswith("ly"))
+
+
 def _is_unquoted_colon_stage_action(
     raw_body: str,
     header_parens: Sequence[str],
@@ -1626,7 +1690,11 @@ def _is_unquoted_colon_stage_action(
             canon == ending or canon.endswith(f" {ending}")
             for ending in _PERSIAN_COLON_ACTION_ENDINGS
         )
-    return tokens[0] in _ENGLISH_COLON_ACTION_LEADS
+    return tokens[0] in _ENGLISH_COLON_ACTION_LEADS or (
+        len(tokens) >= 2
+        and _is_english_stage_adverb(tokens[0])
+        and tokens[1] in _ENGLISH_COLON_ACTION_LEADS
+    )
 
 
 def _is_standalone_character_cue(line: str, next_line: str | None) -> bool:

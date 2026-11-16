@@ -37,6 +37,9 @@ from .bilingual_script_parser import (
     parse_bilingual_script,
 )
 from .cinematography_solver import (
+    AxisEnforcementTrace,
+    AxisVerificationReport,
+    CameraPoseSE3,
     CameraShotSpec,
     SceneCinematographyPlan,
     ScreenLookDirection,
@@ -185,6 +188,7 @@ class EditorialVerificationReport:
     eye_trace_valid: bool
     max_audio_overlap_sec: float
     violations: tuple[str, ...]
+    max_saccade_jump: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -459,39 +463,67 @@ def verify_editorial_timeline(
         video_ok = False
         violations.append("final video_out_sec does not match total_duration_sec")
 
-    for tr in plan.transitions:
-        out_ev = events[tr.transition_index]
-        in_ev = events[tr.transition_index + 1]
-        if tr.cut_type == CutType.J_CUT:
-            actual_prelap = tr.video_cut_sec - in_ev.audio_in_sec
-            if not (j_cut_min_sec - tol <= actual_prelap <= j_cut_max_sec + tol):
+    max_saccade = 0.0
+    expected_transitions = max(0, len(events) - 1)
+    if len(plan.transitions) != expected_transitions:
+        eye_ok = False
+        jl_ok = False
+        violations.append(
+            f"transition count mismatch: got {len(plan.transitions)}, "
+            f"expected {expected_transitions}"
+        )
+    else:
+        for k, tr in enumerate(plan.transitions):
+            out_ev = events[k]
+            in_ev = events[k + 1]
+            chain_ok = (
+                tr.transition_index == k
+                and tr.from_shot_index == out_ev.shot_index
+                and tr.to_shot_index == in_ev.shot_index
+                and tr.eye_trace.transition_index == k
+                and tr.eye_trace.from_shot_index == out_ev.shot_index
+                and tr.eye_trace.to_shot_index == in_ev.shot_index
+                and abs(tr.video_cut_sec - out_ev.video_out_sec) <= tol
+                and abs(tr.video_cut_sec - in_ev.video_in_sec) <= tol
+            )
+            if not chain_ok:
+                eye_ok = False
                 jl_ok = False
                 violations.append(
-                    f"transition {tr.transition_index}: J-Cut pre-lap {actual_prelap:.6f}s "
-                    f"outside [{j_cut_min_sec}, {j_cut_max_sec}]"
-                )
-        elif tr.cut_type == CutType.L_CUT:
-            actual_postlap = out_ev.audio_out_sec - tr.video_cut_sec
-            if not (l_cut_min_sec - tol <= actual_postlap <= l_cut_max_sec + tol):
-                jl_ok = False
-                violations.append(
-                    f"transition {tr.transition_index}: L-Cut post-lap {actual_postlap:.6f}s "
-                    f"outside [{l_cut_min_sec}, {l_cut_max_sec}]"
-                )
-        else:
-            if abs(in_ev.audio_in_sec - tr.video_cut_sec) > tol:
-                jl_ok = False
-                violations.append(
-                    f"transition {tr.transition_index}: STRAIGHT_CUT audio_in misaligned"
+                    f"transition {k}: broken shot chain or cut boundary "
+                    f"(idx={tr.transition_index}, {tr.from_shot_index}->{tr.to_shot_index}, "
+                    f"expected {out_ev.shot_index}->{in_ev.shot_index} at t={out_ev.video_out_sec})"
                 )
 
-        if tr.eye_trace.effective_saccade_uv > plan.max_eye_trace_saccade_limit + tol:
-            eye_ok = False
-            violations.append(
-                f"transition {tr.transition_index}: eye-trace saccade "
-                f"{tr.eye_trace.effective_saccade_uv:.6f} exceeds limit "
-                f"{plan.max_eye_trace_saccade_limit:.6f}"
-            )
+            if tr.cut_type == CutType.J_CUT:
+                actual_prelap = tr.video_cut_sec - in_ev.audio_in_sec
+                if not (j_cut_min_sec - tol <= actual_prelap <= j_cut_max_sec + tol):
+                    jl_ok = False
+                    violations.append(
+                        f"transition {k}: J-Cut pre-lap {actual_prelap:.6f}s "
+                        f"outside [{j_cut_min_sec}, {j_cut_max_sec}]"
+                    )
+            elif tr.cut_type == CutType.L_CUT:
+                actual_postlap = out_ev.audio_out_sec - tr.video_cut_sec
+                if not (l_cut_min_sec - tol <= actual_postlap <= l_cut_max_sec + tol):
+                    jl_ok = False
+                    violations.append(
+                        f"transition {k}: L-Cut post-lap {actual_postlap:.6f}s "
+                        f"outside [{l_cut_min_sec}, {l_cut_max_sec}]"
+                    )
+            else:
+                if abs(in_ev.audio_in_sec - tr.video_cut_sec) > tol:
+                    jl_ok = False
+                    violations.append(f"transition {k}: STRAIGHT_CUT audio_in misaligned")
+
+            max_saccade = max(max_saccade, tr.eye_trace.effective_saccade_uv)
+            if tr.eye_trace.effective_saccade_uv > plan.max_eye_trace_saccade_limit + tol:
+                eye_ok = False
+                violations.append(
+                    f"transition {k}: eye-trace saccade "
+                    f"{tr.eye_trace.effective_saccade_uv:.6f} exceeds limit "
+                    f"{plan.max_eye_trace_saccade_limit:.6f}"
+                )
 
     return EditorialVerificationReport(
         compliant=len(violations) == 0,
@@ -501,6 +533,7 @@ def verify_editorial_timeline(
         eye_trace_valid=eye_ok,
         max_audio_overlap_sec=round(max(0.0, max_overlap), 6),
         violations=tuple(violations),
+        max_saccade_jump=round(max(0.0, max_saccade), 6),
     )
 
 
@@ -866,6 +899,18 @@ def _serialize_script(script: ParsedScript) -> dict[str, Any]:
     }
 
 
+def _serialize_axis_trace(trace: AxisEnforcementTrace) -> dict[str, Any]:
+    return {
+        "adjusted_position": [_qfloat(c) for c in trace.adjusted_position],
+        "original_position": [_qfloat(c) for c in trace.original_position],
+        "original_axis_side": trace.original_axis_side,
+        "enforced_axis_side": trace.enforced_axis_side,
+        "original_signed_distance_m": _qfloat(trace.original_signed_distance_m),
+        "enforced_signed_distance_m": _qfloat(trace.enforced_signed_distance_m),
+        "was_axis_reflected": trace.was_axis_reflected,
+    }
+
+
 def _serialize_cinematography(plans: Sequence[SceneCinematographyPlan]) -> dict[str, Any]:
     out: list[dict[str, Any]] = []
     for plan in plans:
@@ -876,6 +921,7 @@ def _serialize_cinematography(plans: Sequence[SceneCinematographyPlan]) -> dict[
                     "shot_index": sh.shot_index,
                     "scene_index": sh.scene_index,
                     "shot_in_scene": sh.shot_in_scene,
+                    "element_index": sh.element_index,
                     "shot_kind": sh.shot_kind.value,
                     "subject_label": sh.subject_label,
                     "subject_position": [_qfloat(c) for c in sh.subject_position],
@@ -885,8 +931,15 @@ def _serialize_cinematography(plans: Sequence[SceneCinematographyPlan]) -> dict[
                     "axis_side": sh.axis_side,
                     "original_axis_side": sh.original_axis_side,
                     "was_axis_reflected": sh.was_axis_reflected,
+                    "start_original_axis_side": sh.start_original_axis_side,
+                    "end_original_axis_side": sh.end_original_axis_side,
+                    "start_was_reflected": sh.start_was_reflected,
+                    "end_was_reflected": sh.end_was_reflected,
                     "axis_cross_z": _qfloat(sh.axis_cross_z),
+                    "end_axis_cross_z": _qfloat(sh.end_axis_cross_z),
                     "intentional_axis_jump": sh.intentional_axis_jump,
+                    "start_axis_trace": _serialize_axis_trace(sh.start_axis_trace),
+                    "end_axis_trace": _serialize_axis_trace(sh.end_axis_trace),
                     "pose_R": [[_qfloat(v) for v in row] for row in sh.pose.rotation],
                     "pose_t": [_qfloat(v) for v in sh.pose.translation],
                     "end_pose_R": [[_qfloat(v) for v in row] for row in sh.end_pose.rotation],
@@ -928,6 +981,14 @@ def _serialize_cinematography(plans: Sequence[SceneCinematographyPlan]) -> dict[
                 },
                 "axis_compliant": plan.axis_report.compliant,
                 "reflected_shot_indices": list(plan.axis_report.reflected_shot_indices),
+                "axis_report": {
+                    "compliant": plan.axis_report.compliant,
+                    "initial_side": plan.axis_report.initial_side,
+                    "intentional_jumps": plan.axis_report.intentional_jumps,
+                    "reflected_shot_indices": list(plan.axis_report.reflected_shot_indices),
+                    "cross_products": [_qfloat(c) for c in plan.axis_report.cross_products],
+                    "violations": list(plan.axis_report.violations),
+                },
                 "shots": shots_out,
             }
         )
@@ -947,6 +1008,16 @@ def _serialize_editorial(editorial: EditorialTimelinePlan) -> dict[str, Any]:
         "max_eye_trace_saccade_limit": _qfloat(editorial.max_eye_trace_saccade_limit),
         "breath_gap_sec": _qfloat(editorial.breath_gap_sec),
         "compliant": editorial.verification.compliant,
+        "verification": {
+            "compliant": editorial.verification.compliant,
+            "video_contiguous": editorial.verification.video_contiguous,
+            "audio_overlap_free": editorial.verification.audio_overlap_free,
+            "jl_bounds_valid": editorial.verification.jl_bounds_valid,
+            "eye_trace_valid": editorial.verification.eye_trace_valid,
+            "max_audio_overlap_sec": _qfloat(editorial.verification.max_audio_overlap_sec),
+            "max_saccade_jump": _qfloat(editorial.verification.max_saccade_jump),
+            "violations": list(editorial.verification.violations),
+        },
         "events": [
             {
                 "shot_index": ev.shot_index,
@@ -1140,8 +1211,119 @@ def build_compiled_manifest(
     )
 
 
+def _poses_match(pose_a: CameraPoseSE3, pose_b: CameraPoseSE3, *, tol: float = 1e-8) -> bool:
+    return all(
+        abs(pose_a.rotation[r][c] - pose_b.rotation[r][c]) <= tol
+        for r in range(3)
+        for c in range(3)
+    ) and all(abs(pose_a.translation[i] - pose_b.translation[i]) <= tol for i in range(3))
+
+
+def _shot_trajectory_endpoints_valid(shot: CameraShotSpec, *, tol: float = 1e-8) -> bool:
+    samples = shot.trajectory.samples
+    return (
+        len(samples) >= 2
+        and abs(samples[0].tau - 0.0) <= tol
+        and abs(samples[-1].tau - 1.0) <= tol
+        and abs(samples[0].time_sec - 0.0) <= tol
+        and abs(samples[-1].time_sec - shot.duration_sec) <= 1e-5
+        and _poses_match(samples[0].pose, shot.pose, tol=tol)
+        and _poses_match(samples[-1].pose, shot.end_pose, tol=tol)
+        and _poses_match(shot.trajectory.start_pose, shot.pose, tol=tol)
+        and _poses_match(shot.trajectory.end_pose, shot.end_pose, tol=tol)
+        and all(
+            abs(comp) <= tol
+            for vec in (
+                samples[0].linear_velocity,
+                samples[-1].linear_velocity,
+                samples[0].linear_acceleration,
+                samples[-1].linear_acceleration,
+                samples[0].angular_velocity,
+                samples[-1].angular_velocity,
+                samples[0].angular_acceleration,
+                samples[-1].angular_acceleration,
+            )
+            for comp in vec
+        )
+    )
+
+
+def _axis_reports_equal(
+    live: AxisVerificationReport,
+    cached: AxisVerificationReport,
+    *,
+    tol: float = 1e-6,
+) -> bool:
+    return (
+        live.compliant == cached.compliant
+        and live.initial_side == cached.initial_side
+        and live.intentional_jumps == cached.intentional_jumps
+        and live.reflected_shot_indices == cached.reflected_shot_indices
+        and live.violations == cached.violations
+        and len(live.cross_products) == len(cached.cross_products)
+        and all(
+            abs(live.cross_products[i] - cached.cross_products[i]) <= tol
+            for i in range(len(live.cross_products))
+        )
+    )
+
+
+def _editorial_reports_equal(
+    live: EditorialVerificationReport,
+    cached: EditorialVerificationReport,
+    *,
+    tol: float = 1e-6,
+) -> bool:
+    return (
+        live.compliant == cached.compliant
+        and live.video_contiguous == cached.video_contiguous
+        and live.audio_overlap_free == cached.audio_overlap_free
+        and live.jl_bounds_valid == cached.jl_bounds_valid
+        and live.eye_trace_valid == cached.eye_trace_valid
+        and abs(live.max_audio_overlap_sec - cached.max_audio_overlap_sec) <= tol
+        and abs(live.max_saccade_jump - cached.max_saccade_jump) <= tol
+        and live.violations == cached.violations
+    )
+
+
+def _scene_shot_bijection_valid(manifest: CompiledStoryboardManifest) -> bool:
+    scenes = manifest.script.scenes
+    plans = manifest.cinematography
+    all_shots = [sh for plan in plans for sh in plan.shots]
+    return (
+        len(plans) == len(scenes)
+        and all(
+            scenes[i].scene_index == i
+            and plans[i].scene_index == i
+            and len(plans[i].shots) == len(scenes[i].elements)
+            and [
+                (
+                    sh.scene_index,
+                    sh.shot_in_scene,
+                    sh.element_index,
+                    sh.shot_kind == ShotKind.DIALOGUE,
+                )
+                for sh in plans[i].shots
+            ]
+            == [
+                (
+                    scenes[i].scene_index,
+                    k,
+                    scenes[i].elements[k].element_index,
+                    isinstance(scenes[i].elements[k], DialogueLine),
+                )
+                for k in range(len(scenes[i].elements))
+            ]
+            for i in range(len(scenes))
+        )
+        and [sh.shot_index for sh in all_shots] == list(range(len(all_shots)))
+        and [(sh.shot_index, sh.scene_index, sh.shot_kind) for sh in all_shots]
+        == [(ev.shot_index, ev.scene_index, ev.shot_kind) for ev in manifest.editorial.events]
+    )
+
+
 def verify_manifest_integrity(manifest: CompiledStoryboardManifest) -> bool:
-    """Recompute all summary invariants and SHA-256 digests; return True iff untampered."""
+    """Recompute scene graph, reports, trajectories, and SHA-256 digests; True iff untampered."""
     for digest in (
         manifest.script_sha256,
         manifest.cinematography_sha256,
@@ -1153,37 +1335,42 @@ def verify_manifest_integrity(manifest: CompiledStoryboardManifest) -> bool:
 
     expected_total_scenes = len(manifest.script.scenes)
     expected_total_shots = sum(len(plan.shots) for plan in manifest.cinematography)
-    expected_elements = sum(len(sc.elements) for sc in manifest.script.scenes)
     shots_duration = round(
         sum(sh.duration_sec for plan in manifest.cinematography for sh in plan.shots), 6
     )
 
     live_axis_pairs = [
-        (verify_180_degree_rule(plan.shots, plan.axis).compliant, plan.axis_report.compliant)
+        (verify_180_degree_rule(plan.shots, plan.axis), plan.axis_report)
         for plan in manifest.cinematography
     ]
-    axis_reports_consistent = all(live == cached for live, cached in live_axis_pairs)
-    expected_axis_ok = all(live for live, _ in live_axis_pairs)
+    axis_reports_consistent = all(
+        _axis_reports_equal(live, cached) for live, cached in live_axis_pairs
+    )
+    expected_axis_ok = all(live.compliant for live, _ in live_axis_pairs)
 
     live_edit_report = verify_editorial_timeline(manifest.editorial)
-    edit_reports_consistent = (
-        live_edit_report.compliant == manifest.editorial.verification.compliant
-        and live_edit_report.eye_trace_valid == manifest.editorial.verification.eye_trace_valid
+    edit_reports_consistent = _editorial_reports_equal(
+        live_edit_report, manifest.editorial.verification
     )
     expected_edit_ok = live_edit_report.compliant
     expected_eye_ok = live_edit_report.eye_trace_valid
 
+    trajectories_valid = all(
+        _shot_trajectory_endpoints_valid(sh)
+        for plan in manifest.cinematography
+        for sh in plan.shots
+    )
+
     summary_valid = (
         manifest.schema_version == MANIFEST_SCHEMA_VERSION
-        and len(manifest.cinematography) == expected_total_scenes
+        and _scene_shot_bijection_valid(manifest)
         and manifest.total_scenes == expected_total_scenes
         and expected_total_shots > 0
-        and expected_total_shots == expected_elements
-        and len(manifest.editorial.events) == expected_total_shots
         and manifest.total_shots == expected_total_shots
         and math.isfinite(manifest.total_duration_sec)
         and abs(manifest.total_duration_sec - manifest.editorial.total_duration_sec) <= 1e-6
         and abs(manifest.total_duration_sec - shots_duration) <= 1e-5
+        and trajectories_valid
         and axis_reports_consistent
         and edit_reports_consistent
         and manifest.axis_180_compliant is expected_axis_ok

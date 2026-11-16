@@ -668,6 +668,10 @@ def test_colon_action_disambiguation_vs_spoken_dialogue_and_heuristic_docs() -> 
 سارا: (با مکث)
 سارا: ...
 ALI: stares quietly at the door.
+ALI: quietly stares at the door.
+SARA: slowly walks toward the window.
+REZA: still stands by the table.
+ALI: quietly, nothing happens.
 ALI: Tomorrow will be fine.
 """
     parsed = parse_bilingual_script(script)
@@ -695,18 +699,23 @@ ALI: Tomorrow will be fine.
     assert isinstance(e3, ActionBeat) and e3.ambiguous_colon_action is True
     assert e3.focus_characters == ("سارا", "علی")
 
-    # 4..7 -> first-person speech, interrogative, declarative speech, silent beat -> DialogueLine.
+    # 4..8 -> first-person speech, interrogative, declarative speech, silent beat -> DialogueLine.
     assert isinstance(elems[4], DialogueLine) and elems[4].character == "علی"
     assert isinstance(elems[5], DialogueLine) and elems[5].character == "سارا"
     assert isinstance(elems[6], DialogueLine) and elems[6].character == "سارا"
     assert isinstance(elems[7], DialogueLine) and elems[7].character == "سارا"
     assert isinstance(elems[8], DialogueLine) and elems[8].character == "سارا"
 
-    # 9 -> English unquoted 3rd-person colon stage direction ("ALI: stares...").
-    assert isinstance(elems[9], ActionBeat) and elems[9].ambiguous_colon_action is True
-    assert elems[9].focus_characters == ("ALI",)
-    # 10 -> English spoken dialogue ("ALI: Tomorrow will be fine.").
-    assert isinstance(elems[10], DialogueLine) and elems[10].character == "ALI"
+    # 9..12 -> English unquoted 3rd-person colon stage directions (direct & adverb-led).
+    for action_idx, expected_char in ((9, "ALI"), (10, "ALI"), (11, "SARA"), (12, "REZA")):
+        act_elem = elems[action_idx]
+        assert isinstance(act_elem, ActionBeat)
+        assert act_elem.ambiguous_colon_action is True
+        assert act_elem.focus_characters == (expected_char,)
+
+    # 13 & 14 -> English spoken dialogue (adverb + non-stage-verb & declarative sentence).
+    assert isinstance(elems[13], DialogueLine) and elems[13].character == "ALI"
+    assert isinstance(elems[14], DialogueLine) and elems[14].character == "ALI"
 
     # Also verify a scene containing ONLY an ambiguous colon action registers the character
     # and handles duplicate focus character entries cleanly.
@@ -716,9 +725,9 @@ ALI: Tomorrow will be fine.
     assert solo.scenes[0].elements[0].ambiguous_colon_action is True
     assert solo.scenes[0].elements[0].focus_characters == ("علی",)
 
-    # F6: Verify speech-rate priors and source documentation explicitly identify heuristic nature.
+    # F6: Verify speech-rate priors carry both `#: Deterministic heuristic` comments & docstrings.
     src_text = Path(parser_mod.__file__).read_text(encoding="utf-8")
-    assert "Deterministic heuristic" in src_text
+    assert src_text.count("#: Deterministic heuristic") >= 3
     assert parser_mod.BASE_FA_SYLLABLES_PER_SEC == pytest.approx(4.4)
     assert parser_mod.BASE_EN_SYLLABLES_PER_SEC == pytest.approx(4.2)
     assert parser_mod.EMOTION_SPEECH_RATE[EmotionTag.NEUTRAL] == pytest.approx(1.0)

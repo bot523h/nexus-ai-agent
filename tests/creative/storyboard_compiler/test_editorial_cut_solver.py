@@ -471,6 +471,151 @@ def test_compiled_manifest_sha256_is_deterministic_and_tamper_evident() -> None:
         assert verify_manifest_integrity(forged) is False
 
 
+def _reseal_tampered_manifest(
+    manifest: sb.CompiledStoryboardManifest,
+) -> sb.CompiledStoryboardManifest:
+    """Helper simulating an adversary who recomputes all 4 SHA-256 hashes after tampering."""
+    from nexus_ai_agent.creative.storyboard_compiler.editorial_cut_solver import _compute_digests
+
+    s_sha, c_sha, e_sha, m_sha, _ = _compute_digests(
+        manifest.schema_version,
+        manifest.script,
+        manifest.cinematography,
+        manifest.editorial,
+        total_scenes=manifest.total_scenes,
+        total_shots=manifest.total_shots,
+        total_duration_sec=manifest.total_duration_sec,
+        axis_180_compliant=manifest.axis_180_compliant,
+        editorial_compliant=manifest.editorial_compliant,
+        eye_trace_compliant=manifest.eye_trace_compliant,
+    )
+    return dataclasses.replace(
+        manifest,
+        script_sha256=s_sha,
+        cinematography_sha256=c_sha,
+        editorial_sha256=e_sha,
+        manifest_sha256=m_sha,
+    )
+
+
+def test_editorial_transition_cardinality_and_chain_tamper_detection() -> None:
+    # F1-R2: Deleting all transitions, dropping one middle transition, or swapping two
+    # transitions in a multi-shot timeline MUST fail both verify_editorial_timeline
+    # (compliant=False and eye_trace_valid=False) and verify_manifest_integrity.
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    plan = manifest.editorial
+    assert len(plan.events) >= 4
+    assert len(plan.transitions) == len(plan.events) - 1
+
+    # Case 1: Empty transitions=() on a multi-shot timeline.
+    empty_tr_plan = dataclasses.replace(plan, transitions=())
+    rep_empty = verify_editorial_timeline(empty_tr_plan)
+    assert rep_empty.compliant is False
+    assert rep_empty.eye_trace_valid is False
+    assert rep_empty.jl_bounds_valid is False
+    assert any("transition count mismatch" in v for v in rep_empty.violations)
+    assert (
+        verify_manifest_integrity(
+            _reseal_tampered_manifest(dataclasses.replace(manifest, editorial=empty_tr_plan))
+        )
+        is False
+    )
+
+    # Case 2: Dropping a middle transition (transitions[:1] + transitions[2:]).
+    dropped_tr_plan = dataclasses.replace(
+        plan,
+        transitions=(plan.transitions[0], *plan.transitions[2:]),
+    )
+    rep_dropped = verify_editorial_timeline(dropped_tr_plan)
+    assert rep_dropped.compliant is False
+    assert rep_dropped.eye_trace_valid is False
+    assert any("transition count mismatch" in v for v in rep_dropped.violations)
+    assert (
+        verify_manifest_integrity(
+            _reseal_tampered_manifest(dataclasses.replace(manifest, editorial=dropped_tr_plan))
+        )
+        is False
+    )
+
+    # Case 3: Swapping the order of two transitions (preserving count == len(events) - 1).
+    swapped_tr_plan = dataclasses.replace(
+        plan,
+        transitions=(plan.transitions[1], plan.transitions[0], *plan.transitions[2:]),
+    )
+    rep_swapped = verify_editorial_timeline(swapped_tr_plan)
+    assert rep_swapped.compliant is False
+    assert rep_swapped.eye_trace_valid is False
+    assert any("broken shot chain" in v for v in rep_swapped.violations)
+    assert (
+        verify_manifest_integrity(
+            _reseal_tampered_manifest(dataclasses.replace(manifest, editorial=swapped_tr_plan))
+        )
+        is False
+    )
+
+
+def test_deep_scene_graph_report_and_trajectory_endpoint_integrity() -> None:
+    # F1-R1: Verify scene-by-scene bijection, full cached report matching, and trajectory
+    # boundary pose + zero velocity/acceleration checks inside verify_manifest_integrity.
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    assert verify_manifest_integrity(manifest) is True
+
+    # 1. Moving the last shot of scene 0 into scene 1 (total_shots stays identical!) fails.
+    p0, p1 = manifest.cinematography[0], manifest.cinematography[1]
+    moved_p0 = dataclasses.replace(p0, shots=p0.shots[:-1])
+    moved_p1 = dataclasses.replace(p1, shots=(p0.shots[-1], *p1.shots))
+    moved_manifest = _reseal_tampered_manifest(
+        dataclasses.replace(manifest, cinematography=(moved_p0, moved_p1))
+    )
+    assert verify_manifest_integrity(moved_manifest) is False
+
+    # 2. Tampering cached axis_report.reflected_shot_indices (leaving compliant=True) fails.
+    forged_axis_rep = dataclasses.replace(p0.axis_report, reflected_shot_indices=(0,))
+    bad_axis_plan = dataclasses.replace(p0, axis_report=forged_axis_rep)
+    assert (
+        verify_manifest_integrity(
+            _reseal_tampered_manifest(
+                dataclasses.replace(manifest, cinematography=(bad_axis_plan, p1))
+            )
+        )
+        is False
+    )
+
+    # 3. Tampering cached editorial.verification.max_saccade_jump (leaving compliant=True) fails.
+    forged_edit_ver = dataclasses.replace(
+        manifest.editorial.verification,
+        max_saccade_jump=manifest.editorial.verification.max_saccade_jump + 0.25,
+    )
+    bad_edit = dataclasses.replace(manifest.editorial, verification=forged_edit_ver)
+    assert (
+        verify_manifest_integrity(
+            _reseal_tampered_manifest(dataclasses.replace(manifest, editorial=bad_edit))
+        )
+        is False
+    )
+
+    # 4. Corrupting final trajectory sample pose away from end_pose OR non-zero endpoint velocity.
+    sh0 = p0.shots[0]
+    shifted_end_sample = dataclasses.replace(
+        sh0.trajectory.samples[-1],
+        linear_velocity=(0.05, 0.0, 0.0),
+    )
+    bad_traj = dataclasses.replace(
+        sh0.trajectory,
+        samples=(*sh0.trajectory.samples[:-1], shifted_end_sample),
+    )
+    bad_sh0 = dataclasses.replace(sh0, trajectory=bad_traj)
+    bad_traj_plan = dataclasses.replace(p0, shots=(bad_sh0, *p0.shots[1:]))
+    assert (
+        verify_manifest_integrity(
+            _reseal_tampered_manifest(
+                dataclasses.replace(manifest, cinematography=(bad_traj_plan, p1))
+            )
+        )
+        is False
+    )
+
+
 def test_end_to_end_compilation_of_english_persian_and_bilingual_scripts() -> None:
     english_10_shot = """\
 INT. INTERROGATION ROOM - NIGHT - RAIN

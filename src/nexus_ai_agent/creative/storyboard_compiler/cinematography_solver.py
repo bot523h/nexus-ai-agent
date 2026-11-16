@@ -1048,10 +1048,17 @@ class CameraShotSpec:
     end_pose: CameraPoseSE3
     axis_side: int
     axis_cross_z: float
+    end_axis_cross_z: float
     intentional_axis_jump: bool
     lens: LensSettings
     framing: RuleOfThirdsFraming
     trajectory: MinimumJerkTrajectory
+    start_axis_trace: AxisEnforcementTrace
+    end_axis_trace: AxisEnforcementTrace
+    start_original_axis_side: int = 1
+    end_original_axis_side: int = 1
+    start_was_reflected: bool = False
+    end_was_reflected: bool = False
     original_axis_side: int = 1
     was_axis_reflected: bool = False
 
@@ -1100,16 +1107,50 @@ def verify_180_degree_rule(
             expected_side = -expected_side
             jumps += 1
 
-        if not is_valid_se3(shot.pose.matrix, tol=se3_tol):
-            violations.append(f"shot {shot.shot_index}: primary pose is not valid SE(3)")
+        if not is_valid_se3(shot.pose.matrix, tol=se3_tol) or not is_valid_se3(
+            shot.end_pose.matrix, tol=se3_tol
+        ):
+            violations.append(f"shot {shot.shot_index}: start or end pose is not valid SE(3)")
 
         c_z = horizontal_axis_cross(shot.pose.translation_vector, axis.p1, axis.p2)
+        end_c_z = horizontal_axis_cross(shot.end_pose.translation_vector, axis.p1, axis.p2)
         crosses.append(c_z)
         sign = axis_side_sign(shot.pose.translation_vector, axis.p1, axis.p2)
-        if sign != expected_side:
+        end_sign = axis_side_sign(shot.end_pose.translation_vector, axis.p1, axis.p2)
+        if sign != expected_side or end_sign != expected_side:
             violations.append(
-                f"shot {shot.shot_index}: crossed 180-degree axis "
-                f"(cross_z={c_z:.6f}, sign={sign}, expected={expected_side})"
+                f"shot {shot.shot_index}: start or end pose crossed 180-degree axis "
+                f"(start_cross_z={c_z:.6f}, start_sign={sign}, "
+                f"end_cross_z={end_c_z:.6f}, end_sign={end_sign}, expected={expected_side})"
+            )
+
+        traces_consistent = (
+            bool(
+                np.allclose(
+                    shot.start_axis_trace.adjusted_position,
+                    shot.pose.translation,
+                    atol=1e-6,
+                )
+            )
+            and bool(
+                np.allclose(
+                    shot.end_axis_trace.adjusted_position,
+                    shot.end_pose.translation,
+                    atol=1e-6,
+                )
+            )
+            and shot.start_axis_trace.enforced_axis_side == expected_side
+            and shot.end_axis_trace.enforced_axis_side == expected_side
+            and shot.start_original_axis_side == shot.start_axis_trace.original_axis_side
+            and shot.end_original_axis_side == shot.end_axis_trace.original_axis_side
+            and shot.start_was_reflected is shot.start_axis_trace.was_axis_reflected
+            and shot.end_was_reflected is shot.end_axis_trace.was_axis_reflected
+            and shot.original_axis_side == shot.start_original_axis_side
+            and shot.was_axis_reflected is (shot.start_was_reflected or shot.end_was_reflected)
+        )
+        if not traces_consistent:
+            violations.append(
+                f"shot {shot.shot_index}: start/end axis enforcement trace inconsistent with poses"
             )
 
         for sample in shot.trajectory.samples:
@@ -1217,9 +1258,10 @@ def _compute_camera_endpoints(
     dramatic_tension: float,
     shot_in_scene: int,
     camera_override: Sequence[float] | FloatArray | None = None,
+    end_camera_override: Sequence[float] | FloatArray | None = None,
     strict_axis: bool = False,
-) -> tuple[CameraPoseSE3, CameraPoseSE3, float, int, bool]:
-    """Compute 180-degree-compliant start/end SE(3) poses, crane lift, and axis trace."""
+) -> tuple[CameraPoseSE3, CameraPoseSE3, float, AxisEnforcementTrace, AxisEnforcementTrace]:
+    """Compute 180-degree-compliant start/end SE(3) poses, crane lift, and both axis traces."""
     d_xy = axis.axis_vector[:2] / axis.horizontal_length
     n_plus = np.array([d_xy[1], -d_xy[0]], dtype=np.float64)
     cam_normal = float(active_side) * n_plus  # points strictly into valid camera half-plane
@@ -1279,19 +1321,17 @@ def _compute_camera_endpoints(
 
     crane_arc = 0.0
     if move_type == CameraMoveType.STATIC:
-        return (
-            start_pose,
-            start_pose,
-            crane_arc,
-            start_trace.original_axis_side,
-            start_trace.was_axis_reflected,
-        )
+        return (start_pose, start_pose, crane_arc, start_trace, start_trace)
 
     if move_type == CameraMoveType.DOLLY:
         # Smooth push-in toward subject (clamped to keep safe axis clearance >= 0.50 m).
         to_subject = subject_pos - cam_start
         push_frac = 0.14 + 0.10 * dramatic_tension
-        raw_end = cam_start + push_frac * to_subject
+        raw_end = (
+            _as_vec3(end_camera_override, name="end_camera_override")
+            if end_camera_override is not None
+            else cam_start + push_frac * to_subject
+        )
         cam_end, end_trace = enforce_axis_of_action_with_trace(
             raw_end,
             axis,
@@ -1306,13 +1346,7 @@ def _compute_camera_endpoints(
             target_uv=target_uv,
             roll_rad=roll_rad,
         )
-        return (
-            start_pose,
-            end_pose,
-            crane_arc,
-            start_trace.original_axis_side,
-            start_trace.was_axis_reflected or end_trace.was_axis_reflected,
-        )
+        return (start_pose, end_pose, crane_arc, start_trace, end_trace)
 
     if move_type == CameraMoveType.PAN:
         # Fixed pedestal (zero translation), subtle horizontal lead reframe within safe margins.
@@ -1325,24 +1359,22 @@ def _compute_camera_endpoints(
             target_uv=end_uv,
             roll_rad=roll_rad,
         )
-        return (
-            start_pose,
-            end_pose,
-            crane_arc,
-            start_trace.original_axis_side,
-            start_trace.was_axis_reflected,
-        )
+        return (start_pose, end_pose, crane_arc, start_trace, start_trace)
 
     # CameraMoveType.CRANE: jib descent/rise + gentle lateral glide + smooth arc bell.
     lateral = 0.35 * d_xy
     vertical = -0.30 if lens.focal_length_mm == 24 else 0.32
-    raw_end = np.array(
-        [
-            float(cam_start[0] + lateral[0]),
-            float(cam_start[1] + lateral[1]),
-            float(cam_start[2] + vertical),
-        ],
-        dtype=np.float64,
+    raw_end = (
+        _as_vec3(end_camera_override, name="end_camera_override")
+        if end_camera_override is not None
+        else np.array(
+            [
+                float(cam_start[0] + lateral[0]),
+                float(cam_start[1] + lateral[1]),
+                float(cam_start[2] + vertical),
+            ],
+            dtype=np.float64,
+        )
     )
     cam_end, end_trace = enforce_axis_of_action_with_trace(
         raw_end,
@@ -1359,13 +1391,7 @@ def _compute_camera_endpoints(
         target_uv=target_uv,
         roll_rad=roll_rad,
     )
-    return (
-        start_pose,
-        end_pose,
-        crane_arc,
-        start_trace.original_axis_side,
-        start_trace.was_axis_reflected or end_trace.was_axis_reflected,
-    )
+    return (start_pose, end_pose, crane_arc, start_trace, end_trace)
 
 
 def solve_scene_cinematography(
@@ -1376,6 +1402,7 @@ def solve_scene_cinematography(
     starting_shot_index: int = 0,
     num_trajectory_samples: int = 11,
     camera_overrides: Mapping[int, Sequence[float] | FloatArray] | None = None,
+    end_camera_overrides: Mapping[int, Sequence[float] | FloatArray] | None = None,
     strict_axis: bool = False,
 ) -> SceneCinematographyPlan:
     """Solve camera poses, 180-degree blocking, optics, and trajectories for one scene."""
@@ -1455,12 +1482,23 @@ def solve_scene_cinematography(
             if camera_overrides is not None and local_idx in camera_overrides
             else None
         )
+        end_override = (
+            end_camera_overrides[local_idx]
+            if end_camera_overrides is not None and local_idx in end_camera_overrides
+            else None
+        )
+        effective_move = (
+            CameraMoveType.DOLLY
+            if end_override is not None and move_type in (CameraMoveType.STATIC, CameraMoveType.PAN)
+            else move_type
+        )
+
         (
             start_pose,
             end_pose,
             crane_arc,
-            orig_axis_side,
-            was_reflected,
+            start_trace,
+            end_trace,
         ) = _compute_camera_endpoints(
             subject_pos=subj_pos,
             subject_slot=slot,
@@ -1468,10 +1506,11 @@ def solve_scene_cinematography(
             active_side=active_side,
             lens=prelim_lens,
             target_uv=target_uv,
-            move_type=move_type,
+            move_type=effective_move,
             dramatic_tension=elem.dramatic_tension,
             shot_in_scene=local_idx,
             camera_override=shot_override,
+            end_camera_override=end_override,
             strict_axis=strict_axis,
         )
 
@@ -1503,7 +1542,7 @@ def solve_scene_cinematography(
             start_pose,
             end_pose,
             duration_sec=duration,
-            move_type=move_type,
+            move_type=effective_move,
             num_samples=num_trajectory_samples,
             crane_arc_m=crane_arc,
         )
@@ -1511,6 +1550,10 @@ def solve_scene_cinematography(
         cross_z = horizontal_axis_cross(
             start_pose.translation_vector, resolved_axis.p1, resolved_axis.p2
         )
+        end_cross_z = horizontal_axis_cross(
+            end_pose.translation_vector, resolved_axis.p1, resolved_axis.p2
+        )
+        was_reflected = start_trace.was_axis_reflected or end_trace.was_axis_reflected
         shots.append(
             CameraShotSpec(
                 shot_index=starting_shot_index + local_idx,
@@ -1527,11 +1570,18 @@ def solve_scene_cinematography(
                 end_pose=end_pose,
                 axis_side=active_side,
                 axis_cross_z=cross_z,
+                end_axis_cross_z=end_cross_z,
                 intentional_axis_jump=is_jump,
                 lens=lens,
                 framing=framing,
                 trajectory=trajectory,
-                original_axis_side=orig_axis_side,
+                start_axis_trace=start_trace,
+                end_axis_trace=end_trace,
+                start_original_axis_side=start_trace.original_axis_side,
+                end_original_axis_side=end_trace.original_axis_side,
+                start_was_reflected=start_trace.was_axis_reflected,
+                end_was_reflected=end_trace.was_axis_reflected,
+                original_axis_side=start_trace.original_axis_side,
                 was_axis_reflected=was_reflected,
             )
         )
