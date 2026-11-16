@@ -1,10 +1,11 @@
-"""Differential sync engine, deduplication, ancestry guard, and orphan chunk GC.
+"""Differential streaming sync engine, cross-process leases, crash resume, and GC.
 
-:class:`PersonalCloudVaultManager` coordinates client-side chunk encryption,
-content-addressed deduplication across consecutive project edits, optimistic
-concurrency verification via ``parent_snapshot_id``, multi-layered race-free
-in-flight chunk protection against concurrent garbage collection, fail-closed
-verification before file reconstruction, and unreferenced chunk cleanup.
+:class:`PersonalCloudVaultManager` coordinates O(1)-memory streaming client-side
+chunk encryption, content-addressed deduplication across consecutive project edits,
+crash-resumable staging journals, optimistic concurrency verification via
+``parent_snapshot_id``, multi-layered intra-process and cross-process in-flight
+chunk leases against concurrent garbage collection, fail-closed verification
+before file reconstruction, and unreferenced chunk cleanup.
 """
 
 from __future__ import annotations
@@ -14,13 +15,14 @@ import hmac
 import secrets
 import threading
 import time
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import (
     BYOSStorageDriver,
+    VaultStagingJournal,
     _atomic_write_file,
 )
 from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
@@ -39,8 +41,8 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
     derive_vault_keys,
     encrypt_chunk,
     generate_vault_salt,
+    init_streaming_file_mac,
     normalize_relative_vault_path,
-    split_into_chunks,
     validate_chunk_size,
     validate_pad_block_size,
     verify_manifest_integrity,
@@ -51,6 +53,20 @@ from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     VaultTamperDetectedError,
     VaultTransportError,
 )
+
+DEFAULT_GC_MIN_AGE_SECONDS = 3600.0
+DEFAULT_LEASE_TTL_SECONDS = 3600.0
+
+
+@dataclass(frozen=True, slots=True)
+class _ChunkSourceLocator:
+    """Lightweight pointer to a chunk's origin on disk for O(1)-RAM re-reads."""
+
+    file_path: Path | None
+    byte_offset: int
+    byte_length: int
+    chunk_index: int
+    inline_rel_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,14 +105,19 @@ class GarbageCollectionReport:
         return len(self.deleted_chunk_ids)
 
 
-def _collect_source_files(source: Path | str | Mapping[str, bytes]) -> dict[str, bytes]:
-    """Read project files from a directory tree or in-memory mapping fail-closed."""
+def _discover_source_plan(
+    source: Path | str | Mapping[str, bytes],
+) -> tuple[list[tuple[str, Path | None, int]], dict[str, bytes] | None]:
+    """Build a sorted file plan without reading disk file contents into RAM."""
     if isinstance(source, Mapping):
-        collected: dict[str, bytes] = {}
+        inline_map: dict[str, bytes] = {}
         for raw_rel, content in source.items():
             norm = normalize_relative_vault_path(str(raw_rel))
-            collected[norm] = bytes(content)
-        return dict(sorted(collected.items()))
+            inline_map[norm] = bytes(content)
+        plan: list[tuple[str, Path | None, int]] = [
+            (rel, None, len(inline_map[rel])) for rel in sorted(inline_map)
+        ]
+        return plan, inline_map
 
     raw_dir = Path(source)
     if raw_dir.is_symlink() or not raw_dir.is_dir():
@@ -104,20 +125,87 @@ def _collect_source_files(source: Path | str | Mapping[str, bytes]) -> dict[str,
             f"Project source directory must be an existing non-symlink directory: {raw_dir}"
         )
     root = raw_dir.resolve()
-    disk_files: dict[str, bytes] = {}
+    disk_plan: list[tuple[str, Path | None, int]] = []
     for entry in sorted(root.rglob("*")):
-        if entry.is_symlink():
+        try:
+            if entry.is_symlink():
+                raise VaultTransportError(
+                    f"Symlinks are forbidden inside project vault source: {entry}"
+                )
+            if entry.is_file():
+                rel_posix = entry.relative_to(root).as_posix()
+                norm = normalize_relative_vault_path(rel_posix)
+                stat_size = entry.stat().st_size
+                disk_plan.append((norm, entry, stat_size))
+        except OSError as exc:
+            raise VaultTransportError(f"Failed stating project file {entry}: {exc}") from exc
+    disk_plan.sort(key=lambda item: item[0])
+    return disk_plan, None
+
+
+def _stream_source_chunks(
+    *,
+    rel_path: str,
+    disk_path: Path | None,
+    expected_size: int,
+    chunk_size: int,
+    inline_sources: Mapping[str, bytes] | None,
+) -> Iterator[tuple[int, int, bytes]]:
+    """Yield ``(chunk_index, byte_offset, chunk_bytes)`` holding <= 1 chunk in RAM."""
+    if disk_path is not None:
+        bytes_read = 0
+        idx = 0
+        try:
+            with disk_path.open("rb") as handle:
+                while True:
+                    chunk = handle.read(chunk_size)
+                    if not chunk:
+                        break
+                    offset = bytes_read
+                    bytes_read += len(chunk)
+                    yield idx, offset, chunk
+                    idx += 1
+        except OSError as exc:
+            raise VaultTransportError(f"Failed reading project file {disk_path}: {exc}") from exc
+        if bytes_read != expected_size:
             raise VaultTransportError(
-                f"Symlinks are forbidden inside project vault source: {entry}"
+                f"Concurrent file size change while streaming {disk_path}: "
+                f"expected {expected_size} bytes, read {bytes_read}"
             )
-        if entry.is_file():
-            rel_posix = entry.relative_to(root).as_posix()
-            norm = normalize_relative_vault_path(rel_posix)
-            try:
-                disk_files[norm] = entry.read_bytes()
-            except OSError as exc:
-                raise VaultTransportError(f"Failed reading project file {entry}: {exc}") from exc
-    return dict(sorted(disk_files.items()))
+        return
+
+    assert inline_sources is not None
+    raw_bytes = inline_sources[rel_path]
+    view = memoryview(raw_bytes)
+    for idx, offset in enumerate(range(0, expected_size, chunk_size)):
+        yield idx, offset, bytes(view[offset : offset + chunk_size])
+
+
+def _read_chunk_from_locator(
+    locator: _ChunkSourceLocator,
+    inline_sources: Mapping[str, bytes] | None,
+) -> bytes:
+    """Re-read a single evicted chunk from disk via ``seek`` + ``read`` on demand."""
+    if locator.file_path is not None:
+        try:
+            with locator.file_path.open("rb") as handle:
+                handle.seek(locator.byte_offset)
+                data = handle.read(locator.byte_length)
+        except OSError as exc:
+            raise VaultTransportError(
+                f"Failed re-reading chunk from {locator.file_path}: {exc}"
+            ) from exc
+        if len(data) != locator.byte_length:
+            raise VaultTransportError(
+                f"Short read while healing chunk from {locator.file_path}: "
+                f"expected {locator.byte_length} bytes, got {len(data)}"
+            )
+        return data
+
+    assert inline_sources is not None and locator.inline_rel_path is not None
+    raw = inline_sources[locator.inline_rel_path]
+    end = locator.byte_offset + locator.byte_length
+    return bytes(memoryview(raw)[locator.byte_offset : end])
 
 
 def _write_verified_files_to_directory(target_dir: Path | str, files: Mapping[str, bytes]) -> None:
@@ -134,7 +222,6 @@ def _write_verified_files_to_directory(target_dir: Path | str, files: Mapping[st
     for rel_path, content in sorted(files.items()):
         norm = normalize_relative_vault_path(rel_path)
         dest = root / norm
-        # Refuse symlinked intermediate directories before resolving.
         current = root
         for segment in norm.split("/")[:-1]:
             current = current / segment
@@ -150,7 +237,7 @@ def _write_verified_files_to_directory(target_dir: Path | str, files: Mapping[st
 
 
 class PersonalCloudVaultManager:
-    """Differential encrypted BYOS sync manager with ancestry and tamper protection."""
+    """Differential encrypted BYOS sync manager with O(1) streaming & cross-process leases."""
 
     def __init__(
         self,
@@ -159,6 +246,7 @@ class PersonalCloudVaultManager:
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         kdf_iterations: int = PBKDF2_ITERATIONS,
         pad_to_block_size: int = 1,
+        lease_ttl_seconds: float = DEFAULT_LEASE_TTL_SECONDS,
     ) -> None:
         validate_chunk_size(chunk_size)
         validate_pad_block_size(pad_to_block_size)
@@ -166,10 +254,13 @@ class PersonalCloudVaultManager:
             raise PersonalVaultError(
                 f"kdf_iterations must be at least {MIN_PBKDF2_ITERATIONS}, got {kdf_iterations}"
             )
+        if lease_ttl_seconds <= 0.0:
+            raise PersonalVaultError(f"lease_ttl_seconds must be positive, got {lease_ttl_seconds}")
         self._driver = driver
         self._chunk_size = chunk_size
         self._kdf_iterations = kdf_iterations
         self._pad_to_block_size = pad_to_block_size
+        self._lease_ttl_seconds = lease_ttl_seconds
         self._lock = threading.RLock()
         self._known_chunk_ids: set[str] = set()
         self._in_flight_chunks: set[str] = set()
@@ -223,6 +314,76 @@ class PersonalCloudVaultManager:
                 else:
                     self._in_flight_refcounts[cid] = remaining
 
+    def _acquire_driver_lease(self, project_id: str) -> str | None:
+        acquire_fn = getattr(self._driver, "acquire_push_lease", None)
+        if callable(acquire_fn):
+            lease_id = acquire_fn(
+                (),
+                project_id=project_id,
+                ttl_seconds=self._lease_ttl_seconds,
+            )
+            return str(lease_id)
+        return None
+
+    def _update_driver_lease(
+        self,
+        lease_id: str | None,
+        chunk_ids: Collection[str],
+        *,
+        project_id: str,
+    ) -> None:
+        if lease_id is None:
+            return
+        update_fn = getattr(self._driver, "update_push_lease", None)
+        if callable(update_fn):
+            update_fn(
+                lease_id,
+                chunk_ids,
+                project_id=project_id,
+                ttl_seconds=self._lease_ttl_seconds,
+            )
+
+    def _release_driver_lease(self, lease_id: str | None) -> None:
+        if lease_id is None:
+            return
+        release_fn = getattr(self._driver, "release_push_lease", None)
+        if callable(release_fn):
+            release_fn(lease_id)
+
+    def _read_driver_leased_chunks(self) -> set[str]:
+        read_fn = getattr(self._driver, "read_active_leased_chunks", None)
+        if callable(read_fn):
+            leased = read_fn()
+            if isinstance(leased, Iterable):
+                return {str(cid) for cid in leased}
+        return set()
+
+    def _load_staging_journal(
+        self,
+        project_id: str,
+        parent_snapshot_id: str | None,
+    ) -> VaultStagingJournal | None:
+        load_fn = getattr(self._driver, "load_staging_journal", None)
+        if callable(load_fn):
+            loaded = load_fn(project_id, parent_snapshot_id)
+            if isinstance(loaded, VaultStagingJournal):
+                return loaded
+        return None
+
+    def _save_staging_journal(self, journal: VaultStagingJournal) -> None:
+        save_fn = getattr(self._driver, "save_staging_journal", None)
+        if callable(save_fn):
+            save_fn(journal)
+
+    def _clear_staging_journal(
+        self,
+        project_id: str,
+        parent_snapshot_id: str | None,
+    ) -> None:
+        clear_fn = getattr(self._driver, "clear_staging_journal", None)
+        if callable(clear_fn):
+            clear_fn(project_id, parent_snapshot_id)
+
     def _encrypt_and_upload_chunk(
         self,
         chunk_id: str,
@@ -235,28 +396,40 @@ class PersonalCloudVaultManager:
             chunk_index=0,
             pad_to_block_size=self._pad_to_block_size,
         )
+        del chunk_plain
         wire_bytes = envelope.to_bytes()
+        del envelope
+        wire_len = len(wire_bytes)
         self._driver.put_chunk(chunk_id, wire_bytes)
+        del wire_bytes
         with self._lock:
             self._known_chunk_ids.add(chunk_id)
             self._chunk_seen_at[chunk_id] = time.time()
-        return len(wire_bytes)
+        return wire_len
 
     def _verify_and_heal_manifest_chunks(
         self,
-        chunk_plaintexts: Mapping[str, bytes],
+        chunk_locators: Mapping[str, _ChunkSourceLocator],
+        inline_sources: Mapping[str, bytes] | None,
         key_material: VaultKeyMaterial,
         *,
         stage: str,
         rollback_snapshot_id: str | None = None,
     ) -> tuple[int, int]:
-        """Verify every manifest chunk exists on storage; heal if evicted or fail closed."""
+        """Verify every manifest chunk exists on storage; heal from disk if evicted."""
         healed_count = 0
         healed_bytes = 0
-        for cid in sorted(chunk_plaintexts):
+        for cid in sorted(chunk_locators):
             if self._driver.has_chunk(cid):
                 continue
-            written = self._encrypt_and_upload_chunk(cid, chunk_plaintexts[cid], key_material)
+            healed_plain = _read_chunk_from_locator(chunk_locators[cid], inline_sources)
+            recomputed_cid = compute_chunk_id(healed_plain, key_material)
+            if not hmac.compare_digest(recomputed_cid, cid):
+                raise VaultTransportError(
+                    f"Fail-closed ({stage}): local source mutated while healing chunk {cid}"
+                )
+            written = self._encrypt_and_upload_chunk(cid, healed_plain, key_material)
+            del healed_plain
             healed_count += 1
             healed_bytes += written
             if not self._driver.has_chunk(cid):
@@ -297,33 +470,36 @@ class PersonalCloudVaultManager:
         }
         return set(project_manifests.keys()) - referenced_parents
 
-    def push_project_snapshot(
+    def _resolve_push_key_material_and_staging(
         self,
         *,
         project_id: str,
-        source: Path | str | Mapping[str, bytes],
+        parent_snapshot_id: str | None,
         master_secret: str | bytes,
-        parent_snapshot_id: str | None = None,
-        snapshot_id: str | None = None,
-        metadata: Mapping[str, str] | None = None,
-        salt: bytes | None = None,
-    ) -> SnapshotPushReport:
-        """Encrypt and differentially upload a project snapshot with conflict detection."""
-        if not project_id.strip():
-            raise PersonalVaultError("project_id must not be empty")
-
-        all_manifest_ids, project_manifests = self._load_project_manifests(project_id)
-        if snapshot_id is not None and snapshot_id in all_manifest_ids:
-            raise VaultRevisionConflictError(
-                f"Snapshot {snapshot_id!r} already exists on the remote vault"
-            )
-
+        salt: bytes | None,
+        project_manifests: Mapping[str, VaultSnapshotManifest],
+    ) -> tuple[VaultKeyMaterial, set[str]]:
+        existing_journal = self._load_staging_journal(project_id, parent_snapshot_id)
         if not project_manifests:
             if parent_snapshot_id is not None:
                 raise VaultRevisionConflictError(
                     f"Remote vault has no history for project {project_id!r}, "
                     f"cannot reference parent_snapshot_id={parent_snapshot_id!r}"
                 )
+            if (
+                salt is None
+                and existing_journal is not None
+                and existing_journal.kdf_iterations == self._kdf_iterations
+                and existing_journal.chunk_size == self._chunk_size
+            ):
+                candidate_km = derive_vault_keys(
+                    master_secret,
+                    bytes.fromhex(existing_journal.salt_hex),
+                    iterations=existing_journal.kdf_iterations,
+                )
+                if hmac.compare_digest(candidate_km.key_id.hex(), existing_journal.key_id_hex):
+                    return candidate_km, set(existing_journal.uploaded_chunk_ids)
+
             effective_salt = generate_vault_salt() if salt is None else salt
             key_material = derive_vault_keys(
                 master_secret,
@@ -356,58 +532,137 @@ class PersonalCloudVaultManager:
             )
             verify_manifest_integrity(parent_manifest, key_material)
 
-        source_files = _collect_source_files(source)
+        if (
+            existing_journal is not None
+            and existing_journal.chunk_size == self._chunk_size
+            and hmac.compare_digest(existing_journal.key_id_hex, key_material.key_id.hex())
+        ):
+            return key_material, set(existing_journal.uploaded_chunk_ids)
+        return key_material, set()
+
+    def push_project_snapshot(
+        self,
+        *,
+        project_id: str,
+        source: Path | str | Mapping[str, bytes],
+        master_secret: str | bytes,
+        parent_snapshot_id: str | None = None,
+        snapshot_id: str | None = None,
+        metadata: Mapping[str, str] | None = None,
+        salt: bytes | None = None,
+    ) -> SnapshotPushReport:
+        """Stream-encrypt and differentially upload a snapshot in O(1) bounded RAM."""
+        if not project_id.strip():
+            raise PersonalVaultError("project_id must not be empty")
+
+        all_manifest_ids, project_manifests = self._load_project_manifests(project_id)
+        if snapshot_id is not None and snapshot_id in all_manifest_ids:
+            raise VaultRevisionConflictError(
+                f"Snapshot {snapshot_id!r} already exists on the remote vault"
+            )
+
+        key_material, staged_chunk_ids = self._resolve_push_key_material_and_staging(
+            project_id=project_id,
+            parent_snapshot_id=parent_snapshot_id,
+            master_secret=master_secret,
+            salt=salt,
+            project_manifests=project_manifests,
+        )
+        source_plan, inline_sources = _discover_source_plan(source)
+
+        chunk_locators: dict[str, _ChunkSourceLocator] = {}
         file_entries: list[VaultFileEntry] = []
-        chunk_plaintexts_by_id: dict[str, bytes] = {}
-        prepared_files: list[tuple[str, bytes, list[VaultChunkRef], list[tuple[str, bytes]]]] = []
-
+        leased_in_push: list[str] = []
+        leased_set: set[str] = set()
+        uploaded_in_batch: set[str] = set()
         total_chunks = 0
-        for rel_path, file_bytes in source_files.items():
-            raw_chunks = split_into_chunks(file_bytes, chunk_size=self._chunk_size)
-            chunk_refs: list[VaultChunkRef] = []
-            chunk_pairs: list[tuple[str, bytes]] = []
-            for idx, chunk_plain in enumerate(raw_chunks):
-                total_chunks += 1
-                chunk_id = compute_chunk_id(chunk_plain, key_material)
-                chunk_plaintexts_by_id[chunk_id] = chunk_plain
-                chunk_pairs.append((chunk_id, chunk_plain))
-                chunk_refs.append(
-                    VaultChunkRef(
-                        chunk_index=idx,
-                        chunk_id=chunk_id,
-                        plaintext_len=len(chunk_plain),
-                    )
-                )
-            prepared_files.append((rel_path, file_bytes, chunk_refs, chunk_pairs))
+        uploaded_chunks = 0
+        deduplicated_chunks = 0
+        uploaded_bytes = 0
+        saved_plaintext_bytes = 0
 
-        # Lease all snapshot chunks in `_in_flight_chunks` BEFORE any upload begins.
-        acquired_ids = self._acquire_in_flight_chunks(chunk_plaintexts_by_id.keys())
+        lease_id = self._acquire_driver_lease(project_id)
         try:
-            uploaded_in_batch: set[str] = set()
-            uploaded_chunks = 0
-            deduplicated_chunks = 0
-            uploaded_bytes = 0
-            saved_plaintext_bytes = 0
+            for rel_path, disk_path, expected_size in source_plan:
+                file_mac = init_streaming_file_mac(rel_path, expected_size, key_material)
+                chunk_refs: list[VaultChunkRef] = []
 
-            for rel_path, file_bytes, chunk_refs, chunk_pairs in prepared_files:
-                for chunk_id, chunk_plain in chunk_pairs:
+                for idx, byte_offset, chunk_plain in _stream_source_chunks(
+                    rel_path=rel_path,
+                    disk_path=disk_path,
+                    expected_size=expected_size,
+                    chunk_size=self._chunk_size,
+                    inline_sources=inline_sources,
+                ):
+                    total_chunks += 1
+                    chunk_len = len(chunk_plain)
+                    file_mac.update(chunk_plain)
+                    chunk_id = compute_chunk_id(chunk_plain, key_material)
+
+                    if chunk_id not in chunk_locators:
+                        chunk_locators[chunk_id] = _ChunkSourceLocator(
+                            file_path=disk_path,
+                            byte_offset=byte_offset,
+                            byte_length=chunk_len,
+                            chunk_index=idx,
+                            inline_rel_path=rel_path if disk_path is None else None,
+                        )
+
+                    # Lease chunk in RAM and cross-process lease file BEFORE put_chunk.
+                    if chunk_id not in leased_set:
+                        self._acquire_in_flight_chunks((chunk_id,))
+                        leased_in_push.append(chunk_id)
+                        leased_set.add(chunk_id)
+                        self._update_driver_lease(
+                            lease_id,
+                            leased_set,
+                            project_id=project_id,
+                        )
+
                     if chunk_id in uploaded_in_batch or self._driver.has_chunk(chunk_id):
                         deduplicated_chunks += 1
-                        saved_plaintext_bytes += len(chunk_plain)
-                    else:
-                        written = self._encrypt_and_upload_chunk(
-                            chunk_id, chunk_plain, key_material
-                        )
+                        saved_plaintext_bytes += chunk_len
                         uploaded_in_batch.add(chunk_id)
+                        chunk_plain = b""
+                    else:
+                        payload_to_send = chunk_plain
+                        chunk_plain = b""
+                        written = self._encrypt_and_upload_chunk(
+                            chunk_id,
+                            payload_to_send,
+                            key_material,
+                        )
+                        del payload_to_send
+                        uploaded_in_batch.add(chunk_id)
+                        staged_chunk_ids.add(chunk_id)
                         uploaded_chunks += 1
                         uploaded_bytes += written
+                        self._save_staging_journal(
+                            VaultStagingJournal(
+                                project_id=project_id,
+                                parent_snapshot_id=parent_snapshot_id,
+                                salt_hex=key_material.salt.hex(),
+                                kdf_iterations=key_material.iterations,
+                                key_id_hex=key_material.key_id.hex(),
+                                chunk_size=self._chunk_size,
+                                updated_at_epoch=time.time(),
+                                uploaded_chunk_ids=tuple(sorted(staged_chunk_ids)),
+                            )
+                        )
 
-                file_mac_hex = compute_file_mac(rel_path, file_bytes, key_material)
+                    chunk_refs.append(
+                        VaultChunkRef(
+                            chunk_index=idx,
+                            chunk_id=chunk_id,
+                            plaintext_len=chunk_len,
+                        )
+                    )
+
                 file_entries.append(
                     VaultFileEntry(
                         rel_path=rel_path,
-                        total_size=len(file_bytes),
-                        file_mac_hex=file_mac_hex,
+                        total_size=expected_size,
+                        file_mac_hex=file_mac.hexdigest(),
                         chunks=tuple(chunk_refs),
                     )
                 )
@@ -430,23 +685,27 @@ class PersonalCloudVaultManager:
                 metadata=metadata,
             )
 
-            # Pre-manifest check: heal any chunk evicted concurrently by external actors.
+            # Pre-manifest check: heal from disk via _ChunkSourceLocator if evicted.
             self._verify_and_heal_manifest_chunks(
-                chunk_plaintexts_by_id,
+                chunk_locators,
+                inline_sources,
                 key_material,
                 stage="pre-manifest",
             )
             self._driver.put_manifest(manifest.snapshot_id, manifest.to_json_bytes())
 
-            # Post-manifest check: ensure every chunk remains committed after manifest write.
+            # Post-manifest check: verify every chunk remains committed after manifest write.
             self._verify_and_heal_manifest_chunks(
-                chunk_plaintexts_by_id,
+                chunk_locators,
+                inline_sources,
                 key_material,
                 stage="post-manifest",
                 rollback_snapshot_id=manifest.snapshot_id,
             )
+            self._clear_staging_journal(project_id, parent_snapshot_id)
         finally:
-            self._release_in_flight_chunks(acquired_ids)
+            self._release_in_flight_chunks(leased_in_push)
+            self._release_driver_lease(lease_id)
 
         dedup_ratio = (deduplicated_chunks / total_chunks) if total_chunks > 0 else 0.0
         return SnapshotPushReport(
@@ -575,9 +834,9 @@ class PersonalCloudVaultManager:
         active_snapshot_ids: Collection[str] | None = None,
         candidate_chunk_ids: Iterable[str] | None = None,
         protected_chunk_ids: Collection[str] = (),
-        min_age_seconds: float = 0.0,
+        min_age_seconds: float = DEFAULT_GC_MIN_AGE_SECONDS,
     ) -> GarbageCollectionReport:
-        """Delete orphan chunks not referenced by active manifests or in-flight pushes."""
+        """Delete orphan chunks not referenced by active manifests or in-flight leases."""
         if min_age_seconds < 0.0:
             raise PersonalVaultError(f"min_age_seconds must be non-negative, got {min_age_seconds}")
 
@@ -586,6 +845,7 @@ class PersonalCloudVaultManager:
             known_snapshot = set(self._known_chunk_ids)
             seen_snapshot = dict(self._chunk_seen_at)
 
+        cross_process_leased = self._read_driver_leased_chunks()
         stored_manifest_ids = set(self._driver.list_manifests())
         if active_snapshot_ids is None:
             active_ids = stored_manifest_ids
@@ -608,7 +868,9 @@ class PersonalCloudVaultManager:
             else:
                 superseded_chunks.update(chunks_in_manifest)
 
-        protected_all = referenced_chunks | set(protected_chunk_ids) | initial_in_flight
+        protected_all = (
+            referenced_chunks | set(protected_chunk_ids) | initial_in_flight | cross_process_leased
+        )
         discovered_candidates: set[str] = known_snapshot | superseded_chunks
         if candidate_chunk_ids is not None:
             discovered_candidates.update(candidate_chunk_ids)
@@ -633,6 +895,8 @@ class PersonalCloudVaultManager:
             with self._lock:
                 if chunk_id in self._in_flight_chunks:
                     continue
+                if chunk_id in self._read_driver_leased_chunks():
+                    continue
                 if self._driver.has_chunk(chunk_id):
                     self._driver.delete_chunk(chunk_id)
                     deleted.append(chunk_id)
@@ -646,8 +910,11 @@ class PersonalCloudVaultManager:
 
 
 __all__ = [
+    "DEFAULT_GC_MIN_AGE_SECONDS",
+    "DEFAULT_LEASE_TTL_SECONDS",
     "GarbageCollectionReport",
     "PersonalCloudVaultManager",
     "SnapshotPullReport",
     "SnapshotPushReport",
+    "_ChunkSourceLocator",
 ]

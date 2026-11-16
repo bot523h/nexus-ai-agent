@@ -312,14 +312,22 @@ def test_garbage_collect_unreferenced_chunks_retains_active_and_purges_orphans(
     vault.put_chunk(orphan_cid, b"dangling-upload-bytes")
     assert len(vault.list_chunks()) == 4  # A, B, C, orphan
 
-    # Default GC keeps both snap-1 and snap-2 active -> deletes only orphan_cid
-    gc1 = mgr.garbage_collect_unreferenced_chunks()
+    # Safe 1-hour production default (min_age_seconds=3600.0) protects fresh orphan chunks
+    gc_default = mgr.garbage_collect_unreferenced_chunks()
+    assert gc_default.deleted_chunk_ids == ()
+    assert vault.has_chunk(orphan_cid)
+
+    # Explicit min_age_seconds=0.0 keeps snap-1 and snap-2 active -> deletes only orphan_cid
+    gc1 = mgr.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
     assert gc1.deleted_chunk_ids == (orphan_cid,)
     assert gc1.deleted_count == 1
     assert not vault.has_chunk(orphan_cid)
 
     # Prune snap-1 by keeping only active_snapshot_ids=["snap-2"] -> deletes B, retains A & C
-    gc2 = mgr.garbage_collect_unreferenced_chunks(active_snapshot_ids=[r2.snapshot_id])
+    gc2 = mgr.garbage_collect_unreferenced_chunks(
+        active_snapshot_ids=[r2.snapshot_id],
+        min_age_seconds=0.0,
+    )
     assert gc2.deleted_count == 1
     assert len(gc2.retained_chunk_ids) == 2
     vault.delete_manifest(r1.snapshot_id)
@@ -342,7 +350,10 @@ def test_garbage_collect_unreferenced_chunks_retains_active_and_purges_orphans(
     dangling = "e" * 64
     spy_minimal.put_chunk(dangling, b"orphan")
     mgr_min.record_orphan_candidate_chunk(dangling)
-    gc_min = mgr_min.garbage_collect_unreferenced_chunks(candidate_chunk_ids=["d" * 64])
+    gc_min = mgr_min.garbage_collect_unreferenced_chunks(
+        candidate_chunk_ids=["d" * 64],
+        min_age_seconds=0.0,
+    )
     assert gc_min.deleted_chunk_ids == (dangling,)
 
 
@@ -570,24 +581,25 @@ def test_manager_deep_tamper_and_io_defense_in_depth_branches(
             target_dir=leaf_sym_dir,
         )
 
-    # 5) Source file read OSError during directory collection
+    # 5) Source file streaming open/stat OSError during directory push
     unreadable_src = tmp_path / "unreadable_src"
     unreadable_src.mkdir()
     (unreadable_src / "doc.bin").write_bytes(b"data")
-    orig_read = Path.read_bytes
+    orig_open = Path.open
 
-    def _fail_doc_read(self_path: Path) -> bytes:
+    def _fail_doc_open(self_path: Path, mode: str = "r") -> object:
         if self_path.name == "doc.bin":
             raise OSError("disk read error")
-        return orig_read(self_path)
+        return orig_open(self_path, mode)
 
-    monkeypatch.setattr(Path, "read_bytes", _fail_doc_read)
+    monkeypatch.setattr(Path, "open", _fail_doc_open)
     with pytest.raises(VaultTransportError):
         mgr.push_project_snapshot(
             project_id="proj-io",
             source=unreadable_src,
             master_secret=secret,
         )
+    monkeypatch.setattr(Path, "open", orig_open)
 
 
 def test_f1_regression_concurrent_gc_right_before_put_manifest_preserves_all_chunks(
@@ -668,7 +680,7 @@ def test_f1_regression_concurrent_gc_right_before_put_manifest_preserves_all_chu
         assert len(mgr.in_flight_chunks) == 3
 
         def _bg_gc() -> None:
-            rep = mgr.garbage_collect_unreferenced_chunks()
+            rep = mgr.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
             gc_reports_from_thread.append(rep.deleted_chunk_ids)
 
         worker = threading.Thread(target=_bg_gc)
@@ -874,7 +886,442 @@ def test_f1_protected_chunks_min_age_refcounts_and_fail_closed_rollback(
         chunk_size=64,
         kdf_iterations=100_000,
     )
-    gc_late = mgr_late.garbage_collect_unreferenced_chunks()
+    gc_late = mgr_late.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
     assert gc_late.deleted_chunk_ids == ()
     assert vault.has_chunk(late_cid)
     mgr_late._release_in_flight_chunks([late_cid])
+
+
+def test_n1_streaming_push_o1_tracemalloc_ceiling_and_disk_locator_healing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prove O(1) peak memory (< 4 * chunk_size) on 20-chunk multi-file push + disk heal."""
+    import gc
+    import tracemalloc
+
+    from nexus_ai_agent.storage.personal_cloud_vault.sync_journal_manager import (
+        _ChunkSourceLocator,
+        _read_chunk_from_locator,
+    )
+
+    chunk_size = 65_536  # 64 KiB
+    project_dir = tmp_path / "heavy_cinema_project"
+    (project_dir / "reels").mkdir(parents=True)
+    # 4 media files totaling 20 distinct 64 KiB chunks (1,310,720 bytes = 20 * chunk_size)
+    expected_files: dict[str, bytes] = {}
+    chunk_cursor = 0
+    for file_idx, chunks_in_file in enumerate((6, 5, 5, 4)):
+        parts: list[bytes] = []
+        for _ in range(chunks_in_file):
+            tag = f"REEL-{file_idx}-CHUNK-{chunk_cursor:03d}-".encode("ascii")
+            filler = bytes([(chunk_cursor + 17) & 0xFF]) * (chunk_size - len(tag))
+            parts.append(tag + filler)
+            chunk_cursor += 1
+        rel = f"reels/track_{file_idx}.bin"
+        raw_file = b"".join(parts)
+        (project_dir / rel).write_bytes(raw_file)
+        expected_files[rel] = raw_file
+    (project_dir / "reels" / "empty_marker.idx").write_bytes(b"")
+    expected_files["reels/empty_marker.idx"] = b""
+    assert chunk_cursor == 20
+
+    class _EvictTwoChunksDriver(LocalDeviceVaultDriver):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.evicted_before_manifest: list[str] = []
+
+        def put_manifest(self, snapshot_id: str, data: bytes) -> None:
+            super().put_manifest(snapshot_id, data)
+
+    vault_dir = tmp_path / "streaming_vault"
+    driver = _EvictTwoChunksDriver(vault_dir)
+    mgr = PersonalCloudVaultManager(driver, chunk_size=chunk_size, kdf_iterations=100_000)
+
+    gc.collect()
+    tracemalloc.start()
+    try:
+        push_rep = mgr.push_project_snapshot(
+            project_id="cinema-20-chunks",
+            source=project_dir,
+            master_secret="streaming-o1-passphrase",
+            snapshot_id="snap-stream-1",
+        )
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert push_rep.total_chunks == 20
+    assert push_rep.uploaded_chunks == 20
+    # Mandatory N1 invariant: peak allocation strictly < 4 * chunk_size despite 20 chunks!
+    assert peak_bytes < 4 * chunk_size, (
+        f"Streaming push peak_bytes={peak_bytes} exceeded 4 * chunk_size={4 * chunk_size}"
+    )
+
+    pulled = mgr.pull_project_snapshot(
+        project_id="cinema-20-chunks",
+        master_secret="streaming-o1-passphrase",
+        snapshot_id="snap-stream-1",
+    )
+    assert pulled.files == expected_files
+    del expected_files, pulled
+
+    # Verify _ChunkSourceLocator disk seek+read healing errors (missing/short/mutated/stat/grow)
+    sample_file = tmp_path / "locator_sample.bin"
+    sample_file.write_bytes(b"0123456789ABCDEF")
+    loc = _ChunkSourceLocator(
+        file_path=sample_file,
+        byte_offset=4,
+        byte_length=6,
+        chunk_index=1,
+    )
+    assert _read_chunk_from_locator(loc, None) == b"456789"
+
+    loc_short = _ChunkSourceLocator(
+        file_path=sample_file,
+        byte_offset=12,
+        byte_length=8,
+        chunk_index=2,
+    )
+    with pytest.raises(VaultTransportError, match="Short read"):
+        _read_chunk_from_locator(loc_short, None)
+
+    missing_loc = _ChunkSourceLocator(
+        file_path=tmp_path / "deleted.bin",
+        byte_offset=0,
+        byte_length=4,
+        chunk_index=0,
+    )
+    with pytest.raises(VaultTransportError, match="Failed re-reading"):
+        _read_chunk_from_locator(missing_loc, None)
+
+    with pytest.raises(PersonalVaultError):
+        PersonalCloudVaultManager(driver, chunk_size=64, lease_ttl_seconds=0.0)
+
+    # Concurrent file size mutation during streaming & local mutation during heal fail closed
+    grow_dir = tmp_path / "grow_src"
+    grow_dir.mkdir()
+    grow_file = grow_dir / "clip.bin"
+    grow_file.write_bytes(b"A" * 64)
+    orig_stat = Path.stat
+
+    def _inflated_stat(self_path: Path, *, follow_symlinks: bool = True) -> object:
+        st = orig_stat(self_path, follow_symlinks=follow_symlinks)
+        if self_path == grow_file:
+
+            class _FakeStat:
+                st_mode = st.st_mode
+                st_size = 999
+
+            return _FakeStat()
+        return st
+
+    monkeypatch.setattr(Path, "stat", _inflated_stat)
+    with pytest.raises(VaultTransportError, match="Concurrent file size change"):
+        mgr.push_project_snapshot(
+            project_id="grow-proj",
+            source=grow_dir,
+            master_secret="s",
+        )
+
+    def _failing_stat(self_path: Path, *, follow_symlinks: bool = True) -> object:
+        if self_path == grow_file:
+            raise OSError("stat failed")
+        return orig_stat(self_path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", _failing_stat)
+    with pytest.raises(VaultTransportError):
+        mgr.push_project_snapshot(
+            project_id="grow-proj",
+            source=grow_dir,
+            master_secret="s",
+        )
+    monkeypatch.setattr(Path, "stat", orig_stat)
+
+
+def test_n2_crash_recovery_staging_journal_resumes_without_reuploading_chunks(
+    tmp_path: Path,
+) -> None:
+    """Simulated crash mid-upload resumes from VaultStagingJournal without re-uploading."""
+    chunk_size = 128
+    src_dir = tmp_path / "resumable_project"
+    src_dir.mkdir()
+    full_payload = b"".join(bytes([i + 1]) * chunk_size for i in range(10))
+    (src_dir / "render.mov").write_bytes(full_payload)
+
+    class _CrashAfterFiveDriver(LocalDeviceVaultDriver):
+        def __init__(self, root: Path, *, crash_on_call: int | None) -> None:
+            super().__init__(root)
+            self.crash_on_call = crash_on_call
+            self.put_calls: list[str] = []
+
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            if self.crash_on_call is not None and len(self.put_calls) >= self.crash_on_call:
+                raise RuntimeError("simulated power failure mid-push")
+            self.put_calls.append(chunk_id)
+            super().put_chunk(chunk_id, data)
+
+    vault_root = tmp_path / "crash_vault"
+    crashing_driver = _CrashAfterFiveDriver(vault_root, crash_on_call=5)
+    mgr_run1 = PersonalCloudVaultManager(
+        crashing_driver,
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    with pytest.raises(RuntimeError, match="simulated power failure"):
+        mgr_run1.push_project_snapshot(
+            project_id="crash-film",
+            source=src_dir,
+            master_secret="resume-passphrase",
+            snapshot_id="snap-resumed-1",
+        )
+    assert len(crashing_driver.put_calls) == 5
+    # Lease was released on unwind, while staging journal persisted the 5 uploaded chunks + salt!
+    assert crashing_driver.read_active_leased_chunks() == set()
+    staged = crashing_driver.load_staging_journal("crash-film", None)
+    assert staged is not None
+    assert len(staged.uploaded_chunk_ids) == 5
+
+    # Run #2 (fresh process/manager): changing passphrase ignores stale journal cleanly,
+    # whereas matching passphrase reuses staged salt & skips all 5 pre-crash chunks!
+    resumed_driver = _CrashAfterFiveDriver(vault_root, crash_on_call=None)
+    mgr_run2 = PersonalCloudVaultManager(
+        resumed_driver,
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    resume_rep = mgr_run2.push_project_snapshot(
+        project_id="crash-film",
+        source=src_dir,
+        master_secret="resume-passphrase",
+        snapshot_id="snap-resumed-1",
+    )
+    assert resume_rep.total_chunks == 10
+    assert resume_rep.uploaded_chunks == 5
+    assert resume_rep.deduplicated_chunks == 5
+    assert len(resumed_driver.put_calls) == 5
+    # Staging journal is cleaned up once manifest + post-manifest verification complete
+    assert resumed_driver.load_staging_journal("crash-film", None) is None
+
+    pulled = mgr_run2.pull_project_snapshot(
+        project_id="crash-film",
+        master_secret="resume-passphrase",
+        snapshot_id="snap-resumed-1",
+    )
+    assert pulled.files == {"render.mov": full_payload}
+
+    # Incremental delta push (`parent_snapshot_id != None`) also resumes from staging journal
+    delta_payload = full_payload + (b"\xd0" * chunk_size) + (b"\xd1" * chunk_size)
+    (src_dir / "render.mov").write_bytes(delta_payload)
+    crash_delta = _CrashAfterFiveDriver(vault_root, crash_on_call=1)
+    mgr_delta1 = PersonalCloudVaultManager(
+        crash_delta,
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    with pytest.raises(RuntimeError):
+        mgr_delta1.push_project_snapshot(
+            project_id="crash-film",
+            source=src_dir,
+            master_secret="resume-passphrase",
+            parent_snapshot_id="snap-resumed-1",
+            snapshot_id="snap-resumed-2",
+        )
+    ok_delta = _CrashAfterFiveDriver(vault_root, crash_on_call=None)
+    mgr_delta2 = PersonalCloudVaultManager(
+        ok_delta,
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    rep_delta = mgr_delta2.push_project_snapshot(
+        project_id="crash-film",
+        source=src_dir,
+        master_secret="resume-passphrase",
+        parent_snapshot_id="snap-resumed-1",
+        snapshot_id="snap-resumed-2",
+    )
+    assert rep_delta.uploaded_chunks == 1
+    assert len(ok_delta.put_calls) == 1
+
+    # Also cover crashed initial push followed by passphrase change on retry
+    vault_pw_change = tmp_path / "pw_change_vault"
+    crash_pw = _CrashAfterFiveDriver(vault_pw_change, crash_on_call=2)
+    mgr_pw1 = PersonalCloudVaultManager(crash_pw, chunk_size=chunk_size, kdf_iterations=100_000)
+    with pytest.raises(RuntimeError):
+        mgr_pw1.push_project_snapshot(
+            project_id="pw-film",
+            source=src_dir,
+            master_secret="old-passphrase",
+        )
+    ok_pw = _CrashAfterFiveDriver(vault_pw_change, crash_on_call=None)
+    mgr_pw2 = PersonalCloudVaultManager(ok_pw, chunk_size=chunk_size, kdf_iterations=100_000)
+    rep_new_pw = mgr_pw2.push_project_snapshot(
+        project_id="pw-film",
+        source=src_dir,
+        master_secret="new-passphrase",
+        snapshot_id="snap-new-pw",
+    )
+    assert rep_new_pw.uploaded_chunks == 12
+
+
+def test_n6_cross_client_cross_manager_gc_race_file_lease_and_disk_locator(
+    tmp_path: Path,
+) -> None:
+    """Two independent managers on shared storage: prove BOTH file lease AND disk locator heal."""
+    from collections.abc import Callable
+
+    from nexus_ai_agent.storage.personal_cloud_vault import DEFAULT_GC_MIN_AGE_SECONDS
+
+    assert DEFAULT_GC_MIN_AGE_SECONDS == 3600.0
+
+    chunk_size = 128
+    shared_vault_dir = tmp_path / "shared_multi_process_vault"
+    src_dir = tmp_path / "editor_workspace"
+    src_dir.mkdir()
+    secret = "cross-client-shared-secret"
+
+    class _HookedLocalDriver(LocalDeviceVaultDriver):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.before_put_manifest: Callable[[str], None] | None = None
+            self.put_chunk_history: list[str] = []
+
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            self.put_chunk_history.append(chunk_id)
+            super().put_chunk(chunk_id, data)
+
+        def put_manifest(self, snapshot_id: str, data: bytes) -> None:
+            if self.before_put_manifest is not None:
+                self.before_put_manifest(snapshot_id)
+            super().put_manifest(snapshot_id, data)
+
+    # Separate driver + separate PersonalCloudVaultManager instances (zero shared in-RAM state!)
+    driver_client_a = _HookedLocalDriver(shared_vault_dir)
+    driver_client_b = LocalDeviceVaultDriver(shared_vault_dir)
+    mgr_a = PersonalCloudVaultManager(
+        driver_client_a,
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    mgr_b = PersonalCloudVaultManager(
+        driver_client_b,
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+
+    # Initial snapshot v1 on disk
+    v1_bytes = b"A" * chunk_size + b"B" * chunk_size
+    (src_dir / "timeline.edl").write_bytes(v1_bytes)
+    r1 = mgr_a.push_project_snapshot(
+        project_id="shared-cinema",
+        source=src_dir,
+        master_secret=secret,
+        snapshot_id="snap-v1",
+    )
+
+    # Part 1: Cross-Process File Lease prevents mgr_b (with min_age_seconds=0.0!) from deleting
+    # mgr_a's in-flight chunks right before put_manifest, while still deleting true orphans!
+    true_orphan = "7" * 64
+    driver_client_b.put_chunk(true_orphan, b"unleased-dangling-chunk")
+    driver_client_a.put_chunk_history.clear()
+    gc_part1_deleted: list[tuple[str, ...]] = []
+
+    def _client_b_gc_with_active_lease(snap_id: str) -> None:
+        assert snap_id == "snap-v2"
+        # Client B has ZERO in-memory `_in_flight_chunks`, yet sees Client A's file lease on disk!
+        assert mgr_b.in_flight_chunks == frozenset()
+        leased_on_disk = driver_client_b.read_active_leased_chunks()
+        assert len(leased_on_disk) == 3
+        gc_rep = mgr_b.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+        gc_part1_deleted.append(gc_rep.deleted_chunk_ids)
+
+    driver_client_a.before_put_manifest = _client_b_gc_with_active_lease
+    v2_bytes = b"A" * chunk_size + b"C" * chunk_size + b"D" * 77
+    (src_dir / "timeline.edl").write_bytes(v2_bytes)
+    r2 = mgr_a.push_project_snapshot(
+        project_id="shared-cinema",
+        source=src_dir,
+        master_secret=secret,
+        parent_snapshot_id=r1.snapshot_id,
+        snapshot_id="snap-v2",
+    )
+    assert gc_part1_deleted == [(true_orphan,)]
+    # Only the 2 delta chunks (C and D) were uploaded once — 0 re-uploads needed thanks to lease!
+    assert len(driver_client_a.put_chunk_history) == 2
+    assert mgr_b.pull_project_snapshot(
+        project_id="shared-cinema",
+        master_secret=secret,
+        snapshot_id=r2.snapshot_id,
+    ).files == {"timeline.edl": v2_bytes}
+
+    # Part 2: Force lease removal right before Client B runs GC(min_age_seconds=0.0) so Client B
+    # ACTUALLY deletes Client A's newly uploaded chunks before put_manifest -> Client A heals
+    # directly from disk via `_ChunkSourceLocator(file_path, byte_offset, byte_length, ...)`!
+    driver_client_a.put_chunk_history.clear()
+    gc_part2_deleted: list[tuple[str, ...]] = []
+
+    def _client_b_gc_after_forced_lease_loss(snap_id: str) -> None:
+        assert snap_id == "snap-v3"
+        for lease_file in (shared_vault_dir / ".leases").glob("lease-*.json"):
+            lease_file.unlink()
+        gc_rep = mgr_b.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+        gc_part2_deleted.append(gc_rep.deleted_chunk_ids)
+
+    driver_client_a.before_put_manifest = _client_b_gc_after_forced_lease_loss
+    v3_bytes = b"A" * chunk_size + b"E" * chunk_size + b"F" * 55
+    (src_dir / "timeline.edl").write_bytes(v3_bytes)
+    r3 = mgr_a.push_project_snapshot(
+        project_id="shared-cinema",
+        source=src_dir,
+        master_secret=secret,
+        parent_snapshot_id=r2.snapshot_id,
+        snapshot_id="snap-v3",
+    )
+    # Client B deleted both newly uploaded chunks (E and F)...
+    assert len(gc_part2_deleted) == 1
+    assert len(gc_part2_deleted[0]) == 2
+    # ...and Client A re-read both chunks from `src_dir / "timeline.edl"` via _ChunkSourceLocator
+    # (2 initial uploads + 2 disk-locator healing uploads = 4 put_chunk calls)!
+    assert len(driver_client_a.put_chunk_history) == 4
+    assert mgr_b.pull_project_snapshot(
+        project_id="shared-cinema",
+        master_secret=secret,
+        snapshot_id=r3.snapshot_id,
+    ).files == {"timeline.edl": v3_bytes}
+
+    # Fail-closed guard: if local disk file is ALSO mutated while external GC deleted remote chunk
+    def _evict_and_mutate_local_source(_snap_id: str) -> None:
+        for lease_file in (shared_vault_dir / ".leases").glob("lease-*.json"):
+            lease_file.unlink()
+        mgr_b.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+        (src_dir / "timeline.edl").write_bytes(b"CORRUPTED_DURING_PUSH" * 20)
+
+    driver_client_a.before_put_manifest = _evict_and_mutate_local_source
+    (src_dir / "timeline.edl").write_bytes(b"A" * chunk_size + b"G" * chunk_size)
+    with pytest.raises(VaultTransportError, match="local source mutated"):
+        mgr_a.push_project_snapshot(
+            project_id="shared-cinema",
+            source=src_dir,
+            master_secret=secret,
+            parent_snapshot_id=r3.snapshot_id,
+            snapshot_id="snap-v4-aborted",
+        )
+
+    # Mid-GC cross-process lease TOCTOU guard: lease acquired during list_chunks() stops delete
+    toctou_cid = "6" * 64
+    driver_client_b.put_chunk(toctou_cid, b"cross-proc-late")
+
+    class _CrossProcMidGcDriver(LocalDeviceVaultDriver):
+        def list_chunks(self) -> list[str]:
+            driver_client_a.acquire_push_lease([toctou_cid], lease_id="late-cross-proc")
+            return [toctou_cid]
+
+    mgr_mid = PersonalCloudVaultManager(
+        _CrossProcMidGcDriver(shared_vault_dir),
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    gc_mid = mgr_mid.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+    assert gc_mid.deleted_chunk_ids == ()
+    assert driver_client_b.has_chunk(toctou_cid)
+    driver_client_a.release_push_lease("late-cross-proc")

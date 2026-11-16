@@ -18,20 +18,22 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import hmac
+import json
 import os
 import re
 import secrets
 import struct
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import zlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
     VaultSnapshotManifest,
@@ -40,6 +42,7 @@ from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     PersonalVaultError,
     VaultAuthenticationError,
     VaultQuotaExceededError,
+    VaultRevisionConflictError,
     VaultTamperDetectedError,
     VaultTransportError,
 )
@@ -108,6 +111,62 @@ class BYOSStorageDriver(Protocol):
         """Delete an unreferenced encrypted chunk identified by ``chunk_id``."""
 
 
+@dataclass(frozen=True)
+class VaultStagingJournal:
+    """Crash-recovery staging journal tracking non-secret KDF params and uploaded chunks."""
+
+    project_id: str
+    parent_snapshot_id: str | None
+    salt_hex: str
+    kdf_iterations: int
+    key_id_hex: str
+    chunk_size: int
+    updated_at_epoch: float
+    uploaded_chunk_ids: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "project_id": self.project_id,
+            "parent_snapshot_id": self.parent_snapshot_id,
+            "salt_hex": self.salt_hex,
+            "kdf_iterations": self.kdf_iterations,
+            "key_id_hex": self.key_id_hex,
+            "chunk_size": self.chunk_size,
+            "updated_at_epoch": self.updated_at_epoch,
+            "uploaded_chunk_ids": list(self.uploaded_chunk_ids),
+        }
+
+    def to_json_bytes(self) -> bytes:
+        return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    @classmethod
+    def from_json_bytes(cls, raw: bytes) -> VaultStagingJournal:
+        parsed = json.loads(raw.decode("utf-8"))
+        if not isinstance(parsed, dict) or parsed.get("schema_version") != 1:
+            raise PersonalVaultError("Unsupported staging journal schema")
+        raw_parent = parsed.get("parent_snapshot_id")
+        parent_id = None if raw_parent is None else str(raw_parent)
+        raw_chunks = parsed["uploaded_chunk_ids"]
+        if not isinstance(raw_chunks, list):
+            raise PersonalVaultError("Staging journal uploaded_chunk_ids must be a list")
+        validated_chunks = tuple(_validate_chunk_id(str(cid)) for cid in raw_chunks)
+        salt_hex = str(parsed["salt_hex"])
+        key_id_hex = str(parsed["key_id_hex"])
+        bytes.fromhex(salt_hex)
+        bytes.fromhex(key_id_hex)
+        return cls(
+            project_id=str(parsed["project_id"]),
+            parent_snapshot_id=parent_id,
+            salt_hex=salt_hex,
+            kdf_iterations=int(parsed["kdf_iterations"]),
+            key_id_hex=key_id_hex,
+            chunk_size=int(parsed["chunk_size"]),
+            updated_at_epoch=float(parsed["updated_at_epoch"]),
+            uploaded_chunk_ids=validated_chunks,
+        )
+
+
 # --------------------------------------------------------------------------- #
 # 1. LocalDeviceVaultDriver
 # --------------------------------------------------------------------------- #
@@ -132,11 +191,15 @@ class LocalDeviceVaultDriver:
         self._root_dir = raw_root.resolve()
         self._chunks_dir = self._root_dir / "chunks"
         self._manifests_dir = self._root_dir / "manifests"
+        self._leases_dir = self._root_dir / ".leases"
+        self._staging_dir = self._root_dir / ".staging"
         self._max_quota_bytes = max_quota_bytes
 
         try:
             self._chunks_dir.mkdir(parents=True, exist_ok=True)
             self._manifests_dir.mkdir(parents=True, exist_ok=True)
+            self._leases_dir.mkdir(parents=True, exist_ok=True)
+            self._staging_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise VaultTransportError(f"Cannot initialize local vault directory: {exc}") from exc
 
@@ -248,6 +311,161 @@ class LocalDeviceVaultDriver:
             path.unlink(missing_ok=True)
         except OSError as exc:
             raise VaultTransportError(f"Failed deleting manifest {snapshot_id}: {exc}") from exc
+
+    def _lease_path(self, lease_id: str) -> Path:
+        valid = _validate_snapshot_id(lease_id)
+        return self._leases_dir / f"lease-{valid}.json"
+
+    def acquire_push_lease(
+        self,
+        chunk_ids: Iterable[str] = (),
+        *,
+        project_id: str = "",
+        ttl_seconds: float = 3600.0,
+        lease_id: str | None = None,
+    ) -> str:
+        """Atomically create a cross-process lease file via ``O_CREAT | O_EXCL | O_WRONLY``."""
+        if ttl_seconds <= 0.0:
+            raise PersonalVaultError(f"Lease ttl_seconds must be positive, got {ttl_seconds}")
+        validated_chunks = sorted({_validate_chunk_id(cid) for cid in chunk_ids})
+        now = time.time()
+        effective_id = (
+            f"{os.getpid()}-{int(now * 1000)}-{secrets.token_hex(6)}"
+            if lease_id is None
+            else _validate_snapshot_id(lease_id)
+        )
+        lease_path = self._lease_path(effective_id)
+        payload = json.dumps(
+            {
+                "lease_id": effective_id,
+                "pid": os.getpid(),
+                "project_id": project_id,
+                "created_at_epoch": now,
+                "expires_at_epoch": now + ttl_seconds,
+                "ttl_seconds": ttl_seconds,
+                "chunk_ids": validated_chunks,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        try:
+            fd = os.open(lease_path, flags, 0o600)
+        except FileExistsError as exc:
+            raise VaultRevisionConflictError(
+                f"Push lease {effective_id!r} already exists in {self._leases_dir}"
+            ) from exc
+        except OSError as exc:
+            raise VaultTransportError(f"Failed creating push lease {lease_path}: {exc}") from exc
+        try:
+            os.write(fd, payload)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return effective_id
+
+    def update_push_lease(
+        self,
+        lease_id: str,
+        chunk_ids: Iterable[str],
+        *,
+        project_id: str = "",
+        ttl_seconds: float = 3600.0,
+    ) -> None:
+        """Atomically refresh TTL and in-flight ``chunk_ids`` on an active push lease."""
+        if ttl_seconds <= 0.0:
+            raise PersonalVaultError(f"Lease ttl_seconds must be positive, got {ttl_seconds}")
+        lease_path = self._lease_path(lease_id)
+        if lease_path.is_symlink() or not lease_path.is_file():
+            raise VaultTransportError(f"Active push lease not found: {lease_id}")
+        validated_chunks = sorted({_validate_chunk_id(cid) for cid in chunk_ids})
+        now = time.time()
+        payload = json.dumps(
+            {
+                "lease_id": _validate_snapshot_id(lease_id),
+                "pid": os.getpid(),
+                "project_id": project_id,
+                "created_at_epoch": now,
+                "expires_at_epoch": now + ttl_seconds,
+                "ttl_seconds": ttl_seconds,
+                "chunk_ids": validated_chunks,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        _atomic_write_file(lease_path, payload)
+
+    def release_push_lease(self, lease_id: str) -> None:
+        """Release and unlink a cross-process push lease file."""
+        lease_path = self._lease_path(lease_id)
+        with contextlib.suppress(OSError):
+            lease_path.unlink(missing_ok=True)
+
+    def read_active_leased_chunks(self, *, now_epoch: float | None = None) -> set[str]:
+        """Read unexpired in-flight chunk IDs across all cross-process lease files."""
+        effective_now = time.time() if now_epoch is None else now_epoch
+        active_chunks: set[str] = set()
+        for entry in self._leases_dir.iterdir():
+            if (
+                not entry.is_file()
+                or entry.is_symlink()
+                or not entry.name.startswith("lease-")
+                or entry.suffix != ".json"
+            ):
+                continue
+            try:
+                parsed = json.loads(entry.read_bytes().decode("utf-8"))
+                expires_at = float(parsed["expires_at_epoch"])
+                raw_ids = parsed["chunk_ids"]
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if expires_at <= effective_now:
+                with contextlib.suppress(OSError):
+                    entry.unlink(missing_ok=True)
+                continue
+            if isinstance(raw_ids, list):
+                for cid in raw_ids:
+                    cid_str = str(cid)
+                    if _CHUNK_ID_RE.fullmatch(cid_str):
+                        active_chunks.add(cid_str)
+        return active_chunks
+
+    def _staging_journal_path(self, project_id: str, parent_snapshot_id: str | None) -> Path:
+        key_bytes = f"{project_id}\x00{parent_snapshot_id or ''}".encode()
+        digest = hashlib.sha256(key_bytes).hexdigest()[:32]
+        return self._staging_dir / f"stage-{digest}.json"
+
+    def save_staging_journal(self, journal: VaultStagingJournal) -> None:
+        """Atomically persist a crash-recovery staging journal."""
+        path = self._staging_journal_path(journal.project_id, journal.parent_snapshot_id)
+        _atomic_write_file(path, journal.to_json_bytes())
+
+    def load_staging_journal(
+        self,
+        project_id: str,
+        parent_snapshot_id: str | None,
+    ) -> VaultStagingJournal | None:
+        """Load an active crash-recovery staging journal if present and valid."""
+        path = self._staging_journal_path(project_id, parent_snapshot_id)
+        if path.is_symlink() or not path.is_file():
+            return None
+        try:
+            journal = VaultStagingJournal.from_json_bytes(path.read_bytes())
+        except (OSError, ValueError, KeyError, TypeError, PersonalVaultError):
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
+            return None
+        if journal.project_id != project_id or journal.parent_snapshot_id != parent_snapshot_id:
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
+            return None
+        return journal
+
+    def clear_staging_journal(self, project_id: str, parent_snapshot_id: str | None) -> None:
+        """Remove a completed staging journal."""
+        path = self._staging_journal_path(project_id, parent_snapshot_id)
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -960,6 +1178,7 @@ __all__ = [
     "S3HttpResponse",
     "S3SigV4Config",
     "SigV4Artifacts",
+    "VaultStagingJournal",
     "compute_sigv4_signature",
     "export_snapshot_to_bundle",
 ]

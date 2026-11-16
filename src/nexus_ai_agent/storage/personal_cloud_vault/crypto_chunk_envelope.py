@@ -200,21 +200,31 @@ def derive_vault_keys(
 
 def compute_chunk_id(plaintext: bytes, key_material: VaultKeyMaterial) -> str:
     """Compute zero-knowledge convergent content-addressed chunk ID (64 hex chars)."""
-    return hmac.new(
-        key_material.chunk_id_key,
-        b"nagar-pcv-chunk-id-v1|" + plaintext,
-        hashlib.sha256,
-    ).hexdigest()
+    mac = hmac.new(key_material.chunk_id_key, b"nagar-pcv-chunk-id-v1|", hashlib.sha256)
+    mac.update(plaintext)
+    return mac.hexdigest()
 
 
-def compute_file_mac(rel_path: str, file_bytes: bytes, key_material: VaultKeyMaterial) -> str:
-    """Compute keyed HMAC-SHA256 over a file's normalized path and full plaintext."""
+def init_streaming_file_mac(
+    rel_path: str,
+    total_size: int,
+    key_material: VaultKeyMaterial,
+) -> hmac.HMAC:
+    """Initialize a streaming HMAC-SHA256 context matching :func:`compute_file_mac`."""
     normalized = normalize_relative_vault_path(rel_path)
+    if total_size < 0:
+        raise PersonalVaultError(f"total_size must be non-negative, got {total_size}")
     mac = hmac.new(key_material.mac_key, b"nagar-pcv-file-v1|", hashlib.sha256)
     path_bytes = normalized.encode("utf-8")
     mac.update(struct.pack(">I", len(path_bytes)))
     mac.update(path_bytes)
-    mac.update(struct.pack(">Q", len(file_bytes)))
+    mac.update(struct.pack(">Q", total_size))
+    return mac
+
+
+def compute_file_mac(rel_path: str, file_bytes: bytes, key_material: VaultKeyMaterial) -> str:
+    """Compute keyed HMAC-SHA256 over a file's normalized path and full plaintext."""
+    mac = init_streaming_file_mac(rel_path, len(file_bytes), key_material)
     mac.update(file_bytes)
     return mac.hexdigest()
 
@@ -227,8 +237,12 @@ def split_into_chunks(data: bytes, chunk_size: int = DEFAULT_CHUNK_SIZE) -> tupl
     return tuple(data[offset : offset + chunk_size] for offset in range(0, len(data), chunk_size))
 
 
+_CTR_STRIDE_BLOCKS = 128
+_CTR_STRIDE_BYTES = _CTR_STRIDE_BLOCKS * SHA256_BLOCK_BYTES  # 4 KiB scratch buffer
+
+
 def sha256_ctr_crypt(enc_key: bytes, nonce: bytes, payload: bytes) -> bytes:
-    """Encrypt or decrypt ``payload`` using SHA-256 CTR mode (``K_enc || nonce || counter``)."""
+    """Encrypt or decrypt ``payload`` using SHA-256 CTR mode with O(1) scratch memory."""
     if len(enc_key) != 32:
         raise VaultAuthenticationError("enc_key must be 32 bytes")
     if len(nonce) != NONCE_BYTES:
@@ -237,19 +251,27 @@ def sha256_ctr_crypt(enc_key: bytes, nonce: bytes, payload: bytes) -> bytes:
         return b""
 
     total_len = len(payload)
-    num_blocks = (total_len + SHA256_BLOCK_BYTES - 1) // SHA256_BLOCK_BYTES
     base_hasher = hashlib.sha256(enc_key + nonce)
     pack_u64 = struct.Struct(">Q").pack
+    out = bytearray(total_len)
+    view = memoryview(payload)
+    counter = 0
 
-    blocks: list[bytes] = []
-    for counter in range(num_blocks):
-        block_hasher = base_hasher.copy()
-        block_hasher.update(pack_u64(counter))
-        blocks.append(block_hasher.digest())
+    for offset in range(0, total_len, _CTR_STRIDE_BYTES):
+        slice_view = view[offset : offset + _CTR_STRIDE_BYTES]
+        slice_len = len(slice_view)
+        blocks_needed = (slice_len + SHA256_BLOCK_BYTES - 1) // SHA256_BLOCK_BYTES
+        ks_parts: list[bytes] = []
+        for _ in range(blocks_needed):
+            block_hasher = base_hasher.copy()
+            block_hasher.update(pack_u64(counter))
+            ks_parts.append(block_hasher.digest())
+            counter += 1
+        ks = b"".join(ks_parts)[:slice_len]
+        xored = int.from_bytes(slice_view, "big") ^ int.from_bytes(ks, "big")
+        out[offset : offset + slice_len] = xored.to_bytes(slice_len, "big")
 
-    keystream = b"".join(blocks)[:total_len]
-    xored_int = int.from_bytes(payload, "big") ^ int.from_bytes(keystream, "big")
-    return xored_int.to_bytes(total_len, "big")
+    return bytes(out)
 
 
 def _build_envelope_header(chunk_id: str, *, flags: int = _FLAG_NONE) -> bytes:
@@ -893,6 +915,7 @@ __all__ = [
     "generate_vault_salt",
     "hkdf_expand_sha256",
     "hkdf_extract_sha256",
+    "init_streaming_file_mac",
     "normalize_relative_vault_path",
     "sha256_ctr_crypt",
     "split_into_chunks",

@@ -631,3 +631,85 @@ def test_manifest_deserialization_and_integrity_structural_branches() -> None:
 
     with pytest.raises(VaultTamperDetectedError):
         verify_manifest_integrity(_resign(replace(manifest, merkle_root="0" * 64)), km)
+
+
+def test_n4_n5_official_rfc5869_hkdf_and_pbkdf2_hmac_sha256_standard_vectors() -> None:
+    """Verify HKDF-SHA256 against IETF RFC 5869 and PBKDF2-HMAC-SHA256 standard vectors."""
+    from nexus_ai_agent.storage.personal_cloud_vault import init_streaming_file_mac
+
+    # IETF RFC 5869 Appendix A.1 — Test Case 1 (Basic test case with SHA-256)
+    ikm_tc1 = bytes([0x0B] * 22)
+    salt_tc1 = bytes.fromhex("000102030405060708090a0b0c")
+    info_tc1 = bytes.fromhex("f0f1f2f3f4f5f6f7f8f9")
+    prk_tc1 = hkdf_extract_sha256(salt_tc1, ikm_tc1)
+    okm_tc1 = hkdf_expand_sha256(prk_tc1, info_tc1, 42)
+    assert prk_tc1.hex() == ("077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5")
+    assert okm_tc1.hex() == (
+        "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+    )
+
+    # IETF RFC 5869 Appendix A.3 — Test Case 3 (Zero-length salt and info with SHA-256)
+    prk_tc3 = hkdf_extract_sha256(b"", ikm_tc1)
+    okm_tc3 = hkdf_expand_sha256(prk_tc3, b"", 42)
+    assert prk_tc3.hex() == ("19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04")
+    assert okm_tc3.hex() == (
+        "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"
+    )
+
+    # RFC 7914 §11 / RFC 6070-input / NIST standard PBKDF2-HMAC-SHA256 vectors
+    pbkdf2_vectors = (
+        (
+            b"password",
+            b"salt",
+            1,
+            32,
+            "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b",
+        ),
+        (
+            b"password",
+            b"salt",
+            2,
+            32,
+            "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43",
+        ),
+        (
+            b"password",
+            b"salt",
+            4096,
+            32,
+            "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a",
+        ),
+        (
+            b"passwordPASSWORDpassword",
+            b"saltSALTsaltSALTsaltSALTsaltSALTsalt",
+            4096,
+            40,
+            "348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9",
+        ),
+    )
+    for pwd, slt, rounds, dk_len, expected_hex in pbkdf2_vectors:
+        derived = hashlib.pbkdf2_hmac("sha256", pwd, slt, rounds, dk_len)
+        assert derived.hex() == expected_hex
+
+    # Verify derive_vault_keys feeds standard PBKDF2-HMAC-SHA256 directly into RFC 5869 HKDF
+    vault_salt = b"saltSALTsaltSALTsaltSALTsaltSALT"  # 32 bytes
+    km = derive_vault_keys(b"passwordPASSWORDpassword", vault_salt, iterations=100_000)
+    expected_ikm = hashlib.pbkdf2_hmac(
+        "sha256", b"passwordPASSWORDpassword", vault_salt, 100_000, 64
+    )
+    expected_prk = hkdf_extract_sha256(vault_salt, expected_ikm)
+    assert km.enc_key == hkdf_expand_sha256(expected_prk, b"nagar-pcv-v1/K_enc", 32)
+    assert km.mac_key == hkdf_expand_sha256(expected_prk, b"nagar-pcv-v1/K_mac", 32)
+    assert km.chunk_id_key == hkdf_expand_sha256(expected_prk, b"nagar-pcv-v1/K_chunk_id", 32)
+
+    # Multi-stride (>4 KiB) SHA-256 CTR round-trip & streaming file MAC consistency
+    multi_stride = bytes((i * 37) & 0xFF for i in range(9000))
+    ct = sha256_ctr_crypt(km.enc_key, b"\xaa" * 16, multi_stride)
+    assert sha256_ctr_crypt(km.enc_key, b"\xaa" * 16, ct) == multi_stride
+
+    smac = init_streaming_file_mac("clips/scene.mp4", len(multi_stride), km)
+    smac.update(multi_stride[:4096])
+    smac.update(multi_stride[4096:])
+    assert smac.hexdigest() == compute_file_mac("clips/scene.mp4", multi_stride, km)
+    with pytest.raises(PersonalVaultError):
+        init_streaming_file_mac("clips/scene.mp4", -1, km)

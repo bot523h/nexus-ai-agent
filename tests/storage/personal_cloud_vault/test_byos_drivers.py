@@ -669,3 +669,123 @@ def test_portable_bundle_binary_format_tamper_edges(
     )
     _write_and_expect_tamper("trailing_idx", _pack_custom_bundle(1, b"hello", valid_idx))
     assert struct.calcsize(">8sHIQQ") == 30
+
+
+def test_n2_local_driver_atomic_cross_process_lease_and_staging_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify O_CREAT|O_EXCL file leases (PID, TTL, conflict) and VaultStagingJournal."""
+    import json
+    import os
+    import time
+
+    from nexus_ai_agent.storage.personal_cloud_vault import (
+        VaultRevisionConflictError,
+        VaultStagingJournal,
+    )
+
+    driver_a = LocalDeviceVaultDriver(tmp_path / "shared_vault", max_quota_bytes=4096)
+    driver_b = LocalDeviceVaultDriver(tmp_path / "shared_vault", max_quota_bytes=4096)
+
+    with pytest.raises(PersonalVaultError):
+        driver_a.acquire_push_lease(ttl_seconds=0.0)
+
+    c1 = "a" * 64
+    c2 = "b" * 64
+    lease_id = driver_a.acquire_push_lease(
+        [c1],
+        project_id="cinema-proj",
+        ttl_seconds=120.0,
+        lease_id="push-lease-01",
+    )
+    assert lease_id == "push-lease-01"
+    # Lease and staging files never count against user storage quota
+    assert driver_a.used_bytes() == 0
+
+    # Atomic O_CREAT | O_EXCL collision rejects duplicate lease_id
+    with pytest.raises(VaultRevisionConflictError):
+        driver_b.acquire_push_lease([c1], lease_id="push-lease-01")
+
+    # Inspect raw lease file on disk: must contain PID, TTL expiration, and chunk_ids
+    lease_file = driver_a.root_dir / ".leases" / "lease-push-lease-01.json"
+    raw_lease = json.loads(lease_file.read_text(encoding="utf-8"))
+    assert raw_lease["pid"] == os.getpid()
+    assert raw_lease["expires_at_epoch"] > raw_lease["created_at_epoch"]
+    assert raw_lease["chunk_ids"] == [c1]
+
+    # Second process/driver instance sees leased chunks and updated chunks
+    assert driver_b.read_active_leased_chunks() == {c1}
+    driver_a.update_push_lease(lease_id, [c1, c2], project_id="cinema-proj", ttl_seconds=60.0)
+    assert driver_b.read_active_leased_chunks() == {c1, c2}
+
+    with pytest.raises(PersonalVaultError):
+        driver_a.update_push_lease(lease_id, [c1], ttl_seconds=-1.0)
+    with pytest.raises(VaultTransportError):
+        driver_a.update_push_lease("missing-lease", [c1])
+
+    # Malformed / non-lease files in .leases are ignored; expired leases auto-clean
+    (driver_a.root_dir / ".leases" / "ignore.txt").write_text("x", encoding="utf-8")
+    (driver_a.root_dir / ".leases" / "lease-corrupt.json").write_text("{bad", encoding="utf-8")
+    (driver_a.root_dir / ".leases" / "lease-bad-ids.json").write_text(
+        json.dumps({"expires_at_epoch": time.time() + 999, "chunk_ids": ["not-hex"]}),
+        encoding="utf-8",
+    )
+    (driver_a.root_dir / ".leases" / "lease-nonlist.json").write_text(
+        json.dumps({"expires_at_epoch": time.time() + 999, "chunk_ids": "bad"}),
+        encoding="utf-8",
+    )
+    assert driver_b.read_active_leased_chunks() == {c1, c2}
+
+    # Simulate TTL expiration into the future -> active set empty & expired lease unlinked
+    future_now = time.time() + 3600.0
+    assert driver_b.read_active_leased_chunks(now_epoch=future_now) == set()
+    assert not lease_file.exists()
+    driver_a.release_push_lease(lease_id)
+
+    # Staging journal round-trip, corrupt recovery, and clear
+    assert driver_a.load_staging_journal("cinema-proj", None) is None
+    journal = VaultStagingJournal(
+        project_id="cinema-proj",
+        parent_snapshot_id=None,
+        salt_hex="11" * 32,
+        kdf_iterations=100_000,
+        key_id_hex="22" * 16,
+        chunk_size=65_536,
+        updated_at_epoch=time.time(),
+        uploaded_chunk_ids=(c1, c2),
+    )
+    driver_a.save_staging_journal(journal)
+    assert driver_a.used_bytes() == 0
+    loaded = driver_b.load_staging_journal("cinema-proj", None)
+    assert loaded == journal
+
+    with pytest.raises(PersonalVaultError):
+        VaultStagingJournal.from_json_bytes(b'{"schema_version": 99}')
+    with pytest.raises(PersonalVaultError):
+        VaultStagingJournal.from_json_bytes(
+            json.dumps({**journal.to_dict(), "uploaded_chunk_ids": "bad"}).encode("utf-8")
+        )
+
+    # Corrupt journal file & mismatched project_id inside journal file both self-clean
+    stage_files = list((driver_a.root_dir / ".staging").glob("stage-*.json"))
+    assert len(stage_files) == 1
+    stage_files[0].write_bytes(
+        json.dumps({**journal.to_dict(), "project_id": "wrong-proj"}).encode("utf-8")
+    )
+    assert driver_b.load_staging_journal("cinema-proj", None) is None
+    driver_a.save_staging_journal(journal)
+    stage_files = list((driver_a.root_dir / ".staging").glob("stage-*.json"))
+    stage_files[0].write_bytes(b"{corrupt")
+    assert driver_b.load_staging_journal("cinema-proj", None) is None
+
+    driver_a.save_staging_journal(journal)
+    driver_a.clear_staging_journal("cinema-proj", None)
+    assert driver_b.load_staging_journal("cinema-proj", None) is None
+
+    def _fail_os_open(*_args: object, **_kwargs: object) -> int:
+        raise PermissionError("disk read-only")
+
+    monkeypatch.setattr(os, "open", _fail_os_open)
+    with pytest.raises(VaultTransportError):
+        driver_a.acquire_push_lease([c1], lease_id="ro-lease")
