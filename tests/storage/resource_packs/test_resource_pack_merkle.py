@@ -278,7 +278,9 @@ def test_integrity_check_reports_every_dishonest_total() -> None:
 
 def test_verify_installed_pack_accepts_an_exact_install(tmp_path: Path) -> None:
     manifest, blobs = _three_file_pack()
-    report = verify_installed_pack(manifest, _install(manifest, blobs, tmp_path / "ok"))
+    report = verify_installed_pack(
+        manifest, _install(manifest, blobs, tmp_path / "ok"), allow_unsigned=True
+    )
     assert report.verified_files == 3
     assert report.verified_bytes == manifest.total_installed_bytes
     assert report.merkle_root == manifest.merkle_root and not report.signature_verified
@@ -289,7 +291,9 @@ def test_changing_total_leaves_fails_verification(tmp_path: Path) -> None:
     install = _install(manifest, blobs, tmp_path / "pack")
     for count in (2, 4):
         with pytest.raises(PackVerificationError, match="total_leaves"):
-            verify_installed_pack(replace(manifest, total_leaves=count), install)
+            verify_installed_pack(
+                replace(manifest, total_leaves=count), install, allow_unsigned=True
+            )
 
 
 @pytest.mark.parametrize("victim", ["a/one.bin", "b/two.bin", "c.bin"])
@@ -301,7 +305,7 @@ def test_flipping_one_byte_in_any_file_fails_verification(tmp_path: Path, victim
     data[len(data) // 2] ^= 0x01
     path.write_bytes(bytes(data))
     with pytest.raises(PackVerificationError, match=f"{victim}: sha256 mismatch"):
-        verify_installed_pack(manifest, install)
+        verify_installed_pack(manifest, install, allow_unsigned=True)
 
 
 def test_missing_truncated_extra_and_symlinked_files_fail(tmp_path: Path) -> None:
@@ -312,7 +316,7 @@ def test_missing_truncated_extra_and_symlinked_files_fail(tmp_path: Path) -> Non
     (install / "intruder.so").write_bytes(b"\x7fELF")
     os.symlink(install / "a/one.bin", install / "link.bin")
     with pytest.raises(PackVerificationError) as info:
-        verify_installed_pack(manifest, install)
+        verify_installed_pack(manifest, install, allow_unsigned=True)
     text = "\n".join(info.value.problems)
     assert "c.bin: missing" in text
     assert "b/two.bin: size 5" in text
@@ -323,7 +327,7 @@ def test_missing_truncated_extra_and_symlinked_files_fail(tmp_path: Path) -> Non
 def test_missing_install_directory_fails(tmp_path: Path) -> None:
     manifest, _ = _three_file_pack()
     with pytest.raises(PackVerificationError, match="install directory missing"):
-        verify_installed_pack(manifest, tmp_path / "nowhere")
+        verify_installed_pack(manifest, tmp_path / "nowhere", allow_unsigned=True)
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFOs only")
@@ -332,7 +336,7 @@ def test_special_files_are_rejected(tmp_path: Path) -> None:
     install = _install(manifest, blobs, tmp_path / "pack")
     os.mkfifo(install / "pipe")
     with pytest.raises(PackVerificationError, match="pipe: not a regular file"):
-        verify_installed_pack(manifest, install)
+        verify_installed_pack(manifest, install, allow_unsigned=True)
 
 
 def test_mirror_fixture_builds_consistent_manifests(mirror: PackMirror) -> None:

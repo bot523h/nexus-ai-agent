@@ -9,6 +9,7 @@ ROOT = Path(__file__).parents[2]
 WEB_PKG = ROOT / "src" / "nexus_ai_agent" / "web"
 SESSION = ROOT / "src" / "nexus_ai_agent" / "api" / "studio_session.py"
 DELIVERY = ROOT / "src" / "nexus_ai_agent" / "api" / "studio_web.py"
+PACK_STATUS = ROOT / "src" / "nexus_ai_agent" / "api" / "studio_packs.py"
 
 #: Execution/authority modules the web layer must never import directly.
 FORBIDDEN = (
@@ -49,6 +50,31 @@ def test_session_module_adds_no_second_credential_or_store() -> None:
     assert "os.environ" not in text and "getenv" not in text  # no new secret/setting
     for forbidden in ("sqlite", "aiosqlite", "redis", "open(", "write_text", "pickle"):
         assert forbidden not in text, forbidden
+
+
+def test_the_pack_status_module_reads_storage_and_nothing_else() -> None:
+    """The one module allowed to touch storage from the Studio surface.
+
+    It exists so ``studio_web`` does not have to: the report is read-only, so the
+    module may import ``nexus_ai_agent.storage.resource_packs`` and must never
+    import the queue, the executor or an agent — reading a pack's integrity is
+    not a licence to run anything.
+    """
+    imports = _imports(PACK_STATUS)
+    assert "nexus_ai_agent.storage.resource_packs" in imports
+    forbidden = (
+        "nexus_ai_agent.jobs",
+        "nexus_ai_agent.creative",
+        "nexus_ai_agent.application",
+        "nexus_ai_agent.agents",
+        "nexus_ai_agent.bot",
+        "nexus_ai_agent.llm",
+    )
+    bad = {module for module in imports if module.startswith(forbidden)}
+    assert not bad, f"studio_packs imports {sorted(bad)}"
+    text = PACK_STATUS.read_text(encoding="utf-8")
+    for forbidden_text in ("subprocess", "os.system", "write_text", "write_bytes", "unlink"):
+        assert forbidden_text not in text, forbidden_text
 
 
 def test_delivery_module_never_writes_or_executes() -> None:

@@ -92,7 +92,7 @@ def test_core_pack_hydrates_on_disk_to_the_manifest_digests(tmp_path: Path) -> N
         path = hydrate_entry_to_store(entry, store)
         assert hashlib.sha256(path.read_bytes()).hexdigest() == entry.sha256
         store.materialize(entry.sha256, install / entry.relative_path, prefer_hardlink=False)
-    report = verify_installed_pack(manifest, install)
+    report = verify_installed_pack(manifest, install, allow_unsigned=True)
     assert report.verified_files == 3
     assert set(store.index()) == {e.sha256 for e in entries}
 

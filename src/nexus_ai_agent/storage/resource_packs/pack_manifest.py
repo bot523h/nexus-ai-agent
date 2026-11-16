@@ -70,6 +70,7 @@ __all__ = [
     "node_hash",
     "sha256_file",
     "sign_manifest",
+    "signature_required",
     "verify_installed_pack",
     "verify_manifest_integrity",
     "verify_manifest_signature",
@@ -548,6 +549,34 @@ def sign_manifest(manifest: ResourcePackManifest, private_key: bytes) -> Resourc
     return replace(manifest, signature=signature.hex())
 
 
+def signature_required(*, trusted_public_key: bytes | None, allow_unsigned: bool = False) -> bool:
+    """Decide — once, in one place — whether a manifest signature must verify.
+
+    Fail-closed is the default: with no trusted key and no explicit opt-in this
+    raises instead of silently accepting an unauthenticated manifest.  The three
+    outcomes are deliberate and distinct:
+
+    * a trusted key is configured → the signature **must** verify;
+    * ``allow_unsigned=True`` → the caller has said, in code, that this deployment
+      runs without pack signing (tests, air-gapped local mirrors); the manifest is
+      still checked for integrity, only the signature is skipped;
+    * neither → :class:`SignatureVerificationError`.  "No key configured" is a
+      configuration failure, not an absence of tampering.
+
+    Keeping the policy in one function matters because the alternative — an
+    ``if key is not None`` at each call site — is exactly how a fail-open default
+    reappears: one forgotten branch and unauthenticated bytes are installed.
+    """
+    if trusted_public_key is not None:
+        return True
+    if allow_unsigned:
+        return False
+    raise SignatureVerificationError(
+        "trusted_public_key is required for fail-closed pack verification "
+        "(pass allow_unsigned=True only for an explicitly unsigned deployment)"
+    )
+
+
 def verify_manifest_signature(manifest: ResourcePackManifest, public_key: bytes) -> None:
     """Raise :class:`SignatureVerificationError` unless the signature verifies."""
     if not isinstance(public_key, bytes) or len(public_key) != 32:
@@ -613,18 +642,25 @@ def verify_installed_pack(
     install_dir: Path,
     *,
     trusted_public_key: bytes | None = None,
+    allow_unsigned: bool = False,
 ) -> PackVerificationReport:
     """Fail-closed verification of an installed pack against its manifest.
 
     Checks, in order: declared totals and locked root; the Ed25519 signature
-    (mandatory when *trusted_public_key* is given); every file's presence,
-    type, size and SHA-256; the absence of unexpected files or symlinks; and
-    finally the Merkle root recomputed from the **observed** on-disk bytes.
-    Any single discrepancy raises :class:`PackVerificationError`.
+    (mandatory when *trusted_public_key* is given, and — since the fail-closed
+    change — mandatory unless the caller passes ``allow_unsigned=True``); every
+    file's presence, type, size and SHA-256; the absence of unexpected files or
+    symlinks; and finally the Merkle root recomputed from the **observed**
+    on-disk bytes.  Any single discrepancy raises :class:`PackVerificationError`.
+
+    ``trusted_public_key=None`` used to mean "skip the signature".  It now means
+    "this deployment has no trust root", which raises
+    :class:`SignatureVerificationError` before a single byte on disk is read.
     """
     problems = _integrity_problems(manifest)
     signature_verified = False
-    if trusted_public_key is not None:
+    if signature_required(trusted_public_key=trusted_public_key, allow_unsigned=allow_unsigned):
+        assert trusted_public_key is not None  # implied by signature_required()
         verify_manifest_signature(manifest, trusted_public_key)
         signature_verified = True
     if not install_dir.is_dir() or install_dir.is_symlink():

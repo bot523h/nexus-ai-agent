@@ -56,6 +56,7 @@ def _manager(
         clock=FakeClock(),
         chunk_size=4096,
         **kwargs,  # type: ignore[arg-type]
+        allow_unsigned=True,
     )
     return manager, source
 
@@ -248,6 +249,7 @@ def test_real_http_resume_across_two_sync_calls(mirror: PackMirror, tmp_path: Pa
             HttpRangePackSource(server.base_url),
             disk_free_probe=lambda _: PLENTY,
             max_attempts=1,
+            allow_unsigned=True,
         )
         server.cut_after_bytes = size // 2
         with pytest.raises(RangeFetchInterrupted):

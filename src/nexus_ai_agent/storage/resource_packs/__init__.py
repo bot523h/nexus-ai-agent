@@ -11,6 +11,13 @@ and activates the result atomically, only after full verification.
 from __future__ import annotations
 
 from .content_store import LocalContentStore
+from .delivery import (
+    InstalledPackStatus,
+    PackDeliveryState,
+    PackSignatureState,
+    delivery_report,
+    delivery_statuses,
+)
 from .delta_and_hydration_planner import (
     PlannedEntry,
     StorageGuardStatus,
@@ -51,6 +58,7 @@ from .pack_manifest import (
     node_hash,
     sha256_file,
     sign_manifest,
+    signature_required,
     verify_installed_pack,
     verify_manifest_integrity,
     verify_manifest_signature,
@@ -89,6 +97,7 @@ __all__ = [
     "FetchOutcome",
     "GateState",
     "HttpRangePackSource",
+    "InstalledPackStatus",
     "InsufficientStorageError",
     "IntegrityError",
     "LocalContentStore",
@@ -96,7 +105,9 @@ __all__ = [
     "LoginResourceGateStatus",
     "MANIFEST_SCHEMA_VERSION",
     "ManifestValidationError",
+    "PackDeliveryState",
     "PackGateStatus",
+    "PackSignatureState",
     "PackSource",
     "PackSyncError",
     "PackTier",
@@ -131,6 +142,8 @@ __all__ = [
     "canonical_manifest_signing_bytes",
     "compute_merkle_root",
     "default_blob_key",
+    "delivery_report",
+    "delivery_statuses",
     "describe_seed_entry",
     "hydrate_entry_to_store",
     "hydrate_seed",
@@ -143,6 +156,7 @@ __all__ = [
     "node_hash",
     "sha256_file",
     "sign_manifest",
+    "signature_required",
     "verify_installed_pack",
     "verify_manifest_integrity",
     "verify_manifest_signature",

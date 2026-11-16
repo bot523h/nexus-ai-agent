@@ -46,6 +46,7 @@ from .pack_manifest import (
     ResourcePackManifest,
     manifest_from_json,
     manifest_to_json,
+    signature_required,
     verify_installed_pack,
     verify_manifest_integrity,
     verify_manifest_signature,
@@ -255,6 +256,7 @@ class ResourcePackSyncManager:
         source: PackSource,
         *,
         trusted_public_key: bytes | None = None,
+        allow_unsigned: bool = False,
         disk_free_probe: Callable[[Path], int] = _default_disk_free,
         clock: Callable[[], float] = time.monotonic,
         chunk_size: int = 256 * 1024,
@@ -267,7 +269,12 @@ class ResourcePackSyncManager:
             if manifest.pack_id in self._catalog:
                 raise ValueError(f"duplicate pack_id in catalog: {manifest.pack_id!r}")
             self._catalog[manifest.pack_id] = manifest
+        # Refuse to exist in a state where verification would be skipped by
+        # omission: a manager without a trust root must have been asked for
+        # explicitly.  Raising here means no sync can start before the decision.
+        signature_required(trusted_public_key=trusted_public_key, allow_unsigned=allow_unsigned)
         self.trusted_public_key = trusted_public_key
+        self.allow_unsigned = allow_unsigned
         self.store = LocalContentStore(self.root / "cas")
         self.fetcher = ResumableRangeFetcher(
             source, self.store, chunk_size=chunk_size, max_attempts=max_attempts
@@ -338,7 +345,10 @@ class ResourcePackSyncManager:
 
     def _verify_target(self, manifest: ResourcePackManifest) -> None:
         verify_manifest_integrity(manifest)
-        if self.trusted_public_key is not None:
+        if signature_required(
+            trusted_public_key=self.trusted_public_key, allow_unsigned=self.allow_unsigned
+        ):
+            assert self.trusted_public_key is not None  # implied by signature_required()
             verify_manifest_signature(manifest, self.trusted_public_key)
 
     # -- login gate -----------------------------------------------------------
@@ -360,7 +370,10 @@ class ResourcePackSyncManager:
         else:
             try:
                 verify_installed_pack(
-                    loaded[0], loaded[1], trusted_public_key=self.trusted_public_key
+                    loaded[0],
+                    loaded[1],
+                    trusted_public_key=self.trusted_public_key,
+                    allow_unsigned=self.allow_unsigned,
                 )
                 state = GateState.READY
             except PackVerificationError:
@@ -448,7 +461,10 @@ class ResourcePackSyncManager:
         if loaded is not None and loaded[0].merkle_root == target.merkle_root:
             try:
                 report = verify_installed_pack(
-                    target, loaded[1], trusted_public_key=self.trusted_public_key
+                    target,
+                    loaded[1],
+                    trusted_public_key=self.trusted_public_key,
+                    allow_unsigned=self.allow_unsigned,
                 )
             except PackVerificationError:
                 pass  # damaged install of the right version: repair below
@@ -494,7 +510,10 @@ class ResourcePackSyncManager:
                 )
             reporter.emit(SyncStage.VERIFYING)
             report = verify_installed_pack(
-                target, staging, trusted_public_key=self.trusted_public_key
+                target,
+                staging,
+                trusted_public_key=self.trusted_public_key,
+                allow_unsigned=self.allow_unsigned,
             )
             reporter.emit(SyncStage.ACTIVATING)
             _write_atomic(manifest_path, manifest_to_json(target))

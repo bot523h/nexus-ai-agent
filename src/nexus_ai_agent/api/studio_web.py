@@ -30,6 +30,7 @@ from fastapi.responses import RedirectResponse
 
 from nexus_ai_agent import web as web_package
 from nexus_ai_agent.api import studio_session
+from nexus_ai_agent.api.studio_packs import resource_pack_report
 from nexus_ai_agent.api.studio_session import require_studio_caller
 
 _PKG_ROOT = Path(__file__).resolve().parents[1]
@@ -191,6 +192,15 @@ CAPABILITIES: tuple[dict[str, str], ...] = (
         "evidence": "src/nexus_ai_agent/creative/assets/",
     },
     {
+        "id": "resource_packs",
+        "status": "VERIFIED_WITH_LIMITATIONS",
+        "reason": "GET /api/studio/resource-packs re-verifies every installed resource pack on "
+        "disk against its signed manifest and reports one row per pack (ready, unsigned_allowed "
+        "or signature_required). Limitations: it is read-only and only reports packs under "
+        "NEXUS_RESOURCE_PACK_ROOT — the app can neither install, repair nor activate a pack.",
+        "evidence": "src/nexus_ai_agent/storage/resource_packs/delivery.py",
+    },
+    {
         "id": "artifact_download",
         "status": "DEFERRED",
         "reason": "No authorized artifact download route; the app shows the passport "
@@ -222,6 +232,23 @@ async def overview() -> dict[str, object]:
         "capabilities": list(CAPABILITIES),
         "server_time": datetime.now(timezone.utc).isoformat(),
         "build": build_id(),
+    }
+
+
+@api_router.get("/resource-packs", dependencies=[Depends(require_studio_caller)])
+async def resource_packs() -> dict[str, object]:
+    """Installed-pack integrity and signature state, re-verified on every request.
+
+    The projection lives in :mod:`nexus_ai_agent.product.studio_resource_packs`
+    because this module may not import the storage layer (see
+    ``tests/architecture/test_studio_web_boundary.py``). The point of the route is
+    that the fail-closed signature policy is *observable*: a deployment with no
+    trusted key reports every pack as ``signature_required`` instead of quietly
+    offering unauthenticated bytes to a render.
+    """
+    return {
+        **resource_pack_report(),
+        "server_time": datetime.now(timezone.utc).isoformat(),
     }
 
 
