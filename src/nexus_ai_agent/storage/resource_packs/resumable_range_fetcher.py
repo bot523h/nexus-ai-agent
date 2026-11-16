@@ -33,7 +33,7 @@ from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import IO, BinaryIO, Protocol
+from typing import IO, Any, BinaryIO, Protocol, cast
 
 from .content_store import LocalContentStore
 from .errors import IntegrityError, RangeFetchError, RangeFetchInterrupted, UnsafeSourceError
@@ -151,6 +151,8 @@ class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
     connection to the new location — and the refused response is closed.
     """
 
+    handler_order = 0
+
     def __init__(self, policy: _SourcePolicy) -> None:
         self._policy = policy
 
@@ -173,6 +175,34 @@ class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+SecurityRedirectHandler = _AllowlistRedirectHandler
+
+
+def _wrap_opener_with_redirect_guard(
+    opener: urllib.request.OpenerDirector, policy: _SourcePolicy
+) -> urllib.request.OpenerDirector:
+    """Ensure every caller-supplied opener enforces ``_AllowlistRedirectHandler``."""
+    guard = _AllowlistRedirectHandler(policy)
+    opener_any = cast(Any, opener)
+    if type(opener) is urllib.request.OpenerDirector:
+        cloned = urllib.request.OpenerDirector()
+        for handler in opener_any.handlers:
+            if not isinstance(handler, urllib.request.HTTPRedirectHandler):
+                cloned.add_handler(handler)
+        cloned.add_handler(guard)
+        return cloned
+    opener_any.handlers[:] = [
+        h for h in opener_any.handlers if not isinstance(h, urllib.request.HTTPRedirectHandler)
+    ]
+    for code_map in opener_any.handle_error.values():
+        for code, handlers in list(code_map.items()):
+            code_map[code] = [
+                h for h in handlers if not isinstance(h, urllib.request.HTTPRedirectHandler)
+            ]
+    opener.add_handler(guard)
+    return opener
+
+
 class HttpRangePackSource:
     """HTTP(S) source with ``Range`` support, on :mod:`urllib.request` only.
 
@@ -183,8 +213,8 @@ class HttpRangePackSource:
     ``http``.  Redirects are refused unless ``allow_redirects=True``, and even
     then only to allowed hosts/schemes.  Every violation raises
     :class:`UnsafeSourceError` before a request is sent to the forbidden
-    destination.  A caller-supplied *opener* bypasses the redirect handler and
-    is the caller's responsibility.
+    destination; caller-supplied *opener* instances also have
+    :class:`SecurityRedirectHandler` and response-URL checks enforced.
     """
 
     def __init__(
@@ -215,8 +245,10 @@ class HttpRangePackSource:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.headers = dict(headers or {})
-        self._opener = opener or urllib.request.build_opener(
-            _AllowlistRedirectHandler(self._policy)
+        self._opener = (
+            _wrap_opener_with_redirect_guard(opener, self._policy)
+            if opener is not None
+            else urllib.request.build_opener(_AllowlistRedirectHandler(self._policy))
         )
 
     @property
@@ -243,6 +275,27 @@ class HttpRangePackSource:
                 f"transport failure for {key!r}: {error}", bytes_on_disk=offset
             ) from error
         status = int(response.status)
+        if status in (301, 302, 303, 307, 308):
+            location = response.headers.get("Location", "")
+            response.close()
+            if not self._policy.follow:
+                raise UnsafeSourceError(f"HTTP {status} redirect refused (allow_redirects=False)")
+            self._policy.check(urllib.parse.urljoin(url, location) if location else "")
+            raise RangeFetchError(f"unfollowed redirect HTTP {status} for {key!r}", status=status)
+        final_url = getattr(response, "url", None)
+        if final_url is None and hasattr(response, "geturl"):
+            final_url = response.geturl()
+        if isinstance(final_url, str) and final_url and final_url != url:
+            if not self._policy.follow:
+                response.close()
+                raise UnsafeSourceError(
+                    f"HTTP redirect to {final_url!r} refused (allow_redirects=False)"
+                )
+            try:
+                self._policy.check(final_url)
+            except UnsafeSourceError:
+                response.close()
+                raise
         if status == 206:
             match = _CONTENT_RANGE_RE.fullmatch(response.headers.get("Content-Range", "").strip())
             if match is None or int(match.group(1)) != offset:

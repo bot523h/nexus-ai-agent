@@ -98,7 +98,7 @@ class PortalAperture:
 
     @property
     def centroid(self) -> np.ndarray:
-        return self.vertices.mean(axis=0)
+        return np.asarray(self.vertices.mean(axis=0), dtype=np.float64)
 
     def signed_distance(self, point: np.ndarray) -> float:
         """Signed distance of ``point`` along the inward normal."""

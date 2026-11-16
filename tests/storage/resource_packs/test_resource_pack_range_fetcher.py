@@ -388,3 +388,101 @@ def test_real_302_to_an_allowed_host_is_followed_when_enabled(
         outcome = _fetcher(source, tmp_path).fetch(entry)
     assert outcome.path.read_bytes() == data
     assert server.request_hosts == [f"127.0.0.1:{port}", f"localhost:{port}"]
+
+
+class _RedirectReturningOpener(urllib.request.OpenerDirector):
+    def __init__(self, response: _FakeResponse) -> None:
+        super().__init__()
+        self.response = response
+
+    def open(self, fullurl: object, data: object = None, timeout: float | None = None) -> object:
+        return self.response
+
+
+class _UrlResponse(io.BytesIO):
+    def __init__(
+        self, status: int, url: str | None = None, geturl_value: str | None = None
+    ) -> None:
+        super().__init__(b"ok")
+        self.status = status
+        self.headers: dict[str, str] = {}
+        if url is not None:
+            self.url = url
+        self._geturl_value = geturl_value
+
+    def geturl(self) -> str:
+        return self._geturl_value or ""
+
+
+def test_custom_opener_cannot_bypass_redirect_policy(mirror: PackMirror, tmp_path: Path) -> None:
+    entry = mirror.add_remote("textures/hero.ktx2", blob("custom-opener", 2048))
+
+    # 1. Real urllib.request.build_opener() passed as opener still gets SecurityRedirectHandler
+    with range_http_server(mirror.root) as server:
+        for follow in (False, True):
+            server.redirect_to = "http://evil.invalid"
+            custom = urllib.request.build_opener()
+            source = HttpRangePackSource(server.base_url, opener=custom, allow_redirects=follow)
+            with pytest.raises(UnsafeSourceError):
+                _fetcher(source, tmp_path / f"std-{follow}").fetch(entry)
+
+    # 1b. OpenerDirector subclass with pre-installed HTTPRedirectHandler also gets replaced
+    class _SubclassWithRedirect(urllib.request.OpenerDirector):
+        def __init__(self) -> None:
+            super().__init__()
+            self.add_handler(urllib.request.HTTPHandler())
+            self.add_handler(urllib.request.HTTPErrorProcessor())
+            self.add_handler(urllib.request.HTTPRedirectHandler())
+
+    with range_http_server(mirror.root) as server:
+        server.redirect_to = "http://evil.invalid"
+        source_sub = HttpRangePackSource(
+            server.base_url, opener=_SubclassWithRedirect(), allow_redirects=True
+        )
+        with pytest.raises(UnsafeSourceError):
+            _fetcher(source_sub, tmp_path / "sub").fetch(entry)
+
+    # 2. Custom OpenerDirector subclass returning raw 302 response
+    for follow in (False, True):
+        r302 = _FakeResponse(302, {"Location": "http://evil.invalid/x"})
+        src = HttpRangePackSource(
+            "https://cdn.example", opener=_RedirectReturningOpener(r302), allow_redirects=follow
+        )
+        with pytest.raises(UnsafeSourceError):
+            src.open_range("blobs/x", 0)
+        assert r302.closed
+
+    allowed_302 = _FakeResponse(302, {"Location": "https://cdn.example/mirror/x"})
+    src_allowed = HttpRangePackSource(
+        "https://cdn.example",
+        opener=_RedirectReturningOpener(allowed_302),
+        allow_redirects=True,
+    )
+    with pytest.raises(RangeFetchError, match="unfollowed redirect HTTP 302"):
+        src_allowed.open_range("blobs/x", 0)
+
+    # 3. Custom OpenerDirector subclass silently following redirect (url / geturl differs)
+    for follow, target in (
+        (False, "https://cdn.example/other"),
+        (True, "http://cdn.example/downgraded"),
+        (True, "https://evil.invalid/steal"),
+    ):
+        resp_attr = _UrlResponse(200, url=target)
+        src_attr = HttpRangePackSource(
+            "https://cdn.example",
+            opener=_RedirectReturningOpener(resp_attr),  # type: ignore[arg-type]
+            allow_redirects=follow,
+        )
+        with pytest.raises(UnsafeSourceError):
+            src_attr.open_range("blobs/x", 0)
+        assert resp_attr.closed
+
+    resp_geturl = _UrlResponse(200, geturl_value="http://evil.invalid/steal")
+    src_geturl = HttpRangePackSource(
+        "https://cdn.example",
+        opener=_RedirectReturningOpener(resp_geturl),  # type: ignore[arg-type]
+        allow_redirects=True,
+    )
+    with pytest.raises(UnsafeSourceError):
+        src_geturl.open_range("blobs/x", 0)
+    assert resp_geturl.closed

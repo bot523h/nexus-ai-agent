@@ -988,3 +988,32 @@ COVERAGE_FILE=/tmp/.coverage_arena /home/user/.venv/bin/python scripts/ci_parity
 
 `scripts/ci_parity.py --list` prints the chunks; `--skip-collection-proof` exists
 for triage and marks the run as unequivalent in its own JSON.
+
+---
+
+## 10. PR #341 (`origin/arena/atlas-episodic-causality-lab`) ATLAS Overlap & Reference Verification
+
+Compared `origin/arena/atlas-episodic-causality-lab` (`41be2b24e2878dde19ac30e4d758f58250e44f99`,
+PR #341) against `arena/98256240-nexus-ai-agent`:
+
+- **Shared ancestry**: `2e80596af6f3975ce1b22c6d06863c252d3013f2` (PR #341's Wave 3 spine/lab
+  commit) is already an ancestor of `arena/98256240-nexus-ai-agent` (merged in `f9f2863a`).
+- **Common ATLAS modules (`creative/atlas`)**: Between `2e80596a` and `41be2b24`, PR #341
+  only touched two existing ATLAS source files (`prometheus_studio_playground.py` and
+  `prometheus_verifier_and_governance.py`, wiring `atlas_ffmpeg.ffmpeg_binary` /
+  `ffprobe_binary`) plus `PROMETHEUS_STUDIO_PLAYGROUND_DOCTRINE.md`. `arena/98256240-nexus-ai-agent`
+  already provides equivalent `imageio-ffmpeg` wheel fallback and fail-closed FFmpeg
+  handling (`2972e423`, `299e931c`) alongside hardened updates across the shared ATLAS
+  files (`aces_hald_film_optic.py`, `media_sine.py`, `olympus_master.py`,
+  `prometheus_studio_playground.py`, `prometheus_verifier_and_governance.py`,
+  `spectral_ocean_swe.py`, plus `physical_frame_stream.py`, ACES display core unification,
+  and M1–M5/B1 fixes in `1baa531d` and `fb580738`).
+- **PR #341-only additions after `2e80596a`**: `atlas_ffmpeg.py`, `holographic_equation_vault.py`,
+  `self_healing_linear_ledger.py`, `twin_taxonomy_provisioner.py`, `pack_coverage_seal.py`,
+  and their five unit test files — standalone Waves 30–33 ledger/vault/seal modules that do
+  not supersede any shared ATLAS operator on `arena/98256240-nexus-ai-agent`.
+- **Conclusion**: No valid feature or test from the shared ATLAS operators is missing on
+  `arena/98256240-nexus-ai-agent`; `arena/98256240-nexus-ai-agent` is the complete,
+  hardened reference branch. (`git merge-tree --write-tree origin/arena/atlas-episodic-causality-lab HEAD`
+  also resolves cleanly with zero tree conflicts.)
+

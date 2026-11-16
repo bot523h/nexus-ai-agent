@@ -47,8 +47,10 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import threading
 import time
+import uuid
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from enum import Enum
@@ -302,14 +304,44 @@ def _load_fcntl() -> ModuleType | None:
         return None
 
 
+def _pid_is_dead(pid: int) -> bool:
+    if pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
+
+
+def _read_lock_state(path: Path) -> tuple[int, float, dict[str, object] | None] | None:
+    try:
+        lstat = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(lstat.st_mode):
+        return lstat.st_ino, lstat.st_mtime, None
+    try:
+        raw = path.read_bytes()
+        parsed = json.loads(raw)
+    except (OSError, ValueError):
+        parsed = None
+    return lstat.st_ino, lstat.st_mtime, parsed if isinstance(parsed, dict) else None
+
+
 class _StorageLock:
     """Exclusive cross-process lock on ``<root>/.sync_gc.lock``.
 
     ``flock`` (POSIX) is released by the kernel when the owner dies.  The
     portable fallback creates ``.sync_gc.lock.excl`` atomically with
-    ``O_CREAT | O_EXCL`` and records the owner PID and expiry; a lock file
-    older than ``stale_after`` seconds is considered abandoned and broken.
+    ``O_CREAT | O_EXCL`` and records the owner PID, expiry and a unique
+    ``owner_token``; stale locks are broken race-freely via inode/token
+    verification under a short-lived break guard.
     """
+
+    _BREAK_GUARD_TTL = 5.0
 
     def __init__(
         self,
@@ -325,17 +357,82 @@ class _StorageLock:
             raise ValueError("lock_backend='flock' requested but fcntl is unavailable")
         self._fcntl = fcntl
         self.path = root / (_LOCK_FILE if fcntl is not None else f"{_LOCK_FILE}.excl")
+        self._break_path = self.path.with_name(f"{self.path.name}.break")
         self.timeout = timeout
         self.stale_after = stale_after
         self.wall_clock = wall_clock
         self._fd: int | None = None
+        self._st_ino: int | None = None
+        self._owner_token: str | None = None
 
-    def _owner_record(self) -> bytes:
+    def _owner_record(self, token: str, *, ttl: float | None = None) -> bytes:
+        lifetime = self.stale_after if ttl is None else ttl
         return json.dumps(
-            {"pid": os.getpid(), "expires_at": self.wall_clock() + self.stale_after}
+            {
+                "pid": os.getpid(),
+                "expires_at": self.wall_clock() + lifetime,
+                "owner_token": token,
+            }
         ).encode()
 
+    def _is_stale_record(
+        self, data: dict[str, object] | None, mtime: float, *, fallback_ttl: float | None = None
+    ) -> bool:
+        if data is not None:
+            pid = data.get("pid")
+            expires_at = data.get("expires_at")
+            token = data.get("owner_token")
+            if (
+                isinstance(pid, int)
+                and not isinstance(pid, bool)
+                and isinstance(expires_at, (int, float))
+                and not isinstance(expires_at, bool)
+                and math.isfinite(float(expires_at))
+                and isinstance(token, str)
+                and bool(token)
+            ):
+                return self.wall_clock() > float(expires_at) or _pid_is_dead(pid)
+        ttl = self.stale_after if fallback_ttl is None else fallback_ttl
+        return (self.wall_clock() - mtime) > ttl
+
+    def _try_enter_break_guard(self) -> tuple[int, str] | None:
+        token = f"{os.getpid()}:{uuid.uuid4().hex}"
+        try:
+            fd = os.open(self._break_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            state = _read_lock_state(self._break_path)
+            if state is not None and self._is_stale_record(
+                state[2], state[1], fallback_ttl=self._BREAK_GUARD_TTL
+            ):
+                trash = self._break_path.with_name(
+                    f".{self._break_path.name}.{os.getpid()}.{uuid.uuid4().hex}.stale"
+                )
+                try:
+                    os.replace(self._break_path, trash)
+                    trash.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    pass
+            return None
+        try:
+            os.write(fd, self._owner_record(token, ttl=self._BREAK_GUARD_TTL))
+            os.fsync(fd)
+            ino = os.fstat(fd).st_ino
+        finally:
+            os.close(fd)
+        return ino, token
+
+    def _exit_break_guard(self, guard: tuple[int, str]) -> None:
+        guard_ino, guard_token = guard
+        state = _read_lock_state(self._break_path)
+        if state is None:
+            return
+        cur_ino, _, cur_data = state
+        cur_token = cur_data.get("owner_token") if cur_data is not None else None
+        if cur_ino == guard_ino and cur_token == guard_token:
+            self._break_path.unlink(missing_ok=True)
+
     def _try_acquire(self) -> bool:
+        token = f"{os.getpid()}:{uuid.uuid4().hex}"
         if self._fcntl is not None:
             fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
             try:
@@ -344,8 +441,9 @@ class _StorageLock:
                 os.close(fd)
                 return False
             os.ftruncate(fd, 0)
-            os.write(fd, self._owner_record())
+            os.write(fd, self._owner_record(token))
             self._fd = fd
+            self._owner_token = token
             return True
         try:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
@@ -353,18 +451,42 @@ class _StorageLock:
             self._break_if_stale()
             return False
         try:
-            os.write(fd, self._owner_record())
+            os.write(fd, self._owner_record(token))
+            os.fsync(fd)
+            self._st_ino = os.fstat(fd).st_ino
+            self._owner_token = token
         finally:
             os.close(fd)
         return True
 
     def _break_if_stale(self) -> None:
-        try:
-            age = self.wall_clock() - self.path.stat().st_mtime
-        except FileNotFoundError:  # lost a race with the releasing owner
+        state = _read_lock_state(self.path)
+        if state is None:
             return
-        if age > self.stale_after:
-            self.path.unlink(missing_ok=True)
+        target_ino, mtime, data = state
+        if not self._is_stale_record(data, mtime):
+            return
+        target_token = data.get("owner_token") if data is not None else None
+        guard = self._try_enter_break_guard()
+        if guard is None:
+            return
+        try:
+            current = _read_lock_state(self.path)
+            if current is None:
+                return
+            cur_ino, cur_mtime, cur_data = current
+            cur_token = cur_data.get("owner_token") if cur_data is not None else None
+            if (
+                cur_ino != target_ino
+                or cur_token != target_token
+                or not self._is_stale_record(cur_data, cur_mtime)
+            ):
+                return
+            trash = self.path.with_name(f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.stale")
+            os.replace(self.path, trash)
+            trash.unlink(missing_ok=True)
+        finally:
+            self._exit_break_guard(guard)
 
     def __enter__(self) -> _StorageLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -387,8 +509,30 @@ class _StorageLock:
             self._fcntl.flock(self._fd, self._fcntl.LOCK_UN)
             os.close(self._fd)
             self._fd = None
+            self._owner_token = None
         else:
-            self.path.unlink(missing_ok=True)
+            deadline = time.monotonic() + 0.5
+            guard = self._try_enter_break_guard()
+            while guard is None and time.monotonic() < deadline:
+                time.sleep(0.005)
+                guard = self._try_enter_break_guard()
+            try:
+                if guard is not None:
+                    current = _read_lock_state(self.path)
+                    if current is not None:
+                        cur_ino, _, cur_data = current
+                        cur_token = cur_data.get("owner_token") if cur_data is not None else None
+                        if cur_ino == self._st_ino and cur_token == self._owner_token:
+                            trash = self.path.with_name(
+                                f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.release"
+                            )
+                            os.replace(self.path, trash)
+                            trash.unlink(missing_ok=True)
+            finally:
+                if guard is not None:
+                    self._exit_break_guard(guard)
+                self._st_ino = None
+                self._owner_token = None
 
 
 @dataclass(frozen=True)
@@ -478,7 +622,7 @@ class ResourcePackSyncManager:
         self._lock_timeout = lock_timeout_seconds
         self._lock_stale_after = lock_stale_after_seconds
         self._lease_ttl = lease_ttl_seconds
-        self._lock = threading.Lock()  # serialises syncs of this instance (shared .part files)
+        self._lock = threading.RLock()  # serialises syncs while allowing re-entrant callbacks
 
     # -- paths & pointer ------------------------------------------------------
 
@@ -544,8 +688,13 @@ class ResourcePackSyncManager:
             return
         try:
             pointer = self._read_pointer(target.pack_id)
-        except PackSyncError:
-            return  # unreadable pointer: there is no trustworthy active version to protect
+        except PackSyncError as error:
+            raise VersionRollbackError(
+                pack_id=target.pack_id,
+                active_version="<corrupt>",
+                target_version=target.version,
+                reason=f"active pointer is corrupt or unreadable ({error})",
+            ) from error
         if pointer is None:
             return
         active, wanted = (
@@ -648,7 +797,11 @@ class ResourcePackSyncManager:
     def _pack_gate(
         self, target: ResourcePackManifest, cas_index: dict[str, int], available: int
     ) -> PackGateStatus:
-        self._verify_target(target)  # a tampered/unsigned/rolled-back catalog is an incident
+        try:
+            self._verify_target(target)  # a tampered/unsigned/rolled-back catalog is an incident
+        except VersionRollbackError as error:
+            if error.active_version != "<corrupt>":
+                raise
         corrupted = False
         try:
             loaded = self._load_installed(target.pack_id)

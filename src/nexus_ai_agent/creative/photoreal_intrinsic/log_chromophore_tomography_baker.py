@@ -248,21 +248,24 @@ class LogChromophoreTomographyBaker:
             raise ValueError("rgb must have shape (height,width,3)")
         if raw.shape[0] < 2 or raw.shape[1] < 2:
             raise ValueError("image spatial dimensions must be at least 2x2")
+        if input_colorspace not in ("auto", "srgb", "linear"):
+            raise ValueError("input_colorspace must be 'auto', 'srgb', or 'linear'")
         basis = np.asarray(self.basis, dtype=np.float64)
         if (
             basis.shape != (3, 3)
             or not np.isfinite(basis).all()
             or np.linalg.matrix_rank(basis) != 3
-            or np.linalg.cond(basis) > _MAX_BASIS_CONDITION
         ):
             raise ValueError("chromophore basis must be finite, full-rank, and well-conditioned")
+        basis_cond = float(np.linalg.cond(basis))
+        if not math.isfinite(basis_cond) or basis_cond > _MAX_BASIS_CONDITION:
+            raise ValueError("chromophore basis must be finite, full-rank, and well-conditioned")
         if (
-            not np.isfinite((_RADIANCE_EPSILON, _POISSON_REGULARIZATION)).all()
+            not math.isfinite(_RADIANCE_EPSILON)
+            or not math.isfinite(_POISSON_REGULARIZATION)
             or min(_RADIANCE_EPSILON, _POISSON_REGULARIZATION) <= 0
         ):
             raise ValueError("regularization parameters must be finite and positive")
-        if input_colorspace not in ("auto", "srgb", "linear"):
-            raise ValueError("input_colorspace must be 'auto', 'srgb', or 'linear'")
         if np.issubdtype(raw.dtype, np.signedinteger):
             raise ValueError(
                 "Signed integer dtypes are not supported; use uint8, uint16, or floating-point"
@@ -271,10 +274,14 @@ class LogChromophoreTomographyBaker:
             normalized = raw.astype(np.float32) / float(np.iinfo(raw.dtype).max)
             default_space: Literal["srgb", "linear"] = "srgb"
         elif np.issubdtype(raw.dtype, np.floating):
+            if (
+                not np.isfinite(raw).all()
+                or np.any(raw < 0)
+                or np.any(raw > np.finfo(np.float32).max)
+            ):
+                raise ValueError("floating RGB radiance must be finite and nonnegative")
             normalized = raw.astype(np.float32)
             default_space = "linear"
-            if not np.isfinite(normalized).all() or np.any(normalized < 0):
-                raise ValueError("floating RGB radiance must be finite and nonnegative")
         else:
             raise ValueError("rgb dtype must be integer or floating point")
         colorspace = default_space if input_colorspace == "auto" else input_colorspace

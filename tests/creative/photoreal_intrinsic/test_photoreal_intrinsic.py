@@ -352,19 +352,29 @@ def test_persistent_vault_verifies_across_subprocesses(tmp_path: object) -> None
     environment["PYTHONPATH"] = str(Path.cwd() / "src")
     environment["NEXUS_PHOTOREAL_HMAC_KEY"] = key
     create_code = (
-        "import pickle; from nexus_ai_agent.creative.photoreal_intrinsic import "
+        "import os, pickle; from nexus_ai_agent.creative.photoreal_intrinsic import "
         "LogChromophoreTomographyBaker as B; "
         "v=B().bake(B.canonical_archetype(4,4), key_policy='persistent'); "
-        f"pickle.dump(v,open({str(artifact)!r},'wb'))"
+        f"pickle.dump(v,open({str(artifact)!r},'wb')); "
+        "print(os.getpid())"
     )
-    subprocess.run(
+    created = subprocess.run(
         [sys.executable, "-c", create_code],
         env=environment,
         check=True,
         capture_output=True,
         text=True,
     )
-    verify_code = f"import pickle; print(pickle.load(open({str(artifact)!r},'rb')).verify())"
+    pid1 = int(created.stdout.strip())
+    verify_code = (
+        "import os, pickle; "
+        "from nexus_ai_agent.creative.photoreal_intrinsic import "
+        "OcularCausticsAndFilmChemistry as O; "
+        f"v = pickle.load(open({str(artifact)!r},'rb')); "
+        "ok = v.verify(); "
+        "compiled = (O.compile(v)['rgb'].shape == (4, 4, 3)) if ok else False; "
+        "print(f'{os.getpid()}:{ok}:{compiled}')"
+    )
     good = subprocess.run(
         [sys.executable, "-c", verify_code],
         env=environment,
@@ -372,7 +382,32 @@ def test_persistent_vault_verifies_across_subprocesses(tmp_path: object) -> None
         capture_output=True,
         text=True,
     )
-    assert good.stdout.strip() == "True"
+    pid2_s, ok_s, compiled_s = good.stdout.strip().split(":")
+    assert int(pid2_s) != pid1 and ok_s == "True" and compiled_s == "True"
+
+    tamper_code = (
+        "import os, pickle; "
+        "from nexus_ai_agent.creative.photoreal_intrinsic import "
+        "OcularCausticsAndFilmChemistry as O; "
+        f"v = pickle.load(open({str(artifact)!r},'rb')); "
+        "v.melanin.setflags(write=True); v.melanin[0, 0] += 0.25; "
+        "failed_compile = False\n"
+        "try:\n"
+        "    O.compile(v)\n"
+        "except ValueError:\n"
+        "    failed_compile = True\n"
+        "print(f'{os.getpid()}:{v.verify()}:{failed_compile}')"
+    )
+    tampered = subprocess.run(
+        [sys.executable, "-c", tamper_code],
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    pid3_s, tamper_ok_s, tamper_compile_s = tampered.stdout.strip().split(":")
+    assert int(pid3_s) != pid1 and tamper_ok_s == "False" and tamper_compile_s == "True"
+
     wrong_environment = environment.copy()
     wrong_environment["NEXUS_PHOTOREAL_HMAC_KEY"] = "a-different-process-key-123456"
     bad = subprocess.run(
@@ -382,7 +417,7 @@ def test_persistent_vault_verifies_across_subprocesses(tmp_path: object) -> None
         capture_output=True,
         text=True,
     )
-    assert bad.stdout.strip() == "False"
+    assert bad.stdout.strip().split(":")[1] == "False"
     missing_environment = environment.copy()
     missing_environment.pop("NEXUS_PHOTOREAL_HMAC_KEY")
     bad_missing = subprocess.run(
@@ -392,7 +427,7 @@ def test_persistent_vault_verifies_across_subprocesses(tmp_path: object) -> None
         capture_output=True,
         text=True,
     )
-    assert bad_missing.stdout.strip() == "False"
+    assert bad_missing.stdout.strip().split(":")[1] == "False"
     persistent_code = (
         "from nexus_ai_agent.creative.photoreal_intrinsic import "
         "LogChromophoreTomographyBaker as B; "
@@ -604,7 +639,9 @@ def test_compile_rejects_nonphysical_physiology() -> None:
 def test_chromophore_basis_is_well_conditioned_and_noise_stable() -> None:
     basis = LogChromophoreTomographyBaker.basis
     assert np.linalg.matrix_rank(basis) == 3
-    assert np.linalg.cond(basis) < 10.0
+    cond = float(np.linalg.cond(basis))
+    assert cond == pytest.approx(8.337645, abs=1e-4)
+    assert cond < 8.5
     inverse = np.linalg.inv(basis)
     assert np.allclose(basis @ inverse, np.eye(3), rtol=0, atol=1e-12)
     rng = np.random.default_rng(127)
@@ -680,6 +717,40 @@ def test_actual_three_scale_components_match_neumann_reference_and_flux() -> Non
         assert np.linalg.norm(error) / np.linalg.norm(reference) < 1e-12
         assert np.max(np.abs(error)) < 1e-12
         assert np.max(np.abs(actual.mean(axis=(0, 1)) - source.mean(axis=(0, 1)))) < 1e-12
+        # Direct three-scale composite PDE residual on transport() output:
+        # prod_s (I - sigma_s^2 Delta_N) u_c = sum_s w_s prod_{j!=s} (I - sigma_j^2 Delta_N) S_c
+        for channel, radius in enumerate(solver.default_radii):
+            sigmas = [radius / float(scale) for scale in expected_scales]
+            lhs_coeff = row_dct @ actual[..., channel] @ col_dct.T
+            rhs_coeff = row_dct @ source[..., channel] @ col_dct.T
+            factors = [1.0 + (s * s) * eigenvalues for s in sigmas]
+            composite_op = factors[0] * factors[1] * factors[2]
+            rhs_op = (
+                expected_weights[0] * factors[1] * factors[2]
+                + expected_weights[1] * factors[0] * factors[2]
+                + expected_weights[2] * factors[0] * factors[1]
+            )
+            rhs_field = row_dct.T @ (rhs_op * rhs_coeff) @ col_dct
+            pde_residual = row_dct.T @ (composite_op * lhs_coeff) @ col_dct - rhs_field
+            assert np.linalg.norm(pde_residual) / np.linalg.norm(rhs_field) < 1e-12
+            # Also verify the direct weighted PDE residual across the three scales matches S_c
+            weighted_residual = (
+                sum(
+                    expected_weights[s]
+                    * (
+                        components[s, ..., channel]
+                        - (sigmas[s] ** 2)
+                        * (
+                            row_dct.T
+                            @ (-eigenvalues * (row_dct @ components[s, ..., channel] @ col_dct.T))
+                            @ col_dct
+                        )
+                    )
+                    for s in range(3)
+                )
+                - source[..., channel]
+            )
+            assert np.linalg.norm(weighted_residual) / np.linalg.norm(source[..., channel]) < 1e-12
 
 
 def test_scientific_mutation_probes_detect_coefficients_weights_and_spectrum() -> None:
@@ -823,6 +894,9 @@ def test_bake_validates_basis_and_regularization_inputs(monkeypatch: pytest.Monk
     monkeypatch.setattr(baker_module, "_RADIANCE_EPSILON", 0.0)
     with pytest.raises(ValueError, match="regularization"):
         baker.bake(image)
+    monkeypatch.undo()
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        baker.bake(np.full((2, 2, 3), 1e40, dtype=np.float64))
 
 
 def test_single_scale_solver_rejects_invalid_source_and_length() -> None:

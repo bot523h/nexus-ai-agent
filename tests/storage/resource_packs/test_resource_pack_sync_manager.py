@@ -337,9 +337,69 @@ def test_corrupt_pointer_means_repair_and_blocks_pruning(
     pointer.write_bytes(json.dumps(traversal).encode())
     with pytest.raises(PackSyncError):
         manager.active_install_dir("core")
-    rebuilt = manager.sync_pack("core")  # rebuilds from the CAS, no re-download
+    with pytest.raises(VersionRollbackError, match="corrupt or unreadable"):
+        manager.sync_pack("core")
+    # Explicit recovery (allow_rollback=True) rebuilds from the CAS, no re-download
+    recovery, _ = _manager(root, [core], mirror, allow_rollback=True)
+    rebuilt = recovery.sync_pack("core")
     assert manager.get_login_gate_status().state is GateState.READY
     assert rebuilt.downloaded_bytes == 0 and rebuilt.reused_files == 4
+
+
+def test_corrupt_active_json_fails_closed_on_rollback_check(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    v1, v2 = _std_versions(mirror)
+    root = tmp_path / "dev"
+    manager, _ = _manager(root, [v1], mirror)
+    manager.sync_pack("standard")
+    pointer = root / "packs/standard/active.json"
+    upgrader, _ = _manager(root, [v2], mirror)
+    for corrupt in (
+        b"{not json",
+        json.dumps({"schema": 1, "pack_id": "standard"}).encode(),
+        json.dumps(
+            {
+                "schema": 1,
+                "pack_id": "standard",
+                "merkle_root": v1.merkle_root,
+                "install_dir": "1.0.0__abc",
+            }
+        ).encode(),
+    ):
+        pointer.write_bytes(corrupt)
+        with pytest.raises(VersionRollbackError, match="corrupt or unreadable"):
+            upgrader.sync_pack("standard")
+    assert list((root / "leases").iterdir()) == []
+
+
+def test_sync_pack_progress_callback_is_reentrant_without_deadlock(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    core = _core(mirror)
+    v1, _ = _std_versions(mirror)
+    root = tmp_path / "dev"
+    manager, _ = _manager(root, [core, v1], mirror)
+    manager.sync_pack("core")
+    reentrant_calls: list[SyncStage] = []
+
+    def callback(event: SyncProgress) -> None:
+        reentrant_calls.append(event.stage)
+        if event.stage is SyncStage.VERIFYING:
+            # Re-enter the same manager instance on the same thread (RLock must not deadlock)
+            status = manager.get_login_gate_status()
+            assert status.state is GateState.READY
+            assert any(
+                p.pack_id == "standard" and p.state is GateState.INSTALL_REQUIRED
+                for p in status.packs
+            )
+            assert manager.sync_pack("core").already_up_to_date
+            assert manager.collect_garbage(min_age_seconds=0.0) == ()
+
+    result = manager.sync_pack("standard", callback)
+    assert result.verification.verified_files == len(v1.entries)
+    assert SyncStage.VERIFYING in reentrant_calls
+    assert manager.get_login_gate_status().state is GateState.READY
 
 
 def test_pointer_manifest_mismatch_is_detected(mirror: PackMirror, tmp_path: Path) -> None:
@@ -739,7 +799,9 @@ def test_exclusive_file_lock_fallback(mirror: PackMirror, tmp_path: Path) -> Non
     assert not lock_file.exists()  # released after every critical section
     orphan = _orphan(manager, "orphan")
 
-    lock_file.write_text('{"pid": 1, "expires_at": 0}')  # another live owner
+    lock_file.write_text(
+        '{"pid": 1, "expires_at": 0}'
+    )  # incomplete/legacy record: waits for mtime grace
     with pytest.raises(PackLockTimeoutError):
         manager.collect_garbage(min_age_seconds=0.0)
     stale = time.time() - 3600
@@ -748,6 +810,258 @@ def test_exclusive_file_lock_fallback(mirror: PackMirror, tmp_path: Path) -> Non
     assert not lock_file.exists()
     lock = manager._storage_lock()
     lock._break_if_stale()  # nothing to break: a no-op, not an error
+
+
+def test_exclusive_file_lock_token_ownership_and_dead_pid_break(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexus_ai_agent.storage.resource_packs import pack_sync_manager as psm
+
+    root = tmp_path / "dev"
+    now = [1000.0]
+    m1, _ = _manager(
+        root,
+        [],
+        mirror,
+        lock_backend="exclusive_file",
+        lock_timeout_seconds=0.2,
+        lock_stale_after_seconds=5.0,
+        wall_clock=lambda: now[0],
+    )
+    m2, _ = _manager(
+        root,
+        [],
+        mirror,
+        lock_backend="exclusive_file",
+        lock_timeout_seconds=0.2,
+        lock_stale_after_seconds=5.0,
+        wall_clock=lambda: now[0],
+    )
+    lock_file = root / ".sync_gc.lock.excl"
+
+    # 1. Owner writes pid, expires_at, owner_token; advancing wall_clock past TTL breaks it,
+    #    and stale owner's __exit__ never unlinks the new owner's lock!
+    with m1._storage_lock() as l1:
+        record = json.loads(lock_file.read_text())
+        assert record["pid"] == os.getpid()
+        assert isinstance(record["owner_token"], str) and ":" in record["owner_token"]
+        assert l1._owner_token == record["owner_token"]
+        assert l1._st_ino == os.lstat(lock_file).st_ino
+        now[0] += 10.0  # expire l1
+        with m2._storage_lock() as l2:
+            record2 = json.loads(lock_file.read_text())
+            assert record2["owner_token"] == l2._owner_token != l1._owner_token
+        assert not lock_file.exists()
+        # Re-create a live lock owned by m2 while l1 is still in scope: l1 must NOT delete m2's lock
+        l2_live = m2._storage_lock().__enter__()
+    try:
+        assert lock_file.exists()
+        assert json.loads(lock_file.read_text())["owner_token"] == l2_live._owner_token
+    finally:
+        l2_live.__exit__(None, None, None)
+
+    # 2. Dead PID (ESRCH) breaks immediately even before expires_at
+    dead = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.getpid())"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    dead_pid = int(dead.stdout.strip())
+    lock_file.write_text(
+        json.dumps(
+            {"pid": dead_pid, "expires_at": now[0] + 3600, "owner_token": f"{dead_pid}:dead"}
+        )
+    )
+    with m2._storage_lock():
+        assert json.loads(lock_file.read_text())["pid"] == os.getpid()
+
+    # 3. _pid_is_dead handles non-positive, PermissionError (alive), and ESRCH
+    assert psm._pid_is_dead(0) is True
+    monkeypatch.setattr(os, "kill", lambda _pid, _sig: (_ for _ in ()).throw(PermissionError()))
+    assert psm._pid_is_dead(99999) is False
+    monkeypatch.setattr(os, "kill", lambda _pid, _sig: (_ for _ in ()).throw(ProcessLookupError()))
+    assert psm._pid_is_dead(99999) is True
+    monkeypatch.undo()
+
+    # 4. Break-guard edge paths: corrupt/vanished break guard, token mismatch, vanished lock
+    lock = m2._storage_lock()
+    lock._break_path.write_text("{corrupt")
+    stale_t = now[0] - 100.0
+    os.utime(lock._break_path, (stale_t, stale_t))
+    assert lock._try_enter_break_guard() is None  # broke stale guard
+    guard = lock._try_enter_break_guard()
+    assert guard is not None
+    # Swapped guard on disk is never deleted by _exit_break_guard
+    lock._break_path.unlink()
+    lock._break_path.write_text(
+        json.dumps({"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "other:1"})
+    )
+    lock._exit_break_guard(guard)
+    assert lock._break_path.exists()
+    # Stale break guard that vanishes mid-replace is handled cleanly
+    lock._break_path.unlink()
+    lock._break_path.write_text(
+        json.dumps({"pid": os.getpid(), "expires_at": now[0] - 10, "owner_token": "other:1"})
+    )
+    real_replace = os.replace
+
+    def vanish_guard(src: object, dst: object) -> None:
+        if str(src) == str(lock._break_path):
+            raise FileNotFoundError("vanished")
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", vanish_guard)
+    assert lock._try_enter_break_guard() is None
+    monkeypatch.undo()
+    lock._break_path.unlink(missing_ok=True)
+    lock._exit_break_guard(guard)  # vanished before _exit_break_guard
+
+    # Fresh break guard blocks a competing _break_if_stale()
+    lock_file.write_text("{corrupt")
+    os.utime(lock_file, (stale_t, stale_t))
+    lock._break_path.write_text(
+        json.dumps({"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "other:1"})
+    )
+    lock._break_if_stale()
+    assert lock_file.exists()
+    lock._break_path.unlink()
+    lock_file.unlink()
+
+    # Race check inside _break_if_stale: inode changes or lock vanishes before re-check
+    lock_file.write_text("{corrupt")
+    os.utime(lock_file, (stale_t, stale_t))
+    real_enter = lock._try_enter_break_guard
+
+    def swap_lock_before_recheck() -> tuple[int, str] | None:
+        g = real_enter()
+        lock_file.unlink()
+        lock_file.write_text(
+            json.dumps({"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "fresh:1"})
+        )
+        return g
+
+    monkeypatch.setattr(lock, "_try_enter_break_guard", swap_lock_before_recheck)
+    lock._break_if_stale()
+    assert json.loads(lock_file.read_text())["owner_token"] == "fresh:1"  # preserved!
+    monkeypatch.undo()
+
+    os.utime(lock_file, (stale_t, stale_t))
+    lock_file.write_text("{corrupt")
+    os.utime(lock_file, (stale_t, stale_t))
+
+    def vanish_lock_before_recheck() -> tuple[int, str] | None:
+        g = real_enter()
+        lock_file.unlink()
+        return g
+
+    monkeypatch.setattr(lock, "_try_enter_break_guard", vanish_lock_before_recheck)
+    lock._break_if_stale()
+    monkeypatch.undo()
+
+    # __exit__ retry loop when break guard is held transiently, or stays busy until timeout
+    with m2._storage_lock() as l3:
+        calls = [0]
+        orig_enter = l3._try_enter_break_guard
+
+        def busy_once() -> tuple[int, str] | None:
+            calls[0] += 1
+            if calls[0] == 1:
+                return None
+            return orig_enter()
+
+        monkeypatch.setattr(l3, "_try_enter_break_guard", busy_once)
+    monkeypatch.undo()
+    assert calls[0] >= 2
+
+    with m2._storage_lock() as l4:
+        monkeypatch.setattr(l4, "_try_enter_break_guard", lambda: None)
+        ticks = iter([0.0, 1.0, 2.0])
+        monkeypatch.setattr(time, "monotonic", lambda: next(ticks, 2.0))
+    monkeypatch.undo()
+    assert lock_file.exists()
+    lock_file.unlink()
+
+    # __exit__ when lock file vanished while held
+    with m2._storage_lock():
+        lock_file.unlink()
+
+    # Non-regular lock path (e.g. symlink) falls back safely
+    symlink_target = root / "target.txt"
+    symlink_target.write_text("x")
+    lock_file.symlink_to(symlink_target)
+    state = psm._read_lock_state(lock_file)
+    assert state is not None and state[2] is None
+    lock_file.unlink()
+
+
+_CONTEND_STALE_LOCK = """
+import json, os, sys, time
+from pathlib import Path
+from nexus_ai_agent.storage.resource_packs import LocalDirectoryPackSource, PackSyncManager
+
+root, mirror, active_flag, log_path = (Path(a) for a in sys.argv[1:5])
+mgr = PackSyncManager(
+    root, [], LocalDirectoryPackSource(mirror),
+    lock_backend="exclusive_file",
+    lock_timeout_seconds=10.0,
+    lock_stale_after_seconds=0.05,
+)
+with mgr._storage_lock() as lock:
+    # Record entry and verify mutual exclusion via exclusive active_flag
+    fd = os.open(active_flag, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    os.close(fd)
+    time.sleep(0.03)
+    on_disk = json.loads((root / ".sync_gc.lock.excl").read_text())
+    assert on_disk["owner_token"] == lock._owner_token, (on_disk, lock._owner_token)
+    active_flag.unlink()
+    with open(log_path, "a", encoding="utf-8") as fh:
+        fh.write(f"{os.getpid()}:{lock._owner_token}\\n")
+"""
+
+
+def test_multiprocess_contention_breaking_stale_exclusive_lock_preserves_mutual_exclusion(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    root = tmp_path / "dev"
+    root.mkdir(parents=True, exist_ok=True)
+    active_flag = tmp_path / "in_critical_section"
+    log_path = tmp_path / "winners.log"
+    src_dir = Path(importlib.import_module("nexus_ai_agent").__file__ or "").parents[1]
+
+    # Seed an already-expired exclusive_file lock held by a dead PID
+    lock_file = root / ".sync_gc.lock.excl"
+    lock_file.write_text(
+        json.dumps(
+            {"pid": 999_999_999, "expires_at": time.time() - 10.0, "owner_token": "999:stale"}
+        )
+    )
+
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _CONTEND_STALE_LOCK,
+                str(root),
+                str(mirror.root),
+                str(active_flag),
+                str(log_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**os.environ, "PYTHONPATH": str(src_dir)},
+        )
+        for _ in range(5)
+    ]
+    for proc in procs:
+        out, err = proc.communicate(timeout=30)
+        assert proc.returncode == 0, f"worker failed: stdout={out!r} stderr={err!r}"
+    winners = log_path.read_text().splitlines()
+    assert len(winners) == 5 and len(set(winners)) == 5
+    assert not lock_file.exists()
+    assert not active_flag.exists()
 
 
 def test_lock_backend_selection_without_fcntl(
