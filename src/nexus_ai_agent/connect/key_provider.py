@@ -75,7 +75,10 @@ class StaticKeyRing:
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> StaticKeyRing:
-        env = environ or os.environ
+        # `environ or os.environ` treated an explicitly empty mapping as "not
+        # supplied" and silently fell through to the process environment — the
+        # opposite of what a caller passing `{}` means (and untestable).
+        env = os.environ if environ is None else environ
         raw_ring = env.get("NEXUS_CONNECT_KEK_RING", "")
         active = env.get("NEXUS_CONNECT_ACTIVE_KEK_ID", "")
         if not raw_ring or not active:

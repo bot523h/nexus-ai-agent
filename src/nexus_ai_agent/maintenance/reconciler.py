@@ -11,10 +11,13 @@ every divergence, and with ``apply_repair=True`` applies the two safe,
 deterministic repairs:
 
 * **Case A (orphan on-disk published file)** — if the queue row for
-  ``(job_id, attempt)`` exists, is in a non-superseded state and the result
-  pins ``project_id``/``revision_id``, the binding is registered idempotently;
-  otherwise the orphan is moved into ``.quarantine/<job_id>_<attempt>_reconciled/``
-  with a canonical RFC 8785 JCS forensic receipt.  Never deletes bytes silently.
+  ``(job_id, attempt)`` exists, is in a non-superseded state and pins
+  ``project_id``/``revision_id`` — in its ``result`` **or**, inside the crash
+  window, in the immutable ``payload`` it was admitted with — the binding is
+  registered idempotently; otherwise the orphan is moved into
+  ``.quarantine/<job_id>_<attempt>_reconciled/`` with a canonical RFC 8785 JCS
+  forensic receipt.  Never deletes bytes silently, and never overwrites an
+  earlier quarantine witness for the same attempt.
 * **Case B (DB binding with a missing/mismatched blob)** — recorded as
   ``BROKEN_BLOB_BINDING`` with ``LedgerState.VIOLATED``; bytes are never
   fabricated, the row is never deleted.
@@ -58,6 +61,24 @@ from nexus_ai_agent.storage import models as orm
 
 _QUARANTINE_DIR = ".quarantine"
 _SIDECAR_SCHEMA = 1
+
+#: Job states in which *published* bytes can still belong to an attempt whose
+#: completion never landed.  This is the audit's Case A crash window: the bytes
+#: are already moved into ``published/<job_id>/`` while the row is still
+#: ``pending``/``processing``/``verifying``, because the publication, the
+#: confirm hook and ``_mark_completed`` are three separate steps and a crash
+#: between any two of them leaves exactly this state.  The failure states are
+#: excluded on purpose: the queue refused those bytes, so binding them would
+#: fabricate lineage the queue never granted.
+_UNFINISHED_STATUSES = frozenset({"pending", "processing", "verifying"})
+
+#: Keys under which a job row may carry the project/revision pin.  ``result`` is
+#: the post-completion record; ``payload`` is the immutable admission record,
+#: which is the only evidence that exists *inside* the crash window.
+_PIN_CONTAINERS = ("artifact_binding", "intent", "request", "data", "result", "payload")
+
+#: Keys under which a job row may record the published artifact's content address.
+_DIGEST_KEYS = ("artifact_id", "sha256", "content_sha256", "digest")
 
 
 class LedgerState(str, Enum):
@@ -170,6 +191,29 @@ def _quarantine_path(root: Path, job_id: str, attempt: int | None) -> Path:
     return root / _QUARANTINE_DIR / f"{safe_job}_{token}_reconciled"
 
 
+def _unique_target(directory: Path, name: str, content_digest: str | None = None) -> Path:
+    """A path inside *directory* that no existing witness occupies.
+
+    Quarantine is **evidence**, and the destination for a given
+    ``(job_id, attempt)`` is a fixed directory — so a second crash for the same
+    attempt would silently ``os.replace`` the first witness away. The first
+    collision is disambiguated with the content address (two different payloads
+    keep distinguishable names), later ones with a counter. Nothing is ever
+    deleted to make room.
+    """
+    candidate = directory / name
+    if not candidate.exists():
+        return candidate
+    stem, suffix = Path(name).stem, Path(name).suffix
+    marker = (content_digest or "").split(":")[-1][:12] or "repeat"
+    candidate = directory / f"{stem}.{marker}{suffix}"
+    counter = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}.{marker}-{counter}{suffix}"
+        counter += 1
+    return candidate
+
+
 def _move_to_quarantine(
     root: Path,
     artifact: Path,
@@ -179,15 +223,15 @@ def _move_to_quarantine(
     job_id = str(receipt.get("job_id") or "unknown")
     attempt = receipt.get("attempt")
     attempt_int = attempt if isinstance(attempt, int) else None
+    digest = receipt.get("content_sha256")
     destination = _quarantine_path(root, job_id, attempt_int)
     destination.mkdir(parents=True, exist_ok=True)
-    target = destination / artifact.name
-    os.replace(artifact, target)
+    os.replace(artifact, _unique_target(destination, artifact.name, digest))
     if sidecar is not None and sidecar.is_file():
-        os.replace(sidecar, destination / sidecar.name)
-    receipt_path = destination / "reconciliation_receipt.json"
+        os.replace(sidecar, _unique_target(destination, sidecar.name, digest))
     receipt_bytes = canonical_json(receipt).encode("utf-8")
-    tmp = destination / f".reconciliation_receipt.json.tmp.{os.getpid()}"
+    receipt_path = _unique_target(destination, "reconciliation_receipt.json", digest)
+    tmp = destination / f".{receipt_path.name}.tmp.{os.getpid()}"
     tmp.write_bytes(receipt_bytes)
     os.replace(tmp, receipt_path)
     return destination
@@ -353,7 +397,7 @@ async def reconcile_published_artifacts_and_db(
                 continue
 
             # No binding row for the exact (artifact_id, job_id).
-            repair_block = _repair_eligibility(facts, job_id, attempt)
+            repair_block = _repair_eligibility(facts, job_id, attempt, artifact_id=artifact_id)
             if session is None:
                 issues.append(
                     ReconciliationIssue(
@@ -529,23 +573,123 @@ def _receipt(
     }
 
 
-def _repair_eligibility(facts: Any, job_id: str, attempt: int | None) -> str | None:
-    """Return a refusal reason when repair must not run, else ``None``."""
+def _is_pin_value(value: Any) -> bool:
+    """Whether *value* can be one half of a project/revision pin (never a guess)."""
+    if isinstance(value, bool) or value is None:
+        return False
+    if isinstance(value, int):
+        return value > 0
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _search_pin(node: Any, depth: int = 0) -> tuple[str, str] | None:
+    """Find a complete ``(project_id, revision_id)`` pin inside *node*, or ``None``."""
+    if not isinstance(node, dict) or depth > 3:
+        return None
+    project, revision = node.get("project_id"), node.get("revision_id")
+    if _is_pin_value(project) and _is_pin_value(revision):
+        return str(project), str(revision)
+    for container in _PIN_CONTAINERS:
+        nested = _search_pin(node.get(container), depth + 1)
+        if nested is not None:
+            return nested
+    return None
+
+
+def _pinned_project_ref(facts: Any) -> tuple[str, str] | None:
+    """The ``(project_id, revision_id)`` a job row itself pins, or ``None``.
+
+    Order of authority is the row's own evidence and nothing else: the
+    post-completion ``result`` first, then the immutable admission ``payload`` —
+    which is the *only* place the pin exists inside the crash window, because
+    ``result`` is written with ``_mark_completed``, after publication. A file
+    name, a workspace path or the sidecar's ``job_id`` is never turned into a
+    pin: that would be inventing lineage.
+    """
+    for attribute in ("result", "payload", "request_payload", "request"):
+        pin = _search_pin(getattr(facts, attribute, None))
+        if pin is not None:
+            return pin
+    return None
+
+
+def _search_digest(node: Any, depth: int = 0) -> str | None:
+    if not isinstance(node, dict) or depth > 3:
+        return None
+    for key in _DIGEST_KEYS:
+        value = node.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for container in _PIN_CONTAINERS:
+        nested = _search_digest(node.get(container), depth + 1)
+        if nested is not None:
+            return nested
+    return None
+
+
+def _recorded_artifact_digest(facts: Any) -> str | None:
+    """The content address the job row recorded for its artifact, if any."""
+    for attribute in ("result", "payload"):
+        digest = _search_digest(getattr(facts, attribute, None))
+        if digest is not None:
+            return digest
+    return None
+
+
+def _normalise_digest(value: str) -> str:
+    text = value.strip().lower()
+    return text if text.startswith("sha256:") else f"sha256:{text}"
+
+
+def _repair_eligibility(
+    facts: Any,
+    job_id: str,
+    attempt: int | None,
+    *,
+    artifact_id: str | None = None,
+) -> str | None:
+    """Return a refusal reason when repair must not run, else ``None``.
+
+    Two admissible shapes, one rule: the row must still own this attempt and
+    must itself pin the revision.
+
+    * ``completed`` — the ordinary case; the ``result`` carries the pin.
+    * ``pending`` / ``processing`` / ``verifying`` — the crash window. The
+      publication landed, ``_mark_completed`` did not, ``result`` is empty, and
+      the pin comes from the immutable payload the job was admitted with. When
+      the row also recorded a content address, the bytes on disk must still
+      match it; a mismatch means the file is not this job's artifact and the
+      orphan stays unrepairable.
+    """
     if facts is None:
         return "no queue row for this job — provenance cannot be established from disk"
     facts_attempt = getattr(facts, "attempt", None)
     if isinstance(facts_attempt, int) and isinstance(attempt, int) and facts_attempt != attempt:
         return f"job attempt {facts_attempt} superseded sidecar attempt {attempt} (fenced out)"
     status = str(getattr(facts, "status", ""))
-    if status not in {"completed"}:
-        return f"job status is {status!r}, not 'completed' — bytes were never released by the queue"
-    result = getattr(facts, "result", None)
-    if not isinstance(result, dict):
-        return "queue result missing — cannot pin project_id/revision_id for the binding"
-    missing = [key for key in ("project_id", "revision_id") if not result.get(key)]
-    if missing:
-        return f"queue result does not pin {', '.join(missing)} — binding cannot be fabricated"
-    return None
+    pin = _pinned_project_ref(facts)
+    if status == "completed":
+        if pin is None:
+            return "queue result missing — cannot pin project_id/revision_id for the binding"
+        return None
+    if status in _UNFINISHED_STATUSES:
+        if pin is None:
+            return (
+                f"job status is {status!r} and the row pins no project_id/revision_id — "
+                "a crashed publication cannot be attributed to a revision"
+            )
+        recorded = _recorded_artifact_digest(facts)
+        if recorded is not None and artifact_id is not None:
+            if _normalise_digest(recorded) != _normalise_digest(artifact_id):
+                return (
+                    "published bytes do not match the content address recorded on the job row "
+                    f"({recorded} != {artifact_id})"
+                )
+        return None
+    return (
+        f"job status is {status!r}: neither completed nor an unfinished attempt — "
+        "the queue never released these bytes"
+    )
 
 
 #: Media types a repaired binding may claim. Anything else is refused rather
@@ -634,15 +778,24 @@ async def default_register_asset_version(
         raise RuntimeError("published bytes changed between scan and repair")
 
     def fence_check() -> bool:
-        """Authoritative re-read: the attempt must still own a completed row."""
+        """Authoritative re-read: the attempt must still own the row.
+
+        The live confirm hook runs when the row is ``completed``; a repair made
+        inside the crash window re-reads a row that is still ``processing`` or
+        ``verifying``. Both mean the *same* thing here — this attempt still owns
+        the row — so the fence accepts the unfinished states too and refuses
+        every terminal failure. It is not a relaxation: a successor attempt
+        changes ``attempt`` and still fails the fence.
+        """
         if queue is None:
             return True
         current = queue.get_job_facts(job_id)
         if current is None:
             return False
-        return str(getattr(current, "status", "")) == "completed" and (
-            getattr(current, "attempt", None) == attempt
-        )
+        status = str(getattr(current, "status", ""))
+        if status != "completed" and status not in _UNFINISHED_STATUSES:
+            return False
+        return getattr(current, "attempt", None) == attempt
 
     resolve_factory = session_factory
     if resolve_factory is None:
@@ -704,9 +857,10 @@ async def _repair_binding(
         SqlProjectRevisionStore,
     )
 
-    result = getattr(facts, "result", None) or {}
-    project_id = str(result.get("project_id"))
-    revision_id = str(result.get("revision_id"))
+    pin = _pinned_project_ref(facts)
+    if pin is None:  # pragma: no cover - guarded by _repair_eligibility
+        return False, "the job row pins no project_id/revision_id — binding cannot be fabricated"
+    project_id, revision_id = pin
     static_factory = lambda: _StaticSessionContext(session)  # noqa: E731 - shared session by design
 
     if register_asset_version is not None:
@@ -799,20 +953,38 @@ def _queue_for(workspace_root: Path, db_path: str | None) -> Any:
 
 
 def _session_factory_for(db_path: str | None) -> Any:
+    """A zero-argument factory of async session context managers.
+
+    ``get_session`` is an ``@asynccontextmanager``: it must be *called with no
+    arguments* by the store to produce the context manager, so binding the path
+    has to produce a callable — ``get_session(db_path)`` would call it once here
+    and hand the store a context manager instead of a factory (which only shows
+    up on ``--database-path``, the flag that was never exercised end to end).
+    """
+    from functools import partial
+
     from nexus_ai_agent.storage.db import get_session
 
-    return get_session(db_path) if db_path is not None else get_session
+    return partial(get_session, db_path) if db_path is not None else get_session
 
 
 async def _run(args: argparse.Namespace) -> int:
+    from nexus_ai_agent.storage.db import dispose_all_engines
+
     root = Path(args.workspace_root).resolve()
     queue = _queue_for(root, args.queue_db)
-    report = await reconcile_published_artifacts_and_db(
-        root,
-        _session_factory_for(args.database_path),
-        queue=queue,
-        apply_repair=args.apply_repair,
-    )
+    try:
+        report = await reconcile_published_artifacts_and_db(
+            root,
+            _session_factory_for(args.database_path),
+            queue=queue,
+            apply_repair=args.apply_repair,
+        )
+    finally:
+        # This is a one-shot CLI: close the pools it opened before the loop ends,
+        # so an aiosqlite connection never outlives the loop that owns it
+        # (`ResourceWarning: unclosed database`, and the worker thread with it).
+        await dispose_all_engines()
     payload = report.to_dict()
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))

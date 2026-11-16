@@ -34,7 +34,7 @@ def _sha256(data: bytes) -> str:
 
 def _write_published(root: Path, job_id: str, name: str, payload: bytes, attempt: int | str | None):
     job_dir = root / "published" / job_id
-    job_dir.mkdir(parents=True)
+    job_dir.mkdir(parents=True, exist_ok=True)
     artifact = job_dir / name
     artifact.write_bytes(payload)
     sidecar = job_dir / f".{name}.owner"
@@ -46,10 +46,25 @@ def _write_published(root: Path, job_id: str, name: str, payload: bytes, attempt
 
 
 class _Facts:
-    def __init__(self, *, status: str, attempt: int, result: dict[str, Any] | None) -> None:
+    """One queue row, shaped like ``provenance.models.JobFacts``.
+
+    ``payload`` is the immutable admission record: inside the crash window it is
+    the *only* place the project/revision pin exists, because ``result`` is
+    written together with the completion this repair is recovering from.
+    """
+
+    def __init__(
+        self,
+        *,
+        status: str,
+        attempt: int,
+        result: dict[str, Any] | None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
         self.status = status
         self.attempt = attempt
         self.result = result
+        self.payload = payload or {}
 
 
 class _FakeQueue:
@@ -83,15 +98,26 @@ async def _commit_revision(tmp_path: Path, factory) -> Any:
 
 
 class _ctx:
-    """Adapt async_sessionmaker to the store's zero-arg session factory protocol."""
+    """Adapt async_sessionmaker to the store's zero-arg session factory protocol.
+
+    The session is closed on exit: leaving it to the garbage collector is what
+    produced ``SAWarning: the garbage collector is trying to clean up
+    non-checked-in connection`` in this file — a leak in the *test* harness that
+    looked like a defect in the code under test.
+    """
 
     def __init__(self, factory) -> None:
         self._factory = factory
+        self._session = None
 
     async def __aenter__(self):
-        return self._factory()
+        self._session = self._factory()
+        return self._session
 
     async def __aexit__(self, *exc):
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
         return False
 
 
@@ -290,3 +316,218 @@ async def test_consistent_publication_reports_clean(tmp_path: Path, session_fact
     assert report.violations == 0
     assert report.issues == ()
     assert report.bound == 1
+
+
+# ── Case A inside the crash window (audit finding 1a) ────────────────────────
+#
+# The window is: ``publish_verified`` moved the bytes into
+# ``published/<job_id>/<name>`` and ``_mark_completed`` never ran. The row is
+# still ``verifying`` and ``result`` is empty — the *payload* is the only
+# evidence that pins the revision. Treating that state as an unrepairable
+# orphan quarantined a perfectly good artifact and lost the binding.
+
+
+def _crash_window_payload(revision_id: str, *, project_id: str = PROJECT_ID) -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "operation": "timeline.trim",
+        "project_id": project_id,
+        "revision_id": revision_id,
+        "revision_hash": "sha256:" + "ab" * 32,
+        "idempotency_key": "idem-crash-1",
+    }
+
+
+async def test_crash_window_row_is_repaired_from_its_payload_pin(
+    tmp_path: Path, session_factory
+) -> None:
+    revision = await _commit_revision(tmp_path, session_factory)
+    payload = b"crash-window-bytes" * 16
+    artifact, _sidecar = _write_published(tmp_path, JOB_ID, "out.mp4", payload, 3)
+
+    queue = _FakeQueue(
+        {
+            JOB_ID: _Facts(
+                status="verifying",  # publication landed, completion did not
+                attempt=3,
+                result=None,
+                payload=_crash_window_payload(revision.revision_id),
+            )
+        }
+    )
+    report = await reconcile_published_artifacts_and_db(
+        tmp_path, session_factory, queue=queue, apply_repair=True
+    )
+    assert report.repaired == 1, [i.detail for i in report.issues]
+    assert report.quarantined == 0
+    assert artifact.exists(), "a healthy published artifact must never be moved"
+
+    async with session_factory() as session:
+        row = await session.get(orm.ProjectArtifactBinding, (f"sha256:{_sha256(payload)}", JOB_ID))
+    assert row is not None
+    assert row.revision_id == revision.revision_id
+    assert row.attempt == 3
+
+
+async def test_crash_window_without_a_pin_is_quarantined_not_guessed(
+    tmp_path: Path, session_factory
+) -> None:
+    """No pin anywhere in the row: the artifact cannot be attributed, so it is not."""
+    payload = b"unattributable" * 16
+    artifact, _sidecar = _write_published(tmp_path, JOB_ID, "out.mp4", payload, 2)
+    queue = _FakeQueue(
+        {
+            JOB_ID: _Facts(
+                status="processing",
+                attempt=2,
+                result=None,
+                payload={"operation": "timeline.trim", "idempotency_key": "k"},
+            )
+        }
+    )
+    report = await reconcile_published_artifacts_and_db(
+        tmp_path, session_factory, queue=queue, apply_repair=True
+    )
+    assert report.quarantined == 1
+    assert not artifact.exists()
+    assert any("pins no project_id/revision_id" in i.detail for i in report.issues)
+
+
+async def test_crash_window_refuses_bytes_that_do_not_match_the_recorded_digest(
+    tmp_path: Path, session_factory
+) -> None:
+    revision = await _commit_revision(tmp_path, session_factory)
+    payload = b"tampered-in-the-window" * 8
+    _artifact, _sidecar = _write_published(tmp_path, JOB_ID, "out.mp4", payload, 4)
+    recorded = _crash_window_payload(revision.revision_id)
+    recorded["artifact_id"] = "sha256:" + "cd" * 32  # not these bytes
+
+    queue = _FakeQueue(
+        {JOB_ID: _Facts(status="verifying", attempt=4, result=None, payload=recorded)}
+    )
+    report = await reconcile_published_artifacts_and_db(
+        tmp_path, session_factory, queue=queue, apply_repair=True
+    )
+    assert report.quarantined == 1
+    assert report.repaired == 0
+    assert any("do not match the content address" in i.detail for i in report.issues)
+
+
+async def test_a_failed_row_is_never_repaired_even_with_a_payload_pin(
+    tmp_path: Path, session_factory
+) -> None:
+    """The queue refused these bytes; binding them would fabricate lineage."""
+    revision = await _commit_revision(tmp_path, session_factory)
+    _artifact, _sidecar = _write_published(tmp_path, JOB_ID, "out.mp4", b"rejected" * 8, 1)
+    queue = _FakeQueue(
+        {
+            JOB_ID: _Facts(
+                status="failed_terminal",
+                attempt=1,
+                result={"project_id": PROJECT_ID, "revision_id": revision.revision_id},
+                payload=_crash_window_payload(revision.revision_id),
+            )
+        }
+    )
+    report = await reconcile_published_artifacts_and_db(
+        tmp_path, session_factory, queue=queue, apply_repair=True
+    )
+    assert report.repaired == 0
+    assert report.quarantined == 1
+
+
+# ── Quarantine is evidence: a second witness never overwrites the first ─────
+
+
+async def test_quarantine_never_overwrites_an_existing_witness(
+    tmp_path: Path, session_factory
+) -> None:
+    first = b"first-witness" * 8
+    second = b"second-witness" * 8
+    quarantine = tmp_path / ".quarantine" / f"{JOB_ID}_1_reconciled"
+
+    artifact, _ = _write_published(tmp_path, JOB_ID, "out.mp4", first, 1)
+    report = await reconcile_published_artifacts_and_db(
+        tmp_path, session_factory, queue=_FakeQueue({}), apply_repair=True
+    )
+    assert report.quarantined == 1
+    first_bytes = (quarantine / "out.mp4").read_bytes()
+    assert first_bytes == first
+
+    # The same (job_id, attempt) crashes again with different bytes.
+    artifact2, sidecar2 = _write_published(tmp_path, JOB_ID, "out.mp4", second, 1)
+    report2 = await reconcile_published_artifacts_and_db(
+        tmp_path, session_factory, queue=_FakeQueue({}), apply_repair=True
+    )
+    assert report2.quarantined == 1
+
+    witnesses = sorted(
+        p for p in quarantine.iterdir() if p.name.startswith("out") and not p.name.startswith(".")
+    )
+    assert len(witnesses) == 2, witnesses
+    assert (quarantine / "out.mp4").read_bytes() == first, "the first witness was overwritten"
+    assert {p.read_bytes() for p in witnesses} == {first, second}
+    assert any(p.name.startswith("out.") and p.name.endswith(".mp4") for p in witnesses)
+    assert not artifact.exists() and not artifact2.exists()
+    assert not sidecar2.exists()
+    receipts = sorted(quarantine.glob("reconciliation_receipt*.json"))
+    assert len(receipts) == 2, receipts
+
+
+def test_unique_target_disambiguates_by_digest_then_counter(tmp_path: Path) -> None:
+    from nexus_ai_agent.maintenance.reconciler import _unique_target
+
+    (tmp_path / "out.mp4").write_bytes(b"a")
+    first = _unique_target(tmp_path, "out.mp4", "sha256:" + "11" * 32)
+    assert first.name == "out.111111111111.mp4"
+    first.write_bytes(b"b")
+    second = _unique_target(tmp_path, "out.mp4", "sha256:" + "11" * 32)
+    assert second.name == "out.111111111111-2.mp4"
+
+
+# ── The CLI closes the pools it opened (audit finding 1c) ────────────────────
+#
+# A one-shot CLI that exits with a live aiosqlite connection produces
+# `ResourceWarning: unclosed database` and can leave the sqlite worker thread
+# alive. The engine cache is process-wide state, so the only honest fix is an
+# explicit `dispose()` in a `finally` block — which means the cache must be
+# empty afterwards, and a *subsequent* call must still work.
+
+
+async def test_dispose_all_engines_empties_the_cache_and_stays_usable(tmp_path: Path) -> None:
+    from nexus_ai_agent.storage import db as db_module
+
+    database = tmp_path / "app.sqlite"
+    async with db_module.get_session(str(database)) as session:
+        await session.execute(orm.ProjectArtifactBinding.__table__.select())
+    assert db_module._engine is not None
+
+    await db_module.dispose_all_engines()
+    assert db_module._engine is None
+    assert db_module._session_factory is None
+
+    # Idempotent, and the module still works after the pool was closed.
+    await db_module.dispose_all_engines()
+    async with db_module.get_session(str(database)) as session:
+        await session.execute(orm.ProjectArtifactBinding.__table__.select())
+    await db_module.dispose_all_engines()
+
+
+def test_the_reconciler_cli_disposes_its_engines(tmp_path: Path, capsys) -> None:
+    from nexus_ai_agent.maintenance.reconciler import main
+    from nexus_ai_agent.storage import db as db_module
+
+    (tmp_path / "published").mkdir()
+    code = main(
+        [
+            "--workspace-root",
+            str(tmp_path),
+            "--database-path",
+            str(tmp_path / "app.sqlite"),
+            "--json",
+        ]
+    )
+    assert code == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["schema"] == "nagar.db_disk_reconciliation.v1"
+    assert db_module._engine is None, "the CLI left an engine open past its event loop"

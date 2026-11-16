@@ -1,3 +1,5 @@
+import base64
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -97,3 +99,30 @@ def test_connection_contract_has_no_secret_field():
         created_at=datetime.now(timezone.utc),
     )
     assert "secret" not in contract.model_dump()
+
+
+def test_from_environment_treats_an_explicit_empty_mapping_as_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`environ or os.environ` silently read the process env when given `{}`.
+
+    A caller that passes `{}` is saying "no bootstrap configuration"; falling
+    through to the real environment made that unexpressible (and made the
+    function untestable without mutating the process env).
+    """
+    monkeypatch.setenv(
+        "NEXUS_CONNECT_KEK_RING", json.dumps({"k1": base64.b64encode(b"k" * 32).decode()})
+    )
+    monkeypatch.setenv("NEXUS_CONNECT_ACTIVE_KEK_ID", "k1")
+    with pytest.raises(KeyProviderError, match="NEXUS_CONNECT_KEK_RING"):
+        StaticKeyRing.from_environment({})
+
+
+def test_from_environment_reads_only_the_mapping_it_is_given() -> None:
+    ring = StaticKeyRing.from_environment(
+        {
+            "NEXUS_CONNECT_KEK_RING": json.dumps({"k9": base64.b64encode(b"q" * 32).decode()}),
+            "NEXUS_CONNECT_ACTIVE_KEK_ID": "k9",
+        }
+    )
+    assert ring.active_key_id == "k9"

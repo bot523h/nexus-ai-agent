@@ -465,6 +465,56 @@ async def _dispose_replaced_engines() -> None:
             pass
 
 
+async def dispose_all_engines() -> None:
+    """Close every engine this process cached and reset the caches.
+
+    A long-lived process (the bot, the API) *wants* the module-level caches: an
+    engine owns a connection pool, and rebuilding it per call would defeat the
+    pool.  A one-shot CLI does not: when the interpreter exits with a live
+    aiosqlite connection, Python reports ``ResourceWarning: unclosed database``
+    and the process can hang on the worker thread that owns it.  Callers that
+    own the process lifetime (``python -m …maintenance.reconciler``) call this
+    from a ``finally`` block, so the pools are closed deterministically instead
+    of at the mercy of the garbage collector.
+
+    Idempotent, and safe to call when nothing was ever created.
+    """
+    global _engine, _engine_path, _session_factory, _sync_engine_url, _sync_engine_instance
+
+    await _dispose_replaced_engines()
+
+    engines: list[Any] = []
+    if _engine is not None:
+        engines.append(_engine)
+    engines.extend(_pg_engines.values())
+
+    _engine = None
+    _engine_path = None
+    _session_factory = None
+    _pg_engines.clear()
+    _pg_session_factories.clear()
+    _pg_prepared_urls.clear()
+    # The engine is gone, so the schema it prepared is unknown to the next
+    # caller: re-initialisation must run again rather than be skipped.
+    _initialized_paths.clear()
+
+    for engine in engines:
+        try:
+            await engine.dispose()
+        except Exception:
+            # Disposal is hygiene, never a reason to fail the caller's work.
+            pass
+
+    sync_engine = _sync_engine_instance
+    _sync_engine_url = None
+    _sync_engine_instance = None
+    if sync_engine is not None:
+        try:
+            sync_engine.dispose()
+        except Exception:
+            pass
+
+
 #: How many times :func:`create_all_metadata` retries after losing a race.
 _CREATE_ALL_ATTEMPTS = 6
 
