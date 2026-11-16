@@ -36,23 +36,23 @@ Two separate inaccuracies, both stated here rather than smoothed over:
 ### 2.1 Size, measured (not estimated)
 
 ```bash
-git rev-list --count deab2b3e..77a2b8b                  # 1517
-git rev-list --count --first-parent deab2b3e..77a2b8b   # 64
-git rev-list --count da3e5ed7..77a2b8b                  # 41
-git rev-list --count '483403d^..77a2b8b'                # 41   (the §2.3 window, inclusive)
+git rev-list --count deab2b3e..6fd0c95                  # 1519
+git rev-list --count --first-parent deab2b3e..6fd0c95   # 66
+git rev-list --count da3e5ed7..6fd0c95                  # 43
+git rev-list --count '483403d^..6fd0c95'                # 43   (the §2.3 window, inclusive)
 ```
 
-All four are `git rev-list` output at **`77a2b8b`**, the last commit of this wave whose
-tree carries code; the commits after it are documentation and evidence only, and each adds
-exactly one to every count, so a reader who runs the commands at the pushed `HEAD` will see
-three larger numbers. That is the reason the SHAs are named here instead of "HEAD": the
+All four are `git rev-list` output at **`6fd0c95`**, the last commit that changes anything
+but prose; the commits after it in this file's own history are documentation only, and each
+adds exactly one to every count, so a reader who runs the commands at the pushed `HEAD` will
+see larger numbers by exactly the number of documentation commits since. That is the reason the SHAs are named here instead of "HEAD": the
 previous revision of this section printed **1511 / 58 / 35** in the block, **1512 / 59 / 36**
 in the sentence below it and "19 of the 35" against a table that has 35 rows, so no two
 numbers agreed and none of them reproduced. The rule this section now follows: a count is
 stated against a SHA, or it is not stated.
 
-Of the 41, 19 (rows 1–19 of §2.3) are the pre-closeout waves and the four preserved
-commits that came with them; 22 (rows 20–41) are this closeout, including the second audit
+Of the 43, 19 (rows 1–19 of §2.3) are the pre-closeout waves and the four preserved
+commits that came with them; 24 (rows 20–43) are this closeout, including the second audit
 wave of §2.3b.
 
 The **diff** is smaller than the history and easier to review:
@@ -102,7 +102,7 @@ including the margin it left.
 
 ### 2.3 The wave window, commit by commit
 
-`483403d^..77a2b8b` — **41 commits**, inclusive of `483403d` itself. Everything in §3–§7
+`483403d^..6fd0c95` — **43 commits**, inclusive of `483403d` itself. Everything in §3–§7
 is one of these, and rows 37–43 are the second audit wave (§2.3b). The previous revision
 printed `483403d..HEAD` for 35 commits, but that range *excludes* its own first row — 34 is
 what it counts.
@@ -150,12 +150,14 @@ what it counts.
 | 39 | `3eaf7e4` | A2 | engine ports composed at the bus root; `intent_submit` stops calling a live route DEFERRED |
 | 40 | `e7d8ad8` | A2 | the DR drill proves restore *content*, not a row count (§8.2) |
 | 41 | `77a2b8b` | A2 | cherry-pick `cd8db338` — hybrid CAS resource packs (17 files, no conflict) |
+| 42 | `8abd63a` | A2 | the P0 bundle regenerated at the final tree, and this ledger corrected (§8.2, §8.4) |
+| 43 | `6fd0c95` | A2 | §4.2 and §7 record this wave's parity run |
 
 
 Commits 28–29 are documentation only; 30–32 are behaviour, evidence and budgets; §4 is
 measured at `77a2b8b` (41), the last commit of this wave whose tree carries code.
 
-### 2.3b The second audit wave — five findings and one merge (rows 37–41)
+### 2.3b The second audit wave — five findings and one merge (rows 37–43)
 
 A code audit of the pushed head produced five findings and one merge request. Each is
 closed by a commit that names the failure mode, and by at least one test that fails on the
@@ -619,6 +621,30 @@ Two honest notes rather than a clean sweep of the story:
 **6.3.6 What this run does not prove.** It is the `pull_request` run on this branch, not a
 run on `main` after a merge; the CircleCI status of §6.1 is unaffected by it; and the
 branch-protection policy of §8.5 remains unread.
+
+**6.3.7 The run on the final tree — 24/24.** After the second audit wave (§2.3b), run
+`43807306793` (head `6fd0c95`) completed **success with all 24 jobs green**, and that
+number is a count of jobs, not a summary gesture:
+
+```
+$ gh run view 43807306793 --json jobs | jq '.jobs | length,
+    map(select(.conclusion=="success")) | length, map(select(.conclusion!="success")) | length'
+24
+24
+0
+```
+
+Two of those jobs are the point of this wave rather than a formality.
+`dependency-audit (pip-audit vs reviewed allow-list)` is green **on the same tree where the
+local script now also exits 0** — the contradiction §8.4 spent a section on is closed in both
+directions. And `python-parity (3.11)` / `(3.12)` resolve `soupsieve 4.1.1`, so the floor
+declared in `pyproject.toml` is not a comment: it installs where the interpreter can take it,
+which is exactly the claim the acceptances rest on.
+
+What this run does **not** establish is anything about `main`: it is the `pull_request` run
+for this branch. The commits after `6fd0c95` are documentation only, and §4's measurements
+were taken at `77a2b8b` on a tree whose code is identical to this one (the diff is
+`docs/`-only).
 
 ---
 
