@@ -1121,6 +1121,446 @@ SARA (با لبخند): We nailed every single frame روی زمان دقیق!
                 assert shot.trajectory.samples[-1].linear_acceleration == (0.0, 0.0, 0.0)
 
 
+# --------------------------------------------------------------------------- #
+# Wave-5: F8 saccade-policy upper bound/pin and F7/R1 character-blocking binds
+# --------------------------------------------------------------------------- #
+
+
+def _forge_editorial_policy(
+    plan: sb.EditorialTimelinePlan,
+    limit: float,
+) -> sb.EditorialTimelinePlan:
+    """Rebuild a whole timeline under a forged saccade limit, bypassing solver bound checks.
+
+    This is the exact maneuver ChatGPT's audit used: declare a huge (or tiny) policy limit, let
+    the raw entry focus stand where the projector would have reframed it, keep every derived
+    eye-trace field self-consistent with the forged limit, and re-seal the digests afterwards.
+    """
+    from nexus_ai_agent.creative.storyboard_compiler.editorial_cut_solver import (
+        _are_eyelines_complementary,
+        _radial_eye_trace_projection,
+    )
+
+    events = list(plan.events)
+    transitions: list[sb.CutTransition] = []
+    for k, tr in enumerate(plan.transitions):
+        et = tr.eye_trace
+        out_ev, in_ev = events[k], events[k + 1]
+        reframe, projected = _radial_eye_trace_projection(
+            et.exit_focus_uv, et.raw_entry_focus_uv, limit
+        )
+        adj_u, adj_v = projected if reframe else et.raw_entry_focus_uv
+        adjusted = (round(adj_u, 6), round(adj_v, 6))
+        effective = math.hypot(adjusted[0] - et.exit_focus_uv[0], adjusted[1] - et.exit_focus_uv[1])
+        raw = math.hypot(
+            et.raw_entry_focus_uv[0] - et.exit_focus_uv[0],
+            et.raw_entry_focus_uv[1] - et.exit_focus_uv[1],
+        )
+        vert_delta = abs(adjusted[1] - et.exit_focus_uv[1])
+        matched = _are_eyelines_complementary(
+            out_ev.look_direction, in_ev.look_direction, vert_delta, in_ev.intentional_axis_jump
+        )
+        transitions.append(
+            dataclasses.replace(
+                tr,
+                eye_trace=dataclasses.replace(
+                    et,
+                    adjusted_entry_focus_uv=adjusted,
+                    raw_saccade_uv=round(raw, 6),
+                    effective_saccade_uv=round(effective, 6),
+                    vertical_eyeline_delta=round(vert_delta, 6),
+                    reframe_applied=reframe,
+                    eyeline_matched=matched,
+                    continuity_score=round(max(0.0, min(1.0, 1.0 - effective / math.sqrt(2.0))), 6),
+                ),
+            )
+        )
+        events[k + 1] = dataclasses.replace(in_ev, entry_focus_uv=adjusted)
+
+    mean_eye = (
+        round(sum(tr.eye_trace.continuity_score for tr in transitions) / len(transitions), 6)
+        if transitions
+        else 1.0
+    )
+    return dataclasses.replace(
+        plan,
+        events=tuple(events),
+        transitions=tuple(transitions),
+        max_eye_trace_saccade_limit=round(limit, 6),
+        mean_eye_trace_score=mean_eye,
+    )
+
+
+@pytest.mark.parametrize("legal_limit", [0.05, 0.22, DEFAULT_MAX_EYE_TRACE_SACCADE, 0.50])
+def test_wave5_policy_forger_is_faithful_for_in_policy_limits(legal_limit: float) -> None:
+    """Control: the forging helper only trips the new bound, never the geometry itself."""
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    forged = _forge_editorial_policy(manifest.editorial, legal_limit)
+    report = verify_editorial_timeline(forged, expected_max_saccade_limit=legal_limit)
+    assert report.compliant is True
+    assert report.eye_trace_valid is True
+    assert forged.max_eye_trace_saccade_limit == round(legal_limit, 6)
+
+
+@pytest.mark.parametrize("forged_limit", [0.51, 0.85, 2.0, math.sqrt(2.0), 0.049, 0.0, -1.0])
+def test_f8_wave5_out_of_policy_saccade_limit_fails_editorial_and_manifest(
+    forged_limit: float,
+) -> None:
+    """F8 closure: inflating (or shrinking) the saccade policy can never launder an eye jump."""
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    if forged_limit > 0.0:
+        forged = _forge_editorial_policy(manifest.editorial, forged_limit)
+    else:
+        # Degenerate non-positive thresholds never reach the projector (policy fails first),
+        # which is itself the invariant that keeps verification exception-free.
+        forged = dataclasses.replace(manifest.editorial, max_eye_trace_saccade_limit=forged_limit)
+
+    report = verify_editorial_timeline(forged)
+    assert report.compliant is False
+    assert report.eye_trace_valid is False
+    assert any("eye-trace saccade policy violation" in v for v in report.violations)
+
+    tampered = dataclasses.replace(
+        manifest,
+        editorial=forged,
+        editorial_compliant=True,
+        eye_trace_compliant=True,
+    )
+    # Adversary recomputes all 4 SHA-256 digests while keeping the compliance flags True...
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered)) is False
+    # ...and the strongest variant that also recomputes every cached verification report.
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
+
+
+def test_f8_wave5_solver_refuses_out_of_policy_saccade_limits() -> None:
+    """Both solver entry points pin the limit into [0.05, 0.50]."""
+    plans = solve_script_cinematography(parse_bilingual_script(DIALOGUE_AND_REACTION_SCRIPT))
+    for bad in (0.0, 0.049, 0.51, 0.85, 2.0, math.sqrt(2.0), float("nan"), float("inf")):
+        with pytest.raises(EditorialCutError, match="max_saccade_uv"):
+            solve_eye_trace_transition(
+                transition_index=0,
+                from_shot_index=0,
+                to_shot_index=1,
+                exit_focus_uv=(0.15, 0.30),
+                entry_focus_uv=(0.85, 0.30),
+                max_saccade_uv=bad,
+            )
+        with pytest.raises(EditorialCutError, match="max_eye_trace_saccade"):
+            solve_editorial_timeline(plans, max_eye_trace_saccade=bad)
+
+    for good in (0.05, 0.38, 0.50):
+        ok = solve_eye_trace_transition(
+            transition_index=0,
+            from_shot_index=0,
+            to_shot_index=1,
+            exit_focus_uv=(0.15, 0.30),
+            entry_focus_uv=(0.85, 0.30),
+            max_saccade_uv=good,
+        )
+        assert ok.effective_saccade_uv <= good + 1e-6
+        assert ok.reframe_applied is True
+
+
+def test_f8_wave5_explicit_policy_pin_enforces_exact_declared_limit() -> None:
+    """``expected_max_saccade_limit`` pins the canonical policy exactly."""
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    pinned = verify_editorial_timeline(
+        manifest.editorial, expected_max_saccade_limit=DEFAULT_MAX_EYE_TRACE_SACCADE
+    )
+    assert pinned.compliant is True
+    assert pinned.eye_trace_valid is True
+
+    mismatched = verify_editorial_timeline(
+        manifest.editorial, expected_max_saccade_limit=DEFAULT_MAX_EYE_TRACE_SACCADE + 0.1
+    )
+    assert mismatched.compliant is False
+    assert mismatched.eye_trace_valid is False
+    assert any("pinned policy" in v for v in mismatched.violations)
+
+    assert (
+        verify_manifest_integrity(
+            manifest, expected_max_saccade_limit=DEFAULT_MAX_EYE_TRACE_SACCADE
+        )
+        is True
+    )
+    assert (
+        verify_manifest_integrity(
+            manifest, expected_max_saccade_limit=DEFAULT_MAX_EYE_TRACE_SACCADE + 0.1
+        )
+        is False
+    )
+
+    parsed = parse_bilingual_script(DIALOGUE_AND_REACTION_SCRIPT)
+    plans = solve_script_cinematography(parsed)
+    editorial = solve_editorial_timeline(plans, max_eye_trace_saccade=0.30)
+    sealed = build_compiled_manifest(parsed, plans, editorial, expected_max_saccade_limit=0.30)
+    assert sealed.eye_trace_compliant is True
+    assert verify_manifest_integrity(sealed, expected_max_saccade_limit=0.30) is True
+    relaxed = build_compiled_manifest(parsed, plans, editorial, expected_max_saccade_limit=0.12)
+    assert relaxed.eye_trace_compliant is False
+    assert verify_manifest_integrity(relaxed) is False
+
+
+def test_f7_wave5_manifest_rejects_forged_character_blocking() -> None:
+    """F7/R1 closure: blocking, subject labels, and subject positions are bound to the script."""
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    p0, p1 = manifest.cinematography[0], manifest.cinematography[1]
+    scene0 = manifest.script.scenes[0]
+    shift = (0.25, 0.15, 0.05)
+
+    def moved(pos: tuple[float, float, float]) -> tuple[float, float, float]:
+        return (pos[0] + shift[0], pos[1] + shift[1], pos[2] + shift[2])
+
+    # Case 1: re-stage BOTH the ledger and every shot subject so internal consistency holds.
+    forged_pairs = tuple((name, moved(pos)) for name, pos in p0.character_positions)
+    forged_shots = tuple(
+        dataclasses.replace(sh, subject_position=moved(sh.subject_position)) for sh in p0.shots
+    )
+    bad_p0 = dataclasses.replace(p0, character_positions=forged_pairs, shots=forged_shots)
+    tampered = dataclasses.replace(manifest, cinematography=(bad_p0, p1))
+    assert (
+        sb.verify_scene_character_blocking(
+            bad_p0.shots,
+            bad_p0.axis,
+            scene=scene0,
+            character_positions=forged_pairs,
+        )
+        is False
+    )
+    assert (
+        sb.verify_180_degree_rule(
+            bad_p0.shots, bad_p0.axis, scene=scene0, character_positions=forged_pairs
+        ).compliant
+        is False
+    )
+    # cinematography_sha256 now covers character_positions, so the raw digest already differs...
+    resealed = _reseal_tampered_manifest(tampered)
+    assert resealed.cinematography_sha256 != manifest.cinematography_sha256
+    assert verify_manifest_integrity(tampered) is False
+    # ...and full re-sealing plus report recomputation still cannot pass.
+    assert verify_manifest_integrity(resealed) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
+
+    # Case 2: mutate only a shot's subject_position (fake eyeline anchor).
+    drift_shot = dataclasses.replace(
+        p0.shots[0], subject_position=moved(p0.shots[0].subject_position)
+    )
+    drift_p0 = dataclasses.replace(p0, shots=(drift_shot, *p0.shots[1:]))
+    drift = dataclasses.replace(manifest, cinematography=(drift_p0, p1))
+    assert verify_manifest_integrity(_reseal_tampered_manifest(drift)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(drift)) is False
+
+    # Case 3: swap the two speakers' subject_label fields (shot count and poses untouched).
+    swapped_shots = (
+        dataclasses.replace(p0.shots[0], subject_label=p0.shots[1].subject_label),
+        dataclasses.replace(p0.shots[1], subject_label=p0.shots[0].subject_label),
+        *p0.shots[2:],
+    )
+    swapped_p0 = dataclasses.replace(p0, shots=swapped_shots)
+    swapped = dataclasses.replace(manifest, cinematography=(swapped_p0, p1))
+    assert (
+        sb.verify_scene_character_blocking(
+            swapped_p0.shots,
+            swapped_p0.axis,
+            scene=scene0,
+            character_positions=swapped_p0.character_positions,
+        )
+        is False
+    )
+    assert verify_manifest_integrity(_reseal_tampered_manifest(swapped)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(swapped)) is False
+
+    # Case 4: tamper the blocking ledger alone (no re-seal at all).
+    ledger_only = dataclasses.replace(
+        p0, character_positions=tuple((n, moved(p)) for n, p in p0.character_positions)
+    )
+    assert (
+        verify_manifest_integrity(dataclasses.replace(manifest, cinematography=(ledger_only, p1)))
+        is False
+    )
+
+    # Case 5: rename a dialogue event's speaker to another cast member.
+    ed = manifest.editorial
+    first_dialogue = next(i for i, ev in enumerate(ed.events) if ev.speaker is not None)
+    original_speaker = ed.events[first_dialogue].speaker
+    other = next(name for name in dict(p0.character_positions) if name != original_speaker)
+    bad_events = (
+        *ed.events[:first_dialogue],
+        dataclasses.replace(ed.events[first_dialogue], speaker=other),
+        *ed.events[first_dialogue + 1 :],
+    )
+    speaker_tampered = dataclasses.replace(
+        manifest, editorial=dataclasses.replace(ed, events=bad_events)
+    )
+    assert verify_manifest_integrity(_reseal_tampered_manifest(speaker_tampered)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(speaker_tampered)) is False
+
+    # Case 6: dropping a scene plan must return False instead of raising while zipping scenes.
+    short = dataclasses.replace(manifest, cinematography=(p0,))
+    assert verify_manifest_integrity(_reseal_tampered_manifest(short)) is False
+
+    # Case 7: slide the whole 180-degree axis outward (a legal AxisOfAction) while keeping the
+    # declared blocking and shots -- bind_axis canonicality rejects it even though the geometry
+    # replay of verify_180_degree_rule(shots, axis) alone would happily accept the new line.
+    slid_axis = dataclasses.replace(p0.axis, p1=(-1.5, 0.0, 1.6), p2=(1.5, 0.0, 1.6))
+    axis_p0 = dataclasses.replace(p0, axis=slid_axis)
+    axis_tampered = dataclasses.replace(manifest, cinematography=(axis_p0, p1))
+    assert (
+        sb.verify_scene_character_blocking(
+            axis_p0.shots,
+            slid_axis,
+            scene=scene0,
+            character_positions=axis_p0.character_positions,
+            bind_axis=True,
+        )
+        is False
+    )
+    assert verify_manifest_integrity(_reseal_tampered_manifest(axis_tampered)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(axis_tampered)) is False
+
+
+def test_f7_wave5_canonical_character_positions_are_hash_bound() -> None:
+    """_serialize_cinematography must include canonical blocking for every scene plan."""
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    from nexus_ai_agent.creative.storyboard_compiler.editorial_cut_solver import (
+        _compute_digests,
+        _serialize_cinematography,
+    )
+
+    payload = _serialize_cinematography(manifest.cinematography)
+    first = payload["scene_plans"][0]
+    assert [name for name, _ in first["character_positions"]] == sorted(
+        name for name, _ in first["character_positions"]
+    )
+    canonical = sb.compute_canonical_character_positions(
+        manifest.script.scenes[0],
+        axis=manifest.cinematography[0].axis,
+        initial_axis_side=manifest.cinematography[0].axis.initial_side,
+    )
+    sealed_positions = {name: tuple(pos) for name, pos in first["character_positions"]}
+    assert set(sealed_positions) == set(canonical)
+    for name, pos in sealed_positions.items():
+        for axis_idx in range(3):
+            assert abs(pos[axis_idx] - canonical[name][axis_idx]) <= 1e-6
+
+    def digest_of(plans: tuple[sb.SceneCinematographyPlan, ...]) -> str:
+        return _compute_digests(
+            MANIFEST_SCHEMA_VERSION,
+            manifest.script,
+            plans,
+            manifest.editorial,
+            total_scenes=manifest.total_scenes,
+            total_shots=sum(len(p.shots) for p in plans),
+            total_duration_sec=manifest.total_duration_sec,
+            axis_180_compliant=True,
+            editorial_compliant=True,
+            eye_trace_compliant=True,
+        )[1]
+
+    p0, p1 = manifest.cinematography[0], manifest.cinematography[1]
+    nudged = dataclasses.replace(
+        p0,
+        character_positions=(
+            (
+                p0.character_positions[0][0],
+                (p0.character_positions[0][1][0] + 1e-4, *p0.character_positions[0][1][1:]),
+            ),
+            *p0.character_positions[1:],
+        ),
+    )
+    assert digest_of((nudged, p1)) != digest_of((p0, p1))
+
+
+def test_wave5_saccade_policy_window_is_canonical_and_exported() -> None:
+    """The policy window itself is part of the public contract and pins the default."""
+    assert sb.MIN_EYE_TRACE_SACCADE_LOWER_BOUND == 0.05
+    assert sb.MAX_EYE_TRACE_SACCADE_UPPER_BOUND == 0.50
+    assert sb.MIN_EYE_TRACE_SACCADE_LOWER_BOUND <= DEFAULT_MAX_EYE_TRACE_SACCADE
+    assert DEFAULT_MAX_EYE_TRACE_SACCADE <= sb.MAX_EYE_TRACE_SACCADE_UPPER_BOUND
+    # 0.50 comfortably covers the widest legal Rule-of-Thirds reverse (sqrt(2)/3 = 0.4714)
+    # while staying far below the unit-square diagonal that would neutralize reframing.
+    assert sb.MAX_EYE_TRACE_SACCADE_UPPER_BOUND < math.sqrt(2.0) / 2.0
+    assert StoryboardCompilerConfig().max_eye_trace_saccade == DEFAULT_MAX_EYE_TRACE_SACCADE
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    assert manifest.editorial.max_eye_trace_saccade_limit == DEFAULT_MAX_EYE_TRACE_SACCADE
+
+
+def test_f7_wave5_bijection_rejects_consistently_restaged_axis_slide() -> None:
+    """A slid 180-degree axis with a fully re-derived stage is still refused (bind_axis)."""
+    from nexus_ai_agent.creative.storyboard_compiler.editorial_cut_solver import (
+        _scene_shot_bijection_valid,
+    )
+
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    p0 = manifest.cinematography[0]
+    scene0 = manifest.script.scenes[0]
+    slid_axis = dataclasses.replace(p0.axis, p1=(-1.5, 0.0, 1.6), p2=(1.5, 0.0, 1.6))
+    ledger = dict(p0.character_positions)
+    restaged = {
+        name: ((-1.5, 0.0, 1.6) if pos[0] < 0.0 else (1.5, 0.0, 1.6))
+        for name, pos in ledger.items()
+    }
+
+    def rebind(label: str) -> tuple[float, float, float]:
+        return restaged.get(label, (0.0, 0.0, 1.6))
+
+    slid_shots = tuple(
+        dataclasses.replace(sh, subject_position=rebind(sh.subject_label)) for sh in p0.shots
+    )
+    slid_plan = dataclasses.replace(
+        p0,
+        axis=slid_axis,
+        character_positions=tuple((name, restaged[name]) for name in ledger),
+        shots=slid_shots,
+    )
+    # Internally consistent under the slid axis -- only canonical-axis binding can see through it.
+    assert (
+        sb.verify_scene_character_blocking(
+            slid_plan.shots,
+            slid_axis,
+            scene=scene0,
+            character_positions=slid_plan.character_positions,
+            bind_axis=False,
+        )
+        is True
+    )
+    assert (
+        sb.verify_scene_character_blocking(
+            slid_plan.shots,
+            slid_axis,
+            scene=scene0,
+            character_positions=slid_plan.character_positions,
+            bind_axis=True,
+        )
+        is False
+    )
+    tampered = dataclasses.replace(
+        manifest, cinematography=(slid_plan, *manifest.cinematography[1:])
+    )
+    assert _scene_shot_bijection_valid(tampered) is False
+    assert _scene_shot_bijection_valid(manifest) is True
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
+
+
+def test_wave5_editorial_summary_bounds_reject_forged_policy_fields() -> None:
+    """Editorial-level policy/breath-gap bounds are enforced even when hashes are re-sealed."""
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    for forged_limit in (0.85, 2.0):
+        forged = dataclasses.replace(manifest.editorial, max_eye_trace_saccade_limit=forged_limit)
+        tampered = dataclasses.replace(manifest, editorial=forged)
+        rep = verify_editorial_timeline(forged)
+        assert rep.compliant is False and rep.eye_trace_valid is False
+        assert verify_manifest_integrity(_reseal_tampered_manifest(tampered)) is False
+        assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
+
+    for bad_gap in (-0.05, 0.9):
+        forged_ed = dataclasses.replace(manifest.editorial, breath_gap_sec=bad_gap)
+        tampered = dataclasses.replace(manifest, editorial=forged_ed)
+        assert verify_manifest_integrity(_reseal_tampered_manifest(tampered)) is False
+        assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
+
+
 def test_package_exports_and_stdlib_plus_numpy_only_import_boundary() -> None:
     # Verify __all__ exports resolve cleanly.
     for symbol in sb.__all__:

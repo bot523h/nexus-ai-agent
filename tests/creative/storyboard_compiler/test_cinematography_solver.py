@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import dataclasses
 import math
+from collections.abc import Sequence
 
 import numpy as np
 import pytest
 
 from nexus_ai_agent.creative.storyboard_compiler.bilingual_script_parser import (
+    ActionBeat,
+    DialogueLine,
     SceneSetting,
+    ScriptLanguage,
     TimeOfDay,
     WeatherCondition,
     parse_bilingual_script,
@@ -25,13 +29,17 @@ from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import (
     RuleOfThirdsPoint,
     ScreenLookDirection,
     ShotCameraPlan,
+    ShotKind,
     ShotScale,
     axis_side_sign,
     build_look_at_pose,
     build_rule_of_thirds_pose,
+    canonical_axis_of_action,
+    compute_canonical_character_positions,
     enforce_axis_of_action,
     enforce_axis_of_action_with_trace,
     evaluate_trajectory_at,
+    expected_shot_subject,
     generate_minimum_jerk_trajectory,
     horizontal_axis_cross,
     is_valid_se3,
@@ -46,7 +54,10 @@ from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import (
     solve_scene_cinematography,
     solve_script_cinematography,
     verify_180_degree_rule,
+    verify_scene_character_blocking,
 )
+
+Vec3 = Sequence[float]
 
 TEN_SHOT_PERSIAN_DIALOGUE = """\
 داخلی. اتاق بازجویی - شب
@@ -910,3 +921,279 @@ def test_wave4_angular_jerk_clearance_spoof_move_type_and_rain_establishing() ->
         ).compliant
         is False
     )
+
+
+# --------------------------------------------------------------------------- #
+# Wave-5: Canonical character blocking, subject binding, and axis canonicality
+# --------------------------------------------------------------------------- #
+
+
+def _shift(pos: Vec3, dx: float, dy: float, dz: float) -> tuple[float, float, float]:
+    return (pos[0] + dx, pos[1] + dy, pos[2] + dz)
+
+
+def _same_point(a: Vec3, b: Vec3) -> bool:
+    return len(a) == len(b) and all(
+        math.isclose(x, y, rel_tol=0.0, abs_tol=1e-9) for x, y in zip(a, b, strict=False)
+    )
+
+
+def test_wave5_canonical_blocking_helpers_reproduce_solver_staging() -> None:
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+
+    canonical = compute_canonical_character_positions(
+        scene, axis=plan.axis, initial_axis_side=plan.axis.initial_side
+    )
+    assert dict(plan.character_positions) == canonical
+    assert [name for name, _ in plan.character_positions] == list(canonical)
+
+    expected_axis = canonical_axis_of_action(scene, 1)
+    assert _same_point(plan.axis.p1, expected_axis.p1)
+    assert _same_point(plan.axis.p2, expected_axis.p2)
+    assert plan.axis.character_a == expected_axis.character_a
+    assert plan.axis.character_b == expected_axis.character_b
+
+    for idx, elem in enumerate(scene.elements):
+        label, position = expected_shot_subject(
+            scene, elem, canonical, axis=plan.axis, initial_axis_side=1
+        )
+        assert plan.shots[idx].subject_label == label
+        assert _same_point(plan.shots[idx].subject_position, position)
+
+    assert (
+        verify_scene_character_blocking(
+            plan.shots,
+            plan.axis,
+            scene=scene,
+            character_positions=plan.character_positions,
+        )
+        is True
+    )
+    assert (
+        verify_180_degree_rule(
+            plan.shots,
+            plan.axis,
+            scene=scene,
+            character_positions=plan.character_positions,
+        ).compliant
+        is True
+    )
+    # A canonical Mapping input is accepted exactly like the solver's tuple form.
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=scene, character_positions=canonical
+        )
+        is True
+    )
+    # Without a scene the verifier stays purely geometric (backward compatible).
+    assert (
+        verify_scene_character_blocking(plan.shots, plan.axis, scene=None, character_positions=None)
+        is True
+    )
+
+
+def test_wave5_expected_shot_subject_covers_dialogue_single_multi_and_no_focus() -> None:
+    script = """\
+EXT. WAREHOUSE COURTYARD - NIGHT - RAIN
+
+A quiet wide view of the wet concrete yard.
+
+REZA
+No.
+
+SARA
+Everything is quiet here tonight while we wait by the main entrance.
+
+REZA draws a gun and slams the iron door shut with an explosion!
+
+REZA and SARA stand shoulder to shoulder in the rain.
+"""
+    scene = parse_bilingual_script(script).scenes[0]
+    plan = solve_scene_cinematography(scene)
+    positions = compute_canonical_character_positions(scene, axis=plan.axis, initial_axis_side=1)
+    midpoint = _shift(plan.axis.p1, 1.10, 0.0, 0.0)
+    assert _same_point(midpoint, (0.0, 0.0, plan.axis.p1[2]))
+
+    labels: list[str] = []
+    for elem in scene.elements:
+        label, position = expected_shot_subject(
+            scene, elem, positions, axis=plan.axis, initial_axis_side=1
+        )
+        labels.append(label)
+        if isinstance(elem, DialogueLine):
+            assert label == elem.character
+            assert _same_point(position, positions[label])
+        elif len(elem.focus_characters) == 1:
+            assert label == elem.focus_characters[0]
+            assert _same_point(position, positions[label])
+        elif len(elem.focus_characters) >= 2:
+            assert label == f"{elem.focus_characters[0]} & {elem.focus_characters[1]}"
+            assert _same_point(position, midpoint)
+        else:
+            assert label == scene.heading.location
+            assert _same_point(position, midpoint)
+
+    assert [shot.subject_label for shot in plan.shots] == labels
+    assert "REZA & SARA" in labels
+    assert plan.shots[0].subject_label == scene.heading.location
+    assert plan.shots[0].shot_kind is ShotKind.ACTION
+
+
+def test_wave5_blocking_verifier_rejects_forged_positions_labels_and_geometry() -> None:
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+    assert (
+        verify_scene_character_blocking(
+            plan.shots,
+            plan.axis,
+            scene=scene,
+            character_positions=plan.character_positions,
+        )
+        is True
+    )
+
+    # (a) Shift every declared character position while leaving shots untouched.
+    shifted_pairs = tuple(
+        (name, _shift(pos, 0.30, 0.20, 0.10)) for name, pos in plan.character_positions
+    )
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=scene, character_positions=shifted_pairs
+        )
+        is False
+    )
+
+    # (b) Fully re-stage the scene: move positions AND every shot subject together, then even the
+    #     per-shot consistency check passes -- only the scene-derived canonical check catches it.
+    re_staged_shots = tuple(
+        dataclasses.replace(sh, subject_position=_shift(sh.subject_position, 0.30, 0.20, 0.10))
+        for sh in plan.shots
+    )
+    assert (
+        verify_scene_character_blocking(
+            re_staged_shots, plan.axis, scene=None, character_positions=shifted_pairs
+        )
+        is True
+    )
+    assert (
+        verify_scene_character_blocking(
+            re_staged_shots, plan.axis, scene=scene, character_positions=shifted_pairs
+        )
+        is False
+    )
+    forged_report = verify_180_degree_rule(
+        re_staged_shots, plan.axis, scene=scene, character_positions=shifted_pairs
+    )
+    assert forged_report.compliant is False
+    assert any(
+        "character_positions or shot subject blocking" in v for v in forged_report.violations
+    )
+
+    # (c) Swap the subject_label of two reverse shots (camera stays where it is).
+    swapped = (
+        dataclasses.replace(plan.shots[0], subject_label=plan.shots[1].subject_label),
+        dataclasses.replace(plan.shots[1], subject_label=plan.shots[0].subject_label),
+        *plan.shots[2:],
+    )
+    assert (
+        verify_scene_character_blocking(
+            swapped, plan.axis, scene=scene, character_positions=plan.character_positions
+        )
+        is False
+    )
+
+    # (d) Malformed position ledgers: duplicate names and non-finite coordinates.
+    dupe = (plan.character_positions[0], plan.character_positions[0], *plan.character_positions[2:])
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=scene, character_positions=dupe
+        )
+        is False
+    )
+    nan_pairs = ((name, (float("nan"), pos[1], pos[2])) for name, pos in plan.character_positions)
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=scene, character_positions=tuple(nan_pairs)
+        )
+        is False
+    )
+
+    # (e) A shot whose subject_position disagrees with the plan's own blocking ledger.
+    drift_shot = dataclasses.replace(
+        plan.shots[0], subject_position=_shift(plan.shots[0].subject_position, 0.05, 0.0, 0.0)
+    )
+    assert (
+        verify_scene_character_blocking(
+            (drift_shot, *plan.shots[1:]),
+            plan.axis,
+            scene=None,
+            character_positions=plan.character_positions,
+        )
+        is False
+    )
+
+    # (f) Shot count must stay in bijection with the scene's element count.
+    assert (
+        verify_scene_character_blocking(
+            plan.shots[:-1], plan.axis, scene=scene, character_positions=plan.character_positions
+        )
+        is False
+    )
+
+    # (f2) A supporting actor who never fronts a shot is still bound by the canonical ledger.
+    four_char = parse_bilingual_script(
+        "INT. COURTHOUSE STEPS - DAY\n"
+        "REZA\nThe hearing starts at noon, so we walk now.\n\n"
+        "SARA\nI will bring the file from the car."
+    ).scenes[0]
+    beat = ActionBeat(
+        element_index=len(four_char.elements),
+        text="NIAZ and HAMID wait by the pillar.",
+        language=ScriptLanguage.EN,
+        duration_sec=1.75,
+        dramatic_tension=0.2,
+        focus_characters=("NIAZ", "HAMID"),
+    )
+    staged = dataclasses.replace(
+        four_char,
+        characters=(*four_char.characters, "NIAZ", "HAMID"),
+        elements=(*four_char.elements, beat),
+    )
+    crowd_plan = solve_scene_cinematography(staged)
+    assert crowd_plan.axis_report.compliant is True
+    assert [name for name, _ in crowd_plan.character_positions] == ["REZA", "SARA", "NIAZ", "HAMID"]
+    assert crowd_plan.shots[-1].subject_label == "NIAZ & HAMID"
+    assert all(sh.subject_label != "NIAZ" for sh in crowd_plan.shots)
+    ledger = list(crowd_plan.character_positions)
+    niaz_pos = ledger[2][1]
+    ledger[2] = ("NIAZ", (niaz_pos[0] + 0.9, niaz_pos[1] + 0.4, niaz_pos[2]))
+    forged_ledger = tuple(ledger)
+    assert (
+        verify_scene_character_blocking(
+            crowd_plan.shots,
+            crowd_plan.axis,
+            scene=staged,
+            character_positions=forged_ledger,
+        )
+        is False
+    )
+    # Without the scene-derived ledger, this forgery is invisible: the shots themselves are legal.
+    assert (
+        verify_scene_character_blocking(
+            crowd_plan.shots, crowd_plan.axis, scene=None, character_positions=forged_ledger
+        )
+        is True
+    )
+
+    # (g) Scene tampering that makes a declared speaker unstaged must return False, not raise.
+    orphaned = dataclasses.replace(scene, characters=(scene.characters[1],))
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=orphaned, character_positions=None
+        )
+        is False
+    )
+    assert verify_180_degree_rule(plan.shots, plan.axis, scene=orphaned).compliant is False

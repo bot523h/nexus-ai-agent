@@ -53,6 +53,7 @@ from .cinematography_solver import (
     so3_log,
     solve_script_cinematography,
     verify_180_degree_rule,
+    verify_scene_character_blocking,
 )
 
 __all__ = [
@@ -70,7 +71,9 @@ __all__ = [
     "L_CUT_MAX_SEC",
     "L_CUT_MIN_SEC",
     "MANIFEST_SCHEMA_VERSION",
+    "MAX_EYE_TRACE_SACCADE_UPPER_BOUND",
     "MIN_AUDIO_SEGMENT_SEC",
+    "MIN_EYE_TRACE_SACCADE_LOWER_BOUND",
     "PacingProfile",
     "StoryboardCompilerConfig",
     "build_compiled_manifest",
@@ -98,6 +101,20 @@ MIN_AUDIO_SEGMENT_SEC: Final[float] = 0.25
 #: Permits standard horizontal Rule-of-Thirds reverse shots (|2/3 - 1/3| = 0.3333)
 #: while catching and reframing jarring diagonal jumps (sqrt(2)/3 = 0.4714).
 DEFAULT_MAX_EYE_TRACE_SACCADE: Final[float] = 0.38
+
+#: Inclusive policy bounds for any declared eye-trace saccade limit (normalized UV space).
+#:
+#: The upper bound is intentionally far below the full-screen diagonal ``sqrt(2) ~= 1.4142``:
+#: inside the unit square, a threshold at or above ``1.0`` exceeds every reachable saccade, so
+#: ``_radial_eye_trace_projection`` never fires, ``reframe_applied`` is always ``False``, and the
+#: eye-trace invariant silently degenerates into a no-op. Verifying only a lower bound let an
+#: attacker inflate ``max_eye_trace_saccade_limit`` (e.g. to ``2.0``), keep
+#: ``adjusted_entry_focus_uv == raw_entry_focus_uv``, re-seal all four SHA-256 digests, and pass
+#: verification with unbounded eye jumps. Both solver and verifier therefore pin the limit into
+#: ``[0.05, 0.50]``, which still admits every legal Rule-of-Thirds reverse (|2/3 - 1/3| = 0.3333)
+#: and the diagonal case (sqrt(2)/3 = 0.4714) while making threshold-neutralization impossible.
+MIN_EYE_TRACE_SACCADE_LOWER_BOUND: Final[float] = 0.05
+MAX_EYE_TRACE_SACCADE_UPPER_BOUND: Final[float] = 0.50
 
 _LINGERING_EMOTIONS: Final[frozenset[EmotionTag]] = frozenset(
     {EmotionTag.SAD, EmotionTag.WHISPER, EmotionTag.HESITANT, EmotionTag.SARCASTIC}
@@ -299,9 +316,13 @@ def solve_eye_trace_transition(
     projects the incoming entry focal point onto the closed Euclidean ball of
     radius ``max_saccade_uv`` centered at ``exit_focus_uv``.
     """
-    if not math.isfinite(max_saccade_uv) or not (0.05 <= max_saccade_uv <= math.sqrt(2.0)):
+    if not math.isfinite(max_saccade_uv) or not (
+        MIN_EYE_TRACE_SACCADE_LOWER_BOUND <= max_saccade_uv <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
+    ):
         raise EditorialCutError(
-            f"max_saccade_uv must be within [0.05, sqrt(2)], got {max_saccade_uv!r}"
+            f"max_saccade_uv must be within ["
+            f"{MIN_EYE_TRACE_SACCADE_LOWER_BOUND}, {MAX_EYE_TRACE_SACCADE_UPPER_BOUND}], "
+            f"got {max_saccade_uv!r}"
         )
 
     out_u, out_v = _clamp_uv(exit_focus_uv)
@@ -429,14 +450,42 @@ def verify_editorial_timeline(
     l_cut_min_sec: float = L_CUT_MIN_SEC,
     l_cut_max_sec: float = L_CUT_MAX_SEC,
     tol: float = 1e-5,
+    expected_max_saccade_limit: float | None = None,
 ) -> EditorialVerificationReport:
-    """Independently verify video contiguity, audio non-overlap, J/L bounds, and eye-trace."""
+    """Independently verify video contiguity, audio non-overlap, J/L bounds, and eye-trace.
+
+    The declared saccade policy is validated *unconditionally* (before any per-transition loop)
+    against :data:`MIN_EYE_TRACE_SACCADE_LOWER_BOUND` / :data:`MAX_EYE_TRACE_SACCADE_UPPER_BOUND`,
+    so a tampered plan cannot neutralize the eye-trace invariant by inflating
+    ``max_eye_trace_saccade_limit`` and reframing nothing. Pass
+    ``expected_max_saccade_limit`` to additionally pin the plan to an exact policy value.
+    """
     violations: list[str] = []
     video_ok = True
     audio_ok = True
     jl_ok = True
     eye_ok = True
     max_overlap = 0.0
+
+    limit = plan.max_eye_trace_saccade_limit
+    limit_in_policy = (
+        math.isfinite(limit)
+        and MIN_EYE_TRACE_SACCADE_LOWER_BOUND <= limit <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
+    )
+    limit_matches_policy = expected_max_saccade_limit is None or (
+        math.isfinite(expected_max_saccade_limit) and abs(limit - expected_max_saccade_limit) <= tol
+    )
+    if not (limit_in_policy and limit_matches_policy):
+        eye_ok = False
+        pinned = (
+            ""
+            if expected_max_saccade_limit is None
+            else f" or != pinned policy {expected_max_saccade_limit:.6f}"
+        )
+        violations.append(
+            f"eye-trace saccade policy violation: max_eye_trace_saccade_limit={limit!r} outside "
+            f"[{MIN_EYE_TRACE_SACCADE_LOWER_BOUND}, {MAX_EYE_TRACE_SACCADE_UPPER_BOUND}]{pinned}"
+        )
 
     events = plan.events
     if not events:
@@ -584,8 +633,9 @@ def verify_editorial_timeline(
                         *et.adjusted_entry_focus_uv,
                     )
                 )
-                and math.isfinite(plan.max_eye_trace_saccade_limit)
-                and plan.max_eye_trace_saccade_limit >= 0.05
+                and MIN_EYE_TRACE_SACCADE_LOWER_BOUND
+                <= plan.max_eye_trace_saccade_limit
+                <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
             )
             recomputed_raw_saccade = math.hypot(
                 et.raw_entry_focus_uv[0] - et.exit_focus_uv[0],
@@ -715,11 +765,16 @@ def solve_editorial_timeline(
     _validate_split_bounds(
         j_cut_min_sec, j_cut_max_sec, l_cut_min_sec, l_cut_max_sec, breath_gap_sec
     )
-    if not math.isfinite(max_eye_trace_saccade) or not (
-        0.05 <= max_eye_trace_saccade <= math.sqrt(2.0)
-    ):
+    limit_ok = (
+        math.isfinite(max_eye_trace_saccade)
+        and MIN_EYE_TRACE_SACCADE_LOWER_BOUND <= max_eye_trace_saccade
+        and max_eye_trace_saccade <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
+    )
+    if not limit_ok:
         raise EditorialCutError(
-            f"max_eye_trace_saccade must lie within [0.05, sqrt(2)], got {max_eye_trace_saccade!r}"
+            f"max_eye_trace_saccade must lie within "
+            f"[{MIN_EYE_TRACE_SACCADE_LOWER_BOUND}, {MAX_EYE_TRACE_SACCADE_UPPER_BOUND}], "
+            f"got {max_eye_trace_saccade!r}"
         )
 
     all_shots: list[CameraShotSpec] = [shot for plan in scene_plans for shot in plan.shots]
@@ -1134,6 +1189,12 @@ def _serialize_cinematography(plans: Sequence[SceneCinematographyPlan]) -> dict[
                     "character_a": plan.axis.character_a,
                     "character_b": plan.axis.character_b,
                 },
+                # Canonical name-sorted blocking: cryptographically binds every character
+                # position into cinematography_sha256 so it cannot be silently re-staged.
+                "character_positions": [
+                    [name, [_qfloat(c) for c in pos]]
+                    for name, pos in sorted(plan.character_positions, key=lambda item: item[0])
+                ],
                 "axis_compliant": plan.axis_report.compliant,
                 "reflected_shot_indices": list(plan.axis_report.reflected_shot_indices),
                 "axis_report": {
@@ -1318,8 +1379,15 @@ def build_compiled_manifest(
     script: ParsedScript,
     cinematography: Sequence[SceneCinematographyPlan],
     editorial: EditorialTimelinePlan,
+    *,
+    expected_max_saccade_limit: float | None = None,
 ) -> CompiledStoryboardManifest:
-    """Assemble and cryptographically seal a ``CompiledStoryboardManifest`` with SHA-256."""
+    """Assemble and cryptographically seal a ``CompiledStoryboardManifest`` with SHA-256.
+
+    ``expected_max_saccade_limit`` optionally pins the editorial eye-trace policy: when given, the
+    sealed plan must declare exactly that limit (in addition to the canonical bounds check), so a
+    deployment with a fixed policy can refuse manifests that quietly relax it.
+    """
     cinema_tuple = tuple(cinematography)
     if len(cinema_tuple) != len(script.scenes):
         raise EditorialCutError(
@@ -1336,10 +1404,20 @@ def build_compiled_manifest(
     all_shots = [sh for plan in cinema_tuple for sh in plan.shots]
     total_scenes = len(script.scenes)
     axis_ok = all(
-        verify_180_degree_rule(plan.shots, plan.axis).compliant and plan.axis_report.compliant
-        for plan in cinema_tuple
+        verify_180_degree_rule(
+            plan.shots,
+            plan.axis,
+            scene=script.scenes[i],
+            character_positions=plan.character_positions,
+        ).compliant
+        and plan.axis_report.compliant
+        for i, plan in enumerate(cinema_tuple)
     )
-    live_edit = verify_editorial_timeline(editorial, shots=all_shots)
+    live_edit = verify_editorial_timeline(
+        editorial,
+        shots=all_shots,
+        expected_max_saccade_limit=expected_max_saccade_limit,
+    )
     edit_ok = live_edit.compliant and editorial.verification.compliant
     eye_ok = live_edit.eye_trace_valid and editorial.verification.eye_trace_valid
 
@@ -1579,6 +1657,16 @@ def _scene_shot_bijection_valid(manifest: CompiledStoryboardManifest) -> bool:
                 == expected_shot_move_type(plans[i].shots[k])
                 for k in range(len(scenes[i].elements))
             )
+            # Wave-5 (F7/R1): axis endpoints, character blocking, and every shot subject must be
+            # exactly what deterministic staging of this parsed scene produces -- recomputed from
+            # the script, so re-sealing hashes cannot launder forged coordinates.
+            and verify_scene_character_blocking(
+                plans[i].shots,
+                plans[i].axis,
+                scene=scenes[i],
+                character_positions=plans[i].character_positions,
+                bind_axis=True,
+            )
             for i in range(len(scenes))
         )
         and len(all_shots) > 0
@@ -1595,6 +1683,8 @@ def _scene_shot_bijection_valid(manifest: CompiledStoryboardManifest) -> bool:
             and abs(events[k].exit_focus_uv[1] - all_shots[k].framing.projected_end_uv[1]) <= 1e-6
             and events[k].look_direction == all_shots[k].framing.look_direction
             and events[k].intentional_axis_jump is all_shots[k].intentional_axis_jump
+            and events[k].speaker
+            == (all_shots[k].subject_label if all_shots[k].shot_kind == ShotKind.DIALOGUE else None)
             for k in range(len(all_shots))
         )
         and abs(events[0].entry_focus_uv[0] - all_shots[0].framing.projected_start_uv[0]) <= 1e-6
@@ -1649,6 +1739,10 @@ def _editorial_summary_valid(editorial: EditorialTimelinePlan) -> bool:
     )
     return (
         n_events > 0
+        and MIN_EYE_TRACE_SACCADE_LOWER_BOUND
+        <= editorial.max_eye_trace_saccade_limit
+        <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
+        and 0.0 <= editorial.breath_gap_sec <= 0.25
         and editorial.events[0].entry_cut_type is None
         and editorial.events[-1].exit_cut_type is None
         and editorial.j_cut_count
@@ -1664,8 +1758,16 @@ def _editorial_summary_valid(editorial: EditorialTimelinePlan) -> bool:
     )
 
 
-def verify_manifest_integrity(manifest: CompiledStoryboardManifest) -> bool:
-    """Recompute scene graph, reports, trajectories, and SHA-256 digests; True iff untampered."""
+def verify_manifest_integrity(
+    manifest: CompiledStoryboardManifest,
+    *,
+    expected_max_saccade_limit: float | None = None,
+) -> bool:
+    """Recompute scene graph, reports, trajectories, and SHA-256 digests; True iff untampered.
+
+    ``expected_max_saccade_limit`` optionally pins the sealed editorial eye-trace policy to an
+    exact value; the canonical ``[0.05, 0.50]`` bounds are enforced either way.
+    """
     for digest in (
         manifest.script_sha256,
         manifest.cinematography_sha256,
@@ -1681,17 +1783,32 @@ def verify_manifest_integrity(manifest: CompiledStoryboardManifest) -> bool:
         sum(sh.duration_sec for plan in manifest.cinematography for sh in plan.shots), 6
     )
 
+    scene_plan_pairs = list(zip(manifest.script.scenes, manifest.cinematography, strict=False))
+    scenes_plans_aligned = len(scene_plan_pairs) == len(manifest.cinematography)
     live_axis_pairs = [
-        (verify_180_degree_rule(plan.shots, plan.axis), plan.axis_report)
-        for plan in manifest.cinematography
+        (
+            verify_180_degree_rule(
+                plan.shots,
+                plan.axis,
+                scene=scene,
+                character_positions=plan.character_positions,
+            ),
+            plan.axis_report,
+        )
+        for scene, plan in scene_plan_pairs
     ]
-    axis_reports_consistent = all(
+    axis_reports_consistent = scenes_plans_aligned and all(
         _axis_reports_equal(live, cached) for live, cached in live_axis_pairs
     )
-    expected_axis_ok = all(live.compliant for live, _ in live_axis_pairs)
+    expected_axis_ok = scenes_plans_aligned and all(live.compliant for live, _ in live_axis_pairs)
 
     all_shots = [sh for plan in manifest.cinematography for sh in plan.shots]
-    live_edit_report = verify_editorial_timeline(manifest.editorial, shots=all_shots)
+    live_edit_report = verify_editorial_timeline(
+        manifest.editorial,
+        shots=all_shots,
+        expected_max_saccade_limit=expected_max_saccade_limit,
+    )
+
     edit_reports_consistent = _editorial_reports_equal(
         live_edit_report, manifest.editorial.verification
     )

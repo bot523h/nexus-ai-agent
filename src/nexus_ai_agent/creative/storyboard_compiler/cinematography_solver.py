@@ -72,10 +72,13 @@ __all__ = [
     "axis_side_sign",
     "build_look_at_pose",
     "build_rule_of_thirds_pose",
+    "canonical_axis_of_action",
+    "compute_canonical_character_positions",
     "enforce_axis_of_action",
     "enforce_axis_of_action_with_trace",
     "evaluate_trajectory_at",
     "expected_shot_move_type",
+    "expected_shot_subject",
     "generate_minimum_jerk_trajectory",
     "horizontal_axis_cross",
     "is_valid_se3",
@@ -90,6 +93,7 @@ __all__ = [
     "solve_scene_cinematography",
     "solve_script_cinematography",
     "verify_180_degree_rule",
+    "verify_scene_character_blocking",
 ]
 
 #: Canonical prime focal lengths (mm) on a Full-Frame 36x20.25 mm 16:9 cinema gate.
@@ -1274,10 +1278,131 @@ def _canonical_shot_geometry_valid(
     )
 
 
+def _positions_match(
+    pairs: Sequence[tuple[str, Vec3Tuple]],
+    canonical: Mapping[str, Vec3Tuple],
+    *,
+    tol: float,
+) -> bool:
+    """True iff ``pairs`` names exactly the canonical characters, in order, within ``tol``."""
+    return [name for name, _ in pairs] == list(canonical) and all(
+        all(abs(pos[i] - canonical[name][i]) <= tol for i in range(3)) for name, pos in pairs
+    )
+
+
+def _scene_blocking_valid(
+    shots: Sequence[CameraShotSpec],
+    axis: AxisOfAction,
+    scene: ParsedScene,
+    pairs: Sequence[tuple[str, Vec3Tuple]] | None,
+    *,
+    bind_axis: bool,
+    tol: float,
+) -> bool:
+    """Verify declared blocking and every shot subject against deterministic scene blocking.
+
+    Recomputes the canonical staging and the per-element ``(subject_label, subject_position)`` from
+    ``scene`` alone, so a tampered manifest cannot re-stage its actors around forged coordinates
+    even if it re-seals every SHA-256 digest. With ``bind_axis`` the plan's ``AxisOfAction`` itself
+    must also equal the scene-derived canonical axis (used when auditing sealed manifests).
+    """
+    try:
+        canonical = compute_canonical_character_positions(
+            scene, axis=axis, initial_axis_side=axis.initial_side
+        )
+        if bind_axis:
+            expected_axis = canonical_axis_of_action(scene, axis.initial_side)
+            if not (
+                axis.character_a == expected_axis.character_a
+                and axis.character_b == expected_axis.character_b
+                and all(
+                    abs(axis.p1[i] - expected_axis.p1[i]) <= tol
+                    and abs(axis.p2[i] - expected_axis.p2[i]) <= tol
+                    for i in range(3)
+                )
+            ):
+                return False
+        if pairs is not None and not _positions_match(pairs, canonical, tol=tol):
+            return False
+        if len(shots) != len(scene.elements):
+            return False
+        for idx, shot in enumerate(shots):
+            label, position = expected_shot_subject(
+                scene,
+                scene.elements[idx],
+                canonical,
+                axis=axis,
+                initial_axis_side=axis.initial_side,
+            )
+            if shot.subject_label != label or any(
+                abs(shot.subject_position[i] - position[i]) > tol for i in range(3)
+            ):
+                return False
+        return True
+    except (
+        AttributeError,
+        KeyError,
+        IndexError,
+        TypeError,
+        ValueError,
+        ZeroDivisionError,
+        FloatingPointError,
+    ):
+        return False
+
+
+def verify_scene_character_blocking(
+    shots: Sequence[CameraShotSpec],
+    axis: AxisOfAction,
+    *,
+    scene: ParsedScene | None,
+    character_positions: Sequence[tuple[str, Vec3Tuple]] | Mapping[str, Vec3Tuple] | None,
+    bind_axis: bool = False,
+    tol: float = 1e-6,
+) -> bool:
+    """Verify ``character_positions`` and every shot subject against deterministic scene blocking.
+
+    With ``scene`` supplied the canonical ``(subject_label, subject_position)`` of every
+    scene element -- and, when ``bind_axis`` is set, the canonical ``AxisOfAction`` itself -- is
+    recomputed from the parsed script alone and the plan must match it within ``tol``. The same
+    routine backs ``verify_180_degree_rule`` (solver and cached report) and manifest verification,
+    so the solver and the auditor can never drift apart.
+    """
+    pairs = (
+        list(character_positions.items())
+        if isinstance(character_positions, Mapping)
+        else (list(character_positions) if character_positions is not None else None)
+    )
+    char_map = dict(pairs) if pairs is not None else None
+    pairs_ok = pairs is None or (
+        len(char_map or {}) == len(pairs)
+        and all(len(pos) == 3 and all(math.isfinite(c) for c in pos) for _, pos in pairs)
+    )
+    shots_match_chars = char_map is None or all(
+        (
+            sh.subject_label in char_map
+            and all(
+                abs(sh.subject_position[i] - char_map[sh.subject_label][i]) <= tol for i in range(3)
+            )
+        )
+        for sh in shots
+        if sh.shot_kind == ShotKind.DIALOGUE or sh.subject_label in char_map
+    )
+    if scene is None:
+        return pairs_ok and shots_match_chars
+    return (
+        pairs_ok
+        and shots_match_chars
+        and _scene_blocking_valid(shots, axis, scene, pairs, bind_axis=bind_axis, tol=tol)
+    )
+
+
 def verify_180_degree_rule(
     shots: Sequence[CameraShotSpec],
     axis: AxisOfAction,
     *,
+    scene: ParsedScene | None = None,
+    character_positions: Sequence[tuple[str, Vec3Tuple]] | Mapping[str, Vec3Tuple] | None = None,
     se3_tol: float = 1e-9,
     camera_overrides: Mapping[int, Sequence[float] | FloatArray] | None = None,
     end_camera_overrides: Mapping[int, Sequence[float] | FloatArray] | None = None,
@@ -1287,6 +1412,14 @@ def verify_180_degree_rule(
     crosses: list[float] = []
     violations: list[str] = []
     jumps = 0
+
+    if not verify_scene_character_blocking(
+        shots,
+        axis,
+        scene=scene,
+        character_positions=character_positions,
+    ):
+        violations.append("scene character_positions or shot subject blocking inconsistent")
 
     for shot in shots:
         if shot.intentional_axis_jump:
@@ -1424,6 +1557,48 @@ def _stage_scene_characters(
             )
 
     return resolved_axis, positions
+
+
+def compute_canonical_character_positions(
+    scene: ParsedScene,
+    *,
+    axis: AxisOfAction | None = None,
+    initial_axis_side: int = 1,
+) -> dict[str, Vec3Tuple]:
+    """Deterministically compute canonical 3D character blocking for ``scene``."""
+    _, staged = _stage_scene_characters(scene, axis, initial_axis_side)
+    return {name: _to_vec3_tuple(vec) for name, (_, vec) in staged.items()}
+
+
+def canonical_axis_of_action(scene: ParsedScene, initial_axis_side: int = 1) -> AxisOfAction:
+    """Return the deterministic, scene-derived 180-degree axis the solver stages characters on.
+
+    Any sealed plan whose ``axis`` deviates from this value (endpoint ``p1``/``p2`` or the
+    ``character_a``/``character_b`` labels taken from ``scene.characters``) was not produced by
+    the canonical blocking pass and must be rejected.
+    """
+    return _stage_scene_characters(scene, None, initial_axis_side)[0]
+
+
+def expected_shot_subject(
+    scene: ParsedScene,
+    action: DialogueLine | ActionBeat,
+    char_positions: Mapping[str, Vec3Tuple],
+    *,
+    axis: AxisOfAction | None = None,
+    initial_axis_side: int = 1,
+) -> tuple[str, Vec3Tuple]:
+    """Return the canonical ``(subject_label, subject_position)`` for one scene element."""
+    resolved_axis, _ = _stage_scene_characters(scene, axis, initial_axis_side)
+    midpoint = _to_vec3_tuple(resolved_axis.midpoint)
+    if isinstance(action, DialogueLine):
+        return (action.character, char_positions[action.character])
+    if len(action.focus_characters) == 1 and action.focus_characters[0] in char_positions:
+        focus_name = action.focus_characters[0]
+        return (focus_name, char_positions[focus_name])
+    if len(action.focus_characters) >= 2:
+        return (f"{action.focus_characters[0]} & {action.focus_characters[1]}", midpoint)
+    return (scene.heading.location, midpoint)
 
 
 def _choose_camera_move(
@@ -1623,6 +1798,7 @@ def solve_scene_cinematography(
         )
 
     resolved_axis, char_map = _stage_scene_characters(scene, axis, initial_axis_side)
+    char_tuple_map = {name: _to_vec3_tuple(vec) for name, (_, vec) in char_map.items()}
     active_side = resolved_axis.initial_side
     shots: list[CameraShotSpec] = []
 
@@ -1631,12 +1807,19 @@ def solve_scene_cinematography(
         if is_jump:
             active_side = -active_side
 
+        subject_label, subj_tuple = expected_shot_subject(
+            scene,
+            elem,
+            char_tuple_map,
+            axis=resolved_axis,
+            initial_axis_side=initial_axis_side,
+        )
+        subj_pos = np.array(subj_tuple, dtype=np.float64)
         if isinstance(elem, DialogueLine):
             shot_kind = ShotKind.DIALOGUE
             emotion = elem.emotion
             duration = elem.timing.total_duration_sec
-            subject_label = elem.character
-            slot, subj_pos = char_map[elem.character]
+            slot = char_map[elem.character][0]
             is_establishing = False
             is_two_shot = False
         else:
@@ -1646,18 +1829,13 @@ def solve_scene_cinematography(
             duration = elem.duration_sec
             is_establishing = local_idx == 0 and elem.dramatic_tension < 0.45
             if len(elem.focus_characters) == 1 and elem.focus_characters[0] in char_map:
-                subject_label = elem.focus_characters[0]
-                slot, subj_pos = char_map[subject_label]
+                slot = char_map[subject_label][0]
                 is_two_shot = False
             elif len(elem.focus_characters) >= 2:
-                subject_label = f"{elem.focus_characters[0]} & {elem.focus_characters[1]}"
                 slot = 2
-                subj_pos = resolved_axis.midpoint
                 is_two_shot = not is_establishing
             else:
-                subject_label = scene.heading.location
                 slot = 2
-                subj_pos = resolved_axis.midpoint
                 is_two_shot = not is_establishing and elem.dramatic_tension < 0.50
 
         prelim_lens = select_lens_and_aperture(
@@ -1791,13 +1969,15 @@ def solve_scene_cinematography(
             )
         )
 
+    staged_pairs = tuple((name, _to_vec3_tuple(vec)) for name, (_, vec) in char_map.items())
     axis_report = verify_180_degree_rule(
         shots,
         resolved_axis,
+        scene=scene,
+        character_positions=staged_pairs,
         camera_overrides=camera_overrides,
         end_camera_overrides=end_camera_overrides,
     )
-    staged_pairs = tuple((name, _to_vec3_tuple(vec)) for name, (_, vec) in char_map.items())
     return SceneCinematographyPlan(
         scene_index=scene.scene_index,
         axis=resolved_axis,
