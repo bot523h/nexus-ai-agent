@@ -42,6 +42,14 @@ dependencies = [
     "pillow>=10.0",
     "av>=14,<19",  # Wave 4/14: post-disk PyAV verification of media artifacts (spine)
     "beautifulsoup4>=4.12",
+    # Security floor for beautifulsoup4's CSS-selector engine (transitive, but
+    # declared so the floor is enforced rather than hoped for): CVE-2026-126190
+    # (fixed 4.0.0) and CVE-2026-126191 / CVE-2026-126193 (fixed 3.0.2).
+    # Conditional on purpose: every patched release declares
+    # `Requires-Python >=3.11.5`, so on an interpreter older than that no fixed
+    # build exists to install — the marker keeps 3.10 installable instead of
+    # turning the floor into a resolver failure (see docs/audits §8.4).
+    "soupsieve>=4.1.1; python_version >= '3.11.5'",
     "psutil>=5.9",
     "litellm>=1.74,<2",  # multi-provider routing chain (Ollama/Groq/Gemini/OpenRouter)
     "boto3==1.43.98",  # pinned: Cloudflare R2 blob tier (v3.9.0, latest on PyPI 2026-09-20)
@@ -189,7 +197,10 @@ DEP004 = ["imageio_ffmpeg"]
 # fail-closed design).  langsmith arrives transitively via langgraph →
 # langchain-core, so tracing needs no separate extra — the opt-in switch
 # governs egress, not installation.
-DEP002 = ["asyncpg", "python-multipart", "duckduckgo-search", "langsmith"]
+#   soupsieve → declared only as a *security floor* on beautifulsoup4's selector
+#   engine (CVE-2026-126190 / -126191 / -126193). Nothing imports it directly;
+#   the floor exists so the vulnerable 2.x builds cannot be resolved back in.
+DEP002 = ["asyncpg", "python-multipart", "duckduckgo-search", "langsmith", "soupsieve"]
 # DEP003 — transitive packages imported directly, each owned by a declared
 # dependency: starlette (fastapi), httpcore (httpx), botocore (boto3),
 # psycopg_pool (psycopg[pool]).

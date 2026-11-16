@@ -208,9 +208,17 @@ def test_the_shipped_allowlist_is_well_formed() -> None:
     assert accepted, "an empty allow-list would make the gate vacuously green only when clean"
     for advisory_id, entry in accepted.items():
         assert entry.get("package"), f"{advisory_id} has no package"
-        assert entry.get("reason") in {"transitive-cap", "no-fix-released"}, advisory_id
+        assert entry.get("reason") in {
+            "transitive-cap",
+            "no-fix-released",
+            "fix-requires-newer-python",
+        }, advisory_id
         if entry["reason"] == "transitive-cap":
             assert entry.get("fixed") and entry.get("capped_by"), advisory_id
+        if entry["reason"] == "fix-requires-newer-python":
+            assert entry.get("fixed"), advisory_id
+            assert entry.get("requires_python"), advisory_id
+            assert entry.get("declared_floor"), advisory_id
 
 
 def test_a_marker_guarded_cap_does_not_block_a_platform_it_excludes() -> None:
@@ -310,3 +318,147 @@ def test_pip_audit_uses_a_fixed_argv_with_no_shell(monkeypatch: pytest.MonkeyPat
     assert seen["argv"][0] == sys.executable
     assert seen["argv"][1:3] == ["-m", "pip_audit"]
     assert "shell" not in seen["kwargs"]  # shell is never enabled
+
+
+# ── `fix-requires-newer-python`: a fix exists but no build of it runs here ────
+
+
+def _newer_python_entry(**overrides: object) -> dict:
+    entry = {
+        "package": "soupsieve",
+        "reason": "fix-requires-newer-python",
+        "fixed": "4.1.1",
+        "requires_python": ">=3.11.5",
+        "declared_floor": "soupsieve>=4.1.1",
+    }
+    entry.update(overrides)
+    return entry
+
+
+def _versions(package: str, version: str) -> dict[str, str]:
+    return {package: version}
+
+
+def _lookup(mapping: dict[str, str | None]):
+    def _inner(_package: str, version: str) -> str | None:
+        return mapping.get(version, ">=3.11.5")
+
+    return _inner
+
+
+def test_a_newer_python_fix_holds_while_no_build_runs_on_this_interpreter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    holds, why = gate._pin_still_holds(
+        _newer_python_entry(),
+        _versions("soupsieve", "2.10"),
+        {},
+        ["3.0.2", "4.0.0"],
+        interpreter="3.11.2",
+        requires_python_of=_lookup({}),
+    )
+    assert holds, why
+    assert "3.11.2" in why and "soupsieve>=4.1.1" in why
+
+
+def test_the_newer_python_acceptance_expires_when_this_interpreter_could_run_the_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    holds, why = gate._pin_still_holds(
+        _newer_python_entry(),
+        _versions("soupsieve", "2.10"),
+        {},
+        ["3.0.2", "4.0.0"],
+        interpreter="3.12.1",
+        requires_python_of=_lookup({}),
+    )
+    assert not holds
+    assert "satisfies" in why
+
+
+def test_the_acceptance_expires_when_any_published_fix_is_installable_here(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """3.0.2/4.0.0 declare >=3.11.5, but a later release could relax it."""
+    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    holds, why = gate._pin_still_holds(
+        _newer_python_entry(),
+        _versions("soupsieve", "2.10"),
+        {},
+        ["3.0.2", "4.0.0"],
+        interpreter="3.11.2",
+        requires_python_of=_lookup({"3.0.2": ">=3.9"}),
+    )
+    assert not holds
+    assert "installable on this interpreter" in why
+
+
+def test_the_acceptance_expires_when_pypi_metadata_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    holds, why = gate._pin_still_holds(
+        _newer_python_entry(),
+        _versions("soupsieve", "2.10"),
+        {},
+        ["4.0.0"],
+        interpreter="3.11.2",
+        requires_python_of=lambda _p, _v: None,
+    )
+    assert not holds
+    assert "unverified" in why
+
+
+def test_the_acceptance_expires_when_the_floor_is_no_longer_declared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: False)
+    holds, why = gate._pin_still_holds(
+        _newer_python_entry(),
+        _versions("soupsieve", "2.10"),
+        {},
+        ["4.0.0"],
+        interpreter="3.11.2",
+        requires_python_of=_lookup({}),
+    )
+    assert not holds
+    assert "no longer declared" in why
+
+
+def test_the_acceptance_expires_when_the_advisory_names_a_newer_fix_than_the_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    holds, why = gate._pin_still_holds(
+        _newer_python_entry(),
+        _versions("soupsieve", "2.10"),
+        {},
+        ["5.0.0"],
+        interpreter="3.11.2",
+        requires_python_of=_lookup({}),
+    )
+    assert not holds
+    assert "first fixed in" in why
+
+
+def test_the_acceptance_refuses_to_badge_an_unspecified_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    holds, why = gate._pin_still_holds(
+        _newer_python_entry(requires_python=None),
+        _versions("soupsieve", "2.10"),
+        {},
+        ["4.0.0"],
+        interpreter="3.11.2",
+        requires_python_of=_lookup({}),
+    )
+    assert not holds
+    assert "requires_python" in why
+
+
+def test_the_shipped_floor_really_is_declared_for_compliant_interpreters() -> None:
+    """The acceptance above is only honest while pyproject carries the floor."""
+    assert gate._declared_floor_is_present("soupsieve>=4.1.1")

@@ -14,10 +14,14 @@ An allow-list entry expires on its own.  For every entry the gate re-derives,
 from the *installed* environment, the concrete package specifier the advisory
 forces and checks that it is still unresolvable for a stated reason
 (``transitive-cap``: an installed dependency caps the fixed version;
-``no-fix-released``: no version of the package fixes it yet).  If the pin no
-longer holds — because an upstream cap was relaxed or a fix was published — the
-entry is reported STALE and the gate fails, forcing a re-review instead of a
-silent pass.
+``no-fix-released``: no version of the package fixes it yet;
+``fix-requires-newer-python``: a fix is published but every fixed release
+declares a ``Requires-Python`` this interpreter does not satisfy — the entry
+expires the moment a fix becomes installable here, and it stands only while
+``pyproject.toml`` really carries the floor for the interpreters that *can*
+install it).  If the pin no longer holds — because an upstream cap was relaxed,
+a fix was published, or the floor was dropped — the entry is reported STALE and
+the gate fails, forcing a re-review instead of a silent pass.
 
 Contract
 --------
@@ -40,12 +44,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import subprocess
 import sys
+import urllib.error
+import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from packaging.requirements import Requirement
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -137,11 +146,49 @@ def _marker_applies(req: Requirement) -> bool:
         return True
 
 
+def _pypi_requires_python(package: str, version: str) -> str | None:
+    """The ``Requires-Python`` PyPI publishes for one release, or ``None``.
+
+    ``None`` means "could not be established" (no network, unknown release, bad
+    payload). Callers treat it as *unknown*, never as permission: the acceptance
+    that depends on it is only granted when the metadata is actually readable.
+    """
+    url = f"https://pypi.org/pypi/{package}/{version}/json"
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response:  # noqa: S310 - fixed host
+            payload = json.load(response)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None
+    requires = info.get("requires_python")
+    return requires if isinstance(requires, str) and requires else None
+
+
+def _declared_floor_is_present(declared: str) -> bool:
+    """Whether ``pyproject.toml`` really declares *declared* (e.g. ``soupsieve>=4.1.1``).
+
+    The ``fix-requires-newer-python`` acceptance is only honest while the project
+    actually asks for the fixed release on the interpreters that can install it.
+    Dropping the floor turns the entry STALE instead of leaving a silent pass.
+    """
+    pyproject = REPO_ROOT / "pyproject.toml"
+    try:
+        text = pyproject.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return declared in text
+
+
 def _pin_still_holds(
     entry: dict[str, Any],
     versions: dict[str, str],
     reqs: dict[str, list[str]],
     fix_versions: list[str] | None = None,
+    *,
+    interpreter: str | None = None,
+    requires_python_of: Callable[[str, str], str | None] | None = None,
 ) -> tuple[bool, str]:
     """Decide whether an allow-list entry is still genuinely blocked.
 
@@ -190,6 +237,85 @@ def _pin_still_holds(
                 f"bump {pkg} and drop this entry"
             )
         return True, f"no released version of {pkg} fixes {which} (installed {installed})"
+
+    if reason == "fix-requires-newer-python":
+        fixed = entry.get("fixed")
+        declared_requires = entry.get("requires_python")
+        which = entry.get("id", "the advisory")
+        if not fixed or not declared_requires:
+            return False, ("fix-requires-newer-python entry needs `fixed` and `requires_python`")
+        here = interpreter or platform.python_version()
+        # Self-expiry 1: the advisory database must still name a fix, and the
+        # project's floor must be at least that new.  (pip-audit reports the
+        # *first* fixed release — 3.0.2 / 4.0.0 here — while the floor asks for a
+        # later one; pinning below the reported fix would be a stale acceptance.)
+        reported = [version for version in (fix_versions or []) if version]
+        if not reported:
+            return False, f"pip-audit names no fix for {which} any more — re-review this entry"
+        try:
+            first_fix = min(Version(version) for version in reported)
+            declared_fix = Version(fixed)
+        except Exception:
+            return False, f"entry or advisory names an unparseable version ({fixed!r})"
+        if declared_fix < first_fix:
+            return False, (
+                f"the advisory is first fixed in {first_fix} but this entry pins {fixed} — "
+                f"raise the floor and re-review"
+            )
+        # Self-expiry 2: if this interpreter could run that fix, the entry is a lie.
+        try:
+            declared_spec = SpecifierSet(declared_requires)
+        except InvalidSpecifier:
+            return False, f"entry declares an unparseable Requires-Python {declared_requires!r}"
+        if declared_spec.contains(here, prereleases=True):
+            return False, (
+                f"{pkg} {fixed} declares Requires-Python {declared_requires}, which this "
+                f"interpreter ({here}) satisfies — install it and drop this entry"
+            )
+        # Self-expiry 3: any *other* published fix installable here ends it too.
+        lookup = requires_python_of or _pypi_requires_python
+        published = lookup(pkg, fixed)
+        if published is None:
+            return False, (
+                f"cannot read PyPI metadata for {pkg} {fixed}; the interpreter gap that "
+                f"justifies this entry is unverified"
+            )
+        try:
+            if SpecifierSet(published).contains(here, prereleases=True):
+                return False, (
+                    f"PyPI says {pkg} {fixed} requires Python {published}, which this "
+                    f"interpreter ({here}) satisfies — install it and drop this entry"
+                )
+        except InvalidSpecifier:
+            return False, f"PyPI publishes an unparseable Requires-Python for {pkg} {fixed}"
+        for candidate in [*reported, fixed]:
+            if candidate == fixed:
+                continue
+            other = lookup(pkg, candidate)
+            if other is None:
+                continue
+            try:
+                if SpecifierSet(other).contains(here, prereleases=True):
+                    return False, (
+                        f"{pkg} {candidate} is installable on this interpreter ({here}) — "
+                        f"bump to {candidate} and drop this entry"
+                    )
+            except InvalidSpecifier:
+                continue
+        # Self-expiry 4: the project must still ask for the fix where it can be had.
+        floor = entry.get("declared_floor")
+        if not isinstance(floor, str) or not floor:
+            return False, "fix-requires-newer-python entry needs a `declared_floor`"
+        if not _declared_floor_is_present(floor):
+            return False, (
+                f"the floor {floor!r} is no longer declared in pyproject.toml — the entries "
+                f"that can install the fix would silently regress"
+            )
+        return True, (
+            f"every published fix ({', '.join(reported)}) declares Requires-Python "
+            f"{published}; this interpreter is {here} (installed {installed}), and "
+            f"{floor!r} covers the interpreters that can take it"
+        )
 
     return False, f"unknown acceptance reason {reason!r}"
 
@@ -252,7 +378,11 @@ def _load_allowlist(path: Path) -> dict[str, dict[str, Any]]:
             raise SystemExit(f"allow-list entry {advisory_id!r} is not an object")
         if not isinstance(entry.get("package"), str) or not entry["package"]:
             raise SystemExit(f"allow-list entry {advisory_id!r} names no package")
-        if entry.get("reason") not in {"transitive-cap", "no-fix-released"}:
+        if entry.get("reason") not in {
+            "transitive-cap",
+            "no-fix-released",
+            "fix-requires-newer-python",
+        }:
             raise SystemExit(
                 f"allow-list entry {advisory_id!r} has unknown reason {entry.get('reason')!r}"
             )
@@ -261,6 +391,13 @@ def _load_allowlist(path: Path) -> dict[str, dict[str, Any]]:
         ):
             raise SystemExit(
                 f"allow-list entry {advisory_id!r} (transitive-cap) needs `fixed` and `capped_by`"
+            )
+        if entry["reason"] == "fix-requires-newer-python" and not (
+            entry.get("fixed") and entry.get("requires_python") and entry.get("declared_floor")
+        ):
+            raise SystemExit(
+                f"allow-list entry {advisory_id!r} (fix-requires-newer-python) needs "
+                "`fixed`, `requires_python` and `declared_floor`"
             )
     return accepted
 
