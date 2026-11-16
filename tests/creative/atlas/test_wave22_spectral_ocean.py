@@ -20,22 +20,43 @@ def test_deep_water_dispersion_matches_analytic() -> None:
     np.testing.assert_allclose(got, want, rtol=1e-12)
 
 
-def test_jonswap_spectrum_significant_wave_height() -> None:
-    kx, ky = _grid(64)
+def test_jonswap_significant_wave_height_matches_field() -> None:
+    # The spectrum must sit on the same FFT grid the height field is synthesised on.
+    # One realisation is dominated by a few modes, so the claim is about the mean
+    # square over seeds, which has expectation m0 = sum(a_k^2).
+    kx, ky = o.fft_wavenumber_grid(64, 64, 100.0)
     spec = o.jonswap_spectrum(kx, ky, wind_speed=10.0)
-    h = o.spectral_height_field(spec, seed=7, extent=100.0)
-    # Pierson-Moskowitz H_s = 0.21 U^2 / g; 4*std estimates it.
-    h_s_expected = 0.21 * 10.0**2 / o.GRAVITY
-    assert 4.0 * h.std() == pytest.approx(h_s_expected, rel=0.05)
+    assert spec.significant_wave_height == pytest.approx(4.0 * np.sqrt(spec.variance))
+    mean_squares = [
+        float(np.mean(o.spectral_height_field(spec, seed=s, extent=100.0) ** 2))
+        for s in range(60)
+    ]
+    assert float(np.mean(mean_squares)) == pytest.approx(spec.variance, rel=0.1)
 
 
-def test_spectrum_peak_near_pm_peak() -> None:
-    kx, ky = _grid(128)
-    spec = o.jonswap_spectrum(kx, ky, wind_speed=10.0)
-    omega_p = 0.8772 * o.GRAVITY / 10.0
-    # The largest-amplitude bin should be near the peak frequency.
+def test_jonswap_peak_parameters_are_the_fetch_formulas() -> None:
+    kx, ky = o.fft_wavenumber_grid(64, 64, 180.0)
+    spec = o.jonswap_spectrum(kx, ky, wind_speed=10.0, fetch=1.0e5)
+    omega_p = 22.0 * (o.GRAVITY**2 / (10.0 * 1.0e5)) ** (1.0 / 3.0)
+    x_tilde = o.GRAVITY * 1.0e5 / 100.0
+    assert spec.peak_omega == pytest.approx(omega_p, rel=1e-12)
+    assert spec.peak_wavenumber == pytest.approx(omega_p**2 / o.GRAVITY, rel=1e-12)
+    assert spec.phillips_alpha == pytest.approx(0.076 * x_tilde**-0.22, rel=1e-12)
+
+
+def test_jonswap_dimensionless_fetch_is_clamped_to_unity() -> None:
+    # g F / U^2 = 0.49 < 1, so the Phillips constant uses x = 1 and equals 0.076.
+    kx, ky = o.fft_wavenumber_grid(16, 16, 50.0)
+    spec = o.jonswap_spectrum(kx, ky, wind_speed=10.0, fetch=5.0)
+    assert spec.phillips_alpha == pytest.approx(0.076, rel=1e-12)
+
+
+def test_spectrum_peak_sits_at_jonswap_peak_frequency() -> None:
+    kx, ky = o.fft_wavenumber_grid(256, 256, 180.0)
+    spec = o.jonswap_spectrum(kx, ky, wind_speed=10.0, fetch=1.0e5)
+    # The largest-amplitude bin lies within one peak-width of omega_p.
     idx = np.unravel_index(np.argmax(spec.amplitudes), spec.amplitudes.shape)
-    assert spec.omega[idx] == pytest.approx(omega_p, rel=0.35)
+    assert spec.omega[idx] == pytest.approx(spec.peak_omega, rel=0.1)
 
 
 def test_height_field_is_deterministic() -> None:

@@ -2,17 +2,18 @@
 
 Two coupled, offline, deterministic fluid models:
 
-* a **spectral** ocean surface: a JONSWAP-like directional spectrum sampled onto
-  a grid, phases derived deterministically from a seed, inverse-FFT to a height
-  field, and a Gerstner (trochoidal) displacement that preserves the deep-water
-  dispersion relation ``omega = sqrt(g k)``;
+* a **spectral** ocean surface: a fetch-limited JONSWAP directional spectrum
+  (Hasselmann et al. 1973) sampled onto an FFT wavenumber grid, a seeded
+  Hermitian construction evolved in time and inverted to a real height field
+  with ``irfft2``, and a Gerstner (trochoidal) displacement that preserves the
+  deep-water dispersion relation ``omega = sqrt(g k)``;
 * a **finite-volume shallow-water** solver (Saint-Venant) in 1-D and 2-D with a
   Rusanov/Lax-Friedrichs flux, gravity ``g``, and a hard CFL limit that refuses
   to run a step that would be unstable rather than producing silent NaN.
 
 Every numeric claim is bounded and reproducible: the CFL number is checked, the
-spectrum normalisation is measured, and the deep-water dispersion relation is
-verified against the analytic ``omega = sqrt(g k)``.
+surface variance is the integral of the spectrum (so fetch changes it), and the
+deep-water dispersion relation is verified against the analytic ``omega = sqrt(g k)``.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ __all__ = [
     "GRAVITY",
     "OceanSpectrum",
     "jonswap_spectrum",
+    "fft_wavenumber_grid",
     "spectral_height_field",
     "gerstner_displacement",
     "deep_water_omega",
@@ -59,13 +61,29 @@ def _check_seed(seed: int) -> int:
 class OceanSpectrum:
     """A directional wavenumber spectrum on a regular grid.
 
-    ``amplitudes`` is the (real, non-negative) amplitude per wavenumber bin;
-    ``omega`` is the angular frequency per bin. ``wind_dir`` is a unit 2-vector.
+    ``amplitudes`` is the (real, non-negative) energy amplitude per wavenumber bin,
+    ``a_k = sqrt(S(k) dk_x dk_y)``, so ``variance = sum(a_k**2)`` is the total surface
+    variance m0 in m^2. ``omega`` is the angular frequency per bin and ``wind_dir``
+    is a unit 2-vector. ``peak_omega``, ``peak_wavenumber`` and ``phillips_alpha``
+    are the fetch-dependent JONSWAP parameters the spectrum was built from.
     """
 
     amplitudes: np.ndarray
     omega: np.ndarray
     wind_dir: np.ndarray
+    peak_omega: float = 0.0
+    peak_wavenumber: float = 0.0
+    phillips_alpha: float = 0.0
+
+    @property
+    def variance(self) -> float:
+        """Total surface variance m0 = sum of squared bin amplitudes (m^2)."""
+        return float(np.sum(self.amplitudes * self.amplitudes))
+
+    @property
+    def significant_wave_height(self) -> float:
+        """Significant wave height ``H_s = 4 sqrt(m0)`` in metres."""
+        return 4.0 * float(np.sqrt(self.variance))
 
     def __post_init__(self) -> None:
         amp = np.asarray(self.amplitudes, dtype=np.float64)
@@ -111,11 +129,26 @@ def jonswap_spectrum(
     gravity: float = GRAVITY,
     amplitude_scale: float = 1.0,
 ) -> OceanSpectrum:
-    """A JONSWAP-shaped directional spectrum over wavenumbers ``(kx, ky)``.
+    """Fetch-limited JONSWAP directional energy spectrum on wavenumbers ``(kx, ky)``.
 
-    The peak wavenumber follows the Pierson-Moskowitz/PM relation
-    ``k_p = g / (U^2 * 0.8772)`` with ``omega_p = 0.8772 g / U`` (fully
-    developed sea). The directional spread is ``cos^2`` about the wind.
+    Hasselmann et al. (1973), with ``g = gravity``, ``U = wind_speed`` and
+    ``F = fetch``:
+
+    * dimensionless fetch ``x = max(g F / U^2, 1)``;
+    * Phillips constant ``alpha = 0.076 x^-0.22``;
+    * peak angular frequency ``omega_p = 22 (g^2 / (U F))^(1/3)``, peak wavenumber
+      ``k_p = omega_p^2 / g``;
+    * ``S(omega) = alpha g^2 omega^-5 exp(-1.25 (omega_p/omega)^4) gamma^r`` with
+      ``r = exp(-(omega - omega_p)^2 / (2 sigma^2 omega_p^2))``, ``sigma = 0.07``
+      below the peak and ``0.09`` above it, ``gamma = peak_sharpness``.
+
+    The spectrum is converted to wavenumber with the deep-water Jacobian
+    ``d omega / dk = g / (2 omega)`` and a ``cos^2`` directional spread about the
+    wind, normalised over the full circle. The total variance is the integral of
+    ``S(omega)``, so a longer fetch raises the energy and lowers the peak frequency.
+    The bin spacing is inferred from ``kx``/``ky``. To feed
+    :func:`spectral_height_field`, build the grid with :func:`fft_wavenumber_grid`
+    using the same ``extent``, so the bins are the FFT bins of the height field.
     """
     if wind_speed <= 0.0:
         raise OceanError("wind_speed must be positive")
@@ -144,36 +177,63 @@ def jonswap_spectrum(
     wd = wd / wn
 
     k = np.hypot(KX, KY)
-    omega_p = 0.8772 * gravity / wind_speed
+    u10 = max(wind_speed, 0.1)
+    x_tilde = max(gravity * fetch / (u10 * u10), 1.0)
+    alpha_jonswap = 0.076 * x_tilde**-0.22
+    omega_p = 22.0 * ((gravity * gravity) / (u10 * fetch)) ** (1.0 / 3.0)
     k_p = omega_p * omega_p / gravity
-    # Peak enhancement: JONSWAP gaussian in omega-ratio space (Pierson-Moskowitz base).
+    dkx, dky = _grid_spacing(KX, KY)
     with np.errstate(divide="ignore", invalid="ignore"):
         omega = np.sqrt(gravity * k)
         sigma = np.where(omega <= omega_p, 0.07, 0.09)
-        r = np.where(omega > 0.0, (omega - omega_p) / (sigma * omega_p), 0.0)
-        gamma_term = peak_sharpness ** np.exp(-0.5 * r * r)
-        # PM base spectrum in wavenumber space: S(k) ~ alpha/k^4 * exp(-1.25 (kp/k)^2)
-        alpha = 0.0081
-        base = np.where(
-            k > 0.0,
-            alpha / np.maximum(k, 1e-12) ** 4 * np.exp(-1.25 * (k_p / np.maximum(k, 1e-12)) ** 2),
-            0.0,
+        peak_enhancement = peak_sharpness ** np.exp(
+            -((omega - omega_p) ** 2) / (2.0 * sigma**2 * omega_p**2)
         )
-        spec = base * gamma_term
-    # cos^2 directional spreading about the wind direction.
-    with np.errstate(divide="ignore", invalid="ignore"):
-        cos_dir = np.where(k > 0.0, (KX * wd[0] + KY * wd[1]) / np.maximum(k, 1e-12), 0.0)
-    spread = np.where(cos_dir > 0.0, cos_dir * cos_dir, 0.0)
-    amp = np.sqrt(np.maximum(spec * spread, 0.0))
-    # Normalise to the Pierson-Moskowitz significant wave height H_s = 0.21 U^2/g
-    # so the surface is physically scaled (variance = sum(amp^2)/2 = (H_s/4)^2).
-    h_s = 0.21 * wind_speed * wind_speed / gravity
-    target_var = (h_s / 4.0) ** 2
-    var = float(np.sum(amp * amp) * 0.5)
-    if var > 0.0:
-        amp = amp * np.sqrt(target_var / var)
-    amp = amp * amplitude_scale
-    return OceanSpectrum(amplitudes=amp, omega=deep_water_omega(k, gravity=gravity), wind_dir=wd)
+        safe_omega = np.where(omega > 0.0, omega, 1.0)
+        base_omega = (
+            alpha_jonswap
+            * gravity
+            * gravity
+            * safe_omega**-5.0
+            * np.exp(-1.25 * (omega_p / safe_omega) ** 4)
+        )
+        spectrum_omega = np.where(omega > 0.0, base_omega * peak_enhancement, 0.0)
+        # Deep-water Jacobian d(omega)/dk = g / (2 omega) turns S(omega) into S(k).
+        spectrum_k = spectrum_omega * gravity / (2.0 * safe_omega)
+        safe_k = np.where(k > 0.0, k, 1.0)
+        cos_dir = np.where(k > 0.0, (KX * wd[0] + KY * wd[1]) / safe_k, 0.0)
+        directional = np.where(cos_dir > 0.0, (2.0 / np.pi) * cos_dir * cos_dir, 0.0)
+        density = np.where(k > 0.0, spectrum_k * directional / safe_k, 0.0)
+    energy_amp = np.sqrt(np.maximum(density * dkx * dky, 0.0)) * amplitude_scale
+    return OceanSpectrum(
+        amplitudes=energy_amp,
+        omega=deep_water_omega(k, gravity=gravity),
+        wind_dir=wd,
+        peak_omega=float(omega_p),
+        peak_wavenumber=float(k_p),
+        phillips_alpha=float(alpha_jonswap),
+    )
+
+
+def _grid_spacing(KX: np.ndarray, KY: np.ndarray) -> tuple[float, float]:
+    """Wavenumber bin spacing ``(dk_x, dk_y)`` of a regular grid (1 on a singleton axis)."""
+    dkx = float(abs(KX[0, 1] - KX[0, 0])) if KX.shape[1] > 1 else 1.0
+    dky = float(abs(KY[1, 0] - KY[0, 0])) if KX.shape[0] > 1 else 1.0
+    if dkx <= 0.0 or dky <= 0.0:
+        raise OceanError("wavenumber grid must have non-zero spacing")
+    return dkx, dky
+
+
+def fft_wavenumber_grid(nx: int, ny: int, extent: float) -> tuple[np.ndarray, np.ndarray]:
+    """Wavenumber meshgrid ``(KX, KY)`` in FFT ordering for an ``extent``-metre domain."""
+    if nx < 2 or ny < 2 or nx > MAX_GRID or ny > MAX_GRID:
+        raise OceanError(f"grid must be in [2, {MAX_GRID}] per axis")
+    if extent <= 0.0:
+        raise OceanError("extent must be positive")
+    kx = np.fft.fftfreq(nx, d=extent / nx) * 2.0 * np.pi
+    ky = np.fft.fftfreq(ny, d=extent / ny) * 2.0 * np.pi
+    KX, KY = np.meshgrid(kx, ky)
+    return KX, KY
 
 
 def spectral_height_field(
@@ -183,11 +243,20 @@ def spectral_height_field(
     extent: float = 100.0,
     time: float = 0.0,
 ) -> np.ndarray:
-    """Inverse-FFT height field from a spectrum, deterministic in ``seed``.
+    """Real surface height field (metres) of a spectrum at time ``time`` (seconds).
 
-    The field is the real part of ``sum A_k exp(i (k.x - omega t + phi_k))`` with
-    phases ``phi_k`` drawn from a seeded generator; identical inputs reproduce
-    identical bytes.
+    Tessendorf-style Hermitian construction with a seeded Gaussian draw ``xi``:
+
+    * ``h0(k) = a_k (xi_r + i xi_i) / 2``, so ``E|h0|^2 = a_k^2 / 2``;
+    * ``h(k, t) = h0(k) exp(i omega_k t) + conj(h0(-k)) exp(-i omega_k t)``, which
+      satisfies ``h(-k) = conj(h(k))`` by construction;
+    * the real field is ``irfft2`` of the non-negative half-plane of ``h`` with the
+      Nyquist bins zeroed for even dimensions (``nx`` even: column ``nx/2``;
+      ``ny`` even: row ``ny/2``).
+
+    The variance of the result has expectation ``spectrum.variance``, provided the
+    spectrum was built on :func:`fft_wavenumber_grid` with the same ``extent``.
+    Identical inputs reproduce identical bytes.
     """
     _check_seed(seed)
     if extent <= 0.0:
@@ -200,13 +269,19 @@ def spectral_height_field(
         raise OceanError(f"grid must be <= {MAX_GRID} per axis")
 
     rng = np.random.default_rng(seed)
-    phases = rng.uniform(0.0, 2.0 * np.pi, size=amp.shape)
-    kx = np.fft.fftfreq(nx, d=extent / nx) * 2.0 * np.pi
-    ky = np.fft.fftfreq(ny, d=extent / ny) * 2.0 * np.pi
-    KX, KY = np.meshgrid(kx, ky)
-    phase = KX * 0.0 + KY * 0.0 + phases + spectrum.omega * time
-    complex_field = amp * np.exp(1j * phase)
-    height = np.real(np.fft.ifft2(complex_field)) * (nx * ny)
+    xi = rng.standard_normal((ny, nx, 2))
+    h0 = amp * (xi[..., 0] + 1j * xi[..., 1]) / 2.0
+    neg_y = (-np.arange(ny)) % ny
+    neg_x = (-np.arange(nx)) % nx
+    h0_neg = np.conj(h0[np.ix_(neg_y, neg_x)])
+    evolve = spectrum.omega * time
+    hermitian = h0 * np.exp(1j * evolve) + h0_neg * np.exp(-1j * evolve)
+    half = hermitian[:, : nx // 2 + 1].copy()
+    if nx % 2 == 0:
+        half[:, nx // 2] = 0.0
+    if ny % 2 == 0:
+        half[ny // 2, :] = 0.0
+    height = np.fft.irfft2(half, s=(ny, nx)) * float(nx * ny)
     return np.asarray(height, dtype=np.float64)
 
 

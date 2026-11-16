@@ -122,7 +122,7 @@ def test_render_master_reports_blocked_on_media_error(
         raise media.MediaSineError("synthetic encode failure")
 
     monkeypatch.setattr(om.media, "ffmpeg_available", lambda: True)
-    monkeypatch.setattr(om.media, "synthesise_test_clip", _boom)
+    monkeypatch.setattr(om.media, "encode_rgb24_stream", _boom)
     ledger = om.render_master(_bible(), workspace, side=32, frames=4, fps=4)
     names = {s.name: s for s in ledger.stages}
     assert names["encode_clip"].status == "BLOCKED"

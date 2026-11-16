@@ -7,12 +7,13 @@ master-render pipeline:
 1. compile a story into an edit plan (:mod:`titan_feature_film_compiler`);
 2. analyse continuity across episodes (:mod:`showrunner_bible`);
 3. synthesise per-shot audio events diegetically (:mod:`diegetic_modal_foley`);
-4. colour-grade each frame through ACES + a film look
-   (:mod:`aces_hald_film_optic`);
+4. render every frame physically: a fetch-limited JONSWAP sea, a Rayleigh sky and
+   Fresnel water (:mod:`physical_frame_stream`), persisted one raw frame at a time;
 5. ray-march the lighting term for a fixture (:mod:`sdf_global_illumination`);
 6. place the audio onto a timeline and write a real mixed WAV;
-7. encode a *real* H.264 clip from the graded frames with FFmpeg
-   (:mod:`media_sine`), then re-probe it;
+7. encode a *real* H.264 clip by streaming the persisted physical frames into
+   FFmpeg over stdin (:mod:`media_sine`), verifying each frame digest, then re-probe
+   it;
 8. persist a canonical, digest-protected master ledger through the repository's
    ``WorkspaceFilesystem`` boundary and re-open it to verify the bytes.
 
@@ -32,9 +33,6 @@ from typing import Any, Final
 import numpy as np
 
 from nexus_ai_agent.creative.atlas import (
-    aces_hald_film_optic as film,
-)
-from nexus_ai_agent.creative.atlas import (
     buoyant_pyro_blackbody as pyro,
 )
 from nexus_ai_agent.creative.atlas import (
@@ -44,10 +42,10 @@ from nexus_ai_agent.creative.atlas import (
     media_sine as media,
 )
 from nexus_ai_agent.creative.atlas import (
-    sdf_global_illumination as sdf,
+    physical_frame_stream as physical,
 )
 from nexus_ai_agent.creative.atlas import (
-    spectral_ocean_swe as ocean,
+    sdf_global_illumination as sdf,
 )
 from nexus_ai_agent.creative.atlas.showrunner_bible import ShowrunnerBible
 from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
@@ -146,14 +144,6 @@ def _write_wav(
     return target.stat().st_size
 
 
-def _grade_frame(frame: np.ndarray) -> np.ndarray:
-    """Grade one linear frame through ACES tone-mapping and film grain."""
-    mapped = film.aces_tone_map(frame)
-    grained = film.film_grain(mapped, amount=0.02, seed=7)
-    out: np.ndarray = np.clip(grained, 0.0, 1.0)
-    return out
-
-
 def render_master(
     bible: ShowrunnerBible,
     filesystem: WorkspaceFilesystem,
@@ -204,11 +194,18 @@ def render_master(
     stages.append(MasterStage("lighting_sdf", "COMPUTED", f"ambient occlusion {ao:.4f}"))
 
     # --- stage 3: ocean + pyro side physics (REAL COMPUTE) ------------------------
-    kx, ky = np.meshgrid(np.linspace(-0.5, 0.5, 32), np.linspace(-0.5, 0.5, 32))
-    spectrum = ocean.jonswap_spectrum(kx, ky, wind_speed=10.0)
-    heights = ocean.spectral_height_field(spectrum, seed=7, extent=100.0)
-    hs = float(4.0 * heights.std())
-    stages.append(MasterStage("ocean_spectrum", "COMPUTED", f"significant wave height {hs:.4f} m"))
+    frame_width = side - (side % 2)  # yuv420p needs even dimensions
+    ocean_state = physical.OceanState(fps=float(fps))
+    atmos_state = physical.AtmosphereState()
+    spectrum = physical.spectrum_for(ocean_state)
+    stages.append(
+        MasterStage(
+            "ocean_spectrum",
+            "COMPUTED",
+            f"JONSWAP fetch {ocean_state.fetch:.0f} m: significant wave height "
+            f"{spectrum.significant_wave_height:.4f} m, peak omega {spectrum.peak_omega:.4f} rad/s",
+        )
+    )
     bb = float(pyro.planck_spectral_radiance(500e-9, 3000.0))
     stages.append(MasterStage("pyro_blackbody", "COMPUTED", f"planck radiance {bb:.3e}"))
 
@@ -233,31 +230,43 @@ def render_master(
         )
     )
 
-    # --- stage 5: graded frames (REAL COMPUTE) ------------------------------------
+    # --- stage 5: physical frames, persisted one at a time (REAL COMPUTE) ---------
     frame_dir = f"{out_dir}/frames"
     frame_hashes: list[str] = []
     for i in range(frames):
-        base = np.full((side, side, 3), 0.18 + 0.02 * i, dtype=np.float64)
-        base[..., 0] += 0.25
-        graded = _grade_frame(base)
-        raw = (graded * 255.0).astype(np.uint8).tobytes()
+        raw = physical.generate_physical_atlas_frame_rgb24(
+            i, frames, frame_width, frame_width, ocean_state, atmos_state, seed=7
+        )
         rel = f"{frame_dir}/frame_{i:04d}.raw"
         filesystem.write_bytes(rel, raw, create_parents=True)
         frame_hashes.append(_digest(filesystem.read_bytes(rel, max_bytes=1 << 24)))
         total_bytes += len(raw)
     stages.append(
-        MasterStage("grade_frames", "COMPUTED", f"{frames} graded frames at {side}x{side}")
+        MasterStage(
+            "grade_frames",
+            "COMPUTED",
+            f"{frames} physical frames at {frame_width}x{frame_width} "
+            "(JONSWAP sea, Rayleigh sky, Fresnel water)",
+        )
     )
 
-    # --- stage 6: real encode (REAL EXECUTION) ------------------------------------
+    # --- stage 6: real encode of the verified frames (REAL EXECUTION) -------------
     clip_rel = f"{out_dir}/master_clip.mp4"
     if media.ffmpeg_available():
+
+        def persisted_frame(index: int) -> bytes:
+            data = filesystem.read_bytes(f"{frame_dir}/frame_{index:04d}.raw", max_bytes=1 << 24)
+            if _digest(data) != frame_hashes[index]:
+                raise MasterError(f"persisted frame {index} failed digest verification")
+            return data
+
         try:
-            res = media.synthesise_test_clip(
+            res = media.encode_rgb24_stream(
                 filesystem,
                 clip_rel,
-                width=side,
-                height=side,
+                persisted_frame,
+                width=frame_width,
+                height=frame_width,
                 frames=frames,
                 fps=fps,
                 timeout=timeout,
