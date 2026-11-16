@@ -61,6 +61,7 @@ __all__ = [
     "build_manifest",
     "canonical_manifest_signing_bytes",
     "compute_merkle_root",
+    "enforce_manifest_signature",
     "leaf_hash",
     "leaf_payload",
     "manifest_from_json",
@@ -565,6 +566,35 @@ def verify_manifest_signature(manifest: ResourcePackManifest, public_key: bytes)
         ) from error
 
 
+def enforce_manifest_signature(
+    manifest: ResourcePackManifest,
+    trusted_public_key: bytes | None,
+    *,
+    allow_unsigned: bool = False,
+) -> bool:
+    """The single signature *policy* decision; returns whether a signature verified.
+
+    Fail-closed by default: without a trusted key, or for an unsigned manifest,
+    :class:`SignatureVerificationError` is raised.  Only an explicit
+    ``allow_unsigned=True`` (offline tooling, tests) accepts an unsigned
+    manifest — and even then a *present* signature is still checked whenever a
+    key is available, so a forged signature can never pass.
+    """
+    if not isinstance(allow_unsigned, bool):
+        raise TypeError("allow_unsigned must be a bool")
+    if trusted_public_key is None:
+        if allow_unsigned:
+            return False
+        raise SignatureVerificationError(
+            "no trusted Ed25519 public key configured; unsigned operation requires "
+            "an explicit allow_unsigned=True"
+        )
+    if manifest.signature is None and allow_unsigned:
+        return False
+    verify_manifest_signature(manifest, trusted_public_key)
+    return True
+
+
 # --------------------------------------------------------------------------
 # on-disk verification
 # --------------------------------------------------------------------------
@@ -613,20 +643,21 @@ def verify_installed_pack(
     install_dir: Path,
     *,
     trusted_public_key: bytes | None = None,
+    allow_unsigned: bool = False,
 ) -> PackVerificationReport:
     """Fail-closed verification of an installed pack against its manifest.
 
-    Checks, in order: declared totals and locked root; the Ed25519 signature
-    (mandatory when *trusted_public_key* is given); every file's presence,
+    Checks, in order: the Ed25519 signature (mandatory unless the caller
+    explicitly passes ``allow_unsigned=True`` — see
+    :func:`enforce_manifest_signature`); declared totals and locked root; every file's presence,
     type, size and SHA-256; the absence of unexpected files or symlinks; and
     finally the Merkle root recomputed from the **observed** on-disk bytes.
     Any single discrepancy raises :class:`PackVerificationError`.
     """
+    signature_verified = enforce_manifest_signature(
+        manifest, trusted_public_key, allow_unsigned=allow_unsigned
+    )
     problems = _integrity_problems(manifest)
-    signature_verified = False
-    if trusted_public_key is not None:
-        verify_manifest_signature(manifest, trusted_public_key)
-        signature_verified = True
     if not install_dir.is_dir() or install_dir.is_symlink():
         raise PackVerificationError([*problems, f"install directory missing: {install_dir}"])
     on_disk, scan_problems = _scan_tree(install_dir)

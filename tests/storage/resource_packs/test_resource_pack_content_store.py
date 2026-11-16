@@ -23,8 +23,8 @@ def test_put_index_materialize_and_gc(tmp_path: Path) -> None:
     store.materialize(sha, tmp_path / "out/copied.bin", prefer_hardlink=False)
     assert (tmp_path / "out/linked.bin").stat().st_nlink == 2  # CAS object + install link
     assert (tmp_path / "out/copied.bin").read_bytes() == data
-    assert store.collect_garbage({sha}) == ()
-    assert store.collect_garbage(set()) == (sha,) and store.index() == {}
+    assert store.collect_garbage({sha}, min_age_seconds=0.0) == ()
+    assert store.collect_garbage(set(), min_age_seconds=0.0) == (sha,) and store.index() == {}
 
 
 def test_corrupt_candidates_never_become_addressable(tmp_path: Path) -> None:
@@ -48,3 +48,16 @@ def test_index_ignores_foreign_files_and_bad_names(tmp_path: Path) -> None:
     assert store.index() == {sha: len(good)}
     with pytest.raises(ValueError, match="not a sha256"):
         store.object_path("../../etc/passwd")
+
+
+def test_gc_grace_period_spares_young_objects(tmp_path: Path) -> None:
+    store = LocalContentStore(tmp_path / "cas")
+    data = b"just written by a concurrent sync"
+    sha = hashlib.sha256(data).hexdigest()
+    store.put_bytes(data, sha)
+    assert store.collect_garbage(set()) == ()  # default: one hour of grace, wall clock
+    mtime = store.object_path(sha).stat().st_mtime
+    assert store.collect_garbage(set(), min_age_seconds=60, now=mtime + 59) == ()
+    assert store.collect_garbage(set(), min_age_seconds=60, now=mtime + 61) == (sha,)
+    with pytest.raises(ValueError):
+        store.collect_garbage(set(), min_age_seconds=-0.5)

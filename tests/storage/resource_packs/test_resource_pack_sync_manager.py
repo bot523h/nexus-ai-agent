@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib
 import json
 import os
+import subprocess
+import sys
+import time
 from dataclasses import replace
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from resource_pack_testkit import (
@@ -23,16 +29,22 @@ from nexus_ai_agent.storage.resource_packs import (
     InsufficientStorageError,
     IntegrityError,
     LocalDirectoryPackSource,
+    PackLeaseError,
+    PackLockTimeoutError,
     PackSyncError,
+    PackSyncManager,
     PackVerificationError,
     RangeFetchInterrupted,
     ResourceBlobEntry,
     ResourcePackManifest,
     ResourcePackSyncManager,
+    SignatureVerificationError,
     SyncProgress,
     SyncStage,
     UnknownPackError,
+    VersionRollbackError,
     default_blob_key,
+    parse_semantic_version,
 )
 from nexus_ai_agent.storage.resource_packs import pack_sync_manager as psm
 
@@ -48,6 +60,7 @@ def _manager(
     **kwargs: object,
 ) -> tuple[ResourcePackSyncManager, LocalDirectoryPackSource]:
     source = LocalDirectoryPackSource(mirror.root)
+    kwargs.setdefault("allow_unsigned", True)  # keyless fixtures; F1 default is covered below
     manager = ResourcePackSyncManager(
         root,
         catalog,
@@ -246,6 +259,7 @@ def test_real_http_resume_across_two_sync_calls(mirror: PackMirror, tmp_path: Pa
             root,
             [hd],
             HttpRangePackSource(server.base_url),
+            allow_unsigned=True,
             disk_free_probe=lambda _: PLENTY,
             max_attempts=1,
         )
@@ -363,16 +377,16 @@ def test_prune_keeps_only_the_active_version_and_gc_frees_old_blobs(
     assert manager.get_login_gate_status().packs[0].state is GateState.READY
 
     stale = next(e for e in v1.entries if e.relative_path == "tex/2.ktx2")
-    assert manager.collect_garbage() == (stale.sha256,)
+    assert manager.collect_garbage(min_age_seconds=0.0) == (stale.sha256,)
     assert manager.prune_old_versions("standard") == ()
 
 
 def test_prune_and_gc_without_installs(mirror: PackMirror, tmp_path: Path) -> None:
     manager, _ = _manager(tmp_path / "dev", [_core(mirror)], mirror)
     assert manager.prune_old_versions("core") == ()
-    assert manager.collect_garbage() == ()
+    assert manager.collect_garbage(min_age_seconds=0.0) == ()
     (tmp_path / "dev/packs/core/staging").mkdir(parents=True)  # interrupted, never activated
-    assert manager.collect_garbage() == ()
+    assert manager.collect_garbage(min_age_seconds=0.0) == ()
     assert manager.prune_old_versions("core") == ()
     assert not (tmp_path / "dev/packs/core/staging").exists()
     with pytest.raises(UnknownPackError):
@@ -406,3 +420,351 @@ def test_tampered_catalog_is_refused_before_any_download(
 def test_default_disk_probe_walks_up_to_an_existing_directory(tmp_path: Path) -> None:
     free = psm._default_disk_free(tmp_path / "not" / "yet" / "created")
     assert isinstance(free, int) and free > 0
+
+
+# --------------------------------------------------------------------------
+# F1 — signatures are mandatory unless explicitly waived
+# --------------------------------------------------------------------------
+
+
+def test_default_manager_without_a_key_refuses_before_any_write(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    root = tmp_path / "dev"
+    source = LocalDirectoryPackSource(mirror.root)
+    manager = ResourcePackSyncManager(root, [_core(mirror)], source)  # all defaults
+    assert manager.allow_unsigned is False and manager.trusted_public_key is None
+    with pytest.raises(SignatureVerificationError, match="allow_unsigned=True"):
+        manager.sync_pack("core")
+    with pytest.raises(SignatureVerificationError):
+        manager.get_login_gate_status()
+    assert source.requested_offsets == [] and not root.exists()
+    assert PackSyncManager is ResourcePackSyncManager
+
+
+def test_policy_flags_are_validated(mirror: PackMirror, tmp_path: Path) -> None:
+    source = LocalDirectoryPackSource(mirror.root)
+    with pytest.raises(TypeError):
+        ResourcePackSyncManager(tmp_path, [], source, allow_unsigned=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        ResourcePackSyncManager(tmp_path, [], source, allow_rollback=None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="lock_backend"):
+        ResourcePackSyncManager(tmp_path, [], source, lock_backend="nfs")  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------
+# F4 — anti-rollback
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "parsed"),
+    [
+        ("1.10.2", (1, 10, 2)),
+        ("0.0.0", (0, 0, 0)),
+        ("01.0.0", None),
+        ("1.0", None),
+        ("1.0.0-rc1", None),
+        ("v1.0.0", None),
+    ],
+)
+def test_semantic_version_parser(text: str, parsed: tuple[int, int, int] | None) -> None:
+    assert parse_semantic_version(text) == parsed
+
+
+def test_downgrade_is_refused_unless_explicitly_allowed(mirror: PackMirror, tmp_path: Path) -> None:
+    v1, v2 = _std_versions(mirror)
+    root = tmp_path / "dev"
+    _manager(root, [v2], mirror)[0].sync_pack("standard")
+    before = tree_snapshot(root)
+    downgrade, source = _manager(root, [v1], mirror)
+    with pytest.raises(VersionRollbackError, match="older than the active"):
+        downgrade.sync_pack("standard")
+    assert tree_snapshot(root) == before and source.requested_offsets == []
+    rolled = _manager(root, [v1], mirror, allow_rollback=True)[0].sync_pack("standard")
+    assert rolled.version == "1.0.0"
+
+
+def test_non_semantic_versions_cannot_prove_monotonicity(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    v1, _ = _std_versions(mirror)
+    root = tmp_path / "dev"
+    _manager(root, [replace(v1, version="2024-rc")], mirror, allow_rollback=True)[0].sync_pack(
+        "standard"
+    )
+    with pytest.raises(VersionRollbackError, match="not comparable"):
+        _manager(root, [v1], mirror)[0].sync_pack("standard")
+
+
+def test_newer_version_landing_mid_sync_wins_over_an_older_flip(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    v1, v2 = _std_versions(mirror)
+    extra = mirror.add_remote("tex/extra.ktx2", blob("std-extra", 1234))
+    v3 = mirror.manifest("standard", "1.2.0", [*v2.entries, extra], tier="standard")
+    root = tmp_path / "dev"
+    _manager(root, [v1], mirror)[0].sync_pack("standard")
+    newer, _ = _manager(root, [v3], mirror)
+
+    def race(event: SyncProgress) -> None:
+        if event.stage is SyncStage.ACTIVATING:  # callbacks run outside the storage lock
+            newer.sync_pack("standard")
+
+    slow, _ = _manager(root, [v2], mirror)
+    with pytest.raises(VersionRollbackError, match="1.2.0 -> 1.1.0"):
+        slow.sync_pack("standard", race)
+    assert slow.installed_manifest("standard") == v3
+    assert not any(p.name.startswith("1.1.0") for p in (root / "packs/standard/versions").iterdir())
+    assert list((root / "leases").iterdir()) == []
+
+
+# --------------------------------------------------------------------------
+# F2 — cross-process lock, leases and safe garbage collection
+# --------------------------------------------------------------------------
+
+_GC_IN_ANOTHER_PROCESS = """
+import json, sys
+from pathlib import Path
+from nexus_ai_agent.storage.resource_packs import LocalDirectoryPackSource, PackSyncManager
+root, mirror = Path(sys.argv[1]), Path(sys.argv[2])
+manager = PackSyncManager(root, [], LocalDirectoryPackSource(mirror), lock_timeout_seconds=10.0)
+gc = manager.collect_garbage(min_age_seconds=0.0)
+pruned = manager.prune_old_versions("standard")
+print(json.dumps({"gc": list(gc), "pruned": list(pruned)}))
+"""
+
+
+def _orphan(manager: ResourcePackSyncManager, label: str) -> str:
+    data = blob(label, 777)
+    sha = hashlib.sha256(data).hexdigest()
+    manager.store.put_bytes(data, sha)
+    return sha
+
+
+def test_gc_from_another_process_mid_staging_never_loses_in_flight_blobs(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    v1, v2 = _std_versions(mirror)
+    root = tmp_path / "dev"
+    old = _manager(root, [v1], mirror)[0].sync_pack("standard")
+    manager, _ = _manager(root, [v2], mirror)
+    orphan = _orphan(manager, "nobody-needs-me")
+    fresh = next(e for e in v2.entries if e.relative_path == "tex/2.ktx2")
+    seen: dict[str, object] = {}
+    src_dir = Path(importlib.import_module("nexus_ai_agent").__file__ or "").parents[1]
+
+    def hostile_gc(event: SyncProgress) -> None:
+        # VERIFYING: every CAS write and the whole staging tree are done, the
+        # active.json flip has not happened yet — the most dangerous moment.
+        if event.stage is not SyncStage.VERIFYING or seen:
+            return
+        (lease_path,) = (root / "leases").iterdir()
+        seen["lease"] = json.loads(lease_path.read_bytes())
+        assert manager.store.has(fresh.sha256)  # downloaded, referenced by no active pack
+        completed = subprocess.run(
+            [sys.executable, "-c", _GC_IN_ANOTHER_PROCESS, str(root), str(mirror.root)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+            env={**os.environ, "PYTHONPATH": str(src_dir)},
+        )
+        seen["other"] = json.loads(completed.stdout)
+
+    result = manager.sync_pack("standard", hostile_gc)
+
+    lease = seen["lease"]
+    assert isinstance(lease, dict)
+    assert lease["pid"] == os.getpid() and lease["pack_id"] == "standard"
+    assert lease["install_dir"] == result.install_dir.name
+    assert set(lease["digests"]) == {e.sha256 for e in v2.entries}
+    assert lease["expires_at"] > time.time()
+    assert seen["other"] == {"gc": [orphan], "pruned": []}  # GC ran, but only on true garbage
+    assert manager.get_login_gate_status().state is GateState.READY
+    assert result.verification.verified_files == len(v2.entries)
+    assert old.install_dir.is_dir()  # still there: pruning is a separate, explicit step
+    assert list((root / "leases").iterdir()) == []  # the lease is released afterwards
+
+
+def test_interrupted_flip_keeps_previous_version_and_gc_spares_it(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    v1, v2 = _std_versions(mirror)
+    root = tmp_path / "dev"
+    first, _ = _manager(root, [v1], mirror)
+    first.sync_pack("standard")
+    real_replace = os.replace
+    gc_results: list[tuple[str, ...]] = []
+    janitor, _ = _manager(root, [], mirror)
+
+    def gc_then_crash(src: object, dst: object) -> None:
+        if str(dst).endswith("active.json"):
+            raise OSError("killed between staging and the pointer flip")
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    def gc_mid_staging(event: SyncProgress) -> None:
+        if event.stage is SyncStage.STAGING:
+            gc_results.append(janitor.collect_garbage(min_age_seconds=0.0))
+
+    monkeypatch.setattr(os, "replace", gc_then_crash)
+    with pytest.raises(OSError, match="killed"):
+        _manager(root, [v2], mirror)[0].sync_pack("standard", gc_mid_staging)
+    monkeypatch.undo()
+
+    assert gc_results == [()]  # the lease protected every freshly downloaded blob
+    assert first.installed_manifest("standard") == v1
+    assert first.get_login_gate_status().state is GateState.READY
+    assert list((root / "leases").iterdir()) == []
+    changed = next(e for e in v2.entries if e.relative_path == "tex/2.ktx2")
+    assert janitor.collect_garbage(min_age_seconds=0.0) == (changed.sha256,)  # now unleased
+    assert first.get_login_gate_status().state is GateState.READY
+
+
+def _write_lease(root: Path, name: str, **overrides: object) -> Path:
+    record: dict[str, object] = {
+        "schema": 1,
+        "pid": 4242,
+        "pack_id": "standard",
+        "install_dir": "9.9.9__feedface0000",
+        "expires_at": time.time() + 3600,
+        "digests": [],
+    }
+    record.update(overrides)
+    path = root / "leases" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record))
+    return path
+
+
+def test_gc_age_gate_leases_and_protected_digests(mirror: PackMirror, tmp_path: Path) -> None:
+    root = tmp_path / "dev"
+    manager, _ = _manager(root, [], mirror)
+    young = _orphan(manager, "young")
+    assert manager.collect_garbage() == ()  # default 1 h grace period
+    leased, protected = _orphan(manager, "leased"), _orphan(manager, "protected")
+    _write_lease(root, "1-live.json", expires_at=time.time() + 86_400, digests=[leased])
+    expired = _write_lease(root, "2-dead.json", expires_at=time.time() - 1, digests=[young])
+    (root / "leases" / ".3-partial.json.tmp").write_text("{half")  # in-progress write: ignored
+    later, _ = _manager(root, [], mirror, wall_clock=lambda: time.time() + 7200)
+    assert later.collect_garbage(protected_digests={protected}) == (young,)
+    assert not expired.exists()  # a crashed owner's lease is reclaimed
+    assert manager.store.has(leased) and manager.store.has(protected)
+    with pytest.raises(ValueError):
+        manager.collect_garbage(min_age_seconds=-1)
+    with pytest.raises(ValueError):
+        manager.collect_garbage(min_age_seconds=float("nan"))
+    with pytest.raises(TypeError):
+        manager.collect_garbage(protected_digests=leased)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"{not json",
+        json.dumps([1, 2]).encode(),
+        json.dumps({"schema": 1}).encode(),
+        b"BAD-DIGEST",
+        b"BAD-EXPIRY",
+        b"BAD-DIR",
+    ],
+)
+def test_corrupt_lease_makes_gc_and_prune_delete_nothing(
+    mirror: PackMirror, tmp_path: Path, content: bytes
+) -> None:
+    v1, v2 = _std_versions(mirror)
+    root = tmp_path / "dev"
+    _manager(root, [v1], mirror)[0].sync_pack("standard")
+    manager, _ = _manager(root, [v2], mirror)
+    manager.sync_pack("standard")
+    orphan = _orphan(manager, "orphan")
+    if content == b"BAD-DIGEST":
+        _write_lease(root, "x.json", digests=["not-a-digest"])
+    elif content == b"BAD-EXPIRY":
+        _write_lease(root, "x.json", expires_at=True)
+    elif content == b"BAD-DIR":
+        _write_lease(root, "x.json", install_dir="../../escape")
+    else:
+        (root / "leases").mkdir(exist_ok=True)
+        (root / "leases" / "x.json").write_bytes(content)
+    before = tree_snapshot(root / "cas"), tree_snapshot(root / "packs")
+    with pytest.raises(PackLeaseError):
+        manager.collect_garbage(min_age_seconds=0.0)
+    with pytest.raises(PackLeaseError):
+        manager.prune_old_versions("standard")
+    assert (tree_snapshot(root / "cas"), tree_snapshot(root / "packs")) == before
+    assert manager.store.has(orphan)
+
+
+def test_prune_spares_directories_owned_by_a_live_lease(mirror: PackMirror, tmp_path: Path) -> None:
+    v1, _ = _std_versions(mirror)
+    root = tmp_path / "dev"
+    manager, _ = _manager(root, [v1], mirror)
+    manager.sync_pack("standard")
+    owned = "9.9.9__feedface0000"
+    for parent in ("staging", "versions"):
+        (root / "packs/standard" / parent / owned).mkdir(parents=True)
+    (root / "packs/standard/versions" / f"{owned}.manifest.json").write_text("{}")
+    lease = _write_lease(root, "1-live.json", install_dir=owned)
+    _write_lease(root, "2-other-pack.json", pack_id="core", install_dir="1.0.0__abc")
+    assert manager.prune_old_versions("standard") == ()
+    assert (root / "packs/standard/staging" / owned).is_dir()
+    assert (root / "packs/standard/versions" / f"{owned}.manifest.json").is_file()
+    lease.unlink()
+    assert manager.prune_old_versions("standard") == (owned,)
+    assert not (root / "packs/standard/staging").exists()
+
+
+def test_flock_contention_times_out_without_deleting(mirror: PackMirror, tmp_path: Path) -> None:
+    root = tmp_path / "dev"
+    holder, _ = _manager(root, [], mirror)
+    orphan = _orphan(holder, "orphan")
+    waiter, _ = _manager(root, [], mirror, lock_timeout_seconds=0.1)
+    with holder._storage_lock():
+        assert (root / ".sync_gc.lock").is_file()
+        with pytest.raises(PackLockTimeoutError):
+            waiter.collect_garbage(min_age_seconds=0.0)
+    assert holder.store.has(orphan)
+    assert waiter.collect_garbage(min_age_seconds=0.0) == (orphan,)  # released on exit
+
+
+def test_exclusive_file_lock_fallback(mirror: PackMirror, tmp_path: Path) -> None:
+    v1, _ = _std_versions(mirror)
+    root = tmp_path / "dev"
+    manager, _ = _manager(
+        root, [v1], mirror, lock_backend="exclusive_file", lock_timeout_seconds=0.1
+    )
+    manager.sync_pack("standard")
+    lock_file = root / ".sync_gc.lock.excl"
+    assert not lock_file.exists()  # released after every critical section
+    orphan = _orphan(manager, "orphan")
+
+    lock_file.write_text('{"pid": 1, "expires_at": 0}')  # another live owner
+    with pytest.raises(PackLockTimeoutError):
+        manager.collect_garbage(min_age_seconds=0.0)
+    stale = time.time() - 3600
+    os.utime(lock_file, (stale, stale))  # owner crashed long ago: break the lock
+    assert manager.collect_garbage(min_age_seconds=0.0) == (orphan,)
+    assert not lock_file.exists()
+    lock = manager._storage_lock()
+    lock._break_if_stale()  # nothing to break: a no-op, not an error
+
+
+def test_lock_backend_selection_without_fcntl(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flock, _ = _manager(tmp_path / "a", [], mirror, lock_backend="flock")
+    assert flock._storage_lock().path.name == ".sync_gc.lock"
+    real_import = importlib.import_module
+
+    def no_fcntl(name: str, package: str | None = None) -> ModuleType:
+        if name == "fcntl":
+            raise ImportError("no fcntl on this platform")
+        return real_import(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", no_fcntl)
+    auto, _ = _manager(tmp_path / "b", [], mirror)
+    assert auto._storage_lock().path.name == ".sync_gc.lock.excl"
+    assert auto.collect_garbage() == ()
+    with pytest.raises(ValueError, match="fcntl"):
+        _manager(tmp_path / "c", [], mirror, lock_backend="flock")[0]._storage_lock()

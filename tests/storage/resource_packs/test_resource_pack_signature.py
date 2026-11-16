@@ -24,6 +24,7 @@ from nexus_ai_agent.storage.resource_packs import (  # noqa: E402
     ResourcePackManifest,
     ResourcePackSyncManager,
     SignatureVerificationError,
+    VersionRollbackError,
     build_manifest,
     manifest_from_json,
     manifest_to_json,
@@ -140,3 +141,73 @@ def test_manager_refuses_unsigned_catalog_before_any_write(
     with pytest.raises(SignatureVerificationError):
         manager.get_login_gate_status()
     assert tree_snapshot(device) == {}
+
+
+def test_allow_unsigned_never_lets_a_forged_signature_through(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    private, public = _keypair()
+    unsigned = _manifest(mirror)
+    relaxed = ResourcePackSyncManager(
+        tmp_path / "device",
+        [unsigned],
+        LocalDirectoryPackSource(mirror.root),
+        trusted_public_key=public,
+        allow_unsigned=True,
+        disk_free_probe=lambda _: 10**12,
+    )
+    result = relaxed.sync_pack("core")
+    assert not result.verification.signature_verified  # explicitly opted in, reported honestly
+    report = verify_installed_pack(
+        unsigned, result.install_dir, trusted_public_key=public, allow_unsigned=True
+    )
+    assert not report.signature_verified
+    signed = sign_manifest(unsigned, private)
+    assert verify_installed_pack(
+        signed, result.install_dir, trusted_public_key=public, allow_unsigned=True
+    ).signature_verified
+    forged = replace(signed, signature="ab" * 64)
+    with pytest.raises(SignatureVerificationError):
+        verify_installed_pack(
+            forged, result.install_dir, trusted_public_key=public, allow_unsigned=True
+        )
+
+
+def test_signed_older_version_is_refused_after_a_newer_install(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    """F4: a validly signed but older manifest is a rollback attack, not an update."""
+    private, public = _keypair()
+    entry = mirror.add_remote("audio/ambience.ogg", blob("amb", 2048))
+    v110 = sign_manifest(mirror.manifest("core", "1.1.0", [entry, *core_seed_entries()]), private)
+    old_entry = mirror.add_remote("audio/ambience.ogg", blob("amb-old-vulnerable", 2048))
+    v100 = sign_manifest(
+        mirror.manifest("core", "1.0.0", [old_entry, *core_seed_entries()]), private
+    )
+    device = tmp_path / "device"
+
+    def manager(
+        manifest: ResourcePackManifest, *, allow_rollback: bool = False
+    ) -> ResourcePackSyncManager:
+        return ResourcePackSyncManager(
+            device,
+            [manifest],
+            LocalDirectoryPackSource(mirror.root),
+            trusted_public_key=public,
+            disk_free_probe=lambda _: 10**12,
+            allow_rollback=allow_rollback,
+        )
+
+    manager(v110).sync_pack("core")
+    before = tree_snapshot(device)
+    downgrade = manager(v100)
+    with pytest.raises(VersionRollbackError, match="1.1.0 -> 1.0.0") as info:
+        downgrade.sync_pack("core")
+    assert (info.value.active_version, info.value.target_version) == ("1.1.0", "1.0.0")
+    with pytest.raises(VersionRollbackError):
+        downgrade.get_login_gate_status()
+    assert tree_snapshot(device) == before  # nothing downloaded, staged or flipped
+    assert downgrade.installed_manifest("core") == v110
+
+    forced = manager(v100, allow_rollback=True).sync_pack("core")
+    assert forced.version == "1.0.0" and forced.verification.signature_verified

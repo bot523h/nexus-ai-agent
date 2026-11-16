@@ -12,6 +12,8 @@ __all__ = [
     "IntegrityError",
     "InsufficientStorageError",
     "ManifestValidationError",
+    "PackLeaseError",
+    "PackLockTimeoutError",
     "PackSyncError",
     "PackVerificationError",
     "RangeFetchError",
@@ -21,6 +23,8 @@ __all__ = [
     "SignatureBackendUnavailableError",
     "SignatureVerificationError",
     "UnknownPackError",
+    "UnsafeSourceError",
+    "VersionRollbackError",
 ]
 
 
@@ -69,6 +73,14 @@ class RangeFetchError(ResourcePackError):
         self.status = status
 
 
+class UnsafeSourceError(RangeFetchError):
+    """A request (or a redirect) targets a scheme/host the source policy forbids.
+
+    Raised *before* any network I/O towards the forbidden destination and never
+    retried by the fetcher.
+    """
+
+
 class RangeFetchInterrupted(RangeFetchError):
     """The transfer stopped early; the ``.part`` file is kept for resumption."""
 
@@ -95,3 +107,24 @@ class UnknownPackError(ResourcePackError, LookupError):
 
 class PackSyncError(ResourcePackError):
     """The sync manager's on-disk state is inconsistent (e.g. a tampered pointer)."""
+
+
+class PackLeaseError(PackSyncError):
+    """An in-flight lease file is unreadable: garbage collection refuses to run."""
+
+
+class PackLockTimeoutError(PackSyncError):
+    """The cross-process storage lock could not be acquired in time."""
+
+
+class VersionRollbackError(ResourcePackError):
+    """The target manifest is older than the active version (anti-rollback guard)."""
+
+    def __init__(self, *, pack_id: str, active_version: str, target_version: str, reason: str):
+        self.pack_id = pack_id
+        self.active_version = active_version
+        self.target_version = target_version
+        super().__init__(
+            f"refusing {pack_id!r} {active_version} -> {target_version}: {reason} "
+            "(pass allow_rollback=True to downgrade deliberately)"
+        )
