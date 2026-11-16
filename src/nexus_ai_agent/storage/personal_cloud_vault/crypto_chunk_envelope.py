@@ -47,6 +47,7 @@ from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     PersonalVaultError,
     VaultAuthenticationError,
     VaultTamperDetectedError,
+    VaultTransportError,
 )
 
 MIN_CHUNK_SIZE = 1
@@ -71,6 +72,7 @@ _FLAG_NONE = 0x00
 _FLAG_PADDED = 0x01
 _WIRE_FIXED_STRUCT = struct.Struct(">H")
 _WIRE_META_STRUCT = struct.Struct(">16s16sQQ32s")
+_WIRE_MAC_STRUCT = struct.Struct(">32s")
 
 
 def validate_chunk_size(chunk_size: int) -> int:
@@ -198,7 +200,10 @@ def derive_vault_keys(
     )
 
 
-def compute_chunk_id(plaintext: bytes, key_material: VaultKeyMaterial) -> str:
+def compute_chunk_id(
+    plaintext: bytes | bytearray | memoryview,
+    key_material: VaultKeyMaterial,
+) -> str:
     """Compute zero-knowledge convergent content-addressed chunk ID (64 hex chars)."""
     mac = hmac.new(key_material.chunk_id_key, b"nagar-pcv-chunk-id-v1|", hashlib.sha256)
     mac.update(plaintext)
@@ -274,6 +279,49 @@ def sha256_ctr_crypt(enc_key: bytes, nonce: bytes, payload: bytes) -> bytes:
     return bytes(out)
 
 
+def sha256_ctr_crypt_inplace(
+    enc_key: bytes,
+    nonce: bytes,
+    buffer: bytearray,
+    *,
+    start: int = 0,
+) -> None:
+    """XOR the SHA-256 CTR keystream over ``buffer[start:]`` in place.
+
+    The counter always restarts at zero for the given slice, so encryption and
+    decryption must use the same ``start``. Only a 4 KiB keystream scratch is
+    allocated: no payload-sized output copy is ever created.
+    """
+    if len(enc_key) != 32:
+        raise VaultAuthenticationError("enc_key must be 32 bytes")
+    if len(nonce) != NONCE_BYTES:
+        raise VaultTamperDetectedError(f"nonce must be {NONCE_BYTES} bytes, got {len(nonce)}")
+    total_len = len(buffer) - start
+    if total_len <= 0:
+        return
+    base_hasher = hashlib.sha256(enc_key + nonce)
+    pack_u64 = struct.Struct(">Q").pack
+    view = memoryview(buffer)
+    counter = 0
+    try:
+        for offset in range(0, total_len, _CTR_STRIDE_BYTES):
+            slice_start = start + offset
+            slice_view = view[slice_start : slice_start + _CTR_STRIDE_BYTES]
+            slice_len = len(slice_view)
+            blocks_needed = (slice_len + SHA256_BLOCK_BYTES - 1) // SHA256_BLOCK_BYTES
+            ks_parts: list[bytes] = []
+            for _ in range(blocks_needed):
+                block_hasher = base_hasher.copy()
+                block_hasher.update(pack_u64(counter))
+                ks_parts.append(block_hasher.digest())
+                counter += 1
+            ks = b"".join(ks_parts)[:slice_len]
+            xored = int.from_bytes(slice_view, "big") ^ int.from_bytes(ks, "big")
+            slice_view[:] = xored.to_bytes(slice_len, "big")
+    finally:
+        view.release()
+
+
 def _build_envelope_header(chunk_id: str, *, flags: int = _FLAG_NONE) -> bytes:
     """Build deterministic authenticated header binding protocol magic, version, and chunk ID."""
     return ENVELOPE_MAGIC + bytes([ENVELOPE_VERSION, flags]) + bytes.fromhex(chunk_id)
@@ -284,7 +332,7 @@ def _compute_etm_mac(
     *,
     header: bytes,
     nonce: bytes,
-    ciphertext: bytes,
+    ciphertext: bytes | bytearray | memoryview,
     chunk_index: int,
     plaintext_len: int,
 ) -> bytes:
@@ -420,6 +468,167 @@ def encrypt_chunk(
         mac_tag=mac_tag,
         key_id=key_material.key_id,
     )
+
+
+def _resolve_nonce(nonce: bytes | None) -> bytes:
+    """Return a validated 16-byte nonce (fresh random when ``nonce`` is ``None``)."""
+    effective_nonce = secrets.token_bytes(NONCE_BYTES) if nonce is None else bytes(nonce)
+    if len(effective_nonce) != NONCE_BYTES:
+        raise PersonalVaultError(f"nonce must be {NONCE_BYTES} bytes, got {len(effective_nonce)}")
+    return effective_nonce
+
+
+def _wire_geometry(plaintext_len: int, pad_to_block_size: int) -> tuple[int, int, int, int]:
+    """Return ``(prefix_len, padded_len, pad_len, flags)`` for the wire layout."""
+    validate_pad_block_size(pad_to_block_size)
+    if plaintext_len < 0:
+        raise PersonalVaultError(f"plaintext_len must be non-negative, got {plaintext_len}")
+    if pad_to_block_size == 1:
+        padded_len = plaintext_len
+    elif plaintext_len == 0:
+        padded_len = pad_to_block_size
+    else:
+        padded_len = (
+            (plaintext_len + pad_to_block_size - 1) // pad_to_block_size
+        ) * pad_to_block_size
+    pad_len = padded_len - plaintext_len
+    flags = _FLAG_PADDED if pad_len > 0 else _FLAG_NONE
+    header_len = len(ENVELOPE_MAGIC) + 2 + 32  # magic + version/flags + hex chunk id
+    prefix_len = _WIRE_FIXED_STRUCT.size + header_len + _WIRE_META_STRUCT.size
+    return prefix_len, padded_len, pad_len, flags
+
+
+def _finalize_wire(
+    wire: bytearray,
+    *,
+    prefix_len: int,
+    chunk_id: str,
+    flags: int,
+    nonce: bytes,
+    key_material: VaultKeyMaterial,
+    plaintext_len: int,
+) -> None:
+    """Write the authenticated prefix, CTR-encrypt in place, then patch the MAC tag."""
+    header = _build_envelope_header(chunk_id, flags=flags)
+    prefix = (
+        _WIRE_FIXED_STRUCT.pack(len(header))
+        + header
+        + _WIRE_META_STRUCT.pack(
+            key_material.key_id,
+            nonce,
+            0,
+            plaintext_len,
+            b"\x00" * MAC_TAG_BYTES,
+        )
+    )
+    wire[0:prefix_len] = prefix
+    sha256_ctr_crypt_inplace(key_material.enc_key, nonce, wire, start=prefix_len)
+    wire_view = memoryview(wire)
+    try:
+        mac_tag = _compute_etm_mac(
+            key_material.mac_key,
+            header=header,
+            nonce=nonce,
+            ciphertext=wire_view[prefix_len:],
+            chunk_index=0,
+            plaintext_len=plaintext_len,
+        )
+    finally:
+        wire_view.release()
+    _WIRE_MAC_STRUCT.pack_into(wire, prefix_len - MAC_TAG_BYTES, mac_tag)
+
+
+def encrypt_plaintext_to_wire(
+    plaintext: bytes | bytearray | memoryview,
+    key_material: VaultKeyMaterial,
+    *,
+    nonce: bytes | None = None,
+    pad_to_block_size: int = 1,
+    plaintext_observers: Sequence[Any] = (),
+) -> tuple[bytearray, str]:
+    """Encrypt an in-memory chunk into its wire buffer without extra copies.
+
+    Returns ``(wire_bytes, chunk_id)``. The plaintext is copied once into the
+    ciphertext slot of the final wire buffer and then overwritten in place by the
+    keystream, so only ONE payload-sized extra buffer is live (the ~4 of
+    ``encrypt_chunk(...).to_bytes()`` collapse to a single one).
+    """
+    plaintext_len = len(plaintext)
+    effective_nonce = _resolve_nonce(nonce)
+    prefix_len, padded_len, pad_len, flags = _wire_geometry(plaintext_len, pad_to_block_size)
+
+    wire = bytearray(prefix_len + padded_len)
+    wire_view = memoryview(wire)
+    slot_view = wire_view[prefix_len : prefix_len + plaintext_len]
+    try:
+        slot_view[:] = plaintext
+        chunk_id = compute_chunk_id(slot_view, key_material)
+        for observer in plaintext_observers:
+            observer.update(slot_view)
+    finally:
+        slot_view.release()
+        wire_view.release()
+    if pad_len > 0:
+        wire[prefix_len + plaintext_len :] = b"\x00" * pad_len
+
+    _finalize_wire(
+        wire,
+        prefix_len=prefix_len,
+        chunk_id=chunk_id,
+        flags=flags,
+        nonce=effective_nonce,
+        key_material=key_material,
+        plaintext_len=plaintext_len,
+    )
+    return wire, chunk_id
+
+
+def encrypt_chunk_from_fd_to_wire(
+    *,
+    file_handle: Any,
+    plaintext_len: int,
+    key_material: VaultKeyMaterial,
+    nonce: bytes | None = None,
+    pad_to_block_size: int = 1,
+    plaintext_observers: Sequence[Any] = (),
+) -> tuple[bytearray, str]:
+    """Read a chunk straight into its wire buffer and encrypt it in place.
+
+    Returns ``(wire_bytes, chunk_id)``. The plaintext is ``readinto`` the ciphertext
+    slot of the final wire buffer, so exactly ONE payload-sized buffer exists at any
+    instant — this is the memory-optimal path used by the streaming pusher.
+    """
+    effective_nonce = _resolve_nonce(nonce)
+    prefix_len, padded_len, pad_len, flags = _wire_geometry(plaintext_len, pad_to_block_size)
+
+    wire = bytearray(prefix_len + padded_len)
+    wire_view = memoryview(wire)
+    slot_view = wire_view[prefix_len : prefix_len + plaintext_len]
+    try:
+        read_len = file_handle.readinto(slot_view)
+        if read_len != plaintext_len:
+            raise VaultTransportError(
+                f"Short read while encrypting chunk: expected {plaintext_len} bytes, got {read_len}"
+            )
+        chunk_id = compute_chunk_id(slot_view, key_material)
+        for observer in plaintext_observers:
+            observer.update(slot_view)
+    finally:
+        slot_view.release()
+        wire_view.release()
+    if pad_len > 0:
+        wire[prefix_len + plaintext_len :] = b"\x00" * pad_len
+
+    _finalize_wire(
+        wire,
+        prefix_len=prefix_len,
+        chunk_id=chunk_id,
+        flags=flags,
+        nonce=effective_nonce,
+        key_material=key_material,
+        plaintext_len=plaintext_len,
+    )
+    return wire, chunk_id
 
 
 def decrypt_chunk(
@@ -911,6 +1120,8 @@ __all__ = [
     "decrypt_stream_chunks",
     "derive_vault_keys",
     "encrypt_chunk",
+    "encrypt_chunk_from_fd_to_wire",
+    "encrypt_plaintext_to_wire",
     "encrypt_stream_chunks",
     "generate_vault_salt",
     "hkdf_expand_sha256",
@@ -918,6 +1129,7 @@ __all__ = [
     "init_streaming_file_mac",
     "normalize_relative_vault_path",
     "sha256_ctr_crypt",
+    "sha256_ctr_crypt_inplace",
     "split_into_chunks",
     "validate_chunk_size",
     "validate_pad_block_size",

@@ -21,6 +21,7 @@ from nexus_ai_agent.storage.personal_cloud_vault import (
     VaultKeyMaterial,
     VaultSnapshotManifest,
     VaultTamperDetectedError,
+    VaultTransportError,
     build_snapshot_manifest,
     compute_chunk_id,
     compute_file_mac,
@@ -721,3 +722,135 @@ def test_n4_n5_official_rfc5869_hkdf_and_pbkdf2_hmac_sha256_standard_vectors() -
     assert smac.hexdigest() == compute_file_mac("clips/scene.mp4", multi_stride, km)
     with pytest.raises(PersonalVaultError):
         init_streaming_file_mac("clips/scene.mp4", -1, km)
+
+
+def test_streaming_wire_encoders_guard_invalid_inputs_fail_closed() -> None:
+    """The in-place wire encoders reject bad geometry/keys instead of emitting bytes."""
+    import io
+    import os
+
+    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+        encrypt_chunk_from_fd_to_wire,
+        encrypt_plaintext_to_wire,
+        sha256_ctr_crypt_inplace,
+    )
+
+    salt = generate_vault_salt()
+    key_material = derive_vault_keys("streaming-guard-passphrase", salt, iterations=100_000)
+    payload = os.urandom(4_000)
+
+    # Wrong enc key length and wrong nonce length are rejected by the in-place CTR.
+    with pytest.raises(VaultAuthenticationError, match="enc_key must be 32 bytes"):
+        sha256_ctr_crypt_inplace(b"short", b"N" * 16, bytearray(payload))
+    with pytest.raises(VaultTamperDetectedError, match="nonce must be 16 bytes"):
+        sha256_ctr_crypt_inplace(key_material.enc_key, b"short", bytearray(payload))
+
+    # Degenerate slices are a no-op rather than an allocation.
+    empty = bytearray(payload)
+    sha256_ctr_crypt_inplace(key_material.enc_key, b"N" * 16, empty, start=len(empty))
+    assert bytes(empty) == payload
+    sha256_ctr_crypt_inplace(key_material.enc_key, b"N" * 16, bytearray())
+
+    # A Bad nonce supplied to the encoders fails closed before any buffer is built.
+    for bad_nonce in (b"short", b"X" * 17):
+        with pytest.raises(PersonalVaultError, match="nonce must be 16 bytes"):
+            encrypt_plaintext_to_wire(payload, key_material, nonce=bad_nonce)
+        with pytest.raises(PersonalVaultError, match="nonce must be 16 bytes"):
+            encrypt_chunk_from_fd_to_wire(
+                file_handle=io.BytesIO(payload),
+                plaintext_len=len(payload),
+                key_material=key_material,
+                nonce=bad_nonce,
+            )
+
+    # Negative lengths are rejected by the shared wire-geometry validator.
+    with pytest.raises(PersonalVaultError, match="plaintext_len must be non-negative"):
+        encrypt_chunk_from_fd_to_wire(
+            file_handle=io.BytesIO(b"x"),
+            plaintext_len=-1,
+            key_material=key_material,
+        )
+
+    # A short read means the source changed under us: fail closed, never upload.
+    with pytest.raises(VaultTransportError, match="Short read while encrypting chunk"):
+        encrypt_chunk_from_fd_to_wire(
+            file_handle=io.BytesIO(b"only-ten!!"),
+            plaintext_len=32,
+            key_material=key_material,
+        )
+
+
+def test_streaming_wire_encoders_match_envelope_bytes_and_roundtrip() -> None:
+    """``*_to_wire`` output is byte-identical to ``encrypt_chunk(...).to_bytes()``."""
+    import io
+    import os
+
+    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+        encrypt_chunk_from_fd_to_wire,
+        encrypt_plaintext_to_wire,
+    )
+
+    salt = generate_vault_salt()
+    key_material = derive_vault_keys("streaming-equivalence-passphrase", salt, iterations=100_000)
+    nonce = b"E" * 16
+
+    for size in (0, 1, 1_024, 65_535, 65_536, 100_000):
+        plaintext = os.urandom(size)
+        expected = encrypt_chunk(
+            plaintext,
+            key_material,
+            chunk_index=0,
+            nonce=nonce,
+            pad_to_block_size=16,
+        ).to_bytes()
+
+        in_memory, memory_id = encrypt_plaintext_to_wire(
+            plaintext, key_material, nonce=nonce, pad_to_block_size=16
+        )
+        from_fd, fd_id = encrypt_chunk_from_fd_to_wire(
+            file_handle=io.BytesIO(plaintext),
+            plaintext_len=size,
+            key_material=key_material,
+            nonce=nonce,
+            pad_to_block_size=16,
+        )
+        assert bytes(in_memory) == expected
+        assert bytes(from_fd) == expected
+        assert memory_id == fd_id == compute_chunk_id(plaintext, key_material)
+
+        envelope = EncryptedChunkEnvelope.from_bytes(bytes(from_fd))
+        assert decrypt_chunk(envelope, key_material) == plaintext
+
+
+def test_streaming_wire_encoders_feed_observers_plaintext_before_encryption() -> None:
+    """Observers see the exact plaintext while it still occupies the ciphertext slot."""
+    import io
+    import os
+
+    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+        encrypt_chunk_from_fd_to_wire,
+        encrypt_plaintext_to_wire,
+    )
+
+    salt = generate_vault_salt()
+    key_material = derive_vault_keys("streaming-observer-passphrase", salt, iterations=100_000)
+    plaintext = os.urandom(3_000)
+
+    file_hasher = hashlib.sha256()
+    chunk_hasher_cases: list[str] = []
+    for chunk_hasher in (hashlib.sha256(), hashlib.sha256()):
+        encrypt_plaintext_to_wire(
+            plaintext,
+            key_material,
+            plaintext_observers=(hasher := chunk_hasher,),
+        )
+        chunk_hasher_cases.append(hasher.hexdigest())
+    encrypt_chunk_from_fd_to_wire(
+        file_handle=io.BytesIO(plaintext),
+        plaintext_len=len(plaintext),
+        key_material=key_material,
+        plaintext_observers=(file_hasher,),
+    )
+    expected = hashlib.sha256(plaintext).hexdigest()
+    assert chunk_hasher_cases == [expected, expected]
+    assert file_hasher.hexdigest() == expected

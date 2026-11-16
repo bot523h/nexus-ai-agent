@@ -29,7 +29,7 @@ class _SpyDriverWrapper:
         self.put_chunk_calls: list[str] = []
         self.get_chunk_calls: list[str] = []
 
-    def put_chunk(self, chunk_id: str, data: bytes) -> None:
+    def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
         self.put_chunk_calls.append(chunk_id)
         self._inner.put_chunk(chunk_id, data)
 
@@ -615,7 +615,7 @@ def test_f1_regression_concurrent_gc_right_before_put_manifest_preserves_all_chu
             self.before_put_manifest: Callable[[str], None] | None = None
             self.after_put_manifest_once: Callable[[str], None] | None = None
 
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             self.inner.put_chunk(chunk_id, data)
 
         def get_chunk(self, chunk_id: str) -> bytes:
@@ -715,7 +715,7 @@ def test_f1_regression_concurrent_gc_right_before_put_manifest_preserves_all_chu
     external_evicted: list[str] = []
 
     class _ExternalSweepBeforeManifestDriver(_RaceHookDriver):
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             super().put_chunk(chunk_id, data)
             # Simulate rogue external sweeper deleting the new chunk right after initial upload
             if chunk_id not in r2.manifest.referenced_chunk_ids() and not external_evicted:
@@ -826,7 +826,7 @@ def test_f1_protected_chunks_min_age_refcounts_and_fail_closed_rollback(
             self.manifest_written = False
             self.deleted_manifests: list[str] = []
 
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             if not self.fail_post:
                 return  # pre-manifest blackhole: silently drops every chunk write
             if not self.manifest_written:
@@ -965,6 +965,14 @@ def test_n1_streaming_push_o1_tracemalloc_ceiling_and_disk_locator_healing(
     assert peak_bytes < 4 * chunk_size, (
         f"Streaming push peak_bytes={peak_bytes} exceeded 4 * chunk_size={4 * chunk_size}"
     )
+    # Tightened round-2 ceiling: in-flight heap must stay near ONE chunk (measured
+    # ~142-156 KB = wire buffer + prefix + baseline), not anywhere under the 256 KiB
+    # ``4 * chunk_size`` guard above. Printed so a regression shows the real number.
+    print(f"[N1] streaming push peak_bytes={peak_bytes} (limit 200000, chunk_size={chunk_size})")
+    assert peak_bytes < 200_000, (
+        f"Streaming push peak_bytes={peak_bytes} regressed above the 200000-byte "
+        f"O(1) budget (chunk_size={chunk_size})"
+    )
 
     pulled = mgr.pull_project_snapshot(
         project_id="cinema-20-chunks",
@@ -1066,7 +1074,7 @@ def test_n2_crash_recovery_staging_journal_resumes_without_reuploading_chunks(
             self.crash_on_call = crash_on_call
             self.put_calls: list[str] = []
 
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             if self.crash_on_call is not None and len(self.put_calls) >= self.crash_on_call:
                 raise RuntimeError("simulated power failure mid-push")
             self.put_calls.append(chunk_id)
@@ -1197,7 +1205,7 @@ def test_n6_cross_client_cross_manager_gc_race_file_lease_and_disk_locator(
             self.before_put_manifest: Callable[[str], None] | None = None
             self.put_chunk_history: list[str] = []
 
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             self.put_chunk_history.append(chunk_id)
             super().put_chunk(chunk_id, data)
 
@@ -1354,7 +1362,7 @@ def test_p1_1_initial_staging_journal_survives_crash_after_first_put_chunk(
             self.crash_after_first_put = crash_after_first_put
             self.put_calls: list[str] = []
 
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             super().put_chunk(chunk_id, data)
             self.put_calls.append(chunk_id)
             if self.crash_after_first_put and len(self.put_calls) == 1:
@@ -1521,7 +1529,7 @@ print(json.dumps({
             self.atomic_replace = atomic_replace
             self.triggered = False
 
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             super().put_chunk(chunk_id, data)
             if not self.triggered:
                 self.triggered = True
@@ -1672,7 +1680,7 @@ def test_edge_driver_capability_gaps_and_gc_fallback_paths(tmp_path: Path) -> No
             self.inner = inner
             self.manifest_written = False
 
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             if not self.manifest_written:
                 self.inner.put_chunk(chunk_id, data)
 
@@ -1717,7 +1725,7 @@ def test_edge_driver_capability_gaps_and_gc_fallback_paths(tmp_path: Path) -> No
     captured: dict[str, object] = {}
 
     class _TruncateMidStreamDriver(_SpyDriverWrapper):
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             super().put_chunk(chunk_id, data)
             if not captured:
                 with trunc_file.open("rb") as fh:
@@ -1783,7 +1791,7 @@ def test_f4_ctime_fingerprint_survives_mtime_rollback_and_streaming_digest(
         assert restored.st_ctime_ns != original_stat.st_ctime_ns
 
     class _RewriteAndRestoreMtimeDriver(LocalDeviceVaultDriver):
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             super().put_chunk(chunk_id, data)
             if not swapped:
                 swapped.append(chunk_id)
@@ -1812,7 +1820,7 @@ def test_f4_ctime_fingerprint_survives_mtime_rollback_and_streaming_digest(
     swapped.clear()
 
     class _BlindSpotDriver(LocalDeviceVaultDriver):
-        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
             super().put_chunk(chunk_id, data)
             if not swapped:
                 swapped.append(chunk_id)
@@ -1947,3 +1955,91 @@ def test_last_mile_dead_pid_probe_and_digest_optional_streaming(tmp_path: Path) 
         )
     )
     assert len(inline_chunks) == 2
+
+
+def test_streaming_push_fails_closed_on_identity_mismatch_and_locator_errors(
+    tmp_path: Path,
+) -> None:
+    """In-place encryption is fail-closed: identity drift and I/O errors never upload."""
+    import os
+
+    import nexus_ai_agent.storage.personal_cloud_vault.sync_journal_manager as sjm_module
+    from nexus_ai_agent.storage.personal_cloud_vault import (
+        derive_vault_keys,
+        generate_vault_salt,
+    )
+    from nexus_ai_agent.storage.personal_cloud_vault.sync_journal_manager import (
+        _ChunkSourceLocator,
+        _read_chunk_from_locator,
+    )
+
+    chunk_size = 1_024
+    source_dir = tmp_path / "identity_src"
+    source_dir.mkdir()
+    (source_dir / "clip.bin").write_bytes(b"A" * chunk_size)
+    key_material = derive_vault_keys(
+        "identity-mismatch-passphrase",
+        generate_vault_salt(),
+        iterations=100_000,
+    )
+
+    class _RecordingDriver(_SpyDriverWrapper):
+        def __init__(self, inner: BYOSStorageDriver) -> None:
+            super().__init__(inner)
+            self.written: list[int] = []
+
+        def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
+            self.written.append(len(data))
+            super().put_chunk(chunk_id, data)
+
+    identity_driver = _RecordingDriver(LocalDeviceVaultDriver(tmp_path / "identity_vault"))
+    identity_mgr = PersonalCloudVaultManager(
+        identity_driver, chunk_size=chunk_size, kdf_iterations=100_000
+    )
+    # The derived content address no longer matches the caller's chunk id: the
+    # in-place path must reject it *before* the wire buffer reaches the driver.
+    with pytest.raises(VaultTransportError, match="Chunk identity mismatch while encrypting"):
+        identity_mgr._encrypt_and_upload_chunk(
+            "0" * 64,
+            b"A" * chunk_size,
+            key_material,
+        )
+    assert identity_driver.written == []
+
+    # ``_lstat_source`` converts post-stream stat failures into transport errors.
+    missing = tmp_path / "vanished_after_stream.bin"
+    missing.write_bytes(b"B" * 8)
+    stream_handle = missing.open("rb")
+    try:
+        missing.unlink()
+        with pytest.raises(VaultTransportError, match="Failed reading project file"):
+            sjm_module._lstat_source(missing)
+    finally:
+        stream_handle.close()
+
+    # Disk locators surface short reads and re-read failures for evicted chunks.
+    locator_dir = tmp_path / "locator_src"
+    locator_dir.mkdir()
+    payload = b"0123456789"
+    (locator_dir / "full.bin").write_bytes(payload)
+    short_locator = _ChunkSourceLocator(
+        file_path=locator_dir / "full.bin",
+        byte_offset=6,
+        byte_length=8,
+        chunk_index=0,
+    )
+    with pytest.raises(VaultTransportError, match="Short read while healing chunk"):
+        _read_chunk_from_locator(short_locator, None)
+
+    missing_locator = _ChunkSourceLocator(
+        file_path=locator_dir / "gone.bin",
+        byte_offset=0,
+        byte_length=4,
+        chunk_index=0,
+    )
+    with pytest.raises(VaultTransportError, match="Failed re-reading chunk from"):
+        _read_chunk_from_locator(missing_locator, None)
+
+    # The plaintext slot of a prepared chunk is only reachable via the wire buffer, so
+    # a successful push never leaves a second plaintext copy behind.
+    assert os.path.exists(locator_dir / "full.bin")

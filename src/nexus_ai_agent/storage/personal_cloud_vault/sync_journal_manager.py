@@ -19,10 +19,11 @@ import secrets
 import stat
 import threading
 import time
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Protocol
 
 from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import (
     BYOSStorageDriver,
@@ -43,7 +44,8 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
     compute_file_mac,
     decrypt_chunk,
     derive_vault_keys,
-    encrypt_chunk,
+    encrypt_chunk_from_fd_to_wire,
+    encrypt_plaintext_to_wire,
     generate_vault_salt,
     init_streaming_file_mac,
     normalize_relative_vault_path,
@@ -74,6 +76,47 @@ class _ChunkSourceLocator:
     chunk_index: int
     inline_rel_path: str | None = None
     source_sha256_hex: str | None = None
+    chunk_sha256_hex: str | None = None
+
+
+class _DigestObserver(Protocol):
+    """Structural view of ``hashlib`` hashers used for streaming MACs/digests."""
+
+    def update(self, data: bytes | bytearray | memoryview, /) -> None: ...
+
+
+class _PreparedChunk:
+    """One streaming-encrypted chunk: its wire buffer plus derived identity.
+
+    The payload bytes live *inside* ``wire_buffer`` (the plaintext was read straight
+    into the ciphertext slot and overwritten in place by the keystream), so exactly one
+    payload-sized buffer is live per chunk instead of a plaintext/ciphertext/wire trio.
+    """
+
+    __slots__ = ("wire_buffer", "chunk_id", "plaintext_len", "locator")
+
+    def __init__(
+        self,
+        *,
+        wire_buffer: bytearray,
+        chunk_id: str,
+        plaintext_len: int,
+        locator: _ChunkSourceLocator,
+    ) -> None:
+        self.wire_buffer = wire_buffer
+        self.chunk_id = chunk_id
+        self.plaintext_len = plaintext_len
+        self.locator = locator
+
+    def upload(self, driver: BYOSStorageDriver, chunk_id: str) -> int:
+        """Hand the wire bytes to the driver and release the payload immediately."""
+        wire_buffer = self.wire_buffer
+        self.wire_buffer = bytearray(0)
+        try:
+            driver.put_chunk(chunk_id, wire_buffer)
+            return len(wire_buffer)
+        finally:
+            del wire_buffer
 
 
 @dataclass(frozen=True)
@@ -194,6 +237,71 @@ def _verify_fstat_matches_fingerprint(
         )
 
 
+def _open_verified_source(*, disk_path: Path, expected_fp: _DiskFileStatFingerprint) -> Any:
+    """Open ``disk_path`` and fail closed unless the open file matches ``expected_fp``."""
+    try:
+        handle = disk_path.open("rb")
+    except OSError as exc:
+        raise VaultTransportError(f"Failed reading project file {disk_path}: {exc}") from exc
+    try:
+        open_st = os.fstat(handle.fileno())
+        _verify_fstat_matches_fingerprint(disk_path, open_st, expected_fp, phase="open-fstat")
+    except BaseException:
+        handle.close()
+        raise
+    return handle
+
+
+def _lstat_source(disk_path: Path) -> os.stat_result:
+    """``lstat`` a streamed source, surfacing I/O failures as transport errors."""
+    try:
+        return disk_path.lstat()
+    except OSError as exc:
+        raise VaultTransportError(f"Failed reading project file {disk_path}: {exc}") from exc
+
+
+def _verify_source_stream_end(
+    *,
+    disk_path: Path,
+    handle: Any,
+    expected_fp: _DiskFileStatFingerprint,
+    expected_size: int,
+    bytes_read: int,
+) -> None:
+    """Re-check fstat/lstat after the stream and fail closed on any drift."""
+    end_fstat = os.fstat(handle.fileno())
+    end_lstat = _lstat_source(disk_path)
+    if (
+        stat.S_ISLNK(end_lstat.st_mode)
+        or end_lstat.st_size != expected_size
+        or bytes_read != expected_size
+    ):
+        raise VaultTransportError(
+            f"Concurrent file size/symlink change while streaming {disk_path}"
+        )
+    _verify_fstat_matches_fingerprint(disk_path, end_fstat, expected_fp, phase="eof-fstat")
+    _verify_fstat_matches_fingerprint(disk_path, end_lstat, expected_fp, phase="eof-lstat")
+
+
+def _iter_inline_source_chunks(
+    *,
+    rel_path: str,
+    raw_bytes: bytes,
+    expected_size: int,
+    chunk_size: int,
+    digests_out: dict[str, str] | None,
+) -> Iterator[tuple[int, int, bytes]]:
+    """Yield in-memory source chunks without copying the whole payload per chunk."""
+    if digests_out is not None:
+        digests_out[rel_path] = hashlib.sha256(raw_bytes).hexdigest()
+    view = memoryview(raw_bytes)
+    try:
+        for idx, offset in enumerate(range(0, expected_size, chunk_size)):
+            yield idx, offset, bytes(view[offset : offset + chunk_size])
+    finally:
+        view.release()
+
+
 def _stream_source_chunks(
     *,
     rel_path: str,
@@ -210,52 +318,51 @@ def _stream_source_chunks(
     from the source is stored under ``rel_path``. Callers re-read and compare it before
     the manifest is committed, so a same-size in-place rewrite that restored every
     timestamp (``mtime``/``ctime``) is still detected.
+
+    This is the materialising variant used for small/in-memory sources; the push hot
+    path uses :meth:`PersonalCloudVaultManager._stream_and_encrypt_source` instead,
+    which reads each chunk directly into its encrypted wire buffer.
     """
-    if disk_path is not None:
-        assert expected_fp is not None
-        bytes_read = 0
-        idx = 0
-        stream_hasher = hashlib.sha256()
-        try:
-            with disk_path.open("rb") as handle:
-                open_st = os.fstat(handle.fileno())
-                _verify_fstat_matches_fingerprint(
-                    disk_path, open_st, expected_fp, phase="open-fstat"
-                )
-                while True:
-                    chunk = handle.read(chunk_size)
-                    if not chunk:
-                        break
-                    stream_hasher.update(chunk)
-                    offset = bytes_read
-                    bytes_read += len(chunk)
-                    yield idx, offset, chunk
-                    idx += 1
-                end_fstat = os.fstat(handle.fileno())
-                _verify_fstat_matches_fingerprint(
-                    disk_path, end_fstat, expected_fp, phase="eof-fstat"
-                )
-                end_lstat = disk_path.lstat()
-                if stat.S_ISLNK(end_lstat.st_mode) or bytes_read != expected_size:
-                    raise VaultTransportError(
-                        f"Concurrent file size/symlink change while streaming {disk_path}"
-                    )
-                _verify_fstat_matches_fingerprint(
-                    disk_path, end_lstat, expected_fp, phase="eof-lstat"
-                )
-        except OSError as exc:
-            raise VaultTransportError(f"Failed reading project file {disk_path}: {exc}") from exc
-        if digests_out is not None:
-            digests_out[rel_path] = stream_hasher.hexdigest()
+    if disk_path is None:
+        assert inline_sources is not None
+        yield from _iter_inline_source_chunks(
+            rel_path=rel_path,
+            raw_bytes=inline_sources[rel_path],
+            expected_size=expected_size,
+            chunk_size=chunk_size,
+            digests_out=digests_out,
+        )
         return
 
-    assert inline_sources is not None
-    raw_bytes = inline_sources[rel_path]
+    assert expected_fp is not None
+    stream_hasher = hashlib.sha256()
+    bytes_read = 0
+    idx = 0
+    scratch = bytearray(chunk_size)
+    scratch_view = memoryview(scratch)
+    handle = _open_verified_source(disk_path=disk_path, expected_fp=expected_fp)
+    try:
+        while True:
+            read_len = handle.readinto(scratch_view)
+            if not read_len:
+                break
+            stream_hasher.update(scratch_view[:read_len])
+            offset = bytes_read
+            bytes_read += read_len
+            yield idx, offset, bytes(scratch_view[:read_len])
+            idx += 1
+        _verify_source_stream_end(
+            disk_path=disk_path,
+            handle=handle,
+            expected_fp=expected_fp,
+            expected_size=expected_size,
+            bytes_read=bytes_read,
+        )
+    finally:
+        scratch_view.release()
+        handle.close()
     if digests_out is not None:
-        digests_out[rel_path] = hashlib.sha256(raw_bytes).hexdigest()
-    view = memoryview(raw_bytes)
-    for idx, offset in enumerate(range(0, expected_size, chunk_size)):
-        yield idx, offset, bytes(view[offset : offset + chunk_size])
+        digests_out[rel_path] = stream_hasher.hexdigest()
 
 
 def _read_chunk_from_locator(
@@ -301,15 +408,22 @@ def _verify_source_digest(
     if expected_sha256_hex is None:
         return
     hasher = hashlib.sha256()
+    # One reusable buffer + live memoryview: ``readinto`` never allocates a fresh
+    # 64 KiB bytes object per block, so this pass adds no payload-sized transient on
+    # top of the chunk buffers the caller already holds.
+    scratch = bytearray(_SOURCE_DIGEST_BLOCK_BYTES)
+    scratch_view = memoryview(scratch)
     try:
         with disk_path.open("rb") as handle:
             while True:
-                block = handle.read(_SOURCE_DIGEST_BLOCK_BYTES)
-                if not block:
+                read_len = handle.readinto(scratch)
+                if not read_len:
                     break
-                hasher.update(block)
+                hasher.update(scratch_view[:read_len])
     except OSError as exc:
         raise VaultTransportError(f"Failed re-reading project file {disk_path}: {exc}") from exc
+    finally:
+        scratch_view.release()
     actual_sha256_hex = hasher.hexdigest()
     if not hmac.compare_digest(actual_sha256_hex, expected_sha256_hex):
         raise VaultTransportError(
@@ -514,23 +628,161 @@ class PersonalCloudVaultManager:
         chunk_id: str,
         chunk_plain: bytes,
         key_material: VaultKeyMaterial,
+        *,
+        file_observers: Sequence[Any] = (),
     ) -> int:
-        envelope = encrypt_chunk(
+        """Encrypt + upload one in-memory chunk with a single payload-sized buffer.
+
+        ``encrypt_chunk(plaintext).to_bytes()`` keeps the padded plaintext, the CTR
+        output, the ciphertext copy and the concatenated wire bytes alive at once
+        (~4 payload-sized allocations). Here the chunk is copied straight into the
+        ciphertext slot of one wire buffer and encrypted in place, so peak heap stays
+        at ~2 chunks (caller plaintext + wire) instead of ~5.
+        """
+        wire_buffer, derived_id = encrypt_plaintext_to_wire(
             chunk_plain,
             key_material,
-            chunk_index=0,
             pad_to_block_size=self._pad_to_block_size,
+            plaintext_observers=file_observers,
         )
-        del chunk_plain
-        wire_bytes = envelope.to_bytes()
-        del envelope
-        wire_len = len(wire_bytes)
-        self._driver.put_chunk(chunk_id, wire_bytes)
-        del wire_bytes
+        if derived_id != chunk_id:
+            raise VaultTransportError(
+                f"Chunk identity mismatch while encrypting {chunk_id}: got {derived_id}"
+            )
+        wire_len = len(wire_buffer)
+        self._driver.put_chunk(chunk_id, wire_buffer)
+        del wire_buffer
         with self._lock:
             self._known_chunk_ids.add(chunk_id)
             self._chunk_seen_at[chunk_id] = time.time()
         return wire_len
+
+    def _flush_staging(
+        self,
+        *,
+        project_id: str,
+        parent_snapshot_id: str | None,
+        key_material: VaultKeyMaterial,
+        staged_chunk_ids: Collection[str],
+    ) -> None:
+        """Persist the staging journal without keeping intermediate chunk-id copies."""
+        staged_ids = tuple(sorted(staged_chunk_ids))
+        self._save_staging_journal(
+            VaultStagingJournal(
+                project_id=project_id,
+                parent_snapshot_id=parent_snapshot_id,
+                salt_hex=key_material.salt.hex(),
+                kdf_iterations=key_material.iterations,
+                key_id_hex=key_material.key_id.hex(),
+                chunk_size=self._chunk_size,
+                updated_at_epoch=time.time(),
+                uploaded_chunk_ids=staged_ids,
+            )
+        )
+
+    def _stream_and_encrypt_source(
+        self,
+        *,
+        rel_path: str,
+        disk_path: Path | None,
+        expected_size: int,
+        expected_fp: _DiskFileStatFingerprint | None,
+        inline_sources: Mapping[str, bytes] | None,
+        key_material: VaultKeyMaterial,
+        file_mac: _DigestObserver,
+        source_digests: dict[str, str],
+    ) -> Iterator[_PreparedChunk]:
+        """Yield streaming-encrypted chunks with a single live payload buffer each.
+
+        Each chunk is read directly from the source file into the ciphertext slot of its
+        final wire buffer (``readinto``), hashed in place for the file MAC and content
+        address, then encrypted in place. No plaintext ``bytes`` copy is ever created,
+        which keeps the push's peak heap at ~1 chunk regardless of project size.
+        """
+        if disk_path is None:
+            assert inline_sources is not None
+            raw_bytes = inline_sources[rel_path]
+            source_digests[rel_path] = hashlib.sha256(raw_bytes).hexdigest()
+            digest_hex = source_digests[rel_path]
+            view = memoryview(raw_bytes)
+            try:
+                for idx, offset in enumerate(range(0, expected_size, self._chunk_size)):
+                    plaintext = view[offset : offset + self._chunk_size]
+                    plaintext_len = len(plaintext)
+                    chunk_hasher = hashlib.sha256()
+                    file_mac.update(plaintext)
+                    chunk_hasher.update(plaintext)
+                    wire_buffer, chunk_id = encrypt_plaintext_to_wire(
+                        plaintext,
+                        key_material,
+                        pad_to_block_size=self._pad_to_block_size,
+                    )
+                    yield _PreparedChunk(
+                        wire_buffer=wire_buffer,
+                        chunk_id=chunk_id,
+                        plaintext_len=plaintext_len,
+                        locator=_ChunkSourceLocator(
+                            file_path=None,
+                            byte_offset=offset,
+                            byte_length=plaintext_len,
+                            chunk_index=idx,
+                            inline_rel_path=rel_path,
+                            source_sha256_hex=digest_hex,
+                            chunk_sha256_hex=chunk_hasher.hexdigest(),
+                        ),
+                    )
+                    del wire_buffer
+            finally:
+                view.release()
+            return
+
+        assert expected_fp is not None
+        stream_hasher = hashlib.sha256()
+        bytes_read = 0
+        idx = 0
+        handle = _open_verified_source(disk_path=disk_path, expected_fp=expected_fp)
+        try:
+            while bytes_read < expected_size:
+                plaintext_len = min(self._chunk_size, expected_size - bytes_read)
+                chunk_hasher = hashlib.sha256()
+                # ``plaintext_observers`` hash the plaintext while it still sits in the
+                # ciphertext slot of the wire buffer, i.e. before CTR overwrites it, so
+                # the file MAC and per-chunk digest cost no extra buffer.
+                wire_buffer, chunk_id = encrypt_chunk_from_fd_to_wire(
+                    file_handle=handle,
+                    plaintext_len=plaintext_len,
+                    key_material=key_material,
+                    pad_to_block_size=self._pad_to_block_size,
+                    plaintext_observers=(file_mac, stream_hasher, chunk_hasher),
+                )
+                offset = bytes_read
+                bytes_read += plaintext_len
+                yield _PreparedChunk(
+                    wire_buffer=wire_buffer,
+                    chunk_id=chunk_id,
+                    plaintext_len=plaintext_len,
+                    locator=_ChunkSourceLocator(
+                        file_path=disk_path,
+                        byte_offset=offset,
+                        byte_length=plaintext_len,
+                        chunk_index=idx,
+                        source_sha256_hex=None,
+                        chunk_sha256_hex=chunk_hasher.hexdigest(),
+                    ),
+                )
+                # Drop this frame's reference: the caller owns the wire buffer from here.
+                del wire_buffer
+                idx += 1
+            _verify_source_stream_end(
+                disk_path=disk_path,
+                handle=handle,
+                expected_fp=expected_fp,
+                expected_size=expected_size,
+                bytes_read=bytes_read,
+            )
+        finally:
+            handle.close()
+        source_digests[rel_path] = stream_hasher.hexdigest()
 
     def _verify_and_heal_manifest_chunks(
         self,
@@ -728,29 +980,24 @@ class PersonalCloudVaultManager:
                 file_mac = init_streaming_file_mac(rel_path, expected_size, key_material)
                 chunk_refs: list[VaultChunkRef] = []
 
-                for idx, byte_offset, chunk_plain in _stream_source_chunks(
-                    rel_path=rel_path,
-                    disk_path=disk_path,
-                    expected_size=expected_size,
-                    expected_fp=expected_fp,
-                    chunk_size=self._chunk_size,
-                    inline_sources=inline_sources,
-                    digests_out=source_digests,
+                for idx, chunk_info in enumerate(
+                    self._stream_and_encrypt_source(
+                        rel_path=rel_path,
+                        disk_path=disk_path,
+                        expected_size=expected_size,
+                        expected_fp=expected_fp,
+                        inline_sources=inline_sources,
+                        key_material=key_material,
+                        file_mac=file_mac,
+                        source_digests=source_digests,
+                    )
                 ):
                     total_chunks += 1
-                    chunk_len = len(chunk_plain)
-                    file_mac.update(chunk_plain)
-                    chunk_id = compute_chunk_id(chunk_plain, key_material)
+                    chunk_len = chunk_info.plaintext_len
+                    chunk_id = chunk_info.chunk_id
 
                     if chunk_id not in chunk_locators:
-                        chunk_locators[chunk_id] = _ChunkSourceLocator(
-                            file_path=disk_path,
-                            byte_offset=byte_offset,
-                            byte_length=chunk_len,
-                            chunk_index=idx,
-                            inline_rel_path=rel_path if disk_path is None else None,
-                            source_sha256_hex=source_digests.get(rel_path),
-                        )
+                        chunk_locators[chunk_id] = chunk_info.locator
 
                     # Lease chunk in RAM and cross-process lease file BEFORE put_chunk.
                     if chunk_id not in leased_set:
@@ -763,49 +1010,34 @@ class PersonalCloudVaultManager:
                             project_id=project_id,
                         )
 
-                    if chunk_id in uploaded_in_batch or self._driver.has_chunk(chunk_id):
+                    already_present = chunk_id in uploaded_in_batch or self._driver.has_chunk(
+                        chunk_id
+                    )
+                    if already_present:
                         deduplicated_chunks += 1
                         saved_plaintext_bytes += chunk_len
                         uploaded_in_batch.add(chunk_id)
-                        chunk_plain = b""
+                        del chunk_info
                         if chunk_id not in staged_chunk_ids:
                             staged_chunk_ids.add(chunk_id)
-                            self._save_staging_journal(
-                                VaultStagingJournal(
-                                    project_id=project_id,
-                                    parent_snapshot_id=parent_snapshot_id,
-                                    salt_hex=key_material.salt.hex(),
-                                    kdf_iterations=key_material.iterations,
-                                    key_id_hex=key_material.key_id.hex(),
-                                    chunk_size=self._chunk_size,
-                                    updated_at_epoch=time.time(),
-                                    uploaded_chunk_ids=tuple(sorted(staged_chunk_ids)),
-                                )
+                            self._flush_staging(
+                                project_id=project_id,
+                                parent_snapshot_id=parent_snapshot_id,
+                                key_material=key_material,
+                                staged_chunk_ids=staged_chunk_ids,
                             )
                     else:
-                        payload_to_send = chunk_plain
-                        chunk_plain = b""
-                        written = self._encrypt_and_upload_chunk(
-                            chunk_id,
-                            payload_to_send,
-                            key_material,
-                        )
-                        del payload_to_send
+                        written = chunk_info.upload(self._driver, chunk_id)
+                        del chunk_info
                         uploaded_in_batch.add(chunk_id)
                         staged_chunk_ids.add(chunk_id)
                         uploaded_chunks += 1
                         uploaded_bytes += written
-                        self._save_staging_journal(
-                            VaultStagingJournal(
-                                project_id=project_id,
-                                parent_snapshot_id=parent_snapshot_id,
-                                salt_hex=key_material.salt.hex(),
-                                kdf_iterations=key_material.iterations,
-                                key_id_hex=key_material.key_id.hex(),
-                                chunk_size=self._chunk_size,
-                                updated_at_epoch=time.time(),
-                                uploaded_chunk_ids=tuple(sorted(staged_chunk_ids)),
-                            )
+                        self._flush_staging(
+                            project_id=project_id,
+                            parent_snapshot_id=parent_snapshot_id,
+                            key_material=key_material,
+                            staged_chunk_ids=staged_chunk_ids,
                         )
 
                     chunk_refs.append(

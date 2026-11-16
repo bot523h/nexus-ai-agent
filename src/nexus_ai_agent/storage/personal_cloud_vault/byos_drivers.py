@@ -387,7 +387,7 @@ def _staging_journal_digest(project_id: str, parent_snapshot_id: str | None) -> 
     return hashlib.sha256(key_bytes).hexdigest()[:32]
 
 
-def _atomic_write_file(target_path: Path, data: bytes) -> None:
+def _atomic_write_file(target_path: Path, data: bytes | bytearray | memoryview) -> None:
     """Atomically persist ``data`` to ``target_path`` via ``.tmp`` + ``fsync`` + ``replace``."""
     parent = target_path.parent
     tmp_name = f".{target_path.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp"
@@ -413,7 +413,7 @@ def _atomic_write_file(target_path: Path, data: bytes) -> None:
 class BYOSStorageDriver(Protocol):
     """Protocol implemented by all user-owned Personal Cloud & Local Vault backends."""
 
-    def put_chunk(self, chunk_id: str, data: bytes) -> None:
+    def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
         """Persist an encrypted chunk envelope under ``chunk_id``."""
 
     def get_chunk(self, chunk_id: str) -> bytes:
@@ -565,7 +565,7 @@ class LocalDeviceVaultDriver:
         valid = _validate_snapshot_id(snapshot_id)
         return self._manifests_dir / f"{valid}.json"
 
-    def put_chunk(self, chunk_id: str, data: bytes) -> None:
+    def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
         path = self._chunk_path(chunk_id)
         self._enforce_quota(path, len(data))
         _atomic_write_file(path, data)
@@ -915,7 +915,7 @@ def compute_sigv4_signature(
     secret_access_key: str,
     region: str,
     service: str = "s3",
-    payload: bytes = b"",
+    payload: bytes | bytearray | memoryview = b"",
     extra_headers: Mapping[str, str] | None = None,
     session_token: str | None = None,
     timestamp: datetime | None = None,
@@ -1200,12 +1200,15 @@ class S3CompatibleSigV4Driver:
             raise VaultQuotaExceededError("S3 bucket quota exceeded (HTTP 507)")
         return response
 
-    def put_chunk(self, chunk_id: str, data: bytes) -> None:
+    def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
         valid = _validate_chunk_id(chunk_id)
+        # The S3 transport (SigV4 signing + HTTP body) is a single-chunk-bounded copy;
+        # larger-than-chunk materialisation never happens here.
+        body = data if isinstance(data, bytes) else bytes(data)
         resp = self._send(
             "PUT",
             object_key=self._object_key("chunks", f"{valid}.chk"),
-            body=data,
+            body=body,
             content_type="application/octet-stream",
         )
         if resp.status_code not in (200, 201, 204):
@@ -1852,7 +1855,7 @@ class PortableBundleVaultDriver:
             mutator(next_chunks, next_manifests, next_leases)
             self._flush(next_chunks, next_manifests, next_leases, dict(self._staging_journals))
 
-    def put_chunk(self, chunk_id: str, data: bytes) -> None:
+    def put_chunk(self, chunk_id: str, data: bytes | bytearray | memoryview) -> None:
         valid = _validate_chunk_id(chunk_id)
         payload = bytes(data)
         stamp = time.time()
