@@ -175,6 +175,7 @@ SUB_CHUNKS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
 #: measurement with room to spare for the repository copy; the runner still refuses the
 #: sub-chunk (loudly) on a machine without the room.
 SPACE_BUDGETS: dict[str, int] = {
+    "tests/creative#root": 1 * 1024**3,
     f"{ATLAS}#mutation-120": 3 * 1024**3,
     f"{ATLAS}#falsification-160": 3 * 1024**3,
     f"{ATLAS}#titan-mutations": 3 * 1024**3,
@@ -288,6 +289,21 @@ def discover_chunks(tests_root: Path = TESTS_ROOT) -> list[Chunk]:
             else directory.as_posix()
         )
         if relative in SPLIT_ONE_LEVEL:
+            top_level_tests = tuple(
+                _relative(f)
+                for f in sorted(directory.iterdir())
+                if f.is_file() and f.name.startswith("test_") and f.name.endswith(".py")
+            )
+            if top_level_tests:
+                label = f"{relative}#root"
+                chunks.append(
+                    Chunk(
+                        relative,
+                        SPACE_BUDGETS.get(label, DEFAULT_BUDGET_BYTES),
+                        targets=top_level_tests,
+                        label=label,
+                    )
+                )
             children = sorted(child for child in directory.iterdir() if child.is_dir())
             for child in children:
                 if not _has_tests(child):

@@ -288,7 +288,10 @@ def test_a_requested_subtree_selects_its_chunks_and_nothing_else() -> None:
     runner = _load_runner()
     chunks = runner.discover_chunks()
     selected = runner.filter_chunks(chunks, ["tests/creative"])
-    assert selected and all(chunk.path.startswith("tests/creative/") for chunk in selected)
+    assert selected and all(
+        chunk.path == "tests/creative" or chunk.path.startswith("tests/creative/")
+        for chunk in selected
+    )
     assert runner.filter_chunks(chunks, []) == chunks
 
     try:

@@ -28,8 +28,7 @@ def test_jonswap_significant_wave_height_matches_field() -> None:
     spec = o.jonswap_spectrum(kx, ky, wind_speed=10.0)
     assert spec.significant_wave_height == pytest.approx(4.0 * np.sqrt(spec.variance))
     mean_squares = [
-        float(np.mean(o.spectral_height_field(spec, seed=s, extent=100.0) ** 2))
-        for s in range(60)
+        float(np.mean(o.spectral_height_field(spec, seed=s, extent=100.0) ** 2)) for s in range(60)
     ]
     assert float(np.mean(mean_squares)) == pytest.approx(spec.variance, rel=0.1)
 

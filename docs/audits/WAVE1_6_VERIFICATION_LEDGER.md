@@ -252,6 +252,25 @@ seconds after it was created and **before any push**, to replace a commit messag
 that a shell heredoc had truncated to a single `Co-authored-by:` line; its tree was
 not touched.
 
+### 2.3d ATLAS physical JONSWAP render integration (`02731a36`)
+
+Both external deliverables integrated into this closeout carry explicit `git cherry-pick -x`
+provenance trailers in commit history:
+
+- `storage/resource_packs` from commit `cd8db338` (row 41, `(cherry picked from commit cd8db33837e9609dd89dd2813d97478452394bd2)`).
+- `creative/atlas` physical JONSWAP sea & streamed `rgb24` render from commit `02731a36` on
+  `origin/arena/atlas-physical-render-jonswap` (`(cherry picked from commit 02731a361f5f76f531b7f6a534fb6d9b675813db)`),
+  replacing synthetic `testsrc` generation in `media_sine.py` and `olympus_master.py`, adding
+  `physical_frame_stream.py` and `tests/creative/test_atlas_wave31_33.py`, making the JONSWAP
+  spectrum fetch-dependent in `spectral_ocean_swe.py`, and updating the mutation anchors in
+  `tests/creative/atlas/test_titan_olympus_mutations.py`.
+
+Follow-up polish on the cherry-picked commit fixed two `ruff` findings (`B023` loop-variable
+binding in `tests/creative/atlas/test_wave21_30_benchmarks.py` and formatting in
+`tests/creative/atlas/test_wave22_spectral_ocean.py`) and extended the `packaging.markers.Marker`
+truth table in `tests/unit/test_dependency_audit_gate.py` to cover `'3.11.4'` (`False`) and
+`'3.12.3'` (`True`).
+
 ### 2.4 Human review guide — 512 files, in the order that costs least
 
 A 512-file diff is not reviewed alphabetically. This is the map: what changed, where it
@@ -905,6 +924,8 @@ meaning cannot drift away from the file:
 | `3.11.5` | **True** — pip will install the fix |
 | `3.11.9` | **True** |
 | `3.12.0` | **True** |
+| `3.12.3` | **True** |
+| `3.11.4` | **False** — below `3.11.5`, fix cannot be installed |
 | `3.10.14` | **False** — the fix cannot be installed, so the floor cannot apply |
 
 **One floor, not one waiver per CVE.** The three entries above name the advisories pip-audit

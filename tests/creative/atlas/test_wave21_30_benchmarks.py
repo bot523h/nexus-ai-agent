@@ -173,11 +173,13 @@ def test_bench_real_encode(tmp_path: Path) -> None:
         ocean_state = physical.OceanState(fps=24.0)
         atmos = physical.AtmosphereState()
         med, mx, peak = _sample(
-            lambda frames=frames: media.encode_rgb24_stream(
+            lambda frames=frames, ocean_state=ocean_state, atmos=atmos: media.encode_rgb24_stream(
                 fs,
                 f"c{frames}.mp4",
-                lambda i: physical.generate_physical_atlas_frame_rgb24(
-                    i, frames, 128, 72, ocean_state, atmos, seed=7
+                lambda i, frames=frames, ocean_state=ocean_state, atmos=atmos: (
+                    physical.generate_physical_atlas_frame_rgb24(
+                        i, frames, 128, 72, ocean_state, atmos, seed=7
+                    )
                 ),
                 width=128,
                 height=72,

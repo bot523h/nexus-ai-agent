@@ -507,17 +507,25 @@ def _shipped_floor() -> str:
 
 
 def test_the_shipped_floor_applies_exactly_where_the_fix_is_installable() -> None:
-    """The reviewer's matrix: 3.11.5 / 3.11.9 / 3.12.0 apply, 3.10.14 does not."""
+    """The reviewer's matrix: 3.11.5 / 3.11.9 / 3.12.0 / 3.12.3 apply; 3.10.14 / 3.11.4 do not."""
+    from packaging.markers import Marker
+
     requirement = _shipped_floor()
     assert "python_full_version" in requirement
-    for full_version in ("3.11.5", "3.11.9", "3.12.0"):
+    marker_expr = requirement.split(";", 1)[1].strip()
+    marker = Marker(marker_expr)
+    for full_version in ("3.11.5", "3.11.9", "3.12.0", "3.12.3"):
         assert _evaluates(requirement, full_version), full_version
-    assert not _evaluates(requirement, "3.10.14")
+        assert marker.evaluate({"python_full_version": full_version}), full_version
+    for full_version in ("3.10.14", "3.11.4"):
+        assert not _evaluates(requirement, full_version), full_version
+        assert not marker.evaluate({"python_full_version": full_version}), full_version
     # And the same through the gate's own parser, which is what actually runs.
-    for probe in ("3.11.5", "3.11.9", "3.12.0"):
+    for probe in ("3.11.5", "3.11.9", "3.12.0", "3.12.3"):
         assert gate._declared_floor_problem("soupsieve>=4.1.1", probe=probe) is None, probe
-    problem = gate._declared_floor_problem("soupsieve>=4.1.1", probe="3.10.14")
-    assert problem is not None and "does not ask for soupsieve" in problem
+    for probe in ("3.10.14", "3.11.4"):
+        problem = gate._declared_floor_problem("soupsieve>=4.1.1", probe=probe)
+        assert problem is not None and "does not ask for soupsieve" in problem
 
 
 def test_a_major_dot_minor_marker_with_a_patch_level_never_applies(
