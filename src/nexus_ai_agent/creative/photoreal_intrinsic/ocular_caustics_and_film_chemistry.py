@@ -6,7 +6,11 @@ from typing import cast
 
 import numpy as np
 
-from .log_chromophore_tomography_baker import IntrinsicBiophysicalVault, KeyPolicy
+from .log_chromophore_tomography_baker import (
+    IntrinsicBiophysicalVault,
+    KeyPolicy,
+    validate_physiology,
+)
 from .riemannian_strain_wrinkle_tensor import RiemannianStrainWrinkleTensor
 from .screened_poisson_skin_transport import ScreenedPoissonSkinTransport
 
@@ -131,6 +135,32 @@ class OcularCausticsAndFilmChemistry:
             out = out * (1 - 0.1 * coc[..., None])
         return cast(np.ndarray, np.clip(out, 0, 1).astype(np.float32))
 
+    @staticmethod
+    def _beer_lambert_attenuation(
+        melanin: np.ndarray,
+        hemoglobin: np.ndarray,
+        flush: float,
+        pulse_phase: float,
+        oxygenation: float,
+    ) -> np.ndarray:
+        """Return exp(-sum(absorption)) with nonnegative chromophore densities."""
+        mel = np.asarray(melanin, dtype=np.float32)
+        hem = np.asarray(hemoglobin, dtype=np.float32)
+        if np.any(mel < 0) or np.any(hem < 0):
+            raise ValueError("chromophore concentrations must be nonnegative")
+        hb_o = oxygenation * np.array((0.08, 0.24, 0.10), np.float32)
+        hb_d = (1 - oxygenation) * np.array((0.20, 0.72, 0.66), np.float32)
+        absorption = hb_o + hb_d
+        exponent = np.empty((*mel.shape, 3), dtype=np.float32)
+        exponent[...] = -0.035 * mel[..., None] * np.array((0.22, 0.45, 0.82), np.float32)
+        np.exp(exponent, out=exponent)
+        hem_factor = np.empty(hem.shape, dtype=np.float32)
+        for channel in range(3):
+            np.multiply(hem, -0.08 * flush * pulse_phase * absorption[channel], out=hem_factor)
+            np.exp(hem_factor, out=hem_factor)
+            exponent[..., channel] *= hem_factor
+        return exponent
+
     @classmethod
     def compile(
         cls,
@@ -147,34 +177,15 @@ class OcularCausticsAndFilmChemistry:
         key_policy: KeyPolicy = "auto",
         time_sec: float | None = None,
     ) -> dict[str, object]:
+        time_value = t if time_sec is None else time_sec
+        validate_physiology(heart_rate_bpm, time_value, sympathetic_flush, blood_oxygenation, focus)
         if not vault.verify(hmac_key=hmac_key, key_policy=key_policy):
             raise ValueError("Invalid vault seal")
-        time_value = t if time_sec is None else time_sec
-        if not np.isfinite(time_value):
-            raise ValueError("time_sec must be finite")
         pulse_phase = 1 + 0.025 * np.sin(2 * np.pi * heart_rate_bpm * time_value / 60)
-        mel = np.asarray(vault.melanin, dtype=np.float32)
-        hem = np.asarray(vault.hemoglobin, dtype=np.float32)
-        flush = np.clip(1 + 0.45 * sympathetic_flush, 0.4, 1.6)
-        oxygen = np.clip(blood_oxygenation, 0.70, 0.99)
-        hb_o = oxygen * np.array((0.08, 0.24, 0.10), np.float32)
-        hb_d = (1 - oxygen) * np.array((0.20, 0.72, 0.66), np.float32)
-        mel_spectrum = np.array((0.22, 0.45, 0.82), np.float32)
-        attenuation = np.empty((*mel.shape, 3), dtype=np.float32)
-        np.multiply(mel[..., None], mel_spectrum, out=attenuation)
-        attenuation *= -0.035
-        hemoglobin_absorption = np.empty(3, dtype=np.float32)
-        np.add(hb_o, hb_d, out=hemoglobin_absorption)
-        hem_scale = -0.08 * flush * pulse_phase
-        attenuation *= -0.035
-        np.exp(attenuation, out=attenuation)
-        hem_factor = np.empty(hem.shape, dtype=np.float32)
-        for channel in range(3):
-            np.multiply(hem, hem_scale * hemoglobin_absorption[channel], out=hem_factor)
-            np.exp(hem_factor, out=hem_factor)
-            attenuation[..., channel] *= hem_factor
-        del hem_factor
-        del hb_o, hb_d, hemoglobin_absorption, mel_spectrum, mel, hem
+        flush = float(np.clip(1 + 0.45 * sympathetic_flush, 0.4, 1.6))
+        attenuation = cls._beer_lambert_attenuation(
+            vault.melanin, vault.hemoglobin, flush, pulse_phase, blood_oxygenation
+        )
         # Reconstruct chromophore absorption over albedo only; stored shade is not reapplied.
         rgb = np.multiply(vault.albedo, attenuation, dtype=np.float32)
         del attenuation

@@ -231,7 +231,7 @@ def test_transport_and_lighting_validation_paths() -> None:
     solver = ScreenedPoissonSkinTransport()
     with pytest.raises(ValueError, match="finite"):
         solver.shade(np.ones((2, 2, 3)), heart_rate_bpm=float("nan"))
-    with pytest.raises(ValueError, match="supported"):
+    with pytest.raises(ValueError, match="heart_rate_bpm"):
         solver.shade(np.ones((2, 2, 3)), heart_rate_bpm=0)
     gray = solver.shade(np.ones((3, 4, 1)), radii=(1.0,))
     assert gray.shape == (3, 4, 1)
@@ -419,7 +419,7 @@ def test_film_depth_offset_invariance_and_negative_time() -> None:
     )
     negative = OcularCausticsAndFilmChemistry.compile(vault, time_sec=-1.25, include_caustics=False)
     assert isinstance(negative["rgb"], np.ndarray)
-    with pytest.raises(ValueError, match="time_sec must be finite"):
+    with pytest.raises(ValueError, match="must be finite"):
         OcularCausticsAndFilmChemistry.compile(vault, time_sec=float("nan"))
 
 
@@ -475,8 +475,15 @@ def test_benchmark_helper_reports_timing_and_memory() -> None:
     result = benchmark_pipeline((4,), iterations=1, warmups=0)["4x4"]
     assert result["median_ms"] >= 0 and result["mad_ms"] == 0
     assert result["peak_tracemalloc_mib"] > 0 and result["peak_rss_mib"] > 0
+    assert result["baseline_rss_mib"] > 0 and result["incremental_rss_mib"] >= 0
+    assert result["peak_rss_mib"] >= result["baseline_rss_mib"]
+    from nexus_ai_agent.creative.photoreal_intrinsic.benchmark import _benchmark_worker
+
+    direct = _benchmark_worker(3, iterations=1, warmups=1)
+    assert direct["samples_ms"] and direct["peak_tracemalloc_mib"] > 0
     with pytest.raises(ValueError, match="sizes"):
         benchmark_pipeline((1,), iterations=1, warmups=0)
+    assert benchmark_pipeline((), iterations=1, warmups=0) == {}
 
 
 def test_remaining_validation_branches_and_benchmark_warmup() -> None:
@@ -528,3 +535,165 @@ def test_compile_is_invariant_to_constant_depth_offset() -> None:
     )["float32"]
     assert isinstance(original_frame, np.ndarray) and isinstance(shifted_frame, np.ndarray)
     assert np.max(np.abs(original_frame.astype(np.float64) - shifted_frame)) < 1e-12
+
+
+def test_beer_lambert_absorption_is_strictly_monotone_by_chromophore() -> None:
+    baker = LogChromophoreTomographyBaker()
+    key = b"beer-lambert-monotonic-key"
+    base_vault = baker.bake(baker.canonical_archetype(8, 9), hmac_key=key)
+
+    def signed_variant(melanin: np.ndarray, hemoglobin: np.ndarray) -> IntrinsicBiophysicalVault:
+        candidate = replace(
+            base_vault,
+            melanin=melanin,
+            hemoglobin=hemoglobin,
+            seal=replace(base_vault.seal, digest="", signature="", key_fingerprint=""),
+        )
+        return replace(candidate, seal=baker._create_seal(candidate, key))
+
+    original = OcularCausticsAndFilmChemistry.compile(
+        base_vault, hmac_key=key, include_caustics=False
+    )["float32"]
+    assert isinstance(original, np.ndarray)
+    for pigment in ("melanin", "hemoglobin"):
+        melanin = base_vault.melanin.copy()
+        hemoglobin = base_vault.hemoglobin.copy()
+        if pigment == "melanin":
+            melanin += 0.75
+        else:
+            hemoglobin += 0.75
+        increased = OcularCausticsAndFilmChemistry.compile(
+            signed_variant(melanin, hemoglobin),
+            hmac_key=key,
+            include_caustics=False,
+        )["float32"]
+        assert isinstance(increased, np.ndarray)
+        assert np.all(increased.mean(axis=(0, 1)) < original.mean(axis=(0, 1)))
+        baseline_transmission = OcularCausticsAndFilmChemistry._beer_lambert_attenuation(
+            base_vault.melanin, base_vault.hemoglobin, 1.0, 1.0, 0.97
+        )
+        increased_transmission = OcularCausticsAndFilmChemistry._beer_lambert_attenuation(
+            melanin, hemoglobin, 1.0, 1.0, 0.97
+        )
+        assert np.all(
+            base_vault.albedo * increased_transmission < base_vault.albedo * baseline_transmission
+        )
+
+
+def test_compile_rejects_nonphysical_physiology() -> None:
+    vault = LogChromophoreTomographyBaker().bake(
+        LogChromophoreTomographyBaker.canonical_archetype(4, 4)
+    )
+    for parameters in (
+        {"heart_rate_bpm": float("nan")},
+        {"sympathetic_flush": float("inf")},
+        {"blood_oxygenation": -0.5},
+        {"heart_rate_bpm": 241.0},
+        {"sympathetic_flush": 1.1},
+        {"blood_oxygenation": 1.0},
+        {"focus": float("inf")},
+    ):
+        with pytest.raises(ValueError):
+            OcularCausticsAndFilmChemistry.compile(vault, **parameters)  # type: ignore[arg-type]
+
+
+def test_chromophore_basis_is_well_conditioned_and_noise_stable() -> None:
+    basis = LogChromophoreTomographyBaker.basis
+    assert np.linalg.matrix_rank(basis) == 3
+    assert np.linalg.cond(basis) < 10.0
+    inverse = np.linalg.inv(basis)
+    assert np.allclose(basis @ inverse, np.eye(3), rtol=0, atol=1e-12)
+    rng = np.random.default_rng(127)
+    spectrum = rng.uniform(0.1, 2.0, size=(7, 9, 3))
+    noise = rng.normal(0.0, 1e-9, size=spectrum.shape)
+    recovered = spectrum @ inverse.T
+    recovered_noisy = (spectrum + noise) @ inverse.T
+    assert np.linalg.norm(recovered_noisy - recovered) / np.linalg.norm(noise) < np.linalg.cond(
+        basis
+    )
+
+
+def test_geometry_normals_and_screened_poisson_residual() -> None:
+    baker = LogChromophoreTomographyBaker()
+    shading = np.exp(np.random.default_rng(9).normal(0.0, 0.2, size=(9, 11))).astype(np.float32)
+    normals, _ = baker._geometry(shading)
+    assert np.max(np.abs(np.linalg.norm(normals, axis=-1) - 1.0)) < 1e-12
+
+    from nexus_ai_agent.creative.photoreal_intrinsic import dctn, idctn
+
+    source = np.random.default_rng(19).normal(size=(9, 11))
+    kappa_sq = 1.7
+    eigenvalues = (
+        4 * np.sin(np.pi * np.arange(9) / 18)[:, None] ** 2
+        + 4 * np.sin(np.pi * np.arange(11) / 22)[None, :] ** 2
+    )
+    solution = idctn(dctn(source) * (kappa_sq / (kappa_sq + eigenvalues)))
+    laplacian = idctn(-eigenvalues * dctn(solution))
+    relative_residual = np.linalg.norm(solution - laplacian / kappa_sq - source) / np.linalg.norm(
+        source
+    )
+    assert relative_residual < 1e-12
+
+
+def test_beer_lambert_rejects_negative_concentrations() -> None:
+    with pytest.raises(ValueError, match="nonnegative"):
+        OcularCausticsAndFilmChemistry._beer_lambert_attenuation(
+            np.full((2, 2), -0.1), np.ones((2, 2)), 1.0, 1.0, 0.97
+        )
+    with pytest.raises(ValueError, match="nonnegative"):
+        OcularCausticsAndFilmChemistry._beer_lambert_attenuation(
+            np.ones((2, 2)), np.full((2, 2), -0.1), 1.0, 1.0, 0.97
+        )
+
+
+def test_benchmark_rss_is_portable_without_resource(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ctypes
+    import sys
+    from types import SimpleNamespace
+
+    from nexus_ai_agent.creative.photoreal_intrinsic import benchmark
+
+    monkeypatch.setattr(benchmark, "resource", None)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def succeed(_process: object, pointer: object, _size: int) -> int:
+        pointer._obj.PeakWorkingSetSize = 2 * 1024 * 1024  # type: ignore[attr-defined]
+        return 1
+
+    fake_windows = SimpleNamespace(
+        kernel32=SimpleNamespace(GetCurrentProcess=lambda: 1),
+        psapi=SimpleNamespace(GetProcessMemoryInfo=succeed),
+    )
+    monkeypatch.setattr(ctypes, "windll", fake_windows, raising=False)
+    assert benchmark._rss_mib() == 2.0
+
+    fake_windows.psapi.GetProcessMemoryInfo = lambda *_args: 0
+    with pytest.raises(OSError, match="GetProcessMemoryInfo"):
+        benchmark._rss_mib()
+
+    monkeypatch.setattr(sys, "platform", "freebsd")
+    with pytest.raises(RuntimeError, match="unsupported"):
+        benchmark._rss_mib()
+
+
+def test_benchmark_module_import_survives_missing_resource(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+    from typing import Any, cast
+
+    from nexus_ai_agent.creative.photoreal_intrinsic import benchmark
+
+    original_import_module = importlib.import_module
+
+    def import_without_resource(name: str, package: str | None = None) -> Any:
+        if name == "resource":
+            raise ImportError("simulated Windows environment")
+        return original_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", import_without_resource)
+    try:
+        importlib.reload(benchmark)
+        resource_was_optional = cast(Any, benchmark).resource is None
+    finally:
+        monkeypatch.setattr(importlib, "import_module", original_import_module)
+        importlib.reload(benchmark)
+    assert resource_was_optional

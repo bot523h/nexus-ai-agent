@@ -29,6 +29,25 @@ _FIELD_NAMES = (
 KeyPolicy = Literal["auto", "persistent", "ephemeral"]
 
 
+def validate_physiology(
+    heart_rate_bpm: float = 72.0,
+    time_sec: float = 0.0,
+    sympathetic_flush: float = 0.0,
+    blood_oxygenation: float = 0.97,
+    focus: float = 1.0,
+) -> None:
+    """Reject non-finite or out-of-domain physiological, temporal, and focus inputs."""
+    values = (heart_rate_bpm, time_sec, sympathetic_flush, blood_oxygenation, focus)
+    if not np.isfinite(values).all():
+        raise ValueError("physiological, temporal, and optical values must be finite")
+    if not 0 < heart_rate_bpm <= 240:
+        raise ValueError("heart_rate_bpm must be in (0, 240]")
+    if not -1 <= sympathetic_flush <= 1:
+        raise ValueError("sympathetic_flush must be in [-1, 1]")
+    if not 0.70 <= blood_oxygenation <= 0.99:
+        raise ValueError("blood_oxygenation must be in [0.70, 0.99]")
+
+
 def _resolve_key(key: bytes | None, policy: KeyPolicy) -> tuple[bytes, bool]:
     if policy not in ("auto", "persistent", "ephemeral"):
         raise ValueError("key_policy must be 'auto', 'persistent', or 'ephemeral'")
@@ -119,7 +138,8 @@ class IntrinsicBiophysicalVault:
 
     def __post_init__(self) -> None:
         for name in ("albedo", "melanin", "hemoglobin", "shading", "depth", "normals"):
-            array = np.array(getattr(self, name), dtype=np.float32, copy=True)
+            dtype = np.float64 if name == "normals" else np.float32
+            array = np.array(getattr(self, name), dtype=dtype, copy=True)
             array.setflags(write=False)
             object.__setattr__(self, name, array)
         object.__setattr__(self, "metadata", dict(self.metadata))
@@ -188,9 +208,12 @@ class LogChromophoreTomographyBaker:
         )
         depth = idctn(dctn(-div) / eig).astype(np.float32)
         dy, dx = np.gradient(depth)
-        normals = np.stack((-dx, -dy, np.ones_like(depth)), axis=-1)
-        normals /= np.maximum(np.linalg.norm(normals, axis=-1, keepdims=True), 1e-8)
-        return normals.astype(np.float32), depth
+        normals = np.stack(
+            (-dx.astype(np.float64), -dy.astype(np.float64), np.ones_like(depth, dtype=np.float64)),
+            axis=-1,
+        )
+        normals /= np.maximum(np.linalg.norm(normals, axis=-1, keepdims=True), 1e-15)
+        return normals, depth
 
     @staticmethod
     def _create_seal(vault: IntrinsicBiophysicalVault, key: bytes) -> PhotorealDNASeal:
@@ -210,6 +233,7 @@ class LogChromophoreTomographyBaker:
         key_policy: KeyPolicy = "auto",
         input_colorspace: Literal["auto", "srgb", "linear"] = "auto",
     ) -> IntrinsicBiophysicalVault:
+        validate_physiology()
         raw = np.asarray(rgb)
         if raw.ndim != 3 or raw.shape[-1] != 3:
             raise ValueError("rgb must have shape (height,width,3)")

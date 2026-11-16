@@ -6,7 +6,7 @@ from typing import cast
 
 import numpy as np
 
-from .log_chromophore_tomography_baker import dctn, idctn
+from .log_chromophore_tomography_baker import dctn, idctn, validate_physiology
 
 
 class ScreenedPoissonSkinTransport:
@@ -59,19 +59,12 @@ class ScreenedPoissonSkinTransport:
         blood_oxygenation: float = 0.97,
         radii: tuple[float, ...] = default_radii,
     ) -> np.ndarray:
+        validate_physiology(heart_rate_bpm, t, sympathetic_flush, blood_oxygenation)
         source_array = np.asarray(source)
         if source_array.ndim != 3 or source_array.shape[0] < 2 or source_array.shape[1] < 2:
             raise ValueError("source must be (H,W,C) with spatial dimensions at least 2x2")
         if not np.all(np.isfinite(source_array)):
             raise ValueError("source values must be finite")
-        if not np.isfinite((heart_rate_bpm, t, sympathetic_flush, blood_oxygenation)).all():
-            raise ValueError("physiological parameters must be finite")
-        if (
-            heart_rate_bpm <= 0
-            or not -1 <= sympathetic_flush <= 1
-            or not 0.70 <= blood_oxygenation <= 0.99
-        ):
-            raise ValueError("physiology outside supported range")
         a = self.transport(source, radii)
         phase = 1 + 0.025 * np.sin(2 * np.pi * heart_rate_bpm * t / 60)
         oxy = np.asarray((0.08, 0.24, 0.10), dtype=np.float32)
