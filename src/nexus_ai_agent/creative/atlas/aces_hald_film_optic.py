@@ -8,6 +8,8 @@ tone-map, so the transforms are checkable rather than guessed:
   white-point row sums and against round-trip inversion.
 * **Tone mapping** — the Narkowicz ACES RRT/ODT analytic fit, checked for
   monotonicity, endpoint behaviour and the ``f(0)=0`` invariant.
+* **Output transform** — ACEScg (AP1, D60) back to sRGB (D65), the exact inverse
+  of the forward chain, so a display path never encodes AP1 coordinates as sRGB.
 * **HALD CLUT** — identity colour lookup tables in the HALD layout with
   trilinear interpolation; applying the identity CLUT to an image must
   reproduce it to interpolation error (a self-check on the layout).
@@ -33,6 +35,8 @@ __all__ = [
     "AP0_TO_AP1",
     "AP1_TO_AP0",
     "SRGB_D65_TO_AP0_D60",
+    "AP1_TO_SRGB_D65",
+    "scene_linear_srgb_to_display_linear",
     "srgb_eotf_to_linear",
     "linear_to_srgb_oetf",
     "linear_srgb_d65_to_aces_ap0_d60",
@@ -106,6 +110,11 @@ def _build_srgb_d65_to_ap0_d60() -> np.ndarray:
 
 #: Linear sRGB/Rec.709 (D65) -> ACES2065-1 AP0 (D60) with Bradford chromatic adaptation.
 SRGB_D65_TO_AP0_D60: Final[np.ndarray] = _build_srgb_d65_to_ap0_d60()
+
+#: ACEScg (AP1, D60) -> linear sRGB/Rec.709 (D65): the output transform that the
+#: display path needs. It is the exact inverse of the forward chain
+#: ``sRGB(D65) -> AP0(D60) -> AP1``, so the two can never drift apart.
+AP1_TO_SRGB_D65: Final[np.ndarray] = np.linalg.inv(SRGB_D65_TO_AP0_D60) @ AP1_TO_AP0
 
 MAX_LEVEL: Final[int] = 16
 MAX_IMAGE_PIXELS: Final[int] = 64_000_000
@@ -200,6 +209,20 @@ def aces_tone_map(
     num = arr * (a * arr + b)
     den = arr * (c * arr + d) + e
     out: np.ndarray = np.clip(num / den, 0.0, 1.0)
+    return out
+
+
+def scene_linear_srgb_to_display_linear(rgb_linear: np.ndarray) -> np.ndarray:
+    """Scene-referred linear sRGB/D65 -> display-referred linear sRGB/D65 in ``[0, 1]``.
+
+    This is the single colour core shared by every display path: sRGB(D65) -> AP0
+    (D60, Bradford) -> AP1 -> one ACES tone-map in AP1 -> AP1 -> sRGB(D65) output
+    transform -> clip to gamut. The caller applies the sRGB OETF exactly once.
+    """
+    ap0 = linear_srgb_d65_to_aces_ap0_d60(rgb_linear)
+    ap1 = np.maximum(aces_ap0_to_acescg(ap0), 0.0)
+    mapped = aces_tone_map(ap1)
+    out: np.ndarray = np.asarray(np.clip(mapped @ AP1_TO_SRGB_D65.T, 0.0, 1.0), dtype=np.float64)
     return out
 
 

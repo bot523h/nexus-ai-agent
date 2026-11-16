@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -832,6 +833,33 @@ def _make_pristine_tree(destination: Path) -> Path:
     return destination
 
 
+def _link_or_copy(source: str, destination: str) -> None:
+    """Hard-link a file (O(1) disk); fall back to a copy across devices."""
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copy2(source, destination)
+
+
+def _make_mutant_tree(destination: Path) -> Path:
+    """A per-mutant tree that shares unmutated files by hard link.
+
+    The mutated module is always ``unlink``-ed before it is rewritten, so writing it
+    never modifies the shared inode seen by the pristine tree or by other mutants.
+    """
+    shutil.copytree(SRC, destination / "src", copy_function=_link_or_copy)
+    shutil.copytree(TESTS, destination / "tests", copy_function=_link_or_copy)
+    _link_or_copy(str(REPO_ROOT / "pyproject.toml"), str(destination / "pyproject.toml"))
+    return destination
+
+
+@pytest.fixture(autouse=True)
+def _discard_mutant_tree(tmp_path: Path) -> Iterator[None]:
+    """Remove each mutant's tree once its test has recorded its receipt."""
+    yield
+    shutil.rmtree(tmp_path / "campaign", ignore_errors=True)
+
+
 def _baseline_is_green(target_test: str, pristine_tree: Path) -> None:
     """Step A — the unmutated target test file must pass (exit code 0)."""
     if target_test not in _BASELINE_STATUS:
@@ -877,7 +905,7 @@ def test_mutant_is_killed(
       (exit codes 2/3/4/5).
     """
     work = tmp_path / "campaign"
-    _make_pristine_tree(work)
+    _make_mutant_tree(work)
 
     # Step A — baseline pre-flight on the unmutated tree (memoised per target file).
     _baseline_is_green(target_test, pristine_tree)
@@ -889,6 +917,7 @@ def test_mutant_is_killed(
 
     # Step B — the mutated source must still parse as valid Python.
     ast.parse(mutated, filename=str(module))
+    module.unlink()  # hard link: unlink before writing so the shared inode is untouched
     module.write_text(mutated, encoding="utf-8")
 
     env: dict[str, Any] = dict(os.environ)
@@ -934,11 +963,12 @@ def _collect_kill_receipts(base: Path, pristine_tree: Path) -> list[MutationKill
         mutant_id = f"M{index:03d}"
         _baseline_is_green(target_test, pristine_tree)
         work = base / mutant_id
-        _make_pristine_tree(work)
+        _make_mutant_tree(work)
 
         module = work / "src" / rel
         mutated = module.read_text(encoding="utf-8").replace(old, new, 1)
         ast.parse(mutated, filename=str(module))
+        module.unlink()  # hard link: unlink before writing so the shared inode is untouched
         module.write_text(mutated, encoding="utf-8")
 
         env: dict[str, Any] = dict(os.environ)
@@ -962,6 +992,7 @@ def _collect_kill_receipts(base: Path, pristine_tree: Path) -> list[MutationKill
                 exit_code=result.returncode,
             )
         )
+        shutil.rmtree(work, ignore_errors=True)  # receipt recorded: release this mutant's tree
     return receipts
 
 

@@ -152,9 +152,7 @@ def _write_wav(
 def _grade_physical_frame(linear_srgb: np.ndarray, *, clut: np.ndarray, seed: int) -> bytes:
     """Grade scene-referred linear sRGB/D65 radiance through ACES AP0->AP1, single
     ACES tone-map, HALD CLUT, film grain, and exact IEC 61966-2-1 sRGB OETF."""
-    ap0 = film.linear_srgb_d65_to_aces_ap0_d60(linear_srgb)
-    ap1 = np.maximum(film.aces_ap0_to_acescg(ap0), 0.0)
-    mapped = film.aces_tone_map(ap1)
+    mapped = film.scene_linear_srgb_to_display_linear(linear_srgb)
     clut_graded = film.apply_hald_clut(mapped, clut, level=8)
     grained = film.film_grain(clut_graded, amount=0.015, seed=seed)
     encoded = film.linear_to_srgb_oetf(np.clip(grained, 0.0, 1.0))

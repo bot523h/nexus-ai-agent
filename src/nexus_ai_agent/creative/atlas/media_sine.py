@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import math
 import shutil
 import subprocess
@@ -34,6 +35,8 @@ from fractions import Fraction
 from typing import Any, Final
 
 from nexus_ai_agent.tools.filesystem_policy import WorkspaceFilesystem
+
+_LOG = logging.getLogger(__name__)
 
 __all__ = [
     "MediaSineError",
@@ -203,8 +206,16 @@ def encode_rgb24_stream(
             if proc.poll() is None:
                 with contextlib.suppress(OSError):
                     proc.kill()
-                with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+                try:
                     proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    # A killed ffmpeg that will not reap is a leaked process: say so, never hide it.
+                    _LOG.error(
+                        "ffmpeg did not exit after kill; process may be leaked (pid=%s)",
+                        getattr(proc, "pid", "unknown"),
+                    )
+                except OSError:
+                    _LOG.warning("waiting on killed ffmpeg failed", exc_info=True)
             if proc.stdin is not None:
                 with contextlib.suppress(OSError, ValueError):
                     proc.stdin.close()

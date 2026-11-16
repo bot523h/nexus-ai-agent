@@ -215,9 +215,9 @@ def _bilinear_normals(normals: np.ndarray, fx: np.ndarray, fz: np.ndarray) -> np
     return out
 
 
-def _tone_map(linear: np.ndarray) -> np.ndarray:
-    mapped = np.clip(1.0 - np.exp(-linear), 0.0, 1.0)
-    return film.linear_to_srgb_oetf(mapped)
+def _display_encode(linear_srgb_d65: np.ndarray) -> np.ndarray:
+    """Shared display encoding: the ACES colour core followed by the sRGB OETF."""
+    return film.linear_to_srgb_oetf(film.scene_linear_srgb_to_display_linear(linear_srgb_d65))
 
 
 def _check_frame_request(frame_idx: int, total_frames: int, width: int, height: int) -> None:
@@ -344,6 +344,6 @@ def generate_physical_atlas_frame_rgb24(
     frame = np.empty((height, width, 3), dtype=np.uint8)
     for row0 in range(0, height, BAND_ROWS):
         row1 = min(height, row0 + BAND_ROWS)
-        encoded = _tone_map(linear[row0:row1])
+        encoded = _display_encode(linear[row0:row1])
         frame[row0:row1] = np.round(encoded * 255.0).astype(np.uint8)
     return frame.tobytes()
