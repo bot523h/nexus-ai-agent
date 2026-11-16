@@ -1,0 +1,594 @@
+"""Mathematical invariant and refusal tests for the SE(3) cinematography solver."""
+
+from __future__ import annotations
+
+import dataclasses
+import math
+
+import numpy as np
+import pytest
+
+from nexus_ai_agent.creative.storyboard_compiler.bilingual_script_parser import (
+    SceneSetting,
+    TimeOfDay,
+    WeatherCondition,
+    parse_bilingual_script,
+)
+from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import (
+    CANONICAL_F_STOPS,
+    CANONICAL_FOCAL_LENGTHS_MM,
+    AxisOfAction,
+    CameraMoveType,
+    CameraPoseSE3,
+    CinematographyError,
+    RuleOfThirdsPoint,
+    ScreenLookDirection,
+    ShotScale,
+    axis_side_sign,
+    build_look_at_pose,
+    build_rule_of_thirds_pose,
+    enforce_axis_of_action,
+    evaluate_trajectory_at,
+    generate_minimum_jerk_trajectory,
+    horizontal_axis_cross,
+    is_valid_se3,
+    minimum_jerk_profile,
+    minimum_jerk_scalar,
+    project_world_point,
+    select_lens_and_aperture,
+    select_rule_of_thirds,
+    skew_symmetric,
+    so3_exp,
+    so3_log,
+    solve_scene_cinematography,
+    solve_script_cinematography,
+    verify_180_degree_rule,
+)
+
+TEN_SHOT_PERSIAN_DIALOGUE = """\
+داخلی. اتاق بازجویی - شب
+
+سرگرد رضا
+(قاطع)
+ساعت یازده شب کجا بودی؟
+
+سارا
+(آرام)
+در خانه بودم و کتاب می‌خواندم.
+
+سرگرد رضا
+(با طعنه)
+هیچ شاهدی هم داری که تایید کند؟
+
+سارا
+(با تردید)
+تلفنم خاموش بود... کسی زنگ نزد.
+
+سرگرد رضا
+(با خشم)
+دوربین سر خیابان ماشین تو را ثبت کرده!
+
+سارا
+(با ترس)
+امکان ندارد، ماشینم در پارکینگ بود!
+
+سرگرد رضا
+(با عجله)
+کلید پارکینگ دست چه کسی بود؟ زود بگو!
+
+سارا
+(زمزمه)
+فقط برادرم یک نسخهٔ اضافه داشت.
+
+سرگرد رضا
+(غمگین)
+پس حدس من از اول درست بود.
+
+سارا
+(با خشم)
+او بی‌گناه است! پای او را وسط نکش!!
+"""
+
+
+# --------------------------------------------------------------------------- #
+# SO(3) and SE(3) Lie Group Proofs
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "omega",
+    [
+        (0.0, 0.0, 0.0),
+        (1e-10, -2e-10, 1.5e-10),
+        (0.35, -0.60, 0.25),
+        (1.2, 0.8, -0.9),
+        (math.pi - 1e-7, 0.0, 0.0),
+        (0.0, -(math.pi - 2e-7), 0.0),
+        (
+            (math.pi - 1e-6) / math.sqrt(3.0),
+            -(math.pi - 1e-6) / math.sqrt(3.0),
+            (math.pi - 1e-6) / math.sqrt(3.0),
+        ),
+    ],
+)
+def test_so3_exp_and_log_roundtrip_and_orthogonality(omega: tuple[float, float, float]) -> None:
+    rot = so3_exp(omega)
+    assert np.allclose(rot @ rot.T, np.eye(3), atol=1e-12)
+    assert np.allclose(rot.T @ rot, np.eye(3), atol=1e-12)
+    assert math.isclose(float(np.linalg.det(rot)), 1.0, abs_tol=1e-12)
+
+    recovered = so3_log(rot)
+    re_exp = so3_exp(recovered)
+    assert np.allclose(re_exp, rot, atol=1e-9)
+
+    k = skew_symmetric(omega)
+    assert np.allclose(k.T, -k, atol=1e-15)
+
+
+def test_se3_pose_group_closure_inverse_and_refusals() -> None:
+    p1 = build_look_at_pose((0.0, -3.0, 1.6), (0.5, 0.0, 1.5), roll_rad=math.radians(7.5))
+    p2 = build_look_at_pose((1.2, -2.0, 2.1), (-0.4, 0.2, 1.4))
+
+    assert is_valid_se3(p1.matrix)
+    assert is_valid_se3(p2.matrix)
+    assert math.isclose(float(np.linalg.norm(p1.forward_axis)), 1.0, abs_tol=1e-12)
+
+    prod = p1.compose(p2)
+    assert is_valid_se3(prod.matrix)
+    assert np.allclose(prod.matrix, p1.matrix @ p2.matrix, atol=1e-12)
+
+    ident_right = p1.compose(p1.inverse())
+    ident_left = p1.inverse().compose(p1)
+    assert np.allclose(ident_right.matrix, np.eye(4), atol=1e-12)
+    assert np.allclose(ident_left.matrix, np.eye(4), atol=1e-12)
+
+    # Vertical zenith/nadir degeneracy handling in build_look_at_pose.
+    zenith = build_look_at_pose((0.0, 0.0, 1.0), (0.0, 0.0, 5.0))
+    y_look = build_look_at_pose((0.0, 0.0, 1.0), (0.0, 4.0, 1.0), world_up=(0.0, 1.0, 0.0))
+    assert is_valid_se3(zenith.matrix)
+    assert is_valid_se3(y_look.matrix)
+
+    # Reject reflection matrix (det == -1), non-orthogonal matrix, bad shape, bad bottom row.
+    reflection = np.diag([-1.0, 1.0, 1.0])
+    with pytest.raises(CinematographyError, match="determinant"):
+        CameraPoseSE3.from_rt(reflection, (0.0, 0.0, 0.0))
+    with pytest.raises(CinematographyError, match="orthogonality"):
+        CameraPoseSE3.from_rt(2.0 * np.eye(3), (0.0, 0.0, 0.0))
+    with pytest.raises(CinematographyError, match="3x3"):
+        CameraPoseSE3.from_rt(np.eye(2), (0.0, 0.0, 0.0))
+    with pytest.raises(CinematographyError, match="3-vector"):
+        CameraPoseSE3.from_rt(np.eye(3), (0.0, 1.0))
+
+    bad_bottom = np.eye(4)
+    bad_bottom[3, 3] = 2.0
+    assert is_valid_se3(bad_bottom) is False
+    assert is_valid_se3(np.eye(3)) is False
+
+    with pytest.raises(CinematographyError, match="world_up"):
+        build_look_at_pose((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), world_up=(0.0, 0.0, 0.0))
+    with pytest.raises(CinematographyError, match="distinct"):
+        build_look_at_pose((1.0, 1.0, 1.0), (1.0, 1.0, 1.0))
+    with pytest.raises(CinematographyError, match="roll_rad"):
+        build_look_at_pose((0.0, -2.0, 1.6), (0.0, 0.0, 1.6), roll_rad=float("nan"))
+
+
+# --------------------------------------------------------------------------- #
+# Mathematical Proof of the 180-Degree Axis of Action Law (10-Shot Dialogue)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("initial_side", [1, -1])
+def test_10_shot_dialogue_strictly_obeys_180_degree_rule_and_se3_invariants(
+    initial_side: int,
+) -> None:
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    assert len(parsed.scenes) == 1
+    scene = parsed.scenes[0]
+    assert len(scene.elements) == 10
+
+    # Test on a non-trivial rotated 3D axis of action as well as canonical staging.
+    axis = AxisOfAction(
+        p1=(-1.25, -0.45, 1.58),
+        p2=(1.15, 0.65, 1.62),
+        initial_side=initial_side,
+        character_a="سرگرد رضا",
+        character_b="سارا",
+    )
+    plan = solve_scene_cinematography(scene, axis=axis, num_trajectory_samples=15)
+    assert len(plan.shots) == 10
+    assert plan.axis_report.compliant is True
+    assert plan.axis_report.intentional_jumps == 0
+    assert plan.axis_report.violations == ()
+
+    p1 = axis.p1_vector
+    p2 = axis.p2_vector
+    identity = np.eye(3, dtype=np.float64)
+
+    first_sign: int | None = None
+    for shot in plan.shots:
+        # 1. Verify primary pose and end pose R @ R.T == I and det(R) == +1.0.
+        for pose in (shot.pose, shot.end_pose):
+            rot = pose.rotation_matrix
+            assert np.allclose(rot @ rot.T, identity, atol=1e-12)
+            assert np.allclose(rot.T @ rot, identity, atol=1e-12)
+            assert math.isclose(float(np.linalg.det(rot)), 1.0, abs_tol=1e-12)
+            assert is_valid_se3(pose.matrix, tol=1e-12)
+
+        # 2. Verify horizontal cross product ((cam_pos - p1) x (p2 - p1))_z never flips sign.
+        cam_pos = shot.pose.translation_vector
+        cross_3d = np.cross(cam_pos - p1, p2 - p1)
+        cross_z = float(cross_3d[2])
+        assert math.isclose(cross_z, horizontal_axis_cross(cam_pos, p1, p2), abs_tol=1e-12)
+        assert abs(cross_z) > 0.5, "camera must stay strictly clear of the 180-degree line"
+        sign = 1 if cross_z > 0.0 else -1
+        if first_sign is None:
+            first_sign = sign
+        assert sign == first_sign == initial_side
+        assert axis_side_sign(cam_pos, p1, p2) == initial_side
+
+        # 3. Verify EVERY sample along the continuous camera trajectory obeys both invariants.
+        for sample in shot.trajectory.samples:
+            s_rot = sample.pose.rotation_matrix
+            assert np.allclose(s_rot @ s_rot.T, identity, atol=1e-12)
+            assert math.isclose(float(np.linalg.det(s_rot)), 1.0, abs_tol=1e-12)
+            s_cross = horizontal_axis_cross(sample.pose.translation_vector, p1, p2)
+            assert s_cross * initial_side > 0.0
+
+        # 4. Verify canonical lens selection & exact Rule-of-Thirds pinhole framing.
+        assert shot.lens.focal_length_mm in CANONICAL_FOCAL_LENGTHS_MM
+        assert shot.lens.f_stop in CANONICAL_F_STOPS
+        assert shot.framing.framing_error_uv < 1e-9
+
+
+def test_intentional_axis_jump_flips_sign_exactly_once_and_holds_new_side() -> None:
+    script = """\
+INT. INTERROGATION ROOM - NIGHT
+
+REZA
+Tell me the truth.
+
+SARA
+I already did.
+
+[AXIS JUMP]
+
+REZA
+(angrily)
+Everything changes right now!
+
+SARA
+(whispering)
+Then listen carefully.
+"""
+    parsed = parse_bilingual_script(script)
+    plans = solve_script_cinematography(parsed, initial_axis_side=1)
+    plan = plans[0]
+    assert plan.axis_report.compliant is True
+    assert plan.axis_report.intentional_jumps == 1
+
+    signs = [
+        axis_side_sign(s.pose.translation_vector, plan.axis.p1, plan.axis.p2) for s in plan.shots
+    ]
+    assert signs == [1, 1, -1, -1]
+    # Complementary look directions swap consistently when the camera crosses the line.
+    assert plan.shots[0].framing.look_direction == ScreenLookDirection.RIGHT
+    assert plan.shots[1].framing.look_direction == ScreenLookDirection.LEFT
+    assert plan.shots[2].framing.look_direction == ScreenLookDirection.LEFT
+    assert plan.shots[3].framing.look_direction == ScreenLookDirection.RIGHT
+
+
+def test_enforce_axis_of_action_and_violation_detector() -> None:
+    axis = AxisOfAction(p1=(-1.0, 0.0, 1.6), p2=(1.0, 0.0, 1.6), initial_side=1)
+    # Camera placed illegally on the +Y side (cross_z < 0) is reflected onto -Y (cross_z > 0).
+    wrong_side = np.array([0.3, 2.4, 1.7], dtype=np.float64)
+    assert axis_side_sign(wrong_side, axis.p1, axis.p2) == -1
+    fixed = enforce_axis_of_action(wrong_side, axis, required_side=1)
+    assert np.allclose(fixed, (0.3, -2.4, 1.7), atol=1e-12)
+    assert axis_side_sign(fixed, axis.p1, axis.p2) == 1
+
+    # Camera sitting directly on the axis line (cross_z == 0) is pushed off by min_clearance_m.
+    on_axis = np.array([0.0, 0.0, 1.6], dtype=np.float64)
+    assert axis_side_sign(on_axis, axis.p1, axis.p2) == 0
+    cleared = enforce_axis_of_action(on_axis, axis, required_side=1, min_clearance_m=0.5)
+    assert cleared[1] == pytest.approx(-0.5, abs=1e-12)
+
+    # Forging an illegal crossing and an invalid rotation triggers verify_180_degree_rule.
+    parsed = parse_bilingual_script("INT. ROOM - NIGHT\nREZA\nOne.\n\nSARA\nTwo.")
+    plan = solve_scene_cinematography(parsed.scenes[0], axis=axis, num_trajectory_samples=3)
+    illegal_pose = build_look_at_pose((0.0, 2.5, 1.6), (0.0, 0.0, 1.6))
+    corrupted_rot_pose = CameraPoseSE3(
+        rotation=((2.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+        translation=(0.0, 2.5, 1.6),
+    )
+    bad_sample = dataclasses.replace(plan.shots[1].trajectory.samples[1], pose=corrupted_rot_pose)
+    bad_traj = dataclasses.replace(
+        plan.shots[1].trajectory,
+        samples=(
+            plan.shots[1].trajectory.samples[0],
+            bad_sample,
+            plan.shots[1].trajectory.samples[2],
+        ),
+    )
+    forged_shot = dataclasses.replace(
+        plan.shots[1], pose=corrupted_rot_pose, end_pose=illegal_pose, trajectory=bad_traj
+    )
+    report = verify_180_degree_rule((plan.shots[0], forged_shot), axis)
+    assert report.compliant is False
+    assert len(report.violations) >= 3
+
+    # Refusals on invalid axis and enforce parameters.
+    with pytest.raises(CinematographyError, match="horizontal"):
+        AxisOfAction(p1=(1.0, 1.0, 1.0), p2=(1.0, 1.0, 2.5))
+    with pytest.raises(CinematographyError, match="initial_side"):
+        AxisOfAction(p1=(-1.0, 0.0, 1.6), p2=(1.0, 0.0, 1.6), initial_side=0)
+    with pytest.raises(CinematographyError, match="required_side"):
+        enforce_axis_of_action((0.0, -2.0, 1.6), axis, required_side=2)
+    with pytest.raises(CinematographyError, match="min_clearance_m"):
+        enforce_axis_of_action((0.0, -2.0, 1.6), axis, required_side=1, min_clearance_m=0.0)
+
+
+# --------------------------------------------------------------------------- #
+# Quintic Minimum-Jerk Trajectory Derivative & Variational Optimality Proofs
+# --------------------------------------------------------------------------- #
+
+
+def test_minimum_jerk_polynomial_exact_boundary_and_finite_difference_derivatives() -> None:
+    # Exact endpoint values at tau = 0 and tau = 1.
+    s0, ds0, d2s0, d3s0 = minimum_jerk_scalar(0.0)
+    s1, ds1, d2s1, d3s1 = minimum_jerk_scalar(1.0)
+    assert s0 == 0.0 and ds0 == 0.0 and d2s0 == 0.0 and d3s0 == 60.0
+    assert s1 == 1.0 and ds1 == 0.0 and d2s1 == 0.0 and d3s1 == 60.0
+
+    # Midpoint symmetry at tau = 0.5: peak speed = 15/8 = 1.875, inflection d2s = 0.
+    sm, dsm, d2sm, d3sm = minimum_jerk_scalar(0.5)
+    assert sm == pytest.approx(0.5, abs=1e-15)
+    assert dsm == pytest.approx(1.875, abs=1e-15)
+    assert d2sm == 0.0
+    assert d3sm == pytest.approx(-30.0, abs=1e-15)
+
+    # Verify analytical polynomial matches 10*tau^3 - 15*tau^4 + 6*tau^5 and finite differences.
+    taus = np.linspace(0.0, 1.0, 201)
+    prof = minimum_jerk_profile(taus)
+    assert prof.shape == (201, 4)
+    expected_s = 10.0 * taus**3 - 15.0 * taus**4 + 6.0 * taus**5
+    assert np.allclose(prof[:, 0], expected_s, atol=1e-14)
+    # Monotonicity: ds/dtau >= 0 everywhere on [0, 1].
+    assert float(np.min(prof[:, 1])) >= 0.0
+
+    # Central finite-difference verification of 1st, 2nd, and 3rd derivatives.
+    h = 1e-5
+    for tau in (0.1, 0.25, 0.4, 0.63, 0.85):
+        _, ds, d2s, d3s = minimum_jerk_scalar(tau)
+        sp, dsp, d2sp, _ = minimum_jerk_scalar(tau + h)
+        sm_, dsm_, d2sm_, _ = minimum_jerk_scalar(tau - h)
+        assert math.isclose(ds, (sp - sm_) / (2.0 * h), rel_tol=1e-8, abs_tol=1e-9)
+        assert math.isclose(d2s, (dsp - dsm_) / (2.0 * h), rel_tol=1e-8, abs_tol=1e-9)
+        assert math.isclose(d3s, (d2sp - d2sm_) / (2.0 * h), rel_tol=1e-8, abs_tol=1e-9)
+
+    # Variational optimality: integral_0^1 (s'''(tau))^2 dtau == 720, strictly minimal.
+    fine = np.linspace(0.0, 1.0, 10_001)
+    dfine = np.diff(fine)
+    d3_opt = minimum_jerk_profile(fine)[:, 3]
+    y_opt = d3_opt * d3_opt
+    j_opt = float(np.sum(0.5 * (y_opt[1:] + y_opt[:-1]) * dfine))
+    assert math.isclose(j_opt, 720.0, rel_tol=1e-6)
+    # Perturb by eta(tau) = tau^3 * (1 - tau)^3 (vanishes up to 2nd derivative at 0 and 1).
+    eta_d3 = 6.0 - 72.0 * fine + 180.0 * fine**2 - 120.0 * fine**3
+    y_pert = (d3_opt + 0.5 * eta_d3) ** 2
+    j_perturbed = float(np.sum(0.5 * (y_pert[1:] + y_pert[:-1]) * dfine))
+    assert j_perturbed > j_opt + 1.0
+
+
+@pytest.mark.parametrize(
+    ("move_type", "crane_arc"),
+    [
+        (CameraMoveType.DOLLY, 0.0),
+        (CameraMoveType.PAN, 0.0),
+        (CameraMoveType.CRANE, 0.0),
+        (CameraMoveType.CRANE, 0.25),
+        (CameraMoveType.STATIC, 0.0),
+    ],
+)
+def test_se3_camera_trajectory_has_zero_velocity_and_acceleration_at_endpoints(
+    move_type: CameraMoveType, crane_arc: float
+) -> None:
+    start = build_look_at_pose((-1.5, -3.2, 1.6), (0.0, 0.0, 1.6))
+    if move_type == CameraMoveType.STATIC:
+        end = start
+    elif move_type == CameraMoveType.PAN:
+        end = build_look_at_pose((-1.5, -3.2, 1.6), (0.9, 0.2, 1.65))
+    else:
+        end = build_look_at_pose((-0.4, -2.1, 2.05), (0.2, 0.0, 1.55))
+
+    duration = 3.2
+    traj = generate_minimum_jerk_trajectory(
+        start,
+        end,
+        duration_sec=duration,
+        move_type=move_type,
+        num_samples=21,
+        crane_arc_m=crane_arc,
+    )
+    first = traj.samples[0]
+    last = traj.samples[-1]
+
+    # Exact zero linear & angular velocity and acceleration at tau = 0 and tau = 1.
+    assert first.tau == 0.0 and last.tau == 1.0
+    assert first.linear_velocity == (0.0, 0.0, 0.0)
+    assert last.linear_velocity == (0.0, 0.0, 0.0)
+    assert first.linear_acceleration == (0.0, 0.0, 0.0)
+    assert last.linear_acceleration == (0.0, 0.0, 0.0)
+    assert first.angular_velocity == (0.0, 0.0, 0.0)
+    assert last.angular_velocity == (0.0, 0.0, 0.0)
+    assert first.angular_acceleration == (0.0, 0.0, 0.0)
+    assert last.angular_acceleration == (0.0, 0.0, 0.0)
+
+    # Exact start and end pose coincidence.
+    assert np.allclose(first.pose.matrix, start.matrix, atol=1e-12)
+    assert np.allclose(last.pose.matrix, end.matrix, atol=1e-12)
+
+    # Verify analytical 3D velocity & acceleration against central differences at tau=0.37.
+    dtau = 1e-5
+    dt = dtau * duration
+    mid = evaluate_trajectory_at(start, end, 0.37, duration_sec=duration, crane_arc_m=crane_arc)
+    plus = evaluate_trajectory_at(
+        start, end, 0.37 + dtau, duration_sec=duration, crane_arc_m=crane_arc
+    )
+    minus = evaluate_trajectory_at(
+        start, end, 0.37 - dtau, duration_sec=duration, crane_arc_m=crane_arc
+    )
+    num_vel = (plus.pose.translation_vector - minus.pose.translation_vector) / (2.0 * dt)
+    num_acc = (
+        plus.pose.translation_vector
+        - 2.0 * mid.pose.translation_vector
+        + minus.pose.translation_vector
+    ) / (dt * dt)
+    assert np.allclose(mid.linear_velocity, num_vel, atol=1e-6)
+    assert np.allclose(mid.linear_acceleration, num_acc, atol=1e-5)
+
+
+def test_trajectory_input_refusals() -> None:
+    pose = build_look_at_pose((0.0, -2.0, 1.6), (0.0, 0.0, 1.6))
+    for bad_tau in (-0.01, 1.01, float("inf"), float("nan")):
+        with pytest.raises(CinematographyError, match="tau"):
+            minimum_jerk_scalar(bad_tau)
+    with pytest.raises(CinematographyError, match="non-empty"):
+        minimum_jerk_profile([])
+    with pytest.raises(CinematographyError, match="tau"):
+        minimum_jerk_profile([0.0, 1.2])
+    with pytest.raises(CinematographyError, match="duration_sec"):
+        evaluate_trajectory_at(pose, pose, 0.5, duration_sec=0.0)
+    with pytest.raises(CinematographyError, match="crane_arc_m"):
+        evaluate_trajectory_at(pose, pose, 0.5, duration_sec=1.0, crane_arc_m=float("nan"))
+    with pytest.raises(CinematographyError, match="num_samples"):
+        generate_minimum_jerk_trajectory(pose, pose, duration_sec=1.0, num_samples=1)
+    with pytest.raises(CinematographyError, match="num_samples"):
+        generate_minimum_jerk_trajectory(pose, pose, duration_sec=1.0, num_samples=True)
+    with pytest.raises(CinematographyError, match="duration_sec"):
+        generate_minimum_jerk_trajectory(pose, pose, duration_sec=-1.0, num_samples=5)
+
+
+# --------------------------------------------------------------------------- #
+# Lens, Aperture (f-stop), Rule-of-Thirds & Multi-Character Scene Coverage
+# --------------------------------------------------------------------------- #
+
+
+def test_lens_aperture_dof_and_rule_of_thirds_selection() -> None:
+    l24 = select_lens_and_aperture(0.15)
+    l35 = select_lens_and_aperture(0.35)
+    l50 = select_lens_and_aperture(0.55)
+    l85 = select_lens_and_aperture(0.75)
+    l135 = select_lens_and_aperture(0.92)
+    assert (
+        l24.focal_length_mm,
+        l35.focal_length_mm,
+        l50.focal_length_mm,
+        l85.focal_length_mm,
+        l135.focal_length_mm,
+    ) == (24, 35, 50, 85, 135)
+    assert l24.shot_scale == ShotScale.WIDE
+    assert l135.shot_scale == ShotScale.EXTREME_CLOSE_UP
+    assert l24.horizontal_fov_deg > l50.horizontal_fov_deg > l135.horizontal_fov_deg
+    assert l135.f_stop < l24.f_stop
+    assert l85.dof_near_m < l85.focus_distance_m < l85.dof_far_m
+
+    # Hyperfocal infinity branch (24mm at f/11 focused beyond hyperfocal distance).
+    est_ext_day = select_lens_and_aperture(
+        0.2,
+        is_establishing=True,
+        setting=SceneSetting.EXT,
+        time_of_day=TimeOfDay.DAY,
+        focus_distance_m=15.0,
+    )
+    assert est_ext_day.f_stop == 11.0
+    assert est_ext_day.dof_far_m == 1_000.0
+
+    # Atmospheric establishing third placement on both sides of axis.
+    pt_pos, _, _ = select_rule_of_thirds(
+        2, axis_side=1, is_establishing=True, weather=WeatherCondition.RAIN
+    )
+    pt_neg, _, _ = select_rule_of_thirds(
+        2, axis_side=-1, is_establishing=True, weather=WeatherCondition.FOG
+    )
+    assert pt_pos == RuleOfThirdsPoint.LOWER_LEFT
+    assert pt_neg == RuleOfThirdsPoint.LOWER_RIGHT
+    pt_act_neg, _, _ = select_rule_of_thirds(2, axis_side=-1, dramatic_tension=0.80)
+    assert pt_act_neg == RuleOfThirdsPoint.UPPER_LEFT
+
+    # Steep vertical viewpoint fallback + invalid argument refusals.
+    steep_pose = build_rule_of_thirds_pose(
+        (0.0, 0.0, 5.0), (0.01, 0.0, 1.0), focal_length_mm=35.0, target_uv=(1.0 / 3.0, 1.0 / 3.0)
+    )
+    assert is_valid_se3(steep_pose.matrix)
+    with pytest.raises(CinematographyError, match="roll_rad"):
+        build_rule_of_thirds_pose(
+            (0.0, -2.0, 1.6),
+            (0.0, 0.0, 1.6),
+            focal_length_mm=50.0,
+            target_uv=(0.5, 0.5),
+            roll_rad=float("inf"),
+        )
+
+    with pytest.raises(CinematographyError, match="dramatic_tension"):
+        select_lens_and_aperture(1.5)
+    with pytest.raises(CinematographyError, match="focus_distance_m"):
+        select_lens_and_aperture(0.5, focus_distance_m=-1.0)
+    with pytest.raises(CinematographyError, match="axis_side"):
+        select_rule_of_thirds(0, axis_side=0)
+    with pytest.raises(CinematographyError, match="focal_length_mm"):
+        project_world_point(steep_pose, (0.0, 0.0, 1.0), 0.0)
+    with pytest.raises(CinematographyError, match="behind"):
+        project_world_point(steep_pose, (0.0, 0.0, 9.0), 35.0)
+    with pytest.raises(CinematographyError, match="focal_length_mm"):
+        build_rule_of_thirds_pose(
+            (0.0, -2.0, 1.6), (0.0, 0.0, 1.6), focal_length_mm=0.0, target_uv=(0.5, 0.5)
+        )
+    with pytest.raises(CinematographyError, match="target_uv"):
+        build_rule_of_thirds_pose(
+            (0.0, -2.0, 1.6), (0.0, 0.0, 1.6), focal_length_mm=50.0, target_uv=(1.0, 0.5)
+        )
+    with pytest.raises(CinematographyError, match="distinct"):
+        build_rule_of_thirds_pose(
+            (0.0, 0.0, 1.6), (0.0, 0.0, 1.6), focal_length_mm=50.0, target_uv=(0.5, 0.5)
+        )
+
+
+def test_ensemble_four_character_scene_and_action_moves() -> None:
+    script = """\
+EXT. WAREHOUSE COURTYARD - NIGHT - RAIN
+
+A quiet wide view of the wet concrete yard.
+
+REZA
+No.
+
+SARA
+Everything is quiet here tonight while we wait by the main entrance.
+
+AMIR
+I checked the eastern perimeter twice already and saw nobody.
+
+MINA
+(angrily)
+Watch out! Get down right now!!
+
+REZA draws a gun and slams the iron door shut with an explosion!
+
+REZA and SARA stand shoulder to shoulder in the rain.
+
+AMIR steps forward alone.
+"""
+    parsed = parse_bilingual_script(script)
+    plan = solve_scene_cinematography(parsed.scenes[0])
+    assert plan.axis_report.compliant is True
+    assert len(plan.character_positions) == 4
+    move_types = {shot.trajectory.move_type for shot in plan.shots}
+    assert CameraMoveType.STATIC in move_types
+    assert CameraMoveType.DOLLY in move_types
+    assert CameraMoveType.CRANE in move_types
+    assert CameraMoveType.PAN in move_types
+
+    with pytest.raises(CinematographyError, match="starting_shot_index"):
+        solve_scene_cinematography(parsed.scenes[0], starting_shot_index=-1)
+    with pytest.raises(CinematographyError, match="num_trajectory_samples"):
+        solve_scene_cinematography(parsed.scenes[0], num_trajectory_samples=1)
