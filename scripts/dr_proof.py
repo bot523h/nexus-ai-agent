@@ -1,8 +1,14 @@
 """Independent end-to-end DR proof on a live PostgreSQL 17 cluster.
 
 Proves: real dump -> structural verify -> real restore into a fresh DB ->
-the seeded row is byte-identical on the far side. Everything is the shipping
+the seeded rows are byte-identical on the far side. Everything is the shipping
 code path (no mocks): _dump_postgres, _verify_postgres_dump, restore_drill.
+
+The check is content-level, not row-level: a single sentinel row proves the row
+arrived, not that its bytes did. The table also carries a thousand-row payload
+set (plus a NULL), and an ordered SHA-256 of the restored relation must equal
+the one taken before the dump — ``content_digest_matches=true`` on the last
+line is the claim ``scripts/p0_evidence.py`` reads.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from nexus_ai_agent.maintenance.backup import (
     _dump_postgres,
     _verify_postgres_dump,
 )
+from nexus_ai_agent.maintenance.content_digest import content_digest_proof
 from nexus_ai_agent.maintenance.restore import restore_drill
 
 # F-009.6: respect the configured test environment. The previous version
@@ -39,6 +46,12 @@ DST = os.environ.get(
     "NEXUS_DR_TARGET", "postgresql://postgres:pg@127.0.0.1:5433/nexus_restore_target"
 )
 SENTINEL = "hello-durability-42"
+#: Byte order, not the cluster's collation: SRC and DST are two databases that an
+#: operator may have created with different locales, and the digest must not
+#: depend on which one sorts "Z" before "a".
+DR_QUERY = 'SELECT v FROM dr_proof ORDER BY v COLLATE "C"'
+#: Enough rows that a truncated or reordered restore changes the digest.
+PAYLOAD_ROWS = 512
 
 
 def psql(url: str, sql: str) -> str:
@@ -56,11 +69,25 @@ def main() -> int:
     refuse_production_target(DST, what="dr_proof target")
     require_pg_client(what="dr_proof")
 
-    # 1. Seed a uniquely identifiable row in the source database.
+    # 1. Seed a uniquely identifiable row in the source database, plus a payload
+    #    set whose content — not merely whose existence — has to survive.
     psql(SRC, "DROP TABLE IF EXISTS dr_proof")
     psql(SRC, "CREATE TABLE dr_proof(v text)")
     psql(SRC, f"INSERT INTO dr_proof VALUES ('{SENTINEL}')")
-    assert psql(SRC, "SELECT v FROM dr_proof") == SENTINEL
+    psql(
+        SRC,
+        "INSERT INTO dr_proof SELECT 'row-' || lpad(g::text, 5, '0') || '-' "
+        f"|| repeat(md5(g::text), 4) FROM generate_series(1, {PAYLOAD_ROWS}) g",
+    )
+    # A NULL is content too: a restore that turned it into an empty string, or
+    # dropped it, changes the digest.
+    psql(SRC, "INSERT INTO dr_proof VALUES (NULL)")
+    seeded = int(psql(SRC, "SELECT count(*) FROM dr_proof"))
+    assert psql(SRC, f"SELECT v FROM dr_proof WHERE v = '{SENTINEL}'") == SENTINEL
+    source_sha = content_digest_proof(
+        DR_QUERY, source=lambda sql: psql(SRC, sql), restored=lambda sql: psql(SRC, sql)
+    ).source_sha256
+    print(f"[seed] rows={seeded} content_sha256={source_sha}")
 
     # 2. Real pg_dump through the shipping function.
     with tempfile.TemporaryDirectory(prefix="dr_proof_") as tmp:
@@ -85,12 +112,32 @@ def main() -> int:
         )
         print(f"[restore] ok={report.ok} engine={report.engine} chain={report.chain}")
 
-        # 5. The far side must carry the exact seeded row.
-        got = psql(DST, "SELECT v FROM dr_proof")
+        # 5. The far side must carry the exact seeded row ...
+        got = psql(DST, f"SELECT v FROM dr_proof WHERE v = '{SENTINEL}'")
         print(f"[check] restored row = {got!r}")
         assert got == SENTINEL, f"restored row mismatch: {got!r} != {SENTINEL!r}"
 
-    print("DR-PROOF-OK: dump -> verify -> restore -> row preserved")
+        # ... and the same *content*, in the same order, at the same addresses.
+        proof = content_digest_proof(
+            DR_QUERY, source=lambda sql: psql(SRC, sql), restored=lambda sql: psql(DST, sql)
+        )
+        restored_rows = int(psql(DST, "SELECT count(*) FROM dr_proof"))
+        print(
+            f"[digest] rows={restored_rows} source={proof.source_sha256} "
+            f"restored={proof.restored_sha256}"
+        )
+        if not proof.matches:
+            print(
+                "DR-PROOF-FAILED: restored content differs from the dumped content "
+                f"({proof.restored_sha256} != {proof.source_sha256})"
+            )
+            return 1
+        assert restored_rows == seeded, f"restored {restored_rows} of {seeded} rows"
+
+    print(
+        "DR-PROOF-OK: dump -> verify -> restore -> row and content preserved "
+        "content_digest_matches=true"
+    )
     return 0
 
 

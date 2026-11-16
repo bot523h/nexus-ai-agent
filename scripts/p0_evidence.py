@@ -20,6 +20,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from nexus_ai_agent.maintenance.content_digest import content_evidence  # noqa: E402
 from nexus_ai_agent.maintenance.pg_safety import (  # noqa: E402
     refuse_production_target,
     require_destructive_opt_in,
@@ -81,11 +82,12 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     rev = git_rev()
+    started_at = datetime.now(UTC).isoformat()
     bundle: dict[str, object] = {
         "schema": "nexus-p0-evidence/v1",
         "mission": "NEXUS P0 database recovery / durability",
         "source_revision": rev,
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": started_at,
         "environment": {
             "python": sys.version.split()[0],
             "platform": platform.platform(),
@@ -154,7 +156,17 @@ def main() -> int:
         )
     }
 
-    all_ok = all(c["exit_code"] == 0 for c in bundle["checks"].values())  # type: ignore[union-attr]
+    # 7. The restore was verified at content level, not only at row level.
+    bundle["content_evidence"] = content_evidence(
+        out_dir,
+        dr_check=bundle["checks"]["dr_proof"],  # type: ignore[index]
+        not_before=started_at,
+    )
+
+    checks = bundle["checks"]
+    all_ok = all(c["exit_code"] == 0 for c in checks.values()) and bool(  # type: ignore[union-attr]
+        bundle["content_evidence"]["all_content_matches"]  # type: ignore[index]
+    )
     bundle["all_checks_passed"] = all_ok
 
     dest = out_dir / "evidence.json"

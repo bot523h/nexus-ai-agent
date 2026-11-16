@@ -19,6 +19,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from nexus_ai_agent.maintenance.content_digest import content_digest_proof  # noqa: E402
 from nexus_ai_agent.maintenance.pg_safety import (  # noqa: E402
     refuse_production_target,
     require_destructive_opt_in,
@@ -68,6 +69,9 @@ def main() -> int:
         f"repeat(md5(g::text), 8) FROM generate_series(1, {args.rows}) g",
     )
     rows = psql(SRC, "SELECT count(*) FROM bench_rows")
+    # Ordered by the primary key, so identical content is identical text on both
+    # sides regardless of the physical order the restore happened to use.
+    bench_query = "SELECT id, name, body FROM bench_rows ORDER BY id"
 
     with tempfile.TemporaryDirectory(prefix="p0_bench_") as tmp:
         art = Path(tmp) / "bench.sql"
@@ -92,6 +96,11 @@ def main() -> int:
 
         t0 = time.perf_counter()
         restored = psql(DST, "SELECT count(*) FROM bench_rows")
+        proof = content_digest_proof(
+            bench_query,
+            source=lambda sql: psql(SRC, sql),
+            restored=lambda sql: psql(DST, sql),
+        )
         verify_s = time.perf_counter() - t0
 
     result = {
@@ -105,6 +114,7 @@ def main() -> int:
         "restored_rows": int(restored),
         "row_count_matches": int(rows) == int(restored),
         "throughput_rows_per_s_restore": round(int(rows) / restore_s, 1) if restore_s else None,
+        **proof.to_dict(),
     }
     out_dir = REPO / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -112,7 +122,9 @@ def main() -> int:
     dest.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
     print(f"wrote {dest.relative_to(REPO)}")
-    return 0 if result["row_count_matches"] else 1
+    # Both conditions gate the exit code: the count proves nothing was lost, the
+    # digest proves what was kept is the same bytes in the same order.
+    return 0 if result["row_count_matches"] and result["content_digest_matches"] else 1
 
 
 if __name__ == "__main__":
