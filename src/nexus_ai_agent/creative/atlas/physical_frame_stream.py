@@ -30,13 +30,15 @@ from typing import Final
 
 import numpy as np
 
-from nexus_ai_agent.creative.atlas import spectral_ocean_swe as ocean
+from nexus_ai_agent.creative.atlas import aces_hald_film_optic as film
+from nexus_ai_agent.creative.atlas import spectral_ocean_swe as _ocean
 
 __all__ = [
     "FrameError",
     "OceanState",
     "AtmosphereState",
     "spectrum_for",
+    "generate_physical_atlas_frame_linear_rgb",
     "generate_physical_atlas_frame_rgb24",
     "MAX_FRAME_SIDE",
     "BAND_ROWS",
@@ -59,6 +61,28 @@ class FrameError(ValueError):
     """Raised for an invalid frame request or an unresolvable physical state."""
 
 
+def _finite_float(value: object, name: str) -> float:
+    if isinstance(value, (bool, str, bytes)):
+        raise FrameError(f"{name} must be a finite real number")
+    try:
+        num = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise FrameError(f"{name} must be a finite real number") from exc
+    if not math.isfinite(num):
+        raise FrameError(f"{name} must be finite")
+    return num
+
+
+def _finite_vec2(value: object, name: str) -> tuple[float, float]:
+    try:
+        items = list(value)  # type: ignore[call-overload]
+    except TypeError as exc:
+        raise FrameError(f"{name} must be a 2-vector") from exc
+    if len(items) != 2:
+        raise FrameError(f"{name} must be a 2-vector")
+    return (_finite_float(items[0], f"{name}[0]"), _finite_float(items[1], f"{name}[1]"))
+
+
 @dataclass(frozen=True)
 class OceanState:
     """Sea state: wind, fetch, frame rate and the periodic grid that carries the surface.
@@ -76,29 +100,30 @@ class OceanState:
     extent: float = 180.0
 
     def __post_init__(self) -> None:
-        if not math.isfinite(self.wind_speed) or not (0.1 <= self.wind_speed <= 60.0):
+        wind_speed = _finite_float(self.wind_speed, "wind_speed")
+        if not (0.1 <= wind_speed <= 60.0):
             raise FrameError("wind_speed must be finite and in [0.1, 60] m/s")
-        if not math.isfinite(self.fetch) or not (1.0e3 <= self.fetch <= 1.0e7):
+        fetch = _finite_float(self.fetch, "fetch")
+        if not (1.0e3 <= fetch <= 1.0e7):
             raise FrameError("fetch must be finite and in [1e3, 1e7] m")
-        if not math.isfinite(self.fps) or not (0.0 < self.fps <= 240.0):
+        fps = _finite_float(self.fps, "fps")
+        if not (0.0 < fps <= 240.0):
             raise FrameError("fps must be finite and in (0, 240]")
         if (
             not isinstance(self.grid, int)
             or isinstance(self.grid, bool)
-            or not (16 <= self.grid <= ocean.MAX_GRID)
+            or not (16 <= self.grid <= _ocean.MAX_GRID)
         ):
-            raise FrameError(f"grid must be in [16, {ocean.MAX_GRID}]")
-        if not math.isfinite(self.extent) or self.extent <= 0.0:
+            raise FrameError(f"grid must be in [16, {_ocean.MAX_GRID}]")
+        extent = _finite_float(self.extent, "extent")
+        if extent <= 0.0:
             raise FrameError("extent must be positive and finite")
-        if len(self.wind_dir) != 2:
-            raise FrameError("wind_dir must be a 2-vector")
-        if not all(math.isfinite(float(c)) for c in self.wind_dir):
-            raise FrameError("wind_dir components must be finite")
-        if math.hypot(float(self.wind_dir[0]), float(self.wind_dir[1])) < 1e-12:
+        wd = _finite_vec2(self.wind_dir, "wind_dir")
+        if math.hypot(wd[0], wd[1]) < 1e-12:
             raise FrameError("wind_dir must be non-zero")
-        omega_p = 22.0 * ((ocean.GRAVITY**2) / (self.wind_speed * self.fetch)) ** (1.0 / 3.0)
-        k_p = omega_p * omega_p / ocean.GRAVITY
-        k_nyquist = math.pi * self.grid / self.extent
+        omega_p = 22.0 * ((_ocean.GRAVITY**2) / (wind_speed * fetch)) ** (1.0 / 3.0)
+        k_p = omega_p * omega_p / _ocean.GRAVITY
+        k_nyquist = math.pi * self.grid / extent
         if k_p > 0.5 * k_nyquist:
             raise FrameError(
                 f"peak wavenumber {k_p:.3f} rad/m exceeds half the grid Nyquist "
@@ -118,25 +143,29 @@ class AtmosphereState:
     fov_deg: float = CAMERA_FOV_DEG
 
     def __post_init__(self) -> None:
-        if not math.isfinite(self.sun_elevation_deg) or not (0.0 < self.sun_elevation_deg <= 90.0):
+        sun_elevation_deg = _finite_float(self.sun_elevation_deg, "sun_elevation_deg")
+        if not (0.0 < sun_elevation_deg <= 90.0):
             raise FrameError("sun_elevation_deg must be finite and in (0, 90]")
-        if not math.isfinite(self.turbidity) or self.turbidity <= 0.0:
+        turbidity = _finite_float(self.turbidity, "turbidity")
+        if turbidity <= 0.0:
             raise FrameError("turbidity must be positive and finite")
-        if not math.isfinite(self.sun_intensity) or self.sun_intensity < 0.0:
+        sun_intensity = _finite_float(self.sun_intensity, "sun_intensity")
+        if sun_intensity < 0.0:
             raise FrameError("sun_intensity must be non-negative and finite")
-        if not math.isfinite(self.camera_height_m) or self.camera_height_m <= 0.0:
+        camera_height_m = _finite_float(self.camera_height_m, "camera_height_m")
+        if camera_height_m <= 0.0:
             raise FrameError("camera_height_m must be positive and finite")
-        if not math.isfinite(self.sun_azimuth_deg):
-            raise FrameError("sun_azimuth_deg must be finite")
-        if not math.isfinite(self.fov_deg) or not (0.0 < self.fov_deg < 180.0):
+        _finite_float(self.sun_azimuth_deg, "sun_azimuth_deg")
+        fov_deg = _finite_float(self.fov_deg, "fov_deg")
+        if not (0.0 < fov_deg < 180.0):
             raise FrameError("fov_deg must be finite and in (0, 180)")
 
 
 @lru_cache(maxsize=8)
-def spectrum_for(ocean_state: OceanState) -> ocean.OceanSpectrum:
+def spectrum_for(ocean_state: OceanState) -> _ocean.OceanSpectrum:
     """JONSWAP spectrum of ``ocean_state`` on its FFT wavenumber grid (cached)."""
-    kx, ky = ocean.fft_wavenumber_grid(ocean_state.grid, ocean_state.grid, ocean_state.extent)
-    return ocean.jonswap_spectrum(
+    kx, ky = _ocean.fft_wavenumber_grid(ocean_state.grid, ocean_state.grid, ocean_state.extent)
+    return _ocean.jonswap_spectrum(
         kx,
         ky,
         wind_speed=ocean_state.wind_speed,
@@ -187,15 +216,14 @@ def _bilinear_normals(normals: np.ndarray, fx: np.ndarray, fz: np.ndarray) -> np
 
 
 def _tone_map(linear: np.ndarray) -> np.ndarray:
-    mapped = 1.0 - np.exp(-linear)
-    encoded: np.ndarray = np.clip(mapped, 0.0, 1.0) ** GAMMA_INV
-    return encoded
+    mapped = np.clip(1.0 - np.exp(-linear), 0.0, 1.0)
+    return film.linear_to_srgb_oetf(mapped)
 
 
 def _check_frame_request(frame_idx: int, total_frames: int, width: int, height: int) -> None:
     if not isinstance(frame_idx, int) or isinstance(frame_idx, bool):
         raise FrameError("frame_idx must be an int")
-    if total_frames < 1:
+    if not isinstance(total_frames, int) or isinstance(total_frames, bool) or total_frames < 1:
         raise FrameError("total_frames must be >= 1")
     if not (0 <= frame_idx < total_frames):
         raise FrameError(f"frame_idx must be in [0, {total_frames})")
@@ -206,25 +234,38 @@ def _check_frame_request(frame_idx: int, total_frames: int, width: int, height: 
             raise FrameError(f"{name} must be in [8, {MAX_FRAME_SIDE}]")
 
 
-def generate_physical_atlas_frame_rgb24(
+def generate_physical_atlas_frame_linear_rgb(
     frame_idx: int,
-    total_frames: int,
-    width: int,
-    height: int,
-    ocean_state: OceanState,
-    atmosphere_state: AtmosphereState,
-    seed: int,
-) -> bytes:
-    """Render frame ``frame_idx`` of ``total_frames`` as raw ``rgb24`` bytes.
+    width: int = 64,
+    height: int = 64,
+    ocean: OceanState | None = None,
+    atmo: AtmosphereState | None = None,
+    *,
+    total_frames: int | None = None,
+    seed: int = 0,
+) -> np.ndarray:
+    """Render frame ``frame_idx`` as non-negative ``float64`` linear sRGB/Rec.709 radiance.
 
-    The result is deterministic in every argument, has length ``width * height * 3``
-    and is row-major ``(height, width, 3)`` ``uint8``. Changing the wind, the fetch or
-    the time index changes the surface and therefore the pixels.
+    Returns a ``(height, width, 3)`` array of scene-referred linear radiance before
+    any tone-mapping or display OETF.
     """
-    _check_frame_request(frame_idx, total_frames, width, height)
+    ocean_state = ocean if ocean is not None else OceanState()
+    atmosphere_state = atmo if atmo is not None else AtmosphereState()
+    if not isinstance(ocean_state, OceanState):
+        raise FrameError("ocean must be an OceanState")
+    if not isinstance(atmosphere_state, AtmosphereState):
+        raise FrameError("atmo must be an AtmosphereState")
+    effective_total = (
+        total_frames
+        if total_frames is not None
+        else (frame_idx + 1 if isinstance(frame_idx, int) and frame_idx >= 0 else 1)
+    )
+    _check_frame_request(frame_idx, effective_total, width, height)
     spectrum = spectrum_for(ocean_state)
     time_s = frame_idx / ocean_state.fps
-    field = ocean.spectral_height_field(spectrum, seed=seed, extent=ocean_state.extent, time=time_s)
+    field = _ocean.spectral_height_field(
+        spectrum, seed=seed, extent=ocean_state.extent, time=time_s
+    )
     n = field.shape[0]
     dx = ocean_state.extent / n
     dh_dz = np.gradient(field, dx, axis=0)
@@ -239,7 +280,7 @@ def generate_physical_atlas_frame_rgb24(
     tan_half = math.tan(math.radians(atmosphere_state.fov_deg) / 2.0)
     aspect = width / height
     camera_h = atmosphere_state.camera_height_m
-    frame = np.empty((height, width, 3), dtype=np.uint8)
+    out = np.empty((height, width, 3), dtype=np.float64)
     cols = np.arange(width)
     for row0 in range(0, height, BAND_ROWS):
         row1 = min(height, row0 + BAND_ROWS)
@@ -272,6 +313,37 @@ def generate_physical_atlas_frame_rgb24(
             linear[below] = (
                 fresnel[:, None] * mirror + (1.0 - fresnel)[:, None] * diffuse + glint[:, None]
             )
-        encoded = _tone_map(linear)
+        out[row0:row1] = np.maximum(linear, 0.0)
+    return out
+
+
+def generate_physical_atlas_frame_rgb24(
+    frame_idx: int,
+    total_frames: int,
+    width: int,
+    height: int,
+    ocean_state: OceanState,
+    atmosphere_state: AtmosphereState,
+    seed: int,
+) -> bytes:
+    """Render frame ``frame_idx`` of ``total_frames`` as raw ``rgb24`` bytes.
+
+    The result is deterministic in every argument, has length ``width * height * 3``
+    and is row-major ``(height, width, 3)`` ``uint8``. Changing the wind, the fetch or
+    the time index changes the surface and therefore the pixels.
+    """
+    linear = generate_physical_atlas_frame_linear_rgb(
+        frame_idx,
+        width=width,
+        height=height,
+        ocean=ocean_state,
+        atmo=atmosphere_state,
+        total_frames=total_frames,
+        seed=seed,
+    )
+    frame = np.empty((height, width, 3), dtype=np.uint8)
+    for row0 in range(0, height, BAND_ROWS):
+        row1 = min(height, row0 + BAND_ROWS)
+        encoded = _tone_map(linear[row0:row1])
         frame[row0:row1] = np.round(encoded * 255.0).astype(np.uint8)
     return frame.tobytes()

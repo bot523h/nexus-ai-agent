@@ -32,6 +32,10 @@ __all__ = [
     "XYZ_TO_AP1",
     "AP0_TO_AP1",
     "AP1_TO_AP0",
+    "SRGB_D65_TO_AP0_D60",
+    "srgb_eotf_to_linear",
+    "linear_to_srgb_oetf",
+    "linear_srgb_d65_to_aces_ap0_d60",
     "aces_ap0_to_acescg",
     "acescg_to_ap0",
     "aces_tone_map",
@@ -64,6 +68,45 @@ AP0_TO_AP1: Final[np.ndarray] = XYZ_TO_AP1 @ AP0_TO_XYZ
 #: AP1 -> AP0 (exact inverse).
 AP1_TO_AP0: Final[np.ndarray] = np.linalg.inv(AP0_TO_AP1)
 
+_SRGB_EOTF_THRESHOLD: Final[float] = 0.04045
+_SRGB_OETF_THRESHOLD: Final[float] = _SRGB_EOTF_THRESHOLD / 12.92
+
+
+def _build_srgb_d65_to_ap0_d60() -> np.ndarray:
+    """Exact Bradford-adapted linear sRGB/Rec.709 (D65) -> ACES2065-1 AP0 (D60) matrix."""
+    rx, ry = 0.64, 0.33
+    gx, gy = 0.30, 0.60
+    bx, by = 0.15, 0.06
+    wx, wy = 0.3127, 0.3290
+    d65 = np.array([wx / wy, 1.0, (1.0 - wx - wy) / wy], dtype=np.float64)
+    primaries = np.array(
+        [
+            [rx / ry, gx / gy, bx / by],
+            [1.0, 1.0, 1.0],
+            [(1.0 - rx - ry) / ry, (1.0 - gx - gy) / gy, (1.0 - bx - by) / by],
+        ],
+        dtype=np.float64,
+    )
+    scales = np.linalg.solve(primaries, d65)
+    srgb_to_xyz_d65 = primaries * scales[None, :]
+    d60 = AP0_TO_XYZ @ np.ones(3, dtype=np.float64)
+    bradford = np.array(
+        [
+            [0.8951000, 0.2664000, -0.1614000],
+            [-0.7502000, 1.7135000, 0.0367000],
+            [0.0389000, -0.0685000, 1.0296000],
+        ],
+        dtype=np.float64,
+    )
+    cone_d65 = bradford @ d65
+    cone_d60 = bradford @ d60
+    cat_d65_to_d60 = np.linalg.solve(bradford, np.diag(cone_d60 / cone_d65) @ bradford)
+    return np.linalg.solve(AP0_TO_XYZ, cat_d65_to_d60 @ srgb_to_xyz_d65)
+
+
+#: Linear sRGB/Rec.709 (D65) -> ACES2065-1 AP0 (D60) with Bradford chromatic adaptation.
+SRGB_D65_TO_AP0_D60: Final[np.ndarray] = _build_srgb_d65_to_ap0_d60()
+
 MAX_LEVEL: Final[int] = 16
 MAX_IMAGE_PIXELS: Final[int] = 64_000_000
 
@@ -79,6 +122,44 @@ def _check_colour(rgb: np.ndarray, name: str = "rgb") -> np.ndarray:
     if not np.all(np.isfinite(arr)):
         raise FilmOpticError(f"{name} contains NaN/Inf")
     return arr
+
+
+def srgb_eotf_to_linear(srgb: np.ndarray) -> np.ndarray:
+    """IEC 61966-2-1 sRGB EOTF: display-encoded ``srgb`` in ``[0, 1]`` -> linear light."""
+    arr = np.asarray(srgb, dtype=np.float64)
+    if not np.all(np.isfinite(arr)):
+        raise FilmOpticError("srgb input contains NaN/Inf")
+    if arr.size > 0 and (arr.min() < 0.0 or arr.max() > 1.0):
+        raise FilmOpticError("srgb input must lie in [0, 1]")
+    out = np.where(
+        arr <= _SRGB_EOTF_THRESHOLD,
+        arr / 12.92,
+        np.power((np.maximum(arr, _SRGB_EOTF_THRESHOLD) + 0.055) / 1.055, 2.4),
+    )
+    return np.asarray(out, dtype=np.float64)
+
+
+def linear_to_srgb_oetf(linear: np.ndarray) -> np.ndarray:
+    """IEC 61966-2-1 sRGB OETF (inverse EOTF): linear values -> display-encoded ``[0, 1]``."""
+    arr = np.asarray(linear, dtype=np.float64)
+    if not np.all(np.isfinite(arr)):
+        raise FilmOpticError("linear input contains NaN/Inf")
+    if arr.size > 0 and arr.min() < 0.0:
+        raise FilmOpticError("linear input must be non-negative")
+    clamped = np.clip(arr, 0.0, 1.0)
+    out = np.where(
+        clamped <= _SRGB_OETF_THRESHOLD,
+        clamped * 12.92,
+        1.055 * np.power(np.maximum(clamped, _SRGB_OETF_THRESHOLD), 1.0 / 2.4) - 0.055,
+    )
+    return np.asarray(np.clip(out, 0.0, 1.0), dtype=np.float64)
+
+
+def linear_srgb_d65_to_aces_ap0_d60(rgb_linear: np.ndarray) -> np.ndarray:
+    """Convert linear sRGB/Rec.709 (D65) values to ACES2065-1 AP0 (D60) via Bradford CAT."""
+    arr = _check_colour(rgb_linear, "rgb_linear")
+    out: np.ndarray = np.asarray(arr @ SRGB_D65_TO_AP0_D60.T, dtype=np.float64)
+    return out
 
 
 def aces_ap0_to_acescg(rgb: np.ndarray) -> np.ndarray:

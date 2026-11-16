@@ -208,3 +208,62 @@ def test_render_master_detects_continuity_tamper(
     monkeypatch.setattr(workspace, "read_bytes", _corrupt)
     with pytest.raises(om.MasterError):
         om.render_master(_bible(), workspace, side=32, frames=4, fps=4)
+
+
+def test_grade_frames_color_pipeline_order_single_tone_map_and_determinism(
+    workspace: WorkspaceFilesystem, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stage 5 must transform linear sRGB/D65 -> AP0/D60 -> AP1 -> single ACES tone-map
+    -> HALD CLUT -> film grain -> sRGB OETF, in exact order, once per frame."""
+    from nexus_ai_agent.creative.atlas import aces_hald_film_optic as film
+
+    calls: list[str] = []
+    orig_srgb_to_ap0 = film.linear_srgb_d65_to_aces_ap0_d60
+    orig_ap0_to_ap1 = film.aces_ap0_to_acescg
+    orig_tone = film.aces_tone_map
+    orig_clut = film.apply_hald_clut
+    orig_grain = film.film_grain
+    orig_oetf = film.linear_to_srgb_oetf
+
+    def _wrap(name: str, fn: object) -> object:
+        def _wrapped(*args: object, **kwargs: object) -> object:
+            calls.append(name)
+            return fn(*args, **kwargs)  # type: ignore[operator]
+
+        return _wrapped
+
+    monkeypatch.setattr(
+        om.film,
+        "linear_srgb_d65_to_aces_ap0_d60",
+        _wrap("linear_srgb_d65_to_aces_ap0_d60", orig_srgb_to_ap0),
+    )
+    monkeypatch.setattr(om.film, "aces_ap0_to_acescg", _wrap("aces_ap0_to_acescg", orig_ap0_to_ap1))
+    monkeypatch.setattr(om.film, "aces_tone_map", _wrap("aces_tone_map", orig_tone))
+    monkeypatch.setattr(om.film, "apply_hald_clut", _wrap("apply_hald_clut", orig_clut))
+    monkeypatch.setattr(om.film, "film_grain", _wrap("film_grain", orig_grain))
+    monkeypatch.setattr(om.film, "linear_to_srgb_oetf", _wrap("linear_to_srgb_oetf", orig_oetf))
+    monkeypatch.setattr(om.media, "ffmpeg_available", lambda: False)
+
+    frames = 3
+    om.render_master(_bible(), workspace, side=32, frames=frames, fps=4, out_dir="run_a")
+    expected_per_frame = [
+        "linear_srgb_d65_to_aces_ap0_d60",
+        "aces_ap0_to_acescg",
+        "aces_tone_map",
+        "apply_hald_clut",
+        "film_grain",
+        "linear_to_srgb_oetf",
+    ]
+    assert calls == expected_per_frame * frames
+
+    frame_a = [
+        (workspace.root / "run_a" / "frames" / f"frame_{i:04d}.raw").read_bytes()
+        for i in range(frames)
+    ]
+    calls.clear()
+    om.render_master(_bible(), workspace, side=32, frames=frames, fps=4, out_dir="run_b")
+    frame_b = [
+        (workspace.root / "run_b" / "frames" / f"frame_{i:04d}.raw").read_bytes()
+        for i in range(frames)
+    ]
+    assert frame_a == frame_b

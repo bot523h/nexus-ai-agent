@@ -518,3 +518,126 @@ def test_streaming_encode_stays_under_the_memory_cap(workspace: WorkspaceFilesys
     finally:
         tracemalloc.stop()
     assert peak < MEMORY_CAP_BYTES, f"peak {peak} bytes exceeds {MEMORY_CAP_BYTES}"
+
+
+# --- W33: ACES color science, linear radiance, non-numeric errors & bounded cleanup ---
+
+
+def test_srgb_eotf_and_oetf_known_answers_and_invertibility() -> None:
+    from nexus_ai_agent.creative.atlas import aces_hald_film_optic as film
+
+    samples = np.array([0.0, 0.02, 0.04045, 0.5, 1.0], dtype=np.float64)
+    expected_linear = np.array(
+        [
+            0.0,
+            0.02 / 12.92,
+            0.04045 / 12.92,
+            ((0.5 + 0.055) / 1.055) ** 2.4,
+            1.0,
+        ],
+        dtype=np.float64,
+    )
+    linear = film.srgb_eotf_to_linear(samples)
+    np.testing.assert_allclose(linear, expected_linear, atol=1e-15, rtol=0.0)
+
+    roundtrip_srgb = film.linear_to_srgb_oetf(linear)
+    assert float(np.max(np.abs(roundtrip_srgb - samples))) < 1e-12
+
+    grid = np.linspace(0.0, 1.0, 1001, dtype=np.float64)
+    assert (
+        float(np.max(np.abs(film.linear_to_srgb_oetf(film.srgb_eotf_to_linear(grid)) - grid)))
+        < 1e-12
+    )
+    assert (
+        float(np.max(np.abs(film.srgb_eotf_to_linear(film.linear_to_srgb_oetf(grid)) - grid)))
+        < 1e-12
+    )
+
+
+def test_neutral_axis_preservation_across_srgb_d65_ap0_ap1() -> None:
+    from nexus_ai_agent.creative.atlas import aces_hald_film_optic as film
+
+    for v in (0.18, 0.5):
+        neutral = np.array([v, v, v], dtype=np.float64)
+        ap0 = film.linear_srgb_d65_to_aces_ap0_d60(neutral)
+        ap1 = film.aces_ap0_to_acescg(ap0)
+        assert float(np.max(np.abs(ap0 - neutral))) < 1e-9
+        assert float(np.max(np.abs(ap1 - neutral))) < 1e-9
+
+
+def test_linear_radiance_frame_contract() -> None:
+    lin = physical.generate_physical_atlas_frame_linear_rgb(0, width=32, height=32)
+    assert lin.shape == (32, 32, 3)
+    assert lin.dtype == np.float64
+    assert np.all(np.isfinite(lin))
+    assert float(lin.min()) >= 0.0
+
+
+def test_non_numeric_inputs_raise_domain_errors() -> None:
+    bad_vals: tuple[object, ...] = (None, "bad", object(), True)
+    for bad in bad_vals:
+        with pytest.raises(physical.FrameError):
+            physical.OceanState(wind_speed=bad)  # type: ignore[arg-type]
+        with pytest.raises(physical.FrameError):
+            physical.OceanState(wind_dir=(bad, 0.0))  # type: ignore[arg-type]
+        with pytest.raises(physical.FrameError):
+            physical.AtmosphereState(turbidity=bad)  # type: ignore[arg-type]
+
+    kx, ky = ocean.fft_wavenumber_grid(16, 16, 100.0)
+    for bad in bad_vals:
+        with pytest.raises(ocean.OceanError):
+            ocean.jonswap_spectrum(kx, ky, wind_speed=bad)  # type: ignore[arg-type]
+        with pytest.raises(ocean.OceanError):
+            ocean.jonswap_spectrum(kx, ky, wind_dir=(bad, 0.0))  # type: ignore[arg-type]
+        with pytest.raises(ocean.OceanError):
+            ocean.fft_wavenumber_grid(16, 16, bad)  # type: ignore[arg-type]
+        with pytest.raises(ocean.OceanError):
+            ocean.deep_water_omega(np.array([1.0]), gravity=bad)  # type: ignore[arg-type]
+
+
+def test_cleanup_uses_bounded_proc_wait_and_handles_timeout_expired(
+    workspace: WorkspaceFilesystem, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wait_timeouts: list[float | None] = []
+
+    class _StubStdin:
+        def write(self, _data: bytes) -> int:
+            return 0
+
+        def flush(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class _UnkillableProc:
+        stdin = _StubStdin()
+        killed = False
+
+        def poll(self) -> int | None:
+            return None
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, timeout: float | None = None) -> int:
+            wait_timeouts.append(timeout)
+            raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=timeout or 0.0)
+
+    proc = _UnkillableProc()
+    monkeypatch.setattr(media.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(media.subprocess, "Popen", lambda *a, **k: proc)
+
+    with pytest.raises(media.MediaSineError, match="wall-clock timeout"):
+        media.encode_rgb24_stream(
+            workspace,
+            "bounded_wait.mp4",
+            lambda _i: bytes(8 * 8 * 3),
+            width=8,
+            height=8,
+            frames=2,
+            fps=2,
+            timeout=0.05,
+        )
+    assert proc.killed
+    assert any(t is not None and 0.0 < t <= 2.0 for t in wait_timeouts)

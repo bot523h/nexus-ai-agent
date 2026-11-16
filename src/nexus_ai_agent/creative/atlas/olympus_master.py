@@ -149,17 +149,16 @@ def _write_wav(
     return target.stat().st_size
 
 
-def _grade_physical_frame(
-    raw: bytes, width: int, height: int, *, clut: np.ndarray, seed: int
-) -> bytes:
-    """Grade one physical ``rgb24`` frame through ACEScg, ACES tone-map, HALD CLUT & grain."""
-    srgb = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 3).astype(np.float64) / 255.0
-    linear = np.clip(srgb, 0.0, 1.0) ** 2.2
-    ap1 = np.maximum(film.aces_ap0_to_acescg(linear), 0.0)
+def _grade_physical_frame(linear_srgb: np.ndarray, *, clut: np.ndarray, seed: int) -> bytes:
+    """Grade scene-referred linear sRGB/D65 radiance through ACES AP0->AP1, single
+    ACES tone-map, HALD CLUT, film grain, and exact IEC 61966-2-1 sRGB OETF."""
+    ap0 = film.linear_srgb_d65_to_aces_ap0_d60(linear_srgb)
+    ap1 = np.maximum(film.aces_ap0_to_acescg(ap0), 0.0)
     mapped = film.aces_tone_map(ap1)
     clut_graded = film.apply_hald_clut(mapped, clut, level=8)
     grained = film.film_grain(clut_graded, amount=0.015, seed=seed)
-    out = np.round(np.clip(grained, 0.0, 1.0) * 255.0).astype(np.uint8)
+    encoded = film.linear_to_srgb_oetf(np.clip(grained, 0.0, 1.0))
+    out = np.round(encoded * 255.0).astype(np.uint8)
     return out.tobytes()
 
 
@@ -249,15 +248,21 @@ def render_master(
         )
     )
 
-    # --- stage 5: physical frames + ACES/HALD grading, persisted one at a time ---
+    # --- stage 5: linear physical radiance + single-pass ACES/HALD grading --------
     frame_dir = f"{out_dir}/frames"
     frame_hashes: list[str] = []
     clut = film.hald_identity_clut(level=8)
     for i in range(frames):
-        raw_physical = physical.generate_physical_atlas_frame_rgb24(
-            i, frames, frame_width, frame_width, ocean_state, atmos_state, seed=7
+        linear_physical = physical.generate_physical_atlas_frame_linear_rgb(
+            i,
+            width=frame_width,
+            height=frame_width,
+            ocean=ocean_state,
+            atmo=atmos_state,
+            total_frames=frames,
+            seed=7,
         )
-        raw = _grade_physical_frame(raw_physical, frame_width, frame_width, clut=clut, seed=7 + i)
+        raw = _grade_physical_frame(linear_physical, clut=clut, seed=7 + i)
         rel = f"{frame_dir}/frame_{i:04d}.raw"
         filesystem.write_bytes(rel, raw, create_parents=True)
         frame_hashes.append(_digest(filesystem.read_bytes(rel, max_bytes=1 << 24)))

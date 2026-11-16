@@ -201,8 +201,10 @@ def encode_rgb24_stream(
         finally:
             timer.cancel()
             if proc.poll() is None:
-                proc.kill()
-                proc.wait()
+                with contextlib.suppress(OSError):
+                    proc.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+                    proc.wait(timeout=2.0)
             if proc.stdin is not None:
                 with contextlib.suppress(OSError, ValueError):
                     proc.stdin.close()
