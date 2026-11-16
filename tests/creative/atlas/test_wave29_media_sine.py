@@ -11,8 +11,10 @@ the honest instrument for them.
 from __future__ import annotations
 
 import subprocess
+import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -170,6 +172,13 @@ def test_refuse_bad_codec(workspace: WorkspaceFilesystem) -> None:
 def test_refuse_nonpositive_encode_timeout(workspace: WorkspaceFilesystem) -> None:
     with pytest.raises(m.MediaSineError):
         _encode(workspace, "c.mp4", timeout=0.0)
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(m.MediaSineError):
+            _encode(workspace, "c.mp4", timeout=bad)
+        with pytest.raises(m.MediaSineError):
+            m.run_process(["true"], timeout=bad)
+        with pytest.raises(m.MediaSineError):
+            m.probe_media(workspace, "c.mp4", timeout=bad)
 
 
 def test_refuse_frame_of_wrong_size(
@@ -265,6 +274,108 @@ def test_encode_exceeding_deadline_is_refused(
             timeout=0.01,
         )
     assert procs and procs[0].killed
+
+
+def test_blocking_stdin_write_is_killed_by_watchdog_under_one_second(
+    workspace: WorkspaceFilesystem, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real subprocess that never drains stdin fills the pipe buffer and blocks write();
+    the watchdog must kill it and raise MediaSineError before 1 second elapses."""
+    spawned: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+
+    def _sleeping_consumer(_argv: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
+        proc = real_popen(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            stdin=kwargs.get("stdin"),
+            stdout=kwargs.get("stdout"),
+            stderr=kwargs.get("stderr"),
+        )
+        spawned.append(proc)
+        return proc
+
+    monkeypatch.setattr(m.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(m.subprocess, "Popen", _sleeping_consumer)
+    large_frame = b"\x5a" * (256 * 256 * 3)  # 192 KiB > OS pipe buffer; 8 frames = 1.5 MiB
+    t0 = time.monotonic()
+    with pytest.raises(m.MediaSineError, match="wall-clock timeout"):
+        m.encode_rgb24_stream(
+            workspace,
+            "blocked_pipe.mp4",
+            lambda _i: large_frame,
+            width=256,
+            height=256,
+            frames=8,
+            fps=8,
+            timeout=0.15,
+        )
+    elapsed = time.monotonic() - t0
+    assert elapsed < 1.0, f"watchdog took too long: {elapsed:.3f}s"
+    assert spawned and spawned[0].poll() is not None
+
+
+def test_probe_shares_remaining_deadline_budget(
+    workspace: WorkspaceFilesystem, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen_probe_timeouts: list[float] = []
+    out_file = workspace.root / "shared.mp4"
+
+    class _WritingProc(_FakeProc):
+        def wait(self, timeout: float | None = None) -> int:
+            out_file.write_bytes(b"mp4")
+            time.sleep(0.06)
+            return super().wait(timeout=timeout)
+
+    def _fake_probe(_fs: WorkspaceFilesystem, _rel: str, *, timeout: float = 0.0) -> m.MediaProbe:
+        seen_probe_timeouts.append(timeout)
+        return m.MediaProbe(
+            codec="h264",
+            width=8,
+            height=8,
+            nb_frames=2,
+            duration=m.Fraction(1),
+            pix_fmt="yuv420p",
+        )
+
+    monkeypatch.setattr(m.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(m.subprocess, "Popen", lambda *a, **k: _WritingProc(0))
+    monkeypatch.setattr(m, "probe_media", _fake_probe)
+
+    m.encode_rgb24_stream(
+        workspace,
+        "shared.mp4",
+        lambda _i: bytes(8 * 8 * 3),
+        width=8,
+        height=8,
+        frames=2,
+        fps=2,
+        timeout=0.30,
+    )
+    assert len(seen_probe_timeouts) == 1
+    assert 0.0 < seen_probe_timeouts[0] < 0.28
+
+    # When the budget is already exhausted before probe, probe_media must not be called.
+    seen_probe_timeouts.clear()
+
+    class _ExhaustingProc(_FakeProc):
+        def wait(self, timeout: float | None = None) -> int:
+            out_file.write_bytes(b"mp4")
+            time.sleep(0.08)
+            return super().wait(timeout=timeout)
+
+    monkeypatch.setattr(m.subprocess, "Popen", lambda *a, **k: _ExhaustingProc(0))
+    with pytest.raises(m.MediaSineError, match="wall-clock timeout"):
+        m.encode_rgb24_stream(
+            workspace,
+            "shared.mp4",
+            lambda _i: bytes(8 * 8 * 3),
+            width=8,
+            height=8,
+            frames=2,
+            fps=2,
+            timeout=0.05,
+        )
+    assert seen_probe_timeouts == []
 
 
 def test_refuse_ffmpeg_nonzero_exit(

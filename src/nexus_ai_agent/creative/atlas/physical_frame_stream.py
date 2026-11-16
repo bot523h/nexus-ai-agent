@@ -76,18 +76,26 @@ class OceanState:
     extent: float = 180.0
 
     def __post_init__(self) -> None:
-        if not (0.1 <= self.wind_speed <= 60.0):
-            raise FrameError("wind_speed must be in [0.1, 60] m/s")
-        if not (1.0e3 <= self.fetch <= 1.0e7):
-            raise FrameError("fetch must be in [1e3, 1e7] m")
-        if not (0.0 < self.fps <= 240.0):
-            raise FrameError("fps must be in (0, 240]")
-        if not (16 <= self.grid <= ocean.MAX_GRID):
+        if not math.isfinite(self.wind_speed) or not (0.1 <= self.wind_speed <= 60.0):
+            raise FrameError("wind_speed must be finite and in [0.1, 60] m/s")
+        if not math.isfinite(self.fetch) or not (1.0e3 <= self.fetch <= 1.0e7):
+            raise FrameError("fetch must be finite and in [1e3, 1e7] m")
+        if not math.isfinite(self.fps) or not (0.0 < self.fps <= 240.0):
+            raise FrameError("fps must be finite and in (0, 240]")
+        if (
+            not isinstance(self.grid, int)
+            or isinstance(self.grid, bool)
+            or not (16 <= self.grid <= ocean.MAX_GRID)
+        ):
             raise FrameError(f"grid must be in [16, {ocean.MAX_GRID}]")
-        if self.extent <= 0.0:
-            raise FrameError("extent must be positive")
+        if not math.isfinite(self.extent) or self.extent <= 0.0:
+            raise FrameError("extent must be positive and finite")
         if len(self.wind_dir) != 2:
             raise FrameError("wind_dir must be a 2-vector")
+        if not all(math.isfinite(float(c)) for c in self.wind_dir):
+            raise FrameError("wind_dir components must be finite")
+        if math.hypot(float(self.wind_dir[0]), float(self.wind_dir[1])) < 1e-12:
+            raise FrameError("wind_dir must be non-zero")
         omega_p = 22.0 * ((ocean.GRAVITY**2) / (self.wind_speed * self.fetch)) ** (1.0 / 3.0)
         k_p = omega_p * omega_p / ocean.GRAVITY
         k_nyquist = math.pi * self.grid / self.extent
@@ -106,16 +114,22 @@ class AtmosphereState:
     turbidity: float = 1.0
     sun_intensity: float = 20.0
     camera_height_m: float = 3.0
+    sun_azimuth_deg: float = SUN_AZIMUTH_DEG
+    fov_deg: float = CAMERA_FOV_DEG
 
     def __post_init__(self) -> None:
-        if not (0.0 < self.sun_elevation_deg <= 90.0):
-            raise FrameError("sun_elevation_deg must be in (0, 90]")
-        if self.turbidity <= 0.0:
-            raise FrameError("turbidity must be positive")
-        if self.sun_intensity < 0.0:
-            raise FrameError("sun_intensity must be non-negative")
-        if self.camera_height_m <= 0.0:
-            raise FrameError("camera_height_m must be positive")
+        if not math.isfinite(self.sun_elevation_deg) or not (0.0 < self.sun_elevation_deg <= 90.0):
+            raise FrameError("sun_elevation_deg must be finite and in (0, 90]")
+        if not math.isfinite(self.turbidity) or self.turbidity <= 0.0:
+            raise FrameError("turbidity must be positive and finite")
+        if not math.isfinite(self.sun_intensity) or self.sun_intensity < 0.0:
+            raise FrameError("sun_intensity must be non-negative and finite")
+        if not math.isfinite(self.camera_height_m) or self.camera_height_m <= 0.0:
+            raise FrameError("camera_height_m must be positive and finite")
+        if not math.isfinite(self.sun_azimuth_deg):
+            raise FrameError("sun_azimuth_deg must be finite")
+        if not math.isfinite(self.fov_deg) or not (0.0 < self.fov_deg < 180.0):
+            raise FrameError("fov_deg must be finite and in (0, 180)")
 
 
 @lru_cache(maxsize=8)
@@ -133,7 +147,7 @@ def spectrum_for(ocean_state: OceanState) -> ocean.OceanSpectrum:
 
 def _sun_direction(atmos: AtmosphereState) -> np.ndarray:
     el = math.radians(atmos.sun_elevation_deg)
-    az = math.radians(SUN_AZIMUTH_DEG)
+    az = math.radians(atmos.sun_azimuth_deg)
     return np.array([math.cos(el) * math.sin(az), math.sin(el), math.cos(el) * math.cos(az)])
 
 
@@ -222,7 +236,7 @@ def generate_physical_atlas_frame_rgb24(
     intensity = atmosphere_state.sun_intensity if sun[1] > 0.0 else 0.0
     turbidity = atmosphere_state.turbidity
     body = np.array(BODY_RGB) * intensity
-    tan_half = math.tan(math.radians(CAMERA_FOV_DEG) / 2.0)
+    tan_half = math.tan(math.radians(atmosphere_state.fov_deg) / 2.0)
     aspect = width / height
     camera_h = atmosphere_state.camera_height_m
     frame = np.empty((height, width, 3), dtype=np.uint8)

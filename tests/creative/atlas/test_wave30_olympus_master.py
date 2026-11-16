@@ -70,10 +70,20 @@ def test_render_master_ledger_digest_changes_with_input(workspace: WorkspaceFile
 
 
 def test_render_master_writes_real_artifacts(workspace: WorkspaceFilesystem) -> None:
-    om.render_master(_bible(), workspace, side=32, frames=4, fps=4)
+    ledger = om.render_master(_bible(), workspace, side=32, frames=4, fps=4)
     assert (workspace.root / "olympus_master" / "master_audio.wav").is_file()
     assert (workspace.root / "olympus_master" / "continuity.json").is_file()
-    assert (workspace.root / "olympus_master" / "frames" / "frame_0000.raw").is_file()
+    frame0_path = workspace.root / "olympus_master" / "frames" / "frame_0000.raw"
+    assert frame0_path.is_file()
+    names = {s.name: s for s in ledger.stages}
+    assert "ACES" in names["grade_frames"].detail
+    # Physical frame is graded through ACES/HALD/grain rather than written ungraded.
+    from nexus_ai_agent.creative.atlas import physical_frame_stream as physical
+
+    ungraded = physical.generate_physical_atlas_frame_rgb24(
+        0, 4, 32, 32, physical.OceanState(fps=4.0), physical.AtmosphereState(), seed=7
+    )
+    assert frame0_path.read_bytes() != ungraded
 
 
 def test_render_master_audio_is_valid_wav(workspace: WorkspaceFilesystem) -> None:

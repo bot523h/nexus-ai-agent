@@ -18,6 +18,7 @@ deep-water dispersion relation is verified against the analytic ``omega = sqrt(g
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Final
 
@@ -99,9 +100,18 @@ class OceanSpectrum:
         wd = np.asarray(self.wind_dir, dtype=np.float64)
         if wd.shape != (2,):
             raise OceanError("wind_dir must be a 2-vector")
+        if not np.all(np.isfinite(wd)):
+            raise OceanError("wind_dir contains NaN/Inf")
         n = float(np.linalg.norm(wd))
         if n < 1e-12:
             raise OceanError("wind_dir must be non-zero")
+        for name, val in (
+            ("peak_omega", self.peak_omega),
+            ("peak_wavenumber", self.peak_wavenumber),
+            ("phillips_alpha", self.phillips_alpha),
+        ):
+            if not math.isfinite(val):
+                raise OceanError(f"{name} must be finite")
         object.__setattr__(self, "amplitudes", amp)
         object.__setattr__(self, "omega", om)
         object.__setattr__(self, "wind_dir", wd / n)
@@ -110,10 +120,12 @@ class OceanSpectrum:
 def deep_water_omega(k: np.ndarray, *, gravity: float = GRAVITY) -> np.ndarray:
     """Deep-water dispersion relation ``omega = sqrt(g k)`` (k >= 0)."""
     kk = np.asarray(k, dtype=np.float64)
+    if not np.all(np.isfinite(kk)):
+        raise OceanError("wavenumber contains NaN/Inf")
     if np.any(kk < 0.0):
         raise OceanError("wavenumber must be non-negative")
-    if gravity <= 0.0:
-        raise OceanError("gravity must be positive")
+    if not math.isfinite(gravity) or gravity <= 0.0:
+        raise OceanError("gravity must be positive and finite")
     out: np.ndarray = np.sqrt(gravity * kk)
     return out
 
@@ -150,16 +162,16 @@ def jonswap_spectrum(
     :func:`spectral_height_field`, build the grid with :func:`fft_wavenumber_grid`
     using the same ``extent``, so the bins are the FFT bins of the height field.
     """
-    if wind_speed <= 0.0:
-        raise OceanError("wind_speed must be positive")
-    if peak_sharpness <= 0.0:
-        raise OceanError("peak_sharpness must be positive")
-    if fetch <= 0.0:
-        raise OceanError("fetch must be positive")
-    if gravity <= 0.0:
-        raise OceanError("gravity must be positive")
-    if amplitude_scale < 0.0:
-        raise OceanError("amplitude_scale must be non-negative")
+    if not math.isfinite(wind_speed) or wind_speed <= 0.0:
+        raise OceanError("wind_speed must be positive and finite")
+    if not math.isfinite(peak_sharpness) or peak_sharpness <= 0.0:
+        raise OceanError("peak_sharpness must be positive and finite")
+    if not math.isfinite(fetch) or fetch <= 0.0:
+        raise OceanError("fetch must be positive and finite")
+    if not math.isfinite(gravity) or gravity <= 0.0:
+        raise OceanError("gravity must be positive and finite")
+    if not math.isfinite(amplitude_scale) or amplitude_scale < 0.0:
+        raise OceanError("amplitude_scale must be non-negative and finite")
 
     KX = np.asarray(kx, dtype=np.float64)
     KY = np.asarray(ky, dtype=np.float64)
@@ -171,6 +183,8 @@ def jonswap_spectrum(
     wd = np.asarray(wind_dir, dtype=np.float64)
     if wd.shape != (2,):
         raise OceanError("wind_dir must be a 2-vector")
+    if not np.all(np.isfinite(wd)):
+        raise OceanError("wind_dir contains NaN/Inf")
     wn = float(np.linalg.norm(wd))
     if wn < 1e-12:
         raise OceanError("wind_dir must be non-zero")
@@ -228,8 +242,8 @@ def fft_wavenumber_grid(nx: int, ny: int, extent: float) -> tuple[np.ndarray, np
     """Wavenumber meshgrid ``(KX, KY)`` in FFT ordering for an ``extent``-metre domain."""
     if nx < 2 or ny < 2 or nx > MAX_GRID or ny > MAX_GRID:
         raise OceanError(f"grid must be in [2, {MAX_GRID}] per axis")
-    if extent <= 0.0:
-        raise OceanError("extent must be positive")
+    if not math.isfinite(extent) or extent <= 0.0:
+        raise OceanError("extent must be positive and finite")
     kx = np.fft.fftfreq(nx, d=extent / nx) * 2.0 * np.pi
     ky = np.fft.fftfreq(ny, d=extent / ny) * 2.0 * np.pi
     KX, KY = np.meshgrid(kx, ky)
@@ -259,9 +273,9 @@ def spectral_height_field(
     Identical inputs reproduce identical bytes.
     """
     _check_seed(seed)
-    if extent <= 0.0:
-        raise OceanError("extent must be positive")
-    if not np.isfinite(time):
+    if not math.isfinite(extent) or extent <= 0.0:
+        raise OceanError("extent must be positive and finite")
+    if not math.isfinite(time):
         raise OceanError("time must be finite")
     amp = spectrum.amplitudes
     ny, nx = amp.shape
@@ -297,10 +311,10 @@ def gerstner_displacement(
     Returns ``(dx, dy)`` lateral displacement of each surface sample. Steepness
     is clamped to ``[0, 1]`` (the physical non-self-intersecting limit is 1).
     """
-    if not (0.0 <= steepness <= 1.0):
-        raise OceanError("steepness must lie in [0, 1]")
-    if wavelength <= 0.0:
-        raise OceanError("wavelength must be positive")
+    if not math.isfinite(steepness) or not (0.0 <= steepness <= 1.0):
+        raise OceanError("steepness must be finite and lie in [0, 1]")
+    if not math.isfinite(wavelength) or wavelength <= 0.0:
+        raise OceanError("wavelength must be positive and finite")
     h = np.asarray(height, dtype=np.float64)
     if h.ndim != 2:
         raise OceanError("height must be a 2-D array")
@@ -309,6 +323,8 @@ def gerstner_displacement(
     wd = np.asarray(wind_dir, dtype=np.float64)
     if wd.shape != (2,):
         raise OceanError("wind_dir must be a 2-vector")
+    if not np.all(np.isfinite(wd)):
+        raise OceanError("wind_dir contains NaN/Inf")
     wn = float(np.linalg.norm(wd))
     if wn < 1e-12:
         raise OceanError("wind_dir must be non-zero")
@@ -347,10 +363,10 @@ class SWEState:
             raise OceanError("state contains NaN/Inf")
         if np.any(h <= 0.0):
             raise OceanError("water depth h must be positive everywhere")
-        if self.dx <= 0.0:
-            raise OceanError("dx must be positive")
-        if self.g <= 0.0:
-            raise OceanError("g must be positive")
+        if not math.isfinite(self.dx) or self.dx <= 0.0:
+            raise OceanError("dx must be positive and finite")
+        if not math.isfinite(self.g) or self.g <= 0.0:
+            raise OceanError("g must be positive and finite")
         hv = None
         if self.hv is not None:
             hv = np.asarray(self.hv, dtype=np.float64)
@@ -367,8 +383,8 @@ class SWEState:
 
 def cfl_number(state: SWEState, dt: float) -> float:
     """CFL number ``dt * (|u| + sqrt(g h)) / dx`` (max over the grid)."""
-    if dt <= 0.0:
-        raise OceanError("dt must be positive")
+    if not math.isfinite(dt) or dt <= 0.0:
+        raise OceanError("dt must be positive and finite")
     speed = np.abs(state.hu / state.h) + np.sqrt(state.g * state.h)
     c = float(speed.max()) * dt / state.dx
     return c

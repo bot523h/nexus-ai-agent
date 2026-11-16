@@ -20,10 +20,13 @@ binary name so the caller can report BLOCKED rather than pretend the render happ
 
 from __future__ import annotations
 
+import contextlib
 import json
+import math
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -94,8 +97,8 @@ def ffmpeg_available() -> bool:
 
 
 def run_process(argv: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
-    if timeout <= 0.0:
-        raise MediaSineError("timeout must be positive")
+    if not math.isfinite(timeout) or timeout <= 0.0:
+        raise MediaSineError("timeout must be positive and finite")
     return subprocess.run(  # noqa: S603 - argument list, never shell=True
         argv,
         capture_output=True,
@@ -143,8 +146,8 @@ def encode_rgb24_stream(
         raise MediaSineError("fps must be an int in [1, 240]")
     if codec not in {"libx264", "mpeg4"}:
         raise MediaSineError("codec must be 'libx264' or 'mpeg4'")
-    if timeout <= 0.0:
-        raise MediaSineError("timeout must be positive")
+    if not math.isfinite(timeout) or timeout <= 0.0:
+        raise MediaSineError("timeout must be positive and finite")
 
     w = _even(width, "width")
     h = _even(height, "height")
@@ -177,17 +180,34 @@ def encode_rgb24_stream(
         str(target),
     ]
     deadline = time.monotonic() + timeout
+    timed_out = threading.Event()
     with tempfile.TemporaryFile() as err_file:
         proc = subprocess.Popen(  # noqa: S603 - argument list, never shell=True
             argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=err_file
         )
+
+        def _watchdog_kill() -> None:
+            timed_out.set()
+            if proc.poll() is None:
+                with contextlib.suppress(OSError):
+                    proc.kill()
+
+        timer = threading.Timer(max(deadline - time.monotonic(), 0.0), _watchdog_kill)
+        timer.daemon = True
+        timer.start()
         try:
-            _pump_frames(proc, frame_source, frames, expected, deadline)
+            _pump_frames(proc, frame_source, frames, expected, deadline, timed_out)
             returncode = _wait_until(proc, deadline)
         finally:
+            timer.cancel()
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
+            if proc.stdin is not None:
+                with contextlib.suppress(OSError, ValueError):
+                    proc.stdin.close()
+        if timed_out.is_set():
+            raise MediaSineError("encode exceeded its wall-clock timeout")
         if returncode != 0:
             err_file.seek(0)
             detail = err_file.read().decode("utf-8", "replace").strip()[:400]
@@ -195,7 +215,10 @@ def encode_rgb24_stream(
     if not target.is_file():
         raise MediaSineError("ffmpeg reported success but no output file exists")
 
-    probe = probe_media(filesystem, relative_path, timeout=timeout)
+    remaining_probe_timeout = deadline - time.monotonic()
+    if remaining_probe_timeout <= 0.0:
+        raise MediaSineError("encode/probe exceeded its wall-clock timeout")
+    probe = probe_media(filesystem, relative_path, timeout=remaining_probe_timeout)
     if (probe.width, probe.height) != (w, h):
         raise MediaSineError(f"probe geometry {probe.width}x{probe.height} != requested {w}x{h}")
     if probe.nb_frames != frames:
@@ -211,23 +234,31 @@ def _pump_frames(
     frames: int,
     expected: int,
     deadline: float,
+    timed_out: threading.Event | None = None,
 ) -> None:
     stdin = proc.stdin
     if stdin is None:
         raise MediaSineError("ffmpeg stdin is unavailable")
+    flush = getattr(stdin, "flush", None)
     for index in range(frames):
-        if time.monotonic() > deadline:
+        if (timed_out is not None and timed_out.is_set()) or time.monotonic() > deadline:
             raise MediaSineError("encode exceeded its wall-clock timeout")
         data = frame_source(index)
         if len(data) != expected:
             raise MediaSineError(f"frame {index} has {len(data)} bytes, expected {expected}")
         try:
             stdin.write(data)
-        except BrokenPipeError as exc:
+            if callable(flush):
+                flush()
+        except (BrokenPipeError, OSError) as exc:
+            if (timed_out is not None and timed_out.is_set()) or time.monotonic() > deadline:
+                raise MediaSineError("encode exceeded its wall-clock timeout") from exc
             raise MediaSineError("ffmpeg closed its input before every frame was written") from exc
     try:
         stdin.close()
-    except BrokenPipeError as exc:
+    except (BrokenPipeError, OSError) as exc:
+        if (timed_out is not None and timed_out.is_set()) or time.monotonic() > deadline:
+            raise MediaSineError("encode exceeded its wall-clock timeout") from exc
         raise MediaSineError("ffmpeg closed its input before every frame was written") from exc
 
 
@@ -243,6 +274,8 @@ def probe_media(
     filesystem: WorkspaceFilesystem, relative_path: str, *, timeout: float = DEFAULT_TIMEOUT
 ) -> MediaProbe:
     """Probe a media file with ``ffprobe`` and return its verified geometry."""
+    if not math.isfinite(timeout) or timeout <= 0.0:
+        raise MediaSineError("timeout must be positive and finite")
     ffprobe = require_binary("ffprobe")
     target = filesystem.resolve(relative_path)
     if not target.is_file():

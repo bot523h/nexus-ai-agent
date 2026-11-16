@@ -7,11 +7,13 @@ master-render pipeline:
 1. compile a story into an edit plan (:mod:`titan_feature_film_compiler`);
 2. analyse continuity across episodes (:mod:`showrunner_bible`);
 3. synthesise per-shot audio events diegetically (:mod:`diegetic_modal_foley`);
-4. render every frame physically: a fetch-limited JONSWAP sea, a Rayleigh sky and
-   Fresnel water (:mod:`physical_frame_stream`), persisted one raw frame at a time;
+4. render every frame physically (a fetch-limited JONSWAP sea, a Rayleigh sky and
+   Fresnel water via :mod:`physical_frame_stream`) and colour-grade each physical
+   frame through the ACES / HALD / film-grain pipeline (:mod:`aces_hald_film_optic`),
+   persisted one raw frame at a time;
 5. ray-march the lighting term for a fixture (:mod:`sdf_global_illumination`);
 6. place the audio onto a timeline and write a real mixed WAV;
-7. encode a *real* H.264 clip by streaming the persisted physical frames into
+7. encode a *real* H.264 clip by streaming the persisted graded physical frames into
    FFmpeg over stdin (:mod:`media_sine`), verifying each frame digest, then re-probe
    it;
 8. persist a canonical, digest-protected master ledger through the repository's
@@ -32,6 +34,9 @@ from typing import Any, Final
 
 import numpy as np
 
+from nexus_ai_agent.creative.atlas import (
+    aces_hald_film_optic as film,
+)
 from nexus_ai_agent.creative.atlas import (
     buoyant_pyro_blackbody as pyro,
 )
@@ -144,6 +149,20 @@ def _write_wav(
     return target.stat().st_size
 
 
+def _grade_physical_frame(
+    raw: bytes, width: int, height: int, *, clut: np.ndarray, seed: int
+) -> bytes:
+    """Grade one physical ``rgb24`` frame through ACEScg, ACES tone-map, HALD CLUT & grain."""
+    srgb = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 3).astype(np.float64) / 255.0
+    linear = np.clip(srgb, 0.0, 1.0) ** 2.2
+    ap1 = np.maximum(film.aces_ap0_to_acescg(linear), 0.0)
+    mapped = film.aces_tone_map(ap1)
+    clut_graded = film.apply_hald_clut(mapped, clut, level=8)
+    grained = film.film_grain(clut_graded, amount=0.015, seed=seed)
+    out = np.round(np.clip(grained, 0.0, 1.0) * 255.0).astype(np.uint8)
+    return out.tobytes()
+
+
 def render_master(
     bible: ShowrunnerBible,
     filesystem: WorkspaceFilesystem,
@@ -230,13 +249,15 @@ def render_master(
         )
     )
 
-    # --- stage 5: physical frames, persisted one at a time (REAL COMPUTE) ---------
+    # --- stage 5: physical frames + ACES/HALD grading, persisted one at a time ---
     frame_dir = f"{out_dir}/frames"
     frame_hashes: list[str] = []
+    clut = film.hald_identity_clut(level=8)
     for i in range(frames):
-        raw = physical.generate_physical_atlas_frame_rgb24(
+        raw_physical = physical.generate_physical_atlas_frame_rgb24(
             i, frames, frame_width, frame_width, ocean_state, atmos_state, seed=7
         )
+        raw = _grade_physical_frame(raw_physical, frame_width, frame_width, clut=clut, seed=7 + i)
         rel = f"{frame_dir}/frame_{i:04d}.raw"
         filesystem.write_bytes(rel, raw, create_parents=True)
         frame_hashes.append(_digest(filesystem.read_bytes(rel, max_bytes=1 << 24)))
@@ -245,8 +266,8 @@ def render_master(
         MasterStage(
             "grade_frames",
             "COMPUTED",
-            f"{frames} physical frames at {frame_width}x{frame_width} "
-            "(JONSWAP sea, Rayleigh sky, Fresnel water)",
+            f"{frames} physical ACES-graded frames at {frame_width}x{frame_width} "
+            "(JONSWAP sea, Rayleigh sky, Fresnel water, ACES/HALD/grain)",
         )
     )
 

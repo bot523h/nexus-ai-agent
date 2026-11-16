@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
+import time
 import tracemalloc
 from pathlib import Path
 from typing import Any
@@ -208,6 +210,85 @@ def test_atmosphere_bounds_are_enforced() -> None:
         physical.AtmosphereState(sun_intensity=-1.0)
     with pytest.raises(physical.FrameError):
         physical.AtmosphereState(camera_height_m=0.0)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_physical_and_ocean_inputs_are_refused(bad: float) -> None:
+    for kw in (
+        {"sun_elevation_deg": bad},
+        {"turbidity": bad},
+        {"sun_intensity": bad},
+        {"camera_height_m": bad},
+        {"sun_azimuth_deg": bad},
+        {"fov_deg": bad},
+    ):
+        with pytest.raises(physical.FrameError):
+            physical.AtmosphereState(**kw)
+
+    for kw in (
+        {"wind_speed": bad},
+        {"fetch": bad},
+        {"fps": bad},
+        {"extent": bad},
+        {"wind_dir": (bad, 0.0)},
+        {"wind_dir": (1.0, bad)},
+    ):
+        with pytest.raises(physical.FrameError):
+            physical.OceanState(**kw)  # type: ignore[arg-type]
+
+    kx, ky = ocean.fft_wavenumber_grid(16, 16, 100.0)
+    for kw in (
+        {"wind_speed": bad},
+        {"peak_sharpness": bad},
+        {"fetch": bad},
+        {"gravity": bad},
+        {"amplitude_scale": bad},
+        {"wind_dir": (bad, 0.0)},
+        {"wind_dir": (1.0, bad)},
+    ):
+        with pytest.raises(ocean.OceanError):
+            ocean.jonswap_spectrum(kx, ky, **kw)  # type: ignore[arg-type]
+
+    spec = ocean.jonswap_spectrum(kx, ky)
+    with pytest.raises(ocean.OceanError):
+        ocean.spectral_height_field(spec, extent=bad)
+    with pytest.raises(ocean.OceanError):
+        ocean.spectral_height_field(spec, time=bad)
+
+
+def test_stalled_consumer_pipe_write_aborts_under_one_second(
+    workspace: WorkspaceFilesystem, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spawned: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+
+    def _stalled_popen(_argv: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
+        proc = real_popen(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            stdin=kwargs.get("stdin"),
+            stdout=kwargs.get("stdout"),
+            stderr=kwargs.get("stderr"),
+        )
+        spawned.append(proc)
+        return proc
+
+    monkeypatch.setattr(media.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(media.subprocess, "Popen", _stalled_popen)
+    big = b"\x2a" * (256 * 256 * 3)
+    t0 = time.monotonic()
+    with pytest.raises(media.MediaSineError, match="wall-clock timeout"):
+        media.encode_rgb24_stream(
+            workspace,
+            "stalled.mp4",
+            lambda _i: big,
+            width=256,
+            height=256,
+            frames=8,
+            fps=8,
+            timeout=0.15,
+        )
+    assert time.monotonic() - t0 < 1.0
+    assert spawned and spawned[0].poll() is not None
 
 
 def test_memory_of_the_frame_stream_stays_under_the_cap() -> None:
