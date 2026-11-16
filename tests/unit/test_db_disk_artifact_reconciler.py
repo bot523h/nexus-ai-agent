@@ -32,16 +32,33 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _write_published(root: Path, job_id: str, name: str, payload: bytes, attempt: int | str | None):
+def _write_published(
+    root: Path,
+    job_id: str,
+    name: str,
+    payload: bytes,
+    attempt: int | str | None,
+    *,
+    content_digest: str | None = "measured",
+):
+    """Publish *payload* with the owner sidecar the real writer leaves behind.
+
+    The writer refreshes the sidecar with the measured ``content_digest`` right
+    after the atomic publish; the reconciler refuses to repair a crash-window
+    orphan whose sidecar cannot name the bytes it owns, so the fixture records it
+    by default and drops it on request (``content_digest=None``).
+    """
     job_dir = root / "published" / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     artifact = job_dir / name
     artifact.write_bytes(payload)
     sidecar = job_dir / f".{name}.owner"
-    sidecar.write_text(
-        json.dumps({"schema": 1, "job_id": job_id, "attempt": attempt}) + "\n",
-        encoding="utf-8",
-    )
+    document: dict[str, object] = {"schema": 1, "job_id": job_id, "attempt": attempt}
+    if content_digest is not None:
+        document["content_digest"] = (
+            f"sha256:{_sha256(payload)}" if content_digest == "measured" else content_digest
+        )
+    sidecar.write_text(json.dumps(document) + "\n", encoding="utf-8")
     return artifact, sidecar
 
 
@@ -474,15 +491,12 @@ async def test_quarantine_never_overwrites_an_existing_witness(
     assert len(receipts) == 2, receipts
 
 
-def test_unique_target_disambiguates_by_digest_then_counter(tmp_path: Path) -> None:
-    from nexus_ai_agent.maintenance.reconciler import _unique_target
+def test_quarantine_candidates_disambiguate_by_digest_then_counter(tmp_path: Path) -> None:
+    from nexus_ai_agent.maintenance.reconciler import _quarantine_candidates
 
-    (tmp_path / "out.mp4").write_bytes(b"a")
-    first = _unique_target(tmp_path, "out.mp4", "sha256:" + "11" * 32)
-    assert first.name == "out.111111111111.mp4"
-    first.write_bytes(b"b")
-    second = _unique_target(tmp_path, "out.mp4", "sha256:" + "11" * 32)
-    assert second.name == "out.111111111111-2.mp4"
+    candidates = _quarantine_candidates(tmp_path, "out.mp4", "sha256:" + "11" * 32)
+    names = [next(candidates).name for _ in range(3)]
+    assert names == ["out.mp4", "out.111111111111.mp4", "out.111111111111-2.mp4"]
 
 
 # ── The CLI closes the pools it opened (audit finding 1c) ────────────────────
@@ -531,3 +545,215 @@ def test_the_reconciler_cli_disposes_its_engines(tmp_path: Path, capsys) -> None
     report = json.loads(capsys.readouterr().out)
     assert report["schema"] == "nagar.db_disk_reconciliation.v1"
     assert db_module._engine is None, "the CLI left an engine open past its event loop"
+
+
+# ── F3: quarantine witness creation is atomic, not check-then-replace ────────
+#
+# `if not target.exists(): os.replace(src, target)` is a TOCTOU race: two
+# reconcilers scanning the same workspace can both see the name free, and the
+# second `os.replace` silently destroys the first witness.  These tests pin the
+# replacement: the destination must be *taken*, atomically, or the next name
+# used.
+
+
+def test_place_witness_never_overwrites_and_creates_the_name_atomically(
+    tmp_path: Path,
+) -> None:
+    from nexus_ai_agent.maintenance.reconciler import _place_witness
+
+    source = tmp_path / "src.bin"
+    source.write_bytes(b"witness")
+    existing = tmp_path / "target.bin"
+    existing.write_bytes(b"first")
+
+    assert _place_witness(source, existing) is False
+    assert existing.read_bytes() == b"first", "an existing witness was overwritten"
+    assert source.exists(), "a refused placement must not consume the source"
+
+    free = tmp_path / "free.bin"
+    assert _place_witness(source, free) is True
+    assert free.read_bytes() == b"witness"
+    assert not source.exists()
+
+
+def test_place_witness_uses_o_excl_when_the_filesystem_cannot_hardlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cross-device quarantine (EXDEV) must still take the name atomically."""
+    import errno
+
+    from nexus_ai_agent.maintenance import reconciler
+
+    def _no_link(*_args: object, **_kwargs: object) -> None:
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr(reconciler.os, "link", _no_link)
+    source = tmp_path / "src.bin"
+    source.write_bytes(b"across-devices")
+    taken = tmp_path / "taken.bin"
+    taken.write_bytes(b"first")
+    assert reconciler._place_witness(source, taken) is False
+    assert taken.read_bytes() == b"first"
+    free = tmp_path / "free.bin"
+    assert reconciler._place_witness(source, free) is True
+    assert free.read_bytes() == b"across-devices"
+    assert not source.exists()
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".")], "temp file leaked"
+
+
+def test_a_racing_quarantiner_cannot_steal_the_witness_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Simulate the interleaving the old code lost: name appears after the check.
+
+    With `exists()`-then-`replace()` the winner is written, then overwritten.  Here
+    the second writer must observe the taken name and fall through to the next
+    candidate, so both witnesses survive.
+    """
+    from nexus_ai_agent.maintenance import reconciler
+
+    destination = tmp_path / "quarantine"
+    destination.mkdir()
+    first, second = tmp_path / "a.mp4", tmp_path / "b.mp4"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+
+    real_link = reconciler.os.link
+    state = {"raced": False}
+
+    def _link_then_race(src: object, dst: object) -> None:
+        # Another reconciler wins the very name we are about to take.
+        if not state["raced"]:
+            state["raced"] = True
+            Path(str(dst)).write_bytes(b"intruder")
+        return real_link(src, dst)
+
+    monkeypatch.setattr(reconciler.os, "link", _link_then_race)
+    placed_first = reconciler._quarantine_witness(
+        first, destination, "out.mp4", "sha256:" + "11" * 32
+    )
+    monkeypatch.setattr(reconciler.os, "link", real_link)
+    placed_second = reconciler._quarantine_witness(
+        second, destination, "out.mp4", "sha256:" + "11" * 32
+    )
+    assert placed_first != placed_second
+    assert (destination / "out.mp4").read_bytes() == b"intruder"  # never overwritten
+    assert {placed_first.read_bytes(), placed_second.read_bytes()} == {b"first", b"second"}
+
+
+# ── F3: the crash window must prove attribution, or refuse ───────────────────
+#
+# `pending` is not a crash window: the queue has not granted (or has released)
+# the attempt, so no publication can legitimately exist.  And inside the window
+# the sidecar must name the bytes; without it the bytes are just a file.
+
+
+async def test_a_pending_row_is_never_repaired(tmp_path: Path, session_factory) -> None:
+    revision = await _commit_revision(tmp_path, session_factory)
+    artifact, _sidecar = _write_published(tmp_path, JOB_ID, "out.mp4", b"pending" * 16, 2)
+    queue = _FakeQueue(
+        {
+            JOB_ID: _Facts(
+                status="pending",
+                attempt=2,
+                result=None,
+                payload=_crash_window_payload(revision.revision_id),
+            )
+        }
+    )
+    report = await reconcile_published_artifacts_and_db(
+        tmp_path, session_factory, queue=queue, apply_repair=True
+    )
+    assert report.repaired == 0
+    assert report.quarantined == 1
+    assert not artifact.exists()
+    assert any("job status is 'pending'" in i.detail for i in report.issues), report.issues
+
+
+async def test_a_crash_window_sidecar_without_a_digest_is_unrepairable(
+    tmp_path: Path, session_factory
+) -> None:
+    """Bytes that no artifact can attribute are not "probably fine"."""
+    revision = await _commit_revision(tmp_path, session_factory)
+    artifact, _sidecar = _write_published(
+        tmp_path, JOB_ID, "out.mp4", b"unattributed" * 8, 3, content_digest=None
+    )
+    queue = _FakeQueue(
+        {
+            JOB_ID: _Facts(
+                status="verifying",
+                attempt=3,
+                result=None,
+                payload=_crash_window_payload(revision.revision_id),
+            )
+        }
+    )
+    report = await reconcile_published_artifacts_and_db(
+        tmp_path, session_factory, queue=queue, apply_repair=True
+    )
+    assert report.repaired == 0
+    assert not artifact.exists()
+    assert any("carries no content_digest" in i.detail for i in report.issues), report.issues
+
+
+async def test_a_crash_window_sidecar_digest_must_match_the_published_bytes(
+    tmp_path: Path, session_factory
+) -> None:
+    revision = await _commit_revision(tmp_path, session_factory)
+    artifact, _sidecar = _write_published(
+        tmp_path, JOB_ID, "out.mp4", b"replaced" * 8, 3, content_digest="sha256:" + "ab" * 32
+    )
+    queue = _FakeQueue(
+        {
+            JOB_ID: _Facts(
+                status="processing",
+                attempt=3,
+                result=None,
+                payload=_crash_window_payload(revision.revision_id),
+            )
+        }
+    )
+    report = await reconcile_published_artifacts_and_db(
+        tmp_path, session_factory, queue=queue, apply_repair=True
+    )
+    assert report.repaired == 0
+    assert not artifact.exists()
+    assert any("content_digest in the owner sidecar" in i.detail for i in report.issues)
+
+
+async def test_a_row_that_pins_two_different_revisions_is_ambiguity_not_authority(
+    tmp_path: Path, session_factory
+) -> None:
+    """`result` and `payload` disagreeing means we cannot choose; so we do not."""
+    revision = await _commit_revision(tmp_path, session_factory)
+    artifact, _sidecar = _write_published(tmp_path, JOB_ID, "out.mp4", b"ambiguous" * 8, 3)
+    payload_pin = _crash_window_payload(revision.revision_id)
+    queue = _FakeQueue(
+        {
+            JOB_ID: _Facts(
+                status="completed",
+                attempt=3,
+                result={"project_id": PROJECT_ID, "revision_id": "some-other-revision"},
+                payload=payload_pin,
+            )
+        }
+    )
+    report = await reconcile_published_artifacts_and_db(
+        tmp_path, session_factory, queue=queue, apply_repair=True
+    )
+    assert report.repaired == 0
+    assert report.quarantined == 1
+    assert any("conflicting revisions" in i.detail for i in report.issues), report.issues
+    assert not artifact.exists()
+
+
+def test_the_sidecar_writer_records_the_measured_digest() -> None:
+    """The reconciler's requirement is satisfiable: the writer measures, it doesn't guess."""
+    import inspect
+
+    from nexus_ai_agent.creative import render_jobs
+
+    source = inspect.getsource(render_jobs.creative_render_publication_callback)
+    assert "content_digest=content_address_of_file(" in source
+    signature = inspect.signature(render_jobs._write_sidecar)
+    assert signature.parameters["content_digest"].default is None

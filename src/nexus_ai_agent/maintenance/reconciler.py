@@ -43,11 +43,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import hashlib
 import json
 import os
+import secrets
+import shutil
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -65,12 +68,17 @@ _SIDECAR_SCHEMA = 1
 #: Job states in which *published* bytes can still belong to an attempt whose
 #: completion never landed.  This is the audit's Case A crash window: the bytes
 #: are already moved into ``published/<job_id>/`` while the row is still
-#: ``pending``/``processing``/``verifying``, because the publication, the
-#: confirm hook and ``_mark_completed`` are three separate steps and a crash
-#: between any two of them leaves exactly this state.  The failure states are
-#: excluded on purpose: the queue refused those bytes, so binding them would
-#: fabricate lineage the queue never granted.
-_UNFINISHED_STATUSES = frozenset({"pending", "processing", "verifying"})
+#: ``processing``/``verifying``, because the publication, the confirm hook and
+#: ``_mark_completed`` are three separate steps and a crash between any two of
+#: them leaves exactly this state.
+#:
+#: ``pending`` is **not** in this set.  A pending row means the queue has not
+#: (or no longer) granted this attempt the work: either it was never leased —
+#: and no publication can legitimately exist — or the lease was released back
+#: and a successor will own the same destination.  Repairing from a pending row
+#: would bind bytes to an attempt the queue never confirmed.  The failure states
+#: are excluded for the same reason: the queue refused those bytes.
+_CRASH_WINDOW_STATUSES = frozenset({"processing", "verifying"})
 
 #: Keys under which a job row may carry the project/revision pin.  ``result`` is
 #: the post-completion record; ``payload`` is the immutable admission record,
@@ -180,7 +188,11 @@ def _parse_sidecar(path: Path) -> tuple[dict[str, Any] | None, str | None]:
             attempt = int(text)
     if attempt is None:
         return None, "sidecar attempt is missing or not a positive integer"
-    return {"job_id": job_id, "attempt": attempt}, None
+    document_out: dict[str, Any] = {"job_id": job_id, "attempt": attempt}
+    content_digest = document.get("content_digest")
+    if isinstance(content_digest, str) and content_digest.strip():
+        document_out["content_digest"] = content_digest.strip()
+    return document_out, None
 
 
 def _quarantine_path(root: Path, job_id: str, attempt: int | None) -> Path:
@@ -191,27 +203,110 @@ def _quarantine_path(root: Path, job_id: str, attempt: int | None) -> Path:
     return root / _QUARANTINE_DIR / f"{safe_job}_{token}_reconciled"
 
 
-def _unique_target(directory: Path, name: str, content_digest: str | None = None) -> Path:
-    """A path inside *directory* that no existing witness occupies.
+#: ``os.link`` fails with these when source and destination are not on the same
+#: filesystem (or the filesystem refuses hard links).  They are the only cases in
+#: which the copy fallback runs; every other error is a real failure.
+_LINK_UNSUPPORTED = frozenset(
+    {
+        errno.EXDEV,
+        errno.EPERM,
+        errno.EMLINK,
+        errno.ENOSYS,
+        getattr(errno, "ENOTSUP", errno.EPERM),
+        getattr(errno, "EOPNOTSUPP", errno.EPERM),
+    }
+)
+
+
+def _quarantine_candidates(
+    directory: Path, name: str, content_digest: str | None
+) -> Iterator[Path]:
+    """Every witness name this file may take, in preference order.
 
     Quarantine is **evidence**, and the destination for a given
     ``(job_id, attempt)`` is a fixed directory — so a second crash for the same
-    attempt would silently ``os.replace`` the first witness away. The first
+    attempt must never ``os.replace`` the first witness away.  The first
     collision is disambiguated with the content address (two different payloads
-    keep distinguishable names), later ones with a counter. Nothing is ever
+    keep distinguishable names), later ones with a counter.  Nothing is ever
     deleted to make room.
+
+    This function *only names* candidates.  Existence is decided by
+    :func:`_place_witness`, which creates the destination atomically, because
+    ``if not path.exists(): os.replace(...)`` is a time-of-check/time-of-use
+    race: two reconcilers scanning the same workspace can both see the name
+    free, and the second ``os.replace`` silently destroys the first witness.
     """
-    candidate = directory / name
-    if not candidate.exists():
-        return candidate
+    yield directory / name
     stem, suffix = Path(name).stem, Path(name).suffix
     marker = (content_digest or "").split(":")[-1][:12] or "repeat"
-    candidate = directory / f"{stem}.{marker}{suffix}"
+    yield directory / f"{stem}.{marker}{suffix}"
     counter = 2
-    while candidate.exists():
-        candidate = directory / f"{stem}.{marker}-{counter}{suffix}"
+    while True:
+        yield directory / f"{stem}.{marker}-{counter}{suffix}"
         counter += 1
-    return candidate
+
+
+def _place_witness(source: Path, candidate: Path) -> bool:
+    """Move *source* to *candidate* **without ever overwriting** an existing name.
+
+    Two mechanisms, one invariant (the destination name was free at the moment
+    it was taken):
+
+    1. ``os.link(source, candidate)`` — creating a hard link fails atomically
+       with :class:`FileExistsError` if the name is taken, and needs no copy, so
+       the witness is a rename in all but name.  The source is unlinked only
+       after the link exists.
+    2. on a filesystem that cannot link across devices, the destination is
+       *reserved* with ``O_CREAT|O_EXCL`` (again atomic, again
+       :class:`FileExistsError`), the bytes are copied to a temp name in the
+       same directory, and the temp replaces the reservation the caller already
+       owns.  A crash mid-copy leaves the reserved name holding no evidence,
+       never a half-written file pretending to be one.
+
+    Returns ``False`` when the name was already taken, so the caller can move on
+    to the next candidate.
+    """
+    try:
+        os.link(source, candidate)
+    except FileExistsError:
+        return False
+    except OSError as error:
+        if error.errno not in _LINK_UNSUPPORTED:
+            raise
+        return _copy_into_reserved_name(source, candidate)
+    os.unlink(source)
+    return True
+
+
+def _copy_into_reserved_name(source: Path, candidate: Path) -> bool:
+    try:
+        os.close(os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        return False
+    # The name is now ours, exclusively.  The bytes still arrive atomically: the
+    # copy goes to a temp name in the same directory and replaces *our own*
+    # reservation, so no reader ever sees a half-written witness.
+    temp = candidate.with_name(f".{candidate.name}.tmp.{os.getpid()}.{secrets.token_hex(4)}")
+    try:
+        with temp.open("wb") as destination, source.open("rb") as origin:
+            shutil.copyfileobj(origin, destination, 1024 * 1024)
+            destination.flush()
+            os.fsync(destination.fileno())
+        os.replace(temp, candidate)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        candidate.unlink(missing_ok=True)  # an empty name proves nothing; free it
+        raise
+    os.unlink(source)
+    return True
+
+
+def _quarantine_witness(source: Path, directory: Path, name: str, digest: str | None) -> Path:
+    """Give *source* the first witness name in *directory* that is really free."""
+    for candidate in _quarantine_candidates(directory, name, digest):
+        if _place_witness(source, candidate):
+            return candidate
+    raise RuntimeError("quarantine candidates exhausted")  # pragma: no cover - unbounded
 
 
 def _move_to_quarantine(
@@ -226,14 +321,15 @@ def _move_to_quarantine(
     digest = receipt.get("content_sha256")
     destination = _quarantine_path(root, job_id, attempt_int)
     destination.mkdir(parents=True, exist_ok=True)
-    os.replace(artifact, _unique_target(destination, artifact.name, digest))
+    # Artifact first: if the process dies here the receipt's absence is the
+    # signal that this quarantine is incomplete, and the name is still unique.
+    _quarantine_witness(artifact, destination, artifact.name, digest)
     if sidecar is not None and sidecar.is_file():
-        os.replace(sidecar, _unique_target(destination, sidecar.name, digest))
+        _quarantine_witness(sidecar, destination, sidecar.name, digest)
     receipt_bytes = canonical_json(receipt).encode("utf-8")
-    receipt_path = _unique_target(destination, "reconciliation_receipt.json", digest)
-    tmp = destination / f".{receipt_path.name}.tmp.{os.getpid()}"
+    tmp = destination / f".{secrets.token_hex(6)}.receipt.tmp"
     tmp.write_bytes(receipt_bytes)
-    os.replace(tmp, receipt_path)
+    _quarantine_witness(tmp, destination, "reconciliation_receipt.json", digest)
     return destination
 
 
@@ -397,7 +493,14 @@ async def reconcile_published_artifacts_and_db(
                 continue
 
             # No binding row for the exact (artifact_id, job_id).
-            repair_block = _repair_eligibility(facts, job_id, attempt, artifact_id=artifact_id)
+            repair_block = _repair_eligibility(
+                facts,
+                job_id,
+                attempt,
+                artifact_id=artifact_id,
+                sidecar=sidecar_doc,
+                published_digest=artifact_id,
+            )
             if session is None:
                 issues.append(
                     ReconciliationIssue(
@@ -641,12 +744,30 @@ def _normalise_digest(value: str) -> str:
     return text if text.startswith("sha256:") else f"sha256:{text}"
 
 
+def _pins_per_source(facts: Any) -> dict[str, tuple[str, str]]:
+    """Every distinct pin the row states, keyed by the attribute it came from.
+
+    Two authorities exist and they are independent: the post-completion
+    ``result`` and the immutable admission ``payload``.  When both state a pin
+    they must agree — a row that pins two different revisions cannot be used to
+    write a binding, because there is no honest way to choose.
+    """
+    pins: dict[str, tuple[str, str]] = {}
+    for attribute in ("result", "payload", "request_payload", "request"):
+        pin = _search_pin(getattr(facts, attribute, None))
+        if pin is not None and pin not in pins.values():
+            pins[attribute] = pin
+    return pins
+
+
 def _repair_eligibility(
     facts: Any,
     job_id: str,
     attempt: int | None,
     *,
     artifact_id: str | None = None,
+    sidecar: dict[str, Any] | None = None,
+    published_digest: str | None = None,
 ) -> str | None:
     """Return a refusal reason when repair must not run, else ``None``.
 
@@ -654,12 +775,19 @@ def _repair_eligibility(
     must itself pin the revision.
 
     * ``completed`` — the ordinary case; the ``result`` carries the pin.
-    * ``pending`` / ``processing`` / ``verifying`` — the crash window. The
-      publication landed, ``_mark_completed`` did not, ``result`` is empty, and
-      the pin comes from the immutable payload the job was admitted with. When
-      the row also recorded a content address, the bytes on disk must still
-      match it; a mismatch means the file is not this job's artifact and the
-      orphan stays unrepairable.
+    * ``processing`` / ``verifying`` — the crash window. The publication landed
+      and ``_mark_completed`` did not, so the pin comes from the immutable
+      payload the job was admitted with.  ``pending`` is deliberately **not**
+      admissible: the queue has not granted (or has released) this attempt, so
+      there is no confirmed owner to bind the bytes to.
+
+    Inside the crash window the disk must also *prove* it is this job's
+    publication, because the queue row cannot: the ownership sidecar has to
+    carry the ``job_id``, the ``attempt`` and the ``content_digest`` of the
+    bytes actually sitting there.  A sidecar without a digest, a digest that
+    does not match the file, or two pins that disagree all mean the orphan stays
+    ``unrepairable_orphan``.  Guessing here would write lineage the queue never
+    granted, so every ambiguity fails closed.
     """
     if facts is None:
         return "no queue row for this job — provenance cannot be established from disk"
@@ -667,12 +795,22 @@ def _repair_eligibility(
     if isinstance(facts_attempt, int) and isinstance(attempt, int) and facts_attempt != attempt:
         return f"job attempt {facts_attempt} superseded sidecar attempt {attempt} (fenced out)"
     status = str(getattr(facts, "status", ""))
-    pin = _pinned_project_ref(facts)
+    pins = _pins_per_source(facts)
+    distinct = set(pins.values())
+    if len(distinct) > 1:
+        rendered = ", ".join(f"{source}={'/'.join(pin)}" for source, pin in sorted(pins.items()))
+        return f"the job row pins conflicting revisions ({rendered}) — ambiguous lineage"
+    pin = next(iter(distinct), None)
     if status == "completed":
         if pin is None:
             return "queue result missing — cannot pin project_id/revision_id for the binding"
         return None
-    if status in _UNFINISHED_STATUSES:
+    if status in _CRASH_WINDOW_STATUSES:
+        problem = _crash_window_problem(
+            sidecar, job_id=job_id, attempt=attempt, digest=artifact_id or published_digest
+        )
+        if problem is not None:
+            return problem
         if pin is None:
             return (
                 f"job status is {status!r} and the row pins no project_id/revision_id — "
@@ -687,9 +825,49 @@ def _repair_eligibility(
                 )
         return None
     return (
-        f"job status is {status!r}: neither completed nor an unfinished attempt — "
+        f"job status is {status!r}: neither completed nor an in-flight attempt — "
         "the queue never released these bytes"
     )
+
+
+def _crash_window_problem(
+    sidecar: dict[str, Any] | None,
+    *,
+    job_id: str,
+    attempt: int | None,
+    digest: str | None,
+) -> str | None:
+    """What the on-disk sidecar fails to prove, or ``None`` when it proves the job.
+
+    The sidecar is written *before* the destination is touched and refreshed with
+    the published content digest immediately after the atomic publish, so inside
+    the crash window it is the only artifact that can attribute the bytes.  Each
+    requirement below is one the writer can always satisfy; failing any of them
+    means this file cannot be shown to be this job's output.
+    """
+    if sidecar is None:
+        return (
+            "the crash window requires the on-disk owner sidecar to attribute the "
+            "publication, and none is readable"
+        )
+    if sidecar.get("job_id") != job_id:
+        return "owner sidecar job_id does not match the published namespace"
+    if attempt is not None and sidecar.get("attempt") != attempt:
+        return f"owner sidecar attempt {sidecar.get('attempt')!r} does not match {attempt}"
+    recorded = sidecar.get("content_digest")
+    if not isinstance(recorded, str) or not recorded.strip():
+        return (
+            "owner sidecar carries no content_digest — the published bytes cannot be "
+            "tied to this attempt"
+        )
+    if digest is None:
+        return "the published bytes could not be measured — refusing to guess"
+    if _normalise_digest(recorded) != _normalise_digest(digest):
+        return (
+            "published bytes do not match the content_digest in the owner sidecar "
+            f"({recorded} != {digest})"
+        )
+    return None
 
 
 #: Media types a repaired binding may claim. Anything else is refused rather
@@ -793,7 +971,7 @@ async def default_register_asset_version(
         if current is None:
             return False
         status = str(getattr(current, "status", ""))
-        if status != "completed" and status not in _UNFINISHED_STATUSES:
+        if status != "completed" and status not in _CRASH_WINDOW_STATUSES:
             return False
         return getattr(current, "attempt", None) == attempt
 

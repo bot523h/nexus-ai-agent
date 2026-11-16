@@ -19,6 +19,7 @@ missing or unparsable sidecar was treated as permission to delete.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -248,7 +249,17 @@ async def test_sidecar_records_complete_identity(tmp_path: Path) -> None:
 
     sidecar = _sidecar_for(artifact_root, workspace, "job-ident", "render.mp4")
     document = json.loads(sidecar.read_text())
-    assert document == {"schema": 1, "job_id": "job-ident", "attempt": "7"}
+    published = sidecar.with_name(sidecar.name.removeprefix(".").removesuffix(".owner"))
+    digest = hashlib.sha256(published.read_bytes()).hexdigest()
+    # The digest is measured after the publish, never predicted: it is what lets
+    # the reconciler attribute these bytes to this attempt inside the crash
+    # window (see `maintenance/reconciler._crash_window_problem`).
+    assert document == {
+        "schema": 1,
+        "job_id": "job-ident",
+        "attempt": "7",
+        "content_digest": f"sha256:{digest}",
+    }
 
 
 async def test_retract_cannot_cross_job_boundaries(tmp_path: Path) -> None:

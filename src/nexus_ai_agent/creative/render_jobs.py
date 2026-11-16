@@ -1641,21 +1641,31 @@ def _publication_layout(staging: AttemptStaging, staged_name: str) -> tuple[Path
     )
 
 
-def _write_sidecar(sidecar: Path, *, job_id: str, attempt: str | None) -> None:
+def _write_sidecar(
+    sidecar: Path, *, job_id: str, attempt: str | None, content_digest: str | None = None
+) -> None:
     """Atomically record who owns this destination — **before** mutating it.
 
     Ownership evidence is written first so that a crash between "backup
     created" and "bytes published" leaves a destination whose owner is still
     provable.  A torn sidecar would be indistinguishable from a foreign one, so
     the write goes through a temp file and ``os.replace``.
+
+    ``content_digest`` is filled in by a second, equally atomic write *after* the
+    publish step: before the bytes exist there is nothing to hash, and a digest
+    predicted rather than measured would be exactly the kind of fake evidence
+    that lets a reconciler bind the wrong file.  A crash between the publish and
+    that refresh leaves a sidecar with no digest, which the reconciler treats as
+    unattributable (``unrepairable_orphan``) instead of guessing.
     """
-    payload = json.dumps(
-        {
-            "schema": _OWNERSHIP_SIDECAR_SCHEMA,
-            "job_id": job_id,
-            "attempt": attempt,
-        }
-    )
+    document: dict[str, object] = {
+        "schema": _OWNERSHIP_SIDECAR_SCHEMA,
+        "job_id": job_id,
+        "attempt": attempt,
+    }
+    if content_digest is not None:
+        document["content_digest"] = content_digest
+    payload = json.dumps(document)
     tmp = sidecar.with_name(sidecar.name + f".tmp.{os.getpid()}")
     tmp.write_text(payload + "\n", encoding="utf-8")
     os.replace(tmp, sidecar)
@@ -1780,6 +1790,19 @@ def creative_render_publication_callback(
 
     # 4) Atomic publish: staging → final destination (inside the job namespace).
     resolved = staging.publish(staged_path, f"{staging.job_id}/{staged_name}")
+    # 5) Record what was actually published.  A crash before this line leaves an
+    # orphan the reconciler refuses to bind (no digest ⇒ no attribution), which
+    # is the safe direction; a digest written from anything but the bytes on
+    # disk would not be.
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    published_bytes = published_path if published_path.is_file() else resolved
+    _write_sidecar(
+        sidecar_path,
+        job_id=staging.job_id,
+        attempt=attempt_component,
+        content_digest=content_address_of_file(published_bytes),
+    )
 
     return {
         "artifact_path": str(resolved),
