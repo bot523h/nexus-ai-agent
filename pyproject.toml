@@ -49,7 +49,15 @@ dependencies = [
     # `Requires-Python >=3.11.5`, so on an interpreter older than that no fixed
     # build exists to install — the marker keeps 3.10 installable instead of
     # turning the floor into a resolver failure (see docs/audits §8.4).
-    "soupsieve>=4.1.1; python_version >= '3.11.5'",
+    #
+    # `python_full_version`, NOT `python_version`: PEP 508 defines
+    # `python_version` as `major.minor` only, so `python_version >= '3.11.5'`
+    # compares "3.11" against "3.11.5" and is FALSE on every 3.11 interpreter —
+    # the floor silently never applied. `python_full_version` carries the patch
+    # level, so 3.11.5+ gets the fix and 3.11.0–3.11.4 (which cannot install it)
+    # stays resolvable. `scripts/dependency_audit.py` now parses this line and
+    # evaluates the marker itself, so this class of typo fails the gate.
+    "soupsieve>=4.1.1; python_full_version >= '3.11.5'",
     "psutil>=5.9",
     "litellm>=1.74,<2",  # multi-provider routing chain (Ollama/Groq/Gemini/OpenRouter)
     "boto3==1.43.98",  # pinned: Cloudflare R2 blob tier (v3.9.0, latest on PyPI 2026-09-20)

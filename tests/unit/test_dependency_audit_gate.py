@@ -349,7 +349,7 @@ def _lookup(mapping: dict[str, str | None]):
 def test_a_newer_python_fix_holds_while_no_build_runs_on_this_interpreter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _floor, *, probe: None)
     holds, why = gate._pin_still_holds(
         _newer_python_entry(),
         _versions("soupsieve", "2.10"),
@@ -365,7 +365,7 @@ def test_a_newer_python_fix_holds_while_no_build_runs_on_this_interpreter(
 def test_the_newer_python_acceptance_expires_when_this_interpreter_could_run_the_fix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _floor, *, probe: None)
     holds, why = gate._pin_still_holds(
         _newer_python_entry(),
         _versions("soupsieve", "2.10"),
@@ -382,7 +382,7 @@ def test_the_acceptance_expires_when_any_published_fix_is_installable_here(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """3.0.2/4.0.0 declare >=3.11.5, but a later release could relax it."""
-    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _floor, *, probe: None)
     holds, why = gate._pin_still_holds(
         _newer_python_entry(),
         _versions("soupsieve", "2.10"),
@@ -398,7 +398,7 @@ def test_the_acceptance_expires_when_any_published_fix_is_installable_here(
 def test_the_acceptance_expires_when_pypi_metadata_cannot_be_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _floor, *, probe: None)
     holds, why = gate._pin_still_holds(
         _newer_python_entry(),
         _versions("soupsieve", "2.10"),
@@ -414,7 +414,9 @@ def test_the_acceptance_expires_when_pypi_metadata_cannot_be_read(
 def test_the_acceptance_expires_when_the_floor_is_no_longer_declared(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: False)
+    monkeypatch.setattr(
+        gate, "_declared_floor_problem", lambda _floor, *, probe: "not declared (test)"
+    )
     holds, why = gate._pin_still_holds(
         _newer_python_entry(),
         _versions("soupsieve", "2.10"),
@@ -424,13 +426,13 @@ def test_the_acceptance_expires_when_the_floor_is_no_longer_declared(
         requires_python_of=_lookup({}),
     )
     assert not holds
-    assert "no longer declared" in why
+    assert "not enforced where the fix is installable" in why
 
 
 def test_the_acceptance_expires_when_the_advisory_names_a_newer_fix_than_the_floor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _floor, *, probe: None)
     holds, why = gate._pin_still_holds(
         _newer_python_entry(),
         _versions("soupsieve", "2.10"),
@@ -446,7 +448,7 @@ def test_the_acceptance_expires_when_the_advisory_names_a_newer_fix_than_the_flo
 def test_the_acceptance_refuses_to_badge_an_unspecified_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(gate, "_declared_floor_is_present", lambda _floor: True)
+    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _floor, *, probe: None)
     holds, why = gate._pin_still_holds(
         _newer_python_entry(requires_python=None),
         _versions("soupsieve", "2.10"),
@@ -460,5 +462,228 @@ def test_the_acceptance_refuses_to_badge_an_unspecified_entry(
 
 
 def test_the_shipped_floor_really_is_declared_for_compliant_interpreters() -> None:
-    """The acceptance above is only honest while pyproject carries the floor."""
-    assert gate._declared_floor_is_present("soupsieve>=4.1.1")
+    """The acceptance above is only honest while pyproject carries the floor.
+
+    "Carries it" means the marker is *true* on the interpreters that can install
+    the fix — not that the substring appears in the file.
+    """
+    for probe in ("3.11.5", "3.11.9", "3.12.0"):
+        assert gate._declared_floor_is_present("soupsieve>=4.1.1", probe=probe), probe
+    assert not gate._declared_floor_is_present("soupsieve>=4.1.1", probe="3.10.14")
+
+
+# ── F1: the floor's *marker* is part of the claim, not its text ──────────────
+#
+# The shipped floor read `soupsieve>=4.1.1; python_version >= '3.11.5'`. PEP 508
+# defines `python_version` as major.minor, so the comparison was `"3.11" >=
+# "3.11.5"`, i.e. False on every 3.11 interpreter: the floor never applied. A
+# substring check called that "declared". These tests pin the semantics.
+
+
+def _marker(requirement: str) -> object:
+    from packaging.requirements import Requirement
+
+    return Requirement(requirement).marker
+
+
+def _evaluates(requirement: str, full_version: str) -> bool:
+    from packaging.markers import default_environment
+
+    env = {key: str(value) for key, value in default_environment().items()}
+    env["python_full_version"] = full_version
+    env["python_version"] = ".".join(full_version.split(".")[:2])
+    marker = _marker(requirement)
+    assert marker is not None
+    return bool(marker.evaluate(env))
+
+
+def _shipped_floor() -> str:
+    """The soupsieve requirement exactly as `pyproject.toml` declares it."""
+
+    for req in gate._pyproject_requirements():
+        if req.name.lower() == "soupsieve":
+            return str(req)
+    raise AssertionError("pyproject.toml declares no soupsieve floor")
+
+
+def test_the_shipped_floor_applies_exactly_where_the_fix_is_installable() -> None:
+    """The reviewer's matrix: 3.11.5 / 3.11.9 / 3.12.0 apply, 3.10.14 does not."""
+    requirement = _shipped_floor()
+    assert "python_full_version" in requirement
+    for full_version in ("3.11.5", "3.11.9", "3.12.0"):
+        assert _evaluates(requirement, full_version), full_version
+    assert not _evaluates(requirement, "3.10.14")
+    # And the same through the gate's own parser, which is what actually runs.
+    for probe in ("3.11.5", "3.11.9", "3.12.0"):
+        assert gate._declared_floor_problem("soupsieve>=4.1.1", probe=probe) is None, probe
+    problem = gate._declared_floor_problem("soupsieve>=4.1.1", probe="3.10.14")
+    assert problem is not None and "does not ask for soupsieve" in problem
+
+
+def test_a_major_dot_minor_marker_with_a_patch_level_never_applies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact bug: `python_version >= '3.11.5'` is false even at 3.11.9."""
+    from packaging.requirements import Requirement
+
+    buggy = Requirement("soupsieve>=4.1.1; python_version >= '3.11.5'")
+    assert not _evaluates(str(buggy), "3.11.9")
+
+    monkeypatch.setattr(gate, "_pyproject_requirements", lambda *a, **k: [buggy])
+    problem = gate._declared_floor_problem("soupsieve>=4.1.1", probe="3.11.5")
+    assert problem is not None
+    assert "is false at python_full_version 3.11.5" in problem
+
+
+def test_a_floor_whose_marker_never_applies_is_a_stale_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end: the typo would have turned the acceptance STALE, not accepted."""
+    from packaging.requirements import Requirement
+
+    monkeypatch.setattr(
+        gate,
+        "_pyproject_requirements",
+        lambda *a, **k: [Requirement("soupsieve>=4.1.1; python_version >= '3.11.5'")],
+    )
+    holds, why = gate._pin_still_holds(
+        _newer_python_entry(),
+        _versions("soupsieve", "2.10"),
+        {},
+        ["3.0.2", "4.0.0"],
+        interpreter="3.11.2",
+        requires_python_of=_lookup({}),
+    )
+    assert not holds
+    assert "not enforced where the fix is installable" in why
+
+
+def test_the_lowest_installable_interpreter_is_read_from_requires_python() -> None:
+    assert gate._lowest_installable(">=3.11.5") == "3.11.5"
+    assert gate._lowest_installable(">=3.9,>=3.12.1") == "3.12.1"
+    assert gate._lowest_installable(">=3") == "3"
+    assert gate._lowest_installable("not a specifier") is None
+
+
+# ── F1b: one package floor covers an unlisted advisory it can resolve ────────
+
+
+def _floor_entry(**overrides: object) -> dict:
+    entry = {
+        "reason": "fix-requires-newer-python",
+        "fixed": "4.1.1",
+        "requires_python": ">=3.11.5",
+        "declared_floor": "soupsieve>=4.1.1",
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_a_fourth_advisory_for_the_same_package_is_covered_by_the_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CVE-2026-126192 is the ID the audit asked about: covered, not accepted blindly."""
+    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _f, *, probe: None)
+    ok, message = gate._decide_advisory(
+        ("soupsieve", "CVE-2026-126192"),
+        {"package": "soupsieve", "version": "2.10", "fix_versions": ["3.0.2"]},
+        {},  # no per-advisory entry at all
+        _versions("soupsieve", "2.10"),
+        {},
+        {"soupsieve": _floor_entry()},
+    )
+    assert ok, message
+    assert "covered by the package floor" in message and "4.1.1" in message
+
+
+def test_the_package_floor_refuses_an_advisory_fixed_past_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 5.0 fix is not resolved by a 4.1.1 floor — that must block, not pass."""
+    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _f, *, probe: None)
+    ok, message = gate._decide_advisory(
+        ("soupsieve", "CVE-2099-000001"),
+        {"package": "soupsieve", "version": "2.10", "fix_versions": ["5.0.0"]},
+        {},
+        _versions("soupsieve", "2.10"),
+        {},
+        {"soupsieve": _floor_entry()},
+    )
+    assert not ok
+    assert "does not reach" in message
+
+
+def test_the_package_floor_refuses_an_advisory_with_no_published_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _f, *, probe: None)
+    ok, message = gate._decide_advisory(
+        ("soupsieve", "CVE-2099-000002"),
+        {"package": "soupsieve", "version": "2.10", "fix_versions": []},
+        {},
+        _versions("soupsieve", "2.10"),
+        {},
+        {"soupsieve": _floor_entry()},
+    )
+    assert not ok
+    assert "names no fix" in message
+
+
+def test_the_package_floor_expires_with_the_declared_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        gate, "_declared_floor_problem", lambda _f, *, probe: "the floor is gone (test)"
+    )
+    ok, message = gate._decide_advisory(
+        ("soupsieve", "CVE-2026-126192"),
+        {"package": "soupsieve", "version": "2.10", "fix_versions": ["3.0.2"]},
+        {},
+        _versions("soupsieve", "2.10"),
+        {},
+        {"soupsieve": _floor_entry()},
+    )
+    assert not ok
+    assert "STALE" in message
+
+
+def test_a_package_floor_does_not_cover_a_different_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _f, *, probe: None)
+    ok, message = gate._decide_advisory(
+        ("otherpkg", "CVE-2026-126192"),
+        {"package": "otherpkg", "version": "1.0", "fix_versions": ["1.0.1"]},
+        {},
+        {"otherpkg": "1.0"},
+        {},
+        {"soupsieve": _floor_entry()},
+    )
+    assert not ok and "UNACCEPTED" in message
+
+
+def test_load_package_floors_fails_closed_on_malformed_shapes(tmp_path: Path) -> None:
+    good = {"package_floors": {"soupsieve": _floor_entry()}}
+    path = tmp_path / "allowlist.json"
+    path.write_text(json.dumps(good))
+    assert gate._load_package_floors(path) == good["package_floors"]
+
+    for broken in (
+        {"package_floors": []},
+        {"package_floors": {"soupsieve": "nope"}},
+        {"package_floors": {"soupsieve": _floor_entry(reason="no-fix-released")}},
+        {"package_floors": {"soupsieve": _floor_entry(fixed="")}},
+    ):
+        path.write_text(json.dumps(broken))
+        with pytest.raises(SystemExit):
+            gate._load_package_floors(path)
+
+    path.write_text(json.dumps({"accepted": {}}))
+    assert gate._load_package_floors(path) == {}
+
+
+def test_the_shipped_allowlist_declares_the_soupsieve_floor() -> None:
+    floors = gate._load_package_floors(ALLOWLIST)
+    assert "soupsieve" in floors
+    assert floors["soupsieve"]["declared_floor"] == "soupsieve>=4.1.1"
+    assert floors["soupsieve"]["fixed"] == "4.1.1"

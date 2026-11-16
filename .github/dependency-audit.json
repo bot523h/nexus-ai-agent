@@ -149,7 +149,7 @@
       "fixed": "4.1.1",
       "requires_python": ">=3.11.5",
       "declared_floor": "soupsieve>=4.1.1",
-      "note": "Security floor for beautifulsoup4's CSS-selector engine. Fixed releases exist (3.0.2, 3.0.3, 3.0.4, 4.0, 4.0.1, 4.1, 4.1.1) but every one of them declares `Requires-Python >=3.11.5`, and this environment runs CPython 3.11.2 \u2014 pip reports the fixed releases as \"requires a different python version\" and resolves 2.10. The floor `soupsieve>=4.1.1; python_version >= '3.11.5'` is declared in pyproject.toml, so every interpreter that can take the fix does (CI runs 3.11/3.12 and resolves 4.1.1, where no advisory is reported at all). The acceptance expires by itself: the moment a fix is installable on this interpreter \u2014 or the floor is dropped from pyproject.toml \u2014 the gate reports the entry STALE and fails."
+      "note": "Security floor for beautifulsoup4's CSS-selector engine. Fixed releases exist (3.0.2, 3.0.3, 3.0.4, 4.0, 4.0.1, 4.1, 4.1.1) but every one of them declares `Requires-Python >=3.11.5`, and this environment runs CPython 3.11.2 \u2014 pip reports the fixed releases as \"requires a different python version\" and resolves 2.10. The floor is declared in pyproject.toml as `soupsieve>=4.1.1; python_full_version >= '3.11.5'`, so every interpreter that can take the fix does (CI runs 3.11/3.12 and resolves 4.1.1, where no advisory is reported at all). `python_full_version` is deliberate: PEP 508 defines `python_version` as major.minor only, so `python_version >= '3.11.5'` compared \"3.11\" with \"3.11.5\" and was false on every 3.11 interpreter \u2014 a floor that never applied. The gate now parses this line and evaluates the marker at the lowest interpreter that can install the fix, so that class of typo fails it. The acceptance expires by itself: the moment a fix is installable on this interpreter \u2014 or the floor is dropped or its marker stops applying where the fix can be installed \u2014 the gate reports the entry STALE and fails."
     },
     "CVE-2026-126191": {
       "package": "soupsieve",
@@ -157,7 +157,7 @@
       "fixed": "4.1.1",
       "requires_python": ">=3.11.5",
       "declared_floor": "soupsieve>=4.1.1",
-      "note": "Security floor for beautifulsoup4's CSS-selector engine. Fixed releases exist (3.0.2, 3.0.3, 3.0.4, 4.0, 4.0.1, 4.1, 4.1.1) but every one of them declares `Requires-Python >=3.11.5`, and this environment runs CPython 3.11.2 \u2014 pip reports the fixed releases as \"requires a different python version\" and resolves 2.10. The floor `soupsieve>=4.1.1; python_version >= '3.11.5'` is declared in pyproject.toml, so every interpreter that can take the fix does (CI runs 3.11/3.12 and resolves 4.1.1, where no advisory is reported at all). The acceptance expires by itself: the moment a fix is installable on this interpreter \u2014 or the floor is dropped from pyproject.toml \u2014 the gate reports the entry STALE and fails."
+      "note": "Security floor for beautifulsoup4's CSS-selector engine. Fixed releases exist (3.0.2, 3.0.3, 3.0.4, 4.0, 4.0.1, 4.1, 4.1.1) but every one of them declares `Requires-Python >=3.11.5`, and this environment runs CPython 3.11.2 \u2014 pip reports the fixed releases as \"requires a different python version\" and resolves 2.10. The floor is declared in pyproject.toml as `soupsieve>=4.1.1; python_full_version >= '3.11.5'`, so every interpreter that can take the fix does (CI runs 3.11/3.12 and resolves 4.1.1, where no advisory is reported at all). `python_full_version` is deliberate: PEP 508 defines `python_version` as major.minor only, so `python_version >= '3.11.5'` compared \"3.11\" with \"3.11.5\" and was false on every 3.11 interpreter \u2014 a floor that never applied. The gate now parses this line and evaluates the marker at the lowest interpreter that can install the fix, so that class of typo fails it. The acceptance expires by itself: the moment a fix is installable on this interpreter \u2014 or the floor is dropped or its marker stops applying where the fix can be installed \u2014 the gate reports the entry STALE and fails."
     },
     "CVE-2026-126193": {
       "package": "soupsieve",
@@ -165,7 +165,17 @@
       "fixed": "4.1.1",
       "requires_python": ">=3.11.5",
       "declared_floor": "soupsieve>=4.1.1",
-      "note": "Security floor for beautifulsoup4's CSS-selector engine. Fixed releases exist (3.0.2, 3.0.3, 3.0.4, 4.0, 4.0.1, 4.1, 4.1.1) but every one of them declares `Requires-Python >=3.11.5`, and this environment runs CPython 3.11.2 \u2014 pip reports the fixed releases as \"requires a different python version\" and resolves 2.10. The floor `soupsieve>=4.1.1; python_version >= '3.11.5'` is declared in pyproject.toml, so every interpreter that can take the fix does (CI runs 3.11/3.12 and resolves 4.1.1, where no advisory is reported at all). The acceptance expires by itself: the moment a fix is installable on this interpreter \u2014 or the floor is dropped from pyproject.toml \u2014 the gate reports the entry STALE and fails."
+      "note": "Security floor for beautifulsoup4's CSS-selector engine. Fixed releases exist (3.0.2, 3.0.3, 3.0.4, 4.0, 4.0.1, 4.1, 4.1.1) but every one of them declares `Requires-Python >=3.11.5`, and this environment runs CPython 3.11.2 \u2014 pip reports the fixed releases as \"requires a different python version\" and resolves 2.10. The floor is declared in pyproject.toml as `soupsieve>=4.1.1; python_full_version >= '3.11.5'`, so every interpreter that can take the fix does (CI runs 3.11/3.12 and resolves 4.1.1, where no advisory is reported at all). `python_full_version` is deliberate: PEP 508 defines `python_version` as major.minor only, so `python_version >= '3.11.5'` compared \"3.11\" with \"3.11.5\" and was false on every 3.11 interpreter \u2014 a floor that never applied. The gate now parses this line and evaluates the marker at the lowest interpreter that can install the fix, so that class of typo fails it. The acceptance expires by itself: the moment a fix is installable on this interpreter \u2014 or the floor is dropped or its marker stops applying where the fix can be installed \u2014 the gate reports the entry STALE and fails."
+    }
+  },
+  "package_floors": {
+    "soupsieve": {
+      "reason": "fix-requires-newer-python",
+      "fixed": "4.1.1",
+      "requires_python": ">=3.11.5",
+      "declared_floor": "soupsieve>=4.1.1",
+      "covers": "any advisory for this package whose every reported fix is <= 4.1.1",
+      "note": "One floor, not one waiver per CVE. The three reviewed entries above name CVE-2026-126190 / -126191 / -126193 because those are the advisories pip-audit reports against soupsieve 2.10 in this environment. A fourth advisory for the same package \u2014 CVE-2026-126192 is the one other ID in that series, and it is not reported against 2.10 here \u2014 would block the gate on an interpreter that cannot install any fix at all, for no security reason: a 4.1.1 install resolves it exactly like the other three. This floor therefore covers any advisory whose *every* reported fix is at or below 4.1.1, and refuses anything fixed in a later release (the floor would not reach it) or reported with no fix at all. It is subject to the same four self-expiry checks as every other `fix-requires-newer-python` acceptance."
     }
   }
 }

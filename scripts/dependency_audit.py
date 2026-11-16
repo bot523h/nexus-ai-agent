@@ -53,9 +53,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from packaging.requirements import Requirement
+import tomllib
+from packaging.markers import default_environment
+from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ALLOWLIST = REPO_ROOT / ".github" / "dependency-audit.json"
@@ -166,19 +168,136 @@ def _pypi_requires_python(package: str, version: str) -> str | None:
     return requires if isinstance(requires, str) and requires else None
 
 
-def _declared_floor_is_present(declared: str) -> bool:
-    """Whether ``pyproject.toml`` really declares *declared* (e.g. ``soupsieve>=4.1.1``).
+def _pyproject_requirements(pyproject: Path | None = None) -> list[Requirement]:
+    """Every requirement string ``pyproject.toml`` declares, parsed.
 
-    The ``fix-requires-newer-python`` acceptance is only honest while the project
-    actually asks for the fixed release on the interpreters that can install it.
-    Dropping the floor turns the entry STALE instead of leaving a silent pass.
+    Both ``[project].dependencies`` and every extra are read: a floor declared in
+    an extra still protects the install that asks for that extra, so ignoring it
+    would report a live floor as missing.
     """
-    pyproject = REPO_ROOT / "pyproject.toml"
+    path = pyproject or (REPO_ROOT / "pyproject.toml")
     try:
-        text = pyproject.read_text(encoding="utf-8")
-    except OSError:
-        return False
-    return declared in text
+        with path.open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    project = data.get("project")
+    if not isinstance(project, dict):
+        return []
+    raw: list[str] = []
+    deps = project.get("dependencies")
+    if isinstance(deps, list):
+        raw.extend(str(item) for item in deps)
+    extras = project.get("optional-dependencies")
+    if isinstance(extras, dict):
+        for group in extras.values():
+            if isinstance(group, list):
+                raw.extend(str(item) for item in group)
+    parsed: list[Requirement] = []
+    for item in raw:
+        try:
+            parsed.append(Requirement(item))
+        except InvalidRequirement:
+            continue
+    return parsed
+
+
+def _required_version(req: Requirement) -> Version | None:
+    """The highest version *req* demands (``>=4.1.1`` -> ``4.1.1``), else ``None``."""
+    versions: list[Version] = []
+    for specifier in req.specifier:
+        if specifier.operator in {">=", "==", "===", "~=", ">"}:
+            try:
+                versions.append(Version(specifier.version))
+            except InvalidVersion:
+                continue
+    return max(versions) if versions else None
+
+
+def _lowest_installable(published: str) -> str | None:
+    """The lowest interpreter version satisfying a ``Requires-Python`` specifier.
+
+    ``>=3.11.5`` -> ``"3.11.5"``. This is the interpreter the floor has to cover:
+    an acceptance that says "a fix exists but you need a newer Python" is only
+    honest if the *newest* interpreter that can install it is actually asked for
+    the fixed release.
+    """
+    try:
+        specifier_set = SpecifierSet(published)
+    except InvalidSpecifier:
+        return None
+    candidates: list[Version] = []
+    for specifier in specifier_set:
+        if specifier.operator in {">=", "==", "===", "~=", ">"}:
+            try:
+                candidates.append(Version(specifier.version))
+            except InvalidVersion:
+                continue
+    if not candidates:
+        return None
+    return str(max(candidates))
+
+
+def _declared_floor_problem(declared: str, *, probe: str | None) -> str | None:
+    """Why the project does not really ask for *declared* where the fix can install.
+
+    Returns ``None`` when ``pyproject.toml`` carries a requirement that (a) names
+    the same package, (b) pins at least the declared floor, and (c) has an
+    environment marker that is **true** for *probe* — the lowest interpreter that
+    can install the fixed release.
+
+    This is the check that a substring search cannot do. The floor was written as
+    ``soupsieve>=4.1.1; python_version >= '3.11.5'``; PEP 508 defines
+    ``python_version`` as ``major.minor`` only, so ``"3.11" >= "3.11.5"`` is
+    false and the floor **never applied on any 3.11 interpreter**. A textual
+    check called that present. Evaluating the marker at the probe interpreter
+    calls it what it was: dead.
+    """
+    try:
+        floor_req = Requirement(declared)
+    except InvalidRequirement:
+        return f"{declared!r} is not a parseable requirement"
+    if probe is None:
+        return (
+            "cannot establish which interpreter can install the fixed release, so the "
+            f"floor {declared!r} cannot be shown to apply"
+        )
+    required = _required_version(floor_req)
+    if required is None:
+        return f"the floor {declared!r} demands no concrete version"
+    # A plain dict, not packaging's typed ``Environment``: the marker is evaluated
+    # against an interpreter we are *asking about*, not the one running this gate.
+    environment: dict[str, str] = {key: str(value) for key, value in default_environment().items()}
+    environment["python_full_version"] = probe
+    environment["python_version"] = ".".join(probe.split(".")[:2])
+    seen: list[str] = []
+    for req in _pyproject_requirements():
+        if req.name.lower().replace("_", "-") != floor_req.name.lower().replace("_", "-"):
+            continue
+        declared_marker = str(req.marker) if req.marker is not None else ""
+        if req.marker is not None:
+            try:
+                applies = bool(req.marker.evaluate(environment))
+            except Exception:  # noqa: BLE001 - an unevaluable marker is not a floor
+                applies = False
+            if not applies:
+                seen.append(f"{declared_marker} is false at python_full_version {probe}")
+                continue
+        pinned = _required_version(req)
+        if pinned is None or pinned < required:
+            seen.append(f"{req} does not pin {required}")
+            continue
+        return None
+    detail = "; ".join(seen) if seen else "no requirement for that package at all"
+    return (
+        f"pyproject.toml does not ask for {floor_req.name} {required} on the interpreters "
+        f"that can install it ({detail})"
+    )
+
+
+def _declared_floor_is_present(declared: str, *, probe: str | None = None) -> bool:
+    """Convenience wrapper: is the floor declared *and* applicable at *probe*?"""
+    return _declared_floor_problem(declared, probe=probe) is None
 
 
 def _pin_still_holds(
@@ -302,14 +421,17 @@ def _pin_still_holds(
                     )
             except InvalidSpecifier:
                 continue
-        # Self-expiry 4: the project must still ask for the fix where it can be had.
+        # Self-expiry 4: the project must still ask for the fix where it can be had,
+        # and its marker must actually be true there (a marker that never applies is
+        # a floor that does not exist, however the text reads).
         floor = entry.get("declared_floor")
         if not isinstance(floor, str) or not floor:
             return False, "fix-requires-newer-python entry needs a `declared_floor`"
-        if not _declared_floor_is_present(floor):
+        floor_problem = _declared_floor_problem(floor, probe=_lowest_installable(published))
+        if floor_problem is not None:
             return False, (
-                f"the floor {floor!r} is no longer declared in pyproject.toml — the entries "
-                f"that can install the fix would silently regress"
+                f"the floor {floor!r} is not enforced where the fix is installable — "
+                f"{floor_problem}; the entries that can install the fix would silently regress"
             )
         return True, (
             f"every published fix ({', '.join(reported)}) declares Requires-Python "
@@ -320,12 +442,69 @@ def _pin_still_holds(
     return False, f"unknown acceptance reason {reason!r}"
 
 
+def _floor_covers_advisory(
+    advisory_id: str,
+    meta: dict[str, Any],
+    floor_entry: dict[str, Any],
+    versions: dict[str, str],
+    reqs: dict[str, list[str]],
+) -> tuple[bool, str]:
+    """Accept an *unlisted* advisory that the declared package floor already resolves.
+
+    The three reviewed `soupsieve` entries accept three specific CVEs. That is
+    precise but brittle in one direction: a fourth advisory against the same
+    package, fixed in a release at or below the declared floor, would block the
+    gate on an interpreter that cannot install the fix — the exact situation the
+    floor exists for — for no security reason, because a 4.1.1 install removes it
+    just as it removes the other three.
+
+    So a package may declare *one* floor, and that floor covers any advisory for
+    that package whose **every** reported fix is at or below the floor. It cannot
+    cover an advisory fixed in a later release (the floor would not resolve it),
+    and it cannot cover an advisory pip-audit reports with no fix at all. The
+    same four self-expiry checks still run, so the coverage dies the moment the
+    floor stops being declared where it can be installed.
+    """
+    pkg = meta["package"].lower()
+    reported = [version for version in (meta.get("fix_versions") or []) if version]
+    ceiling = floor_entry.get("fixed")
+    if not reported:
+        return False, (
+            f"UNACCEPTED {advisory_id} in {meta['package']} {meta['version']} — pip-audit "
+            f"names no fix, so the {floor_entry.get('declared_floor')} floor cannot be "
+            "shown to resolve it"
+        )
+    if not isinstance(ceiling, str) or not ceiling:
+        return False, f"package floor for {pkg} names no concrete `fixed` version"
+    try:
+        ceiling_version = Version(ceiling)
+        highest = max(Version(version) for version in reported)
+    except InvalidVersion:
+        return False, f"package floor for {pkg} names an unparseable version ({ceiling!r})"
+    if highest > ceiling_version:
+        return False, (
+            f"UNACCEPTED {advisory_id} in {meta['package']} {meta['version']} — the "
+            f"advisory is fixed in {highest}, which the {pkg}>={ceiling} floor does not "
+            "reach; raise the floor and review it"
+        )
+    holds, why = _pin_still_holds(
+        {**floor_entry, "package": meta["package"], "id": advisory_id}, versions, reqs, reported
+    )
+    if holds:
+        return True, (
+            f"ACCEPTED  {advisory_id} ({meta['package']}) — covered by the package floor "
+            f"{floor_entry.get('declared_floor')}: fixed in {highest} <= {ceiling}. {why}"
+        )
+    return False, f"STALE     {advisory_id} ({meta['package']}) — package floor: {why}"
+
+
 def _decide_advisory(
     key: tuple[str, str],
     meta: dict[str, Any],
     allowlist: dict[str, dict[str, Any]],
     versions: dict[str, str],
     reqs: dict[str, list[str]],
+    package_floors: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[bool, str]:
     """Decide one finding, keyed by ``(package, advisory_id)``: ``(accepted, message)``.
 
@@ -341,6 +520,9 @@ def _decide_advisory(
     pkg_key, advisory_id = key
     entry = allowlist.get(advisory_id)
     if entry is None:
+        floor_entry = (package_floors or {}).get(pkg_key)
+        if floor_entry is not None:
+            return _floor_covers_advisory(advisory_id, meta, floor_entry, versions, reqs)
         return False, f"UNACCEPTED {advisory_id} in {meta['package']} {meta['version']}"
     if entry.get("package", "").lower() != pkg_key:
         return False, (
@@ -402,6 +584,35 @@ def _load_allowlist(path: Path) -> dict[str, dict[str, Any]]:
     return accepted
 
 
+def _load_package_floors(path: Path) -> dict[str, dict[str, Any]]:
+    """Load the optional ``package_floors`` block, failing closed on bad shapes.
+
+    Absent is legitimate (most trees declare no floor); malformed is not, and a
+    floor that cannot be re-derived is never silently dropped.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"allow-list {path} is not valid JSON: {exc}") from exc
+    floors = data.get("package_floors")
+    if floors is None:
+        return {}
+    if not isinstance(floors, dict):
+        raise SystemExit(f"allow-list {path} has a non-object 'package_floors'")
+    for package, entry in floors.items():
+        if not isinstance(entry, dict):
+            raise SystemExit(f"package floor {package!r} is not an object")
+        if entry.get("reason") != "fix-requires-newer-python":
+            raise SystemExit(
+                f"package floor {package!r} must use reason 'fix-requires-newer-python' "
+                f"(got {entry.get('reason')!r})"
+            )
+        for field in ("fixed", "requires_python", "declared_floor"):
+            if not isinstance(entry.get(field), str) or not entry[field]:
+                raise SystemExit(f"package floor {package!r} needs a non-empty {field!r}")
+    return floors
+
+
 def _parse_pip_audit(stdout: str) -> dict[str, Any]:
     """Parse pip-audit's JSON, refusing anything that is not a well-formed report.
 
@@ -426,6 +637,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     allowlist = _load_allowlist(args.allowlist)
+    package_floors = _load_package_floors(args.allowlist)
     report = _parse_pip_audit(_run_pip_audit_stdout())
     found = _collect_ids(report)
     versions = _installed_versions()
@@ -434,7 +646,7 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[str] = []
     accepted: list[str] = []
     for key, meta in sorted(found.items()):
-        ok, message = _decide_advisory(key, meta, allowlist, versions, reqs)
+        ok, message = _decide_advisory(key, meta, allowlist, versions, reqs, package_floors)
         (accepted if ok else failures).append(message)
 
     for line in accepted:
