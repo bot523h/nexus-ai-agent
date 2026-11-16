@@ -1,12 +1,12 @@
 {
   "schema": "nexus-p0-evidence/v1",
   "mission": "NEXUS P0 database recovery / durability",
-  "source_revision": "80c8ea65da78202cbef089de39057d4bcdea3028",
-  "generated_at": "2026-11-15T17:22:59.568534+00:00",
+  "source_revision": "77a2b8be0164331446fb761ea0e7d5ed6c1647a1",
+  "generated_at": "2026-11-16T04:10:13.967818+00:00",
   "environment": {
     "python": "3.11.2",
     "platform": "Linux-6.1.158+-x86_64-with-glibc2.36",
-    "postgres_url": "postgresql://postgres@127.0.0.1:5433/nexus"
+    "postgres_url": "postgresql://postgres:***@127.0.0.1:5433/nexus"
   },
   "checks": {
     "migrations": {
@@ -29,7 +29,7 @@
         "    current = (await session.execute(text(\"SELECT current_database()\"))).scalar_one()",
         "",
         "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
-        "3 passed, 2 warnings in 1.11s"
+        "3 passed, 2 warnings in 1.06s"
       ],
       "stderr_tail": []
     },
@@ -37,12 +37,12 @@
       "command": "/home/user/.venv/bin/python scripts/dr_proof.py",
       "exit_code": 0,
       "stdout_tail": [
-        "[dump] artifact=nexus-pg.sql bytes=5538319 sha256=ec33a4927ccdad8680102a11679d837d9f0d351492e9bf9970ef97172c844c2e",
         "[verify] {'engine': 'postgres', 'footer': 'present'}",
-        "2026-11-15 17:23:05 [info     ] maintenance_restore_apply_ok   checksum=ec33a4927ccdad8680102a11679d837d9f0d351492e9bf9970ef97172c844c2e engine=postgres target=127.0.0.1:5433/nexus_restore_target",
-        "[restore] ok=True engine=postgres chain=[{'state': 'FETCHED', 'ok': True, 'detail': 'local:/tmp/dr_proof_vxrbwnhk/nexus-pg.sql'}, {'state': 'CHECKSUM_STRUCTURAL_ONLY', 'ok': True, 'detail': 'no checksum evidence available (no sidecar, no --expected-sha256)'}, {'state': 'INTEGRITY_VERIFIED', 'ok': True, 'detail': 'pg_dump footer present, non-empty'}, {'state': 'ARTIFACT_VERIFIED', 'ok': True, 'detail': 'checksum + structural integrity verified'}, {'state': 'POSTGRES_LIVE_RESTORE', 'ok': True, 'detail': 'psql applied the dump atomically on 127.0.0.1:5433/nexus_restore_target'}, {'state': 'POST_RESTORE_SCHEMA', 'ok': True, 'detail': '51 dump tables present on the target'}, {'state': 'POST_RESTORE_DATA', 'ok': True, 'detail': \"51 tables' row counts match the dump (20017 rows)\"}, {'state': 'RESTORE_PROVEN', 'ok': True, 'detail': 'restored, re-verified, and data row counts match on the target'}]",
+        "2026-11-16 04:10:19 [info     ] maintenance_restore_apply_ok   checksum=196ca088297f85cb9c40ccfeac20358265546917460dbb3027718a228e50f3c1 engine=postgres target=127.0.0.1:5433/nexus_restore_target",
+        "[restore] ok=True engine=postgres chain=[{'state': 'FETCHED', 'ok': True, 'detail': 'local:/tmp/dr_proof_qo_39wh_/nexus-pg.sql'}, {'state': 'CHECKSUM_STRUCTURAL_ONLY', 'ok': True, 'detail': 'no checksum evidence available (no sidecar, no --expected-sha256)'}, {'state': 'INTEGRITY_VERIFIED', 'ok': True, 'detail': 'pg_dump footer present, non-empty'}, {'state': 'ARTIFACT_VERIFIED', 'ok': True, 'detail': 'checksum + structural integrity verified'}, {'state': 'POSTGRES_LIVE_RESTORE', 'ok': True, 'detail': 'psql applied the dump atomically on 127.0.0.1:5433/nexus_restore_target'}, {'state': 'POST_RESTORE_SCHEMA', 'ok': True, 'detail': '46 dump tables present on the target'}, {'state': 'POST_RESTORE_DATA', 'ok': True, 'detail': \"46 tables' row counts match the dump (515 rows)\"}, {'state': 'RESTORE_PROVEN', 'ok': True, 'detail': 'restored, re-verified, and data row counts match on the target'}]",
         "[check] restored row = 'hello-durability-42'",
-        "DR-PROOF-OK: dump -> verify -> restore -> row preserved"
+        "[digest] rows=514 source=06cdd2482cc9e4f653608ee82b3549ff0575206915e745d57d0b1f4b0d436bbb restored=06cdd2482cc9e4f653608ee82b3549ff0575206915e745d57d0b1f4b0d436bbb",
+        "DR-PROOF-OK: dump -> verify -> restore -> row and content preserved content_digest_matches=true"
       ],
       "stderr_tail": [
         "[pg-safety] dr_proof source (DROP/CREATE/INSERT) \u2192 target 127.0.0.1:5433/nexus (destructive opt-in ARMED)",
@@ -54,7 +54,7 @@
       "exit_code": 0,
       "stdout_tail": [
         "..................                                                       [100%]",
-        "18 passed in 1.04s"
+        "18 passed in 0.98s"
       ],
       "stderr_tail": []
     },
@@ -70,10 +70,10 @@
       "command": "/home/user/.venv/bin/python scripts/p0_benchmark.py --rows 20000",
       "exit_code": 0,
       "stdout_tail": [
-        "  \"verify_seconds\": 0.007,",
-        "  \"restored_rows\": 20000,",
-        "  \"row_count_matches\": true,",
-        "  \"throughput_rows_per_s_restore\": 29402.9",
+        "  \"sql\": \"SELECT id, name, body FROM bench_rows ORDER BY id\",",
+        "  \"source_content_sha256\": \"bc35d143db03e802b12b834f1a0a3124a3504e9e86c84c25abaffdeb2c87c8f9\",",
+        "  \"restored_content_sha256\": \"bc35d143db03e802b12b834f1a0a3124a3504e9e86c84c25abaffdeb2c87c8f9\",",
+        "  \"content_digest_matches\": true",
         "}",
         "wrote docs/evidence/p0/benchmark.json"
       ],
@@ -86,7 +86,20 @@
   "fixed_sites": {
     "src/nexus_ai_agent/maintenance/backup.py": "f3f6400d4ced4decd857933e4ad41a1c33a91f8a4a185308bc3118fddbe24485",
     "src/nexus_ai_agent/maintenance/restore.py": "63d0d45e6e9635ef94327d1f6fa028de8803dabb6d81392a36cc3979ed6d686e",
-    "src/nexus_ai_agent/storage/db.py": "ba85ae2a1e7c4b90cf3970e2c41c8e379afa846dfbe2fdff9a79cc1aa6f25a24"
+    "src/nexus_ai_agent/storage/db.py": "1119283f40fe26087dbd5c729595f64dcfe953f61d1057a4f1bdd41a4b027a8c"
+  },
+  "content_evidence": {
+    "benchmark": {
+      "rows": 20000,
+      "restored_rows": 20000,
+      "source_content_sha256": "bc35d143db03e802b12b834f1a0a3124a3504e9e86c84c25abaffdeb2c87c8f9",
+      "restored_content_sha256": "bc35d143db03e802b12b834f1a0a3124a3504e9e86c84c25abaffdeb2c87c8f9",
+      "content_digest_matches": true,
+      "generated_at": "2026-11-16T04:10:30.882310+00:00"
+    },
+    "dr_proof_content_digest_matches": true,
+    "all_content_matches": true,
+    "reasons": []
   },
   "all_checks_passed": true
 }

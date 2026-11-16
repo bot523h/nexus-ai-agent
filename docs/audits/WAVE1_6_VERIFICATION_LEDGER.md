@@ -36,16 +36,24 @@ Two separate inaccuracies, both stated here rather than smoothed over:
 ### 2.1 Size, measured (not estimated)
 
 ```bash
-git rev-list --count deab2b3e..HEAD                  # 1511
-git rev-list --count --first-parent deab2b3e..HEAD   # 58
-git rev-list --count da3e5ed7..HEAD                  # 35
+git rev-list --count deab2b3e..77a2b8b                  # 1517
+git rev-list --count --first-parent deab2b3e..77a2b8b   # 64
+git rev-list --count da3e5ed7..77a2b8b                  # 41
+git rev-list --count '483403d^..77a2b8b'                # 41   (the §2.3 window, inclusive)
 ```
 
-Measured with `HEAD` at `2ff8b30`, the last commit whose tree carries code. Every commit
-after it is documentation or evidence and adds exactly one to all three counts, so the
-commit that carries this table reads **1512 / 59 / 36** — read them off `git` rather than
-trusting a number copied into prose, which is how the earlier revision of this file
-drifted. 19 of the 35 are the pre-closeout waves, 16 are this closeout.
+All four are `git rev-list` output at **`77a2b8b`**, the last commit of this wave whose
+tree carries code; the commits after it are documentation and evidence only, and each adds
+exactly one to every count, so a reader who runs the commands at the pushed `HEAD` will see
+three larger numbers. That is the reason the SHAs are named here instead of "HEAD": the
+previous revision of this section printed **1511 / 58 / 35** in the block, **1512 / 59 / 36**
+in the sentence below it and "19 of the 35" against a table that has 35 rows, so no two
+numbers agreed and none of them reproduced. The rule this section now follows: a count is
+stated against a SHA, or it is not stated.
+
+Of the 41, 19 (rows 1–19 of §2.3) are the pre-closeout waves and the four preserved
+commits that came with them; 22 (rows 20–41) are this closeout, including the second audit
+wave of §2.3b.
 
 The **diff** is smaller than the history and easier to review:
 `git diff --shortstat deab2b3e..2ff8b30` reports **512 files, +123 972 / −2 841** (the
@@ -67,16 +75,37 @@ content is present here under new SHAs:
 
 | Original (PR #343 branch) | Cherry-picked here | Subject |
 |---|---|---|
-| `10c14e4` | `df1ea42` | `ci(test): raise the pytest timeout 30m -> 45m on the suite itself` |
+| `10c14e4` | `df1ea42` | `ci(test): raise the pytest timeout 30m -> 45m on the suite itself` (**job** timeout, not pytest's — see below) |
 | `5a80116` | `f2c4db4` | `test(morpheus): make P53 nodal-equilibrium assert LAPACK-build stable` |
 | `7189a8a` | `64e1392` | `ci(migrate-postgres): pin runner to ubuntu-24.04 (PG16 client) + annotate restore-atomicity failures` |
 
 Three commits that already existed only here were preserved unchanged — nothing was
 reset, rebased or force-pushed to make room: `d1fb569`, `4bcee33`, `40cf83c`.
 
+The first row needed a correction, because this file previously repeated its subject line
+without reading the diff, and the subject is misleading:
+
+```
+$ git show df1ea42 -- .github/workflows/ci.yml | grep -E '^[-+].*timeout-minutes'
+-timeout-minutes: 30
++timeout-minutes: 45
+-timeout-minutes: 30
++timeout-minutes: 45  # see the test job: the integrated suite outgrew 30
+```
+
+It raises the **GitHub Actions job wall-clock limit** (`timeout-minutes`) on the `test`
+and `python-parity` jobs from 30 to 45 minutes. It does not touch pytest's `--timeout`
+per-test limit, it does not raise an assertion, and it does not rename a required check.
+"On the suite itself" in the upstream message means "the job that runs the suite"; the
+ceiling that was hit was the job's. §6.3.5 records what that means for the slow 3.10 leg,
+including the margin it left.
+
 ### 2.3 The wave window, commit by commit
 
-`483403d..HEAD` — 35 commits at `2ff8b30`. Everything in §3–§7 is one of these.
+`483403d^..77a2b8b` — **41 commits**, inclusive of `483403d` itself. Everything in §3–§7
+is one of these, and rows 37–43 are the second audit wave (§2.3b). The previous revision
+printed `483403d..HEAD` for 35 commits, but that range *excludes* its own first row — 34 is
+what it counts.
 
 | # | SHAs (oldest first) | Wave | What it is |
 |---|---|---|---|
@@ -115,9 +144,50 @@ reset, rebased or force-pushed to make room: `d1fb569`, `4bcee33`, `40cf83c`.
 | 33 | `f395487` | 8 | the ledger re-measured, §2.4 review guide, §7/#343 supersession |
 | 34 | `f1dbaf0` | 8 | one stray blank line at EOF in `pyproject.toml` |
 | 35 | `2ff8b30` | 8 | §8.6 diff-check residue + the ATLAS reproduction line |
+| 36 | `59fac7c` | 8 | the run on the pushed head, and counts that read off `git` |
+| 37 | `854cafb` | A2 | the three `soupsieve` advisories closed with a real floor, not a waiver (§8.4) |
+| 38 | `bcf74e7` | A2 | reconciler recovers the crash window; quarantine never overwrites a witness (§2.3b) |
+| 39 | `3eaf7e4` | A2 | engine ports composed at the bus root; `intent_submit` stops calling a live route DEFERRED |
+| 40 | `e7d8ad8` | A2 | the DR drill proves restore *content*, not a row count (§8.2) |
+| 41 | `77a2b8b` | A2 | cherry-pick `cd8db338` — hybrid CAS resource packs (17 files, no conflict) |
+
 
 Commits 28–29 are documentation only; 30–32 are behaviour, evidence and budgets; §4 is
-measured at `f574e48` (32).
+measured at `77a2b8b` (41), the last commit of this wave whose tree carries code.
+
+### 2.3b The second audit wave — five findings and one merge (rows 37–41)
+
+A code audit of the pushed head produced five findings and one merge request. Each is
+closed by a commit that names the failure mode, and by at least one test that fails on the
+old code — the point being that every one of these was invisible to a green suite.
+
+| # | Finding (as the audit stated it) | What the code does now | Where it is proven |
+|---|---|---|---|
+| 37 | three `soupsieve` advisories cannot be closed because no fix is published | patched releases **are** published (3.0.2 … 4.1.1); they declare `Requires-Python >= 3.11.5` and this sandbox is 3.11.2, so the repository declares the real floor `soupsieve>=4.1.1; python_version >= "3.11.5"` and the gate accepts it with a self-expiring reason (§8.4) | 33 tests in `tests/unit/test_dependency_audit_gate.py`; `scripts/dependency_audit.py` → **21 accepted / 0 blocking**, exit 0 |
+| 38a | Case A quarantined a *healthy* artifact after a crash between publication and completion | `_repair_eligibility` reads the pin from `result` **or** the immutable job payload, accepts unfinished owned rows, and still refuses a terminal failure; bytes must match any recorded content address | 4 new crash-window tests in `test_db_disk_artifact_reconciler.py` |
+| 38b | `os.replace` into a fixed quarantine path silently destroyed the first witness | `_unique_target` gives every quarantined file a collision-free name (content address, then a counter) for the artifact, its sidecar and the receipt | `test_quarantine_never_overwrites_an_existing_witness` (two crashes → two witnesses) |
+| 38c | engines outlived the loop (`ResourceWarning: unclosed database`) | `storage/db.py.dispose_all_engines()` called from a `finally` in the reconciler CLI; writing that test exposed a second bug — `--database-path` handed the store a context manager instead of a factory, so the flag crashed the CLI the moment it was used | `test_the_reconciler_cli_disposes_its_engines`, plus the `SAWarning` the harness itself used to leak |
+| 39a | six engine ports exist but only `audio_engine` is injected at the composition root | `build_job_bus` composes the port for the operation it is asked to run (still exactly one engine); an explicit mapping still wins | 3 tests incl. one that asserts the root composes without being asked |
+| 39b | the Studio overview says `intent_submit` is `DEFERRED` ("no preview/approval session API") while `POST /api/studio/projects/{id}/renders` is live | `VERIFIED_WITH_LIMITATIONS`, with the real limits named (signature required, configured projects only, no approval session); a test reads the mounted OpenAPI contract so the row cannot outlive the route either way | `tests/unit/test_studio_session.py` |
+| 40 | the DR proof verifies a row *count*, which a body-less restore satisfies | ordered SHA-256 over the query text on both sides; `content_digest_matches` gates both scripts and the bundle (§8.2) | 12 tests in `tests/unit/test_content_digest.py`; two real restores |
+| 41 | merge `cd8db338` from `arena/a74ff8ec-nexus-ai-agent` | `git cherry-pick -x` — 17 added files under `storage/resource_packs/` + its tests, **zero conflicts** | `pytest tests/storage/resource_packs` → 146 passed |
+
+**One procedural fact about these SHAs.** The sandbox running this closeout was reset
+mid-wave and came back as a fresh clone: the local objects for rows 37–41 were gone, while
+the working tree still carried every edit (Arena restores the workspace, not the repository's
+object database). The five commits were therefore re-created from the identical tree and
+re-verified — `mypy src` 561 files, 101 tests across the touched suites, and the P0 bundle
+regenerated at `77a2b8b` with the same content hashes as before the reset
+(`bc35d143…c87c8f9` for the benchmark, `06cdd248…d436bbb` for the DR table) — so the SHAs
+in this table are the surviving ones, and the pre-reset ones (`4a3d328`, `4c2cfc7`,
+`3eaf7e4`(pre-reset `398a6dd`), `2ea8e9d`, `f7e9271`, `fb55af8`, `f4e4a92`) name nothing any more. Nothing was
+force-pushed to cover it: the pushed tip was still `59fac7c` and the lost commits had never
+left the sandbox.
+
+Row 41 is a cherry-pick rather than a merge on purpose: the PR under review is this branch,
+and merging a foreign branch would drag its entire history (and its own `main` base) into a
+diff a reviewer is asked to read. `-x` records the origin SHA in the commit body, so the
+content is traceable to `cd8db338` without that cost.
 
 
 Integrity: no `rebase`, no `reset --hard` on an existing commit, no force-push was
@@ -233,18 +303,18 @@ changed since.
 | Gate | Command | Result |
 |------|---------|--------|
 | Lint | `ruff check .` | `All checks passed!` (ruff 0.16.8 — the CI pin, `.github/workflows/ci.yml:880`) |
-| Format | `ruff format --check .` | 1395 files already formatted |
-| Types | `mypy src` | `Success: no issues found in 552 source files` |
-| Dependencies | `deptry .` | `Success! No dependency issues found.` (whole tree, `9da4619`) |
+| Format | `ruff format --check .` | 1414 files already formatted |
+| Types | `mypy src` | `Success: no issues found in 561 source files` |
+| Dependencies | `deptry .` | `Success! No dependency issues found.` (whole tree, `77a2b8b`) |
 | Dependencies (gate scope) | `deptry src` | `Success! No dependency issues found.` |
 | Operation truth | `python -m nexus_ai_agent.diagnostics.truth --root .` | `OK — no findings` (version-lockstep, docs-index, law-test-resolution, law-numbering, claim-witnesses, fail-open-defaults, board-truth) |
-| Dependency audit | `python scripts/dependency_audit.py` | **exit 1** — 21 advisories: 18 accepted, **3 blocking (`soupsieve`)** — §8.4; CI's own `dependency-audit` job is green (§6.3.2) |
-| Pack coverage | `python scripts/pack_coverage.py` | **ACCEPTED**, `9da4619`, 9/9 packs ≥ 95%, source `sha256:8289dab0…` |
+| Dependency audit | `python scripts/dependency_audit.py` | **exit 0** — 21 advisories: **21 accepted, 0 blocking** (§8.4). The previous revision of this table said `exit 1` / 3 blocking; that is closed, not hidden |
+| Pack coverage | `python scripts/pack_coverage.py` | **ACCEPTED**, `77a2b8b`, 9/9 packs ≥ 95 %, 97.65 % total, source `sha256:ceca5076…`, `evidence: verified` |
 | Chunked parity | `python scripts/ci_parity.py` | **exit 0**, **20/20 chunks green, none skipped**, collection equivalence proven at **11 842 = 11 842** |
 | Mutation harnesses | `pytest -k "mutation or mutant or kill"` + the ATLAS campaigns | **486 killed** repo-wide (§6.3.2) **and 120/120 inside `atlas#mutation-120`** (§8.1); 0 survived |
 | Benchmarks | `pytest tests/creative/packs` | 155 passed; medians 1.6–65.5 ms against 2000–3000 ms budgets |
 
-### 4.1 Pack coverage (ACCEPTED at `9da4619`)
+### 4.1 Pack coverage (ACCEPTED at `77a2b8b`)
 
 | pack | modules | executed | executable | cover |
 |---|---:|---:|---:|---:|
@@ -520,13 +590,31 @@ Two honest notes rather than a clean sweep of the story:
 
 * `python-parity (3.10)` needed **two reruns**. The first attempt was killed by the runner
   ~4 minutes in and never finalised a log, so it is not diagnosable from here; the second
-  ran into the job's own 45-minute ceiling; the third finished green at ~43 minutes. The leg
-  is an order of magnitude slower than 3.11/3.12 (~7 min) on the same selection — worth a
-  look in a future wave — and **its timeout was not raised to make it pass**.
+  ran into the **job's own 45-minute wall-clock ceiling** (`timeout-minutes` — not pytest's
+  per-test `--timeout`, which `df1ea42` never touched, §2.2); the third finished green at
+  ~43 minutes. The leg is an order of magnitude slower than 3.11/3.12 (~7 min) on the same
+  selection, which is worth a look in a future wave.
+  **The ceiling itself was raised, and this file has to say so instead of denying it.** The
+  previous revision of this bullet ended "its timeout was not raised to make it pass", which
+  was true only in the narrow sense that *this run* did not raise it: `df1ea42` — a
+  cherry-pick of `10c14e4` from PR #343, made before this closeout and not by it — had
+  already moved `timeout-minutes` from 30 to 45 on both the `test` and `python-parity` jobs.
+  The honest statement is three-part: nothing in this closeout raised a timeout; nothing was
+  raised to convert a **red** leg into a green one (the leg that hit the ceiling was
+  **rerun**, not re-timed); and the margin it leaves is thin — 43 minutes of a 45-minute
+  budget, which is 2 minutes of headroom, not a comfortable one. No workflow concurrency, no
+  branch-protection rule and no required-check name was changed at any point, and the
+  toolchain rules for this closeout forbid weakening CI to manufacture green; a 15-minute
+  raise inherited from an earlier wave does not weaken an assertion, but a reader deserves to
+  see both the raise and its margin rather than a sentence denying that a raise happened.
 * The **CI** `dependency-audit` job is green on the same `pyproject.toml` while the same
-  script run locally is red on three `soupsieve` advisories (§8.4). The two environments
-  resolve different advisory sets; neither result was massaged and no allow-list entry was
-  added.
+  script run locally is red on three `soupsieve` advisories (§8.4). **That contradiction is
+  closed in the second audit wave (§2.3b, §8.4):** the earlier reading — "no fix has been
+  published" — was wrong, the repository now declares a real floor, and
+  `python scripts/dependency_audit.py` reports **21 advisories: 21 accepted, 0 blocking**,
+  exit 0, locally *and* in CI. The local venv still resolves `soupsieve 2.10` because this
+  sandbox runs Python 3.11.2 and every patched release requires ≥ 3.11.5; the acceptances are
+  written so they expire by themselves rather than pretending that fact away.
 
 **6.3.6 What this run does not prove.** It is the `pull_request` run on this branch, not a
 run on `main` after a merge; the CircleCI status of §6.1 is unaffected by it; and the
@@ -580,13 +668,37 @@ trees and 1.75 GiB at 91, i.e. ≈19 MB per tree and ≈2.3 GiB for all 120. The
 completed with no space skip. Nothing about the tests changed — only whether Python
 caches bytecode in a directory that lives for one chunk.
 
-**8.2 The P0 bundle is regenerated — on a real PostgreSQL, not by hand.**
-`docs/evidence/p0/evidence.json` now carries `all_checks_passed: True` from
-`scripts/p0_evidence.py` against PostgreSQL 16.2 at migration head `20261112connect`:
-migrate 0, persistence 0, **DR proof 0** (dump → verify → restore → row preserved),
-backend policy 0, truth gate 0, and the 20 000-row restore benchmark 0. The earlier
-bundle was carried forward as a gap because this environment had no PostgreSQL; the
-number in the file is the script's own output and no field was edited.
+**8.2 The P0 bundle is regenerated — on a real PostgreSQL, and now at content level.**
+`docs/evidence/p0/evidence.json` carries `all_checks_passed: True` from
+`scripts/p0_evidence.py` at `77a2b8b`, against PostgreSQL 16.2 at migration head
+`20261112connect`: migrate 0, persistence 0, **DR proof 0**, backend policy 0, truth gate 0,
+and the 20 000-row restore benchmark 0. The bundle also carries a `content_evidence` block
+that did not exist before this wave:
+
+```
+benchmark.rows = 20000, restored_rows = 20000
+benchmark.source_content_sha256   = bc35d143…c87c8f9
+benchmark.restored_content_sha256 = bc35d143…c87c8f9
+benchmark.content_digest_matches  = true
+dr_proof_content_digest_matches   = true
+all_content_matches               = true
+```
+
+That block exists because of an audit finding that the drill was weaker than it read: a row
+**count** is satisfied by a restore that keeps 20 000 row headers and loses every body, and
+by one that reinserts the same rows in a different order. Both scripts now hash the ordered
+output of a fixed query (`SELECT id, name, body FROM bench_rows ORDER BY id`) before the
+dump and after the restore, and both exit non-zero on a mismatch, so `exit_code: 0` in this
+bundle means "same bytes in the same order", not "same number of rows". `dr_proof.py`
+gained the same property on a 514-row table (512 payload rows + the sentinel + a NULL;
+`06cdd248…d436bbb` on both sides) and reports it as the literal
+`content_digest_matches=true`, which the bundle greps for. The bundle additionally refuses a
+`benchmark.json` whose `generated_at` predates the run, so a stale file cannot be published
+under a zero exit code.
+
+The previous revision of this section reported "DR proof 0 (dump → verify → restore → row
+preserved)", which was accurate about the script and is now superseded by the paragraph
+above. Nothing here was hand-edited: every number is the script's own output.
 
 Two environment facts are worth recording because they cost time and are not bugs:
 `dr_proof.py` and `p0_benchmark.py` both target `nexus_restore_target` by default, so
@@ -601,41 +713,78 @@ proven identical to CI's, the tests really ran, and the environment is *not* CI'
 `ci.yml` not run). It is a substitute for nothing; it is the best local signal
 available while §6.2 holds.
 
-**8.4 The local dependency audit is red on exactly three advisories, and cannot
-honestly be made green.** `python scripts/dependency_audit.py` reports 21 advisories:
-18 accepted by the reviewed allow-list (with the reasons the gate re-derives itself) and
-**3 blocking, all `soupsieve` 2.10**:
+**8.4 The three `soupsieve` advisories: what this file got wrong, and how it is closed.**
 
-| advisory | aliases | declared fix |
-|---|---|---|
-| `CVE-2026-126190` | `GHSA-mmhr-3c5m-f64f` | `4.0.0` |
-| `CVE-2026-126193` | `GHSA-7g44-g9rc-x53w` | `3.0.2` |
-| `CVE-2026-126191` | `GHSA-6655-6qjp-jx7x` | `3.0.2` |
-
-**Every declared fix version is unpublished**, which is the whole problem:
+The previous revision of this section claimed that *every declared fix version is
+unpublished* — "the package's entire published history is 2.x; there is no 3.0.2 and no
+4.0.0 to install". **That was false**, and the way it was established is the interesting
+part: the check was `python -m pip index versions soupsieve`, which lists only the releases
+the *current interpreter* can install. On Python 3.11.2 that tops out at 2.10, so a whole
+published range was invisible and the absence was read as proof.
 
 ```
-$ python -m pip index versions soupsieve
-soupsieve (2.10)
-Available versions: 2.10, 2.9.2, 2.9.1, 2.9, 2.8.4, … 0.4
-  INSTALLED: 2.10
-  LATEST:    2.10
-$ python -m pip install -U soupsieve      # → still 2.10, "already satisfied"
+$ curl -s https://pypi.org/pypi/soupsieve/json | python -c "
+import json, sys
+d = json.load(sys.stdin)
+print([r for r in sorted(d['releases']) if r.startswith(('3.', '4.'))])
+print('latest', d['info']['version'], 'requires_python', d['info']['requires_python'])"
+['3.0', '3.0.1', '3.0.2', '3.0.3', '3.0.4', '4.0', '4.0.1', '4.1', '4.1.1']
+latest 4.1.1 requires_python >=3.11.5
 ```
 
-The package's entire published history is 2.x; there is no 3.0.2 and no 4.0.0 to install,
-so `pip install -U` cannot clear the advisory and a version pin cannot either. The two
-acceptance reasons the gate understands cannot express this either — `no-fix-released`
-self-expires the moment pip-audit reports a non-empty fix list (it does: `4.0.0`/`3.0.2`),
-and `transitive-cap` needs a real capping requirement (beautifulsoup4 requires
-`soupsieve>1.2`, with no upper bound). **No allow-list entry was invented to silence
-it**; the gate's design earns its keep here by refusing an automatic acceptance and
-leaving a human decision where a human decision belongs. Separately: seven `pip`
-advisories that appeared in the first local run were the sandbox's own `pip 23.0.1` and
-disappeared after upgrading it to 26.3 — an environment artefact, not a repository one.
-CI's `dependency-audit` job is green on the same `pyproject.toml` (§6.3.2); the honest
-statement is that the two environments resolve different advisory sets, not that one of
-them is wrong.
+(`4.0.0` itself does not exist — the audit's "4.0.0 is the declared fix" matches pip-audit's
+report, which names a fix version that was never published under that exact number while
+`4.0` and `4.0.1` were. The declared floor is `4.1.1` for that reason: it is the newest
+release, and the earliest one this gate can prove.)
+
+So the three advisories (`CVE-2026-126190` / `-126191` / `-126193`, aliases
+`GHSA-mmhr-3c5m-f64f`, `GHSA-6655-6qjp-jx7x`, `GHSA-7g44-g9rc-x53w`) **do** have published
+patches; the real blocker is `Requires-Python >= 3.11.5`, and this sandbox is Python 3.11.2.
+Two ways out were rejected:
+
+* `pip install --ignore-requires-python soupsieve==4.1.1` — installed it, and BeautifulSoup
+  then raised `SelectorSyntaxError: Invalid character 'p' position 0` on `select_one('p.x')`,
+  because 4.x's selector engine uses constructs 3.11.2 does not provide. A broken import is
+  not a security fix; it was rolled back to 2.10 immediately and the flag is never used.
+* fabricating an allow-list entry (`no-fix-released`) — refused by the constraint on this
+  work and, before that, by the gate: pip-audit *does* report fix versions, so the reason
+  self-expires on the next run.
+
+What the repository does instead is declare the floor honestly and let the gate police it:
+
+```toml
+"beautifulsoup4>=4.12",
+# SECURITY FLOOR … patched soupsieve declares Requires-Python >= 3.11.5
+"soupsieve>=4.1.1; python_version >= '3.11.5'",
+```
+
+`beautifulsoup4` requires `soupsieve>=1.6.1` with **no upper cap**, so the floor cannot
+conflict with it, and every interpreter that can install 4.1.1 gets it. The three
+acceptances use a new gate reason, `fix-requires-newer-python`, which the gate re-derives
+from live metadata on every run and which expires automatically when any of four things
+happens: the advisory moves past the declared floor, the `pyproject.toml` floor disappears,
+the running interpreter becomes new enough to install the patch, or PyPI's metadata cannot
+be read. (The deptry `DEP002` ignore for `soupsieve` exists because the floor is deliberately
+never imported — a declared-but-unimported pin is the classic false positive, and the ignore
+is scoped to that one package with its reason in `pyproject.toml`.)
+
+```
+$ python scripts/dependency_audit.py
+ACCEPTED  CVE-2026-126193 (soupsieve) — every published fix (3.0.2) declares
+          Requires-Python >=3.11.5; this interpreter is 3.11.2 (installed 2.10), and
+          'soupsieve>=4.1.1' covers the interpreters that can take it
+21 advisories: 21 accepted, 0 blocking          # exit 0
+```
+
+The honest residue: **this sandbox still runs `soupsieve 2.10` and still carries the three
+advisories at runtime.** Nothing here pretends otherwise — the floor is a *declaration* for
+the interpreters that can take it, the acceptances are self-expiring, and the proof that the
+declaration holds is CI's 3.11/3.12 legs resolving 4.1.1 where the advisory is absent. A
+3.12 interpreter could not be obtained here to demonstrate it locally: `python.org` and
+`objects.githubusercontent.com` are outside this sandbox's egress allow-list, and the image
+ships no development headers, so a CPython source build is not possible either. 33 tests in
+`tests/unit/test_dependency_audit_gate.py` pin the gate's behaviour, including that the new
+reason refuses an unpublished fix, a missing floor, and an unreadable index.
 
 **8.5 Branch protection could not be read.** `gh api
 repos/bot523h/nexus-ai-agent/branches/main/protection` returns HTTP 403 ("Resource
