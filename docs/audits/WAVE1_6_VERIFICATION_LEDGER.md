@@ -310,7 +310,7 @@ changed since.
 | Operation truth | `python -m nexus_ai_agent.diagnostics.truth --root .` | `OK — no findings` (version-lockstep, docs-index, law-test-resolution, law-numbering, claim-witnesses, fail-open-defaults, board-truth) |
 | Dependency audit | `python scripts/dependency_audit.py` | **exit 0** — 21 advisories: **21 accepted, 0 blocking** (§8.4). The previous revision of this table said `exit 1` / 3 blocking; that is closed, not hidden |
 | Pack coverage | `python scripts/pack_coverage.py` | **ACCEPTED**, `77a2b8b`, 9/9 packs ≥ 95 %, 97.65 % total, source `sha256:ceca5076…`, `evidence: verified` |
-| Chunked parity | `python scripts/ci_parity.py` | **exit 0**, **20/20 chunks green, none skipped**, collection equivalence proven at **11 842 = 11 842** |
+| Chunked parity | `python scripts/ci_parity.py` | **exit 0**, **20/20 chunks green, none skipped**, collection equivalence proven at **12 021 = 12 021** (§4.2) |
 | Mutation harnesses | `pytest -k "mutation or mutant or kill"` + the ATLAS campaigns | **486 killed** repo-wide (§6.3.2) **and 120/120 inside `atlas#mutation-120`** (§8.1); 0 survived |
 | Benchmarks | `pytest tests/creative/packs` | 155 passed; medians 1.6–65.5 ms against 2000–3000 ms budgets |
 
@@ -338,7 +338,7 @@ holds no `.coverage*` file.
 Collection proof (before execution):
 
 ```
-collection: CI 11842 ids, union 11842 ids, missing 0, duplicated 0, unexpected 0
+collection: CI 12021 ids, union 12021 ids, missing 0, duplicated 0, unexpected 0
 collection equivalence proven: the chunks are exactly the CI selection
 ```
 
@@ -346,30 +346,30 @@ Twenty chunks, every one green, **nothing skipped for space**:
 
 | Chunk | Result | Collected | Wall |
 |---|---|---:|---:|
-| `tests/architecture` | 406 passed | 406 | 64.9 s |
-| `tests/bench` | 3 passed | 3 | 0.8 s |
-| `tests/creative/atlas#mutation-120` | **124 passed** (the 120-mutant receipt) | 124 | 711.9 s |
-| `tests/creative/atlas#falsification-160` | 190 passed | 190 | 10.2 s |
-| `tests/creative/atlas#titan-mutations` | 97 passed, 3 skipped | 100 | 197.1 s |
+| `tests/architecture` | 406 passed | 406 | 77.4 s |
+| `tests/bench` | 3 passed | 3 | 1.8 s |
+| `tests/creative/atlas#mutation-120` | 124 passed (the 120-mutant receipt) | 124 | 780.9 s |
+| `tests/creative/atlas#falsification-160` | 190 passed | 190 | 11.2 s |
+| `tests/creative/atlas#titan-mutations` | 97 passed, 3 skipped | 100 | 217.7 s |
 | `tests/creative/atlas#prometheus-governance` | 164 passed, 9 skipped | 173 | 13.3 s |
-| `tests/creative/atlas#waves-13-22` | 406 passed, 1 skipped | 407 | 10.9 s |
-| `tests/creative/atlas#waves-23-30-and-solvers` | 510 passed, 8 skipped | 518 | 13.2 s |
-| `tests/creative/audio_engine` | 163 passed | 163 | 4.4 s |
-| `tests/creative/chronos` | 240 passed | 240 | 13.1 s |
-| `tests/creative/composition` | 306 passed | 306 | 85.7 s |
-| `tests/creative/director` | 68 passed | 68 | 0.9 s |
-| `tests/creative/episode_causality_lab` | 183 passed | 183 | 7.6 s |
+| `tests/creative/atlas#waves-13-22` | 406 passed, 1 skipped | 407 | 12.1 s |
+| `tests/creative/atlas#waves-23-30-and-solvers` | 510 passed, 8 skipped | 518 | 14.5 s |
+| `tests/creative/audio_engine` | 163 passed | 163 | 6.0 s |
+| `tests/creative/chronos` | 240 passed | 240 | 14.3 s |
+| `tests/creative/composition` | 306 passed | 306 | 86.2 s |
+| `tests/creative/director` | 68 passed | 68 | 2.1 s |
+| `tests/creative/episode_causality_lab` | 183 passed | 183 | 7.3 s |
 | `tests/creative/morpheus` | 281 passed | 281 | 4.4 s |
-| `tests/creative/packs` | 155 passed | 155 | 7.9 s |
-| `tests/creative/speech_cinema` | 284 passed, 4 deselected | 284 | 32.2 s |
-| `tests/creative/veritas` | 648 passed | 648 | 18.2 s |
-| `tests/integration` | 661 passed, 36 skipped | 697 | 260.2 s |
-| `tests/storage` | 43 passed | 43 | 0.8 s |
-| `tests/unit` | 6838 passed, 15 skipped | 6853 | 673.5 s |
+| `tests/creative/packs` | 155 passed | 155 | 7.7 s |
+| `tests/creative/speech_cinema` | 284 passed, 4 deselected | 284 | 35.4 s |
+| `tests/creative/veritas` | 648 passed | 648 | 17.8 s |
+| `tests/integration` | 661 passed, 36 skipped, 1035 warnings | 697 | 260.1 s |
+| `tests/storage` | 189 passed | 189 | 7.4 s |
+| `tests/unit` | 6872 passed, 14 skipped, 292 warnings | 6886 | 695.1 s |
 
-**Totals: 11 770 passed, 72 skipped, 4 deselected (outside the CI marker selection),
-0 failed, 0 errors — 11 842 executed = 11 842 in the CI selection, ~36 min of wall
-time.** The skips are environmental and self-describing: FFmpeg/ffprobe absent on this
+**Totals: 11 950 passed, 71 skipped, 4 deselected (outside the CI marker selection),
+0 failed, 0 errors — 12 021 executed = 12 021 in the CI selection, ~38 min of wall
+time** (`tests/unit` alone is 11:29, and the 120-mutant chunk is 12:48). The skips are environmental and self-describing: FFmpeg/ffprobe absent on this
 machine (the ATLAS media mutants say so in their own skip reason), the core-only
 optional-extras legs, and the CI-leg validation that is inert off CI.
 
@@ -418,7 +418,7 @@ regenerated truth:
 
 Two counts measure different things and are both given deliberately: **82** is the
 number of *operations* the truth engine proves are executed by the suite (from the same
-AST resolution pass the doctor re-checks, so it cannot drift from the tree); **11 770**
+AST resolution pass the doctor re-checks, so it cannot drift from the tree); **11 950**
 is the number of *tests* the chunked parity run executed (§4.2). The regeneration moved
 only `source_revision` 946e48e → f574e48 and `generated_at`: every measured field is
 unchanged, which is what a tree without registry changes should produce.
@@ -649,13 +649,13 @@ are now measured rather than argued:
   ledger and never frees a tree. Splitting the tree into chunks therefore did not bound
   it; suppressing bytecode did (§8.1.1);
 * the split is only worth anything if it is proven, so `SUB_CHUNKS` is checked against
-  the CI selection before execution (`11842 = 11842`, §4.2) and by a unit test that pins
+  the CI selection before execution (`12021 = 12021`, §4.2) and by a unit test that pins
   the sub-chunks as disjoint and exhaustive.
 
 Result of the whole tree, in §4.2: **1491 passed, 21 skipped** over the six sub-chunks
 (`124 + 190 + 97 + 164 + 406 + 510`), with the 120-mutant campaign itself at
-**124 passed in 711.9 s** — the same numbers the tree produced last time it ran
-completely at `4bcee33`. The 21 skips are FFmpeg/ffprobe absence and are *not* counted
+**124 passed in 780.9 s** — the same kill count the tree produced the last time it ran
+completely at `4bcee33` (the wall time is this machine's, not the earlier one's). The 21 skips are FFmpeg/ffprobe absence and are *not* counted
 as kills; three of them say so explicitly ("mutant is only killed by a real-ffmpeg test
 that skips without ffmpeg/ffprobe on PATH (NOT a kill)").
 
