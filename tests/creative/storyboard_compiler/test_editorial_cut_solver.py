@@ -439,6 +439,37 @@ def test_compiled_manifest_sha256_is_deterministic_and_tamper_evident() -> None:
     mutated_script = dataclasses.replace(m1.script, total_duration_sec=999.0)
     assert verify_manifest_integrity(dataclasses.replace(m1, script=mutated_script)) is False
 
+    # F1: Tampering with ANY of the 5 top-level summary fields on CompiledStoryboardManifest
+    # (even if an adversary also recomputes manifest_sha256!) MUST return False.
+    from nexus_ai_agent.creative.storyboard_compiler.editorial_cut_solver import _compute_digests
+
+    summary_tamper_cases = [
+        dataclasses.replace(m1, axis_180_compliant=not m1.axis_180_compliant),
+        dataclasses.replace(m1, editorial_compliant=not m1.editorial_compliant),
+        dataclasses.replace(m1, eye_trace_compliant=not m1.eye_trace_compliant),
+        dataclasses.replace(m1, total_shots=m1.total_shots + 1),
+        dataclasses.replace(m1, total_duration_sec=m1.total_duration_sec + 0.5),
+    ]
+    for tampered in summary_tamper_cases:
+        # 1) Direct field mutation fails immediately.
+        assert verify_manifest_integrity(tampered) is False
+        # 2) Even if manifest_sha256 is recomputed over the tampered summary field,
+        # live re-derivation from script/shots/timeline still rejects it.
+        _, _, _, forged_manifest_sha, _ = _compute_digests(
+            tampered.schema_version,
+            tampered.script,
+            tampered.cinematography,
+            tampered.editorial,
+            total_scenes=tampered.total_scenes,
+            total_shots=tampered.total_shots,
+            total_duration_sec=tampered.total_duration_sec,
+            axis_180_compliant=tampered.axis_180_compliant,
+            editorial_compliant=tampered.editorial_compliant,
+            eye_trace_compliant=tampered.eye_trace_compliant,
+        )
+        forged = dataclasses.replace(tampered, manifest_sha256=forged_manifest_sha)
+        assert verify_manifest_integrity(forged) is False
+
 
 def test_end_to_end_compilation_of_english_persian_and_bilingual_scripts() -> None:
     english_10_shot = """\

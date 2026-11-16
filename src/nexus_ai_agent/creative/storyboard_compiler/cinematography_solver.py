@@ -23,7 +23,7 @@ for every shot of a parsed screenplay with zero external API calls:
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
@@ -47,6 +47,7 @@ Vec3Tuple = tuple[float, float, float]
 Mat3Tuple = tuple[Vec3Tuple, Vec3Tuple, Vec3Tuple]
 
 __all__ = [
+    "AxisEnforcementTrace",
     "AxisOfAction",
     "AxisVerificationReport",
     "CANONICAL_F_STOPS",
@@ -64,6 +65,7 @@ __all__ = [
     "SENSOR_WIDTH_MM",
     "SceneCinematographyPlan",
     "ScreenLookDirection",
+    "ShotCameraPlan",
     "ShotKind",
     "ShotScale",
     "TrajectorySample",
@@ -71,6 +73,7 @@ __all__ = [
     "build_look_at_pose",
     "build_rule_of_thirds_pose",
     "enforce_axis_of_action",
+    "enforce_axis_of_action_with_trace",
     "evaluate_trajectory_at",
     "generate_minimum_jerk_trajectory",
     "horizontal_axis_cross",
@@ -252,9 +255,11 @@ def so3_log(rotation: Sequence[Sequence[float]] | FloatArray, *, tol: float = 1e
     theta = math.atan2(sin_theta, cos_theta)
     if theta < 1e-8:
         return 0.5 * vee
-    if math.pi - theta < 1e-4:
-        # Near pi rotation, extract unit axis from the dominant column of (R + I) / 2.
-        sym = 0.5 * (rot + np.eye(3, dtype=np.float64))
+    if cos_theta < -0.99:
+        # Near pi rotation: extract unit axis at machine precision from the rank-1
+        # symmetric outer product S = 0.5*(R + R^T) - cos(theta)*I = (1 - cos(theta))*u*u^T
+        # and resolve hemisphere sign against the skew-symmetric vector vee(R - R^T).
+        sym = 0.5 * (rot + rot.T) - cos_theta * np.eye(3, dtype=np.float64)
         col_norms = np.linalg.norm(sym, axis=0)
         best = int(np.argmax(col_norms))
         axis: FloatArray = sym[:, best] / float(col_norms[best])
@@ -554,18 +559,37 @@ def axis_side_sign(
     return 0
 
 
-def enforce_axis_of_action(
+@dataclass(frozen=True)
+class AxisEnforcementTrace:
+    """Explicit geometric audit record of 180-degree axis enforcement on a 3D point."""
+
+    adjusted_position: Vec3Tuple
+    original_position: Vec3Tuple
+    original_axis_side: int
+    enforced_axis_side: int
+    original_signed_distance_m: float
+    enforced_signed_distance_m: float
+    was_axis_reflected: bool
+
+
+def enforce_axis_of_action_with_trace(
     camera_pos: Sequence[float] | FloatArray,
     axis: AxisOfAction,
     *,
     required_side: int,
     min_clearance_m: float = 0.35,
-) -> FloatArray:
-    """Guarantee ``camera_pos`` lies strictly on ``required_side`` of ``axis``.
+    strict: bool = False,
+) -> tuple[FloatArray, AxisEnforcementTrace]:
+    """Enforce ``required_side`` of ``axis`` and return ``(adjusted_pos, trace)``.
 
-    If ``camera_pos`` crosses or sits too close to the 180-degree line, it is
-    reflected orthogonally across the line of action in the horizontal plane while
-    preserving along-axis blocking and vertical height ``z``.
+    When ``camera_pos`` lies on the opposite half-plane or closer than
+    ``min_clearance_m`` to the 180-degree line:
+
+    * If ``strict=True``, raises :class:`CinematographyError` (a ``ValueError``
+      subclass) rather than silently reflecting/clamping the camera.
+    * If ``strict=False`` (default), reflects/clamps ``camera_pos`` orthogonally
+      into the valid half-plane and sets ``trace.was_axis_reflected = True`` along
+      with ``trace.original_axis_side`` (``-1``, ``0``, or ``+1``).
     """
     if required_side not in (-1, 1):
         raise CinematographyError(f"required_side must be +1 or -1, got {required_side!r}")
@@ -573,6 +597,7 @@ def enforce_axis_of_action(
         raise CinematographyError(f"min_clearance_m must be positive, got {min_clearance_m!r}")
 
     cam = _as_vec3(camera_pos, name="camera_pos")
+    orig_side = axis_side_sign(cam, axis.p1, axis.p2)
     p1_xy = axis.p1_vector[:2]
     d_xy = axis.axis_vector[:2]
     axis_unit = d_xy / axis.horizontal_length
@@ -585,11 +610,61 @@ def enforce_axis_of_action(
     signed_dist = float(np.dot(rel_xy, n_plus))
 
     if required_side * signed_dist >= min_clearance_m:
-        return cam.copy()
+        unchanged = cam.copy()
+        return unchanged, AxisEnforcementTrace(
+            adjusted_position=_to_vec3_tuple(unchanged),
+            original_position=_to_vec3_tuple(cam),
+            original_axis_side=orig_side,
+            enforced_axis_side=required_side,
+            original_signed_distance_m=signed_dist,
+            enforced_signed_distance_m=signed_dist,
+            was_axis_reflected=False,
+        )
+
+    if strict:
+        raise CinematographyError(
+            f"camera_pos {_to_vec3_tuple(cam)} violates 180-degree axis in strict mode "
+            f"(original_axis_side={orig_side}, required_side={required_side}, "
+            f"signed_distance_m={signed_dist:.6f}, min_clearance_m={min_clearance_m:.6f})"
+        )
 
     corrected_dist = float(required_side) * max(abs(signed_dist), min_clearance_m)
     new_xy = p1_xy + along * axis_unit + corrected_dist * n_plus
-    return np.array([float(new_xy[0]), float(new_xy[1]), float(cam[2])], dtype=np.float64)
+    adjusted = np.array([float(new_xy[0]), float(new_xy[1]), float(cam[2])], dtype=np.float64)
+    return adjusted, AxisEnforcementTrace(
+        adjusted_position=_to_vec3_tuple(adjusted),
+        original_position=_to_vec3_tuple(cam),
+        original_axis_side=orig_side,
+        enforced_axis_side=required_side,
+        original_signed_distance_m=signed_dist,
+        enforced_signed_distance_m=corrected_dist,
+        was_axis_reflected=True,
+    )
+
+
+def enforce_axis_of_action(
+    camera_pos: Sequence[float] | FloatArray,
+    axis: AxisOfAction,
+    *,
+    required_side: int,
+    min_clearance_m: float = 0.35,
+    strict: bool = False,
+) -> FloatArray:
+    """Guarantee ``camera_pos`` lies strictly on ``required_side`` of ``axis``.
+
+    If ``camera_pos`` crosses or sits too close to the 180-degree line, raises
+    :class:`CinematographyError` (``ValueError``) when ``strict=True``; otherwise
+    reflects/clamps it orthogonally across the line of action in the XY plane.
+    Use :func:`enforce_axis_of_action_with_trace` to inspect reflection metadata.
+    """
+    adjusted, _ = enforce_axis_of_action_with_trace(
+        camera_pos,
+        axis,
+        required_side=required_side,
+        min_clearance_m=min_clearance_m,
+        strict=strict,
+    )
+    return adjusted
 
 
 # --------------------------------------------------------------------------- #
@@ -977,6 +1052,12 @@ class CameraShotSpec:
     lens: LensSettings
     framing: RuleOfThirdsFraming
     trajectory: MinimumJerkTrajectory
+    original_axis_side: int = 1
+    was_axis_reflected: bool = False
+
+
+#: Alias for per-shot camera plan carrying 180-degree reflection provenance.
+ShotCameraPlan = CameraShotSpec
 
 
 @dataclass(frozen=True)
@@ -988,6 +1069,7 @@ class AxisVerificationReport:
     cross_products: tuple[float, ...]
     intentional_jumps: int
     violations: tuple[str, ...]
+    reflected_shot_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1049,6 +1131,7 @@ def verify_180_degree_rule(
         cross_products=tuple(crosses),
         intentional_jumps=jumps,
         violations=tuple(violations),
+        reflected_shot_indices=tuple(sh.shot_index for sh in shots if sh.was_axis_reflected),
     )
 
 
@@ -1133,8 +1216,10 @@ def _compute_camera_endpoints(
     move_type: CameraMoveType,
     dramatic_tension: float,
     shot_in_scene: int,
-) -> tuple[CameraPoseSE3, CameraPoseSE3, float]:
-    """Compute 180-degree-compliant start and end SE(3) poses plus optional crane lift."""
+    camera_override: Sequence[float] | FloatArray | None = None,
+    strict_axis: bool = False,
+) -> tuple[CameraPoseSE3, CameraPoseSE3, float, int, bool]:
+    """Compute 180-degree-compliant start/end SE(3) poses, crane lift, and axis trace."""
     d_xy = axis.axis_vector[:2] / axis.horizontal_length
     n_plus = np.array([d_xy[1], -d_xy[0]], dtype=np.float64)
     cam_normal = float(active_side) * n_plus  # points strictly into valid camera half-plane
@@ -1162,16 +1247,24 @@ def _compute_camera_endpoints(
     else:
         z_offset = 0.0
 
-    raw_start = np.array(
-        [
-            float(subject_pos[0] + horiz_offset[0]),
-            float(subject_pos[1] + horiz_offset[1]),
-            float(subject_pos[2] + z_offset),
-        ],
-        dtype=np.float64,
+    raw_start = (
+        _as_vec3(camera_override, name="camera_override")
+        if camera_override is not None
+        else np.array(
+            [
+                float(subject_pos[0] + horiz_offset[0]),
+                float(subject_pos[1] + horiz_offset[1]),
+                float(subject_pos[2] + z_offset),
+            ],
+            dtype=np.float64,
+        )
     )
-    cam_start = enforce_axis_of_action(
-        raw_start, axis, required_side=active_side, min_clearance_m=0.55
+    cam_start, start_trace = enforce_axis_of_action_with_trace(
+        raw_start,
+        axis,
+        required_side=active_side,
+        min_clearance_m=0.55,
+        strict=strict_axis,
     )
 
     # Mild Dutch roll only on extreme peak tension shots (keeps SO(3) exact).
@@ -1186,15 +1279,25 @@ def _compute_camera_endpoints(
 
     crane_arc = 0.0
     if move_type == CameraMoveType.STATIC:
-        return start_pose, start_pose, crane_arc
+        return (
+            start_pose,
+            start_pose,
+            crane_arc,
+            start_trace.original_axis_side,
+            start_trace.was_axis_reflected,
+        )
 
     if move_type == CameraMoveType.DOLLY:
         # Smooth push-in toward subject (clamped to keep safe axis clearance >= 0.50 m).
         to_subject = subject_pos - cam_start
         push_frac = 0.14 + 0.10 * dramatic_tension
         raw_end = cam_start + push_frac * to_subject
-        cam_end = enforce_axis_of_action(
-            raw_end, axis, required_side=active_side, min_clearance_m=0.50
+        cam_end, end_trace = enforce_axis_of_action_with_trace(
+            raw_end,
+            axis,
+            required_side=active_side,
+            min_clearance_m=0.50,
+            strict=strict_axis,
         )
         end_pose = build_rule_of_thirds_pose(
             cam_end,
@@ -1203,7 +1306,13 @@ def _compute_camera_endpoints(
             target_uv=target_uv,
             roll_rad=roll_rad,
         )
-        return start_pose, end_pose, crane_arc
+        return (
+            start_pose,
+            end_pose,
+            crane_arc,
+            start_trace.original_axis_side,
+            start_trace.was_axis_reflected or end_trace.was_axis_reflected,
+        )
 
     if move_type == CameraMoveType.PAN:
         # Fixed pedestal (zero translation), subtle horizontal lead reframe within safe margins.
@@ -1216,7 +1325,13 @@ def _compute_camera_endpoints(
             target_uv=end_uv,
             roll_rad=roll_rad,
         )
-        return start_pose, end_pose, crane_arc
+        return (
+            start_pose,
+            end_pose,
+            crane_arc,
+            start_trace.original_axis_side,
+            start_trace.was_axis_reflected,
+        )
 
     # CameraMoveType.CRANE: jib descent/rise + gentle lateral glide + smooth arc bell.
     lateral = 0.35 * d_xy
@@ -1229,7 +1344,13 @@ def _compute_camera_endpoints(
         ],
         dtype=np.float64,
     )
-    cam_end = enforce_axis_of_action(raw_end, axis, required_side=active_side, min_clearance_m=0.55)
+    cam_end, end_trace = enforce_axis_of_action_with_trace(
+        raw_end,
+        axis,
+        required_side=active_side,
+        min_clearance_m=0.55,
+        strict=strict_axis,
+    )
     crane_arc = 0.12
     end_pose = build_rule_of_thirds_pose(
         cam_end,
@@ -1238,7 +1359,13 @@ def _compute_camera_endpoints(
         target_uv=target_uv,
         roll_rad=roll_rad,
     )
-    return start_pose, end_pose, crane_arc
+    return (
+        start_pose,
+        end_pose,
+        crane_arc,
+        start_trace.original_axis_side,
+        start_trace.was_axis_reflected or end_trace.was_axis_reflected,
+    )
 
 
 def solve_scene_cinematography(
@@ -1248,6 +1375,8 @@ def solve_scene_cinematography(
     initial_axis_side: int = 1,
     starting_shot_index: int = 0,
     num_trajectory_samples: int = 11,
+    camera_overrides: Mapping[int, Sequence[float] | FloatArray] | None = None,
+    strict_axis: bool = False,
 ) -> SceneCinematographyPlan:
     """Solve camera poses, 180-degree blocking, optics, and trajectories for one scene."""
     if starting_shot_index < 0:
@@ -1321,7 +1450,18 @@ def solve_scene_cinematography(
             duration_sec=duration,
             shot_in_scene=local_idx,
         )
-        start_pose, end_pose, crane_arc = _compute_camera_endpoints(
+        shot_override = (
+            camera_overrides[local_idx]
+            if camera_overrides is not None and local_idx in camera_overrides
+            else None
+        )
+        (
+            start_pose,
+            end_pose,
+            crane_arc,
+            orig_axis_side,
+            was_reflected,
+        ) = _compute_camera_endpoints(
             subject_pos=subj_pos,
             subject_slot=slot,
             axis=resolved_axis,
@@ -1331,6 +1471,8 @@ def solve_scene_cinematography(
             move_type=move_type,
             dramatic_tension=elem.dramatic_tension,
             shot_in_scene=local_idx,
+            camera_override=shot_override,
+            strict_axis=strict_axis,
         )
 
         # Refine optical focus distance and DoF to exact 3D camera-to-subject distance.
@@ -1389,6 +1531,8 @@ def solve_scene_cinematography(
                 lens=lens,
                 framing=framing,
                 trajectory=trajectory,
+                original_axis_side=orig_axis_side,
+                was_axis_reflected=was_reflected,
             )
         )
 

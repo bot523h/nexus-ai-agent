@@ -17,17 +17,20 @@ from nexus_ai_agent.creative.storyboard_compiler.bilingual_script_parser import 
 from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import (
     CANONICAL_F_STOPS,
     CANONICAL_FOCAL_LENGTHS_MM,
+    AxisEnforcementTrace,
     AxisOfAction,
     CameraMoveType,
     CameraPoseSE3,
     CinematographyError,
     RuleOfThirdsPoint,
     ScreenLookDirection,
+    ShotCameraPlan,
     ShotScale,
     axis_side_sign,
     build_look_at_pose,
     build_rule_of_thirds_pose,
     enforce_axis_of_action,
+    enforce_axis_of_action_with_trace,
     evaluate_trajectory_at,
     generate_minimum_jerk_trajectory,
     horizontal_axis_cross,
@@ -119,10 +122,44 @@ def test_so3_exp_and_log_roundtrip_and_orthogonality(omega: tuple[float, float, 
 
     recovered = so3_log(rot)
     re_exp = so3_exp(recovered)
-    assert np.allclose(re_exp, rot, atol=1e-9)
+    assert float(np.linalg.norm(re_exp - rot)) < 1e-10
 
     k = skew_symmetric(omega)
     assert np.allclose(k.T, -k, atol=1e-15)
+
+
+@pytest.mark.parametrize(
+    "theta",
+    [
+        math.pi - 1e-3,
+        math.pi - 1e-4,
+        math.pi - 1e-7,
+        math.pi,
+    ],
+)
+@pytest.mark.parametrize(
+    "raw_axis",
+    [
+        (1.0, 0.0, 0.0),
+        (-1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+        (0.0, -1.0, 0.0),
+        (0.0, 0.0, 1.0),
+        (0.0, 0.0, -1.0),
+        (1.0, -2.0, 0.5),
+        (-0.6, -0.4, -1.1),
+    ],
+)
+def test_so3_log_machine_precision_near_and_at_pi(
+    theta: float,
+    raw_axis: tuple[float, float, float],
+) -> None:
+    unit = np.asarray(raw_axis, dtype=np.float64)
+    unit = unit / float(np.linalg.norm(unit))
+    rot = so3_exp(theta * unit)
+    recovered = so3_log(rot)
+    roundtrip_err = float(np.linalg.norm(so3_exp(recovered) - rot))
+    assert roundtrip_err < 1e-10, f"near-pi roundtrip error {roundtrip_err:.3e} >= 1e-10"
 
 
 def test_se3_pose_group_closure_inverse_and_refusals() -> None:
@@ -289,8 +326,77 @@ def test_enforce_axis_of_action_and_violation_detector() -> None:
     # Camera sitting directly on the axis line (cross_z == 0) is pushed off by min_clearance_m.
     on_axis = np.array([0.0, 0.0, 1.6], dtype=np.float64)
     assert axis_side_sign(on_axis, axis.p1, axis.p2) == 0
-    cleared = enforce_axis_of_action(on_axis, axis, required_side=1, min_clearance_m=0.5)
+    cleared, on_trace = enforce_axis_of_action_with_trace(
+        on_axis, axis, required_side=1, min_clearance_m=0.5
+    )
     assert cleared[1] == pytest.approx(-0.5, abs=1e-12)
+    assert isinstance(on_trace, AxisEnforcementTrace)
+    assert on_trace.was_axis_reflected is True
+    assert on_trace.original_axis_side == 0
+    assert on_trace.enforced_axis_side == 1
+
+    # Explicit trace checks for: (a) valid placement, (b) opposite side, (c) near-axis clearance,
+    # and strict=True ValueError enforcement on illegal / near-line placements.
+    valid_pos = np.array([0.0, -1.8, 1.6], dtype=np.float64)
+    unchanged, ok_trace = enforce_axis_of_action_with_trace(
+        valid_pos, axis, required_side=1, strict=True
+    )
+    assert np.allclose(unchanged, valid_pos, atol=1e-12)
+    assert ok_trace.was_axis_reflected is False
+    assert ok_trace.original_axis_side == 1
+
+    _, opp_trace = enforce_axis_of_action_with_trace(wrong_side, axis, required_side=1)
+    assert opp_trace.was_axis_reflected is True
+    assert opp_trace.original_axis_side == -1
+    assert opp_trace.enforced_axis_side == 1
+
+    near_same_side = np.array([0.1, -0.12, 1.6], dtype=np.float64)
+    near_fixed, near_trace = enforce_axis_of_action_with_trace(
+        near_same_side, axis, required_side=1, min_clearance_m=0.45
+    )
+    assert near_fixed[1] == pytest.approx(-0.45, abs=1e-12)
+    assert near_trace.was_axis_reflected is True
+    assert near_trace.original_axis_side == 1
+
+    with pytest.raises(ValueError, match="strict mode"):
+        enforce_axis_of_action(wrong_side, axis, required_side=1, strict=True)
+    with pytest.raises(ValueError, match="strict mode"):
+        enforce_axis_of_action(
+            near_same_side, axis, required_side=1, min_clearance_m=0.45, strict=True
+        )
+
+    # Multi-shot dialogue sequence where candidate cameras attempt illegal axis crossings:
+    # strict_axis=True rejects the crossing, while default mode reflects & records provenance.
+    multi_parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    overrides = {
+        2: (0.25, 2.20, 1.60),  # opposite side (-1) illegal crossing attempt
+        5: (0.00, 0.00, 1.60),  # directly on the 180-degree line (0)
+        7: (-0.15, -0.10, 1.60),  # inside forbidden near-axis clearance buffer (+1, <0.55m)
+    }
+    with pytest.raises(ValueError, match="strict mode"):
+        solve_scene_cinematography(
+            multi_parsed.scenes[0],
+            axis=axis,
+            camera_overrides=overrides,
+            strict_axis=True,
+        )
+
+    traced_plan = solve_scene_cinematography(
+        multi_parsed.scenes[0],
+        axis=axis,
+        camera_overrides=overrides,
+    )
+    assert traced_plan.axis_report.compliant is True
+    assert traced_plan.axis_report.reflected_shot_indices == (2, 5, 7)
+    assert isinstance(traced_plan.shots[2], ShotCameraPlan)
+    assert traced_plan.shots[0].was_axis_reflected is False
+    assert traced_plan.shots[0].original_axis_side == 1
+    assert traced_plan.shots[2].was_axis_reflected is True
+    assert traced_plan.shots[2].original_axis_side == -1
+    assert traced_plan.shots[5].was_axis_reflected is True
+    assert traced_plan.shots[5].original_axis_side == 0
+    assert traced_plan.shots[7].was_axis_reflected is True
+    assert traced_plan.shots[7].original_axis_side == 1
 
     # Forging an illegal crossing and an invalid rotation triggers verify_180_degree_rule.
     parsed = parse_bilingual_script("INT. ROOM - NIGHT\nREZA\nOne.\n\nSARA\nTwo.")

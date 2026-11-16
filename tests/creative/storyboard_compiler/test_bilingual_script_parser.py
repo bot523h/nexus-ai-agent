@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from nexus_ai_agent.creative.storyboard_compiler.bilingual_script_parser import (
@@ -183,6 +185,13 @@ def test_normalize_script_text_handles_arabic_variants_crlf_and_bidi() -> None:
 
 def test_normalize_script_text_preserves_zwnj_and_rejects_non_string() -> None:
     assert "\u200c" in normalize_script_text("می\u200cروم")
+    # Default normalize_digits=False preserves Persian and Arabic-Indic numerals in dialogue/prose.
+    assert normalize_script_text("ساعت ۱۲:۳۰ و کد ٤٥") == "ساعت ۱۲:۳۰ و کد ٤٥"
+    # Optional normalize_digits=True converts Persian (۰-۹) and Arabic-Indic (٠-٩) digits to ASCII.
+    assert (
+        normalize_script_text("ساعت ۱۲:۳۰ و کد ٠١٢٣٤٥٦٧٨٩", normalize_digits=True)
+        == "ساعت 12:30 و کد 0123456789"
+    )
     with pytest.raises(ScriptParseError, match="str"):
         normalize_script_text(123)  # type: ignore[arg-type]
 
@@ -639,6 +648,80 @@ The morning sun warms the pavement.
     assert isinstance(parsed.scenes[3].elements[1], ActionBeat)
     assert isinstance(parsed.scenes[3].elements[2], DialogueLine)
     assert parsed.scenes[3].elements[2].character == "ripley"
+
+
+def test_colon_action_disambiguation_vs_spoken_dialogue_and_heuristic_docs() -> None:
+    import nexus_ai_agent.creative.storyboard_compiler.bilingual_script_parser as parser_mod
+
+    # F4: Unquoted 3rd-person stage-direction colon lines are classified as ActionBeat
+    # with ambiguous_colon_action=True and character focus, NOT as spoken DialogueLine.
+    script = """\
+داخلی. اتاق نشیمن - شب
+
+علی: با دلخوری نگاه می‌کند.
+علی: «من دیگر برنمی‌گردم.»
+سارا: آرام کنار پنجره می‌نشیند.
+سارا: به علی خیره می‌شود.
+علی: من دیگر خسته شده‌ام.
+سارا: کجا می‌رود؟
+سارا: فردا دیر است.
+سارا: (با مکث)
+سارا: ...
+ALI: stares quietly at the door.
+ALI: Tomorrow will be fine.
+"""
+    parsed = parse_bilingual_script(script)
+    assert len(parsed.scenes) == 1
+    elems = parsed.scenes[0].elements
+
+    # 0 -> "علی: با دلخوری نگاه می‌کند." -> ActionBeat with character focus & flag.
+    e0 = elems[0]
+    assert isinstance(e0, ActionBeat)
+    assert e0.ambiguous_colon_action is True
+    assert e0.focus_characters == ("علی",)
+
+    # 1 -> "علی: «من دیگر برنمی‌گردم.»" -> genuine quoted DialogueLine.
+    e1 = elems[1]
+    assert isinstance(e1, DialogueLine)
+    assert e1.character == "علی"
+    assert "برنمی‌گردم" in e1.spoken_text
+    assert e1.timing.persian_syllable_count >= 6
+
+    # 2 & 3 -> unquoted 3rd-person actions ("می‌نشیند", "به علی خیره می‌شود").
+    e2 = elems[2]
+    e3 = elems[3]
+    assert isinstance(e2, ActionBeat) and e2.ambiguous_colon_action is True
+    assert e2.focus_characters == ("سارا",)
+    assert isinstance(e3, ActionBeat) and e3.ambiguous_colon_action is True
+    assert e3.focus_characters == ("سارا", "علی")
+
+    # 4..7 -> first-person speech, interrogative, declarative speech, silent beat -> DialogueLine.
+    assert isinstance(elems[4], DialogueLine) and elems[4].character == "علی"
+    assert isinstance(elems[5], DialogueLine) and elems[5].character == "سارا"
+    assert isinstance(elems[6], DialogueLine) and elems[6].character == "سارا"
+    assert isinstance(elems[7], DialogueLine) and elems[7].character == "سارا"
+    assert isinstance(elems[8], DialogueLine) and elems[8].character == "سارا"
+
+    # 9 -> English unquoted 3rd-person colon stage direction ("ALI: stares...").
+    assert isinstance(elems[9], ActionBeat) and elems[9].ambiguous_colon_action is True
+    assert elems[9].focus_characters == ("ALI",)
+    # 10 -> English spoken dialogue ("ALI: Tomorrow will be fine.").
+    assert isinstance(elems[10], DialogueLine) and elems[10].character == "ALI"
+
+    # Also verify a scene containing ONLY an ambiguous colon action registers the character
+    # and handles duplicate focus character entries cleanly.
+    solo = parse_bilingual_script("داخلی. راهرو - شب\nعلی: آرام وارد می‌شود و سکوت می‌کند.")
+    assert solo.characters == ("علی",)
+    assert isinstance(solo.scenes[0].elements[0], ActionBeat)
+    assert solo.scenes[0].elements[0].ambiguous_colon_action is True
+    assert solo.scenes[0].elements[0].focus_characters == ("علی",)
+
+    # F6: Verify speech-rate priors and source documentation explicitly identify heuristic nature.
+    src_text = Path(parser_mod.__file__).read_text(encoding="utf-8")
+    assert "Deterministic heuristic" in src_text
+    assert parser_mod.BASE_FA_SYLLABLES_PER_SEC == pytest.approx(4.4)
+    assert parser_mod.BASE_EN_SYLLABLES_PER_SEC == pytest.approx(4.2)
+    assert parser_mod.EMOTION_SPEECH_RATE[EmotionTag.NEUTRAL] == pytest.approx(1.0)
 
 
 def test_parser_refusals_on_empty_or_headingless_scripts() -> None:

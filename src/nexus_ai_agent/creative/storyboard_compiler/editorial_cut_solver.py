@@ -42,6 +42,7 @@ from .cinematography_solver import (
     ScreenLookDirection,
     ShotKind,
     solve_script_cinematography,
+    verify_180_degree_rule,
 )
 
 __all__ = [
@@ -835,6 +836,7 @@ def _serialize_script(script: ParsedScript) -> dict[str, Any]:
                         "dramatic_tension": _qfloat(el.dramatic_tension),
                         "focus_characters": list(el.focus_characters),
                         "intentional_axis_jump": el.intentional_axis_jump,
+                        "ambiguous_colon_action": el.ambiguous_colon_action,
                     }
                 )
         scenes_out.append(
@@ -881,6 +883,8 @@ def _serialize_cinematography(plans: Sequence[SceneCinematographyPlan]) -> dict[
                     "dramatic_tension": _qfloat(sh.dramatic_tension),
                     "emotion": sh.emotion.value,
                     "axis_side": sh.axis_side,
+                    "original_axis_side": sh.original_axis_side,
+                    "was_axis_reflected": sh.was_axis_reflected,
                     "axis_cross_z": _qfloat(sh.axis_cross_z),
                     "intentional_axis_jump": sh.intentional_axis_jump,
                     "pose_R": [[_qfloat(v) for v in row] for row in sh.pose.rotation],
@@ -923,6 +927,7 @@ def _serialize_cinematography(plans: Sequence[SceneCinematographyPlan]) -> dict[
                     "character_b": plan.axis.character_b,
                 },
                 "axis_compliant": plan.axis_report.compliant,
+                "reflected_shot_indices": list(plan.axis_report.reflected_shot_indices),
                 "shots": shots_out,
             }
         )
@@ -993,6 +998,13 @@ def _compute_digests(
     script: ParsedScript,
     cinematography: Sequence[SceneCinematographyPlan],
     editorial: EditorialTimelinePlan,
+    *,
+    total_scenes: int,
+    total_shots: int,
+    total_duration_sec: float,
+    axis_180_compliant: bool,
+    editorial_compliant: bool,
+    eye_trace_compliant: bool,
 ) -> tuple[str, str, str, str, dict[str, Any]]:
     script_dict = _serialize_script(script)
     cinema_dict = _serialize_cinematography(cinematography)
@@ -1004,6 +1016,12 @@ def _compute_digests(
 
     envelope = {
         "schema_version": schema_version,
+        "total_scenes": total_scenes,
+        "total_shots": total_shots,
+        "total_duration_sec": _qfloat(total_duration_sec),
+        "axis_180_compliant": bool(axis_180_compliant),
+        "editorial_compliant": bool(editorial_compliant),
+        "eye_trace_compliant": bool(eye_trace_compliant),
         "script_sha256": script_sha,
         "cinematography_sha256": cinema_sha,
         "editorial_sha256": edit_sha,
@@ -1083,19 +1101,33 @@ def build_compiled_manifest(
             f"editorial event count ({len(editorial.events)})"
         )
 
-    axis_ok = all(plan.axis_report.compliant for plan in cinema_tuple)
-    edit_ok = editorial.verification.compliant
-    eye_ok = editorial.verification.eye_trace_valid
+    total_scenes = len(script.scenes)
+    axis_ok = all(
+        verify_180_degree_rule(plan.shots, plan.axis).compliant and plan.axis_report.compliant
+        for plan in cinema_tuple
+    )
+    live_edit = verify_editorial_timeline(editorial)
+    edit_ok = live_edit.compliant and editorial.verification.compliant
+    eye_ok = live_edit.eye_trace_valid and editorial.verification.eye_trace_valid
 
     script_sha, cinema_sha, edit_sha, manifest_sha, _ = _compute_digests(
-        MANIFEST_SCHEMA_VERSION, script, cinema_tuple, editorial
+        MANIFEST_SCHEMA_VERSION,
+        script,
+        cinema_tuple,
+        editorial,
+        total_scenes=total_scenes,
+        total_shots=shot_count,
+        total_duration_sec=editorial.total_duration_sec,
+        axis_180_compliant=axis_ok,
+        editorial_compliant=edit_ok,
+        eye_trace_compliant=eye_ok,
     )
     return CompiledStoryboardManifest(
         schema_version=MANIFEST_SCHEMA_VERSION,
         script=script,
         cinematography=cinema_tuple,
         editorial=editorial,
-        total_scenes=len(script.scenes),
+        total_scenes=total_scenes,
         total_shots=shot_count,
         total_duration_sec=editorial.total_duration_sec,
         axis_180_compliant=axis_ok,
@@ -1109,7 +1141,7 @@ def build_compiled_manifest(
 
 
 def verify_manifest_integrity(manifest: CompiledStoryboardManifest) -> bool:
-    """Recompute all domain SHA-256 digests and return True iff ``manifest`` is untampered."""
+    """Recompute all summary invariants and SHA-256 digests; return True iff untampered."""
     for digest in (
         manifest.script_sha256,
         manifest.cinematography_sha256,
@@ -1119,11 +1151,59 @@ def verify_manifest_integrity(manifest: CompiledStoryboardManifest) -> bool:
         if not _SHA256_HEX_RE.match(digest):
             return False
 
+    expected_total_scenes = len(manifest.script.scenes)
+    expected_total_shots = sum(len(plan.shots) for plan in manifest.cinematography)
+    expected_elements = sum(len(sc.elements) for sc in manifest.script.scenes)
+    shots_duration = round(
+        sum(sh.duration_sec for plan in manifest.cinematography for sh in plan.shots), 6
+    )
+
+    live_axis_pairs = [
+        (verify_180_degree_rule(plan.shots, plan.axis).compliant, plan.axis_report.compliant)
+        for plan in manifest.cinematography
+    ]
+    axis_reports_consistent = all(live == cached for live, cached in live_axis_pairs)
+    expected_axis_ok = all(live for live, _ in live_axis_pairs)
+
+    live_edit_report = verify_editorial_timeline(manifest.editorial)
+    edit_reports_consistent = (
+        live_edit_report.compliant == manifest.editorial.verification.compliant
+        and live_edit_report.eye_trace_valid == manifest.editorial.verification.eye_trace_valid
+    )
+    expected_edit_ok = live_edit_report.compliant
+    expected_eye_ok = live_edit_report.eye_trace_valid
+
+    summary_valid = (
+        manifest.schema_version == MANIFEST_SCHEMA_VERSION
+        and len(manifest.cinematography) == expected_total_scenes
+        and manifest.total_scenes == expected_total_scenes
+        and expected_total_shots > 0
+        and expected_total_shots == expected_elements
+        and len(manifest.editorial.events) == expected_total_shots
+        and manifest.total_shots == expected_total_shots
+        and math.isfinite(manifest.total_duration_sec)
+        and abs(manifest.total_duration_sec - manifest.editorial.total_duration_sec) <= 1e-6
+        and abs(manifest.total_duration_sec - shots_duration) <= 1e-5
+        and axis_reports_consistent
+        and edit_reports_consistent
+        and manifest.axis_180_compliant is expected_axis_ok
+        and manifest.editorial_compliant is expected_edit_ok
+        and manifest.eye_trace_compliant is expected_eye_ok
+    )
+    if not summary_valid:
+        return False
+
     expected_script, expected_cinema, expected_edit, expected_manifest, _ = _compute_digests(
         manifest.schema_version,
         manifest.script,
         manifest.cinematography,
         manifest.editorial,
+        total_scenes=manifest.total_scenes,
+        total_shots=manifest.total_shots,
+        total_duration_sec=manifest.total_duration_sec,
+        axis_180_compliant=manifest.axis_180_compliant,
+        editorial_compliant=manifest.editorial_compliant,
+        eye_trace_compliant=manifest.eye_trace_compliant,
     )
     return (
         manifest.script_sha256 == expected_script

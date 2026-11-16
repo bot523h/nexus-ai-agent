@@ -120,9 +120,23 @@ class DeliveryMode(str, Enum):
     OFF_SCREEN = "OFF_SCREEN"
 
 
-#: Baseline conversational cinema speech rates (syllables / second).
+#: Baseline conversational Persian speech rate (syllables / second).
 BASE_FA_SYLLABLES_PER_SEC: Final[float] = 4.4
+"""Deterministic heuristic estimator (4.4 syl/s) for Persian pre-production timing.
+
+Calibrated for zero-API offline storyboard and animatic duration planning rather
+than speaker-specific acoustic measurement or corpus-trained prosody prediction.
+"""
+
+#: Baseline conversational English speech rate (syllables / second).
 BASE_EN_SYLLABLES_PER_SEC: Final[float] = 4.2
+"""Deterministic heuristic estimator (4.2 syl/s) for English pre-production timing.
+
+Calibrated for zero-API offline storyboard and animatic duration planning rather
+than speaker-specific acoustic measurement or corpus-trained prosody prediction.
+"""
+
+#: Auxiliary deterministic heuristic word-rate priors (words / second) for pre-production.
 _BASE_FA_WORDS_PER_SEC: Final[float] = 2.25
 _BASE_EN_WORDS_PER_SEC: Final[float] = 2.50
 
@@ -139,6 +153,12 @@ EMOTION_SPEECH_RATE: Final[dict[EmotionTag, float]] = {
     EmotionTag.SAD: 0.78,
     EmotionTag.HESITANT: 0.74,
 }
+"""Deterministic heuristic speech-rate multipliers for pre-production storyboard timing.
+
+Scales ``BASE_FA_SYLLABLES_PER_SEC`` and ``BASE_EN_SYLLABLES_PER_SEC`` by fixed,
+reproducible relative factors per ``EmotionTag`` to approximate dramatic tempo
+shifts during pre-visualization without external TTS/ASR inference.
+"""
 
 #: Emotion-conditioned pause duration multipliers.
 EMOTION_PAUSE_MULTIPLIER: Final[dict[EmotionTag, float]] = {
@@ -214,6 +234,7 @@ class ActionBeat:
     dramatic_tension: float
     focus_characters: tuple[str, ...] = ()
     intentional_axis_jump: bool = False
+    ambiguous_colon_action: bool = False
 
 
 SceneElement = DialogueLine | ActionBeat
@@ -892,6 +913,101 @@ _PERSIAN_VERB_ENDINGS: Final[tuple[str, ...]] = (
     "کرد",
 )
 
+_QUOTED_SPEECH_RE: Final[re.Pattern[str]] = re.compile(r'[«»"\u201c\u201d]')
+
+_DIALOGUE_PRONOUNS: Final[frozenset[str]] = frozenset(
+    {
+        "من",
+        "تو",
+        "شما",
+        "ما",
+        "منم",
+        "مرا",
+        "i",
+        "i'm",
+        "i'll",
+        "i've",
+        "me",
+        "my",
+        "you",
+        "you're",
+        "your",
+        "we",
+        "we're",
+        "our",
+        "let's",
+    }
+)
+
+#: Third-person Persian stage-direction verb endings (canonical space-separated form).
+_PERSIAN_COLON_ACTION_ENDINGS: Final[tuple[str, ...]] = (
+    "نگاه می کند",
+    "خیره می شود",
+    "وارد می شود",
+    "خارج می شود",
+    "می نشیند",
+    "برمی خیزد",
+    "بر می خیزد",
+    "بلند می شود",
+    "می ایستد",
+    "سکوت می کند",
+    "مکث می کند",
+    "می رود",
+    "برمی گردد",
+    "بر می گردد",
+    "لبخند می زند",
+    "پوزخند می زند",
+    "آه می کشد",
+    "نفس می کشد",
+    "تکان می دهد",
+    "گریه می کند",
+    "می خندد",
+    "زمزمه می کند",
+    "قدم می زند",
+    "می دود",
+    "نزدیک می شود",
+    "دور می شود",
+    "می کوبد",
+    "می بندد",
+    "باز می کند",
+    "برمی دارد",
+    "بر می دارد",
+    "می گذارد",
+    "می افتد",
+    "می چرخد",
+    "تکیه می دهد",
+    "دست می کشد",
+)
+
+#: Third-person singular English stage-direction lead verbs for unquoted colon actions.
+_ENGLISH_COLON_ACTION_LEADS: Final[frozenset[str]] = frozenset(
+    {
+        "looks",
+        "stares",
+        "glances",
+        "sits",
+        "stands",
+        "rises",
+        "walks",
+        "enters",
+        "exits",
+        "leaves",
+        "turns",
+        "steps",
+        "pauses",
+        "sighs",
+        "nods",
+        "shakes",
+        "smiles",
+        "frowns",
+        "weeps",
+        "slams",
+        "opens",
+        "closes",
+        "remains",
+    }
+)
+
 _PAREN_GROUP_RE: Final[re.Pattern[str]] = re.compile(r"\(([^()]+)\)")
 _NUMERIC_PAUSE_RE: Final[re.Pattern[str]] = re.compile(
     r"(?:(?:pause|beat|silence|مکث|سکوت)\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?|ثانیه)?|"
@@ -905,17 +1021,25 @@ _NUMERIC_PAUSE_RE: Final[re.Pattern[str]] = re.compile(
 # --------------------------------------------------------------------------- #
 
 
-def normalize_script_text(text: str) -> str:
-    """Normalize bilingual screenplay text while preserving ZWNJ and line breaks."""
+def normalize_script_text(text: str, *, normalize_digits: bool = False) -> str:
+    """Normalize bilingual screenplay text while preserving ZWNJ and line breaks.
+
+    When ``normalize_digits=True``, Persian (``۰-۹``) and Arabic-Indic (``٠-٩``)
+    numerals are also converted into ASCII digits (``0-9``). By default
+    (``normalize_digits=False``), native numerals in prose and dialogue are kept.
+    """
     if not isinstance(text, str):
         raise ScriptParseError(f"script text must be a str, got {type(text).__name__}")
     unified = unicodedata.normalize("NFC", text).replace("\r\n", "\n").replace("\r", "\n")
-    return unified.translate(_CHAR_TRANSLATION)
+    cleaned = unified.translate(_CHAR_TRANSLATION)
+    if normalize_digits:
+        return cleaned.translate(_DIGIT_TRANSLATION)
+    return cleaned
 
 
 def _canonical_key(text: str) -> str:
     """Map Persian/English phrase into a punctuation-stripped lookup key."""
-    ascii_digits = normalize_script_text(text).translate(_DIGIT_TRANSLATION).lower()
+    ascii_digits = normalize_script_text(text, normalize_digits=True).lower()
     no_diacritics = _DIACRITIC_RE.sub("", ascii_digits)
     spaced = re.sub(r"[\u200c_\-–—/]+", " ", no_diacritics)
     cleaned = re.sub(r"[^\w\s\u0600-\u06FF']", " ", spaced)
@@ -1472,6 +1596,39 @@ def _try_parse_colon_dialogue(line: str) -> tuple[str, DeliveryMode, list[str], 
     return char_name, delivery, parens, right
 
 
+def _is_unquoted_colon_stage_action(
+    raw_body: str,
+    header_parens: Sequence[str],
+    delivery: DeliveryMode,
+    *,
+    forced_cue: bool,
+) -> bool:
+    """Return True when an unquoted ``CHAR: ...`` line is 3rd-person stage action."""
+    if (
+        forced_cue
+        or delivery != DeliveryMode.ON_SCREEN
+        or bool(header_parens)
+        or bool(_QUOTED_SPEECH_RE.search(raw_body))
+    ):
+        return False
+
+    clause, _, _ = _extract_inline_directives(raw_body, ())
+    if not clause or clause.endswith(("?", "؟", "!")):
+        return False
+
+    canon = _canonical_key(clause)
+    tokens = canon.split()
+    if not tokens or any(tok in _DIALOGUE_PRONOUNS for tok in tokens):
+        return False
+
+    if _PERSIAN_CHAR_RE.search(clause):
+        return any(
+            canon == ending or canon.endswith(f" {ending}")
+            for ending in _PERSIAN_COLON_ACTION_ENDINGS
+        )
+    return tokens[0] in _ENGLISH_COLON_ACTION_LEADS
+
+
 def _is_standalone_character_cue(line: str, next_line: str | None) -> bool:
     """Determine whether ``line`` begins a standard multi-line dialogue block."""
     if next_line is None or not next_line.strip() or ":" in line:
@@ -1618,8 +1775,13 @@ def _finalize_scene(
     """Attach focus characters, optional atmospheric weather, and scene-level aggregates."""
     seen_chars: list[str] = []
     for elem in raw_elements:
-        if isinstance(elem, DialogueLine) and elem.character not in seen_chars:
-            seen_chars.append(elem.character)
+        if isinstance(elem, DialogueLine):
+            if elem.character not in seen_chars:
+                seen_chars.append(elem.character)
+        else:
+            for fc in elem.focus_characters:
+                if fc not in seen_chars:
+                    seen_chars.append(fc)
 
     effective_heading = heading
     if (
@@ -1643,7 +1805,11 @@ def _finalize_scene(
     resolved_elements: list[SceneElement] = []
     for idx, elem in enumerate(raw_elements):
         if isinstance(elem, ActionBeat):
-            focus = _find_focus_characters(elem.text, seen_chars)
+            detected_focus = _find_focus_characters(elem.text, seen_chars)
+            merged_focus: list[str] = list(elem.focus_characters)
+            for fc in detected_focus:
+                if fc not in merged_focus:
+                    merged_focus.append(fc)
             tension = _compute_action_tension(
                 elem.text,
                 effective_heading.time_of_day,
@@ -1657,8 +1823,9 @@ def _finalize_scene(
                     language=elem.language,
                     duration_sec=elem.duration_sec,
                     dramatic_tension=tension,
-                    focus_characters=focus,
+                    focus_characters=tuple(merged_focus),
                     intentional_axis_jump=elem.intentional_axis_jump,
+                    ambiguous_colon_action=elem.ambiguous_colon_action,
                 )
             )
         else:
@@ -1851,12 +2018,35 @@ def parse_bilingual_script(script_text: str) -> ParsedScript:
                 f"content encountered before first scene heading at line {idx + 1}: {line!r}"
             )
 
-        # Inline colon dialogue ("سارا (زمزمه): ..." or "REZA (coldly): ...").
+        # Inline colon line: disambiguate unquoted 3rd-person stage action vs spoken dialogue.
         colon_parsed = _try_parse_colon_dialogue(line)
         if colon_parsed is not None:
             _flush_action()
             char_name, delivery, header_parens, body = colon_parsed
-            _append_dialogue(char_name, delivery, header_parens, body)
+            if _is_unquoted_colon_stage_action(
+                body,
+                header_parens,
+                delivery,
+                forced_cue=line.startswith("@"),
+            ):
+                has_jump = pending_axis_jump or bool(_AXIS_JUMP_RE.search(body))
+                pending_axis_jump = False
+                clean_body = re.sub(r"\s+", " ", _AXIS_JUMP_RE.sub(" ", body)).strip()
+                action_text = f"{char_name}: {clean_body}"
+                current_elements.append(
+                    ActionBeat(
+                        element_index=len(current_elements),
+                        text=action_text,
+                        language=detect_language(action_text),
+                        duration_sec=estimate_action_duration(clean_body),
+                        dramatic_tension=0.30,
+                        focus_characters=(char_name,),
+                        intentional_axis_jump=has_jump,
+                        ambiguous_colon_action=True,
+                    )
+                )
+            else:
+                _append_dialogue(char_name, delivery, header_parens, body)
             idx += 1
             continue
 
