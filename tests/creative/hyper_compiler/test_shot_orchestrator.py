@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -16,6 +18,7 @@ from nexus_ai_agent.creative.hyper_compiler.bounded_memory_pipe_runner import (
 )
 from nexus_ai_agent.creative.hyper_compiler.errors import HyperCompilerError
 from nexus_ai_agent.creative.hyper_compiler.segment_cas_dag import (
+    SEGMENT_HEADER_LEN,
     SegmentStatus,
     TimelineSegmentSpec,
 )
@@ -25,6 +28,22 @@ from nexus_ai_agent.creative.hyper_compiler.shot_orchestrator import (
 )
 
 Frame = NDArray[np.uint8]
+
+
+def _ffmpeg_exe() -> str | None:
+    """Locate a usable FFmpeg: PATH first, else the imageio-ffmpeg bundle."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg  # type: ignore[import-untyped]
+
+        return cast(str, imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:  # pragma: no cover - environment without any FFmpeg
+        return None
+
+
+FFMPEG = _ffmpeg_exe()
 
 
 def make_spec(index: int, *, dna: str = "dna", value: int = 100) -> TimelineSegmentSpec:
@@ -107,7 +126,12 @@ def test_orchestrator_unchanged_segments_are_not_rewritten(tmp_path: Path) -> No
     orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
     timeline = [make_spec(i) for i in range(5)]
     orch.execute(timeline, frame_factory=frame_factory())
-    keys = {spec.segment_id: orch.planner.cas_key(spec) for spec in timeline}
+    keys = {
+        spec.segment_id: orch.planner.cas_key(
+            spec, pipeline_digest=default_pipe_spec(spec).fingerprint()
+        )
+        for spec in timeline
+    }
     before = {key: (tmp_path / f"{key}.nagarseg").stat().st_mtime_ns for key in keys.values()}
 
     changed = list(timeline)
@@ -121,6 +145,24 @@ def test_orchestrator_unchanged_segments_are_not_rewritten(tmp_path: Path) -> No
     # ...and only the changed segment was re-rendered under a fresh key.
     rendered = [seg for seg in second.segments if not seg.from_cache]
     assert [seg.segment_id for seg in rendered] == ["seg2"]
+
+
+def test_orchestrator_pipeline_change_re_renders_every_segment(tmp_path: Path) -> None:
+    """P1-4: a pipeline-knob change invalidates segments even if the spec is equal."""
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    timeline = [make_spec(i) for i in range(5)]
+    orch.execute(timeline, frame_factory=frame_factory())
+
+    # Same timeline, brighter pipeline: every segment must be re-rendered.
+    brighter = orch.execute(
+        timeline,
+        frame_factory=frame_factory(),
+        pipe_spec_factory=lambda s: FramePipelineSpec(
+            width=s.width, height=s.height, fps=s.fps, brightness=0.3
+        ),
+    )
+    assert brighter.plan.cache_hits == 0
+    assert brighter.receipt.rendered_segments == 5
 
 
 def test_orchestrator_cache_hit_payloads_are_byte_identical(tmp_path: Path) -> None:
@@ -147,6 +189,7 @@ def test_orchestrator_writes_output_file(tmp_path: Path) -> None:
     assert execution.output_path == out
     assert out.read_bytes()
     assert execution.output_digest == hashlib.sha256(out.read_bytes()).hexdigest()
+    assert execution.output_size == out.stat().st_size
 
 
 def test_orchestrator_execute_delta_is_equivalent(tmp_path: Path) -> None:
@@ -176,7 +219,8 @@ def test_orchestrator_render_segment_directly(tmp_path: Path) -> None:
     assert planned.status is SegmentStatus.RENDER_REQUIRED
     outcome = orch.render_segment(planned, frame_factory()(make_spec(0)))
     assert outcome.frames_processed == 3
-    assert orch.planner.verify_segment_artifact(planned.cas_key) == outcome.container
+    assert orch.planner.read_segment_artifact(planned.cas_key)
+    assert outcome.container_size == planned.artifact_path.stat().st_size - SEGMENT_HEADER_LEN
 
 
 def test_orchestrator_verify_timeline(tmp_path: Path) -> None:
@@ -194,14 +238,49 @@ def test_orchestrator_verify_timeline_skips_uncached(tmp_path: Path) -> None:
     assert orch.verify_timeline(timeline) == orch.plan(timeline).merkle_root
 
 
-def test_orchestrator_receipt_reports_mode(tmp_path: Path) -> None:
+def test_orchestrator_cpu_mode_receipt_reports_cpu(tmp_path: Path) -> None:
     orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    execution = orch.execute([make_spec(0)], frame_factory=frame_factory())
+    assert execution.receipt.mode == "deterministic_cpu_mux"
+    assert execution.segments[0].mode == "deterministic_cpu_mux"
+
+
+@pytest.mark.skipif(FFMPEG is None, reason="no FFmpeg available")
+def test_orchestrator_ffmpeg_mode_really_runs(tmp_path: Path) -> None:
+    """P1-1: FFMPEG_SUBPROCESS_PIPE must really drive the engine, not just label it."""
+    assert FFMPEG is not None
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024, ffmpeg_bin=FFMPEG)
     execution = orch.execute(
         [make_spec(0)],
         frame_factory=frame_factory(),
         mode=MuxMode.FFMPEG_SUBPROCESS_PIPE,
     )
     assert execution.receipt.mode == "ffmpeg_subprocess_pipe"
+    assert execution.segments[0].mode == "ffmpeg_subprocess_pipe"
+    assert execution.receipt.rendered_segments == 1
+    assert execution.output_size > 0
+    # A second run reuses the cached artifact and the receipt still says ffmpeg.
+    second = orch.execute(
+        [make_spec(0)],
+        frame_factory=frame_factory(),
+        mode=MuxMode.FFMPEG_SUBPROCESS_PIPE,
+    )
+    assert second.plan.cache_hits == 1
+    assert second.receipt.mode == "ffmpeg_subprocess_pipe"
+
+
+def test_orchestrator_ffmpeg_mode_fails_closed_without_binary(tmp_path: Path) -> None:
+    orch = HyperTimelineOrchestrator(
+        tmp_path, max_buffer_bytes=1024 * 1024, ffmpeg_bin="/nonexistent/ffmpeg-xyz"
+    )
+    from nexus_ai_agent.creative.hyper_compiler.errors import PipeExecutionError
+
+    with pytest.raises(PipeExecutionError):
+        orch.execute(
+            [make_spec(0)],
+            frame_factory=frame_factory(),
+            mode=MuxMode.FFMPEG_SUBPROCESS_PIPE,
+        )
 
 
 def test_orchestrator_peak_memory_stays_bounded(tmp_path: Path) -> None:
@@ -212,7 +291,11 @@ def test_orchestrator_peak_memory_stays_bounded(tmp_path: Path) -> None:
 
 def test_orchestrator_hmac_key_is_honoured(tmp_path: Path) -> None:
     orch = HyperTimelineOrchestrator(tmp_path, hmac_key=b"secret")
-    assert orch.planner.cas_key(make_spec(0)) == orch.plan([make_spec(0)]).segments[0].cas_key
+    spec = make_spec(0)
+    digest = default_pipe_spec(spec).fingerprint()
+    assert (
+        orch.planner.cas_key(spec, pipeline_digest=digest) == orch.plan([spec]).segments[0].cas_key
+    )
 
 
 def test_orchestrator_cache_hit_segment_reports_zero_peak(tmp_path: Path) -> None:

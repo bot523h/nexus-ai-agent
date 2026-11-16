@@ -133,6 +133,10 @@ def test_check_int_rejects_out_of_band() -> None:
         fgc._check_int(11, 0, 10, what="x")
 
 
+def test_as_float_narrows_optional() -> None:
+    assert fgc._as_float(-3.0) == -3.0
+
+
 # ── label / path validation (injection defence) ─────────────────────────────
 @pytest.mark.parametrize(
     "label",
@@ -272,6 +276,64 @@ def test_base_filter_op_methods_raise() -> None:
         base.output_pads()
     with pytest.raises(NotImplementedError):
         base.render()
+
+
+# ── loudnorm measured_* / linear mode (P2) ──────────────────────────────────
+def test_loudnorm_dynamic_render() -> None:
+    op = LoudnessNormOp("a0", "aout")
+    assert op.render() == "loudnorm=I=-16:TP=-1.5:LRA=11"
+
+
+def test_loudnorm_linear_render_emits_measurements() -> None:
+    op = LoudnessNormOp(
+        "a0",
+        "aout",
+        measured_i=-20.5,
+        measured_tp=-3.0,
+        measured_lra=6.0,
+        measured_thresh=-30.0,
+        linear=True,
+    )
+    rendered = op.render()
+    assert "measured_I=-20.5" in rendered
+    assert "measured_TP=-3" in rendered
+    assert "measured_LRA=6" in rendered
+    assert "measured_thresh=-30" in rendered
+    assert "linear=true" in rendered
+
+
+def test_loudnorm_measurements_without_linear_render_false() -> None:
+    op = LoudnessNormOp(
+        "a0",
+        "aout",
+        measured_i=-20.0,
+        measured_tp=-2.0,
+        measured_lra=5.0,
+        measured_thresh=-30.0,
+    )
+    assert "linear=false" in op.render()
+
+
+def test_loudnorm_rejects_partial_measurements() -> None:
+    with pytest.raises(InvalidFilterGraphError):
+        LoudnessNormOp("a0", "aout", measured_i=-20.0)
+
+
+def test_loudnorm_rejects_linear_without_measurements() -> None:
+    with pytest.raises(InvalidFilterGraphError):
+        LoudnessNormOp("a0", "aout", linear=True)
+
+
+def test_loudnorm_rejects_out_of_range_measurements() -> None:
+    with pytest.raises(InvalidFilterGraphError):
+        LoudnessNormOp(
+            "a0",
+            "aout",
+            measured_i=-100.0,
+            measured_tp=-2.0,
+            measured_lra=5.0,
+            measured_thresh=-30.0,
+        )
 
 
 # ── compile-time graph refusals ─────────────────────────────────────────────

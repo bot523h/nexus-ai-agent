@@ -82,6 +82,12 @@ def _check_int(value: int, low: int, high: int, *, what: str) -> int:
     return value
 
 
+def _as_float(value: float | None) -> float:
+    """Narrow an optional measurement the caller already proved present."""
+    assert value is not None  # guarded by the caller's all-or-none check
+    return value
+
+
 # ── Typed ops ───────────────────────────────────────────────────────────────
 class FilterOp:
     """Base class for a typed filter operation (video or audio)."""
@@ -365,7 +371,14 @@ class CrossfadeAudioOp(FilterOp):
 
 @dataclass(frozen=True)
 class LoudnessNormOp(FilterOp):
-    """EBU R128 loudness normalisation via ``loudnorm`` (linear apply pass)."""
+    """EBU R128 loudness normalisation via ``loudnorm``.
+
+    The base form (``linear`` unset) is a single-pass dynamic normalisation.
+    Supplying the four ``measured_*`` values of a first measurement pass enables
+    the two-pass *linear* mode (``linear=true``), which applies a constant gain
+    instead of dynamic gain.  All four measurements must be supplied together —
+    a partial set is refused, because FFmpeg ignores them without ``linear``.
+    """
 
     kind: ClassVar[StreamKind] = StreamKind.AUDIO
 
@@ -374,6 +387,11 @@ class LoudnessNormOp(FilterOp):
     integrated: float = -16.0
     true_peak: float = -1.5
     lra: float = 11.0
+    measured_i: float | None = None
+    measured_tp: float | None = None
+    measured_lra: float | None = None
+    measured_thresh: float | None = None
+    linear: bool = False
 
     def __post_init__(self) -> None:
         _check_label(self.in_pad, what="input pad")
@@ -381,6 +399,22 @@ class LoudnessNormOp(FilterOp):
         _check_range(self.integrated, -70.0, -5.0, what="loudnorm I")
         _check_range(self.true_peak, -9.0, 0.0, what="loudnorm TP")
         _check_range(self.lra, 1.0, 50.0, what="loudnorm LRA")
+        measured = (self.measured_i, self.measured_tp, self.measured_lra, self.measured_thresh)
+        supplied = [value for value in measured if value is not None]
+        if supplied and len(supplied) != 4:
+            raise InvalidFilterGraphError(
+                "loudnorm linear mode needs all of measured_i/measured_tp/"
+                "measured_lra/measured_thresh"
+            )
+        if self.linear and not supplied:
+            raise InvalidFilterGraphError("loudnorm linear=true requires the measured_* values")
+        if supplied:
+            _check_range(_as_float(self.measured_i), -70.0, 0.0, what="loudnorm measured_i")
+            _check_range(_as_float(self.measured_tp), -9.0, 0.0, what="loudnorm measured_tp")
+            _check_range(_as_float(self.measured_lra), 0.0, 99.0, what="loudnorm measured_lra")
+            _check_range(
+                _as_float(self.measured_thresh), -70.0, 0.0, what="loudnorm measured_thresh"
+            )
 
     def input_pads(self) -> tuple[str, ...]:
         return (self.in_pad,)
@@ -389,7 +423,18 @@ class LoudnessNormOp(FilterOp):
         return (self.out_pad,)
 
     def render(self) -> str:
-        return f"loudnorm=I={_num(self.integrated)}:TP={_num(self.true_peak)}:LRA={_num(self.lra)}"
+        parts = [
+            f"I={_num(self.integrated)}",
+            f"TP={_num(self.true_peak)}",
+            f"LRA={_num(self.lra)}",
+        ]
+        if self.measured_i is not None:
+            parts.append(f"measured_I={_num(self.measured_i)}")
+            parts.append(f"measured_TP={_num(_as_float(self.measured_tp))}")
+            parts.append(f"measured_LRA={_num(_as_float(self.measured_lra))}")
+            parts.append(f"measured_thresh={_num(_as_float(self.measured_thresh))}")
+            parts.append(f"linear={'true' if self.linear else 'false'}")
+        return "loudnorm=" + ":".join(parts)
 
 
 # ── Graph description ───────────────────────────────────────────────────────

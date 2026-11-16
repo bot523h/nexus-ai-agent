@@ -3,17 +3,26 @@
 A timeline is decomposed into deterministic :class:`TimelineSegmentSpec`
 segments.  Each segment gets a content-addressed key (:func:`segment_cas_key`)
 derived from a canonical, length-prefixed, type-tagged encoding of *every*
-choice that affects the rendered pixels/audio.  The timeline as a whole commits
-to an RFC 6962 Merkle root (:func:`timeline_merkle_root`) that also binds the
-leaf count, so two timelines with the same leaves but a different number of
-them cannot share a root.
+choice that affects the rendered pixels/audio — including the render-pipeline
+fingerprint (``pipeline_digest``), so changing a single knob such as brightness
+invalidates exactly the affected segments.  The timeline as a whole commits to an
+RFC 6962 Merkle root (:func:`timeline_merkle_root`) that also binds the leaf
+count, so two timelines with the same leaves but a different number of them
+cannot share a root.
 
 :class:`SegmentCASPlanner` diffs a new timeline against the artifacts already on
 disk and classifies each segment as ``CACHE_HIT`` or ``RENDER_REQUIRED``.  A
 20-segment timeline where a single segment changed therefore re-renders exactly
 one segment (95% cache hit) instead of twenty.  Every artifact is written
 atomically (``.tmp`` → ``fsync`` → ``os.replace``) and re-verified — content
-hash *and* on-disk file hash — before it is ever consumed (fail-closed).
+hash *and* on-disk file hash, streamed in fixed-size chunks so a whole timeline
+is never held in RAM — before it is ever consumed (fail-closed).
+
+Cache keys are validated against ``[0-9a-f]{64}`` and every derived path is
+confined to ``cache_dir``, so a hostile or corrupted key can never traverse out
+of the cache.  When an ``hmac_key`` is supplied the artifact manifest is sealed
+with HMAC-SHA256, so the artifact and its manifest cannot be rewritten
+independently without the key.
 """
 
 from __future__ import annotations
@@ -24,17 +33,26 @@ import hmac
 import json
 import math
 import os
+import re
 import struct
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import BinaryIO, Protocol
 
 from nexus_ai_agent.creative.hyper_compiler.errors import (
     HyperCompilerError,
     SegmentIntegrityError,
 )
+
+
+class ByteSink(Protocol):
+    """Anything bytes can be written to (a file handle or an in-memory buffer)."""
+
+    def write(self, data: bytes, /) -> int: ...
+
 
 #: Domain separators keep the three hash families (spec key, Merkle leaf,
 #: Merkle node) from ever colliding on the same byte string.
@@ -44,6 +62,10 @@ _ARTIFACT_MAGIC = b"NAGARSEG1"
 _KEY_HEX_LEN = 64
 _CONTENT_SHA_OFFSET = len(_ARTIFACT_MAGIC) + _KEY_HEX_LEN + 8
 _HEADER_LEN = _CONTENT_SHA_OFFSET + 32
+#: Public alias: byte length of the artifact header (``magic || key || len || sha``).
+SEGMENT_HEADER_LEN = _HEADER_LEN
+_CHUNK_BYTES = 64 * 1024
+_CAS_KEY_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def _length_prefixed(tag: bytes, payload: bytes) -> bytes:
@@ -51,11 +73,23 @@ def _length_prefixed(tag: bytes, payload: bytes) -> bytes:
     return tag + len(payload).to_bytes(8, "big") + payload
 
 
+def validate_cas_key(cas_key: str) -> str:
+    """Fail closed unless ``cas_key`` is exactly 64 lowercase hex characters.
+
+    The strict check is what makes :meth:`SegmentCASPlanner.artifact_path` safe:
+    a 64-character string containing ``/`` or ``..`` is refused before it can
+    ever reach the filesystem.
+    """
+    if not isinstance(cas_key, str) or _CAS_KEY_RE.fullmatch(cas_key) is None:
+        raise SegmentIntegrityError(f"cas_key must be 64 lowercase hex chars, got {cas_key!r}")
+    return cas_key
+
+
 @dataclass(frozen=True)
 class TimelineSegmentSpec:
     """One deterministic slice of a timeline (frames are half-open ``[s, e)``).
 
-    The four ``*_digest`` fields are opaque caller-supplied digests of the
+    The five ``*_digest`` fields are opaque caller-supplied digests of the
     upstream decisions (shot DNA, camera, lighting, audio) that feed the
     segment; they are folded into the content-addressed key so any upstream
     change invalidates exactly the affected segments.
@@ -101,8 +135,13 @@ class TimelineSegmentSpec:
         return self.end_frame - self.start_frame
 
 
-def canonical_spec_bytes(spec: TimelineSegmentSpec) -> bytes:
-    """Deterministic, length-prefixed, type-tagged encoding of a segment spec."""
+def canonical_spec_bytes(spec: TimelineSegmentSpec, *, pipeline_digest: str = "") -> bytes:
+    """Deterministic, length-prefixed, type-tagged encoding of a segment spec.
+
+    ``pipeline_digest`` is the render-pipeline fingerprint; folding it in means a
+    change to any pipeline knob (brightness, dissolve, trim, …) changes the key
+    even when the timeline spec itself is untouched.
+    """
     parts = (
         _length_prefixed(b"seg", spec.segment_id.encode("utf-8")),
         _length_prefixed(b"i64", struct.pack(">q", spec.start_frame)),
@@ -115,13 +154,19 @@ def canonical_spec_bytes(spec: TimelineSegmentSpec) -> bytes:
         _length_prefixed(b"lit", spec.lighting_digest.encode("utf-8")),
         _length_prefixed(b"aud", spec.audio_digest.encode("utf-8")),
         _length_prefixed(b"afx", spec.audio_filter_digest.encode("utf-8")),
+        _length_prefixed(b"pipe", pipeline_digest.encode("utf-8")),
     )
     return _SPEC_DOMAIN + b"".join(parts)
 
 
-def segment_cas_key(spec: TimelineSegmentSpec, *, hmac_key: bytes | None = None) -> str:
+def segment_cas_key(
+    spec: TimelineSegmentSpec,
+    *,
+    hmac_key: bytes | None = None,
+    pipeline_digest: str = "",
+) -> str:
     """Content-addressed key for ``spec`` (HMAC-SHA256 when a key is supplied)."""
-    data = canonical_spec_bytes(spec)
+    data = canonical_spec_bytes(spec, pipeline_digest=pipeline_digest)
     if hmac_key is not None:
         return hmac.new(hmac_key, data, hashlib.sha256).hexdigest()
     return hashlib.sha256(data).hexdigest()
@@ -196,6 +241,18 @@ class PlannedSegment:
     cas_key: str
     status: SegmentStatus
     artifact_path: Path
+    pipeline_digest: str = ""
+    content_sha: str = ""
+    body_size: int = 0
+
+
+@dataclass(frozen=True)
+class VerifiedSegment:
+    """Metadata proven by a streaming verification (no body retained)."""
+
+    cas_key: str
+    content_sha: str
+    body_size: int
 
 
 @dataclass(frozen=True)
@@ -254,14 +311,21 @@ def _encode_artifact(cas_key: str, body: bytes) -> bytes:
     )
 
 
-def _decode_artifact(raw: bytes) -> tuple[str, bytes]:
-    if len(raw) < _HEADER_LEN:
-        raise SegmentIntegrityError(f"artifact truncated: {len(raw)} bytes < header")
-    if raw[: len(_ARTIFACT_MAGIC)] != _ARTIFACT_MAGIC:
+def _parse_artifact_header(header: bytes) -> tuple[str, int, bytes]:
+    """Decode ``magic || key || content_len || content_sha`` from a header block."""
+    if len(header) < _HEADER_LEN:
+        raise SegmentIntegrityError(f"artifact header truncated: {len(header)} bytes")
+    if header[: len(_ARTIFACT_MAGIC)] != _ARTIFACT_MAGIC:
         raise SegmentIntegrityError("artifact magic mismatch")
-    key = raw[len(_ARTIFACT_MAGIC) : len(_ARTIFACT_MAGIC) + _KEY_HEX_LEN].decode("ascii")
-    (content_len,) = struct.unpack(">Q", raw[_CONTENT_SHA_OFFSET - 8 : _CONTENT_SHA_OFFSET])
-    content_sha = raw[_CONTENT_SHA_OFFSET:_HEADER_LEN]
+    key = header[len(_ARTIFACT_MAGIC) : len(_ARTIFACT_MAGIC) + _KEY_HEX_LEN].decode("ascii")
+    (content_len,) = struct.unpack(">Q", header[_CONTENT_SHA_OFFSET - 8 : _CONTENT_SHA_OFFSET])
+    content_sha = header[_CONTENT_SHA_OFFSET:_HEADER_LEN]
+    return key, content_len, content_sha
+
+
+def _decode_artifact(raw: bytes) -> tuple[str, bytes]:
+    """Decode a complete in-memory artifact (magic/key/length/hash + body)."""
+    key, content_len, content_sha = _parse_artifact_header(raw)
     body = raw[_HEADER_LEN:]
     if content_len != len(body):
         raise SegmentIntegrityError(
@@ -280,30 +344,62 @@ class SegmentCASPlanner:
         self._hmac_key = hmac_key
 
     # -- keys & paths -------------------------------------------------------
-    def cas_key(self, spec: TimelineSegmentSpec) -> str:
-        return segment_cas_key(spec, hmac_key=self._hmac_key)
+    def cas_key(self, spec: TimelineSegmentSpec, *, pipeline_digest: str = "") -> str:
+        return segment_cas_key(spec, hmac_key=self._hmac_key, pipeline_digest=pipeline_digest)
+
+    def _safe_cache_path(self, name: str) -> Path:
+        path = self.cache_dir / name
+        if not path.resolve().is_relative_to(self.cache_dir.resolve()):
+            raise SegmentIntegrityError(f"cache path escapes cache_dir: {name!r}")
+        return path
 
     def artifact_path(self, cas_key: str) -> Path:
-        return self.cache_dir / f"{cas_key}.nagarseg"
+        validate_cas_key(cas_key)
+        return self._safe_cache_path(f"{cas_key}.nagarseg")
 
     def manifest_path(self, cas_key: str) -> Path:
-        return self.cache_dir / f"{cas_key}.manifest.json"
+        validate_cas_key(cas_key)
+        return self._safe_cache_path(f"{cas_key}.manifest.json")
 
     # -- planning -----------------------------------------------------------
-    def plan(self, timeline: Sequence[TimelineSegmentSpec]) -> SegmentPlan:
+    def plan(
+        self,
+        timeline: Sequence[TimelineSegmentSpec],
+        *,
+        pipeline_digests: Sequence[str] | None = None,
+    ) -> SegmentPlan:
+        if pipeline_digests is not None and len(pipeline_digests) != len(timeline):
+            raise HyperCompilerError("pipeline_digests length must match the timeline")
         planned: list[PlannedSegment] = []
         keys: list[str] = []
-        for spec in timeline:
-            key = self.cas_key(spec)
+        for index, spec in enumerate(timeline):
+            digest = "" if pipeline_digests is None else pipeline_digests[index]
+            key = self.cas_key(spec, pipeline_digest=digest)
             keys.append(key)
             path = self.artifact_path(key)
             try:
-                self.verify_segment_artifact(key, path)
+                # Bounded, streaming verification: a whole segment is never
+                # materialised just to decide cache-hit vs re-render.
+                verified = self.verify_segment_artifact(key)
             except HyperCompilerError:
                 status = SegmentStatus.RENDER_REQUIRED
+                content_sha = ""
+                body_size = 0
             else:
                 status = SegmentStatus.CACHE_HIT
-            planned.append(PlannedSegment(spec, key, status, path))
+                content_sha = verified.content_sha
+                body_size = verified.body_size
+            planned.append(
+                PlannedSegment(
+                    spec,
+                    key,
+                    status,
+                    path,
+                    digest,
+                    content_sha=content_sha,
+                    body_size=body_size,
+                )
+            )
         cache_hits = sum(1 for seg in planned if seg.status is SegmentStatus.CACHE_HIT)
         return SegmentPlan(
             segments=tuple(planned),
@@ -313,39 +409,24 @@ class SegmentCASPlanner:
             render_required=len(planned) - cache_hits,
         )
 
-    # -- artifact lifecycle -------------------------------------------------
-    def write_segment_artifact(self, cas_key: str, payload: bytes) -> Path:
-        """Atomically persist ``payload`` under ``cas_key`` plus its manifest."""
-        path = self.artifact_path(cas_key)
-        raw = _encode_artifact(cas_key, payload)
-        atomic_write_bytes(path, raw)
-        manifest = {
+    # -- manifests ----------------------------------------------------------
+    def _write_manifest(self, cas_key: str, *, content_sha: str, file_sha: str, size: int) -> None:
+        manifest: dict[str, object] = {
             "cas_key": cas_key,
-            "content_sha256": hashlib.sha256(payload).hexdigest(),
-            "file_sha256": hashlib.sha256(raw).hexdigest(),
-            "size": len(raw),
+            "content_sha256": content_sha,
+            "file_sha256": file_sha,
+            "size": size,
         }
+        if self._hmac_key is not None:
+            sealed = json.dumps(manifest, sort_keys=True).encode("utf-8")
+            manifest["manifest_hmac"] = hmac.new(self._hmac_key, sealed, hashlib.sha256).hexdigest()
         atomic_write_bytes(
             self.manifest_path(cas_key),
             json.dumps(manifest, sort_keys=True).encode("utf-8"),
         )
-        return path
 
-    def commit_segment(self, spec: TimelineSegmentSpec, payload: bytes) -> Path:
-        """Render-and-cache a single segment; returns the artifact path."""
-        return self.write_segment_artifact(self.cas_key(spec), payload)
-
-    def verify_segment_artifact(self, cas_key: str, path: Path | None = None) -> bytes:
-        """Return the verified payload, or raise :class:`SegmentIntegrityError`.
-
-        Both the *content* hash (recomputed over the body) and the *on-disk file*
-        hash (recomputed over the whole artifact and compared to the manifest)
-        are checked before the bytes are handed back.
-        """
-        artifact = Path(path) if path is not None else self.artifact_path(cas_key)
-        if not artifact.is_file():
-            raise SegmentIntegrityError(f"segment artifact missing: {artifact}")
-        raw = artifact.read_bytes()
+    def read_manifest(self, cas_key: str) -> dict[str, object]:
+        """Load and validate the manifest (including its HMAC seal when keyed)."""
         manifest_file = self.manifest_path(cas_key)
         if not manifest_file.is_file():
             raise SegmentIntegrityError(f"segment manifest missing: {manifest_file}")
@@ -355,30 +436,201 @@ class SegmentCASPlanner:
             raise SegmentIntegrityError(f"segment manifest unreadable: {exc}") from exc
         if not isinstance(manifest, dict):
             raise SegmentIntegrityError("segment manifest is not an object")
-        if manifest.get("file_sha256") != hashlib.sha256(raw).hexdigest():
-            raise SegmentIntegrityError("segment file hash mismatch on disk")
-        if manifest.get("size") != len(raw):
-            raise SegmentIntegrityError("segment file size mismatch on disk")
-        stored_key, body = _decode_artifact(raw)
-        if stored_key != cas_key:
-            raise SegmentIntegrityError(f"artifact key mismatch: {stored_key} != {cas_key}")
-        if manifest.get("cas_key") != cas_key:
-            raise SegmentIntegrityError("manifest key mismatch")
-        if manifest.get("content_sha256") != hashlib.sha256(body).hexdigest():
-            raise SegmentIntegrityError("segment content hash mismatch on disk")
-        return body
+        if self._hmac_key is not None:
+            tag = manifest.pop("manifest_hmac", None)
+            if not isinstance(tag, str):
+                raise SegmentIntegrityError("segment manifest seal missing")
+            sealed = json.dumps(manifest, sort_keys=True).encode("utf-8")
+            expected = hmac.new(self._hmac_key, sealed, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(tag, expected):
+                raise SegmentIntegrityError("segment manifest seal mismatch")
+        return manifest
+
+    # -- artifact lifecycle -------------------------------------------------
+    def write_segment_artifact(self, cas_key: str, payload: bytes) -> Path:
+        """Atomically persist ``payload`` under ``cas_key`` plus its manifest."""
+        path = self.artifact_path(cas_key)
+        raw = _encode_artifact(cas_key, payload)
+        atomic_write_bytes(path, raw)
+        self._write_manifest(
+            cas_key,
+            content_sha=hashlib.sha256(payload).hexdigest(),
+            file_sha=hashlib.sha256(raw).hexdigest(),
+            size=len(raw),
+        )
+        return path
+
+    def commit_segment(self, spec: TimelineSegmentSpec, payload: bytes) -> Path:
+        """Render-and-cache a single segment; returns the artifact path."""
+        return self.write_segment_artifact(self.cas_key(spec), payload)
+
+    def commit_stream(
+        self,
+        cas_key: str,
+        source: BinaryIO,
+        *,
+        size: int,
+        digest: str,
+    ) -> Path:
+        """Atomically persist a payload streamed from ``source`` (bounded RAM).
+
+        ``size``/``digest`` describe the body (its length and SHA-256); the body
+        is copied in fixed-size chunks, so the artifact never has to exist in
+        memory as a whole.
+        """
+        validate_cas_key(cas_key)
+        if size < 0:
+            raise SegmentIntegrityError(f"payload size must be >= 0, got {size}")
+        try:
+            expected_sha = bytes.fromhex(digest)
+        except ValueError as exc:
+            raise SegmentIntegrityError(f"payload digest is not hex: {digest!r}") from exc
+        if len(expected_sha) != 32:
+            raise SegmentIntegrityError("payload digest must be a 32-byte SHA-256")
+        path = self.artifact_path(cas_key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+        tmp_path = Path(tmp_name)
+        header = _ARTIFACT_MAGIC + cas_key.encode("ascii") + struct.pack(">Q", size) + expected_sha
+        file_hasher = hashlib.sha256()
+        body_hasher = hashlib.sha256()
+        body_len = 0
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(header)
+                file_hasher.update(header)
+                while True:
+                    chunk = source.read(_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    file_hasher.update(chunk)
+                    body_hasher.update(chunk)
+                    body_len += len(chunk)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if body_len != size:
+                raise SegmentIntegrityError(f"streamed {body_len} bytes, expected {size}")
+            if body_hasher.digest() != expected_sha:
+                raise SegmentIntegrityError("streamed payload hash mismatch")
+            os.replace(tmp_path, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+            raise
+        self._write_manifest(
+            cas_key,
+            content_sha=digest,
+            file_sha=file_hasher.hexdigest(),
+            size=SEGMENT_HEADER_LEN + body_len,
+        )
+        return path
+
+    def verify_segment_artifact(self, cas_key: str, path: Path | None = None) -> VerifiedSegment:
+        """Verify the artifact and return its proven metadata (never its body).
+
+        The *content* hash (recomputed over the body) and the *on-disk file* hash
+        (recomputed over the whole artifact and compared to the manifest) are
+        both checked while streaming in fixed-size chunks, so verifying a large
+        artifact never materialises it in RAM.  Fail-closed: any mismatch raises
+        :class:`SegmentIntegrityError`.
+        """
+        handle, verified = self._open_verified(cas_key, path)
+        handle.close()
+        return verified
+
+    def read_segment_artifact(self, cas_key: str, path: Path | None = None) -> bytes:
+        """Return the verified payload of ``cas_key`` (fail-closed)."""
+        handle, _ = self._open_verified(cas_key, path)
+        try:
+            chunks: list[bytes] = []
+            while True:
+                chunk = handle.read(_CHUNK_BYTES)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        finally:
+            handle.close()
+        return b"".join(chunks)
+
+    def stream_segment_body(self, cas_key: str, sink: ByteSink) -> VerifiedSegment:
+        """Verify ``cas_key`` and copy its body to ``sink`` in fixed-size chunks.
+
+        The body is never held in memory as a whole, so assembling a final
+        timeline from many cached segments stays bounded regardless of length.
+        """
+        handle, verified = self._open_verified(cas_key, None)
+        try:
+            while True:
+                chunk = handle.read(_CHUNK_BYTES)
+                if not chunk:
+                    break
+                sink.write(chunk)
+        finally:
+            handle.close()
+        return verified
+
+    def _open_verified(self, cas_key: str, path: Path | None) -> tuple[BinaryIO, VerifiedSegment]:
+        """Verify ``cas_key`` fully, then return an open handle positioned at the body."""
+        validated = validate_cas_key(cas_key)
+        artifact = Path(path) if path is not None else self.artifact_path(validated)
+        if not artifact.is_file():
+            raise SegmentIntegrityError(f"segment artifact missing: {artifact}")
+        manifest = self.read_manifest(validated)
+        handle = artifact.open("rb")
+        try:
+            header = handle.read(SEGMENT_HEADER_LEN)
+            stored_key, content_len, content_sha = _parse_artifact_header(header)
+            file_hasher = hashlib.sha256()
+            file_hasher.update(header)
+            body_hasher = hashlib.sha256()
+            body_len = 0
+            while True:
+                chunk = handle.read(_CHUNK_BYTES)
+                if not chunk:
+                    break
+                file_hasher.update(chunk)
+                body_hasher.update(chunk)
+                body_len += len(chunk)
+            if stored_key != validated:
+                raise SegmentIntegrityError(f"artifact key mismatch: {stored_key} != {validated}")
+            if content_len != body_len:
+                raise SegmentIntegrityError(
+                    f"artifact length mismatch: header={content_len} body={body_len}"
+                )
+            if body_hasher.digest() != content_sha:
+                raise SegmentIntegrityError("artifact content hash mismatch")
+            if manifest.get("file_sha256") != file_hasher.hexdigest():
+                raise SegmentIntegrityError("segment file hash mismatch on disk")
+            if manifest.get("size") != SEGMENT_HEADER_LEN + body_len:
+                raise SegmentIntegrityError("segment file size mismatch on disk")
+            if manifest.get("cas_key") != validated:
+                raise SegmentIntegrityError("manifest key mismatch")
+            if manifest.get("content_sha256") != content_sha.hex():
+                raise SegmentIntegrityError("segment content hash mismatch on disk")
+            handle.seek(SEGMENT_HEADER_LEN)
+        except BaseException:
+            handle.close()
+            raise
+        verified = VerifiedSegment(
+            cas_key=validated, content_sha=content_sha.hex(), body_size=body_len
+        )
+        return handle, verified
 
 
 __all__ = [
+    "SEGMENT_HEADER_LEN",
     "PlannedSegment",
     "SegmentCASPlanner",
     "SegmentPlan",
     "SegmentStatus",
     "TimelineSegmentSpec",
+    "VerifiedSegment",
     "atomic_write_bytes",
     "canonical_spec_bytes",
     "merkle_root",
     "merkle_root_hex",
     "segment_cas_key",
     "timeline_merkle_root",
+    "validate_cas_key",
 ]

@@ -47,11 +47,13 @@ from nexus_ai_agent.creative.hyper_compiler.segment_cas_dag import (
     SegmentPlan,
     SegmentStatus,
     TimelineSegmentSpec,
+    VerifiedSegment,
     canonical_spec_bytes,
     merkle_root,
     merkle_root_hex,
     segment_cas_key,
     timeline_merkle_root,
+    validate_cas_key,
 )
 from nexus_ai_agent.creative.hyper_compiler.shot_orchestrator import (
     HyperTimelineOrchestrator,
@@ -94,6 +96,7 @@ __all__ = [
     "TimelineExecution",
     "TimelineSegmentSpec",
     "TrimOp",
+    "VerifiedSegment",
     "VignetteOp",
     "apply_tone",
     "canonical_spec_bytes",
@@ -103,4 +106,5 @@ __all__ = [
     "merkle_root_hex",
     "segment_cas_key",
     "timeline_merkle_root",
+    "validate_cas_key",
 ]

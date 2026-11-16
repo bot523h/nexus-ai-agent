@@ -7,29 +7,40 @@ runner applies *backpressure* — it drains the buffer instead of growing it —
 a single frame that cannot fit is refused with
 :class:`MemoryBudgetExceededError`.
 
-Two execution modes:
+Processed frames are written straight to a file sink in fixed-size chunks, so
+the peak resident payload is bounded by the ring buffer, never by the clip
+length; a ``bytearray`` holding the whole timeline is never built.  Every frame
+is shape- and dtype-checked against its :class:`FramePipelineSpec` before use,
+and a closed trim range must yield exactly its expected frame count.
+
+Two execution modes, both ending in an immutable
+:class:`CompileExecutionReceipt`:
 
 * ``deterministic_cpu_mux`` — combine, tone-map, dissolve and trim purely with
-  NumPy and pack the result into the deterministic ``.nagarseg`` container
+  NumPy and pack the result into the deterministic ``.nagarmux`` container
   (magic + geometry + frame digest + payload).  Byte-identical across runs, so
   it works in environments with no FFmpeg.
-* ``ffmpeg_subprocess_pipe`` — assemble the full ``ffmpeg`` argv for a
-  ``-f rawvideo -pix_fmt rgb24`` pipe (list argv, never ``shell=True``).
-
-Both modes end in an immutable :class:`CompileExecutionReceipt`.
+* ``ffmpeg_subprocess_pipe`` — drive ``ffmpeg`` through a real
+  :class:`subprocess.Popen` pipe: frames are written to ``stdin`` one at a time
+  and the result is drained from ``stdout`` in fixed-size chunks, so the raw
+  frames are never collected in memory as a single blob.
 """
 
 from __future__ import annotations
 
 import hashlib
 import math
+import os
 import struct
 import subprocess
+import tempfile
+import threading
 from collections import deque
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import cast
+from pathlib import Path
+from typing import BinaryIO, Protocol, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -50,8 +61,16 @@ from nexus_ai_agent.creative.hyper_compiler.ffmpeg_filter_graph_compiler import 
 
 DEFAULT_MAX_BUFFER_BYTES = 32 * 1024 * 1024
 _MUX_MAGIC = b"NAGARMUX1"
+_MUX_HEADER_LEN = len(_MUX_MAGIC) + 4 + 4 + 8 + 8 + 32
+_CHUNK_BYTES = 64 * 1024
 
 Frame = NDArray[np.uint8]
+
+
+class ByteSink(Protocol):
+    """Anything bytes can be written to (a file handle or an in-memory buffer)."""
+
+    def write(self, data: bytes, /) -> int: ...
 
 
 class MuxMode(str, Enum):
@@ -59,9 +78,16 @@ class MuxMode(str, Enum):
     FFMPEG_SUBPROCESS_PIPE = "ffmpeg_subprocess_pipe"
 
 
+def _require_int(value: object, *, what: str) -> int:
+    """Strict integer check: a ``bool`` or a ``float`` is refused."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PipeExecutionError(f"{what} must be an int, got {type(value).__name__}")
+    return value
+
+
 @dataclass(frozen=True)
 class FramePipelineSpec:
-    """Deterministic, validated description of the frame pipeline."""
+    """Deterministic, strictly validated description of the frame pipeline."""
 
     width: int
     height: int
@@ -73,6 +99,11 @@ class FramePipelineSpec:
     trim_end: int | None = None
 
     def __post_init__(self) -> None:
+        _require_int(self.width, what="width")
+        _require_int(self.height, what="height")
+        _require_int(self.trim_start, what="trim_start")
+        if self.trim_end is not None:
+            _require_int(self.trim_end, what="trim_end")
         if self.width <= 0 or self.height <= 0:
             raise PipeExecutionError(f"invalid frame size {self.width}x{self.height}")
         if not math.isfinite(self.fps) or self.fps <= 0.0:
@@ -87,6 +118,37 @@ class FramePipelineSpec:
             raise PipeExecutionError(f"trim_start must be >= 0, got {self.trim_start}")
         if self.trim_end is not None and self.trim_end <= self.trim_start:
             raise PipeExecutionError("trim_end must be > trim_start")
+
+    @property
+    def frame_shape(self) -> tuple[int, int, int]:
+        return (self.height, self.width, 3)
+
+    @property
+    def expected_frame_count(self) -> int | None:
+        """Frames the pipeline must emit when the trim range is fully closed."""
+        if self.trim_end is None:
+            return None
+        return self.trim_end - self.trim_start
+
+    def fingerprint(self) -> str:
+        """Canonical SHA-256 of every knob that changes the rendered pixels.
+
+        Folded into the segment cache key so that flipping a single setting (for
+        example ``brightness``) invalidates exactly the affected segments.
+        """
+        payload = "|".join(
+            (
+                f"w={self.width}",
+                f"h={self.height}",
+                f"fps={self.fps!r}",
+                f"b={self.brightness!r}",
+                f"c={self.contrast!r}",
+                f"d={self.dissolve!r}",
+                f"ts={self.trim_start}",
+                f"te={self.trim_end!r}",
+            )
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -117,13 +179,21 @@ class CompileExecutionReceipt:
 
 @dataclass(frozen=True)
 class StreamOutcome:
-    """Result of streaming frame iterators through the pipeline."""
+    """Result of streaming frame iterables through the pipeline.
 
-    container: bytes
+    The container is *not* carried in memory: ``container_path`` points at the
+    file it was written to (when the caller did not supply its own sink).
+    """
+
     output_digest: str
+    body_digest: str
+    body_size: int
+    container_size: int
     frames_processed: int
     peak_buffer_bytes: int
     max_buffer_bytes: int
+    mode: MuxMode
+    container_path: Path | None = None
 
 
 class RingBufferFrameStore:
@@ -195,7 +265,14 @@ class BoundedMemoryPipeRunner:
         self.max_buffer_bytes = max_buffer_bytes
         self.ffmpeg_bin = ffmpeg_bin
 
-    # -- deterministic CPU mux ---------------------------------------------
+    # -- validation & CPU frame math ---------------------------------------
+    def validate_frame(self, frame: Frame, spec: FramePipelineSpec) -> None:
+        """Refuse a frame whose shape or dtype disagrees with ``spec``."""
+        if frame.ndim != 3 or frame.shape != spec.frame_shape:
+            raise PipeExecutionError(f"frame shape {frame.shape} does not match {spec.frame_shape}")
+        if frame.dtype != np.uint8:
+            raise PipeExecutionError(f"frame dtype must be uint8, got {frame.dtype}")
+
     def _process_frame(self, frame: Frame, spec: FramePipelineSpec, prev: Frame | None) -> Frame:
         out = apply_tone(frame, brightness=spec.brightness, contrast=spec.contrast)
         if spec.dissolve > 0.0 and prev is not None:
@@ -207,26 +284,27 @@ class BoundedMemoryPipeRunner:
             return False
         return spec.trim_end is None or index < spec.trim_end
 
-    def stream_many(
+    def _stream_body(
         self,
         segments: Iterable[Iterable[Frame]],
         spec: FramePipelineSpec,
-    ) -> StreamOutcome:
-        """Stream one-or-more frame iterables under a single shared ceiling.
+        body_handle: ByteSink,
+    ) -> tuple[int, str, int]:
+        """Stream processed frames into ``body_handle``; return (count, digest, peak).
 
         Frames leave the FIFO in arrival order, so the *consumed* counter is the
         source frame index used for the trim range — no per-frame index needs to
-        be buffered.
+        be buffered and no frame is retained once written.
         """
         store = RingBufferFrameStore(self.max_buffer_bytes)
-        payload = bytearray()
-        hasher = hashlib.sha256()
+        body_hasher = hashlib.sha256()
         processed = 0
         consumed_index = 0
         prev: Frame | None = None
 
         def consume(frame: Frame) -> None:
             nonlocal processed, prev, consumed_index
+            self.validate_frame(frame, spec)
             index = consumed_index
             consumed_index += 1
             if not self._in_trim_range(index, spec):
@@ -234,8 +312,8 @@ class BoundedMemoryPipeRunner:
             out = self._process_frame(frame, spec, prev)
             prev = out
             raw = out.tobytes()
-            hasher.update(raw)
-            payload.extend(raw)
+            body_handle.write(raw)
+            body_hasher.update(raw)
             processed += 1
 
         for segment in segments:
@@ -250,29 +328,109 @@ class BoundedMemoryPipeRunner:
                 break
             consume(buffered)
 
-        header = (
-            _MUX_MAGIC
-            + struct.pack(">II", spec.width, spec.height)
-            + struct.pack(">d", spec.fps)
-            + struct.pack(">Q", processed)
-            + hasher.digest()
-        )
-        container = header + bytes(payload)
-        return StreamOutcome(
-            container=container,
-            output_digest=hashlib.sha256(container).hexdigest(),
-            frames_processed=processed,
-            peak_buffer_bytes=store.peak_bytes,
-            max_buffer_bytes=self.max_buffer_bytes,
-        )
+        expected = spec.expected_frame_count
+        if expected is not None and processed != expected:
+            raise PipeExecutionError(
+                f"pipeline emitted {processed} frames, expected {expected} "
+                f"(trim range {spec.trim_start}..{spec.trim_end})"
+            )
+        return processed, body_hasher.hexdigest(), store.peak_bytes
+
+    # -- deterministic CPU mux ---------------------------------------------
+    def stream_many(
+        self,
+        segments: Iterable[Iterable[Frame]],
+        spec: FramePipelineSpec,
+        *,
+        sink: ByteSink | None = None,
+    ) -> StreamOutcome:
+        """Stream frame iterables under one shared ceiling into a container.
+
+        The frame body is buffered on disk (never in RAM), then the mux header
+        and body are written to ``sink`` (or to a fresh temporary file whose path
+        is returned on the outcome) in fixed-size chunks.
+        """
+        body_fd, body_name = tempfile.mkstemp(suffix=".nagarmux.body")
+        body_path = Path(body_name)
+        try:
+            with os.fdopen(body_fd, "wb") as body_handle:
+                count, body_digest, peak = self._stream_body(segments, spec, body_handle)
+            header = (
+                _MUX_MAGIC
+                + struct.pack(">II", spec.width, spec.height)
+                + struct.pack(">d", spec.fps)
+                + struct.pack(">Q", count)
+                + bytes.fromhex(body_digest)
+            )
+            container_path: Path | None = None
+            owned_handle: BinaryIO | None = None
+            out_handle: ByteSink
+            if sink is None:
+                out_fd, out_name = tempfile.mkstemp(suffix=".nagarmux")
+                container_path = Path(out_name)
+                owned_handle = os.fdopen(out_fd, "wb")
+                out_handle = owned_handle
+            else:
+                out_handle = sink
+            container_hasher = hashlib.sha256()
+            try:
+                out_handle.write(header)
+                container_hasher.update(header)
+                with body_path.open("rb") as body_reader:
+                    while True:
+                        chunk = body_reader.read(_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        out_handle.write(chunk)
+                        container_hasher.update(chunk)
+            finally:
+                if owned_handle is not None:
+                    owned_handle.flush()
+                    os.fsync(owned_handle.fileno())
+                    owned_handle.close()
+            body_size = count * spec.width * spec.height * 3
+            return StreamOutcome(
+                output_digest=container_hasher.hexdigest(),
+                body_digest=body_digest,
+                body_size=body_size,
+                container_size=_MUX_HEADER_LEN + body_size,
+                frames_processed=count,
+                peak_buffer_bytes=peak,
+                max_buffer_bytes=self.max_buffer_bytes,
+                mode=MuxMode.DETERMINISTIC_CPU_MUX,
+                container_path=container_path,
+            )
+        finally:
+            body_path.unlink(missing_ok=True)
 
     def stream(
         self,
         frames: Iterator[Frame],
         spec: FramePipelineSpec,
+        *,
+        sink: ByteSink | None = None,
     ) -> StreamOutcome:
         """Stream a single frame iterator under the memory ceiling."""
-        return self.stream_many([frames], spec)
+        return self.stream_many([frames], spec, sink=sink)
+
+    def stream_to_path(
+        self,
+        segments: Iterable[Iterable[Frame]],
+        spec: FramePipelineSpec,
+        path: Path,
+    ) -> StreamOutcome:
+        """Stream a container atomically to ``path`` (``.tmp`` → ``fsync`` → ``replace``)."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".nagarmux.tmp")
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(tmp_fd, "wb") as handle:
+                outcome = self.stream_many(segments, spec, sink=handle)
+            os.replace(tmp_path, path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        return outcome
 
     # -- ffmpeg subprocess pipe --------------------------------------------
     def build_ffmpeg_command(self, spec: FramePipelineSpec) -> list[str]:
@@ -321,24 +479,104 @@ class BoundedMemoryPipeRunner:
         output_args = ["-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
         return graph.ffmpeg_argv(input_args, output_args, ffmpeg_bin=self.ffmpeg_bin)
 
-    def run_ffmpeg_pipe(self, raw_frames: bytes, spec: FramePipelineSpec) -> bytes:
-        """Execute the rawvideo pipe; fail closed when FFmpeg is unavailable."""
+    def run_ffmpeg_stream(
+        self,
+        segments: Iterable[Iterable[Frame]],
+        spec: FramePipelineSpec,
+        *,
+        sink: ByteSink | None = None,
+    ) -> StreamOutcome:
+        """Drive ``ffmpeg`` over a real pipe, frame-in / chunk-out (fail-closed).
+
+        Frames are written to the process ``stdin`` one at a time from a writer
+        thread (so a full ``stdout`` buffer cannot deadlock us) while ``stdout``
+        and ``stderr`` are drained concurrently in fixed-size chunks.  The raw
+        frames are never collected in memory as a single blob.
+        """
         command = self.build_ffmpeg_command(spec)
         try:
-            completed = subprocess.run(
+            proc: subprocess.Popen[bytes] = subprocess.Popen(
                 command,
-                input=raw_frames,
-                capture_output=True,
-                check=False,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 shell=False,
-                timeout=600,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise PipeExecutionError(f"ffmpeg pipe failed to start: {exc}") from exc
-        if completed.returncode != 0:
-            detail = completed.stderr.decode("utf-8", "replace")[-400:]
-            raise PipeExecutionError(f"ffmpeg pipe exited {completed.returncode}: {detail}")
-        return completed.stdout
+        stdin = proc.stdin
+        stdout = proc.stdout
+        stderr_pipe = proc.stderr
+        assert stdin is not None and stdout is not None and stderr_pipe is not None
+        writer_error: list[BaseException] = []
+        frames_written = [0]
+        peak_frame_bytes = [0]
+
+        def feed() -> None:
+            try:
+                for segment in segments:
+                    for frame in segment:
+                        self.validate_frame(frame, spec)
+                        raw = frame.tobytes()
+                        peak_frame_bytes[0] = max(peak_frame_bytes[0], len(raw))
+                        stdin.write(raw)
+                        frames_written[0] += 1
+            except BaseException as exc:  # noqa: BLE001 - relayed to the main thread
+                writer_error.append(exc)
+            finally:
+                try:
+                    stdin.close()
+                except OSError:
+                    pass
+
+        def drain_stderr() -> None:
+            while stderr_pipe.read(_CHUNK_BYTES):
+                pass
+
+        writer = threading.Thread(target=feed, daemon=True)
+        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        writer.start()
+        stderr_thread.start()
+        container_hasher = hashlib.sha256()
+        total = 0
+        try:
+            while True:
+                chunk = stdout.read(_CHUNK_BYTES)
+                if not chunk:
+                    break
+                if sink is not None:
+                    sink.write(chunk)
+                container_hasher.update(chunk)
+                total += len(chunk)
+            writer.join()
+            stderr_thread.join()
+            returncode = proc.wait()
+        finally:
+            # Popen does not close the pipes it handed us; release them so a
+            # long-lived process never leaks a descriptor per segment.
+            for pipe in (stdout, stderr_pipe):
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+        if writer_error:
+            writer_exc = writer_error[0]
+            if isinstance(writer_exc, PipeExecutionError):
+                raise writer_exc
+            raise PipeExecutionError(f"ffmpeg pipe writer failed: {writer_exc}") from writer_exc
+        if returncode != 0:
+            raise PipeExecutionError(f"ffmpeg pipe exited {returncode}")
+        return StreamOutcome(
+            output_digest=container_hasher.hexdigest(),
+            body_digest=container_hasher.hexdigest(),
+            body_size=total,
+            container_size=total,
+            frames_processed=frames_written[0],
+            peak_buffer_bytes=peak_frame_bytes[0],
+            max_buffer_bytes=self.max_buffer_bytes,
+            mode=MuxMode.FFMPEG_SUBPROCESS_PIPE,
+            container_path=None,
+        )
 
     # -- receipts -----------------------------------------------------------
     def build_receipt(
