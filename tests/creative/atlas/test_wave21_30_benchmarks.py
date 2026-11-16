@@ -36,6 +36,9 @@ from nexus_ai_agent.creative.atlas import (
     olympus_master as master,
 )
 from nexus_ai_agent.creative.atlas import (
+    physical_frame_stream as physical,
+)
+from nexus_ai_agent.creative.atlas import (
     sdf_global_illumination as sdf,
 )
 from nexus_ai_agent.creative.atlas import (
@@ -90,9 +93,11 @@ def test_bench_sdf_ambient_occlusion() -> None:
 
 def test_bench_spectral_ocean() -> None:
     for n in (32, 64, 128):
-        kx, ky = np.meshgrid(np.linspace(-0.5, 0.5, n), np.linspace(-0.5, 0.5, n))
+        kx, ky = ocean.fft_wavenumber_grid(n, n, 100.0)
         med, mx, peak = _sample(
-            lambda kx=kx, ky=ky: ocean.spectral_height_field(ocean.jonswap_spectrum(kx, ky), seed=1)
+            lambda kx=kx, ky=ky: ocean.spectral_height_field(
+                ocean.jonswap_spectrum(kx, ky), seed=1, extent=100.0
+            )
         )
         _report(f"ocean_height n={n}", med, mx, peak)
         assert med < 3000.0
@@ -165,9 +170,19 @@ def test_bench_master_render(tmp_path: Path) -> None:
 def test_bench_real_encode(tmp_path: Path) -> None:
     fs = WorkspaceFilesystem(tmp_path)
     for frames in (12, 48, 120):
+        ocean_state = physical.OceanState(fps=24.0)
+        atmos = physical.AtmosphereState()
         med, mx, peak = _sample(
-            lambda frames=frames: media.synthesise_test_clip(
-                fs, f"c{frames}.mp4", width=128, height=72, frames=frames, fps=24
+            lambda frames=frames: media.encode_rgb24_stream(
+                fs,
+                f"c{frames}.mp4",
+                lambda i: physical.generate_physical_atlas_frame_rgb24(
+                    i, frames, 128, 72, ocean_state, atmos, seed=7
+                ),
+                width=128,
+                height=72,
+                frames=frames,
+                fps=24,
             )
         )
         _report(f"ffmpeg encode frames={frames}", med, mx, peak)

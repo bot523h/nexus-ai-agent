@@ -10,10 +10,12 @@ binaries, and it does so with an explicit, safe contract:
 * the produced media is re-opened with ``ffprobe`` and its stream geometry
   (codec, width, height, frame count, duration) is checked against the request.
 
-The synthesised clip is a moving test pattern; it is a *real* encoded artifact
-on disk, not a mock. If ``ffmpeg``/``ffprobe`` are unavailable the functions
-raise :class:`MediaSineUnavailable` with the exact missing binary name so the
-caller can report BLOCKED rather than pretend the render happened.
+Frames are never invented here: :func:`encode_rgb24_stream` pulls raw ``rgb24``
+frames one at a time from a caller-supplied source and pipes them to FFmpeg over
+``stdin``, so the encoded clip contains exactly the pixels the caller rendered and
+peak memory is one frame, not the whole clip. If ``ffmpeg``/``ffprobe`` are
+unavailable the functions raise :class:`MediaSineUnavailable` with the exact missing
+binary name so the caller can report BLOCKED rather than pretend the render happened.
 """
 
 from __future__ import annotations
@@ -21,6 +23,9 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, Final
@@ -35,7 +40,7 @@ __all__ = [
     "ffmpeg_available",
     "require_binary",
     "run_process",
-    "synthesise_test_clip",
+    "encode_rgb24_stream",
     "probe_media",
     "MAX_DIMENSION",
     "MAX_FRAMES",
@@ -108,22 +113,26 @@ def _even(value: int, name: str) -> int:
     return value - (value % 2)
 
 
-def synthesise_test_clip(
+def encode_rgb24_stream(
     filesystem: WorkspaceFilesystem,
     relative_path: str,
+    frame_source: Callable[[int], bytes],
     *,
-    width: int = 128,
-    height: int = 72,
-    frames: int = 24,
-    fps: int = 24,
+    width: int,
+    height: int,
+    frames: int,
+    fps: int,
     codec: str = "libx264",
     timeout: float = DEFAULT_TIMEOUT,
 ) -> MediaSineResult:
-    """Encode a real moving test-pattern clip into ``filesystem``.
+    """Encode ``frames`` raw ``rgb24`` frames pulled from ``frame_source`` into a clip.
 
-    The pattern is FFmpeg's ``testsrc`` with a frame counter drawn on top, so the
-    frames are visually distinct. The result is probed after encoding and the
-    observed geometry is asserted against the request.
+    ``frame_source(i)`` is called once per frame in order ``0 .. frames-1`` and must
+    return exactly ``width * height * 3`` bytes. The bytes go straight to FFmpeg's
+    ``stdin`` (``-f rawvideo -pix_fmt rgb24 -s WxH -r fps -i pipe:0``), so only one
+    frame is held by this process at a time. The whole run shares one wall-clock
+    ``timeout``; the output is re-opened with ``ffprobe`` and its geometry and frame
+    count are checked against the request.
     """
     ffmpeg = require_binary("ffmpeg")
     if not isinstance(frames, int) or isinstance(frames, bool) or frames < 1:
@@ -134,9 +143,12 @@ def synthesise_test_clip(
         raise MediaSineError("fps must be an int in [1, 240]")
     if codec not in {"libx264", "mpeg4"}:
         raise MediaSineError("codec must be 'libx264' or 'mpeg4'")
+    if timeout <= 0.0:
+        raise MediaSineError("timeout must be positive")
 
     w = _even(width, "width")
     h = _even(height, "height")
+    expected = w * h * 3
     target = filesystem.resolve(relative_path)
     target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -147,9 +159,15 @@ def synthesise_test_clip(
         "error",
         "-y",
         "-f",
-        "lavfi",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{w}x{h}",
+        "-r",
+        str(fps),
         "-i",
-        f"testsrc=size={w}x{h}:rate={fps}:duration={frames}",
+        "pipe:0",
         "-frames:v",
         str(frames),
         "-c:v",
@@ -158,9 +176,22 @@ def synthesise_test_clip(
         "yuv420p",
         str(target),
     ]
-    proc = run_process(argv, timeout=timeout)
-    if proc.returncode != 0:
-        raise MediaSineError(f"ffmpeg failed ({proc.returncode}): {proc.stderr.strip()[:400]}")
+    deadline = time.monotonic() + timeout
+    with tempfile.TemporaryFile() as err_file:
+        proc = subprocess.Popen(  # noqa: S603 - argument list, never shell=True
+            argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=err_file
+        )
+        try:
+            _pump_frames(proc, frame_source, frames, expected, deadline)
+            returncode = _wait_until(proc, deadline)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        if returncode != 0:
+            err_file.seek(0)
+            detail = err_file.read().decode("utf-8", "replace").strip()[:400]
+            raise MediaSineError(f"ffmpeg failed ({returncode}): {detail}")
     if not target.is_file():
         raise MediaSineError("ffmpeg reported success but no output file exists")
 
@@ -172,6 +203,40 @@ def synthesise_test_clip(
     return MediaSineResult(
         relative_path=relative_path, size_bytes=target.stat().st_size, probe=probe
     )
+
+
+def _pump_frames(
+    proc: subprocess.Popen[bytes],
+    frame_source: Callable[[int], bytes],
+    frames: int,
+    expected: int,
+    deadline: float,
+) -> None:
+    stdin = proc.stdin
+    if stdin is None:
+        raise MediaSineError("ffmpeg stdin is unavailable")
+    for index in range(frames):
+        if time.monotonic() > deadline:
+            raise MediaSineError("encode exceeded its wall-clock timeout")
+        data = frame_source(index)
+        if len(data) != expected:
+            raise MediaSineError(f"frame {index} has {len(data)} bytes, expected {expected}")
+        try:
+            stdin.write(data)
+        except BrokenPipeError as exc:
+            raise MediaSineError("ffmpeg closed its input before every frame was written") from exc
+    try:
+        stdin.close()
+    except BrokenPipeError as exc:
+        raise MediaSineError("ffmpeg closed its input before every frame was written") from exc
+
+
+def _wait_until(proc: subprocess.Popen[bytes], deadline: float) -> int:
+    remaining = max(deadline - time.monotonic(), 1e-3)
+    try:
+        return proc.wait(timeout=remaining)
+    except subprocess.TimeoutExpired as exc:
+        raise MediaSineError("ffmpeg did not finish before the wall-clock timeout") from exc
 
 
 def probe_media(

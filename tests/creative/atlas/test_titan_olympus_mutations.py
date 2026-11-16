@@ -269,8 +269,8 @@ MUTANTS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "nexus_ai_agent/creative/atlas/spectral_ocean_swe.py",
-        "omega_p = 0.8772 * gravity / wind_speed",
-        "omega_p = 0.8772 * gravity * wind_speed",
+        "omega_p = 22.0 * ((gravity * gravity) / (u10 * fetch)) ** (1.0 / 3.0)",
+        "omega_p = 22.0 * ((gravity * gravity) / (u10 * fetch)) ** (1.0 / 2.0)",
         "tests/creative/atlas/test_wave22_spectral_ocean.py",
     ),
     (
@@ -281,20 +281,20 @@ MUTANTS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "nexus_ai_agent/creative/atlas/spectral_ocean_swe.py",
-        "h_s = 0.21 * wind_speed * wind_speed / gravity",
-        "h_s = 0.12 * wind_speed * wind_speed / gravity",
+        "alpha_jonswap = 0.076 * x_tilde**-0.22",
+        "alpha_jonswap = 0.076 * x_tilde**-0.20",
         "tests/creative/atlas/test_wave22_spectral_ocean.py",
     ),
     (
         "nexus_ai_agent/creative/atlas/spectral_ocean_swe.py",
-        "target_var = (h_s / 4.0) ** 2",
-        "target_var = (h_s / 2.0) ** 2",
+        "x_tilde = max(gravity * fetch / (u10 * u10), 1.0)",
+        "x_tilde = max(gravity * fetch / (u10 * u10), 0.5)",
         "tests/creative/atlas/test_wave22_spectral_ocean.py",
     ),
     (
         "nexus_ai_agent/creative/atlas/spectral_ocean_swe.py",
-        "spread = np.where(cos_dir > 0.0, cos_dir * cos_dir, 0.0)",
-        "spread = np.where(cos_dir > 0.0, cos_dir, 0.0)",
+        "directional = np.where(cos_dir > 0.0, (2.0 / np.pi) * cos_dir * cos_dir, 0.0)",
+        "directional = np.where(cos_dir > 0.0, (2.0 / np.pi) * cos_dir, 0.0)",
         "tests/creative/atlas/test_titan_olympus_mutation_killers.py",
     ),
     (
@@ -558,7 +558,7 @@ _COLLECTION_CRASH_MARKERS = (
     "ERROR collecting",
 )
 
-# Two mutants live inside ``media_sine.synthesise_test_clip`` after a real
+# Two mutants live inside ``media_sine.encode_rgb24_stream`` after a real
 # ``ffprobe`` call; their only killing assertion is a ``@requires_ffmpeg`` test.
 # Without the binaries that test is *skipped*, so the mutant cannot be killed —
 # the campaign skips it explicitly rather than reporting a false kill.
