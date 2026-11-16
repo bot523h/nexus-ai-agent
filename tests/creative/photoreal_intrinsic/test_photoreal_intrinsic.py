@@ -75,7 +75,7 @@ def test_surface_metric_and_wrinkle_normals() -> None:
 
 def test_compile_responds_to_reversed_normals() -> None:
     baker = LogChromophoreTomographyBaker()
-    key = b"for-test-only"
+    key = b"for-test-only-0123456789"
     vault = baker.bake(baker.canonical_archetype(12, 12), hmac_key=key)
     candidate = IntrinsicBiophysicalVault(
         vault.melanin,
@@ -136,7 +136,7 @@ def test_hmac_metadata_and_key_are_not_exposed() -> None:
     vault = LogChromophoreTomographyBaker().bake(
         LogChromophoreTomographyBaker.canonical_archetype(5, 5), hmac_key=key
     )
-    assert vault.verify(key) and not vault.verify(b"wrong")
+    assert vault.verify(key) and not vault.verify(b"wrong-key-is-long-enough")
     assert not hasattr(vault, "hmac_key")
     assert vault.seal.algorithm == "HMAC-SHA256" and len(vault.seal.key_fingerprint) == 8
     vault.albedo.setflags(write=True)
@@ -181,7 +181,7 @@ def test_caustic_left_light_energy_is_on_opposite_half() -> None:
 
 
 def test_hmac_empty_key_is_rejected() -> None:
-    with pytest.raises(ValueError, match="must not be empty"):
+    with pytest.raises(ValueError, match="at least 16 bytes"):
         LogChromophoreTomographyBaker().bake(
             LogChromophoreTomographyBaker.canonical_archetype(3, 3), hmac_key=b""
         )
@@ -193,7 +193,7 @@ def test_environment_hmac_key_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
         LogChromophoreTomographyBaker.canonical_archetype(3, 3)
     )
     assert vault.verify()
-    monkeypatch.setenv("NEXUS_PHOTOREAL_HMAC_KEY", "changed secret")
+    monkeypatch.setenv("NEXUS_PHOTOREAL_HMAC_KEY", "changed secret key")
     assert not vault.verify()
 
 
@@ -243,18 +243,18 @@ def test_transport_and_lighting_validation_paths() -> None:
 
 def test_compiler_chromophore_and_pulse_inputs_change_output() -> None:
     baker = LogChromophoreTomographyBaker()
-    vault = baker.bake(baker.canonical_archetype(8, 8), hmac_key=b"compiler-key")
+    vault = baker.bake(baker.canonical_archetype(8, 8), hmac_key=b"compiler-key-012345")
     base = OcularCausticsAndFilmChemistry.compile(
-        vault, hmac_key=b"compiler-key", t=0.37, include_caustics=False
+        vault, hmac_key=b"compiler-key-012345", t=0.37, include_caustics=False
     )["float32"]
     altered_mel = np.array(vault.melanin, copy=True) + 2
     altered = replace(vault, melanin=altered_mel, seal=replace(vault.seal, digest="", signature=""))
-    altered = replace(altered, seal=baker._create_seal(altered, b"compiler-key"))
+    altered = replace(altered, seal=baker._create_seal(altered, b"compiler-key-012345"))
     changed = OcularCausticsAndFilmChemistry.compile(
-        altered, hmac_key=b"compiler-key", t=0.37, include_caustics=False
+        altered, hmac_key=b"compiler-key-012345", t=0.37, include_caustics=False
     )["float32"]
     pulse = OcularCausticsAndFilmChemistry.compile(
-        vault, hmac_key=b"compiler-key", t=0.37, heart_rate_bpm=140, include_caustics=False
+        vault, hmac_key=b"compiler-key-012345", t=0.37, heart_rate_bpm=140, include_caustics=False
     )["float32"]
     hb_candidate = IntrinsicBiophysicalVault(
         vault.melanin,
@@ -266,9 +266,11 @@ def test_compiler_chromophore_and_pulse_inputs_change_output() -> None:
         replace(vault.seal, digest="", signature=""),
         vault.metadata,
     )
-    hb_candidate = replace(hb_candidate, seal=baker._create_seal(hb_candidate, b"compiler-key"))
+    hb_candidate = replace(
+        hb_candidate, seal=baker._create_seal(hb_candidate, b"compiler-key-012345")
+    )
     hb_changed = OcularCausticsAndFilmChemistry.compile(
-        hb_candidate, hmac_key=b"compiler-key", t=0.37, include_caustics=False
+        hb_candidate, hmac_key=b"compiler-key-012345", t=0.37, include_caustics=False
     )["float32"]
     assert isinstance(base, np.ndarray) and isinstance(changed, np.ndarray)
     assert isinstance(pulse, np.ndarray) and isinstance(hb_changed, np.ndarray)
@@ -303,3 +305,226 @@ def test_singleton_inverse_dct_and_validation_branches() -> None:
 def test_transport_radii_conversion_error() -> None:
     with pytest.raises(ValueError, match="one-dimensional sequence"):
         ScreenedPoissonSkinTransport().transport(np.ones((3, 3, 3)), ("invalid",))  # type: ignore[arg-type]
+
+
+def test_fresnel_energy_and_caustic_resolution_invariance() -> None:
+    reflectance, transmittance = OcularCausticsAndFilmChemistry.fresnel_coefficients(
+        np.linspace(0, 1, 128)
+    )
+    assert np.allclose(reflectance + transmittance, 1, atol=1e-15)
+    fields = [OcularCausticsAndFilmChemistry.caustic((n, n)) for n in (128, 256, 512)]
+    means = np.asarray([field.mean() for field in fields])
+    peaks = np.asarray([field.max() for field in fields])
+    assert np.ptp(means) / means.mean() < 0.10
+    assert np.ptp(peaks) / peaks.mean() < 0.10
+    # The area integral is the transmitted in-frame plus reflected Fresnel budget.
+    integrated = np.asarray([field.sum() * 4 / field.shape[0] ** 2 for field in fields])
+    assert np.ptp(integrated) / integrated.mean() < 0.10
+
+
+def test_persistent_key_policy_and_fail_closed_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    baker = LogChromophoreTomographyBaker()
+    image = baker.canonical_archetype(4, 4)
+    monkeypatch.delenv("NEXUS_PHOTOREAL_HMAC_KEY", raising=False)
+    with pytest.raises(ValueError, match="Persistent vault requires"):
+        baker.bake(image, key_policy="persistent")
+    with pytest.raises(ValueError, match="at least 16 bytes"):
+        baker.bake(image, hmac_key=b"short")
+    monkeypatch.setenv("NEXUS_PHOTOREAL_HMAC_KEY", "")
+    with pytest.raises(ValueError, match="at least 16 bytes"):
+        baker.bake(image)
+    monkeypatch.setenv("NEXUS_PHOTOREAL_HMAC_KEY", "valid-environment-secret")
+    persistent = baker.bake(image, key_policy="persistent")
+    assert not persistent.seal.ephemeral and persistent.verify(key_policy="persistent")
+    ephemeral = baker.bake(image, key_policy="ephemeral")
+    assert ephemeral.seal.ephemeral
+
+
+def test_persistent_vault_verifies_across_subprocesses(tmp_path: object) -> None:
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    artifact = Path(str(tmp_path)) / "vault.pkl"
+    key = "cross-process-test-key-123456"
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path.cwd() / "src")
+    environment["NEXUS_PHOTOREAL_HMAC_KEY"] = key
+    create_code = (
+        "import pickle; from nexus_ai_agent.creative.photoreal_intrinsic import "
+        "LogChromophoreTomographyBaker as B; "
+        "v=B().bake(B.canonical_archetype(4,4), key_policy='persistent'); "
+        f"pickle.dump(v,open({str(artifact)!r},'wb'))"
+    )
+    subprocess.run(
+        [sys.executable, "-c", create_code],
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    verify_code = f"import pickle; print(pickle.load(open({str(artifact)!r},'rb')).verify())"
+    good = subprocess.run(
+        [sys.executable, "-c", verify_code],
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert good.stdout.strip() == "True"
+    wrong_environment = environment.copy()
+    wrong_environment["NEXUS_PHOTOREAL_HMAC_KEY"] = "a-different-process-key-123456"
+    bad = subprocess.run(
+        [sys.executable, "-c", verify_code],
+        env=wrong_environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert bad.stdout.strip() == "False"
+    missing_environment = environment.copy()
+    missing_environment.pop("NEXUS_PHOTOREAL_HMAC_KEY")
+    bad_missing = subprocess.run(
+        [sys.executable, "-c", verify_code],
+        env=missing_environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert bad_missing.stdout.strip() == "False"
+    persistent_code = (
+        "from nexus_ai_agent.creative.photoreal_intrinsic import "
+        "LogChromophoreTomographyBaker as B; "
+        "B().bake(B.canonical_archetype(3,3),key_policy='persistent')"
+    )
+    failed = subprocess.run(
+        [sys.executable, "-c", persistent_code],
+        env=missing_environment,
+        capture_output=True,
+        text=True,
+    )
+    assert failed.returncode != 0 and "Persistent vault requires" in failed.stderr
+
+
+def test_film_depth_offset_invariance_and_negative_time() -> None:
+    image = np.full((9, 8, 3), 0.4, dtype=np.float32)
+    y, x = np.mgrid[:9, :8]
+    depth = 0.2 * np.sin(x / 2) + 0.15 * np.cos(y / 3)
+    first = OcularCausticsAndFilmChemistry.film(image, depth=depth, focus=0.1, seed=3)
+    shifted = OcularCausticsAndFilmChemistry.film(image, depth=depth + 10, focus=0.1, seed=3)
+    assert np.array_equal(first, shifted)
+    vault = LogChromophoreTomographyBaker().bake(
+        LogChromophoreTomographyBaker.canonical_archetype(6, 6)
+    )
+    negative = OcularCausticsAndFilmChemistry.compile(vault, time_sec=-1.25, include_caustics=False)
+    assert isinstance(negative["rgb"], np.ndarray)
+    with pytest.raises(ValueError, match="time_sec must be finite"):
+        OcularCausticsAndFilmChemistry.compile(vault, time_sec=float("nan"))
+
+
+def test_warp_zero_flow_returns_independent_array() -> None:
+    source = np.ones((3, 4), dtype=np.uint8)
+    result = RiemannianStrainWrinkleTensor.warp(source, np.zeros((3, 4, 2)))
+    assert np.array_equal(result, source) and result is not source
+    result[0, 0] = 0
+    assert source[0, 0] == 1
+
+
+def test_colorspace_contract_is_explicit() -> None:
+    baker = LogChromophoreTomographyBaker()
+    key = b"colorspace-contract-key"
+    image = np.full((4, 5, 3), 128, dtype=np.uint8)
+    srgb_integer = baker.bake(image, hmac_key=key, input_colorspace="srgb")
+    srgb_float = baker.bake(
+        np.full(image.shape, 128.0 / 255.0, dtype=np.float64),
+        hmac_key=key,
+        input_colorspace="srgb",
+    )
+    assert np.max(np.abs(srgb_integer.albedo - srgb_float.albedo)) < 1e-12
+    assert np.max(np.abs(srgb_integer.melanin - srgb_float.melanin)) < 1e-12
+    linear_integer = baker.bake(image, hmac_key=key, input_colorspace="linear")
+    assert not np.allclose(linear_integer.shading, srgb_integer.shading)
+
+
+def test_compile_warps_depth_and_relative_lighting(monkeypatch: pytest.MonkeyPatch) -> None:
+    vault = LogChromophoreTomographyBaker().bake(
+        LogChromophoreTomographyBaker.canonical_archetype(6, 7)
+    )
+    flow = np.zeros((6, 7, 2), dtype=np.float32)
+    flow[..., 0] = 0.4
+    expected = RiemannianStrainWrinkleTensor.warp(vault.depth, flow)
+    seen: dict[str, np.ndarray] = {}
+
+    def film(
+        image: np.ndarray, depth: np.ndarray | None = None, focus: float = 1.0, seed: int = 0
+    ) -> np.ndarray:
+        assert depth is not None
+        seen["depth"] = depth.copy()
+        return image
+
+    monkeypatch.setattr(OcularCausticsAndFilmChemistry, "film", staticmethod(film))
+    result = OcularCausticsAndFilmChemistry.compile(vault, flow=flow, include_caustics=False)
+    assert np.array_equal(seen["depth"], expected)
+    assert isinstance(result["float32"], np.ndarray)
+
+
+def test_benchmark_helper_reports_timing_and_memory() -> None:
+    from nexus_ai_agent.creative.photoreal_intrinsic.benchmark import benchmark_pipeline
+
+    result = benchmark_pipeline((4,), iterations=1, warmups=0)["4x4"]
+    assert result["median_ms"] >= 0 and result["mad_ms"] == 0
+    assert result["peak_tracemalloc_mib"] > 0 and result["peak_rss_mib"] > 0
+    with pytest.raises(ValueError, match="sizes"):
+        benchmark_pipeline((1,), iterations=1, warmups=0)
+
+
+def test_remaining_validation_branches_and_benchmark_warmup() -> None:
+    baker = LogChromophoreTomographyBaker()
+    image = baker.canonical_archetype(3, 3)
+    with pytest.raises(ValueError, match="input_colorspace"):
+        baker.bake(image, input_colorspace="xyz")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="normalized"):
+        baker.bake(image * 2, input_colorspace="srgb")
+    with pytest.raises(ValueError, match="key_policy"):
+        baker.bake(image, key_policy="invalid")  # type: ignore[arg-type]
+    solver = ScreenedPoissonSkinTransport()
+    with pytest.raises(ValueError, match="2x2"):
+        solver.transport(np.ones((1, 3, 3)))
+    with pytest.raises(ValueError, match="finite"):
+        solver.transport(np.full((2, 2, 3), np.inf))
+    with pytest.raises(ValueError, match="2x2"):
+        solver.shade(np.ones((1, 3, 3)))
+    with pytest.raises(ValueError, match="finite"):
+        solver.shade(np.full((2, 2, 3), np.nan))
+    from nexus_ai_agent.creative.photoreal_intrinsic.benchmark import benchmark_pipeline
+
+    assert benchmark_pipeline((3,), iterations=1, warmups=1)["3x3"]["samples_ms"]
+
+
+def test_film_rejects_invalid_depth_and_focus() -> None:
+    image = np.ones((3, 4, 3), dtype=np.float32)
+    with pytest.raises(ValueError, match="focus"):
+        OcularCausticsAndFilmChemistry.film(image, depth=np.ones((3, 4)), focus=float("inf"))
+    with pytest.raises(ValueError, match="depth"):
+        OcularCausticsAndFilmChemistry.film(image, depth=np.ones((2, 4)))
+
+
+def test_compile_is_invariant_to_constant_depth_offset() -> None:
+    baker = LogChromophoreTomographyBaker()
+    key = b"compile-depth-offset-key-123456"
+    vault = baker.bake(baker.canonical_archetype(8, 8), hmac_key=key)
+    altered = replace(
+        vault,
+        depth=vault.depth.astype(np.float64) + 10.0,
+        seal=replace(vault.seal, digest="", signature="", key_fingerprint=""),
+    )
+    shifted = replace(altered, seal=baker._create_seal(altered, key))
+    original_frame = OcularCausticsAndFilmChemistry.compile(
+        vault, hmac_key=key, include_caustics=False
+    )["float32"]
+    shifted_frame = OcularCausticsAndFilmChemistry.compile(
+        shifted, hmac_key=key, include_caustics=False
+    )["float32"]
+    assert isinstance(original_frame, np.ndarray) and isinstance(shifted_frame, np.ndarray)
+    assert np.max(np.abs(original_frame.astype(np.float64) - shifted_frame)) < 1e-12

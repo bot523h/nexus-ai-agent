@@ -1,7 +1,9 @@
 """CPU-only deterministic intrinsic rendering primitives."""
 
+from .benchmark import benchmark_pipeline
 from .log_chromophore_tomography_baker import (
     IntrinsicBiophysicalVault,
+    KeyPolicy,
     LogChromophoreTomographyBaker,
     PhotorealDNASeal,
     dctn,
@@ -14,6 +16,8 @@ from .screened_poisson_skin_transport import ScreenedPoissonSkinTransport
 PhotorealCharacterShotCompiler = OcularCausticsAndFilmChemistry
 __all__ = [
     "IntrinsicBiophysicalVault",
+    "KeyPolicy",
+    "benchmark_pipeline",
     "PhotorealDNASeal",
     "dctn",
     "idctn",

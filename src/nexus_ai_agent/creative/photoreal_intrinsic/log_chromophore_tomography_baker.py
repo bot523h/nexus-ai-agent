@@ -8,7 +8,7 @@ import json
 import os
 import secrets
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -26,13 +26,31 @@ _FIELD_NAMES = (
 )
 
 
-def _resolve_key(key: bytes | None) -> bytes:
-    if key is not None:
-        if not key:
-            raise ValueError("HMAC key must not be empty")
-        return key
-    from_environment = os.environ.get("NEXUS_PHOTOREAL_HMAC_KEY")
-    return from_environment.encode() if from_environment else _MODULE_KEY
+KeyPolicy = Literal["auto", "persistent", "ephemeral"]
+
+
+def _resolve_key(key: bytes | None, policy: KeyPolicy) -> tuple[bytes, bool]:
+    if policy not in ("auto", "persistent", "ephemeral"):
+        raise ValueError("key_policy must be 'auto', 'persistent', or 'ephemeral'")
+    environment_value = os.environ.get("NEXUS_PHOTOREAL_HMAC_KEY")
+    if environment_value is not None:
+        environment_key = environment_value.encode()
+        if len(environment_key) < 16:
+            raise ValueError("NEXUS_PHOTOREAL_HMAC_KEY must contain at least 16 bytes")
+    else:
+        environment_key = None
+    if key is not None and len(key) < 16:
+        raise ValueError("hmac_key must contain at least 16 bytes")
+    external_key = key if key is not None else environment_key
+    if policy == "persistent" and external_key is None:
+        raise ValueError(
+            "Persistent vault requires an explicit hmac_key or NEXUS_PHOTOREAL_HMAC_KEY"
+        )
+    if policy == "ephemeral":
+        return (external_key if external_key is not None else _MODULE_KEY), True
+    if external_key is not None:
+        return external_key, False
+    return _MODULE_KEY, True
 
 
 def _dct_axis(values: np.ndarray, axis: int) -> np.ndarray:
@@ -85,6 +103,7 @@ class PhotorealDNASeal:
     digest: str
     signature: str
     key_fingerprint: str
+    ephemeral: bool
 
 
 @dataclass(frozen=True)
@@ -131,10 +150,11 @@ class IntrinsicBiophysicalVault:
             self.metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         ).encode()
         parts.extend((len(meta).to_bytes(8, "big"), meta))
+        parts.append(b"ephemeral=1" if self.seal.ephemeral else b"ephemeral=0")
         return b"".join(parts)
 
-    def verify(self, hmac_key: bytes | None = None) -> bool:
-        key = _resolve_key(hmac_key)
+    def verify(self, hmac_key: bytes | None = None, key_policy: KeyPolicy = "auto") -> bool:
+        key, _ = _resolve_key(hmac_key, key_policy)
         payload = self._canonical_bytes()
         digest = hashlib.sha256(payload).hexdigest()
         signature = hmac.new(key, payload, hashlib.sha256).hexdigest()
@@ -180,38 +200,55 @@ class LogChromophoreTomographyBaker:
             hashlib.sha256(payload).hexdigest(),
             hmac.new(key, payload, hashlib.sha256).hexdigest(),
             hashlib.sha256(key).hexdigest()[:8],
+            vault.seal.ephemeral,
         )
 
-    def bake(self, rgb: np.ndarray, hmac_key: bytes | None = None) -> IntrinsicBiophysicalVault:
+    def bake(
+        self,
+        rgb: np.ndarray,
+        hmac_key: bytes | None = None,
+        key_policy: KeyPolicy = "auto",
+        input_colorspace: Literal["auto", "srgb", "linear"] = "auto",
+    ) -> IntrinsicBiophysicalVault:
         raw = np.asarray(rgb)
         if raw.ndim != 3 or raw.shape[-1] != 3:
             raise ValueError("rgb must have shape (height,width,3)")
         if raw.shape[0] < 2 or raw.shape[1] < 2:
             raise ValueError("image spatial dimensions must be at least 2x2")
+        if input_colorspace not in ("auto", "srgb", "linear"):
+            raise ValueError("input_colorspace must be 'auto', 'srgb', or 'linear'")
         if np.issubdtype(raw.dtype, np.signedinteger):
             raise ValueError(
                 "Signed integer dtypes are not supported; use uint8, uint16, or floating-point"
             )
         if np.issubdtype(raw.dtype, np.integer):
-            a = raw.astype(np.float32) / float(np.iinfo(raw.dtype).max)
+            normalized = raw.astype(np.float32) / float(np.iinfo(raw.dtype).max)
+            default_space: Literal["srgb", "linear"] = "srgb"
         elif np.issubdtype(raw.dtype, np.floating):
-            a = raw.astype(np.float32)
-            if not np.isfinite(a).all() or np.any(a < 0):
+            normalized = raw.astype(np.float32)
+            default_space = "linear"
+            if not np.isfinite(normalized).all() or np.any(normalized < 0):
                 raise ValueError("floating RGB radiance must be finite and nonnegative")
         else:
             raise ValueError("rgb dtype must be integer or floating point")
-        linear = (
-            a
-            if np.issubdtype(raw.dtype, np.floating)
-            else np.where(a <= 0.04045, a / 12.92, ((a + 0.055) / 1.055) ** 2.4)
-        )
+        colorspace = default_space if input_colorspace == "auto" else input_colorspace
+        if colorspace == "srgb":
+            if np.any(normalized > 1):
+                raise ValueError("sRGB input values must be normalized to [0,1]")
+            linear = np.where(
+                normalized <= 0.04045,
+                normalized / 12.92,
+                ((normalized + 0.055) / 1.055) ** 2.4,
+            )
+        else:
+            linear = normalized
         density = -np.log(np.maximum(linear, 1e-6))
         chroma = np.einsum("...c,ic->...i", density, np.linalg.inv(self.basis)).astype(np.float32)
-        mel, hem, _ = np.moveaxis(chroma, -1, 0)
+        mel, hem, _ = np.moveaxis(np.maximum(chroma, 0), -1, 0)
         shading = np.maximum(np.max(linear, axis=-1), 1e-6).astype(np.float32)
         albedo = np.clip(linear / shading[..., None], 0, 1).astype(np.float32)
         normals, depth = self._geometry(shading)
-        key = _resolve_key(hmac_key)
+        key, ephemeral = _resolve_key(hmac_key, key_policy)
         temporary = IntrinsicBiophysicalVault(
             mel,
             hem,
@@ -219,8 +256,12 @@ class LogChromophoreTomographyBaker:
             albedo,
             normals,
             depth,
-            PhotorealDNASeal("HMAC-SHA256", "", "", ""),
-            {"height": int(raw.shape[0]), "width": int(raw.shape[1]), "input_dtype": raw.dtype.str},
+            PhotorealDNASeal("HMAC-SHA256", "", "", "", ephemeral),
+            {
+                "height": int(raw.shape[0]),
+                "width": int(raw.shape[1]),
+                "input_colorspace": colorspace,
+            },
         )
         return IntrinsicBiophysicalVault(
             mel,

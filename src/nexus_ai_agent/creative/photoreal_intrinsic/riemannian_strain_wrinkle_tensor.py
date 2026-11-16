@@ -115,7 +115,7 @@ class RiemannianStrainWrinkleTensor:
         if displacement.shape != (h, w, 2) or not np.isfinite(displacement).all():
             raise ValueError("flow must be finite with shape (H,W,2) matching image")
         if not np.any(displacement):
-            return im
+            return im.copy()
         y, x = np.mgrid[:h, :w]
         y, x = y.astype(coordinate_dtype), x.astype(coordinate_dtype)
         sx = np.clip(x + displacement[..., 0], 0, w - 1)

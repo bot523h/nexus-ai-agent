@@ -20,6 +20,10 @@ class ScreenedPoissonSkinTransport:
         a = np.asarray(source, dtype=np.float64)
         if a.ndim != 3 or a.shape[-1] < 1:
             raise ValueError("source must have shape (H,W,C) with at least one channel")
+        if a.shape[0] < 2 or a.shape[1] < 2:
+            raise ValueError("source spatial dimensions must be at least 2x2")
+        if not np.all(np.isfinite(a)):
+            raise ValueError("source values must be finite")
         try:
             radius_values = np.asarray(radii, dtype=np.float64)
         except (TypeError, ValueError) as exc:
@@ -36,11 +40,12 @@ class ScreenedPoissonSkinTransport:
         eigenvalues = ky[:, None] + kx[None, :]
         result = np.empty_like(a, dtype=np.float32)
         for channel in range(channels):
-            radius = float(radius_values[0 if len(radii) == 1 else channel])
+            radius = float(radius_values[0 if radius_values.size == 1 else channel])
             source_hat = dctn(a[..., channel])
             solved = np.zeros((height, width), dtype=np.float64)
             for weight, scale in zip(self.weights, self.scales, strict=True):
-                kappa2 = (float(scale) / radius) ** 2
+                ratio = float(np.clip(float(scale) / radius, 1e-4, 1e4))
+                kappa2 = ratio * ratio
                 solved += weight * idctn(source_hat * (kappa2 / (eigenvalues + kappa2)))
             result[..., channel] = solved
         return result
@@ -54,6 +59,11 @@ class ScreenedPoissonSkinTransport:
         blood_oxygenation: float = 0.97,
         radii: tuple[float, ...] = default_radii,
     ) -> np.ndarray:
+        source_array = np.asarray(source)
+        if source_array.ndim != 3 or source_array.shape[0] < 2 or source_array.shape[1] < 2:
+            raise ValueError("source must be (H,W,C) with spatial dimensions at least 2x2")
+        if not np.all(np.isfinite(source_array)):
+            raise ValueError("source values must be finite")
         if not np.isfinite((heart_rate_bpm, t, sympathetic_flush, blood_oxygenation)).all():
             raise ValueError("physiological parameters must be finite")
         if (
