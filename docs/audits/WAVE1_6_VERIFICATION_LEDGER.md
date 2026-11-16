@@ -42,10 +42,10 @@ git rev-list --count da3e5ed7..6fd0c95                  # 43
 git rev-list --count '483403d^..6fd0c95'                # 43   (the §2.3 window, inclusive)
 ```
 
-All four are `git rev-list` output at **`6fd0c95`**, the last commit that changes anything
-but prose; the commits after it in this file's own history are documentation only, and each
-adds exactly one to every count, so a reader who runs the commands at the pushed `HEAD` will
-see larger numbers by exactly the number of documentation commits since. That is the reason the SHAs are named here instead of "HEAD": the
+All four are `git rev-list` output at **`6fd0c95`**. Commits landed after it — the two
+documentation commits that published this wave and the three fix commits of §2.3c (rows
+44–46) — each add exactly one to every count, so a reader who runs the commands at the
+pushed `HEAD` will see larger numbers by exactly the number of commits after `6fd0c95`. That is the reason the SHAs are named here instead of "HEAD": the
 previous revision of this section printed **1511 / 58 / 35** in the block, **1512 / 59 / 36**
 in the sentence below it and "19 of the 35" against a table that has 35 rows, so no two
 numbers agreed and none of them reproduced. The rule this section now follows: a count is
@@ -165,9 +165,9 @@ old code — the point being that every one of these was invisible to a green su
 
 | # | Finding (as the audit stated it) | What the code does now | Where it is proven |
 |---|---|---|---|
-| 37 | three `soupsieve` advisories cannot be closed because no fix is published | patched releases **are** published (3.0.2 … 4.1.1); they declare `Requires-Python >= 3.11.5` and this sandbox is 3.11.2, so the repository declares the real floor `soupsieve>=4.1.1; python_version >= "3.11.5"` and the gate accepts it with a self-expiring reason (§8.4) | 33 tests in `tests/unit/test_dependency_audit_gate.py`; `scripts/dependency_audit.py` → **21 accepted / 0 blocking**, exit 0 |
-| 38a | Case A quarantined a *healthy* artifact after a crash between publication and completion | `_repair_eligibility` reads the pin from `result` **or** the immutable job payload, accepts unfinished owned rows, and still refuses a terminal failure; bytes must match any recorded content address | 4 new crash-window tests in `test_db_disk_artifact_reconciler.py` |
-| 38b | `os.replace` into a fixed quarantine path silently destroyed the first witness | `_unique_target` gives every quarantined file a collision-free name (content address, then a counter) for the artifact, its sidecar and the receipt | `test_quarantine_never_overwrites_an_existing_witness` (two crashes → two witnesses) |
+| 37 | three `soupsieve` advisories cannot be closed because no fix is published | patched releases **are** published (3.0.2 … 4.1.1); they declare `Requires-Python >= 3.11.5` and this sandbox is 3.11.2, so the repository declares the real floor `soupsieve>=4.1.1; python_full_version >= "3.11.5"` and the gate accepts it with a self-expiring reason (§8.4) | 33 tests in `tests/unit/test_dependency_audit_gate.py` at the time; 44 after row 44; `scripts/dependency_audit.py` → **21 accepted / 0 blocking**, exit 0 |
+| 38a | Case A quarantined a *healthy* artifact after a crash between publication and completion | `_repair_eligibility` reads the pin from `result` **or** the immutable job payload, accepts in-flight owned rows, and still refuses a terminal failure; bytes must match any recorded content address. Row 46 later narrowed this further (crash window = `processing`/`verifying` only, sidecar digest required) | 4 crash-window tests in `test_db_disk_artifact_reconciler.py`, plus row 46's 8 |
+| 38b | `os.replace` into a fixed quarantine path silently destroyed the first witness | every quarantined file — artifact, sidecar, receipt — gets a collision-free name (content address, then a counter). Row 46 replaced the `exists()`-then-`replace()` naming with an atomic claim: a name is *taken* by `os.link`, never checked | `test_quarantine_never_overwrites_an_existing_witness` (two crashes → two witnesses) and row 46's racer test |
 | 38c | engines outlived the loop (`ResourceWarning: unclosed database`) | `storage/db.py.dispose_all_engines()` called from a `finally` in the reconciler CLI; writing that test exposed a second bug — `--database-path` handed the store a context manager instead of a factory, so the flag crashed the CLI the moment it was used | `test_the_reconciler_cli_disposes_its_engines`, plus the `SAWarning` the harness itself used to leak |
 | 39a | six engine ports exist but only `audio_engine` is injected at the composition root | `build_job_bus` composes the port for the operation it is asked to run (still exactly one engine); an explicit mapping still wins | 3 tests incl. one that asserts the root composes without being asked |
 | 39b | the Studio overview says `intent_submit` is `DEFERRED` ("no preview/approval session API") while `POST /api/studio/projects/{id}/renders` is live | `VERIFIED_WITH_LIMITATIONS`, with the real limits named (signature required, configured projects only, no approval session); a test reads the mounted OpenAPI contract so the row cannot outlive the route either way | `tests/unit/test_studio_session.py` |
@@ -188,9 +188,40 @@ left the sandbox.
 
 Row 41 is a cherry-pick rather than a merge on purpose: the PR under review is this branch,
 and merging a foreign branch would drag its entire history (and its own `main` base) into a
-diff a reviewer is asked to read. `-x` records the origin SHA in the commit body, so the
-content is traceable to `cd8db338` without that cost.
+diff a reviewer is asked to read. **`cd8db338` was applied with `git cherry-pick -x`, not with
+`git merge` and not by copying files**, and the record is in the commit body rather than only
+in this table:
 
+```
+$ git log --format=%B -1 77a2b8b | grep 'cherry picked'
+(cherry picked from commit cd8db33837e9609dd89dd2813d97478452394bd2)
+```
+
+That line is what makes the provenance checkable by someone who has the original branch: the
+reviewed commit is `77a2b8b`, its `-x` trailer names `cd8db338`, and the 17 added files under
+`storage/resource_packs/` are byte-identical to the source commit's.
+
+
+### 2.3c The third audit pass — three defects fixed before merge (rows 44–46)
+
+An independent review of `142139b` accepted the wave (24/24 CI, the resource-pack merge, the
+engine injection, the DR content digest) and refused to call it mergeable: three defects were
+real, and each one was a place where a check existed but could not fail. They are fixed here
+rather than deferred, because a follow-up PR would have meant merging a `main` that still
+carried the broken marker.
+
+| # | Defect (as the review stated it) | What the code does now | Where it is proven |
+|---|---|---|---|
+| 44 | the `soupsieve` floor used `python_version`, which PEP 508 defines as `major.minor` — the marker was false on every 3.11 interpreter and the gate's substring check called it declared | marker is `python_full_version >= '3.11.5'`; the gate parses `pyproject.toml` with `tomllib` and evaluates real `Requirement` markers at the lowest installable interpreter, so a never-applying marker is STALE; a `package_floors` entry covers any *unlisted* advisory the floor can actually resolve (§8.4) | marker truth table over the real file (3.11.5/3.11.9/3.12.0 true, 3.10.14 false), the same table through `_declared_floor_problem`, and a test that rebuilds the old marker and shows it is false at 3.11.9 — 11 new tests, 44 total |
+| 45 | `verify_installed_pack` / `ResourcePackSyncManager` skipped signature verification whenever `trusted_public_key` was `None` — fail-open by omission, and the machinery was reachable only from the sync manager | `signature_required()` is the single policy point and raises `SignatureVerificationError("trusted_public_key is required for fail-closed pack verification")`; `allow_unsigned: bool = False` is the only opt-in, the manager refuses to construct without one of the two, and a real consumer (`storage/resource_packs/delivery.py` → `GET /api/studio/resource-packs`) re-verifies every installed pack on request | 6 new tests in `test_resource_pack_signature.py` (incl. "the same intact pack is withheld, not ready, without a key") and 13 in `test_resource_pack_delivery.py` covering ready / unsigned_allowed / signature_required / repair_required over HTTP |
+| 46 | `if not target.exists(): os.replace(...)` in quarantine is a TOCTOU race, and `_repair_eligibility` repaired from `pending` rows and from crash windows with no attribution evidence | `os.link(src, candidate)` takes the witness name atomically (falling back to `O_CREAT\|O_EXCL` reservation + atomic replace on cross-device), `FileExistsError` moves to the next candidate; the crash window is `processing`/`verifying` only, requires the sidecar's `job_id`/`attempt`/`content_digest` to match the bytes actually on disk, and refuses a row whose `result` and `payload` pin different revisions | 8 new tests in `test_db_disk_artifact_reconciler.py`, including an interleaved racer that proves the first witness survives and an `EXDEV` fallback that proves the temp file is not leaked; the writer's post-publish digest refresh is pinned by `test_sidecar_records_complete_identity` |
+
+**What made all three the same class of bug**: each check was written against the *shape* of
+the evidence rather than the evidence. A substring for a marker, an `is not None` for a
+signature policy, an `exists()` for an atomic claim, a status set for an authority. The fix in
+each case was to make the check evaluate the thing itself — the marker at a specific
+interpreter, the policy in one function, the link syscall, the digest of the bytes — and to
+add the test that fails on the old code.
 
 Integrity: no `rebase`, no `reset --hard` on an existing commit, no force-push was
 used at any point. The only history edit was `git commit --amend` on `ce46a62`
@@ -792,8 +823,10 @@ What the repository does instead is declare the floor honestly and let the gate 
 
 ```toml
 "beautifulsoup4>=4.12",
-# SECURITY FLOOR … patched soupsieve declares Requires-Python >= 3.11.5
-"soupsieve>=4.1.1; python_version >= '3.11.5'",
+# SECURITY FLOOR … patched soupsieve declares Requires-Python >= 3.11.5.
+# `python_full_version` is deliberate: PEP 508 defines `python_version` as
+# `major.minor`, so `python_version >= '3.11.5'` compares "3.11" with "3.11.5".
+"soupsieve>=4.1.1; python_full_version >= '3.11.5'",
 ```
 
 `beautifulsoup4` requires `soupsieve>=1.6.1` with **no upper cap**, so the floor cannot
@@ -814,15 +847,66 @@ ACCEPTED  CVE-2026-126193 (soupsieve) — every published fix (3.0.2) declares
 21 advisories: 21 accepted, 0 blocking          # exit 0
 ```
 
+**The floor as first written was dead, and the gate could not see it.** The first version of
+this floor read `soupsieve>=4.1.1; python_version >= '3.11.5'`. PEP 508 defines
+`python_version` as `major.minor` only, so the comparison was `"3.11" >= "3.11.5"` — string
+ordering, and false on *every* 3.11 interpreter. The floor was declared and never applied: pip
+on 3.11 would never install 4.1.1, while the ledger and the gate both said the floor covered
+the interpreters that could take it. Measured, not reasoned:
+
+```
+$ python -c "from packaging.markers import Marker, default_environment as e; \
+  env=dict(e()); env['python_full_version']='3.11.9'; env['python_version']='3.11'; \
+  print(Marker("python_version >= '3.11.5'").evaluate(env))"
+False
+```
+
+Two changes close it, and neither is a wording fix:
+
+1. the marker is `python_full_version`, so the comparison is against `3.11.9` / `3.11.5` /
+   `3.10.14` and not against a two-component prefix;
+2. the gate no longer looks for a substring. It parses `pyproject.toml` with `tomllib`, keeps
+   the `packaging.requirements.Requirement` objects, and evaluates each candidate marker at
+   the **lowest interpreter that can install the fix** (`_lowest_installable(">=3.11.5")` →
+   `"3.11.5"`). A floor whose marker is false there is reported STALE, exactly like a floor
+   that was deleted. The substring check is what let a never-applying marker pass as
+   compliance — the same shape of failure as the `pip index versions` claim above, and the
+   reason both are recorded here instead of being quietly corrected.
+
+The truth table is now a test against the real `pyproject.toml`
+(`test_the_shipped_floor_applies_exactly_where_the_fix_is_installable`), so the marker's
+meaning cannot drift away from the file:
+
+| `python_full_version` | `soupsieve>=4.1.1; python_full_version >= '3.11.5'` |
+|---|---|
+| `3.11.5` | **True** — pip will install the fix |
+| `3.11.9` | **True** |
+| `3.12.0` | **True** |
+| `3.10.14` | **False** — the fix cannot be installed, so the floor cannot apply |
+
+**One floor, not one waiver per CVE.** The three entries above name the advisories pip-audit
+actually reports against `soupsieve 2.10` here. A fourth ID in that series —
+`CVE-2026-126192` is the one other number in it, and it is *not* reported against 2.10 in
+this environment — would, without a package-level rule, block the gate on an interpreter that
+cannot install any fix at all, for no security reason: a 4.1.1 install resolves it exactly
+like the other three. `.github/dependency-audit.json` therefore also carries a
+`package_floors` entry for `soupsieve`, which accepts an **unlisted** advisory only when every
+reported fix is at or below the floor's `fixed` version (4.1.1) *and* the floor passes the same
+four self-expiry checks. An advisory fixed in a later release, reported with no fix at all, or
+carried by a different package is refused. This is the change that keeps the gate from
+"surprising anyone on any interpreter" while still not accepting anything by name alone.
+
 The honest residue: **this sandbox still runs `soupsieve 2.10` and still carries the three
 advisories at runtime.** Nothing here pretends otherwise — the floor is a *declaration* for
 the interpreters that can take it, the acceptances are self-expiring, and the proof that the
 declaration holds is CI's 3.11/3.12 legs resolving 4.1.1 where the advisory is absent. A
 3.12 interpreter could not be obtained here to demonstrate it locally: `python.org` and
 `objects.githubusercontent.com` are outside this sandbox's egress allow-list, and the image
-ships no development headers, so a CPython source build is not possible either. 33 tests in
-`tests/unit/test_dependency_audit_gate.py` pin the gate's behaviour, including that the new
-reason refuses an unpublished fix, a missing floor, and an unreadable index.
+ships no development headers, so a CPython source build is not possible either. 44 tests in
+`tests/unit/test_dependency_audit_gate.py` pin the gate's behaviour, including that the reason
+refuses an unpublished fix, a missing floor and an unreadable index, the marker truth table
+above, and the package-floor rules (covers an unlisted advisory it can resolve, refuses one
+fixed past it, refuses one with no published fix, expires with the floor).
 
 **8.5 Branch protection could not be read.** `gh api
 repos/bot523h/nexus-ai-agent/branches/main/protection` returns HTTP 403 ("Resource
