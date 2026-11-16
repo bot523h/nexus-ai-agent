@@ -579,51 +579,70 @@ def _floor_entry(**overrides: object) -> dict:
     return entry
 
 
-def test_a_fourth_advisory_for_the_same_package_is_covered_by_the_floor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """CVE-2026-126192 is the ID the audit asked about: covered, not accepted blindly."""
-    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _f, *, probe: None)
+def _advisory(fix_versions: list[str], package: str = "soupsieve") -> dict:
+    return {"package": package, "version": "2.10", "fix_versions": list(fix_versions)}
+
+
+def test_a_fourth_advisory_for_the_same_package_is_covered_by_the_floor() -> None:
+    """CVE-2026-126192 is the ID the audit asked about: covered, not accepted blindly.
+
+    The interpreter is pinned to one that cannot install 4.1.1 (3.11.2, the same
+    environment the acceptances were written for). Without pinning it, this test
+    passed on 3.11.2 and failed on 3.12 — where the acceptance *correctly*
+    expires — which is what the CI run on `a7c7283` caught.
+    """
     ok, message = gate._decide_advisory(
         ("soupsieve", "CVE-2026-126192"),
-        {"package": "soupsieve", "version": "2.10", "fix_versions": ["3.0.2"]},
+        _advisory(["3.0.2"]),
         {},  # no per-advisory entry at all
         _versions("soupsieve", "2.10"),
         {},
         {"soupsieve": _floor_entry()},
+        interpreter="3.11.2",
     )
     assert ok, message
     assert "covered by the package floor" in message and "4.1.1" in message
 
 
-def test_the_package_floor_refuses_an_advisory_fixed_past_it(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A 5.0 fix is not resolved by a 4.1.1 floor — that must block, not pass."""
-    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _f, *, probe: None)
+def test_the_package_floor_expires_on_an_interpreter_that_can_install_the_fix() -> None:
+    """The same floor, on an interpreter the fix supports: STALE, not accepted."""
     ok, message = gate._decide_advisory(
-        ("soupsieve", "CVE-2099-000001"),
-        {"package": "soupsieve", "version": "2.10", "fix_versions": ["5.0.0"]},
+        ("soupsieve", "CVE-2026-126192"),
+        _advisory(["3.0.2"]),
         {},
         _versions("soupsieve", "2.10"),
         {},
         {"soupsieve": _floor_entry()},
+        interpreter="3.12.16",
+    )
+    assert not ok
+    assert "STALE" in message and "3.12.16" in message
+
+
+def test_the_package_floor_refuses_an_advisory_fixed_past_it() -> None:
+    """A 5.0 fix is not resolved by a 4.1.1 floor — that must block, not pass."""
+    ok, message = gate._decide_advisory(
+        ("soupsieve", "CVE-2099-000001"),
+        _advisory(["5.0.0"]),
+        {},
+        _versions("soupsieve", "2.10"),
+        {},
+        {"soupsieve": _floor_entry()},
+        interpreter="3.11.2",
     )
     assert not ok
     assert "does not reach" in message
 
 
-def test_the_package_floor_refuses_an_advisory_with_no_published_fix(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _f, *, probe: None)
+def test_the_package_floor_refuses_an_advisory_with_no_published_fix() -> None:
     ok, message = gate._decide_advisory(
         ("soupsieve", "CVE-2099-000002"),
-        {"package": "soupsieve", "version": "2.10", "fix_versions": []},
+        _advisory([]),
         {},
         _versions("soupsieve", "2.10"),
         {},
         {"soupsieve": _floor_entry()},
+        interpreter="3.11.2",
     )
     assert not ok
     assert "names no fix" in message
@@ -637,27 +656,26 @@ def test_the_package_floor_expires_with_the_declared_floor(
     )
     ok, message = gate._decide_advisory(
         ("soupsieve", "CVE-2026-126192"),
-        {"package": "soupsieve", "version": "2.10", "fix_versions": ["3.0.2"]},
+        _advisory(["3.0.2"]),
         {},
         _versions("soupsieve", "2.10"),
         {},
         {"soupsieve": _floor_entry()},
+        interpreter="3.11.2",
     )
     assert not ok
     assert "STALE" in message
 
 
-def test_a_package_floor_does_not_cover_a_different_package(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(gate, "_declared_floor_problem", lambda _f, *, probe: None)
+def test_a_package_floor_does_not_cover_a_different_package() -> None:
     ok, message = gate._decide_advisory(
         ("otherpkg", "CVE-2026-126192"),
-        {"package": "otherpkg", "version": "1.0", "fix_versions": ["1.0.1"]},
+        _advisory(["1.0.1"], package="otherpkg"),
         {},
         {"otherpkg": "1.0"},
         {},
         {"soupsieve": _floor_entry()},
+        interpreter="3.11.2",
     )
     assert not ok and "UNACCEPTED" in message
 

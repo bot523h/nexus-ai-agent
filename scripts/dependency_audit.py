@@ -457,6 +457,8 @@ def _floor_covers_advisory(
     floor_entry: dict[str, Any],
     versions: dict[str, str],
     reqs: dict[str, list[str]],
+    *,
+    interpreter: str | None = None,
 ) -> tuple[bool, str]:
     """Accept an *unlisted* advisory that the declared package floor already resolves.
 
@@ -473,6 +475,13 @@ def _floor_covers_advisory(
     and it cannot cover an advisory pip-audit reports with no fix at all. The
     same four self-expiry checks still run, so the coverage dies the moment the
     floor stops being declared where it can be installed.
+
+    *interpreter* exists because this decision depends on it: the same floor
+    covers an advisory on an interpreter that cannot install the fix and must
+    report STALE on one that can. It defaults to the running interpreter in
+    production, and tests pin it, because a test that silently used whatever
+    interpreter CI happened to run would pass on 3.11.2 and fail on 3.12 — which
+    is exactly what the first version of this test did.
     """
     pkg = meta["package"].lower()
     reported = [version for version in (meta.get("fix_versions") or []) if version]
@@ -497,7 +506,11 @@ def _floor_covers_advisory(
             "reach; raise the floor and review it"
         )
     holds, why = _pin_still_holds(
-        {**floor_entry, "package": meta["package"], "id": advisory_id}, versions, reqs, reported
+        {**floor_entry, "package": meta["package"], "id": advisory_id},
+        versions,
+        reqs,
+        reported,
+        interpreter=interpreter,
     )
     if holds:
         return True, (
@@ -514,6 +527,8 @@ def _decide_advisory(
     versions: dict[str, str],
     reqs: dict[str, list[str]],
     package_floors: dict[str, dict[str, Any]] | None = None,
+    *,
+    interpreter: str | None = None,
 ) -> tuple[bool, str]:
     """Decide one finding, keyed by ``(package, advisory_id)``: ``(accepted, message)``.
 
@@ -531,7 +546,9 @@ def _decide_advisory(
     if entry is None:
         floor_entry = (package_floors or {}).get(pkg_key)
         if floor_entry is not None:
-            return _floor_covers_advisory(advisory_id, meta, floor_entry, versions, reqs)
+            return _floor_covers_advisory(
+                advisory_id, meta, floor_entry, versions, reqs, interpreter=interpreter
+            )
         return False, f"UNACCEPTED {advisory_id} in {meta['package']} {meta['version']}"
     if entry.get("package", "").lower() != pkg_key:
         return False, (
