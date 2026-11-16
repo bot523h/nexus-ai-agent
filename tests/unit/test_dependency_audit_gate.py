@@ -687,3 +687,17 @@ def test_the_shipped_allowlist_declares_the_soupsieve_floor() -> None:
     assert "soupsieve" in floors
     assert floors["soupsieve"]["declared_floor"] == "soupsieve>=4.1.1"
     assert floors["soupsieve"]["fixed"] == "4.1.1"
+
+
+def test_the_toml_reader_exists_on_every_supported_interpreter() -> None:
+    """`requires-python = ">=3.10"` and CI runs a 3.10 leg: the reader must too.
+
+    `tomllib` is 3.11+, and importing it unconditionally broke the 3.10 parity
+    and continuum legs (a collection error in this very module). The fallback is
+    declared in the `dev` extra instead of borrowed from deptry/pip-audit.
+    """
+    assert hasattr(gate, "tomllib")
+    if sys.version_info < (3, 11):
+        assert gate.tomllib.__name__ == "tomli"
+    else:
+        assert gate.tomllib.__name__ == "tomllib"

@@ -96,6 +96,10 @@ dev = [
   "imageio-ffmpeg>=0.5",  # bundles a static FFmpeg: the render test runs a real encode
   "deptry>=0.20",  # declared-vs-imported dependency gate (`make deps`, CI lint job)
   "pip-audit>=2.7",  # known-vulnerability gate (`make audit`, CI dependency-audit job)
+  # `scripts/dependency_audit.py` parses pyproject.toml to prove a declared floor
+  # is real. `tomllib` is 3.11+, so the 3.10 leg needs this — declared here rather
+  # than borrowed from deptry/pip-audit, which only happen to ship it.
+  "tomli>=2.0.1; python_version < '3.11'",
 ]
 
 [tool.setuptools]

@@ -53,7 +53,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import tomllib
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised by the 3.10 CI leg
+    # The repository supports 3.10 (`requires-python = ">=3.10"`, and CI runs
+    # 3.10/3.11/3.12), so the pyproject reader must work there too: `tomllib` is
+    # 3.11+. `tomli` is declared in the `dev` extra for exactly this leg rather
+    # than being borrowed from a transitive (deptry/pip-audit both happen to ship
+    # it, which is not a contract).
+    import tomli as tomllib  # type: ignore[no-redef]
+
 from packaging.markers import default_environment
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
