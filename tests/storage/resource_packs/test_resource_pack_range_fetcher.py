@@ -6,6 +6,7 @@ import hashlib
 import http.client
 import io
 import urllib.request
+import urllib.response
 from pathlib import Path
 
 import pytest
@@ -268,44 +269,74 @@ def test_http_source_url_building_and_scheme_allowlist() -> None:
             HttpRangePackSource(bad)
 
 
-class _FakeResponse(io.BytesIO):
-    def __init__(self, status: int, headers: dict[str, str]) -> None:
-        super().__init__(b"")
-        self.status = status
-        self.headers = headers
+class _CannedHandler(urllib.request.BaseHandler):
+    """A real urllib *handler* (not a patched opener) serving scripted replies.
+
+    Every URL it is asked to open is recorded, so a test can prove that a
+    forbidden redirect target was never contacted.
+    """
+
+    handler_order = 100  # ahead of the stock HTTP(S)Handler when used in build_opener
+
+    def __init__(self, replies: dict[str, tuple[int, dict[str, str], str | None]]) -> None:
+        self.replies = replies
+        self.requested: list[str] = []
+        self.served: list[urllib.response.addinfourl] = []
+
+    def _serve(self, request: urllib.request.Request) -> urllib.response.addinfourl:
+        url = request.full_url
+        self.requested.append(url)
+        status, fields, reported_url = self.replies[url]
+        headers = http.client.HTTPMessage()
+        for name, value in fields.items():
+            headers[name] = value
+        reply = urllib.response.addinfourl(
+            io.BytesIO(b"abcde"), headers, reported_url or url, status
+        )
+        reply.msg = "scripted"  # type: ignore[attr-defined]
+        self.served.append(reply)
+        return reply
+
+    def http_open(self, request: urllib.request.Request) -> urllib.response.addinfourl:
+        return self._serve(request)
+
+    def https_open(self, request: urllib.request.Request) -> urllib.response.addinfourl:
+        return self._serve(request)
 
 
-class _FakeOpener(urllib.request.OpenerDirector):
-    def __init__(self, response: _FakeResponse) -> None:
-        super().__init__()
-        self.response = response
-
-    def open(self, fullurl: object, data: object = None, timeout: float | None = None) -> object:
-        return self.response
+def _injected_opener(handler: _CannedHandler) -> urllib.request.OpenerDirector:
+    """A caller-built opener with error processing but no redirect logic of its own."""
+    opener = urllib.request.OpenerDirector()
+    for item in (
+        handler,
+        urllib.request.HTTPErrorProcessor(),
+        urllib.request.HTTPDefaultErrorHandler(),
+    ):
+        opener.add_handler(item)
+    return opener
 
 
 def test_http_source_unexpected_status_and_unknown_total() -> None:
-    odd = HttpRangePackSource("https://cdn.example", opener=_FakeOpener(_FakeResponse(204, {})))
+    canned = _CannedHandler(
+        {
+            "https://cdn.example/odd": (204, {}, None),
+            "https://cdn.example/star": (206, {"Content-Range": "bytes 5-9/*"}, None),
+            "https://cdn.example/plain": (200, {}, None),
+        }
+    )
+    source = HttpRangePackSource("https://cdn.example", opener=_injected_opener(canned))
     with pytest.raises(RangeFetchError, match="unexpected HTTP status 204"):
-        odd.open_range("x", 0)
-    star = _FakeResponse(206, {"Content-Range": "bytes 5-9/*"})
-    reply = HttpRangePackSource("https://cdn.example", opener=_FakeOpener(star)).open_range("x", 5)
-    assert reply.total_size is None
-    plain = HttpRangePackSource("https://cdn.example", opener=_FakeOpener(_FakeResponse(200, {})))
-    assert plain.open_range("x", 0).total_size is None
+        source.open_range("odd", 0)
+    assert source.open_range("star", 5).total_size is None
+    assert source.open_range("plain", 0).total_size is None
 
 
 # -- F5: host allowlist & redirect policy ------------------------------------
 
 
 class _RecordingOpener(urllib.request.OpenerDirector):
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls: list[object] = []
-
     def open(self, fullurl: object, data: object = None, timeout: float | None = None) -> object:
-        self.calls.append(fullurl)
-        raise AssertionError("no request may be sent to a forbidden host")
+        raise AssertionError("a dispatch-overriding opener must be rejected, never used")
 
 
 def test_disallowed_host_is_refused_before_any_request() -> None:
@@ -320,12 +351,12 @@ def test_disallowed_host_is_refused_before_any_request() -> None:
     explicit = HttpRangePackSource("https://cdn.example", allowed_hosts=["CDN.example", " "])
     assert explicit.allowed_hosts == frozenset({"cdn.example"})
 
-    opener = _RecordingOpener()
-    source = HttpRangePackSource("https://cdn.example", opener=opener)
+    canned = _CannedHandler({})
+    source = HttpRangePackSource("https://cdn.example", opener=_injected_opener(canned))
     source.base_url = "https://evil.example"  # tampering after construction
     with pytest.raises(UnsafeSourceError):
         source.open_range("blobs/x", 0)
-    assert opener.calls == []
+    assert canned.requested == []
 
 
 def test_source_policy_arguments_are_strict() -> None:
@@ -388,3 +419,110 @@ def test_real_302_to_an_allowed_host_is_followed_when_enabled(
         outcome = _fetcher(source, tmp_path).fetch(entry)
     assert outcome.path.read_bytes() == data
     assert server.request_hosts == [f"127.0.0.1:{port}", f"localhost:{port}"]
+
+
+# -- B: caller-supplied openers obey the same redirect policy ------------------
+
+
+def _redirecting(location: str) -> _CannedHandler:
+    return _CannedHandler(
+        {
+            "https://cdn.example/blobs/x": (302, {"Location": location}, None),
+            "https://mirror.cdn.example/blobs/x": (200, {"Content-Length": "5"}, None),
+        }
+    )
+
+
+def test_injected_opener_cannot_redirect_to_an_untrusted_host() -> None:
+    canned = _redirecting("https://evil.example/blobs/x")
+    source = HttpRangePackSource(
+        "https://cdn.example", opener=_injected_opener(canned), allow_redirects=True
+    )
+    with pytest.raises(UnsafeSourceError, match="evil.example"):
+        source.open_range("blobs/x", 0)
+    assert canned.requested == ["https://cdn.example/blobs/x"]  # evil host never contacted
+
+
+def test_injected_opener_cannot_downgrade_https_to_http() -> None:
+    canned = _redirecting("http://cdn.example/blobs/x")
+    source = HttpRangePackSource(
+        "https://cdn.example", opener=_injected_opener(canned), allow_redirects=True
+    )
+    with pytest.raises(UnsafeSourceError, match="scheme 'http'"):
+        source.open_range("blobs/x", 0)
+    assert canned.requested == ["https://cdn.example/blobs/x"]
+
+
+def test_injected_opener_redirects_are_refused_when_disabled_and_allowed_when_safe() -> None:
+    blocked = _redirecting("https://mirror.cdn.example/blobs/x")
+    strict = HttpRangePackSource(
+        "https://cdn.example",
+        opener=_injected_opener(blocked),
+        allowed_hosts={"cdn.example", "mirror.cdn.example"},
+    )
+    with pytest.raises(UnsafeSourceError, match="allow_redirects=False"):
+        strict.open_range("blobs/x", 0)
+    assert blocked.requested == ["https://cdn.example/blobs/x"]
+
+    followed = _redirecting("https://mirror.cdn.example/blobs/x")
+    relaxed = HttpRangePackSource(
+        "https://cdn.example",
+        opener=_injected_opener(followed),
+        allowed_hosts={"cdn.example", "mirror.cdn.example"},
+        allow_redirects=True,
+    )
+    with relaxed.open_range("blobs/x", 0) as reply:
+        assert (reply.status, reply.total_size, reply.read(10)) == (200, 5, b"abcde")
+    assert followed.requested == [
+        "https://cdn.example/blobs/x",
+        "https://mirror.cdn.example/blobs/x",
+    ]
+
+
+def test_openers_that_cannot_be_made_policy_safe_are_rejected() -> None:
+    with pytest.raises(UnsafeSourceError, match="HTTPRedirectHandler"):
+        HttpRangePackSource("https://cdn.example", opener=urllib.request.build_opener())
+    with pytest.raises(UnsafeSourceError, match="overrides OpenerDirector.open"):
+        HttpRangePackSource("https://cdn.example", opener=_RecordingOpener())
+    with pytest.raises(UnsafeSourceError, match="OpenerDirector"):
+        HttpRangePackSource("https://cdn.example", opener=object())  # type: ignore[arg-type]
+
+    class SneakyRedirects(urllib.request.BaseHandler):  # not an HTTPRedirectHandler subclass
+        def http_error_302(self, *args: object) -> None:
+            return None
+
+    sneaky = urllib.request.OpenerDirector()
+    sneaky.add_handler(SneakyRedirects())
+    with pytest.raises(UnsafeSourceError, match="SneakyRedirects"):
+        HttpRangePackSource("https://cdn.example", opener=sneaky)
+    with pytest.raises(UnsafeSourceError, match="SneakyRedirects"):
+        HttpRangePackSource("https://cdn.example", extra_handlers=[SneakyRedirects()])
+    opaque = urllib.request.OpenerDirector()
+    setattr(opaque, "handlers", None)  # noqa: B010 - simulate an opener we cannot inspect
+    with pytest.raises(UnsafeSourceError, match="handler list"):
+        HttpRangePackSource("https://cdn.example", opener=opaque)
+    with pytest.raises(ValueError, match="not both"):
+        HttpRangePackSource(
+            "https://cdn.example",
+            opener=urllib.request.OpenerDirector(),
+            extra_handlers=[_CannedHandler({})],
+        )
+
+
+def test_extra_handlers_join_the_default_policy_opener() -> None:
+    canned = _redirecting("https://evil.example/blobs/x")
+    source = HttpRangePackSource(
+        "https://cdn.example", extra_handlers=[canned], allow_redirects=True
+    )
+    with pytest.raises(UnsafeSourceError, match="evil.example"):
+        source.open_range("blobs/x", 0)
+    assert canned.requested == ["https://cdn.example/blobs/x"]
+
+
+def test_response_from_a_foreign_url_is_rejected_and_closed() -> None:
+    """Defence in depth: a handler that silently followed a redirect elsewhere."""
+    canned = _CannedHandler({"https://cdn.example/x": (200, {}, "https://evil.example/x")})
+    source = HttpRangePackSource("https://cdn.example", opener=_injected_opener(canned))
+    with pytest.raises(UnsafeSourceError, match="evil.example"):
+        source.open_range("x", 0)
+    assert canned.served[0].fp is None or canned.served[0].fp.closed

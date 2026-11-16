@@ -8,7 +8,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
@@ -24,6 +26,7 @@ from resource_pack_testkit import (
 )
 
 from nexus_ai_agent.storage.resource_packs import (
+    ActivePointerError,
     GateState,
     HttpRangePackSource,
     InsufficientStorageError,
@@ -31,10 +34,12 @@ from nexus_ai_agent.storage.resource_packs import (
     LocalDirectoryPackSource,
     PackLeaseError,
     PackLockTimeoutError,
+    PackLockUnavailableError,
     PackSyncError,
     PackSyncManager,
     PackVerificationError,
     RangeFetchInterrupted,
+    ReentrantSyncError,
     ResourceBlobEntry,
     ResourcePackManifest,
     ResourcePackSyncManager,
@@ -337,7 +342,11 @@ def test_corrupt_pointer_means_repair_and_blocks_pruning(
     pointer.write_bytes(json.dumps(traversal).encode())
     with pytest.raises(PackSyncError):
         manager.active_install_dir("core")
-    rebuilt = manager.sync_pack("core")  # rebuilds from the CAS, no re-download
+    with pytest.raises(ActivePointerError, match="allow_rollback=True"):
+        manager.sync_pack("core")  # fail closed: the active version is unknown
+    assert pointer.read_bytes() == json.dumps(traversal).encode()
+    repair, _ = _manager(root, [core], mirror, allow_rollback=True)
+    rebuilt = repair.sync_pack("core")  # deliberate repair: rebuilds from the CAS
     assert manager.get_login_gate_status().state is GateState.READY
     assert rebuilt.downloaded_bytes == 0 and rebuilt.reused_files == 4
 
@@ -448,8 +457,9 @@ def test_policy_flags_are_validated(mirror: PackMirror, tmp_path: Path) -> None:
         ResourcePackSyncManager(tmp_path, [], source, allow_unsigned=1)  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         ResourcePackSyncManager(tmp_path, [], source, allow_rollback=None)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="lock_backend"):
-        ResourcePackSyncManager(tmp_path, [], source, lock_backend="nfs")  # type: ignore[arg-type]
+    for unsafe in ("nfs", "exclusive_file"):  # the O_EXCL stale-stealing fallback is gone
+        with pytest.raises(ValueError, match="lock_backend"):
+            ResourcePackSyncManager(tmp_path, [], source, lock_backend=unsafe)  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------
@@ -728,33 +738,129 @@ def test_flock_contention_times_out_without_deleting(mirror: PackMirror, tmp_pat
     assert waiter.collect_garbage(min_age_seconds=0.0) == (orphan,)  # released on exit
 
 
-def test_exclusive_file_lock_fallback(mirror: PackMirror, tmp_path: Path) -> None:
-    v1, _ = _std_versions(mirror)
-    root = tmp_path / "dev"
-    manager, _ = _manager(
-        root, [v1], mirror, lock_backend="exclusive_file", lock_timeout_seconds=0.1
+# --------------------------------------------------------------------------
+# A — the lock is flock only: never stolen, never unlinked, fail closed without it
+# --------------------------------------------------------------------------
+
+_LOCK_HOLDER = """
+import sys, time
+from pathlib import Path
+from nexus_ai_agent.storage.resource_packs import LocalDirectoryPackSource, PackSyncManager
+root = Path(sys.argv[1])
+manager = PackSyncManager(root, [], LocalDirectoryPackSource(root), lock_timeout_seconds=30.0)
+with manager._storage_lock() as lock:
+    print("LOCKED", lock.path.stat().st_ino, flush=True)
+    command = sys.stdin.readline().strip()
+    if command == "hang":
+        time.sleep(3600)  # killed by the test while holding the lock
+print("RELEASED", flush=True)
+"""
+
+
+def _spawn_holder(root: Path) -> subprocess.Popen[str]:
+    src_dir = Path(importlib.import_module("nexus_ai_agent").__file__ or "").parents[1]
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _LOCK_HOLDER, str(root)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(src_dir)},
     )
-    manager.sync_pack("standard")
-    lock_file = root / ".sync_gc.lock.excl"
-    assert not lock_file.exists()  # released after every critical section
-    orphan = _orphan(manager, "orphan")
+    assert holder.stdout is not None
+    line = holder.stdout.readline().split()  # blocks until the child really holds the lock
+    assert line[0] == "LOCKED", line
+    return holder
 
-    lock_file.write_text('{"pid": 1, "expires_at": 0}')  # another live owner
+
+def _release(holder: subprocess.Popen[str]) -> None:
+    assert holder.stdin is not None and holder.stdout is not None
+    holder.stdin.write("release\n")
+    holder.stdin.flush()
+    assert holder.stdout.readline().strip() == "RELEASED"
+    assert holder.wait(timeout=30) == 0
+
+
+def test_live_lock_survives_stale_looking_contender_and_exiting_owner(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    """Deterministic multi-process regression for the removed O_EXCL TOCTOU.
+
+    1. process A holds the lock; its lock file is made to look ancient — a
+       contender must still time out (no stale-lock stealing) and must not
+       remove the file;
+    2. A exits normally while process B waits; B acquires, and A's exit did
+       not unlink anything (same inode);
+    3. B is SIGKILLed while holding the lock (a crashed "stale" owner): the
+       kernel releases it, the next owner C acquires without stealing, and
+       B's death removed nothing;
+    4. while C holds the lock, an in-process contender still cannot take it.
+    """
+    root = tmp_path / "dev"
+    root.mkdir()
+    contender, _ = _manager(root, [], mirror, lock_timeout_seconds=0.2)
+    orphan = _orphan(contender, "must-survive-every-failed-attempt")
+    lock_path = root / ".sync_gc.lock"
+
+    holder_a = _spawn_holder(root)
+    inode = lock_path.stat().st_ino
+    os.utime(lock_path, (0, 0))  # looks abandoned since 1970
+    with pytest.raises(PackLockTimeoutError, match="never stolen"):
+        contender.collect_garbage(min_age_seconds=0.0)
+    assert lock_path.stat().st_ino == inode and contender.store.has(orphan)
+
+    _release(holder_a)
+    holder_b = _spawn_holder(root)
+    assert lock_path.stat().st_ino == inode  # A's exit did not unlink B's lock
     with pytest.raises(PackLockTimeoutError):
-        manager.collect_garbage(min_age_seconds=0.0)
-    stale = time.time() - 3600
-    os.utime(lock_file, (stale, stale))  # owner crashed long ago: break the lock
-    assert manager.collect_garbage(min_age_seconds=0.0) == (orphan,)
-    assert not lock_file.exists()
+        contender.collect_garbage(min_age_seconds=0.0)
+
+    assert holder_b.stdin is not None
+    holder_b.stdin.write("hang\n")
+    holder_b.stdin.flush()
+    holder_b.kill()  # crashed while holding the lock
+    holder_b.wait(timeout=30)
+    holder_c = _spawn_holder(root)  # acquires: the kernel released B's flock
+    assert lock_path.stat().st_ino == inode
+    with pytest.raises(PackLockTimeoutError):
+        contender.collect_garbage(min_age_seconds=0.0)
+    assert contender.store.has(orphan)
+    _release(holder_c)
+
+    assert contender.collect_garbage(min_age_seconds=0.0) == (orphan,)
+    assert lock_path.stat().st_ino == inode  # the lock file is never unlinked
+
+
+def test_release_is_idempotent_and_never_unlinks(mirror: PackMirror, tmp_path: Path) -> None:
+    manager, _ = _manager(tmp_path / "dev", [], mirror)
     lock = manager._storage_lock()
-    lock._break_if_stale()  # nothing to break: a no-op, not an error
+    lock.__exit__(None, None, None)  # never acquired: nothing to release
+    with lock:
+        pass
+    lock.__exit__(None, None, None)  # second release of the same object: a no-op
+    assert lock.path.is_file()
 
 
-def test_lock_backend_selection_without_fcntl(
+def test_flock_contention_in_process(mirror: PackMirror, tmp_path: Path) -> None:
+    root = tmp_path / "dev"
+    holder, _ = _manager(root, [], mirror, lock_backend="flock")
+    orphan = _orphan(holder, "orphan")
+    waiter, _ = _manager(root, [], mirror, lock_timeout_seconds=0.1)
+    with holder._storage_lock():
+        with pytest.raises(PackLockTimeoutError):
+            waiter.collect_garbage(min_age_seconds=0.0)
+    assert waiter.collect_garbage(min_age_seconds=0.0) == (orphan,)
+
+
+def test_without_fcntl_every_mutation_fails_closed(
     mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    flock, _ = _manager(tmp_path / "a", [], mirror, lock_backend="flock")
-    assert flock._storage_lock().path.name == ".sync_gc.lock"
+    """Platform without a safe primitive (simulated by hiding ``fcntl``)."""
+    v1, _ = _std_versions(mirror)
+    root = tmp_path / "dev"
+    installed, _ = _manager(root, [v1], mirror)
+    installed.sync_pack("standard")
+    orphan = _orphan(installed, "orphan")
+    before = tree_snapshot(root)
     real_import = importlib.import_module
 
     def no_fcntl(name: str, package: str | None = None) -> ModuleType:
@@ -763,8 +869,205 @@ def test_lock_backend_selection_without_fcntl(
         return real_import(name, package)
 
     monkeypatch.setattr(importlib, "import_module", no_fcntl)
-    auto, _ = _manager(tmp_path / "b", [], mirror)
-    assert auto._storage_lock().path.name == ".sync_gc.lock.excl"
-    assert auto.collect_garbage() == ()
-    with pytest.raises(ValueError, match="fcntl"):
-        _manager(tmp_path / "c", [], mirror, lock_backend="flock")[0]._storage_lock()
+    _, v2 = _std_versions(mirror)
+    for backend in ("auto", "flock"):
+        manager, source = _manager(root, [v2], mirror, lock_backend=backend)
+        with pytest.raises(PackLockUnavailableError, match="refusing"):
+            manager.collect_garbage(min_age_seconds=0.0)
+        with pytest.raises(PackLockUnavailableError):
+            manager.prune_old_versions("standard")
+        with pytest.raises(PackLockUnavailableError):
+            manager.sync_pack("standard")  # refused before the first byte
+        assert source.requested_offsets == []
+    assert tree_snapshot(root) == before and installed.store.has(orphan)
+    assert installed.get_login_gate_status().state is GateState.READY  # read-only still works
+
+
+# --------------------------------------------------------------------------
+# C — missing vs corrupt active pointer
+# --------------------------------------------------------------------------
+
+
+def _corrupt_pointer(pointer: Path, kind: str) -> None:
+    pointer.unlink()
+    if kind == "bad_json":
+        pointer.write_bytes(b"{not json")
+    elif kind == "bad_schema":
+        pointer.write_text(json.dumps({"schema": 2}))
+    elif kind == "directory":  # exists but cannot be read as a file
+        pointer.mkdir()
+    elif kind == "dangling_symlink":  # must not be mistaken for "absent"
+        pointer.symlink_to(pointer.parent / "nowhere.json")
+    else:  # symlink to an otherwise valid pointer: still not a regular file
+        real = pointer.parent / "elsewhere.json"
+        real.write_text("{}")
+        pointer.symlink_to(real)
+
+
+def test_missing_pointer_is_a_first_install(mirror: PackMirror, tmp_path: Path) -> None:
+    v1, _ = _std_versions(mirror)
+    manager, _ = _manager(tmp_path / "dev", [v1], mirror)
+    assert manager.active_install_dir("standard") is None
+    assert manager.sync_pack("standard").version == "1.0.0"
+
+
+@pytest.mark.parametrize(
+    "kind", ["bad_json", "bad_schema", "directory", "dangling_symlink", "symlink"]
+)
+def test_corrupt_or_unreadable_pointer_fails_closed_before_any_change(
+    mirror: PackMirror, tmp_path: Path, kind: str
+) -> None:
+    v1, v2 = _std_versions(mirror)
+    root = tmp_path / "dev"
+    old = _manager(root, [v1], mirror)[0].sync_pack("standard")
+    pointer = root / "packs/standard/active.json"
+    _corrupt_pointer(pointer, kind)
+    before = tree_snapshot(root)
+    upgrade, source = _manager(root, [v2], mirror)
+    with pytest.raises(ActivePointerError, match="allow_rollback=True"):
+        upgrade.sync_pack("standard")
+    assert tree_snapshot(root) == before and source.requested_offsets == []
+    assert pointer.is_symlink() or pointer.exists()  # never replaced
+    assert upgrade.get_login_gate_status().packs[0].state is GateState.REPAIR_REQUIRED
+    assert old.install_dir.is_dir()
+    repair, _ = _manager(root, [v2], mirror, allow_rollback=True)
+    if kind == "directory":  # os.replace cannot overwrite a directory: still nothing activated
+        with pytest.raises(IsADirectoryError):
+            repair.sync_pack("standard")
+        assert pointer.is_dir() and not any(
+            p.name.startswith("1.1.0") for p in (root / "packs/standard/versions").iterdir()
+        )
+        pointer.rmdir()  # the operator removes the obstruction; nothing is deleted for them
+    repaired = repair.sync_pack("standard")
+    assert repaired.version == "1.1.0" and pointer.is_file() and not pointer.is_symlink()
+
+
+def test_unstatable_pointer_fails_closed(mirror: PackMirror, tmp_path: Path) -> None:
+    v1, _ = _std_versions(mirror)
+    root = tmp_path / "dev"
+    (root / "packs").mkdir(parents=True)
+    (root / "packs/standard").write_text("a file where the pack directory should be")
+    manager, _ = _manager(root, [v1], mirror)
+    with pytest.raises(ActivePointerError, match="cannot stat"):
+        manager.sync_pack("standard")
+
+
+def test_pointer_corrupted_mid_sync_blocks_the_flip(mirror: PackMirror, tmp_path: Path) -> None:
+    """The under-lock re-check right before ``os.replace`` sees the corruption."""
+    v1, v2 = _std_versions(mirror)
+    root = tmp_path / "dev"
+    _manager(root, [v1], mirror)[0].sync_pack("standard")
+    pointer = root / "packs/standard/active.json"
+
+    def corrupt(event: SyncProgress) -> None:
+        if event.stage is SyncStage.ACTIVATING:
+            pointer.write_bytes(b"\x00garbage")
+
+    manager, _ = _manager(root, [v2], mirror)
+    with pytest.raises(ActivePointerError):
+        manager.sync_pack("standard", corrupt)
+    assert pointer.read_bytes() == b"\x00garbage"  # not overwritten by the flip
+    assert not any(p.name.startswith("1.1.0") for p in (root / "packs/standard/versions").iterdir())
+    assert list((root / "leases").iterdir()) == []
+
+
+# --------------------------------------------------------------------------
+# D — re-entrant progress callbacks
+# --------------------------------------------------------------------------
+
+
+def _run_bounded(target: Callable[[], object], seconds: float = 30.0) -> list[object]:
+    outcome: list[object] = []
+
+    def runner() -> None:
+        try:
+            outcome.append(target())
+        except BaseException as error:  # noqa: BLE001 - reported to the test thread
+            outcome.append(error)
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    assert not thread.is_alive(), "sync_pack deadlocked on re-entry"
+    return outcome
+
+
+def test_reentrant_callback_is_refused_without_deadlock_or_nested_writes(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    v1, v2 = _std_versions(mirror)
+    root = tmp_path / "dev"
+    _manager(root, [v1], mirror)[0].sync_pack("standard")
+    manager, source = _manager(root, [v2], mirror)
+    refusals: list[tuple[SyncStage, bool]] = []
+
+    def reenter(event: SyncProgress) -> None:
+        if event.stage in (SyncStage.PLANNING, SyncStage.DOWNLOADING, SyncStage.ACTIVATING):
+            snapshot, offsets = tree_snapshot(root), list(source.requested_offsets)
+            try:
+                manager.sync_pack("standard")
+            except ReentrantSyncError:
+                unchanged = tree_snapshot(root) == snapshot
+                refusals.append((event.stage, unchanged and source.requested_offsets == offsets))
+
+    (result,) = _run_bounded(lambda: manager.sync_pack("standard", reenter))
+    assert not isinstance(result, BaseException), result
+    stages = {stage for stage, _ in refusals}
+    assert stages == {SyncStage.PLANNING, SyncStage.DOWNLOADING, SyncStage.ACTIVATING}
+    assert all(unchanged for _, unchanged in refusals)  # nested call touched nothing
+    changed = next(e for e in v2.entries if e.relative_path == "tex/2.ktx2")
+    assert [key for key, _ in source.requested_offsets] == [default_blob_key(changed)]
+    versions = [p for p in (root / "packs/standard/versions").iterdir() if p.is_dir()]
+    assert len(versions) == 2  # v1 + exactly one v2 tree: no second transaction
+    assert manager.installed_manifest("standard") == v2
+    assert list((root / "leases").iterdir()) == []
+    # the guard is released afterwards: the same instance can sync again
+    assert manager.sync_pack("standard").already_up_to_date
+
+
+def test_uncaught_reentry_aborts_the_outer_sync_cleanly(mirror: PackMirror, tmp_path: Path) -> None:
+    v1, v2 = _std_versions(mirror)
+    root = tmp_path / "dev"
+    _manager(root, [v1], mirror)[0].sync_pack("standard")
+    pointer_before = (root / "packs/standard/active.json").read_bytes()
+    manager, _ = _manager(root, [v2], mirror)
+
+    def reenter(event: SyncProgress) -> None:
+        if event.stage is SyncStage.VERIFYING:
+            manager.sync_pack("standard")
+
+    (outcome,) = _run_bounded(lambda: manager.sync_pack("standard", reenter))
+    assert isinstance(outcome, ReentrantSyncError)
+    assert (root / "packs/standard/active.json").read_bytes() == pointer_before
+    assert manager.installed_manifest("standard") == v1
+
+
+def test_other_threads_wait_their_turn_instead_of_being_refused(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    v1, _ = _std_versions(mirror)
+    manager, _ = _manager(tmp_path / "dev", [v1], mirror)
+    results: list[object] = []
+    started = threading.Event()
+
+    def other_thread() -> None:
+        started.wait(30)
+        try:
+            results.append(manager.sync_pack("standard"))
+        except BaseException as error:  # noqa: BLE001 - reported to the test thread
+            results.append(error)
+
+    worker = threading.Thread(target=other_thread, daemon=True)
+
+    def from_callback(event: SyncProgress) -> None:
+        if event.stage is SyncStage.DOWNLOADING and not started.is_set():
+            started.set()
+            time.sleep(0.3)
+            assert worker.is_alive() and results == []  # waiting on the lock, not refused
+
+    worker.start()
+    first = manager.sync_pack("standard", from_callback)
+    worker.join(30)
+    assert not worker.is_alive() and not first.already_up_to_date
+    (second,) = results
+    assert isinstance(second, type(first)) and second.already_up_to_date

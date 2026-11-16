@@ -2,7 +2,7 @@
 
 On-disk layout under ``root``::
 
-    .sync_gc.lock                       cross-process storage lock (flock / O_EXCL)
+    .sync_gc.lock                       cross-process flock target (never unlinked)
     leases/<pid>-<token>.json           in-flight leases of running syncs
     cas/                                shared content-addressed store
     packs/<pack_id>/active.json         the ONLY commit point (atomic pointer)
@@ -21,15 +21,24 @@ Security posture (all fail-closed by default)
   before any work *and again* under the storage lock right before the pointer
   flip, so a concurrent newer install cannot be overwritten by an older one.
   Non-semantic versions cannot prove monotonicity and are refused too unless
-  ``allow_rollback=True``.
+  ``allow_rollback=True``.  A *missing* ``active.json`` means first install;
+  an existing but unreadable/malformed/non-regular pointer is
+  :class:`ActivePointerError` — installs refuse to replace it unless
+  ``allow_rollback=True`` is passed to repair deliberately (the login gate
+  reports it as ``REPAIR_REQUIRED``).
 * **Concurrency (F2)** — a sync registers a *lease* (PID, expiry, every digest
   of the target manifest, its staging/install directory name) under the
   cross-process lock before it writes anything.  ``collect_garbage`` and
   ``prune_old_versions`` run under the same lock and never touch leased
   digests or directories; GC additionally spares blobs younger than
   ``min_age_seconds`` and refuses to run at all if a lease file is corrupt.
+  The lock is ``fcntl.flock`` only; where it is unavailable every mutating
+  operation raises :class:`PackLockUnavailableError` (no lock stealing).
   The lock is only held for short critical sections — never while user
   callbacks run — so progress handlers may safely call GC or prune.
+* **Re-entrancy** — ``sync_pack`` serialises syncs of one manager instance.
+  Re-entering it from the same thread (e.g. from a progress callback) raises
+  :class:`ReentrantSyncError` immediately, before reading or writing anything.
 
 A sync builds a complete new tree in ``staging``, verifies it against the RFC
 6962 root and the signature, moves it into ``versions`` and finally flips
@@ -47,6 +56,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import threading
 import time
 from collections.abc import Callable, Collection, Iterable
@@ -59,12 +69,15 @@ from typing import Literal
 from .content_store import LocalContentStore, fsync_directory
 from .delta_and_hydration_planner import SyncAction, SyncPlan, build_sync_plan
 from .errors import (
+    ActivePointerError,
     InsufficientStorageError,
     ManifestValidationError,
     PackLeaseError,
     PackLockTimeoutError,
+    PackLockUnavailableError,
     PackSyncError,
     PackVerificationError,
+    ReentrantSyncError,
     UnknownPackError,
     VersionRollbackError,
 )
@@ -266,7 +279,7 @@ _LOCK_FILE = ".sync_gc.lock"
 _LEASE_KEYS = frozenset({"schema", "pid", "pack_id", "install_dir", "expires_at", "digests"})
 _MANIFEST_SUFFIX = ".manifest.json"
 
-LockBackend = Literal["auto", "flock", "exclusive_file"]
+LockBackend = Literal["auto", "flock"]
 
 
 def parse_semantic_version(version: str) -> tuple[int, int, int] | None:
@@ -303,68 +316,45 @@ def _load_fcntl() -> ModuleType | None:
 
 
 class _StorageLock:
-    """Exclusive cross-process lock on ``<root>/.sync_gc.lock``.
+    """Exclusive cross-process lock: ``fcntl.flock`` on ``<root>/.sync_gc.lock``.
 
-    ``flock`` (POSIX) is released by the kernel when the owner dies.  The
-    portable fallback creates ``.sync_gc.lock.excl`` atomically with
-    ``O_CREAT | O_EXCL`` and records the owner PID and expiry; a lock file
-    older than ``stale_after`` seconds is considered abandoned and broken.
+    Safety argument (no stat-then-unlink anywhere):
+
+    * ``flock`` is an OS-level lock bound to the open file description; the
+      kernel releases it when the owner closes the descriptor *or dies*, so a
+      crashed owner never leaves a lock that has to be "stolen".
+    * The lock file is created once and **never unlinked** by this code — not
+      on release, not on timeout, not when it looks old.  Every contender
+      therefore locks the same inode, and no owner (exiting, crashed or
+      contending) can remove another owner's live lock.
+    * Without ``fcntl`` there is no safe primitive: :class:`PackLockUnavailableError`
+      is raised and the caller performs no mutation (fail closed).
     """
 
-    def __init__(
-        self,
-        root: Path,
-        *,
-        backend: LockBackend,
-        timeout: float,
-        stale_after: float,
-        wall_clock: Callable[[], float],
-    ) -> None:
-        fcntl = None if backend == "exclusive_file" else _load_fcntl()
-        if backend == "flock" and fcntl is None:
-            raise ValueError("lock_backend='flock' requested but fcntl is unavailable")
-        self._fcntl = fcntl
-        self.path = root / (_LOCK_FILE if fcntl is not None else f"{_LOCK_FILE}.excl")
+    def __init__(self, root: Path, *, timeout: float) -> None:
+        fcntl = _load_fcntl()
+        if fcntl is None:
+            raise PackLockUnavailableError(
+                "no safe OS-level lock primitive (fcntl.flock) on this platform; "
+                "refusing to mutate shared resource-pack storage"
+            )
+        self._fcntl: ModuleType = fcntl
+        self.path = root / _LOCK_FILE
         self.timeout = timeout
-        self.stale_after = stale_after
-        self.wall_clock = wall_clock
         self._fd: int | None = None
 
-    def _owner_record(self) -> bytes:
-        return json.dumps(
-            {"pid": os.getpid(), "expires_at": self.wall_clock() + self.stale_after}
-        ).encode()
-
     def _try_acquire(self) -> bool:
-        if self._fcntl is not None:
-            fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
-            try:
-                self._fcntl.flock(fd, self._fcntl.LOCK_EX | self._fcntl.LOCK_NB)
-            except BlockingIOError:
-                os.close(fd)
-                return False
-            os.ftruncate(fd, 0)
-            os.write(fd, self._owner_record())
-            self._fd = fd
-            return True
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+        fd = os.open(self.path, flags, 0o644)
         try:
-            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            self._break_if_stale()
-            return False
-        try:
-            os.write(fd, self._owner_record())
-        finally:
+            self._fcntl.flock(fd, self._fcntl.LOCK_EX | self._fcntl.LOCK_NB)
+        except BlockingIOError:
             os.close(fd)
+            return False
+        os.ftruncate(fd, 0)  # diagnostics only — the lock itself is the flock
+        os.write(fd, json.dumps({"pid": os.getpid()}).encode())
+        self._fd = fd
         return True
-
-    def _break_if_stale(self) -> None:
-        try:
-            age = self.wall_clock() - self.path.stat().st_mtime
-        except FileNotFoundError:  # lost a race with the releasing owner
-            return
-        if age > self.stale_after:
-            self.path.unlink(missing_ok=True)
 
     def __enter__(self) -> _StorageLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -372,7 +362,8 @@ class _StorageLock:
         while not self._try_acquire():
             if time.monotonic() >= deadline:
                 raise PackLockTimeoutError(
-                    f"storage lock {self.path} still held after {self.timeout}s"
+                    f"storage lock {self.path} still held after {self.timeout}s "
+                    "(a live owner holds it; locks are never stolen)"
                 )
             time.sleep(0.02)
         return self
@@ -383,12 +374,10 @@ class _StorageLock:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        if self._fcntl is not None and self._fd is not None:
-            self._fcntl.flock(self._fd, self._fcntl.LOCK_UN)
-            os.close(self._fd)
-            self._fd = None
-        else:
-            self.path.unlink(missing_ok=True)
+        fd, self._fd = self._fd, None
+        if fd is not None:  # release only what this object acquired; never unlink
+            self._fcntl.flock(fd, self._fcntl.LOCK_UN)
+            os.close(fd)
 
 
 @dataclass(frozen=True)
@@ -450,13 +439,13 @@ class ResourcePackSyncManager:
         prefer_hardlinks: bool = True,
         lock_backend: LockBackend = "auto",
         lock_timeout_seconds: float = 30.0,
-        lock_stale_after_seconds: float = 600.0,
         lease_ttl_seconds: float = 6 * 3600.0,
     ) -> None:
         if not isinstance(allow_unsigned, bool) or not isinstance(allow_rollback, bool):
             raise TypeError("allow_unsigned and allow_rollback must be bools")
-        if lock_backend not in ("auto", "flock", "exclusive_file"):
-            raise ValueError(f"unknown lock_backend {lock_backend!r}")
+        if lock_backend not in ("auto", "flock"):
+            # "exclusive_file" (O_EXCL + stale-lock stealing) was removed: it is unsafe.
+            raise ValueError(f"unknown or unsafe lock_backend {lock_backend!r}")
         self.root = Path(root)
         self._catalog: dict[str, ResourcePackManifest] = {}
         for manifest in catalog:
@@ -474,11 +463,10 @@ class ResourcePackSyncManager:
         self._clock = clock
         self._wall_clock = wall_clock
         self.prefer_hardlinks = prefer_hardlinks
-        self._lock_backend: LockBackend = lock_backend
         self._lock_timeout = lock_timeout_seconds
-        self._lock_stale_after = lock_stale_after_seconds
         self._lease_ttl = lease_ttl_seconds
         self._lock = threading.Lock()  # serialises syncs of this instance (shared .part files)
+        self._sync_owner: int | None = None  # thread ident inside sync_pack, for re-entry
 
     # -- paths & pointer ------------------------------------------------------
 
@@ -494,13 +482,25 @@ class ResourcePackSyncManager:
             raise UnknownPackError(f"pack {pack_id!r} is not in the catalog") from None
 
     def _read_pointer(self, pack_id: str) -> _ActivePointer | None:
+        """``None`` only when ``active.json`` is genuinely absent (first install).
+
+        Anything else that is not a valid pointer — unreadable, not a regular
+        file (directory, symlink, dangling symlink), bad JSON or bad schema —
+        raises :class:`ActivePointerError`.
+        """
         path = self._pack_dir(pack_id) / "active.json"
-        if not path.exists():
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
             return None
+        except OSError as error:
+            raise ActivePointerError(f"{pack_id}: cannot stat active pointer: {error}") from error
+        if not stat.S_ISREG(info.st_mode):
+            raise ActivePointerError(f"{pack_id}: active pointer is not a regular file")
         try:
             raw = json.loads(path.read_bytes())
         except (OSError, ValueError) as error:
-            raise PackSyncError(f"{pack_id}: unreadable active pointer: {error}") from error
+            raise ActivePointerError(f"{pack_id}: unreadable active pointer: {error}") from error
         if (
             not isinstance(raw, dict)
             or set(raw) != _POINTER_KEYS
@@ -509,7 +509,7 @@ class ResourcePackSyncManager:
             or not all(isinstance(raw[k], str) for k in ("version", "merkle_root", "install_dir"))
             or not _DIR_NAME_RE.fullmatch(raw["install_dir"])
         ):
-            raise PackSyncError(f"{pack_id}: malformed active pointer")
+            raise ActivePointerError(f"{pack_id}: malformed active pointer")
         return _ActivePointer(raw["version"], raw["merkle_root"], raw["install_dir"])
 
     def _load_installed(self, pack_id: str) -> tuple[ResourcePackManifest, Path] | None:
@@ -544,10 +544,13 @@ class ResourcePackSyncManager:
             return
         try:
             pointer = self._read_pointer(target.pack_id)
-        except PackSyncError:
-            return  # unreadable pointer: there is no trustworthy active version to protect
+        except ActivePointerError as error:
+            raise ActivePointerError(
+                f"{error}; the active version is unknown, so anti-rollback refuses to "
+                "replace it (pass allow_rollback=True to repair deliberately)"
+            ) from error
         if pointer is None:
-            return
+            return  # genuinely absent: first install
         active, wanted = (
             parse_semantic_version(pointer.version),
             parse_semantic_version(target.version),
@@ -588,13 +591,7 @@ class ResourcePackSyncManager:
     # -- cross-process lock & leases -------------------------------------------
 
     def _storage_lock(self) -> _StorageLock:
-        return _StorageLock(
-            self.root,
-            backend=self._lock_backend,
-            timeout=self._lock_timeout,
-            stale_after=self._lock_stale_after,
-            wall_clock=self._wall_clock,
-        )
+        return _StorageLock(self.root, timeout=self._lock_timeout)
 
     def _live_leases(self) -> list[_Lease]:
         """Every unexpired lease; expired ones (crashed owners) are removed.
@@ -648,7 +645,15 @@ class ResourcePackSyncManager:
     def _pack_gate(
         self, target: ResourcePackManifest, cas_index: dict[str, int], available: int
     ) -> PackGateStatus:
-        self._verify_target(target)  # a tampered/unsigned/rolled-back catalog is an incident
+        # a tampered/unsigned/rolled-back catalog is an incident: raise
+        enforce_manifest_signature(
+            target, self.trusted_public_key, allow_unsigned=self.allow_unsigned
+        )
+        verify_manifest_integrity(target)
+        try:
+            self._check_rollback(target)
+        except ActivePointerError:
+            pass  # unknown active version: reported as REPAIR_REQUIRED just below
         corrupted = False
         try:
             loaded = self._load_installed(target.pack_id)
@@ -718,9 +723,24 @@ class ResourcePackSyncManager:
         Signature, integrity and anti-rollback checks and the disk guard all
         run before a single byte is written.  Any later failure leaves the
         active version untouched (``.part`` files survive for resumption).
+
+        Syncs on one instance are serialised; calling ``sync_pack`` again from
+        the thread that is already inside it (e.g. from *progress_callback*)
+        raises :class:`ReentrantSyncError` at once — no deadlock, no nested
+        transaction.  Other threads simply wait their turn.
         """
+        me = threading.get_ident()
+        if self._sync_owner == me:  # only this thread ever writes its own ident here
+            raise ReentrantSyncError(
+                f"sync_pack({pack_id!r}) re-entered from inside a running sync on the same "
+                "manager (e.g. from a progress callback); nested syncs are refused"
+            )
         with self._lock:
-            return self._sync_locked(pack_id, progress_callback)
+            self._sync_owner = me
+            try:
+                return self._sync_locked(pack_id, progress_callback)
+            finally:
+                self._sync_owner = None
 
     def _sync_locked(self, pack_id: str, progress_callback: ProgressCallback | None) -> SyncResult:
         target = self._target(pack_id)

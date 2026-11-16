@@ -19,15 +19,18 @@ from .delta_and_hydration_planner import (
     build_sync_plan,
 )
 from .errors import (
+    ActivePointerError,
     InsufficientStorageError,
     IntegrityError,
     ManifestValidationError,
     PackLeaseError,
     PackLockTimeoutError,
+    PackLockUnavailableError,
     PackSyncError,
     PackVerificationError,
     RangeFetchError,
     RangeFetchInterrupted,
+    ReentrantSyncError,
     ResourcePackError,
     SeedRecipeError,
     SignatureBackendUnavailableError,
@@ -93,6 +96,7 @@ from .seed_hydrator import (
 )
 
 __all__ = [
+    "ActivePointerError",
     "AcquisitionMode",
     "FetchOutcome",
     "GateState",
@@ -108,6 +112,7 @@ __all__ = [
     "PackGateStatus",
     "PackLeaseError",
     "PackLockTimeoutError",
+    "PackLockUnavailableError",
     "PackSource",
     "PackSyncError",
     "PackSyncManager",
@@ -119,6 +124,7 @@ __all__ = [
     "RECIPE_NAMES",
     "RangeFetchError",
     "RangeFetchInterrupted",
+    "ReentrantSyncError",
     "RangeReply",
     "ResourceBlobEntry",
     "ResourcePackError",

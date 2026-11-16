@@ -29,7 +29,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -173,6 +173,52 @@ class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+_OPENER_DISPATCH = ("open", "_open", "error", "_call_chain", "add_handler")
+_REDIRECT_HOOK_RE = re.compile(r"[a-z]+_error_3[0-9][0-9]")
+
+
+def _policy_safe_opener(
+    opener: urllib.request.OpenerDirector, policy: _SourcePolicy
+) -> urllib.request.OpenerDirector:
+    """Make a caller-supplied opener follow *policy*, or reject it.
+
+    Accepted only when the opener's redirect behaviour is provably ours: it
+    must be a plain :class:`urllib.request.OpenerDirector` (no overridden
+    dispatch methods) carrying **no** redirect-capable handler of its own (no
+    ``HTTPRedirectHandler`` and no ``*_error_3xx`` hook).  The policy redirect
+    handler is then installed, so every 3xx it surfaces is checked against
+    ``allowed_hosts`` and the allowed schemes before urllib connects anywhere.
+    Openers from :func:`urllib.request.build_opener` include the stock
+    redirect handler and are therefore rejected — pass ``extra_handlers``
+    instead.
+    """
+    if not isinstance(opener, urllib.request.OpenerDirector):
+        raise UnsafeSourceError("opener must be a urllib.request.OpenerDirector")
+    for name in _OPENER_DISPATCH:
+        if getattr(type(opener), name) is not getattr(urllib.request.OpenerDirector, name):
+            raise UnsafeSourceError(
+                f"custom opener overrides OpenerDirector.{name}; its redirects cannot be "
+                "policy-checked"
+            )
+    handlers = getattr(opener, "handlers", None)  # stdlib attribute, absent from typeshed
+    if not isinstance(handlers, list):
+        raise UnsafeSourceError("opener exposes no handler list; it cannot be policy-checked")
+    for handler in handlers:
+        _reject_redirect_capable(handler)
+    opener.add_handler(_AllowlistRedirectHandler(policy))
+    return opener
+
+
+def _reject_redirect_capable(handler: urllib.request.BaseHandler) -> None:
+    if isinstance(handler, urllib.request.HTTPRedirectHandler) or any(
+        _REDIRECT_HOOK_RE.fullmatch(name) for name in dir(handler)
+    ):
+        raise UnsafeSourceError(
+            f"{type(handler).__name__} handles redirects itself; that would bypass the "
+            "allowed_hosts policy"
+        )
+
+
 class HttpRangePackSource:
     """HTTP(S) source with ``Range`` support, on :mod:`urllib.request` only.
 
@@ -183,8 +229,14 @@ class HttpRangePackSource:
     ``http``.  Redirects are refused unless ``allow_redirects=True``, and even
     then only to allowed hosts/schemes.  Every violation raises
     :class:`UnsafeSourceError` before a request is sent to the forbidden
-    destination.  A caller-supplied *opener* bypasses the redirect handler and
-    is the caller's responsibility.
+    destination.
+
+    The same policy binds a caller-supplied *opener* (see
+    :func:`_policy_safe_opener`: openers with their own redirect logic are
+    rejected) and ``extra_handlers`` (proxy/auth/... handlers added to the
+    default opener; redirect-capable ones are rejected).  As defence in depth
+    the final response URL is checked too, so a handler that silently
+    followed a redirect elsewhere cannot hand back foreign bytes.
     """
 
     def __init__(
@@ -196,6 +248,7 @@ class HttpRangePackSource:
         opener: urllib.request.OpenerDirector | None = None,
         allowed_hosts: Collection[str] | None = None,
         allow_redirects: bool = False,
+        extra_handlers: Sequence[urllib.request.BaseHandler] = (),
     ) -> None:
         parsed = urllib.parse.urlsplit(base_url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
@@ -215,9 +268,16 @@ class HttpRangePackSource:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.headers = dict(headers or {})
-        self._opener = opener or urllib.request.build_opener(
-            _AllowlistRedirectHandler(self._policy)
-        )
+        for handler in extra_handlers:
+            _reject_redirect_capable(handler)
+        if opener is None:
+            self._opener = urllib.request.build_opener(
+                *extra_handlers, _AllowlistRedirectHandler(self._policy)
+            )
+        elif extra_handlers:
+            raise ValueError("pass either opener or extra_handlers, not both")
+        else:
+            self._opener = _policy_safe_opener(opener, self._policy)
 
     @property
     def allowed_hosts(self) -> frozenset[str]:
@@ -242,6 +302,11 @@ class HttpRangePackSource:
             raise RangeFetchInterrupted(
                 f"transport failure for {key!r}: {error}", bytes_on_disk=offset
             ) from error
+        try:
+            self._policy.check(response.geturl())  # where the bytes actually came from
+        except UnsafeSourceError:
+            response.close()
+            raise
         status = int(response.status)
         if status == 206:
             match = _CONTENT_RANGE_RE.fullmatch(response.headers.get("Content-Range", "").strip())

@@ -9,15 +9,18 @@ connection" — instead of string-matching messages.  All of them derive from
 from __future__ import annotations
 
 __all__ = [
+    "ActivePointerError",
     "IntegrityError",
     "InsufficientStorageError",
     "ManifestValidationError",
     "PackLeaseError",
     "PackLockTimeoutError",
+    "PackLockUnavailableError",
     "PackSyncError",
     "PackVerificationError",
     "RangeFetchError",
     "RangeFetchInterrupted",
+    "ReentrantSyncError",
     "ResourcePackError",
     "SeedRecipeError",
     "SignatureBackendUnavailableError",
@@ -115,6 +118,34 @@ class PackLeaseError(PackSyncError):
 
 class PackLockTimeoutError(PackSyncError):
     """The cross-process storage lock could not be acquired in time."""
+
+
+class PackLockUnavailableError(PackSyncError):
+    """No safe OS-level lock primitive exists here: mutating operations fail closed.
+
+    The storage lock relies on ``fcntl.flock`` (released by the kernel when
+    the owner dies).  There is deliberately no ``O_EXCL`` lock-file fallback:
+    such a fallback can only recover from a crashed owner by *stealing* a
+    "stale" lock, which can delete a live owner's lock.
+    """
+
+
+class ActivePointerError(PackSyncError):
+    """``active.json`` exists but is unreadable, malformed or not a regular file.
+
+    Anti-rollback cannot know the active version, so installs refuse to
+    replace the pointer unless the caller deliberately passes
+    ``allow_rollback=True`` to repair.
+    """
+
+
+class ReentrantSyncError(PackSyncError):
+    """``sync_pack`` was re-entered on the same manager from inside its own sync
+
+    (typically from a progress callback).  The nested call is refused
+    immediately — before it reads or writes anything — instead of deadlocking
+    or starting a second, conflicting transaction.
+    """
 
 
 class VersionRollbackError(ResourcePackError):
