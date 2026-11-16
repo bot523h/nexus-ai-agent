@@ -646,6 +646,18 @@ for this branch. The commits after `6fd0c95` are documentation only, and §4's m
 were taken at `77a2b8b` on a tree whose code is identical to this one (the diff is
 `docs/`-only).
 
+**One rerun, recorded rather than smoothed over.** On the documentation commit `3818527`,
+run `43812434012` finished with **23 of 24 jobs green and `python-parity (3.10)` marked
+`cancelled`** at 33 minutes into its pytest step — no failing test ids, no annotation, no
+exceeded-timeout message, and the job's own limit is 45 minutes (§2.2). That is the same
+runner-side kill this section already describes for the earlier run (§6.3.5); it is not
+diagnosable from here because the job log is not fetchable from this sandbox. The job was
+**re-run unchanged** through the API
+(`POST /repos/{owner}/{repo}/actions/jobs/133116861609/rerun`), and the re-run finished green;
+the run then reported **24/24 success** on that head. The 3.11 and 3.12 legs, which run the
+same selection, passed first time on both attempts. Nothing was raised, skipped or renamed to
+make this pass — the same commit was executed again.
+
 ---
 
 ## 7. Where this work is published
