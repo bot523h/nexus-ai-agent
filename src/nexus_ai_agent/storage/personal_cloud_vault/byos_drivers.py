@@ -16,9 +16,11 @@ Provides the :class:`BYOSStorageDriver` protocol and three stdlib-only drivers:
 from __future__ import annotations
 
 import contextlib
+import email.utils
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
@@ -29,7 +31,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import zlib
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +63,107 @@ def _validate_snapshot_id(snapshot_id: str) -> str:
     if not _SNAPSHOT_ID_RE.fullmatch(snapshot_id) or ".." in snapshot_id:
         raise PersonalVaultError(f"Invalid snapshot_id format: {snapshot_id!r}")
     return snapshot_id
+
+
+def _validate_positive_finite_seconds(value: float, *, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise PersonalVaultError(f"{name} must be a finite positive number, got {value!r}")
+    as_float = float(value)
+    if not math.isfinite(as_float) or as_float <= 0.0:
+        raise PersonalVaultError(f"{name} must be finite and positive, got {value!r}")
+    return as_float
+
+
+def _validate_finite_epoch(value: float | None, *, default_now: float) -> float:
+    if value is None:
+        return default_now
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise PersonalVaultError(f"now_epoch must be a finite number, got {value!r}")
+    as_float = float(value)
+    if not math.isfinite(as_float):
+        raise PersonalVaultError(f"now_epoch must be finite, got {value!r}")
+    return as_float
+
+
+def _build_lease_json_bytes(
+    *,
+    lease_id: str,
+    project_id: str,
+    now_epoch: float,
+    ttl_seconds: float,
+    chunk_ids: Iterable[str],
+) -> bytes:
+    validated_chunks = sorted({_validate_chunk_id(cid) for cid in chunk_ids})
+    # ``ttl_seconds`` is validated finite/positive by every caller, so the computed
+    # expiration can never become non-finite (float("inf") is not reachable by rounding).
+    expires_at = now_epoch + ttl_seconds
+    return json.dumps(
+        {
+            "lease_id": lease_id,
+            "pid": os.getpid(),
+            "project_id": project_id,
+            "created_at_epoch": now_epoch,
+            "expires_at_epoch": expires_at,
+            "ttl_seconds": ttl_seconds,
+            "chunk_ids": validated_chunks,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _parse_and_validate_lease_payload(
+    raw: bytes,
+    *,
+    source_label: str,
+) -> tuple[float, set[str]]:
+    """Parse a lease document fail-closed, raising :class:`VaultTransportError` if corrupt."""
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise VaultTransportError(f"Corrupted push lease JSON in {source_label}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise VaultTransportError(
+            f"Malformed push lease payload in {source_label}: expected JSON object"
+        )
+    raw_exp = parsed.get("expires_at_epoch")
+    if isinstance(raw_exp, bool) or not isinstance(raw_exp, (int, float)):
+        raise VaultTransportError(
+            f"Missing or non-numeric expires_at_epoch in push lease {source_label}"
+        )
+    expires_at = float(raw_exp)
+    if not math.isfinite(expires_at):
+        raise VaultTransportError(
+            f"Non-finite expires_at_epoch in push lease {source_label}: {expires_at!r}"
+        )
+    raw_ids = parsed.get("chunk_ids")
+    if not isinstance(raw_ids, list):
+        raise VaultTransportError(f"Malformed chunk_ids in push lease {source_label}: not a list")
+    chunk_set: set[str] = set()
+    for cid in raw_ids:
+        if not isinstance(cid, str) or not _CHUNK_ID_RE.fullmatch(cid):
+            raise VaultTransportError(f"Invalid chunk_id {cid!r} in push lease {source_label}")
+        chunk_set.add(cid)
+    return expires_at, chunk_set
+
+
+def _parse_http_or_iso_timestamp(raw_ts: str) -> float | None:
+    """Parse RFC 7231 HTTP ``Last-Modified`` or ISO-8601 S3 ``<LastModified>`` string."""
+    cleaned = raw_ts.strip()
+    if not cleaned:
+        return None
+    with contextlib.suppress(TypeError, ValueError):
+        iso_norm = cleaned[:-1] + "+00:00" if cleaned.endswith("Z") else cleaned
+        dt_iso = datetime.fromisoformat(iso_norm)
+        if dt_iso.tzinfo is None:
+            dt_iso = dt_iso.replace(tzinfo=timezone.utc)
+        return dt_iso.timestamp()
+    with contextlib.suppress(TypeError, ValueError):
+        dt_http = email.utils.parsedate_to_datetime(cleaned)
+        if dt_http.tzinfo is None:
+            dt_http = dt_http.replace(tzinfo=timezone.utc)
+        return dt_http.timestamp()
+    return None
 
 
 def _atomic_write_file(target_path: Path, data: bytes) -> None:
@@ -316,6 +419,46 @@ class LocalDeviceVaultDriver:
         valid = _validate_snapshot_id(lease_id)
         return self._leases_dir / f"lease-{valid}.json"
 
+    @contextlib.contextmanager
+    def _coordination_lock(
+        self,
+        *,
+        timeout_seconds: float = 10.0,
+        stale_lock_seconds: float = 30.0,
+    ) -> Iterator[None]:
+        """Short-lived cross-process mutex (``O_CREAT | O_EXCL``) closing GC/Lease TOCTOU."""
+        lock_path = self._leases_dir / ".gc_coord.lock"
+        deadline = time.monotonic() + timeout_seconds
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        while True:
+            try:
+                fd = os.open(lock_path, flags, 0o600)
+                try:
+                    os.write(fd, f"{os.getpid()}:{time.time():.6f}".encode("ascii"))
+                finally:
+                    os.close(fd)
+                break
+            except FileExistsError:
+                with contextlib.suppress(OSError):
+                    st = lock_path.lstat()
+                    if (time.time() - st.st_mtime) > stale_lock_seconds:
+                        lock_path.unlink(missing_ok=True)
+                        continue
+                if time.monotonic() >= deadline:
+                    raise VaultTransportError(
+                        f"Timed out acquiring vault GC coordination lock: {lock_path}"
+                    ) from None
+                time.sleep(0.002)
+            except OSError as exc:
+                raise VaultTransportError(
+                    f"Failed acquiring vault GC coordination lock {lock_path}: {exc}"
+                ) from exc
+        try:
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                lock_path.unlink(missing_ok=True)
+
     def acquire_push_lease(
         self,
         chunk_ids: Iterable[str] = (),
@@ -325,9 +468,7 @@ class LocalDeviceVaultDriver:
         lease_id: str | None = None,
     ) -> str:
         """Atomically create a cross-process lease file via ``O_CREAT | O_EXCL | O_WRONLY``."""
-        if ttl_seconds <= 0.0:
-            raise PersonalVaultError(f"Lease ttl_seconds must be positive, got {ttl_seconds}")
-        validated_chunks = sorted({_validate_chunk_id(cid) for cid in chunk_ids})
+        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
         now = time.time()
         effective_id = (
             f"{os.getpid()}-{int(now * 1000)}-{secrets.token_hex(6)}"
@@ -335,33 +476,30 @@ class LocalDeviceVaultDriver:
             else _validate_snapshot_id(lease_id)
         )
         lease_path = self._lease_path(effective_id)
-        payload = json.dumps(
-            {
-                "lease_id": effective_id,
-                "pid": os.getpid(),
-                "project_id": project_id,
-                "created_at_epoch": now,
-                "expires_at_epoch": now + ttl_seconds,
-                "ttl_seconds": ttl_seconds,
-                "chunk_ids": validated_chunks,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        payload = _build_lease_json_bytes(
+            lease_id=effective_id,
+            project_id=project_id,
+            now_epoch=now,
+            ttl_seconds=finite_ttl,
+            chunk_ids=chunk_ids,
+        )
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        try:
-            fd = os.open(lease_path, flags, 0o600)
-        except FileExistsError as exc:
-            raise VaultRevisionConflictError(
-                f"Push lease {effective_id!r} already exists in {self._leases_dir}"
-            ) from exc
-        except OSError as exc:
-            raise VaultTransportError(f"Failed creating push lease {lease_path}: {exc}") from exc
-        try:
-            os.write(fd, payload)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        with self._coordination_lock():
+            try:
+                fd = os.open(lease_path, flags, 0o600)
+            except FileExistsError as exc:
+                raise VaultRevisionConflictError(
+                    f"Push lease {effective_id!r} already exists in {self._leases_dir}"
+                ) from exc
+            except OSError as exc:
+                raise VaultTransportError(
+                    f"Failed creating push lease {lease_path}: {exc}"
+                ) from exc
+            try:
+                os.write(fd, payload)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         return effective_id
 
     def update_push_lease(
@@ -373,62 +511,78 @@ class LocalDeviceVaultDriver:
         ttl_seconds: float = 3600.0,
     ) -> None:
         """Atomically refresh TTL and in-flight ``chunk_ids`` on an active push lease."""
-        if ttl_seconds <= 0.0:
-            raise PersonalVaultError(f"Lease ttl_seconds must be positive, got {ttl_seconds}")
-        lease_path = self._lease_path(lease_id)
-        if lease_path.is_symlink() or not lease_path.is_file():
-            raise VaultTransportError(f"Active push lease not found: {lease_id}")
-        validated_chunks = sorted({_validate_chunk_id(cid) for cid in chunk_ids})
+        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
+        valid_id = _validate_snapshot_id(lease_id)
+        lease_path = self._lease_path(valid_id)
         now = time.time()
-        payload = json.dumps(
-            {
-                "lease_id": _validate_snapshot_id(lease_id),
-                "pid": os.getpid(),
-                "project_id": project_id,
-                "created_at_epoch": now,
-                "expires_at_epoch": now + ttl_seconds,
-                "ttl_seconds": ttl_seconds,
-                "chunk_ids": validated_chunks,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        _atomic_write_file(lease_path, payload)
+        payload = _build_lease_json_bytes(
+            lease_id=valid_id,
+            project_id=project_id,
+            now_epoch=now,
+            ttl_seconds=finite_ttl,
+            chunk_ids=chunk_ids,
+        )
+        with self._coordination_lock():
+            if lease_path.is_symlink() or not lease_path.is_file():
+                raise VaultTransportError(f"Active push lease not found: {lease_id}")
+            _atomic_write_file(lease_path, payload)
 
     def release_push_lease(self, lease_id: str) -> None:
         """Release and unlink a cross-process push lease file."""
         lease_path = self._lease_path(lease_id)
-        with contextlib.suppress(OSError):
+        with self._coordination_lock(), contextlib.suppress(OSError):
             lease_path.unlink(missing_ok=True)
 
-    def read_active_leased_chunks(self, *, now_epoch: float | None = None) -> set[str]:
-        """Read unexpired in-flight chunk IDs across all cross-process lease files."""
-        effective_now = time.time() if now_epoch is None else now_epoch
+    def _read_active_leased_chunks_unlocked(self, *, effective_now: float) -> set[str]:
         active_chunks: set[str] = set()
-        for entry in self._leases_dir.iterdir():
+        for entry in sorted(self._leases_dir.iterdir()):
+            if entry.name.startswith("."):
+                continue
             if (
-                not entry.is_file()
-                or entry.is_symlink()
+                entry.is_symlink()
+                or not entry.is_file()
                 or not entry.name.startswith("lease-")
                 or entry.suffix != ".json"
             ):
-                continue
+                raise VaultTransportError(
+                    f"Unexpected or symlinked file in vault lease directory: {entry}"
+                )
             try:
-                parsed = json.loads(entry.read_bytes().decode("utf-8"))
-                expires_at = float(parsed["expires_at_epoch"])
-                raw_ids = parsed["chunk_ids"]
-            except (OSError, ValueError, KeyError, TypeError):
-                continue
+                raw_bytes = entry.read_bytes()
+            except OSError as exc:
+                raise VaultTransportError(f"Failed reading push lease file {entry}: {exc}") from exc
+            expires_at, chunk_set = _parse_and_validate_lease_payload(
+                raw_bytes,
+                source_label=str(entry),
+            )
             if expires_at <= effective_now:
                 with contextlib.suppress(OSError):
                     entry.unlink(missing_ok=True)
                 continue
-            if isinstance(raw_ids, list):
-                for cid in raw_ids:
-                    cid_str = str(cid)
-                    if _CHUNK_ID_RE.fullmatch(cid_str):
-                        active_chunks.add(cid_str)
+            active_chunks.update(chunk_set)
         return active_chunks
+
+    def read_active_leased_chunks(self, *, now_epoch: float | None = None) -> set[str]:
+        """Read unexpired in-flight chunk IDs fail-closed across cross-process lease files."""
+        effective_now = _validate_finite_epoch(now_epoch, default_now=time.time())
+        with self._coordination_lock():
+            return self._read_active_leased_chunks_unlocked(effective_now=effective_now)
+
+    def delete_chunk_if_unleased(
+        self,
+        chunk_id: str,
+        *,
+        now_epoch: float | None = None,
+    ) -> bool:
+        """Atomically re-verify leases under ``.gc_coord.lock`` and delete ``chunk_id``."""
+        valid = _validate_chunk_id(chunk_id)
+        effective_now = _validate_finite_epoch(now_epoch, default_now=time.time())
+        with self._coordination_lock():
+            active_leased = self._read_active_leased_chunks_unlocked(effective_now=effective_now)
+            if valid in active_leased or not self.has_chunk(valid):
+                return False
+            self.delete_chunk(valid)
+            return True
 
     def _staging_journal_path(self, project_id: str, parent_snapshot_id: str | None) -> Path:
         key_bytes = f"{project_id}\x00{parent_snapshot_id or ''}".encode()
@@ -691,8 +845,10 @@ _FORBIDDEN_XML_TOKENS = (
 )
 
 
-def _parse_s3_list_xml(xml_bytes: bytes) -> tuple[list[str], str | None]:
-    """Safely parse S3 ``ListObjectsV2`` XML response without DTD/entity/CDATA constructs."""
+def _parse_s3_list_xml_entries(
+    xml_bytes: bytes,
+) -> tuple[list[tuple[str, float | None]], str | None]:
+    """Safely parse S3 ``ListObjectsV2`` XML keys and optional ``<LastModified>`` timestamps."""
     if b"\x00" in xml_bytes:
         raise VaultTransportError("NUL byte forbidden in S3 ListObjectsV2 XML response")
     lowered = xml_bytes.lower()
@@ -711,20 +867,35 @@ def _parse_s3_list_xml(xml_bytes: bytes) -> tuple[list[str], str | None]:
     except (UnicodeDecodeError, ET.ParseError) as exc:
         raise VaultTransportError("Malformed XML in S3 ListObjectsV2 response") from exc
 
-    keys: list[str] = []
+    entries: list[tuple[str, float | None]] = []
     is_truncated = False
     next_token: str | None = None
 
-    for elem in root.iter():
-        local_name = elem.tag.rsplit("}", 1)[-1]
-        if local_name == "Key" and elem.text:
-            keys.append(elem.text)
-        elif local_name == "IsTruncated" and elem.text:
-            is_truncated = elem.text.strip().lower() == "true"
-        elif local_name == "NextContinuationToken" and elem.text:
-            next_token = elem.text.strip()
+    for child in root:
+        local_child = child.tag.rsplit("}", 1)[-1]
+        if local_child == "Contents":
+            item_key: str | None = None
+            item_mtime: float | None = None
+            for sub in child:
+                sub_name = sub.tag.rsplit("}", 1)[-1]
+                if sub_name == "Key" and sub.text:
+                    item_key = sub.text
+                elif sub_name == "LastModified" and sub.text:
+                    item_mtime = _parse_http_or_iso_timestamp(sub.text)
+            if item_key is not None:
+                entries.append((item_key, item_mtime))
+        elif local_child == "IsTruncated" and child.text:
+            is_truncated = child.text.strip().lower() == "true"
+        elif local_child == "NextContinuationToken" and child.text:
+            next_token = child.text.strip()
 
-    return keys, (next_token if is_truncated else None)
+    return entries, (next_token if is_truncated else None)
+
+
+def _parse_s3_list_xml(xml_bytes: bytes) -> tuple[list[str], str | None]:
+    """Safely parse S3 ``ListObjectsV2`` XML response without DTD/entity/CDATA constructs."""
+    entries, next_token = _parse_s3_list_xml_entries(xml_bytes)
+    return [key for key, _ in entries], next_token
 
 
 class S3CompatibleSigV4Driver:
@@ -747,6 +918,7 @@ class S3CompatibleSigV4Driver:
             (lambda: datetime.now(timezone.utc)) if clock is None else clock
         )
         self._clean_prefix = config.prefix.strip("/")
+        self._chunk_mtimes: dict[str, float] = {}
 
     @property
     def config(self) -> S3SigV4Config:
@@ -783,9 +955,10 @@ class S3CompatibleSigV4Driver:
         query: Mapping[str, str] | None = None,
         body: bytes = b"",
         content_type: str | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> S3HttpResponse:
         url = self._build_url(object_key=object_key, query=query)
-        extra: dict[str, str] = {}
+        extra: dict[str, str] = dict(extra_headers) if extra_headers else {}
         if content_type is not None:
             extra["content-type"] = content_type
         if method in ("PUT", "POST"):
@@ -828,6 +1001,7 @@ class S3CompatibleSigV4Driver:
         )
         if resp.status_code not in (200, 201, 204):
             raise VaultTransportError(f"S3 put_chunk failed with HTTP {resp.status_code}")
+        self._chunk_mtimes[valid] = self._clock().timestamp()
 
     def get_chunk(self, chunk_id: str) -> bytes:
         valid = _validate_chunk_id(chunk_id)
@@ -846,6 +1020,26 @@ class S3CompatibleSigV4Driver:
         if resp.status_code == 404:
             return False
         raise VaultTransportError(f"S3 has_chunk failed for {valid} with HTTP {resp.status_code}")
+
+    def get_chunk_mtime(self, chunk_id: str) -> float | None:
+        """Return UTC epoch mtime of ``chunk_id`` from S3 ``Last-Modified`` or metadata."""
+        valid = _validate_chunk_id(chunk_id)
+        resp = self._send("HEAD", object_key=self._object_key("chunks", f"{valid}.chk"))
+        if resp.status_code == 404:
+            self._chunk_mtimes.pop(valid, None)
+            return None
+        if resp.status_code != 200:
+            raise VaultTransportError(
+                f"S3 get_chunk_mtime failed for {valid} with HTTP {resp.status_code}"
+            )
+        lowered_headers = {k.lower(): v for k, v in resp.headers.items()}
+        raw_lm = lowered_headers.get("last-modified")
+        if raw_lm is not None:
+            parsed_ts = _parse_http_or_iso_timestamp(raw_lm)
+            if parsed_ts is not None:
+                self._chunk_mtimes[valid] = parsed_ts
+                return parsed_ts
+        return self._chunk_mtimes.get(valid)
 
     def put_manifest(self, snapshot_id: str, data: bytes) -> None:
         valid = _validate_snapshot_id(snapshot_id)
@@ -880,12 +1074,14 @@ class S3CompatibleSigV4Driver:
                 raise VaultTransportError(
                     f"S3 list ({category}) failed with HTTP {resp.status_code}"
                 )
-            keys, continuation = _parse_s3_list_xml(resp.body)
-            for key in keys:
+            entries, continuation = _parse_s3_list_xml_entries(resp.body)
+            for key, mtime_val in entries:
                 if key.startswith(prefix) and key.endswith(suffix):
                     stem = key[len(prefix) : -len(suffix)]
                     if stem and "/" not in stem:
                         stems.append(stem)
+                        if category == "chunks" and mtime_val is not None:
+                            self._chunk_mtimes[stem] = mtime_val
             if continuation is None:
                 break
         return sorted(set(stems))
@@ -904,6 +1100,136 @@ class S3CompatibleSigV4Driver:
             raise VaultTransportError(
                 f"S3 delete_chunk failed for {valid} with HTTP {resp.status_code}"
             )
+        self._chunk_mtimes.pop(valid, None)
+
+    def acquire_push_lease(
+        self,
+        chunk_ids: Iterable[str] = (),
+        *,
+        project_id: str = "",
+        ttl_seconds: float = 3600.0,
+        lease_id: str | None = None,
+    ) -> str:
+        """Create a lease object under ``leases/<lease_id>.json`` on the S3 bucket."""
+        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
+        now = self._clock().timestamp()
+        effective_id = (
+            f"{os.getpid()}-{int(now * 1000)}-{secrets.token_hex(6)}"
+            if lease_id is None
+            else _validate_snapshot_id(lease_id)
+        )
+        obj_key = self._object_key("leases", f"{effective_id}.json")
+        head_resp = self._send("HEAD", object_key=obj_key)
+        if head_resp.status_code == 200:
+            raise VaultRevisionConflictError(f"S3 push lease {effective_id!r} already exists")
+        if head_resp.status_code != 404:
+            raise VaultTransportError(
+                f"S3 lease probe failed for {effective_id} with HTTP {head_resp.status_code}"
+            )
+        payload = _build_lease_json_bytes(
+            lease_id=effective_id,
+            project_id=project_id,
+            now_epoch=now,
+            ttl_seconds=finite_ttl,
+            chunk_ids=chunk_ids,
+        )
+        put_resp = self._send(
+            "PUT",
+            object_key=obj_key,
+            body=payload,
+            content_type="application/json",
+            extra_headers={"if-none-match": "*"},
+        )
+        if put_resp.status_code in (409, 412):
+            raise VaultRevisionConflictError(f"S3 push lease {effective_id!r} collision")
+        if put_resp.status_code not in (200, 201, 204):
+            raise VaultTransportError(
+                f"S3 acquire_push_lease failed with HTTP {put_resp.status_code}"
+            )
+        return effective_id
+
+    def update_push_lease(
+        self,
+        lease_id: str,
+        chunk_ids: Iterable[str],
+        *,
+        project_id: str = "",
+        ttl_seconds: float = 3600.0,
+    ) -> None:
+        """Refresh ``leases/<lease_id>.json`` on the S3 bucket."""
+        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
+        valid_id = _validate_snapshot_id(lease_id)
+        obj_key = self._object_key("leases", f"{valid_id}.json")
+        head_resp = self._send("HEAD", object_key=obj_key)
+        if head_resp.status_code != 200:
+            raise VaultTransportError(f"Active S3 push lease not found: {valid_id}")
+        now = self._clock().timestamp()
+        payload = _build_lease_json_bytes(
+            lease_id=valid_id,
+            project_id=project_id,
+            now_epoch=now,
+            ttl_seconds=finite_ttl,
+            chunk_ids=chunk_ids,
+        )
+        put_resp = self._send(
+            "PUT",
+            object_key=obj_key,
+            body=payload,
+            content_type="application/json",
+        )
+        if put_resp.status_code not in (200, 201, 204):
+            raise VaultTransportError(
+                f"S3 update_push_lease failed with HTTP {put_resp.status_code}"
+            )
+
+    def release_push_lease(self, lease_id: str) -> None:
+        """Delete ``leases/<lease_id>.json`` from the S3 bucket."""
+        valid_id = _validate_snapshot_id(lease_id)
+        obj_key = self._object_key("leases", f"{valid_id}.json")
+        resp = self._send("DELETE", object_key=obj_key)
+        if resp.status_code not in (200, 202, 204, 404):
+            raise VaultTransportError(
+                f"S3 release_push_lease failed for {valid_id} with HTTP {resp.status_code}"
+            )
+
+    def read_active_leased_chunks(self, *, now_epoch: float | None = None) -> set[str]:
+        """List and parse all active ``leases/*.json`` objects fail-closed."""
+        effective_now = _validate_finite_epoch(now_epoch, default_now=self._clock().timestamp())
+        active_chunks: set[str] = set()
+        for stem in self._list_category_stems("leases", ".json"):
+            obj_key = self._object_key("leases", f"{stem}.json")
+            resp = self._send("GET", object_key=obj_key)
+            if resp.status_code == 404:
+                continue
+            if resp.status_code != 200:
+                raise VaultTransportError(
+                    f"S3 read_active_leased_chunks failed for {stem} with HTTP {resp.status_code}"
+                )
+            expires_at, chunk_set = _parse_and_validate_lease_payload(
+                resp.body,
+                source_label=obj_key,
+            )
+            if expires_at <= effective_now:
+                with contextlib.suppress(VaultTransportError):
+                    self.release_push_lease(stem)
+                continue
+            active_chunks.update(chunk_set)
+        return active_chunks
+
+    def delete_chunk_if_unleased(
+        self,
+        chunk_id: str,
+        *,
+        now_epoch: float | None = None,
+    ) -> bool:
+        """Re-check S3 ``leases/*.json`` objects immediately before deleting ``chunk_id``."""
+        valid = _validate_chunk_id(chunk_id)
+        if valid in self.read_active_leased_chunks(now_epoch=now_epoch):
+            return False
+        if not self.has_chunk(valid):
+            return False
+        self.delete_chunk(valid)
+        return True
 
 
 # --------------------------------------------------------------------------- #
@@ -919,6 +1245,7 @@ _BUNDLE_INDEX_HEAD = struct.Struct(">BH")
 _BUNDLE_INDEX_TAIL = struct.Struct(">QQI32s")
 _ENTRY_CHUNK = 1
 _ENTRY_MANIFEST = 2
+_ENTRY_LEASE = 3
 
 
 class PortableBundleVaultDriver:
@@ -946,6 +1273,8 @@ class PortableBundleVaultDriver:
         self._max_quota_bytes = max_quota_bytes
         self._chunks: dict[str, bytes] = {}
         self._manifests: dict[str, bytes] = {}
+        self._leases: dict[str, bytes] = {}
+        self._chunk_mtimes: dict[str, float] = {}
 
         try:
             self._bundle_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1000,6 +1329,8 @@ class PortableBundleVaultDriver:
 
         loaded_chunks: dict[str, bytes] = {}
         loaded_manifests: dict[str, bytes] = {}
+        loaded_leases: dict[str, bytes] = {}
+        archive_mtime = self._bundle_path.stat().st_mtime
         cursor = index_offset
         index_end = index_offset + index_len
 
@@ -1045,6 +1376,12 @@ class PortableBundleVaultDriver:
             elif entry_kind == _ENTRY_MANIFEST:
                 _validate_snapshot_id(key)
                 loaded_manifests[key] = blob
+            elif entry_kind == _ENTRY_LEASE:
+                if not key.startswith("leases/") or not key.endswith(".json"):
+                    raise VaultTamperDetectedError(f"Malformed lease key in .nagarvault: {key!r}")
+                stem = key[len("leases/") : -len(".json")]
+                _validate_snapshot_id(stem)
+                loaded_leases[stem] = blob
             else:
                 raise VaultTamperDetectedError(f"Unknown .nagarvault entry kind: {entry_kind}")
 
@@ -1053,17 +1390,23 @@ class PortableBundleVaultDriver:
 
         self._chunks = loaded_chunks
         self._manifests = loaded_manifests
+        self._leases = loaded_leases
+        for cid in loaded_chunks:
+            self._chunk_mtimes.setdefault(cid, archive_mtime)
 
     def _serialize_archive(
         self,
         chunks: Mapping[str, bytes],
         manifests: Mapping[str, bytes],
+        leases: Mapping[str, bytes],
     ) -> bytes:
         ordered_entries: list[tuple[int, str, bytes]] = []
         for chunk_id in sorted(chunks):
             ordered_entries.append((_ENTRY_CHUNK, chunk_id, chunks[chunk_id]))
         for snapshot_id in sorted(manifests):
             ordered_entries.append((_ENTRY_MANIFEST, snapshot_id, manifests[snapshot_id]))
+        for lease_id in sorted(leases):
+            ordered_entries.append((_ENTRY_LEASE, f"leases/{lease_id}.json", leases[lease_id]))
 
         payload_parts: list[bytes] = []
         index_parts: list[bytes] = []
@@ -1094,8 +1437,13 @@ class PortableBundleVaultDriver:
         archive_sha = hashlib.sha256(header_prefix + payload_bytes + index_bytes).digest()
         return header_prefix + archive_sha + payload_bytes + index_bytes
 
-    def _flush(self, next_chunks: dict[str, bytes], next_manifests: dict[str, bytes]) -> None:
-        archive_bytes = self._serialize_archive(next_chunks, next_manifests)
+    def _flush(
+        self,
+        next_chunks: dict[str, bytes],
+        next_manifests: dict[str, bytes],
+        next_leases: dict[str, bytes],
+    ) -> None:
+        archive_bytes = self._serialize_archive(next_chunks, next_manifests, next_leases)
         if self._max_quota_bytes is not None and len(archive_bytes) > self._max_quota_bytes:
             raise VaultQuotaExceededError(
                 f"Portable bundle size {len(archive_bytes)} exceeds max_quota_bytes "
@@ -1104,12 +1452,14 @@ class PortableBundleVaultDriver:
         _atomic_write_file(self._bundle_path, archive_bytes)
         self._chunks = next_chunks
         self._manifests = next_manifests
+        self._leases = next_leases
 
     def put_chunk(self, chunk_id: str, data: bytes) -> None:
         valid = _validate_chunk_id(chunk_id)
         updated_chunks = dict(self._chunks)
         updated_chunks[valid] = bytes(data)
-        self._flush(updated_chunks, dict(self._manifests))
+        self._flush(updated_chunks, dict(self._manifests), dict(self._leases))
+        self._chunk_mtimes[valid] = time.time()
 
     def get_chunk(self, chunk_id: str) -> bytes:
         valid = _validate_chunk_id(chunk_id)
@@ -1121,11 +1471,18 @@ class PortableBundleVaultDriver:
         valid = _validate_chunk_id(chunk_id)
         return valid in self._chunks
 
+    def get_chunk_mtime(self, chunk_id: str) -> float | None:
+        """Return POSIX mtime recorded for ``chunk_id`` inside this bundle, or ``None``."""
+        valid = _validate_chunk_id(chunk_id)
+        if valid not in self._chunks:
+            return None
+        return self._chunk_mtimes.get(valid)
+
     def put_manifest(self, snapshot_id: str, data: bytes) -> None:
         valid = _validate_snapshot_id(snapshot_id)
         updated_manifests = dict(self._manifests)
         updated_manifests[valid] = bytes(data)
-        self._flush(dict(self._chunks), updated_manifests)
+        self._flush(dict(self._chunks), updated_manifests, dict(self._leases))
 
     def get_manifest(self, snapshot_id: str) -> bytes:
         valid = _validate_snapshot_id(snapshot_id)
@@ -1145,7 +1502,114 @@ class PortableBundleVaultDriver:
         if valid in self._chunks:
             updated_chunks = dict(self._chunks)
             del updated_chunks[valid]
-            self._flush(updated_chunks, dict(self._manifests))
+            self._flush(updated_chunks, dict(self._manifests), dict(self._leases))
+            self._chunk_mtimes.pop(valid, None)
+
+    def acquire_push_lease(
+        self,
+        chunk_ids: Iterable[str] = (),
+        *,
+        project_id: str = "",
+        ttl_seconds: float = 3600.0,
+        lease_id: str | None = None,
+    ) -> str:
+        """Record a ``leases/<lease_id>.json`` entry inside this ``.nagarvault`` bundle."""
+        if self._bundle_path.exists():
+            self._load_and_verify()
+        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
+        now = time.time()
+        effective_id = (
+            f"{os.getpid()}-{int(now * 1000)}-{secrets.token_hex(6)}"
+            if lease_id is None
+            else _validate_snapshot_id(lease_id)
+        )
+        if effective_id in self._leases:
+            raise VaultRevisionConflictError(
+                f"Portable bundle lease {effective_id!r} already exists"
+            )
+        payload = _build_lease_json_bytes(
+            lease_id=effective_id,
+            project_id=project_id,
+            now_epoch=now,
+            ttl_seconds=finite_ttl,
+            chunk_ids=chunk_ids,
+        )
+        updated_leases = dict(self._leases)
+        updated_leases[effective_id] = payload
+        self._flush(dict(self._chunks), dict(self._manifests), updated_leases)
+        return effective_id
+
+    def update_push_lease(
+        self,
+        lease_id: str,
+        chunk_ids: Iterable[str],
+        *,
+        project_id: str = "",
+        ttl_seconds: float = 3600.0,
+    ) -> None:
+        """Refresh an active ``leases/<lease_id>.json`` entry inside this bundle."""
+        if self._bundle_path.exists():
+            self._load_and_verify()
+        finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
+        valid_id = _validate_snapshot_id(lease_id)
+        if valid_id not in self._leases:
+            raise VaultTransportError(f"Active bundle push lease not found: {valid_id}")
+        payload = _build_lease_json_bytes(
+            lease_id=valid_id,
+            project_id=project_id,
+            now_epoch=time.time(),
+            ttl_seconds=finite_ttl,
+            chunk_ids=chunk_ids,
+        )
+        updated_leases = dict(self._leases)
+        updated_leases[valid_id] = payload
+        self._flush(dict(self._chunks), dict(self._manifests), updated_leases)
+
+    def release_push_lease(self, lease_id: str) -> None:
+        """Remove a ``leases/<lease_id>.json`` entry from this bundle."""
+        if self._bundle_path.exists():
+            self._load_and_verify()
+        valid_id = _validate_snapshot_id(lease_id)
+        if valid_id in self._leases:
+            updated_leases = dict(self._leases)
+            del updated_leases[valid_id]
+            self._flush(dict(self._chunks), dict(self._manifests), updated_leases)
+
+    def read_active_leased_chunks(self, *, now_epoch: float | None = None) -> set[str]:
+        """Read unexpired ``leases/*.json`` entries fail-closed from this bundle."""
+        if self._bundle_path.exists():
+            self._load_and_verify()
+        effective_now = _validate_finite_epoch(now_epoch, default_now=time.time())
+        active_chunks: set[str] = set()
+        expired_ids: list[str] = []
+        for stem, raw_bytes in sorted(self._leases.items()):
+            expires_at, chunk_set = _parse_and_validate_lease_payload(
+                raw_bytes,
+                source_label=f"bundle://leases/{stem}.json",
+            )
+            if expires_at <= effective_now:
+                expired_ids.append(stem)
+                continue
+            active_chunks.update(chunk_set)
+        if expired_ids:
+            updated_leases = {k: v for k, v in self._leases.items() if k not in expired_ids}
+            self._flush(dict(self._chunks), dict(self._manifests), updated_leases)
+        return active_chunks
+
+    def delete_chunk_if_unleased(
+        self,
+        chunk_id: str,
+        *,
+        now_epoch: float | None = None,
+    ) -> bool:
+        """Verify bundle leases and delete ``chunk_id`` if unleased."""
+        valid = _validate_chunk_id(chunk_id)
+        if valid in self.read_active_leased_chunks(now_epoch=now_epoch):
+            return False
+        if not self.has_chunk(valid):
+            return False
+        self.delete_chunk(valid)
+        return True
 
 
 def export_snapshot_to_bundle(

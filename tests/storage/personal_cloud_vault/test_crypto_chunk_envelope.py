@@ -656,8 +656,16 @@ def test_n4_n5_official_rfc5869_hkdf_and_pbkdf2_hmac_sha256_standard_vectors() -
         "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"
     )
 
-    # RFC 7914 §11 / RFC 6070-input / NIST standard PBKDF2-HMAC-SHA256 vectors
+    # Official IETF RFC 7914 §11 (passwd, salt, c=1, dkLen=64) & NIST PBKDF2-HMAC-SHA256 vectors
     pbkdf2_vectors = (
+        (
+            b"passwd",
+            b"salt",
+            1,
+            64,
+            "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc"
+            "49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783",
+        ),
         (
             b"password",
             b"salt",

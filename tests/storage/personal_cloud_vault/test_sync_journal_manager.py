@@ -801,14 +801,22 @@ def test_f1_protected_chunks_min_age_refcounts_and_fail_closed_rollback(
     assert vault.has_chunk(c_young_mem)
     assert vault.has_chunk(c_young_disk)
 
-    # Minimal driver without get_chunk_mtime falls back gracefully when timestamp unknown
+    # P1-3 Fail-Safe: minimal driver without get_chunk_mtime stamps `first_seen = now`
+    # and RETAINS unknown-age chunks until `min_age_seconds` has elapsed!
     spy = _SpyDriverWrapper(vault)
     mgr_spy = PersonalCloudVaultManager(spy, chunk_size=64, kdf_iterations=100_000)
     gc_unknown_ts = mgr_spy.garbage_collect_unreferenced_chunks(
         candidate_chunk_ids=[c_young_disk],
         min_age_seconds=300.0,
     )
-    assert gc_unknown_ts.deleted_chunk_ids == (c_young_disk,)
+    assert gc_unknown_ts.deleted_chunk_ids == ()
+    assert vault.has_chunk(c_young_disk)
+    mgr_spy.record_orphan_candidate_chunk(c_young_disk, recorded_at=time.time() - 400.0)
+    gc_aged_ts = mgr_spy.garbage_collect_unreferenced_chunks(
+        candidate_chunk_ids=[c_young_disk],
+        min_age_seconds=300.0,
+    )
+    assert gc_aged_ts.deleted_chunk_ids == (c_young_disk,)
 
     # Fail-closed when broken storage loses chunks after re-upload (pre- and post-manifest)
     class _BlackholeChunkDriver:
@@ -1007,17 +1015,19 @@ def test_n1_streaming_push_o1_tracemalloc_ceiling_and_disk_locator_healing(
 
     def _inflated_stat(self_path: Path, *, follow_symlinks: bool = True) -> object:
         st = orig_stat(self_path, follow_symlinks=follow_symlinks)
-        if self_path == grow_file:
+        if self_path == grow_file and follow_symlinks:
 
             class _FakeStat:
                 st_mode = st.st_mode
+                st_ino = st.st_ino
                 st_size = 999
+                st_mtime_ns = st.st_mtime_ns
 
             return _FakeStat()
         return st
 
     monkeypatch.setattr(Path, "stat", _inflated_stat)
-    with pytest.raises(VaultTransportError, match="Concurrent file size change"):
+    with pytest.raises(VaultTransportError, match="open-fstat"):
         mgr.push_project_snapshot(
             project_id="grow-proj",
             source=grow_dir,
@@ -1325,3 +1335,413 @@ def test_n6_cross_client_cross_manager_gc_race_file_lease_and_disk_locator(
     assert gc_mid.deleted_chunk_ids == ()
     assert driver_client_b.has_chunk(toctou_cid)
     driver_client_a.release_push_lease("late-cross-proc")
+
+
+def test_p1_1_initial_staging_journal_survives_crash_after_first_put_chunk(
+    tmp_path: Path,
+) -> None:
+    """Crash right after 1st put_chunk (before journal chunk list update) preserves salt & chunk."""
+    chunk_size = 64
+    src_dir = tmp_path / "p1_1_src"
+    src_dir.mkdir()
+    payload = (b"1" * chunk_size) + (b"2" * chunk_size) + (b"3" * chunk_size)
+    (src_dir / "clip.bin").write_bytes(payload)
+
+    class _CrashRightAfterFirstPutDriver(LocalDeviceVaultDriver):
+        def __init__(self, root: Path, *, crash_after_first_put: bool) -> None:
+            super().__init__(root)
+            self.crash_after_first_put = crash_after_first_put
+            self.put_calls: list[str] = []
+
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            super().put_chunk(chunk_id, data)
+            self.put_calls.append(chunk_id)
+            if self.crash_after_first_put and len(self.put_calls) == 1:
+                raise RuntimeError("crash after 1st put_chunk before journal update")
+
+    vault_dir = tmp_path / "p1_1_vault"
+    d1 = _CrashRightAfterFirstPutDriver(vault_dir, crash_after_first_put=True)
+    m1 = PersonalCloudVaultManager(d1, chunk_size=chunk_size, kdf_iterations=100_000)
+
+    with pytest.raises(RuntimeError, match="before journal update"):
+        m1.push_project_snapshot(
+            project_id="p1-1-proj",
+            source=src_dir,
+            master_secret="p1-1-secret",
+            snapshot_id="snap-p1-1",
+        )
+    # Chunk #1 IS on storage, and the pre-upload initial journal recorded salt_hex
+    # even though uploaded_chunk_ids is still empty ()!
+    assert len(d1.put_calls) == 1
+    first_cid = d1.put_calls[0]
+    assert d1.has_chunk(first_cid)
+    initial_journal = d1.load_staging_journal("p1-1-proj", None)
+    assert initial_journal is not None
+    assert initial_journal.uploaded_chunk_ids == ()
+    saved_salt_hex = initial_journal.salt_hex
+
+    # Retry on fresh manager: recovers `saved_salt_hex`, sees chunk #1 via `has_chunk`,
+    # does NOT re-upload chunk #1, uploads ONLY chunks #2 & #3, and leaves 0 orphans!
+    d2 = _CrashRightAfterFirstPutDriver(vault_dir, crash_after_first_put=False)
+    m2 = PersonalCloudVaultManager(d2, chunk_size=chunk_size, kdf_iterations=100_000)
+    rep = m2.push_project_snapshot(
+        project_id="p1-1-proj",
+        source=src_dir,
+        master_secret="p1-1-secret",
+        snapshot_id="snap-p1-1",
+    )
+    assert rep.manifest.salt_hex == saved_salt_hex
+    assert rep.total_chunks == 3
+    assert rep.uploaded_chunks == 2
+    assert rep.deduplicated_chunks == 1
+    assert first_cid not in d2.put_calls
+    assert len(d2.list_chunks()) == 3
+    assert d2.load_staging_journal("p1-1-proj", None) is None
+    assert m2.pull_project_snapshot(
+        project_id="p1-1-proj",
+        master_secret="p1-1-secret",
+        snapshot_id="snap-p1-1",
+    ).files == {"clip.bin": payload}
+
+
+def test_p1_2_p1_4_fail_closed_corrupt_lease_gc_and_isfinite_guards(
+    tmp_path: Path,
+) -> None:
+    """Corrupt lease aborts GC fail-closed (0 deletes); NaN/Inf/bool temporal inputs fail."""
+    vault = LocalDeviceVaultDriver(tmp_path / "p1_2_vault")
+    for bad_val in (float("nan"), float("inf"), float("-inf"), True):
+        with pytest.raises(PersonalVaultError):
+            PersonalCloudVaultManager(vault, chunk_size=64, lease_ttl_seconds=bad_val)
+
+    mgr = PersonalCloudVaultManager(vault, chunk_size=64, kdf_iterations=100_000)
+    for bad_val in (float("nan"), float("inf"), float("-inf"), True):
+        with pytest.raises(PersonalVaultError):
+            mgr.garbage_collect_unreferenced_chunks(min_age_seconds=bad_val)
+        with pytest.raises(PersonalVaultError):
+            mgr.record_orphan_candidate_chunk("a" * 64, recorded_at=bad_val)
+
+    protected_by_corrupt_lease = "c" * 64
+    vault.put_chunk(protected_by_corrupt_lease, b"must-not-be-deleted")
+    corrupt_lease = vault.root_dir / ".leases" / "lease-corrupted.json"
+    corrupt_lease.write_text("{truncated-corrupt-lease", encoding="utf-8")
+
+    with pytest.raises(VaultTransportError):
+        mgr.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+    assert vault.has_chunk(protected_by_corrupt_lease)
+    corrupt_lease.unlink()
+
+
+def test_p1_5_real_os_subprocess_cross_process_lease_fstat_and_gc_coordination(
+    tmp_path: Path,
+) -> None:
+    """Real OS child process via subprocess.run respects parent lease + fstat catches swaps."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    chunk_size = 64
+    vault_dir = tmp_path / "subproc_shared_vault"
+    src_dir = tmp_path / "subproc_src"
+    src_dir.mkdir()
+    media_bytes = (b"X" * chunk_size) + (b"Y" * chunk_size)
+    (src_dir / "reel.bin").write_bytes(media_bytes)
+
+    orphan_cid = "e" * 64
+    subproc_results: list[dict[str, object]] = []
+
+    child_code = """
+import json, os, sys
+from pathlib import Path
+from nexus_ai_agent.storage.personal_cloud_vault import (
+    LocalDeviceVaultDriver,
+    PersonalCloudVaultManager,
+)
+vdir = Path(sys.argv[1])
+drv = LocalDeviceVaultDriver(vdir)
+leased = sorted(drv.read_active_leased_chunks())
+mgr = PersonalCloudVaultManager(drv, chunk_size=64, kdf_iterations=100_000)
+rep = mgr.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+print(json.dumps({
+    "child_pid": os.getpid(),
+    "leased": leased,
+    "deleted": list(rep.deleted_chunk_ids),
+}))
+"""
+
+    class _SubprocHookDriver(LocalDeviceVaultDriver):
+        def put_manifest(self, snapshot_id: str, data: bytes) -> None:
+            proc = subprocess.run(
+                [sys.executable, "-c", child_code, str(vault_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            subproc_results.append(json.loads(proc.stdout.strip()))
+            super().put_manifest(snapshot_id, data)
+
+    parent_driver = _SubprocHookDriver(vault_dir)
+    parent_driver.put_chunk(orphan_cid, b"real-orphan")
+    parent_mgr = PersonalCloudVaultManager(
+        parent_driver,
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    push_rep = parent_mgr.push_project_snapshot(
+        project_id="subproc-proj",
+        source=src_dir,
+        master_secret="subproc-secret",
+        snapshot_id="snap-subproc-1",
+    )
+    assert len(subproc_results) == 1
+    child_info = subproc_results[0]
+    assert child_info["child_pid"] != os.getpid()
+    assert len(child_info["leased"]) == 2  # type: ignore[arg-type]
+    assert child_info["deleted"] == [orphan_cid]
+    assert not parent_driver.has_chunk(orphan_cid)
+
+    pulled = parent_mgr.pull_project_snapshot(
+        project_id="subproc-proj",
+        master_secret="subproc-secret",
+        snapshot_id=push_rep.snapshot_id,
+    )
+    assert pulled.files == {"reel.bin": media_bytes}
+
+    # P1-5 fstat / lstat: same-size in-place overwrite & same-size atomic os.replace mid-stream
+    swap_dir = tmp_path / "swap_src"
+    swap_dir.mkdir()
+    target_file = swap_dir / "live.bin"
+    target_file.write_bytes((b"A" * chunk_size) + (b"B" * chunk_size))
+
+    class _MutateMidStreamDriver(LocalDeviceVaultDriver):
+        def __init__(self, root: Path, *, atomic_replace: bool) -> None:
+            super().__init__(root)
+            self.atomic_replace = atomic_replace
+            self.triggered = False
+
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            super().put_chunk(chunk_id, data)
+            if not self.triggered:
+                self.triggered = True
+                if self.atomic_replace:
+                    tmp_swap = swap_dir / ".swap_same_size.tmp"
+                    tmp_swap.write_bytes((b"Z" * chunk_size) + (b"W" * chunk_size))
+                    os.replace(tmp_swap, target_file)
+                else:
+                    with target_file.open("r+b") as fh:
+                        fh.seek(chunk_size)
+                        fh.write(b"Q" * chunk_size)
+                        fh.flush()
+                    os.utime(target_file, ns=(1_800_000_000_123_456_789, 1_800_000_000_123_456_789))
+
+    mgr_inplace = PersonalCloudVaultManager(
+        _MutateMidStreamDriver(tmp_path / "v_inplace", atomic_replace=False),
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    with pytest.raises(VaultTransportError, match="eof-fstat"):
+        mgr_inplace.push_project_snapshot(
+            project_id="fstat-p",
+            source=swap_dir,
+            master_secret="s",
+        )
+
+    (swap_dir / ".swap_same_size.tmp").unlink(missing_ok=True)
+    target_file.write_bytes((b"A" * chunk_size) + (b"B" * chunk_size))
+    mgr_replace = PersonalCloudVaultManager(
+        _MutateMidStreamDriver(tmp_path / "v_replace", atomic_replace=True),
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    with pytest.raises(VaultTransportError, match="eof-lstat"):
+        mgr_replace.push_project_snapshot(
+            project_id="lstat-p",
+            source=swap_dir,
+            master_secret="s",
+        )
+
+
+def test_edge_driver_capability_gaps_and_gc_fallback_paths(tmp_path: Path) -> None:
+    """Cover optional-driver-capability gaps, non-iterable listings, and GC fallback deletes."""
+    import os
+
+    chunk_size = 64
+    payload = (b"M" * chunk_size) + (b"N" * chunk_size)
+
+    # Driver with acquire_push_lease but WITHOUT update/release hooks
+    class _AcquireOnlyDriver(_SpyDriverWrapper):
+        def acquire_push_lease(
+            self,
+            chunk_ids: object = (),
+            *,
+            project_id: str = "",
+            ttl_seconds: float = 60.0,
+            lease_id: str | None = None,
+        ) -> str:
+            return "acquire-only-lease"
+
+    vault_acq = LocalDeviceVaultDriver(tmp_path / "acq_only")
+    mgr_acq = PersonalCloudVaultManager(
+        _AcquireOnlyDriver(vault_acq), chunk_size=chunk_size, kdf_iterations=100_000
+    )
+    rep_acq = mgr_acq.push_project_snapshot(
+        project_id="acq-proj",
+        source={"f.bin": payload},
+        master_secret="s",
+        snapshot_id="snap-acq",
+    )
+    assert rep_acq.uploaded_chunks == 2
+
+    # Non-iterable read_active_leased_chunks / list_chunks and non-numeric get_chunk_mtime
+    class _WeirdCapabilityDriver(_SpyDriverWrapper):
+        def read_active_leased_chunks(self, *, now_epoch: object = None) -> object:
+            return 42
+
+        def list_chunks(self) -> object:
+            return 7
+
+        def get_chunk_mtime(self, chunk_id: str) -> object:
+            return "not-a-timestamp"
+
+    weird_vault = LocalDeviceVaultDriver(tmp_path / "weird_caps")
+    orphan_a = "7" * 64
+    orphan_b = "8" * 64
+    weird_vault.put_chunk(orphan_a, b"orphan-a")
+    weird_vault.put_chunk(orphan_b, b"orphan-b")
+    weird = _WeirdCapabilityDriver(weird_vault)
+    mgr_weird = PersonalCloudVaultManager(weird, chunk_size=chunk_size, kdf_iterations=100_000)
+    mgr_weird.record_orphan_candidate_chunk(orphan_a, recorded_at=1.0)
+    gc_weird = mgr_weird.garbage_collect_unreferenced_chunks(
+        candidate_chunk_ids=[orphan_b],
+        min_age_seconds=300.0,
+    )
+    assert gc_weird.deleted_chunk_ids == (orphan_a,)
+    assert weird_vault.has_chunk(orphan_b)  # unknown age -> first_seen fail-safe retention
+
+    # Atomic delete path: delete_chunk_if_unleased returns False and the chunk is gone
+    class _VanishingDriver(_SpyDriverWrapper):
+        def delete_chunk_if_unleased(self, chunk_id: str, *, now_epoch: object = None) -> bool:
+            return False
+
+        def has_chunk(self, chunk_id: str) -> bool:
+            return False
+
+    mgr_vanish = PersonalCloudVaultManager(
+        _VanishingDriver(LocalDeviceVaultDriver(tmp_path / "vanishing")),
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    mgr_vanish.record_orphan_candidate_chunk("9" * 64)
+    gc_vanish = mgr_vanish.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+    assert gc_vanish.deleted_chunk_ids == ()
+
+    # Fallback delete path: driver without delete_chunk_if_unleased but reporting a lease
+    class _LateLeaseReportingDriver(_SpyDriverWrapper):
+        def __init__(self, inner: BYOSStorageDriver, leased: set[str]) -> None:
+            super().__init__(inner)
+            self.leased = leased
+            self.read_calls = 0
+
+        def read_active_leased_chunks(self, *, now_epoch: object = None) -> set[str]:
+            self.read_calls += 1
+            return set() if self.read_calls == 1 else set(self.leased)
+
+    fallback_vault = LocalDeviceVaultDriver(tmp_path / "fallback_vault")
+    leased_cid = "5" * 64
+    unleased_cid = "4" * 64
+    fallback_vault.put_chunk(leased_cid, b"leased")
+    fallback_vault.put_chunk(unleased_cid, b"unleased")
+    mgr_fallback = PersonalCloudVaultManager(
+        _LateLeaseReportingDriver(fallback_vault, {leased_cid}),
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    mgr_fallback.record_orphan_candidate_chunk(leased_cid)
+    mgr_fallback.record_orphan_candidate_chunk(unleased_cid)
+    gc_fallback = mgr_fallback.garbage_collect_unreferenced_chunks(min_age_seconds=0.0)
+    assert gc_fallback.deleted_chunk_ids == (unleased_cid,)
+    assert fallback_vault.has_chunk(leased_cid)
+
+    # Post-manifest heal failure on a driver WITHOUT delete_manifest rollback hook
+    class _NoRollbackBlackhole:
+        def __init__(self, inner: LocalDeviceVaultDriver) -> None:
+            self.inner = inner
+            self.manifest_written = False
+
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            if not self.manifest_written:
+                self.inner.put_chunk(chunk_id, data)
+
+        def get_chunk(self, chunk_id: str) -> bytes:
+            return self.inner.get_chunk(chunk_id)
+
+        def has_chunk(self, chunk_id: str) -> bool:
+            return False if self.manifest_written else self.inner.has_chunk(chunk_id)
+
+        def put_manifest(self, snapshot_id: str, data: bytes) -> None:
+            self.inner.put_manifest(snapshot_id, data)
+            self.manifest_written = True
+
+        def get_manifest(self, snapshot_id: str) -> bytes:
+            return self.inner.get_manifest(snapshot_id)
+
+        def list_manifests(self) -> list[str]:
+            return self.inner.list_manifests()
+
+        def delete_chunk(self, chunk_id: str) -> None:
+            self.inner.delete_chunk(chunk_id)
+
+    mgr_norollback = PersonalCloudVaultManager(
+        _NoRollbackBlackhole(LocalDeviceVaultDriver(tmp_path / "no_rollback")),
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    with pytest.raises(VaultTransportError, match="post-manifest"):
+        mgr_norollback.push_project_snapshot(
+            project_id="norollback",
+            source={"a.bin": b"data"},
+            master_secret="s",
+            snapshot_id="snap-norollback",
+        )
+
+    # Growth mid-stream with fstat pinned to the original fingerprint -> unaligned read length check
+    trunc_dir = tmp_path / "trunc_dir"
+    trunc_dir.mkdir()
+    trunc_file = trunc_dir / "clip.bin"
+    trunc_file.write_bytes(payload)
+    real_fstat = os.fstat
+    captured: dict[str, object] = {}
+
+    class _TruncateMidStreamDriver(_SpyDriverWrapper):
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            super().put_chunk(chunk_id, data)
+            if not captured:
+                with trunc_file.open("rb") as fh:
+                    captured["st"] = real_fstat(fh.fileno())
+                with trunc_file.open("ab") as fh:
+                    fh.write(b"Z" * 32)
+                    fh.flush()
+
+    def _pinned_fstat(fd: int) -> object:
+        return captured.get("st", real_fstat(fd))
+
+    mangled_module_os = __import__(
+        "nexus_ai_agent.storage.personal_cloud_vault.sync_journal_manager",
+        fromlist=["os"],
+    ).os
+    mangled_module_os.fstat = _pinned_fstat
+    try:
+        mgr_trunc = PersonalCloudVaultManager(
+            _TruncateMidStreamDriver(LocalDeviceVaultDriver(tmp_path / "trunc_vault")),
+            chunk_size=chunk_size,
+            kdf_iterations=100_000,
+        )
+        with pytest.raises(VaultTransportError, match="Concurrent file size/symlink change"):
+            mgr_trunc.push_project_snapshot(
+                project_id="trunc-proj",
+                source=trunc_dir,
+                master_secret="s",
+            )
+    finally:
+        mangled_module_os.fstat = real_fstat

@@ -38,6 +38,7 @@ from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import (
     _BUNDLE_INDEX_TAIL,
     _default_urllib_transport,
     _parse_s3_list_xml,
+    _parse_s3_list_xml_entries,
 )
 
 
@@ -690,9 +691,16 @@ def test_n2_local_driver_atomic_cross_process_lease_and_staging_journal(
 
     with pytest.raises(PersonalVaultError):
         driver_a.acquire_push_lease(ttl_seconds=0.0)
+    for bad_ttl in (float("nan"), float("inf"), float("-inf"), True):
+        with pytest.raises(PersonalVaultError):
+            driver_a.acquire_push_lease(ttl_seconds=bad_ttl)
+    for bad_now in (float("nan"), float("inf"), True):
+        with pytest.raises(PersonalVaultError):
+            driver_a.read_active_leased_chunks(now_epoch=bad_now)
 
     c1 = "a" * 64
     c2 = "b" * 64
+    driver_a.put_chunk(c1, b"payload-c1")
     lease_id = driver_a.acquire_push_lease(
         [c1],
         project_id="cinema-proj",
@@ -701,7 +709,7 @@ def test_n2_local_driver_atomic_cross_process_lease_and_staging_journal(
     )
     assert lease_id == "push-lease-01"
     # Lease and staging files never count against user storage quota
-    assert driver_a.used_bytes() == 0
+    assert driver_a.used_bytes() == len(b"payload-c1")
 
     # Atomic O_CREAT | O_EXCL collision rejects duplicate lease_id
     with pytest.raises(VaultRevisionConflictError):
@@ -714,8 +722,10 @@ def test_n2_local_driver_atomic_cross_process_lease_and_staging_journal(
     assert raw_lease["expires_at_epoch"] > raw_lease["created_at_epoch"]
     assert raw_lease["chunk_ids"] == [c1]
 
-    # Second process/driver instance sees leased chunks and updated chunks
+    # Second process/driver instance sees leased chunks & delete_chunk_if_unleased refuses delete
     assert driver_b.read_active_leased_chunks() == {c1}
+    assert driver_b.delete_chunk_if_unleased(c1) is False
+    assert driver_b.has_chunk(c1)
     driver_a.update_push_lease(lease_id, [c1, c2], project_id="cinema-proj", ttl_seconds=60.0)
     assert driver_b.read_active_leased_chunks() == {c1, c2}
 
@@ -724,23 +734,53 @@ def test_n2_local_driver_atomic_cross_process_lease_and_staging_journal(
     with pytest.raises(VaultTransportError):
         driver_a.update_push_lease("missing-lease", [c1])
 
-    # Malformed / non-lease files in .leases are ignored; expired leases auto-clean
-    (driver_a.root_dir / ".leases" / "ignore.txt").write_text("x", encoding="utf-8")
-    (driver_a.root_dir / ".leases" / "lease-corrupt.json").write_text("{bad", encoding="utf-8")
-    (driver_a.root_dir / ".leases" / "lease-bad-ids.json").write_text(
-        json.dumps({"expires_at_epoch": time.time() + 999, "chunk_ids": ["not-hex"]}),
-        encoding="utf-8",
+    # P1-2 Fail-Closed: ANY unexpected or malformed lease file raises VaultTransportError!
+    leases_dir = driver_a.root_dir / ".leases"
+    bad_cases = (
+        ("ignore.txt", "x"),
+        ("lease-corrupt.json", "{bad"),
+        ("lease-listroot.json", "[1, 2]"),
+        ("lease-bool-exp.json", json.dumps({"expires_at_epoch": True, "chunk_ids": []})),
+        ("lease-nan-exp.json", '{"expires_at_epoch": NaN, "chunk_ids": []}'),
+        (
+            "lease-bad-ids.json",
+            json.dumps({"expires_at_epoch": time.time() + 999, "chunk_ids": ["not-hex"]}),
+        ),
+        (
+            "lease-nonlist.json",
+            json.dumps({"expires_at_epoch": time.time() + 999, "chunk_ids": "bad"}),
+        ),
     )
-    (driver_a.root_dir / ".leases" / "lease-nonlist.json").write_text(
-        json.dumps({"expires_at_epoch": time.time() + 999, "chunk_ids": "bad"}),
-        encoding="utf-8",
-    )
-    assert driver_b.read_active_leased_chunks() == {c1, c2}
+    for bad_name, bad_body in bad_cases:
+        bad_path = leases_dir / bad_name
+        bad_path.write_text(bad_body, encoding="utf-8")
+        with pytest.raises(VaultTransportError):
+            driver_b.read_active_leased_chunks()
+        bad_path.unlink()
+    assert driver_b.has_chunk(c1)
 
-    # Simulate TTL expiration into the future -> active set empty & expired lease unlinked
+    # Stale `.gc_coord.lock` (>30s old) self-heals; fresh active lock times out fail-closed
+    coord_lock = leases_dir / ".gc_coord.lock"
+    coord_lock.write_bytes(b"stale")
+    stale_ts = time.time() - 120.0
+    os.utime(coord_lock, (stale_ts, stale_ts))
+    assert driver_b.read_active_leased_chunks() == {c1, c2}
+    coord_lock.write_bytes(b"fresh-contended")
+    with (
+        pytest.raises(VaultTransportError, match="Timed out acquiring"),
+        driver_b._coordination_lock(timeout_seconds=0.01),
+    ):
+        pass
+    coord_lock.unlink()
+
+    # Simulate TTL expiration into the future -> active set empty, expired lease unlinked,
+    # and delete_chunk_if_unleased atomically deletes unleased c1
     future_now = time.time() + 3600.0
     assert driver_b.read_active_leased_chunks(now_epoch=future_now) == set()
     assert not lease_file.exists()
+    assert driver_b.delete_chunk_if_unleased(c1) is True
+    assert not driver_b.has_chunk(c1)
+    assert driver_b.delete_chunk_if_unleased(c1) is False
     driver_a.release_push_lease(lease_id)
 
     # Staging journal round-trip, corrupt recovery, and clear
@@ -783,9 +823,383 @@ def test_n2_local_driver_atomic_cross_process_lease_and_staging_journal(
     driver_a.clear_staging_journal("cinema-proj", None)
     assert driver_b.load_staging_journal("cinema-proj", None) is None
 
-    def _fail_os_open(*_args: object, **_kwargs: object) -> int:
-        raise PermissionError("disk read-only")
+    orig_os_open = os.open
 
-    monkeypatch.setattr(os, "open", _fail_os_open)
+    def _fail_lease_open(path_arg: object, flags: int, mode: int = 0o777) -> int:
+        if "ro-lease" in str(path_arg):
+            raise PermissionError("disk read-only")
+        return orig_os_open(path_arg, flags, mode)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", _fail_lease_open)
     with pytest.raises(VaultTransportError):
         driver_a.acquire_push_lease([c1], lease_id="ro-lease")
+    monkeypatch.setattr(os, "open", orig_os_open)
+
+
+def test_p1_3_multi_backend_s3_and_bundle_leases_and_chunk_mtime(tmp_path: Path) -> None:
+    """Verify S3CompatibleSigV4Driver and PortableBundleVaultDriver leases & get_chunk_mtime."""
+    import urllib.parse
+    from datetime import datetime, timezone
+
+    from nexus_ai_agent.storage.personal_cloud_vault import VaultRevisionConflictError
+    from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import (
+        _parse_http_or_iso_timestamp,
+    )
+
+    assert _parse_http_or_iso_timestamp("   ") is None
+    assert _parse_http_or_iso_timestamp("not-a-timestamp") is None
+    assert _parse_http_or_iso_timestamp("2026-11-16T10:00:00") is not None
+    assert _parse_http_or_iso_timestamp("Mon, 16 Nov 2026 10:00:00 -0000") is not None
+
+    fixed_now = datetime(2026, 11, 16, 12, 0, 0, tzinfo=timezone.utc)
+    objects: dict[str, tuple[bytes, dict[str, str]]] = {}
+    force_412_once = {"active": False}
+
+    def _s3_transport(req: S3HttpRequest) -> S3HttpResponse:
+        parsed = urllib.parse.urlsplit(req.url)
+        query = dict(urllib.parse.parse_qsl(parsed.query))
+        path_after_bucket = parsed.path.split("/vault-bkt/", 1)
+        obj_key = path_after_bucket[1] if len(path_after_bucket) == 2 else ""
+
+        if req.method == "GET" and query.get("list-type") == "2":
+            prefix = query.get("prefix", "")
+            items_xml = "".join(
+                f"<Contents><Key>{k}</Key>"
+                f"<LastModified>2026-11-16T11:30:00.000Z</LastModified></Contents>"
+                for k in sorted(objects)
+                if k.startswith(prefix)
+            )
+            body = (
+                b'<?xml version="1.0" encoding="UTF-8"?>'
+                b"<ListBucketResult><IsTruncated>false</IsTruncated>"
+                + items_xml.encode("utf-8")
+                + b"</ListBucketResult>"
+            )
+            return S3HttpResponse(status_code=200, body=body)
+        if req.method == "HEAD":
+            if obj_key in objects:
+                return S3HttpResponse(status_code=200, headers=dict(objects[obj_key][1]))
+            return S3HttpResponse(status_code=404)
+        if req.method == "PUT":
+            if force_412_once["active"] and req.headers.get("if-none-match") == "*":
+                force_412_once["active"] = False
+                return S3HttpResponse(status_code=412)
+            hdrs = {"last-modified": "Mon, 16 Nov 2026 12:00:00 GMT"}
+            objects[obj_key] = (req.body, hdrs)
+            return S3HttpResponse(status_code=200)
+        if req.method == "GET":
+            if obj_key in objects:
+                return S3HttpResponse(
+                    status_code=200,
+                    headers=dict(objects[obj_key][1]),
+                    body=objects[obj_key][0],
+                )
+            return S3HttpResponse(status_code=404)
+        if req.method == "DELETE":
+            objects.pop(obj_key, None)
+            return S3HttpResponse(status_code=204)
+        return S3HttpResponse(status_code=405)
+
+    cfg = S3SigV4Config(
+        endpoint_url="https://s3.example.com",
+        bucket="vault-bkt",
+        region="us-east-1",
+        access_key_id="AKID",
+        secret_access_key="SECRET",
+        prefix="p13",
+    )
+    s3_a = S3CompatibleSigV4Driver(cfg, http_transport=_s3_transport, clock=lambda: fixed_now)
+    s3_b = S3CompatibleSigV4Driver(cfg, http_transport=_s3_transport, clock=lambda: fixed_now)
+
+    c1 = "1" * 64
+    c2 = "2" * 64
+    assert s3_a.get_chunk_mtime(c1) is None
+    s3_a.put_chunk(c1, b"s3-chunk-1")
+    assert s3_a.get_chunk_mtime(c1) == fixed_now.timestamp()
+    # Headerless S3 object populates mtime from ListObjectsV2 <LastModified>
+    objects[f"p13/chunks/{c2}.chk"] = (b"s3-chunk-2", {})
+    assert s3_b.list_chunks() == [c1, c2]
+    assert s3_b.get_chunk_mtime(c2) is not None
+
+    lid = s3_a.acquire_push_lease([c1], project_id="proj-s3", ttl_seconds=600.0, lease_id="s3-l1")
+    assert lid == "s3-l1"
+    assert f"p13/leases/{lid}.json" in objects
+    with pytest.raises(VaultRevisionConflictError):
+        s3_b.acquire_push_lease([c1], lease_id="s3-l1")
+    force_412_once["active"] = True
+    with pytest.raises(VaultRevisionConflictError):
+        s3_b.acquire_push_lease([c1], lease_id="s3-l2")
+
+    assert s3_b.read_active_leased_chunks() == {c1}
+    assert s3_b.delete_chunk_if_unleased(c1) is False
+    s3_a.update_push_lease(lid, [c1, c2], project_id="proj-s3", ttl_seconds=300.0)
+    assert s3_b.read_active_leased_chunks() == {c1, c2}
+    with pytest.raises(VaultTransportError):
+        s3_a.update_push_lease("no-such-s3-lease", [c1])
+
+    # Corrupt lease object on S3 fails closed with VaultTransportError
+    objects["p13/leases/corrupt.json"] = (b"{broken-json", {})
+    with pytest.raises(VaultTransportError):
+        s3_b.read_active_leased_chunks()
+    del objects["p13/leases/corrupt.json"]
+
+    # Expire S3 lease -> auto-deletes lease object and allows delete_chunk_if_unleased
+    assert s3_b.read_active_leased_chunks(now_epoch=fixed_now.timestamp() + 900.0) == set()
+    assert f"p13/leases/{lid}.json" not in objects
+    assert s3_b.delete_chunk_if_unleased(c1) is True
+    assert s3_b.delete_chunk_if_unleased(c1) is False
+
+    # PortableBundleVaultDriver multi-instance lease + get_chunk_mtime
+    bundle_file = tmp_path / "multi.nagarvault"
+    b_a = PortableBundleVaultDriver(bundle_file)
+    assert b_a.get_chunk_mtime(c1) is None
+    b_a.put_chunk(c1, b"bundle-c1")
+    assert isinstance(b_a.get_chunk_mtime(c1), float)
+
+    blid = b_a.acquire_push_lease([c1], project_id="proj-b", ttl_seconds=300.0, lease_id="b-l1")
+    b_b = PortableBundleVaultDriver(bundle_file)
+    assert isinstance(b_b.get_chunk_mtime(c1), float)
+    with pytest.raises(VaultRevisionConflictError):
+        b_b.acquire_push_lease([c1], lease_id="b-l1")
+    assert b_b.read_active_leased_chunks() == {c1}
+    assert b_b.delete_chunk_if_unleased(c1) is False
+    b_a.update_push_lease(blid, [c1, c2], project_id="proj-b", ttl_seconds=120.0)
+    assert b_b.read_active_leased_chunks() == {c1, c2}
+    with pytest.raises(VaultTransportError):
+        b_a.update_push_lease("missing-b-lease", [c1])
+
+    import time as _time
+
+    assert b_b.read_active_leased_chunks(now_epoch=_time.time() + 900.0) == set()
+    assert b_b.delete_chunk_if_unleased(c1) is True
+    assert b_b.delete_chunk_if_unleased(c1) is False
+    b_a.acquire_push_lease([c2], lease_id="b-l2")
+    b_b.release_push_lease("b-l2")
+    assert b_b.read_active_leased_chunks() == set()
+
+
+def test_edge_branches_local_s3_and_bundle_fail_closed_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cover defensive/error branches: subdirectory entries, OSErrors, S3 HTTP failures, bundle."""
+    import os
+
+    from nexus_ai_agent.storage.personal_cloud_vault import VaultRevisionConflictError
+
+    # --- LocalDeviceVaultDriver: subdirectories are ignored by every enumerator -----
+    vault = LocalDeviceVaultDriver(tmp_path / "edge_local")
+    vault.put_chunk("a" * 64, b"chunk")
+    vault.put_manifest("snap-edge", b"{}")
+    (vault.root_dir / "chunks" / "nested_dir").mkdir()
+    (vault.root_dir / "manifests" / "nested_dir").mkdir()
+    (vault.root_dir / "manifests" / ".hidden.json").write_bytes(b"{}")
+    (vault.root_dir / "chunks" / ".hidden.chk").write_bytes(b"zz")
+    assert vault.used_bytes() == len(b"chunk") + len(b"{}")
+    assert vault.list_chunks() == ["a" * 64]
+    assert vault.list_manifests() == ["snap-edge"]
+
+    # OSError (non FileExistsError) while creating .gc_coord.lock fails closed
+    orig_os_open = os.open
+
+    def _fail_lock_open(path_arg: object, flags: int, mode: int = 0o777) -> int:
+        if str(path_arg).endswith(".gc_coord.lock"):
+            raise PermissionError("read-only vault")
+        return orig_os_open(path_arg, flags, mode)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", _fail_lock_open)
+    with pytest.raises(VaultTransportError, match="coordination lock"):
+        vault.read_active_leased_chunks()
+    monkeypatch.setattr(os, "open", orig_os_open)
+
+    # OSError while reading a well-named lease file fails closed
+    vault.acquire_push_lease(["a" * 64], lease_id="edge-lease")
+    orig_read_bytes = Path.read_bytes
+
+    def _fail_lease_read(self_path: Path) -> bytes:
+        if self_path.name.startswith("lease-"):
+            raise OSError("lease unreadable")
+        return orig_read_bytes(self_path)
+
+    monkeypatch.setattr(Path, "read_bytes", _fail_lease_read)
+    with pytest.raises(VaultTransportError, match="Failed reading push lease file"):
+        vault.read_active_leased_chunks()
+    monkeypatch.setattr(Path, "read_bytes", orig_read_bytes)
+    vault.release_push_lease("edge-lease")
+
+    # --- S3: HTTP error branches, XML oddities, list filtering ----------------------
+    objects: dict[str, tuple[bytes, dict[str, str]]] = {}
+    state: dict[str, Any] = {
+        "head_status": None,
+        "put_status": None,
+        "get_status": None,
+        "delete_status": None,
+        "extra_list_keys": (),
+        "last_modified": None,
+        "token_without_truncation": False,
+    }
+
+    def _s3_transport(req: S3HttpRequest) -> S3HttpResponse:
+        parsed = urllib.parse.urlsplit(req.url)
+        query = dict(urllib.parse.parse_qsl(parsed.query))
+        key = parsed.path.split("/edge-bkt/", 1)[-1]
+
+        if req.method == "GET" and query.get("list-type") == "2":
+            prefix = query.get("prefix", "")
+            keys = sorted(set(objects) | set(state["extra_list_keys"]))
+            contents = "".join(
+                f"<Contents><Key>{k}</Key><ETag>etag</ETag></Contents>"
+                for k in keys
+                if k.startswith(prefix)
+            )
+            contents += "<Contents><ETag>orphan</ETag></Contents>"
+            token = (
+                "<NextContinuationToken>tok-ignored</NextContinuationToken>"
+                if state["token_without_truncation"]
+                else ""
+            )
+            body = (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                f"<ListBucketResult>{contents}{token}</ListBucketResult>"
+            ).encode()
+            return S3HttpResponse(status_code=200, body=body)
+        if req.method == "HEAD":
+            if state["head_status"] is not None:
+                return S3HttpResponse(status_code=int(state["head_status"]))
+            if key in objects:
+                return S3HttpResponse(status_code=200, headers=dict(objects[key][1]))
+            return S3HttpResponse(status_code=404)
+        if req.method == "PUT":
+            if state["put_status"] is not None:
+                return S3HttpResponse(status_code=int(state["put_status"]))
+            headers: dict[str, str] = {}
+            if state["last_modified"] is not None:
+                headers["last-modified"] = str(state["last_modified"])
+            objects[key] = (req.body, headers)
+            return S3HttpResponse(status_code=200)
+        if req.method == "GET":
+            if state["get_status"] is not None:
+                return S3HttpResponse(status_code=int(state["get_status"]))
+            if key in objects:
+                return S3HttpResponse(
+                    status_code=200,
+                    headers=dict(objects[key][1]),
+                    body=objects[key][0],
+                )
+            return S3HttpResponse(status_code=404)
+        if req.method == "DELETE":
+            if state["delete_status"] is not None:
+                return S3HttpResponse(status_code=int(state["delete_status"]))
+            objects.pop(key, None)
+            return S3HttpResponse(status_code=204)
+        return S3HttpResponse(status_code=405)
+
+    cfg = S3SigV4Config(
+        endpoint_url="https://edge.example.com",
+        bucket="edge-bkt",
+        region="us-east-1",
+        access_key_id="AKID",
+        secret_access_key="SECRET",
+        prefix="p13",
+    )
+    s3 = S3CompatibleSigV4Driver(cfg, http_transport=_s3_transport)
+    cid = "b" * 64
+
+    # HEAD 500 -> get_chunk_mtime fails closed
+    state["head_status"] = 500
+    with pytest.raises(VaultTransportError, match="get_chunk_mtime"):
+        s3.get_chunk_mtime(cid)
+    state["head_status"] = None
+
+    # HEAD 200 with unparseable Last-Modified -> falls back to the recorded mtime cache
+    objects[f"p13/chunks/{cid}.chk"] = (b"edge", {"last-modified": "not-a-date"})
+    assert s3.get_chunk_mtime(cid) is None
+    s3.put_chunk(cid, b"edge")
+    state["last_modified"] = "not-a-date"
+    assert isinstance(s3.get_chunk_mtime(cid), float)
+    state["last_modified"] = None
+
+    # ListObjectsV2 oddities: sub-directory stems, wrong suffixes, mismatched prefixes,
+    # Contents without <Key>, and a NextContinuationToken without IsTruncated=true
+    state["token_without_truncation"] = True
+    state["extra_list_keys"] = (
+        "p13/chunks/sub/dir.chk",
+        "p13/chunks/stray.txt",
+        "p14/chunks/elsewhere.chk",
+        "p13/leases/ghost.json",
+    )
+    assert s3.list_chunks() == [cid]
+
+    # S3 lease probe (HEAD) 500 -> acquire_push_lease fails closed
+    state["head_status"] = 500
+    with pytest.raises(VaultTransportError, match="lease probe"):
+        s3.acquire_push_lease([cid], lease_id="s3-edge")
+    state["head_status"] = None
+
+    # S3 lease PUT 500 -> acquire/update fail closed
+    state["put_status"] = 500
+    with pytest.raises(VaultTransportError, match="acquire_push_lease"):
+        s3.acquire_push_lease([cid], lease_id="s3-edge")
+    state["put_status"] = None
+    s3.acquire_push_lease([cid], lease_id="s3-edge")
+    state["put_status"] = 500
+    with pytest.raises(VaultTransportError, match="update_push_lease"):
+        s3.update_push_lease("s3-edge", [cid])
+    state["put_status"] = None
+
+    # S3 lease DELETE 500 -> release fails closed
+    state["delete_status"] = 500
+    with pytest.raises(VaultTransportError, match="release_push_lease"):
+        s3.release_push_lease("s3-edge")
+    state["delete_status"] = None
+
+    # Lease listed but vanished (GET 404) is skipped; GET 500 fails closed
+    state["extra_list_keys"] = ("p13/leases/ghost.json",)
+    assert s3.read_active_leased_chunks() == {cid}
+    state["get_status"] = 500
+    with pytest.raises(VaultTransportError, match="read_active_leased_chunks"):
+        s3.read_active_leased_chunks()
+    state["get_status"] = None
+    state["extra_list_keys"] = ()
+    with pytest.raises(VaultRevisionConflictError):
+        s3.acquire_push_lease([cid], lease_id="s3-edge")
+    s3.release_push_lease("s3-edge")
+
+    # --- PortableBundleVaultDriver: brand-new bundle & malformed lease key ----------
+    fresh = PortableBundleVaultDriver(tmp_path / "brand_new.nagarvault")
+    assert fresh.read_active_leased_chunks() == set()
+    # A brand-new bundle has no lease files at all
+    with pytest.raises(VaultTransportError):
+        fresh.update_push_lease("missing-fresh", [])
+    fresh.release_push_lease("missing-fresh")
+    assert fresh.acquire_push_lease([], lease_id="fresh-lease") == "fresh-lease"
+
+    bad_key = b"not-a-lease-key"
+    bad_idx = (
+        _BUNDLE_INDEX_HEAD.pack(3, len(bad_key))
+        + bad_key
+        + _BUNDLE_INDEX_TAIL.pack(
+            _BUNDLE_HEADER_TOTAL,
+            5,
+            zlib.crc32(b"hello") & 0xFFFFFFFF,
+            hashlib.sha256(b"hello").digest(),
+        )
+    )
+    hdr = _BUNDLE_HEADER_PREFIX.pack(
+        BUNDLE_MAGIC, BUNDLE_VERSION, 1, _BUNDLE_HEADER_TOTAL + 5, len(bad_idx)
+    )
+    bad_bundle = tmp_path / "bad_lease_key.nagarvault"
+    bad_bundle.write_bytes(
+        hdr + hashlib.sha256(hdr + b"hello" + bad_idx).digest() + b"hello" + bad_idx
+    )
+    with pytest.raises(VaultTamperDetectedError, match="Malformed lease key"):
+        PortableBundleVaultDriver(bad_bundle)
+
+    # Unrelated ListObjectsV2 children and empty-text NextContinuationToken are ignored
+    entries, token = _parse_s3_list_xml_entries(
+        b"<ListBucketResult><Name>bkt</Name><Prefix>x</Prefix>"
+        b"<Contents><Key>k1</Key><Size>0</Size></Contents>"
+        b"<NextContinuationToken/><IsTruncated>false</IsTruncated></ListBucketResult>"
+    )
+    assert entries == [("k1", None)]
+    assert token is None

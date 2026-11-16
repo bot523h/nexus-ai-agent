@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import contextlib
 import hmac
+import math
+import os
 import secrets
+import stat
 import threading
 import time
 from collections.abc import Collection, Iterable, Iterator, Mapping
@@ -105,17 +108,29 @@ class GarbageCollectionReport:
         return len(self.deleted_chunk_ids)
 
 
+@dataclass(frozen=True, slots=True)
+class _DiskFileStatFingerprint:
+    """Initial POSIX inode/size/mtime snapshot verified via ``fstat`` while streaming."""
+
+    st_ino: int
+    st_size: int
+    st_mtime_ns: int
+
+
 def _discover_source_plan(
     source: Path | str | Mapping[str, bytes],
-) -> tuple[list[tuple[str, Path | None, int]], dict[str, bytes] | None]:
+) -> tuple[
+    list[tuple[str, Path | None, int, _DiskFileStatFingerprint | None]],
+    dict[str, bytes] | None,
+]:
     """Build a sorted file plan without reading disk file contents into RAM."""
     if isinstance(source, Mapping):
         inline_map: dict[str, bytes] = {}
         for raw_rel, content in source.items():
             norm = normalize_relative_vault_path(str(raw_rel))
             inline_map[norm] = bytes(content)
-        plan: list[tuple[str, Path | None, int]] = [
-            (rel, None, len(inline_map[rel])) for rel in sorted(inline_map)
+        plan: list[tuple[str, Path | None, int, _DiskFileStatFingerprint | None]] = [
+            (rel, None, len(inline_map[rel]), None) for rel in sorted(inline_map)
         ]
         return plan, inline_map
 
@@ -125,7 +140,7 @@ def _discover_source_plan(
             f"Project source directory must be an existing non-symlink directory: {raw_dir}"
         )
     root = raw_dir.resolve()
-    disk_plan: list[tuple[str, Path | None, int]] = []
+    disk_plan: list[tuple[str, Path | None, int, _DiskFileStatFingerprint | None]] = []
     for entry in sorted(root.rglob("*")):
         try:
             if entry.is_symlink():
@@ -135,12 +150,34 @@ def _discover_source_plan(
             if entry.is_file():
                 rel_posix = entry.relative_to(root).as_posix()
                 norm = normalize_relative_vault_path(rel_posix)
-                stat_size = entry.stat().st_size
-                disk_plan.append((norm, entry, stat_size))
+                st = entry.stat()
+                fp = _DiskFileStatFingerprint(
+                    st_ino=st.st_ino,
+                    st_size=st.st_size,
+                    st_mtime_ns=st.st_mtime_ns,
+                )
+                disk_plan.append((norm, entry, st.st_size, fp))
         except OSError as exc:
             raise VaultTransportError(f"Failed stating project file {entry}: {exc}") from exc
     disk_plan.sort(key=lambda item: item[0])
     return disk_plan, None
+
+
+def _verify_fstat_matches_fingerprint(
+    disk_path: Path,
+    actual_st: os.stat_result,
+    expected_fp: _DiskFileStatFingerprint,
+    *,
+    phase: str,
+) -> None:
+    if (
+        actual_st.st_ino != expected_fp.st_ino
+        or actual_st.st_size != expected_fp.st_size
+        or actual_st.st_mtime_ns != expected_fp.st_mtime_ns
+    ):
+        raise VaultTransportError(
+            f"Concurrent file modification/replacement detected ({phase}) on {disk_path}"
+        )
 
 
 def _stream_source_chunks(
@@ -148,15 +185,21 @@ def _stream_source_chunks(
     rel_path: str,
     disk_path: Path | None,
     expected_size: int,
+    expected_fp: _DiskFileStatFingerprint | None,
     chunk_size: int,
     inline_sources: Mapping[str, bytes] | None,
 ) -> Iterator[tuple[int, int, bytes]]:
-    """Yield ``(chunk_index, byte_offset, chunk_bytes)`` holding <= 1 chunk in RAM."""
+    """Yield ``(chunk_index, byte_offset, chunk_bytes)`` with ``fstat`` checks."""
     if disk_path is not None:
+        assert expected_fp is not None
         bytes_read = 0
         idx = 0
         try:
             with disk_path.open("rb") as handle:
+                open_st = os.fstat(handle.fileno())
+                _verify_fstat_matches_fingerprint(
+                    disk_path, open_st, expected_fp, phase="open-fstat"
+                )
                 while True:
                     chunk = handle.read(chunk_size)
                     if not chunk:
@@ -165,13 +208,20 @@ def _stream_source_chunks(
                     bytes_read += len(chunk)
                     yield idx, offset, chunk
                     idx += 1
+                end_fstat = os.fstat(handle.fileno())
+                _verify_fstat_matches_fingerprint(
+                    disk_path, end_fstat, expected_fp, phase="eof-fstat"
+                )
+                end_lstat = disk_path.lstat()
+                if stat.S_ISLNK(end_lstat.st_mode) or bytes_read != expected_size:
+                    raise VaultTransportError(
+                        f"Concurrent file size/symlink change while streaming {disk_path}"
+                    )
+                _verify_fstat_matches_fingerprint(
+                    disk_path, end_lstat, expected_fp, phase="eof-lstat"
+                )
         except OSError as exc:
             raise VaultTransportError(f"Failed reading project file {disk_path}: {exc}") from exc
-        if bytes_read != expected_size:
-            raise VaultTransportError(
-                f"Concurrent file size change while streaming {disk_path}: "
-                f"expected {expected_size} bytes, read {bytes_read}"
-            )
         return
 
     assert inline_sources is not None
@@ -254,13 +304,20 @@ class PersonalCloudVaultManager:
             raise PersonalVaultError(
                 f"kdf_iterations must be at least {MIN_PBKDF2_ITERATIONS}, got {kdf_iterations}"
             )
-        if lease_ttl_seconds <= 0.0:
-            raise PersonalVaultError(f"lease_ttl_seconds must be positive, got {lease_ttl_seconds}")
+        if (
+            isinstance(lease_ttl_seconds, bool)
+            or not isinstance(lease_ttl_seconds, (int, float))
+            or not math.isfinite(float(lease_ttl_seconds))
+            or float(lease_ttl_seconds) <= 0.0
+        ):
+            raise PersonalVaultError(
+                f"lease_ttl_seconds must be finite and positive, got {lease_ttl_seconds!r}"
+            )
         self._driver = driver
         self._chunk_size = chunk_size
         self._kdf_iterations = kdf_iterations
         self._pad_to_block_size = pad_to_block_size
-        self._lease_ttl_seconds = lease_ttl_seconds
+        self._lease_ttl_seconds = float(lease_ttl_seconds)
         self._lock = threading.RLock()
         self._known_chunk_ids: set[str] = set()
         self._in_flight_chunks: set[str] = set()
@@ -288,7 +345,16 @@ class PersonalCloudVaultManager:
         recorded_at: float | None = None,
     ) -> None:
         """Register a chunk ID in the local sync journal for future GC inspection."""
-        ts = time.time() if recorded_at is None else recorded_at
+        if recorded_at is None:
+            ts = time.time()
+        else:
+            if (
+                isinstance(recorded_at, bool)
+                or not isinstance(recorded_at, (int, float))
+                or not math.isfinite(float(recorded_at))
+            ):
+                raise PersonalVaultError(f"recorded_at must be finite, got {recorded_at!r}")
+            ts = float(recorded_at)
         with self._lock:
             self._known_chunk_ids.add(chunk_id)
             self._chunk_seen_at[chunk_id] = ts
@@ -570,6 +636,21 @@ class PersonalCloudVaultManager:
         )
         source_plan, inline_sources = _discover_source_plan(source)
 
+        # P1-1: Persist initial staging journal BEFORE uploading even the first chunk
+        # so salt_hex / key_id_hex survive a crash right after the first put_chunk.
+        self._save_staging_journal(
+            VaultStagingJournal(
+                project_id=project_id,
+                parent_snapshot_id=parent_snapshot_id,
+                salt_hex=key_material.salt.hex(),
+                kdf_iterations=key_material.iterations,
+                key_id_hex=key_material.key_id.hex(),
+                chunk_size=self._chunk_size,
+                updated_at_epoch=time.time(),
+                uploaded_chunk_ids=tuple(sorted(staged_chunk_ids)),
+            )
+        )
+
         chunk_locators: dict[str, _ChunkSourceLocator] = {}
         file_entries: list[VaultFileEntry] = []
         leased_in_push: list[str] = []
@@ -583,7 +664,7 @@ class PersonalCloudVaultManager:
 
         lease_id = self._acquire_driver_lease(project_id)
         try:
-            for rel_path, disk_path, expected_size in source_plan:
+            for rel_path, disk_path, expected_size, expected_fp in source_plan:
                 file_mac = init_streaming_file_mac(rel_path, expected_size, key_material)
                 chunk_refs: list[VaultChunkRef] = []
 
@@ -591,6 +672,7 @@ class PersonalCloudVaultManager:
                     rel_path=rel_path,
                     disk_path=disk_path,
                     expected_size=expected_size,
+                    expected_fp=expected_fp,
                     chunk_size=self._chunk_size,
                     inline_sources=inline_sources,
                 ):
@@ -624,6 +706,20 @@ class PersonalCloudVaultManager:
                         saved_plaintext_bytes += chunk_len
                         uploaded_in_batch.add(chunk_id)
                         chunk_plain = b""
+                        if chunk_id not in staged_chunk_ids:
+                            staged_chunk_ids.add(chunk_id)
+                            self._save_staging_journal(
+                                VaultStagingJournal(
+                                    project_id=project_id,
+                                    parent_snapshot_id=parent_snapshot_id,
+                                    salt_hex=key_material.salt.hex(),
+                                    kdf_iterations=key_material.iterations,
+                                    key_id_hex=key_material.key_id.hex(),
+                                    chunk_size=self._chunk_size,
+                                    updated_at_epoch=time.time(),
+                                    uploaded_chunk_ids=tuple(sorted(staged_chunk_ids)),
+                                )
+                            )
                     else:
                         payload_to_send = chunk_plain
                         chunk_plain = b""
@@ -822,10 +918,18 @@ class PersonalCloudVaultManager:
             mtime_fn = getattr(self._driver, "get_chunk_mtime", None)
             if callable(mtime_fn):
                 mtime_val = mtime_fn(chunk_id)
-                if isinstance(mtime_val, (int, float)):
+                if (
+                    not isinstance(mtime_val, bool)
+                    and isinstance(mtime_val, (int, float))
+                    and math.isfinite(float(mtime_val))
+                ):
                     recorded_ts = float(mtime_val)
         if recorded_ts is None:
-            return False
+            # P1-3 Fail-Safe: unknown age is stamped with `first_seen = now_epoch` and retained.
+            with self._lock:
+                first_seen = self._chunk_seen_at.setdefault(chunk_id, now_epoch)
+                self._known_chunk_ids.add(chunk_id)
+            return (now_epoch - first_seen) < min_age_seconds
         return (now_epoch - recorded_ts) < min_age_seconds
 
     def garbage_collect_unreferenced_chunks(
@@ -837,8 +941,16 @@ class PersonalCloudVaultManager:
         min_age_seconds: float = DEFAULT_GC_MIN_AGE_SECONDS,
     ) -> GarbageCollectionReport:
         """Delete orphan chunks not referenced by active manifests or in-flight leases."""
-        if min_age_seconds < 0.0:
-            raise PersonalVaultError(f"min_age_seconds must be non-negative, got {min_age_seconds}")
+        if (
+            isinstance(min_age_seconds, bool)
+            or not isinstance(min_age_seconds, (int, float))
+            or not math.isfinite(float(min_age_seconds))
+            or float(min_age_seconds) < 0.0
+        ):
+            raise PersonalVaultError(
+                f"min_age_seconds must be finite and non-negative, got {min_age_seconds!r}"
+            )
+        effective_min_age = float(min_age_seconds)
 
         with self._lock:
             initial_in_flight = set(self._in_flight_chunks)
@@ -881,19 +993,29 @@ class PersonalCloudVaultManager:
                 discovered_candidates.update(str(cid) for cid in listed)
 
         now_epoch = time.time()
+        atomic_delete_fn = getattr(self._driver, "delete_chunk_if_unleased", None)
         deleted: list[str] = []
         for chunk_id in sorted(discovered_candidates):
             if chunk_id in protected_all:
                 continue
             if self._is_younger_than_min_age(
                 chunk_id,
-                min_age_seconds=min_age_seconds,
+                min_age_seconds=effective_min_age,
                 now_epoch=now_epoch,
                 seen_snapshot=seen_snapshot,
             ):
                 continue
             with self._lock:
                 if chunk_id in self._in_flight_chunks:
+                    continue
+                if callable(atomic_delete_fn):
+                    if atomic_delete_fn(chunk_id, now_epoch=now_epoch):
+                        deleted.append(chunk_id)
+                        self._known_chunk_ids.discard(chunk_id)
+                        self._chunk_seen_at.pop(chunk_id, None)
+                    elif not self._driver.has_chunk(chunk_id):
+                        self._known_chunk_ids.discard(chunk_id)
+                        self._chunk_seen_at.pop(chunk_id, None)
                     continue
                 if chunk_id in self._read_driver_leased_chunks():
                     continue
