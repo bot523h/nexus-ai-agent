@@ -759,19 +759,18 @@ def test_n2_local_driver_atomic_cross_process_lease_and_staging_journal(
         bad_path.unlink()
     assert driver_b.has_chunk(c1)
 
-    # Stale `.gc_coord.lock` (>30s old) self-heals; fresh active lock times out fail-closed
-    coord_lock = leases_dir / ".gc_coord.lock"
-    coord_lock.write_bytes(b"stale")
-    stale_ts = time.time() - 120.0
-    os.utime(coord_lock, (stale_ts, stale_ts))
+    # F1: a *live* holder blocks competitors (fail-closed timeout) and the kernel lock
+    # is released automatically when the holder exits the context manager.
+    with driver_a._coordination_lock():
+        with (
+            pytest.raises(VaultTransportError, match="Timed out acquiring"),
+            driver_b._coordination_lock(timeout_seconds=0.01),
+        ):
+            pass
     assert driver_b.read_active_leased_chunks() == {c1, c2}
-    coord_lock.write_bytes(b"fresh-contended")
-    with (
-        pytest.raises(VaultTransportError, match="Timed out acquiring"),
-        driver_b._coordination_lock(timeout_seconds=0.01),
-    ):
-        pass
-    coord_lock.unlink()
+    # The persistent kernel lock file stays behind (never unlinked => no lock theft),
+    # yet it is ignored by lease scanning and does not block new holders.
+    assert (leases_dir / ".gc_coord.lock").exists()
 
     # Simulate TTL expiration into the future -> active set empty, expired lease unlinked,
     # and delete_chunk_if_unleased atomically deletes unleased c1
@@ -1203,3 +1202,955 @@ def test_edge_branches_local_s3_and_bundle_fail_closed_paths(
     )
     assert entries == [("k1", None)]
     assert token is None
+
+
+def test_f1_f2_lock_ownership_hidden_lease_entries_and_overflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F1 lock theft, F2 hidden/symlinked lease entries, and huge-JSON OverflowError."""
+    import json
+    import os
+    import time
+
+    import nexus_ai_agent.storage.personal_cloud_vault.byos_drivers as drivers_module
+
+    vault = LocalDeviceVaultDriver(tmp_path / "f1_vault")
+    leases_dir = vault.root_dir / ".leases"
+    cid = "c" * 64
+    vault.put_chunk(cid, b"leased-payload")
+
+    # ---- F1a: a *live* holder is never preempted, even with a "stale-looking" mtime --
+    owner_marker: list[str] = []
+    with vault._coordination_lock():
+        (leases_dir / ".gc_coord.lock").write_bytes(b"")
+        stale_ts = time.time() - 3600.0
+        os.utime(leases_dir / ".gc_coord.lock", (stale_ts, stale_ts))
+        with (
+            pytest.raises(VaultTransportError, match="Timed out acquiring"),
+            vault._coordination_lock(timeout_seconds=0.01),
+        ):
+            pass
+        # The holder still owns the coordination path: a competitor cannot barge in.
+        owner_marker.append("held")
+
+    # After release a new holder (a different driver instance/process) can proceed and
+    # must leave the previous owner's kernel lock file untouched (no unlink => no theft).
+    assert owner_marker == ["held"]
+    assert vault.read_active_leased_chunks() == set()
+
+    # ---- F1b: fallback ownership file is broken only when the owner PID is dead -----
+    owner_path = leases_dir / ".gc_coord.owner"
+    live_payload = json.dumps(
+        {"pid": os.getpid(), "owner_token": "live-owner", "created_at_epoch": 0.0}
+    ).encode()
+    owner_path.write_bytes(live_payload)
+    os.utime(owner_path, (time.time() - 3600.0, time.time() - 3600.0))
+
+    real_fcntl = drivers_module._FCNTL
+    monkeypatch.setattr(drivers_module, "_FCNTL", None)
+    with (
+        pytest.raises(VaultTransportError, match="Timed out acquiring"),
+        drivers_module._cross_process_file_lock(
+            leases_dir / ".gc_coord.lock",
+            owner_path=owner_path,
+            timeout_seconds=0.01,
+        ),
+    ):
+        pass
+    # The live owner's fallback file survived: no lock theft from a running holder.
+    assert owner_path.read_bytes() == live_payload
+
+    # A provably dead owner is broken; the new holder then owns and releases the file.
+    dead_pid = 2**22 + 12345
+    while True:
+        try:
+            os.kill(dead_pid, 0)
+        except ProcessLookupError:
+            break
+        dead_pid += 1
+    owner_path.write_bytes(
+        json.dumps({"pid": dead_pid, "owner_token": "dead", "created_at_epoch": 0.0}).encode()
+    )
+    os.utime(owner_path, (time.time() - 3600.0, time.time() - 3600.0))
+    with drivers_module._cross_process_file_lock(
+        leases_dir / ".gc_coord.lock",
+        owner_path=owner_path,
+        timeout_seconds=1.0,
+    ):
+        assert owner_path.exists()
+    assert not owner_path.exists()
+
+    # A malformed (unparseable) fallback payload is never broken: fail closed instead.
+    owner_path.write_bytes(b"{definitely-not-json")
+    os.utime(owner_path, (time.time() - 3600.0, time.time() - 3600.0))
+    with (
+        pytest.raises(VaultTransportError, match="Timed out acquiring"),
+        drivers_module._cross_process_file_lock(
+            leases_dir / ".gc_coord.lock",
+            owner_path=owner_path,
+            timeout_seconds=0.01,
+        ),
+    ):
+        pass
+    owner_path.unlink()
+    monkeypatch.setattr(drivers_module, "_FCNTL", real_fcntl)
+
+    # ---- F1c: a stale owner must NOT unlink a lock file now owned by someone else ---
+    replacement_owner = leases_dir / ".gc_coord.owner"
+    replacement_owner.write_bytes(b"not-json-at-all")
+    drivers_module._release_ownership_lock(
+        replacement_owner,
+        owner_token="ghost-token",
+        owner_ino=replacement_owner.lstat().st_ino,
+    )
+    assert replacement_owner.exists()  # unparseable owner file is never removed
+
+    # A different owner_token (or a recycled inode) must also survive release attempts
+    other_owner = json.dumps({"owner_token": "someone-else"}).encode()
+    replacement_owner.write_bytes(other_owner)
+    same_ino = replacement_owner.lstat().st_ino
+    drivers_module._release_ownership_lock(
+        replacement_owner, owner_token="ghost-token", owner_ino=same_ino
+    )
+    drivers_module._release_ownership_lock(
+        replacement_owner, owner_token="someone-else", owner_ino=same_ino + 1
+    )
+    assert replacement_owner.read_bytes() == other_owner
+    replacement_owner.unlink()
+
+    # ---- F2: hidden dot-files, symlinks and overflow leases all fail closed ---------
+    hidden_corrupt = leases_dir / ".hidden_corrupt.json"
+    hidden_corrupt.write_text("{not-a-lease", encoding="utf-8")
+    with pytest.raises(VaultTransportError, match="hidden or symlinked"):
+        vault.read_active_leased_chunks()
+    hidden_corrupt.unlink()
+
+    target_lease = tmp_path / "outside-lease.json"
+    target_lease.write_text(
+        json.dumps({"expires_at_epoch": time.time() + 600.0, "chunk_ids": []}),
+        encoding="utf-8",
+    )
+    hidden_symlink = leases_dir / ".hidden_symlink.json"
+    hidden_symlink.symlink_to(target_lease)
+    with pytest.raises(VaultTransportError, match="hidden or symlinked"):
+        vault.read_active_leased_chunks()
+    # The atomic delete path re-reads leases under the lock, so it aborts fail-closed
+    # and leaves the chunk untouched rather than guessing about an ambiguous lease dir.
+    with pytest.raises(VaultTransportError, match="hidden or symlinked"):
+        vault.delete_chunk_if_unleased(cid)
+    assert vault.has_chunk(cid)
+    hidden_symlink.unlink()
+
+    hidden_subdir = leases_dir / ".hidden_dir"
+    hidden_subdir.mkdir()
+    with pytest.raises(VaultTransportError, match="hidden or symlinked"):
+        vault.read_active_leased_chunks()
+    hidden_subdir.rmdir()
+
+    # OverflowError: a JSON integer so large that float() cannot represent it
+    huge_lease = leases_dir / "lease-huge-expiry.json"
+    huge_lease.write_text(
+        '{"expires_at_epoch": ' + "9" * 400 + ', "chunk_ids": []}',
+        encoding="utf-8",
+    )
+    with pytest.raises(VaultTransportError, match="Unrepresentable expires_at_epoch"):
+        vault.read_active_leased_chunks()
+    huge_lease.unlink()
+
+    # With every hostile entry removed the lease directory is healthy again.
+    assert vault.read_active_leased_chunks() == set()
+    assert vault.delete_chunk_if_unleased(cid) is True
+
+
+def test_f3_s3_staging_journal_and_if_match_lease_updates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3 crash-recovery staging journals + If-Match lease refreshes on S3."""
+    import json
+    import time
+    import urllib.parse
+    from collections.abc import Mapping
+
+    from nexus_ai_agent.storage.personal_cloud_vault import (
+        VaultRevisionConflictError,
+        VaultStagingJournal,
+    )
+
+    objects: dict[str, tuple[bytes, dict[str, str]]] = {}
+    state: dict[str, Any] = {"force_412_update": False, "delete_status": None}
+    etag_counter = {"n": 0}
+
+    def _transport(req: S3HttpRequest) -> S3HttpResponse:
+        parsed = urllib.parse.urlsplit(req.url)
+        query = dict(urllib.parse.parse_qsl(parsed.query))
+        key = parsed.path.split("/f3-bkt/", 1)[-1]
+
+        if req.method == "GET" and query.get("list-type") == "2":
+            prefix = query.get("prefix", "")
+            body = (
+                "<ListBucketResult>"
+                + "".join(
+                    f"<Contents><Key>{k}</Key></Contents>"
+                    for k in sorted(objects)
+                    if k.startswith(prefix)
+                )
+                + "</ListBucketResult>"
+            ).encode()
+            return S3HttpResponse(status_code=200, body=body)
+        if req.method == "HEAD":
+            if key in objects:
+                return S3HttpResponse(status_code=200, headers=dict(objects[key][1]))
+            return S3HttpResponse(status_code=404)
+        if req.method == "PUT":
+            if state["force_412_update"] and "if-match" in req.headers:
+                return S3HttpResponse(status_code=412)
+            etag_counter["n"] += 1
+            objects[key] = (req.body, {"etag": f'"etag-{etag_counter["n"]}"'})
+            return S3HttpResponse(status_code=200)
+        if req.method == "GET":
+            if key in objects:
+                return S3HttpResponse(
+                    status_code=200,
+                    headers=dict(objects[key][1]),
+                    body=objects[key][0],
+                )
+            return S3HttpResponse(status_code=404)
+        if req.method == "DELETE":
+            if state["delete_status"] is not None:
+                return S3HttpResponse(status_code=int(state["delete_status"]))
+            objects.pop(key, None)
+            return S3HttpResponse(status_code=204)
+        return S3HttpResponse(status_code=405)
+
+    cfg = S3SigV4Config(
+        endpoint_url="https://f3.example.com",
+        bucket="f3-bkt",
+        region="us-east-1",
+        access_key_id="AKID",
+        secret_access_key="SECRET",
+        prefix="f3",
+    )
+    s3 = S3CompatibleSigV4Driver(cfg, http_transport=_transport)
+    cid = "d" * 64
+    journal = VaultStagingJournal(
+        project_id="f3-proj",
+        parent_snapshot_id=None,
+        salt_hex="11" * 32,
+        kdf_iterations=100_000,
+        key_id_hex="22" * 16,
+        chunk_size=65_536,
+        updated_at_epoch=time.time(),
+        uploaded_chunk_ids=(cid,),
+    )
+
+    # Round-trip, then crash-resume semantics: the journal survives an instance restart.
+    assert s3.load_staging_journal("f3-proj", None) is None
+    s3.save_staging_journal(journal)
+    assert s3.load_staging_journal("f3-proj", None) == journal
+    assert (
+        S3CompatibleSigV4Driver(cfg, http_transport=_transport).load_staging_journal(
+            "f3-proj", None
+        )
+        == journal
+    )
+
+    # Corrupt / mismatched journals self-heal to None (and are deleted)
+    journal_key = s3._staging_journal_key("f3-proj", None)
+    assert journal_key in objects
+    objects[journal_key] = (b"{corrupt", {})
+    assert s3.load_staging_journal("f3-proj", None) is None
+    s3.save_staging_journal(journal)
+    objects[journal_key] = (
+        journal.to_json_bytes().replace(b"f3-proj", b"other-pr"),
+        {},
+    )
+    assert s3.load_staging_journal("f3-proj", None) is None
+
+    s3.save_staging_journal(journal)
+    s3.clear_staging_journal("f3-proj", None)
+    assert s3.load_staging_journal("f3-proj", None) is None
+
+    # Saving fails closed on a non-2xx PUT response
+    state["delete_status"] = None
+    s3.put_chunk(cid, b"chunk-body")
+    s3.acquire_push_lease([cid], lease_id="f3-lease")
+    assert "if-match" not in objects  # lease object exists and carries an ETag
+    s3.update_push_lease("f3-lease", [cid])
+    state["force_412_update"] = True
+    with pytest.raises(VaultRevisionConflictError, match="Concurrent modification"):
+        s3.update_push_lease("f3-lease", [cid])
+    state["force_412_update"] = False
+
+    # The lease-state token guards delete_chunk_if_unleased against mid-check leases
+    assert s3.delete_chunk_if_unleased(cid) is False
+    s3.release_push_lease("f3-lease")
+    assert s3.delete_chunk_if_unleased(cid) is True
+    assert s3.delete_chunk_if_unleased(cid) is False
+
+    # A lease object that appears between the lease scan and the DELETE aborts deletion
+    late_chunks: list[str] = []
+    real_send = s3._send
+    calls = {"n": 0}
+
+    def _racing_send(
+        method: str,
+        *,
+        object_key: str | None = None,
+        query: Mapping[str, str] | None = None,
+        body: bytes = b"",
+        content_type: str | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> S3HttpResponse:
+        calls["n"] += 1
+        if calls["n"] == 3 and not late_chunks:
+            late_chunks.append(object_key or "")
+            objects["f3/leases/newcomer.json"] = (
+                json.dumps({"expires_at_epoch": time.time() + 600.0, "chunk_ids": [cid]}).encode(),
+                {"etag": '"late"'},
+            )
+        return real_send(
+            method,
+            object_key=object_key,
+            query=query,
+            body=body,
+            content_type=content_type,
+            extra_headers=extra_headers,
+        )
+
+    s3.put_chunk(cid, b"chunk-body")
+    monkeypatch.setattr(s3, "_send", _racing_send)
+    assert s3.delete_chunk_if_unleased(cid) is False
+    assert s3.has_chunk(cid)
+    objects.pop("f3/leases/newcomer.json")
+
+
+def test_f3_bundle_multi_instance_lease_serialization_and_staging_journal(
+    tmp_path: Path,
+) -> None:
+    """F3 cross-process bundle lock: no peer write is lost and lease+delete is atomic."""
+    import time
+
+    from nexus_ai_agent.storage.personal_cloud_vault import (
+        VaultRevisionConflictError,
+        VaultStagingJournal,
+    )
+
+    bundle_file = tmp_path / "f3_multi.nagarvault"
+    c1 = "a" * 64
+    c2 = "b" * 64
+    c3 = "c" * 64
+    writer = PortableBundleVaultDriver(bundle_file)
+    peer = PortableBundleVaultDriver(bundle_file)
+
+    # 1) Two instances interleaving writes must not resurrect/clobber each other.
+    writer.put_chunk(c1, b"one")
+    peer.put_chunk(c2, b"two")  # peer reloads under the lock => c1 is preserved
+    writer.put_chunk(c3, b"three")
+    assert peer.list_chunks() == [c1, c2, c3]
+    assert writer.get_chunk(c1) == b"one"
+
+    # 2) Lease acquisition by one instance is visible to (and honoured by) the other.
+    lease_id = writer.acquire_push_lease([c2], project_id="f3", lease_id="f3-bundle-lease")
+    assert peer.read_active_leased_chunks() == {c2}
+    assert peer.delete_chunk_if_unleased(c2) is False
+    assert peer.has_chunk(c2)
+    with pytest.raises(VaultRevisionConflictError):
+        peer.acquire_push_lease([c2], lease_id="f3-bundle-lease")
+    peer.update_push_lease(lease_id, [c2, c3])
+    assert writer.read_active_leased_chunks() == {c2, c3}
+    with pytest.raises(VaultTransportError):
+        peer.update_push_lease("no-such-bundle-lease", [c2])
+
+    # 3) Unleased chunks are deleted atomically; leased ones survive.
+    assert peer.delete_chunk_if_unleased(c1) is True
+    assert peer.delete_chunk_if_unleased(c1) is False
+    assert peer.has_chunk(c2) and peer.has_chunk(c3)
+
+    # 4) Expired leases are swept and no longer protect chunks.
+    future = time.time() + 7200.0
+    assert peer.read_active_leased_chunks(now_epoch=future) == set()
+    assert writer.delete_chunk_if_unleased(c2, now_epoch=future) is True
+    assert not peer.has_chunk(c2)
+
+    # 5) Crash-recovery staging journals survive across bundle instances.
+    journal = VaultStagingJournal(
+        project_id="f3-bundle",
+        parent_snapshot_id=None,
+        salt_hex="33" * 32,
+        kdf_iterations=100_000,
+        key_id_hex="44" * 16,
+        chunk_size=65_536,
+        updated_at_epoch=time.time(),
+        uploaded_chunk_ids=(c3,),
+    )
+    assert writer.load_staging_journal("f3-bundle", None) is None
+    writer.save_staging_journal(journal)
+    assert peer.load_staging_journal("f3-bundle", None) == journal
+    assert PortableBundleVaultDriver(bundle_file).load_staging_journal("f3-bundle", None) == (
+        journal
+    )
+
+    # Corrupt and mismatched journals self-heal to None instead of crashing a push.
+    stage_key = writer._staging_journal_key("f3-bundle", None)
+
+    def _inject_staging(key: str, payload: bytes) -> None:
+        """Persist a hostile journal payload straight into the archive under the lock."""
+        with writer._coordination_lock():
+            writer._reload_locked()
+            staging = dict(writer._staging_journals)
+            staging[key] = payload
+            writer._flush(
+                dict(writer._chunks),
+                dict(writer._manifests),
+                dict(writer._leases),
+                staging,
+            )
+
+    _inject_staging(stage_key, b"{not-json")
+    assert writer.load_staging_journal("f3-bundle", None) is None
+    _inject_staging(
+        stage_key,
+        journal.to_json_bytes().replace(b"f3-bundle", b"other-prj"),
+    )
+    assert writer.load_staging_journal("f3-bundle", None) is None
+
+    writer.save_staging_journal(journal)
+    peer.clear_staging_journal("f3-bundle", None)
+    assert writer.load_staging_journal("f3-bundle", None) is None
+    peer.clear_staging_journal("f3-bundle", None)  # idempotent no-op
+
+    # 6) The bundle lock tolerates contention and never steals a live holder's lock.
+    with writer._coordination_lock():
+        with (
+            pytest.raises(VaultTransportError, match="Timed out acquiring"),
+            peer._coordination_lock(timeout_seconds=0.01),
+        ):
+            pass
+    # (the earlier future-dated sweep already expired the only lease)
+    assert peer.read_active_leased_chunks() == set()
+
+
+def test_edge_branches_pid_probe_lock_break_and_backend_probe_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cover the remaining fail-closed probes: PID liveness, lock break, S3 HTTP errors."""
+    import json
+    import os
+    import time
+    import urllib.parse
+
+    import nexus_ai_agent.storage.personal_cloud_vault.byos_drivers as drivers_module
+    from nexus_ai_agent.storage.personal_cloud_vault import VaultStagingJournal
+
+    # --- PID liveness probes --------------------------------------------------------
+    assert drivers_module._pid_is_alive(0) is True  # non-positive PID => unknown/alive
+    assert drivers_module._pid_is_alive(-5) is True
+    assert drivers_module._pid_is_alive(os.getpid()) is True
+
+    real_kill = os.kill
+
+    def _kernel_denies_signal(pid: int, sig: int) -> None:
+        raise PermissionError("EPERM: live process owned by another user")
+
+    monkeypatch.setattr(os, "kill", _kernel_denies_signal)
+    assert drivers_module._pid_is_alive(4_000_000) is True
+    assert drivers_module._pid_is_definitely_dead(4_000_000) is False
+    monkeypatch.setattr(os, "kill", real_kill)
+
+    def _kernel_broken(pid: int, sig: int) -> None:
+        raise OSError(5, "unexpected kernel error")
+
+    monkeypatch.setattr(os, "kill", _kernel_broken)
+    assert drivers_module._pid_is_alive(4_000_001) is True
+    monkeypatch.setattr(os, "kill", real_kill)
+    assert drivers_module._pid_is_definitely_dead(0) is False
+    assert drivers_module._pid_is_definitely_dead(os.getpid()) is False
+    # A brand-new child process is provably alive => alive for both probes.
+    import subprocess
+    import sys
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert drivers_module._pid_is_alive(child.pid) is True
+        assert drivers_module._pid_is_definitely_dead(child.pid) is False
+    finally:
+        child.kill()
+        child.wait(timeout=30)
+
+    # --- Stale ownership-lock breaking: every hostile permutation stays fail-closed --
+    leases_dir = tmp_path / "break_vault" / ".leases"
+    leases_dir.mkdir(parents=True)
+    owner_path = leases_dir / ".gc_coord.owner"
+    stale = time.time() - 3600.0
+
+    def _break(stale_lock_seconds: float = 30.0) -> bool:
+        return drivers_module._break_stale_ownership_lock(
+            owner_path, stale_lock_seconds=stale_lock_seconds
+        )
+
+    # (a) vanished owner file -> nothing to break
+    assert _break() is False
+
+    # (b) fresh owner file -> never broken
+    owner_path.write_bytes(json.dumps({"pid": 4_000_002}).encode())
+    assert _break() is False
+
+    # (c) stale but unparseable / non-dict / non-int PID payloads -> never broken
+    for payload in (b"{not-json", b'["list"]', b'{"pid": "not-an-int"}'):
+        owner_path.write_bytes(payload)
+        os.utime(owner_path, (stale, stale))
+        assert _break() is False
+        assert owner_path.exists()
+
+    # (d) stale, parseable, but the recorded PID is still alive -> never broken
+    owner_path.write_bytes(json.dumps({"pid": os.getpid()}).encode())
+    os.utime(owner_path, (stale, stale))
+    assert _break() is False
+    assert owner_path.exists()
+
+    # (e) stale owner whose file is swapped between inspection and unlink -> no break
+    dead_pid = 4_100_000
+    while True:
+        try:
+            os.kill(dead_pid, 0)
+        except ProcessLookupError:
+            break
+        dead_pid += 1
+    owner_path.write_bytes(json.dumps({"pid": dead_pid}).encode())
+    os.utime(owner_path, (stale, stale))
+    real_lstat = Path.lstat
+    swaps = {"n": 0}
+
+    def _racing_lstat(self_path: Path) -> object:
+        st = real_lstat(self_path)
+        if self_path == owner_path:
+            swaps["n"] += 1
+            if swaps["n"] == 2:  # second lstat is the post-inspection re-check
+                # A newer owner atomically replaces the file => brand-new inode.
+                replacement = owner_path.with_name(".gc_coord.owner.new")
+                replacement.write_bytes(b'{"pid": 1, "owner_token": "newer-owner"}')
+                os.replace(replacement, owner_path)
+                return real_lstat(self_path)
+        return st
+
+    monkeypatch.setattr(Path, "lstat", _racing_lstat)
+    assert _break() is False
+    monkeypatch.setattr(Path, "lstat", real_lstat)
+    assert owner_path.exists()
+
+    # (f) unlink itself fails (immutable directory semantics) -> no break reported
+    real_unlink = Path.unlink
+
+    def _refuse_unlink(self_path: Path, *args: object, **kwargs: object) -> None:
+        if self_path == owner_path:
+            raise OSError(1, "Operation not permitted")
+        real_unlink(self_path, *args, **kwargs)  # type: ignore[arg-type]
+
+    owner_path.write_bytes(json.dumps({"pid": dead_pid}).encode())
+    os.utime(owner_path, (stale, stale))
+    monkeypatch.setattr(Path, "unlink", _refuse_unlink)
+    assert _break() is False
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+
+    # (g) the genuine happy path finally breaks the provably dead owner
+    assert _break() is True
+    assert not owner_path.exists()
+
+    # --- S3 lease-state / staging-journal probe failures ---------------------------
+    state: dict[str, Any] = {
+        "lease_head_status": None,
+        "save_status": None,
+        "load_status": None,
+    }
+    objects: dict[str, tuple[bytes, dict[str, str]]] = {}
+
+    def _transport(req: S3HttpRequest) -> S3HttpResponse:
+        parsed = urllib.parse.urlsplit(req.url)
+        query = dict(urllib.parse.parse_qsl(parsed.query))
+        key = parsed.path.split("/eg-bkt/", 1)[-1]
+        if req.method == "GET" and query.get("list-type") == "2":
+            prefix = query.get("prefix", "")
+            body = (
+                "<ListBucketResult>"
+                + "".join(
+                    f"<Contents><Key>{k}</Key></Contents>"
+                    for k in sorted(set(objects) | {"eg/leases/ghost.json"})
+                    if k.startswith(prefix)
+                )
+                + "</ListBucketResult>"
+            ).encode()
+            return S3HttpResponse(status_code=200, body=body)
+        if req.method == "HEAD":
+            if "leases/" in key and state["lease_head_status"] is not None:
+                return S3HttpResponse(status_code=int(state["lease_head_status"]))
+            if key in objects:
+                return S3HttpResponse(status_code=200, headers=dict(objects[key][1]))
+            return S3HttpResponse(status_code=404)
+        if req.method == "PUT":
+            if "staging/" in key and state["save_status"] is not None:
+                return S3HttpResponse(status_code=int(state["save_status"]))
+            objects[key] = (req.body, {"etag": '"e"'})
+            return S3HttpResponse(status_code=200)
+        if req.method == "GET":
+            if "staging/" in key and state["load_status"] is not None:
+                return S3HttpResponse(status_code=int(state["load_status"]))
+            if key in objects:
+                return S3HttpResponse(
+                    status_code=200, headers=dict(objects[key][1]), body=objects[key][0]
+                )
+            return S3HttpResponse(status_code=404)
+        if req.method == "DELETE":
+            objects.pop(key, None)
+            return S3HttpResponse(status_code=204)
+        return S3HttpResponse(status_code=405)
+
+    cfg = S3SigV4Config(
+        endpoint_url="https://eg.example.com",
+        bucket="eg-bkt",
+        region="us-east-1",
+        access_key_id="AKID",
+        secret_access_key="SECRET",
+        prefix="eg",
+    )
+    s3 = S3CompatibleSigV4Driver(cfg, http_transport=_transport)
+    cid = "f" * 64
+    s3.put_chunk(cid, b"payload")
+
+    # A lease that disappeared between LIST and HEAD contributes an "absent" token,
+    # and `delete_chunk_if_unleased` still only deletes genuinely unleased chunks.
+    assert s3.delete_chunk_if_unleased(cid) is True
+    assert s3.delete_chunk_if_unleased(cid) is False
+
+    # A failing lease-state HEAD probe aborts the deletion fail-closed.
+    s3.put_chunk(cid, b"payload")
+    state["lease_head_status"] = 500
+    with pytest.raises(VaultTransportError, match="lease state probe failed"):
+        s3.delete_chunk_if_unleased(cid)
+    state["lease_head_status"] = None
+    assert s3.has_chunk(cid)
+
+    # S3 staging-journal persistence / loading failures are surfaced, never swallowed.
+    journal = VaultStagingJournal(
+        project_id="eg-proj",
+        parent_snapshot_id=None,
+        salt_hex="55" * 32,
+        kdf_iterations=100_000,
+        key_id_hex="66" * 16,
+        chunk_size=65_536,
+        updated_at_epoch=time.time(),
+        uploaded_chunk_ids=(cid,),
+    )
+    state["save_status"] = 500
+    with pytest.raises(VaultTransportError, match="save_staging_journal"):
+        s3.save_staging_journal(journal)
+    state["save_status"] = None
+    state["load_status"] = 500
+    with pytest.raises(VaultTransportError, match="load_staging_journal"):
+        s3.load_staging_journal("eg-proj", None)
+    state["load_status"] = None
+
+    # A bundle staging entry with a hostile key is a tamper signal, never a silent skip.
+    bad_key = b"staging/not-a-digest.json"
+    bad_idx = (
+        _BUNDLE_INDEX_HEAD.pack(4, len(bad_key))
+        + bad_key
+        + _BUNDLE_INDEX_TAIL.pack(
+            _BUNDLE_HEADER_TOTAL,
+            5,
+            zlib.crc32(b"hello") & 0xFFFFFFFF,
+            hashlib.sha256(b"hello").digest(),
+        )
+    )
+    hdr = _BUNDLE_HEADER_PREFIX.pack(
+        BUNDLE_MAGIC, BUNDLE_VERSION, 1, _BUNDLE_HEADER_TOTAL + 5, len(bad_idx)
+    )
+    bad_bundle = tmp_path / "bad_staging_key.nagarvault"
+    bad_bundle.write_bytes(
+        hdr + hashlib.sha256(hdr + b"hello" + bad_idx).digest() + b"hello" + bad_idx
+    )
+    with pytest.raises(VaultTamperDetectedError, match="Malformed staging key"):
+        PortableBundleVaultDriver(bad_bundle)
+
+
+def test_edge_branches_owner_release_races_lock_errors_and_bundle_sweeps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cover owner-release races, lock-acquisition OSErrors, and bundle sweep branches."""
+    import json
+    import os
+    import time
+    import urllib.parse
+
+    import nexus_ai_agent.storage.personal_cloud_vault.byos_drivers as drivers_module
+    from nexus_ai_agent.storage.personal_cloud_vault import VaultStagingJournal
+
+    leases_dir = tmp_path / "rel_vault" / ".leases"
+    leases_dir.mkdir(parents=True)
+    owner_path = leases_dir / ".gc_coord.owner"
+    payload = json.dumps({"pid": os.getpid(), "owner_token": "tok"}).encode()
+    owner_path.write_bytes(payload)
+    ino = owner_path.lstat().st_ino
+    real_lstat = Path.lstat
+
+    # (a) a newer owner replaced the file between the token check and the unlink
+    swaps = {"n": 0}
+
+    def _swap_on_final_check(self_path: Path) -> object:
+        st = real_lstat(self_path)
+        if self_path == owner_path:
+            swaps["n"] += 1
+            if swaps["n"] == 2:
+                replacement = owner_path.with_name(".gc_coord.owner.new")
+                replacement.write_bytes(b'{"owner_token": "newer"}')
+                os.replace(replacement, owner_path)
+                return real_lstat(self_path)
+        return st
+
+    monkeypatch.setattr(Path, "lstat", _swap_on_final_check)
+    drivers_module._release_ownership_lock(owner_path, owner_token="tok", owner_ino=ino)
+    monkeypatch.setattr(Path, "lstat", real_lstat)
+    assert owner_path.exists()
+    assert owner_path.read_bytes() == b'{"owner_token": "newer"}'
+
+    # (b) the unlink itself fails: the release is a silent no-op (never raises)
+    def _refuse_unlink(self_path: Path, *args: object, **kwargs: object) -> None:
+        if self_path == owner_path:
+            raise OSError(1, "Operation not permitted")
+        real_lstat_unlink(self_path, *args, **kwargs)  # type: ignore[arg-type]
+
+    real_lstat_unlink = Path.unlink
+    owner_path.write_bytes(payload)
+    owner_ino = owner_path.lstat().st_ino
+    monkeypatch.setattr(Path, "unlink", _refuse_unlink)
+    drivers_module._release_ownership_lock(owner_path, owner_token="tok", owner_ino=owner_ino)
+    monkeypatch.setattr(Path, "unlink", real_lstat_unlink)
+    assert owner_path.exists()
+    owner_path.unlink()
+
+    # (c) kernel flock failures: non-blocking contention and unexpected OSError
+    vault = LocalDeviceVaultDriver(tmp_path / "rel_vault_body")
+    real_fcntl = drivers_module._FCNTL
+
+    class _ContendedFcntl:
+        LOCK_EX = real_fcntl.LOCK_EX
+        LOCK_NB = real_fcntl.LOCK_NB
+        LOCK_UN = real_fcntl.LOCK_UN
+
+        @staticmethod
+        def flock(fd: int, operation: int) -> None:
+            raise BlockingIOError(11, "kernel lock already held")
+
+    monkeypatch.setattr(drivers_module, "_FCNTL", _ContendedFcntl)
+    with (
+        pytest.raises(VaultTransportError, match="Timed out acquiring"),
+        vault._coordination_lock(timeout_seconds=0.01),
+    ):
+        pass
+
+    class _BrokenFcntl(_ContendedFcntl):
+        @staticmethod
+        def flock(fd: int, operation: int) -> None:
+            raise OSError(9, "bad file descriptor")
+
+    monkeypatch.setattr(drivers_module, "_FCNTL", _BrokenFcntl)
+    with pytest.raises(VaultTransportError, match="Failed acquiring vault coordination lock"):
+        with vault._coordination_lock():
+            pass
+    monkeypatch.setattr(drivers_module, "_FCNTL", real_fcntl)
+
+    # (d) fallback-owner acquisition OSError (e.g. read-only directory)
+    monkeypatch.setattr(drivers_module, "_FCNTL", None)
+    real_os_open = os.open
+
+    def _readonly_owner_open(path_arg: object, flags: int, mode: int = 0o777) -> int:
+        if str(path_arg).endswith(".gc_coord.owner"):
+            raise PermissionError("read-only vault directory")
+        return real_os_open(path_arg, flags, mode)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", _readonly_owner_open)
+    with pytest.raises(VaultTransportError, match="Failed acquiring vault coordination lock"):
+        with drivers_module._cross_process_file_lock(
+            leases_dir / ".gc_coord.lock",
+            owner_path=owner_path,
+            timeout_seconds=0.01,
+        ):
+            pass
+    monkeypatch.setattr(os, "open", real_os_open)
+    monkeypatch.setattr(drivers_module, "_FCNTL", real_fcntl)
+
+    # (e) an S3 lease-state token that shifts between the re-check and the delete aborts
+    objects: dict[str, tuple[bytes, dict[str, str]]] = {}
+    state: dict[str, Any] = {"shift_after_check": False, "heads": 0}
+
+    def _transport(req: S3HttpRequest) -> S3HttpResponse:
+        parsed = urllib.parse.urlsplit(req.url)
+        query = dict(urllib.parse.parse_qsl(parsed.query))
+        key = parsed.path.split("/eg-bkt/", 1)[-1]
+        if req.method == "GET" and query.get("list-type") == "2":
+            prefix = query.get("prefix", "")
+            body = (
+                "<ListBucketResult>"
+                + "".join(
+                    f"<Contents><Key>{k}</Key></Contents>"
+                    for k in sorted(objects)
+                    if k.startswith(prefix)
+                )
+                + "</ListBucketResult>"
+            ).encode()
+            return S3HttpResponse(status_code=200, body=body)
+        if req.method == "HEAD":
+            if "leases/" in key:
+                state["heads"] += 1
+                if state["shift_after_check"] and state["heads"] % 2 == 0:
+                    return S3HttpResponse(status_code=404)  # the lease just vanished
+            if key in objects:
+                return S3HttpResponse(status_code=200, headers=dict(objects[key][1]))
+            return S3HttpResponse(status_code=404)
+        if req.method == "PUT":
+            objects[key] = (req.body, {"etag": '"e"'})
+            return S3HttpResponse(status_code=200)
+        if req.method == "GET":
+            if key in objects:
+                return S3HttpResponse(
+                    status_code=200, headers=dict(objects[key][1]), body=objects[key][0]
+                )
+            return S3HttpResponse(status_code=404)
+        if req.method == "DELETE":
+            objects.pop(key, None)
+            return S3HttpResponse(status_code=204)
+        return S3HttpResponse(status_code=405)
+
+    cfg = S3SigV4Config(
+        endpoint_url="https://eg.example.com",
+        bucket="eg-bkt",
+        region="us-east-1",
+        access_key_id="AKID",
+        secret_access_key="SECRET",
+        prefix="eg",
+    )
+    s3 = S3CompatibleSigV4Driver(cfg, http_transport=_transport)
+    cid = "e" * 64
+    s3.put_chunk(cid, b"payload")
+    s3.acquire_push_lease(["1" * 64], lease_id="eg-lease")
+
+    # First token == baseline; the *second* re-check sees a different lease state.
+    state["shift_after_check"] = True
+    real_token = s3._lease_state_token
+    calls = {"n": 0}
+
+    def _shifting_token() -> tuple[tuple[str, str], ...]:
+        calls["n"] += 1
+        token = real_token()
+        if calls["n"] > 1:
+            return token + (("ghost", "changed"),)
+        return token
+
+    monkeypatch.setattr(s3, "_lease_state_token", _shifting_token)
+    assert s3.delete_chunk_if_unleased(cid) is False
+    assert s3.has_chunk(cid)
+    monkeypatch.setattr(s3, "_lease_state_token", real_token)
+    s3.release_push_lease("eg-lease")
+
+    # (f) a bundle staging entry that shifts the archive view is fine, but a bundle
+    #     delete must sweep expired leases even when the chunk itself survives.
+    bundle_file = tmp_path / "sweep.nagarvault"
+    bundle = PortableBundleVaultDriver(bundle_file)
+    keep_cid = "2" * 64
+    bundle.put_chunk(keep_cid, b"kept")
+    bundle.acquire_push_lease([keep_cid], lease_id="sweep-lease", ttl_seconds=1.0)
+    expired_now = time.time() + 7200.0
+    # chunk is leased until expiry => the sweep persists, the chunk survives
+    assert bundle.delete_chunk_if_unleased(keep_cid, now_epoch=expired_now) is True
+    assert bundle.read_active_leased_chunks() == set()
+
+    # unknown chunk with an expired lease present: sweep persists, delete reports False
+    bundle.acquire_push_lease([], lease_id="sweep-lease-2", ttl_seconds=1.0)
+    journal = VaultStagingJournal(
+        project_id="sweep-proj",
+        parent_snapshot_id=None,
+        salt_hex="77" * 32,
+        kdf_iterations=100_000,
+        key_id_hex="88" * 16,
+        chunk_size=65_536,
+        updated_at_epoch=time.time(),
+        uploaded_chunk_ids=(),
+    )
+    bundle.save_staging_journal(journal)
+    assert bundle.delete_chunk_if_unleased("3" * 64, now_epoch=expired_now) is False
+    assert bundle.load_staging_journal("sweep-proj", None) == journal
+    assert bundle.read_active_leased_chunks() == set()
+
+
+def test_last_mile_lease_state_shift_before_delete_aborts_s3_deletion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The final lease-state re-check (right before DELETE) must abort the deletion."""
+    objects: dict[str, tuple[bytes, dict[str, str]]] = {}
+
+    def _transport(req: S3HttpRequest) -> S3HttpResponse:
+        parsed = urllib.parse.urlsplit(req.url)
+        query = dict(urllib.parse.parse_qsl(parsed.query))
+        key = parsed.path.split("/lm-bkt/", 1)[-1]
+        if req.method == "GET" and query.get("list-type") == "2":
+            prefix = query.get("prefix", "")
+            body = (
+                "<ListBucketResult>"
+                + "".join(
+                    f"<Contents><Key>{k}</Key></Contents>"
+                    for k in sorted(objects)
+                    if k.startswith(prefix)
+                )
+                + "</ListBucketResult>"
+            ).encode()
+            return S3HttpResponse(status_code=200, body=body)
+        if req.method == "HEAD":
+            if key in objects:
+                return S3HttpResponse(status_code=200, headers=dict(objects[key][1]))
+            return S3HttpResponse(status_code=404)
+        if req.method == "PUT":
+            objects[key] = (req.body, {"etag": '"e"'})
+            return S3HttpResponse(status_code=200)
+        if req.method == "GET":
+            if key in objects:
+                return S3HttpResponse(
+                    status_code=200, headers=dict(objects[key][1]), body=objects[key][0]
+                )
+            return S3HttpResponse(status_code=404)
+        if req.method == "DELETE":
+            objects.pop(key, None)
+            return S3HttpResponse(status_code=204)
+        return S3HttpResponse(status_code=405)
+
+    cfg = S3SigV4Config(
+        endpoint_url="https://lm.example.com",
+        bucket="lm-bkt",
+        region="us-east-1",
+        access_key_id="AKID",
+        secret_access_key="SECRET",
+        prefix="lm",
+    )
+    s3 = S3CompatibleSigV4Driver(cfg, http_transport=_transport)
+    cid = "9" * 64
+    s3.put_chunk(cid, b"payload")
+    s3.acquire_push_lease(["8" * 64], lease_id="lm-lease")
+
+    real_token = s3._lease_state_token
+    calls = {"n": 0}
+
+    def _shift_on_third_check() -> tuple[tuple[str, str], ...]:
+        calls["n"] += 1
+        token = real_token()
+        # call 1 = baseline, call 2 = post-scan re-check, call 3 = final pre-DELETE check
+        if calls["n"] >= 3:
+            return token + (("late", "appeared"),)
+        return token
+
+    monkeypatch.setattr(s3, "_lease_state_token", _shift_on_third_check)
+    assert s3.delete_chunk_if_unleased(cid) is False
+    assert s3.has_chunk(cid)
+    assert calls["n"] >= 3

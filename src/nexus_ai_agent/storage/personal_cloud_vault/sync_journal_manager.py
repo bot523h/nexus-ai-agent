@@ -11,6 +11,7 @@ before file reconstruction, and unreferenced chunk cleanup.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import hmac
 import math
 import os
@@ -57,6 +58,8 @@ from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     VaultTransportError,
 )
 
+#: Fixed re-read block size for source-integrity hashing (keeps pushes O(1) in RAM).
+_SOURCE_DIGEST_BLOCK_BYTES = 64 * 1024
 DEFAULT_GC_MIN_AGE_SECONDS = 3600.0
 DEFAULT_LEASE_TTL_SECONDS = 3600.0
 
@@ -70,6 +73,7 @@ class _ChunkSourceLocator:
     byte_length: int
     chunk_index: int
     inline_rel_path: str | None = None
+    source_sha256_hex: str | None = None
 
 
 @dataclass(frozen=True)
@@ -110,11 +114,19 @@ class GarbageCollectionReport:
 
 @dataclass(frozen=True, slots=True)
 class _DiskFileStatFingerprint:
-    """Initial POSIX inode/size/mtime snapshot verified via ``fstat`` while streaming."""
+    """Initial POSIX inode/size/mtime/ctime snapshot verified via ``fstat`` while streaming.
+
+    ``st_ctime_ns`` is included on purpose: an attacker (or a racing process) that
+    rewrites a file in place and restores ``st_mtime_ns`` with :func:`os.utime` still
+    bumps the inode change time, which userspace cannot forge. The fingerprint is
+    additionally paired with a streaming SHA-256 computed while the chunks are read,
+    so a same-size rewrite that somehow preserved every timestamp is still caught.
+    """
 
     st_ino: int
     st_size: int
     st_mtime_ns: int
+    st_ctime_ns: int
 
 
 def _discover_source_plan(
@@ -155,6 +167,7 @@ def _discover_source_plan(
                     st_ino=st.st_ino,
                     st_size=st.st_size,
                     st_mtime_ns=st.st_mtime_ns,
+                    st_ctime_ns=st.st_ctime_ns,
                 )
                 disk_plan.append((norm, entry, st.st_size, fp))
         except OSError as exc:
@@ -174,6 +187,7 @@ def _verify_fstat_matches_fingerprint(
         actual_st.st_ino != expected_fp.st_ino
         or actual_st.st_size != expected_fp.st_size
         or actual_st.st_mtime_ns != expected_fp.st_mtime_ns
+        or actual_st.st_ctime_ns != expected_fp.st_ctime_ns
     ):
         raise VaultTransportError(
             f"Concurrent file modification/replacement detected ({phase}) on {disk_path}"
@@ -188,12 +202,20 @@ def _stream_source_chunks(
     expected_fp: _DiskFileStatFingerprint | None,
     chunk_size: int,
     inline_sources: Mapping[str, bytes] | None,
+    digests_out: dict[str, str] | None = None,
 ) -> Iterator[tuple[int, int, bytes]]:
-    """Yield ``(chunk_index, byte_offset, chunk_bytes)`` with ``fstat`` checks."""
+    """Yield ``(chunk_index, byte_offset, chunk_bytes)`` with ``fstat`` checks.
+
+    When ``digests_out`` is provided, the streaming SHA-256 of the exact bytes read
+    from the source is stored under ``rel_path``. Callers re-read and compare it before
+    the manifest is committed, so a same-size in-place rewrite that restored every
+    timestamp (``mtime``/``ctime``) is still detected.
+    """
     if disk_path is not None:
         assert expected_fp is not None
         bytes_read = 0
         idx = 0
+        stream_hasher = hashlib.sha256()
         try:
             with disk_path.open("rb") as handle:
                 open_st = os.fstat(handle.fileno())
@@ -204,6 +226,7 @@ def _stream_source_chunks(
                     chunk = handle.read(chunk_size)
                     if not chunk:
                         break
+                    stream_hasher.update(chunk)
                     offset = bytes_read
                     bytes_read += len(chunk)
                     yield idx, offset, chunk
@@ -222,10 +245,14 @@ def _stream_source_chunks(
                 )
         except OSError as exc:
             raise VaultTransportError(f"Failed reading project file {disk_path}: {exc}") from exc
+        if digests_out is not None:
+            digests_out[rel_path] = stream_hasher.hexdigest()
         return
 
     assert inline_sources is not None
     raw_bytes = inline_sources[rel_path]
+    if digests_out is not None:
+        digests_out[rel_path] = hashlib.sha256(raw_bytes).hexdigest()
     view = memoryview(raw_bytes)
     for idx, offset in enumerate(range(0, expected_size, chunk_size)):
         yield idx, offset, bytes(view[offset : offset + chunk_size])
@@ -256,6 +283,38 @@ def _read_chunk_from_locator(
     raw = inline_sources[locator.inline_rel_path]
     end = locator.byte_offset + locator.byte_length
     return bytes(memoryview(raw)[locator.byte_offset : end])
+
+
+def _verify_source_digest(
+    disk_path: Path,
+    *,
+    expected_sha256_hex: str | None,
+    phase: str,
+) -> None:
+    """Re-read a disk source and compare it with the bytes originally streamed.
+
+    This closes the residual window in which a file is rewritten in place at exactly
+    the same size *and* every timestamp (``mtime``/``ctime``) is restored: the content
+    hash captured while streaming is the authoritative source of truth, so uploads
+    never commit a manifest whose chunks do not match the current source.
+    """
+    if expected_sha256_hex is None:
+        return
+    hasher = hashlib.sha256()
+    try:
+        with disk_path.open("rb") as handle:
+            while True:
+                block = handle.read(_SOURCE_DIGEST_BLOCK_BYTES)
+                if not block:
+                    break
+                hasher.update(block)
+    except OSError as exc:
+        raise VaultTransportError(f"Failed re-reading project file {disk_path}: {exc}") from exc
+    actual_sha256_hex = hasher.hexdigest()
+    if not hmac.compare_digest(actual_sha256_hex, expected_sha256_hex):
+        raise VaultTransportError(
+            f"Fail-closed ({phase}): local source content mutated for {disk_path}"
+        )
 
 
 def _write_verified_files_to_directory(target_dir: Path | str, files: Mapping[str, bytes]) -> None:
@@ -652,6 +711,7 @@ class PersonalCloudVaultManager:
         )
 
         chunk_locators: dict[str, _ChunkSourceLocator] = {}
+        source_digests: dict[str, str] = {}
         file_entries: list[VaultFileEntry] = []
         leased_in_push: list[str] = []
         leased_set: set[str] = set()
@@ -675,6 +735,7 @@ class PersonalCloudVaultManager:
                     expected_fp=expected_fp,
                     chunk_size=self._chunk_size,
                     inline_sources=inline_sources,
+                    digests_out=source_digests,
                 ):
                     total_chunks += 1
                     chunk_len = len(chunk_plain)
@@ -688,6 +749,7 @@ class PersonalCloudVaultManager:
                             byte_length=chunk_len,
                             chunk_index=idx,
                             inline_rel_path=rel_path if disk_path is None else None,
+                            source_sha256_hex=source_digests.get(rel_path),
                         )
 
                     # Lease chunk in RAM and cross-process lease file BEFORE put_chunk.
@@ -762,6 +824,16 @@ class PersonalCloudVaultManager:
                         chunks=tuple(chunk_refs),
                     )
                 )
+
+            # The streaming SHA-256 is authoritative: re-read every disk source and
+            # fail closed if the on-disk bytes no longer match what was uploaded.
+            for rel_path, disk_path, _expected_size, _fp in source_plan:
+                if disk_path is not None:
+                    _verify_source_digest(
+                        disk_path,
+                        expected_sha256_hex=source_digests.get(rel_path),
+                        phase="pre-manifest-digest",
+                    )
 
             now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             effective_snapshot_id = (

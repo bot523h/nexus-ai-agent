@@ -29,6 +29,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -49,8 +50,24 @@ from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     VaultTransportError,
 )
 
+
+def _load_fcntl() -> Any:
+    """Import ``fcntl`` when the platform provides it (POSIX) and ``None`` otherwise."""
+    try:  # pragma: no cover - platform dependent import
+        import fcntl as posix_fcntl
+    except ImportError:  # pragma: no cover - non-POSIX platforms (Windows)
+        return None
+    return posix_fcntl
+
+
+#: POSIX ``fcntl`` module when available (``None`` on Windows); kernel-backed locking.
+_FCNTL: Any = _load_fcntl()
+
 _CHUNK_ID_RE = re.compile(r"^[0-9a-f]{16,128}$")
 _SNAPSHOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_GC_COORD_LOCK_FILENAME = ".gc_coord.lock"
+_GC_COORD_OWNER_FILENAME = ".gc_coord.owner"
+_LEASE_DIR_FILENAME_RE = re.compile(r"^lease-[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$")
 
 
 def _validate_chunk_id(chunk_id: str) -> str:
@@ -131,7 +148,12 @@ def _parse_and_validate_lease_payload(
         raise VaultTransportError(
             f"Missing or non-numeric expires_at_epoch in push lease {source_label}"
         )
-    expires_at = float(raw_exp)
+    try:
+        expires_at = float(raw_exp)
+    except OverflowError as exc:  # huge JSON integers e.g. 1e1000 / 10**1000
+        raise VaultTransportError(
+            f"Unrepresentable expires_at_epoch in push lease {source_label}: {exc}"
+        ) from exc
     if not math.isfinite(expires_at):
         raise VaultTransportError(
             f"Non-finite expires_at_epoch in push lease {source_label}: {expires_at!r}"
@@ -164,6 +186,205 @@ def _parse_http_or_iso_timestamp(raw_ts: str) -> float | None:
             dt_http = dt_http.replace(tzinfo=timezone.utc)
         return dt_http.timestamp()
     return None
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Return ``True`` when ``pid`` still runs on this host (POSIX ``kill(pid, 0)``).
+
+    ``PermissionError`` (a live process owned by another user) is treated as alive and
+    any unexpected ``OSError`` is treated as alive too, so a false negative can never
+    let a competitor break a live owner's lock.
+    """
+    if pid <= 0 or pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _pid_is_definitely_dead(pid: int) -> bool:
+    """Return ``True`` only when the kernel positively reports ``ESRCH`` for ``pid``."""
+    if pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _break_stale_ownership_lock(
+    owner_path: Path,
+    *,
+    stale_lock_seconds: float,
+) -> bool:
+    """Break a stale ``O_EXCL`` ownership file only when its owner is provably dead.
+
+    Never breaks a lock whose recorded PID is still alive on this host, whose payload
+    is unparseable, or whose inode changed between inspection and ``unlink``.
+    """
+    try:
+        st = owner_path.lstat()
+        raw_owner = owner_path.read_bytes()
+        if (time.time() - st.st_mtime) <= stale_lock_seconds:
+            return False
+        parsed = json.loads(raw_owner.decode("utf-8"))
+        owner_pid = int(parsed["pid"])
+        if not _pid_is_definitely_dead(owner_pid):
+            return False
+        if owner_path.lstat().st_ino != st.st_ino:
+            return False
+        owner_path.unlink()
+    except OSError:
+        return False
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError):
+        return False
+    return True
+
+
+def _release_ownership_lock(
+    owner_path: Path,
+    *,
+    owner_token: str,
+    owner_ino: int,
+) -> None:
+    """Unlink the fallback ownership file only if it is still provably ours.
+
+    A replaced inode or a different ``owner_token`` means the file now belongs to a
+    newer holder, so this (possibly slow) release becomes a strict no-op.
+    """
+    try:
+        if owner_path.lstat().st_ino != owner_ino:
+            return
+        parsed = json.loads(owner_path.read_bytes().decode("utf-8"))
+        if str(parsed["owner_token"]) != owner_token:
+            return
+        if owner_path.lstat().st_ino != owner_ino:
+            return
+        owner_path.unlink()
+    except OSError:
+        return
+    except (UnicodeDecodeError, ValueError, KeyError, TypeError):
+        return
+
+
+@contextlib.contextmanager
+def _cross_process_file_lock(
+    lock_path: Path,
+    *,
+    owner_path: Path | None = None,
+    timeout_seconds: float = 10.0,
+    stale_lock_seconds: float = 30.0,
+) -> Iterator[None]:
+    """Ownership-safe cross-process file mutex used by every local/bundle driver.
+
+    Two complementary layers, both of which never steal a live lock:
+
+    1. **POSIX kernel lock** — ``fcntl.flock(LOCK_EX | LOCK_NB)`` on the persistent
+       ``lock_path`` file. The kernel owns the lock, so it is released automatically
+       when the holder dies; no staleness heuristic and no ``unlink`` is involved.
+    2. **Fallback ownership file** — where ``fcntl`` is unavailable, an
+       ``O_CREAT | O_EXCL`` ``owner_path`` records ``{pid, owner_token, created_at}``.
+       A competitor only breaks it when the recorded PID is provably gone (and
+       re-validates the inode before unlinking). Release re-reads the file and unlinks
+       it *only* when both ``st_ino`` and ``owner_token`` still belong to this holder,
+       so a slow owner can never delete a newer owner's lock.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    effective_owner_path = owner_path if owner_path is not None else lock_path
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as exc:
+        raise VaultTransportError(
+            f"Failed acquiring vault coordination lock {lock_path}: {exc}"
+        ) from exc
+
+    kernel_fd: int | None = None
+    owner_ino: int | None = None
+    owner_token = f"{os.getpid()}:{uuid.uuid4().hex}"
+
+    try:
+        if _FCNTL is not None:
+            while True:
+                try:
+                    _FCNTL.flock(fd, _FCNTL.LOCK_EX | _FCNTL.LOCK_NB)
+                    kernel_fd = fd
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise VaultTransportError(
+                            f"Timed out acquiring vault coordination lock: {lock_path}"
+                        ) from None
+                    time.sleep(0.002)
+                except OSError as exc:
+                    raise VaultTransportError(
+                        f"Failed acquiring vault coordination lock {lock_path}: {exc}"
+                    ) from exc
+        else:
+            payload = json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "owner_token": owner_token,
+                    "created_at_epoch": time.time(),
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+            while True:
+                try:
+                    owner_fd = os.open(
+                        effective_owner_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                    )
+                    try:
+                        os.write(owner_fd, payload)
+                        os.fsync(owner_fd)
+                    finally:
+                        os.close(owner_fd)
+                    owner_ino = effective_owner_path.lstat().st_ino
+                    break
+                except FileExistsError:
+                    if _break_stale_ownership_lock(
+                        effective_owner_path,
+                        stale_lock_seconds=stale_lock_seconds,
+                    ):
+                        continue
+                    if time.monotonic() >= deadline:
+                        raise VaultTransportError(
+                            f"Timed out acquiring vault coordination lock: {effective_owner_path}"
+                        ) from None
+                    time.sleep(0.002)
+                except OSError as exc:
+                    raise VaultTransportError(
+                        f"Failed acquiring vault coordination lock {effective_owner_path}: {exc}"
+                    ) from exc
+
+        try:
+            yield
+        finally:
+            if kernel_fd is not None:
+                with contextlib.suppress(OSError):
+                    _FCNTL.flock(kernel_fd, _FCNTL.LOCK_UN)
+            if owner_ino is not None:
+                with contextlib.suppress(OSError):
+                    _release_ownership_lock(
+                        effective_owner_path,
+                        owner_token=owner_token,
+                        owner_ino=owner_ino,
+                    )
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
+def _staging_journal_digest(project_id: str, parent_snapshot_id: str | None) -> str:
+    """Return the deterministic staging-journal name digest for a push target."""
+    key_bytes = f"{project_id}\x00{parent_snapshot_id or ''}".encode()
+    return hashlib.sha256(key_bytes).hexdigest()[:32]
 
 
 def _atomic_write_file(target_path: Path, data: bytes) -> None:
@@ -426,38 +647,20 @@ class LocalDeviceVaultDriver:
         timeout_seconds: float = 10.0,
         stale_lock_seconds: float = 30.0,
     ) -> Iterator[None]:
-        """Short-lived cross-process mutex (``O_CREAT | O_EXCL``) closing GC/Lease TOCTOU."""
-        lock_path = self._leases_dir / ".gc_coord.lock"
-        deadline = time.monotonic() + timeout_seconds
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        while True:
-            try:
-                fd = os.open(lock_path, flags, 0o600)
-                try:
-                    os.write(fd, f"{os.getpid()}:{time.time():.6f}".encode("ascii"))
-                finally:
-                    os.close(fd)
-                break
-            except FileExistsError:
-                with contextlib.suppress(OSError):
-                    st = lock_path.lstat()
-                    if (time.time() - st.st_mtime) > stale_lock_seconds:
-                        lock_path.unlink(missing_ok=True)
-                        continue
-                if time.monotonic() >= deadline:
-                    raise VaultTransportError(
-                        f"Timed out acquiring vault GC coordination lock: {lock_path}"
-                    ) from None
-                time.sleep(0.002)
-            except OSError as exc:
-                raise VaultTransportError(
-                    f"Failed acquiring vault GC coordination lock {lock_path}: {exc}"
-                ) from exc
-        try:
+        """Cross-process mutex closing the GC/lease TOCTOU window without lock theft.
+
+        Delegates to :func:`_cross_process_file_lock`, which layers a POSIX kernel
+        ``flock`` over an ownership-verified ``O_CREAT | O_EXCL`` fallback so a lock is
+        never taken over from a live owner and never unlinked by a stale owner.
+        """
+        self._leases_dir.mkdir(parents=True, exist_ok=True)
+        with _cross_process_file_lock(
+            self._leases_dir / _GC_COORD_LOCK_FILENAME,
+            owner_path=self._leases_dir / _GC_COORD_OWNER_FILENAME,
+            timeout_seconds=timeout_seconds,
+            stale_lock_seconds=stale_lock_seconds,
+        ):
             yield
-        finally:
-            with contextlib.suppress(OSError):
-                lock_path.unlink(missing_ok=True)
 
     def acquire_push_lease(
         self,
@@ -534,18 +737,25 @@ class LocalDeviceVaultDriver:
             lease_path.unlink(missing_ok=True)
 
     def _read_active_leased_chunks_unlocked(self, *, effective_now: float) -> set[str]:
+        """Parse every lease file, failing closed on ANY unexpected entry.
+
+        Only the two coordination artefacts owned by :meth:`_coordination_lock`
+        (``.gc_coord.lock`` and the ``.gc_coord.owner`` fallback) are exempt. Every
+        other entry — hidden dot-file, symlink, sub-directory, or misnamed regular
+        file — makes the lease state ambiguous and therefore raises
+        :class:`VaultTransportError` so GC deletes nothing.
+        """
         active_chunks: set[str] = set()
         for entry in sorted(self._leases_dir.iterdir()):
-            if entry.name.startswith("."):
+            if entry.name in (_GC_COORD_LOCK_FILENAME, _GC_COORD_OWNER_FILENAME):
                 continue
             if (
                 entry.is_symlink()
                 or not entry.is_file()
-                or not entry.name.startswith("lease-")
-                or entry.suffix != ".json"
+                or not _LEASE_DIR_FILENAME_RE.fullmatch(entry.name)
             ):
                 raise VaultTransportError(
-                    f"Unexpected or symlinked file in vault lease directory: {entry}"
+                    f"Unexpected, hidden or symlinked entry in vault lease directory: {entry}"
                 )
             try:
                 raw_bytes = entry.read_bytes()
@@ -585,8 +795,7 @@ class LocalDeviceVaultDriver:
             return True
 
     def _staging_journal_path(self, project_id: str, parent_snapshot_id: str | None) -> Path:
-        key_bytes = f"{project_id}\x00{parent_snapshot_id or ''}".encode()
-        digest = hashlib.sha256(key_bytes).hexdigest()[:32]
+        digest = _staging_journal_digest(project_id, parent_snapshot_id)
         return self._staging_dir / f"stage-{digest}.json"
 
     def save_staging_journal(self, journal: VaultStagingJournal) -> None:
@@ -1163,6 +1372,8 @@ class S3CompatibleSigV4Driver:
         head_resp = self._send("HEAD", object_key=obj_key)
         if head_resp.status_code != 200:
             raise VaultTransportError(f"Active S3 push lease not found: {valid_id}")
+        lowered_head = {k.lower(): v for k, v in head_resp.headers.items()}
+        prior_etag = lowered_head.get("etag")
         now = self._clock().timestamp()
         payload = _build_lease_json_bytes(
             lease_id=valid_id,
@@ -1171,12 +1382,23 @@ class S3CompatibleSigV4Driver:
             ttl_seconds=finite_ttl,
             chunk_ids=chunk_ids,
         )
+        conditional: dict[str, str] = {}
+        if prior_etag:
+            # A concurrent refresher that already replaced the lease object wins:
+            # ``If-Match`` makes our optimistic update fail instead of losing theirs.
+            conditional["if-match"] = prior_etag
         put_resp = self._send(
             "PUT",
             object_key=obj_key,
             body=payload,
             content_type="application/json",
+            extra_headers=conditional,
         )
+        if put_resp.status_code in (409, 412):
+            raise VaultRevisionConflictError(
+                f"Concurrent modification of S3 push lease {valid_id!r} (HTTP "
+                f"{put_resp.status_code}); refusing to overwrite a newer lease state"
+            )
         if put_resp.status_code not in (200, 201, 204):
             raise VaultTransportError(
                 f"S3 update_push_lease failed with HTTP {put_resp.status_code}"
@@ -1216,26 +1438,126 @@ class S3CompatibleSigV4Driver:
             active_chunks.update(chunk_set)
         return active_chunks
 
+    def _lease_state_token(self) -> tuple[tuple[str, str], ...]:
+        """Return a comparable ``(stem, ETag|LastModified)`` snapshot of lease objects."""
+        state: list[tuple[str, str]] = []
+        for stem in self._list_category_stems("leases", ".json"):
+            head_resp = self._send("HEAD", object_key=self._object_key("leases", f"{stem}.json"))
+            if head_resp.status_code == 404:
+                state.append((stem, "absent"))
+                continue
+            if head_resp.status_code != 200:
+                raise VaultTransportError(
+                    f"S3 lease state probe failed for {stem} with HTTP {head_resp.status_code}"
+                )
+            lowered = {k.lower(): v for k, v in head_resp.headers.items()}
+            state.append((stem, f"{lowered.get('etag', '')}|{lowered.get('last-modified', '')}"))
+        return tuple(sorted(state))
+
     def delete_chunk_if_unleased(
         self,
         chunk_id: str,
         *,
         now_epoch: float | None = None,
     ) -> bool:
-        """Re-check S3 ``leases/*.json`` objects immediately before deleting ``chunk_id``."""
+        """Delete ``chunk_id`` only when no lease appeared across the whole check.
+
+        The lease set is snapshotted, re-read immediately before the ``DELETE``, and the
+        lease-object state token (ETag / Last-Modified per lease) must be identical
+        before and after the deletion decision. Any lease registered mid-check —
+        including a brand-new lease that does not list this chunk yet — aborts the
+        deletion, because a freshly acquired push lease may claim the chunk right after
+        our scan.
+        """
         valid = _validate_chunk_id(chunk_id)
-        if valid in self.read_active_leased_chunks(now_epoch=now_epoch):
+        effective_now = _validate_finite_epoch(now_epoch, default_now=self._clock().timestamp())
+        before_state = self._lease_state_token()
+        if valid in self.read_active_leased_chunks(now_epoch=effective_now):
+            return False
+        if self._lease_state_token() != before_state:
             return False
         if not self.has_chunk(valid):
             return False
+        if self._lease_state_token() != before_state:
+            return False
         self.delete_chunk(valid)
         return True
+
+    def _staging_journal_key(self, project_id: str, parent_snapshot_id: str | None) -> str:
+        digest = _staging_journal_digest(project_id, parent_snapshot_id)
+        return self._object_key("staging", f"stage-{digest}.json")
+
+    def save_staging_journal(self, journal: VaultStagingJournal) -> None:
+        """Persist a crash-recovery staging journal object on the S3 bucket."""
+        obj_key = self._staging_journal_key(journal.project_id, journal.parent_snapshot_id)
+        resp = self._send(
+            "PUT",
+            object_key=obj_key,
+            body=journal.to_json_bytes(),
+            content_type="application/json",
+        )
+        if resp.status_code not in (200, 201, 204):
+            raise VaultTransportError(
+                f"S3 save_staging_journal failed with HTTP {resp.status_code}"
+            )
+
+    def load_staging_journal(
+        self,
+        project_id: str,
+        parent_snapshot_id: str | None,
+    ) -> VaultStagingJournal | None:
+        """Load (and self-heal) the crash-recovery staging journal object, if any."""
+        obj_key = self._staging_journal_key(project_id, parent_snapshot_id)
+        resp = self._send("GET", object_key=obj_key)
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise VaultTransportError(
+                f"S3 load_staging_journal failed with HTTP {resp.status_code}"
+            )
+        try:
+            journal = VaultStagingJournal.from_json_bytes(resp.body)
+        except (UnicodeDecodeError, ValueError, KeyError, TypeError, PersonalVaultError):
+            self.clear_staging_journal(project_id, parent_snapshot_id)
+            return None
+        if journal.project_id != project_id or journal.parent_snapshot_id != parent_snapshot_id:
+            self.clear_staging_journal(project_id, parent_snapshot_id)
+            return None
+        return journal
+
+    def clear_staging_journal(self, project_id: str, parent_snapshot_id: str | None) -> None:
+        """Delete the crash-recovery staging journal object after a completed push."""
+        obj_key = self._staging_journal_key(project_id, parent_snapshot_id)
+        with contextlib.suppress(VaultTransportError):
+            self._send("DELETE", object_key=obj_key)
 
 
 # --------------------------------------------------------------------------- #
 # 3. PortableBundleVaultDriver (.nagarvault single-file binary archive)
 # --------------------------------------------------------------------------- #
 
+#: ``.nagarvault`` archive format version written by this module.
+#:
+#: Version-compatibility contract
+#: ------------------------------
+#: * ``BUNDLE_VERSION == 1`` is the only accepted version. The header stores a
+#:   ``u32`` version alongside the magic ``NAGARVLT``; any other value raises
+#:   :class:`VaultTamperDetectedError` ("unsupported version"), so a bundle written
+#:   by a newer writer is rejected rather than silently mis-parsed.
+#: * Version 1 defines exactly four entry kinds in the index table:
+#:   ``1 == _ENTRY_CHUNK`` (key = chunk id), ``2 == _ENTRY_MANIFEST``
+#:   (key = snapshot id), ``3 == _ENTRY_LEASE`` (key = ``leases/<id>.json``) and
+#:   ``4 == _ENTRY_STAGING`` (key = ``staging/stage-<digest>.json``).
+#:   Because version 1 always carried the ``_ENTRY_LEASE`` kind, older readers that
+#:   predate lease support must reject lease entries instead of ignoring them —
+#:   ignoring a lease entry would silently invalidate the fail-closed lease check
+#:   that protects in-flight chunks from GC. Unknown kinds raise
+#:   :class:`VaultTamperDetectedError`, never a skip. Adding a *new* kind is therefore
+#:   a ``BUNDLE_VERSION`` bump.
+#: * Entry ordering inside the archive is canonical and irrelevant to readers
+#:   (chunks, then manifests, then leases, each sorted); a reader must accept any
+#:   ordering because only per-entry CRC32/SHA-256 plus the archive-level SHA-256
+#:   are authoritative.
 BUNDLE_MAGIC = b"NAGARVLT"
 BUNDLE_VERSION = 1
 BUNDLE_SUFFIX = ".nagarvault"
@@ -1246,6 +1568,8 @@ _BUNDLE_INDEX_TAIL = struct.Struct(">QQI32s")
 _ENTRY_CHUNK = 1
 _ENTRY_MANIFEST = 2
 _ENTRY_LEASE = 3
+_ENTRY_STAGING = 4
+_STAGING_ENTRY_KEY_RE = re.compile(r"^staging/stage-[0-9a-f]{32}\.json$")
 
 
 class PortableBundleVaultDriver:
@@ -1274,7 +1598,11 @@ class PortableBundleVaultDriver:
         self._chunks: dict[str, bytes] = {}
         self._manifests: dict[str, bytes] = {}
         self._leases: dict[str, bytes] = {}
+        self._staging_journals: dict[str, bytes] = {}
         self._chunk_mtimes: dict[str, float] = {}
+        # Cross-process lock identities live next to (never inside) the archive.
+        self._lock_path = self._bundle_path.with_name(f".{self._bundle_path.name}.lock")
+        self._owner_path = self._bundle_path.with_name(f".{self._bundle_path.name}.owner")
 
         try:
             self._bundle_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1287,6 +1615,42 @@ class PortableBundleVaultDriver:
     @property
     def bundle_path(self) -> Path:
         return self._bundle_path
+
+    @contextlib.contextmanager
+    def _coordination_lock(
+        self,
+        *,
+        timeout_seconds: float = 10.0,
+        stale_lock_seconds: float = 30.0,
+    ) -> Iterator[None]:
+        """Serialize every archive read-modify-write across processes.
+
+        Two ``PortableBundleVaultDriver`` instances (or two processes) sharing one
+        ``.nagarvault`` file would otherwise clobber each other: the archive is a single
+        all-or-nothing blob, so an unserialized writer would resurrect chunks another
+        writer just deleted, drop a peer's push lease, and turn the lease-check +
+        ``delete_chunk`` pair into a TOCTOU race. The lock is mandatory for every
+        mutation and for the lease-then-delete decision.
+        """
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with _cross_process_file_lock(
+            self._lock_path,
+            owner_path=self._owner_path,
+            timeout_seconds=timeout_seconds,
+            stale_lock_seconds=stale_lock_seconds,
+        ):
+            yield
+
+    def _reload_locked(self) -> None:
+        """Refresh in-memory state from disk while holding the coordination lock."""
+        if not self._bundle_path.exists():
+            self._chunks = {}
+            self._manifests = {}
+            self._leases = {}
+            self._staging_journals = {}
+            self._chunk_mtimes = {}
+            return
+        self._load_and_verify()
 
     def verify_bundle(self) -> None:
         """Verify binary header, index bounds, per-blob CRC32/SHA-256, and archive SHA-256."""
@@ -1330,6 +1694,7 @@ class PortableBundleVaultDriver:
         loaded_chunks: dict[str, bytes] = {}
         loaded_manifests: dict[str, bytes] = {}
         loaded_leases: dict[str, bytes] = {}
+        loaded_staging: dict[str, bytes] = {}
         archive_mtime = self._bundle_path.stat().st_mtime
         cursor = index_offset
         index_end = index_offset + index_len
@@ -1382,6 +1747,10 @@ class PortableBundleVaultDriver:
                 stem = key[len("leases/") : -len(".json")]
                 _validate_snapshot_id(stem)
                 loaded_leases[stem] = blob
+            elif entry_kind == _ENTRY_STAGING:
+                if not _STAGING_ENTRY_KEY_RE.fullmatch(key):
+                    raise VaultTamperDetectedError(f"Malformed staging key in .nagarvault: {key!r}")
+                loaded_staging[key] = blob
             else:
                 raise VaultTamperDetectedError(f"Unknown .nagarvault entry kind: {entry_kind}")
 
@@ -1391,6 +1760,10 @@ class PortableBundleVaultDriver:
         self._chunks = loaded_chunks
         self._manifests = loaded_manifests
         self._leases = loaded_leases
+        self._staging_journals = loaded_staging
+        for cid in list(self._chunk_mtimes):
+            if cid not in loaded_chunks:
+                del self._chunk_mtimes[cid]
         for cid in loaded_chunks:
             self._chunk_mtimes.setdefault(cid, archive_mtime)
 
@@ -1399,6 +1772,7 @@ class PortableBundleVaultDriver:
         chunks: Mapping[str, bytes],
         manifests: Mapping[str, bytes],
         leases: Mapping[str, bytes],
+        staging: Mapping[str, bytes] | None = None,
     ) -> bytes:
         ordered_entries: list[tuple[int, str, bytes]] = []
         for chunk_id in sorted(chunks):
@@ -1407,6 +1781,8 @@ class PortableBundleVaultDriver:
             ordered_entries.append((_ENTRY_MANIFEST, snapshot_id, manifests[snapshot_id]))
         for lease_id in sorted(leases):
             ordered_entries.append((_ENTRY_LEASE, f"leases/{lease_id}.json", leases[lease_id]))
+        for staging_key in sorted(staging or {}):
+            ordered_entries.append((_ENTRY_STAGING, staging_key, (staging or {})[staging_key]))
 
         payload_parts: list[bytes] = []
         index_parts: list[bytes] = []
@@ -1442,8 +1818,11 @@ class PortableBundleVaultDriver:
         next_chunks: dict[str, bytes],
         next_manifests: dict[str, bytes],
         next_leases: dict[str, bytes],
+        next_staging: Mapping[str, bytes],
     ) -> None:
-        archive_bytes = self._serialize_archive(next_chunks, next_manifests, next_leases)
+        archive_bytes = self._serialize_archive(
+            next_chunks, next_manifests, next_leases, next_staging
+        )
         if self._max_quota_bytes is not None and len(archive_bytes) > self._max_quota_bytes:
             raise VaultQuotaExceededError(
                 f"Portable bundle size {len(archive_bytes)} exceeds max_quota_bytes "
@@ -1453,57 +1832,161 @@ class PortableBundleVaultDriver:
         self._chunks = next_chunks
         self._manifests = next_manifests
         self._leases = next_leases
+        self._staging_journals = dict(next_staging)
+
+    def _read_locked(self) -> None:
+        """Reload from disk under the shared lock so readers see peer writes."""
+        with self._coordination_lock():
+            self._reload_locked()
+
+    def _mutate(
+        self,
+        mutator: Callable[[dict[str, bytes], dict[str, bytes], dict[str, bytes]], None],
+    ) -> None:
+        """Reload, mutate, and persist the archive atomically under the shared lock."""
+        with self._coordination_lock():
+            self._reload_locked()
+            next_chunks = dict(self._chunks)
+            next_manifests = dict(self._manifests)
+            next_leases = dict(self._leases)
+            mutator(next_chunks, next_manifests, next_leases)
+            self._flush(next_chunks, next_manifests, next_leases, dict(self._staging_journals))
 
     def put_chunk(self, chunk_id: str, data: bytes) -> None:
         valid = _validate_chunk_id(chunk_id)
-        updated_chunks = dict(self._chunks)
-        updated_chunks[valid] = bytes(data)
-        self._flush(updated_chunks, dict(self._manifests), dict(self._leases))
-        self._chunk_mtimes[valid] = time.time()
+        payload = bytes(data)
+        stamp = time.time()
+
+        def _apply(
+            chunks: dict[str, bytes],
+            manifests: dict[str, bytes],
+            leases: dict[str, bytes],
+        ) -> None:
+            del manifests, leases
+            chunks[valid] = payload
+
+        self._mutate(_apply)
+        self._chunk_mtimes[valid] = stamp
 
     def get_chunk(self, chunk_id: str) -> bytes:
         valid = _validate_chunk_id(chunk_id)
+        self._read_locked()
         if valid not in self._chunks:
             raise VaultTransportError(f"Chunk not found in .nagarvault bundle: {valid}")
         return self._chunks[valid]
 
     def has_chunk(self, chunk_id: str) -> bool:
         valid = _validate_chunk_id(chunk_id)
+        self._read_locked()
         return valid in self._chunks
 
     def get_chunk_mtime(self, chunk_id: str) -> float | None:
         """Return POSIX mtime recorded for ``chunk_id`` inside this bundle, or ``None``."""
         valid = _validate_chunk_id(chunk_id)
+        self._read_locked()
         if valid not in self._chunks:
             return None
         return self._chunk_mtimes.get(valid)
 
     def put_manifest(self, snapshot_id: str, data: bytes) -> None:
         valid = _validate_snapshot_id(snapshot_id)
-        updated_manifests = dict(self._manifests)
-        updated_manifests[valid] = bytes(data)
-        self._flush(dict(self._chunks), updated_manifests, dict(self._leases))
+        payload = bytes(data)
+
+        def _apply(
+            chunks: dict[str, bytes],
+            manifests: dict[str, bytes],
+            leases: dict[str, bytes],
+        ) -> None:
+            del chunks, leases
+            manifests[valid] = payload
+
+        self._mutate(_apply)
 
     def get_manifest(self, snapshot_id: str) -> bytes:
         valid = _validate_snapshot_id(snapshot_id)
+        self._read_locked()
         if valid not in self._manifests:
             raise VaultTransportError(f"Manifest not found in .nagarvault bundle: {valid}")
         return self._manifests[valid]
 
     def list_manifests(self) -> list[str]:
+        self._read_locked()
         return sorted(self._manifests)
 
     def list_chunks(self) -> list[str]:
         """Return sorted chunk IDs stored inside this ``.nagarvault`` bundle."""
+        self._read_locked()
         return sorted(self._chunks)
 
     def delete_chunk(self, chunk_id: str) -> None:
         valid = _validate_chunk_id(chunk_id)
-        if valid in self._chunks:
-            updated_chunks = dict(self._chunks)
-            del updated_chunks[valid]
-            self._flush(updated_chunks, dict(self._manifests), dict(self._leases))
-            self._chunk_mtimes.pop(valid, None)
+
+        def _apply(
+            chunks: dict[str, bytes],
+            manifests: dict[str, bytes],
+            leases: dict[str, bytes],
+        ) -> None:
+            del manifests, leases
+            chunks.pop(valid, None)
+
+        self._mutate(_apply)
+        self._chunk_mtimes.pop(valid, None)
+
+    def _staging_journal_key(self, project_id: str, parent_snapshot_id: str | None) -> str:
+        digest = _staging_journal_digest(project_id, parent_snapshot_id)
+        return f"staging/stage-{digest}.json"
+
+    def save_staging_journal(self, journal: VaultStagingJournal) -> None:
+        """Persist a crash-recovery staging journal entry inside this bundle."""
+        key = self._staging_journal_key(journal.project_id, journal.parent_snapshot_id)
+        payload = journal.to_json_bytes()
+        with self._coordination_lock():
+            self._reload_locked()
+            next_staging = dict(self._staging_journals)
+            next_staging[key] = payload
+            self._flush(
+                dict(self._chunks),
+                dict(self._manifests),
+                dict(self._leases),
+                next_staging,
+            )
+
+    def load_staging_journal(
+        self,
+        project_id: str,
+        parent_snapshot_id: str | None,
+    ) -> VaultStagingJournal | None:
+        """Load (and self-heal) this bundle's crash-recovery staging journal, if any."""
+        key = self._staging_journal_key(project_id, parent_snapshot_id)
+        self._read_locked()
+        raw = self._staging_journals.get(key)
+        if raw is None:
+            return None
+        try:
+            journal = VaultStagingJournal.from_json_bytes(raw)
+        except (UnicodeDecodeError, ValueError, KeyError, TypeError, PersonalVaultError):
+            self.clear_staging_journal(project_id, parent_snapshot_id)
+            return None
+        if journal.project_id != project_id or journal.parent_snapshot_id != parent_snapshot_id:
+            self.clear_staging_journal(project_id, parent_snapshot_id)
+            return None
+        return journal
+
+    def clear_staging_journal(self, project_id: str, parent_snapshot_id: str | None) -> None:
+        """Drop the crash-recovery staging journal entry after a completed push."""
+        key = self._staging_journal_key(project_id, parent_snapshot_id)
+        with self._coordination_lock():
+            self._reload_locked()
+            if key not in self._staging_journals:
+                return
+            next_staging = dict(self._staging_journals)
+            del next_staging[key]
+            self._flush(
+                dict(self._chunks),
+                dict(self._manifests),
+                dict(self._leases),
+                next_staging,
+            )
 
     def acquire_push_lease(
         self,
@@ -1514,29 +1997,35 @@ class PortableBundleVaultDriver:
         lease_id: str | None = None,
     ) -> str:
         """Record a ``leases/<lease_id>.json`` entry inside this ``.nagarvault`` bundle."""
-        if self._bundle_path.exists():
-            self._load_and_verify()
         finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
+        leased_ids = sorted({_validate_chunk_id(cid) for cid in chunk_ids})
         now = time.time()
         effective_id = (
             f"{os.getpid()}-{int(now * 1000)}-{secrets.token_hex(6)}"
             if lease_id is None
             else _validate_snapshot_id(lease_id)
         )
-        if effective_id in self._leases:
-            raise VaultRevisionConflictError(
-                f"Portable bundle lease {effective_id!r} already exists"
-            )
         payload = _build_lease_json_bytes(
             lease_id=effective_id,
             project_id=project_id,
             now_epoch=now,
             ttl_seconds=finite_ttl,
-            chunk_ids=chunk_ids,
+            chunk_ids=leased_ids,
         )
-        updated_leases = dict(self._leases)
-        updated_leases[effective_id] = payload
-        self._flush(dict(self._chunks), dict(self._manifests), updated_leases)
+
+        def _apply(
+            chunks: dict[str, bytes],
+            manifests: dict[str, bytes],
+            leases: dict[str, bytes],
+        ) -> None:
+            del chunks, manifests
+            if effective_id in self._leases:
+                raise VaultRevisionConflictError(
+                    f"Portable bundle lease {effective_id!r} already exists"
+                )
+            leases[effective_id] = payload
+
+        self._mutate(_apply)
         return effective_id
 
     def update_push_lease(
@@ -1548,38 +2037,44 @@ class PortableBundleVaultDriver:
         ttl_seconds: float = 3600.0,
     ) -> None:
         """Refresh an active ``leases/<lease_id>.json`` entry inside this bundle."""
-        if self._bundle_path.exists():
-            self._load_and_verify()
         finite_ttl = _validate_positive_finite_seconds(ttl_seconds, name="ttl_seconds")
         valid_id = _validate_snapshot_id(lease_id)
-        if valid_id not in self._leases:
-            raise VaultTransportError(f"Active bundle push lease not found: {valid_id}")
+        leased_ids = sorted({_validate_chunk_id(cid) for cid in chunk_ids})
         payload = _build_lease_json_bytes(
             lease_id=valid_id,
             project_id=project_id,
             now_epoch=time.time(),
             ttl_seconds=finite_ttl,
-            chunk_ids=chunk_ids,
+            chunk_ids=leased_ids,
         )
-        updated_leases = dict(self._leases)
-        updated_leases[valid_id] = payload
-        self._flush(dict(self._chunks), dict(self._manifests), updated_leases)
+
+        def _apply(
+            chunks: dict[str, bytes],
+            manifests: dict[str, bytes],
+            leases: dict[str, bytes],
+        ) -> None:
+            del chunks, manifests
+            if valid_id not in self._leases:
+                raise VaultTransportError(f"Active bundle push lease not found: {valid_id}")
+            leases[valid_id] = payload
+
+        self._mutate(_apply)
 
     def release_push_lease(self, lease_id: str) -> None:
         """Remove a ``leases/<lease_id>.json`` entry from this bundle."""
-        if self._bundle_path.exists():
-            self._load_and_verify()
         valid_id = _validate_snapshot_id(lease_id)
-        if valid_id in self._leases:
-            updated_leases = dict(self._leases)
-            del updated_leases[valid_id]
-            self._flush(dict(self._chunks), dict(self._manifests), updated_leases)
 
-    def read_active_leased_chunks(self, *, now_epoch: float | None = None) -> set[str]:
-        """Read unexpired ``leases/*.json`` entries fail-closed from this bundle."""
-        if self._bundle_path.exists():
-            self._load_and_verify()
-        effective_now = _validate_finite_epoch(now_epoch, default_now=time.time())
+        def _apply(
+            chunks: dict[str, bytes],
+            manifests: dict[str, bytes],
+            leases: dict[str, bytes],
+        ) -> None:
+            del chunks, manifests
+            leases.pop(valid_id, None)
+
+        self._mutate(_apply)
+
+    def _active_leases_unlocked(self, *, effective_now: float) -> tuple[set[str], list[str]]:
         active_chunks: set[str] = set()
         expired_ids: list[str] = []
         for stem, raw_bytes in sorted(self._leases.items()):
@@ -1591,9 +2086,23 @@ class PortableBundleVaultDriver:
                 expired_ids.append(stem)
                 continue
             active_chunks.update(chunk_set)
-        if expired_ids:
-            updated_leases = {k: v for k, v in self._leases.items() if k not in expired_ids}
-            self._flush(dict(self._chunks), dict(self._manifests), updated_leases)
+        return active_chunks, expired_ids
+
+    def read_active_leased_chunks(self, *, now_epoch: float | None = None) -> set[str]:
+        """Read unexpired ``leases/*.json`` entries fail-closed from this bundle."""
+        effective_now = _validate_finite_epoch(now_epoch, default_now=time.time())
+        with self._coordination_lock():
+            self._reload_locked()
+            active_chunks, expired_ids = self._active_leases_unlocked(effective_now=effective_now)
+            if expired_ids:
+                expired = set(expired_ids)
+                updated_leases = {k: v for k, v in self._leases.items() if k not in expired}
+                self._flush(
+                    dict(self._chunks),
+                    dict(self._manifests),
+                    updated_leases,
+                    dict(self._staging_journals),
+                )
         return active_chunks
 
     def delete_chunk_if_unleased(
@@ -1602,14 +2111,39 @@ class PortableBundleVaultDriver:
         *,
         now_epoch: float | None = None,
     ) -> bool:
-        """Verify bundle leases and delete ``chunk_id`` if unleased."""
+        """Verify bundle leases and delete ``chunk_id`` atomically under the bundle lock.
+
+        Both the lease re-read and the deletion happen inside one critical section, so a
+        concurrent ``acquire_push_lease``/``update_push_lease`` (which must take the same
+        lock) can never register a claim between the lease check and the deletion.
+        """
         valid = _validate_chunk_id(chunk_id)
-        if valid in self.read_active_leased_chunks(now_epoch=now_epoch):
-            return False
-        if not self.has_chunk(valid):
-            return False
-        self.delete_chunk(valid)
-        return True
+        effective_now = _validate_finite_epoch(now_epoch, default_now=time.time())
+        with self._coordination_lock():
+            self._reload_locked()
+            active_chunks, expired_ids = self._active_leases_unlocked(effective_now=effective_now)
+            next_leases = dict(self._leases)
+            for stem in expired_ids:
+                del next_leases[stem]
+            if valid in active_chunks or valid not in self._chunks:
+                if expired_ids:
+                    self._flush(
+                        dict(self._chunks),
+                        dict(self._manifests),
+                        next_leases,
+                        dict(self._staging_journals),
+                    )
+                return False
+            next_chunks = dict(self._chunks)
+            del next_chunks[valid]
+            self._flush(
+                next_chunks,
+                dict(self._manifests),
+                next_leases,
+                dict(self._staging_journals),
+            )
+            self._chunk_mtimes.pop(valid, None)
+            return True
 
 
 def export_snapshot_to_bundle(

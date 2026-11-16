@@ -1022,6 +1022,7 @@ def test_n1_streaming_push_o1_tracemalloc_ceiling_and_disk_locator_healing(
                 st_ino = st.st_ino
                 st_size = 999
                 st_mtime_ns = st.st_mtime_ns
+                st_ctime_ns = st.st_ctime_ns
 
             return _FakeStat()
         return st
@@ -1554,7 +1555,9 @@ print(json.dumps({
         chunk_size=chunk_size,
         kdf_iterations=100_000,
     )
-    with pytest.raises(VaultTransportError, match="eof-lstat"):
+    # An atomic os.replace() mid-stream changes the inode link count (=> ctime) of the
+    # inode we still hold open, so the *end-of-file* fingerprint check trips first.
+    with pytest.raises(VaultTransportError, match="Concurrent file modification/replacement"):
         mgr_replace.push_project_snapshot(
             project_id="lstat-p",
             source=swap_dir,
@@ -1745,3 +1748,202 @@ def test_edge_driver_capability_gaps_and_gc_fallback_paths(tmp_path: Path) -> No
             )
     finally:
         mangled_module_os.fstat = real_fstat
+
+
+def test_f4_ctime_fingerprint_survives_mtime_rollback_and_streaming_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F4: rewrites that restore ``st_mtime_ns`` are still caught (ctime + SHA-256)."""
+    import hashlib
+    import os
+
+    import nexus_ai_agent.storage.personal_cloud_vault.sync_journal_manager as sjm
+
+    chunk_size = 64
+    src_dir = tmp_path / "f4_src"
+    src_dir.mkdir()
+    victim = src_dir / "grade.bin"
+    original = (b"A" * chunk_size) + (b"B" * chunk_size)
+    rewritten = (b"Z" * chunk_size) + (b"Y" * chunk_size)
+    victim.write_bytes(original)
+    original_stat = victim.stat()
+
+    def _rewrite_and_restore_mtime() -> None:
+        """Same-size in-place rewrite, then restore the original mtime exactly."""
+        with victim.open("r+b") as handle:
+            handle.seek(0)
+            handle.write(rewritten)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.utime(victim, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+        restored = victim.stat()
+        assert restored.st_mtime_ns == original_stat.st_mtime_ns
+        assert restored.st_size == original_stat.st_size
+        assert restored.st_ctime_ns != original_stat.st_ctime_ns
+
+    class _RewriteAndRestoreMtimeDriver(LocalDeviceVaultDriver):
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            super().put_chunk(chunk_id, data)
+            if not swapped:
+                swapped.append(chunk_id)
+                _rewrite_and_restore_mtime()
+
+    swapped: list[str] = []
+    mgr = PersonalCloudVaultManager(
+        _RewriteAndRestoreMtimeDriver(tmp_path / "f4_vault"),
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    # An attacker can restore mtime but cannot forge the kernel-owned ctime:
+    # the fstat fingerprint therefore fails closed.
+    with pytest.raises(VaultTransportError, match="Concurrent file modification/replacement"):
+        mgr.push_project_snapshot(
+            project_id="f4-proj",
+            source=src_dir,
+            master_secret="f4-secret",
+        )
+    assert swapped
+
+    # Defence in depth: even if every metadata check is disabled, the streaming
+    # SHA-256 of the uploaded bytes still blocks the manifest from being committed.
+    victim.write_bytes(original)
+    monkeypatch.setattr(sjm, "_verify_fstat_matches_fingerprint", lambda *a, **k: None)
+    swapped.clear()
+
+    class _BlindSpotDriver(LocalDeviceVaultDriver):
+        def put_chunk(self, chunk_id: str, data: bytes) -> None:
+            super().put_chunk(chunk_id, data)
+            if not swapped:
+                swapped.append(chunk_id)
+                with victim.open("r+b") as handle:
+                    handle.seek(0)
+                    handle.write(rewritten)
+                    handle.flush()
+
+    mgr_blind = PersonalCloudVaultManager(
+        _BlindSpotDriver(tmp_path / "f4_blind_vault"),
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    with pytest.raises(VaultTransportError, match="local source content mutated"):
+        mgr_blind.push_project_snapshot(
+            project_id="f4-blind-proj",
+            source=src_dir,
+            master_secret="f4-secret",
+        )
+    assert mgr_blind.driver.list_manifests() == []
+
+    # The digest guard itself: mismatch raises, match/absent pass, IO errors fail closed.
+    victim.write_bytes(rewritten)
+    with pytest.raises(VaultTransportError, match="local source content mutated"):
+        sjm._verify_source_digest(
+            victim,
+            expected_sha256_hex=hashlib.sha256(original).hexdigest(),
+            phase="unit",
+        )
+    sjm._verify_source_digest(victim, expected_sha256_hex=None, phase="unit")
+    sjm._verify_source_digest(
+        victim,
+        expected_sha256_hex=hashlib.sha256(rewritten).hexdigest(),
+        phase="unit",
+    )
+    with pytest.raises(VaultTransportError, match="Failed re-reading project file"):
+        sjm._verify_source_digest(
+            src_dir / "missing.bin",
+            expected_sha256_hex=hashlib.sha256(original).hexdigest(),
+            phase="unit",
+        )
+
+    # The stream records the digest of exactly the bytes it yielded, block by block.
+    victim.write_bytes(original)
+    fp = sjm._DiskFileStatFingerprint(
+        st_ino=victim.stat().st_ino,
+        st_size=victim.stat().st_size,
+        st_mtime_ns=victim.stat().st_mtime_ns,
+        st_ctime_ns=victim.stat().st_ctime_ns,
+    )
+    digests: dict[str, str] = {}
+    streamed = list(
+        sjm._stream_source_chunks(
+            rel_path="grade.bin",
+            disk_path=victim,
+            expected_size=len(original),
+            expected_fp=fp,
+            chunk_size=chunk_size,
+            inline_sources=None,
+            digests_out=digests,
+        )
+    )
+    assert [chunk for _, _, chunk in streamed] == [original[:chunk_size], original[chunk_size:]]
+    assert digests["grade.bin"] == hashlib.sha256(original).hexdigest()
+
+    # Inline (in-memory) sources also publish their digest for the same verification.
+    inline_digests: dict[str, str] = {}
+    inline_chunks = list(
+        sjm._stream_source_chunks(
+            rel_path="inline.bin",
+            disk_path=None,
+            expected_size=len(original),
+            expected_fp=None,
+            chunk_size=chunk_size,
+            inline_sources={"inline.bin": original},
+            digests_out=inline_digests,
+        )
+    )
+    assert len(inline_chunks) == 2
+    assert inline_digests["inline.bin"] == hashlib.sha256(original).hexdigest()
+
+
+def test_last_mile_dead_pid_probe_and_digest_optional_streaming(tmp_path: Path) -> None:
+    """A provably dead owner PID returns ``False`` and streaming works without digests."""
+    import os
+
+    import nexus_ai_agent.storage.personal_cloud_vault.byos_drivers as drivers_module
+    import nexus_ai_agent.storage.personal_cloud_vault.sync_journal_manager as sjm
+
+    dead_pid = 4_500_000
+    while True:
+        try:
+            os.kill(dead_pid, 0)
+        except ProcessLookupError:
+            break
+        dead_pid += 1
+    assert drivers_module._pid_is_alive(dead_pid) is False
+    assert drivers_module._pid_is_definitely_dead(dead_pid) is True
+
+    chunk_size = 32
+    payload = b"S" * chunk_size + b"T" * chunk_size
+    src = tmp_path / "no_digest.bin"
+    src.write_bytes(payload)
+    stat_result = src.stat()
+    fingerprint = sjm._DiskFileStatFingerprint(
+        st_ino=stat_result.st_ino,
+        st_size=stat_result.st_size,
+        st_mtime_ns=stat_result.st_mtime_ns,
+        st_ctime_ns=stat_result.st_ctime_ns,
+    )
+    # digests_out omitted => purely streaming, no hashing side channel
+    chunks = list(
+        sjm._stream_source_chunks(
+            rel_path="no_digest.bin",
+            disk_path=src,
+            expected_size=len(payload),
+            expected_fp=fingerprint,
+            chunk_size=chunk_size,
+            inline_sources=None,
+        )
+    )
+    assert [c for _, _, c in chunks] == [payload[:chunk_size], payload[chunk_size:]]
+
+    inline_chunks = list(
+        sjm._stream_source_chunks(
+            rel_path="inline.bin",
+            disk_path=None,
+            expected_size=len(payload),
+            expected_fp=None,
+            chunk_size=chunk_size,
+            inline_sources={"inline.bin": payload},
+        )
+    )
+    assert len(inline_chunks) == 2
