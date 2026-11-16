@@ -19,7 +19,8 @@ _BASIS = np.array(
 _MODULE_KEY = secrets.token_bytes(32)
 _RADIANCE_EPSILON = 1e-6
 _POISSON_REGULARIZATION = 1e-4
-_MAX_BASIS_CONDITION = 100.0
+# Inversion amplifies relative spectral error by at most 10x (one decimal order).
+_MAX_BASIS_CONDITION = 10.0
 _FIELD_NAMES = (
     ("albedo", "albedo"),
     ("melanin", "melanin"),

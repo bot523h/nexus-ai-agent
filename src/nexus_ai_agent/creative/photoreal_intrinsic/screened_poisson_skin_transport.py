@@ -9,6 +9,13 @@ import numpy as np
 
 from .log_chromophore_tomography_baker import dctn, idctn, validate_physiology
 
+# The authored model uses radii up to 3.4 image-coordinate units and a minimum
+# scale factor 0.618. Thus sigma <= 5.502 and cond(I-sigma^2 Delta_N) < 243.2
+# because the 2-D Neumann five-point Laplacian has spectral radius < 8.
+_MAX_NORMALIZED_RADIUS = 3.4
+_MIN_DIFFUSION_SCALE = 0.618
+_MAX_DIFFUSION_LENGTH = _MAX_NORMALIZED_RADIUS / _MIN_DIFFUSION_SCALE
+
 
 class ScreenedPoissonSkinTransport:
     """Solve weighted ``(I - sigma² Delta_N)u=S`` at three image-space scales.
@@ -31,8 +38,8 @@ class ScreenedPoissonSkinTransport:
             raise ValueError("source must be a 2-D field with dimensions at least 2x2")
         if not np.isfinite(field).all():
             raise ValueError("source values must be finite")
-        if not math.isfinite(diffusion_length) or not 0 < diffusion_length <= 1e4:
-            raise ValueError("diffusion_length must be finite and in (0, 1e4]")
+        if not math.isfinite(diffusion_length) or not 0 < diffusion_length <= _MAX_DIFFUSION_LENGTH:
+            raise ValueError("diffusion_length exceeds the model's normalized conditioning bound")
         height, width = field.shape
         ky = 4 * np.sin(np.pi * np.arange(height) / (2 * height)) ** 2
         kx = 4 * np.sin(np.pi * np.arange(width) / (2 * width)) ** 2
@@ -61,8 +68,8 @@ class ScreenedPoissonSkinTransport:
             raise ValueError("radii must contain one value or one value per image channel")
         if not np.isfinite(radius_values).all() or np.any(radius_values <= 0):
             raise ValueError("all radii must be finite and strictly positive")
-        if np.any(radius_values > 1e4):
-            raise ValueError("radii must be no greater than 1e4 normalized units")
+        if np.any(radius_values > _MAX_NORMALIZED_RADIUS):
+            raise ValueError("radii exceed the authored normalized skin diffusion range")
         components = np.empty((self.scales.size, *source.shape), dtype=np.float64)
         for channel in range(source.shape[-1]):
             radius = float(radius_values[0 if radius_values.size == 1 else channel])

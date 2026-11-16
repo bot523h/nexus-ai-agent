@@ -665,6 +665,8 @@ def test_actual_three_scale_components_match_neumann_reference_and_flux() -> Non
         for scale_index, scale in enumerate(expected_scales):
             for channel, radius in enumerate(solver.default_radii):
                 sigma = radius / scale
+                operator_condition = 1.0 + sigma * sigma * float(eigenvalues.max())
+                assert operator_condition < 243.2
                 reference_components[scale_index, ..., channel] = _reference_scale(
                     source[..., channel], sigma, eigenvalues, row_dct, col_dct
                 )
@@ -679,6 +681,9 @@ def test_actual_three_scale_components_match_neumann_reference_and_flux() -> Non
         error = actual - reference
         assert np.linalg.norm(error) / np.linalg.norm(reference) < 1e-12
         assert np.max(np.abs(error)) < 1e-12
+        corrupted_output = actual.copy()
+        corrupted_output[0, 0, 0] += 1e-8
+        assert np.max(np.abs(corrupted_output - reference)) > 1e-12
         assert np.max(np.abs(actual.mean(axis=(0, 1)) - source.mean(axis=(0, 1)))) < 1e-12
 
 
@@ -813,7 +818,7 @@ def test_bake_validates_basis_and_regularization_inputs(monkeypatch: pytest.Monk
         np.ones((2, 3)),
         np.full((3, 3), np.nan),
         np.ones((3, 3)),
-        np.diag((1.0, 1.0, 1e-5)),
+        np.diag((1.0, 1.0, 0.05)),  # condition 20: exceeds the 10x error-amplification budget
     )
     for basis in invalid_bases:
         baker.basis = basis
@@ -831,8 +836,64 @@ def test_single_scale_solver_rejects_invalid_source_and_length() -> None:
         solver.solve_single_scale(np.ones((1, 4)), 1.0)
     with pytest.raises(ValueError, match="finite"):
         solver.solve_single_scale(np.full((2, 2), np.nan), 1.0)
-    for length in (0.0, float("inf"), 1e5):
+    for length in (0.0, float("inf"), 1e5, 3.4 / 0.618 + 0.01):
         with pytest.raises(ValueError, match="diffusion_length"):
             solver.solve_single_scale(np.ones((2, 2)), length)
-    with pytest.raises(ValueError, match="1e4"):
-        solver.transport_with_scale_components(np.ones((2, 2, 3)), (1e5,))
+    with pytest.raises(ValueError, match="diffusion range"):
+        solver.transport_with_scale_components(np.ones((2, 2, 3)), (3.4001,))
+
+
+def test_coupled_physiology_extremes_are_finite_and_aliases_agree() -> None:
+    baker = LogChromophoreTomographyBaker()
+    vault = baker.bake(baker.canonical_archetype(4, 5))
+    compile_at_boundary = OcularCausticsAndFilmChemistry.compile(
+        vault,
+        heart_rate_bpm=240.0,
+        time_sec=86400.0,
+        sympathetic_flush=1.0,
+        blood_oxygenation=0.99,
+        focus_depth=1.0,
+        include_caustics=False,
+    )["float32"]
+    assert isinstance(compile_at_boundary, np.ndarray)
+    assert np.isfinite(compile_at_boundary).all()
+    legacy_time = OcularCausticsAndFilmChemistry.compile(vault, t=0.25, include_caustics=False)[
+        "float32"
+    ]
+    explicit_time = OcularCausticsAndFilmChemistry.compile(
+        vault, time_sec=0.25, include_caustics=False
+    )["float32"]
+    assert isinstance(legacy_time, np.ndarray) and isinstance(explicit_time, np.ndarray)
+    assert np.array_equal(legacy_time, explicit_time)
+    shaded = ScreenedPoissonSkinTransport().shade(
+        np.ones((3, 4, 3)),
+        heart_rate_bpm=240.0,
+        t=86400.0,
+        sympathetic_flush=1.0,
+        blood_oxygenation=0.99,
+    )
+    assert np.isfinite(shaded).all()
+
+
+def test_compile_validation_precedes_seal_and_rendering(monkeypatch: pytest.MonkeyPatch) -> None:
+    vault = LogChromophoreTomographyBaker().bake(
+        LogChromophoreTomographyBaker.canonical_archetype(3, 3)
+    )
+
+    def forbidden_verify(*_args: object, **_kwargs: object) -> bool:
+        raise AssertionError("validation must reject inputs before seal verification")
+
+    monkeypatch.setattr(IntrinsicBiophysicalVault, "verify", forbidden_verify)
+    with pytest.raises(ValueError, match="time_sec"):
+        OcularCausticsAndFilmChemistry.compile(vault, time_sec=-0.01)
+
+
+def test_film_focus_depth_accepts_only_normalized_bounds() -> None:
+    image = np.full((3, 4, 3), 0.5, dtype=np.float32)
+    depth = np.full((3, 4), 0.5, dtype=np.float64)
+    for focus_depth in (0.0, 1.0):
+        result = OcularCausticsAndFilmChemistry.film(image, depth=depth, focus=focus_depth, seed=0)
+        assert np.isfinite(result).all()
+    for focus_depth in (-0.01, 1.5, float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            OcularCausticsAndFilmChemistry.film(image, depth=depth, focus=focus_depth, seed=0)

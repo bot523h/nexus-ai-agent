@@ -43,7 +43,7 @@ def test_flush_warms_red(flush: float) -> None:
 
 
 @pytest.mark.parametrize(
-    "radius", [(3.4, 1.35, 0.65), (4, 2, 1), (2, 1, 0.5), (1, 1, 1), (5, 3, 2)]
+    "radius", [(3.4, 1.35, 0.65), (3.2, 2, 1), (2, 1, 0.5), (1, 1, 1), (3.4, 3, 2)]
 )
 def test_transport_finite(radius: tuple[float, float, float]) -> None:
     x = np.zeros((20, 20, 3), np.float32)
