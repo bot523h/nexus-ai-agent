@@ -757,3 +757,37 @@ def test_the_sidecar_writer_records_the_measured_digest() -> None:
     assert "content_digest=content_address_of_file(" in source
     signature = inspect.signature(render_jobs._write_sidecar)
     assert signature.parameters["content_digest"].default is None
+
+
+def test_the_digest_refresh_never_fabricates_a_claim(tmp_path: Path) -> None:
+    """The refresh extends an existing claim; it must not be able to create one.
+
+    If it could, removing the claim-time write would go unnoticed — which is
+    exactly what the `queue-ownership-mutations` M6 probe ("publication writes no
+    ownership evidence") caught when the refresh was first written as a second
+    plain `_write_sidecar` call.
+    """
+    from nexus_ai_agent.creative import render_jobs
+
+    sidecar = tmp_path / ".out.mp4.owner"
+    digest = "sha256:" + "ab" * 32
+    with pytest.raises(RuntimeError, match="claim that was never made"):
+        render_jobs._refresh_sidecar_digest(
+            sidecar, job_id="job-x", attempt="2", content_digest=digest
+        )
+    assert not sidecar.exists()
+
+    render_jobs._write_sidecar(sidecar, job_id="job-x", attempt="2")
+    with pytest.raises(RuntimeError, match="does not belong"):
+        render_jobs._refresh_sidecar_digest(
+            sidecar, job_id="job-y", attempt="2", content_digest=digest
+        )
+    assert "content_digest" not in json.loads(sidecar.read_text())
+
+    render_jobs._refresh_sidecar_digest(sidecar, job_id="job-x", attempt="2", content_digest=digest)
+    assert json.loads(sidecar.read_text()) == {
+        "schema": 1,
+        "job_id": "job-x",
+        "attempt": "2",
+        "content_digest": digest,
+    }

@@ -216,6 +216,20 @@ carried the broken marker.
 | 45 | `verify_installed_pack` / `ResourcePackSyncManager` skipped signature verification whenever `trusted_public_key` was `None` — fail-open by omission, and the machinery was reachable only from the sync manager | `signature_required()` is the single policy point and raises `SignatureVerificationError("trusted_public_key is required for fail-closed pack verification")`; `allow_unsigned: bool = False` is the only opt-in, the manager refuses to construct without one of the two, and a real consumer (`storage/resource_packs/delivery.py` → `GET /api/studio/resource-packs`) re-verifies every installed pack on request | 6 new tests in `test_resource_pack_signature.py` (incl. "the same intact pack is withheld, not ready, without a key") and 13 in `test_resource_pack_delivery.py` covering ready / unsigned_allowed / signature_required / repair_required over HTTP |
 | 46 | `if not target.exists(): os.replace(...)` in quarantine is a TOCTOU race, and `_repair_eligibility` repaired from `pending` rows and from crash windows with no attribution evidence | `os.link(src, candidate)` takes the witness name atomically (falling back to `O_CREAT\|O_EXCL` reservation + atomic replace on cross-device), `FileExistsError` moves to the next candidate; the crash window is `processing`/`verifying` only, requires the sidecar's `job_id`/`attempt`/`content_digest` to match the bytes actually on disk, and refuses a row whose `result` and `payload` pin different revisions | 8 new tests in `test_db_disk_artifact_reconciler.py`, including an interleaved racer that proves the first witness survives and an `EXDEV` fallback that proves the temp file is not leaked; the writer's post-publish digest refresh is pinned by `test_sidecar_records_complete_identity` |
 
+**One of these fixes was itself caught by a gate, and that is recorded rather than
+rewritten.** The first version of row 46's digest write was a second plain
+`_write_sidecar(...)` call after the publish. That made the campaign in
+`.github/workflows/queue-ownership-mutations.yml` fail on both pushes: probe **M6**
+("publication writes no ownership evidence") replaces the *claim-time* sidecar
+write with `pass`, and the second write re-created a complete sidecar afterwards,
+so the killing test stayed green and the mutant survived. The claim-before-mutate
+property — the one that lets a crash leave provable ownership — was no longer
+proven. The fix is not a test edit: the post-publish step is now
+`_refresh_sidecar_digest`, which *refuses to create* a sidecar and refuses one
+whose `job_id`/`attempt` do not match, so the invariant it depends on is enforced
+by the code and the mutant dies again (`All 10 mutants killed; tree restored and
+green`). The M6 failure is the reason that probe exists, and it earned its keep.
+
 **What made all three the same class of bug**: each check was written against the *shape* of
 the evidence rather than the evidence. A substring for a marker, an `is not None` for a
 signature policy, an `exists()` for an atomic claim, a status set for an authority. The fix in

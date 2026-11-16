@@ -1652,11 +1652,12 @@ def _write_sidecar(
     the write goes through a temp file and ``os.replace``.
 
     ``content_digest`` is filled in by a second, equally atomic write *after* the
-    publish step: before the bytes exist there is nothing to hash, and a digest
-    predicted rather than measured would be exactly the kind of fake evidence
-    that lets a reconciler bind the wrong file.  A crash between the publish and
-    that refresh leaves a sidecar with no digest, which the reconciler treats as
-    unattributable (``unrepairable_orphan``) instead of guessing.
+    publish step (see :func:`_refresh_sidecar_digest`): before the bytes exist
+    there is nothing to hash, and a digest predicted rather than measured would be
+    exactly the kind of fake evidence that lets a reconciler bind the wrong file.
+    A crash between the publish and that refresh leaves a sidecar with no digest,
+    which the reconciler treats as unattributable (``unrepairable_orphan``)
+    instead of guessing.
     """
     document: dict[str, object] = {
         "schema": _OWNERSHIP_SIDECAR_SCHEMA,
@@ -1669,6 +1670,54 @@ def _write_sidecar(
     tmp = sidecar.with_name(sidecar.name + f".tmp.{os.getpid()}")
     tmp.write_text(payload + "\n", encoding="utf-8")
     os.replace(tmp, sidecar)
+
+
+def _read_claim(sidecar: Path) -> dict[str, object] | None:
+    """The claim document, requiring only what the *writer* promises.
+
+    Deliberately weaker than :func:`_read_sidecar`: that one decides whether a
+    sidecar grants retract authority and therefore rejects an attempt-less
+    document, while a legitimately attempt-less publication (a job published
+    without queue identity) still owns the claim it wrote.  The digest refresh
+    checks identity itself; see :func:`_refresh_sidecar_digest`.
+    """
+    try:
+        document = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    if document.get("schema") != _OWNERSHIP_SIDECAR_SCHEMA:
+        return None
+    if not isinstance(document.get("job_id"), str) or not document["job_id"]:
+        return None
+    return document
+
+
+def _refresh_sidecar_digest(
+    sidecar: Path, *, job_id: str, attempt: str | None, content_digest: str
+) -> None:
+    """Add the **measured** digest to an ownership sidecar that already exists.
+
+    A refresh, never a claim: the claim is written before the destination is
+    touched, and this only extends evidence that is already there.  It therefore
+    refuses to create the file and refuses to touch one whose identity does not
+    match — a digest written onto a claim that was never made (or made by
+    another attempt) is precisely the fabricated evidence this design exists to
+    prevent, and it would also mask a broken ordering, which is what the M6
+    mutation probe checks.
+    """
+    document = _read_claim(sidecar)
+    if document is None:
+        raise RuntimeError(
+            "publish: no readable ownership sidecar after the publish — refusing to record "
+            "a digest on a claim that was never made"
+        )
+    if document.get("job_id") != job_id or _parse_attempt(
+        document.get("attempt")
+    ) != _parse_attempt(attempt):
+        raise RuntimeError("publish: ownership sidecar does not belong to this job and attempt")
+    _write_sidecar(sidecar, job_id=job_id, attempt=attempt, content_digest=content_digest)
 
 
 def _parse_attempt(value: object) -> int | None:
@@ -1797,7 +1846,7 @@ def creative_render_publication_callback(
     from nexus_ai_agent.creative.project_state.store import content_address_of_file
 
     published_bytes = published_path if published_path.is_file() else resolved
-    _write_sidecar(
+    _refresh_sidecar_digest(
         sidecar_path,
         job_id=staging.job_id,
         attempt=attempt_component,
