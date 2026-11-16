@@ -1,4 +1,4 @@
-"""Isolated, repeatable CPU and memory benchmark for intrinsic shot compilation."""
+"""Per-trial subprocess benchmarks for the image-space intrinsic rendering model."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import tracemalloc
+from pathlib import Path
 from types import ModuleType
 from typing import Any, TypedDict, cast
 
@@ -19,23 +20,27 @@ except ImportError:  # Windows does not provide the resource module.
     resource = None
 
 
-class BenchmarkResult(TypedDict):
-    median_ms: float
-    mad_ms: float
-    peak_tracemalloc_mib: float
+class BenchmarkTrial(TypedDict):
+    pid: int
+    elapsed_ms: float
     baseline_rss_mib: float
     peak_rss_mib: float
     incremental_rss_mib: float
-    samples_ms: list[float]
+    tracemalloc_peak_mib: float
+
+
+class BenchmarkResult(TypedDict):
+    median_ms: float
+    mad_ms: float
+    raw_trials: list[BenchmarkTrial]
 
 
 def _rss_mib() -> float:
-    """Current process high-water RSS in MiB, using only the standard library."""
+    """Return process peak working-set RSS in MiB using standard-library APIs."""
     if resource is not None:
         peak = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
         return peak / (1024.0**2 if sys.platform == "darwin" else 1024.0)
-    platform_name = sys.platform
-    if platform_name == "win32":
+    if sys.platform == "win32":
         import ctypes
         from ctypes import wintypes
 
@@ -66,12 +71,12 @@ def _rss_mib() -> float:
     raise RuntimeError("Peak RSS measurement is unsupported on this platform")
 
 
-def _benchmark_worker(size: int, iterations: int, warmups: int) -> BenchmarkResult:
-    """Run one image size in the short-lived worker process."""
+def _benchmark_trial(size: int) -> BenchmarkTrial:
+    """Measure one fresh process: baseline, one warm-up, and one timed pass."""
     from .log_chromophore_tomography_baker import LogChromophoreTomographyBaker
     from .ocular_caustics_and_film_chemistry import OcularCausticsAndFilmChemistry
 
-    baseline_rss = _rss_mib()
+    baseline = _rss_mib()
     baker = LogChromophoreTomographyBaker()
     image = baker.canonical_archetype(size, size)
 
@@ -79,52 +84,59 @@ def _benchmark_worker(size: int, iterations: int, warmups: int) -> BenchmarkResu
         vault = baker.bake(image)
         OcularCausticsAndFilmChemistry.compile(vault, t=0.25)
 
-    for _ in range(warmups):
-        run()
-    samples: list[float] = []
-    traced_peaks: list[int] = []
-    for _ in range(iterations):
-        tracemalloc.start()
-        started = time.perf_counter()
-        run()
-        samples.append((time.perf_counter() - started) * 1000.0)
-        traced_peaks.append(tracemalloc.get_traced_memory()[1])
-        tracemalloc.stop()
-    median = statistics.median(samples)
+    run()  # exactly one warm-up in each isolated trial process
+    tracemalloc.start()
+    started = time.perf_counter()
+    run()
+    elapsed = (time.perf_counter() - started) * 1000.0
+    traced_peak = tracemalloc.get_traced_memory()[1] / (1024.0**2)
+    tracemalloc.stop()
     peak_rss = _rss_mib()
     return {
-        "median_ms": median,
-        "mad_ms": statistics.median(abs(value - median) for value in samples),
-        "peak_tracemalloc_mib": max(traced_peaks) / (1024.0**2),
-        "baseline_rss_mib": baseline_rss,
+        "pid": os.getpid(),
+        "elapsed_ms": elapsed,
+        "baseline_rss_mib": baseline,
         "peak_rss_mib": peak_rss,
-        "incremental_rss_mib": max(0.0, peak_rss - baseline_rss),
-        "samples_ms": samples,
+        "incremental_rss_mib": max(0.0, peak_rss - baseline),
+        "tracemalloc_peak_mib": traced_peak,
     }
 
 
 def benchmark_pipeline(
-    sizes: tuple[int, ...] = (128, 256, 512), iterations: int = 3, warmups: int = 1
+    sizes: tuple[int, ...] = (128, 256, 512), iterations: int = 3
 ) -> dict[str, BenchmarkResult]:
-    """Benchmark each size in its own process, isolating high-water RSS per size."""
-    if iterations < 1 or warmups < 0 or any(size < 2 for size in sizes):
-        raise ValueError("sizes must be >=2, iterations >=1, and warmups >=0")
+    """Run each trial in a new subprocess and report its raw record, median, and MAD."""
+    if iterations < 1 or any(size < 2 for size in sizes):
+        raise ValueError("sizes must be >=2 and iterations >=1")
     if not sizes:
         return {}
     worker_code = (
         "import json,sys; from nexus_ai_agent.creative.photoreal_intrinsic.benchmark "
-        "import _benchmark_worker; "
-        "print(json.dumps(_benchmark_worker(int(sys.argv[1]), int(sys.argv[2]), "
-        "int(sys.argv[3]))))"
+        "import _benchmark_trial; "
+        "print(json.dumps(_benchmark_trial(int(sys.argv[1]))))"
     )
     report: dict[str, BenchmarkResult] = {}
     for size in sizes:
-        completed = subprocess.run(
-            [sys.executable, "-c", worker_code, str(size), str(iterations), str(warmups)],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=os.environ.copy(),
-        )
-        report[f"{size}x{size}"] = cast(BenchmarkResult, json.loads(completed.stdout))
+        trials: list[BenchmarkTrial] = []
+        for _ in range(iterations):
+            environment = os.environ.copy()
+            source_root = str(Path(__file__).resolve().parents[3])
+            environment["PYTHONPATH"] = os.pathsep.join(
+                part for part in (source_root, environment.get("PYTHONPATH", "")) if part
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", worker_code, str(size)],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            trials.append(cast(BenchmarkTrial, json.loads(completed.stdout)))
+        timings = [trial["elapsed_ms"] for trial in trials]
+        median = statistics.median(timings)
+        report[f"{size}x{size}"] = {
+            "median_ms": median,
+            "mad_ms": statistics.median(abs(value - median) for value in timings),
+            "raw_trials": trials,
+        }
     return report

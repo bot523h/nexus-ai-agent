@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import cast
 
 import numpy as np
@@ -13,6 +14,14 @@ from .log_chromophore_tomography_baker import (
 )
 from .riemannian_strain_wrinkle_tensor import RiemannianStrainWrinkleTensor
 from .screened_poisson_skin_transport import ScreenedPoissonSkinTransport
+
+# Approximate image-space Beer-Lambert weights, not lab-measured dimensional coefficients.
+# The RGB vectors are normalized channel response weights; concentrations are dimensionless.
+_MELANIN_RGB_WEIGHTS = np.array((0.22, 0.45, 0.82), dtype=np.float32)
+_OXYHEMOGLOBIN_RGB_WEIGHTS = np.array((0.08, 0.24, 0.10), dtype=np.float32)
+_DEOXYHEMOGLOBIN_RGB_WEIGHTS = np.array((0.20, 0.72, 0.66), dtype=np.float32)
+_MELANIN_IMAGE_ABSORPTION = 0.035
+_HEMOGLOBIN_IMAGE_ABSORPTION = 0.08
 
 
 class OcularCausticsAndFilmChemistry:
@@ -110,6 +119,7 @@ class OcularCausticsAndFilmChemistry:
     def film(
         image: np.ndarray, depth: np.ndarray | None = None, focus: float = 1.0, seed: int = 0
     ) -> np.ndarray:
+        validate_physiology(focus_depth=focus)
         a = np.asarray(image, dtype=np.float32)
         density = 1 / (1 + np.exp(-8 * (a - 0.5)))
         grain_sigma = np.sqrt(np.maximum(density * (1 - density), 0))
@@ -119,8 +129,6 @@ class OcularCausticsAndFilmChemistry:
             + rng.normal(0, 1, density.shape).astype(np.float32) * grain_sigma * 0.012
         )
         if depth is not None:
-            if not np.isfinite(focus):
-                raise ValueError("focus must be finite")
             depth_array = np.asarray(depth, dtype=np.float64)
             if depth_array.shape != a.shape[:2] or not np.isfinite(depth_array).all():
                 raise ValueError("depth must be finite and match image spatial dimensions")
@@ -148,15 +156,19 @@ class OcularCausticsAndFilmChemistry:
         hem = np.asarray(hemoglobin, dtype=np.float32)
         if np.any(mel < 0) or np.any(hem < 0):
             raise ValueError("chromophore concentrations must be nonnegative")
-        hb_o = oxygenation * np.array((0.08, 0.24, 0.10), np.float32)
-        hb_d = (1 - oxygenation) * np.array((0.20, 0.72, 0.66), np.float32)
+        hb_o = oxygenation * _OXYHEMOGLOBIN_RGB_WEIGHTS
+        hb_d = (1 - oxygenation) * _DEOXYHEMOGLOBIN_RGB_WEIGHTS
         absorption = hb_o + hb_d
         exponent = np.empty((*mel.shape, 3), dtype=np.float32)
-        exponent[...] = -0.035 * mel[..., None] * np.array((0.22, 0.45, 0.82), np.float32)
+        exponent[...] = -_MELANIN_IMAGE_ABSORPTION * mel[..., None] * _MELANIN_RGB_WEIGHTS
         np.exp(exponent, out=exponent)
         hem_factor = np.empty(hem.shape, dtype=np.float32)
         for channel in range(3):
-            np.multiply(hem, -0.08 * flush * pulse_phase * absorption[channel], out=hem_factor)
+            np.multiply(
+                hem,
+                -_HEMOGLOBIN_IMAGE_ABSORPTION * flush * pulse_phase * absorption[channel],
+                out=hem_factor,
+            )
             np.exp(hem_factor, out=hem_factor)
             exponent[..., channel] *= hem_factor
         return exponent
@@ -176,12 +188,17 @@ class OcularCausticsAndFilmChemistry:
         include_caustics: bool = True,
         key_policy: KeyPolicy = "auto",
         time_sec: float | None = None,
+        focus_depth: float | None = None,
     ) -> dict[str, object]:
         time_value = t if time_sec is None else time_sec
-        validate_physiology(heart_rate_bpm, time_value, sympathetic_flush, blood_oxygenation, focus)
+        focus_value = focus if focus_depth is None else focus_depth
+        validate_physiology(
+            heart_rate_bpm, time_value, sympathetic_flush, blood_oxygenation, focus_value
+        )
         if not vault.verify(hmac_key=hmac_key, key_policy=key_policy):
             raise ValueError("Invalid vault seal")
-        pulse_phase = 1 + 0.025 * np.sin(2 * np.pi * heart_rate_bpm * time_value / 60)
+        pulse_cycles = math.fmod(heart_rate_bpm * time_value / 60.0, 1.0)
+        pulse_phase = 1 + 0.025 * math.sin(2 * math.pi * pulse_cycles)
         flush = float(np.clip(1 + 0.45 * sympathetic_flush, 0.4, 1.6))
         attenuation = cls._beer_lambert_attenuation(
             vault.melanin, vault.hemoglobin, flush, pulse_phase, blood_oxygenation
@@ -243,13 +260,14 @@ class OcularCausticsAndFilmChemistry:
             lit = lit + ocular[..., None] * 0.015
         halated = cls.halation(np.clip(lit, 0, 1))
         seed = int(round(float(time_value) * 1000.0)) & 0xFFFFFFFFFFFFFFFF
-        frame = cls.film(halated, warped_depth, focus, seed)
+        frame = cls.film(halated, warped_depth, focus_value, seed)
         return {
             "rgb": np.rint(frame * 255).astype(np.uint8),
             "float32": frame,
             "metadata": {
                 "model": "intrinsic-six-stage-cpu",
-                "focus": focus,
+                "focus": focus_value,
+                "focus_depth": focus_value,
                 "time": time_value,
                 "heart_rate_bpm": heart_rate_bpm,
                 "sympathetic_flush": sympathetic_flush,

@@ -417,8 +417,8 @@ def test_film_depth_offset_invariance_and_negative_time() -> None:
     vault = LogChromophoreTomographyBaker().bake(
         LogChromophoreTomographyBaker.canonical_archetype(6, 6)
     )
-    negative = OcularCausticsAndFilmChemistry.compile(vault, time_sec=-1.25, include_caustics=False)
-    assert isinstance(negative["rgb"], np.ndarray)
+    frame = OcularCausticsAndFilmChemistry.compile(vault, time_sec=1.25, include_caustics=False)
+    assert isinstance(frame["rgb"], np.ndarray)
     with pytest.raises(ValueError, match="must be finite"):
         OcularCausticsAndFilmChemistry.compile(vault, time_sec=float("nan"))
 
@@ -469,21 +469,25 @@ def test_compile_warps_depth_and_relative_lighting(monkeypatch: pytest.MonkeyPat
     assert isinstance(result["float32"], np.ndarray)
 
 
-def test_benchmark_helper_reports_timing_and_memory() -> None:
+def test_benchmark_helper_reports_timing_and_memory(monkeypatch: pytest.MonkeyPatch) -> None:
     from nexus_ai_agent.creative.photoreal_intrinsic.benchmark import benchmark_pipeline
 
-    result = benchmark_pipeline((4,), iterations=1, warmups=0)["4x4"]
-    assert result["median_ms"] >= 0 and result["mad_ms"] == 0
-    assert result["peak_tracemalloc_mib"] > 0 and result["peak_rss_mib"] > 0
-    assert result["baseline_rss_mib"] > 0 and result["incremental_rss_mib"] >= 0
-    assert result["peak_rss_mib"] >= result["baseline_rss_mib"]
-    from nexus_ai_agent.creative.photoreal_intrinsic.benchmark import _benchmark_worker
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    result = benchmark_pipeline((4,), iterations=3)["4x4"]
+    assert result["median_ms"] >= 0 and result["mad_ms"] >= 0
+    assert len(result["raw_trials"]) == 3
+    assert len({trial["pid"] for trial in result["raw_trials"]}) == 3
+    trial = result["raw_trials"][0]
+    assert trial["tracemalloc_peak_mib"] > 0 and trial["peak_rss_mib"] > 0
+    assert trial["baseline_rss_mib"] > 0 and trial["incremental_rss_mib"] >= 0
+    assert trial["peak_rss_mib"] >= trial["baseline_rss_mib"]
+    from nexus_ai_agent.creative.photoreal_intrinsic.benchmark import _benchmark_trial
 
-    direct = _benchmark_worker(3, iterations=1, warmups=1)
-    assert direct["samples_ms"] and direct["peak_tracemalloc_mib"] > 0
+    direct = _benchmark_trial(3)
+    assert direct["elapsed_ms"] >= 0 and direct["tracemalloc_peak_mib"] > 0
     with pytest.raises(ValueError, match="sizes"):
-        benchmark_pipeline((1,), iterations=1, warmups=0)
-    assert benchmark_pipeline((), iterations=1, warmups=0) == {}
+        benchmark_pipeline((1,), iterations=1)
+    assert benchmark_pipeline((), iterations=1) == {}
 
 
 def test_remaining_validation_branches_and_benchmark_warmup() -> None:
@@ -506,7 +510,7 @@ def test_remaining_validation_branches_and_benchmark_warmup() -> None:
         solver.shade(np.full((2, 2, 3), np.nan))
     from nexus_ai_agent.creative.photoreal_intrinsic.benchmark import benchmark_pipeline
 
-    assert benchmark_pipeline((3,), iterations=1, warmups=1)["3x3"]["samples_ms"]
+    assert len(benchmark_pipeline((3,), iterations=1)["3x3"]["raw_trials"]) == 1
 
 
 def test_film_rejects_invalid_depth_and_focus() -> None:
@@ -613,26 +617,107 @@ def test_chromophore_basis_is_well_conditioned_and_noise_stable() -> None:
     )
 
 
-def test_geometry_normals_and_screened_poisson_residual() -> None:
+def _explicit_dct_matrix(length: int) -> np.ndarray:
+    frequency = np.arange(length, dtype=np.float64)[:, None]
+    position = np.arange(length, dtype=np.float64)[None, :]
+    matrix = np.sqrt(2.0 / length) * np.cos(np.pi * frequency * (position + 0.5) / length)
+    matrix[0] = np.sqrt(1.0 / length)
+    return cast(np.ndarray, matrix)
+
+
+def _reference_scale(
+    source: np.ndarray,
+    sigma: float,
+    eigenvalues: np.ndarray,
+    row_dct: np.ndarray,
+    col_dct: np.ndarray,
+) -> np.ndarray:
+    coefficients = row_dct @ source @ col_dct.T
+    return cast(
+        np.ndarray,
+        row_dct.T @ (coefficients / (1.0 + sigma * sigma * eigenvalues)) @ col_dct,
+    )
+
+
+def test_geometry_normals_and_real_three_scale_screened_poisson() -> None:
     baker = LogChromophoreTomographyBaker()
     shading = np.exp(np.random.default_rng(9).normal(0.0, 0.2, size=(9, 11))).astype(np.float32)
     normals, _ = baker._geometry(shading)
     assert np.max(np.abs(np.linalg.norm(normals, axis=-1) - 1.0)) < 1e-12
 
-    from nexus_ai_agent.creative.photoreal_intrinsic import dctn, idctn
 
-    source = np.random.default_rng(19).normal(size=(9, 11))
-    kappa_sq = 1.7
+def test_actual_three_scale_components_match_neumann_reference_and_flux() -> None:
+    solver = ScreenedPoissonSkinTransport()
+    expected_weights = np.array((0.5218, 0.3341, 0.1441), dtype=np.float64)
+    expected_scales = np.array((0.618, 1.618, 3.618), dtype=np.float64)
+    assert np.array_equal(solver.weights, expected_weights)
+    assert np.array_equal(solver.scales, expected_scales)
+    assert solver.weights.sum() == 1.0
+    for size in (32, 64, 128):
+        source = np.random.default_rng(size).normal(size=(size, size, 3))
+        components = solver.transport_with_scale_components(source)
+        row_dct, col_dct = _explicit_dct_matrix(size), _explicit_dct_matrix(size)
+        eigenvalues = (
+            4 * np.sin(np.pi * np.arange(size) / (2 * size))[:, None] ** 2
+            + 4 * np.sin(np.pi * np.arange(size) / (2 * size))[None, :] ** 2
+        )
+        reference_components = np.empty_like(components)
+        for scale_index, scale in enumerate(expected_scales):
+            for channel, radius in enumerate(solver.default_radii):
+                sigma = radius / scale
+                reference_components[scale_index, ..., channel] = _reference_scale(
+                    source[..., channel], sigma, eigenvalues, row_dct, col_dct
+                )
+                field = components[scale_index, ..., channel]
+                coefficients = row_dct @ field @ col_dct.T
+                laplacian = row_dct.T @ (-eigenvalues * coefficients) @ col_dct
+                residual = field - sigma * sigma * laplacian - source[..., channel]
+                assert np.linalg.norm(residual) / np.linalg.norm(source[..., channel]) < 1e-12
+                assert abs(float(field.mean() - source[..., channel].mean())) < 1e-12
+        actual = solver.transport(source)
+        reference = np.einsum("s,shwc->hwc", expected_weights, reference_components)
+        error = actual - reference
+        assert np.linalg.norm(error) / np.linalg.norm(reference) < 1e-12
+        assert np.max(np.abs(error)) < 1e-12
+        assert np.max(np.abs(actual.mean(axis=(0, 1)) - source.mean(axis=(0, 1)))) < 1e-12
+
+
+def test_scientific_mutation_probes_detect_coefficients_weights_and_spectrum() -> None:
+    melanin = np.full((3, 4), 0.7, dtype=np.float64)
+    hemoglobin = np.full((3, 4), 0.4, dtype=np.float64)
+    actual_attenuation = OcularCausticsAndFilmChemistry._beer_lambert_attenuation(
+        melanin, hemoglobin, 1.0, 1.0, 0.97
+    )
+    absorption_hb = 0.97 * np.array((0.08, 0.24, 0.10)) + 0.03 * np.array((0.20, 0.72, 0.66))
+    expected = np.exp(
+        -0.035 * melanin[..., None] * np.array((0.22, 0.45, 0.82))
+        - 0.08 * hemoglobin[..., None] * absorption_hb
+    )
+    assert np.allclose(actual_attenuation, expected, rtol=0, atol=1e-7)
+    mutated_absorption = np.exp(
+        -0.03501 * melanin[..., None] * np.array((0.22, 0.45, 0.82))
+        - 0.08 * hemoglobin[..., None] * absorption_hb
+    )
+    assert np.max(np.abs(actual_attenuation - mutated_absorption)) > 1e-7
+
+    solver = ScreenedPoissonSkinTransport()
+    source = np.random.default_rng(32).normal(size=(8, 8, 3))
+    components = solver.transport_with_scale_components(source)
+    changed_weights = solver.weights.copy()
+    changed_weights[0] += 0.001
+    assert abs(float(changed_weights.sum()) - 1.0) > 1e-4
+    expected_mix = np.einsum("s,shwc->hwc", solver.weights, components)
+    mutated_mix = np.einsum("s,shwc->hwc", changed_weights, components)
+    assert np.max(np.abs(expected_mix - mutated_mix)) > 1e-7
+    row_dct = _explicit_dct_matrix(8)
     eigenvalues = (
-        4 * np.sin(np.pi * np.arange(9) / 18)[:, None] ** 2
-        + 4 * np.sin(np.pi * np.arange(11) / 22)[None, :] ** 2
+        4 * np.sin(np.pi * np.arange(8) / 16)[:, None] ** 2
+        + 4 * np.sin(np.pi * np.arange(8) / 16)[None, :] ** 2
     )
-    solution = idctn(dctn(source) * (kappa_sq / (kappa_sq + eigenvalues)))
-    laplacian = idctn(-eigenvalues * dctn(solution))
-    relative_residual = np.linalg.norm(solution - laplacian / kappa_sq - source) / np.linalg.norm(
-        source
-    )
-    assert relative_residual < 1e-12
+    sigma = solver.default_radii[0] / solver.scales[0]
+    correct = _reference_scale(source[..., 0], sigma, eigenvalues, row_dct, row_dct)
+    wrong = _reference_scale(source[..., 0], sigma, eigenvalues + 1e-4, row_dct, row_dct)
+    assert np.max(np.abs(correct - wrong)) > 1e-7
 
 
 def test_beer_lambert_rejects_negative_concentrations() -> None:
@@ -697,3 +782,57 @@ def test_benchmark_module_import_survives_missing_resource(monkeypatch: pytest.M
         monkeypatch.setattr(importlib, "import_module", original_import_module)
         importlib.reload(benchmark)
     assert resource_was_optional
+
+
+@pytest.mark.parametrize("bad_time", [-0.1, 1e308, 100000.0])
+def test_compile_rejects_time_outside_physical_day(bad_time: float) -> None:
+    vault = LogChromophoreTomographyBaker().bake(
+        LogChromophoreTomographyBaker.canonical_archetype(3, 3)
+    )
+    with pytest.raises(ValueError):
+        OcularCausticsAndFilmChemistry.compile(vault, time_sec=bad_time, include_caustics=False)
+
+
+@pytest.mark.parametrize("bad_focus", [-0.01, 1.5])
+def test_compile_rejects_focus_depth_outside_normalized_range(bad_focus: float) -> None:
+    vault = LogChromophoreTomographyBaker().bake(
+        LogChromophoreTomographyBaker.canonical_archetype(3, 3)
+    )
+    with pytest.raises(ValueError):
+        OcularCausticsAndFilmChemistry.compile(vault, focus_depth=bad_focus, include_caustics=False)
+
+
+def test_bake_validates_basis_and_regularization_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nexus_ai_agent.creative.photoreal_intrinsic import (
+        log_chromophore_tomography_baker as baker_module,
+    )
+
+    baker = LogChromophoreTomographyBaker()
+    image = baker.canonical_archetype(3, 4)
+    invalid_bases = (
+        np.ones((2, 3)),
+        np.full((3, 3), np.nan),
+        np.ones((3, 3)),
+        np.diag((1.0, 1.0, 1e-5)),
+    )
+    for basis in invalid_bases:
+        baker.basis = basis
+        with pytest.raises(ValueError, match="chromophore basis"):
+            baker.bake(image)
+    baker.basis = LogChromophoreTomographyBaker.basis
+    monkeypatch.setattr(baker_module, "_RADIANCE_EPSILON", 0.0)
+    with pytest.raises(ValueError, match="regularization"):
+        baker.bake(image)
+
+
+def test_single_scale_solver_rejects_invalid_source_and_length() -> None:
+    solver = ScreenedPoissonSkinTransport()
+    with pytest.raises(ValueError, match="2x2"):
+        solver.solve_single_scale(np.ones((1, 4)), 1.0)
+    with pytest.raises(ValueError, match="finite"):
+        solver.solve_single_scale(np.full((2, 2), np.nan), 1.0)
+    for length in (0.0, float("inf"), 1e5):
+        with pytest.raises(ValueError, match="diffusion_length"):
+            solver.solve_single_scale(np.ones((2, 2)), length)
+    with pytest.raises(ValueError, match="1e4"):
+        solver.transport_with_scale_components(np.ones((2, 2, 3)), (1e5,))

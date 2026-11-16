@@ -1,7 +1,8 @@
-"""Solve the screened-Poisson skin transport equation with Neumann DCT-II boundaries."""
+"""Three-scale Neumann-DCT transport with normalized image-space diffusion lengths."""
 
 from __future__ import annotations
 
+import math
 from typing import cast
 
 import numpy as np
@@ -10,19 +11,45 @@ from .log_chromophore_tomography_baker import dctn, idctn, validate_physiology
 
 
 class ScreenedPoissonSkinTransport:
-    """DCT-II solution of (-Laplacian+kappa²)Phi=kappa²S, with Neumann edges."""
+    """Solve weighted ``(I - sigma² Delta_N)u=S`` at three image-space scales.
+
+    ``sigma`` is a normalized-image diffusion length (pixels in the sampled image
+    coordinate system), not a dimensional tissue transport coefficient. The three
+    weights and scale factors are phenomenological RGB skin-rendering parameters.
+    """
 
     weights = np.array((0.5218, 0.3341, 0.1441), np.float64)
+    # Scale factors are dimensionless multipliers of each normalized diffusion length.
     scales = np.array((0.618, 1.618, 3.618), np.float64)
     default_radii = (3.4, 1.35, 0.65)
 
-    def transport(self, source: np.ndarray, radii: tuple[float, ...] = default_radii) -> np.ndarray:
-        a = np.asarray(source, dtype=np.float64)
-        if a.ndim != 3 or a.shape[-1] < 1:
+    @staticmethod
+    def solve_single_scale(source: np.ndarray, diffusion_length: float) -> np.ndarray:
+        """Solve one Neumann-DCT scale; ``diffusion_length`` uses image coordinates."""
+        field = np.asarray(source, dtype=np.float64)
+        if field.ndim != 2 or min(field.shape, default=0) < 2:
+            raise ValueError("source must be a 2-D field with dimensions at least 2x2")
+        if not np.isfinite(field).all():
+            raise ValueError("source values must be finite")
+        if not math.isfinite(diffusion_length) or not 0 < diffusion_length <= 1e4:
+            raise ValueError("diffusion_length must be finite and in (0, 1e4]")
+        height, width = field.shape
+        ky = 4 * np.sin(np.pi * np.arange(height) / (2 * height)) ** 2
+        kx = 4 * np.sin(np.pi * np.arange(width) / (2 * width)) ** 2
+        eigenvalues = ky[:, None] + kx[None, :]
+        sigma_sq = diffusion_length * diffusion_length
+        return idctn(dctn(field) / (1.0 + sigma_sq * eigenvalues))
+
+    def transport_with_scale_components(
+        self, irradiance: np.ndarray, radii: tuple[float, ...] = default_radii
+    ) -> np.ndarray:
+        """Return the three unweighted scale fields as ``(scale,H,W,C)`` float64."""
+        source = np.asarray(irradiance, dtype=np.float64)
+        if source.ndim != 3 or source.shape[-1] < 1:
             raise ValueError("source must have shape (H,W,C) with at least one channel")
-        if a.shape[0] < 2 or a.shape[1] < 2:
+        if source.shape[0] < 2 or source.shape[1] < 2:
             raise ValueError("source spatial dimensions must be at least 2x2")
-        if not np.all(np.isfinite(a)):
+        if not np.isfinite(source).all():
             raise ValueError("source values must be finite")
         try:
             radius_values = np.asarray(radii, dtype=np.float64)
@@ -30,25 +57,31 @@ class ScreenedPoissonSkinTransport:
             raise ValueError(
                 "radii must be a one-dimensional sequence of positive numbers"
             ) from exc
-        if radius_values.ndim != 1 or radius_values.size not in (1, a.shape[-1]):
+        if radius_values.ndim != 1 or radius_values.size not in (1, source.shape[-1]):
             raise ValueError("radii must contain one value or one value per image channel")
         if not np.isfinite(radius_values).all() or np.any(radius_values <= 0):
             raise ValueError("all radii must be finite and strictly positive")
-        height, width, channels = a.shape
-        ky = 4 * np.sin(np.pi * np.arange(height) / (2 * height)) ** 2
-        kx = 4 * np.sin(np.pi * np.arange(width) / (2 * width)) ** 2
-        eigenvalues = ky[:, None] + kx[None, :]
-        result = np.empty_like(a, dtype=np.float32)
-        for channel in range(channels):
+        if np.any(radius_values > 1e4):
+            raise ValueError("radii must be no greater than 1e4 normalized units")
+        components = np.empty((self.scales.size, *source.shape), dtype=np.float64)
+        for channel in range(source.shape[-1]):
             radius = float(radius_values[0 if radius_values.size == 1 else channel])
-            source_hat = dctn(a[..., channel])
-            solved = np.zeros((height, width), dtype=np.float64)
-            for weight, scale in zip(self.weights, self.scales, strict=True):
-                ratio = float(np.clip(float(scale) / radius, 1e-4, 1e4))
-                kappa2 = ratio * ratio
-                solved += weight * idctn(source_hat * (kappa2 / (eigenvalues + kappa2)))
-            result[..., channel] = solved
-        return result
+            for scale_index, scale in enumerate(self.scales):
+                sigma = radius / float(scale)
+                components[scale_index, ..., channel] = self.solve_single_scale(
+                    source[..., channel], sigma
+                )
+        return components
+
+    def transport(self, source: np.ndarray, radii: tuple[float, ...] = default_radii) -> np.ndarray:
+        """Return the weighted three-scale transport; Neumann boundaries preserve mean flux."""
+        components = self.transport_with_scale_components(source, radii)
+        combined = components[0]
+        combined *= self.weights[0]
+        for index in range(1, self.weights.size):
+            components[index] *= self.weights[index]
+            combined += components[index]
+        return cast(np.ndarray, combined)
 
     def shade(
         self,
@@ -66,7 +99,8 @@ class ScreenedPoissonSkinTransport:
         if not np.all(np.isfinite(source_array)):
             raise ValueError("source values must be finite")
         a = self.transport(source, radii)
-        phase = 1 + 0.025 * np.sin(2 * np.pi * heart_rate_bpm * t / 60)
+        pulse_cycles = math.fmod(heart_rate_bpm * t / 60.0, 1.0)
+        phase = 1 + 0.025 * math.sin(2 * math.pi * pulse_cycles)
         oxy = np.asarray((0.08, 0.24, 0.10), dtype=np.float32)
         deoxy = np.asarray((0.20, 0.72, 0.66), dtype=np.float32)
         absorption = blood_oxygenation * oxy + (1 - blood_oxygenation) * deoxy

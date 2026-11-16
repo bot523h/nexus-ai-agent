@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import secrets
 from dataclasses import dataclass
@@ -16,6 +17,9 @@ _BASIS = np.array(
     [[0.242, 0.118, 0.57735], [0.543, 0.768, 0.57735], [0.804, 0.629, 0.57735]], dtype=np.float64
 )
 _MODULE_KEY = secrets.token_bytes(32)
+_RADIANCE_EPSILON = 1e-6
+_POISSON_REGULARIZATION = 1e-4
+_MAX_BASIS_CONDITION = 100.0
 _FIELD_NAMES = (
     ("albedo", "albedo"),
     ("melanin", "melanin"),
@@ -34,14 +38,20 @@ def validate_physiology(
     time_sec: float = 0.0,
     sympathetic_flush: float = 0.0,
     blood_oxygenation: float = 0.97,
-    focus: float = 1.0,
+    focus_depth: float = 0.5,
 ) -> None:
-    """Reject non-finite or out-of-domain physiological, temporal, and focus inputs."""
-    values = (heart_rate_bpm, time_sec, sympathetic_flush, blood_oxygenation, focus)
-    if not np.isfinite(values).all():
-        raise ValueError("physiological, temporal, and optical values must be finite")
+    """Validate normalized physiology; time is seconds, depth/focus are unitless [0,1]."""
+    values = (heart_rate_bpm, time_sec, sympathetic_flush, blood_oxygenation)
+    if not all(math.isfinite(float(value)) for value in values):
+        raise ValueError("physiological and temporal values must be finite")
+    if not math.isfinite(float(focus_depth)):
+        raise ValueError("focus_depth must be finite")
     if not 0 < heart_rate_bpm <= 240:
         raise ValueError("heart_rate_bpm must be in (0, 240]")
+    if not 0.0 <= time_sec <= 86400.0:
+        raise ValueError("time_sec must be in [0, 86400] seconds")
+    if not 0.0 <= focus_depth <= 1.0:
+        raise ValueError("focus_depth must be in normalized range [0, 1]")
     if not -1 <= sympathetic_flush <= 1:
         raise ValueError("sympathetic_flush must be in [-1, 1]")
     if not 0.70 <= blood_oxygenation <= 0.99:
@@ -194,7 +204,7 @@ class LogChromophoreTomographyBaker:
 
     @staticmethod
     def _geometry(shade: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        lightness = np.log(np.maximum(shade.astype(np.float32), 1e-6))
+        lightness = np.log(np.maximum(shade.astype(np.float32), _RADIANCE_EPSILON))
         gy, gx = np.gradient(lightness)
         div = np.gradient(gx, axis=1) + np.gradient(gy, axis=0)
         div -= div.mean()
@@ -204,7 +214,7 @@ class LogChromophoreTomographyBaker:
         eig = (
             4 * np.sin(np.pi * ky / (2 * height)) ** 2
             + 4 * np.sin(np.pi * kx / (2 * width)) ** 2
-            + 1e-4
+            + _POISSON_REGULARIZATION
         )
         depth = idctn(dctn(-div) / eig).astype(np.float32)
         dy, dx = np.gradient(depth)
@@ -233,12 +243,24 @@ class LogChromophoreTomographyBaker:
         key_policy: KeyPolicy = "auto",
         input_colorspace: Literal["auto", "srgb", "linear"] = "auto",
     ) -> IntrinsicBiophysicalVault:
-        validate_physiology()
         raw = np.asarray(rgb)
         if raw.ndim != 3 or raw.shape[-1] != 3:
             raise ValueError("rgb must have shape (height,width,3)")
         if raw.shape[0] < 2 or raw.shape[1] < 2:
             raise ValueError("image spatial dimensions must be at least 2x2")
+        basis = np.asarray(self.basis, dtype=np.float64)
+        if (
+            basis.shape != (3, 3)
+            or not np.isfinite(basis).all()
+            or np.linalg.matrix_rank(basis) != 3
+            or np.linalg.cond(basis) > _MAX_BASIS_CONDITION
+        ):
+            raise ValueError("chromophore basis must be finite, full-rank, and well-conditioned")
+        if (
+            not np.isfinite((_RADIANCE_EPSILON, _POISSON_REGULARIZATION)).all()
+            or min(_RADIANCE_EPSILON, _POISSON_REGULARIZATION) <= 0
+        ):
+            raise ValueError("regularization parameters must be finite and positive")
         if input_colorspace not in ("auto", "srgb", "linear"):
             raise ValueError("input_colorspace must be 'auto', 'srgb', or 'linear'")
         if np.issubdtype(raw.dtype, np.signedinteger):
@@ -266,10 +288,10 @@ class LogChromophoreTomographyBaker:
             )
         else:
             linear = normalized
-        density = -np.log(np.maximum(linear, 1e-6))
-        chroma = np.einsum("...c,ic->...i", density, np.linalg.inv(self.basis)).astype(np.float32)
+        density = -np.log(np.maximum(linear, _RADIANCE_EPSILON))
+        chroma = np.einsum("...c,ic->...i", density, np.linalg.inv(basis)).astype(np.float32)
         mel, hem, _ = np.moveaxis(np.maximum(chroma, 0), -1, 0)
-        shading = np.maximum(np.max(linear, axis=-1), 1e-6).astype(np.float32)
+        shading = np.maximum(np.max(linear, axis=-1), _RADIANCE_EPSILON).astype(np.float32)
         albedo = np.clip(linear / shading[..., None], 0, 1).astype(np.float32)
         normals, depth = self._geometry(shading)
         key, ephemeral = _resolve_key(hmac_key, key_policy)
