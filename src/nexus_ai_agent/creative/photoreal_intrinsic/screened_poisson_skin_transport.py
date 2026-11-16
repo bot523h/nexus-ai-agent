@@ -1,4 +1,4 @@
-"""Integral-image skin transport and inexpensive physiological shading."""
+"""Solve the screened-Poisson skin transport equation with Neumann DCT-II boundaries."""
 
 from __future__ import annotations
 
@@ -6,33 +6,44 @@ from typing import cast
 
 import numpy as np
 
+from .log_chromophore_tomography_baker import dctn, idctn
+
 
 class ScreenedPoissonSkinTransport:
-    weights = np.array((0.5218, 0.3341, 0.1441), np.float32)
-    scales = np.array((0.618, 1.618, 3.618), np.float32)
+    """DCT-II solution of (-Laplacian+kappa²)Phi=kappa²S, with Neumann edges."""
 
-    def transport(
-        self, source: np.ndarray, radii: tuple[float, float, float] = (3.4, 1.35, 0.65)
-    ) -> np.ndarray:
-        a = np.asarray(source, dtype=np.float32)
-        if a.ndim != 3 or a.shape[-1] != 3:
-            raise ValueError("source must be RGB image")
-        height, width, _ = a.shape
-        ky = 2 - 2 * np.cos(2 * np.pi * np.fft.fftfreq(height))[:, None]
-        kx = 2 - 2 * np.cos(2 * np.pi * np.fft.fftfreq(width))[None, :]
-        laplace = ky + kx
-        out = np.empty_like(a)
-        for channel, radius in enumerate(radii):
-            spectrum = np.fft.fft2(a[..., channel])
-            result = np.zeros((height, width), dtype=np.float64)
+    weights = np.array((0.5218, 0.3341, 0.1441), np.float64)
+    scales = np.array((0.618, 1.618, 3.618), np.float64)
+    default_radii = (3.4, 1.35, 0.65)
+
+    def transport(self, source: np.ndarray, radii: tuple[float, ...] = default_radii) -> np.ndarray:
+        a = np.asarray(source, dtype=np.float64)
+        if a.ndim != 3 or a.shape[-1] < 1:
+            raise ValueError("source must have shape (H,W,C) with at least one channel")
+        try:
+            radius_values = np.asarray(radii, dtype=np.float64)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "radii must be a one-dimensional sequence of positive numbers"
+            ) from exc
+        if radius_values.ndim != 1 or radius_values.size not in (1, a.shape[-1]):
+            raise ValueError("radii must contain one value or one value per image channel")
+        if not np.isfinite(radius_values).all() or np.any(radius_values <= 0):
+            raise ValueError("all radii must be finite and strictly positive")
+        height, width, channels = a.shape
+        ky = 4 * np.sin(np.pi * np.arange(height) / (2 * height)) ** 2
+        kx = 4 * np.sin(np.pi * np.arange(width) / (2 * width)) ** 2
+        eigenvalues = ky[:, None] + kx[None, :]
+        result = np.empty_like(a, dtype=np.float32)
+        for channel in range(channels):
+            radius = float(radius_values[0 if len(radii) == 1 else channel])
+            source_hat = dctn(a[..., channel])
+            solved = np.zeros((height, width), dtype=np.float64)
             for weight, scale in zip(self.weights, self.scales, strict=True):
-                kappa_squared = (float(scale) / radius) ** 2
-                result += (
-                    float(weight)
-                    * np.fft.ifft2(spectrum * kappa_squared / (laplace + kappa_squared)).real
-                )
-            out[..., channel] = result
-        return out
+                kappa2 = (float(scale) / radius) ** 2
+                solved += weight * idctn(source_hat * (kappa2 / (eigenvalues + kappa2)))
+            result[..., channel] = solved
+        return result
 
     def shade(
         self,
@@ -41,39 +52,49 @@ class ScreenedPoissonSkinTransport:
         t: float = 0,
         sympathetic_flush: float = 0,
         blood_oxygenation: float = 0.97,
+        radii: tuple[float, ...] = default_radii,
     ) -> np.ndarray:
-        if not -1 <= sympathetic_flush <= 1 or not 0.70 <= blood_oxygenation <= 0.99:
+        if not np.isfinite((heart_rate_bpm, t, sympathetic_flush, blood_oxygenation)).all():
+            raise ValueError("physiological parameters must be finite")
+        if (
+            heart_rate_bpm <= 0
+            or not -1 <= sympathetic_flush <= 1
+            or not 0.70 <= blood_oxygenation <= 0.99
+        ):
             raise ValueError("physiology outside supported range")
+        a = self.transport(source, radii)
         phase = 1 + 0.025 * np.sin(2 * np.pi * heart_rate_bpm * t / 60)
-        a = self.transport(source) * phase
         oxy = np.asarray((0.08, 0.24, 0.10), dtype=np.float32)
         deoxy = np.asarray((0.20, 0.72, 0.66), dtype=np.float32)
         absorption = blood_oxygenation * oxy + (1 - blood_oxygenation) * deoxy
         concentration = 0.08 * np.clip(1 + 0.45 * sympathetic_flush, 0.4, 1.6)
-        a *= np.exp(-concentration * absorption)[None, None, :]
-        return cast(np.ndarray, a)
+        if a.shape[-1] == 3:
+            a *= (phase * np.exp(-concentration * absorption))[None, None, :]
+        else:
+            a *= phase * np.exp(-concentration * float(absorption.mean()))
+        return a
 
     @staticmethod
     def spherical_harmonic(normals: np.ndarray, light: np.ndarray | None = None) -> np.ndarray:
         n = np.asarray(normals, dtype=np.float32)
+        if n.ndim < 1 or n.shape[-1] != 3:
+            raise ValueError("normals must end in three components")
         if light is None:
             direction = np.asarray((0.35, -0.45, 0.82), dtype=np.float32)
             direction /= np.linalg.norm(direction)
-            quadratic = 0.2 * np.outer(direction, direction)
-            linear = 0.3 * direction
             light_matrix = np.zeros((4, 4), dtype=np.float32)
-            light_matrix[:3, :3] = quadratic
+            light_matrix[:3, :3] = 0.2 * np.outer(direction, direction)
+            linear = 0.3 * direction
             light_matrix[:3, 3] = linear / 2
             light_matrix[3, :3] = linear / 2
             light_matrix[3, 3] = 0.5
         else:
             light_matrix = np.asarray(light, dtype=np.float32)
+            if light_matrix.shape != (4, 4) or not np.allclose(
+                light_matrix, light_matrix.T, atol=1e-6
+            ):
+                raise ValueError("light matrix must be symmetric with shape 4x4")
+        homogeneous = np.concatenate((n, np.ones((*n.shape[:-1], 1), np.float32)), -1)
         return cast(
-            np.ndarray,
-            np.einsum(
-                "...i,ij,...j->...",
-                np.concatenate((n, np.ones((*n.shape[:-1], 1), np.float32)), -1),
-                light_matrix,
-                np.concatenate((n, np.ones((*n.shape[:-1], 1), np.float32)), -1),
-            ),
+            np.ndarray, np.einsum("...i,ij,...j->...", homogeneous, light_matrix, homogeneous)
         )

@@ -19,8 +19,9 @@ def test_bake_reproducible_and_sealed(baker: LogChromophoreTomographyBaker, i: i
     rgb = baker.canonical_archetype(8 + i, 9)
     a = baker.bake(rgb)
     b = baker.bake(rgb)
-    assert a.seal == b.seal and a.compute_seal() == a.seal
-    assert a.albedo.shape == rgb.shape and not a.depth.flags.writeable
+    assert a.seal == b.seal and a.verify()
+    assert not hasattr(a, "hmac_key")
+    assert a.albedo.shape == rgb.shape
     assert np.isfinite(a.normals).all()
 
 
@@ -142,8 +143,12 @@ def test_seal_rejects_tampering() -> None:
     vault = LogChromophoreTomographyBaker().bake(
         LogChromophoreTomographyBaker.canonical_archetype(4, 4)
     )
-    with pytest.raises(ValueError, match="PhotorealDNASeal"):
-        replace(vault, seal="0" * 64)
+    forged_seal = replace(vault.seal, signature="0" * 64)
+    changed = replace(vault, seal=forged_seal)
+    assert not changed.verify()
+    vault.albedo.setflags(write=True)
+    vault.albedo[0, 0, 0] += 0.1
+    assert not vault.verify()
 
 
 def test_caustic_has_expected_shape() -> None:
