@@ -129,6 +129,17 @@ def test_segment_cas_key_hmac_mode() -> None:
     assert len(keyed) == 64
 
 
+def test_segment_cas_key_folds_mux_mode_and_renderer() -> None:
+    spec = make_spec(1)
+    cpu = segment_cas_key(spec, mux_mode="deterministic_cpu_mux")
+    ffmpeg = segment_cas_key(spec, mux_mode="ffmpeg_subprocess_pipe")
+    assert cpu != ffmpeg
+    # A different renderer version must also change the key.
+    assert segment_cas_key(spec, renderer_version="v1") != segment_cas_key(
+        spec, renderer_version="v2"
+    )
+
+
 # ── RFC 6962 Merkle tree ────────────────────────────────────────────────────
 def test_merkle_root_of_empty_tree_is_sha256_of_empty() -> None:
     assert merkle_root([]) == hashlib.sha256(b"").digest()
@@ -434,6 +445,95 @@ def test_planner_pipeline_digest_change_forces_render(tmp_path: Path) -> None:
     plan = planner.plan(timeline, pipeline_digests=flipped)
     assert plan.cache_hits == 2
     assert plan.render_targets()[0].spec.segment_id == "seg1"
+
+
+def test_planner_mux_mode_separates_engine_caches(tmp_path: Path) -> None:
+    # P1-A: a segment rendered by the CPU mux must NOT satisfy an FFmpeg request
+    # (and vice versa) — the two engines can never share a cache entry.
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    cpu_key = planner.cas_key(spec, mux_mode="deterministic_cpu_mux")
+    ffmpeg_key = planner.cas_key(spec, mux_mode="ffmpeg_subprocess_pipe")
+    assert cpu_key != ffmpeg_key
+    planner.write_segment_artifact(cpu_key, b"cpu-body", mode="deterministic_cpu_mux")
+
+    cpu_plan = planner.plan([spec], mux_modes=["deterministic_cpu_mux"])
+    assert cpu_plan.cache_hits == 1
+    assert cpu_plan.segments[0].mode == "deterministic_cpu_mux"
+
+    ffmpeg_plan = planner.plan([spec], mux_modes=["ffmpeg_subprocess_pipe"])
+    assert ffmpeg_plan.cache_hits == 0
+    assert ffmpeg_plan.segments[0].status is SegmentStatus.RENDER_REQUIRED
+
+
+def test_planner_rejects_mismatched_mux_modes(tmp_path: Path) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    with pytest.raises(HyperCompilerError):
+        planner.plan(make_timeline(3), mux_modes=["only-one"])
+
+
+def test_manifest_records_mode_and_renderer_version(tmp_path: Path) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec, mux_mode="ffmpeg_subprocess_pipe")
+    planner.write_segment_artifact(key, b"body", mode="ffmpeg_subprocess_pipe")
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    assert manifest["mode"] == "ffmpeg_subprocess_pipe"
+    assert manifest["renderer_version"] == dag.RENDERER_VERSION
+
+
+def test_verify_rejects_incompatible_renderer_version(tmp_path: Path) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    manifest = json.loads(planner.manifest_path(key).read_text(encoding="utf-8"))
+    manifest["renderer_version"] = "hyper-compiler/0"
+    planner.manifest_path(key).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(SegmentIntegrityError):
+        planner.verify_segment_artifact(key)
+
+
+def test_read_manifest_rejects_oversized_file(tmp_path: Path) -> None:
+    # P1-D/P2: a hostile multi-megabyte manifest must be refused before it is
+    # read into memory.
+    planner = SegmentCASPlanner(tmp_path)
+    key = "a" * 64
+    planner.cache_dir.mkdir(parents=True, exist_ok=True)
+    planner.manifest_path(key).write_bytes(b"x" * (dag._MAX_MANIFEST_BYTES + 1))
+    with pytest.raises(SegmentIntegrityError):
+        planner.read_manifest(key)
+
+
+def test_read_manifest_reports_stat_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planner = SegmentCASPlanner(tmp_path)
+    key = "a" * 64
+    planner.cache_dir.mkdir(parents=True, exist_ok=True)
+    planner.manifest_path(key).write_text("{}", encoding="utf-8")
+
+    # Let the existence check pass, then make the size probe itself fail so the
+    # OSError guard around os.stat is exercised.
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+    monkeypatch.setattr(os, "stat", lambda *a, **k: (_ for _ in ()).throw(OSError("stat failed")))
+    with pytest.raises(SegmentIntegrityError):
+        planner.read_manifest(key)
+
+
+def test_verify_rejects_explicit_path_outside_cache_dir(tmp_path: Path) -> None:
+    # P1-D: an explicit ``path`` must still be confined to cache_dir, even when
+    # the key itself is canonical.
+    planner = SegmentCASPlanner(tmp_path / "cache")
+    spec = make_spec(0)
+    key = planner.cas_key(spec)
+    planner.commit_segment(spec, b"body")
+    outside = tmp_path / "outside.nagarseg"
+    outside.write_bytes(planner.artifact_path(key).read_bytes())
+    with pytest.raises(SegmentIntegrityError):
+        planner.verify_segment_artifact(key, outside)
+    with pytest.raises(SegmentIntegrityError):
+        planner.read_segment_artifact(key, outside)
 
 
 def test_planner_rejects_mismatched_pipeline_digests(tmp_path: Path) -> None:

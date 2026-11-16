@@ -144,10 +144,18 @@ class HyperTimelineOrchestrator:
         timeline: Sequence[TimelineSegmentSpec],
         *,
         pipe_spec_factory: PipeSpecFactory | None = None,
+        mode: MuxMode = MuxMode.DETERMINISTIC_CPU_MUX,
     ) -> SegmentPlan:
-        """Plan the timeline, folding each segment's pipeline fingerprint in."""
+        """Plan the timeline, folding pipeline fingerprint *and* engine mode in.
+
+        Folding the mode into the key is what keeps the two engines from sharing
+        a cache entry: a segment rendered by the CPU mux is a ``CACHE_MISS`` for
+        the FFmpeg pipe and vice versa, so a plan can never hand back bytes whose
+        provenance disagrees with the requested engine.
+        """
         digests = [self._pipe_spec_for(spec, pipe_spec_factory).fingerprint() for spec in timeline]
-        return self.planner.plan(timeline, pipeline_digests=digests)
+        modes = [mode.value] * len(timeline)
+        return self.planner.plan(timeline, pipeline_digests=digests, mux_modes=modes)
 
     # -- rendering ----------------------------------------------------------
     def _render_to_temp(
@@ -188,6 +196,7 @@ class HyperTimelineOrchestrator:
                     source,
                     size=outcome.container_size,
                     digest=outcome.output_digest,
+                    mode=outcome.mode.value,
                 )
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -209,7 +218,7 @@ class HyperTimelineOrchestrator:
         (never assembled in RAM); a rendered segment is written once to a temp
         file, then streamed to the output and to the cache in bounded chunks.
         """
-        plan = self.plan(timeline, pipe_spec_factory=pipe_spec_factory)
+        plan = self.plan(timeline, pipe_spec_factory=pipe_spec_factory, mode=mode)
         segments: list[SegmentRender] = []
         peak = 0
         executed_mode: MuxMode | None = None
@@ -237,7 +246,7 @@ class HyperTimelineOrchestrator:
                                 from_cache=True,
                                 payload_digest=planned.content_sha,
                                 payload_size=planned.body_size,
-                                mode=MuxMode.DETERMINISTIC_CPU_MUX.value,
+                                mode=planned.mode,
                             )
                         )
                         continue
@@ -268,6 +277,7 @@ class HyperTimelineOrchestrator:
                                 rendered,
                                 size=outcome.container_size,
                                 digest=outcome.output_digest,
+                                mode=outcome.mode.value,
                             )
                     finally:
                         tmp_path.unlink(missing_ok=True)
@@ -293,7 +303,20 @@ class HyperTimelineOrchestrator:
 
         output_digest = writer.digest
         output_size = writer.size
-        receipt_mode = executed_mode if executed_mode is not None else mode
+        # Every segment shares one mode (the mode is part of the cache key), so
+        # the receipt reports the engine that actually produced the bytes.
+        segment_modes = {seg.mode for seg in segments if seg.mode}
+        if len(segment_modes) > 1:
+            raise HyperCompilerError(
+                f"timeline mixed engine modes in one run: {sorted(segment_modes)}"
+            )
+        if segment_modes:
+            try:
+                receipt_mode = MuxMode(next(iter(segment_modes)))
+            except ValueError as exc:
+                raise HyperCompilerError(f"unknown engine mode in manifest: {exc}") from exc
+        else:
+            receipt_mode = executed_mode or mode
         receipt = self.runner.build_receipt(
             timeline_merkle_root=plan.merkle_root,
             total_segments=plan.total_leaves,
@@ -335,9 +358,10 @@ class HyperTimelineOrchestrator:
         timeline: Sequence[TimelineSegmentSpec],
         *,
         pipe_spec_factory: PipeSpecFactory | None = None,
+        mode: MuxMode = MuxMode.DETERMINISTIC_CPU_MUX,
     ) -> str:
         """Verify every cached artifact and return the timeline Merkle root."""
-        plan = self.plan(timeline, pipe_spec_factory=pipe_spec_factory)
+        plan = self.plan(timeline, pipe_spec_factory=pipe_spec_factory, mode=mode)
         for planned in plan.segments:
             if planned.status is SegmentStatus.CACHE_HIT:
                 self.planner.verify_segment_artifact(planned.cas_key)

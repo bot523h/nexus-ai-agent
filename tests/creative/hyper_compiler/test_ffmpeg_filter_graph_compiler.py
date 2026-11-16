@@ -22,6 +22,7 @@ from nexus_ai_agent.creative.hyper_compiler.ffmpeg_filter_graph_compiler import 
     ScalePadOp,
     StreamKind,
     TrimOp,
+    TrimStartOp,
     VignetteOp,
 )
 
@@ -220,6 +221,25 @@ def test_trim_op_rejects_non_finite_fps() -> None:
 def test_trim_op_rejects_negative_start() -> None:
     with pytest.raises(InvalidFilterGraphError):
         TrimOp("v0", "v1", -1, 10, 24.0)
+
+
+def test_trim_start_op_renders_open_ended_trim() -> None:
+    op = TrimStartOp("v0", "v1", 3)
+    assert op.render() == "trim=start_frame=3,setpts=PTS-STARTPTS"
+    assert op.input_pads() == ("v0",)
+    assert op.output_pads() == ("v1",)
+    assert op.kind is StreamKind.VIDEO
+
+
+def test_trim_start_op_rejects_zero_start() -> None:
+    # A zero start would be a no-op; the caller must not build one.
+    with pytest.raises(InvalidFilterGraphError):
+        TrimStartOp("v0", "v1", 0)
+
+
+def test_trim_start_op_rejects_unsafe_label() -> None:
+    with pytest.raises(InvalidFilterGraphError):
+        TrimStartOp("bad label", "v1", 3)
 
 
 def test_scale_pad_op_rejects_zero_size() -> None:

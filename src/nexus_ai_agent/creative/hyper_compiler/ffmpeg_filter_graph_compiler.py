@@ -139,6 +139,38 @@ class TrimOp(FilterOp):
 
 
 @dataclass(frozen=True)
+class TrimStartOp(FilterOp):
+    """Drop every frame before ``start_frame`` (open-ended trim).
+
+    The CPU engine selects frames by index; this is its exact FFmpeg
+    counterpart for the ``trim_end is None`` case, so an open-ended trim is
+    never silently dropped on the FFmpeg path.  No ``fps`` filter is emitted:
+    the source is already at the target rate, and forcing a rate here could
+    duplicate or drop frames the CPU path would have kept.
+    """
+
+    kind: ClassVar[StreamKind] = StreamKind.VIDEO
+
+    in_pad: str
+    out_pad: str
+    start_frame: int
+
+    def __post_init__(self) -> None:
+        _check_label(self.in_pad, what="input pad")
+        _check_label(self.out_pad, what="output pad")
+        _check_int(self.start_frame, 1, 2**53, what="start_frame")
+
+    def input_pads(self) -> tuple[str, ...]:
+        return (self.in_pad,)
+
+    def output_pads(self) -> tuple[str, ...]:
+        return (self.out_pad,)
+
+    def render(self) -> str:
+        return f"trim=start_frame={self.start_frame},setpts=PTS-STARTPTS"
+
+
+@dataclass(frozen=True)
 class ScalePadOp(FilterOp):
     """Scale preserving aspect ratio, then pad to an exact canvas."""
 
@@ -552,5 +584,6 @@ __all__ = [
     "ScalePadOp",
     "StreamKind",
     "TrimOp",
+    "TrimStartOp",
     "VignetteOp",
 ]

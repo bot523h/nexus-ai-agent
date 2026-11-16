@@ -128,7 +128,9 @@ def test_orchestrator_unchanged_segments_are_not_rewritten(tmp_path: Path) -> No
     orch.execute(timeline, frame_factory=frame_factory())
     keys = {
         spec.segment_id: orch.planner.cas_key(
-            spec, pipeline_digest=default_pipe_spec(spec).fingerprint()
+            spec,
+            pipeline_digest=default_pipe_spec(spec).fingerprint(),
+            mux_mode=MuxMode.DETERMINISTIC_CPU_MUX.value,
         )
         for spec in timeline
     }
@@ -284,9 +286,11 @@ def test_orchestrator_ffmpeg_mode_fails_closed_without_binary(tmp_path: Path) ->
 
 
 def test_orchestrator_peak_memory_stays_bounded(tmp_path: Path) -> None:
-    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=192 * 2)
+    # 8x8x3 = 192 B/frame; the CPU working set for this geometry is 832 B, so a
+    # 4096 B budget still bounds the reported peak.
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=4096)
     execution = orch.execute([make_spec(0)], frame_factory=frame_factory())
-    assert execution.receipt.peak_buffer_bytes <= 192 * 2
+    assert execution.receipt.peak_buffer_bytes <= 4096
 
 
 def test_orchestrator_hmac_key_is_honoured(tmp_path: Path) -> None:
@@ -294,7 +298,10 @@ def test_orchestrator_hmac_key_is_honoured(tmp_path: Path) -> None:
     spec = make_spec(0)
     digest = default_pipe_spec(spec).fingerprint()
     assert (
-        orch.planner.cas_key(spec, pipeline_digest=digest) == orch.plan([spec]).segments[0].cas_key
+        orch.planner.cas_key(
+            spec, pipeline_digest=digest, mux_mode=MuxMode.DETERMINISTIC_CPU_MUX.value
+        )
+        == orch.plan([spec]).segments[0].cas_key
     )
 
 
@@ -304,3 +311,77 @@ def test_orchestrator_cache_hit_segment_reports_zero_peak(tmp_path: Path) -> Non
     orch.execute(timeline, frame_factory=frame_factory())
     second = orch.execute(timeline, frame_factory=frame_factory())
     assert second.receipt.peak_buffer_bytes == 0
+
+
+@pytest.mark.skipif(FFMPEG is None, reason="no FFmpeg available")
+def test_orchestrator_switching_engine_is_a_cache_miss(tmp_path: Path) -> None:
+    """P1-A: the same segment rendered by one engine is a CACHE_MISS for the other."""
+    assert FFMPEG is not None
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024, ffmpeg_bin=FFMPEG)
+    timeline = [make_spec(0)]
+
+    cpu_run = orch.execute(timeline, frame_factory=frame_factory())
+    assert cpu_run.plan.render_required == 1
+    assert cpu_run.plan.segments[0].mode == "deterministic_cpu_mux"
+
+    # Same timeline, different engine: the CPU artifact must NOT satisfy it.
+    ffmpeg_run = orch.execute(
+        timeline,
+        frame_factory=frame_factory(),
+        mode=MuxMode.FFMPEG_SUBPROCESS_PIPE,
+    )
+    assert ffmpeg_run.plan.cache_hits == 0
+    assert ffmpeg_run.plan.render_required == 1
+    assert ffmpeg_run.receipt.mode == "ffmpeg_subprocess_pipe"
+    assert ffmpeg_run.plan.segments[0].cas_key != cpu_run.plan.segments[0].cas_key
+
+
+def test_orchestrator_cpu_cache_hit_reports_cpu_mode(tmp_path: Path) -> None:
+    # P1-A: a cache hit reports the mode recorded in the manifest, not a default.
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    timeline = [make_spec(0)]
+    orch.execute(timeline, frame_factory=frame_factory())
+    second = orch.execute(timeline, frame_factory=frame_factory())
+    assert second.plan.cache_hits == 1
+    assert second.plan.segments[0].mode == "deterministic_cpu_mux"
+    assert second.segments[0].mode == "deterministic_cpu_mux"
+
+
+def test_orchestrator_rejects_mixed_engine_modes(tmp_path: Path) -> None:
+    # If a manifest's recorded mode disagrees with another segment's, the run is
+    # refused rather than emitting a receipt that lies about the engine.
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    spec0 = make_spec(0)
+    key0 = orch.planner.cas_key(
+        spec0,
+        pipeline_digest=default_pipe_spec(spec0).fingerprint(),
+        mux_mode=MuxMode.DETERMINISTIC_CPU_MUX.value,
+    )
+    # A cached artifact whose manifest claims the FFmpeg engine.
+    orch.planner.write_segment_artifact(key0, b"body", mode="ffmpeg_subprocess_pipe")
+    # seg1 is uncached and will be rendered by the CPU engine.
+    with pytest.raises(HyperCompilerError, match="mixed engine modes"):
+        orch.execute([spec0, make_spec(1)], frame_factory=frame_factory())
+
+
+def test_orchestrator_rejects_unknown_manifest_mode(tmp_path: Path) -> None:
+    # A tampered manifest with a bogus mode must fail closed, not raise a bare
+    # ValueError when the receipt tries to parse it.
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    spec0 = make_spec(0)
+    key0 = orch.planner.cas_key(
+        spec0,
+        pipeline_digest=default_pipe_spec(spec0).fingerprint(),
+        mux_mode=MuxMode.DETERMINISTIC_CPU_MUX.value,
+    )
+    orch.planner.write_segment_artifact(key0, b"body", mode="not-a-real-engine")
+    with pytest.raises(HyperCompilerError, match="unknown engine mode"):
+        orch.execute([spec0], frame_factory=frame_factory())
+
+
+def test_orchestrator_empty_timeline_receipt_mode(tmp_path: Path) -> None:
+    # With no segments the receipt falls back to the requested mode.
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    execution = orch.execute([], frame_factory=frame_factory())
+    assert execution.receipt.mode == "deterministic_cpu_mux"
+    assert execution.receipt.total_segments == 0

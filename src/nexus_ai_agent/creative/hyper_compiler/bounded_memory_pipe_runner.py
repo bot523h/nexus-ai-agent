@@ -28,6 +28,7 @@ Two execution modes, both ending in an immutable
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import math
 import os
@@ -57,12 +58,18 @@ from nexus_ai_agent.creative.hyper_compiler.ffmpeg_filter_graph_compiler import 
     GraphInput,
     StreamKind,
     TrimOp,
+    TrimStartOp,
 )
 
 DEFAULT_MAX_BUFFER_BYTES = 32 * 1024 * 1024
 _MUX_MAGIC = b"NAGARMUX1"
 _MUX_HEADER_LEN = len(_MUX_MAGIC) + 4 + 4 + 8 + 8 + 32
 _CHUNK_BYTES = 64 * 1024
+#: How long to wait for a wedged FFmpeg child to die before giving up.
+_KILL_TIMEOUT_SECONDS = 5.0
+#: Per-pixel widths of the intermediate buffers the CPU path allocates.
+_UINT8_BYTES_PER_PIXEL = 3
+_FLOAT32_BYTES_PER_PIXEL = 4
 
 Frame = NDArray[np.uint8]
 
@@ -251,6 +258,28 @@ def dissolve(first: Frame, second: Frame, alpha: float) -> Frame:
     return np.clip(blended, 0.0, 255.0).astype(np.uint8)
 
 
+def frame_bytes(spec: FramePipelineSpec) -> int:
+    """Raw byte size of one ``rgb24`` frame at ``spec``'s geometry."""
+    return spec.width * spec.height * 3
+
+
+def cpu_working_set_bytes(spec: FramePipelineSpec) -> int:
+    """Transient bytes the CPU path holds *outside* the ring buffer, per frame.
+
+    While one frame is being consumed the CPU path holds, simultaneously: the
+    input ``uint8`` frame, a ``float32`` tone-map temporary, the ``uint8`` tone
+    output and the packed ``uint8`` body bytes.  ``dissolve`` additionally
+    retains the previous ``uint8`` frame and two ``float32`` blend temporaries.
+    Counting these is what keeps ``max_buffer_bytes`` an honest *total* ceiling
+    rather than a ceiling on the ring buffer alone.
+    """
+    pixels = spec.width * spec.height
+    per_pixel = 3 * _UINT8_BYTES_PER_PIXEL + _FLOAT32_BYTES_PER_PIXEL
+    if spec.dissolve > 0.0:
+        per_pixel += _UINT8_BYTES_PER_PIXEL + 2 * _FLOAT32_BYTES_PER_PIXEL
+    return pixels * per_pixel
+
+
 class BoundedMemoryPipeRunner:
     """Stream frames through a bounded buffer into a deterministic container."""
 
@@ -284,6 +313,23 @@ class BoundedMemoryPipeRunner:
             return False
         return spec.trim_end is None or index < spec.trim_end
 
+    def _ring_capacity(self, spec: FramePipelineSpec) -> int:
+        """Ring-buffer bytes available once the CPU working set is reserved.
+
+        ``max_buffer_bytes`` is a ceiling on the *total* resident payload, so the
+        transient buffers the CPU path holds while a frame is being processed
+        (``float32`` tone-map temporaries, the retained ``dissolve`` frame and the
+        packed output) are subtracted before any frame may be buffered.
+        """
+        reserve = cpu_working_set_bytes(spec)
+        capacity = self.max_buffer_bytes - reserve
+        if capacity < frame_bytes(spec):
+            raise MemoryBudgetExceededError(
+                f"max_buffer_bytes={self.max_buffer_bytes} cannot hold the CPU working "
+                f"set ({reserve} B) plus one frame ({frame_bytes(spec)} B)"
+            )
+        return capacity
+
     def _stream_body(
         self,
         segments: Iterable[Iterable[Frame]],
@@ -294,9 +340,11 @@ class BoundedMemoryPipeRunner:
 
         Frames leave the FIFO in arrival order, so the *consumed* counter is the
         source frame index used for the trim range — no per-frame index needs to
-        be buffered and no frame is retained once written.
+        be buffered and no frame is retained once written.  The ring buffer is
+        capped below ``max_buffer_bytes`` so the resident payload plus the CPU
+        working set can never exceed the ceiling.
         """
-        store = RingBufferFrameStore(self.max_buffer_bytes)
+        store = RingBufferFrameStore(self._ring_capacity(spec))
         body_hasher = hashlib.sha256()
         processed = 0
         consumed_index = 0
@@ -334,7 +382,8 @@ class BoundedMemoryPipeRunner:
                 f"pipeline emitted {processed} frames, expected {expected} "
                 f"(trim range {spec.trim_start}..{spec.trim_end})"
             )
-        return processed, body_hasher.hexdigest(), store.peak_bytes
+        peak = store.peak_bytes + cpu_working_set_bytes(spec)
+        return processed, body_hasher.hexdigest(), peak
 
     # -- deterministic CPU mux ---------------------------------------------
     def stream_many(
@@ -426,6 +475,10 @@ class BoundedMemoryPipeRunner:
         try:
             with os.fdopen(tmp_fd, "wb") as handle:
                 outcome = self.stream_many(segments, spec, sink=handle)
+                # Durability: the bytes must be on disk before the rename, so a
+                # crash can never leave a renamed-but-empty container behind.
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(tmp_path, path)
         except BaseException:
             tmp_path.unlink(missing_ok=True)
@@ -434,7 +487,23 @@ class BoundedMemoryPipeRunner:
 
     # -- ffmpeg subprocess pipe --------------------------------------------
     def build_ffmpeg_command(self, spec: FramePipelineSpec) -> list[str]:
-        """Assemble the ``-f rawvideo -pix_fmt rgb24`` pipe argv (no shell)."""
+        """Assemble the ``-f rawvideo -pix_fmt rgb24`` pipe argv (no shell).
+
+        The filter chain mirrors the CPU engine exactly: a closed trim becomes
+        ``trim=start_frame:s``/``end_frame``, an open-ended ``trim_start`` becomes
+        ``trim=start_frame=s`` (never dropped), and the tone map is ``eq``.
+
+        A ``dissolve`` is refused: FFmpeg's ``tblend`` aligns and blends frames
+        differently from the CPU engine's per-frame ``(1-a)*prev + a*cur`` (its
+        first output pair is duplicated), so there is no byte-equivalent graph.
+        Rather than let one knob produce two different results on the two engines,
+        the FFmpeg path fails closed and the caller must use the CPU mux.
+        """
+        if spec.dissolve > 0.0:
+            raise PipeExecutionError(
+                "dissolve is not supported on the ffmpeg_subprocess_pipe engine "
+                "(no byte-equivalent filter graph); use deterministic_cpu_mux"
+            )
         ops: list[FilterOp] = []
         eq_in = "v0"
         if spec.trim_end is not None:
@@ -447,6 +516,9 @@ class BoundedMemoryPipeRunner:
                     fps=spec.fps,
                 )
             )
+            eq_in = "v1"
+        elif spec.trim_start > 0:
+            ops.append(TrimStartOp(in_pad="v0", out_pad="v1", start_frame=spec.trim_start))
             eq_in = "v1"
         ops.append(
             ColorGradeEqOp(
@@ -492,6 +564,12 @@ class BoundedMemoryPipeRunner:
         thread (so a full ``stdout`` buffer cannot deadlock us) while ``stdout``
         and ``stderr`` are drained concurrently in fixed-size chunks.  The raw
         frames are never collected in memory as a single blob.
+
+        The in-flight resident bytes (the frame being written plus the output
+        chunk being drained) are checked against ``max_buffer_bytes`` before each
+        write, so a frame too large for the budget is refused with
+        :class:`MemoryBudgetExceededError`.  A wedged or failing child is always
+        killed and reaped in ``finally``, so no FFmpeg process outlives the call.
         """
         command = self.build_ffmpeg_command(spec)
         try:
@@ -509,8 +587,7 @@ class BoundedMemoryPipeRunner:
         stderr_pipe = proc.stderr
         assert stdin is not None and stdout is not None and stderr_pipe is not None
         writer_error: list[BaseException] = []
-        frames_written = [0]
-        peak_frame_bytes = [0]
+        peak_inflight = [_CHUNK_BYTES]
 
         def feed() -> None:
             try:
@@ -518,9 +595,17 @@ class BoundedMemoryPipeRunner:
                     for frame in segment:
                         self.validate_frame(frame, spec)
                         raw = frame.tobytes()
-                        peak_frame_bytes[0] = max(peak_frame_bytes[0], len(raw))
+                        # The frame we hold while writing plus the chunk the
+                        # reader holds while draining are both resident at once.
+                        inflight = len(raw) + _CHUNK_BYTES
+                        if inflight > self.max_buffer_bytes:
+                            raise MemoryBudgetExceededError(
+                                f"in-flight frame {len(raw)} B + read chunk "
+                                f"{_CHUNK_BYTES} B exceeds max_buffer_bytes "
+                                f"{self.max_buffer_bytes}"
+                            )
+                        peak_inflight[0] = max(peak_inflight[0], inflight)
                         stdin.write(raw)
-                        frames_written[0] += 1
             except BaseException as exc:  # noqa: BLE001 - relayed to the main thread
                 writer_error.append(exc)
             finally:
@@ -552,8 +637,13 @@ class BoundedMemoryPipeRunner:
             stderr_thread.join()
             returncode = proc.wait()
         finally:
-            # Popen does not close the pipes it handed us; release them so a
-            # long-lived process never leaks a descriptor per segment.
+            # Never let a wedged child or a stuck writer outlive the call.
+            if proc.poll() is None:
+                proc.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=_KILL_TIMEOUT_SECONDS)
+            writer.join(timeout=_KILL_TIMEOUT_SECONDS)
+            stderr_thread.join(timeout=_KILL_TIMEOUT_SECONDS)
             for pipe in (stdout, stderr_pipe):
                 try:
                     pipe.close()
@@ -561,18 +651,32 @@ class BoundedMemoryPipeRunner:
                     pass
         if writer_error:
             writer_exc = writer_error[0]
+            if isinstance(writer_exc, MemoryBudgetExceededError):
+                raise writer_exc
             if isinstance(writer_exc, PipeExecutionError):
                 raise writer_exc
             raise PipeExecutionError(f"ffmpeg pipe writer failed: {writer_exc}") from writer_exc
         if returncode != 0:
             raise PipeExecutionError(f"ffmpeg pipe exited {returncode}")
+        frame_size = frame_bytes(spec)
+        if total % frame_size != 0:
+            raise PipeExecutionError(
+                f"ffmpeg emitted {total} bytes, not a whole number of {frame_size}-byte frames"
+            )
+        emitted_frames = total // frame_size
+        expected = spec.expected_frame_count
+        if expected is not None and emitted_frames != expected:
+            raise PipeExecutionError(
+                f"ffmpeg emitted {emitted_frames} frames, expected {expected} "
+                f"(trim range {spec.trim_start}..{spec.trim_end})"
+            )
         return StreamOutcome(
             output_digest=container_hasher.hexdigest(),
             body_digest=container_hasher.hexdigest(),
             body_size=total,
             container_size=total,
-            frames_processed=frames_written[0],
-            peak_buffer_bytes=peak_frame_bytes[0],
+            frames_processed=emitted_frames,
+            peak_buffer_bytes=peak_inflight[0],
             max_buffer_bytes=self.max_buffer_bytes,
             mode=MuxMode.FFMPEG_SUBPROCESS_PIPE,
             container_path=None,

@@ -254,11 +254,13 @@ def test_stream_applies_dissolve() -> None:
 
 
 def test_stream_peak_never_exceeds_budget() -> None:
-    # 12 frames of 8x8x3 = 192 bytes each; a 3-frame budget must never be crossed.
-    runner = BoundedMemoryPipeRunner(max_buffer_bytes=192 * 3)
+    # 12 frames of 8x8x3 = 192 bytes each.  The budget must cover the CPU
+    # working set plus the buffered frames, and the reported peak must include
+    # that working set while still never crossing the budget.
+    runner = BoundedMemoryPipeRunner(max_buffer_bytes=4096)
     outcome = runner.stream(frames(12), spec())
     assert outcome.peak_buffer_bytes <= outcome.max_buffer_bytes
-    assert outcome.peak_buffer_bytes <= 192 * 3
+    assert outcome.peak_buffer_bytes <= 4096
     assert outcome.frames_processed == 12
     outcome.container_path.unlink()  # type: ignore[union-attr]
 
@@ -269,8 +271,47 @@ def test_stream_refuses_frame_larger_than_budget() -> None:
         runner.stream(frames(1, size=8), spec())
 
 
+def test_stream_budget_must_cover_cpu_working_set() -> None:
+    # P1-C: max_buffer_bytes is a *total* ceiling, so a budget that cannot hold
+    # the CPU working set plus one frame is refused up front, not silently
+    # exceeded by the transient float32/tone buffers.
+    working_set = bmpr.cpu_working_set_bytes(spec())
+    assert working_set > 0
+    runner = BoundedMemoryPipeRunner(max_buffer_bytes=working_set)
+    with pytest.raises(MemoryBudgetExceededError):
+        runner.stream(frames(1), spec())
+
+
+def test_cpu_working_set_grows_with_dissolve() -> None:
+    plain = bmpr.cpu_working_set_bytes(spec())
+    blended = bmpr.cpu_working_set_bytes(spec(dissolve=0.5))
+    assert blended > plain
+
+
+def test_stream_peak_accounts_for_working_set() -> None:
+    # The reported peak includes the CPU working set, so it is a true ceiling
+    # on the resident payload rather than on the ring buffer alone.
+    runner = BoundedMemoryPipeRunner(max_buffer_bytes=8192)
+    outcome = runner.stream(frames(3), spec())
+    assert outcome.peak_buffer_bytes >= bmpr.cpu_working_set_bytes(spec())
+    assert outcome.peak_buffer_bytes <= outcome.max_buffer_bytes
+    outcome.container_path.unlink()  # type: ignore[union-attr]
+
+
+def test_stream_applies_backpressure_when_ring_is_small() -> None:
+    # A ring that holds only ~2 frames forces the producer to drain on push, so
+    # the backpressure branch (consume-on-full) is exercised and the peak stays
+    # inside the budget.
+    working_set = bmpr.cpu_working_set_bytes(spec())
+    runner = BoundedMemoryPipeRunner(max_buffer_bytes=working_set + 192 * 2)
+    outcome = runner.stream(frames(8), spec())
+    assert outcome.frames_processed == 8
+    assert outcome.peak_buffer_bytes <= outcome.max_buffer_bytes
+    outcome.container_path.unlink()  # type: ignore[union-attr]
+
+
 def test_stream_many_across_segments() -> None:
-    runner = BoundedMemoryPipeRunner(max_buffer_bytes=192 * 3)
+    runner = BoundedMemoryPipeRunner(max_buffer_bytes=4096)
     outcome = runner.stream_many([frames(5), frames(5)], spec())
     assert outcome.frames_processed == 10
     assert outcome.peak_buffer_bytes <= outcome.max_buffer_bytes
@@ -308,6 +349,104 @@ def test_build_ffmpeg_command_without_trim() -> None:
     assert "eq=" in " ".join(command)
 
 
+def test_build_ffmpeg_command_with_open_ended_trim() -> None:
+    # P1-B: trim_start > 0 with trim_end=None must still emit a trim filter,
+    # matching the CPU engine instead of silently dropping the offset.
+    runner = BoundedMemoryPipeRunner()
+    command = runner.build_ffmpeg_command(spec(trim_start=3))
+    joined = " ".join(command)
+    assert "trim=start_frame=3" in joined
+    assert "setpts=PTS-STARTPTS" in joined
+    assert "end_frame" not in joined
+
+
+def test_build_ffmpeg_command_with_closed_trim() -> None:
+    runner = BoundedMemoryPipeRunner()
+    command = runner.build_ffmpeg_command(spec(trim_start=2, trim_end=9))
+    assert "trim=start_frame=2:end_frame=9" in " ".join(command)
+
+
+def test_build_ffmpeg_command_refuses_dissolve() -> None:
+    # P1-B: no byte-equivalent FFmpeg graph exists for the CPU dissolve, so the
+    # FFmpeg path fails closed rather than producing a different result.
+    runner = BoundedMemoryPipeRunner()
+    with pytest.raises(PipeExecutionError, match="dissolve"):
+        runner.build_ffmpeg_command(spec(dissolve=0.5))
+
+
+def test_run_ffmpeg_stream_refuses_dissolve_before_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("Popen must not be reached for a dissolve spec")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    runner = BoundedMemoryPipeRunner()
+    with pytest.raises(PipeExecutionError, match="dissolve"):
+        runner.run_ffmpeg_stream([frames(1)], spec(dissolve=0.5))
+
+
+def test_run_ffmpeg_stream_enforces_memory_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    # P1-C: a frame whose in-flight size exceeds max_buffer_bytes must fail closed
+    # on the FFmpeg path, not merely be recorded in the peak.
+    class FakeProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(b"")
+            self.stderr = io.BytesIO(b"")
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    runner = BoundedMemoryPipeRunner(max_buffer_bytes=1024)
+    with pytest.raises(MemoryBudgetExceededError):
+        runner.run_ffmpeg_stream([frames(1, size=8)], spec())
+
+
+def test_run_ffmpeg_stream_rejects_partial_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    # P1-B: a stdout byte count that is not a whole number of frames is refused.
+    class FakeProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(b"\x00" * 100)  # 100 is not a multiple of 192
+            self.stderr = io.BytesIO(b"")
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    runner = BoundedMemoryPipeRunner()
+    with pytest.raises(PipeExecutionError, match="whole number"):
+        runner.run_ffmpeg_stream([frames(1)], spec())
+
+
+def test_run_ffmpeg_stream_rejects_wrong_frame_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    # P1-B: a closed trim range whose output frame count disagrees is refused.
+    class FakeProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(b"\x00" * 192)  # exactly one frame, but 3 expected
+            self.stderr = io.BytesIO(b"")
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    runner = BoundedMemoryPipeRunner()
+    with pytest.raises(PipeExecutionError, match="expected"):
+        runner.run_ffmpeg_stream([frames(1)], spec(trim_start=0, trim_end=3))
+
+
 def test_build_ffmpeg_command_rejects_nan() -> None:
     runner = BoundedMemoryPipeRunner()
     with pytest.raises(PipeExecutionError):
@@ -320,6 +459,33 @@ def test_run_ffmpeg_stream_reports_missing_binary() -> None:
         runner.run_ffmpeg_stream([frames(1)], spec())
 
 
+def test_run_ffmpeg_stream_kills_wedged_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    # P1-D: if the child is still alive when we finish, it must be killed and
+    # reaped rather than left running.
+    killed = {"kill": False}
+
+    class WedgedProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(b"")
+            self.stderr = io.BytesIO(b"")
+
+        def poll(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            killed["kill"] = True
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", WedgedProc)
+    runner = BoundedMemoryPipeRunner()
+    outcome = runner.run_ffmpeg_stream([], spec())
+    assert killed["kill"] is True
+    assert outcome.frames_processed == 0
+
+
 def test_run_ffmpeg_stream_reports_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeProc:
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -327,7 +493,10 @@ def test_run_ffmpeg_stream_reports_nonzero_exit(monkeypatch: pytest.MonkeyPatch)
             self.stdout = io.BytesIO(b"")
             self.stderr = io.BytesIO(b"boom")
 
-        def wait(self) -> int:
+        def poll(self) -> int:
+            return 1
+
+        def wait(self, timeout: float | None = None) -> int:
             return 1
 
     monkeypatch.setattr(subprocess, "Popen", FakeProc)
@@ -350,17 +519,22 @@ def test_run_ffmpeg_stream_success(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeProc:
         def __init__(self, *args: object, **kwargs: object) -> None:
             self.stdin = io.BytesIO()
-            self.stdout = CloseOncePipe(b"rawout")
+            # Two whole 8x8x3 frames so the output frame-count check passes.
+            self.stdout = CloseOncePipe(b"rawout" * (384 // 6))
             self.stderr = CloseOncePipe(b"")
 
-        def wait(self) -> int:
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
             return 0
 
     monkeypatch.setattr(subprocess, "Popen", FakeProc)
     runner = BoundedMemoryPipeRunner()
     outcome = runner.run_ffmpeg_stream([frames(1)], spec())
     assert outcome.mode is MuxMode.FFMPEG_SUBPROCESS_PIPE
-    assert outcome.body_size == len(b"rawout")
+    assert outcome.body_size == 384
+    assert outcome.frames_processed == 2
 
 
 def test_run_ffmpeg_stream_relays_writer_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -370,7 +544,10 @@ def test_run_ffmpeg_stream_relays_writer_error(monkeypatch: pytest.MonkeyPatch) 
             self.stdout = io.BytesIO(b"")
             self.stderr = io.BytesIO(b"")
 
-        def wait(self) -> int:
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
             return 0
 
     monkeypatch.setattr(subprocess, "Popen", FakeProc)
@@ -401,7 +578,10 @@ def test_run_ffmpeg_stream_relays_plain_oserror(monkeypatch: pytest.MonkeyPatch)
             self.stdout = io.BytesIO(b"")
             self.stderr = io.BytesIO(b"")
 
-        def wait(self) -> int:
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
             return 0
 
     monkeypatch.setattr(subprocess, "Popen", FakeProc)

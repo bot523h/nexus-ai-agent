@@ -59,12 +59,17 @@ class ByteSink(Protocol):
 _SPEC_DOMAIN = b"NEXUS.SEGMENT.CAS.v1"
 _MTH_DOMAIN = b"NEXUS.TIMELINE.MTH.v1"
 _ARTIFACT_MAGIC = b"NAGARSEG1"
+#: Bumped whenever the renderer changes what a segment's bytes mean, so a
+#: stale artifact can never be reused across an incompatible renderer.
+RENDERER_VERSION = "hyper-compiler/1"
 _KEY_HEX_LEN = 64
 _CONTENT_SHA_OFFSET = len(_ARTIFACT_MAGIC) + _KEY_HEX_LEN + 8
 _HEADER_LEN = _CONTENT_SHA_OFFSET + 32
 #: Public alias: byte length of the artifact header (``magic || key || len || sha``).
 SEGMENT_HEADER_LEN = _HEADER_LEN
 _CHUNK_BYTES = 64 * 1024
+#: A manifest is tiny JSON; anything larger is hostile or corrupt.
+_MAX_MANIFEST_BYTES = 1024 * 1024
 _CAS_KEY_RE = re.compile(r"[0-9a-f]{64}")
 
 
@@ -135,12 +140,22 @@ class TimelineSegmentSpec:
         return self.end_frame - self.start_frame
 
 
-def canonical_spec_bytes(spec: TimelineSegmentSpec, *, pipeline_digest: str = "") -> bytes:
+def canonical_spec_bytes(
+    spec: TimelineSegmentSpec,
+    *,
+    pipeline_digest: str = "",
+    mux_mode: str = "",
+    renderer_version: str = RENDERER_VERSION,
+) -> bytes:
     """Deterministic, length-prefixed, type-tagged encoding of a segment spec.
 
     ``pipeline_digest`` is the render-pipeline fingerprint; folding it in means a
     change to any pipeline knob (brightness, dissolve, trim, …) changes the key
-    even when the timeline spec itself is untouched.
+    even when the timeline spec itself is untouched.  ``mux_mode`` is the engine
+    that produced (or will produce) the bytes and ``renderer_version`` the
+    renderer identity, so a segment rendered by the CPU mux and one rendered by
+    the FFmpeg pipe can never share a cache entry, and neither can be reused
+    across an incompatible renderer.
     """
     parts = (
         _length_prefixed(b"seg", spec.segment_id.encode("utf-8")),
@@ -155,6 +170,8 @@ def canonical_spec_bytes(spec: TimelineSegmentSpec, *, pipeline_digest: str = ""
         _length_prefixed(b"aud", spec.audio_digest.encode("utf-8")),
         _length_prefixed(b"afx", spec.audio_filter_digest.encode("utf-8")),
         _length_prefixed(b"pipe", pipeline_digest.encode("utf-8")),
+        _length_prefixed(b"mux", mux_mode.encode("utf-8")),
+        _length_prefixed(b"rdr", renderer_version.encode("utf-8")),
     )
     return _SPEC_DOMAIN + b"".join(parts)
 
@@ -164,9 +181,16 @@ def segment_cas_key(
     *,
     hmac_key: bytes | None = None,
     pipeline_digest: str = "",
+    mux_mode: str = "",
+    renderer_version: str = RENDERER_VERSION,
 ) -> str:
     """Content-addressed key for ``spec`` (HMAC-SHA256 when a key is supplied)."""
-    data = canonical_spec_bytes(spec, pipeline_digest=pipeline_digest)
+    data = canonical_spec_bytes(
+        spec,
+        pipeline_digest=pipeline_digest,
+        mux_mode=mux_mode,
+        renderer_version=renderer_version,
+    )
     if hmac_key is not None:
         return hmac.new(hmac_key, data, hashlib.sha256).hexdigest()
     return hashlib.sha256(data).hexdigest()
@@ -244,6 +268,7 @@ class PlannedSegment:
     pipeline_digest: str = ""
     content_sha: str = ""
     body_size: int = 0
+    mode: str = ""
 
 
 @dataclass(frozen=True)
@@ -253,6 +278,7 @@ class VerifiedSegment:
     cas_key: str
     content_sha: str
     body_size: int
+    mode: str = ""
 
 
 @dataclass(frozen=True)
@@ -344,8 +370,19 @@ class SegmentCASPlanner:
         self._hmac_key = hmac_key
 
     # -- keys & paths -------------------------------------------------------
-    def cas_key(self, spec: TimelineSegmentSpec, *, pipeline_digest: str = "") -> str:
-        return segment_cas_key(spec, hmac_key=self._hmac_key, pipeline_digest=pipeline_digest)
+    def cas_key(
+        self,
+        spec: TimelineSegmentSpec,
+        *,
+        pipeline_digest: str = "",
+        mux_mode: str = "",
+    ) -> str:
+        return segment_cas_key(
+            spec,
+            hmac_key=self._hmac_key,
+            pipeline_digest=pipeline_digest,
+            mux_mode=mux_mode,
+        )
 
     def _safe_cache_path(self, name: str) -> Path:
         path = self.cache_dir / name
@@ -367,14 +404,18 @@ class SegmentCASPlanner:
         timeline: Sequence[TimelineSegmentSpec],
         *,
         pipeline_digests: Sequence[str] | None = None,
+        mux_modes: Sequence[str] | None = None,
     ) -> SegmentPlan:
         if pipeline_digests is not None and len(pipeline_digests) != len(timeline):
             raise HyperCompilerError("pipeline_digests length must match the timeline")
+        if mux_modes is not None and len(mux_modes) != len(timeline):
+            raise HyperCompilerError("mux_modes length must match the timeline")
         planned: list[PlannedSegment] = []
         keys: list[str] = []
         for index, spec in enumerate(timeline):
             digest = "" if pipeline_digests is None else pipeline_digests[index]
-            key = self.cas_key(spec, pipeline_digest=digest)
+            mode = "" if mux_modes is None else mux_modes[index]
+            key = self.cas_key(spec, pipeline_digest=digest, mux_mode=mode)
             keys.append(key)
             path = self.artifact_path(key)
             try:
@@ -385,10 +426,12 @@ class SegmentCASPlanner:
                 status = SegmentStatus.RENDER_REQUIRED
                 content_sha = ""
                 body_size = 0
+                verified_mode = ""
             else:
                 status = SegmentStatus.CACHE_HIT
                 content_sha = verified.content_sha
                 body_size = verified.body_size
+                verified_mode = verified.mode
             planned.append(
                 PlannedSegment(
                     spec,
@@ -398,6 +441,7 @@ class SegmentCASPlanner:
                     digest,
                     content_sha=content_sha,
                     body_size=body_size,
+                    mode=verified_mode or mode,
                 )
             )
         cache_hits = sum(1 for seg in planned if seg.status is SegmentStatus.CACHE_HIT)
@@ -410,12 +454,22 @@ class SegmentCASPlanner:
         )
 
     # -- manifests ----------------------------------------------------------
-    def _write_manifest(self, cas_key: str, *, content_sha: str, file_sha: str, size: int) -> None:
+    def _write_manifest(
+        self,
+        cas_key: str,
+        *,
+        content_sha: str,
+        file_sha: str,
+        size: int,
+        mode: str,
+    ) -> None:
         manifest: dict[str, object] = {
             "cas_key": cas_key,
             "content_sha256": content_sha,
             "file_sha256": file_sha,
             "size": size,
+            "mode": mode,
+            "renderer_version": RENDERER_VERSION,
         }
         if self._hmac_key is not None:
             sealed = json.dumps(manifest, sort_keys=True).encode("utf-8")
@@ -426,10 +480,22 @@ class SegmentCASPlanner:
         )
 
     def read_manifest(self, cas_key: str) -> dict[str, object]:
-        """Load and validate the manifest (including its HMAC seal when keyed)."""
+        """Load and validate the manifest (including its HMAC seal when keyed).
+
+        The file size is checked *before* reading, so a hostile multi-gigabyte
+        manifest cannot be pulled into memory.
+        """
         manifest_file = self.manifest_path(cas_key)
         if not manifest_file.is_file():
             raise SegmentIntegrityError(f"segment manifest missing: {manifest_file}")
+        try:
+            manifest_size = os.stat(manifest_file).st_size
+        except OSError as exc:
+            raise SegmentIntegrityError(f"segment manifest unreadable: {exc}") from exc
+        if manifest_size > _MAX_MANIFEST_BYTES:
+            raise SegmentIntegrityError(
+                f"segment manifest too large: {manifest_size} > {_MAX_MANIFEST_BYTES} bytes"
+            )
         try:
             manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -447,7 +513,7 @@ class SegmentCASPlanner:
         return manifest
 
     # -- artifact lifecycle -------------------------------------------------
-    def write_segment_artifact(self, cas_key: str, payload: bytes) -> Path:
+    def write_segment_artifact(self, cas_key: str, payload: bytes, *, mode: str = "") -> Path:
         """Atomically persist ``payload`` under ``cas_key`` plus its manifest."""
         path = self.artifact_path(cas_key)
         raw = _encode_artifact(cas_key, payload)
@@ -457,6 +523,7 @@ class SegmentCASPlanner:
             content_sha=hashlib.sha256(payload).hexdigest(),
             file_sha=hashlib.sha256(raw).hexdigest(),
             size=len(raw),
+            mode=mode,
         )
         return path
 
@@ -471,6 +538,7 @@ class SegmentCASPlanner:
         *,
         size: int,
         digest: str,
+        mode: str = "",
     ) -> Path:
         """Atomically persist a payload streamed from ``source`` (bounded RAM).
 
@@ -523,6 +591,7 @@ class SegmentCASPlanner:
             content_sha=digest,
             file_sha=file_hasher.hexdigest(),
             size=SEGMENT_HEADER_LEN + body_len,
+            mode=mode,
         )
         return path
 
@@ -571,12 +640,28 @@ class SegmentCASPlanner:
         return verified
 
     def _open_verified(self, cas_key: str, path: Path | None) -> tuple[BinaryIO, VerifiedSegment]:
-        """Verify ``cas_key`` fully, then return an open handle positioned at the body."""
+        """Verify ``cas_key`` fully, then return an open handle positioned at the body.
+
+        An explicit ``path`` must still resolve inside ``cache_dir`` — the same
+        containment rule as every derived path, so a caller cannot be tricked
+        into reading or trusting a file outside the store.
+        """
         validated = validate_cas_key(cas_key)
-        artifact = Path(path) if path is not None else self.artifact_path(validated)
+        if path is not None:
+            artifact = Path(path)
+            if not artifact.resolve().is_relative_to(self.cache_dir.resolve()):
+                raise SegmentIntegrityError(f"artifact path escapes cache_dir: {artifact}")
+        else:
+            artifact = self.artifact_path(validated)
         if not artifact.is_file():
             raise SegmentIntegrityError(f"segment artifact missing: {artifact}")
         manifest = self.read_manifest(validated)
+        if manifest.get("renderer_version") not in (None, RENDERER_VERSION):
+            raise SegmentIntegrityError(
+                f"segment rendered by an incompatible renderer: "
+                f"{manifest.get('renderer_version')!r}"
+            )
+        stored_mode = manifest.get("mode", "")
         handle = artifact.open("rb")
         try:
             header = handle.read(SEGMENT_HEADER_LEN)
@@ -613,12 +698,16 @@ class SegmentCASPlanner:
             handle.close()
             raise
         verified = VerifiedSegment(
-            cas_key=validated, content_sha=content_sha.hex(), body_size=body_len
+            cas_key=validated,
+            content_sha=content_sha.hex(),
+            body_size=body_len,
+            mode=stored_mode if isinstance(stored_mode, str) else "",
         )
         return handle, verified
 
 
 __all__ = [
+    "RENDERER_VERSION",
     "SEGMENT_HEADER_LEN",
     "PlannedSegment",
     "SegmentCASPlanner",
