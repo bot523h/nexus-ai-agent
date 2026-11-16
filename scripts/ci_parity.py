@@ -144,6 +144,8 @@ SUB_CHUNKS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             (
                 f"{ATLAS}/test_adjoint_inverse_cinema_solver.py",
                 f"{ATLAS}/test_anamorphic_scattering_renderer.py",
+                f"{ATLAS}/test_colour_output_transform.py",
+                f"{ATLAS}/test_media_cleanup_logging.py",
                 f"{ATLAS}/test_nash_dramatic_staging_solver.py",
                 f"{ATLAS}/test_port_hamiltonian_world_solver.py",
                 f"{ATLAS}/test_riemannian_camera_choreographer.py",

@@ -116,10 +116,33 @@ def test_a_tampered_install_is_repair_required_not_signature_required(
 
 def test_a_broken_pointer_is_reported_without_raising(mirror: PackMirror, tmp_path: Path) -> None:
     public = _installed_packs(mirror, tmp_path / "device")
-    (tmp_path / "device" / "packs" / "core" / "active.json").write_bytes(b"{not json")
+    pointer = tmp_path / "device" / "packs" / "core" / "active.json"
+    pointer.write_bytes(b"{not json")
     rows = delivery_statuses(tmp_path / "device", trusted_public_key=public)
     assert rows[0].state == "repair_required"
     assert "active pointer" in rows[0].detail
+
+    pointer.write_bytes(b"[]")
+    rows = delivery_statuses(tmp_path / "device", trusted_public_key=public)
+    assert rows[0].state == "repair_required"
+    assert "not a JSON object" in rows[0].detail
+
+    pointer.write_bytes(b"{}")
+    rows = delivery_statuses(tmp_path / "device", trusted_public_key=public)
+    assert rows[0].state == "repair_required"
+    assert "does not name a version" in rows[0].detail
+
+
+def test_an_unreadable_installed_manifest_is_reported_as_repair_required(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    public = _installed_packs(mirror, tmp_path / "device")
+    versions_dir = tmp_path / "device" / "packs" / "core" / "versions"
+    manifest_file = next(versions_dir.glob("*.manifest.json"))
+    manifest_file.unlink()
+    rows = delivery_statuses(tmp_path / "device", trusted_public_key=public)
+    assert rows[0].state == "repair_required"
+    assert "installed manifest is unreadable" in rows[0].detail
 
 
 def test_an_unconfigured_root_is_not_an_empty_success(mirror: PackMirror, tmp_path: Path) -> None:
