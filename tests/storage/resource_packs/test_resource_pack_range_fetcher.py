@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import io
 import urllib.request
 from pathlib import Path
@@ -20,8 +21,10 @@ from nexus_ai_agent.storage.resource_packs import (
     RangeReply,
     ResourceBlobEntry,
     ResumableRangeFetcher,
+    UnsafeSourceError,
     default_blob_key,
 )
+from nexus_ai_agent.storage.resource_packs import resumable_range_fetcher as rrf
 
 SIZE = 200_000
 
@@ -290,3 +293,98 @@ def test_http_source_unexpected_status_and_unknown_total() -> None:
     assert reply.total_size is None
     plain = HttpRangePackSource("https://cdn.example", opener=_FakeOpener(_FakeResponse(200, {})))
     assert plain.open_range("x", 0).total_size is None
+
+
+# -- F5: host allowlist & redirect policy ------------------------------------
+
+
+class _RecordingOpener(urllib.request.OpenerDirector):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[object] = []
+
+    def open(self, fullurl: object, data: object = None, timeout: float | None = None) -> object:
+        self.calls.append(fullurl)
+        raise AssertionError("no request may be sent to a forbidden host")
+
+
+def test_disallowed_host_is_refused_before_any_request() -> None:
+    with pytest.raises(UnsafeSourceError, match="evil.example"):
+        HttpRangePackSource("https://evil.example/packs", allowed_hosts={"cdn.example"})
+    with pytest.raises(UnsafeSourceError):  # an explicit empty allowlist allows nothing
+        HttpRangePackSource("https://cdn.example", allowed_hosts=())
+    with pytest.raises(UnsafeSourceError):  # userinfo cannot smuggle a host past the check
+        HttpRangePackSource("https://cdn.example@evil.example/", allowed_hosts=["cdn.example"])
+    default = HttpRangePackSource("https://CDN.Example./packs/")
+    assert default.allowed_hosts == frozenset({"cdn.example"})
+    explicit = HttpRangePackSource("https://cdn.example", allowed_hosts=["CDN.example", " "])
+    assert explicit.allowed_hosts == frozenset({"cdn.example"})
+
+    opener = _RecordingOpener()
+    source = HttpRangePackSource("https://cdn.example", opener=opener)
+    source.base_url = "https://evil.example"  # tampering after construction
+    with pytest.raises(UnsafeSourceError):
+        source.open_range("blobs/x", 0)
+    assert opener.calls == []
+
+
+def test_source_policy_arguments_are_strict() -> None:
+    with pytest.raises(TypeError, match="not a str"):
+        HttpRangePackSource("https://cdn.example", allowed_hosts="cdn.example")
+    with pytest.raises(TypeError, match="allow_redirects"):
+        HttpRangePackSource("https://cdn.example", allow_redirects=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="absolute"):
+        HttpRangePackSource("http:///no-host")
+
+
+def _redirect_handler(base: str, *, follow: bool) -> rrf._AllowlistRedirectHandler:
+    source = HttpRangePackSource(base, allowed_hosts=["cdn.example"], allow_redirects=follow)
+    return rrf._AllowlistRedirectHandler(source._policy)
+
+
+def test_redirect_handler_blocks_scheme_downgrade_and_closes_the_reply() -> None:
+    request = urllib.request.Request("https://cdn.example/blobs/x")
+    headers = http.client.HTTPMessage()
+    for target in ("http://cdn.example/blobs/x", "ftp://cdn.example/x", "https://evil.example/x"):
+        body = io.BytesIO(b"")
+        with pytest.raises(UnsafeSourceError):
+            _redirect_handler("https://cdn.example", follow=True).redirect_request(
+                request, body, 302, "Found", headers, target
+            )
+        assert body.closed
+    handler = _redirect_handler("https://cdn.example", follow=True)
+    target = "https://cdn.example/mirror/x"
+    allowed = handler.redirect_request(request, io.BytesIO(b""), 302, "Found", headers, target)
+    assert allowed is not None and allowed.full_url == "https://cdn.example/mirror/x"
+
+
+@pytest.mark.parametrize("follow", [False, True])
+def test_real_302_to_a_disallowed_host_is_blocked(
+    mirror: PackMirror, tmp_path: Path, follow: bool
+) -> None:
+    entry = mirror.add_remote("textures/hero.ktx2", blob("redirect", 4096))
+    with range_http_server(mirror.root) as server:
+        source = HttpRangePackSource(server.base_url, allow_redirects=follow)
+        fetcher = _fetcher(source, tmp_path, max_attempts=3)
+        server.redirect_to = "http://evil.invalid"
+        with pytest.raises(UnsafeSourceError):
+            fetcher.fetch(entry)
+    assert len(server.range_headers) == 1  # one 302, never retried, never followed
+    assert not fetcher.store.has(entry.sha256)
+    assert not fetcher.store.part_path(entry.sha256).exists()
+
+
+def test_real_302_to_an_allowed_host_is_followed_when_enabled(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    data = blob("redirect-ok", 4096)
+    entry = mirror.add_remote("textures/hero.ktx2", data)
+    with range_http_server(mirror.root) as server:
+        port = server.base_url.rsplit(":", 1)[1]
+        source = HttpRangePackSource(
+            server.base_url, allowed_hosts={"127.0.0.1", "localhost"}, allow_redirects=True
+        )
+        server.redirect_to = f"http://localhost:{port}"
+        outcome = _fetcher(source, tmp_path).fetch(entry)
+    assert outcome.path.read_bytes() == data
+    assert server.request_hosts == [f"127.0.0.1:{port}", f"localhost:{port}"]

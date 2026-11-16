@@ -29,14 +29,14 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import BinaryIO, Protocol
+from typing import IO, BinaryIO, Protocol
 
 from .content_store import LocalContentStore
-from .errors import IntegrityError, RangeFetchError, RangeFetchInterrupted
+from .errors import IntegrityError, RangeFetchError, RangeFetchInterrupted, UnsafeSourceError
 from .pack_manifest import ResourceBlobEntry
 
 __all__ = [
@@ -123,11 +123,68 @@ class LocalDirectoryPackSource:
         return RangeReply(200, 0, size, handle)
 
 
+def _normalise_host(host: str) -> str:
+    return host.strip().rstrip(".").lower()
+
+
+class _SourcePolicy:
+    """Scheme + exact-hostname allowlist shared by requests and redirects."""
+
+    def __init__(self, schemes: frozenset[str], hosts: frozenset[str], follow: bool) -> None:
+        self.schemes = schemes
+        self.hosts = hosts
+        self.follow = follow
+
+    def check(self, url: str) -> None:
+        parsed = urllib.parse.urlsplit(url)
+        host = _normalise_host(parsed.hostname or "")
+        if parsed.scheme not in self.schemes:
+            raise UnsafeSourceError(f"scheme {parsed.scheme!r} is not allowed for {url!r}")
+        if host not in self.hosts:
+            raise UnsafeSourceError(f"host {host!r} is not in allowed_hosts")
+
+
+class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect unless enabled *and* aimed at an allowed scheme/host.
+
+    The check runs inside ``redirect_request`` — i.e. before urllib opens a
+    connection to the new location — and the refused response is closed.
+    """
+
+    def __init__(self, policy: _SourcePolicy) -> None:
+        self._policy = policy
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: http.client.HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        try:
+            if not self._policy.follow:
+                raise UnsafeSourceError(f"HTTP {code} redirect refused (allow_redirects=False)")
+            self._policy.check(newurl)
+        except UnsafeSourceError:
+            fp.close()
+            raise
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 class HttpRangePackSource:
     """HTTP(S) source with ``Range`` support, on :mod:`urllib.request` only.
 
-    Only ``http``/``https`` base URLs are accepted (``file:`` and friends
-    would turn a manifest into a local-file read primitive).
+    Only ``http``/``https`` URLs are accepted (``file:`` and friends would turn
+    a manifest into a local-file read primitive), and only towards
+    ``allowed_hosts`` (exact, case-insensitive hostnames; ``None`` means "the
+    base URL's host only").  An ``https`` base never accepts a downgrade to
+    ``http``.  Redirects are refused unless ``allow_redirects=True``, and even
+    then only to allowed hosts/schemes.  Every violation raises
+    :class:`UnsafeSourceError` before a request is sent to the forbidden
+    destination.  A caller-supplied *opener* bypasses the redirect handler and
+    is the caller's responsibility.
     """
 
     def __init__(
@@ -137,14 +194,34 @@ class HttpRangePackSource:
         timeout: float = 30.0,
         headers: Mapping[str, str] | None = None,
         opener: urllib.request.OpenerDirector | None = None,
+        allowed_hosts: Collection[str] | None = None,
+        allow_redirects: bool = False,
     ) -> None:
         parsed = urllib.parse.urlsplit(base_url)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
             raise ValueError(f"base_url must be an absolute http(s) URL: {base_url!r}")
+        if isinstance(allowed_hosts, str):
+            raise TypeError("allowed_hosts must be a collection of hostnames, not a str")
+        if not isinstance(allow_redirects, bool):
+            raise TypeError("allow_redirects must be a bool")
+        hosts = frozenset(
+            _normalise_host(h)
+            for h in (allowed_hosts if allowed_hosts is not None else (parsed.hostname,))
+            if h.strip()
+        )
+        schemes = frozenset({"https"} if parsed.scheme == "https" else {"http", "https"})
+        self._policy = _SourcePolicy(schemes, hosts, allow_redirects)
+        self._policy.check(base_url)
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.headers = dict(headers or {})
-        self._opener = opener or urllib.request.build_opener()
+        self._opener = opener or urllib.request.build_opener(
+            _AllowlistRedirectHandler(self._policy)
+        )
+
+    @property
+    def allowed_hosts(self) -> frozenset[str]:
+        return self._policy.hosts
 
     def url_for(self, key: str) -> str:
         return f"{self.base_url}/{urllib.parse.quote(key.lstrip('/'), safe='/')}"
@@ -153,7 +230,9 @@ class HttpRangePackSource:
         headers = {"User-Agent": _USER_AGENT, "Accept-Encoding": "identity", **self.headers}
         if offset:
             headers["Range"] = f"bytes={offset}-"
-        request = urllib.request.Request(self.url_for(key), headers=headers, method="GET")
+        url = self.url_for(key)
+        self._policy.check(url)  # defence in depth: base_url is a public attribute
+        request = urllib.request.Request(url, headers=headers, method="GET")
         try:
             response = self._opener.open(request, timeout=self.timeout)
         except urllib.error.HTTPError as error:

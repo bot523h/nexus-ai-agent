@@ -20,6 +20,8 @@ import os
 import re
 import secrets
 import shutil
+import time
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 from .errors import IntegrityError
@@ -140,9 +142,28 @@ class LocalContentStore:
                 pass  # cross-device, FAT/exFAT, sandboxed storage: fall back to a copy
         shutil.copyfile(source, destination)
 
-    def collect_garbage(self, keep: set[str]) -> tuple[str, ...]:
-        """Delete every object not in *keep*; returns the evicted digests."""
-        removed = tuple(sorted(sha for sha in self.index() if sha not in keep))
-        for sha in removed:
+    def collect_garbage(
+        self,
+        keep: AbstractSet[str],
+        *,
+        min_age_seconds: float = 3600.0,
+        now: float | None = None,
+    ) -> tuple[str, ...]:
+        """Delete objects not in *keep* that are older than ``min_age_seconds``.
+
+        The grace period spares blobs a concurrent sync has just written but
+        not yet published (by mtime).  The caller is responsible for holding
+        the cross-process storage lock.  Returns the evicted digests.
+        """
+        if min_age_seconds < 0:
+            raise ValueError("min_age_seconds must be >= 0")
+        current = time.time() if now is None else now
+        removed: list[str] = []
+        for sha in sorted(self.index()):
+            if sha in keep:
+                continue
+            if current - self.object_path(sha).stat().st_mtime < min_age_seconds:
+                continue  # too young: may belong to a sync that has not published yet
             self.evict(sha)
-        return removed
+            removed.append(sha)
+        return tuple(removed)

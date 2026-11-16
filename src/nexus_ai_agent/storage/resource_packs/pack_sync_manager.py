@@ -2,68 +2,100 @@
 
 On-disk layout under ``root``::
 
+    .sync_gc.lock                       cross-process storage lock (flock / O_EXCL)
+    leases/<pid>-<token>.json           in-flight leases of running syncs
     cas/                                shared content-addressed store
     packs/<pack_id>/active.json         the ONLY commit point (atomic pointer)
     packs/<pack_id>/versions/<dir>/     immutable, verified install trees
     packs/<pack_id>/versions/<dir>.manifest.json
     packs/<pack_id>/staging/<dir>/      work in progress (always disposable)
 
+Security posture (all fail-closed by default)
+---------------------------------------------
+* **Signatures (F1)** — every target manifest must carry a valid Ed25519
+  signature from ``trusted_public_key``.  Without a key, or for an unsigned
+  manifest, nothing is planned, written or downloaded; only an explicit
+  ``allow_unsigned=True`` relaxes this.
+* **Anti-rollback (F4)** — a target whose ``MAJOR.MINOR.PATCH`` is strictly
+  below the active version is refused (``VersionRollbackError``), checked
+  before any work *and again* under the storage lock right before the pointer
+  flip, so a concurrent newer install cannot be overwritten by an older one.
+  Non-semantic versions cannot prove monotonicity and are refused too unless
+  ``allow_rollback=True``.
+* **Concurrency (F2)** — a sync registers a *lease* (PID, expiry, every digest
+  of the target manifest, its staging/install directory name) under the
+  cross-process lock before it writes anything.  ``collect_garbage`` and
+  ``prune_old_versions`` run under the same lock and never touch leased
+  digests or directories; GC additionally spares blobs younger than
+  ``min_age_seconds`` and refuses to run at all if a lease file is corrupt.
+  The lock is only held for short critical sections — never while user
+  callbacks run — so progress handlers may safely call GC or prune.
+
 A sync builds a complete new tree in ``staging``, verifies it against the RFC
-6962 root (and the Ed25519 signature when a trusted key is configured), moves
-it into ``versions`` and finally flips ``active.json`` with :func:`os.replace`.
-Any failure before the flip leaves the previous version — and the pointer to
-it — untouched; interrupted downloads keep their ``.part`` files so the next
-attempt resumes instead of restarting.
+6962 root and the signature, moves it into ``versions`` and finally flips
+``active.json`` with :func:`os.replace`.  Any failure before the flip leaves
+the previous version — and the pointer to it — untouched; interrupted
+downloads keep their ``.part`` files so the next attempt resumes.
 """
 
 from __future__ import annotations
 
+import importlib
 import json
+import math
 import os
 import re
 import secrets
 import shutil
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from types import ModuleType, TracebackType
+from typing import Literal
 
 from .content_store import LocalContentStore, fsync_directory
 from .delta_and_hydration_planner import SyncAction, SyncPlan, build_sync_plan
 from .errors import (
     InsufficientStorageError,
     ManifestValidationError,
+    PackLeaseError,
+    PackLockTimeoutError,
     PackSyncError,
     PackVerificationError,
     UnknownPackError,
+    VersionRollbackError,
 )
 from .pack_manifest import (
     PackTier,
     PackVerificationReport,
     ResourceBlobEntry,
     ResourcePackManifest,
+    enforce_manifest_signature,
     manifest_from_json,
     manifest_to_json,
-    signature_required,
     verify_installed_pack,
     verify_manifest_integrity,
-    verify_manifest_signature,
 )
 from .resumable_range_fetcher import PackSource, ResumableRangeFetcher
 from .seed_hydrator import hydrate_entry_to_store
 
 __all__ = [
     "GateState",
+    "LockBackend",
     "LoginResourceGateStatus",
     "PackGateStatus",
+    "PackSyncManager",
     "ProgressCallback",
     "ResourcePackSyncManager",
     "SyncProgress",
     "SyncResult",
     "SyncStage",
+    "parse_semantic_version",
 ]
+
 
 _PACK_ID_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
 _DIR_NAME_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,95}")
@@ -228,6 +260,23 @@ class _ProgressReporter:
         )
 
 
+_SEMVER_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_LOCK_FILE = ".sync_gc.lock"
+_LEASE_KEYS = frozenset({"schema", "pid", "pack_id", "install_dir", "expires_at", "digests"})
+_MANIFEST_SUFFIX = ".manifest.json"
+
+LockBackend = Literal["auto", "flock", "exclusive_file"]
+
+
+def parse_semantic_version(version: str) -> tuple[int, int, int] | None:
+    """``"1.10.2" -> (1, 10, 2)``; anything not strictly ``MAJOR.MINOR.PATCH`` -> ``None``."""
+    match = _SEMVER_RE.fullmatch(version)
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
 def _default_disk_free(path: Path) -> int:
     probe = path
     while not probe.exists():
@@ -246,6 +295,141 @@ def _write_atomic(path: Path, data: bytes) -> None:
     fsync_directory(path.parent)
 
 
+def _load_fcntl() -> ModuleType | None:
+    try:
+        return importlib.import_module("fcntl")
+    except ImportError:  # Windows and some sandboxes have no fcntl
+        return None
+
+
+class _StorageLock:
+    """Exclusive cross-process lock on ``<root>/.sync_gc.lock``.
+
+    ``flock`` (POSIX) is released by the kernel when the owner dies.  The
+    portable fallback creates ``.sync_gc.lock.excl`` atomically with
+    ``O_CREAT | O_EXCL`` and records the owner PID and expiry; a lock file
+    older than ``stale_after`` seconds is considered abandoned and broken.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        backend: LockBackend,
+        timeout: float,
+        stale_after: float,
+        wall_clock: Callable[[], float],
+    ) -> None:
+        fcntl = None if backend == "exclusive_file" else _load_fcntl()
+        if backend == "flock" and fcntl is None:
+            raise ValueError("lock_backend='flock' requested but fcntl is unavailable")
+        self._fcntl = fcntl
+        self.path = root / (_LOCK_FILE if fcntl is not None else f"{_LOCK_FILE}.excl")
+        self.timeout = timeout
+        self.stale_after = stale_after
+        self.wall_clock = wall_clock
+        self._fd: int | None = None
+
+    def _owner_record(self) -> bytes:
+        return json.dumps(
+            {"pid": os.getpid(), "expires_at": self.wall_clock() + self.stale_after}
+        ).encode()
+
+    def _try_acquire(self) -> bool:
+        if self._fcntl is not None:
+            fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
+            try:
+                self._fcntl.flock(fd, self._fcntl.LOCK_EX | self._fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.close(fd)
+                return False
+            os.ftruncate(fd, 0)
+            os.write(fd, self._owner_record())
+            self._fd = fd
+            return True
+        try:
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            self._break_if_stale()
+            return False
+        try:
+            os.write(fd, self._owner_record())
+        finally:
+            os.close(fd)
+        return True
+
+    def _break_if_stale(self) -> None:
+        try:
+            age = self.wall_clock() - self.path.stat().st_mtime
+        except FileNotFoundError:  # lost a race with the releasing owner
+            return
+        if age > self.stale_after:
+            self.path.unlink(missing_ok=True)
+
+    def __enter__(self) -> _StorageLock:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + self.timeout
+        while not self._try_acquire():
+            if time.monotonic() >= deadline:
+                raise PackLockTimeoutError(
+                    f"storage lock {self.path} still held after {self.timeout}s"
+                )
+            time.sleep(0.02)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        if self._fcntl is not None and self._fd is not None:
+            self._fcntl.flock(self._fd, self._fcntl.LOCK_UN)
+            os.close(self._fd)
+            self._fd = None
+        else:
+            self.path.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class _Lease:
+    path: Path
+    pack_id: str
+    install_dir: str
+    expires_at: float
+    digests: frozenset[str]
+
+
+def _parse_lease(path: Path) -> _Lease:
+    try:
+        raw = json.loads(path.read_bytes())
+    except (OSError, ValueError) as error:
+        raise PackLeaseError(f"unreadable lease {path.name}: {error}") from error
+    valid = (
+        isinstance(raw, dict)
+        and set(raw) == _LEASE_KEYS
+        and raw["schema"] == 1
+        and isinstance(raw["pid"], int)
+        and isinstance(raw["pack_id"], str)
+        and _PACK_ID_RE.fullmatch(raw["pack_id"]) is not None
+        and isinstance(raw["install_dir"], str)
+        and _DIR_NAME_RE.fullmatch(raw["install_dir"]) is not None
+        and isinstance(raw["expires_at"], (int, float))
+        and not isinstance(raw["expires_at"], bool)
+        and isinstance(raw["digests"], list)
+        and all(isinstance(d, str) and _SHA256_RE.fullmatch(d) for d in raw["digests"])
+    )
+    if not valid:
+        raise PackLeaseError(f"malformed lease {path.name}: garbage collection refused")
+    return _Lease(
+        path,
+        raw["pack_id"],
+        raw["install_dir"],
+        float(raw["expires_at"]),
+        frozenset(raw["digests"]),
+    )
+
+
 class ResourcePackSyncManager:
     """Plans, acquires, verifies and atomically activates resource packs."""
 
@@ -257,32 +441,44 @@ class ResourcePackSyncManager:
         *,
         trusted_public_key: bytes | None = None,
         allow_unsigned: bool = False,
+        allow_rollback: bool = False,
         disk_free_probe: Callable[[Path], int] = _default_disk_free,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
         chunk_size: int = 256 * 1024,
         max_attempts: int = 3,
         prefer_hardlinks: bool = True,
+        lock_backend: LockBackend = "auto",
+        lock_timeout_seconds: float = 30.0,
+        lock_stale_after_seconds: float = 600.0,
+        lease_ttl_seconds: float = 6 * 3600.0,
     ) -> None:
+        if not isinstance(allow_unsigned, bool) or not isinstance(allow_rollback, bool):
+            raise TypeError("allow_unsigned and allow_rollback must be bools")
+        if lock_backend not in ("auto", "flock", "exclusive_file"):
+            raise ValueError(f"unknown lock_backend {lock_backend!r}")
         self.root = Path(root)
         self._catalog: dict[str, ResourcePackManifest] = {}
         for manifest in catalog:
             if manifest.pack_id in self._catalog:
                 raise ValueError(f"duplicate pack_id in catalog: {manifest.pack_id!r}")
             self._catalog[manifest.pack_id] = manifest
-        # Refuse to exist in a state where verification would be skipped by
-        # omission: a manager without a trust root must have been asked for
-        # explicitly.  Raising here means no sync can start before the decision.
-        signature_required(trusted_public_key=trusted_public_key, allow_unsigned=allow_unsigned)
         self.trusted_public_key = trusted_public_key
         self.allow_unsigned = allow_unsigned
+        self.allow_rollback = allow_rollback
         self.store = LocalContentStore(self.root / "cas")
         self.fetcher = ResumableRangeFetcher(
             source, self.store, chunk_size=chunk_size, max_attempts=max_attempts
         )
         self._disk_free = disk_free_probe
         self._clock = clock
+        self._wall_clock = wall_clock
         self.prefer_hardlinks = prefer_hardlinks
-        self._lock = threading.Lock()
+        self._lock_backend: LockBackend = lock_backend
+        self._lock_timeout = lock_timeout_seconds
+        self._lock_stale_after = lock_stale_after_seconds
+        self._lease_ttl = lease_ttl_seconds
+        self._lock = threading.Lock()  # serialises syncs of this instance (shared .part files)
 
     # -- paths & pointer ------------------------------------------------------
 
@@ -323,7 +519,7 @@ class ResourcePackSyncManager:
         versions = self._pack_dir(pack_id) / "versions"
         try:
             manifest = manifest_from_json(
-                (versions / f"{pointer.install_dir}.manifest.json").read_bytes()
+                (versions / f"{pointer.install_dir}{_MANIFEST_SUFFIX}").read_bytes()
             )
         except (OSError, ManifestValidationError) as error:
             raise PackSyncError(f"{pack_id}: installed manifest unreadable: {error}") from error
@@ -333,30 +529,126 @@ class ResourcePackSyncManager:
 
     def active_install_dir(self, pack_id: str) -> Path | None:
         pointer = self._read_pointer(pack_id)
-        return (
-            None
-            if pointer is None
-            else self._pack_dir(pack_id) / "versions" / (pointer.install_dir)
-        )
+        if pointer is None:
+            return None
+        return self._pack_dir(pack_id) / "versions" / pointer.install_dir
 
     def installed_manifest(self, pack_id: str) -> ResourcePackManifest | None:
         loaded = self._load_installed(pack_id)
         return None if loaded is None else loaded[0]
 
+    # -- trust policy ---------------------------------------------------------
+
+    def _check_rollback(self, target: ResourcePackManifest) -> None:
+        if self.allow_rollback:
+            return
+        try:
+            pointer = self._read_pointer(target.pack_id)
+        except PackSyncError:
+            return  # unreadable pointer: there is no trustworthy active version to protect
+        if pointer is None:
+            return
+        active, wanted = (
+            parse_semantic_version(pointer.version),
+            parse_semantic_version(target.version),
+        )
+        if active is None or wanted is None:
+            raise VersionRollbackError(
+                pack_id=target.pack_id,
+                active_version=pointer.version,
+                target_version=target.version,
+                reason="versions are not comparable MAJOR.MINOR.PATCH values",
+            )
+        if wanted < active:
+            raise VersionRollbackError(
+                pack_id=target.pack_id,
+                active_version=pointer.version,
+                target_version=target.version,
+                reason="the target is older than the active version",
+            )
+
     def _verify_target(self, manifest: ResourcePackManifest) -> None:
+        """Signature policy, honest totals/root and anti-rollback — before any I/O."""
+        enforce_manifest_signature(
+            manifest, self.trusted_public_key, allow_unsigned=self.allow_unsigned
+        )
         verify_manifest_integrity(manifest)
-        if signature_required(
-            trusted_public_key=self.trusted_public_key, allow_unsigned=self.allow_unsigned
-        ):
-            assert self.trusted_public_key is not None  # implied by signature_required()
-            verify_manifest_signature(manifest, self.trusted_public_key)
+        self._check_rollback(manifest)
+
+    def _verify_tree(
+        self, manifest: ResourcePackManifest, directory: Path
+    ) -> PackVerificationReport:
+        return verify_installed_pack(
+            manifest,
+            directory,
+            trusted_public_key=self.trusted_public_key,
+            allow_unsigned=self.allow_unsigned,
+        )
+
+    # -- cross-process lock & leases -------------------------------------------
+
+    def _storage_lock(self) -> _StorageLock:
+        return _StorageLock(
+            self.root,
+            backend=self._lock_backend,
+            timeout=self._lock_timeout,
+            stale_after=self._lock_stale_after,
+            wall_clock=self._wall_clock,
+        )
+
+    def _live_leases(self) -> list[_Lease]:
+        """Every unexpired lease; expired ones (crashed owners) are removed.
+
+        Call only while holding the storage lock.  A corrupt lease raises
+        :class:`PackLeaseError` — callers must then delete nothing.
+        """
+        directory = self.root / "leases"
+        if not directory.is_dir():
+            return []
+        now = self._wall_clock()
+        live: list[_Lease] = []
+        for path in sorted(directory.iterdir()):
+            if path.name.startswith("."):
+                continue  # temp file of an in-progress atomic lease write
+            lease = _parse_lease(path)
+            if lease.expires_at < now:
+                path.unlink(missing_ok=True)
+                continue
+            live.append(lease)
+        return live
+
+    def _in_flight_blobs(self) -> frozenset[str]:
+        """Digests protected by live leases (requires the storage lock)."""
+        return frozenset(d for lease in self._live_leases() for d in lease.digests)
+
+    def _write_lease(self, lease: _Lease) -> None:
+        record = {
+            "schema": 1,
+            "pid": os.getpid(),
+            "pack_id": lease.pack_id,
+            "install_dir": lease.install_dir,
+            "expires_at": self._wall_clock() + self._lease_ttl,
+            "digests": sorted(lease.digests),
+        }
+        _write_atomic(lease.path, json.dumps(record, sort_keys=True).encode())
+
+    def _open_lease(self, pack_id: str, install_dir: str, digests: frozenset[str]) -> _Lease:
+        name = f"{os.getpid()}-{secrets.token_hex(6)}.json"
+        lease = _Lease(self.root / "leases" / name, pack_id, install_dir, 0.0, digests)
+        with self._storage_lock():
+            self._write_lease(lease)
+        return lease
+
+    def _renew_lease(self, lease: _Lease) -> None:
+        with self._storage_lock():
+            self._write_lease(lease)
 
     # -- login gate -----------------------------------------------------------
 
     def _pack_gate(
         self, target: ResourcePackManifest, cas_index: dict[str, int], available: int
     ) -> PackGateStatus:
-        self._verify_target(target)  # a tampered catalog is an incident, not a state
+        self._verify_target(target)  # a tampered/unsigned/rolled-back catalog is an incident
         corrupted = False
         try:
             loaded = self._load_installed(target.pack_id)
@@ -369,12 +661,7 @@ class ResourcePackSyncManager:
             state = GateState.UPDATE_REQUIRED
         else:
             try:
-                verify_installed_pack(
-                    loaded[0],
-                    loaded[1],
-                    trusted_public_key=self.trusted_public_key,
-                    allow_unsigned=self.allow_unsigned,
-                )
+                self._verify_tree(loaded[0], loaded[1])
                 state = GateState.READY
             except PackVerificationError:
                 state = GateState.REPAIR_REQUIRED
@@ -401,7 +688,7 @@ class ResourcePackSyncManager:
 
         Every mandatory (core) pack must be installed at the catalog's exact
         Merkle root *and* pass full on-disk verification; anything else shows
-        the gate (fail closed).
+        the gate (fail closed).  Read-only: never writes, never locks.
         """
         cas_index = self.store.index()
         available = self._disk_free(self.root)
@@ -428,14 +715,14 @@ class ResourcePackSyncManager:
     ) -> SyncResult:
         """Bring *pack_id* to the catalog version, atomically.
 
-        Raises :class:`InsufficientStorageError` before writing any byte when
-        the disk guard blocks; any other failure leaves the active version
-        untouched (``.part`` files survive for resumption).
+        Signature, integrity and anti-rollback checks and the disk guard all
+        run before a single byte is written.  Any later failure leaves the
+        active version untouched (``.part`` files survive for resumption).
         """
         with self._lock:
             return self._sync_locked(pack_id, progress_callback)
 
-    def _sync_locked(self, pack_id: str, callback: ProgressCallback | None) -> SyncResult:
+    def _sync_locked(self, pack_id: str, progress_callback: ProgressCallback | None) -> SyncResult:
         target = self._target(pack_id)
         self._verify_target(target)
         try:
@@ -443,10 +730,11 @@ class ResourcePackSyncManager:
         except PackSyncError:
             loaded = None  # corrupt pointer/manifest: rebuild from scratch
         installed = None if loaded is None else loaded[0]
-        plan = build_sync_plan(self.store.index(), installed, target, self._disk_free(self.root))
+        available = self._disk_free(self.root)
+        plan = build_sync_plan(self.store.index(), installed, target, available)
         reporter = _ProgressReporter(
             pack_id,
-            callback,
+            progress_callback,
             self._clock,
             plan.network_bytes + plan.hydrate_bytes,
             len(target.entries),
@@ -460,12 +748,7 @@ class ResourcePackSyncManager:
             )
         if loaded is not None and loaded[0].merkle_root == target.merkle_root:
             try:
-                report = verify_installed_pack(
-                    target,
-                    loaded[1],
-                    trusted_public_key=self.trusted_public_key,
-                    allow_unsigned=self.allow_unsigned,
-                )
+                report = self._verify_tree(target, loaded[1])
             except PackVerificationError:
                 pass  # damaged install of the right version: repair below
             else:
@@ -484,17 +767,36 @@ class ResourcePackSyncManager:
                     elapsed_seconds=self._clock() - reporter.started,
                 )
 
+        dir_name = f"{target.version}__{secrets.token_hex(6)}"
+        lease = self._open_lease(pack_id, dir_name, frozenset(e.sha256 for e in target.entries))
+        try:
+            # re-plan now that the lease protects every target digest from GC
+            plan = build_sync_plan(self.store.index(), installed, target, available)
+            reporter.total = plan.network_bytes + plan.hydrate_bytes
+            return self._install(target, plan, dir_name, lease, reporter)
+        finally:
+            lease.path.unlink(missing_ok=True)
+
+    def _install(
+        self,
+        target: ResourcePackManifest,
+        plan: SyncPlan,
+        dir_name: str,
+        lease: _Lease,
+        reporter: _ProgressReporter,
+    ) -> SyncResult:
         downloaded = hydrated = 0
         for item in plan.download:
+            self._renew_lease(lease)
             downloaded += self._download(item.entry, reporter)
         for item in plan.hydrate:
+            self._renew_lease(lease)
             hydrated += self._hydrate(item.entry, reporter)
 
-        pack_dir = self._pack_dir(pack_id)
-        dir_name = f"{target.version}__{secrets.token_hex(6)}"
+        pack_dir = self._pack_dir(target.pack_id)
         staging = pack_dir / "staging" / dir_name
         final_dir = pack_dir / "versions" / dir_name
-        manifest_path = pack_dir / "versions" / f"{dir_name}.manifest.json"
+        manifest_path = pack_dir / "versions" / f"{dir_name}{_MANIFEST_SUFFIX}"
         activated = False
         try:
             reporter.emit(SyncStage.STAGING)
@@ -509,25 +811,24 @@ class ResourcePackSyncManager:
                     prefer_hardlink=self.prefer_hardlinks,
                 )
             reporter.emit(SyncStage.VERIFYING)
-            report = verify_installed_pack(
-                target,
-                staging,
-                trusted_public_key=self.trusted_public_key,
-                allow_unsigned=self.allow_unsigned,
-            )
-            reporter.emit(SyncStage.ACTIVATING)
-            _write_atomic(manifest_path, manifest_to_json(target))
-            final_dir.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(staging, final_dir)
-            pointer = {
-                "schema": 1,
-                "pack_id": pack_id,
-                "version": target.version,
-                "merkle_root": target.merkle_root,
-                "install_dir": dir_name,
-            }
-            _write_atomic(pack_dir / "active.json", json.dumps(pointer, sort_keys=True).encode())
-            activated = True
+            report = self._verify_tree(target, staging)
+            reporter.emit(SyncStage.ACTIVATING)  # callbacks run outside the lock
+            with self._storage_lock():
+                self._check_rollback(target)  # a newer version may have landed meanwhile
+                _write_atomic(manifest_path, manifest_to_json(target))
+                final_dir.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(staging, final_dir)
+                pointer = {
+                    "schema": 1,
+                    "pack_id": target.pack_id,
+                    "version": target.version,
+                    "merkle_root": target.merkle_root,
+                    "install_dir": dir_name,
+                }
+                _write_atomic(
+                    pack_dir / "active.json", json.dumps(pointer, sort_keys=True).encode()
+                )
+                activated = True
         finally:
             shutil.rmtree(staging, ignore_errors=True)
             if not activated:
@@ -537,7 +838,7 @@ class ResourcePackSyncManager:
         reporter.done = reporter.total
         reporter.emit(SyncStage.COMPLETED)
         return SyncResult(
-            pack_id=pack_id,
+            pack_id=target.pack_id,
             version=target.version,
             install_dir=final_dir,
             plan=plan,
@@ -596,36 +897,72 @@ class ResourcePackSyncManager:
     def prune_old_versions(self, pack_id: str) -> tuple[str, ...]:
         """Delete every inactive version directory (and stale staging) of *pack_id*.
 
-        Never deletes anything while the active pointer is unreadable — when
-        unsure, keep.  Returns the removed version directory names.
+        Runs under the cross-process lock; never deletes the active version,
+        anything owned by a live lease, or anything at all while the active
+        pointer or a lease is unreadable (when unsure, keep).  Returns the
+        removed version directory names.
         """
-        with self._lock:
-            pack_dir = self._pack_dir(pack_id)
+        pack_dir = self._pack_dir(pack_id)
+        with self._storage_lock():
             pointer = self._read_pointer(pack_id)
-            shutil.rmtree(pack_dir / "staging", ignore_errors=True)
+            leased = {
+                lease.install_dir for lease in self._live_leases() if lease.pack_id == pack_id
+            }
+            staging = pack_dir / "staging"
+            if staging.is_dir():
+                for child in sorted(staging.iterdir()):
+                    if child.name not in leased:
+                        shutil.rmtree(child, ignore_errors=True)
+                if not any(staging.iterdir()):
+                    staging.rmdir()
             versions = pack_dir / "versions"
             if pointer is None or not versions.is_dir():
                 return ()
+            keep = leased | {pointer.install_dir}
             removed: list[str] = []
             for child in sorted(versions.iterdir()):
                 name = child.name
-                if child.is_dir() and name != pointer.install_dir:
-                    shutil.rmtree(child)
-                    removed.append(name)
-                elif name.endswith(".manifest.json") and name != (
-                    f"{pointer.install_dir}.manifest.json"
-                ):
+                if child.is_dir():
+                    if name not in keep:
+                        shutil.rmtree(child)
+                        removed.append(name)
+                elif name.endswith(_MANIFEST_SUFFIX) and name[: -len(_MANIFEST_SUFFIX)] not in keep:
                     child.unlink()
             return tuple(removed)
 
-    def collect_garbage(self) -> tuple[str, ...]:
-        """Evict CAS objects no active version of any installed pack references."""
-        with self._lock:
-            keep: set[str] = set()
+    def collect_garbage(
+        self,
+        *,
+        min_age_seconds: float = 3600.0,
+        protected_digests: Collection[str] = (),
+    ) -> tuple[str, ...]:
+        """Evict CAS objects that nothing needs any more.
+
+        Kept: blobs referenced by any active install, blobs in a live lease
+        (in-flight syncs, even in other processes), ``protected_digests``, and
+        every blob younger than ``min_age_seconds`` (grace period).  Runs under
+        the cross-process lock and refuses to delete anything if an active
+        pointer or a lease file is unreadable.
+        """
+        if not isinstance(min_age_seconds, (int, float)) or not (
+            math.isfinite(min_age_seconds) and min_age_seconds >= 0
+        ):
+            raise ValueError("min_age_seconds must be a finite number >= 0")
+        if isinstance(protected_digests, str):
+            raise TypeError("protected_digests must be a collection of digests, not a str")
+        keep = set(protected_digests)
+        with self._storage_lock():
+            keep |= self._in_flight_blobs()
             packs_root = self.root / "packs"
             if packs_root.is_dir():
                 for pack_dir in sorted(packs_root.iterdir()):
                     loaded = self._load_installed(pack_dir.name)
                     if loaded is not None:
                         keep.update(entry.sha256 for entry in loaded[0].entries)
-            return self.store.collect_garbage(keep)
+            return self.store.collect_garbage(
+                keep, min_age_seconds=float(min_age_seconds), now=self._wall_clock()
+            )
+
+
+#: Short alias used by the security audit and the studio integration layer.
+PackSyncManager = ResourcePackSyncManager

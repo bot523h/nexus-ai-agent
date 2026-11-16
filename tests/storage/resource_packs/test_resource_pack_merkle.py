@@ -18,8 +18,10 @@ from nexus_ai_agent.storage.resource_packs import (
     PackVerificationError,
     ResourceBlobEntry,
     ResourcePackManifest,
+    SignatureVerificationError,
     build_manifest,
     compute_merkle_root,
+    enforce_manifest_signature,
     leaf_hash,
     leaf_payload,
     manifest_from_json,
@@ -284,6 +286,22 @@ def test_verify_installed_pack_accepts_an_exact_install(tmp_path: Path) -> None:
     assert report.verified_files == 3
     assert report.verified_bytes == manifest.total_installed_bytes
     assert report.merkle_root == manifest.merkle_root and not report.signature_verified
+
+
+def test_verification_without_a_key_fails_closed_by_default(tmp_path: Path) -> None:
+    """F1: an honest-looking but unsigned install is NOT trusted unless explicitly allowed."""
+    manifest, blobs = _three_file_pack()
+    install = _install(manifest, blobs, tmp_path / "ok")
+    with pytest.raises(SignatureVerificationError, match="allow_unsigned=True"):
+        verify_installed_pack(manifest, install)
+    with pytest.raises(SignatureVerificationError):
+        enforce_manifest_signature(manifest, None)
+    assert enforce_manifest_signature(manifest, None, allow_unsigned=True) is False
+    with pytest.raises(TypeError, match="bool"):
+        enforce_manifest_signature(manifest, None, allow_unsigned="yes")  # type: ignore[arg-type]
+    # the signature policy runs first: nothing on disk is even looked at
+    with pytest.raises(SignatureVerificationError):
+        verify_installed_pack(manifest, tmp_path / "nowhere")
 
 
 def test_changing_total_leaves_fails_verification(tmp_path: Path) -> None:

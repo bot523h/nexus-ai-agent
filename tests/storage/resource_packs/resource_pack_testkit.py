@@ -129,10 +129,14 @@ class ServerControl:
 
     root: Path
     range_headers: list[str | None] = field(default_factory=list)
+    #: ``Host`` header of every request, in arrival order.
+    request_hosts: list[str | None] = field(default_factory=list)
     #: when set, the next response sends only this many body bytes, then hangs up.
     cut_after_bytes: int | None = None
     ignore_range: bool = False
     bogus_content_range: bool = False
+    #: when set, the next request is answered ``302 Location: <redirect_to><path>`` (once).
+    redirect_to: str | None = None
     base_url: str = ""
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -149,7 +153,15 @@ def _handler_for(control: ServerControl) -> type[BaseHTTPRequestHandler]:
             header = self.headers.get("Range")
             with control.lock:
                 control.range_headers.append(header)
+                control.request_hosts.append(self.headers.get("Host"))
                 cut, control.cut_after_bytes = control.cut_after_bytes, None
+                redirect, control.redirect_to = control.redirect_to, None
+            if redirect is not None:
+                self.send_response(302)
+                self.send_header("Location", f"{redirect}{self.path}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             path = control.root / self.path.lstrip("/")
             if not path.is_file():
                 self.send_error(404)
