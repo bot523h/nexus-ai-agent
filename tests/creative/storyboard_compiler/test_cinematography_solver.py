@@ -746,3 +746,84 @@ AMIR steps forward alone.
         solve_scene_cinematography(parsed.scenes[0], starting_shot_index=-1)
     with pytest.raises(CinematographyError, match="num_trajectory_samples"):
         solve_scene_cinematography(parsed.scenes[0], num_trajectory_samples=1)
+
+
+def test_f7_live_axis_trace_replay_rejects_forged_original_position_distance_and_cross_z() -> None:
+    parsed = parse_bilingual_script(
+        "INT. INTERROGATION ROOM - NIGHT\n"
+        "COLE\n(angrily)\nTell me where you hid the ledger tonight!\n\n"
+        "MAYA\nI left it inside the safe downstairs."
+    )
+    plan = solve_scene_cinematography(parsed.scenes[0])
+    assert plan.axis_report.compliant is True
+    sh0, sh1 = plan.shots[0], plan.shots[1]
+
+    # 1. Forged start_axis_trace.original_position on same side of axis.
+    orig_p = sh0.start_axis_trace.original_position
+    forged_start_pos = dataclasses.replace(
+        sh0.start_axis_trace,
+        original_position=(orig_p[0] + 0.35, orig_p[1], orig_p[2]),
+    )
+    rep_pos = verify_180_degree_rule(
+        (dataclasses.replace(sh0, start_axis_trace=forged_start_pos), sh1),
+        plan.axis,
+    )
+    assert rep_pos.compliant is False
+
+    # 2. Forged start_axis_trace.original_signed_distance_m.
+    forged_start_dist = dataclasses.replace(
+        sh0.start_axis_trace,
+        original_signed_distance_m=sh0.start_axis_trace.original_signed_distance_m + 0.5,
+    )
+    rep_dist = verify_180_degree_rule(
+        (dataclasses.replace(sh0, start_axis_trace=forged_start_dist), sh1),
+        plan.axis,
+    )
+    assert rep_dist.compliant is False
+
+    # 3. Forged end_axis_trace.enforced_signed_distance_m & non-finite original_position.
+    forged_end_dist = dataclasses.replace(
+        sh0.end_axis_trace,
+        enforced_signed_distance_m=sh0.end_axis_trace.enforced_signed_distance_m + 0.25,
+    )
+    assert (
+        verify_180_degree_rule(
+            (dataclasses.replace(sh0, end_axis_trace=forged_end_dist), sh1),
+            plan.axis,
+        ).compliant
+        is False
+    )
+    nan_trace = dataclasses.replace(
+        sh1.end_axis_trace,
+        original_position=(float("nan"), 0.0, 1.6),
+    )
+    assert (
+        verify_180_degree_rule(
+            (sh0, dataclasses.replace(sh1, end_axis_trace=nan_trace)),
+            plan.axis,
+        ).compliant
+        is False
+    )
+
+    # 4. Forged axis_cross_z, end_axis_cross_z, or axis_side on CameraShotSpec.
+    assert (
+        verify_180_degree_rule(
+            (dataclasses.replace(sh0, axis_cross_z=sh0.axis_cross_z + 0.5), sh1),
+            plan.axis,
+        ).compliant
+        is False
+    )
+    assert (
+        verify_180_degree_rule(
+            (dataclasses.replace(sh0, end_axis_cross_z=sh0.end_axis_cross_z + 0.5), sh1),
+            plan.axis,
+        ).compliant
+        is False
+    )
+    assert (
+        verify_180_degree_rule(
+            (dataclasses.replace(sh0, axis_side=-sh0.axis_side), sh1),
+            plan.axis,
+        ).compliant
+        is False
+    )

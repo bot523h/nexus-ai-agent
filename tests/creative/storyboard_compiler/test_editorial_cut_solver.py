@@ -616,6 +616,207 @@ def test_deep_scene_graph_report_and_trajectory_endpoint_integrity() -> None:
     )
 
 
+def _reseal_with_recomputed_reports(
+    manifest: sb.CompiledStoryboardManifest,
+) -> sb.CompiledStoryboardManifest:
+    """Strongest adversary: recomputes cached reports, compliance flags, AND all 4 SHA-256s."""
+    rebuilt_plans = tuple(
+        dataclasses.replace(plan, axis_report=sb.verify_180_degree_rule(plan.shots, plan.axis))
+        for plan in manifest.cinematography
+    )
+    live_edit = verify_editorial_timeline(manifest.editorial)
+    rebuilt_editorial = dataclasses.replace(manifest.editorial, verification=live_edit)
+    updated = dataclasses.replace(
+        manifest,
+        cinematography=rebuilt_plans,
+        editorial=rebuilt_editorial,
+        axis_180_compliant=all(p.axis_report.compliant for p in rebuilt_plans),
+        editorial_compliant=live_edit.compliant,
+        eye_trace_compliant=live_edit.eye_trace_valid,
+    )
+    return _reseal_tampered_manifest(updated)
+
+
+def test_f7_manifest_rejects_tampered_axis_trace_original_position_and_distance() -> None:
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    p0, p1 = manifest.cinematography[0], manifest.cinematography[1]
+    sh0, sh1 = p0.shots[0], p0.shots[1]
+
+    # Case 1: Tamper start_axis_trace.original_position while keeping poses/sides untouched.
+    orig = sh0.start_axis_trace.original_position
+    bad_start_trace = dataclasses.replace(
+        sh0.start_axis_trace,
+        original_position=(orig[0] + 0.40, orig[1], orig[2]),
+    )
+    bad_p0_pos = dataclasses.replace(
+        p0,
+        shots=(dataclasses.replace(sh0, start_axis_trace=bad_start_trace), *p0.shots[1:]),
+    )
+    assert sb.verify_180_degree_rule(bad_p0_pos.shots, bad_p0_pos.axis).compliant is False
+    tampered_pos = dataclasses.replace(manifest, cinematography=(bad_p0_pos, p1))
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered_pos)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered_pos)) is False
+
+    # Case 2: Tamper end_axis_trace.original_signed_distance_m and reseal.
+    bad_end_trace = dataclasses.replace(
+        sh1.end_axis_trace,
+        original_signed_distance_m=sh1.end_axis_trace.original_signed_distance_m + 0.75,
+    )
+    bad_p0_dist = dataclasses.replace(
+        p0,
+        shots=(sh0, dataclasses.replace(sh1, end_axis_trace=bad_end_trace), *p0.shots[2:]),
+    )
+    assert sb.verify_180_degree_rule(bad_p0_dist.shots, bad_p0_dist.axis).compliant is False
+    tampered_dist = dataclasses.replace(manifest, cinematography=(bad_p0_dist, p1))
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered_dist)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered_dist)) is False
+
+
+def test_f8_manifest_rejects_forged_eye_trace_saccade_and_derived_cut_fields() -> None:
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    ed = manifest.editorial
+    tr0 = ed.transitions[0]
+
+    # Case 1: True Euclidean jump between exit_focus_uv=(0.15, 0.30) and
+    # adjusted_entry_focus_uv=(0.80, 0.30) is 0.65 (> max_eye_trace_saccade_limit),
+    # while attacker forges effective_saccade_uv=0.05!
+    forged_et = dataclasses.replace(
+        tr0.eye_trace,
+        exit_focus_uv=(0.15, 0.30),
+        raw_entry_focus_uv=(0.80, 0.30),
+        adjusted_entry_focus_uv=(0.80, 0.30),
+        raw_saccade_uv=0.05,
+        effective_saccade_uv=0.05,
+        vertical_eyeline_delta=0.0,
+        reframe_applied=False,
+    )
+    ev0_forged = dataclasses.replace(ed.events[0], exit_focus_uv=(0.15, 0.30))
+    ev1_forged = dataclasses.replace(ed.events[1], entry_focus_uv=(0.80, 0.30))
+    ed_saccade_lie = dataclasses.replace(
+        ed,
+        events=(ev0_forged, ev1_forged, *ed.events[2:]),
+        transitions=(dataclasses.replace(tr0, eye_trace=forged_et), *ed.transitions[1:]),
+    )
+    rep_saccade = verify_editorial_timeline(ed_saccade_lie)
+    assert rep_saccade.compliant is False
+    assert rep_saccade.eye_trace_valid is False
+    tampered_saccade = dataclasses.replace(manifest, editorial=ed_saccade_lie)
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered_saccade)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered_saccade)) is False
+
+    # Case 2: Keep UV coordinates legal (<= limit), but forge effective_saccade_uv=0.05.
+    ed_cached_lie = dataclasses.replace(
+        ed,
+        transitions=(
+            dataclasses.replace(
+                tr0,
+                eye_trace=dataclasses.replace(tr0.eye_trace, effective_saccade_uv=0.05),
+            ),
+            *ed.transitions[1:],
+        ),
+    )
+    rep_cached_lie = verify_editorial_timeline(ed_cached_lie)
+    assert rep_cached_lie.compliant is False
+    assert rep_cached_lie.eye_trace_valid is False
+    assert (
+        verify_manifest_integrity(
+            _reseal_tampered_manifest(dataclasses.replace(manifest, editorial=ed_cached_lie))
+        )
+        is False
+    )
+
+    # Case 3: Tamper j_cut_prelap_sec (plus audio_offset_sec / scene_boundary) and reseal.
+    j_idx = next(idx for idx, tr in enumerate(ed.transitions) if tr.cut_type == CutType.J_CUT)
+    j_tr = ed.transitions[j_idx]
+    forged_j_tr = dataclasses.replace(j_tr, j_cut_prelap_sec=j_tr.j_cut_prelap_sec + 0.12)
+    ed_bad_j = dataclasses.replace(
+        ed,
+        transitions=(*ed.transitions[:j_idx], forged_j_tr, *ed.transitions[j_idx + 1 :]),
+    )
+    rep_bad_j = verify_editorial_timeline(ed_bad_j)
+    assert rep_bad_j.compliant is False
+    assert rep_bad_j.jl_bounds_valid is False
+    tampered_j = dataclasses.replace(manifest, editorial=ed_bad_j)
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered_j)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered_j)) is False
+
+
+def test_f9_manifest_rejects_perturbed_interior_minimum_jerk_sample() -> None:
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    p0, p1 = manifest.cinematography[0], manifest.cinematography[1]
+    # Pick a shot and perturb ONLY its middle sample (tau ~ 0.5) while keeping valid SE(3)
+    # and staying strictly on the valid side of the 180-degree axis!
+    sh = p0.shots[0]
+    samples = list(sh.trajectory.samples)
+    mid_idx = len(samples) // 2
+    mid_smp = samples[mid_idx]
+
+    # 1. Perturb interior translation by 5cm along Z (preserves horizontal 180-degree side & SE(3)).
+    t_orig = mid_smp.pose.translation
+    pose_shifted = sb.CameraPoseSE3.from_rt(
+        mid_smp.pose.rotation_matrix,
+        (t_orig[0], t_orig[1], t_orig[2] + 0.05),
+    )
+    samples_t = list(samples)
+    samples_t[mid_idx] = dataclasses.replace(mid_smp, pose=pose_shifted)
+    bad_sh_t = dataclasses.replace(
+        sh,
+        trajectory=dataclasses.replace(sh.trajectory, samples=tuple(samples_t)),
+    )
+    bad_p0_t = dataclasses.replace(p0, shots=(bad_sh_t, *p0.shots[1:]))
+    # Confirm 180-degree rule & SE(3) membership still pass on bad_p0_t!
+    assert sb.verify_180_degree_rule(bad_p0_t.shots, bad_p0_t.axis).compliant is True
+    tampered_t = dataclasses.replace(manifest, cinematography=(bad_p0_t, p1))
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered_t)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered_t)) is False
+
+    # 2. Perturb interior SO(3) rotation by 2 degrees via exponential map (exact SO(3)).
+    delta_r = sb.so3_exp((0.0, 0.0, math.radians(2.0)))
+    pose_rotated = sb.CameraPoseSE3.from_rt(
+        mid_smp.pose.rotation_matrix @ delta_r,
+        mid_smp.pose.translation,
+    )
+    samples_r = list(samples)
+    samples_r[mid_idx] = dataclasses.replace(mid_smp, pose=pose_rotated)
+    bad_sh_r = dataclasses.replace(
+        sh,
+        trajectory=dataclasses.replace(sh.trajectory, samples=tuple(samples_r)),
+    )
+    bad_p0_r = dataclasses.replace(p0, shots=(bad_sh_r, *p0.shots[1:]))
+    assert sb.verify_180_degree_rule(bad_p0_r.shots, bad_p0_r.axis).compliant is True
+    tampered_r = dataclasses.replace(manifest, cinematography=(bad_p0_r, p1))
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered_r)) is False
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered_r)) is False
+
+
+def test_f10_manifest_rejects_shot_to_event_and_trajectory_duration_mismatch() -> None:
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    p0, p1 = manifest.cinematography[0], manifest.cinematography[1]
+    sh0, sh1 = p0.shots[0], p0.shots[1]
+
+    # Case 1: Zero-sum duration swap (+0.15s on shot 0, -0.15s on shot 1) so total_duration_sec
+    # stays identical, while editorial events retain original durations -> F10 rejects!
+    swapped_p0 = dataclasses.replace(
+        p0,
+        shots=(
+            dataclasses.replace(sh0, duration_sec=round(sh0.duration_sec + 0.15, 6)),
+            dataclasses.replace(sh1, duration_sec=round(sh1.duration_sec - 0.15, 6)),
+            *p0.shots[2:],
+        ),
+    )
+    tampered_swap = dataclasses.replace(manifest, cinematography=(swapped_p0, p1))
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered_swap)) is False
+
+    # Case 2: Trajectory duration_sec desynchronized from shot.duration_sec -> F10 rejects!
+    desync_traj_sh0 = dataclasses.replace(
+        sh0,
+        trajectory=dataclasses.replace(sh0.trajectory, duration_sec=sh0.duration_sec + 0.20),
+    )
+    desync_p0 = dataclasses.replace(p0, shots=(desync_traj_sh0, *p0.shots[1:]))
+    tampered_traj_dur = dataclasses.replace(manifest, cinematography=(desync_p0, p1))
+    assert verify_manifest_integrity(_reseal_tampered_manifest(tampered_traj_dur)) is False
+
+
 def test_end_to_end_compilation_of_english_persian_and_bilingual_scripts() -> None:
     english_10_shot = """\
 INT. INTERROGATION ROOM - NIGHT - RAIN

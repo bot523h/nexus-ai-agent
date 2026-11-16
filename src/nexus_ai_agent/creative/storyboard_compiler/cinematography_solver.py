@@ -1090,6 +1090,45 @@ class SceneCinematographyPlan:
     axis_report: AxisVerificationReport
 
 
+def _axis_trace_matches_geometry(
+    trace: AxisEnforcementTrace,
+    axis: AxisOfAction,
+    *,
+    expected_side: int,
+    min_clearance_m: float,
+    pose_translation: Vec3Tuple,
+    tol: float = 1e-6,
+) -> bool:
+    """Independently replay 180-degree axis enforcement and verify all 7 trace fields."""
+    replayed = (
+        enforce_axis_of_action_with_trace(
+            trace.original_position,
+            axis,
+            required_side=expected_side,
+            min_clearance_m=min_clearance_m,
+            strict=False,
+        )[1]
+        if len(trace.original_position) == 3
+        and all(math.isfinite(c) for c in trace.original_position)
+        else None
+    )
+    return (
+        replayed is not None
+        and all(
+            abs(trace.original_position[i] - replayed.original_position[i]) <= tol for i in range(3)
+        )
+        and all(
+            abs(trace.adjusted_position[i] - replayed.adjusted_position[i]) <= tol for i in range(3)
+        )
+        and all(abs(trace.adjusted_position[i] - pose_translation[i]) <= tol for i in range(3))
+        and trace.original_axis_side == replayed.original_axis_side
+        and trace.enforced_axis_side == expected_side
+        and abs(trace.original_signed_distance_m - replayed.original_signed_distance_m) <= tol
+        and abs(trace.enforced_signed_distance_m - replayed.enforced_signed_distance_m) <= tol
+        and trace.was_axis_reflected is replayed.was_axis_reflected
+    )
+
+
 def verify_180_degree_rule(
     shots: Sequence[CameraShotSpec],
     axis: AxisOfAction,
@@ -1124,23 +1163,25 @@ def verify_180_degree_rule(
                 f"end_cross_z={end_c_z:.6f}, end_sign={end_sign}, expected={expected_side})"
             )
 
+        end_clearance = 0.50 if shot.trajectory.move_type == CameraMoveType.DOLLY else 0.55
         traces_consistent = (
-            bool(
-                np.allclose(
-                    shot.start_axis_trace.adjusted_position,
-                    shot.pose.translation,
-                    atol=1e-6,
-                )
+            shot.axis_side == expected_side
+            and abs(shot.axis_cross_z - c_z) <= 1e-6
+            and abs(shot.end_axis_cross_z - end_c_z) <= 1e-6
+            and _axis_trace_matches_geometry(
+                shot.start_axis_trace,
+                axis,
+                expected_side=expected_side,
+                min_clearance_m=0.55,
+                pose_translation=shot.pose.translation,
             )
-            and bool(
-                np.allclose(
-                    shot.end_axis_trace.adjusted_position,
-                    shot.end_pose.translation,
-                    atol=1e-6,
-                )
+            and _axis_trace_matches_geometry(
+                shot.end_axis_trace,
+                axis,
+                expected_side=expected_side,
+                min_clearance_m=end_clearance,
+                pose_translation=shot.end_pose.translation,
             )
-            and shot.start_axis_trace.enforced_axis_side == expected_side
-            and shot.end_axis_trace.enforced_axis_side == expected_side
             and shot.start_original_axis_side == shot.start_axis_trace.original_axis_side
             and shot.end_original_axis_side == shot.end_axis_trace.original_axis_side
             and shot.start_was_reflected is shot.start_axis_trace.was_axis_reflected

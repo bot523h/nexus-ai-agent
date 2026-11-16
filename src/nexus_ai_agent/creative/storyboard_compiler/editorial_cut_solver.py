@@ -39,11 +39,13 @@ from .bilingual_script_parser import (
 from .cinematography_solver import (
     AxisEnforcementTrace,
     AxisVerificationReport,
+    CameraMoveType,
     CameraPoseSE3,
     CameraShotSpec,
     SceneCinematographyPlan,
     ScreenLookDirection,
     ShotKind,
+    evaluate_trajectory_at,
     solve_script_cinematography,
     verify_180_degree_rule,
 )
@@ -276,21 +278,25 @@ def solve_eye_trace_transition(
 
     out_u, out_v = _clamp_uv(exit_focus_uv)
     in_u, in_v = _clamp_uv(entry_focus_uv)
-    du = in_u - out_u
-    dv = in_v - out_v
+    out_pt = (round(out_u, 6), round(out_v, 6))
+    in_pt = (round(in_u, 6), round(in_v, 6))
+    du = in_pt[0] - out_pt[0]
+    dv = in_pt[1] - out_pt[1]
     raw_dist = math.hypot(du, dv)
 
     if raw_dist <= max_saccade_uv + 1e-12:
-        adj_u, adj_v = in_u, in_v
+        adj_pt = in_pt
         reframe = False
     else:
         scale = max_saccade_uv / raw_dist
-        adj_u = min(max(out_u + scale * du, 0.05), 0.95)
-        adj_v = min(max(out_v + scale * dv, 0.05), 0.95)
+        adj_pt = (
+            round(min(max(out_pt[0] + scale * du, 0.05), 0.95), 6),
+            round(min(max(out_pt[1] + scale * dv, 0.05), 0.95), 6),
+        )
         reframe = True
 
-    eff_dist = math.hypot(adj_u - out_u, adj_v - out_v)
-    vert_delta = abs(adj_v - out_v)
+    eff_dist = math.hypot(adj_pt[0] - out_pt[0], adj_pt[1] - out_pt[1])
+    vert_delta = abs(adj_pt[1] - out_pt[1])
     matched = _are_eyelines_complementary(out_look, in_look, vert_delta, axis_jumped)
     score = max(0.0, min(1.0, 1.0 - eff_dist / math.sqrt(2.0)))
 
@@ -298,9 +304,9 @@ def solve_eye_trace_transition(
         transition_index=transition_index,
         from_shot_index=from_shot_index,
         to_shot_index=to_shot_index,
-        exit_focus_uv=(round(out_u, 6), round(out_v, 6)),
-        raw_entry_focus_uv=(round(in_u, 6), round(in_v, 6)),
-        adjusted_entry_focus_uv=(round(adj_u, 6), round(adj_v, 6)),
+        exit_focus_uv=out_pt,
+        raw_entry_focus_uv=in_pt,
+        adjusted_entry_focus_uv=adj_pt,
         raw_saccade_uv=round(raw_dist, 6),
         effective_saccade_uv=round(eff_dist, 6),
         vertical_eyeline_delta=round(vert_delta, 6),
@@ -430,17 +436,23 @@ def verify_editorial_timeline(
         violations.append(f"shot 0 video_in_sec={events[0].video_in_sec} != 0.0")
 
     for idx, ev in enumerate(events):
-        if ev.video_out_sec <= ev.video_in_sec + tol:
+        if (
+            ev.video_out_sec <= ev.video_in_sec + tol
+            or abs(ev.video_duration_sec - (ev.video_out_sec - ev.video_in_sec)) > tol
+        ):
             video_ok = False
-            violations.append(f"shot {idx}: non-positive video duration")
+            violations.append(f"shot {idx}: non-positive or inconsistent video duration")
         if ev.audio_in_sec < -tol or ev.audio_out_sec > plan.total_duration_sec + tol:
             audio_ok = False
             violations.append(
                 f"shot {idx}: audio window [{ev.audio_in_sec}, {ev.audio_out_sec}] out of bounds"
             )
-        if ev.audio_out_sec <= ev.audio_in_sec + tol:
+        if (
+            ev.audio_out_sec <= ev.audio_in_sec + tol
+            or abs(ev.audio_duration_sec - (ev.audio_out_sec - ev.audio_in_sec)) > tol
+        ):
             audio_ok = False
-            violations.append(f"shot {idx}: non-positive audio duration")
+            violations.append(f"shot {idx}: non-positive or inconsistent audio duration")
         if idx > 0:
             prev = events[idx - 1]
             if abs(ev.video_in_sec - prev.video_out_sec) > tol:
@@ -497,6 +509,9 @@ def verify_editorial_timeline(
 
             if tr.cut_type == CutType.J_CUT:
                 actual_prelap = tr.video_cut_sec - in_ev.audio_in_sec
+                expected_audio_cut = in_ev.audio_in_sec
+                expected_j_prelap = actual_prelap
+                expected_l_postlap = 0.0
                 if not (j_cut_min_sec - tol <= actual_prelap <= j_cut_max_sec + tol):
                     jl_ok = False
                     violations.append(
@@ -505,6 +520,9 @@ def verify_editorial_timeline(
                     )
             elif tr.cut_type == CutType.L_CUT:
                 actual_postlap = out_ev.audio_out_sec - tr.video_cut_sec
+                expected_audio_cut = out_ev.audio_out_sec
+                expected_j_prelap = 0.0
+                expected_l_postlap = actual_postlap
                 if not (l_cut_min_sec - tol <= actual_postlap <= l_cut_max_sec + tol):
                     jl_ok = False
                     violations.append(
@@ -512,16 +530,71 @@ def verify_editorial_timeline(
                         f"outside [{l_cut_min_sec}, {l_cut_max_sec}]"
                     )
             else:
+                expected_audio_cut = tr.video_cut_sec
+                expected_j_prelap = 0.0
+                expected_l_postlap = 0.0
                 if abs(in_ev.audio_in_sec - tr.video_cut_sec) > tol:
                     jl_ok = False
                     violations.append(f"transition {k}: STRAIGHT_CUT audio_in misaligned")
 
-            max_saccade = max(max_saccade, tr.eye_trace.effective_saccade_uv)
-            if tr.eye_trace.effective_saccade_uv > plan.max_eye_trace_saccade_limit + tol:
+            expected_audio_offset = expected_audio_cut - tr.video_cut_sec
+            derived_cut_ok = (
+                events[0].entry_cut_type is None
+                and events[-1].exit_cut_type is None
+                and tr.scene_boundary is (out_ev.scene_index != in_ev.scene_index)
+                and out_ev.exit_cut_type == tr.cut_type
+                and in_ev.entry_cut_type == tr.cut_type
+                and abs(tr.audio_cut_sec - expected_audio_cut) <= 1e-6
+                and abs(tr.audio_offset_sec - expected_audio_offset) <= 1e-6
+                and abs(tr.j_cut_prelap_sec - expected_j_prelap) <= 1e-6
+                and abs(tr.l_cut_postlap_sec - expected_l_postlap) <= 1e-6
+            )
+            if not derived_cut_ok:
+                jl_ok = False
+                violations.append(
+                    f"transition {k}: derived CutTransition fields inconsistent with events"
+                )
+
+            et = tr.eye_trace
+            recomputed_raw_saccade = math.hypot(
+                et.raw_entry_focus_uv[0] - et.exit_focus_uv[0],
+                et.raw_entry_focus_uv[1] - et.exit_focus_uv[1],
+            )
+            recomputed_eff_saccade = math.hypot(
+                et.adjusted_entry_focus_uv[0] - et.exit_focus_uv[0],
+                et.adjusted_entry_focus_uv[1] - et.exit_focus_uv[1],
+            )
+            recomputed_vert_delta = abs(et.adjusted_entry_focus_uv[1] - et.exit_focus_uv[1])
+            recomputed_score = max(0.0, min(1.0, 1.0 - recomputed_eff_saccade / math.sqrt(2.0)))
+            eye_geom_ok = (
+                all(
+                    math.isfinite(c) and 0.0 <= c <= 1.0
+                    for c in (
+                        *et.exit_focus_uv,
+                        *et.raw_entry_focus_uv,
+                        *et.adjusted_entry_focus_uv,
+                    )
+                )
+                and abs(et.exit_focus_uv[0] - out_ev.exit_focus_uv[0]) <= 1e-6
+                and abs(et.exit_focus_uv[1] - out_ev.exit_focus_uv[1]) <= 1e-6
+                and abs(et.adjusted_entry_focus_uv[0] - in_ev.entry_focus_uv[0]) <= 1e-6
+                and abs(et.adjusted_entry_focus_uv[1] - in_ev.entry_focus_uv[1]) <= 1e-6
+                and abs(et.raw_saccade_uv - recomputed_raw_saccade) <= 1e-6
+                and abs(et.effective_saccade_uv - recomputed_eff_saccade) <= 1e-6
+                and abs(et.vertical_eyeline_delta - recomputed_vert_delta) <= 1e-6
+                and abs(et.continuity_score - recomputed_score) <= 1e-6
+                and (
+                    et.reframe_applied
+                    is (recomputed_raw_saccade > plan.max_eye_trace_saccade_limit + 1e-12)
+                )
+                and (et.reframe_applied or et.adjusted_entry_focus_uv == et.raw_entry_focus_uv)
+            )
+            max_saccade = max(max_saccade, recomputed_eff_saccade)
+            if not eye_geom_ok or recomputed_eff_saccade > plan.max_eye_trace_saccade_limit + tol:
                 eye_ok = False
                 violations.append(
-                    f"transition {k}: eye-trace saccade "
-                    f"{tr.eye_trace.effective_saccade_uv:.6f} exceeds limit "
+                    f"transition {k}: eye-trace geometry mismatch or saccade "
+                    f"{recomputed_eff_saccade:.6f} exceeds limit "
                     f"{plan.max_eye_trace_saccade_limit:.6f}"
                 )
 
@@ -966,6 +1039,24 @@ def _serialize_cinematography(plans: Sequence[SceneCinematographyPlan]) -> dict[
                         "sample_count": len(sh.trajectory.samples),
                         "total_translation_m": _qfloat(sh.trajectory.total_translation_m),
                         "total_rotation_deg": _qfloat(sh.trajectory.total_rotation_deg),
+                        "samples": [
+                            {
+                                "tau": _qfloat(smp.tau),
+                                "time_sec": _qfloat(smp.time_sec),
+                                "s": _qfloat(smp.s),
+                                "pose_R": [[_qfloat(v) for v in row] for row in smp.pose.rotation],
+                                "pose_t": [_qfloat(v) for v in smp.pose.translation],
+                                "linear_velocity": [_qfloat(v) for v in smp.linear_velocity],
+                                "linear_acceleration": [
+                                    _qfloat(v) for v in smp.linear_acceleration
+                                ],
+                                "angular_velocity": [_qfloat(v) for v in smp.angular_velocity],
+                                "angular_acceleration": [
+                                    _qfloat(v) for v in smp.angular_acceleration
+                                ],
+                            }
+                            for smp in sh.trajectory.samples
+                        ],
                     },
                 }
             )
@@ -1026,8 +1117,10 @@ def _serialize_editorial(editorial: EditorialTimelinePlan) -> dict[str, Any]:
                 "speaker": ev.speaker,
                 "video_in_sec": _qfloat(ev.video_in_sec),
                 "video_out_sec": _qfloat(ev.video_out_sec),
+                "video_duration_sec": _qfloat(ev.video_duration_sec),
                 "audio_in_sec": _qfloat(ev.audio_in_sec),
                 "audio_out_sec": _qfloat(ev.audio_out_sec),
+                "audio_duration_sec": _qfloat(ev.audio_duration_sec),
                 "entry_cut_type": ev.entry_cut_type.value if ev.entry_cut_type else None,
                 "exit_cut_type": ev.exit_cut_type.value if ev.exit_cut_type else None,
                 "entry_focus_uv": [_qfloat(v) for v in ev.entry_focus_uv],
@@ -1219,18 +1312,67 @@ def _poses_match(pose_a: CameraPoseSE3, pose_b: CameraPoseSE3, *, tol: float = 1
     ) and all(abs(pose_a.translation[i] - pose_b.translation[i]) <= tol for i in range(3))
 
 
-def _shot_trajectory_endpoints_valid(shot: CameraShotSpec, *, tol: float = 1e-8) -> bool:
+def _shot_trajectory_valid(shot: CameraShotSpec, *, tol: float = 1e-7) -> bool:
+    """Verify full quintic minimum-jerk kinematics across every trajectory sample."""
     samples = shot.trajectory.samples
-    return (
-        len(samples) >= 2
-        and abs(samples[0].tau - 0.0) <= tol
-        and abs(samples[-1].tau - 1.0) <= tol
-        and abs(samples[0].time_sec - 0.0) <= tol
-        and abs(samples[-1].time_sec - shot.duration_sec) <= 1e-5
-        and _poses_match(samples[0].pose, shot.pose, tol=tol)
-        and _poses_match(samples[-1].pose, shot.end_pose, tol=tol)
+    num = len(samples)
+    crane_arc = shot.trajectory.crane_arc_m
+    params_ok = (
+        num >= 2
+        and math.isfinite(shot.duration_sec)
+        and shot.duration_sec > 0.0
+        and abs(shot.trajectory.duration_sec - shot.duration_sec) <= 1e-6
+        and math.isfinite(crane_arc)
+        and (
+            crane_arc == 0.0
+            if shot.trajectory.move_type != CameraMoveType.CRANE
+            else crane_arc >= 0.0
+        )
         and _poses_match(shot.trajectory.start_pose, shot.pose, tol=tol)
         and _poses_match(shot.trajectory.end_pose, shot.end_pose, tol=tol)
+        and all(
+            math.isfinite(samples[i].tau) and abs(samples[i].tau - (i / (num - 1))) <= tol
+            for i in range(num)
+        )
+    )
+    return (
+        params_ok
+        and all(
+            (
+                lambda smp, exp: (
+                    abs(smp.time_sec - exp.time_sec) <= 1e-6
+                    and abs(smp.s - exp.s) <= tol
+                    and _poses_match(smp.pose, exp.pose, tol=tol)
+                    and all(
+                        abs(smp.linear_velocity[j] - exp.linear_velocity[j]) <= 1e-6
+                        for j in range(3)
+                    )
+                    and all(
+                        abs(smp.linear_acceleration[j] - exp.linear_acceleration[j]) <= 1e-6
+                        for j in range(3)
+                    )
+                    and all(abs(smp.linear_jerk[j] - exp.linear_jerk[j]) <= 1e-5 for j in range(3))
+                    and all(
+                        abs(smp.angular_velocity[j] - exp.angular_velocity[j]) <= 1e-6
+                        for j in range(3)
+                    )
+                    and all(
+                        abs(smp.angular_acceleration[j] - exp.angular_acceleration[j]) <= 1e-6
+                        for j in range(3)
+                    )
+                )
+            )(
+                samples[i],
+                evaluate_trajectory_at(
+                    shot.pose,
+                    shot.end_pose,
+                    samples[i].tau,
+                    duration_sec=shot.duration_sec,
+                    crane_arc_m=crane_arc,
+                ),
+            )
+            for i in range(num)
+        )
         and all(
             abs(comp) <= tol
             for vec in (
@@ -1286,9 +1428,14 @@ def _editorial_reports_equal(
     )
 
 
+def _element_duration_sec(elem: DialogueLine | ActionBeat) -> float:
+    return elem.timing.total_duration_sec if isinstance(elem, DialogueLine) else elem.duration_sec
+
+
 def _scene_shot_bijection_valid(manifest: CompiledStoryboardManifest) -> bool:
     scenes = manifest.script.scenes
     plans = manifest.cinematography
+    events = manifest.editorial.events
     all_shots = [sh for plan in plans for sh in plan.shots]
     return (
         len(plans) == len(scenes)
@@ -1314,11 +1461,54 @@ def _scene_shot_bijection_valid(manifest: CompiledStoryboardManifest) -> bool:
                 )
                 for k in range(len(scenes[i].elements))
             ]
+            and all(
+                abs(plans[i].shots[k].duration_sec - _element_duration_sec(scenes[i].elements[k]))
+                <= 1e-6
+                for k in range(len(scenes[i].elements))
+            )
             for i in range(len(scenes))
         )
         and [sh.shot_index for sh in all_shots] == list(range(len(all_shots)))
         and [(sh.shot_index, sh.scene_index, sh.shot_kind) for sh in all_shots]
-        == [(ev.shot_index, ev.scene_index, ev.shot_kind) for ev in manifest.editorial.events]
+        == [(ev.shot_index, ev.scene_index, ev.shot_kind) for ev in events]
+        and all(
+            abs((events[k].video_out_sec - events[k].video_in_sec) - all_shots[k].duration_sec)
+            <= 1e-6
+            and abs(events[k].video_duration_sec - all_shots[k].duration_sec) <= 1e-6
+            and abs(all_shots[k].trajectory.duration_sec - all_shots[k].duration_sec) <= 1e-6
+            for k in range(len(all_shots))
+        )
+    )
+
+
+def _editorial_summary_valid(editorial: EditorialTimelinePlan) -> bool:
+    n_events = len(editorial.events)
+    n_trans = len(editorial.transitions)
+    expected_asl = round(editorial.total_duration_sec / n_events, 6) if n_events > 0 else 0.0
+    expected_cpm = (
+        round(((n_events - 1) / editorial.total_duration_sec) * 60.0, 6)
+        if n_events > 0 and editorial.total_duration_sec > 0.0
+        else 0.0
+    )
+    expected_mean_eye = (
+        round(sum(tr.eye_trace.continuity_score for tr in editorial.transitions) / n_trans, 6)
+        if n_trans > 0
+        else 1.0
+    )
+    return (
+        n_events > 0
+        and editorial.events[0].entry_cut_type is None
+        and editorial.events[-1].exit_cut_type is None
+        and editorial.j_cut_count
+        == sum(1 for tr in editorial.transitions if tr.cut_type == CutType.J_CUT)
+        and editorial.l_cut_count
+        == sum(1 for tr in editorial.transitions if tr.cut_type == CutType.L_CUT)
+        and editorial.straight_cut_count
+        == sum(1 for tr in editorial.transitions if tr.cut_type == CutType.STRAIGHT_CUT)
+        and abs(editorial.average_shot_length_sec - expected_asl) <= 1e-5
+        and abs(editorial.cuts_per_minute - expected_cpm) <= 1e-4
+        and abs(editorial.mean_eye_trace_score - expected_mean_eye) <= 1e-5
+        and editorial.pacing_profile == _classify_pacing(editorial.average_shot_length_sec)
     )
 
 
@@ -1356,14 +1546,13 @@ def verify_manifest_integrity(manifest: CompiledStoryboardManifest) -> bool:
     expected_eye_ok = live_edit_report.eye_trace_valid
 
     trajectories_valid = all(
-        _shot_trajectory_endpoints_valid(sh)
-        for plan in manifest.cinematography
-        for sh in plan.shots
+        _shot_trajectory_valid(sh) for plan in manifest.cinematography for sh in plan.shots
     )
 
     summary_valid = (
         manifest.schema_version == MANIFEST_SCHEMA_VERSION
         and _scene_shot_bijection_valid(manifest)
+        and _editorial_summary_valid(manifest.editorial)
         and manifest.total_scenes == expected_total_scenes
         and expected_total_shots > 0
         and manifest.total_shots == expected_total_shots
@@ -1373,9 +1562,12 @@ def verify_manifest_integrity(manifest: CompiledStoryboardManifest) -> bool:
         and trajectories_valid
         and axis_reports_consistent
         and edit_reports_consistent
-        and manifest.axis_180_compliant is expected_axis_ok
-        and manifest.editorial_compliant is expected_edit_ok
-        and manifest.eye_trace_compliant is expected_eye_ok
+        and expected_axis_ok
+        and expected_edit_ok
+        and expected_eye_ok
+        and manifest.axis_180_compliant is True
+        and manifest.editorial_compliant is True
+        and manifest.eye_trace_compliant is True
     )
     if not summary_valid:
         return False
