@@ -449,17 +449,70 @@ class _StorageLock:
     # (3); that re-check is the linearization point of the protocol.
 
     @staticmethod
-    def _unlink_if_inode(path: Path, ino: int) -> None:
-        """Unlink *path* only while it is still the exact inode inspected."""
+    def _unlink_if_inode(path: Path, ino: int, expected_token: object = None) -> None:
+        """Remove *path* only if it is still the inode (and owner token) inspected.
+
+        A bare ``lstat`` check followed by ``unlink`` is a TOCTOU window: a rival
+        can replace *path* between the two calls and the unlink then destroys the
+        rival's live record.  The candidate is therefore first moved to a private
+        stage name with ``os.replace``, and the *moved* inode is verified.  Only a
+        verified match is unlinked, and the stage name is private, so nobody else
+        can change it in between.  A mismatch means a rival was moved; it is put
+        back with a no-clobber ``os.link``.  If that link is refused, the moved
+        record is kept as ownership evidence and is never deleted.
+        """
         try:
-            if os.lstat(path).st_ino == ino:
-                path.unlink(missing_ok=True)
+            if os.lstat(path).st_ino != ino:
+                return
         except FileNotFoundError:
             return  # already gone; never touch a concurrent replacement
+        stage = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.stale")
+        try:
+            os.replace(path, stage)
+        except FileNotFoundError:
+            return  # vanished between lstat and replace
+        moved = _read_lock_state(stage)
+        if (
+            moved is not None
+            and moved[0] == ino
+            and (expected_token is None or _lock_token(moved[2]) == expected_token)
+        ):
+            stage.unlink(missing_ok=True)
+            return
+        # The moved inode is not the one we inspected: a rival record slipped in.
+        # Restore it without clobbering whatever is now at *path*.
+        moved_token = _lock_token(moved[2]) if moved is not None else None
+        try:
+            os.link(stage, path)
+        except FileExistsError:
+            # Something re-filled *path*.  Drop the staged copy only if it is the
+            # very same owner's record; otherwise keep it as ownership evidence.
+            current = _read_lock_state(path)
+            if (
+                moved_token is not None
+                and current is not None
+                and _lock_token(current[2]) == moved_token
+            ):
+                stage.unlink(missing_ok=True)
+            return
+        except OSError:
+            return  # keep the staged record: it may be the only ownership evidence
+        stage.unlink(missing_ok=True)
 
     def _quarantine_paths(self, target: Path) -> list[Path]:
-        """Every ``*.stale`` quarantine record belonging to *target*."""
-        return sorted(target.parent.glob(f".{target.name}.*.stale"))
+        """Every ``*.stale`` quarantine record belonging to *target*.
+
+        The break guard of a lock is ``<lock>.break`` and its quarantine records
+        are ``..<lock>.break.<pid>.<hex>.stale``, which also match the lock's own
+        glob.  Those records belong to the break-guard protocol, so they are
+        excluded here; restoring one would install a guard record as the lock.
+        """
+        sibling_prefix = f".{target.name}.break."
+        return sorted(
+            candidate
+            for candidate in target.parent.glob(f".{target.name}.*.stale")
+            if not candidate.name.startswith(sibling_prefix)
+        )
 
     def _sweep_quarantine(
         self,
@@ -480,14 +533,19 @@ class _StorageLock:
             if not is_stale(data, mtime):
                 live.append(candidate)
                 continue
-            self._unlink_if_inode(candidate, ino)
+            self._unlink_if_inode(candidate, ino, _lock_token(data))
         return live
 
     def _restore_quarantine(self, candidate: Path, target: Path) -> None:
         """Best-effort, no-clobber restore of a live quarantined claim."""
         try:
+            state = _read_lock_state(candidate)
+            if state is None:
+                return  # vanished: nothing left to restore
+            ino, _, data = state
             os.link(candidate, target)
-            candidate.unlink(missing_ok=True)
+            # Drop the quarantine name only while it still names this inode/owner.
+            self._unlink_if_inode(candidate, ino, _lock_token(data))
         except OSError:
             return  # keep the only surviving ownership evidence
 
@@ -526,7 +584,7 @@ class _StorageLock:
         if owned and not rivals:
             return False
         if owned:
-            self._unlink_if_inode(target, created_ino)
+            self._unlink_if_inode(target, created_ino, token)
         for candidate in rivals:
             self._restore_quarantine(candidate, target)
         return True
@@ -623,8 +681,8 @@ class _StorageLock:
         return ino, token
 
     def _exit_break_guard(self, guard: tuple[int, str]) -> None:
-        if self._guard_still_owned(guard):
-            self._break_path.unlink(missing_ok=True)
+        guard_ino, guard_token = guard
+        self._unlink_if_inode(self._break_path, guard_ino, guard_token)
 
     def _try_acquire(self) -> bool:
         token = f"{os.getpid()}:{uuid.uuid4().hex}"
@@ -748,13 +806,11 @@ class _StorageLock:
             # Use the quarantine namespace, not a transient `.release` name:
             # if unlink fails, the surviving evidence is still discovered by
             # every future pre-sweep instead of becoming invisible litter.
-            trash = self.path.with_name(f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.stale")
-            os.replace(self.path, trash)
-            trash.unlink(missing_ok=True)
+            self._unlink_if_inode(self.path, ino, token)
         for candidate in self._quarantine_paths(self.path):
             q_state = _read_lock_state(candidate)
             if q_state is not None and q_state[0] == ino and _lock_token(q_state[2]) == token:
-                self._unlink_if_inode(candidate, ino)
+                self._unlink_if_inode(candidate, ino, token)
 
     def __enter__(self) -> _StorageLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
