@@ -443,6 +443,7 @@ class _StorageLock:
         trash = self._break_path.with_name(
             f".{self._break_path.name}.{os.getpid()}.{uuid.uuid4().hex}.stale"
         )
+        preserve_trash = False
         try:
             stat_before = os.lstat(self._break_path)
             if stat_before.st_ino != guard_ino or not stat.S_ISREG(stat_before.st_mode):
@@ -463,6 +464,9 @@ class _StorageLock:
             ):
                 return False
             os.replace(self._break_path, trash)
+            # Until the moved inode is either proven stale or restored at the
+            # live path, it is the only remaining ownership evidence.
+            preserve_trash = True
             if os.lstat(trash).st_ino != probe_stat.st_ino:
                 try:
                     os.link(trash, self._break_path)
@@ -470,13 +474,16 @@ class _StorageLock:
                     pass
                 else:
                     trash.unlink(missing_ok=True)
+                    preserve_trash = False
                 return False
+            preserve_trash = False
             return True
         except FileNotFoundError:
             return False
         finally:
             link_path.unlink(missing_ok=True)
-            trash.unlink(missing_ok=True)
+            if not preserve_trash:
+                trash.unlink(missing_ok=True)
 
     def _try_enter_break_guard(
         self, *, target_lock_ino: int | None = None

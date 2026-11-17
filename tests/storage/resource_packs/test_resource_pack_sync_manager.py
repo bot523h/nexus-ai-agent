@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib
 import json
@@ -1305,6 +1306,50 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
     monkeypatch.undo()
     assert json.loads(lock._break_path.read_text())["owner_token"] == "rival:2"
     lock._break_path.unlink()
+
+    # Recovery faults must preserve the moved inode instead of allowing the
+    # finally block to delete the only remaining ownership evidence.
+    for recovery_error in (
+        PermissionError("permission denied during recovery"),
+        OSError(errno.ENOSPC, "no space left during recovery"),
+    ):
+        lock._break_path.write_text(
+            json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "dead:fault"})
+        )
+        recovery_trash: list[Path] = []
+
+        def replace_and_record_rival(
+            src: object, dst: object, *, trash_ref: list[Path] = recovery_trash
+        ) -> None:
+            lock._break_path.unlink()
+            lock._break_path.write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "expires_at": now[0] + 60,
+                        "owner_token": "live:fault",
+                    }
+                )
+            )
+            real_replace(src, dst)  # type: ignore[arg-type]
+            trash_ref.extend(lock._break_path.parent.glob("*.stale"))
+
+        def fail_recovery_link(
+            src: object, dst: object, *, error: OSError = recovery_error
+        ) -> None:
+            if str(dst) == str(lock._break_path):
+                raise error
+            real_link(src, dst)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(os, "replace", replace_and_record_rival)
+        monkeypatch.setattr(os, "link", fail_recovery_link)
+        with pytest.raises(type(recovery_error)):
+            lock._reclaim_stale_break_guard()
+        monkeypatch.undo()
+        assert not lock._break_path.exists()
+        assert recovery_trash
+        assert json.loads(recovery_trash[-1].read_text())["owner_token"] == "live:fault"
+        recovery_trash[-1].unlink()
 
     # Multi-process race: dead-PID .break + dead-PID lock are reclaimed cleanly,
     # whereas an expired live-PID .break is NOT reclaimed while the live owner runs.
