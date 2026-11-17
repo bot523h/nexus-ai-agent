@@ -185,12 +185,92 @@ def _imported_atlas_modules(source: ast.Module) -> set[str]:
 
 
 def _exercises_source(test_path: Path, source_stem: str) -> bool:
-    """Whether the test module at ``test_path`` imports the ``source_stem`` module."""
+    """Whether ``test_path`` imports ``source_stem`` and exercises it in a test."""
     try:
         source = ast.parse(test_path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError):
         return False
-    return source_stem in _imported_atlas_modules(source)
+    local_names, dotted_prefixes = _bound_source_names(source, source_stem)
+    if not local_names and not dotted_prefixes:
+        return False
+
+    used_in_body = False
+    has_assertion = False
+    for node in ast.walk(source):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_test_or_fixture_fn(
+            node
+        ):
+            is_test_fn = node.name.startswith("test_")
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Name) and sub.id in local_names:
+                    used_in_body = True
+                elif isinstance(sub, ast.Attribute):
+                    dotted = _dotted_name(sub)
+                    if dotted is not None and any(
+                        dotted == prefix or dotted.startswith(prefix + ".")
+                        for prefix in dotted_prefixes
+                    ):
+                        used_in_body = True
+                if is_test_fn and _is_verification_node(sub):
+                    has_assertion = True
+    return used_in_body and has_assertion
+
+
+def _bound_source_names(source: ast.Module, source_stem: str) -> tuple[set[str], set[str]]:
+    local_names: set[str] = set()
+    dotted_prefixes: set[str] = set()
+    target_pkg = f"{SOURCE_MODULE_PACKAGE}.{source_stem}"
+    for node in ast.walk(source):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if node.module == SOURCE_MODULE_PACKAGE:
+                for alias in node.names:
+                    if alias.name == source_stem:
+                        local_names.add(alias.asname or alias.name)
+            elif node.module == target_pkg or node.module.startswith(target_pkg + "."):
+                for alias in node.names:
+                    local_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == target_pkg or alias.name.startswith(target_pkg + "."):
+                    if alias.asname:
+                        local_names.add(alias.asname)
+                    else:
+                        dotted_prefixes.add(alias.name)
+    return local_names, dotted_prefixes
+
+
+def _dotted_name(node: ast.AST) -> str | None:
+    parts: list[str] = []
+    cur: ast.AST = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if isinstance(cur, ast.Name):
+        parts.append(cur.id)
+        return ".".join(reversed(parts))
+    return None
+
+
+def _is_verification_node(node: ast.AST) -> bool:
+    if isinstance(node, ast.Assert):
+        return True
+    if isinstance(node, ast.Call):
+        dotted = _dotted_name(node.func)
+        if dotted is not None:
+            leaf = dotted.rsplit(".", 1)[-1]
+            if dotted in {"pytest.raises", "pytest.warns"} or leaf.startswith("assert"):
+                return True
+    return False
+
+
+def _is_test_or_fixture_fn(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    if fn.name.startswith("test_"):
+        return True
+    for dec in fn.decorator_list:
+        dotted = _dotted_name(dec.func if isinstance(dec, ast.Call) else dec)
+        if dotted is not None and dotted.endswith("fixture"):
+            return True
+    return False
 
 
 @dataclass(frozen=True)

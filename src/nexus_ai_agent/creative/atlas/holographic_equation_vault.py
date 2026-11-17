@@ -586,8 +586,7 @@ class HolographicEquationVault:
         if self._k > 1:
             step = (self._n - 1) / (self._k - 1)
             spread = tuple(sorted({round(i * step) for i in range(self._k)}))
-            if len(spread) == self._k:
-                subsets.add(spread)
+            subsets.add(spread)
         return tuple(sorted(subsets))
 
     def merkle_root(self) -> str:
@@ -630,10 +629,22 @@ class HolographicEquationVault:
         """
         directory = Path(vault_dir)
         directory.mkdir(parents=True, exist_ok=True)
+        seen_names: dict[str, str] = {}
+        planned: list[tuple[Path, bytes]] = []
         for record in self._records.values():
             shard_set = self._shards[record.equation_id]
             for index, shard in enumerate(shard_set.shards):
-                _atomic_write(directory / _shard_filename(record.equation_id, index), shard)
+                filename = _shard_filename(record.equation_id, index)
+                owner = seen_names.get(filename)
+                if owner is not None and owner != record.equation_id:
+                    raise VaultError(
+                        f"shard filename {filename!r} collides between {owner!r} and "
+                        f"{record.equation_id!r}"
+                    )
+                seen_names[filename] = record.equation_id
+                planned.append((directory / filename, shard))
+        for path, shard in planned:
+            _atomic_write(path, shard)
         _atomic_write(directory / "vault.json", jcs_canonical_bytes(self.to_dict()))
         return directory
 
@@ -659,6 +670,8 @@ class HolographicEquationVault:
         vault = cls(k=int(document["k"]), parity=int(document["n"]) - int(document["k"]))
         for record_document in document["equations"]:
             equation_id = str(record_document["equation_id"])
+            if equation_id in vault._records:
+                raise VaultError(f"duplicate equation {equation_id!r} in vault.json")
             statement = str(record_document["statement"])
             record = EquationRecord(
                 equation_id=equation_id,
@@ -716,9 +729,14 @@ def _atomic_write(path: Path, payload: bytes) -> None:
 
 
 def _shard_filename(equation_id: str, index: int) -> str:
-    """The deterministic, filesystem-safe shard file name for one shard."""
-    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in equation_id)
-    return f"{safe}.shard.{index}.bin"
+    """The deterministic, collision-free, filesystem-safe shard file name."""
+    if all(ch.isascii() and (ch.isalnum() or ch in "-.") for ch in equation_id):
+        return f"{equation_id}.shard.{index}.bin"
+    safe = "".join(
+        ch if ch.isascii() and (ch.isalnum() or ch in "-.") else "_" for ch in equation_id
+    )
+    digest12 = hashlib.sha256(equation_id.encode("utf-8")).hexdigest()[:12]
+    return f"{safe}__{digest12}.shard.{index}.bin"
 
 
 def _manifest_shard_digests(directory: Path, record: EquationRecord) -> list[str]:

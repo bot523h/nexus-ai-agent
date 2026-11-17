@@ -33,6 +33,7 @@ Pure Python + stdlib, offline, deterministic.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import struct
@@ -54,6 +55,7 @@ __all__ = [
     "DEFAULT_DATA_SHARDS",
     "GENESIS",
     "ENTRY_DOMAIN",
+    "ANCHOR_HMAC_KEY_ENV",
     "LedgerError",
     "LedgerEntry",
     "LedgerIntegrityReport",
@@ -68,6 +70,7 @@ DEFAULT_DATA_SHARDS: Final[int] = 4
 GENESIS: Final[str] = "0" * 64
 #: Domain separator for the predecessor-bound entry digest.
 ENTRY_DOMAIN: Final[bytes] = b"NAGAR_LEDGER_V1\x00"
+ANCHOR_HMAC_KEY_ENV: Final[str] = "NEXUS_LEDGER_ANCHOR_HMAC_KEY"
 
 
 class LedgerError(ValueError):
@@ -189,6 +192,27 @@ class HealingReport:
         }
 
 
+def _resolve_hmac_key(hmac_key: bytes | str | None) -> bytes | None:
+    if hmac_key is None:
+        env_key = os.environ.get(ANCHOR_HMAC_KEY_ENV)
+        return env_key.encode("utf-8") if env_key else None
+    if isinstance(hmac_key, str):
+        if not hmac_key:
+            raise LedgerError("hmac_key must not be empty")
+        return hmac_key.encode("utf-8")
+    if isinstance(hmac_key, (bytes, bytearray)):
+        if not hmac_key:
+            raise LedgerError("hmac_key must not be empty")
+        return bytes(hmac_key)
+    raise LedgerError("hmac_key must be bytes or str")
+
+
+def _anchor_hmac_payload(*, seq_count: int, head_digest: str, schema: str) -> bytes:
+    return jcs_canonical_bytes(
+        {"schema": schema, "seq_count": seq_count, "head_digest": head_digest}
+    )
+
+
 @dataclass(frozen=True)
 class LedgerAnchor:
     """An independent external witness for the ledger head.
@@ -201,16 +225,51 @@ class LedgerAnchor:
     seq_count: int
     head_digest: str
     schema: str = "atlas.ledger-anchor/1"
+    hmac_signature: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        doc: dict[str, Any] = {
             "schema": self.schema,
             "seq_count": self.seq_count,
             "head_digest": self.head_digest,
         }
+        if self.hmac_signature is not None:
+            doc["hmac_signature"] = self.hmac_signature
+        return doc
 
     def canonical_bytes(self) -> bytes:
         return jcs_canonical_bytes(self.to_dict())
+
+    def sign(self, hmac_key: bytes | str) -> LedgerAnchor:
+        key = _resolve_hmac_key(hmac_key)
+        assert key is not None
+        sig = hmac.new(
+            key,
+            _anchor_hmac_payload(
+                seq_count=self.seq_count, head_digest=self.head_digest, schema=self.schema
+            ),
+            hashlib.sha256,
+        ).hexdigest()
+        return LedgerAnchor(
+            seq_count=self.seq_count,
+            head_digest=self.head_digest,
+            schema=self.schema,
+            hmac_signature=sig,
+        )
+
+    def verify_hmac(self, hmac_key: bytes | str) -> bool:
+        key = _resolve_hmac_key(hmac_key)
+        assert key is not None
+        if not isinstance(self.hmac_signature, str) or len(self.hmac_signature) != 64:
+            return False
+        expected = hmac.new(
+            key,
+            _anchor_hmac_payload(
+                seq_count=self.seq_count, head_digest=self.head_digest, schema=self.schema
+            ),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(self.hmac_signature, expected)
 
     @classmethod
     def from_dict(cls, document: dict[str, Any]) -> LedgerAnchor:
@@ -222,7 +281,13 @@ class LedgerAnchor:
         count = int(document["seq_count"])
         if count < 0:
             raise LedgerError("anchor seq_count must be non-negative")
-        return cls(seq_count=count, head_digest=head)
+        raw_sig = document.get("hmac_signature")
+        sig: str | None = None
+        if raw_sig is not None:
+            sig = str(raw_sig)
+            if len(sig) != 64 or any(c not in "0123456789abcdef" for c in sig):
+                raise LedgerError("anchor hmac_signature must be a 64-hex digest")
+        return cls(seq_count=count, head_digest=head, hmac_signature=sig)
 
 
 class LinearEvidenceLedger:
@@ -491,7 +556,13 @@ class LinearEvidenceLedger:
 
     # --- on-disk persistence (JSONL log + external witness anchor) -------------
 
-    def save_to_disk(self, log_path: str | Path, anchor_path: str | Path) -> LedgerAnchor:
+    def save_to_disk(
+        self,
+        log_path: str | Path,
+        anchor_path: str | Path,
+        *,
+        hmac_key: bytes | str | None = None,
+    ) -> LedgerAnchor:
         """Persist the ledger as an append-only JSONL log plus a witness anchor.
 
         The log is rewritten atomically (temp + fsync + ``os.replace``); the
@@ -502,14 +573,23 @@ class LinearEvidenceLedger:
         lines = [json.dumps(self.to_dict(), ensure_ascii=False, sort_keys=True)]
         _atomic_write(log, ("\n".join(lines) + "\n").encode("utf-8"))
         anchor = LedgerAnchor(seq_count=len(self._entries), head_digest=self.head_digest)
+        key = _resolve_hmac_key(hmac_key)
+        if key is not None:
+            anchor = anchor.sign(key)
         _atomic_write(Path(anchor_path), anchor.canonical_bytes())
         return anchor
 
     @classmethod
     def load_from_disk(
-        cls, log_path: str | Path, anchor_path: str | Path | None = None
+        cls,
+        log_path: str | Path,
+        anchor_path: str | Path | None = None,
+        *,
+        require_anchor: bool = False,
+        allow_missing_anchor: bool = False,
+        hmac_key: bytes | str | None = None,
     ) -> LinearEvidenceLedger:
-        """Reload a ledger from its JSONL log and, if given, verify the anchor."""
+        """Reload a ledger from its JSONL log and verify its external witness anchor."""
         log = Path(log_path)
         if not log.is_file():
             raise LedgerError(f"no ledger log at {log}")
@@ -518,15 +598,25 @@ class LinearEvidenceLedger:
         except json.JSONDecodeError as exc:
             raise LedgerError(f"ledger log is not valid JSON: {exc}") from exc
         ledger = cls.from_dict(document)
-        if anchor_path is not None:
-            anchor = cls.load_anchor(anchor_path)
-            conflict = ledger._anchor_conflict(anchor)
-            if conflict is not None:
-                raise LedgerError(conflict)
+        if anchor_path is None:
+            if require_anchor and not allow_missing_anchor:
+                raise LedgerError("anchor_path is required when require_anchor=True")
+            return ledger
+        path = Path(anchor_path)
+        if not path.is_file():
+            if allow_missing_anchor and not require_anchor:
+                return ledger
+            raise LedgerError(f"no ledger anchor at {path}")
+        anchor = cls.load_anchor(path, hmac_key=hmac_key)
+        conflict = ledger._anchor_conflict(anchor)
+        if conflict is not None:
+            raise LedgerError(conflict)
         return ledger
 
     @staticmethod
-    def load_anchor(anchor_path: str | Path) -> LedgerAnchor:
+    def load_anchor(
+        anchor_path: str | Path, *, hmac_key: bytes | str | None = None
+    ) -> LedgerAnchor:
         path = Path(anchor_path)
         if not path.is_file():
             raise LedgerError(f"no ledger anchor at {path}")
@@ -534,7 +624,11 @@ class LinearEvidenceLedger:
             document = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise LedgerError(f"ledger anchor is not valid JSON: {exc}") from exc
-        return LedgerAnchor.from_dict(document)
+        anchor = LedgerAnchor.from_dict(document)
+        key = _resolve_hmac_key(hmac_key)
+        if key is not None and not anchor.verify_hmac(key):
+            raise LedgerError("ledger anchor HMAC signature is missing or invalid")
+        return anchor
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:

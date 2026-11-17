@@ -56,8 +56,20 @@ def test_coverage_below_threshold_is_refused() -> None:
 
 
 def test_custom_threshold_is_honoured() -> None:
-    assert pcs.evaluate_pack_coverage((_entry("x", 90.0),), threshold=90.0).accepted is True
-    assert pcs.evaluate_pack_coverage((_entry("x", 89.99),), threshold=90.0).accepted is False
+    assert pcs.evaluate_pack_coverage((_entry("x", 96.0),), threshold=96.0).accepted is True
+    assert pcs.evaluate_pack_coverage((_entry("x", 95.99),), threshold=96.0).accepted is False
+
+
+def test_governance_threshold_below_95_or_invalid_is_refused() -> None:
+    for bad in (90.0, 94.99, -1.0, 100.01, float("nan"), float("inf"), True):
+        with pytest.raises(ValueError, match="95.0"):
+            pcs.evaluate_pack_coverage(_clean(), threshold=bad)  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="95.0"):
+            pcs.seal_pack_coverage_from_report(
+                _FakeReport([("slideshow", 99.0)]),
+                git_commit="abc123",
+                threshold=bad,  # type: ignore[arg-type]
+            )
 
 
 def test_decision_validates_its_inputs() -> None:
@@ -279,3 +291,41 @@ def test_measure_pack_coverage_seal_honours_an_explicit_commit() -> None:
 
     seal = pcs.measure_pack_coverage_seal(runner=runner, git_commit="abc123")
     assert seal.git_commit == "abc123"
+
+
+def test_seal_from_report_refuses_unhealthy_or_mismatched_commit_reports() -> None:
+    healthy_packs = [{"pack": name, "percent": 99.0} for name in continuum.PACK_TEST_TARGETS]
+    clean_dict = {
+        "packs": healthy_packs,
+        "verified": True,
+        "pytest_exit_code": 0,
+        "failed": 0,
+        "errors": 0,
+        "measurement_issues": [],
+        "commit_sha": "abc123",
+    }
+    seal_ok = pcs.seal_pack_coverage_from_report(clean_dict, commit_sha="abc123")
+    assert seal_ok.verdict.accepted is True
+
+    # Each health failure forces accepted=False even when every pack >= 95%
+    for key, bad_val in (
+        ("verified", False),
+        ("pytest_exit_code", 1),
+        ("failed", 2),
+        ("errors", 1),
+        ("measurement_issues", ["stale"]),
+    ):
+        bad_report = {**clean_dict, key: bad_val}
+        seal = pcs.seal_pack_coverage_from_report(bad_report, git_commit="abc123")
+        assert seal.verdict.accepted is False
+        assert any(key in reason for reason in seal.verdict.reasons)
+
+    # Commit mismatch raises ValueError / PackCoverageError
+    with pytest.raises(pcs.PackCoverageError, match="commit_sha"):
+        pcs.seal_pack_coverage_from_report(
+            {**clean_dict, "commit_sha": "other"}, git_commit="abc123"
+        )
+    with pytest.raises(pcs.PackCoverageError, match="head_sha"):
+        pcs.seal_pack_coverage_from_report({**clean_dict, "head_sha": "other"}, git_commit="abc123")
+    with pytest.raises(pcs.PackCoverageError, match="disagree"):
+        pcs.seal_pack_coverage_from_report(clean_dict, git_commit="abc123", commit_sha="def456")

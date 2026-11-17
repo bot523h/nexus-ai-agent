@@ -846,10 +846,13 @@ def test_the_cli_reports_an_invalid_fixture_set_with_exit_code_2(
 
 @pytest.mark.parametrize("seed", ["0", "1", "12345"])
 def test_the_fingerprint_is_stable_across_hash_seeds(seed: str) -> None:
+    existing_pp = os.environ.get("PYTHONPATH", "")
     child_env = {
         "PYTHONHASHSEED": seed,
         "PATH": "/usr/bin:/bin",
-        "PYTHONPATH": os.environ.get("PYTHONPATH", str(ROOT / "src")),
+        "PYTHONPATH": f"{ROOT / 'src'}{os.pathsep}{existing_pp}"
+        if existing_pp
+        else str(ROOT / "src"),
     }
     completed = subprocess.run(
         [sys.executable, str(SCRIPT), "--json", "--repeats", "2"],

@@ -402,3 +402,69 @@ def test_atomic_write_cleans_up_when_the_replace_fails(tmp_path: Path, monkeypat
         shl._atomic_write(tmp_path / "out.bin", b"payload")
     # no stray temp files are left behind in the directory
     assert [p.name for p in tmp_path.iterdir()] == []
+
+
+def test_anchor_hmac_signing_and_fail_closed_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ledger = _ledger(count=3)
+    log = tmp_path / "ledger.jsonl"
+    anchor_path = tmp_path / "ledger.anchor.json"
+    key = b"super-secret-anchor-key"
+
+    anchor = ledger.save_to_disk(log, anchor_path, hmac_key=key)
+    assert anchor.hmac_signature is not None
+    assert anchor.verify_hmac(key) is True
+    assert anchor.verify_hmac("wrong-key") is False
+
+    restored = shl.LinearEvidenceLedger.load_from_disk(log, anchor_path, hmac_key=key)
+    assert restored.head_digest == ledger.head_digest
+
+    # Env var key works automatically as well
+    monkeypatch.setenv(shl.ANCHOR_HMAC_KEY_ENV, "env-secret-key")
+    ledger.save_to_disk(log, anchor_path)
+    reloaded = shl.LinearEvidenceLedger.load_from_disk(log, anchor_path)
+    assert reloaded.head_digest == ledger.head_digest
+    monkeypatch.delenv(shl.ANCHOR_HMAC_KEY_ENV)
+
+    # Wrong HMAC key or forged anchor fails closed
+    with pytest.raises(shl.LedgerError, match="HMAC"):
+        shl.LinearEvidenceLedger.load_from_disk(log, anchor_path, hmac_key="wrong")
+    doc = json.loads(anchor_path.read_text(encoding="utf-8"))
+    doc["hmac_signature"] = "0" * 64
+    anchor_path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(shl.LedgerError, match="HMAC"):
+        shl.LinearEvidenceLedger.load_from_disk(log, anchor_path, hmac_key="env-secret-key")
+
+    # Missing HMAC signature fails closed when key is supplied
+    del doc["hmac_signature"]
+    anchor_path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(shl.LedgerError, match="HMAC"):
+        shl.LinearEvidenceLedger.load_anchor(anchor_path, hmac_key="env-secret-key")
+
+    # Malformed hmac_signature or key rejected
+    with pytest.raises(shl.LedgerError, match="hmac_signature"):
+        shl.LedgerAnchor.from_dict({**doc, "hmac_signature": "not-hex"})
+    with pytest.raises(shl.LedgerError, match="empty"):
+        shl._resolve_hmac_key("")
+    with pytest.raises(shl.LedgerError, match="empty"):
+        shl._resolve_hmac_key(b"")
+    with pytest.raises(shl.LedgerError, match="bytes or str"):
+        shl._resolve_hmac_key(123)  # type: ignore[arg-type]
+
+
+def test_load_from_disk_anchor_presence_policy(tmp_path: Path) -> None:
+    ledger = _ledger(count=2)
+    log = tmp_path / "ledger.jsonl"
+    missing_anchor = tmp_path / "missing.anchor.json"
+    ledger.save_to_disk(log, tmp_path / "real.anchor.json")
+
+    with pytest.raises(shl.LedgerError, match="require_anchor"):
+        shl.LinearEvidenceLedger.load_from_disk(log, require_anchor=True)
+    with pytest.raises(shl.LedgerError, match="no ledger anchor"):
+        shl.LinearEvidenceLedger.load_from_disk(log, missing_anchor)
+    # Explicit opt-out allows missing anchor only when require_anchor is False
+    restored = shl.LinearEvidenceLedger.load_from_disk(
+        log, missing_anchor, allow_missing_anchor=True
+    )
+    assert restored.head_digest == ledger.head_digest

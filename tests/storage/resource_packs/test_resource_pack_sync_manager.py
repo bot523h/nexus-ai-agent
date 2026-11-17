@@ -899,10 +899,17 @@ def test_exclusive_file_lock_token_ownership_and_dead_pid_break(
     )
     lock._exit_break_guard(guard)
     assert lock._break_path.exists()
-    # Stale break guard that vanishes mid-replace is handled cleanly
+    # Expired break guard owned by a LIVE pid must NEVER be broken
     lock._break_path.unlink()
     lock._break_path.write_text(
-        json.dumps({"pid": os.getpid(), "expires_at": now[0] - 10, "owner_token": "other:1"})
+        json.dumps({"pid": os.getpid(), "expires_at": now[0] - 10, "owner_token": "live:1"})
+    )
+    assert lock._try_enter_break_guard() is None
+    assert lock._break_path.exists()
+    # Stale break guard (expired AND dead pid) that vanishes mid-replace is handled cleanly
+    lock._break_path.unlink()
+    lock._break_path.write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "other:1"})
     )
     real_replace = os.replace
 
@@ -933,8 +940,8 @@ def test_exclusive_file_lock_token_ownership_and_dead_pid_break(
     os.utime(lock_file, (stale_t, stale_t))
     real_enter = lock._try_enter_break_guard
 
-    def swap_lock_before_recheck() -> tuple[int, str] | None:
-        g = real_enter()
+    def swap_lock_before_recheck(*_args: object, **_kwargs: object) -> tuple[int, str] | None:
+        g = real_enter(**_kwargs)  # type: ignore[arg-type]
         lock_file.unlink()
         lock_file.write_text(
             json.dumps({"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "fresh:1"})
@@ -950,8 +957,8 @@ def test_exclusive_file_lock_token_ownership_and_dead_pid_break(
     lock_file.write_text("{corrupt")
     os.utime(lock_file, (stale_t, stale_t))
 
-    def vanish_lock_before_recheck() -> tuple[int, str] | None:
-        g = real_enter()
+    def vanish_lock_before_recheck(*_args: object, **_kwargs: object) -> tuple[int, str] | None:
+        g = real_enter(**_kwargs)  # type: ignore[arg-type]
         lock_file.unlink()
         return g
 
@@ -964,18 +971,18 @@ def test_exclusive_file_lock_token_ownership_and_dead_pid_break(
         calls = [0]
         orig_enter = l3._try_enter_break_guard
 
-        def busy_once() -> tuple[int, str] | None:
+        def busy_once(*_args: object, **_kwargs: object) -> tuple[int, str] | None:
             calls[0] += 1
             if calls[0] == 1:
                 return None
-            return orig_enter()
+            return orig_enter(**_kwargs)  # type: ignore[arg-type]
 
         monkeypatch.setattr(l3, "_try_enter_break_guard", busy_once)
     monkeypatch.undo()
     assert calls[0] >= 2
 
     with m2._storage_lock() as l4:
-        monkeypatch.setattr(l4, "_try_enter_break_guard", lambda: None)
+        monkeypatch.setattr(l4, "_try_enter_break_guard", lambda *_args, **_kwargs: None)
         ticks = iter([0.0, 1.0, 2.0])
         monkeypatch.setattr(time, "monotonic", lambda: next(ticks, 2.0))
     monkeypatch.undo()
@@ -1130,3 +1137,179 @@ def test_break_guard_ttl_and_finally_lifetime(
     assert observed_during_replace == [True]
     assert observed_during_unlink == [True]
     assert not lock._break_path.exists()
+
+
+_CONTEND_DEAD_BREAK = """
+import json, sys, time
+from pathlib import Path
+from nexus_ai_agent.storage.resource_packs import LocalDirectoryPackSource, ResourcePackSyncManager
+root = Path(sys.argv[1])
+mirror = Path(sys.argv[2])
+log = Path(sys.argv[3])
+mgr = ResourcePackSyncManager(
+    root, [], LocalDirectoryPackSource(mirror),
+    allow_unsigned=True, disk_free_probe=lambda _: 10**12,
+    lock_backend="exclusive_file", lock_timeout_seconds=10.0, lock_stale_after_seconds=0.05,
+)
+with mgr._storage_lock():
+    with open(log, "a") as fh:
+        fh.write(f"ok\\n")
+"""
+
+
+def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "fencing"
+    now = [1000.0]
+    mgr, _ = _manager(
+        root,
+        [],
+        mirror,
+        lock_backend="exclusive_file",
+        lock_timeout_seconds=0.2,
+        lock_stale_after_seconds=5.0,
+        wall_clock=lambda: now[0],
+    )
+    lock = mgr._storage_lock()
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    lock.path.write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10.0, "owner_token": "999:stale"})
+    )
+    lock_ino = os.lstat(lock.path).st_ino
+
+    # Guard JSON includes pid, owner_token, created_at, expires_at, target_lock_ino
+    guard = lock._try_enter_break_guard(target_lock_ino=lock_ino)
+    assert guard is not None
+    guard_json = json.loads(lock._break_path.read_text())
+    assert guard_json["pid"] == os.getpid()
+    assert guard_json["owner_token"] == guard[1]
+    assert guard_json["created_at"] == now[0]
+    assert guard_json["expires_at"] == now[0] + lock._BREAK_GUARD_TTL
+    assert guard_json["target_lock_ino"] == lock_ino
+    lock._exit_break_guard(guard)
+
+    # Fencing check inside _break_if_stale: abort if .break is swapped before os.replace
+    real_enter = lock._try_enter_break_guard
+
+    def swap_break_before_replace(*, target_lock_ino: int | None = None) -> tuple[int, str] | None:
+        g = real_enter(target_lock_ino=target_lock_ino)
+        lock._break_path.unlink()
+        lock._break_path.write_text(
+            json.dumps({"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "hijack:1"})
+        )
+        return g
+
+    monkeypatch.setattr(lock, "_try_enter_break_guard", swap_break_before_replace)
+    lock._break_if_stale()
+    monkeypatch.undo()
+    assert lock.path.exists()
+    lock._break_path.unlink(missing_ok=True)
+
+    # _reclaim_stale_break_guard edge cases: vanished, symlink/non-regular, swapped inode/token
+    lock._reclaim_stale_break_guard()  # vanished
+    target = tmp_path / "symlink_target"
+    target.write_text("x")
+    lock._break_path.symlink_to(target)
+    stale_t = now[0] - 100.0
+    os.utime(lock._break_path, (stale_t, stale_t), follow_symlinks=False)
+    lock._reclaim_stale_break_guard()  # non-regular file refused
+    lock._break_path.unlink()
+
+    lock._break_path.write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "dead:1"})
+    )
+    real_lstat = os.lstat
+    calls = [0]
+
+    def swap_inode_on_recheck(path: object, *args: object, **kwargs: object) -> os.stat_result:
+        if str(path) == str(lock._break_path):
+            calls[0] += 1
+            if calls[0] == 3:
+                lock._break_path.unlink()
+                lock._break_path.write_text(
+                    json.dumps(
+                        {"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "new:1"}
+                    )
+                )
+        return real_lstat(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "lstat", swap_inode_on_recheck)
+    lock._reclaim_stale_break_guard()  # aborted before touching newly replaced .break!
+    monkeypatch.undo()
+    assert json.loads(lock._break_path.read_text())["owner_token"] == "new:1"
+    lock._break_path.unlink()
+
+    lock._break_path.write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "dead:2"})
+    )
+    real_link = os.link
+
+    def swap_token_during_link(src: object, dst: object) -> None:
+        real_link(src, dst)  # type: ignore[arg-type]
+        Path(str(dst)).write_text(
+            json.dumps({"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "diff:1"})
+        )
+
+    monkeypatch.setattr(os, "link", swap_token_during_link)
+    lock._reclaim_stale_break_guard()
+    monkeypatch.undo()
+    assert lock._break_path.exists()
+    lock._break_path.unlink()
+
+    # Multi-process race: dead-PID .break + dead-PID lock are reclaimed cleanly,
+    # whereas an expired live-PID .break is NOT reclaimed while the live owner runs.
+    src_dir = Path(importlib.import_module("nexus_ai_agent").__file__ or "").parents[1]
+    mp_root = tmp_path / "mp_break"
+    mp_root.mkdir()
+    mp_lock = mp_root / ".sync_gc.lock.excl"
+    mp_break = mp_root / ".sync_gc.lock.excl.break"
+    mp_lock.write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": time.time() - 10.0, "owner_token": "999:l"})
+    )
+    mp_break.write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": time.time() - 10.0, "owner_token": "999:b"})
+    )
+    log_path = tmp_path / "mp_break.log"
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _CONTEND_DEAD_BREAK,
+                str(mp_root),
+                str(mirror.root),
+                str(log_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**os.environ, "PYTHONPATH": str(src_dir)},
+        )
+        for _ in range(4)
+    ]
+    for proc in procs:
+        out, err = proc.communicate(timeout=30)
+        assert proc.returncode == 0, f"worker failed: stdout={out!r} stderr={err!r}"
+    assert log_path.read_text().splitlines() == ["ok"] * 4
+
+    # Live-PID expired .break blocks acquisition (timeout) rather than breaking a live holder
+    live_root = tmp_path / "live_break"
+    live_root.mkdir()
+    (live_root / ".sync_gc.lock.excl").write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": time.time() - 10.0, "owner_token": "999:l"})
+    )
+    (live_root / ".sync_gc.lock.excl.break").write_text(
+        json.dumps({"pid": os.getpid(), "expires_at": time.time() - 10.0, "owner_token": "live:b"})
+    )
+    live_mgr, _ = _manager(
+        live_root,
+        [],
+        mirror,
+        lock_backend="exclusive_file",
+        lock_timeout_seconds=0.05,
+        lock_stale_after_seconds=0.01,
+    )
+    with pytest.raises(PackLockTimeoutError):
+        with live_mgr._storage_lock():
+            pass

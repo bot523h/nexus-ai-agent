@@ -500,3 +500,93 @@ def test_vault_to_dict_round_trips_through_disk(tmp_path: Path) -> None:
     vault.save_to_disk(tmp_path)
     restored = hv.HolographicEquationVault.load_from_disk(tmp_path)
     assert restored.to_dict() == vault.to_dict()
+
+
+def test_shard_filename_avoids_collisions_between_slash_and_underscore(tmp_path: Path) -> None:
+    vault = hv.HolographicEquationVault(k=2, parity=1)
+    vault.seal("a/b", 30, "slash-equation")
+    vault.seal("a_b", 30, "underscore-equation")
+    assert hv._shard_filename("a/b", 0) != hv._shard_filename("a_b", 0)
+    vault.save_to_disk(tmp_path)
+    restored = hv.HolographicEquationVault.load_from_disk(tmp_path)
+    assert restored.reconstruct("a/b", restored.shard_set("a/b").available((0, 1))) == (
+        "slash-equation"
+    )
+    assert restored.reconstruct("a_b", restored.shard_set("a_b").available((0, 1))) == (
+        "underscore-equation"
+    )
+
+
+def test_save_and_load_reject_filename_collisions_and_duplicates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    vault = hv.HolographicEquationVault(k=2, parity=1)
+    vault.seal("eq1", 30, "one")
+    vault.seal("eq2", 30, "two")
+    monkeypatch.setattr(hv, "_shard_filename", lambda _eq, idx: f"same.shard.{idx}.bin")
+    with pytest.raises(hv.VaultError, match="collides"):
+        vault.save_to_disk(tmp_path)
+    monkeypatch.undo()
+
+    vault.save_to_disk(tmp_path)
+    manifest = json.loads((tmp_path / "vault.json").read_text(encoding="utf-8"))
+    manifest["equations"].append(manifest["equations"][0])
+    (tmp_path / "vault.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(hv.VaultError, match="duplicate"):
+        hv.HolographicEquationVault.load_from_disk(tmp_path)
+
+
+def test_vault_audit_and_disk_repair_edge_branches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    # k=1 exercises the k==1 branch in audit() and _k_subsets()
+    v1 = hv.HolographicEquationVault(k=1, parity=1)
+    v1.seal("E1", 30, "single")
+    assert v1.audit().all_verified is True
+
+    # audit() failure detection branches when reconstruct / decode_shards misbehave
+    v2 = hv.HolographicEquationVault(k=2, parity=1)
+    v2.seal("E2", 30, "expected")
+
+    def _raise_vault_error(*_args: object, **_kwargs: object) -> str:
+        raise hv.VaultError("boom")
+
+    monkeypatch.setattr(v2, "reconstruct", _raise_vault_error)
+    assert v2.audit().any_k_reconstruction_verified is False
+    monkeypatch.setattr(v2, "reconstruct", lambda *_args, **_kwargs: "wrong")
+    assert v2.audit().any_k_reconstruction_verified is False
+    monkeypatch.setattr(v2, "reconstruct", lambda *_args, **_kwargs: "expected")
+    monkeypatch.setattr(hv, "decode_shards", lambda *_args, **_kwargs: b"ok")
+    audit_bad = v2.audit()
+    assert audit_bad.fewer_than_k_is_refused is False
+    assert audit_bad.tamper_is_detected is False
+    monkeypatch.undo()
+
+    # _atomic_write cleans temp file when os.replace raises
+    monkeypatch.setattr(hv.os, "replace", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("boom")))
+    with pytest.raises(OSError, match="boom"):
+        hv._atomic_write(tmp_path / "fail.bin", b"data")
+    monkeypatch.undo()
+    assert list(tmp_path.iterdir()) == []
+
+    # _manifest_shard_digests handles missing/corrupt vault.json and missing equation_id
+    rec = hv.EquationRecord(equation_id="missing", wave=30, statement="s")
+    assert hv._manifest_shard_digests(tmp_path, rec) == []
+    v3 = hv.HolographicEquationVault(k=2, parity=1)
+    v3.seal("present", 30, "good")
+    v3.save_to_disk(tmp_path)
+    assert hv._manifest_shard_digests(tmp_path, rec) == []
+
+    # _read_and_repair_shards refuses shards that decode to a mismatched payload
+    forged_shards = hv.encode_shards(b"evil", k=2, n=3)
+    for idx, raw in enumerate(forged_shards):
+        (tmp_path / hv._shard_filename("present", idx)).write_bytes(raw)
+    doc = json.loads((tmp_path / "vault.json").read_text(encoding="utf-8"))
+    doc["equations"][0]["shard_digests"] = [hv._sha256(raw) for raw in forged_shards]
+    (tmp_path / "vault.json").write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(hv.VaultError, match="does not match its seal"):
+        hv.HolographicEquationVault.load_from_disk(tmp_path)

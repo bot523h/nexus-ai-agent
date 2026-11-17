@@ -331,6 +331,25 @@ def _read_lock_state(path: Path) -> tuple[int, float, dict[str, object] | None] 
     return lstat.st_ino, lstat.st_mtime, parsed if isinstance(parsed, dict) else None
 
 
+def _parse_lock_record(data: dict[str, object] | None) -> tuple[int, float, str] | None:
+    if data is None:
+        return None
+    pid = data.get("pid")
+    expires_at = data.get("expires_at")
+    token = data.get("owner_token")
+    if (
+        isinstance(pid, int)
+        and not isinstance(pid, bool)
+        and isinstance(expires_at, (int, float))
+        and not isinstance(expires_at, bool)
+        and math.isfinite(float(expires_at))
+        and isinstance(token, str)
+        and bool(token)
+    ):
+        return pid, float(expires_at), token
+    return None
+
+
 class _StorageLock:
     """Exclusive cross-process lock on ``<root>/.sync_gc.lock``.
 
@@ -365,56 +384,106 @@ class _StorageLock:
         self._st_ino: int | None = None
         self._owner_token: str | None = None
 
-    def _owner_record(self, token: str, *, ttl: float | None = None) -> bytes:
+    def _owner_record(
+        self,
+        token: str,
+        *,
+        ttl: float | None = None,
+        target_lock_ino: int | None = None,
+    ) -> bytes:
+        now = self.wall_clock()
         lifetime = self.stale_after if ttl is None else ttl
-        return json.dumps(
-            {
-                "pid": os.getpid(),
-                "expires_at": self.wall_clock() + lifetime,
-                "owner_token": token,
-            }
-        ).encode()
+        payload: dict[str, object] = {
+            "pid": os.getpid(),
+            "owner_token": token,
+            "created_at": now,
+            "expires_at": now + lifetime,
+        }
+        if target_lock_ino is not None:
+            payload["target_lock_ino"] = target_lock_ino
+        return json.dumps(payload).encode()
 
     def _is_stale_record(
         self, data: dict[str, object] | None, mtime: float, *, fallback_ttl: float | None = None
     ) -> bool:
-        if data is not None:
-            pid = data.get("pid")
-            expires_at = data.get("expires_at")
-            token = data.get("owner_token")
-            if (
-                isinstance(pid, int)
-                and not isinstance(pid, bool)
-                and isinstance(expires_at, (int, float))
-                and not isinstance(expires_at, bool)
-                and math.isfinite(float(expires_at))
-                and isinstance(token, str)
-                and bool(token)
-            ):
-                return self.wall_clock() > float(expires_at) or _pid_is_dead(pid)
+        parsed = _parse_lock_record(data)
+        if parsed is not None:
+            pid, expires_at, _ = parsed
+            return self.wall_clock() > expires_at or _pid_is_dead(pid)
         ttl = self.stale_after if fallback_ttl is None else fallback_ttl
         return (self.wall_clock() - mtime) > ttl
 
-    def _try_enter_break_guard(self) -> tuple[int, str] | None:
+    def _is_stale_break_guard(self, data: dict[str, object] | None, mtime: float) -> bool:
+        parsed = _parse_lock_record(data)
+        if parsed is not None:
+            pid, expires_at, _ = parsed
+            return self.wall_clock() > expires_at and _pid_is_dead(pid)
+        return (self.wall_clock() - mtime) > self._BREAK_GUARD_TTL
+
+    def _guard_still_owned(self, guard: tuple[int, str]) -> bool:
+        guard_ino, guard_token = guard
+        state = _read_lock_state(self._break_path)
+        if state is None:
+            return False
+        cur_ino, _, cur_data = state
+        cur_token = cur_data.get("owner_token") if cur_data is not None else None
+        return cur_ino == guard_ino and cur_token == guard_token
+
+    def _reclaim_stale_break_guard(self) -> None:
+        state = _read_lock_state(self._break_path)
+        if state is None:
+            return
+        guard_ino, guard_mtime, guard_data = state
+        if not self._is_stale_break_guard(guard_data, guard_mtime):
+            return
+        guard_token = guard_data.get("owner_token") if guard_data is not None else None
+        link_path = self._break_path.with_name(
+            f".{self._break_path.name}.{os.getpid()}.{uuid.uuid4().hex}.link"
+        )
+        trash = self._break_path.with_name(
+            f".{self._break_path.name}.{os.getpid()}.{uuid.uuid4().hex}.stale"
+        )
+        try:
+            stat_before = os.lstat(self._break_path)
+            if stat_before.st_ino != guard_ino or not stat.S_ISREG(stat_before.st_mode):
+                return
+            os.link(self._break_path, link_path)
+            linked_state = _read_lock_state(link_path)
+            linked_token = (
+                linked_state[2].get("owner_token")
+                if linked_state is not None and linked_state[2] is not None
+                else None
+            )
+            if (
+                linked_state is None
+                or linked_state[0] != guard_ino
+                or linked_token != guard_token
+                or os.lstat(self._break_path).st_ino != guard_ino
+            ):
+                return
+            os.replace(self._break_path, trash)
+        except FileNotFoundError:
+            return
+        finally:
+            link_path.unlink(missing_ok=True)
+            trash.unlink(missing_ok=True)
+
+    def _try_enter_break_guard(
+        self, *, target_lock_ino: int | None = None
+    ) -> tuple[int, str] | None:
         token = f"{os.getpid()}:{uuid.uuid4().hex}"
         try:
             fd = os.open(self._break_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
-            state = _read_lock_state(self._break_path)
-            if state is not None and self._is_stale_record(
-                state[2], state[1], fallback_ttl=self._BREAK_GUARD_TTL
-            ):
-                trash = self._break_path.with_name(
-                    f".{self._break_path.name}.{os.getpid()}.{uuid.uuid4().hex}.stale"
-                )
-                try:
-                    os.replace(self._break_path, trash)
-                    trash.unlink(missing_ok=True)
-                except FileNotFoundError:
-                    pass
+            self._reclaim_stale_break_guard()
             return None
         try:
-            os.write(fd, self._owner_record(token, ttl=self._BREAK_GUARD_TTL))
+            os.write(
+                fd,
+                self._owner_record(
+                    token, ttl=self._BREAK_GUARD_TTL, target_lock_ino=target_lock_ino
+                ),
+            )
             os.fsync(fd)
             ino = os.fstat(fd).st_ino
         finally:
@@ -422,13 +491,7 @@ class _StorageLock:
         return ino, token
 
     def _exit_break_guard(self, guard: tuple[int, str]) -> None:
-        guard_ino, guard_token = guard
-        state = _read_lock_state(self._break_path)
-        if state is None:
-            return
-        cur_ino, _, cur_data = state
-        cur_token = cur_data.get("owner_token") if cur_data is not None else None
-        if cur_ino == guard_ino and cur_token == guard_token:
+        if self._guard_still_owned(guard):
             self._break_path.unlink(missing_ok=True)
 
     def _try_acquire(self) -> bool:
@@ -467,7 +530,7 @@ class _StorageLock:
         if not self._is_stale_record(data, mtime):
             return
         target_token = data.get("owner_token") if data is not None else None
-        guard = self._try_enter_break_guard()
+        guard = self._try_enter_break_guard(target_lock_ino=target_ino)
         if guard is None:
             return
         try:
@@ -480,6 +543,7 @@ class _StorageLock:
                 cur_ino != target_ino
                 or cur_token != target_token
                 or not self._is_stale_record(cur_data, cur_mtime)
+                or not self._guard_still_owned(guard)
             ):
                 return
             trash = self.path.with_name(f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.stale")
@@ -512,7 +576,7 @@ class _StorageLock:
             self._owner_token = None
         else:
             deadline = time.monotonic() + 0.5
-            guard = self._try_enter_break_guard()
+            guard = self._try_enter_break_guard(target_lock_ino=self._st_ino)
             while guard is None and time.monotonic() < deadline:
                 time.sleep(0.005)
                 guard = self._try_enter_break_guard()

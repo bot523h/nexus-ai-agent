@@ -114,3 +114,30 @@ def test_render_and_grade_paths_both_use_the_shared_core(monkeypatch: pytest.Mon
 
 def test_render_path_has_no_private_tone_curve() -> None:
     assert not hasattr(physical, "_tone_map")
+
+
+def test_pure_green_and_blue_crosstalk_and_luminance_monotonicity() -> None:
+    """Characterise standard ACES RRT->ODT (Narkowicz in AP1 -> AP1_TO_SRGB_D65).
+
+    Because the tone curve runs per-channel in AP1 before multiplying by
+    ``AP1_TO_SRGB_D65``, saturated pure sRGB green ``(0, 1, 0)`` and blue
+    ``(0, 0, 1)`` undergo controlled crosstalk/desaturation into adjacent sRGB
+    channels while staying bounded in ``[0, 1]`` and strictly monotone with scene
+    luminance.
+    """
+    levels = np.array([0.05, 0.18, 0.5, 1.0, 4.0, 12.0])
+    for channel_idx, primary in ((1, np.array([0.0, 1.0, 0.0])), (2, np.array([0.0, 0.0, 1.0]))):
+        samples = levels[:, None] * primary[None, :]
+        out = film.scene_linear_srgb_to_display_linear(samples)
+        assert np.all((out >= 0.0) & (out <= 1.0))
+        # Dominant primary stays strictly greater than the crosstalk channels at every level
+        other_max = np.max(np.delete(out, channel_idx, axis=1), axis=1)
+        assert np.all(out[:, channel_idx] > other_max)
+        # Dominant channel is monotonically non-decreasing (strict before clipping) and
+        # total sRGB display luminance increases strictly with exposure.
+        assert np.all(np.diff(out[:, channel_idx]) >= -1e-12)
+        assert np.all(np.diff(out[:4, channel_idx]) > 0.0)
+        luma = out @ np.array([0.2126, 0.7152, 0.0722])
+        assert np.all(np.diff(luma) > 0.0)
+        # Highlight desaturation: at high exposure, adjacent channels exhibit positive crosstalk
+        assert np.all(out[-1, :] > 0.1)

@@ -25,6 +25,7 @@ it reports each reason it refused, never a silent pass.
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,7 @@ from nexus_ai_agent.creative.atlas.self_healing_linear_ledger import LinearEvide
 __all__ = [
     "SEAL_SCHEMA",
     "PACK_MANIFEST",
+    "MIN_GOVERNANCE_COVERAGE_THRESHOLD",
     "DEFAULT_COVERAGE_THRESHOLD",
     "PackCoverageError",
     "PackCoverageEntry",
@@ -52,7 +54,9 @@ __all__ = [
 
 SEAL_SCHEMA: Final[str] = "atlas.pack-coverage-seal/1"
 PACK_MANIFEST: Final[str] = "pack.manifest.json"
+MIN_GOVERNANCE_COVERAGE_THRESHOLD: Final[float] = 95.0
 DEFAULT_COVERAGE_THRESHOLD: Final[float] = 95.0
+_MISSING: Final[object] = object()
 
 
 class PackCoverageError(ValueError):
@@ -118,14 +122,25 @@ class PackCoverageVerdict:
         }
 
 
+def _validate_threshold(threshold: object) -> float:
+    if (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, (int, float))
+        or not math.isfinite(float(threshold))
+        or float(threshold) < MIN_GOVERNANCE_COVERAGE_THRESHOLD
+        or float(threshold) > 100.0
+    ):
+        raise PackCoverageError("Pack coverage governance threshold must be in [95.0, 100.0]")
+    return float(threshold)
+
+
 def evaluate_pack_coverage(
     entries: Sequence[PackCoverageEntry],
     *,
     threshold: float = DEFAULT_COVERAGE_THRESHOLD,
 ) -> PackCoverageVerdict:
     """Decide whether the shipped packs meet the coverage contract."""
-    if not isinstance(threshold, (int, float)) or not 0.0 <= float(threshold) <= 100.0:
-        raise PackCoverageError("threshold must be a percentage in [0, 100]")
+    validated_threshold = _validate_threshold(threshold)
     reasons: list[str] = []
     seen: set[str] = set()
     for entry in entries:
@@ -142,11 +157,13 @@ def evaluate_pack_coverage(
             reasons.append(f"shipped pack {entry.pack!r} has no {PACK_MANIFEST}")
         if not entry.has_canonical_target:
             reasons.append(f"shipped pack {entry.pack!r} has no canonical test target")
-        if entry.coverage_percent < threshold:
-            reasons.append(f"pack {entry.pack!r}: {entry.coverage_percent:.2f}% < {threshold:.2f}%")
+        if entry.coverage_percent < validated_threshold:
+            reasons.append(
+                f"pack {entry.pack!r}: {entry.coverage_percent:.2f}% < {validated_threshold:.2f}%"
+            )
     return PackCoverageVerdict(
         accepted=not reasons,
-        threshold=float(threshold),
+        threshold=validated_threshold,
         reasons=tuple(reasons),
         entries=tuple(entries),
     )
@@ -244,6 +261,41 @@ def _shipped_pack_directories(pack_root: Path) -> tuple[str, ...]:
     )
 
 
+def _report_field(report: Any, key: str) -> Any:
+    if isinstance(report, Mapping):
+        return report.get(key, _MISSING)
+    return getattr(report, key, _MISSING)
+
+
+def _report_health_reasons(report: Any, *, expected_commit: str) -> tuple[str, ...]:
+    for sha_key in ("commit_sha", "head_sha"):
+        sha_val = _report_field(report, sha_key)
+        if isinstance(sha_val, str) and sha_val and sha_val != expected_commit:
+            raise PackCoverageError(
+                f"report {sha_key} {sha_val!r} does not match expected commit {expected_commit!r}"
+            )
+
+    reasons: list[str] = []
+    verified = _report_field(report, "verified")
+    if verified is not _MISSING and bool(verified) is not True:
+        reasons.append("report verified flag is False")
+
+    exit_code = _report_field(report, "pytest_exit_code")
+    if exit_code is not _MISSING and (isinstance(exit_code, bool) or exit_code != 0):
+        reasons.append(f"report pytest_exit_code is {exit_code!r} (expected 0)")
+
+    for count_key in ("failed", "errors"):
+        count_val = _report_field(report, count_key)
+        if count_val is not _MISSING and (isinstance(count_val, bool) or count_val != 0):
+            reasons.append(f"report {count_key} is {count_val!r} (expected 0)")
+
+    issues = _report_field(report, "measurement_issues")
+    if issues is not _MISSING and issues is not None and len(issues) > 0:
+        reasons.append(f"report measurement_issues is non-empty ({len(issues)})")
+
+    return tuple(reasons)
+
+
 def entries_from_report(
     report: Any, *, pack_root: Path | None = None
 ) -> tuple[PackCoverageEntry, ...]:
@@ -259,7 +311,13 @@ def entries_from_report(
 
     root = (pack_root or continuum.DEFAULT_PACK_ROOT).resolve()
     shipped = _shipped_pack_directories(root)
-    measured = {pack.pack: pack.percent for pack in report.packs}
+    raw_packs = _report_field(report, "packs")
+    measured: dict[str, float] = {}
+    for pack in raw_packs:
+        if isinstance(pack, Mapping):
+            measured[str(pack["pack"])] = float(pack["percent"])
+        else:
+            measured[str(pack.pack)] = float(pack.percent)
     manifests = shipped
     canonical_targets = tuple(continuum.PACK_TEST_TARGETS)
     return build_entries(
@@ -273,7 +331,8 @@ def entries_from_report(
 def seal_pack_coverage_from_report(
     report: Any,
     *,
-    git_commit: str,
+    git_commit: str | None = None,
+    commit_sha: str | None = None,
     threshold: float = DEFAULT_COVERAGE_THRESHOLD,
     pack_root: Path | None = None,
 ) -> PackCoverageSeal:
@@ -284,10 +343,23 @@ def seal_pack_coverage_from_report(
     that was tampered with (or produced against the wrong tree) cannot yield an
     accepted seal.
     """
-    if not git_commit:
+    _validate_threshold(threshold)
+    if git_commit is not None and commit_sha is not None and git_commit != commit_sha:
+        raise PackCoverageError("git_commit and commit_sha disagree")
+    commit = commit_sha if commit_sha is not None else git_commit
+    if not commit:
         raise PackCoverageError("git_commit must be a non-empty revision")
+    health_reasons = _report_health_reasons(report, expected_commit=commit)
     entries = entries_from_report(report, pack_root=pack_root)
-    return seal_pack_coverage(entries, git_commit=git_commit, threshold=threshold)
+    verdict = evaluate_pack_coverage(entries, threshold=threshold)
+    if health_reasons:
+        verdict = PackCoverageVerdict(
+            accepted=False,
+            threshold=verdict.threshold,
+            reasons=verdict.reasons + health_reasons,
+            entries=verdict.entries,
+        )
+    return PackCoverageSeal(verdict=verdict, git_commit=commit)
 
 
 def measure_pack_coverage_seal(

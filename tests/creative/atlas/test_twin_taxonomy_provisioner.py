@@ -200,10 +200,105 @@ def test_verify_semantic_accepts_a_dotted_import(tmp_path: Path) -> None:
     _write_pair(
         tmp_path,
         "beta",
-        "import nexus_ai_agent.creative.atlas.beta as beta\n",
+        (
+            "import nexus_ai_agent.creative.atlas.beta as beta\n\n\n"
+            "def test_beta():\n    assert beta.VALUE == 1\n"
+        ),
     )
     provisioner = tt.TwinTaxonomyProvisioner.from_workspace(tmp_path / "src", tmp_path / "tests")
     assert provisioner.verify_semantic().semantic_ok is True
+
+
+def test_verify_semantic_rejects_import_only_with_hollow_assert_or_missing_assert(
+    tmp_path: Path,
+) -> None:
+    # Imports alpha, but test body never uses alpha (just assert True)
+    sub1 = tmp_path / "hollow"
+    _write_pair(
+        sub1,
+        "alpha",
+        (
+            "from nexus_ai_agent.creative.atlas import alpha\n\n\n"
+            "def test_hollow():\n    assert True\n"
+        ),
+    )
+    provisioner = tt.TwinTaxonomyProvisioner.from_workspace(sub1 / "src", sub1 / "tests")
+    report = provisioner.verify_semantic()
+    assert report.semantic_ok is False
+    assert report.non_exercising_tests == ("test_alpha",)
+
+    # Imports alpha and accesses it, but has zero verification statements
+    sub2 = tmp_path / "no_assert"
+    _write_pair(
+        sub2,
+        "alpha",
+        (
+            "from nexus_ai_agent.creative.atlas import alpha\n\n\n"
+            "def test_no_assert():\n    _ = alpha.VALUE\n"
+        ),
+    )
+    assert (
+        tt.TwinTaxonomyProvisioner.from_workspace(sub2 / "src", sub2 / "tests")
+        .verify_semantic()
+        .semantic_ok
+        is False
+    )
+
+    # Accepts unaliased dotted import + fixture + pytest.raises verification (no local alias)
+    sub3 = tmp_path / "dotted_unaliased"
+    _write_pair(
+        sub3,
+        "gamma",
+        (
+            "import pytest\n"
+            "import nexus_ai_agent.creative.atlas.gamma\n\n\n"
+            "@pytest.fixture\n"
+            "def val():\n"
+            "    return nexus_ai_agent.creative.atlas.gamma.VALUE\n\n\n"
+            "def test_gamma(val):\n"
+            "    with pytest.raises(ZeroDivisionError):\n"
+            "        _ = val / 0\n"
+        ),
+    )
+    assert (
+        tt.TwinTaxonomyProvisioner.from_workspace(sub3 / "src", sub3 / "tests")
+        .verify_semantic()
+        .semantic_ok
+        is True
+    )
+
+    # Accepts submodule symbol import (`from ...gamma import VALUE`)
+    sub4 = tmp_path / "submod_import"
+    _write_pair(
+        sub4,
+        "delta",
+        (
+            "from nexus_ai_agent.creative.atlas.delta import VALUE\n\n\n"
+            "def test_delta():\n"
+            "    assert VALUE == 1\n"
+        ),
+    )
+    assert (
+        tt.TwinTaxonomyProvisioner.from_workspace(sub4 / "src", sub4 / "tests")
+        .verify_semantic()
+        .semantic_ok
+        is True
+    )
+
+
+def test_verify_semantic_helpers_edge_branches() -> None:
+    import ast
+
+    assert tt._dotted_name(ast.Constant(1)) is None
+    assert tt._is_verification_node(ast.parse("foo()").body[0].value) is False  # type: ignore[attr-defined]
+    assert tt._is_verification_node(ast.parse("1()").body[0].value) is False  # type: ignore[attr-defined]
+    fn = ast.parse("@other\ndef helper():\n    pass\n").body[0]
+    assert isinstance(fn, ast.FunctionDef)
+    assert tt._is_test_or_fixture_fn(fn) is False
+    non_match = ast.parse(
+        "import os\nfrom nexus_ai_agent.creative.atlas import other\nfrom other.pkg import x\n"
+    )
+    assert tt._bound_source_names(non_match, "alpha") == (set(), set())
 
 
 def test_verify_semantic_reports_an_unreadable_test(tmp_path: Path) -> None:
@@ -257,8 +352,13 @@ def test_from_workspace_scans_the_real_directories(tmp_path: Path) -> None:
 def test_imported_atlas_modules_reads_a_dotted_from_import() -> None:
     import ast
 
-    module = ast.parse("from nexus_ai_agent.creative.atlas.alpha.beta import thing\n")
-    assert tt._imported_atlas_modules(module) == {"alpha"}
+    module = ast.parse(
+        "import os\n"
+        "import nexus_ai_agent.creative.atlas.gamma\n"
+        "from nexus_ai_agent.creative.atlas import delta\n"
+        "from nexus_ai_agent.creative.atlas.alpha.beta import thing\n"
+    )
+    assert tt._imported_atlas_modules(module) == {"alpha", "delta", "gamma"}
 
 
 def test_exercises_source_returns_false_for_unparsable_source(tmp_path: Path) -> None:
