@@ -6,6 +6,33 @@ crash-resumable staging journals, optimistic concurrency verification via
 ``parent_snapshot_id``, multi-layered intra-process and cross-process in-flight
 chunk leases against concurrent garbage collection, fail-closed verification
 before file reconstruction, and unreferenced chunk cleanup.
+
+Memory model
+------------
+A push of ``N`` chunks of ``S_chunk`` plaintext bytes costs, at peak::
+
+    M(N) = M_baseline + M_payload(S_chunk) + M_metadata(N) + M_backend(N)
+
+* ``M_baseline`` — interpreter + imported modules + the manager itself. Constant.
+* ``M_payload(S_chunk)`` — **O(S_chunk), independent of total file size.** Exactly one
+  payload-sized buffer exists at any instant: the plaintext is read straight into the
+  ciphertext slot of the final wire buffer (``handle.readinto``), hashed in place for
+  the file MAC and content address, then overwritten in place by the SHA-256 CTR
+  keystream (:func:`encrypt_chunk_from_fd_to_wire`). There is no plaintext copy, no
+  CTR output copy and no concatenated wire copy, so pushing a 10 GiB project costs
+  the same payload RAM as pushing a 64 KiB one.
+* ``M_metadata(N)`` — **O(N), compact.** Per chunk: a 64-hex ``chunk_id`` string, a
+  :class:`_ChunkSourceLocator`, a :class:`VaultChunkRef`, and a handful of set/dict
+  slots. Measured slope is ~1.3-2.6 KB per chunk (see the wave-3 scalability
+  benchmark test); it grows with the *count* of chunks, never with their size.
+* ``M_backend(N)`` — whatever the chosen driver retains; ``LocalDeviceVaultDriver``
+  and ``S3CompatibleSigV4Driver`` keep only ids/mtimes (O(N) small), while
+  ``PortableBundleVaultDriver`` necessarily holds one serialized archive image.
+
+Consequently only ``M_payload`` is bounded by the chunk size, which is what the
+``peak_bytes < 4 * S_chunk`` / ``< 200_000`` ceilings in the N1 regression test pin
+down; ``M_metadata`` and ``M_backend`` are linear in the chunk count and are
+exercised by the ``test_wave3_memory_scaling_benchmark`` scalability check.
 """
 
 from __future__ import annotations
@@ -76,7 +103,9 @@ class _ChunkSourceLocator:
     chunk_index: int
     inline_rel_path: str | None = None
     source_sha256_hex: str | None = None
-    chunk_sha256_hex: str | None = None
+
+
+_EMPTY_LOCATOR = _ChunkSourceLocator(file_path=None, byte_offset=0, byte_length=0, chunk_index=0)
 
 
 class _DigestObserver(Protocol):
@@ -107,6 +136,12 @@ class _PreparedChunk:
         self.chunk_id = chunk_id
         self.plaintext_len = plaintext_len
         self.locator = locator
+
+    def take_locator(self) -> _ChunkSourceLocator:
+        """Hand ownership of the pending locator to the caller and drop our reference."""
+        locator = self.locator
+        self.locator = _EMPTY_LOCATOR
+        return locator
 
     def upload(self, driver: BYOSStorageDriver, chunk_id: str) -> int:
         """Hand the wire bytes to the driver and release the payload immediately."""
@@ -709,9 +744,7 @@ class PersonalCloudVaultManager:
                 for idx, offset in enumerate(range(0, expected_size, self._chunk_size)):
                     plaintext = view[offset : offset + self._chunk_size]
                     plaintext_len = len(plaintext)
-                    chunk_hasher = hashlib.sha256()
                     file_mac.update(plaintext)
-                    chunk_hasher.update(plaintext)
                     wire_buffer, chunk_id = encrypt_plaintext_to_wire(
                         plaintext,
                         key_material,
@@ -728,7 +761,6 @@ class PersonalCloudVaultManager:
                             chunk_index=idx,
                             inline_rel_path=rel_path,
                             source_sha256_hex=digest_hex,
-                            chunk_sha256_hex=chunk_hasher.hexdigest(),
                         ),
                     )
                     del wire_buffer
@@ -744,16 +776,15 @@ class PersonalCloudVaultManager:
         try:
             while bytes_read < expected_size:
                 plaintext_len = min(self._chunk_size, expected_size - bytes_read)
-                chunk_hasher = hashlib.sha256()
                 # ``plaintext_observers`` hash the plaintext while it still sits in the
                 # ciphertext slot of the wire buffer, i.e. before CTR overwrites it, so
-                # the file MAC and per-chunk digest cost no extra buffer.
+                # the file MAC and the whole-file digest cost no extra buffer.
                 wire_buffer, chunk_id = encrypt_chunk_from_fd_to_wire(
                     file_handle=handle,
                     plaintext_len=plaintext_len,
                     key_material=key_material,
                     pad_to_block_size=self._pad_to_block_size,
-                    plaintext_observers=(file_mac, stream_hasher, chunk_hasher),
+                    plaintext_observers=(file_mac, stream_hasher),
                 )
                 offset = bytes_read
                 bytes_read += plaintext_len
@@ -767,7 +798,6 @@ class PersonalCloudVaultManager:
                         byte_length=plaintext_len,
                         chunk_index=idx,
                         source_sha256_hex=None,
-                        chunk_sha256_hex=chunk_hasher.hexdigest(),
                     ),
                 )
                 # Drop this frame's reference: the caller owns the wire buffer from here.
@@ -997,7 +1027,10 @@ class PersonalCloudVaultManager:
                     chunk_id = chunk_info.chunk_id
 
                     if chunk_id not in chunk_locators:
-                        chunk_locators[chunk_id] = chunk_info.locator
+                        # One locator object per *distinct* chunk: the pending record
+                        # handed to us by the producer is recycled here rather than
+                        # duplicated, keeping metadata at a single object per chunk.
+                        chunk_locators[chunk_id] = chunk_info.take_locator()
 
                     # Lease chunk in RAM and cross-process lease file BEFORE put_chunk.
                     if chunk_id not in leased_set:

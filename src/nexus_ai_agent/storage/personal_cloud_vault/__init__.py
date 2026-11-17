@@ -70,6 +70,7 @@ from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
 from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     PersonalVaultError,
     VaultAuthenticationError,
+    VaultCryptoError,
     VaultQuotaExceededError,
     VaultRevisionConflictError,
     VaultTamperDetectedError,
@@ -120,6 +121,7 @@ __all__ = [
     "SnapshotPullReport",
     "SnapshotPushReport",
     "VaultAuthenticationError",
+    "VaultCryptoError",
     "VaultChunkRef",
     "VaultFileEntry",
     "VaultKeyMaterial",

@@ -46,6 +46,7 @@ from typing import Any
 from nexus_ai_agent.storage.personal_cloud_vault.errors import (
     PersonalVaultError,
     VaultAuthenticationError,
+    VaultCryptoError,
     VaultTamperDetectedError,
     VaultTransportError,
 )
@@ -296,8 +297,14 @@ def sha256_ctr_crypt_inplace(
         raise VaultAuthenticationError("enc_key must be 32 bytes")
     if len(nonce) != NONCE_BYTES:
         raise VaultTamperDetectedError(f"nonce must be {NONCE_BYTES} bytes, got {len(nonce)}")
+    # Fail closed on an out-of-range slice: silently encrypting the wrong region would
+    # corrupt the chunk, and a negative ``start`` would silently wrap around.
+    if isinstance(start, bool) or not isinstance(start, int):
+        raise VaultCryptoError(f"start must be an int, got {type(start).__name__}")
+    if not 0 <= start <= len(buffer):
+        raise VaultCryptoError(f"start={start} outside valid range [0, {len(buffer)}]")
     total_len = len(buffer) - start
-    if total_len <= 0:
+    if total_len == 0:
         return
     base_hasher = hashlib.sha256(enc_key + nonce)
     pack_u64 = struct.Struct(">Q").pack
@@ -756,7 +763,7 @@ def compute_rfc6962_merkle_root(leaves: Sequence[bytes]) -> str:
 # --------------------------------------------------------------------------- #
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class VaultChunkRef:
     """Reference to one encrypted content-addressed chunk within a file entry."""
 
@@ -784,7 +791,7 @@ class VaultChunkRef:
         return cls(chunk_index=chunk_index, chunk_id=chunk_id, plaintext_len=plaintext_len)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class VaultFileEntry:
     """Manifest entry describing one logical project file and its ordered chunks."""
 

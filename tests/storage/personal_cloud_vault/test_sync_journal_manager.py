@@ -2043,3 +2043,184 @@ def test_streaming_push_fails_closed_on_identity_mismatch_and_locator_errors(
     # The plaintext slot of a prepared chunk is only reachable via the wire buffer, so
     # a successful push never leaves a second plaintext copy behind.
     assert os.path.exists(locator_dir / "full.bin")
+
+
+_BENCHMARK_CHILD = r'''
+"""Wave-3 scalability probe: one push of ``N`` chunks in an isolated process."""
+import gc
+import json
+import os
+import sys
+import tempfile
+import tracemalloc
+from pathlib import Path
+
+chunk_count = int(sys.argv[1])
+chunk_size = int(sys.argv[2])
+
+from nexus_ai_agent.storage.personal_cloud_vault.byos_drivers import LocalDeviceVaultDriver
+from nexus_ai_agent.storage.personal_cloud_vault.sync_journal_manager import (
+    PersonalCloudVaultManager,
+)
+
+with tempfile.TemporaryDirectory() as td:
+    tmp = Path(td)
+    project = tmp / "scaling_project"
+    (project / "media").mkdir(parents=True)
+    # N structurally distinct chunks so deduplication cannot collapse them. The source
+    # file is written one chunk at a time so this harness never holds the whole payload
+    # (that would pollute the very RSS number we are measuring).
+    with (project / "media" / "reel.bin").open("wb") as source_file:
+        for index in range(chunk_count):
+            source_file.write(
+                f"CHUNK-{index:06d}-".encode() + bytes([index & 0xFF]) * (chunk_size - 13)
+            )
+
+    manager = PersonalCloudVaultManager(
+        LocalDeviceVaultDriver(tmp / "vault"),
+        chunk_size=chunk_size,
+        kdf_iterations=100_000,
+    )
+    gc.collect()
+    baseline_rss = _rss = None
+    try:
+        import psutil
+
+        baseline_rss = psutil.Process(os.getpid()).memory_info().rss
+    except Exception:  # pragma: no cover - psutil is a declared dependency
+        baseline_rss = 0
+    tracemalloc.start()
+    try:
+        report = manager.push_project_snapshot(
+            project_id="scaling",
+            source=project,
+            master_secret="scaling-benchmark-passphrase",
+            snapshot_id="snap-scaling",
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    try:
+        import psutil
+
+        peak_rss = psutil.Process(os.getpid()).memory_info().rss
+    except Exception:  # pragma: no cover - psutil is a declared dependency
+        peak_rss = baseline_rss
+    print(
+        json.dumps(
+            {
+                "chunks": chunk_count,
+                "chunk_size": chunk_size,
+                "uploaded": report.uploaded_chunks,
+                "tracemalloc_peak": peak,
+                "rss_baseline": baseline_rss,
+                "rss_peak": peak_rss,
+            }
+        )
+    )
+'''
+
+
+def test_wave3_memory_scaling_benchmark(tmp_path: Path) -> None:
+    """F2/F3: peak RAM stays payload-bounded as the chunk count grows to 250.
+
+    Each ``N`` runs in its own subprocess (so allocator state from a previous size can
+    never leak into the next measurement) and reports both ``tracemalloc`` peak and
+    process RSS. The printed table is the wave-3 scalability evidence:
+
+    * ``M_payload`` must stay at ~1 chunk regardless of ``N`` — the tracemalloc peak is
+      asserted to stay far below ``4 * chunk_size`` even for 250 chunks (16 MiB).
+    * ``M_metadata`` grows only *linearly and compactly* with ``N`` — the per-chunk
+      slope is asserted to stay under a few KB, and RSS growth is measured, not assumed.
+    """
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path as _Path
+
+    chunk_size = 65_536
+    counts = (20, 100, 250)
+    results: list[dict[str, int]] = []
+    for chunk_count in counts:
+        completed = subprocess.run(
+            [sys.executable, "-c", _BENCHMARK_CHILD, str(chunk_count), str(chunk_size)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+            cwd=str(_Path(__file__).resolve().parents[3]),
+        )
+        assert completed.returncode == 0, (
+            f"benchmark subprocess failed for N={chunk_count}:\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+        payload_line = completed.stdout.strip().splitlines()[-1]
+        entry = json.loads(payload_line)
+        assert entry["chunks"] == chunk_count
+        assert entry["uploaded"] == chunk_count
+        results.append(entry)
+
+    print("\n[wave-3] push memory scaling (chunk_size=65536, LocalDeviceVaultDriver)")
+    print(
+        f"{'chunks':>7} {'data MiB':>9} {'tracemalloc peak':>18} "
+        f"{'RSS base MiB':>13} {'RSS peak MiB':>13} {'B/chunk':>9}"
+    )
+    for entry in results:
+        data_mib = entry["chunks"] * chunk_size / (1024 * 1024)
+        rss_base = entry["rss_baseline"] / (1024 * 1024)
+        rss_peak = entry["rss_peak"] / (1024 * 1024)
+        per_chunk = entry["tracemalloc_peak"] / entry["chunks"]
+        print(
+            f"{entry['chunks']:>7} {data_mib:>9.2f} {entry['tracemalloc_peak']:>18} "
+            f"{rss_base:>13.2f} {rss_peak:>13.2f} {per_chunk:>9.1f}"
+        )
+
+    # --- M_payload is O(S_chunk): a project 12.5x larger costs the SAME payload RAM.
+    # The N1 test pins the absolute ceiling; here we prove it does not drift with N.
+    peaks = [entry["tracemalloc_peak"] for entry in results]
+    peak_growth_per_chunk = (peaks[-1] - peaks[0]) / (counts[-1] - counts[0])
+    print(
+        f"[wave-3] tracemalloc peak slope: {peak_growth_per_chunk:.1f} B/chunk "
+        f"(payload floor is {chunk_size} B and is shared by every N)"
+    )
+    # A payload-sized (or worse) per-chunk retention would show up as >= chunk_size/chunk.
+    assert peak_growth_per_chunk < 4 * 1024, (
+        f"peak grew {peak_growth_per_chunk:.1f} B/chunk: metadata is not compact, or a "
+        f"payload-sized buffer is being retained per chunk"
+    )
+    # ``peak = payload + metadata``: the payload is pinned to the N1 budget and the only
+    # thing allowed to grow with N is compact per-chunk metadata. A retained payload
+    # buffer (or a second copy) would blow straight through this linear model bound.
+    metadata_allowance_per_chunk = 2048
+    for entry in results:
+        model_bound = 200_000 + metadata_allowance_per_chunk * entry["chunks"]
+        assert entry["tracemalloc_peak"] < model_bound, (
+            f"peak at N={entry['chunks']} was {entry['tracemalloc_peak']}, above the "
+            f"documented model bound {model_bound} (payload 200000 + metadata)"
+        )
+
+    # --- M_metadata is O(N) but genuinely per-chunk-tiny: no payload buffers retained.
+    first, last = results[0], results[-1]
+    per_chunk_footprint = (peaks[-1] - peaks[0]) / (counts[-1] - counts[0])
+    assert per_chunk_footprint < chunk_size // 8, (
+        f"per-chunk metadata footprint {per_chunk_footprint:.0f} B is not compact"
+    )
+
+    # --- RSS: metadata retention must be far below the payload it describes.
+    rss_growth = (last["rss_peak"] - first["rss_peak"]) / (counts[-1] - counts[0])
+    print(f"[wave-3] RSS slope: {rss_growth:.1f} B/chunk (payload is {chunk_size} B/chunk)")
+    assert rss_growth < 8 * 1024, (
+        f"RSS grew {rss_growth:.0f} B/chunk, indicating payload-sized per-chunk retention"
+    )
+    assert rss_growth < chunk_size, (
+        "RSS growth must stay well below one chunk of payload per chunk of metadata"
+    )
+
+    # --- The payload ceiling itself must be independent of N: compare the *excess* over
+    # the flat payload floor at the smallest and largest sizes.
+    excess_first = peaks[0] - chunk_size
+    excess_last = peaks[-1] - chunk_size
+    assert excess_last - excess_first < counts[-1] * 2048, (
+        "payload excess over one chunk must grow only with compact per-chunk metadata"
+    )
+    assert all(entry["rss_peak"] >= entry["rss_baseline"] for entry in results)

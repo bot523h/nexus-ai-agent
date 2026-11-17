@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -854,3 +855,45 @@ def test_streaming_wire_encoders_feed_observers_plaintext_before_encryption() ->
     expected = hashlib.sha256(plaintext).hexdigest()
     assert chunk_hasher_cases == [expected, expected]
     assert file_hasher.hexdigest() == expected
+
+
+def test_f5_ctr_inplace_rejects_out_of_range_start_fail_closed() -> None:
+    """F5: ``start`` must be a non-bool int inside ``[0, len(buffer)]`` or we abort.
+
+    A negative or oversized ``start`` would silently encrypt the wrong region (or wrap
+    around), producing a chunk whose MAC and content address no longer match — so it is
+    a hard ``VaultCryptoError``, never a silent no-op.
+    """
+    import os
+
+    from nexus_ai_agent.storage.personal_cloud_vault import VaultCryptoError
+    from nexus_ai_agent.storage.personal_cloud_vault.crypto_chunk_envelope import (
+        sha256_ctr_crypt_inplace,
+    )
+
+    salt = generate_vault_salt()
+    key_material = derive_vault_keys("f5-guard-passphrase", salt, iterations=100_000)
+    buffer = bytearray(os.urandom(128))
+    nonce = b"F" * 16
+
+    for bad_start in (-1, 129, 10_000, -(2**63)):
+        with pytest.raises(VaultCryptoError, match=r"start=-?\d+ outside valid range"):
+            sha256_ctr_crypt_inplace(key_material.enc_key, nonce, buffer, start=bad_start)
+
+    # ``start`` is typed ``int``, so feed the hostile values through ``**kwargs``: no
+    # ``# type: ignore`` is needed and the runtime guard is still exercised for real.
+    for non_int in (True, False, 1.0, "0", None, b"\x00"):
+        bad_kwargs: dict[str, Any] = {"start": non_int}
+        with pytest.raises(VaultCryptoError, match="start must be an int"):
+            sha256_ctr_crypt_inplace(key_material.enc_key, nonce, buffer, **bad_kwargs)
+
+    # Boundary values that ARE legal still work: 0 encrypts everything, len() is a no-op.
+    assert bytes(buffer) == bytes(buffer)  # untouched by the rejected calls above
+    pristine = bytes(buffer)
+    sha256_ctr_crypt_inplace(key_material.enc_key, nonce, buffer, start=len(buffer))
+    assert bytes(buffer) == pristine
+    sha256_ctr_crypt_inplace(key_material.enc_key, nonce, buffer, start=0)
+    assert bytes(buffer) != pristine
+    # Decrypting with the same start restores the plaintext exactly.
+    sha256_ctr_crypt_inplace(key_material.enc_key, nonce, buffer, start=0)
+    assert bytes(buffer) == pristine

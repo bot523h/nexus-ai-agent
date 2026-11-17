@@ -387,14 +387,92 @@ def _staging_journal_digest(project_id: str, parent_snapshot_id: str | None) -> 
     return hashlib.sha256(key_bytes).hexdigest()[:32]
 
 
+@dataclass(frozen=True)
+class _ArchiveLayout:
+    """Streamable pieces of a ``.nagarvault`` archive (no concatenation needed)."""
+
+    header_prefix: bytes
+    payload_parts: tuple[bytes, ...]
+    index_bytes: bytes
+
+    @property
+    def total_size(self) -> int:
+        return (
+            _BUNDLE_HEADER_TOTAL
+            + sum(len(part) for part in self.payload_parts)
+            + len(self.index_bytes)
+        )
+
+    def iter_segments(self) -> Iterator[bytes | memoryview]:
+        """Yield ``header_prefix | archive_sha | payload parts | index`` in order."""
+
+        def _generate() -> Iterator[bytes | memoryview]:
+            yield self.header_prefix
+            yield _compute_archive_sha(self.header_prefix, self.payload_parts, self.index_bytes)
+            for part in self.payload_parts:
+                yield memoryview(part).cast("B")
+            yield self.index_bytes
+
+        return _generate()
+
+    def to_bytes(self) -> bytes:
+        """Materialise the archive with exactly ONE payload-sized allocation.
+
+        The archive SHA is computed incrementally (never ``header + payload + index``),
+        and the buffer is pre-sized so the payload parts are copied in place instead
+        of building a chain of intermediate concatenations.
+        """
+        buffer = bytearray(self.total_size)
+        cursor = 0
+        for segment in self.iter_segments():
+            segment_view = memoryview(segment)
+            try:
+                buffer[cursor : cursor + len(segment_view)] = segment_view
+                cursor += len(segment_view)
+            finally:
+                segment_view.release()
+        return bytes(buffer)
+
+
+def _compute_archive_sha(
+    header_prefix: bytes,
+    payload_parts: tuple[bytes, ...],
+    index_bytes: bytes,
+) -> bytes:
+    """Hash ``header_prefix || payload parts || index`` incrementally.
+
+    Concatenating the three regions first would allocate a second copy of the whole
+    archive just to hash it; feeding the hasher region by region does not.
+    """
+    hasher = hashlib.sha256()
+    hasher.update(header_prefix)
+    for part in payload_parts:
+        hasher.update(part)
+    hasher.update(index_bytes)
+    return hasher.digest()
+
+
 def _atomic_write_file(target_path: Path, data: bytes | bytearray | memoryview) -> None:
     """Atomically persist ``data`` to ``target_path`` via ``.tmp`` + ``fsync`` + ``replace``."""
+    _atomic_write_stream(target_path, (data,))
+
+
+def _atomic_write_stream(
+    target_path: Path,
+    segments: Iterable[bytes | bytearray | memoryview],
+) -> None:
+    """Atomically persist ``segments`` in order without joining them in memory.
+
+    Each segment is written straight to the temp file, so the caller can stream a
+    whole archive whose total size far exceeds the RAM it is willing to spend.
+    """
     parent = target_path.parent
     tmp_name = f".{target_path.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp"
     tmp_path = parent / tmp_name
     try:
         with open(tmp_path, "wb") as handle:
-            handle.write(data)
+            for segment in segments:
+                handle.write(segment)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, target_path)
@@ -1770,13 +1848,14 @@ class PortableBundleVaultDriver:
         for cid in loaded_chunks:
             self._chunk_mtimes.setdefault(cid, archive_mtime)
 
-    def _serialize_archive(
+    def _build_archive_layout(
         self,
         chunks: Mapping[str, bytes],
         manifests: Mapping[str, bytes],
         leases: Mapping[str, bytes],
         staging: Mapping[str, bytes] | None = None,
-    ) -> bytes:
+    ) -> _ArchiveLayout:
+        """Compute the binary index and header without concatenating the payload."""
         ordered_entries: list[tuple[int, str, bytes]] = []
         for chunk_id in sorted(chunks):
             ordered_entries.append((_ENTRY_CHUNK, chunk_id, chunks[chunk_id]))
@@ -1784,8 +1863,9 @@ class PortableBundleVaultDriver:
             ordered_entries.append((_ENTRY_MANIFEST, snapshot_id, manifests[snapshot_id]))
         for lease_id in sorted(leases):
             ordered_entries.append((_ENTRY_LEASE, f"leases/{lease_id}.json", leases[lease_id]))
-        for staging_key in sorted(staging or {}):
-            ordered_entries.append((_ENTRY_STAGING, staging_key, (staging or {})[staging_key]))
+        staging_map = staging or {}
+        for staging_key in sorted(staging_map):
+            ordered_entries.append((_ENTRY_STAGING, staging_key, staging_map[staging_key]))
 
         payload_parts: list[bytes] = []
         index_parts: list[bytes] = []
@@ -1804,7 +1884,6 @@ class PortableBundleVaultDriver:
             )
             current_offset += blob_len
 
-        payload_bytes = b"".join(payload_parts)
         index_bytes = b"".join(index_parts)
         header_prefix = _BUNDLE_HEADER_PREFIX.pack(
             BUNDLE_MAGIC,
@@ -1813,8 +1892,21 @@ class PortableBundleVaultDriver:
             current_offset,
             len(index_bytes),
         )
-        archive_sha = hashlib.sha256(header_prefix + payload_bytes + index_bytes).digest()
-        return header_prefix + archive_sha + payload_bytes + index_bytes
+        return _ArchiveLayout(
+            header_prefix=header_prefix,
+            payload_parts=tuple(payload_parts),
+            index_bytes=index_bytes,
+        )
+
+    def _serialize_archive(
+        self,
+        chunks: Mapping[str, bytes],
+        manifests: Mapping[str, bytes],
+        leases: Mapping[str, bytes],
+        staging: Mapping[str, bytes] | None = None,
+    ) -> bytes:
+        """Return the full archive bytes via a single pre-sized buffer."""
+        return self._build_archive_layout(chunks, manifests, leases, staging).to_bytes()
 
     def _flush(
         self,
@@ -1823,15 +1915,15 @@ class PortableBundleVaultDriver:
         next_leases: dict[str, bytes],
         next_staging: Mapping[str, bytes],
     ) -> None:
-        archive_bytes = self._serialize_archive(
-            next_chunks, next_manifests, next_leases, next_staging
-        )
-        if self._max_quota_bytes is not None and len(archive_bytes) > self._max_quota_bytes:
+        layout = self._build_archive_layout(next_chunks, next_manifests, next_leases, next_staging)
+        total_size = layout.total_size
+        if self._max_quota_bytes is not None and total_size > self._max_quota_bytes:
             raise VaultQuotaExceededError(
-                f"Portable bundle size {len(archive_bytes)} exceeds max_quota_bytes "
-                f"{self._max_quota_bytes}"
+                f"Portable bundle size {total_size} exceeds max_quota_bytes {self._max_quota_bytes}"
             )
-        _atomic_write_file(self._bundle_path, archive_bytes)
+        # Stream the archive straight to the temp file: the payload is never gathered
+        # into a second in-memory copy of the whole vault.
+        _atomic_write_stream(self._bundle_path, layout.iter_segments())
         self._chunks = next_chunks
         self._manifests = next_manifests
         self._leases = next_leases

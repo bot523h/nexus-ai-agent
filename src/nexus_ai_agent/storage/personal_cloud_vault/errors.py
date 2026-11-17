@@ -17,6 +17,10 @@ class VaultAuthenticationError(PersonalVaultError):
     """Raised when vault key derivation, key verification, or storage auth fails."""
 
 
+class VaultCryptoError(PersonalVaultError):
+    """Raised when a cryptographic primitive receives invalid parameters or geometry."""
+
+
 class VaultTamperDetectedError(PersonalVaultError):
     """Raised on any integrity, MAC, Merkle root, ordering, or bundle mismatch."""
 
@@ -36,6 +40,7 @@ class VaultTransportError(PersonalVaultError):
 __all__ = [
     "PersonalVaultError",
     "VaultAuthenticationError",
+    "VaultCryptoError",
     "VaultQuotaExceededError",
     "VaultRevisionConflictError",
     "VaultTamperDetectedError",

@@ -8,6 +8,7 @@ import struct
 import urllib.error
 import urllib.parse
 import zlib
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -2154,3 +2155,149 @@ def test_last_mile_lease_state_shift_before_delete_aborts_s3_deletion(
     assert s3.delete_chunk_if_unleased(cid) is False
     assert s3.has_chunk(cid)
     assert calls["n"] >= 3
+
+
+def test_f4_put_chunk_snapshots_mutable_input_across_all_three_drivers(tmp_path: Path) -> None:
+    """F4: a caller mutating its buffer after ``put_chunk`` must not alter stored bytes.
+
+    ``put_chunk`` now accepts ``bytes | bytearray | memoryview`` so the vault can hand
+    over its streaming wire buffer without a copy. That makes aliasing a real risk: a
+    driver that kept the caller's buffer would let later in-place writes (or the
+    chunk-buffer reuse inside the push loop) silently corrupt already-uploaded chunks.
+    Every backend must therefore own an immutable snapshot by the time it returns.
+    """
+    chunk_id = "ab" * 32
+    plaintext = bytes(range(256)) * 512  # 128 KiB, spans several allocator size classes
+
+    def _mutable_inputs() -> list[tuple[str, bytearray, memoryview]]:
+        """Fresh, independent buffers per case (mutating one must not affect the other)."""
+        cases: list[tuple[str, bytearray, memoryview]] = []
+        for label in ("bytearray", "memoryview"):
+            buf = bytearray(plaintext)
+            cases.append((label, buf, memoryview(buf)))
+        return cases
+
+    # --- 1) LocalDeviceVaultDriver -------------------------------------------------
+    local = LocalDeviceVaultDriver(tmp_path / "f4_local_vault")
+    for label, buf, view in _mutable_inputs():
+        payload = view if label == "memoryview" else buf
+        local.put_chunk(chunk_id, payload)
+        buf[:] = b"\x00" * len(buf)  # mutate the caller's buffer *after* the upload
+        assert local.get_chunk(chunk_id) == plaintext, f"local driver aliased a {label}"
+        local.delete_chunk(chunk_id)
+
+    # --- 2) S3CompatibleSigV4Driver ------------------------------------------------
+    sent_bodies: list[bytes] = []
+
+    def _transport(request: S3HttpRequest) -> S3HttpResponse:
+        if request.method == "PUT":
+            sent_bodies.append(bytes(request.body))
+        return S3HttpResponse(status_code=200)
+
+    s3 = S3CompatibleSigV4Driver(
+        S3SigV4Config(
+            endpoint_url="https://account.r2.cloudflarestorage.com",
+            bucket="f4-bucket",
+            region="auto",
+            access_key_id="AKID",
+            secret_access_key="SECRET",
+        ),
+        http_transport=_transport,
+    )
+    for label, buf, view in _mutable_inputs():
+        payload = view if label == "memoryview" else buf
+        del sent_bodies[:]
+        s3.put_chunk(chunk_id, payload)
+        assert sent_bodies == [plaintext], f"S3 signed/sent an aliased {label} body"
+        # Nothing in the driver may still reference the caller's buffer either.
+        buf[:] = b"\xff" * len(buf)
+        assert all(body == plaintext for body in sent_bodies)
+
+    # --- 3) PortableBundleVaultDriver ----------------------------------------------
+    bundle_path = tmp_path / "f4_bundle.nagarvault"
+    bundle = PortableBundleVaultDriver(bundle_path)
+    for label, buf, view in _mutable_inputs():
+        payload = view if label == "memoryview" else buf
+        bundle.put_chunk(chunk_id, payload)
+        buf[:] = b"\x00" * len(buf)
+        assert bundle.get_chunk(chunk_id) == plaintext, f"bundle driver aliased a {label}"
+        # The bytes on disk must be equally immune: reload from a fresh instance.
+        assert PortableBundleVaultDriver(bundle_path).get_chunk(chunk_id) == plaintext
+        bundle.delete_chunk(chunk_id)
+
+
+def test_f1_archive_serialization_is_single_copy_and_stream_equivalent(
+    tmp_path: Path,
+) -> None:
+    """F1: archive SHA and persistence never materialise a second full archive copy.
+
+    ``_serialize_archive`` must produce exactly the same bytes as streaming the layout
+    straight to disk, and its SHA must be computed incrementally (region by region)
+    rather than over a freshly concatenated ``header + payload + index`` blob.
+    """
+    import hashlib
+
+    import nexus_ai_agent.storage.personal_cloud_vault.byos_drivers as drivers_module
+
+    bundle_path = tmp_path / "f1_bundle.nagarvault"
+    driver = PortableBundleVaultDriver(bundle_path)
+
+    chunks = {f"{index:064x}": bytes([index & 0xFF]) * (1024 + index) for index in range(6)}
+    manifests = {"snap-a": b'{"a":1}', "snap-b": b'{"b":2}'}
+    leases = {"lease-1": b'{"lease":1}'}
+    staging = {"staging/stage-aa.json": b'{"stage":1}'}
+
+    layout = driver._build_archive_layout(chunks, manifests, leases, staging)
+    serialized = driver._serialize_archive(chunks, manifests, leases, staging)
+
+    # ``to_bytes`` is exactly the concatenation of the streamed segments...
+    assert serialized == b"".join(bytes(segment) for segment in layout.iter_segments())
+    # ...and every payload blob appears verbatim, in sorted order, exactly once.
+    ordered_blobs = list(layout.payload_parts)
+    assert ordered_blobs == [chunks[key] for key in sorted(chunks)] + [
+        manifests[key] for key in sorted(manifests)
+    ] + [leases[key] for key in sorted(leases)] + [staging[key] for key in sorted(staging)]
+    assert layout.total_size == len(serialized)
+
+    # The archive-level SHA genuinely covers header + payload + index.
+    expected_sha = hashlib.sha256(
+        layout.header_prefix + b"".join(layout.payload_parts) + layout.index_bytes
+    ).digest()
+    assert serialized[: drivers_module._BUNDLE_HEADER_TOTAL][-32:] == expected_sha
+
+    # Streaming persistence writes byte-identical content to ``to_bytes``.
+    streamed_path = tmp_path / "f1_streamed.nagarvault"
+    drivers_module._atomic_write_stream(streamed_path, layout.iter_segments())
+    assert streamed_path.read_bytes() == serialized
+    # And the stream is replayable: a second pass yields the same archive.
+    assert b"".join(bytes(segment) for segment in layout.iter_segments()) == serialized
+
+
+def test_f1_flush_streams_archive_to_disk_without_materialising_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F1: ``_flush`` streams segments to the temp file instead of one giant blob."""
+    import nexus_ai_agent.storage.personal_cloud_vault.byos_drivers as drivers_module
+
+    bundle_path = tmp_path / "f1_flush.nagarvault"
+    driver = PortableBundleVaultDriver(bundle_path)
+    driver.put_chunk("cd" * 32, b"payload-bytes")
+
+    written_segments: list[int] = []
+    real_write_stream = drivers_module._atomic_write_stream
+
+    def _spy(
+        target: Path,
+        segments: Iterable[bytes | bytearray | memoryview],
+    ) -> None:
+        collected = list(segments)
+        written_segments.append(len(collected))
+        real_write_stream(target, collected)
+
+    monkeypatch.setattr(drivers_module, "_atomic_write_stream", _spy)
+    driver.put_chunk("ef" * 32, b"second-payload")
+    # header_prefix + archive_sha + one segment per stored chunk + index.
+    assert written_segments == [2 + 2 + 1]
+    assert driver.get_chunk("ef" * 32) == b"second-payload"
+    # The on-disk archive still verifies end to end.
+    PortableBundleVaultDriver(bundle_path).verify_bundle()
