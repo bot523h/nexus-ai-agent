@@ -1258,9 +1258,9 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
     lock._break_path.unlink()
 
     # Deterministic failpoint: after the final inode/token fencing checks, a
-    # rival replaces .break immediately before os.replace.  The replacement
-    # reports the race as a vanished source; reclaim must fail closed and leave
-    # the rival's live guard untouched.
+    # rival replaces .break immediately before os.replace.  The real
+    # os.replace then moves the rival's inode; reclaim must detect that inode
+    # mismatch, restore the live guard, and fail closed.
     lock._break_path.write_text(
         json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "dead:3"})
     )
@@ -1274,13 +1274,36 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
                     {"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "rival:1"}
                 )
             )
-            raise FileNotFoundError("competitor replaced stale guard")
         real_replace(src, dst)  # type: ignore[arg-type]
 
     monkeypatch.setattr(os, "replace", replace_after_competitor)
-    lock._reclaim_stale_break_guard()
+    assert lock._reclaim_stale_break_guard() is False
     monkeypatch.undo()
+    assert lock._break_path.exists()
     assert json.loads(lock._break_path.read_text())["owner_token"] == "rival:1"
+    lock._break_path.unlink()
+
+    # A second race fills the destination between os.replace and the recovery
+    # hardlink.  FileExistsError is fail-closed and the newly-created guard is
+    # preserved.
+    lock._break_path.write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "dead:4"})
+    )
+
+    def replace_then_create_rival(src: object, dst: object) -> None:
+        lock._break_path.unlink()
+        lock._break_path.write_text(
+            json.dumps({"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "rival:1b"})
+        )
+        real_replace(src, dst)  # type: ignore[arg-type]
+        lock._break_path.write_text(
+            json.dumps({"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "rival:2"})
+        )
+
+    monkeypatch.setattr(os, "replace", replace_then_create_rival)
+    assert lock._reclaim_stale_break_guard() is False
+    monkeypatch.undo()
+    assert json.loads(lock._break_path.read_text())["owner_token"] == "rival:2"
     lock._break_path.unlink()
 
     # Multi-process race: dead-PID .break + dead-PID lock are reclaimed cleanly,

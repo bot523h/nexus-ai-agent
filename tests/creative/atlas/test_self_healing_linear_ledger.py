@@ -375,10 +375,20 @@ def test_save_without_anchor_path_writes_only_the_ledger(tmp_path: Path) -> None
     ledger = _ledger(count=1)
     log = tmp_path / "ledger.jsonl"
 
-    anchor = ledger.save_to_disk(log)
+    anchor = ledger.save_to_disk(log, allow_unsigned=True, require_anchor=False)
 
     assert log.is_file()
     assert anchor.hmac_signature is None
+
+
+def test_save_without_anchor_path_is_fail_closed_by_default(tmp_path: Path) -> None:
+    ledger = _ledger(count=1)
+    log = tmp_path / "ledger.jsonl"
+
+    with pytest.raises(shl.LedgerCorruptionError, match="anchor_path is required"):
+        ledger.save_to_disk(log)
+
+    assert not log.exists()
 
 
 def test_load_from_disk_refuses_a_ledger_that_disagrees_with_the_anchor(tmp_path: Path) -> None:

@@ -429,13 +429,13 @@ class _StorageLock:
         cur_token = cur_data.get("owner_token") if cur_data is not None else None
         return cur_ino == guard_ino and cur_token == guard_token
 
-    def _reclaim_stale_break_guard(self) -> None:
+    def _reclaim_stale_break_guard(self) -> bool:
         state = _read_lock_state(self._break_path)
         if state is None:
-            return
+            return False
         guard_ino, guard_mtime, guard_data = state
         if not self._is_stale_break_guard(guard_data, guard_mtime):
-            return
+            return False
         guard_token = guard_data.get("owner_token") if guard_data is not None else None
         link_path = self._break_path.with_name(
             f".{self._break_path.name}.{os.getpid()}.{uuid.uuid4().hex}.link"
@@ -446,8 +446,9 @@ class _StorageLock:
         try:
             stat_before = os.lstat(self._break_path)
             if stat_before.st_ino != guard_ino or not stat.S_ISREG(stat_before.st_mode):
-                return
+                return False
             os.link(self._break_path, link_path)
+            probe_stat = os.lstat(link_path)
             linked_state = _read_lock_state(link_path)
             linked_token = (
                 linked_state[2].get("owner_token")
@@ -460,10 +461,19 @@ class _StorageLock:
                 or linked_token != guard_token
                 or os.lstat(self._break_path).st_ino != guard_ino
             ):
-                return
+                return False
             os.replace(self._break_path, trash)
+            if os.lstat(trash).st_ino != probe_stat.st_ino:
+                try:
+                    os.link(trash, self._break_path)
+                except FileExistsError:
+                    pass
+                else:
+                    trash.unlink(missing_ok=True)
+                return False
+            return True
         except FileNotFoundError:
-            return
+            return False
         finally:
             link_path.unlink(missing_ok=True)
             trash.unlink(missing_ok=True)
