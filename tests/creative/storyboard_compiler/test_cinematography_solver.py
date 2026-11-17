@@ -13,6 +13,7 @@ import pytest
 from nexus_ai_agent.creative.storyboard_compiler.bilingual_script_parser import (
     ActionBeat,
     DialogueLine,
+    ParsedScene,
     SceneSetting,
     ScriptLanguage,
     TimeOfDay,
@@ -1497,6 +1498,196 @@ def test_wave6_ledger_is_bound_to_the_declared_cast_not_only_the_collapsed_stagi
             plan.axis,
             scene=honest,
             character_positions=((first, honest_positions[first]),),
+        )
+        is True
+    )
+
+
+def test_wave7_mapping_ledger_cannot_outnumber_or_undercover_the_declared_cast() -> None:
+    """A Mapping ledger is order-free but never cardinality-free: duplicate casts are refused."""
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+    first, second = scene.characters[0], scene.characters[1]
+
+    def blocking(forged_scene: object, ledger: object) -> bool:
+        return verify_scene_character_blocking(
+            (),
+            plan.axis,
+            scene=cast(ParsedScene, forged_scene),
+            character_positions=cast(
+                "Sequence[tuple[str, tuple[float, float, float]]] | None", ledger
+            ),
+        )
+
+    # Degenerate forged cast: the canonical staging dict collapses to one entry, so a single-key
+    # ledger looks "complete" under a set comparison. The duplicate cast must be what is refused.
+    duplicated = dataclasses.replace(scene, elements=(), characters=(first, first))
+    collapsed = compute_canonical_character_positions(
+        duplicated, axis=plan.axis, initial_axis_side=plan.axis.initial_side
+    )
+    assert list(collapsed) == [first]
+    assert blocking(duplicated, {first: collapsed[first]}) is False
+    assert blocking(duplicated, ((first, collapsed[first]),)) is False
+    # A ledger that is *longer* than the cast is refused by the same cardinality rule.
+    assert blocking(duplicated, {first: plan.axis.p1, second: plan.axis.p2}) is False
+    # Same ledger shapes against an honestly declared single-name cast: accepted, so the refusal
+    # above is caused by the duplicate cast and not by ledger length in isolation.
+    honest = dataclasses.replace(scene, elements=(), characters=(first,))
+    honest_positions = compute_canonical_character_positions(
+        honest, axis=plan.axis, initial_axis_side=plan.axis.initial_side
+    )
+    assert blocking(honest, {first: honest_positions[first]}) is True
+    assert blocking(honest, ((first, honest_positions[first]),)) is True
+
+
+def test_wave7_malformed_declared_cast_fails_closed_instead_of_raising() -> None:
+    """Blank, duplicated, non-string, or non-tuple casts refuse the audit without an exception."""
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    plan = solve_scene_cinematography(parsed.scenes[0])
+    scene = dataclasses.replace(parsed.scenes[0], elements=())
+    for bad_cast in (
+        ("SARA", "SARA"),
+        ("SARA", ""),
+        ("SARA", "   "),
+        ("SARA", 7),
+        ("SARA", None),
+        ["SARA"],
+        "SARA",
+        0,
+    ):
+        forged = dataclasses.replace(scene, characters=bad_cast)
+        assert (
+            verify_scene_character_blocking(
+                (),
+                plan.axis,
+                scene=cast(ParsedScene, forged),
+                character_positions=None,
+            )
+            is False
+        )
+    # A lone valid name is the control: the guard is about shape, not about every forged scene.
+    assert (
+        verify_scene_character_blocking((), plan.axis, scene=scene, character_positions=None)
+        is True
+    )
+
+
+@pytest.mark.parametrize("tolerance", ["0.1", None, True, False, object(), [1e-6], 1e-6j])
+def test_wave7_non_numeric_position_tolerance_raises_value_error(tolerance: object) -> None:
+    """Garbage tolerances are a uniform configuration ``ValueError``, never a ``TypeError``."""
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+    with pytest.raises(ValueError, match="position_tolerance must be a finite, non-negative float"):
+        verify_scene_character_blocking(
+            plan.shots,
+            plan.axis,
+            scene=scene,
+            character_positions=plan.character_positions,
+            position_tolerance=cast("float", tolerance),
+        )
+
+
+@pytest.mark.parametrize("tolerance", [0, 0.0, 1e-6])
+def test_wave7_integer_zero_and_small_position_tolerances_are_accepted(tolerance: float) -> None:
+    """``0`` (exact match), ``0.0``, and a tiny finite tolerance stay legal policy values."""
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+    assert (
+        verify_scene_character_blocking(
+            plan.shots,
+            plan.axis,
+            scene=scene,
+            character_positions=plan.character_positions,
+            position_tolerance=tolerance,
+        )
+        is True
+    )
+
+
+def test_wave7_hostile_ledger_values_fail_closed_without_type_error() -> None:
+    """A deserialized manifest can carry non-numeric coordinates; the audit must just refuse."""
+    parsed = parse_bilingual_script(TEN_SHOT_PERSIAN_DIALOGUE)
+    scene = parsed.scenes[0]
+    plan = solve_scene_cinematography(scene)
+    for hostile in [
+        {"SARA": ("x", "y", "z")},
+        {"SARA": (0.0, 0.0)},
+        {"SARA": 1.0},
+        {"SARA": None},
+        {7: (0.0, 0.0, 0.0)},
+        {"": (0.0, 0.0, 0.0)},
+        (("SARA", (float("nan"), 0.0, 0.0)),),
+    ]:
+        assert (
+            verify_scene_character_blocking(
+                plan.shots,
+                plan.axis,
+                scene=scene,
+                character_positions=cast(
+                    "Sequence[tuple[str, tuple[float, float, float]]] | None", hostile
+                ),
+            )
+            is False
+        )
+    # A scene object that does not even carry a cast (a hand-built or badly deserialized record)
+    # is refused rather than raising ``AttributeError``.
+    assert (
+        verify_scene_character_blocking(
+            plan.shots,
+            plan.axis,
+            scene=cast(ParsedScene, object()),
+            character_positions=None,
+        )
+        is False
+    )
+    # ``scene=None`` takes the ledger-only branch, which must be equally total.
+    assert (
+        verify_scene_character_blocking(
+            plan.shots, plan.axis, scene=None, character_positions={"SARA": 1.0}
+        )
+        is False
+    )
+
+
+def test_wave7_mapping_ledger_comparator_is_cardinality_bound_not_only_set_bound() -> None:
+    """Direct proof that the Mapping branch of the ledger comparator refuses a shortened ledger."""
+    from nexus_ai_agent.creative.storyboard_compiler.cinematography_solver import _positions_match
+
+    pos = (0.0, 0.5, 1.0)
+    # A duplicated cast collapses to a single canonical entry, so a one-pair ledger matches it as a
+    # *set* -- only the entry count relative to the declared cast can expose the shortfall.
+    assert (
+        _positions_match(
+            [("SARA", pos)], {"SARA": pos}, tol=0.0, ordered=False, expected_names=("SARA", "SARA")
+        )
+        is False
+    )
+    # The identical ledger and staging against an honestly declared single-name cast is accepted,
+    # so the refusal above is caused by the cast/cardinality mismatch and not by shape.
+    assert (
+        _positions_match(
+            [("SARA", pos)], {"SARA": pos}, tol=0.0, ordered=False, expected_names=("SARA",)
+        )
+        is True
+    )
+    # The ordered branch keeps its exact-sequence requirement (duplicates must appear in order), and
+    # duplicated ledger entries themselves are rejected upstream by the ledger's dedup check.
+    assert (
+        _positions_match(
+            [("SARA", pos)], {"SARA": pos}, tol=0.0, ordered=True, expected_names=("SARA", "SARA")
+        )
+        is False
+    )
+    assert (
+        _positions_match(
+            [("SARA", pos), ("AMIR", pos)],
+            {"SARA": pos, "AMIR": pos},
+            tol=0.0,
+            ordered=True,
+            expected_names=("SARA", "AMIR"),
         )
         is True
     )

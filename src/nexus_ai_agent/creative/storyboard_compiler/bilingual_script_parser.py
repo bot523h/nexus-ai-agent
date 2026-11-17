@@ -62,6 +62,10 @@ class ScriptParseError(ValueError):
     """Raised when a screenplay input violates structural or domain constraints."""
 
 
+#: Lowercase-hex SHA-256 spelling, validated before any comparison against untrusted input.
+_SHA256_HEX_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{64}$")
+
+
 class SceneSetting(str, Enum):
     """Interior/exterior camera environment classification."""
 
@@ -2191,30 +2195,50 @@ def parse_bilingual_script(script_text: str) -> ParsedScript:
 
 
 def verify_script_provenance(
-    script: ParsedScript,
+    script: ParsedScript | None,
     *,
     expected_source_sha256: str | None = None,
 ) -> bool:
     """Prove a sealed AST really is the deterministic parse of its own hashed source text.
 
-    Three independent checks, all fail-closed:
+    Every check is fail-closed *and* total: this is an untrusted-input boundary (a manifest may be
+    deserialized), so a missing, ``None``, or wrongly typed field -- or anything raised while
+    replaying the parser or comparing the AST -- yields ``False`` and never an exception.
 
-    1. ``script.normalized_source`` must be non-empty and re-hash to ``script.source_sha256``,
-       so the claimed provenance digest cannot be detached from the retained text.
-    2. When ``expected_source_sha256`` is supplied it must match ``script.source_sha256``
-       exactly, letting a deployment pin the screenplay it agreed to compile.
+    1. ``script.normalized_source`` must be a non-empty ``str`` whose SHA-256 equals
+       ``script.source_sha256`` (also a ``str``), so the claimed provenance digest cannot be
+       detached from, or forged independently of, the retained text.
+    2. When ``expected_source_sha256`` is supplied it must itself be a well-formed 64-hex digest
+       and equal ``script.source_sha256``, letting a deployment pin the screenplay it agreed to
+       compile without a malformed pin silently passing.
     3. Re-running :func:`parse_bilingual_script` on that text must reproduce the AST *verbatim*
-       (scenes, headings, every element, language, cast, and both durations). A forged or
-       partially edited scene graph is caught even after all four manifest SHA-256 digests have
-       been recomputed, because the replay never looks at the attacker's AST.
+       (scenes, headings, every element, language, cast, and both durations). A forged or partially
+       edited scene graph is caught even after all four manifest SHA-256 digests have been
+       recomputed, because the replay never looks at the attacker's AST.
     """
-    source = script.normalized_source
-    if not source or hashlib.sha256(source.encode("utf-8")).hexdigest() != script.source_sha256:
+    if script is None:
         return False
-    if expected_source_sha256 is not None and script.source_sha256 != expected_source_sha256:
+    source = getattr(script, "normalized_source", None)
+    claimed = getattr(script, "source_sha256", None)
+    if not isinstance(source, str) or not source or not isinstance(claimed, str):
         return False
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != claimed:
+        return False
+    if expected_source_sha256 is not None:
+        if (
+            not isinstance(expected_source_sha256, str)
+            or not _SHA256_HEX_RE.match(expected_source_sha256)
+            or expected_source_sha256 != claimed
+        ):
+            return False
     try:
         replayed = parse_bilingual_script(source)
-    except (ScriptParseError, UnicodeError, ValueError, TypeError, AttributeError):
+        # The comparison is between two independently built ``ParsedScript`` values, so a genuine
+        # AST matches exactly and nothing else can. It is still inside the guard, because a hostile
+        # AST may own an ``__eq__`` (or a field whose ``__eq__`` explodes) that raises on contact.
+        return bool(replayed == script)
+    except Exception:
+        # Anything at all -- a parser refusal, a mistyped field, an exploding ``__eq__`` -- means
+        # provenance cannot be established, so the answer is "not verified". Deliberately not
+        # ``BaseException``: KeyboardInterrupt and SystemExit must still propagate.
         return False
-    return replayed == script

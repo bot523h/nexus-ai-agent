@@ -819,3 +819,62 @@ def test_wave6_provenance_gate_fails_closed_on_forged_or_detached_ast() -> None:
     with pytest.raises(ScriptParseError, match="first scene heading"):
         parse_bilingual_script(garbage)
     assert verify_script_provenance(detached) is False
+
+
+def test_wave7_provenance_verifier_is_total_on_malformed_scripts_and_pins() -> None:
+    """The fail-closed gate must return ``False`` -- never raise -- on hostile or mistyped input."""
+    parsed = parse_bilingual_script(FULL_PERSIAN_SCRIPT)
+    assert verify_script_provenance(parsed) is True
+
+    # Objects that are not a ParsedScript at all (a deserialized manifest can hand us anything).
+    for impostor in (None, object(), 123, "not-a-script", [], parsed.normalized_source):
+        assert verify_script_provenance(impostor) is False  # type: ignore[arg-type]
+
+    # Right class, mistyped provenance fields: these used to crash on ``.encode``/``.strip``.
+    for bad_source in (None, 123, b"", [], parsed):
+        assert (
+            verify_script_provenance(
+                dataclasses.replace(parsed, normalized_source=bad_source)  # type: ignore[arg-type]
+            )
+            is False
+        )
+    for bad_digest in (None, 123, "", "0" * 64, "not-a-hash"):
+        assert (
+            verify_script_provenance(
+                dataclasses.replace(parsed, source_sha256=bad_digest)  # type: ignore[arg-type]
+            )
+            is False
+        )
+
+    # Malformed pins are refused up front, exactly like a mismatching one.
+    for bad_pin in ("", "0" * 63, "0" * 65, "z" * 64, "0" * 64 + " ", None, 7, True):
+        assert verify_script_provenance(
+            parsed,
+            expected_source_sha256=bad_pin,  # type: ignore[arg-type]
+        ) is (bad_pin is None)
+
+
+def test_wave7_provenance_pin_requires_lowercase_hex_and_equal_digest() -> None:
+    """A pin is only accepted in the exact lowercase-hex spelling the parser emits."""
+    parsed = parse_bilingual_script(MIXED_BILINGUAL_SCRIPT)
+    digest = parsed.source_sha256
+    assert verify_script_provenance(parsed, expected_source_sha256=digest) is True
+    assert verify_script_provenance(parsed, expected_source_sha256=digest.upper()) is False
+    assert verify_script_provenance(parsed, expected_source_sha256=f" {digest}") is False
+    assert verify_script_provenance(parsed, expected_source_sha256=f"{digest}\n") is False
+
+
+def test_wave7_provenance_replay_swallows_a_boom_script_not_only_parser_errors() -> None:
+    """An AST whose comparison itself explodes must still yield ``False``, not propagate."""
+    parsed = parse_bilingual_script(FULL_ENGLISH_SCRIPT)
+
+    class _Boom:
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("comparison exploded")
+
+        def __hash__(self) -> int:  # pragma: no cover - never used
+            return 0
+
+    hostile = dataclasses.replace(parsed, scenes=_Boom())  # type: ignore[arg-type]
+    assert verify_script_provenance(hostile) is False
+    assert verify_script_provenance(hostile, expected_source_sha256=parsed.source_sha256) is False

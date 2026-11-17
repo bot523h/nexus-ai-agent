@@ -1902,3 +1902,197 @@ def test_package_exports_and_stdlib_plus_numpy_only_import_boundary() -> None:
                 assert root in stdlib or root in allowed_external, (
                     f"{py_file.name} imports disallowed module {node.module!r}"
                 )
+
+
+def test_wave7_hmac_seal_is_deterministic_and_excluded_from_the_signed_payload() -> None:
+    """The seal wraps the manifest digest; it must never perturb the payload it commits to."""
+    import hashlib
+    import hmac as _hmac
+
+    key = b"deployment-signing-secret"
+    unsigned = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    sealed = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT, hmac_key=key)
+
+    assert unsigned.manifest_hmac_sha256 == ""
+    assert re.fullmatch(r"[0-9a-f]{64}", sealed.manifest_hmac_sha256)
+    assert sealed.manifest_sha256 == unsigned.manifest_sha256
+    assert sealed.script_sha256 == unsigned.script_sha256
+    assert sealed.to_canonical_json() == unsigned.to_canonical_json()
+    assert "manifest_hmac_sha256" not in json.loads(sealed.to_canonical_json())
+    assert sealed.to_canonical_dict()["manifest_sha256"] == sealed.manifest_sha256
+    assert (
+        _hmac.new(key, sealed.manifest_sha256.encode("utf-8"), hashlib.sha256).hexdigest()
+        == sealed.manifest_hmac_sha256
+    )
+    # A str key is the same secret as its UTF-8 bytes, and re-sealing is deterministic.
+    text_key = compile_storyboard(
+        DIALOGUE_AND_REACTION_SCRIPT, hmac_key="deployment-signing-secret"
+    )
+    assert text_key.manifest_hmac_sha256 == sealed.manifest_hmac_sha256
+    parsed = parse_bilingual_script(DIALOGUE_AND_REACTION_SCRIPT)
+    plans = solve_script_cinematography(parsed)
+    editorial = solve_editorial_timeline(plans)
+    again = build_compiled_manifest(parsed, plans, editorial, hmac_key=key)
+    assert again.manifest_hmac_sha256 == sealed.manifest_hmac_sha256
+    # Keyless builds stay unsigned, so the sealed payload digest is unchanged by the feature.
+    assert build_compiled_manifest(parsed, plans, editorial).manifest_hmac_sha256 == ""
+    assert verify_manifest_integrity(sealed) is True
+    assert verify_manifest_integrity(sealed, hmac_key=key) is True
+
+
+def test_wave7_hmac_key_validation_and_seal_verification_are_fail_closed() -> None:
+    """An unusable key stops the builder; a missing, forged, or mismatched seal refuses."""
+    key = b"deployment-signing-secret"
+    parsed = parse_bilingual_script(DIALOGUE_AND_REACTION_SCRIPT)
+    plans = solve_script_cinematography(parsed)
+    editorial = solve_editorial_timeline(plans)
+    sealed = build_compiled_manifest(parsed, plans, editorial, hmac_key=key)
+    unsigned = build_compiled_manifest(parsed, plans, editorial)
+
+    for bad_key in ("", b"", bytearray(), 0, 1, True, None.__class__, [key]):
+        with pytest.raises(ValueError, match="hmac_key must"):
+            build_compiled_manifest(parsed, plans, editorial, hmac_key=cast("bytes", bad_key))
+    # The key is checked before any content validation, so a caller typo is never masked.
+    with pytest.raises(ValueError, match="hmac_key must not be empty"):
+        build_compiled_manifest(parsed, [], editorial, hmac_key="")
+
+    # A verifier never raises on a bad key -- it simply refuses to vouch for the manifest.
+    for bad_key in ("", b"", 123, True):
+        assert verify_manifest_integrity(sealed, hmac_key=cast("bytes", bad_key)) is False
+    assert verify_manifest_integrity(sealed, hmac_key=b"other-secret") is False
+    assert verify_manifest_integrity(unsigned, hmac_key=key) is False
+    assert verify_manifest_integrity(sealed, hmac_key=None) is True
+    assert verify_manifest_integrity(unsigned, hmac_key=None) is True
+
+    for malformed in ("", "0" * 63, "0" * 65, "z" * 64, sealed.manifest_sha256.upper()):
+        assert (
+            verify_manifest_integrity(
+                dataclasses.replace(sealed, manifest_hmac_sha256=malformed), hmac_key=key
+            )
+            is False
+        )
+    flipped = ("0" if sealed.manifest_hmac_sha256[0] != "0" else "1") + sealed.manifest_hmac_sha256[
+        1:
+    ]
+    tampered_seal = dataclasses.replace(sealed, manifest_hmac_sha256=flipped)
+    # The seal is inert unless the deployment asks for it -- the payload still verifies...
+    assert verify_manifest_integrity(tampered_seal) is True
+    # ...and a single flipped hex character destroys it under a key-mismatch comparison.
+    assert verify_manifest_integrity(tampered_seal, hmac_key=key) is False
+    # Re-sealing an untouched manifest leaves the payload -- and therefore the seal -- identical.
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(sealed), hmac_key=key) is True
+    # Editing any committed field invalidates the seal even though the payload is self-consistent.
+    edited = dataclasses.replace(sealed, total_duration_sec=sealed.total_duration_sec + 0.5)
+    assert verify_manifest_integrity(_reseal_tampered_manifest(edited), hmac_key=key) is False
+
+
+def test_wave7_hmac_anchor_defeats_a_fully_self_consistent_whole_script_substitution() -> None:
+    """Only an external anchor can refuse a forged manifest that is internally perfect."""
+    key = b"ops-key-2026"
+    legit = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT, hmac_key=key)
+    rival = compile_storyboard("INT. RING - NIGHT\nA\nGo!\n\nB\nNow!\n\nA\nHit!")
+    assert rival.script_sha256 != legit.script_sha256
+    # The substitution attacker: take a *different genuine* screenplay package and graft its
+    # digests onto it. Every internal invariant -- all four SHA-256s, the parser replay, both
+    # cached reports -- is satisfied, because the package really was compiled from a real script.
+    assert verify_manifest_integrity(rival) is True
+    assert verify_manifest_integrity(_reseal_with_recomputed_reports(rival)) is True
+    # Its own seal is absent, so a deployment that demands the anchor refuses it outright...
+    assert verify_manifest_integrity(rival, hmac_key=key) is False
+    assert verify_manifest_integrity(rival, require_trusted_anchor=True) is False
+    # ...and the legitimate package keeps passing while the key stays secret.
+    assert verify_manifest_integrity(legit, hmac_key=key, require_trusted_anchor=True) is True
+    # Copying the honest seal onto the rival package does not help: the seal commits to the digest.
+    stolen = dataclasses.replace(rival, manifest_hmac_sha256=legit.manifest_hmac_sha256)
+    assert verify_manifest_integrity(stolen, hmac_key=key) is False
+    # Demanding an anchor without supplying one is a refusal, whatever the manifest claims.
+    assert verify_manifest_integrity(stolen, require_trusted_anchor=True) is False
+    assert verify_manifest_integrity(stolen, require_trusted_anchor=True, hmac_key=key) is False
+
+
+def test_wave7_require_trusted_anchor_demands_an_external_commitment() -> None:
+    """With the flag set, a manifest that nothing outside itself vouches for is refused."""
+    key = b"ops-key-2026"
+    unsigned = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    sealed = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT, hmac_key=key)
+    source_sha = unsigned.script.source_sha256
+
+    assert verify_manifest_integrity(unsigned) is True
+    assert verify_manifest_integrity(unsigned, require_trusted_anchor=True) is False
+    assert (
+        verify_manifest_integrity(
+            unsigned, require_trusted_anchor=True, expected_source_sha256=source_sha
+        )
+        is True
+    )
+    assert (
+        verify_manifest_integrity(
+            unsigned, require_trusted_anchor=True, expected_source_sha256="0" * 64
+        )
+        is False
+    )
+    # A malformed pin is not an anchor: it cannot unlock the gate on its own.
+    assert (
+        verify_manifest_integrity(
+            unsigned, require_trusted_anchor=True, expected_source_sha256=cast("str", 7)
+        )
+        is False
+    )
+    assert verify_manifest_integrity(sealed, require_trusted_anchor=True, hmac_key=key) is True
+    # An unsigned manifest cannot satisfy the anchor requirement by pointing at the key alone.
+    assert verify_manifest_integrity(unsigned, require_trusted_anchor=True, hmac_key=key) is False
+    # The flag is inert when no anchor is demanded at all (default behaviour is unchanged).
+    assert verify_manifest_integrity(unsigned, require_trusted_anchor=False) is True
+    # A legacy manifest (no seal field in the serialized record) still verifies, unsigned.
+    legacy_fields = {
+        field.name: getattr(unsigned, field.name)
+        for field in dataclasses.fields(unsigned)
+        if field.name != "manifest_hmac_sha256"
+    }
+    legacy = sb.CompiledStoryboardManifest(**legacy_fields)
+    assert legacy.manifest_hmac_sha256 == ""
+    assert verify_manifest_integrity(legacy) is True
+    assert verify_manifest_integrity(legacy, hmac_key=key) is False
+
+
+def test_wave7_saccade_policy_values_are_validated_uniformly() -> None:
+    """Policy pins raise ``ValueError``; forged declared limits only ever report violations."""
+    manifest = compile_storyboard(DIALOGUE_AND_REACTION_SCRIPT)
+    ed = manifest.editorial
+
+    for bad_pin in ("0.35", None.__class__, True, float("nan"), float("inf"), [0.35]):
+        with pytest.raises(
+            ValueError, match="expected_max_saccade_limit must be None or a finite real number"
+        ):
+            verify_editorial_timeline(ed, expected_max_saccade_limit=cast("float", bad_pin))
+    # 0 is a legal finite number (it merely fails the policy bounds), and None means "no pin".
+    declared = ed.max_eye_trace_saccade_limit
+    assert verify_editorial_timeline(ed, expected_max_saccade_limit=None).compliant is True
+    assert verify_editorial_timeline(ed, expected_max_saccade_limit=declared).compliant is True
+    assert verify_editorial_timeline(ed, expected_max_saccade_limit=0).compliant is False
+    off_by_a_hair = verify_editorial_timeline(ed, expected_max_saccade_limit=declared + 1e-3)
+    assert off_by_a_hair.compliant is False
+    assert any("!= pinned policy" in v for v in off_by_a_hair.violations)
+
+    for bad_limit in ("0.35", None, True, float("nan"), float("inf"), object()):
+        forged = dataclasses.replace(ed, max_eye_trace_saccade_limit=cast("float", bad_limit))
+        report = verify_editorial_timeline(forged)
+        assert report.compliant is False
+        assert report.eye_trace_valid is False
+        assert any("saccade policy violation" in v for v in report.violations)
+        tampered = dataclasses.replace(manifest, editorial=forged)
+        assert verify_manifest_integrity(tampered) is False
+    # The string and bool forgeries are the ones an attacker can actually canonicalize into a
+    # re-sealed payload (both coerce to a float in the digest JSON), so they must additionally be
+    # refused by the summary bounds with every SHA-256 recomputed.
+    for resealed in ("0.35", True):
+        forged = dataclasses.replace(ed, max_eye_trace_saccade_limit=cast("float", resealed))
+        tampered = dataclasses.replace(manifest, editorial=forged)
+        assert verify_manifest_integrity(_reseal_tampered_manifest(tampered)) is False
+        assert verify_manifest_integrity(_reseal_with_recomputed_reports(tampered)) is False
+
+    for bad_policy in ("0.35", None, True, float("nan"), float("inf")):
+        with pytest.raises(EditorialCutError, match="max_eye_trace_saccade must lie within"):
+            solve_editorial_timeline(
+                manifest.cinematography, max_eye_trace_saccade=cast("float", bad_policy)
+            )

@@ -21,6 +21,7 @@ screenplay and its solved ``SE(3)`` cinematography plans:
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
 import re
@@ -468,7 +469,21 @@ def verify_editorial_timeline(
     so a tampered plan cannot neutralize the eye-trace invariant by inflating
     ``max_eye_trace_saccade_limit`` and reframing nothing. Pass
     ``expected_max_saccade_limit`` to additionally pin the plan to an exact policy value.
+
+    A *declared* limit that is not a real number (a string, ``None``, a bool) is attacker content,
+    so it is reported as a policy violation rather than raised -- but it is never fed to
+    :func:`math.isfinite`/comparison operators, so no ``TypeError`` can leak. A *caller-supplied*
+    pin is deployment configuration, so an invalid ``expected_max_saccade_limit`` raises
+    :class:`ValueError` up front, exactly like ``position_tolerance`` and ``hmac_key``.
     """
+    pinned_limit = (
+        None if expected_max_saccade_limit is None else _finite_real(expected_max_saccade_limit)
+    )
+    if expected_max_saccade_limit is not None and pinned_limit is None:
+        raise ValueError(
+            "expected_max_saccade_limit must be None or a finite real number, got "
+            f"{expected_max_saccade_limit!r}"
+        )
     violations: list[str] = []
     video_ok = True
     audio_ok = True
@@ -477,13 +492,16 @@ def verify_editorial_timeline(
     max_overlap = 0.0
 
     limit = plan.max_eye_trace_saccade_limit
+    declared_limit = _finite_real(limit)
+    # A non-numeric or non-finite declared limit cannot participate in any comparison, so the
+    # audit substitutes the strictest conceivable policy instead of raising: every eye-trace check
+    # then fails on its own merits and the violation text still reports the original repr.
+    limit_value = declared_limit if declared_limit is not None else float("-inf")
     limit_in_policy = (
-        math.isfinite(limit)
-        and MIN_EYE_TRACE_SACCADE_LOWER_BOUND <= limit <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
+        declared_limit is not None
+        and MIN_EYE_TRACE_SACCADE_LOWER_BOUND <= declared_limit <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
     )
-    limit_matches_policy = expected_max_saccade_limit is None or (
-        math.isfinite(expected_max_saccade_limit) and abs(limit - expected_max_saccade_limit) <= tol
-    )
+    limit_matches_policy = pinned_limit is None or abs(limit_value - pinned_limit) <= tol
     if not (limit_in_policy and limit_matches_policy):
         eye_ok = False
         pinned = (
@@ -647,7 +665,7 @@ def verify_editorial_timeline(
                     )
                 )
                 and MIN_EYE_TRACE_SACCADE_LOWER_BOUND
-                <= plan.max_eye_trace_saccade_limit
+                <= limit_value
                 <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
             )
             recomputed_raw_saccade = math.hypot(
@@ -664,7 +682,7 @@ def verify_editorial_timeline(
                 _radial_eye_trace_projection(
                     et.exit_focus_uv,
                     et.raw_entry_focus_uv,
-                    plan.max_eye_trace_saccade_limit,
+                    limit_value,
                 )
                 if coords_finite
                 else (False, et.raw_entry_focus_uv)
@@ -711,12 +729,12 @@ def verify_editorial_timeline(
                 and et.eyeline_matched is expected_matched
             )
             max_saccade = max(max_saccade, recomputed_eff_saccade)
-            if not eye_geom_ok or recomputed_eff_saccade > plan.max_eye_trace_saccade_limit + tol:
+            if not eye_geom_ok or recomputed_eff_saccade > limit_value + tol:
                 eye_ok = False
                 violations.append(
                     f"transition {k}: eye-trace geometry mismatch or saccade "
                     f"{recomputed_eff_saccade:.6f} exceeds limit "
-                    f"{plan.max_eye_trace_saccade_limit:.6f}"
+                    f"{limit_value:.6f}"
                 )
 
     return EditorialVerificationReport(
@@ -778,10 +796,10 @@ def solve_editorial_timeline(
     _validate_split_bounds(
         j_cut_min_sec, j_cut_max_sec, l_cut_min_sec, l_cut_max_sec, breath_gap_sec
     )
+    policy_limit = _finite_real(max_eye_trace_saccade)
     limit_ok = (
-        math.isfinite(max_eye_trace_saccade)
-        and MIN_EYE_TRACE_SACCADE_LOWER_BOUND <= max_eye_trace_saccade
-        and max_eye_trace_saccade <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
+        policy_limit is not None
+        and MIN_EYE_TRACE_SACCADE_LOWER_BOUND <= policy_limit <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
     )
     if not limit_ok:
         raise EditorialCutError(
@@ -1344,7 +1362,16 @@ def _compute_digests(
 
 @dataclass(frozen=True)
 class CompiledStoryboardManifest:
-    """Immutable, SHA-256-sealed deliverable of the deterministic storyboard compiler."""
+    """Immutable, SHA-256-sealed deliverable of the deterministic storyboard compiler.
+
+    The four SHA-256 digests form the audit trail for deterministic, reproducible compilation.
+    They are, however, *self-referential*: a forger who rewrites the whole scene graph can recompute
+    all of them, so the manifest also carries an optional HMAC-SHA256 seal over ``manifest_sha256``
+    keyed with a deployment secret. That seal is the external trust anchor: without the key, no
+    forged -- however internally consistent -- manifest can be sealed. It defaults to ``""``
+    (unsigned) for backward compatibility and is deliberately excluded from the canonical payload,
+    because it seals the payload rather than forming part of it.
+    """
 
     schema_version: str
     script: ParsedScript
@@ -1360,6 +1387,8 @@ class CompiledStoryboardManifest:
     cinematography_sha256: str
     editorial_sha256: str
     manifest_sha256: str
+    #: HMAC-SHA256 (hex) of ``manifest_sha256`` under the deployment secret; "" means unsigned.
+    manifest_hmac_sha256: str = ""
 
     def to_canonical_dict(self) -> dict[str, Any]:
         """Return deterministic dictionary representation including SHA-256 seals."""
@@ -1391,19 +1420,67 @@ class CompiledStoryboardManifest:
         )
 
 
+def _finite_real(value: object) -> float | None:
+    """Return ``value`` as a finite ``float``, or ``None`` for bools, non-numbers, NaN and Inf.
+
+    Declared ``float`` parameters can still receive anything at runtime -- a manifest is
+    deserialized, and a config may arrive from JSON. Centralising the coercion here means every
+    numeric policy value is refused the same way (``None`` for the caller) instead of leaking a
+    ``TypeError`` out of a comparison or out of :func:`math.isfinite`.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _hmac_key_bytes(hmac_key: object) -> bytes:
+    """Coerce a deployment signing secret into non-empty bytes, refusing anything else.
+
+    Accepts ``str`` (UTF-8) or ``bytes``/``bytearray``; every other type -- including ``None``,
+    ``int``, and ``bool`` -- raises :class:`ValueError`, as does an empty secret. A verifier catches
+    this and fails closed; a builder lets it stop the caller before any work is done.
+    """
+    if isinstance(hmac_key, str):
+        key = hmac_key.encode("utf-8")
+    elif isinstance(hmac_key, (bytes, bytearray)):
+        key = bytes(hmac_key)
+    else:
+        raise ValueError(
+            f"hmac_key must be a non-empty str or bytes secret, got {type(hmac_key).__name__}: "
+            f"{hmac_key!r}"
+        )
+    if not key:
+        raise ValueError("hmac_key must not be empty")
+    return key
+
+
+def _seal_manifest_hmac(manifest_sha256: str, key: bytes) -> str:
+    """HMAC-SHA256 (lowercase hex) over a manifest digest under ``key``."""
+    return hmac.new(key, manifest_sha256.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def build_compiled_manifest(
     script: ParsedScript,
     cinematography: Sequence[SceneCinematographyPlan],
     editorial: EditorialTimelinePlan,
     *,
     expected_max_saccade_limit: float | None = None,
+    hmac_key: bytes | str | None = None,
 ) -> CompiledStoryboardManifest:
     """Assemble and cryptographically seal a ``CompiledStoryboardManifest`` with SHA-256.
 
     ``expected_max_saccade_limit`` optionally pins the editorial eye-trace policy: when given, the
     sealed plan must declare exactly that limit (in addition to the canonical bounds check), so a
     deployment with a fixed policy can refuse manifests that quietly relax it.
+
+    ``hmac_key`` optionally seals ``manifest_sha256`` with HMAC-SHA256 under a deployment secret,
+    producing the external trust anchor :func:`verify_manifest_integrity` can demand. A key that is
+    not a non-empty ``str``/``bytes`` raises :class:`ValueError` before anything is built.
     """
+    key_bytes: bytes | None = None
+    if hmac_key is not None:
+        key_bytes = _hmac_key_bytes(hmac_key)
     cinema_tuple = tuple(cinematography)
     if len(cinema_tuple) != len(script.scenes):
         raise EditorialCutError(
@@ -1468,6 +1545,9 @@ def build_compiled_manifest(
         cinematography_sha256=cinema_sha,
         editorial_sha256=edit_sha,
         manifest_sha256=manifest_sha,
+        manifest_hmac_sha256=(
+            "" if key_bytes is None else _seal_manifest_hmac(manifest_sha, key_bytes)
+        ),
     )
 
 
@@ -1757,11 +1837,11 @@ def _editorial_summary_valid(editorial: EditorialTimelinePlan) -> bool:
         if n_trans > 0
         else 1.0
     )
+    declared_limit = _finite_real(editorial.max_eye_trace_saccade_limit)
     return (
         n_events > 0
-        and MIN_EYE_TRACE_SACCADE_LOWER_BOUND
-        <= editorial.max_eye_trace_saccade_limit
-        <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
+        and declared_limit is not None
+        and MIN_EYE_TRACE_SACCADE_LOWER_BOUND <= declared_limit <= MAX_EYE_TRACE_SACCADE_UPPER_BOUND
         and 0.0 <= editorial.breath_gap_sec <= 0.25
         and editorial.events[0].entry_cut_type is None
         and editorial.events[-1].exit_cut_type is None
@@ -1784,6 +1864,8 @@ def verify_manifest_integrity(
     expected_max_saccade_limit: float | None = None,
     expected_source_sha256: str | None = None,
     expected_initial_axis_side: int | None = None,
+    hmac_key: bytes | str | None = None,
+    require_trusted_anchor: bool = False,
 ) -> bool:
     """Recompute scene graph, reports, trajectories, and SHA-256 digests; True iff untampered.
 
@@ -1795,7 +1877,21 @@ def verify_manifest_integrity(
     The AST is never trusted on its own word: the deterministic parser is replayed on the
     manifest's retained ``normalized_source``, so a hand-forged scene graph is rejected even
     after all four SHA-256 digests have been recomputed to match it.
+
+    That replay still leaves a *self-consistent* forgery possible -- an attacker who writes a whole
+    second screenplay, rebuilds its AST, and recomputes every digest produces a manifest that
+    verifies internally. Only a key the attacker does not have can rule that out, hence:
+
+    * ``hmac_key`` -- verify the manifest's ``manifest_hmac_sha256`` seal with HMAC-SHA256 over
+      ``manifest_sha256``. A missing (``""``), malformed, or wrong-key seal rejects, compared with
+      :func:`hmac.compare_digest` so a mismatch leaks nothing through timing. An unusable key
+      (non-``str``/``bytes``, or empty) rejects rather than raising.
+    * ``require_trusted_anchor`` -- refuse any manifest that cannot be tied to something outside
+      itself: with this set, at least one of ``expected_source_sha256`` / ``hmac_key`` must be
+      supplied, otherwise verification fails immediately.
     """
+    if require_trusted_anchor and expected_source_sha256 is None and hmac_key is None:
+        return False
     for digest in (
         manifest.script_sha256,
         manifest.cinematography_sha256,
@@ -1803,6 +1899,17 @@ def verify_manifest_integrity(
         manifest.manifest_sha256,
     ):
         if not _SHA256_HEX_RE.match(digest):
+            return False
+
+    if hmac_key is not None:
+        try:
+            key_bytes = _hmac_key_bytes(hmac_key)
+        except ValueError:
+            return False
+        seal = manifest.manifest_hmac_sha256
+        if not _SHA256_HEX_RE.match(seal):
+            return False
+        if not hmac.compare_digest(_seal_manifest_hmac(manifest.manifest_sha256, key_bytes), seal):
             return False
 
     if not verify_script_provenance(manifest.script, expected_source_sha256=expected_source_sha256):
@@ -1899,8 +2006,13 @@ def compile_storyboard(
     script_text: str,
     *,
     config: StoryboardCompilerConfig | None = None,
+    hmac_key: bytes | str | None = None,
 ) -> CompiledStoryboardManifest:
-    """Compile a Persian/English screenplay into a verified, SHA-256-sealed storyboard manifest."""
+    """Compile a Persian/English screenplay into a verified, SHA-256-sealed storyboard manifest.
+
+    ``hmac_key`` optionally adds the external HMAC trust anchor to the sealed manifest (see
+    :func:`build_compiled_manifest`); it is a deployment secret and is never stored in the manifest.
+    """
     cfg = config if config is not None else StoryboardCompilerConfig()
     parsed = parse_bilingual_script(script_text)
     cinema_plans = solve_script_cinematography(
@@ -1918,4 +2030,4 @@ def compile_storyboard(
         max_eye_trace_saccade=cfg.max_eye_trace_saccade,
         allow_scene_prelap=cfg.allow_scene_prelap,
     )
-    return build_compiled_manifest(parsed, cinema_plans, editorial)
+    return build_compiled_manifest(parsed, cinema_plans, editorial, hmac_key=hmac_key)

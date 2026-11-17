@@ -1291,18 +1291,41 @@ def _positions_match(
     ``expected_names`` is the parsed scene's cast, so the ledger is bound to the screenplay itself
     and not merely to the plan's own staging. With ``ordered`` (a sequence-of-pairs ledger) the name
     *sequence* must match that cast exactly; without it (a :class:`~collections.abc.Mapping` ledger)
-    only the key *set* is bound, so dict insertion order is irrelevant while every coordinate is
-    still checked by name.
+    the key *set* plus the entry *count* are bound, so dict insertion order is irrelevant while a
+    short or duplicated ledger is not. The cast itself is validated before this comparison, so a
+    non-string or blank ledger key can never line up with it, and every ``canonical`` lookup below
+    is total.
     """
     names = [name for name, _ in pairs]
     if ordered:
         if names != list(expected_names) or set(names) != set(canonical):
             return False
-    elif set(names) != set(expected_names) or set(names) != set(canonical):
+    elif (
+        len(names) != len(expected_names)  # cardinality, not just membership
+        or set(names) != set(expected_names)
+        or set(names) != set(canonical)
+    ):
+        # A Mapping ledger is order-free but never cardinality-free: comparing only key *sets*
+        # would let a duplicated cast (``scene.characters == ("SARA", "SARA")``) collapse and be
+        # "covered" by a single-entry dict, which the sequence-of-pairs path already refuses.
         return False
     return all(
         all(abs(pos[i] - canonical[name][i]) <= tol for i in range(3)) for name, pos in pairs
     )
+
+
+def _cast_names_well_formed(cast: object) -> bool:
+    """True iff a scene's declared cast is a duplicate-free tuple of non-blank names.
+
+    The parser emits deduplicated casts, so a repeated, empty, or non-string entry can only come
+    from a hand-forged or deserialized scene graph. Rejecting it up front keeps ``set`` based
+    ledger comparisons from hiding a collapsed duplicate cast behind an apparently complete ledger.
+    """
+    if not isinstance(cast, tuple) or not all(
+        isinstance(name, str) and bool(name.strip()) for name in cast
+    ):
+        return False
+    return len(cast) == len(set(cast))
 
 
 def _axis_side_pin_valid(axis: AxisOfAction, expected_initial_axis_side: object) -> bool:
@@ -1406,57 +1429,75 @@ def verify_scene_character_blocking(
     recomputed from the parsed script alone, and the plan must match it within
     ``position_tolerance``. ``expected_initial_axis_side`` optionally pins the opening camera side
     (only ``-1``/``+1``; anything else, including ``bool``, fails closed). A :class:`Mapping`
-    ledger is bound by key *set*, so dict insertion order never matters; a sequence-of-pairs ledger
-    is additionally bound by canonical order. The same routine backs ``verify_180_degree_rule``
-    (solver and cached report) and manifest verification, so solver and auditor cannot drift apart.
+    ledger is bound by key *set* (never by insertion order) but also by *cardinality*, so a
+    duplicate-cast scene cannot be "covered" by a shortened ledger. ``position_tolerance`` must be
+    a real finite non-negative number: a ``bool``, a string, ``None``, ``NaN``/``Inf``, or a
+    negative value raises :class:`ValueError` instead of leaking a ``TypeError``. Everything after
+    that policy check -- including ledger coordinates and scene attributes that a deserialized
+    manifest could have replaced with a string, ``None``, or a short tuple -- is total: malformed
+    input fails closed as ``False`` and never propagates an exception. The same routine backs
+    ``verify_180_degree_rule`` (solver and cached report) and manifest verification, so solver and
+    auditor cannot drift apart.
     """
     if (
         isinstance(position_tolerance, bool)
+        or not isinstance(position_tolerance, (int, float))
         or not math.isfinite(position_tolerance)
         or position_tolerance < 0.0
     ):
         raise ValueError(
             f"position_tolerance must be a finite, non-negative float, got {position_tolerance!r}"
         )
-    tol = position_tolerance
-    if not _axis_side_pin_valid(axis, expected_initial_axis_side):
-        return False
-    ordered_ledger = not isinstance(character_positions, Mapping)
-    pairs = (
-        list(character_positions.items())
-        if isinstance(character_positions, Mapping)
-        else (list(character_positions) if character_positions is not None else None)
-    )
-    char_map = dict(pairs) if pairs is not None else None
-    pairs_ok = pairs is None or (
-        len(char_map or {}) == len(pairs)
-        and all(len(pos) == 3 and all(math.isfinite(c) for c in pos) for _, pos in pairs)
-    )
-    shots_match_chars = char_map is None or all(
-        (
-            sh.subject_label in char_map
-            and all(
-                abs(sh.subject_position[i] - char_map[sh.subject_label][i]) <= tol for i in range(3)
+    try:
+        # Every actor name the scene claims must exist exactly once; a forged or deserialized scene
+        # with a repeated, blank, non-string, or non-tuple cast is refused before any comparison.
+        if scene is not None and not _cast_names_well_formed(getattr(scene, "characters", None)):
+            return False
+        tol = position_tolerance
+        if not _axis_side_pin_valid(axis, expected_initial_axis_side):
+            return False
+        ordered_ledger = not isinstance(character_positions, Mapping)
+        pairs = (
+            list(character_positions.items())
+            if isinstance(character_positions, Mapping)
+            else (list(character_positions) if character_positions is not None else None)
+        )
+        char_map = dict(pairs) if pairs is not None else None
+        pairs_ok = pairs is None or (
+            len(char_map or {}) == len(pairs)
+            and all(len(pos) == 3 and all(math.isfinite(c) for c in pos) for _, pos in pairs)
+        )
+        shots_match_chars = char_map is None or all(
+            (
+                sh.subject_label in char_map
+                and all(
+                    abs(sh.subject_position[i] - char_map[sh.subject_label][i]) <= tol
+                    for i in range(3)
+                )
+            )
+            for sh in shots
+            if sh.shot_kind == ShotKind.DIALOGUE or sh.subject_label in char_map
+        )
+        if scene is None:
+            return pairs_ok and shots_match_chars
+        return (
+            pairs_ok
+            and shots_match_chars
+            and _scene_blocking_valid(
+                shots,
+                axis,
+                scene,
+                pairs,
+                bind_axis=bind_axis,
+                ordered=ordered_ledger,
+                tol=tol,
             )
         )
-        for sh in shots
-        if sh.shot_kind == ShotKind.DIALOGUE or sh.subject_label in char_map
-    )
-    if scene is None:
-        return pairs_ok and shots_match_chars
-    return (
-        pairs_ok
-        and shots_match_chars
-        and _scene_blocking_valid(
-            shots,
-            axis,
-            scene,
-            pairs,
-            bind_axis=bind_axis,
-            ordered=ordered_ledger,
-            tol=tol,
-        )
-    )
+    except Exception:
+        # Fail closed on *anything*: a deserialized manifest can hand this auditor objects whose
+        # comparisons or arithmetic raise arbitrary exceptions, and a crashing gate is worse than a
+        # refusing one. BaseException (KeyboardInterrupt, SystemExit) is deliberately not caught.
+        return False
 
 
 def verify_180_degree_rule(
