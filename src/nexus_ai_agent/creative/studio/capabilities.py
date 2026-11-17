@@ -52,6 +52,18 @@ from nexus_ai_agent.creative.studio.models import (
 )
 from nexus_ai_agent.creative.studio.references import ReferenceInput
 
+#: Wave 5 — engine name -> the ``OperationContext`` attribute that carries it.
+#: Declared here (and nowhere else) so the bus and the capability layer cannot
+#: disagree about where a port lives; a new engine registers one row.
+ENGINE_PORT_ATTRIBUTES: dict[str, str] = {
+    "omega": "audio_engine",
+    "veritas": "veritas_engine",
+    "chronos": "chronos_engine",
+    "atlas": "atlas_engine",
+    "morpheus": "morpheus_engine",
+    "hyperion": "hyperion_engine",
+}
+
 
 @dataclass(frozen=True)
 class OperationOutcome:
@@ -66,19 +78,34 @@ class OperationOutcome:
 class OperationContext:
     """What a handler sees: the command, its validated input, and the history.
 
-    ``audio_engine`` is the composition-root-supplied execution seam
-    (:class:`nexus_ai_agent.creative.studio.audio_engine.AudioEnginePort`).
-    It is typed ``Any`` on purpose: the studio core must not import any pack,
+    ``audio_engine`` / ``portrait_kernel`` / ``scene_kernel`` and the five
+    ``*_engine`` ports are the composition-root-supplied execution seams
+    (:class:`nexus_ai_agent.creative.studio.audio_engine.AudioEnginePort` and the
+    ``context.portrait_kernel`` / ``context.scene_kernel`` kernel contracts).
+    They are typed ``Any`` on purpose: the studio core must not import any pack,
     engine or adapter module (a fitness test pins that), so the *shape* of this
-    seam is declared by the pack that uses it and enforced by
-    :mod:`nexus_ai_agent.creative.audio_engine`.  A handler that needs an engine
-    and finds ``None`` must refuse loudly; it may never simulate the result.
+    seam is declared by the pack that uses it and enforced by the native
+    implementations (:mod:`nexus_ai_agent.creative.audio_engine` and
+    ``creative.composition.{portrait_ops,scene_ops}``).  A handler that needs an
+    engine/kernel and finds ``None`` must refuse loudly; it may never simulate
+    the result.
     """
 
     command: TypedCommand
     input_data: dict[str, Any]
     history: tuple[EditTransaction, ...]
     audio_engine: Any = None
+    portrait_kernel: Any = None
+    scene_kernel: Any = None
+    #: The five NAGAR creative engines, injected by the composition root
+    #: (Wave 5). ``None`` means "not composed in this deployment": the handler
+    #: for that engine's capability answers with a *typed refusal* — it never
+    #: simulates a verification it did not run.
+    veritas_engine: Any = None
+    chronos_engine: Any = None
+    atlas_engine: Any = None
+    morpheus_engine: Any = None
+    hyperion_engine: Any = None
 
 
 OperationHandler = Callable[[Project, OperationContext], OperationOutcome]
@@ -118,6 +145,11 @@ class OperationSpec:
     #: operations that do not advertise ``preview``; registration refuses both
     #: an undeclared preview advertisement and an orphaned declaration.
     preview_semantics: PreviewSemantics | None = None
+    #: EXPERIMENTAL capability that is *not* pack-backed. The pack gate cannot
+    #: speak for it (it declares no ``required_packs``), so the bus holds it to
+    #: the same composition-root opt-in explicitly. The flag is a property of the
+    #: registered capability, never of a command, a queue row or a request.
+    requires_opt_in: bool = False
 
     @property
     def effective_permissions(self) -> tuple[str, ...]:
@@ -177,6 +209,9 @@ class CapabilityDescription(BaseModel):
     required_permissions: tuple[str, ...]
     required_packs: tuple[str, ...]
     pack_provider: str
+    #: The capability is EXPERIMENTAL without being pack-backed, so the bus holds
+    #: it to the composition-root opt-in directly (see ``OperationSpec``).
+    requires_opt_in: bool = False
 
     def snapshot(self) -> CapabilitySnapshot:
         return CapabilitySnapshot(
@@ -290,6 +325,7 @@ class CapabilityRegistry:
             required_permissions=spec.effective_permissions,
             required_packs=spec.required_packs,
             pack_provider=spec.required_packs[0] if spec.required_packs else "nagar.core",
+            requires_opt_in=spec.requires_opt_in,
         )
 
     def check_capability(self, command: TypedCommand) -> CapabilityDescription:

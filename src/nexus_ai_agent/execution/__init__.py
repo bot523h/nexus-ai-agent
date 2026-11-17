@@ -36,6 +36,9 @@ from nexus_ai_agent.execution.contract import (
 )
 from nexus_ai_agent.execution.staging import (
     AttemptStaging,
+    QuarantineDecision,
+    QuarantineRetention,
+    QuarantineRetentionPolicy,
     StagingBoundaryError,
 )
 
@@ -51,6 +54,9 @@ __all__ = [
     "ExecutionResult",
     "FailureDisposition",
     "ObservationState",
+    "QuarantineDecision",
+    "QuarantineRetention",
+    "QuarantineRetentionPolicy",
     "RetryPolicy",
     "StagingBoundaryError",
     "disposition_from_failure_class",

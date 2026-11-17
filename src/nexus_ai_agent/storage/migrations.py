@@ -37,7 +37,7 @@ from alembic.config import Config as AlembicConfig
 from nexus_ai_agent.storage.db import (
     create_all_tables,
     decide_sqlite_bootstrap,
-    resolve_database_url,
+    enforce_postgres_policy,
     resolve_migration_url,
 )
 
@@ -171,7 +171,7 @@ def run_migrations() -> None:
     dying inside ``op.create_table`` with a bare ``DuplicateTableError``.
     """
     with migration_lock():
-        if resolve_database_url() is None:
+        if enforce_postgres_policy() is None:
             from nexus_ai_agent.config.settings import get_settings
 
             db_path = str(Path(get_settings().db_path).expanduser())
@@ -200,7 +200,7 @@ def ensure_startup_schema() -> dict[str, Any]:
     SQLite adoption opens its own private event loop; do not call it from
     inside a running loop.
     """
-    if resolve_database_url() is not None:
+    if enforce_postgres_policy() is not None:
         return {"backend": "postgresql", "source": "deferred"}
 
     from nexus_ai_agent.config.settings import get_settings

@@ -279,6 +279,63 @@ class PreviewManifest(BaseModel):
         return digest_of(self.model_dump(mode="json"))
 
 
+# ---------------------------------------------------------------------------
+# Shadow preview (additive — Spec §2.3)
+# ---------------------------------------------------------------------------
+
+
+SHADOW_PREVIEW_SCHEMA_ID: Literal["nexus.ibpc.shadow_preview.v1"] = "nexus.ibpc.shadow_preview.v1"
+
+
+class ShadowKeyframe(BaseModel):
+    """One JPEG keyframe extracted from the source at ``timestamp_us``.
+
+    ``jpeg_b64`` is ``base64.b64encode(jpeg_bytes)`` of the *actual* bytes
+    ffmpeg emitted; ``frame_digest`` is ``sha256`` of those same bytes, so the
+    keyframe is self-verifying: decode the base64, hash it, compare.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    timestamp_us: int = Field(ge=0)
+    jpeg_b64: str
+    frame_digest: str = Field(pattern=_HEX64)
+
+
+class ShadowPreviewManifest(BaseModel):
+    """Visual preview: a sparse keyframe strip from the affected scope only.
+
+    ``composite_digest`` is the digest the approval binds to (not
+    ``plan_digest``): it is computed over the *sorted* frame digests, so it is
+    order-independent within the scope and changes the moment any pixel of any
+    keyframe changes.  ``shadow_digest`` is the digest of the *whole* manifest
+    (plan + scope + timing + identity + composite) and is a different concept.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_id: Literal["nexus.ibpc.shadow_preview.v1"] = SHADOW_PREVIEW_SCHEMA_ID
+    shadow_id: str = Field(default_factory=lambda: _new_id("shad"))
+    plan_digest: str = Field(pattern=_HEX64)
+    scope_digest: str = Field(pattern=_HEX64)
+    source_duration_us: int = Field(ge=0)
+    scope_start_us: int = Field(ge=0)
+    scope_end_us: int = Field(gt=0)
+    keyframes: tuple[ShadowKeyframe, ...]
+    composite_digest: str = Field(pattern=_HEX64)
+
+    @property
+    def shadow_digest(self) -> str:
+        """Digest of the entire manifest (canonical JSON of all fields).
+
+        Includes ``shadow_id`` (so it is instance-specific) and — unlike
+        ``composite_digest`` — also covers plan, scope and timing.  The two
+        digests are deliberately different concepts: ``composite_digest`` is
+        the content-stable one the approval binds.
+        """
+        return digest_of(self.model_dump(mode="json"))
+
+
 class Readback(BaseModel):
     """The structured readback shown to the user before approval.
 
@@ -514,6 +571,7 @@ __all__ = [
     "PLAN_SCHEMA_ID",
     "PREVIEW_SCHEMA_ID",
     "REPORT_SCHEMA_ID",
+    "SHADOW_PREVIEW_SCHEMA_ID",
     "ApprovalBinding",
     "ApprovalState",
     "CapabilityIdentity",
@@ -526,6 +584,8 @@ __all__ = [
     "PrivacyMode",
     "PreviewManifest",
     "Readback",
+    "ShadowKeyframe",
+    "ShadowPreviewManifest",
     "TypedCreativeAST",
     "VerifierReport",
     "VideoTimeRange",

@@ -100,6 +100,29 @@ EXPERIMENTAL_OPT_IN_OPERATIONS: frozenset[str] = frozenset(
     }
 )
 
+#: Operations that are answered by an engine *port* rather than by an engine
+#: instance owned by this module. Composing the port is the composition root's
+#: job; an operation whose engine cannot be built is refused by the capability
+#: layer with EngineNotComposedError, never simulated here.
+ENGINE_PORT_OPERATIONS: dict[str, str] = {
+    "audio.omega_verify_media": "omega",
+    "cinema.veritas_verify_media": "veritas",
+    "cinema.chronos_verify_media": "chronos",
+    "cinema.atlas_verify_media": "atlas",
+    "cinema.morpheus_verify_media": "morpheus",
+    "cinema.hyperion_verify_media": "hyperion",
+}
+
+#: The engine-verification capabilities, as an opt-in set of their own.
+#:
+#: They are deliberately NOT merged into ``EXPERIMENTAL_OPT_IN_OPERATIONS``:
+#: that set is pinned to *exactly* the surface operations whose packs are
+#: EXPERIMENTAL (least privilege, no gap — see
+#: ``tests/unit/test_creative_render_jobs.py``). These are a different axis:
+#: read-only engine verifications that the bus may run, but only when the
+#: composition root opted in. Union of the two is what the bus is handed.
+ENGINE_VERIFICATION_OPERATIONS: frozenset[str] = frozenset(ENGINE_PORT_OPERATIONS)
+
 #: Typed failure codes surfaced to users via ``creative.failed.<code>``.
 ERROR_CODES: frozenset[str] = frozenset(
     {
@@ -517,6 +540,22 @@ AUDIO_ENGINE_OPERATIONS = frozenset(
 )
 
 
+def _engine_ports_for(operation: str | None) -> dict[str, Any]:
+    """Compose the engine ports an operation needs (Wave 5).
+
+    Only the port for the operation's own engine is built: a verification
+    command must not drag five engines (and their native dependencies) into a
+    worker just because they exist. An engine that cannot be composed is simply
+    absent, and the capability layer answers with a typed refusal.
+    """
+    engine = ENGINE_PORT_OPERATIONS.get(operation or "")
+    if engine is None:
+        return {}
+    from nexus_ai_agent.creative.engine_ports import build_engine_ports
+
+    return build_engine_ports([engine])
+
+
 def _audio_engine_for(operation: str | None) -> Any:  # noqa: ANN401
     """Compose the audio engine for an engine-backed operation (else ``None``).
 
@@ -539,6 +578,7 @@ def build_job_bus(
     operation: str | None = None,
     authorizer: Any = None,  # noqa: ANN401
     audio_engine: Any = None,  # noqa: ANN401
+    engine_ports: dict[str, Any] | None = None,
 ) -> Any:  # noqa: ANN401
     """The canonical, server-policy bus factory for job-side callers.
 
@@ -561,16 +601,34 @@ def build_job_bus(
     *only* production caller (:func:`_dispatch`) passes
     :func:`_audio_engine_for`, i.e. a real engine for the operations that need
     one and ``None`` otherwise.
+
+    ``engine_ports`` is composed *here* when the caller does not supply it.
+    A bus with no port for the operation's engine can only answer
+    ``EngineNotComposedError`` — the capability exists, the handler runs, and
+    every Studio/queue invocation of ``cinema.*_verify_media`` is refused for a
+    reason that has nothing to with the artifact.  Leaving that to each caller
+    means the one that forgets (a new surface, a CLI, a test harness) turns a
+    verification into a false negative, so the root supplies the real adapter
+    for the operation being run and an explicit mapping still wins (tests need
+    doubles, and a caller may deliberately withhold an engine).
     """
     from nexus_ai_agent.creative.packs.runtime import build_runtime_registry
     from nexus_ai_agent.creative.studio.bus import CommandBus
 
+    if engine_ports is None:
+        engine_ports = _engine_ports_for(operation)
+
     return CommandBus(
         state=project,
         registry=build_runtime_registry(),
-        allow_experimental=operation in EXPERIMENTAL_OPT_IN_OPERATIONS,
+        # Read at call time on purpose: the two sets are module-level policy, and
+        # a test (or an operator tool) must be able to withdraw the opt-in by
+        # rebinding them without rebuilding the module.
+        allow_experimental=operation
+        in (EXPERIMENTAL_OPT_IN_OPERATIONS | ENGINE_VERIFICATION_OPERATIONS),
         authorizer=authorizer,
         audio_engine=audio_engine,
+        engine_ports=engine_ports,
     )
 
 
@@ -697,6 +755,10 @@ def _dispatch(
             ),
         )
 
+    # The bus root composes the engine port for ``operation`` itself (see
+    # ``build_job_bus``): passing it here as well would be the same value twice
+    # and would leave the default path — the one every other caller takes —
+    # untested in production.
     bus = build_job_bus(
         project,
         operation=operation,
@@ -1240,7 +1302,9 @@ async def _bind_published_artifact(
     return result
 
 
-async def creative_render_binding_confirm(payload: dict[str, Any], result: dict[str, Any]) -> None:
+async def creative_render_binding_confirm(
+    payload: dict[str, Any], result: dict[str, Any], *, blob_store_root: Path | None = None
+) -> None:
     """Queue confirm hook: durably commit the artifact→revision binding.
 
     Runs after the queue independently verified and atomically published the
@@ -1275,18 +1339,77 @@ async def creative_render_binding_confirm(payload: dict[str, Any], result: dict[
             "artifact_binding_failed",
             "published artifact bytes do not match the measured binding digest",
         )
-    store = SqlArtifactBindingStore()
+    from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
+
+    configured_root = blob_store_root
+    if configured_root is None:
+        context_root = result.get("_blob_store_root")
+        if isinstance(context_root, str) and context_root:
+            configured_root = Path(context_root)
+    blob_store = (
+        LocalContentAddressedBlobStore(configured_root) if configured_root is not None else None
+    )
+    store = SqlArtifactBindingStore(blob_store=blob_store)
     try:
-        await store.bind(
-            project_id=str(intent["project_id"]),
-            revision_id=str(intent["revision_id"]),
-            artifact_id=measured,
-            job_id=str(result.get("_queue_job_id") or ""),
-            artifact_kind=str(intent.get("artifact_kind") or "binary"),
-            size_bytes=int(intent.get("size_bytes") or 0),
-            artifact_version_id=intent.get("artifact_version_id") or None,
-            attempt=int(result.get("_queue_attempt") or 0),
-        )
+        project_id = str(intent["project_id"])
+        revision_id = str(intent["revision_id"])
+        job_id = str(result.get("_queue_job_id") or "")
+        fencing_token = int(result.get("_queue_attempt") or 0)
+        published_size = Path(raw_path).stat().st_size
+        passport_digest = result.get("artifact_passport_digest")
+        fence_check = result.get("_queue_fence_check")
+        if isinstance(passport_digest, str) and callable(fence_check):
+            # Verified lineage (Wave 4): the published bytes become a
+            # content-addressed AssetVersion in the blob store, and the
+            # ProjectArtifactBinding advances monotonically under the attempt
+            # fence. The verifier evidence is folded into one digest so the
+            # registration receipt is re-derivable from durable facts only.
+            import mimetypes
+
+            verifier_facts = result.get("artifact_verification")
+            if verifier_facts is None:
+                raise CreativeRenderError(
+                    "artifact_binding_failed", "verified publication has no verifier evidence"
+                )
+            verifier_digest = (
+                "sha256:"
+                + hashlib.sha256(
+                    json.dumps(verifier_facts, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+            )
+            media_type = mimetypes.guess_type(raw_path)[0] or "application/octet-stream"
+            registration = await store.register_verified_asset_version(
+                project_id=project_id,
+                revision_id=revision_id,
+                job_id=job_id,
+                attempt_id=str(result.get("_queue_attempt_id") or f"{job_id}:{fencing_token}"),
+                fencing_token=fencing_token,
+                content_sha256=measured,
+                size_bytes=published_size,
+                media_type=media_type,
+                storage_uri=raw_path,
+                verifier_digest=verifier_digest,
+                passport_id=str(result.get("artifact_passport_id") or ""),
+                passport_digest=passport_digest,
+                fence_check=fence_check,
+            )
+            result["asset_version_id"] = registration.asset_version_id
+            intent["artifact_version_id"] = registration.asset_version_id
+            intent["derived_receipt_ref"] = registration.binding.derived_receipt_ref
+        else:
+            # Compatibility for payload schemas that carry no persisted
+            # ArtifactPassport: those keep the established revision binding and
+            # are never presented as first-class AssetVersion lineage.
+            await store.bind(
+                project_id=project_id,
+                revision_id=revision_id,
+                artifact_id=measured,
+                job_id=job_id,
+                artifact_kind=str(intent.get("artifact_kind") or "binary"),
+                size_bytes=int(intent.get("size_bytes") or 0),
+                artifact_version_id=intent.get("artifact_version_id") or None,
+                attempt=fencing_token,
+            )
     except Exception as exc:  # noqa: BLE001 - every binding failure must be typed
         raise CreativeRenderError(
             "artifact_binding_failed", f"{type(exc).__name__}: {exc}"
@@ -1518,24 +1641,83 @@ def _publication_layout(staging: AttemptStaging, staged_name: str) -> tuple[Path
     )
 
 
-def _write_sidecar(sidecar: Path, *, job_id: str, attempt: str | None) -> None:
+def _write_sidecar(
+    sidecar: Path, *, job_id: str, attempt: str | None, content_digest: str | None = None
+) -> None:
     """Atomically record who owns this destination — **before** mutating it.
 
     Ownership evidence is written first so that a crash between "backup
     created" and "bytes published" leaves a destination whose owner is still
     provable.  A torn sidecar would be indistinguishable from a foreign one, so
     the write goes through a temp file and ``os.replace``.
+
+    ``content_digest`` is filled in by a second, equally atomic write *after* the
+    publish step (see :func:`_refresh_sidecar_digest`): before the bytes exist
+    there is nothing to hash, and a digest predicted rather than measured would be
+    exactly the kind of fake evidence that lets a reconciler bind the wrong file.
+    A crash between the publish and that refresh leaves a sidecar with no digest,
+    which the reconciler treats as unattributable (``unrepairable_orphan``)
+    instead of guessing.
     """
-    payload = json.dumps(
-        {
-            "schema": _OWNERSHIP_SIDECAR_SCHEMA,
-            "job_id": job_id,
-            "attempt": attempt,
-        }
-    )
+    document: dict[str, object] = {
+        "schema": _OWNERSHIP_SIDECAR_SCHEMA,
+        "job_id": job_id,
+        "attempt": attempt,
+    }
+    if content_digest is not None:
+        document["content_digest"] = content_digest
+    payload = json.dumps(document)
     tmp = sidecar.with_name(sidecar.name + f".tmp.{os.getpid()}")
     tmp.write_text(payload + "\n", encoding="utf-8")
     os.replace(tmp, sidecar)
+
+
+def _read_claim(sidecar: Path) -> dict[str, object] | None:
+    """The claim document, requiring only what the *writer* promises.
+
+    Deliberately weaker than :func:`_read_sidecar`: that one decides whether a
+    sidecar grants retract authority and therefore rejects an attempt-less
+    document, while a legitimately attempt-less publication (a job published
+    without queue identity) still owns the claim it wrote.  The digest refresh
+    checks identity itself; see :func:`_refresh_sidecar_digest`.
+    """
+    try:
+        document = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    if document.get("schema") != _OWNERSHIP_SIDECAR_SCHEMA:
+        return None
+    if not isinstance(document.get("job_id"), str) or not document["job_id"]:
+        return None
+    return document
+
+
+def _refresh_sidecar_digest(
+    sidecar: Path, *, job_id: str, attempt: str | None, content_digest: str
+) -> None:
+    """Add the **measured** digest to an ownership sidecar that already exists.
+
+    A refresh, never a claim: the claim is written before the destination is
+    touched, and this only extends evidence that is already there.  It therefore
+    refuses to create the file and refuses to touch one whose identity does not
+    match — a digest written onto a claim that was never made (or made by
+    another attempt) is precisely the fabricated evidence this design exists to
+    prevent, and it would also mask a broken ordering, which is what the M6
+    mutation probe checks.
+    """
+    document = _read_claim(sidecar)
+    if document is None:
+        raise RuntimeError(
+            "publish: no readable ownership sidecar after the publish — refusing to record "
+            "a digest on a claim that was never made"
+        )
+    if document.get("job_id") != job_id or _parse_attempt(
+        document.get("attempt")
+    ) != _parse_attempt(attempt):
+        raise RuntimeError("publish: ownership sidecar does not belong to this job and attempt")
+    _write_sidecar(sidecar, job_id=job_id, attempt=attempt, content_digest=content_digest)
 
 
 def _parse_attempt(value: object) -> int | None:
@@ -1657,6 +1839,19 @@ def creative_render_publication_callback(
 
     # 4) Atomic publish: staging → final destination (inside the job namespace).
     resolved = staging.publish(staged_path, f"{staging.job_id}/{staged_name}")
+    # 5) Record what was actually published.  A crash before this line leaves an
+    # orphan the reconciler refuses to bind (no digest ⇒ no attribution), which
+    # is the safe direction; a digest written from anything but the bytes on
+    # disk would not be.
+    from nexus_ai_agent.creative.project_state.store import content_address_of_file
+
+    published_bytes = published_path if published_path.is_file() else resolved
+    _refresh_sidecar_digest(
+        sidecar_path,
+        job_id=staging.job_id,
+        attempt=attempt_component,
+        content_digest=content_address_of_file(published_bytes),
+    )
 
     return {
         "artifact_path": str(resolved),
@@ -1800,7 +1995,9 @@ def build_creative_render_publication(artifact_root: Path) -> ArtifactPublicatio
         creative_render_finalize_callback(payload, result, artifact_root)
 
     async def _confirm(payload: dict[str, object], result: dict[str, object]) -> None:
-        await creative_render_binding_confirm(payload, result)
+        await creative_render_binding_confirm(
+            payload, result, blob_store_root=artifact_root / "asset-library"
+        )
 
     async def _retract_confirmation(payload: dict[str, object], result: dict[str, object]) -> None:
         await creative_render_binding_retract(payload, result)

@@ -20,5 +20,13 @@ services:
         value: "{{ .Env.NEXUS_WEBHOOK_URL }}"
       - name: NEXUS_WEBHOOK_SECRET
         value: "{{ .Env.NEXUS_WEBHOOK_SECRET }}"
+      # P0 persistence: production MUST use Neon/PostgreSQL. NEXUS_REQUIRE_POSTGRES
+      # makes the runtime refuse the SQLite fallback, so a missing
+      # NEXUS_DATABASE_URL fails /readyz (and the deploy gate) instead of
+      # silently serving from an ephemeral local file.
+      - name: NEXUS_DATABASE_URL
+        value: "{{ .Env.NEXUS_DATABASE_URL }}"
+      - name: NEXUS_REQUIRE_POSTGRES
+        value: "true"
     health_check:
       path: /readyz

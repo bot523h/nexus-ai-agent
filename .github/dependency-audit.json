@@ -1,5 +1,5 @@
 {
-  "_comment": "Reviewed acceptances for `scripts/dependency_audit.py`. Every key is a pip-audit advisory id; every entry names the package and an acceptance `reason`. `transitive-cap` means an installed dependency caps the package below the fixed version (`capped_by` names it) — the gate re-derives that cap from the installed environment and FAILS if it no longer holds. `no-fix-released` means no released version of the package fixes the advisory yet — the gate re-checks the same way. Nothing here is a permanent ignore: a relaxed upstream cap or a published fix turns the entry STALE and reds the gate. Evidence: docs/audits/NEXUS_OMNI_SECURITY_PRIVACY_AUDIT_2026-11-03.md (dependency section).",
+  "_comment": "Reviewed acceptances for `scripts/dependency_audit.py`. Every key is a pip-audit advisory id; every entry names the package and an acceptance `reason`. `transitive-cap` means an installed dependency caps the package below the fixed version (`capped_by` names it) \u2014 the gate re-derives that cap from the installed environment and FAILS if it no longer holds. `no-fix-released` means no released version of the package fixes the advisory yet; `fix-requires-newer-python` means a fix is published but every fixed release declares a Requires-Python this interpreter does not satisfy (the entry also requires the project to declare the floor for the interpreters that can install it, and expires when either changes) \u2014 the gate re-checks the same way. Nothing here is a permanent ignore: a relaxed upstream cap or a published fix turns the entry STALE and reds the gate. Evidence: docs/audits/NEXUS_OMNI_SECURITY_PRIVACY_AUDIT_2026-11-03.md (dependency section).",
   "accepted": {
     "PYSEC-2026-311": {
       "package": "chromadb",
@@ -30,20 +30,152 @@
       "package": "filelock",
       "reason": "transitive-cap",
       "fixed": "4.2.1",
-      "capped_by": ["litellm"],
-      "note": "ReadWriteLock SQLite lock-db symlink overwrite. Fixed in 4.2.1, but litellm (declared `litellm>=1.74,<2`) requires `filelock<4.0,>=3.16.1` — still true on litellm 1.108.0 — so 4.2.1 is unresolvable. Local-privilege attack, not remote. Re-check when litellm relaxes the cap."
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "ReadWriteLock SQLite lock-db symlink overwrite. Fixed in 4.2.1, but litellm (declared `litellm>=1.74,<2`) requires `filelock<4.0,>=3.16.1` \u2014 still true on litellm 1.108.0 \u2014 so 4.2.1 is unresolvable. Local-privilege attack, not remote. Re-check when litellm relaxes the cap."
     },
-    "CVE-2026-112913": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap as CVE-2026-112940."},
-    "CVE-2026-112907": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
-    "CVE-2026-112938": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
-    "CVE-2026-112936": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.0.9", "capped_by": ["litellm"], "note": "Fixed 4.0.9, still above the litellm <4.0 cap."},
-    "CVE-2026-112910": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
-    "CVE-2026-112909": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
-    "CVE-2026-112911": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
-    "CVE-2026-112939": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
-    "CVE-2026-112915": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
-    "CVE-2026-112935": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
-    "CVE-2026-112912": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."},
-    "CVE-2026-112908": {"package": "filelock", "reason": "transitive-cap", "fixed": "4.2.1", "capped_by": ["litellm"], "note": "Same litellm filelock<4.0 cap."}
+    "CVE-2026-112913": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap as CVE-2026-112940."
+    },
+    "CVE-2026-112907": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap."
+    },
+    "CVE-2026-112938": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap."
+    },
+    "CVE-2026-112936": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.0.9",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Fixed 4.0.9, still above the litellm <4.0 cap."
+    },
+    "CVE-2026-112910": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap."
+    },
+    "CVE-2026-112909": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap."
+    },
+    "CVE-2026-112911": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap."
+    },
+    "CVE-2026-112939": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap."
+    },
+    "CVE-2026-112915": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap."
+    },
+    "CVE-2026-112935": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap."
+    },
+    "CVE-2026-112912": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap."
+    },
+    "CVE-2026-112908": {
+      "package": "filelock",
+      "reason": "transitive-cap",
+      "fixed": "4.2.1",
+      "capped_by": [
+        "litellm"
+      ],
+      "note": "Same litellm filelock<4.0 cap."
+    },
+    "CVE-2026-126190": {
+      "package": "soupsieve",
+      "reason": "fix-requires-newer-python",
+      "fixed": "4.1.1",
+      "requires_python": ">=3.11.5",
+      "declared_floor": "soupsieve>=4.1.1",
+      "note": "Security floor for beautifulsoup4's CSS-selector engine. Fixed releases exist (3.0.2, 3.0.3, 3.0.4, 4.0, 4.0.1, 4.1, 4.1.1) but every one of them declares `Requires-Python >=3.11.5`, and this environment runs CPython 3.11.2 \u2014 pip reports the fixed releases as \"requires a different python version\" and resolves 2.10. The floor is declared in pyproject.toml as `soupsieve>=4.1.1; python_full_version >= '3.11.5'`, so every interpreter that can take the fix does (CI runs 3.11/3.12 and resolves 4.1.1, where no advisory is reported at all). `python_full_version` is deliberate: PEP 508 defines `python_version` as major.minor only, so `python_version >= '3.11.5'` compared \"3.11\" with \"3.11.5\" and was false on every 3.11 interpreter \u2014 a floor that never applied. The gate now parses this line and evaluates the marker at the lowest interpreter that can install the fix, so that class of typo fails it. The acceptance expires by itself: the moment a fix is installable on this interpreter \u2014 or the floor is dropped or its marker stops applying where the fix can be installed \u2014 the gate reports the entry STALE and fails."
+    },
+    "CVE-2026-126191": {
+      "package": "soupsieve",
+      "reason": "fix-requires-newer-python",
+      "fixed": "4.1.1",
+      "requires_python": ">=3.11.5",
+      "declared_floor": "soupsieve>=4.1.1",
+      "note": "Security floor for beautifulsoup4's CSS-selector engine. Fixed releases exist (3.0.2, 3.0.3, 3.0.4, 4.0, 4.0.1, 4.1, 4.1.1) but every one of them declares `Requires-Python >=3.11.5`, and this environment runs CPython 3.11.2 \u2014 pip reports the fixed releases as \"requires a different python version\" and resolves 2.10. The floor is declared in pyproject.toml as `soupsieve>=4.1.1; python_full_version >= '3.11.5'`, so every interpreter that can take the fix does (CI runs 3.11/3.12 and resolves 4.1.1, where no advisory is reported at all). `python_full_version` is deliberate: PEP 508 defines `python_version` as major.minor only, so `python_version >= '3.11.5'` compared \"3.11\" with \"3.11.5\" and was false on every 3.11 interpreter \u2014 a floor that never applied. The gate now parses this line and evaluates the marker at the lowest interpreter that can install the fix, so that class of typo fails it. The acceptance expires by itself: the moment a fix is installable on this interpreter \u2014 or the floor is dropped or its marker stops applying where the fix can be installed \u2014 the gate reports the entry STALE and fails."
+    },
+    "CVE-2026-126193": {
+      "package": "soupsieve",
+      "reason": "fix-requires-newer-python",
+      "fixed": "4.1.1",
+      "requires_python": ">=3.11.5",
+      "declared_floor": "soupsieve>=4.1.1",
+      "note": "Security floor for beautifulsoup4's CSS-selector engine. Fixed releases exist (3.0.2, 3.0.3, 3.0.4, 4.0, 4.0.1, 4.1, 4.1.1) but every one of them declares `Requires-Python >=3.11.5`, and this environment runs CPython 3.11.2 \u2014 pip reports the fixed releases as \"requires a different python version\" and resolves 2.10. The floor is declared in pyproject.toml as `soupsieve>=4.1.1; python_full_version >= '3.11.5'`, so every interpreter that can take the fix does (CI runs 3.11/3.12 and resolves 4.1.1, where no advisory is reported at all). `python_full_version` is deliberate: PEP 508 defines `python_version` as major.minor only, so `python_version >= '3.11.5'` compared \"3.11\" with \"3.11.5\" and was false on every 3.11 interpreter \u2014 a floor that never applied. The gate now parses this line and evaluates the marker at the lowest interpreter that can install the fix, so that class of typo fails it. The acceptance expires by itself: the moment a fix is installable on this interpreter \u2014 or the floor is dropped or its marker stops applying where the fix can be installed \u2014 the gate reports the entry STALE and fails."
+    }
+  },
+  "package_floors": {
+    "soupsieve": {
+      "reason": "fix-requires-newer-python",
+      "fixed": "4.1.1",
+      "requires_python": ">=3.11.5",
+      "declared_floor": "soupsieve>=4.1.1",
+      "covers": "any advisory for this package whose every reported fix is <= 4.1.1",
+      "note": "One floor, not one waiver per CVE. The three reviewed entries above name CVE-2026-126190 / -126191 / -126193 because those are the advisories pip-audit reports against soupsieve 2.10 in this environment. A fourth advisory for the same package \u2014 CVE-2026-126192 is the one other ID in that series, and it is not reported against 2.10 here \u2014 would block the gate on an interpreter that cannot install any fix at all, for no security reason: a 4.1.1 install resolves it exactly like the other three. This floor therefore covers any advisory whose *every* reported fix is at or below 4.1.1, and refuses anything fixed in a later release (the floor would not reach it) or reported with no fix at all. It is subject to the same four self-expiry checks as every other `fix-requires-newer-python` acceptance."
+    }
   }
 }

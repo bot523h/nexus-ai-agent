@@ -50,11 +50,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import os
 import re
 import sqlite3
 import time
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +65,8 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.staticfiles import StaticFiles
 
+from nexus_ai_agent.api import studio_session
+from nexus_ai_agent.api.studio_web import PUBLIC_SHELL_PATHS
 from nexus_ai_agent.config import settings as settings_module
 from nexus_ai_agent.storage import db as db_module
 
@@ -75,11 +78,28 @@ from nexus_ai_agent.storage import db as db_module
 #: database; neither carries user data.  Nothing else may be public — a new
 #: operation either joins this list (with a reason) or it inherits the gate
 #: of the surface that owns it.
+#:
+#: The Studio web app is public for the same reason, and the shell routes are
+#: taken from ``studio_web.PUBLIC_SHELL_PATHS`` rather than restated here: the
+#: module's own asset allow-list *is* the route table (one literal route per
+#: file, no directory serving, no request-derived path), so a copy of those
+#: names in this file would be a second source of truth that drifts the moment
+#: an asset is added.  The bytes served are the same for every caller and
+#: contain no user data — the app authenticates itself through the session
+#: lane below, not through its own delivery.
+#:
+#: ``GET /studio/session`` is a *status probe*, not a state read: it answers
+#: ``{"configured": …, "authenticated": …}`` and deliberately reports "no
+#: session" as a value instead of an error, so a browser can decide whether to
+#: render the login view.  It never discloses a token, an expiry of somebody
+#: else, or any project data.
 PUBLIC_OPERATIONS: frozenset[tuple[str, str]] = frozenset(
     {
         ("GET", "/"),
         ("GET", "/healthz"),
         ("GET", "/readyz"),
+        *(("GET", path) for path in PUBLIC_SHELL_PATHS),
+        ("GET", "/studio/session"),
     }
 )
 
@@ -142,15 +162,35 @@ class Surface:
     path_prefix: str = ""
     #: Exact paths owned by the surface.
     exact_paths: frozenset[str] = frozenset()
+    #: The methods this surface owns.  Empty means "every method", which is
+    #: right for a prefix that gates a whole router.  A path shared by
+    #: several lanes with *different* gates (``/studio/session`` answers a
+    #: public status probe on GET, exchanges a token on POST and clears the
+    #: cookie on DELETE) must say which methods it really owns, otherwise
+    #: one lane's expected status would be asserted against another's.
+    methods: frozenset[str] = frozenset()
     #: Status when the security configuration is absent.
     unconfigured_status: int = 503
     #: Status when the surface is configured but the credentials are wrong.
     unauthenticated_status: int = 401
     #: The configuration that arms the surface (documentation only).
     configuration: str = ""
+    #: A JSON body the probe has to send for this surface to reach its gate.
+    #: Almost every operation takes its credential from a header; the Studio
+    #: token exchange takes it from the request body, and a bodyless probe
+    #: would only ever meet FastAPI's validation layer (422), never the gate.
+    #: The body deliberately carries a *wrong* credential: the probe states
+    #: are all denial states, and no probe may ever authenticate.
+    probe_body: Mapping[str, str] | None = None
+    #: Headers the probe has to send for this surface to reach its gate (the
+    #: Studio session lane refuses a request that lacks its CSRF marker
+    #: *before* it looks at the credential).
+    probe_headers: Mapping[str, str] = field(default_factory=dict)
 
     def owns(self, operation: tuple[str, str]) -> bool:
-        _method, path = operation
+        method, path = operation
+        if self.methods and method.upper() not in self.methods:
+            return False
         if path in self.exact_paths:
             return True
         return bool(self.path_prefix) and path.startswith(self.path_prefix)
@@ -196,6 +236,38 @@ SURFACES: tuple[Surface, ...] = (
         unconfigured_status=403,
         unauthenticated_status=403,
         configuration="NEXUS_WEBHOOK_SECRET",
+    ),
+    Surface(
+        # The Studio login *is* a pre-authentication endpoint — a caller who
+        # already held a credential would not need it — so its contract is not
+        # "rejects an unauthenticated caller" but "exchanges a credential it
+        # has verified, and fails closed otherwise": 503 when the deployment
+        # has not configured a token at all, 401 when the presented token is
+        # not the configured one.  The probe therefore sends a wrong token in
+        # the request body (the token is the body here) plus the CSRF marker,
+        # which the lane demands before it compares anything.
+        name="studio-session-exchange",
+        exact_paths=frozenset({"/studio/session"}),
+        methods=frozenset({"POST"}),
+        unconfigured_status=503,
+        unauthenticated_status=401,
+        configuration="NEXUS_DASHBOARD_TOKEN",
+        probe_body={"token": "not-the-deployment-token"},
+        probe_headers={studio_session.CSRF_HEADER: studio_session.CSRF_VALUE},
+    ),
+    Surface(
+        # Logout has no credential to check: the session is stateless, so the
+        # only thing DELETE can destroy is the caller's own cookie.  What it
+        # *is* gated by is the CSRF marker that every state-changing session
+        # call must carry — and that gate fails closed (403) with or without
+        # a configured deployment token, which is exactly what makes a
+        # cross-site form post unable to log a user out.
+        name="studio-session-csrf",
+        exact_paths=frozenset({"/studio/session"}),
+        methods=frozenset({"DELETE"}),
+        unconfigured_status=403,
+        unauthenticated_status=403,
+        configuration="x-nagar-studio request marker",
     ),
 )
 
@@ -530,8 +602,16 @@ def _sweep(
     for operation in sorted(inventory.gated):
         method, path = operation
         url = _fill_path(path, _path_parameter_names(inventory.schema, path))
-        response = client.request(method, url, headers=dict(headers) if headers else None)
         surface = surface_of(operation)
+        request_headers = dict(headers) if headers else {}
+        if surface is not None:
+            request_headers.update(surface.probe_headers)
+        response = client.request(
+            method,
+            url,
+            headers=request_headers or None,
+            json=dict(surface.probe_body) if surface and surface.probe_body else None,
+        )
         if surface is None:
             deviations[operation] = (
                 f"{method} {path}: no security surface owns this operation "
@@ -570,14 +650,24 @@ def _multipart_upload(field: str, filename: str, payload: bytes) -> tuple[bytes,
     return body, f"multipart/form-data; boundary={boundary}"
 
 
-def _creative_job_ids(creative_dir: Path) -> list[str]:
-    """The job ids the legacy creative registry holds (empty when unused)."""
-    db_file = creative_dir / "creative_jobs.sqlite3"
-    if not db_file.exists():
+def _creative_job_ids(_creative_dir: Path, db_path: Path | None = None) -> list[str]:
+    """The job ids held by the canonical in-process queue (empty when unused).
+
+    Wave 1 unified the legacy creative registry into ``InProcessJobQueue``,
+    so the durable truth now lives in ``{NEXUS_DB_PATH}.jobs.sqlite3`` as
+    ``nexus_job_queue`` — the legacy ``creative_jobs.sqlite3`` no longer
+    exists and must not be consulted.
+    """
+    queue_file = (
+        Path(f"{db_path}.jobs.sqlite3")
+        if db_path is not None
+        else Path(f"{os.environ.get('NEXUS_DB_PATH', '')}.jobs.sqlite3")
+    )
+    if not queue_file.exists():
         return []
-    with sqlite3.connect(db_file) as connection:
+    with sqlite3.connect(queue_file) as connection:
         try:
-            rows = connection.execute("SELECT id FROM creative_jobs").fetchall()
+            rows = connection.execute("SELECT id FROM nexus_job_queue").fetchall()
         except sqlite3.OperationalError:
             return []
     return sorted(str(row[0]) for row in rows)
@@ -680,6 +770,7 @@ def api_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[ApiEnv]
 
     settings_module.get_settings.cache_clear()
     _reset_storage_caches()
+    studio_session.reset_login_throttle()
 
     app = api_app_module.app
     saved_state = {
@@ -713,6 +804,12 @@ def api_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[ApiEnv]
 
 def _arm_security(monkeypatch: pytest.MonkeyPatch) -> None:
     """Configure every security surface (the "configured" probe state)."""
+    # The failed-login throttle is *global* by design (it bounds online
+    # guessing against the one shared credential).  The probe matrix below
+    # deliberately fails a login in every state, so without a reset the
+    # three sweeps of this module would exhaust the budget between them and
+    # the last one would observe a 429 instead of the gate's answer.
+    studio_session.reset_login_throttle()
     monkeypatch.setenv("NEXUS_DASHBOARD_TOKEN", DASHBOARD_TOKEN)
     monkeypatch.setenv("NEXUS_API_HMAC_KEY", HMAC_KEY)
     monkeypatch.setenv("NEXUS_WEBHOOK_SECRET", WEBHOOK_SECRET)
@@ -845,6 +942,24 @@ def test_the_public_allowlist_is_reachable_without_any_credential(api_env: ApiEn
     # The public surface is exactly the allowlist plus those endpoints.
     public_paths = {path for _method, path in inventory.public}
     assert {"/", "/healthz", "/readyz"} <= public_paths
+
+    # "Public by design" must also mean *reachable*: an allowlist entry that
+    # answers a gate (or a 404) would hide a surface that stopped being public
+    # while the classification test stayed green.  ``/studio`` is the one
+    # entry allowed to redirect — it sends the browser to the trailing-slash
+    # form so the app's relative module URLs resolve — and the redirect is
+    # followed here, so what is asserted is the document behind it.
+    # ``/readyz`` is the one entry allowed to answer a non-200: it reports
+    # 503 until its dependencies are ready, which is exactly its job (this
+    # fixture runs without a prepared database).  Every other public
+    # operation must actually serve its content.
+    for method, path in sorted(inventory.public):
+        response = api_env.client.request(method, path)
+        expected = {200, 503} if path == "/readyz" else {200}
+        assert response.status_code in expected, (
+            f"public operation {method} {path} is not reachable anonymously: {response.status_code}"
+        )
+    assert {"GET /studio/", "GET /studio/app.js"} <= {f"{m} {p}" for m, p in inventory.public}
 
 
 # ── the negative matrix ─────────────────────────────────────────────────────
@@ -1089,7 +1204,7 @@ def test_a_rejected_creative_request_creates_no_job_and_persists_no_upload(
 
     registry = get_creative_registry()
     _run_async(registry.create_job("video_edit", {"project_id": AUTHORIZED_PROJECT}))
-    before = _creative_job_ids(api_env.creative_dir)
+    before = _creative_job_ids(api_env.creative_dir, api_env.db_path)
     assert before, "the creative registry is empty — the assertion below has no teeth"
 
     body, content_type = _multipart_upload("file", "probe.mp4", b"not-a-real-video")
@@ -1106,7 +1221,7 @@ def test_a_rejected_creative_request_creates_no_job_and_persists_no_upload(
     assert "invalid signature" in response.json()["detail"]
 
     # No new job row, and no upload file left behind.
-    assert _creative_job_ids(api_env.creative_dir) == before
+    assert _creative_job_ids(api_env.creative_dir, api_env.db_path) == before
     assert list(api_env.creative_dir.glob("creative-upload-*")) == []
 
 

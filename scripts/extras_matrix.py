@@ -106,7 +106,7 @@ class LegDefinition:
 LEG_DEFINITIONS: dict[str, LegDefinition] = {
     "pdf": LegDefinition(
         extra="pdf",
-        requirements=("pypdf>=5.1",),
+        requirements=("pypdf>=6.21.4",),
         import_modules=("pypdf",),
         focused_tests=(
             "tests/integration/test_in_process_job_queue.py::test_extract_pdf_text_reads_text_layer",

@@ -536,12 +536,12 @@ def _packs_registry() -> Any:
 
     Wave 1 kept this to the frozen five-operation catalog; Wave 2 composed it with
     the slideshow pack and Wave 4a with the caption pack — one call site at a time,
-    which is why five of the six builtin packs were reported as ``pending`` even
+    which is why five of the then-six builtin packs were reported as ``pending`` even
     though their operations shipped in this repository.
 
     Wave 5 removes that failure mode: the composition lives in exactly one module,
     :mod:`nexus_ai_agent.creative.packs.runtime`, and the CLI consumes it.  The
-    Wave-1 catalog plus all six builtin packs' operations is what makes every
+    Wave-1 catalog plus all eight builtin packs' operations is what makes every
     builtin manifest verify clean, and every builtin pack activatable.
 
     Scope note: this helper answers *"what does the runtime know?"* only.

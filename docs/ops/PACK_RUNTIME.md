@@ -19,7 +19,7 @@ operation by name alone"*.
 
 That rule is correct. The defect Wave 5 fixed was on the other side of it: the
 runtime registry used to be assembled **at each call site**, and only the
-slideshow and caption packs were composed. Five of the six packs that ship inside
+slideshow and caption packs were composed. Five of the then-six packs that ship inside
 this repository therefore had *pending* capabilities even though their pure
 operations were implemented and tested.
 
@@ -46,9 +46,9 @@ builtin packs exist in the runtime:
 | Symbol | Meaning |
 |---|---|
 | `PackComposition` | one pack: `directory`, `package_id`, registrar, summary |
-| `COMPOSITION` | the six builtin packs, in deterministic order (slideshow → caption → edit → motion → audio → delivery) |
+| `COMPOSITION` | the builtin packs, in deterministic order (slideshow → caption → edit → motion → audio → delivery → portrait → scene; portrait/scene added by the ATLAS integration) |
 | `COMPOSITION_BY_DIRECTORY` / `COMPOSITION_BY_PACKAGE_ID` | O(1) lookups used by the gate and the CLI |
-| `build_runtime_registry()` | Wave-1 catalog + every pack's operations (57 operations today) |
+| `build_runtime_registry()` | Wave-1 catalog + every pack's operations (82 operations today) |
 | `build_pack_registry()` | the same registry wrapped in a `PackRegistry` (what the CLI consumes) |
 | `build_pack_runtime()` | `PackRuntime`: composition + builtin registration + optional activation |
 | `PackRuntime.status()` | one `PackStatus` row per pack: capabilities, pending, active, signature, binaries |
@@ -91,9 +91,24 @@ from nexus_ai_agent.creative.packs.runtime import build_pack_runtime
 
 runtime = build_pack_runtime(activate=True)
 runtime.complete  # True: no pending capability anywhere
-[r.package_id for r in runtime.status()]  # six packs, composition order
-len(runtime.operation_ids())  # 57 = wave-1 (5) + pack operations (52)
+[r.package_id for r in runtime.status()]  # eight packs, composition order
+len(runtime.operation_ids())  # 82 = wave-1 (5) + pack operations (77)
 ```
+
+**Portrait/scene execution seams.** `nexus.portrait.refine` and
+`nexus.scene.imaging` ship as declarative packs: their registered handlers are
+fail-closed delegates (the audio-pack engine pattern). Executing a `portrait.*`
+operation requires an injected kernel on the command context —
+`context.portrait_kernel`, the `PortraitKernel` protocol from
+`creative.studio.portrait_kernel` — and `scene.*` the twin
+`context.scene_kernel`. The reference implementations are
+`creative.composition.portrait_ops.NativePortraitKernel` and
+`creative.composition.scene_ops.NativeSceneKernel`; compose them at the
+application edge. Without one injected, every delegate refuses loudly
+(`PORTRAIT_KERNEL_REQUIRED` / `SCENE_KERNEL_REQUIRED`) — rendering is never
+simulated. The `PORTRAIT_SPECS` / `SCENE_SPECS` tables in the packs are the
+single source of truth for the operation catalogue; the composition kernels
+import them, so the two zones cannot drift apart.
 
 ---
 

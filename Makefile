@@ -1,4 +1,4 @@
-.PHONY: setup lint types deps audit test migrate smoke run dev-bootstrap hooks version-check board-check mutations
+.PHONY: setup lint types deps audit test test-parity migrate smoke run dev-bootstrap hooks version-check board-check truth-check mutations
 
 setup:
 	pip install -e ".[dev]"
@@ -14,6 +14,15 @@ version-check:
 
 board-check:
 	python scripts/check_board_integrity.py
+
+# Operation-truth truth, checked locally BEFORE a push.  OPERATION_TRUTH.json is a
+# generated projection of the live sources (nagar.sources), so any commit that adds
+# a suite file naming a creative operation id, or edits a registered operation,
+# silently invalidates it — and until now nothing caught that until CI's `test` and
+# `python-parity` legs went red on an already-pushed SHA.  This is the same check CI
+# runs, run early: `--check` never writes, and it exits non-zero on drift.
+truth-check:
+	python -m nexus_ai_agent.nagar --check
 
 lint:
 	ruff check . && ruff format --check .
@@ -37,6 +46,14 @@ audit:
 
 test:
 	pytest -q -m "not slow"
+
+# The same selection as `make test`/CI, run in chunks that fit on a small disk:
+# pytest's temporary root is reclaimed between chunks, and a chunk that cannot
+# fit is reported instead of poisoning the ones after it.  Use this when
+# `make test` dies with "No space left on device" — that failure mode shows up
+# as hundreds of phantom red tests, not as one.
+test-parity:
+	python scripts/ci_parity.py
 
 # Adversarial proof for the capability-pack trust plane (ADR 0006) and the
 # remote-key ingress/cache boundary: every mutation must turn its suite red.

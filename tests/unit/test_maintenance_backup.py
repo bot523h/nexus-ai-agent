@@ -199,3 +199,82 @@ def test_postgres_dump_rejects_truncated_artifact(
     )
     with pytest.raises(RuntimeError):
         create_backup(settings=settings)
+
+
+def test_postgres_dump_accepts_pg17_restrict_wrapper(tmp_path: Path) -> None:
+    """PostgreSQL 17 wraps the dump in ``\\restrict``/``\\unrestrict`` lines.
+
+    The completion footer is therefore a *line* in the file, not its final
+    bytes — a real PG17 dump must still verify. (The old ``endswith()`` check
+    rejected every PG17 dump as "truncated".)
+    """
+    from nexus_ai_agent.maintenance.backup import _verify_postgres_dump
+
+    token = "AbCdEf0123456789"
+    dump = (
+        "--\n-- PostgreSQL database dump\n--\n\n"
+        f"\\restrict {token}\n\n"
+        "CREATE TABLE t (id int);\n"
+        "-- PostgreSQL database dump complete\n--\n\n"
+        f"\\unrestrict {token}\n"
+    )
+    artifact = tmp_path / "pg17.sql"
+    artifact.write_text(dump, encoding="utf-8")
+
+    assert _verify_postgres_dump(artifact) == {"engine": "postgres", "footer": "present"}
+
+
+def test_postgres_dump_without_footer_still_rejected(tmp_path: Path) -> None:
+    from nexus_ai_agent.maintenance.backup import _verify_postgres_dump
+
+    artifact = tmp_path / "truncated.sql"
+    artifact.write_text("--\n-- PostgreSQL database dump\n--\nCREATE TABLE t (id int);\n")
+    with pytest.raises(RuntimeError, match="last meaningful line is not the footer"):
+        _verify_postgres_dump(artifact)
+
+
+def test_postgres_dump_with_footer_in_data_is_still_rejected(tmp_path: Path) -> None:
+    """A truncated dump whose *data* contains the footer literal must fail.
+
+    A plain containment check is a false positive: a row value can legitimately
+    hold the footer text. Only the footer as the LAST meaningful line proves a
+    complete dump.
+    """
+    from nexus_ai_agent.maintenance.backup import _PG_DUMP_FOOTER, _verify_postgres_dump
+
+    artifact = tmp_path / "poisoned.sql"
+    artifact.write_text(
+        "-- PostgreSQL database dump\n"
+        "\\restrict abc\n"
+        "CREATE TABLE t(v text);\n"
+        f"INSERT INTO t VALUES ('{_PG_DUMP_FOOTER}');\n"
+        "-- truncated before the real completion footer\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="last meaningful line is not the footer"):
+        _verify_postgres_dump(artifact)
+
+
+def test_pg_dump_is_self_contained_for_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dump must re-apply over an existing schema: ``--clean --if-exists``."""
+    from nexus_ai_agent.maintenance import backup as backup_module
+
+    captured: dict[str, list[str]] = {}
+
+    class _Done:
+        returncode = 0
+        stderr = ""
+
+    def _fake_run(argv: list[str], **_kwargs: Any) -> _Done:
+        captured["argv"] = list(argv)
+        Path(argv[argv.index("--file") + 1]).write_text("-- dump\n", encoding="utf-8")
+        return _Done()
+
+    monkeypatch.setattr(backup_module.subprocess, "run", _fake_run)
+    monkeypatch.setattr(backup_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    backup_module._dump_postgres("postgresql://u:p@h/db", tmp_path / "out.sql")
+    assert "--clean" in captured["argv"]
+    assert "--if-exists" in captured["argv"]

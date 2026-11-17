@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501  (the anchors/mutants are verbatim source lines, kept intact)
-"""NEXUS V1 execution-core mutation probes (M1–M25).
+"""NEXUS V1 execution-core mutation probes (M1–M27).
 
 A targeted mutation harness in the same shape as the established
 ``scripts/gate5_mutation_probes.py``: for each correctness property this
@@ -35,6 +35,8 @@ M22   backend fabricates a second authority              I9 one-queue boundary
 M23   observe launders a missing job to a verdict         I7 UNKNOWN != FAILED
 M24   observe launders an unreadable status to a verdict  I7 UNKNOWN != FAILED
 M25   dedup insert discards the durable idempotency key   I8 Nexus-owned dedup
+M26   retention deletes without an operator bound         default-keep / age bound
+M27   retention drops the retained journal decision       journal completeness
 ====  ================================================  =========================
 
 Layered-defense note: M5 replaces the whole quarantine move (both the
@@ -665,6 +667,36 @@ PROBES: tuple[Probe, ...] = (
         anchor="            if cursor.rowcount == 1:",
         mutant="            if True:  # MUTATION: idempotency key conflict is discarded",
         tests=(f"{BACKEND_T}test_submit_is_idempotent_on_the_nexus_key",),
+    ),
+    Probe(
+        name="M26 quarantine retention ignores the operator switch (default keep)",
+        target=STAGING,
+        anchor=(
+            "            if self.policy.max_age_seconds is not None and age > self.policy.max_age_seconds:"
+        ),
+        mutant="            if True:  # MUTATION: retention deletes without an operator bound",
+        tests=(
+            f"{STAGING_T}test_retention_defaults_to_keep_everything",
+            f"{STAGING_T}test_retention_age_bound_removes_only_the_old_tree",
+        ),
+    ),
+    Probe(
+        name="M27 quarantine retention drops the retained journal decision",
+        target=STAGING,
+        anchor=(
+            "            if (job_id, name) in removed:\n"
+            "                continue\n"
+            "            decisions.append("
+        ),
+        mutant=(
+            "            if True:  # MUTATION: every retained tree is dropped from the journal\n"
+            "                continue\n"
+            "            decisions.append("
+        ),
+        tests=(
+            f"{STAGING_T}test_retention_journal_records_every_tree_removed_or_kept",
+            f"{STAGING_T}test_retention_defaults_to_keep_everything",
+        ),
     ),
 )
 

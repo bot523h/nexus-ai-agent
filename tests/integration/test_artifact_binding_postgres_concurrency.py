@@ -342,6 +342,32 @@ def _bound_project_ids(artifact_id: str) -> set[str]:
     return {str(row[0]) for row in rows}
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _fresh_postgres_engine_cache() -> Iterator[None]:
+    """Start this module on empty engine caches, whatever ran before it.
+
+    ``nexus_ai_agent.storage.db`` caches async engines per URL, and an asyncpg
+    connection is bound to the event loop that opened it.  pytest-asyncio gives
+    each module its own loop, so an engine cached by an earlier module is unusable
+    here — asyncpg raises ``RuntimeError: … got Future … attached to a different
+    loop``, which is exactly how this module failed when it ran after the other
+    PostgreSQL legs (and passed when it ran alone).  Nothing about the fence is
+    order-dependent; the *cache* was.  Same idiom as
+    ``tests/integration/test_postgres_persistence.py``.
+    """
+    from nexus_ai_agent.storage import db as db_module
+
+    db_module._pg_engines.clear()
+    db_module._pg_session_factories.clear()
+    db_module._pg_prepared_urls.clear()
+    yield
+    # Leave the cache empty too: the connections this module opened are bound to a
+    # loop that is about to close, so they must not outlive it.
+    db_module._pg_engines.clear()
+    db_module._pg_session_factories.clear()
+    db_module._pg_prepared_urls.clear()
+
+
 @pytest.fixture(scope="module")
 def nonce() -> str:
     return "pgfence-" + uuid.uuid4().hex[:12]

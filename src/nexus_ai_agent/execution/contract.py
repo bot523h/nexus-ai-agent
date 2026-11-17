@@ -418,6 +418,19 @@ class ExecutionBackend(Protocol):
         token) is rejected and must never cancel the current attempt; an
         unbound identity (``job_id`` without a fencing token) holds no
         cancellation authority at all — ``job_id`` alone is never sufficient.
+
+        **Not-yet-owned (``pending``) rows are a typed refusal, not a
+        dequeue.**  Cancellation closes an *in-flight* attempt
+        (``processing`` / ``verifying``): that attempt was already owned and
+        minted a fencing token, so a fenced reset to ``pending`` keeps the row
+        recoverable and rejects the cancelled attempt's later completion.  A
+        row that has never been reserved holds no attempt and therefore no
+        fencing token, so ``cancel`` has nothing to fence: it returns ``False``
+        and mutates nothing.  This is a deliberate, single, documented choice —
+        the contract never dequeues an unowned request — and it is the same
+        refusal a terminal row receives.  The row's later, independent
+        reservation is unaffected, and a subsequent ``cancel`` of *that* bound
+        attempt behaves normally.
         """
         ...
 

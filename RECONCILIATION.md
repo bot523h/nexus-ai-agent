@@ -10,13 +10,13 @@ recomputed on every run. No number on this page is hand-maintained.
 | quantity | value | rule |
 |---|---|---|
 | product catalogue | 70 | rows of the pack tables in `docs/NAGAR_70_OPERATIONS_TDD.md` |
-| runtime registry | 57 | `build_runtime_registry()` |
+| runtime registry | 88 | `build_runtime_registry()` |
 | overlap | 47 | catalogue ∩ registry |
 | missing | 23 | catalogue − registry |
-| runtime-only | 10 | registry − catalogue |
-| universe | 80 | catalogue ∪ registry |
+| runtime-only | 41 | registry − catalogue |
+| universe | 111 | catalogue ∪ registry |
 | surface-reachable | 12 | allow-list ∪ slideshow entrypoint |
-| suite-executed | 57 | tests AST execution probe |
+| suite-executed | 82 | tests AST execution probe |
 
 ## Missing (catalogue rows no registrar ships)
 
@@ -50,13 +50,48 @@ recomputed on every run. No number on this page is hand-maintained.
 
 ## Runtime-only (dispatchable, never catalogued)
 
+* `audio` — 1
+* `cinema` — 5
 * `media` — 2
+* `portrait` — 11
+* `scene` — 14
 * `slideshow` — 6
 * `system` — 1
 * `timeline` — 1
 
+* `audio.omega_verify_media`
+* `cinema.atlas_verify_media`
+* `cinema.chronos_verify_media`
+* `cinema.hyperion_verify_media`
+* `cinema.morpheus_verify_media`
+* `cinema.veritas_verify_media`
 * `media.pause`
 * `media.play`
+* `portrait.aging_deaging_geometry`
+* `portrait.depth_of_field_bokeh`
+* `portrait.eyeblink_synthesis`
+* `portrait.facial_hair_continuity`
+* `portrait.facial_relighting_gradient`
+* `portrait.gaze_redirection`
+* `portrait.head_repose_3d`
+* `portrait.micro_expression_morph`
+* `portrait.relight_spherical_harmonics`
+* `portrait.skintone_harmonization`
+* `portrait.teeth_whitening`
+* `scene.add_volumetric_fog_haze`
+* `scene.chromatic_aberration_control`
+* `scene.film_emulation`
+* `scene.harmonize_radiative_transfer`
+* `scene.insert_object_with_shadow`
+* `scene.lens_distortion_correct`
+* `scene.outpaint_canvas_expand`
+* `scene.perspective_horizon_level`
+* `scene.reflection_water_glass_synth`
+* `scene.remove_object_inpaint`
+* `scene.retime_optical_flow`
+* `scene.sky_replacement_relit`
+* `scene.synthesize_depth_of_field`
+* `scene.tonemap_hdr`
 * `slideshow.compose`
 * `slideshow.render`
 * `slideshow.scan_assets`

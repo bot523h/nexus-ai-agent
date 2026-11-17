@@ -1,21 +1,26 @@
-"""Unified Cloud Storage — combines 5+ free cloud providers into one virtual drive.
+"""Unified Cloud Storage — combines free-tier cloud providers into one virtual drive.
 
-Providers:
-  - Google Drive: 15GB free (via rclone or API)
-  - MEGA: 20GB free
-  - Dropbox: 2GB free
-  - pCloud: 10GB free (via API)
-  - Internxt: 10GB free (via API)
-  - GitHub Releases: 2GB per repo (existing)
-  - HuggingFace: unlimited (existing, for models)
+Providers (declared free tiers, GB):
+  - Google Drive: 15 (via rclone or API)
+  - MEGA: 20
+  - Dropbox: 2
+  - pCloud: 10
+  - Internxt: 10
+  - GitHub Releases: 2 per repo
+  - HuggingFace: 0 — no writable free quota; the old "999 GB" figure was fabricated
 
-Total: ~57GB+ unified virtual storage, transparent to the user.
+The totals this module reports are DECLARED tier limits, not measured
+capacity.  No adapter performs a live, authenticated write-quota probe, so
+``verified_free_gb`` is 0.0 for every deployment.  Individual listings that
+cannot be completed raise typed ``ProviderUnavailable`` errors instead of
+fabricating empty results.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -26,19 +31,40 @@ from nexus_ai_agent.storage.providers.base import ProviderUnavailable, StorageEr
 
 log = get_logger(__name__)
 
-# Provider storage limits (GB)
-PROVIDER_LIMITS: dict[str, float] = {
+
+class ProviderStatus(str, Enum):
+    """Structured honesty states for provider health/capacity probes."""
+
+    VERIFIED = "verified"
+    UNVERIFIED = "unverified"
+    READ_ONLY = "read_only"
+    UNAVAILABLE = "unavailable"
+
+
+#: Declared free-tier figures (GB) — informational marketing numbers, NOT a
+#: measurement of what this deployment may use, and NOT evidence of a working
+#: credential.  ``huggingface`` is 0.0 on purpose: Hugging Face exposes no
+#: writable free quota for arbitrary artifact storage, and the previous
+#: ``999.0`` figure was fabricated.  Capacity must come from a live,
+#: authenticated probe (see ``verified_free_gb``), which this module does not
+#: currently perform for any provider.
+DECLARED_TIER_LIMITS_GB: dict[str, float] = {
     "google_drive": 15.0,
     "mega": 20.0,
     "dropbox": 2.0,
     "pcloud": 10.0,
     "internxt": 10.0,
     "github_releases": 2.0,
-    "huggingface": 999.0,
+    "huggingface": 0.0,
 }
 
-# Estimated total
-TOTAL_FREE_GB = sum(PROVIDER_LIMITS.values())
+#: Backwards-compatible alias.  Deprecated: new code must use
+#: :data:`DECLARED_TIER_LIMITS_GB` (declared tiers) or
+#: ``UnifiedCloudStorage.verified_free_gb`` (probed capacity).
+PROVIDER_LIMITS: dict[str, float] = DECLARED_TIER_LIMITS_GB
+
+# Estimated total of the *declared* tiers (informational only).
+TOTAL_FREE_GB = sum(DECLARED_TIER_LIMITS_GB.values())
 
 
 class StorageListingError(StorageError):
@@ -173,7 +199,7 @@ class _DropboxProvider:
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
         if not self._token:
-            return []
+            raise ProviderUnavailable("Dropbox token not configured")
         url = "https://api.dropboxapi.com/2/files/list_folder"
         headers = {
             "Authorization": f"Bearer {self._token}",
@@ -183,42 +209,40 @@ class _DropboxProvider:
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(url, headers=headers, json=payload)
-                if resp.status_code != 200:
-                    return []
-                data = resp.json()
-                entries = data.get("entries", [])
-                return [
-                    e["name"]
-                    for e in entries
-                    if e.get(".tag") == "file" and e["name"].startswith(prefix)
-                ]
-        except Exception:
-            return []
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailable(f"Dropbox list failed: {type(exc).__name__}") from exc
+        if resp.status_code != 200:
+            raise ProviderUnavailable(f"Dropbox list failed: HTTP {resp.status_code}")
+        data = resp.json()
+        entries = data.get("entries", [])
+        return [
+            e["name"] for e in entries if e.get(".tag") == "file" and e["name"].startswith(prefix)
+        ]
 
     async def get_usage(self) -> dict[str, Any]:
         if not self._token:
-            return {"used_bytes": 0, "allocated_bytes": 2 * 1024**3}
+            raise ProviderUnavailable("Dropbox token not configured")
+        url = "https://api.dropboxapi.com/2/users/get_space_usage"
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "",
+        }
         try:
-            url = "https://api.dropboxapi.com/2/users/get_space_usage"
-            headers = {
-                "Authorization": f"Bearer {self._token}",
-                "Content-Type": "",
-            }
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(url, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return {
-                        "used_bytes": data.get("used", 0),
-                        "allocated_bytes": (
-                            data.get("allocation", {})
-                            .get("individual", {})
-                            .get("allocated", 2 * 1024**3)
-                        ),
-                    }
-        except Exception:
-            pass
-        return {"used_bytes": 0, "allocated_bytes": 2 * 1024**3}
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailable(f"Dropbox usage probe failed: {type(exc).__name__}") from exc
+        if resp.status_code != 200:
+            raise ProviderUnavailable(f"Dropbox usage probe failed: HTTP {resp.status_code}")
+        data = resp.json()
+        return {
+            "used_bytes": int(data.get("used", 0)),
+            "allocated_bytes": int(
+                data.get("allocation", {}).get("individual", {}).get("allocated", 2 * 1024**3)
+            ),
+            "verified": True,
+            "status": ProviderStatus.VERIFIED.value,
+        }
 
 
 class _PcloudProvider:
@@ -267,24 +291,29 @@ class _PcloudProvider:
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
         if not self._token:
-            return []
+            raise ProviderUnavailable("pCloud token not configured")
         url = "https://api.pcloud.com/listfolder"
         params = {"auth": self._token, "path": "/NEXUS"}
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(url, params=params)
-                if resp.status_code != 200:
-                    return []
-                data = resp.json()
-                entries = data.get("metadata", {}).get("contents", [])
-                return [
-                    e["name"] for e in entries if e.get("isfile") and e["name"].startswith(prefix)
-                ]
-        except Exception:
-            return []
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailable(f"pCloud list failed: {type(exc).__name__}") from exc
+        if resp.status_code != 200:
+            raise ProviderUnavailable(f"pCloud list failed: HTTP {resp.status_code}")
+        data = resp.json()
+        entries = data.get("metadata", {}).get("contents", [])
+        return [e["name"] for e in entries if e.get("isfile") and e["name"].startswith(prefix)]
 
     async def get_usage(self) -> dict[str, Any]:
-        return {"used_bytes": 0, "allocated_bytes": 10 * 1024**3}
+        # No authenticated quota probe is implemented for this adapter; the
+        # figure is the declared tier, explicitly marked unverified.
+        return {
+            "used_bytes": 0,
+            "allocated_bytes": 10 * 1024**3,
+            "verified": False,
+            "status": ProviderStatus.UNVERIFIED.value,
+        }
 
 
 class _InternxtProvider:
@@ -316,10 +345,18 @@ class _InternxtProvider:
         raise ProviderUnavailable("Internxt download not yet supported")
 
     async def list_files(self, *, prefix: str = "") -> list[str]:
-        return []
+        raise ProviderUnavailable(
+            "Internxt list is not implemented for the Internxt drive API; "
+            "refusing to report an empty listing as a complete one"
+        )
 
     async def get_usage(self) -> dict[str, Any]:
-        return {"used_bytes": 0, "allocated_bytes": 10 * 1024**3}
+        return {
+            "used_bytes": 0,
+            "allocated_bytes": 10 * 1024**3,
+            "verified": False,
+            "status": ProviderStatus.UNVERIFIED.value,
+        }
 
 
 class UnifiedCloudStorage:
@@ -329,7 +366,7 @@ class UnifiedCloudStorage:
       - Transparent file distribution across providers
       - Round-robin + capacity-aware upload routing
       - Seamless download — user never sees which provider
-      - Total ~57GB+ free storage
+      - Total = sum of declared tiers only (see DECLARED_TIER_LIMITS_GB)
       - Auto-fallback if a provider is down
     """
 
@@ -391,10 +428,25 @@ class UnifiedCloudStorage:
 
     @property
     def total_configured_gb(self) -> float:
+        """Sum of the *declared* tiers of the configured providers (GB).
+
+        This is marketing capacity, not measured capacity; see
+        :meth:`verified_free_gb`.
+        """
         total = 0.0
         for name in self.configured_providers:
-            total += PROVIDER_LIMITS.get(name, 0)
+            total += DECLARED_TIER_LIMITS_GB.get(name, 0)
         return total
+
+    @property
+    def verified_free_gb(self) -> float:
+        """Capacity proven by a live, authenticated quota probe (GB).
+
+        Always ``0.0`` today: no adapter in this module performs a live
+        write-enabled quota probe.  A deployment must not advertise capacity
+        it has not measured.
+        """
+        return 0.0
 
     def _select_provider(self, size_bytes: int) -> Any | None:
         """Select the best provider for upload using round-robin + capacity check."""
@@ -578,9 +630,10 @@ class UnifiedCloudStorage:
         lines = [
             "☁️ فضای ابری یکپارچه NEXUS",
             "━━━━━━━━━━━━━━━━━━━━━━━",
-            f"📊 کل فضای رایگان: {TOTAL_FREE_GB:.0f}GB+",
+            f"📢 مجموع اعلامی (تأییدنشده): {TOTAL_FREE_GB:.0f}GB",
+            f"🔬 مجموع اثبات‌شده با پروب زنده: {self.verified_free_gb:.0f}GB",
             f"✅ سرویس‌های متصل: {len(self.configured_providers)}",
-            f"💾 فضای فعال: {self.total_configured_gb:.0f}GB",
+            f"💾 فضای فعال (اعلامی): {self.total_configured_gb:.0f}GB",
             "",
             "📋 جزئیات سرویس‌ها:",
         ]
@@ -597,7 +650,7 @@ class UnifiedCloudStorage:
     def _get_provider_info(self) -> list[CloudProviderInfo]:
         """Get info about all known providers."""
         result = []
-        for name, free_gb in PROVIDER_LIMITS.items():
+        for name, free_gb in DECLARED_TIER_LIMITS_GB.items():
             configured = name in self._provider_names
             info = CloudProviderInfo(name=name, free_gb=free_gb, configured=configured)
             result.append(info)

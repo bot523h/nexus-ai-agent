@@ -95,7 +95,12 @@ MUTATIONS = (
         "E",
         "studio_bearer_authentication_removed",
         STUDIO,
-        "    require_dashboard_token(authorization)",
+        # The Studio route now authenticates through the session-aware helper
+        # (``authenticate_studio_caller``), which accepts the bearer header *or*
+        # the HttpOnly cookie derived from the same dashboard token. The anchor
+        # moved with the code; the property under test did not — exactly one
+        # authentication call must guard the project scope.
+        "    authenticate_studio_caller(request, authorization)",
         "    # mutation: skip Studio bearer authentication",
         "test_the_studio_surface_enforces_project_scope_after_authentication",
         "Studio route accepted missing bearer",

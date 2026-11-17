@@ -34,6 +34,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -756,7 +757,7 @@ def test_write_candidate_refuses_to_overwrite_the_committed_baseline() -> None:
     completed = _check_cli("--write-candidate", str(BASELINE), "--repeats", "1")
     assert completed.returncode == 2
     assert "refusing to overwrite the committed baseline" in completed.stderr
-    assert json.loads(BASELINE.read_text(encoding="utf-8"))["fingerprint"] == "268adff247b9060a"
+    assert json.loads(BASELINE.read_text(encoding="utf-8"))["fingerprint"] == "59f2f1e61fc749d8"
 
 
 def test_write_candidate_rejects_a_path_outside_the_repository(tmp_path: Path) -> None:
@@ -845,18 +846,26 @@ def test_the_cli_reports_an_invalid_fixture_set_with_exit_code_2(
 
 @pytest.mark.parametrize("seed", ["0", "1", "12345"])
 def test_the_fingerprint_is_stable_across_hash_seeds(seed: str) -> None:
+    existing_pp = os.environ.get("PYTHONPATH", "")
+    child_env = {
+        "PYTHONHASHSEED": seed,
+        "PATH": "/usr/bin:/bin",
+        "PYTHONPATH": f"{ROOT / 'src'}{os.pathsep}{existing_pp}"
+        if existing_pp
+        else str(ROOT / "src"),
+    }
     completed = subprocess.run(
         [sys.executable, str(SCRIPT), "--json", "--repeats", "2"],
         capture_output=True,
         text=True,
         cwd=ROOT,
         check=False,
-        env={"PYTHONHASHSEED": seed, "PATH": "/usr/bin:/bin"},
+        env=child_env,
     )
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout)
     assert payload["repeatability"]["identical"] is True
-    assert payload["repeatability"]["fingerprints"][0] == "268adff247b9060a"
+    assert payload["repeatability"]["fingerprints"][0] == "59f2f1e61fc749d8"
 
 
 def test_the_report_is_identical_from_a_foreign_working_directory(tmp_path: Path) -> None:

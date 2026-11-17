@@ -584,6 +584,62 @@ async def test_repeated_cancel_is_safe_and_idempotent(tmp_path: Path) -> None:
     await queue.shutdown()
 
 
+def _insert_never_owned_pending_row(db: Path, job_id: str) -> None:
+    """Persist a ``pending`` row that no worker has ever reserved (attempt 0)."""
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            "INSERT INTO nexus_job_queue "
+            "(id, job_type, idempotency_key, payload_json, status, created_at, attempt) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                job_id,
+                "fenced",
+                f"idem-{job_id}",
+                "{}",
+                JobStatus.PENDING.value,
+                "2026-01-01T00:00:00+00:00",
+                0,
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_cancel_never_owned_pending_row_is_a_typed_refusal(tmp_path: Path) -> None:
+    """task-257: ``cancel`` on a not-yet-owned (``pending``) row is a refusal.
+
+    The single documented choice: a row that was never reserved holds no attempt
+    and no fencing token, so ``cancel`` has nothing to fence and returns
+    ``False`` — it is a typed refusal, **not** a dequeue.  This holds whether the
+    caller presents an unbound identity or a bound one (a token the row never
+    minted), and the durable row is left byte-for-byte untouched (status still
+    ``pending``, ``attempt`` still 0).  A later, independent reservation of the
+    same row is therefore unaffected.
+    """
+    db = tmp_path / "jobs.sqlite3"
+    queue, _ = _queues(db, _Gate())
+    backend = NativeLocalBackend(queue)
+
+    job_id = "never-owned"
+    _insert_never_owned_pending_row(db, job_id)
+
+    bare = ExecutionIdentity(request_id="r", idempotency_key="k", job_id=job_id)
+    assert await backend.cancel(bare) is False  # unbound: no authority at all
+    bound = bare.with_attempt(attempt_id="a#1", fencing_token=1)
+    assert await backend.cancel(bound) is False  # bound, but the row holds no attempt
+    assert await backend.cancel(bound) is False  # idempotent: repeat is still refused
+
+    # A refusal never dequeues: the row is present and unchanged (no attempt
+    # minted, no status change), so a later independent reservation is safe.
+    row = _row(db, job_id)
+    assert row["status"] == JobStatus.PENDING.value
+    assert row["attempt"] == 0
+    with sqlite3.connect(db) as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM nexus_job_queue WHERE id = ?", (job_id,)
+        ).fetchone()[0]
+    assert count == 1
+
+
 @pytest.mark.asyncio
 async def test_cancel_terminal_job_is_refused(tmp_path: Path) -> None:
     """I3: a terminal row is never reopened (even by its own attempt token)."""

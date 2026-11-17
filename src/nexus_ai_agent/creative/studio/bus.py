@@ -61,6 +61,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -69,6 +70,7 @@ from pydantic import ValidationError
 
 from nexus_ai_agent.creative.studio.authorization import ProjectAccess, ProjectAuthorizer
 from nexus_ai_agent.creative.studio.capabilities import (
+    ENGINE_PORT_ATTRIBUTES,
     CapabilityRegistry,
     OperationContext,
     OperationSpec,
@@ -78,6 +80,7 @@ from nexus_ai_agent.creative.studio.lifecycle import check_required_packs
 from nexus_ai_agent.creative.studio.models import (
     PROTOCOL_VERSION,
     AuthorizationError,
+    CapabilityError,
     CommandExecutionError,
     CommandResult,
     CommandValidationError,
@@ -158,6 +161,7 @@ class CommandBus:
         authorizer: ProjectAuthorizer | None = None,
         allow_experimental: bool = False,
         audio_engine: Any = None,
+        engine_ports: Mapping[str, Any] | None = None,
     ) -> None:
         self._registry = registry if registry is not None else build_wave1_registry()
         self._resolver = resolver if resolver is not None else ReferenceResolver()
@@ -167,6 +171,14 @@ class CommandBus:
         # only carries it to the handler; it never inspects it, so a command can
         # neither supply nor replace an engine.
         self._audio_engine = audio_engine
+        # Wave 5: the five NAGAR engine seams, keyed by the *operation context
+        # attribute* they populate. Unknown keys are a composition error, not a
+        # silently ignored hint — a misspelt port would otherwise present as an
+        # engine that is permanently "not composed".
+        unknown = set(engine_ports or {}) - set(ENGINE_PORT_ATTRIBUTES.values())
+        if unknown:
+            raise CapabilityError(f"unknown engine port(s): {', '.join(sorted(unknown))}")
+        self._engine_ports: dict[str, Any] = dict(engine_ports or {})
         # Trusted composition-root opt-in for EXPERIMENTAL packs. Deliberately
         # not an envelope field: a command must never widen its own lifecycle.
         self._allow_experimental = allow_experimental
@@ -273,6 +285,14 @@ class CommandBus:
                 descriptor.required_packs, allow_experimental=self._allow_experimental
             )
 
+        # 4c. Opt-in-only capabilities that no pack speaks for (the NAGAR engine
+        # verifications): the same composition-root policy, stated explicitly so
+        # "registered" never quietly means "reachable".
+        if descriptor.requires_opt_in and not self._allow_experimental:
+            raise ExecutionPolicyError(
+                f"{command.operation}: requires the composition-root experimental opt-in"
+            )
+
         # 5. Execution policy: only an advertised mode; A/B/C/D ladder remains
         # authoritative. The envelope cannot opt into egress or a shell.
         if command.execution_policy.mode not in descriptor.execution_modes:
@@ -352,11 +372,15 @@ class CommandBus:
         self, command: TypedCommand, spec: OperationSpec, input_data: dict[str, Any]
     ) -> CommandResult:
         """9. The only execution request into a registered pure handler."""
+        # ``audio_engine`` is both the OMEGA port and the legacy constructor
+        # argument, so an explicitly supplied engine wins over any port entry
+        # (a caller cannot pass both and have one silently shadow the other).
+        engine_kwargs: dict[str, Any] = {"audio_engine": self._audio_engine, **self._engine_ports}
         context = OperationContext(
             command=command,
             input_data=input_data,
             history=tuple(self._history),
-            audio_engine=self._audio_engine,
+            **engine_kwargs,
         )
         try:
             # A buggy handler cannot mutate central state even if it then raises.

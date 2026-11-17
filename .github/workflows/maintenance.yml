@@ -170,6 +170,80 @@ jobs:
           path: drill/
           retention-days: 14
 
+  reconcile-artifacts:
+    # DB <-> disk reconciliation of published creative artifacts (Wave 3B).
+    # Every night, right after the backup window: an orphan published file or a
+    # binding whose blob no longer matches is exactly the crash window a backup
+    # cannot repair, so it must be *visible* the next morning.
+    #
+    # The job is a DRY RUN by default: it reports what it would repair and fails
+    # the run (`--fail-on-violation`) when a divergence remains. Repair stays an
+    # explicit operator action (`--apply-repair`) because relocating bytes and
+    # writing lineage rows on production state is a reviewed decision.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.schedule == '17 3 * * *' ||
+      github.event.schedule == '23 4 * * 1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Same production database the backup job reads; SQLite is refused below.
+      NEXUS_DATABASE_URL: ${{ secrets.NEXUS_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: bash scripts/ci_install.sh "."
+      - name: Reconciliation preflight — production database configured
+        run: |
+          set -uo pipefail
+          if [ -z "${NEXUS_DATABASE_URL:-}" ]; then
+            echo "::error title=reconcile-artifacts::NEXUS_DATABASE_URL is not configured"
+            echo "A reconciliation against CI-local state would prove nothing."
+            exit 1
+          fi
+          echo "preflight ok — reconciling against the configured production database"
+      - name: Reconcile published artifacts against the durable bindings (dry run)
+        run: |
+          set -o pipefail
+          python -m nexus_ai_agent.maintenance.reconciler \
+            --workspace-root . \
+            --json \
+            --fail-on-violation 2>&1 | tee reconcile.json
+      - name: Publish reconciliation evidence
+        if: always()
+        run: |
+          python - <<'EOF'
+          import json, os, pathlib
+          path = pathlib.Path("reconcile.json")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if not path.is_file() or summary is None:
+              raise SystemExit(0)
+          try:
+              report = json.loads(path.read_text(encoding="utf-8"))
+          except Exception:
+              raise SystemExit(0)  # the step log already carries the failure
+          lines = [
+              "## Artifact reconciliation (nightly, dry run)",
+              f"- scanned files: {report.get('scanned_files')}",
+              f"- bindings checked: {report.get('bindings_checked')}",
+              f"- violations: {report.get('violations')}",
+              f"- would repair: {sum(1 for i in report.get('issues', []) if i.get('action') == 'would_repair')}",
+              f"- would quarantine: {sum(1 for i in report.get('issues', []) if i.get('action') == 'would_quarantine')}",
+          ]
+          with open(summary, "a", encoding="utf-8") as handle:
+              handle.write("\n".join(lines) + "\n")
+          EOF
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: reconciliation-report
+          path: reconcile.json
+          retention-days: 14
+
   housekeeping:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * 1'
     runs-on: ubuntu-latest

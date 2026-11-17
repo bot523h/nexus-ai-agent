@@ -115,6 +115,20 @@ PACK_TEST_TARGETS: Mapping[str, tuple[str, ...]] = {
         "tests/unit/test_motion_pack.py",
         "tests/architecture/test_motion_pack_boundary.py",
     ),
+    # ATLAS/AETHEL: the declarative portrait pack's evidence. The kernels and
+    # registrar live in creative/composition/ (pack purity); these suites drive
+    # the pack's models/errors/operations through them and are pack evidence.
+    "portrait": (
+        "tests/creative/packs/portrait/test_portrait_adversarial.py",
+        "tests/creative/packs/portrait/test_portrait_kernels.py",
+        "tests/creative/packs/portrait/test_portrait_registry.py",
+    ),
+    # ATLAS/AETHEL: the declarative scene pack's evidence, same layering rule.
+    "scene": (
+        "tests/creative/packs/scene/test_scene_adversarial.py",
+        "tests/creative/packs/scene/test_scene_kernels.py",
+        "tests/creative/packs/scene/test_scene_registry.py",
+    ),
     "slideshow": (
         "tests/unit/test_slideshow_pack.py",
         "tests/unit/test_slideshow_invariants.py",

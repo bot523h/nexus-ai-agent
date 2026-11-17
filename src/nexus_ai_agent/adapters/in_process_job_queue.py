@@ -62,6 +62,7 @@ automatically) and the queue's own lifecycle lines name it explicitly.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -72,6 +73,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import structlog
@@ -349,6 +351,23 @@ class _EnqueueOutcome:
     status: str
     status_known: bool
     rejected: bool = False
+
+
+#: Namespace of the execution metadata the *queue* writes into a handler result
+#: (job id, attempt, fence check, post-publish marker). A handler runs untrusted
+#: code, so these keys are stripped before any verification reads the result —
+#: otherwise a handler could impersonate queue context and, for example, tell the
+#: verifier that a publication already happened.
+QUEUE_METADATA_PREFIX = "_queue_"
+
+
+def handler_result_view(result: Mapping[str, Any]) -> dict[str, Any]:
+    """The handler's own claims: everything the queue did not write itself."""
+    return {
+        str(key): value
+        for key, value in result.items()
+        if not str(key).startswith(QUEUE_METADATA_PREFIX)
+    }
 
 
 def default_artifact_verifiers() -> dict[str, ArtifactVerifier]:
@@ -1867,7 +1886,7 @@ class InProcessJobQueue:
                     occurred_at=_now(),
                 )
             )
-            outcome = await self._verify_safely(verifier, payload, result)
+            outcome = await self._verify_safely(verifier, payload, handler_result_view(result))
             published = False
             if outcome.ok and publication is not None:
                 # Stage → verify → **publish atomically** → **re-probe** →
@@ -1921,6 +1940,12 @@ class InProcessJobQueue:
                             self._log_rejected(job_id, claim, JobStatus.VERIFYING)
                             return
                         final_result["artifact_passport_id"] = archived.passport.passport_id
+                        # The verified-asset registration binds the *durable* passport
+                        # bytes, not the in-memory object: digests of the stored JSON are
+                        # what a later reader can independently re-derive.
+                        final_result["artifact_passport_digest"] = (
+                            "sha256:" + hashlib.sha256(stored_passport.encode("utf-8")).hexdigest()
+                        )
                     except Exception as exc:  # noqa: BLE001 - evidence persistence fails closed
                         logger.warning(
                             "creative_passport_persistence_failed job_id=%s reason=%s",
@@ -1965,7 +1990,9 @@ class InProcessJobQueue:
                     ):
                         self._log_rejected(job_id, claim, JobStatus.COMPLETED)
                         return
-                    confirm_error = await self._confirm_safely(publication, payload, result, claim)
+                    confirm_error = await self._confirm_safely(
+                        publication, payload, final_result, claim
+                    )
                     if confirm_error is not None:
                         # The confirmation may have COMMITTED the binding and
                         # then raised (a partial failure: the row is durable but
@@ -2238,6 +2265,11 @@ class InProcessJobQueue:
         publish_context = dict(result)
         publish_context["_queue_job_id"] = claim.job_id
         publish_context["_queue_attempt"] = claim.attempt
+        # The publication adapter performs this authoritative CAS read at the
+        # last responsible moment, after it has staged and hashed private bytes.
+        publish_context["_queue_fence_check"] = lambda: self._owns_execution(
+            claim, JobStatus.VERIFYING
+        )
         try:
             patch = await self._publish_in_thread(publication, payload, publish_context)
         except Exception as exc:  # noqa: BLE001 - publication failure is a refusal
@@ -2256,7 +2288,14 @@ class InProcessJobQueue:
                 False,
             )
         published = {**result, **patch}
-        reprobed = await self._verify_safely(verifier, payload, published)
+        # The re-probe answers a different question than the pre-publish check:
+        # "do the bytes now on disk still satisfy the claim?" The artifact no
+        # longer lives at its workspace name (the publication renamed it into
+        # the fenced job namespace), so the queue — which performed that
+        # rename — tells the verifier that this is a post-publish probe. The
+        # marker is added here, after the handler's own claim was stripped.
+        reprobe_view = {**handler_result_view(result), **patch, "_queue_post_publish": True}
+        reprobed = await self._verify_safely(verifier, payload, reprobe_view)
         if not reprobed.ok:
             reason = reprobed.reason_code or "reprobe_failed"
             return (
@@ -2318,6 +2357,10 @@ class InProcessJobQueue:
         confirm_context = dict(result)
         confirm_context["_queue_job_id"] = claim.job_id
         confirm_context["_queue_attempt"] = claim.attempt
+        confirm_context["_queue_attempt_id"] = creative_attempt_id(claim.job_id, claim.attempt)
+        confirm_context["_queue_fence_check"] = lambda: self._owns_execution(
+            claim, JobStatus.VERIFYING
+        )
         try:
             await publication.confirm(payload, confirm_context)
         except Exception as exc:  # noqa: BLE001 - an unconfirmed success must fail closed

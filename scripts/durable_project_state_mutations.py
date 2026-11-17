@@ -42,11 +42,22 @@ TESTS = (
 
 @dataclass(frozen=True)
 class Mutation:
+    """One mutant: one or more exact source edits, applied together.
+
+    ``extra_edits`` exists for invariants that the source enforces at **two**
+    independent points (a pre-read guard and the predicate of the statement that
+    follows it).  Mutating only one of them leaves a mutant that is behaviourally
+    identical to the original — an equivalent mutant, which no honest test can
+    kill — so such a mutant removes both points at once and models "the invariant
+    is not enforced at all".
+    """
+
     name: str
     path: Path
     old: str
     new: str
     why: str
+    extra_edits: tuple[tuple[str, str], ...] = ()
 
 
 MUTATIONS: tuple[Mutation, ...] = (
@@ -190,7 +201,13 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "artifact_binding_skips_revision_validation",
         STORE,
-        "        await self._load_validated_revision(project_id, revision_id)",
+        # The literal call is now shared by the verified-registration path and the
+        # binding path, so the anchor carries the binding site's own comment: a
+        # mutation must hit *this* validation, not whichever one is first in the
+        # file (a duplicated anchor silently mutates only the first occurrence).
+        """        # The revision is the authority: load it (this re-validates its bytes,
+        # refusing tampered/re-homed rows) before any binding row is written.
+        await self._load_validated_revision(project_id, revision_id)""",
         "        pass  # mutated: binding no longer validates the revision exists",
         "Slice 2: an artifact must only bind to a revision that exists and validates; "
         "skipping the load lets an artifact bind to a vanished/tampered revision",
@@ -282,7 +299,9 @@ MUTATIONS: tuple[Mutation, ...] = (
                     ):
                         self._log_rejected(job_id, claim, JobStatus.COMPLETED)
                         return
-                    confirm_error = await self._confirm_safely(publication, payload, result, claim)""",
+                    confirm_error = await self._confirm_safely(
+                        publication, payload, final_result, claim
+                    )""",
         "                    confirm_error = await self._confirm_safely(publication, payload, result, claim)",
         "the durable binding is a side effect: ownership must be re-read at the "
         "commit boundary, else an attempt superseded during the re-probe window "
@@ -302,11 +321,21 @@ MUTATIONS: tuple[Mutation, ...] = (
     Mutation(
         "retraction_not_token_scoped",
         STORE,
-        "                    _BINDING.c.attempt == attempt,",
-        "                    _BINDING.c.artifact_id == artifact_id,  # mutated: fencing token dropped from the delete predicate",
+        "            if binding is None or binding.attempt != attempt:",
+        "            if binding is None:  # mutated: fencing token dropped from the pre-read guard",
         "F1: retraction must be scoped to the exact (job_id, attempt) that wrote the "
         "row; dropping the fencing token lets a superseded attempt delete a "
-        "successor's live binding",
+        "successor's live binding.  The token is enforced twice — the pre-read guard "
+        "and the delete predicate — and either one alone is sufficient, so the mutant "
+        "drops BOTH: a single-point mutant is equivalent to the original and cannot "
+        "be killed by any test.",
+        extra_edits=(
+            (
+                "                    _BINDING.c.job_id == job_id,\n"
+                "                    _BINDING.c.attempt == attempt,",
+                "                    _BINDING.c.job_id == job_id,  # mutated: fencing token dropped from the delete predicate",
+            ),
+        ),
     ),
     Mutation(
         "retraction_not_job_scoped",
@@ -475,14 +504,16 @@ def main() -> int:
     survivors: list[str] = []
     for mutation in MUTATIONS:
         original = mutation.path.read_text(encoding="utf-8")
-        if mutation.old not in original:
+        edits = ((mutation.old, mutation.new), *mutation.extra_edits)
+        if any(old_text not in original for old_text, _ in edits):
             print(f"{mutation.name}: MUTATION DOES NOT APPLY (source drifted)")
             survivors.append(mutation.name)
             continue
+        mutated = original
+        for old_text, new_text in edits:
+            mutated = mutated.replace(old_text, new_text, 1)
         try:
-            mutation.path.write_text(
-                original.replace(mutation.old, mutation.new, 1), encoding="utf-8"
-            )
+            mutation.path.write_text(mutated, encoding="utf-8")
             green = run_tests()
         finally:
             mutation.path.write_text(original, encoding="utf-8")

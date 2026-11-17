@@ -24,16 +24,18 @@ revision row and no moved head.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy import Table, delete, select, update
+from sqlalchemy import Table, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexus_ai_agent.creative.assets.blob_store import LocalContentAddressedBlobStore
 from nexus_ai_agent.creative.project_state.models import (
     ArtifactBindingAmbiguous,
     ArtifactBindingConflict,
@@ -97,6 +99,15 @@ def content_address_of_file(path: Path) -> str:
 
 
 @dataclass(frozen=True)
+class VerifiedAssetRegistration:
+    """Idempotent result of the verified artifact/asset/binding transaction."""
+
+    asset_id: str
+    asset_version_id: str
+    binding: ArtifactBinding
+
+
+@dataclass(frozen=True)
 class ArtifactBinding:
     """One durable artifact→revision binding as read back from storage."""
 
@@ -110,6 +121,12 @@ class ArtifactBinding:
     artifact_version_id: str | None = None
     #: Fencing token of the execution that committed the binding (0 = pre-fence).
     attempt: int = 0
+    #: Passport identifier supplied by verified registration (receipt-only on this schema).
+    passport_id: str | None = None
+    #: Attempt/fence evidence included in registration receipt, not persisted by baseline schema.
+    attempt_id: str | None = None
+    verifier_digest: str | None = None
+    derived_receipt_ref: str | None = None
 
 
 def _as_binding(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
@@ -124,6 +141,44 @@ def _as_binding(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
         artifact_version_id=row.artifact_version_id,
         attempt=row.attempt,
     )
+
+
+def _derive_receipt(row: orm.ProjectArtifactBinding) -> ArtifactBinding:
+    """Derive portable lineage identifiers solely from persisted binding facts."""
+    fields = (
+        row.project_id,
+        row.revision_id,
+        row.artifact_id,
+        row.job_id,
+        str(row.attempt),
+        row.artifact_version_id or "",
+        str(row.size_bytes),
+    )
+    encoded = "\\0".join(fields).encode("utf-8")
+    receipt_ref = hashlib.sha256(b"nexus:derived-lineage-receipt:v1\\0" + encoded).hexdigest()
+    attempt_document = json.dumps(
+        {"job_id": row.job_id, "attempt": row.attempt},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    attempt_ref = hashlib.sha256(attempt_document.encode("utf-8")).hexdigest()
+    return replace(
+        _as_binding(row),
+        attempt_id=f"attempt_{attempt_ref}",
+        derived_receipt_ref=f"sha256:{receipt_ref}",
+    )
+
+
+async def derive_persisted_lineage_receipt(
+    session: AsyncSession, *, artifact_id: str, job_id: str
+) -> ArtifactBinding:
+    """Read and deterministically re-derive lineage metadata from SQL facts."""
+    row = await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))
+    if row is None:
+        raise ArtifactBindingError("registered artifact binding does not exist")
+    return _derive_receipt(row)
 
 
 def _as_revision(row: orm.ProjectRevision) -> RevisionRecord:
@@ -400,9 +455,276 @@ class SqlArtifactBindingStore:
         self,
         session_factory: Any | None = None,
         revision_store: SqlProjectRevisionStore | None = None,
+        blob_store: LocalContentAddressedBlobStore | None = None,
     ) -> None:
         self._session_factory = session_factory or (lambda: get_session())
         self._revision_store = revision_store or SqlProjectRevisionStore()
+        self._blob_store = blob_store
+
+    async def register_verified_asset_version(
+        self,
+        *,
+        project_id: str,
+        revision_id: str,
+        job_id: str,
+        attempt_id: str,
+        fencing_token: int,
+        content_sha256: str,
+        size_bytes: int,
+        media_type: str,
+        storage_uri: str,
+        verifier_digest: str,
+        passport_id: str,
+        passport_digest: str,
+        fence_check: Any,
+    ) -> VerifiedAssetRegistration:
+        """Atomically register verified bytes, version, project link and binding.
+
+        The queue supplies ``fence_check`` from its authoritative claim. The
+        stored path is re-measured in this operation; caller digests are claims
+        only. Deterministic identifiers make crash/retry reconciliation a
+        no-op when all immutable facts match.
+        """
+        if not project_id or not revision_id or not job_id or not attempt_id:
+            raise ArtifactBindingError("asset registration identity is incomplete")
+        if (
+            isinstance(fencing_token, bool)
+            or not isinstance(fencing_token, int)
+            or fencing_token < 1
+        ):
+            raise ArtifactBindingError("fencing_token must be a positive integer")
+        if not callable(fence_check) or not fence_check():
+            raise ArtifactBindingError("stale or unverifiable execution fence")
+        if (
+            not media_type
+            or not storage_uri
+            or not verifier_digest
+            or not passport_id
+            or not passport_digest
+        ):
+            raise ArtifactBindingError("verified asset metadata is incomplete")
+        path = Path(storage_uri)
+        try:
+            digest = content_address_of_file(path)
+            size = path.stat().st_size
+        except OSError as exc:
+            raise ArtifactRevisionMismatch("published asset is unavailable") from exc
+        normalized = (
+            content_sha256 if content_sha256.startswith("sha256:") else f"sha256:{content_sha256}"
+        )
+        if digest != normalized or size != size_bytes or size <= 0:
+            raise ArtifactRevisionMismatch("published asset digest or size does not match")
+        with path.open("rb") as source:
+            header = source.read(16)
+        signatures = {
+            "video/mp4": lambda value: len(value) >= 8 and value[4:8] == b"ftyp",
+            "image/png": lambda value: value.startswith(b"\x89PNG\r\n\x1a\n"),
+            "image/jpeg": lambda value: value.startswith(b"\xff\xd8\xff"),
+            "audio/wav": lambda value: (
+                len(value) >= 12 and value[:4] == b"RIFF" and value[8:12] == b"WAVE"
+            ),
+            "audio/x-wav": lambda value: (
+                len(value) >= 12 and value[:4] == b"RIFF" and value[8:12] == b"WAVE"
+            ),
+            "video/webm": lambda value: value.startswith(b"\x1a\x45\xdf\xa3"),
+        }
+        signature = signatures.get(media_type)
+        if signature is not None and not signature(header):
+            raise ArtifactRevisionMismatch("published bytes do not match the claimed media type")
+        blob_store = self._blob_store or LocalContentAddressedBlobStore(
+            path.parent / ".asset-library"
+        )
+        with path.open("rb") as source:
+            staging_key, staged_digest, staged_size = blob_store.stage(
+                source, max_bytes=max(size_bytes, 1)
+            )
+        if staged_digest != digest.removeprefix("sha256:") or staged_size != size:
+            blob_store.remove_staging(staging_key)
+            raise ArtifactRevisionMismatch("blob staging changed the verified asset bytes")
+        blob_key = blob_store.blob_key_for(staged_digest)
+        try:
+            stored_digest, stored_size, _ = blob_store.store(staging_key, blob_key)
+            stored_bytes = blob_store.open(blob_key)
+        except Exception as exc:  # noqa: BLE001 - blob publication fails closed
+            blob_store.remove_staging(staging_key)
+            raise ArtifactRevisionMismatch("canonical blob publication failed") from exc
+        if (
+            stored_digest != staged_digest
+            or stored_size != size
+            or hashlib.sha256(stored_bytes).hexdigest() != staged_digest
+        ):
+            raise ArtifactRevisionMismatch("canonical blob readback failed integrity verification")
+        await self._load_validated_revision(project_id, revision_id)
+        content_identity = f"{project_id}\\0{digest}".encode()
+        suffix = hashlib.sha256(content_identity).hexdigest()
+        asset_id = f"render_asset_{suffix}"
+        version_id = f"render_version_{suffix}"
+        link_id = f"render_link_{hashlib.sha256((project_id + version_id).encode()).hexdigest()}"
+        artifact_kind = media_type.split("/", 1)[0] or "binary"
+
+        async with self._session_factory() as session:
+            await self._claim_content_owner(session, digest, project_id)
+            asset = await session.get(orm.Asset, asset_id)
+            if asset is None:
+                session.add(orm.Asset(asset_id=asset_id, media_kind=artifact_kind))
+                await session.flush()
+            elif asset.media_kind != artifact_kind:
+                raise ArtifactBindingConflict(
+                    "deterministic Asset identity has conflicting media kind"
+                )
+            version = await session.get(orm.AssetVersion, version_id)
+            if version is None:
+                session.add(
+                    orm.AssetVersion(
+                        version_id=version_id,
+                        asset_id=asset_id,
+                        content_sha256=digest.removeprefix("sha256:"),
+                        size_bytes=size,
+                        media_kind=artifact_kind,
+                        media_type=media_type,
+                        blob_key=blob_key,
+                        original_filename=Path(storage_uri).name,
+                    )
+                )
+                await session.flush()
+            elif (
+                version.asset_id != asset_id
+                or version.content_sha256 != digest.removeprefix("sha256:")
+                or version.size_bytes != size
+                or version.media_type != media_type
+            ):
+                raise ArtifactBindingConflict("deterministic AssetVersion identity diverged")
+            link = await session.get(orm.ProjectAssetLink, link_id)
+            if link is None:
+                session.add(
+                    orm.ProjectAssetLink(
+                        link_id=link_id,
+                        project_id=project_id,
+                        asset_id=asset_id,
+                        version_id=version_id,
+                    )
+                )
+                await session.flush()
+            elif (
+                link.project_id != project_id
+                or link.asset_id != asset_id
+                or link.version_id != version_id
+            ):
+                raise CrossProjectAccess(
+                    "AssetVersion is already linked to different project facts"
+                )
+
+            existing = await session.get(orm.ProjectArtifactBinding, (digest, job_id))
+            if existing is not None:
+                if existing.project_id != project_id or existing.revision_id != revision_id:
+                    raise ArtifactBindingConflict("existing artifact lineage conflicts with retry")
+                if fencing_token < existing.attempt:
+                    raise ArtifactBindingError("stale fencing token cannot replace a successor")
+                if existing.artifact_version_id != version_id or existing.size_bytes != size:
+                    raise ArtifactBindingConflict(
+                        "same artifact identity has conflicting immutable facts"
+                    )
+                if fencing_token == existing.attempt:
+                    if not fence_check():
+                        raise ArtifactBindingError(
+                            "execution fence was lost before idempotent commit"
+                        )
+                    return VerifiedAssetRegistration(
+                        asset_id, version_id, _derive_receipt(existing)
+                    )
+                existing.attempt = fencing_token
+                if not fence_check():
+                    raise ArtifactBindingError("execution fence was lost before successor commit")
+                await session.commit()
+                return VerifiedAssetRegistration(asset_id, version_id, _derive_receipt(existing))
+            predecessor = (
+                await session.execute(
+                    select(orm.ProjectArtifactBinding)
+                    .where(_BINDING.c.job_id == job_id)
+                    .order_by(_BINDING.c.attempt.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            retired_version_id: str | None = None
+            if predecessor is not None:
+                if predecessor.project_id != project_id or predecessor.revision_id != revision_id:
+                    raise ArtifactBindingConflict("successor attempt changed project or revision")
+                if fencing_token <= predecessor.attempt:
+                    raise ArtifactBindingError(
+                        "stale or conflicting attempt cannot replace current binding"
+                    )
+                retired_version_id = predecessor.artifact_version_id
+                await session.delete(predecessor)
+                await session.flush()
+            binding = orm.ProjectArtifactBinding(
+                artifact_id=digest,
+                project_id=project_id,
+                revision_id=revision_id,
+                job_id=job_id,
+                attempt=fencing_token,
+                artifact_kind=artifact_kind,
+                size_bytes=size,
+                artifact_version_id=version_id,
+            )
+            session.add(binding)
+            await session.flush()
+            if retired_version_id is not None:
+                old_version = await session.get(orm.AssetVersion, retired_version_id)
+                if old_version is not None:
+                    old_binding_count = (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(_BINDING)
+                            .where(_BINDING.c.artifact_version_id == retired_version_id)
+                        )
+                    ).scalar_one()
+                    if old_binding_count == 0:
+                        old_link_model: Any = orm.ProjectAssetLink
+                        old_link_table: Any = old_link_model.__table__
+                        old_link_hash = hashlib.sha256(
+                            (project_id + retired_version_id).encode()
+                        ).hexdigest()
+                        old_link_id = f"render_link_{old_link_hash}"
+                        await session.execute(
+                            delete(old_link_model).where(old_link_table.c.link_id == old_link_id)
+                        )
+                        old_link_count = (
+                            await session.execute(
+                                select(func.count())
+                                .select_from(old_link_table)
+                                .where(old_link_table.c.version_id == retired_version_id)
+                            )
+                        ).scalar_one()
+                        if old_link_count == 0:
+                            old_asset_id = old_version.asset_id
+                            await session.delete(old_version)
+                            version_model: Any = orm.AssetVersion
+                            old_version_table: Any = version_model.__table__
+                            remaining = (
+                                await session.execute(
+                                    select(func.count())
+                                    .select_from(old_version_table)
+                                    .where(old_version_table.c.asset_id == old_asset_id)
+                                )
+                            ).scalar_one()
+                            if remaining == 0:
+                                old_asset = await session.get(orm.Asset, old_asset_id)
+                                if old_asset is not None:
+                                    await session.delete(old_asset)
+            if not fence_check():
+                raise ArtifactBindingError("execution fence was lost before asset commit")
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise ArtifactBindingConflict("verified AssetVersion transaction raced") from exc
+            saved = await session.get(orm.ProjectArtifactBinding, (digest, job_id))
+            assert saved is not None
+            return VerifiedAssetRegistration(
+                asset_id,
+                version_id,
+                _derive_receipt(saved),
+            )
 
     async def bind(
         self,
@@ -415,6 +737,7 @@ class SqlArtifactBindingStore:
         size_bytes: int,
         artifact_version_id: str | None = None,
         attempt: int = 0,
+        require_asset_version: bool = False,
     ) -> ArtifactBinding:
         """Bind one measured artifact to the immutable revision it served.
 
@@ -458,6 +781,29 @@ class SqlArtifactBindingStore:
         await self._load_validated_revision(project_id, revision_id)
 
         async with self._session_factory() as session:
+            if artifact_version_id is not None:
+                version = await session.get(orm.AssetVersion, artifact_version_id)
+                if version is None:
+                    if require_asset_version:
+                        raise ArtifactBindingError("artifact_version_id references no AssetVersion")
+                else:
+                    if (
+                        version.content_sha256 != artifact_id.removeprefix("sha256:")
+                        or version.size_bytes != size_bytes
+                    ):
+                        raise ArtifactRevisionMismatch(
+                            "AssetVersion digest or size does not match the verified artifact"
+                        )
+                    link_model: Any = orm.ProjectAssetLink
+                    link = await session.execute(
+                        select(link_model).where(
+                            link_model.version_id == artifact_version_id,
+                            link_model.project_id == project_id,
+                            link_model.asset_id == version.asset_id,
+                        )
+                    )
+                    if link.scalar_one_or_none() is None:
+                        raise CrossProjectAccess("AssetVersion is not linked to this project")
             # The content address is claimed FIRST, atomically, in the database:
             # a same-project replay (or a second job of the same project) is a
             # no-op, while a *different* project's claim is refused here — before
@@ -698,6 +1044,15 @@ class SqlArtifactBindingStore:
         if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
             raise ArtifactBindingError("retract requires a real fencing token (attempt >= 1)")
         async with self._session_factory() as session:
+            binding = await session.get(orm.ProjectArtifactBinding, (artifact_id, job_id))
+            if binding is None or binding.attempt != attempt:
+                await session.rollback()
+                return False
+            version_id = binding.artifact_version_id
+            asset_id: str | None = None
+            if version_id is not None:
+                version = await session.get(orm.AssetVersion, version_id)
+                asset_id = version.asset_id if version is not None else None
             result = await session.execute(
                 delete(orm.ProjectArtifactBinding).where(
                     _BINDING.c.artifact_id == artifact_id,
@@ -705,8 +1060,54 @@ class SqlArtifactBindingStore:
                     _BINDING.c.attempt == attempt,
                 )
             )
+            if not getattr(result, "rowcount", 0):
+                await session.rollback()
+                return False
+            if version_id is not None:
+                active_binding = (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(_BINDING)
+                        .where(_BINDING.c.artifact_version_id == version_id)
+                    )
+                ).scalar_one()
+                if active_binding == 0:
+                    links = orm.ProjectAssetLink
+                    link_model: Any = links
+                    link_table: Any = link_model.__table__
+                    link_hash = hashlib.sha256(
+                        (binding.project_id + version_id).encode()
+                    ).hexdigest()
+                    link_id = f"render_link_{link_hash}"
+                    await session.execute(delete(links).where(link_table.c.link_id == link_id))
+                    remaining_links = (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(link_table)
+                            .where(link_table.c.version_id == version_id)
+                        )
+                    ).scalar_one()
+                    if remaining_links == 0:
+                        if version is not None:
+                            await session.delete(version)
+                            await session.flush()
+                        if asset_id is not None:
+                            versions = orm.AssetVersion
+                            version_model: Any = versions
+                            version_table: Any = version_model.__table__
+                            remaining_versions = (
+                                await session.execute(
+                                    select(func.count())
+                                    .select_from(version_table)
+                                    .where(version_table.c.asset_id == asset_id)
+                                )
+                            ).scalar_one()
+                            if remaining_versions == 0:
+                                asset = await session.get(orm.Asset, asset_id)
+                                if asset is not None:
+                                    await session.delete(asset)
             await session.commit()
-            return bool(getattr(result, "rowcount", 0))
+            return True
 
     async def _load_validated_revision(self, project_id: str, revision_id: str) -> RevisionRecord:
         """Load the bound revision and re-validate its bytes, with a typed refusal.

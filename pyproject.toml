@@ -40,10 +40,38 @@ dependencies = [
     "arabic-reshaper>=3.0",
     "python-bidi>=0.4",
     "pillow>=10.0",
+    "av>=14,<19",  # Wave 4/14: post-disk PyAV verification of media artifacts (spine)
     "beautifulsoup4>=4.12",
+    # Security floor for beautifulsoup4's CSS-selector engine (transitive, but
+    # declared so the floor is enforced rather than hoped for): CVE-2026-126190
+    # (fixed 4.0.0) and CVE-2026-126191 / CVE-2026-126193 (fixed 3.0.2).
+    # Conditional on purpose: every patched release declares
+    # `Requires-Python >=3.11.5`, so on an interpreter older than that no fixed
+    # build exists to install — the marker keeps 3.10 installable instead of
+    # turning the floor into a resolver failure (see docs/audits §8.4).
+    #
+    # `python_full_version`, NOT `python_version`: PEP 508 defines
+    # `python_version` as `major.minor` only, so `python_version >= '3.11.5'`
+    # compares "3.11" against "3.11.5" and is FALSE on every 3.11 interpreter —
+    # the floor silently never applied. `python_full_version` carries the patch
+    # level, so 3.11.5+ gets the fix and 3.11.0–3.11.4 (which cannot install it)
+    # stays resolvable. `scripts/dependency_audit.py` now parses this line and
+    # evaluates the marker itself, so this class of typo fails the gate.
+    "soupsieve>=4.1.1; python_full_version >= '3.11.5'",
     "psutil>=5.9",
     "litellm>=1.74,<2",  # multi-provider routing chain (Ollama/Groq/Gemini/OpenRouter)
     "boto3==1.43.98",  # pinned: Cloudflare R2 blob tier (v3.9.0, latest on PyPI 2026-09-20)
+    # Wave 4 (PR #333/#334): RFC 8785 canonicalization authority and the
+    # AES-GCM credential envelopes of NAGAR CONNECT. No hand-rolled primitives
+    # and no second key ladder: the libraries are the crypto/canonicalization
+    # authority, imported lazily where the fail-closed error must be typed.
+    "rfc8785==0.1.4",
+    # Cap widened 48 -> 51 (2026-11-14): 47.0.0 carries four unaccepted advisories
+    # (PYSEC-2026-3552/3553/3554, GHSA-537c-gmf6-5ccf) whose fixes are 48.0.1/49.0.0/
+    # 50.0.0, so a `<48` cap could never resolve to a clean release and reddened
+    # `scripts/dependency_audit.py` on every run. Only the stable HMAC/AES-GCM
+    # surface is used (connect/crypto.py).
+    "cryptography>=43,<51",
   ]
 
 [project.scripts]
@@ -51,7 +79,7 @@ nexus = "nexus_ai_agent.cli:app"
 
 [project.optional-dependencies]
 pdf = [
-  "pypdf>=5.1",  # D3: real PDF text extraction (clear error when missing)
+  "pypdf>=6.21.4",  # D3: real PDF text extraction (clear error when missing)
 ]
 speech = [
   "faster-whisper>=1.0,<2",  # Wave 9: local CTranslate2 ASR (int8 CPU, no torch)
@@ -64,10 +92,14 @@ dev = [
   "pytest-asyncio>=0.23",
   "ruff>=0.4",
   "mypy>=1.10",
-  "pypdf>=5.1",  # keep the pdf-extraction test path real, not mocked
+  "pypdf>=6.21.4",  # keep the pdf-extraction test path real, not mocked
   "imageio-ffmpeg>=0.5",  # bundles a static FFmpeg: the render test runs a real encode
   "deptry>=0.20",  # declared-vs-imported dependency gate (`make deps`, CI lint job)
   "pip-audit>=2.7",  # known-vulnerability gate (`make audit`, CI dependency-audit job)
+  # `scripts/dependency_audit.py` parses pyproject.toml to prove a declared floor
+  # is real. `tomllib` is 3.11+, so the 3.10 leg needs this — declared here rather
+  # than borrowed from deptry/pip-audit, which only happen to ship it.
+  "tomli>=2.0.1; python_version < '3.11'",
 ]
 
 [tool.setuptools]
@@ -78,6 +110,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "nexus_ai_agent.creative.packs.caption" = ["fonts/*.ttf", "fonts/OFL.txt"]
+"nexus_ai_agent.web" = ["static/*"]  # Studio PWA shell (Wave 4 / PR #328)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -143,8 +176,19 @@ ignore_missing_imports = true
 # `deptry src` is part of `make lint` and the CI lint job: every import must be
 # a declared dependency, and every declared runtime dependency must be used.
 [tool.deptry]
-known_first_party = ["nexus_ai_agent"]
+# ``scripts/`` is deliberately not an installed namespace
+# (tests/architecture/test_scripts_import_boundary.py): each file there is a thin
+# CLI that may import its *sibling* helper modules by bare name, because a script
+# is executed from the repository root.  Those helpers are first-party files, not
+# distributions, so the two that are imported that way are declared here — the
+# alternative (a distribution per helper) would ship operator tooling as product.
+known_first_party = ["nexus_ai_agent", "security_mutation_support", "omega_media"]
 pep621_dev_dependency_groups = ["dev"]
+# llama-cpp-python's distribution name and its import name (`llama_cpp`) are not
+# derivable from one another, so deptry needs the explicit mapping to see the
+# optional local-LLM backend as "declared and used" rather than reported twice
+# (DEP002 on the distribution, DEP001 on the module).
+package_module_name_map = { "llama-cpp-python" = ["llama_cpp"] }
 
 [tool.deptry.per_rule_ignores]
 # DEP001 — imported but not declared: *optional* integrations that are probed
@@ -165,8 +209,23 @@ DEP004 = ["imageio_ffmpeg"]
 # fail-closed design).  langsmith arrives transitively via langgraph →
 # langchain-core, so tracing needs no separate extra — the opt-in switch
 # governs egress, not installation.
-DEP002 = ["asyncpg", "python-multipart", "duckduckgo-search", "langsmith"]
+#   soupsieve → declared only as a *security floor* on beautifulsoup4's selector
+#   engine (CVE-2026-126190 / -126191 / -126193). Nothing imports it directly;
+#   the floor exists so the vulnerable 2.x builds cannot be resolved back in.
+DEP002 = ["asyncpg", "python-multipart", "duckduckgo-search", "langsmith", "soupsieve"]
 # DEP003 — transitive packages imported directly, each owned by a declared
 # dependency: starlette (fastapi), httpcore (httpx), botocore (boto3),
 # psycopg_pool (psycopg[pool]).
-DEP003 = ["starlette", "httpcore", "botocore", "psycopg_pool"]
+#   packaging / yaml / langsmith → `scripts/` only (pip-audit, kubernetes and
+#   langchain-core respectively).  `deptry .` scans the whole tree; those CLIs are
+#   never imported by the shipped package, so the libraries stay transitive and
+#   the reason is recorded here instead of the paths being silently ignored.
+DEP003 = [
+    "starlette",
+    "httpcore",
+    "botocore",
+    "psycopg_pool",
+    "packaging",
+    "yaml",
+    "langsmith",
+]

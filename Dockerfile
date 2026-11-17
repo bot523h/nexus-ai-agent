@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     libmagic1 \
     libgl1 \
     fonts-liberation \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy assets and code

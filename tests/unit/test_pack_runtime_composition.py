@@ -51,6 +51,8 @@ MANIFEST_PATHS = sorted(PACKS_DIR.glob("*/pack.manifest.json"))
 #: The frozen Wave-1 catalog is the floor of every composition.
 WAVE1 = build_wave1_registry().list_operations()
 
+#: ATLAS integration appends the AETHEL lanes (portrait, scene) after the
+#: original six, so the frozen order is the six plus the two additions.
 EXPECTED_PACKAGE_IDS = (
     "nexus.slideshow.compose",
     "nexus.language.caption",
@@ -58,6 +60,8 @@ EXPECTED_PACKAGE_IDS = (
     "nexus.motion.graphics",
     "nexus.audio.studio",
     "nexus.color.delivery",
+    "nexus.portrait.refine",
+    "nexus.scene.imaging",
 )
 
 
@@ -86,7 +90,7 @@ def test_composition_package_ids_match_the_manifests() -> None:
         )
 
 
-def test_composition_order_is_the_documented_six_pack_order() -> None:
+def test_composition_order_is_the_documented_pack_order() -> None:
     assert tuple(entry.package_id for entry in COMPOSITION) == EXPECTED_PACKAGE_IDS
 
 
@@ -108,10 +112,25 @@ def test_runtime_knows_every_declared_capability() -> None:
 
 
 def test_runtime_operations_are_the_wave1_catalog_plus_every_manifest_capability() -> None:
+    """Three axes, and nothing else: Wave-1 core, pack manifests, engine capabilities.
+
+    Wave 6 added a third axis — the six NAGAR creative engines each expose one
+    read-only ``verify_media`` capability. They are *not* pack capabilities (no
+    manifest declares them) and they are not Wave-1 core, so they are enumerated
+    here explicitly: the invariant stays exact, and a seventh unpinned operation
+    still turns this test red.
+    """
+    from nexus_ai_agent.creative.studio.capabilities import ENGINE_PORT_ATTRIBUTES
+    from nexus_ai_agent.creative.studio.engine_capabilities import verify_operation_id
+
+    engine_operations = {verify_operation_id(engine) for engine in ENGINE_PORT_ATTRIBUTES}
     registry = build_runtime_registry()
     declared = [cap for path in MANIFEST_PATHS for cap in load_manifest(path).capabilities]
-    assert set(registry.list_operations()) == set(WAVE1) | set(declared)
-    assert len(registry.list_operations()) == len(WAVE1) + len(set(declared))
+    assert set(registry.list_operations()) == set(WAVE1) | set(declared) | engine_operations
+    assert not (engine_operations & (set(WAVE1) | set(declared)))
+    assert len(registry.list_operations()) == len(WAVE1) + len(set(declared)) + len(
+        engine_operations
+    )
 
 
 def test_every_builtin_pack_activates_once_the_runtime_knows_it() -> None:

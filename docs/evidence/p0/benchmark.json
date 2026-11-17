@@ -1,0 +1,16 @@
+{
+  "schema": "nexus-p0-benchmark/v1",
+  "generated_at": "2026-11-16T04:10:30.882310+00:00",
+  "rows": 20000,
+  "artifact_bytes": 5605060,
+  "dump_seconds": 0.128,
+  "restore_seconds": 0.643,
+  "verify_seconds": 0.148,
+  "restored_rows": 20000,
+  "row_count_matches": true,
+  "throughput_rows_per_s_restore": 31101.1,
+  "sql": "SELECT id, name, body FROM bench_rows ORDER BY id",
+  "source_content_sha256": "bc35d143db03e802b12b834f1a0a3124a3504e9e86c84c25abaffdeb2c87c8f9",
+  "restored_content_sha256": "bc35d143db03e802b12b834f1a0a3124a3504e9e86c84c25abaffdeb2c87c8f9",
+  "content_digest_matches": true
+}

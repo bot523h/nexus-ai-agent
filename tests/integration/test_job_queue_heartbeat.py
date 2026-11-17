@@ -267,19 +267,27 @@ async def test_normal_recovery_strict_heartbeat_boundary(
     before = _row(db, job_id)
 
     recovered = await queue.recover_job(job_id, stale_after=STALE_WINDOW)
-    if offset >= -STALE_WINDOW:
-        assert recovered == []
-        assert _row(db, job_id) == before
-        assert gate.calls == 0
-    else:
-        assert recovered == [job_id]
-        await _wait_status(queue, job_id, JobStatus.PROCESSING)
-        row = _row(db, job_id)
-        assert row["attempt"] == 2
-        assert row["heartbeat_at"] == clock.iso()
-        assert gate.calls == 1
+    try:
+        if offset >= -STALE_WINDOW:
+            assert recovered == []
+            assert _row(db, job_id) == before
+            assert gate.calls == 0
+        else:
+            assert recovered == [job_id]
+            await _wait_status(queue, job_id, JobStatus.PROCESSING)
+            row = _row(db, job_id)
+            assert row["attempt"] == 2
+            assert row["heartbeat_at"] == clock.iso()
+
+            async def _wait_calls() -> None:
+                while gate.calls < 1:
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(_wait_calls(), timeout=2.0)
+            assert gate.calls == 1
+    finally:
         gate.event(1).set()
-    await queue.shutdown()
+        await queue.shutdown()
 
 
 @pytest.mark.parametrize("status", [JobStatus.PROCESSING, JobStatus.VERIFYING])

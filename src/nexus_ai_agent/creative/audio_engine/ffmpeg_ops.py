@@ -192,6 +192,39 @@ def parse_audio_stream_channels(layout_token: str) -> int | None:
     return None
 
 
+def _json_channel_count(stream: dict[str, object]) -> int:
+    """Channel count from an ``ffprobe`` JSON stream, or a typed refusal.
+
+    Two shapes are seen in the wild, and both must resolve to the *same* number:
+
+    * ``"channels": 1`` — the documented field (fast path);
+    * no ``channels`` at all, with only ``"channel_layout": "mono"`` or
+      ``"1 channels"`` — some builds and muxers omit the count.
+
+    The fallback deliberately reuses :func:`parse_audio_stream_channels`, the
+    same authority the ``ffmpeg -i`` banner path uses, so the two probes can
+    never disagree about a stream. An unparseable shape raises rather than
+    guessing: a wrong channel count corrupts the loudness channel sum.
+    """
+    raw = stream.get("channels")
+    if raw is not None and not isinstance(raw, bool):
+        try:
+            count = int(str(raw))
+        except (TypeError, ValueError) as error:
+            raise AudioProbeError(f"ffprobe channels is not an integer: {raw!r}") from error
+        if count >= 1:
+            return count
+        raise AudioProbeError(f"ffprobe reported a non-physical channel count ({count})")
+    layout = stream.get("channel_layout")
+    if isinstance(layout, str) and layout:
+        derived = parse_audio_stream_channels(layout)
+        if derived is not None:
+            return derived
+    raise AudioProbeError(
+        "ffprobe stream reports neither `channels` nor a parseable `channel_layout`"
+    )
+
+
 class AudioEngineError(RuntimeError):
     """The native audio engine could not produce a verifiable result."""
 
@@ -336,7 +369,6 @@ class FfmpegEngine:
     _REQUIRED_STREAM_KEYS = (
         "codec_name",
         "sample_rate",
-        "channels",
         "sample_fmt",
         "time_base",
         "duration_ts",
@@ -402,7 +434,7 @@ class FfmpegEngine:
                 "stream is not a valid audio program"
             )
         sample_rate = _as_int(stream["sample_rate"], "sample_rate")
-        channels = _as_int(stream["channels"], "channels")
+        channels = _json_channel_count(stream)
         duration_ts = _as_int(stream["duration_ts"], "duration_ts")
         start_pts = _as_int(stream["start_pts"], "start_pts") if "start_pts" in stream else None
         time_base = str(stream["time_base"])

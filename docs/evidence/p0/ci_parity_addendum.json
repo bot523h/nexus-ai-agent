@@ -1,0 +1,329 @@
+{
+  "schema": "nexus-ci-parity-addendum/v2",
+  "mission": "Forensic closeout, wave 4 \u2014 the gates at the final tree, recorded as machine output",
+  "source_revision": "f574e486e076e368a3024fa48c3f8db14071e1c8",
+  "source_revision_note": "the revision every number below was measured at; the documentation commit that carries this file is its child, so `git rev-parse HEAD` will differ by that one commit only",
+  "measured_at_utc": "2026-11-15T18:20:24Z",
+  "verification_label": "CHUNKED_SUITE_VERIFICATION_WITH_COLLECTION_EQUIVALENCE",
+  "selection_marker": "not slow",
+  "selection_source": ".github/workflows/ci.yml",
+  "why_this_file": "In an earlier revision this file stood in for docs/evidence/p0/evidence.json, which could not be regenerated without a live PostgreSQL. That is no longer true: the P0 bundle is now the script's own output on PostgreSQL 16.2 (see `p0_evidence` below). This file therefore records what the closeout measured \u2014 the chunked parity run, the gates, the dependency audit \u2014 as machine output rather than prose.",
+  "not_a_substitute_for_github_actions": [
+    "the GitHub Actions runner image and its installed system packages",
+    "service containers (PostgreSQL for the migrate/parity legs)",
+    "the pull_request trigger, required checks and job timeouts",
+    "jobs other than `test` (lint, dependency audit, python-parity, migrate-postgres)"
+  ],
+  "commands": [
+    {
+      "id": "collection_equivalence_and_suite",
+      "command": "python scripts/ci_parity.py --json-out /tmp/parity_final2.json",
+      "exit_code": 0,
+      "ci_selection_ids": 11842,
+      "chunk_union_ids": 11842,
+      "missing": 0,
+      "duplicated": 0,
+      "unexpected": 0,
+      "equal": true,
+      "chunks_run": 20,
+      "chunks_skipped_for_space": 0,
+      "wall_seconds_total": 2177.5
+    },
+    {
+      "id": "atlas_sub_chunks",
+      "command": "python scripts/ci_parity.py \"tests/creative/atlas#mutation-120\" \u2026",
+      "exit_code": 0,
+      "sub_chunks": 6,
+      "passed": 1491,
+      "skipped": 21,
+      "collected": 1512,
+      "note": "the 120-mutant campaign ran to completion (124 passed, 711.9 s) after PYTHONDONTWRITEBYTECODE=1 cut each mutant tree from ~53 MB to ~19 MB"
+    },
+    {
+      "id": "ruff_check",
+      "command": "ruff check .",
+      "exit_code": 0,
+      "output": "All checks passed!"
+    },
+    {
+      "id": "ruff_format",
+      "command": "ruff format --check .",
+      "exit_code": 0,
+      "output": "1395 files already formatted"
+    },
+    {
+      "id": "mypy",
+      "command": "mypy src",
+      "exit_code": 0,
+      "output": "Success: no issues found in 552 source files"
+    },
+    {
+      "id": "deptry_tree",
+      "command": "deptry .",
+      "exit_code": 0,
+      "output": "Success! No dependency issues found. (616 files)"
+    },
+    {
+      "id": "deptry_gate_scope",
+      "command": "deptry src",
+      "exit_code": 0,
+      "output": "Success! No dependency issues found. (552 files)"
+    },
+    {
+      "id": "pack_coverage",
+      "command": "COVERAGE_FILE=/tmp/.coverage_arena python scripts/pack_coverage.py",
+      "exit_code": 0,
+      "verdict": "ACCEPTED",
+      "total_coverage_percent": 97.65,
+      "packs_over_95_percent": "9/9",
+      "coverage_source_sha256": "51245902d7ed4c272ee815fff0eed7aacb25b005c6035259737e3df998940bcc"
+    },
+    {
+      "id": "truth_doctor",
+      "command": "python -m nexus_ai_agent.diagnostics.truth --root .",
+      "exit_code": 0,
+      "output": "OK \u2014 no findings"
+    },
+    {
+      "id": "dependency_audit",
+      "command": "python scripts/dependency_audit.py",
+      "exit_code": 1,
+      "summary": "21 advisories: 18 accepted, 3 blocking",
+      "blocking": [
+        "CVE-2026-126190",
+        "CVE-2026-126191",
+        "CVE-2026-126193"
+      ],
+      "note": "red on exactly three soupsieve advisories whose declared fix versions (3.0.2, 4.0.0) are not published on PyPI \u2014 see `dependency_audit` below; no allow-list entry was invented"
+    }
+  ],
+  "chunks": [
+    {
+      "name": "tests/architecture",
+      "exit_code": 0,
+      "summary": "406 passed in 64.87s (0:01:04)",
+      "collected": 406,
+      "wall_seconds": 66.5
+    },
+    {
+      "name": "tests/bench",
+      "exit_code": 0,
+      "summary": "3 passed in 0.77s",
+      "collected": 3,
+      "wall_seconds": 2.2
+    },
+    {
+      "name": "tests/creative/atlas#mutation-120",
+      "exit_code": 0,
+      "summary": "124 passed in 711.85s (0:11:51)",
+      "collected": 124,
+      "wall_seconds": 721.7
+    },
+    {
+      "name": "tests/creative/atlas#falsification-160",
+      "exit_code": 0,
+      "summary": "190 passed in 10.18s",
+      "collected": 190,
+      "wall_seconds": 11.3
+    },
+    {
+      "name": "tests/creative/atlas#titan-mutations",
+      "exit_code": 0,
+      "summary": "97 passed, 3 skipped in 197.06s (0:03:17)",
+      "collected": 100,
+      "wall_seconds": 201.7
+    },
+    {
+      "name": "tests/creative/atlas#prometheus-governance",
+      "exit_code": 0,
+      "summary": "164 passed, 9 skipped in 13.28s",
+      "collected": 173,
+      "wall_seconds": 14.8
+    },
+    {
+      "name": "tests/creative/atlas#waves-13-22",
+      "exit_code": 0,
+      "summary": "406 passed, 1 skipped in 10.89s",
+      "collected": 407,
+      "wall_seconds": 12.3
+    },
+    {
+      "name": "tests/creative/atlas#waves-23-30-and-solvers",
+      "exit_code": 0,
+      "summary": "510 passed, 8 skipped in 13.22s",
+      "collected": 518,
+      "wall_seconds": 14.7
+    },
+    {
+      "name": "tests/creative/audio_engine",
+      "exit_code": 0,
+      "summary": "163 passed in 4.39s",
+      "collected": 163,
+      "wall_seconds": 5.7
+    },
+    {
+      "name": "tests/creative/chronos",
+      "exit_code": 0,
+      "summary": "240 passed in 13.10s",
+      "collected": 240,
+      "wall_seconds": 14.6
+    },
+    {
+      "name": "tests/creative/composition",
+      "exit_code": 0,
+      "summary": "306 passed in 85.66s (0:01:25)",
+      "collected": 306,
+      "wall_seconds": 88.3
+    },
+    {
+      "name": "tests/creative/director",
+      "exit_code": 0,
+      "summary": "68 passed in 0.85s",
+      "collected": 68,
+      "wall_seconds": 2.2
+    },
+    {
+      "name": "tests/creative/episode_causality_lab",
+      "exit_code": 0,
+      "summary": "183 passed in 7.56s",
+      "collected": 183,
+      "wall_seconds": 9.2
+    },
+    {
+      "name": "tests/creative/morpheus",
+      "exit_code": 0,
+      "summary": "281 passed in 4.41s",
+      "collected": 281,
+      "wall_seconds": 6.1
+    },
+    {
+      "name": "tests/creative/packs",
+      "exit_code": 0,
+      "summary": "155 passed in 7.87s",
+      "collected": 155,
+      "wall_seconds": 9.3
+    },
+    {
+      "name": "tests/creative/speech_cinema",
+      "exit_code": 0,
+      "summary": "284 passed, 4 deselected in 32.16s",
+      "collected": 284,
+      "wall_seconds": 33.5
+    },
+    {
+      "name": "tests/creative/veritas",
+      "exit_code": 0,
+      "summary": "648 passed in 18.17s",
+      "collected": 648,
+      "wall_seconds": 19.6
+    },
+    {
+      "name": "tests/integration",
+      "exit_code": 0,
+      "summary": "661 passed, 36 skipped, 1036 warnings in 260.24s (0:04:20)",
+      "collected": 697,
+      "wall_seconds": 262.9
+    },
+    {
+      "name": "tests/storage",
+      "exit_code": 0,
+      "summary": "43 passed in 0.80s",
+      "collected": 43,
+      "wall_seconds": 2.1
+    },
+    {
+      "name": "tests/unit",
+      "exit_code": 0,
+      "summary": "6838 passed, 15 skipped, 299 warnings in 673.50s (0:11:13)",
+      "collected": 6853,
+      "wall_seconds": 678.8
+    }
+  ],
+  "totals": {
+    "passed": 11770,
+    "skipped": 72,
+    "deselected": 4,
+    "failed": 0,
+    "executed": 11842
+  },
+  "skipped_for_space": [],
+  "p0_evidence": {
+    "path": "docs/evidence/p0/evidence.json",
+    "source_revision": "80c8ea65da78202cbef089de39057d4bcdea3028",
+    "all_checks_passed": true,
+    "checks": {
+      "migrations": 0,
+      "persistence_tests": 0,
+      "dr_proof": 0,
+      "backend_policy": 0,
+      "truth_gate": 0,
+      "benchmark": 0
+    },
+    "database": "PostgreSQL 16.2 on 127.0.0.1:5433, database `nexus`, migration head 20261112connect",
+    "note": "generated by scripts/p0_evidence.py; no field was hand-written"
+  },
+  "dependency_audit": {
+    "command": "python scripts/dependency_audit.py",
+    "exit_code": 1,
+    "summary": "21 advisories: 18 accepted, 3 blocking",
+    "accepted_by_reviewed_allow_list": 18,
+    "blocking": [
+      "CVE-2026-126190",
+      "CVE-2026-126191",
+      "CVE-2026-126193"
+    ],
+    "blocking_detail": {
+      "package": "soupsieve",
+      "installed": "2.10",
+      "pip_index_latest": "2.10",
+      "declared_fix_versions": {
+        "CVE-2026-126190": "4.0.0",
+        "CVE-2026-126193": "3.0.2",
+        "CVE-2026-126191": "3.0.2"
+      },
+      "why_no_acceptance_is_honest": "every published soupsieve release is 2.x, so the declared fixes are not installable; the gate's `no-fix-released` reason self-expires when pip-audit reports a fix list (it does) and `transitive-cap` needs a capping requirement (beautifulsoup4 allows any soupsieve>1.2). The three advisories are left blocking and documented in the ledger \u00a78.4."
+    },
+    "environment_note": "seven `pip` advisories in the first local run were the sandbox pip 23.0.1 and disappeared after upgrading it to 26.3; CI resolves a different advisory set (ledger \u00a76.3.2)"
+  },
+  "benchmarks": {
+    "revision": "9da4619",
+    "method": "statistics.median over N=5, two discarded warm-ups, gc.collect() before each round",
+    "medians_ms": {
+      "homography": 27.837,
+      "blur_512": 45.412,
+      "inpaint_30it": 65.546,
+      "flow_32_w5": 15.601,
+      "skintone_256": 13.396,
+      "lab_roundtrip": 9.499,
+      "bokeh": 7.977,
+      "relight": 1.876,
+      "blur_64": 1.637
+    },
+    "budgets_ms": {
+      "homography": 2000,
+      "flow_32_w5": 3000,
+      "skintone_256": 3000
+    },
+    "note": "raw samples, MAD and the min are in the ledger \u00a74.3; nothing here is rounded from a plan"
+  },
+  "artifacts": {
+    "docs/evidence/p0/evidence.json": "0d8b12c312ada5fb6c305b586218fa1fc03a7294650d8fbaf211a32628774d0f",
+    "docs/evidence/p0/benchmark.json": "04a5490ec95cb23831ec78dfe6bdb4c23f094fba33d5e3807c40f5749b444132",
+    "OPERATION_TRUTH.json": "282fa62750dab54064070569de3a9533ff46779cf8a4765e02e83bf5483571ac",
+    "scripts/ci_parity.py": "6dad35149f1eb26722ebbf86ef9ed44a60aff71669958e49df77f849375415cb",
+    "parity_json_sha256": "75132fbe292685a2fec19a1b3081e08b1b17d3befa3d6a77c11d6d9955e80421",
+    "pip_audit_json_sha256": "55e48cb51b44cc6d16ad48665bc7fae9507942e1c9978f6903419b0ad1275bb2",
+    "dependency_audit_stdout_sha256": "23bfc90a90d3e00f6ce00a2cf294ea87dca656bf47c60919bf6e31424bb52f98"
+  },
+  "limitations": [
+    "The parity run is not GitHub Actions: no runner image, no service containers, no workflow triggers, and the other jobs in ci.yml are not run (CHUNKED_SUITE_VERIFICATION_WITH_COLLECTION_EQUIVALENCE).",
+    "FFmpeg/ffprobe are absent on this machine, so 21 ATLAS ids skip with an explicit reason; three of them say they are NOT kills.",
+    "The local dependency audit is red on three soupsieve advisories that cannot be fixed with any published version (see dependency_audit).",
+    "Branch protection could not be read with this token (HTTP 403), so the required-check policy is unverified here and was not modified."
+  ],
+  "honesty": {
+    "fabricated_values": 0,
+    "source": "every command above was executed on this machine at source_revision; every count is copied from that execution or from a generated file whose SHA-256 is recorded above",
+    "no_live_postgresql_limitation": "retired \u2014 the P0 bundle was regenerated on a live PostgreSQL 16.2"
+  }
+}

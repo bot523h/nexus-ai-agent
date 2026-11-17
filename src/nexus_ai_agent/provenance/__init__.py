@@ -11,6 +11,17 @@ state. It observes facts after they are durably committed and proves (or
 honestly refuses to prove) what happened.
 """
 
+from nexus_ai_agent.provenance.canonicalization import (
+    CanonicalizationScheme,
+    canonical_digest,
+    verify_canonical_digest,
+)
+from nexus_ai_agent.provenance.jcs import (
+    JcsError,
+    canonical_bytes,
+    canonical_text,
+    jcs_digest,
+)
 from nexus_ai_agent.provenance.journal import (
     AppendResult,
     CausalConflictError,
@@ -46,16 +57,23 @@ __all__ = [
     "CausalEvent",
     "CausalJournal",
     "CausalObserver",
+    "CanonicalizationScheme",
     "ChainVerdict",
     "EventKind",
     "Finding",
+    "JcsError",
     "JobFacts",
     "LedgerRecord",
     "PassportBuilder",
     "PassportStatus",
     "QueueLedgerObserver",
+    "canonical_bytes",
+    "canonical_digest",
     "canonical_json",
+    "canonical_text",
     "compute_record_hash",
     "digest_of",
+    "jcs_digest",
+    "verify_canonical_digest",
     "verify_chain",
 ]

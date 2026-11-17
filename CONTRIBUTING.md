@@ -11,6 +11,7 @@ make version-check  # VERSION == pyproject.toml == newest released CHANGELOG hea
 make lint           # ruff check . && ruff format --check .
 make types          # mypy src
 make test           # pytest -q -m "not slow"
+make test-parity    # the same selection, chunked to fit a small /tmp
 ```
 
 * **Ruff has one pinned version, declared twice on purpose**: `rev:` in
@@ -22,6 +23,16 @@ make test           # pytest -q -m "not slow"
 * **Lint never blocks the tests.** `lint-fast` installs no package and reports lint and
   version drift in seconds; the `test` job deliberately declares no `needs:` gate, so a
   broken-lint push shows the lint failure while the test signal stays independent.
+* **The test selection is bigger than a workstation's `/tmp`.** CI runs the whole
+  suite in one process, but the mutation campaigns under `tests/creative` write
+  more than 15 GB into pytest's temporary root, so the same single-process run
+  locally ends in `OSError: [Errno 28] No space left on device` — which pytest
+  reports as *hundreds* of phantom failures. `make test-parity`
+  (`scripts/ci_parity.py`) runs the identical selection (`-m "not slow"`, read
+  from the workflow by `tests/unit/test_ci_parity_runner.py`) one test tree per
+  process, reclaiming the temporary root between trees, and states explicitly
+  which trees it could not fit. A chunk that fails is reported with its own
+  test ids, so a red parity run points at a tree, not at a disk.
 * **Version drift fails before the install.** `scripts/check_version_lockstep.py` is
   standard-library only and runs as the first step of the fast rail (and as
   `make version-check` locally), so a drifted `VERSION` / `pyproject.toml` /

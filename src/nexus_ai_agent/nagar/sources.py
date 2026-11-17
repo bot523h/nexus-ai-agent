@@ -94,6 +94,15 @@ _PACK_MODULES = (
     "nexus_ai_agent.creative.packs.motion.operations",
     "nexus_ai_agent.creative.packs.audio.operations",
     "nexus_ai_agent.creative.packs.delivery.operations",
+    # ATLAS integration (PR #341): the AETHEL declarative packs. Their
+    # OPERATION_* constants are re-exported from models.py by the thin
+    # operations adapter, so the declaration scan sees the same ids.
+    "nexus_ai_agent.creative.packs.portrait.operations",
+    "nexus_ai_agent.creative.packs.scene.operations",
+    # Wave 5: the six NAGAR creative-engine capabilities declare their ids as
+    # OPERATION_* constants in the engine capability layer, so the declaration
+    # scan and the runtime registry stay bidirectionally pinned.
+    "nexus_ai_agent.creative.studio.engine_capabilities",
 )
 
 #: The studio core module scanned for ``operation_id=`` literals.

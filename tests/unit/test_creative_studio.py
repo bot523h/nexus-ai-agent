@@ -8,7 +8,7 @@ from typing import Any
 import aiosqlite
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 from nexus_ai_agent.api import app as app_module
 from nexus_ai_agent.config import settings as settings_module
@@ -149,7 +149,8 @@ async def test_job_registry_crud(tmp_path: Path) -> None:
     assert await registry.get_job(job_id) is None
 
 
-def test_background_task_flow(
+@pytest.mark.asyncio
+async def test_background_task_flow(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -159,6 +160,8 @@ def test_background_task_flow(
 
     monkeypatch.setenv("NEXUS_CREATIVE_GEMINI_API_KEY", "creative-key")
     monkeypatch.setenv("CREATIVE_TEMP_DIR", str(tmp_path / "creative"))
+    # Isolate the durable queue sidecar for this test (never the repo default).
+    monkeypatch.setenv("NEXUS_DB_PATH", str(tmp_path / "app.sqlite"))
     # The endpoint is fail-closed: without a signing key it answers 503.
     monkeypatch.setenv("NEXUS_API_HMAC_KEY", "test-signing-key")
     settings_module.get_settings.cache_clear()
@@ -192,7 +195,15 @@ def test_background_task_flow(
     monkeypatch.setattr(app_module, "analyze_video_with_gemini", fake_analyze)
     monkeypatch.setattr(app_module, "execute_ffmpeg_commands", fake_execute)
 
-    client = TestClient(app_module.app)
+    # Everything below runs in ONE event loop. The durable queue's tasks, its
+    # locks and its database sessions are loop-bound: submitting through
+    # ``TestClient`` (its own portal loop) and then draining from
+    # ``asyncio.run`` (a second loop) raced, and under an unlucky test order the
+    # claim never progressed — the job sat in ``pending`` until the deadline.
+    # ``ASGITransport`` keeps the request, the worker and the assertions on the
+    # same loop, which is how the composition roots actually run.
+    transport = ASGITransport(app=app_module.app)
+    client = AsyncClient(transport=transport, base_url="http://testserver")
     # Build the multipart body once so the HMAC signature covers exactly
     # the raw bytes the server will receive.
     request = httpx.Request(
@@ -207,7 +218,7 @@ def test_background_task_flow(
         f"{timestamp}:".encode() + request.content,
         hashlib.sha256,
     ).hexdigest()
-    response = client.post(
+    response = await client.post(
         "/creative/video-edit",
         content=request.content,
         headers={
@@ -221,6 +232,29 @@ def test_background_task_flow(
     payload = response.json()
     assert payload["status"] == "pending"
 
+    # The legacy lane is a durable-queue job now: a worker (the bot/CLI
+    # composition roots, or this process's own queue tasks) executes it.
+    # Drain deterministically instead of racing the background task.
+    import asyncio as _asyncio
+
+    registry = app_module._creative_registry
+    assert registry is not None
+    queue = registry.queue
+    terminal = {"completed", "failed_retryable", "failed_terminal", "cancelled"}
+    # Claim anything still pending (the operator path), then wait.
+    await queue.resume_pending_jobs()
+    # The budget covers a *real* FFmpeg encode on a loaded CI box. The wait stays
+    # a hard deadline — it never returns success early, so a genuinely stuck job
+    # still fails this test.
+    status = ""
+    for _ in range(1500):
+        facts = await queue.get_job_facts_async(payload["job_id"])
+        if facts is not None and str(facts.status) in terminal:
+            status = str(facts.status)
+            break
+        await _asyncio.sleep(0.02)
+    assert status == "completed", "video_edit job did not reach a terminal state in time"
+
     # GET is the same HMAC gate as the POST (task-165): timestamp over an
     # empty body, constant-time verified by the app.
     read_timestamp = str(int(time.time()))
@@ -229,7 +263,7 @@ def test_background_task_flow(
         f"{read_timestamp}:".encode() + b"",
         hashlib.sha256,
     ).hexdigest()
-    job_response = client.get(
+    job_response = await client.get(
         f"/creative/jobs/{payload['job_id']}",
         headers={
             "X-NEXUS-Timestamp": read_timestamp,
@@ -239,5 +273,11 @@ def test_background_task_flow(
     assert job_response.status_code == 200
     job = job_response.json()
     assert job["status"] == "done"
-    assert job["result"]["output_path"].endswith(f"{payload['job_id']}.mp4")
+    output_path = job["result"]["output_path"]
+    assert output_path.endswith(".mp4")
+    assert Path(output_path).exists()
     assert not Path(job["input_data"]["path"]).exists()
+
+    # The queue lifecycle is closed by this test, not leaked into the next one.
+    await queue.shutdown()
+    await client.aclose()
