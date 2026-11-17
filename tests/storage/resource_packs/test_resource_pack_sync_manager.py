@@ -2187,6 +2187,43 @@ def test_lock_closure_matrix_09_release_preserves_owner_token_and_inode(
     lock_file.unlink()
 
 
+def test_lock_closure_matrix_11_release_spares_a_foreign_quarantine_record(
+    mirror: PackMirror, tmp_path: Path
+) -> None:
+    """11: release retires only our own record and skips a rival's quarantine."""
+    manager, now = _closure_manager(tmp_path / "matrix11", mirror)
+    lock_file = manager._storage_lock().path
+    with manager._storage_lock() as held:
+        assert held._owner_token is not None
+        own_ino = os.lstat(lock_file).st_ino
+        foreign = lock_file.parent / f".{lock_file.name}.foreign.stale"
+        _live_claim(foreign, now[0], "foreign:token")
+        # A real, live quarantined record owned by somebody else: differing inode
+        # and token, so the release loop must neither restore nor unlink it.
+        assert os.lstat(foreign).st_ino != own_ino
+    assert not lock_file.exists()
+    assert foreign.exists()
+    assert json.loads(foreign.read_text())["owner_token"] == "foreign:token"
+    foreign.unlink()
+
+
+def test_guard_still_owned_is_false_when_the_record_vanished(tmp_path: Path) -> None:
+    """A break guard whose record disappeared is never considered still owned."""
+    lock = PackSyncManager(
+        tmp_path / "guard-vanished",
+        [],
+        LocalDirectoryPackSource(tmp_path / "mirror"),
+        allow_unsigned=True,
+        disk_free_probe=lambda _: PLENTY,
+        lock_backend="exclusive_file",
+    )._storage_lock()
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    guard = lock._try_enter_break_guard()
+    assert guard is not None
+    lock._break_path.unlink()
+    assert lock._guard_still_owned(guard) is False
+
+
 _LOCK_CLOSURE_MP_CHILD = """
 import json, os, sys
 from pathlib import Path

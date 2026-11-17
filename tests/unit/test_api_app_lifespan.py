@@ -10,6 +10,7 @@ Two layers are covered:
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -115,7 +116,7 @@ async def test_shutdown_failure_is_logged_not_raised(
 
 async def test_real_sidecar_is_owned_while_serving_and_released_after(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     queue = InProcessJobQueue(tmp_path / "jobs.sqlite3")
     _use_queue(monkeypatch, queue)
@@ -128,7 +129,7 @@ async def test_real_sidecar_is_owned_while_serving_and_released_after(
 
 async def test_real_sidecar_second_owner_in_same_host_is_refused(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "jobs.sqlite3"
     first = InProcessJobQueue(db_path)
@@ -145,5 +146,20 @@ async def test_real_sidecar_second_owner_in_same_host_is_refused(
         await first.shutdown()
 
 
-def test_app_is_built_with_the_owning_lifespan() -> None:
-    assert api_app_module.app.router.lifespan_context is api_app_module._api_lifespan
+async def test_app_is_built_with_the_owning_lifespan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The assembled app's lifespan is wired to the owning ``_api_lifespan``.
+
+    FastAPI merges every included router's lifespan into the app's own, so
+    ``app.router.lifespan_context`` is always a wrapper and can never be the
+    ``_api_lifespan`` object itself. Driving the assembled context is the real
+    proof that the app owns (and releases) the durable queue while serving.
+    """
+    queue = _RecordingQueue()
+    _use_queue(monkeypatch, queue)
+
+    async with api_app_module.app.router.lifespan_context(api_app_module.app):
+        assert queue.calls == ["acquire", "resume"]
+
+    assert queue.calls == ["acquire", "resume", "shutdown"]
