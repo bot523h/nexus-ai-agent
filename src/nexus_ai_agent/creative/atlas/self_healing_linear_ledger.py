@@ -61,8 +61,10 @@ __all__ = [
     "LedgerEntry",
     "LedgerIntegrityReport",
     "HealingReport",
+    "SelfHealingReport",
     "LedgerAnchor",
     "LinearEvidenceLedger",
+    "SelfHealingLinearLedger",
 ]
 
 LEDGER_SCHEMA: Final[str] = "atlas.self-healing-linear-ledger/1"
@@ -677,3 +679,12 @@ def _atomic_write(path: Path, payload: bytes) -> None:
     except BaseException:
         Path(temp_name).unlink(missing_ok=True)
         raise
+
+
+# Wave-31 naming parity: the alternate spellings are plain aliases, exported
+# alongside the canonical names.  They are deliberately never used in an
+# annotation — the Python 3.10 compatibility guard scans code lines for the
+# bare Self annotation token, so these assign-and-export-only aliases keep it
+# green while both public names remain interchangeable.
+SelfHealingLinearLedger = LinearEvidenceLedger
+SelfHealingReport = HealingReport

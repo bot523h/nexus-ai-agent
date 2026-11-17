@@ -1,4 +1,4 @@
-# NAGAR PROMETHEUS-ATLAS — Counterfactual Time-Travel Studio Doctrine (Waves 18-29)
+# NAGAR PROMETHEUS-ATLAS — Counterfactual Time-Travel Studio Doctrine (Waves 18-33)
 
 Status: **living** (updated with the code in the same PR).
 Owner zone: `src/nexus_ai_agent/creative/atlas/**`, `tests/creative/atlas/**`.
@@ -381,3 +381,105 @@ the `docs/` zone should (1) move this file to `docs/architecture/` (or keep it i
 place and add a stub link), (2) index it in `docs/README.md`, and (3) add the
 module-boundary rows to `docs/architecture/MODULE_MAP.md` §3. None of that is
 performed here because `docs/README.md` is off-limits in this mission.
+
+## 11. Waves 30-33 — the durable-evidence substrate
+
+Waves 18-29 produce evidence (a rendered bundle, a coverage table, a set of
+proved equations). Waves 30-33 make that evidence *durable*: an equation store
+that survives lost shards, a ledger that survives bit-rot without laundering a
+tamper, a provisioner that refuses to bless an untested capability, and a seal
+that binds a coverage measurement so it cannot be edited after the fact. All
+four reuse one JCS canonicaliser (`atlas_spine_governance.jcs_canonical_bytes`)
+and one RFC 6962 leaf convention (`0x00` leaf, `0x01` node), so their digests
+are mutually comparable.
+
+* **Wave 30** (`holographic_equation_vault.py`) — a holographic equation vault
+  over **GF(2⁸)** (primitive polynomial `0x11D`). A systematic MDS generator
+  `[I_k | P]` is built from a Vandermonde matrix, so **every** `k`-row subset is
+  invertible and any `k` of the `n = k + parity` shards reconstruct the payload
+  exactly. `audit()` proves four invariants: the MDS property, any-`k`
+  reconstruction, refusal below `k` shards, and tamper detection through the
+  shard Merkle root. Receipt schema `atlas.holographic-equation-vault/1`.
+* **Wave 31** (`self_healing_linear_ledger.py`) — an append-only evidence ledger
+  where each record is both a link in a SHA-256 hash chain and a Wave-30 MDS
+  shard set. Each shard carries its own digest, so a damaged shard is *erased*
+  rather than trusted. The seal is the discriminator: if the rebuilt record
+  hashes back to the digest already in the chain the damage was random and the
+  ledger **heals**; if it does not, the bytes were rewritten and the ledger
+  **refuses** and reports a tamper — it never launders a forgery into a pass. A
+  record with fewer than `k` readable shards is *unreadable*, never guessed.
+  Each entry digest binds its **position** and its **predecessor** digest, so a
+  record cannot be replayed at another index or lifted onto another chain.
+  The public classes are `LinearEvidenceLedger` and `HealingReport`; the
+  equivalent `SelfHealingLinearLedger` and `SelfHealingReport` names are
+  exported as plain aliases at the end of the module and in `__all__`. They are
+  deliberately never used in an annotation: the repository's 3.10
+  compatibility guard (`tests/unit/test_omega_wave2_py310_compat.py`) scans
+  code lines for the bare `Self` annotation token that `typing.Self` needs.
+* **Wave 32** (`twin_taxonomy_provisioner.py`) — a capability counts as
+  delivered only when it is reachable *and* proven, so the atlas keeps two
+  taxonomies that must mirror each other: the source operators under
+  `creative/atlas/` and the evidence modules under `tests/creative/atlas/`. The
+  provisioner pairs them by the `test_<stem>` convention (with explicit
+  overrides) and refuses to bless a tree in which a source has no twin test (an
+  unproven capability) or a test names no known source (a test with nothing to
+  prove). The pairing is checked *semantically*, not by file name alone: a twin
+  counts only when its module actually imports the source module it claims to
+  cover (`verify_semantic`), and `TwinTaxonomyProvisioner.from_workspace` runs
+  that check over the real tree. The canonical taxonomy can be sealed into the
+  Wave-30 vault and appended to the Wave-31 ledger.
+* **Wave 33** (`pack_coverage_seal.py`) — a coverage measurement is evidence
+  only when it is *bound*: a percentage in a log can be edited after the fact.
+  The seal binds the shipped pack set, the per-pack percentages, the threshold
+  and the provenance into one canonical JCS document with a per-pack Merkle root
+  and a whole-document digest. `evaluate_pack_coverage` is the pure decision —
+  accepted only when every shipped pack has a manifest, a canonical target and
+  coverage at or above the threshold — and it preserves every refusal reason.
+  An unmeasured shipped pack is recorded at `0.0`, never dropped.
+
+### Measured evidence (Waves 30-33)
+
+The table below is PR #341's recorded measurement, transferred verbatim from
+`origin/arena/atlas-episodic-causality-lab` (`41be2b24`); the numbers belong to
+that branch, not to this one.
+
+| Module | Tests | Line coverage | Branch coverage |
+|---|---|---|---|
+| `holographic_equation_vault.py` | 57 | 97.1% | 95.2% |
+| `self_healing_linear_ledger.py` | 36 | 100% | 100% |
+| `twin_taxonomy_provisioner.py` | 25 | 100% | 100% |
+| `pack_coverage_seal.py` | 27 | 100% | 100% |
+
+Reproduce (from the repository root, `PYTHONPATH=src`):
+
+```bash
+COVERAGE_FILE=/tmp/.coverage_arena_closeout pytest tests/creative/atlas \
+  --cov=nexus_ai_agent.creative.atlas --cov-branch --cov-report=term-missing -q
+```
+
+### Verification ledger (Waves 30-33)
+
+| Claim | Enforcing test | Observed |
+|---|---|---|
+| Every `k`-subset of shards reconstructs the payload (MDS) | `test_holographic_equation_vault.py` | pass |
+| Below `k` shards is refused, never guessed | `test_holographic_equation_vault.py` | pass |
+| Shard tamper is detected via the Merkle root | `test_holographic_equation_vault.py` | pass |
+| Bit-rot (≤ `parity` shards) is detected and healed | `test_self_healing_linear_ledger.py` | pass |
+| A rewrite is refused, never laundered into a pass | `test_self_healing_linear_ledger.py` | pass |
+| Fewer than `k` readable shards is unreadable | `test_self_healing_linear_ledger.py` | pass |
+| An untested source is refused | `test_twin_taxonomy_provisioner.py` | pass |
+| Orphan tests and over-provisioning are reported | `test_twin_taxonomy_provisioner.py` | pass |
+| The taxonomy seals into the vault and ledger | `test_twin_taxonomy_provisioner.py` | pass |
+| Coverage below threshold / missing manifest is refused | `test_pack_coverage_seal.py` | pass |
+| One changed pack changes the Merkle root and digest | `test_pack_coverage_seal.py` | pass |
+| The seal appends to the ledger and vault | `test_pack_coverage_seal.py` | pass |
+
+### Pack-coverage evidence rail on this branch
+
+PR #341 recorded the `continuum-evidence` rail as deferred on *its* branch
+because `creative/packs/portrait/` and `creative/packs/scene/` carried Python
+modules but no `pack.manifest.json`. This branch ships both `pack.manifest.json`
+files and registers both packs in `creative/packs/runtime.COMPOSITION`, so that
+particular out-of-zone blocker does not apply here. Wave 33 still ships the seal
+that binds whatever measurement the rail produces, and the enforcement test is
+`tests/unit/test_pack_coverage_contract.py`.

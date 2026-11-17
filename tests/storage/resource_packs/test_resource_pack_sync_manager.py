@@ -1308,7 +1308,12 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
     lock._break_path.unlink()
 
     # Recovery faults must preserve the moved inode instead of allowing the
-    # finally block to delete the only remaining ownership evidence.
+    # finally block to delete the only remaining ownership evidence.  An
+    # earlier scenario already left a `.stale` file in this directory, so
+    # `glob(...) [-1]` is NOT deterministic across filesystems (CI 44131476170):
+    # identify ONLY the file this very step created by a set difference, and
+    # remove it afterwards so it cannot interfere with the next scenario.
+    stale_pattern = f".{lock._break_path.name}.*.stale"
     for recovery_error in (
         PermissionError("permission denied during recovery"),
         OSError(errno.ENOSPC, "no space left during recovery"),
@@ -1317,9 +1322,14 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
             json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "dead:fault"})
         )
         recovery_trash: list[Path] = []
+        existing_stale = set(lock._break_path.parent.glob(stale_pattern))
 
         def replace_and_record_rival(
-            src: object, dst: object, *, trash_ref: list[Path] = recovery_trash
+            src: object,
+            dst: object,
+            *,
+            trash_ref: list[Path] = recovery_trash,
+            before: set[Path] = existing_stale,
         ) -> None:
             lock._break_path.unlink()
             lock._break_path.write_text(
@@ -1332,7 +1342,8 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
                 )
             )
             real_replace(src, dst)  # type: ignore[arg-type]
-            trash_ref.extend(lock._break_path.parent.glob("*.stale"))
+            new_stale = set(lock._break_path.parent.glob(stale_pattern)) - before
+            trash_ref.extend(sorted(new_stale))
 
         def fail_recovery_link(
             src: object, dst: object, *, error: OSError = recovery_error
@@ -1347,9 +1358,14 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
             lock._reclaim_stale_break_guard()
         monkeypatch.undo()
         assert not lock._break_path.exists()
-        assert recovery_trash
+        assert len(recovery_trash) == 1
         assert json.loads(recovery_trash[-1].read_text())["owner_token"] == "live:fault"
         recovery_trash[-1].unlink()
+
+    # Drop the unrelated `.stale` left by the earlier race: it is a live guard
+    # and would make the fail-closed quarantine check block later contenders.
+    for leftover in lock._break_path.parent.glob(stale_pattern):
+        leftover.unlink()
 
     # Multi-process race: dead-PID .break + dead-PID lock are reclaimed cleanly,
     # whereas an expired live-PID .break is NOT reclaimed while the live owner runs.
@@ -1407,3 +1423,229 @@ def test_break_guard_reclaim_fencing_and_multiprocess_dead_vs_live_pid(
     with pytest.raises(PackLockTimeoutError):
         with live_mgr._storage_lock():
             pass
+
+
+def test_break_if_stale_fences_a_live_lock_created_before_os_replace(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock installed between the final check and os.replace is never broken."""
+    now = [1000.0]
+    mgr, _ = _manager(
+        tmp_path / "toctou",
+        [],
+        mirror,
+        lock_backend="exclusive_file",
+        lock_timeout_seconds=0.2,
+        lock_stale_after_seconds=5.0,
+        wall_clock=lambda: now[0],
+    )
+    lock = mgr._storage_lock()
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    real_replace = os.replace
+    real_link = os.link
+    stale_pattern = f".{lock.path.name}.*.stale"
+    installed_ino: list[int] = []
+
+    def seed_stale_lock() -> None:
+        lock._break_path.unlink(missing_ok=True)
+        for leftover in lock.path.parent.glob(stale_pattern):
+            leftover.unlink()
+        lock.path.write_text(
+            json.dumps(
+                {"pid": 999_999_999, "expires_at": now[0] - 10.0, "owner_token": "dead:toctou"}
+            )
+        )
+        stale_t = now[0] - 100.0
+        os.utime(lock.path, (stale_t, stale_t))
+
+    def live_record() -> str:
+        return json.dumps(
+            {"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "live:toctou"}
+        )
+
+    def install_live_lock() -> None:
+        # Build the rival at a separate path first so its inode is provably
+        # distinct from the stale lock's inode, then move it into place.
+        holder = lock.path.with_name(f"{lock.path.name}.fresh")
+        holder.write_text(live_record())
+        installed_ino.append(os.lstat(holder).st_ino)
+        lock.path.unlink()
+        real_replace(holder, lock.path)
+
+    def swap_before_replace(src: object, dst: object) -> None:
+        if str(src) == str(lock.path):
+            install_live_lock()
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    # 1. The fresh live lock is restored through a no-clobber hardlink, with
+    #    its inode intact, and the break guard is released.
+    seed_stale_lock()
+    monkeypatch.setattr(os, "replace", swap_before_replace)
+    lock._break_if_stale()
+    monkeypatch.undo()
+    assert lock.path.exists()
+    assert json.loads(lock.path.read_text())["owner_token"] == "live:toctou"
+    assert os.lstat(lock.path).st_ino == installed_ino[-1]
+    assert not lock._break_path.exists()
+    assert not list(lock.path.parent.glob(stale_pattern))
+
+    # 2. A third owner filling self.path between os.replace and the recovery
+    #    hardlink makes os.link fail with FileExistsError: nobody's live lock is
+    #    broken and the moved inode is kept as ownership evidence.
+    seed_stale_lock()
+
+    def swap_then_third_owner(src: object, dst: object) -> None:
+        if str(src) == str(lock.path):
+            install_live_lock()
+        real_replace(src, dst)  # type: ignore[arg-type]
+        if str(src) == str(lock.path):
+            lock.path.write_text(
+                json.dumps(
+                    {"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "third:owner"}
+                )
+            )
+
+    monkeypatch.setattr(os, "replace", swap_then_third_owner)
+    lock._break_if_stale()
+    monkeypatch.undo()
+    assert json.loads(lock.path.read_text())["owner_token"] == "third:owner"
+    evidence = list(lock.path.parent.glob(stale_pattern))
+    assert len(evidence) == 1
+    assert json.loads(evidence[0].read_text())["owner_token"] == "live:toctou"
+    for path in evidence:
+        path.unlink()
+
+    # 3. An unexpected recovery fault propagates WITHOUT deleting the trash,
+    #    so the moved live lock remains recoverable evidence.
+    seed_stale_lock()
+
+    def fail_restore_link(src: object, dst: object) -> None:
+        if str(dst) == str(lock.path):
+            raise PermissionError("permission denied during restore")
+        real_link(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", swap_before_replace)
+    monkeypatch.setattr(os, "link", fail_restore_link)
+    with pytest.raises(PermissionError, match="permission denied during restore"):
+        lock._break_if_stale()
+    monkeypatch.undo()
+    assert not lock.path.exists()
+    evidence = list(lock.path.parent.glob(stale_pattern))
+    assert len(evidence) == 1
+    assert json.loads(evidence[0].read_text())["owner_token"] == "live:toctou"
+    for path in evidence:
+        path.unlink()
+
+    # 4. An unlink + recreate may reuse the same inode.  The owner token is
+    #    the second half of the fence: the reused-inode live lock is preserved.
+    seed_stale_lock()
+
+    def overwrite_before_replace(src: object, dst: object) -> None:
+        if str(src) == str(lock.path):
+            lock.path.write_text(live_record())
+            installed_ino.append(os.lstat(lock.path).st_ino)
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", overwrite_before_replace)
+    lock._break_if_stale()
+    monkeypatch.undo()
+    assert lock.path.exists()
+    assert json.loads(lock.path.read_text())["owner_token"] == "live:toctou"
+    assert not lock._break_path.exists()
+    assert not list(lock.path.parent.glob(stale_pattern))
+
+
+def test_quarantined_live_break_guard_is_fail_closed_for_the_next_contender(
+    mirror: PackMirror, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live guard stranded in .stale must not allow a second .break owner."""
+    now = [1000.0]
+    mgr, _ = _manager(
+        tmp_path / "quarantine",
+        [],
+        mirror,
+        lock_backend="exclusive_file",
+        lock_timeout_seconds=0.2,
+        lock_stale_after_seconds=5.0,
+        wall_clock=lambda: now[0],
+    )
+    lock = mgr._storage_lock()
+    rival = mgr._storage_lock()
+    root = lock._break_path.parent
+    root.mkdir(parents=True, exist_ok=True)
+    stale_pattern = f".{lock._break_path.name}.*.stale"
+    real_replace = os.replace
+    real_link = os.link
+    real_read = psm._read_lock_state
+
+    # Reproduce the gap: reclaim moves a rival's LIVE guard to .stale, the
+    # recovery hardlink fails (ENOSPC), and .break is left empty.
+    lock._break_path.write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "dead:guard"})
+    )
+
+    def replace_with_live_rival(src: object, dst: object) -> None:
+        if str(src) == str(lock._break_path):
+            lock._break_path.unlink()
+            lock._break_path.write_text(
+                json.dumps(
+                    {"pid": os.getpid(), "expires_at": now[0] + 60, "owner_token": "rival:live"}
+                )
+            )
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    def fail_recovery_link(src: object, dst: object) -> None:
+        if str(dst) == str(lock._break_path):
+            raise OSError(errno.ENOSPC, "no space left during recovery")
+        real_link(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", replace_with_live_rival)
+    monkeypatch.setattr(os, "link", fail_recovery_link)
+    with pytest.raises(OSError, match="no space left during recovery"):
+        lock._reclaim_stale_break_guard()
+    monkeypatch.undo()
+    quarantined = sorted(root.glob(stale_pattern))
+    assert len(quarantined) == 1
+    assert not lock._break_path.exists()
+
+    # The next contender must NOT be handed a fresh .break guard while the
+    # live rival is still quarantined: exclusivity holds (fail closed).
+    monkeypatch.setattr(os, "link", fail_recovery_link)
+    assert rival._try_enter_break_guard() is None
+    monkeypatch.undo()
+    assert not lock._break_path.exists()
+    assert quarantined[0].exists()
+    assert json.loads(quarantined[0].read_text())["owner_token"] == "rival:live"
+
+    # Once recovery is possible again the guard is restored at the live path,
+    # but this caller still fails closed: it never minted a competing token.
+    assert rival._try_enter_break_guard() is None
+    assert json.loads(lock._break_path.read_text())["owner_token"] == "rival:live"
+    assert not quarantined[0].exists()
+    lock._break_path.unlink()
+
+    # A dead/expired quarantine is not a live owner: entry stays available.
+    dead = root / f".{lock._break_path.name}.dead.stale"
+    dead.write_text(
+        json.dumps({"pid": 999_999_999, "expires_at": now[0] - 10, "owner_token": "dead:guard"})
+    )
+    guard = rival._try_enter_break_guard()
+    assert guard is not None
+    rival._exit_break_guard(guard)
+    dead.unlink()
+
+    # A candidate that vanishes between glob and lstat protects nobody.
+    vanishing = root / f".{lock._break_path.name}.vanished.stale"
+    vanishing.write_text("unreadable")
+
+    def vanish_on_read(path: object, *args: object, **kwargs: object) -> object:
+        if str(path) == str(vanishing):
+            return None
+        return real_read(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(psm, "_read_lock_state", vanish_on_read)
+    guard = rival._try_enter_break_guard()
+    monkeypatch.undo()
+    assert guard is not None
+    rival._exit_break_guard(guard)
+    vanishing.unlink()

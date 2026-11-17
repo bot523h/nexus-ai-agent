@@ -429,6 +429,25 @@ class _StorageLock:
         cur_token = cur_data.get("owner_token") if cur_data is not None else None
         return cur_ino == guard_ino and cur_token == guard_token
 
+    def _live_quarantined_break_guard(self) -> Path | None:
+        """Return a ``*.stale`` break guard that is still a live ownership claim.
+
+        When the recovery hardlink in :meth:`_reclaim_stale_break_guard` fails
+        (``EACCES``, ``ENOSPC``, ...), the only copy of a *live* rival's guard
+        stays quarantined under ``.stale`` while ``.break`` is empty.  Until
+        that evidence is restored or expires, an ``O_CREAT | O_EXCL`` create at
+        ``.break`` would hand a second process a break guard and break the
+        exclusivity of the first owner.
+        """
+        for candidate in sorted(self._break_path.parent.glob(f".{self._break_path.name}.*.stale")):
+            state = _read_lock_state(candidate)
+            if state is None:
+                continue  # vanished between glob and lstat: nothing left to protect
+            _, mtime, data = state
+            if not self._is_stale_break_guard(data, mtime):
+                return candidate
+        return None
+
     def _reclaim_stale_break_guard(self) -> bool:
         state = _read_lock_state(self._break_path)
         if state is None:
@@ -488,6 +507,19 @@ class _StorageLock:
     def _try_enter_break_guard(
         self, *, target_lock_ino: int | None = None
     ) -> tuple[int, str] | None:
+        quarantined = self._live_quarantined_break_guard()
+        if quarantined is not None:
+            # Put the surviving evidence back at the live path when that is
+            # still possible.  The restore is best-effort: in every case this
+            # caller must NOT become a new owner while a live guard is
+            # quarantined.  Fail closed by returning None.
+            try:
+                os.link(quarantined, self._break_path)
+            except OSError:
+                pass  # keep the only surviving copy of the rival's guard
+            else:
+                quarantined.unlink(missing_ok=True)
+            return None
         token = f"{os.getpid()}:{uuid.uuid4().hex}"
         try:
             fd = os.open(self._break_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
@@ -565,6 +597,29 @@ class _StorageLock:
                 return
             trash = self.path.with_name(f".{self.path.name}.{os.getpid()}.{uuid.uuid4().hex}.stale")
             os.replace(self.path, trash)
+            moved_state = _read_lock_state(trash)
+            moved_token = (
+                moved_state[2].get("owner_token")
+                if moved_state is not None and moved_state[2] is not None
+                else None
+            )
+            # An inode can be reused immediately after an unlink, so the token
+            # is the second half of the fence: either mismatch proves that a
+            # different lock was moved.
+            if os.stat(trash).st_ino != target_ino or moved_token != target_token:
+                # TOCTOU: the stale owner released the lock and a new live
+                # owner installed a fresh lock between the last fencing check
+                # and os.replace.  os.replace moved THEIR lock, not ours: put
+                # it back with a no-clobber hardlink and never break it.
+                try:
+                    os.link(trash, self.path)
+                except FileExistsError:
+                    pass  # a third owner already installed its own lock
+                else:
+                    trash.unlink(missing_ok=True)
+                # A non-FileExistsError OSError propagates without ever
+                # unlinking `trash`: that file is the only ownership evidence.
+                return
             trash.unlink(missing_ok=True)
         finally:
             self._exit_break_guard(guard)
