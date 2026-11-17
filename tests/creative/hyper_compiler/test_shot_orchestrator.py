@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -502,3 +503,179 @@ def test_orchestrator_execute_propagates_fsync_failure(
     with pytest.raises(OSError):
         orch.execute([make_spec(0)], frame_factory=frame_factory(), output_path=out)
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+# ── F1 (direct path): a non-pure pipe_spec_factory cannot poison the CAS ─────
+def test_orchestrator_snapshots_pipe_spec_once(tmp_path: Path) -> None:
+    # The factory must be called exactly once per segment for the whole run:
+    # plan() and execute() must NOT each call it (that double call is what let a
+    # non-pure factory commit bytes under a key that disagreed with the plan).
+    calls: list[str] = []
+
+    def counting_factory(s: TimelineSegmentSpec) -> FramePipelineSpec:
+        calls.append(s.segment_id)
+        return FramePipelineSpec(width=s.width, height=s.height, fps=s.fps, brightness=0.25)
+
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    timeline = [make_spec(0), make_spec(1)]
+    orch.execute(timeline, frame_factory=frame_factory(), pipe_spec_factory=counting_factory)
+    assert calls == ["seg0", "seg1"]
+
+
+def test_orchestrator_unstable_pipe_spec_factory_is_rejected(tmp_path: Path) -> None:
+    # F1: a factory that returns a *different* pipeline on the second call for
+    # the same segment would make the rendered bytes disagree with the planned
+    # key.  Snapshotting removes the second call, so the run is still bound to
+    # the plan-time pipeline and the committed artifact verifies against it.
+    seen: dict[str, int] = {}
+
+    def unstable_factory(s: TimelineSegmentSpec) -> FramePipelineSpec:
+        n = seen.get(s.segment_id, 0)
+        seen[s.segment_id] = n + 1
+        brightness = 0.1 if n == 0 else 0.9  # second call would differ
+        return FramePipelineSpec(width=s.width, height=s.height, fps=s.fps, brightness=brightness)
+
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    timeline = [make_spec(0)]
+    execution = orch.execute(
+        timeline, frame_factory=frame_factory(), pipe_spec_factory=unstable_factory
+    )
+    # Exactly one factory call per segment, and the artifact verifies against the
+    # planned (brightness=0.1) pipeline — not the 0.9 the second call would give.
+    assert seen == {"seg0": 1}
+    planned = execution.plan.segments[0]
+    expected = FramePipelineSpec(width=8, height=8, fps=24.0, brightness=0.1).fingerprint()
+    assert planned.pipeline_digest == expected
+    verified = orch.planner.verify_segment_artifact(
+        planned.cas_key,
+        expected_mode=planned.mode,
+        expected_pipeline_digest=planned.pipeline_digest,
+    )
+    assert verified.mode == planned.mode
+
+
+def test_orchestrator_execute_fails_closed_on_provenance_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # F1: even if a planned segment's key were forged to disagree with the
+    # snapshot pipeline, execute() must refuse *before* rendering or writing to
+    # the cache — never commit bytes under a mismatched key.
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    real_plan = orch._plan_from_specs
+
+    def forging_plan(timeline: object, specs: object, mode: object) -> object:
+        plan = real_plan(timeline, specs, mode)  # type: ignore[arg-type]
+        forged = []
+        for seg in plan.segments:
+            forged.append(
+                PlannedSegment(
+                    seg.spec,
+                    "f" * 64,  # a key that does not match the snapshot pipeline
+                    seg.status,
+                    seg.artifact_path,
+                    seg.pipeline_digest,
+                    mode=seg.mode,
+                )
+            )
+        from nexus_ai_agent.creative.hyper_compiler.segment_cas_dag import SegmentPlan
+
+        return SegmentPlan(
+            segments=tuple(forged),
+            merkle_root=plan.merkle_root,
+            total_leaves=plan.total_leaves,
+            cache_hits=plan.cache_hits,
+            render_required=plan.render_required,
+        )
+
+    monkeypatch.setattr(orch, "_plan_from_specs", forging_plan)
+    with pytest.raises(SegmentTamperError, match="key"):
+        orch.execute([make_spec(0)], frame_factory=frame_factory())
+    # Nothing was committed to the cache under the forged key.
+    assert list((tmp_path).rglob("*.nagarseg")) == []
+
+
+# ── F4: the temp file lives on the destination filesystem (no EXDEV) ─────────
+def test_orchestrator_output_replace_is_same_filesystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # F4: the timeline temp file must be created in the *same directory* as the
+    # final target, so the atomic ``os.replace`` cannot fail with EXDEV across
+    # filesystems.  We observe the src/dst of the timeline rename directly.
+    real_replace = os.replace
+    pairs: list[tuple[Path, Path]] = []
+
+    def spy(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+        pairs.append((Path(src), Path(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy)
+    orch = HyperTimelineOrchestrator(tmp_path / "cache", max_buffer_bytes=1024 * 1024)
+    out = tmp_path / "nested" / "final.nagartl"
+    orch.execute([make_spec(0)], frame_factory=frame_factory(), output_path=out)
+    timeline_pairs = [p for p in pairs if p[0].name.endswith(".nagartl.tmp")]
+    assert timeline_pairs, "the timeline was not renamed atomically"
+    src, dst = timeline_pairs[-1]
+    assert src.parent == dst.parent == out.parent
+    assert out.exists()
+
+
+def test_orchestrator_output_temp_cleaned_on_render_failure(
+    tmp_path: Path,
+) -> None:
+    # F4: if the render fails before os.replace, the same-filesystem temp file
+    # must be removed so no ``.nagartl.tmp`` is left behind next to the target.
+    orch = HyperTimelineOrchestrator(tmp_path / "cache", max_buffer_bytes=1024 * 1024)
+    out = tmp_path / "final.nagartl"
+
+    def boom(_spec: TimelineSegmentSpec) -> Iterator[Frame]:
+        raise HyperCompilerError("frame source exploded")
+
+    with pytest.raises(HyperCompilerError):
+        orch.execute([make_spec(0)], frame_factory=boom, output_path=out)
+    assert list(tmp_path.glob("*.nagartl.tmp")) == []
+    assert not out.exists()
+
+
+def test_orchestrator_assert_provenance_rejects_mode_mismatch(tmp_path: Path) -> None:
+    # Directly exercise the execute()-path guard's fail-closed branches.
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    spec0 = make_spec(0)
+    pipe = default_pipe_spec(spec0)
+    planned = PlannedSegment(
+        spec0,
+        orch.planner.cas_key(spec0, pipeline_digest=pipe.fingerprint(), mux_mode="cpu"),
+        SegmentStatus.RENDER_REQUIRED,
+        Path("/x"),
+        pipe.fingerprint(),
+        mode="cpu",
+    )
+    with pytest.raises(SegmentTamperError, match="mode"):
+        orch._assert_provenance(planned, pipe, MuxMode.FFMPEG_SUBPROCESS_PIPE)
+
+
+def test_orchestrator_assert_provenance_rejects_pipeline_mismatch(tmp_path: Path) -> None:
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    spec0 = make_spec(0)
+    pipe = default_pipe_spec(spec0)
+    planned = PlannedSegment(
+        spec0,
+        orch.planner.cas_key(
+            spec0, pipeline_digest="deadbeef", mux_mode=MuxMode.DETERMINISTIC_CPU_MUX.value
+        ),
+        SegmentStatus.RENDER_REQUIRED,
+        Path("/x"),
+        "deadbeef",  # a digest that disagrees with the snapshot pipeline
+        mode=MuxMode.DETERMINISTIC_CPU_MUX.value,
+    )
+    with pytest.raises(SegmentTamperError, match="pipeline"):
+        orch._assert_provenance(planned, pipe, MuxMode.DETERMINISTIC_CPU_MUX)
+
+
+def test_orchestrator_plan_from_specs_rejects_length_mismatch(tmp_path: Path) -> None:
+    orch = HyperTimelineOrchestrator(tmp_path, max_buffer_bytes=1024 * 1024)
+    with pytest.raises(HyperCompilerError, match="snapshot length"):
+        orch._plan_from_specs(
+            [make_spec(0), make_spec(1)],
+            [default_pipe_spec(make_spec(0))],
+            MuxMode.DETERMINISTIC_CPU_MUX,
+        )

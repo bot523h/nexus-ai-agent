@@ -161,6 +161,23 @@ class HyperTimelineOrchestrator:
     ) -> FramePipelineSpec:
         return pipe_spec_factory(spec) if pipe_spec_factory is not None else default_pipe_spec(spec)
 
+    def _snapshot_specs(
+        self,
+        timeline: Sequence[TimelineSegmentSpec],
+        pipe_spec_factory: PipeSpecFactory | None,
+    ) -> list[FramePipelineSpec]:
+        """Snapshot one :class:`FramePipelineSpec` per segment, exactly once.
+
+        The factory is invoked a single time per segment and its result is
+        frozen for the whole run.  A ``pipe_spec_factory`` that is not a pure
+        function (e.g. one that reads mutable state, a clock or a counter) would
+        otherwise return a *different* pipeline on the second call, so the bytes
+        rendered during ``execute`` could disagree with the fingerprint the plan
+        keyed on — silently poisoning the content-addressed store.  Snapshotting
+        removes that second call entirely.
+        """
+        return [self._pipe_spec_for(spec, pipe_spec_factory) for spec in timeline]
+
     def plan(
         self,
         timeline: Sequence[TimelineSegmentSpec],
@@ -175,9 +192,60 @@ class HyperTimelineOrchestrator:
         the FFmpeg pipe and vice versa, so a plan can never hand back bytes whose
         provenance disagrees with the requested engine.
         """
-        digests = [self._pipe_spec_for(spec, pipe_spec_factory).fingerprint() for spec in timeline]
+        specs = self._snapshot_specs(timeline, pipe_spec_factory)
+        return self._plan_from_specs(timeline, specs, mode)
+
+    def _plan_from_specs(
+        self,
+        timeline: Sequence[TimelineSegmentSpec],
+        specs: Sequence[FramePipelineSpec],
+        mode: MuxMode,
+    ) -> SegmentPlan:
+        """Plan using an already-snapshotted pipeline spec per segment."""
+        if len(specs) != len(timeline):
+            raise HyperCompilerError("pipeline spec snapshot length must match the timeline")
+        digests = [pipe.fingerprint() for pipe in specs]
         modes = [mode.value] * len(timeline)
         return self.planner.plan(timeline, pipeline_digests=digests, mux_modes=modes)
+
+    def _assert_provenance(
+        self,
+        planned: PlannedSegment,
+        pipe_spec: FramePipelineSpec,
+        mode: MuxMode,
+    ) -> None:
+        """Fail closed unless the render is provably bound to ``planned``.
+
+        Re-derives the pipeline fingerprint and the content-addressed key from
+        the *snapshot* pipeline spec and the segment spec, and refuses a
+        mismatch *before* a single frame is rendered or a byte reaches the cache.
+        This is the direct-path twin of the guard in :meth:`render_segment`:
+        it closes the hole where ``execute`` — which does not go through
+        ``render_segment`` — could commit bytes under a key that disagrees with
+        the pipeline the bytes were actually produced with.
+        """
+        effect_mode = mode.value
+        effect_digest = pipe_spec.fingerprint()
+        if planned.mode != effect_mode:
+            raise SegmentTamperError(
+                f"execute mode {effect_mode!r} != planned mode {planned.mode!r} "
+                f"for segment {planned.spec.segment_id!r}"
+            )
+        if planned.pipeline_digest != effect_digest:
+            raise SegmentTamperError(
+                f"execute pipeline {effect_digest!r} != planned "
+                f"{planned.pipeline_digest!r} for segment {planned.spec.segment_id!r}"
+            )
+        derived_key = self.planner.cas_key(
+            planned.spec,
+            pipeline_digest=effect_digest,
+            mux_mode=effect_mode,
+        )
+        if derived_key != planned.cas_key:
+            raise SegmentTamperError(
+                f"execute key {derived_key} != planned key {planned.cas_key} "
+                f"for segment {planned.spec.segment_id!r}"
+            )
 
     # -- rendering ----------------------------------------------------------
     def _render_to_temp(
@@ -272,13 +340,30 @@ class HyperTimelineOrchestrator:
         The timeline container is streamed segment-by-segment into a file sink
         (never assembled in RAM); a rendered segment is written once to a temp
         file, then streamed to the output and to the cache in bounded chunks.
+
+        The pipeline spec for every segment is snapshotted *once* at plan time
+        and reused for the render, and the provenance of each render is
+        re-derived and checked both before it runs and before any byte reaches
+        the content-addressed store — so a non-pure ``pipe_spec_factory`` can
+        never commit bytes under a key that disagrees with the pipeline that
+        produced them.
         """
-        plan = self.plan(timeline, pipe_spec_factory=pipe_spec_factory, mode=mode)
+        specs = self._snapshot_specs(timeline, pipe_spec_factory)
+        plan = self._plan_from_specs(timeline, specs, mode)
         segments: list[SegmentRender] = []
         peak = 0
         executed_mode: MuxMode | None = None
 
-        out_fd, out_name = tempfile.mkstemp(suffix=".nagartl.tmp")
+        target = Path(output_path) if output_path is not None else None
+        # F4: the temp file must live on the *same* filesystem as the final
+        # target, otherwise the atomic ``os.replace`` below can fail with
+        # ``EXDEV`` (cross-device link).  With no target there is no rename, so
+        # the default temp directory is fine.
+        if target is not None:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            out_fd, out_name = tempfile.mkstemp(dir=str(target.parent), suffix=".nagartl.tmp")
+        else:
+            out_fd, out_name = tempfile.mkstemp(suffix=".nagartl.tmp")
         tmp_out = Path(out_name)
         try:
             with os.fdopen(out_fd, "wb") as raw_out:
@@ -287,7 +372,7 @@ class HyperTimelineOrchestrator:
                 writer.write(bytes.fromhex(plan.merkle_root))
                 writer.write(struct.pack(">Q", plan.total_leaves))
 
-                for planned in plan.segments:
+                for index, planned in enumerate(plan.segments):
                     if planned.status is SegmentStatus.CACHE_HIT:
                         writer.write(planned.cas_key.encode("ascii"))
                         writer.write(struct.pack(">Q", planned.body_size))
@@ -317,7 +402,14 @@ class HyperTimelineOrchestrator:
                             f"segment {planned.spec.segment_id} needs a render but no "
                             "frame_factory was given"
                         )
-                    spec = self._pipe_spec_for(planned.spec, pipe_spec_factory)
+                    # Reuse the *snapshot* pipeline spec, never a fresh call to the
+                    # factory: the factory was already invoked once for this
+                    # segment at plan time, and calling it again here could return
+                    # a different pipeline and commit bytes under the wrong key.
+                    spec = specs[index]
+                    # Fail closed *before* rendering if the snapshot disagrees with
+                    # the key the plan is bound to.
+                    self._assert_provenance(planned, spec, mode)
                     tmp_path, outcome = self._render_to_temp(
                         frame_factory(planned.spec), spec, mode
                     )
@@ -333,6 +425,10 @@ class HyperTimelineOrchestrator:
                                 if not chunk:
                                     break
                                 writer.write(chunk)
+                        # Re-assert against the mode the engine actually reported,
+                        # so no byte is committed under a key that disagrees with
+                        # the engine that produced it.
+                        self._assert_provenance(planned, spec, outcome.mode)
                         with tmp_path.open("rb") as rendered:
                             self.planner.commit_stream(
                                 planned.cas_key,
@@ -359,9 +455,7 @@ class HyperTimelineOrchestrator:
                 # rename, so a crash can never leave a renamed-but-empty file.
                 raw_out.flush()
                 os.fsync(raw_out.fileno())
-            if output_path is not None:
-                target = Path(output_path)
-                target.parent.mkdir(parents=True, exist_ok=True)
+            if target is not None:
                 os.replace(tmp_out, target)
                 # The rename must be durable too: fsync the parent directory so
                 # the new directory entry survives a crash (matches the segment

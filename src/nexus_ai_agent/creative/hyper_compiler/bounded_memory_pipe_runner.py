@@ -707,19 +707,25 @@ class BoundedMemoryPipeRunner:
                 for segment in segments:
                     for frame in segment:
                         self.validate_frame(frame, spec)
+                        # F3b: at the instant ``tobytes`` runs, BOTH the source
+                        # ndarray and its freshly packed bytes are resident, so the
+                        # honest in-flight footprint is ``frame.nbytes + len(raw)``
+                        # (plus the chunk the reader holds while draining).  Counting
+                        # only ``len(raw)`` would understate the peak by a whole
+                        # frame and could let a frame slip past the ceiling.
+                        frame_bytes_held = int(frame.nbytes)
                         raw = frame.tobytes()
-                        # The frame we hold while writing plus the chunk the
-                        # reader holds while draining are both resident at once.
-                        inflight = len(raw) + _CHUNK_BYTES
+                        held = frame_bytes_held + len(raw)
+                        inflight = held + _CHUNK_BYTES
                         if inflight > self.max_buffer_bytes:
                             raise MemoryBudgetExceededError(
-                                f"in-flight frame {len(raw)} B + read chunk "
-                                f"{_CHUNK_BYTES} B exceeds max_buffer_bytes "
+                                f"in-flight frame {frame_bytes_held} B + packed {len(raw)} B "
+                                f"+ read chunk {_CHUNK_BYTES} B exceeds max_buffer_bytes "
                                 f"{self.max_buffer_bytes}"
                             )
                         with state_lock:
-                            live_frame[0] = len(raw)
-                            peak_inflight[0] = max(peak_inflight[0], len(raw))
+                            live_frame[0] = held
+                            peak_inflight[0] = max(peak_inflight[0], held)
                         stdin.write(raw)
                         with state_lock:
                             live_frame[0] = 0
@@ -741,6 +747,11 @@ class BoundedMemoryPipeRunner:
         writer = threading.Thread(target=feed, daemon=True)
         stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
         watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+        # A short, bounded window for the *daemon* writer to notice a closed pipe.
+        # The writer can be wedged inside a caller-supplied generator that never
+        # returns, so every join on it must be bounded by this — never by the
+        # longer child-kill window, which would otherwise stall the caller.
+        writer_join = max(min(self.timeout_seconds, 5.0), 0.01)
         writer.start()
         stderr_thread.start()
         watchdog_thread.start()
@@ -762,13 +773,24 @@ class BoundedMemoryPipeRunner:
             # F2: the writer must never block the caller forever.  Closing stdin
             # first unblocks a writer parked on ``stdin.write`` (it raises
             # ``BrokenPipeError``/``ValueError`` and the thread exits), then the
-            # join is bounded; a writer that is *still* alive after that (e.g. a
-            # stalled frame generator that ignores the closed pipe) is a hard
-            # failure rather than an indefinite hang.
+            # join is bounded.
             with contextlib.suppress(OSError, ValueError):
                 stdin.close()
-            writer.join(timeout=max(min(self.timeout_seconds, 5.0), 0.01))
+            writer.join(timeout=writer_join)
             if writer.is_alive():
+                # A producer that ignores the closed pipe (e.g. a generator
+                # blocked forever inside its own code) cannot be unblocked by
+                # EOF alone.  Kill the child *now* so no subprocess outlives the
+                # call, give the writer one more bounded window to observe the
+                # broken pipe, then fail hard — never hang the caller.  The
+                # writer thread is a daemon, so even a producer wedged outside
+                # ``stdin.write`` cannot keep the process alive.
+                if proc.poll() is None:
+                    with contextlib.suppress(OSError):
+                        proc.kill()
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        proc.wait(timeout=_KILL_TIMEOUT_SECONDS)
+                writer.join(timeout=writer_join)
                 raise PipeExecutionError("writer thread timed out")
             stderr_thread.join()
             returncode = proc.wait()
@@ -781,7 +803,9 @@ class BoundedMemoryPipeRunner:
                     proc.wait(timeout=_KILL_TIMEOUT_SECONDS)
             with contextlib.suppress(OSError, ValueError):
                 stdin.close()
-            writer.join(timeout=_KILL_TIMEOUT_SECONDS)
+            # Bounded by ``writer_join`` (not the longer child-kill window): a
+            # writer wedged in a caller generator must not stall the caller.
+            writer.join(timeout=writer_join)
             stderr_thread.join(timeout=_KILL_TIMEOUT_SECONDS)
             watchdog_thread.join(timeout=_KILL_TIMEOUT_SECONDS)
             for pipe in (stdout, stderr_pipe):

@@ -909,3 +909,165 @@ def test_fsync_directory_raises_on_fsync_failure(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(os, "fsync", boom)
     with pytest.raises(OSError):
         bmpr._fsync_directory(Path("/tmp"))
+
+
+# ── F2: a producer wedged in ``stdin.write`` is freed by killing the child ───
+def test_run_ffmpeg_stream_writer_blocked_on_write_is_freed_by_kill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # F2: a producer parked in ``stdin.write`` (a full pipe with a non-reading
+    # child) cannot be unblocked by closing stdin alone.  The fix kills the child
+    # deterministically *before* giving the writer its last bounded window, so
+    # the write unblocks, the writer terminates, the child is reaped, and a hard
+    # error is raised — the caller never hangs and no subprocess outlives it.
+    events: list[str] = []
+    release = threading.Event()
+
+    class BlockingStdin:
+        def write(self, data: bytes, /) -> int:
+            events.append("write_entered")
+            release.wait(timeout=5.0)  # only proc.kill() releases this
+            events.append("write_released")
+            raise BrokenPipeError("child gone")
+
+        def close(self) -> None:
+            pass
+
+    class FakeProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = BlockingStdin()
+            self.stdout = io.BytesIO(b"")
+            self.stderr = io.BytesIO(b"")
+            self._dead = False
+
+        def poll(self) -> int | None:
+            return 0 if self._dead else None
+
+        def kill(self) -> None:
+            events.append("killed")
+            self._dead = True
+            release.set()
+
+        def wait(self, timeout: float | None = None) -> int:
+            events.append("reaped")
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(bmpr, "_KILL_TIMEOUT_SECONDS", 0.2)
+    runner = BoundedMemoryPipeRunner(timeout_seconds=0.2)
+    start = time.monotonic()
+    with pytest.raises(PipeExecutionError, match="writer thread timed out"):
+        runner.run_ffmpeg_stream([frames(1)], spec())
+    # The kill happened *while* the writer was still blocked (so it is what freed
+    # it), the child was reaped, and the call returned promptly.  (The watchdog
+    # thread may also kill, so we assert ordering, not exact equality.)
+    assert events.index("killed") < events.index("write_released")
+    assert "reaped" in events
+    assert time.monotonic() - start < 3.0
+
+
+def test_run_ffmpeg_stream_writer_wedged_in_generator_is_daemon_and_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # F2: a producer wedged *inside its own code* (not in ``write``) can never be
+    # unblocked by EOF, so every join on the daemon writer must be bounded by the
+    # short ``writer_join`` window — NOT by the longer child-kill window.  With
+    # ``timeout_seconds`` small and ``_KILL_TIMEOUT_SECONDS`` left at its real
+    # (long) default, a regression that joins the writer for the kill window
+    # would stall the caller for seconds; the fix returns promptly.
+    gate = threading.Event()
+    killed = {"kill": False}
+
+    class FakeProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO(b"")
+            self.stderr = io.BytesIO(b"")
+            self._dead = False
+
+        def poll(self) -> int | None:
+            return 0 if self._dead else None
+
+        def kill(self) -> None:
+            self._dead = True
+            killed["kill"] = True
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    def blocked() -> Iterator[Frame]:
+        yield np.zeros((8, 8, 3), dtype=np.uint8)
+        gate.wait()  # block inside the generator itself, never released by us
+        yield np.zeros((8, 8, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    # _KILL_TIMEOUT_SECONDS stays at its real (long) default on purpose.
+    runner = BoundedMemoryPipeRunner(timeout_seconds=0.2)
+    start = time.monotonic()
+    try:
+        with pytest.raises(PipeExecutionError, match="writer thread timed out"):
+            runner.run_ffmpeg_stream([blocked()], spec())
+        elapsed = time.monotonic() - start
+    finally:
+        gate.set()  # let the wedged daemon writer finish and fully close
+    assert elapsed < bmpr._KILL_TIMEOUT_SECONDS  # bounded by writer_join, not 5 s
+    assert killed["kill"] is True
+
+
+# ── F3b: the measured peak counts frame.nbytes + len(raw) together ───────────
+def test_run_ffmpeg_stream_peak_counts_frame_and_packed_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # F3b: while ``tobytes`` runs, the source ndarray AND its packed copy are both
+    # resident, so the honest in-flight footprint of one 8x8x3 frame is
+    # 2 * 192 = 384 bytes — not the 192 the previous model recorded.
+    ready = threading.Event()
+
+    class BlockingStdin:
+        def __init__(self) -> None:
+            self._buffer = bytearray()
+
+        def write(self, data: bytes, /) -> int:
+            self._buffer.extend(data)
+            ready.set()
+            return len(data)
+
+        def close(self) -> None:
+            pass
+
+    class FakeProc:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = BlockingStdin()
+            self.stdout = _BlockingEmptyStdout(ready)
+            self.stderr = io.BytesIO(b"")
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    runner = BoundedMemoryPipeRunner(max_buffer_bytes=1024 * 1024)
+    outcome = runner.run_ffmpeg_stream([frames(1)], spec())
+    assert outcome.peak_buffer_bytes == 2 * 192  # frame.nbytes + len(raw)
+    assert outcome.peak_buffer_bytes > 192  # strictly more than the old model
+
+
+class _BlockingEmptyStdout:
+    """A stdout that returns EOF only after the writer has fed a whole frame."""
+
+    def __init__(self, ready: threading.Event) -> None:
+        self._ready = ready
+        self._done = False
+
+    def read(self, size: int) -> bytes:
+        # Wait for the writer's first ``stdin.write`` so the peak is measured
+        # deterministically (no race between the reader and the writer thread).
+        if not self._done:
+            self._ready.wait(timeout=2.0)
+            self._done = True
+        return b""
+
+    def close(self) -> None:
+        pass
